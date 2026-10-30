@@ -18,7 +18,14 @@ priv const DOT_RELS: U8[][4] = ::{ ".env", ".git/config", "sub/.hidden.txt",
     ".well-known/acme.txt" }
 priv const DOT_BODIES: U8[][4] = ::{ "SECRET=1\n", "[core]\n", "hidden\n", "well known\n" }
 priv const HIDDEN_TARGETS: U8[][5] = ::{ "/.env", "/.git/config", "/sub/.hidden.txt", "/%2eenv",
-    "/sub%5c.hidden.txt" }
+    "/sub//.hidden.txt" }
+
+priv const SLASHES: Sz = 3900 //< how many `/` follow `/sub` in the request whose cost is bounded
+    //< The path stays short of the 4 KiB one lookup takes, so a walk that looked up every
+    //< segment, the empty ones included, would look up each of them.
+priv const SLASH_ROUNDS: Sz = 100 //< how many times the request with many `/` and the plain one go
+priv const SLASH_RATIO: I64 = 4I64 //< how many times longer the many `/` may take than the plain
+priv const SLASH_SLACK_US: I64 = 500000I64 //< the time added to that bound, for a busy machine
 
 priv const BIG_REL: U8[] = "big.bin" //< larger than the chunks the server sends a file in
 priv const BIG_BYTES: Sz = 3 * 1024 * 1024 + 7 //< not a multiple of a chunk, so the last is short
@@ -37,7 +44,7 @@ fn place(root: U8[], arena: Arena$@): Bool //< puts this file's fixtures under t
     io.write_file(fs.join(root, BIG_REL, arena), client.filler(BIG_BYTES, arena)) catch
         return false
     // Elsewhere a `\` is part of a name, so the file Windows reaches by `sub\.hidden.txt` is
-    // made under that name: the request then finds a file, and only the filter keeps it back.
+    // made under that name: the request then finds a file, and only the refusal keeps it back.
     if !sys.is_windows()
         literal: = arena.text().s(root).s("/sub\\.hidden.txt").take()
         io.write_file(literal, "SECRET=2\n") catch
@@ -46,6 +53,7 @@ fn place(root: U8[], arena: Arena$@): Bool //< puts this file's fixtures under t
 
 fn cases(port: I32, arena: Arena$@): Void!client.Http_end //< every check in this file, in turn
     dot_cases(port, arena)!
+    slash_cases(port, arena)!
     big_cases(port, arena)!
     trickle_cases(port, arena)!
     peer_cases(port, arena)!
@@ -57,9 +65,50 @@ priv fn dot_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
         nm: = arena.text().s("a name starting with a dot is not served: \{target\}").take()
         verdict.check(nm, r.status == 404 && r.body.find_str("SECRET").is_none(),
             client.shown(r, arena))
+    // **On POSIX a `\` is refused outright** (403), since no file named with one can be saved.
+    // Windows reads it as `sub/.hidden.txt`, a hidden name.
+    back: = client.get(port, "/sub%5c.hidden.txt", "", arena)!
+    want: = 404 if sys.is_windows() else 403
+    verdict.check("a path holding a `\\` is refused on POSIX and hidden on Windows",
+        back.status == want && back.body.find_str("SECRET").is_none(),
+        client.shown(back, arena))
     wk: = client.get(port, "/.well-known/acme.txt", "", arena)!
     verdict.check("`.well-known` is still served",
         wk.status == 200 && wk.body.equals("well known\n"), client.shown(wk, arena))
+
+priv fn slash_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< An empty segment is skipped: `a//b` is `a/b`, and many `/` cost no more than one
+    //< Caution: **Measure the cost against the plain request on the same server**, so a slow
+    //< machine or a sanitizer slows both. One lookup per `/` takes hundreds of times as long.
+    one: = client.get(port, "/sub//one.txt", "", arena)!
+    verdict.check("a path with an empty segment is served as if it had none",
+        one.status == 200 && one.body.equals("one\n"), client.shown(one, arena))
+    b: = arena.text().s("/sub")
+    for _i in Range.asc(SLASHES)
+        b.c('/')
+    many: = b.take()
+    plain_us: = rounds_us(port, "/sub/", arena)!
+    many_us: = rounds_us(port, many, arena)!
+    last: = client.get(port, many, "", arena)!
+    verdict.check("a folder's path followed by many `/` is still its index",
+        last.status == 200 && last.body.equals("sub index\n"), client.shown(last, arena))
+    verdict.check("many `/` in a row cost the server about what one costs",
+        many_us <= plain_us * SLASH_RATIO + SLASH_SLACK_US,
+        arena.text()
+        .s("\{SLASH_ROUNDS\} requests took \{many_us\} us; with one `/`, \{plain_us\} us").take())
+
+priv fn rounds_us(port: I32, target: U8[], arena: Arena$@): I64!client.Http_end //<
+    //< How long `SLASH_ROUNDS` requests for `target`, sent at once on one connection, take
+    //< **They are sent together**, so the time is the server's work. One at a time, each would
+    //< also wait out the network's delays, which are longer than the work measured.
+    one: = client.raw("GET", target, "", "", arena)
+    all: = arena.text()
+    for _i in Range.asc(SLASH_ROUNDS)
+        all.s(one)
+    raw: = all.take()
+    from: = sys.mono_us()
+    client.request(port, raw, SLASH_ROUNDS, client.DEFAULT_TIMEOUT_MS, false, arena)!
+    return sys.mono_us() - from
 
 priv fn big_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< A file sent in chunks arrives whole, and its length is the one the head names

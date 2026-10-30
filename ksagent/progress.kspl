@@ -1,0 +1,425 @@
+//< What the person sees while an answer is written: the console, and a conversation's live file
+//< **The growing answer is unchecked**, so it is never shown where the checked answer stands: the
+//< console says so before it, and the live file is apart from the chat file. **The chat file is
+//< written once a question ends**, with its answer and the answer's state. Why is "Watching an
+//< answer grow" in `ksagent/docs/DESIGN-agent.md`.
+import "ksagent/answer" + { Lang }
+import "ksagent/chat"
+import "ksagent/files"
+import "ksagent/model"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+priv const LIVE_GAP_US: I64 = 1000000I64 //< the shortest time between two writes of a live file
+    //< A page looks again every second, so a write each second keeps it current.
+priv const CHECK_GAP_US: I64 = 2000000I64 //< the shortest time between two looks at the question
+
+enum Phase //< what the model is doing now, as the person is told it
+    waiting //< nothing has come back this round yet
+    thinking //< its thinking (`reasoning_content`) grows
+    writing //< its text, or its answer's text, grows
+    reading //< it called the reading tools; their results go back to it
+
+struct Progress //< how far an answer has been shown, and where
+    console: Bool //< whether standard error shows the work as it goes
+    live: U8[] //< the live file's path; empty for none (`ask` and `eval`)
+    ask: U8[] //< the ask file the question stands in; empty for none
+    id: U8[] //< the question's id, which the live file names
+    lang: Lang
+    phase: Phase
+    thought: Sz //< bytes of this round's thinking shown
+    written: Sz //< bytes of this round's text shown
+    from_call: Bool //< whether the text shown comes from the `answer` call, not the plain text
+    text: Str_builder //< this round's text, for the live file and a stopped answer's record
+    reader: Text_reader //< this round's `answer` call, its text decoded as its arguments come
+    tools_said: U8[] //< the reading tools last called, for the live file
+    stop: U8[] //< why the answer must stop; empty while it goes on
+    last_live_us: I64
+    last_check_us: I64
+    arena: Arena$@
+
+impl Progress
+    fn new(console: Bool, lang: Lang, arena: Arena$@): Progress //<
+        //< Progress shown on the console alone, or nowhere
+        return Progress::{ .console = console, .live = "", .ask = "", .id = "", .lang = lang,
+            .phase = .waiting, .thought = 0, .written = 0, .from_call = false,
+            .text = Str_builder(), .reader = Text_reader(), .tools_said = "", .stop = "",
+            .last_live_us = 0I64, .last_check_us = 0I64, .arena = arena }
+
+    fn following(ask_path: U8[], live_path: U8[], id: U8[], lang: Lang, console: Bool,
+        arena: Arena$@): Progress //<
+            //< Progress also written to a live file, for a question that stands in an ask file
+        $p: = Progress(console, lang, arena)
+        p.ask = ask_path
+        p.live = live_path
+        p.id = id
+        p.write_live(true)
+        return p
+
+    fn round_starts(r: Self$@) //< a new request goes out: nothing of its reply is shown yet
+        r.end_line()
+        r.phase = .waiting
+        r.thought = 0
+        r.written = 0
+        r.from_call = false
+        r.text.clear()
+        r.reader.clear()
+
+    fn saw(r: Self$@, p: model.Partial$@) //< shows what a reply adds to what was shown
+        thinking: = p.reasoning.slice()
+        if thinking.len > r.thought
+            if r.phase != Phase.thinking
+                r.end_line()
+                r.phase = .thinking
+                r.say("  thinking: ")
+            r.say(thinking.sub_from(r.thought))
+            r.thought = thinking.len
+        $text: U8[] = p.content.slice()
+        $from_call: = false
+        // **The first `answer` call is shown**, as it is the one the loop takes (`agent.run`).
+        for i in Range.asc(p.calls.len)
+            c: = p.calls.ptr + i
+            if c.name.equals("answer")
+                r.reader.more(c.arguments.slice())
+                text = r.reader.out.slice()
+                from_call = true
+                break
+        if from_call != r.from_call
+            r.written = 0
+            r.from_call = from_call
+            r.text.clear()
+        text = whole_chars(text)
+        // The not-found marker shows nothing, in plain text as in a call: ksagent says it itself.
+        if is_not_found_start(text)
+            text = ""
+        if text.len > r.written
+            if r.phase != Phase.writing
+                r.end_line()
+                r.phase = .writing
+                r.say(r.lang.writing_line())
+                r.say("\n")
+            r.say(text.sub_from(r.written))
+            r.text.s(text.sub_from(r.written))
+            r.written = text.len
+        r.write_live(false)
+
+    fn called(r: Self$@, calls: U8[]) //< the model called the reading tools; `calls` names them
+        r.end_line()
+        r.phase = .reading
+        r.tools_said = r.arena.dup_str(calls)
+        r.write_live(true)
+
+    fn note(r: Self$@, line: U8[]) //< a line of its own on the console, such as a tool call
+        r.end_line()
+        if r.console
+            io.err().s("  ")
+            answer.write_shown(io.err(), line)
+            io.err().c('\n')
+
+    fn go_on(r: Self$@): Bool //< false once the answer must stop; `stop` then says why
+        //< **A question stopped on the page, or gone from its ask file, stops its answer**: nobody
+        //< waits for it any more, and the model's time goes to the next question.
+        if r.stop.len > 0 || r.ask.len == 0 || sys.mono_us() - r.last_check_us < CHECK_GAP_US
+            return r.stop.len == 0
+        r.last_check_us = sys.mono_us()
+        defer look: = Arena(64 * 1024)
+        if files.ask_too_large(r.ask)
+            r.stop = "the ask file grew larger than 1 MiB"
+            return false
+        now: = io.read_file(r.ask, look) catch
+            fallback ""
+        r.stop = chat.stop_reason(now, r.id, look)
+        return r.stop.len == 0
+
+    fn ended(r: Self$@, why: U8[], written: Bool) //<
+        //< Ends the work: the live file says the turn stands in the chat file, or why it does not
+        //< Where it does not, the text shown so far stays in the live file, marked unchecked.
+        r.end_line()
+        if r.live.len == 0
+            return
+        $b: = Json_builder(r.arena)
+        $o: = b.obj().set("id", b.str_val(r.id))
+        if written
+            o = o.set("phase", b.str_val("done"))
+        else
+            o = o.set("phase", b.str_val("stopped")).set("why", b.str_val(why))
+                .set("text", b.str_val(r.text.slice()))
+        r.put_live(o.build())
+
+    priv fn say(r: Self$@, text: U8[]) //< writes to standard error, where it is shown
+        //< Each control character but a line break and a tab is replaced (`answer.write_shown`).
+        if r.console
+            answer.write_shown(io.err(), text)
+
+    priv fn end_line(r: Self$@) //< ends a line of growing text on the console
+        if r.console && (r.phase == Phase.thinking || r.phase == Phase.writing)
+            io.err().c('\n')
+        if r.phase == Phase.thinking || r.phase == Phase.writing
+            r.phase = .waiting
+
+    priv fn write_live(r: Self$@, now: Bool) //< rewrites the live file, at most once a second
+        //< One JSON record: the question's id, what the model does, and the unchecked text so far.
+        if r.live.len == 0 || (!now && sys.mono_us() - r.last_live_us < LIVE_GAP_US)
+            return
+        $b: = Json_builder(r.arena)
+        r
+            .put_live(b.obj().set("id", b.str_val(r.id))
+            .set("phase", b.str_val(r.phase.word())).set("tools", b.str_val(r.tools_said))
+            .set("text", b.str_val(r.text.slice())).build())
+
+    priv fn put_live(r: Self$@, record: json.Value) //<
+        //< replaces the live file; a failure is said once
+        r.last_live_us = sys.mono_us()
+        defer $out: = Str_builder()
+        record.dump(out@)
+        out.c('\n')
+        fs.replace_file(r.live, out.slice(), .kept) catch e
+            if r.console
+                io.err().s("  cannot write \{r.live\} (\{e\}); the answer goes on\n")
+            r.live = ""
+
+fn refused(live: U8[], why: U8[], arena: Arena$@) //<
+    //< Writes a live file that says why ksagent answers none of the conversation's questions
+    //< Its id is empty, which no question has, so the page shows `why` apart from every turn.
+    $b: = Json_builder(arena)
+    record: = b.obj().set("id", b.str_val("")).set("phase", b.str_val("refused"))
+        .set("why", b.str_val(why)).build()
+    defer $out: = Str_builder()
+    record.dump(out@)
+    out.c('\n')
+    fs.replace_file(live, out.slice(), .kept) catch {}
+
+impl Progress: Manual_free //< `free()` lets go the text it keeps
+    fn free(r: Self$@) //< frees this round's text
+        r.text.free()
+        r.reader.free()
+
+impl Phase
+    fn word(r: Self): U8[] //< the phase as the live file names it
+        switch r
+        case .waiting
+            return "waiting"
+        case .thinking
+            return "thinking"
+        case .writing
+            return "writing"
+        case .reading
+            return "reading"
+
+impl Lang
+    fn writing_line(r: Self): U8[] //< the console's line before an answer that grows
+        switch r
+        case .ja
+            return "  回答を書いています (出典は未確認):"
+        case .en
+            return "  writing (sources not checked yet):"
+
+// ==========================================
+// The answer's text, read from its arguments as they arrive
+// ==========================================
+
+priv enum Place //< where the reader of an `answer` call's arguments stands
+    open //< before the object's `{`
+    key_start //< before a member's key, or the object's end
+    key //< inside a member's key
+    colon //< after a key, before its `:`
+    value_start //< before a member's value
+    skipping //< inside the value of a member other than `text`
+    text //< inside the `text` member's string
+    done //< past the text's end, or where the arguments hold no text
+
+struct Text_reader //< the `text` member of an `answer` call's arguments, decoded as they arrive
+    //< **The arguments are JSON cut anywhere, and grow a piece at a time.** Each byte is read once:
+    //< `at` and the state say where reading goes on. So a long answer takes time and memory in
+    //< step with its length. An escape is decoded once it has fully come.
+    out: Str_builder //< the text decoded so far
+    priv at: Sz //< the first byte of the arguments not read yet
+    priv place: Place
+    priv key_len: Sz //< the bytes of the current key read so far
+    priv is_text: Bool //< whether the current key is `text` so far
+    priv depth: Sz //< how deep the skipped value nests
+    priv in_string: Bool //< whether the skipped value stands inside a string
+    priv escaped: Bool //< whether the byte before, in a key or a skipped string, was a backslash
+
+impl Text_reader
+    fn new(): Text_reader //< a reader at the start of the arguments
+        return Text_reader::{ .out = Str_builder(), .at = 0, .place = .open, .key_len = 0,
+            .is_text = false, .depth = 0, .in_string = false, .escaped = false }
+
+    fn clear(r: Self$@) //< starts again, for the arguments of another call
+        r.out.clear()
+        r.at = 0
+        r.place = .open
+
+    fn more(r: Self$@, args: U8[]) //< reads what has come since the last call; `args` only grows
+        for r.at < args.len && r.place != Place.done
+            if r.place == Place.text
+                used: = r.decode_one(args)
+                if used == 0
+                    return
+                r.at += used
+            else if r.step(args[r.at])
+                r.at += 1
+
+    priv fn step(r: Self$@, c: U8): Bool //< takes one byte outside the text; false to read it again
+        switch r.place
+        case .open
+            r.place = .key_start if c == '{' else (.open if c.is_space() else .done)
+        case .key_start
+            if c == '"'
+                r.place = .key
+                r.key_len = 0
+                r.is_text = true
+                r.escaped = false
+            else if !c.is_space() && c != ','
+                r.place = .done
+        case .key
+            r.take_key(c)
+        case .colon
+            r.place = .value_start if c == ':' else (.colon if c.is_space() else .done)
+        case .value_start
+            if c.is_space()
+                return true
+            if r.is_text
+                r.place = .text if c == '"' else .done
+                return true
+            r.place = .skipping
+            r.in_string = c == '"'
+            r.escaped = false
+            r.depth = 1 if c == '{' || c == '[' else 0
+        case .skipping
+            return r.skip(c)
+        default {}
+        return true
+
+    priv fn take_key(r: Self$@, c: U8) //< takes one byte of a key, comparing it with `text`
+        if r.escaped || c == '\\'
+            r.escaped = !r.escaped
+            r.is_text = false
+        else if c == '"'
+            r.is_text = r.is_text && r.key_len == 4
+            r.place = .colon
+        else
+            r.is_text = r.is_text && r.key_len < 4 && "text"[r.key_len] == c
+            r.key_len += 1
+
+    priv fn skip(r: Self$@, c: U8): Bool //< takes one byte of another member's value
+        //< False at the `}` that ends the object, which the next place reads again.
+        if r.in_string
+            if r.escaped
+                r.escaped = false
+            else if c == '\\'
+                r.escaped = true
+            else if c == '"'
+                r.in_string = false
+                r.place = .key_start if r.depth == 0 else .skipping
+        else if c == '"'
+            r.in_string = true
+        else if c == '{' || c == '['
+            r.depth += 1
+        else if c == '}' || c == ']'
+            if r.depth == 0
+                r.place = .key_start
+                return false
+            r.depth -= 1
+            r.place = .key_start if r.depth == 0 else .skipping
+        else if r.depth == 0 && (c == ',' || c.is_space())
+            r.place = .key_start
+        return true
+
+    priv fn decode_one(r: Self$@, s: U8[]): Sz //<
+        //< Decodes one character or escape of the text at `at`; the bytes used, or 0 until it comes
+        at: = r.at
+        c: = s[at]
+        if c == '"'
+            r.place = .done
+            return 1
+        if c != '\\'
+            r.out.c(c)
+            return 1
+        if at + 1 >= s.len
+            return 0
+        e: = s[at + 1]
+        if e != 'u'
+            r.out.c(simple_escape(e))
+            return 2
+        $cp: = hex4(s, at + 2) catch
+            return 0
+        $used: Sz = 6
+        if cp >= 0xD800 && cp < 0xDC00
+            // A high surrogate takes the low one after it, once that has come.
+            if at + 12 > s.len && (s.len <= at + 6 || s[at + 6] == '\\') &&
+                (s.len <= at + 7 || s[at + 7] == 'u')
+                return 0
+            low: = hex4(s, at + 8).unwrap_or(0)
+            if !s.starts_with("\\u", at + 6) || low < 0xDC00 || low >= 0xE000
+                cp = 0xFFFD
+            else
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
+                used = 12
+        put_utf8(r.out@, cp)
+        return used
+
+impl Text_reader: Manual_free //< `free()` lets go the text it keeps
+    fn free(r: Self$@) //< frees the text decoded
+        r.out.free()
+
+priv fn is_not_found_start(text: U8[]): Bool //< whether the text can still be the not-found marker
+    t: = text.trim_start()
+    return t.len <= answer.NOT_FOUND.len &&
+        answer.NOT_FOUND.sub(0, t.len).equals_ignore_case(t)
+
+priv fn simple_escape(e: U8): U8 //< the character a one-letter JSON escape stands for
+    switch e
+    case 'n'
+        return '\n'
+    case 't'
+        return '\t'
+    case 'r'
+        return '\r'
+    case 'b'
+        return 8U8
+    case 'f'
+        return 12U8
+    default
+        return e
+
+priv fn hex4(s: U8[], from: Sz): I32? //< the four hex digits at `from`, or none until they come
+    if from + 4 > s.len
+        return .none
+    $v: I32 = 0
+    for i in Range.asc(4)
+        d: = s[from + i].hex_val() catch
+            return .some(0xFFFD)
+        v = v * 16 + d
+    return .some(v)
+
+priv fn put_utf8(out: Str_builder$@, cp: I32) //< writes a code point as UTF-8
+    if cp < 0x80
+        out.c(U8::cp)
+    else if cp < 0x800
+        out.c(U8::(0xC0 | (cp >> 6))).c(U8::(0x80 | (cp & 0x3F)))
+    else if cp < 0x10000
+        out.c(U8::(0xE0 | (cp >> 12))).c(U8::(0x80 | ((cp >> 6) & 0x3F)))
+            .c(U8::(0x80 | (cp & 0x3F)))
+    else
+        out.c(U8::(0xF0 | (cp >> 18))).c(U8::(0x80 | ((cp >> 12) & 0x3F)))
+            .c(U8::(0x80 | ((cp >> 6) & 0x3F))).c(U8::(0x80 | (cp & 0x3F)))
+
+priv fn whole_chars(t: U8[]): U8[] //< the text up to a last UTF-8 character still arriving
+    $back: Sz = 1
+    for back <= 3 && back <= t.len
+        c: = t[t.len - back]
+        if (c & 0xC0U8) == 0xC0U8
+            width: = 2 if c < 0xE0U8 else (3 if c < 0xF0U8 else 4)
+            return t.sub(0, t.len - back) if width > back else t
+        if (c & 0xC0U8) != 0x80U8
+            return t
+        back += 1
+    return t

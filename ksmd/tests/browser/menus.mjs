@@ -3,7 +3,7 @@
 // whole block. Each is driven through the browser's own input events, as `main.mjs` drives the
 // rest, and checked by the saved source and its undo.
 // `menus(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
 
 const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
@@ -92,7 +92,8 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(await visible() === 1, "Show only rows with this value hides the other rows");
     check(await js("document.querySelector('.filter-note').textContent.startsWith('Showing 1 of 3 rows')"),
       "and a line above the table says how many rows are shown");
-    await saves("and the file still holds every row", table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`));
+    await saves("and the file holds every row, and the filter beside them",
+      table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`).replace(':::table name="t"', ':::table name="t" filter="in:fig,"'));
     await click(".filter-note .filter-clear");
     check(await visible() === 3, "Show all rows shows them again");
     // The column's own panel, as Excel's filter: untick a value and press OK.
@@ -372,6 +373,37 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(await width() === full, "and Full width fills the window again");
     check(await js("document.querySelectorAll('.quick [data-cmd^=\"align-\"] svg').length") === 3,
       "each alignment tool draws its own lines");
+  },
+
+  // Paragraph turns every kind of block back into a plain paragraph, as Word's Normal style and
+  // Google Docs' Normal text do; Clear format leaves the kind, as it leaves the marks.
+  async paragraphAgain() {
+    const fence = "```";
+    const start = `${H}# **Head**\n\n- one\n- [ ] two\n\n> quoted\n\n${fence}\ncode\n${fence}\n\nplain\n`;
+    const all = () => js(`(() => {
+      const doc = document.getElementById("doc");
+      doc.focus();
+      const last = doc.lastElementChild.firstChild;
+      window.getSelection().setBaseAndExtent(doc.firstElementChild, 0, last, last.data.length);
+    })()`);
+    await load(start);
+    await select(0, 0, 0);
+    await menu("look-clear");
+    await saves("Clear format leaves a heading a heading, and its marks", start);
+    await all();
+    await press("0", CTRL | ALT);
+    await saves("Ctrl+Alt+0 makes a heading, list items, a checklist item, a quote and code paragraphs",
+      `${H}**Head**\n\none\n\ntwo\n\nquoted\n\ncode\n\nplain\n`);
+    await menu("undo");
+    await saves("and one undo gives every kind back", start);
+    await all();
+    await menu("p");
+    await saves("Format, Kind of block, Paragraph does the same",
+      `${H}**Head**\n\none\n\ntwo\n\nquoted\n\ncode\n\nplain\n`);
+    check(await js("document.querySelector('.menubar [data-cmd=\"p\"] kbd').textContent") === "Ctrl+Alt+0",
+      "and its item shows its key, Ctrl+Alt+0");
+    check(await js("document.querySelector('.menubar [data-cmd=\"h2\"] kbd').textContent") === "Ctrl+Alt+2",
+      "as each heading's item shows its own");
   },
 
   // Each table and format command that no other check presses, pressed once from its menu where

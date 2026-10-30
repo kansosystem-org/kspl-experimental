@@ -17,16 +17,20 @@ import "ksai/nn"
 import "ksai/safetensors" as st
 import "ksai/sampler"
 import "ksai/tensor" { Tensor }
+import "std/bytes" // U8[].get_u64_le's extension impl
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" // U8[].equals's extension impl
 import "std/strfmt" as _strfmt
 import "std/strnum" // U8[].to_i64's extension impl
 
 enum Pilot_error
-    bad_blob //< it does not read as safetensors
+    bad_blob //< it does not read as safetensors, or a tensor's bytes lie outside the file
+    too_deep //< the header nests deeper than a policy's (`MAX_HEADER_DEPTH`)
     bad_version //< there is no `__metadata__.kspl_pilot`, or the version is unknown
     bad_meta //< the metadata (far_mm) cannot be read
     missing //< a required tensor is absent
+    bad_dtype //< a tensor's elements are not F32
     bad_shape //< a tensor's shape differs from what this version expects
 
 struct Drive //< values that can be passed to the car's `motor.drive` as they are
@@ -47,14 +51,72 @@ fn empty(): Policy //< a policy with nothing read into it yet
     //< fields are private, so `Policy::{}` cannot be written from outside.
     return Policy::{}
 
-priv fn dim(t: Tensor<|F32|>, i: Sz): Sz
-    return 0 if i >= t.shape.len else t.shape[i]
+priv const MAX_HEADER_DEPTH: Sz = 3 //<
+    //< the deepest nesting of `[` and `{` a policy's header may have
+    //< A policy's own is three: the header, a tensor's entry, its shape.
+    //< Caution: **Refuse a deeper header before the JSON parser sees it.** The parser recurses once
+    //< per level, about 176 bytes of stack each, and the car's task stack is 2560 bytes. Its own
+    //< limit is 500 levels, and on bare metal it cannot see where the stack ends (`std/stack_limit`
+    //< answers "not known" there), so a deep header would run past the stack into other memory.
+
+priv fn header_depth(blob: U8[]): Sz //<
+    //< How deep the header's `[` and `{` nest, counting none inside a string
+    //< 0 where blob has no whole header; `load_from_bytes` refuses those.
+    if blob.len < 8 || blob.get_u64_le(0) > U64::(blob.len - 8)
+        return 0
+    end: = 8 + Sz::blob.get_u64_le(0)
+    $depth: Sz = 0
+    $deepest: Sz = 0
+    $in_string: = false
+    $at: Sz = 8
+    for at < end
+        c: = blob[at]
+        at += 1
+        if in_string
+            if c == '\\'
+                at += 1 // the escaped character, which may be `"`
+            else if c == '"'
+                in_string = false
+            continue
+        if c == '"'
+            in_string = true
+        else if c == '[' || c == '{'
+            depth += 1
+            deepest = math.max(deepest, depth)
+        else if (c == ']' || c == '}') && depth > 0
+            depth -= 1
+    return deepest
+
+priv fn is_shape(t: Tensor<|F32|>, d0: Sz, d1: Sz): Bool //<
+    //< Whether t is exactly [d0, d1], or exactly [d0] when d1 is 0
+    //< Caution: **Check the rank, not only the sizes read.** `[5, 24, 1]` has the right first two
+    //< and three times the elements, and the matrix product stops the program on it.
+    if t.shape.len != (1 if d1 == 0 else 2) || t.shape[0] != d0
+        return false
+    return d1 == 0 || t.shape[1] == d1
+
+priv fn tensor(sf: st.Safetensors$@, name: U8[], arena: Arena$@): Tensor<|F32|>!Pilot_error //<
+    //< One tensor, with the cause the car prints when it cannot be read
+    //< Caution: **Map each failure to its own cause.** Read as "missing", a file cut short sends
+    //< the reader to look for a tensor that is there.
+    return sf.get_tensor<|F32|>(name, arena) catch e
+        switch e
+        case .tensor_not_found
+            throw .missing
+        case .dtype_mismatch
+            throw .bad_dtype
+        case .shape_mismatch
+            throw .bad_shape
+        default
+            throw .bad_blob
 
 fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
     //< Reads the one file given and returns a policy ready to decide with
     //< blob belongs to the caller.
     //< Caution: **Keep it alive as long as the returned Policy is used.** The weights point
     //< straight into blob, zero copy (see get_tensor in ksai/safetensors).
+    if header_depth(blob) > MAX_HEADER_DEPTH
+        throw .too_deep
     $sf: = st.Safetensors.load_from_bytes(blob, arena) catch
         throw .bad_blob
     meta: = sf.metadata().get("__metadata__")
@@ -65,26 +127,23 @@ fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
     if far_mm <= 0I64
         throw .bad_meta
 
-    w1: = sf.get_tensor<|F32|>("fc1.weight", arena) catch
-        throw .missing
-    b1: = sf.get_tensor<|F32|>("fc1.bias", arena) catch
-        throw .missing
-    w2: = sf.get_tensor<|F32|>("fc2.weight", arena) catch
-        throw .missing
-    b2: = sf.get_tensor<|F32|>("fc2.bias", arena) catch
-        throw .missing
-    man: = sf.get_tensor<|F32|>("maneuvers", arena) catch
-        throw .missing
+    w1: = tensor(sf@, "fc1.weight", arena)!
+    b1: = tensor(sf@, "fc1.bias", arena)!
+    w2: = tensor(sf@, "fc2.weight", arena)!
+    b2: = tensor(sf@, "fc2.bias", arena)!
+    man: = tensor(sf@, "maneuvers", arena)!
 
-    hidden: = dim(w1, 1)
-    actions: = dim(w2, 1)
-    // Caution: Check every shape before building. Miss even one and a later matmul reads outside
-    // blob.
-    if dim(w1, 0) != encoding.FEATURE_COUNT || hidden == 0 || actions == 0
+    // Caution: Check every shape before building. Miss even one and a later matmul stops the
+    // program, and the car saves the file before its first decision.
+    if w1.shape.len != 2 || w2.shape.len != 2
         throw .bad_shape
-    if dim(b1, 0) != hidden || dim(w2, 0) != hidden || dim(b2, 0) != actions
+    hidden: = w1.shape[1]
+    actions: = w2.shape[1]
+    if hidden == 0 || actions == 0 || !is_shape(w1, encoding.FEATURE_COUNT, hidden)
         throw .bad_shape
-    if dim(man, 0) != actions || dim(man, 1) != encoding.DRIVE_FIELDS
+    if !is_shape(b1, hidden, 0) || !is_shape(w2, hidden, actions) || !is_shape(b2, actions, 0)
+        throw .bad_shape
+    if !is_shape(man, actions, encoding.DRIVE_FIELDS)
         throw .bad_shape
 
     // The same nn.Mlp as the producer: one forward pass, not a copy of the formula.

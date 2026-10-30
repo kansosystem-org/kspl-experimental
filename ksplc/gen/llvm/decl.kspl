@@ -164,7 +164,7 @@ impl Ast_node
             case .real(f)
                 cg.s(gen_llvm_ctx.format_f64_hex(f))
             return
-        if init: = r.named_const_init(cg, type_id)
+        if init: = r.named_const_init(cg)
             init.emit_llvm_const_init(cg, type_id)
             return
         switch r.kind_id
@@ -187,11 +187,12 @@ impl Ast_node
         default
             r.ice_panic("genllvm: a global initializer of a form sema did not classify")
 
-    priv fn named_const_init(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32): Ast_node$@? //<
+    priv fn named_const_init(r: Ast_node$@, cg: Genllvm_ctx$@): Ast_node$@? //<
         //< The initializer of the `const` a global initializer names, written in its place
-        //< A name is no constant to LLVM; the value it names is. A function's name stays a name.
-        if !r.is_path_or_ident() ||
-            cg.env.is_fn_ptr(cg.env.get_clean_real_type(type_id))
+        //< A name is no constant to LLVM; the value it names is. A function's name names no
+        //< `const`, so it stays a name; a `const` of function type gives its initializer, as any
+        //< other `const` does.
+        if !r.is_path_or_ident()
             return .none
         return r.const_init_expr(cg.sema)
 
@@ -434,7 +435,7 @@ impl Ast_node
         //< variant decides its own bytes. Each piece sits at sema's offset with explicit `i8`
         //< padding, so what the code reads through the named types finds its bytes.
         if r != null
-            if init: = r.named_const_init(cg, type_id)
+            if init: = r.named_const_init(cg)
                 init.emit_llvm_laid_const(cg, type_id, as_type)
                 return
         if !cg.holds_laid_value(type_id, 0) || r == null || r.kind_id == .k_empty

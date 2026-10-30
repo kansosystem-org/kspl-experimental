@@ -8,6 +8,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/http"
+import "std/http_body"
 import "std/io"
 import "std/json"
 import "std/mem" { Arena }
@@ -60,7 +61,7 @@ priv fn ask(url: U8[], target: U8[], arena: Arena$@): http.Response$@? //<
     http.write_request(stream, "GET", target, head, "", ANSWER_WAIT_MS) catch
         return .none
     answer: =
-        http.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
+        http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
         return .none
     return .some(answer)
 
@@ -142,7 +143,8 @@ priv fn place(work: U8[], launcher: U8[], server: U8[], arena: Arena$@): U8[]!fs
     //< Copies the launcher and the server into `<work>/bin` with a stand-in page beside them
     //< Returns the launcher's copy. The page is served for `/` alone, so any text stands in for it.
     bin: = fs.join(work, "bin", arena)
-    fs.write_tree(fs.join(bin, aim.BUILT, arena), U8[][]::{ aim.PAGE }, U8[][]::{ PAGE }, arena)!
+    fs.write_tree(fs.join(bin, aim.KSMD.built, arena), U8[][]::{ aim.KSMD.page },
+        U8[][]::{ PAGE }, arena)!
     at: = fs.join(bin, "ksmd_open.exe", arena)
     fs.copy_file(launcher, at)!
     fs.copy_file(server, fs.join(bin, "kssrv.exe", arena))!

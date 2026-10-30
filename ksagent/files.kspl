@@ -1,8 +1,12 @@
 //< The folder's files, as the model's tools reach them
 //< **Every path the model gives passes `resolve` first**, so nothing outside the folder, no link
 //< and no hidden name is ever read. The tools only read: nothing here writes a file.
-//< A file is text only when it holds no NUL byte and is valid UTF-8 (`text_problem`).
-//< **A chat file is no source**: it holds questions and earlier answers (`is_chat`).
+//< A file is text when it holds no NUL byte and is valid UTF-8 (`text_problem`). **A Word or Excel
+//< file is read as its text view** (`ksagent/office/`), so the tools and the citation check see
+//< lines in both. **A conversation's files are no source**: they hold the model's own words and a
+//< person's questions (`is_conversation`).
+import "ksagent/office/excel"
+import "ksagent/office/word"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -17,12 +21,28 @@ const MAX_HITS: Sz = 50 //< the most lines one search returns
 const MAX_READ_LINES: Sz = 400 //< the most lines one read returns
 const MAX_READ_BYTES: Sz = 32 * 1024 //< the most bytes one read returns
 const MAX_LISTED: Sz = 500 //< the most names one listing returns
-priv const MAX_TEXT_BYTES: I64 = 8I64 * 1024I64 * 1024I64 //< a larger file is not read
+priv const MAX_TEXT_BYTES: I64 = 8I64 * 1024I64 * 1024I64 //<
+    //< a larger file, or text view, is not read
     //< It bounds the memory one tool call takes; a regulation or a source file is far smaller.
+priv const MAX_OFFICE_BYTES: I64 = 32I64 * 1024I64 * 1024I64 //<
+    //< a larger Word or Excel file is not read
+    //< Pictures make most of such a file's size, and only its text is unpacked
+    //< (`ksagent/office/zip.kspl` caps that).
 priv const HIT_TEXT_BYTES: Sz = 200 //< how much of a matching line a search hit shows
     //< The model reads the lines around a hit with `read`, so a hit only has to place them.
 
-const CHAT_SUFFIX: U8[] = ".chat.ksmd" //< how the name of a chat file ends (`ksagent watch`)
+const ASK_SUFFIX: U8[] = ".ask.jsonl" //< how the name of the file a page asks in ends
+    //< `ksagent watch` answers the questions in it. Only the page writes it.
+const MAX_ASK_BYTES: Sz = 1024 * 1024 //< the largest ask file whose questions are answered
+    //< It is read again for each question, and every 2 seconds while an answer is written. A MiB
+    //< holds thousands of questions; past it, the person starts a new conversation.
+const CHAT_SUFFIX: U8[] = ".chat.jsonl" //< how the name of a conversation's record ends
+    //< `team.ask.jsonl` has `team.chat.jsonl`. Only ksagent writes it.
+const LIVE_SUFFIX: U8[] = ".live.json" //< how the name of the answer being written ends
+    //< `team.ask.jsonl` has `team.live.json`. Only ksagent writes it.
+priv const OLD_SUFFIXES: U8[][_] = ::{ ".chat.ksmd", ".live.ksmd" } //<
+    //< how the names of chat files of the old form end, which ksmd's editor showed
+    //< Their answers are the model's own words, so `old_chat_file` finds them before any command.
 
 enum Resolved //< a path the model gave, checked against the root
     ok(full: U8[], rel: U8[]) //< the path to open, and the path under the root (empty: the root)
@@ -45,14 +65,45 @@ fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved //<
             as rules/leave.md, with no `..` step and no link on the way")
     if hides_name(rel) || hides_long_name(root, rel, arena)
         return .refused("names that start with a dot are hidden, and cannot be read")
-    if is_chat(sys.get_file_name(rel))
-        return .refused("a chat file holds questions and earlier answers, which are no source")
+    if is_conversation(sys.get_file_name(rel)) ||
+        is_conversation(last_long_name(root, rel, arena))
+        return .refused("a conversation's file holds the model's own words or a person's questions, \
+            which are no source")
     return .ok(fs.join(root, rel, arena), rel)
 
-fn is_chat(name: U8[]): Bool //< whether a name is a chat file's
-    //< Caution: **Never let a chat file back an answer.** Its answers are the model's own words, so
-    //< citing one would check a claim against itself.
-    return name.ends_with(CHAT_SUFFIX)
+fn is_ask(name: U8[]): Bool //< whether a name is an ask file's, whose questions `watch` answers
+    return name.ends_with(ASK_SUFFIX)
+
+fn ask_too_large(ask_path: U8[]): Bool //< whether an ask file is past `MAX_ASK_BYTES`
+    info: = fs.stat(ask_path) catch
+        return false
+    return info.size > I64::MAX_ASK_BYTES
+
+fn is_conversation(name: U8[]): Bool //< whether a name is one of a conversation's three files
+    //< Caution: **Never let one back an answer.** Its answers are the model's own words, so citing
+    //< one would check a claim against itself, and a question is no evidence either. **ASCII case
+    //< is ignored**, since Windows and macOS open `team.CHAT.jsonl` as `team.chat.jsonl`.
+    return ends_ignoring_case(name, ASK_SUFFIX) || ends_ignoring_case(name, CHAT_SUFFIX) ||
+        ends_ignoring_case(name, LIVE_SUFFIX)
+
+fn chat_path(ask_path: U8[], arena: Arena$@): U8[] //< the conversation's record beside an ask file
+    return arena.text().s(ask_path.strip_suffix(ASK_SUFFIX)).s(CHAT_SUFFIX).take()
+
+fn live_path(ask_path: U8[], arena: Arena$@): U8[] //< the answer being written, beside an ask file
+    return arena.text().s(ask_path.strip_suffix(ASK_SUFFIX)).s(LIVE_SUFFIX).take()
+
+fn old_chat_file(root: U8[], arena: Arena$@): U8[] //<
+    //< The first chat file of the old form under the root, or empty where none stands
+    //< **No command starts beside one**: the tools do not hide it, so its answers would count as
+    //< sources. The person deletes it, or asks its questions again on the chat page.
+    found: = fs.walk_files(root, skip_dir, arena) catch
+        return ""
+    for path in found
+        name: = sys.get_file_name(path)
+        for suffix in OLD_SUFFIXES
+            if ends_ignoring_case(name, suffix) && !is_hidden(name)
+                return path
+    return ""
 
 fn is_hidden(name: U8[]): Bool //< whether a name is one the tools never show: it starts with a dot
     return name.len > 0 && name[0] == '.'
@@ -69,18 +120,33 @@ priv fn hides_name(rel: U8[]): Bool //< whether a segment of `rel` starts with a
 
 priv fn hides_long_name(root: U8[], rel: U8[], arena: Arena$@): Bool //<
     //< Whether a segment of `rel`, by the name the file system keeps, starts with a dot
+    //< Caution: **Skip an empty segment** (`a//b`): Windows reads no long name for `a/`.
+    //< Caution: **A long name that cannot be read hides what stands there.** Only where nothing
+    //< stands is the path not hidden (a file `eval --out` makes), and nothing deeper can stand.
     $start: Sz = 0
     for start <= rel.len
         end: = sys.segment_end(rel, start)
-        long: =
-            fs.long_name(fs.join(root, rel.sub(0, end), arena), arena) catch
-            return false
+        empty: = end == start
+        start = end + 1
+        if empty
+            continue
+        prefix: = fs.join(root, rel.sub(0, end), arena)
+        long: = fs.long_name(prefix, arena) catch
+            return fs.exists(prefix)
         if is_hidden(long)
             return true
-        start = end + 1
     return false
 
+priv fn last_long_name(root: U8[], rel: U8[], arena: Arena$@): U8[] //<
+    //< The name the file system keeps for the last segment of `rel`; empty where nothing stands
+    //< **Windows answers to a short name**, so `TEAM~1.JSO` can open `team.chat.jsonl`.
+    return fs.long_name(fs.join(root, rel, arena), arena) catch
+        fallback ""
+
 fn skip_dir(name: U8[]): Bool //< the folders a walk does not enter: hidden ones, and `out`
+    //< **`out` is skipped at any depth**: a checkout keeps build output there, often in each
+    //< package, and its generated text would bury the real lines. A search given a path inside
+    //< one still reads it, since the walk starts there.
     return is_hidden(name) || name.equals("out")
 
 fn text_problem(bytes: U8[]): U8[] //< why the bytes are not text, or empty when they are
@@ -96,8 +162,31 @@ fn text_problem(bytes: U8[]): U8[] //< why the bytes are not text, or empty when
         i += n
     return ""
 
+priv enum Kind //< how a file is read, by the ending of its name
+    text //< as it stands, when it is UTF-8 text
+    word //< `.docx`, `.docm`: as its text view
+    excel //< `.xlsx`, `.xlsm`: as its text view
+    old_word //< `.doc`: refused, with what to do
+    old_excel //< `.xls`: refused, with what to do
+
+priv fn kind_of(name: U8[]): Kind //< how a file of that name is read
+    if ends_ignoring_case(name, ".docx") || ends_ignoring_case(name, ".docm")
+        return .word
+    if ends_ignoring_case(name, ".xlsx") || ends_ignoring_case(name, ".xlsm")
+        return .excel
+    if ends_ignoring_case(name, ".doc")
+        return .old_word
+    if ends_ignoring_case(name, ".xls")
+        return .old_excel
+    return .text
+
+priv fn ends_ignoring_case(name: U8[], ending: U8[]): Bool //< whether the name ends so, any case
+    return name.len >= ending.len &&
+        name.sub_from(name.len - ending.len).equals_ignore_case(ending)
+
 fn read_text(full: U8[], arena: Arena$@): U8[]!U8[] //<
-    //< The whole file, when it is a text file; otherwise why not, as one line
+    //< The whole file as text, or its text view for a Word or Excel file; otherwise why not, as one
+    //< line
     info: = fs.stat(full) catch
         throw "there is no such file"
     switch info.kind
@@ -108,6 +197,19 @@ fn read_text(full: U8[], arena: Arena$@): U8[]!U8[] //<
         throw "it is not a regular file"
     if fs.is_link(full)
         throw "it is a link, and links are not followed"
+    kind: = kind_of(sys.get_file_name(full))
+    switch kind
+    case .old_word
+        throw "it is a Word file in the old format (.doc), which is not read: open it in Word and \
+            save it as .docx"
+    case .old_excel
+        throw "it is an Excel file in the old format (.xls), which is not read: open it in Excel \
+            and save it as .xlsx"
+    default {}
+    if kind == Kind.word || kind == Kind.excel
+        if info.size > MAX_OFFICE_BYTES
+            throw "it is larger than 32 MiB"
+        return office_text(full, kind, arena)
     if info.size > MAX_TEXT_BYTES
         throw "it is larger than 8 MiB"
     body: = io.read_file(full, arena) catch
@@ -116,6 +218,19 @@ fn read_text(full: U8[], arena: Arena$@): U8[]!U8[] //<
     if problem.len > 0
         throw problem
     return body
+
+priv fn office_text(full: U8[], kind: Kind, arena: Arena$@): U8[]!U8[] //<
+    //< A Word or Excel file's text view, worked out in an arena of its own
+    //< **Only the view is kept**: the file and its unpacked parts are many times its size, and a
+    //< search reads every file in one call.
+    defer work: = Arena(1024 * 1024)
+    body: = io.read_file(full, work) catch
+        throw "it cannot be read"
+    view: =
+        (word.text_of(body, Sz::MAX_TEXT_BYTES, work) if kind == Kind.word
+        else excel.text_of(body, Sz::MAX_TEXT_BYTES, work)) catch why
+        throw arena.dup_str(why)
+    return arena.dup_str(view)
 
 fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The lines of a text, numbered from 1 by their index plus one
@@ -145,7 +260,7 @@ fn tool_list(root: U8[], given: U8[], arena: Arena$@): U8[] //< the entries of o
     $listed: Sz = 0
     for name in sorted
         path: = fs.join(full, name, arena)
-        if is_hidden(name) || is_chat(name) || fs.is_link(path)
+        if is_hidden(name) || is_conversation(name) || fs.is_link(path)
             continue
         if listed == MAX_LISTED
             out.s("(the list stops at \{MAX_LISTED\} names)\n")
@@ -180,26 +295,31 @@ fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
             return "refused: the folder cannot be read"
     else
         files.push(full)
-    // Every line that holds a word, with how many it holds; each list is cut where no more of it
-    // could be shown.
+    // The lines that hold a word, with how many each holds; each list is cut where no more of it
+    // could be shown. **Each file is read in memory of its own**, and only its hits are kept.
     $whole: = List<|Hit|>(arena)
     $partial: = List<|Hit|>(arena)
     for path in files
         name: = sys.get_file_name(path)
-        if is_hidden(name) || is_chat(name) || fs.is_link(path)
+        if is_hidden(name) || is_conversation(name) || fs.is_link(path)
             continue
-        body: = read_text(path, arena) catch
+        defer one: = Arena(64 * 1024)
+        body: = read_text(path, one) catch
             continue
-        shown: = shown_path(rel, full, path, arena)
-        lines: = split_lines(body, arena)
+        lines: = split_lines(body, one)
+        $shown: U8[] = ""
         for i in Range.asc(lines.len)
             held: = words_held(lines.get(i), words.slice())
-            if held == 0
+            if held == 0 || whole.len > MAX_HITS ||
+                (held < words.len && partial.len == MAX_PARTIAL)
                 continue
-            hit: = Hit::{ .path = shown, .line = i + 1, .text = lines.get(i), .held = held }
+            if shown.len == 0
+                shown = shown_path(rel, full, path, arena)
+            kept: = arena.dup_str(cut(lines.get(i).trim_spaces(), HIT_TEXT_BYTES))
+            hit: = Hit::{ .path = shown, .line = i + 1, .text = kept, .held = held }
             if held == words.len
                 whole.push(hit)
-            else if partial.len < MAX_PARTIAL
+            else
                 partial.push(hit)
     if whole.len > 0
         return hit_lines(whole.slice(), arena)
@@ -220,7 +340,7 @@ fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
 priv struct Hit //< one line a search found
     path: U8[] //< the file, as the model gives it back
     line: Sz //< its number, from 1
-    text: U8[] //< the line itself
+    text: U8[] //< the line, cut to `HIT_TEXT_BYTES`
     held: Sz //< how many of the search's words it holds
 
 priv const MAX_PARTIAL: Sz = 10000 //< the most lines kept that hold only some of the words
@@ -237,7 +357,7 @@ priv fn hit_lines(hits: Hit[], arena: Arena$@): U8[] //<
     return out.take()
 
 priv fn hit_line(h: Hit, out: str.Arena_text$@) //< writes one hit as `path:line: text`
-    out.s(h.path).s(":\{h.line\}: ").s(cut(h.text.trim_spaces(), HIT_TEXT_BYTES)).c('\n')
+    out.s(h.path).s(":\{h.line\}: ").s(h.text).c('\n')
 
 fn words_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The words of a search, lower case, each once

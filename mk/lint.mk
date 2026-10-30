@@ -18,8 +18,23 @@ FMT_LIST = { git ls-files '*.kspl'; \
     $(foreach d,$(FMT_UNTOUCHED),| grep -v '^$(d)/') | sort -u \
     | while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done
 
+# **Where git cannot list the files, fmt and lint stop**, as the suites do (`tracked` in
+# `tests/support/harness.kspl`). An empty list would pass, having formatted or found nothing, and
+# lint would check only the files named by hand. A copy without `.git` (a downloaded archive)
+# needs one `git init`: the untracked files are listed then too. The check costs one `git ls-files`.
+# Caution: **Stop in a recipe, not when the file is read**: every other target must still work.
+# **`GIT_UNLISTED` comes first among the prerequisites**, so it stops the run before a lint starts.
+git_unlisted := $(shell git ls-files > /dev/null 2>&1 || echo 1)
+GIT_UNLISTED := $(if $(git_unlisted),git-unlisted)
+define git_unlisted_help
+git cannot list this folder's files (git ls-files), so make cannot find what to format or lint.
+  In a copy without .git, run `git init` once: git then lists the files that are not committed too
+endef
+git-unlisted:
+	$(if $(git_unlisted),$(error $(git_unlisted_help)))
+
 ## Local-cycle|fmt|Format every tracked `.kspl` (`FMT_JOBS=1` for one at a time)
-fmt: $(SEED_EXE)
+fmt: $(GIT_UNLISTED) $(SEED_EXE)
 	@set -o pipefail; mkdir -p $(TMP_DIR); log=$(TMP_DIR)/fmt.log; : > "$$log"; \
 	list=$(TMP_DIR)/fmt_files; \
 	$(FMT_LIST) | tr '\n' '\0' > "$$list"; \
@@ -48,8 +63,8 @@ LINT_FIXTURES := ksplc/tests/negative ksplc/tests/parse ksplc/tests/lint ksplc/t
   ksplc/tests/ship
 
 # Caution: **Pass the paths through a pipe, not as arguments**: hundreds of them on one command line
-# pass the length Windows allows.
-LINT_MAINS := $(shell { git ls-files; git ls-files --others --exclude-standard; } \
+# pass the length Windows allows. git's own complaint is left out: `git_unlisted` above says why.
+LINT_MAINS := $(shell { git ls-files; git ls-files --others --exclude-standard; } 2> /dev/null \
   | grep '\.kspl$$' | grep -v $(foreach d,$(LINT_FIXTURES),-e '^$(d)/') \
   | while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done \
   | tr '\n' '\0' | xargs -0 grep -lE '$(lint_main_re)' | tr '\n' '\0' \
@@ -106,7 +121,7 @@ LINT_ONE_TARGETS := $(addprefix lint-one-,$(subst /,_,$(LINT_TARGETS) $(LINT_TAR
   $(LINT_TARGETS_OWN)) $(addsuffix -blas,$(subst /,_,$(LINT_TARGETS_BLAS))))
 
 ## Local-cycle|lint|Static analysis. Zero down to hints is a pass
-lint: $(LINT_ONE_TARGETS)
+lint: $(GIT_UNLISTED) $(LINT_ONE_TARGETS)
 	@echo "RESULT: ALL PASS ($(words $(LINT_ONE_TARGETS)) lint targets clean)"
 
 ## Per-item|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`; `-blas` ends the `#cfg(blas)` reading)

@@ -1,11 +1,12 @@
-//< Following the chat files under a folder, and answering each question added to one
-//< **Files are the only channel between a page and ksagent**: the person saves a question, and
-//< ksagent writes the answer into the same file. Why is "Files are the only channel" in
-//< `ksagent/docs/DESIGN-agent.md`.
+//< Following the ask files under a folder, and answering each question a page adds to one
+//< **Files are the only channel between a page and ksagent**: the page appends a question to an
+//< ask file, and ksagent records the question and its answer in the chat file beside it. Why is
+//< "Files are the only channel" in `ksagent/docs/DESIGN-agent.md`.
 import "ksagent/agent"
 import "ksagent/answer"
 import "ksagent/chat"
 import "ksagent/files"
+import "ksagent/progress" + { Progress }
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -17,52 +18,124 @@ import "std/sys"
 priv const SCAN_GAP_MS: I32 = 2000 //< the wait between two looks at the folder
     //< Short enough that an answer starts soon after a save; a look costs one walk of the folder.
 priv const MAX_ANSWERS_PER_LOOK: Sz = 20 //< the most questions one file gets answered in one look
-    //< It bounds a look at a file whose writing back keeps failing to take the question.
+    //< Then the other files get their turn, and the next look goes on with this one.
+priv const LOCK_NAME: U8[] = ".ksagent.lock" //< the lock one `watch` holds on its folder
+    //< **One `watch` per folder**, or two would answer one question and both write its chat file.
+    //< The name starts with a dot, so neither the tools nor a page's listing shows it.
 
 struct Stamp //< what tells that a file changed: its size and its change time
     size: I64
     mtime: I64
 
-struct Seen //< a chat file, and its stamp when it was last looked at
-    path: U8[]
-    stamp: Stamp
+priv const UNSEEN: Stamp = Stamp::{ .size = -1I64, .mtime = -1I64 } //<
+    //< the stamp of a file that is not there, or that the next look must read again
 
-fn watch(job: agent.Ask): I32 //< follows the chat files under the root until the process ends
+struct Seen //< an ask file, and the stamps of it and its chat file when it was last read
+    path: U8[]
+    ask: Stamp
+    chat: Stamp
+
+fn watch(job: agent.Ask): I32 //< follows the ask files under the root until the process ends
     //< **The files seen are a list, not a `Map`**: their names come from whoever can write into the
     //< folder, and `Map`'s hashing has no seed against chosen collisions.
+    // **Each line goes out at once**, so a log of the run holds every line even after Ctrl+C.
+    io.set_line_buffered()
     defer keep: = Arena(64 * 1024)
+    lock_path: = fs.join(job.root, LOCK_NAME, keep)
+    defer $_lock: = fs.File_lock.try_take(lock_path) catch e
+        io.err().s(lock_refusal(job.root, lock_path, e, keep)).c('\n')
+        return 1
+    other: = other_watch(job.root, keep)
+    if other.len > 0
+        io.err()
+            .s("ksagent: another ksagent watch answers in \{other\}, which holds \{job.root\} or \
+                lies inside it. Two would answer the same questions: stop it first, or let it \
+                answer").c('\n')
+        return 1
     $seen: = List<|Seen|>(keep)
-    io.out().s("watching \{job.root\} for files named *").s(files.CHAT_SUFFIX)
+    io.out().s("watching \{job.root\} for questions in files named *").s(files.ASK_SUFFIX)
         .s("; stop with Ctrl+C\n")
     for
         look(job, seen@, keep)
         sys.sleep_ms(SCAN_GAP_MS)
 
+priv fn lock_refusal(root: U8[], path: U8[], e: fs.Fs_error, arena: Arena$@): U8[] //<
+    //< Why `watch` does not start, where its folder's lock cannot be taken
+    switch e
+    case .held_elsewhere
+        return arena.text()
+            .s("ksagent: another ksagent watch answers in \{root\} already. Stop it first, or let \
+                it answer").take()
+    default
+        return arena.text().s("ksagent: cannot take the lock \{path\} (\{e\})").take()
+
+fn other_watch(root: U8[], arena: Arena$@): U8[] //<
+    //< A folder above or below the root that another `watch` answers in, or empty where none does
+    //< **Two watches whose folders nest would answer the same questions**, so the second does not
+    //< start. A lock whose holder ended is free, and tells of no watch.
+    full: = fs.absolute(root, arena) catch
+        return ""
+    $at: = full
+    for
+        up: = sys.get_dir_name(at)
+        if up.len == 0 || up.len >= at.len
+            break
+        at = up
+        if held_elsewhere(fs.join(at, LOCK_NAME, arena))
+            return at
+    found: = fs.walk_files(root, files.skip_dir, arena) catch
+        return ""
+    own: = fs.join(root, LOCK_NAME, arena)
+    for path in found
+        if sys.get_file_name(path).equals(LOCK_NAME) && !path.equals(own) && held_elsewhere(path)
+            return sys.get_dir_name(path)
+    return ""
+
+priv fn held_elsewhere(lock_path: U8[]): Bool //< whether another process holds that lock
+    //< Caution: **Look only at a lock that stands.** Taking one creates its file, and a folder
+    //< nobody watches must get none.
+    if !fs.exists(lock_path)
+        return false
+    $l: = fs.File_lock.try_take(lock_path) catch e
+        switch e
+        case .held_elsewhere
+            return true
+        default
+            return false
+    l.free()
+    return false
+
 fn look(job: agent.Ask, seen: List<|Seen|>$@, keep: Arena$@) //<
-    //< One look at the folder: each chat file whose size or change time moved is read again
-    //< **A file saved twice within one second at the same size looks unchanged**: the change time
-    //< counts whole seconds. The next save is seen.
+    //< One look at the folder: an ask file is read again where it or its chat file moved
+    //< **The stamps are taken before the files are read**, so a line added while a question is
+    //< answered moves them again. A repaired chat file moves its own. **A file saved twice within
+    //< one second at the same size looks unchanged**: the change time counts whole seconds.
     defer arena: = Arena(256 * 1024)
     found: = fs.walk_files(job.root, files.skip_dir, arena) catch
         io.out().s("cannot walk \{job.root\}; trying again\n")
         return
     for path in found
         name: = sys.get_file_name(path)
-        if !files.is_chat(name) || files.is_hidden(name) || fs.is_link(path)
+        if !files.is_ask(name) || files.is_hidden(name) || fs.is_link(path)
             continue
-        now: = stamp_of(path) catch
-            continue
+        ask: = stamp_of(path).unwrap_or(UNSEEN)
+        chat_file: = stamp_of(files.chat_path(path, arena)).unwrap_or(UNSEEN)
         at: = index_of(seen, path)
-        if at < seen.len && seen.get(at).stamp.size == now.size &&
-            seen.get(at).stamp.mtime == now.mtime
+        if at < seen.len && seen.get(at).ask.same(ask) &&
+            seen.get(at).chat.same(chat_file)
             continue
-        answer_pending(job, path, arena)
-        after: = stamp_of(path) catch
-            continue
+        $now: = Seen::{ .path = "",
+            .ask = (ask if answer_pending(job, path, arena) else UNSEEN), .chat = chat_file }
         if at < seen.len
-            seen[at].stamp = after
+            now.path = seen.get(at).path
+            seen[at] = now
         else
-            seen.push(Seen::{ .path = keep.dup_str(path), .stamp = after })
+            now.path = keep.dup_str(path)
+            seen.push(now)
+
+impl Stamp
+    fn same(r: Self, other: Stamp): Bool //< whether two stamps tell the same file
+        return r.size == other.size && r.mtime == other.mtime
 
 priv fn index_of(seen: List<|Seen|>$@, path: U8[]): Sz //< where `path` stands, or the list's length
     for i in Range.asc(seen.len)
@@ -75,48 +148,119 @@ priv fn stamp_of(path: U8[]): Stamp? //< the file's size and change time, or non
         return .none
     return .some(Stamp::{ .size = info.size, .mtime = info.mtime })
 
-fn answer_pending(job: agent.Ask, path: U8[], arena: Arena$@) //<
-    //< Answers each question in one chat file that has no answer yet, first to last
-    for _n in Range.asc(MAX_ANSWERS_PER_LOOK)
-        text: = io.read_file(path, arena) catch
-            return
-        if files.text_problem(text).len > 0
-            return
-        p: = chat.find_pending(text, arena) catch
-            return
-        if !answer_one(job, path, p, arena)
-            return
+fn answer_pending(job: agent.Ask, ask_path: U8[], arena: Arena$@): Bool //<
+    //< Answers each question in one ask file that has no answer yet, first to last; false where
+    //< some can still wait, past `MAX_ANSWERS_PER_LOOK`
+    //< A line of the ask file that cannot be read is named once a look, and passed over. **Each
+    //< question works in memory of its own**, so the files and requests of one do not add up.
+    chat_path: = files.chat_path(ask_path, arena)
+    for n in Range.asc(MAX_ANSWERS_PER_LOOK)
+        defer turn: = Arena(256 * 1024)
+        if !answer_next(job, ask_path, chat_path, n == 0, turn)
+            return true
+    return false
 
-fn answer_one(job: agent.Ask, path: U8[], p: chat.Pending, arena: Arena$@): Bool //<
-    //< Answers one pending question and writes the answer back; false where nothing was written
-    //< Caution: **Read the file again just before writing**, and insert into what it holds then:
-    //< the person can have written elsewhere in it meanwhile. **A race remains** between that read
-    //< and the replace ("Writing the answer back" in `ksagent/docs/DESIGN-agent.md`).
-    //< What it does is written to standard output only where `job.trace` asks for it.
-    say: = job.trace
-    if say
-        io.out().s("answering a question in \{path\}\n")
+priv fn answer_next(job: agent.Ask, ask_path: U8[], chat_path: U8[], first: Bool, arena: Arena$@):
+    Bool //<
+        //< Answers the first pending question of an ask file; false where none was recorded
+    if files.ask_too_large(ask_path)
+        why: = arena.text().s(ask_path)
+            .s(" is larger than 1 MiB, so its questions are not answered. Start a new conversation")
+            .take()
+        say(job, why)
+        progress.refused(files.live_path(ask_path, arena), why, arena)
+        return false
+    text: = io.read_file(ask_path, arena) catch
+        return false
+    if files.text_problem(text).len > 0
+        say(job,
+            arena.text().s(ask_path).s(": ").s(files.text_problem(text)).take())
+        return false
+    asks: = chat.read_asks(text, arena)
+    if first
+        for i in Range.asc(asks.refused.len)
+            say(job,
+                arena.text().s(ask_path).s(", ").s(asks.refused.get(i))
+                .s("; that line is passed over").take())
+    recorded: = read_recorded(job, chat_path, arena) catch
+        return false
+    p: = chat.find_pending(asks@, recorded@, arena) catch
+        return false
+    return answer_one(job, ask_path, p, arena)
+
+priv fn read_recorded(job: agent.Ask, chat_path: U8[], arena: Arena$@): chat.Recorded? //<
+    //< What the chat file records, or none where it cannot be read, said on the console
+    //< **A conversation whose chat file holds a broken line gets no answer**: an answer written
+    //< after the line would hide it. The person repairs or removes the line.
+    text: = recorded_text(chat_path, arena) catch why
+        say(job, why)
+        return .none
+    r: = chat.read_chat(text, arena) catch why
+        say(job,
+            arena.text().s(chat_path).s(", ").s(why)
+            .s("; ksagent answers in this conversation again once that line is repaired").take())
+        return .none
+    return .some(r)
+
+priv fn recorded_text(chat_path: U8[], arena: Arena$@): U8[]!U8[] //<
+    //< The chat file's text: empty where none stands yet, or why it cannot be read
+    if !fs.exists(chat_path)
+        return ""
+    text: = io.read_file(chat_path, arena) catch
+        throw arena.text().s("cannot read \{chat_path\}").take()
+    why: = files.text_problem(text)
+    if why.len > 0
+        throw arena.text().s(chat_path).s(": ").s(why).take()
+    return text
+
+priv fn say(job: agent.Ask, line: U8[]) //< a line on standard output, where `job.trace` asks
+    //< Each control character but a line break and a tab is replaced (`answer.write_shown`).
+    if job.trace
+        answer.write_shown(io.out(), line)
+        io.out().c('\n')
+
+fn answer_one(job: agent.Ask, ask_path: U8[], p: chat.Pending, arena: Arena$@): Bool //<
+    //< Answers one pending question and records it with its answer; false where nothing was written
+    //< **A question stopped on the page is recorded too**, as `stopped`, so the page shows it as
+    //< such. Caution: **Read the chat file again just before writing**: a person can have edited
+    //< it by hand meanwhile, and a broken line must not be buried.
+    chat_path: = files.chat_path(ask_path, arena)
+    say(job, arena.text().s("answering a question in \{ask_path\}").take())
     started: = sys.mono_us()
-    a: = agent.run(job, p.question, p.history@, p.lang, arena)
+    defer $shown: = Progress.following(ask_path, files.live_path(ask_path, arena), p.id, p.lang,
+        job.trace, arena)
+    a: = agent.run(job, p.question, p.history@, p.lang, shown@, arena)
     ended: = answer.ended_line(a@, arena)
-    if say && ended.len > 0
-        io.out().s("  ").s(ended).c('\n')
-    fresh: = io.read_file(path, arena) catch
-        if say
-            io.out().s("  cannot read \{path\} again; the answer was dropped\n")
+    if ended.len > 0
+        say(job, arena.text().s("  ").s(ended).take())
+    fresh: = recorded_text(chat_path, arena) catch why
+        dropped(shown@, job, why)
         return false
-    block: = chat.answer_block(a@, arena)
-    updated: = chat.insert_answer(fresh, p.question, block, arena) catch
-        if say
-            io.out()
-                .s("  the question in \{path\} changed or was removed meanwhile; the answer was \
-                    dropped\n")
+    r: = chat.read_chat(fresh, arena) catch why
+        dropped(shown@, job, arena.text().s(chat_path).s(", ").s(why).take())
         return false
-    fs.replace_file(path, updated, .kept) catch e
-        if say
-            io.out().s("  cannot write \{path\} (\{e\}); the answer was dropped\n")
+    // **A turn already there was recorded by another writer meanwhile**, such as a second
+    // `watch` started by hand: written again, its id would stand twice and refuse the file.
+    if chat.answered(r@, p.id)
+        say(job, "  another writer recorded this question meanwhile; nothing more is written")
+        shown.ended("", true)
+        return true
+    updated: = chat.appended(fresh,
+        chat.turn_lines(p@, a@, shown.text.slice(), arena), arena)
+    fs.replace_file(chat_path, updated, .kept) catch e
+        dropped(shown@, job,
+            arena.text().s("cannot write \{chat_path\} (\{e\})").take())
         return false
+    shown.ended("", true)
     seconds: = (sys.mono_us() - started) / 1000000I64
-    if say
-        io.out().s("  answered in \{seconds\} s\n")
+    if job.trace
+        io.out().s("  recorded in \{seconds\} s\n")
     return true
+
+priv fn dropped(shown: Progress$@, job: agent.Ask, why: U8[]) //<
+    //< Says why an answer was not recorded, on the console and in the live file
+    say(job, arena_line(shown, why))
+    shown.ended(why, false)
+
+priv fn arena_line(shown: Progress$@, why: U8[]): U8[] //< the console's line for a dropped answer
+    return shown.arena.text().s("  ").s(why).s("; the answer was not recorded").take()

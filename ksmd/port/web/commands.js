@@ -15,8 +15,9 @@ const COMMANDS = [
   ["read-only", "Read-only"], ["quick-choose", "Quick access bar…"],
   ["table", "Table"], ["divider", "Divider"], ["link", "Link…", "Ctrl+K"],
   ["date", "Today's date", "Ctrl+;"], ["time", "Time now", "Ctrl+:"],
-  ["p", "Paragraph"], ["h1", "Heading 1"], ["h2", "Heading 2"], ["h3", "Heading 3"],
-  ["h4", "Heading 4"], ["h5", "Heading 5"], ["h6", "Heading 6"], ["c", "Code block"],
+  ["p", "Paragraph", "Ctrl+Alt+0"], ["h1", "Heading 1", "Ctrl+Alt+1"], ["h2", "Heading 2", "Ctrl+Alt+2"],
+  ["h3", "Heading 3", "Ctrl+Alt+3"], ["h4", "Heading 4", "Ctrl+Alt+4"], ["h5", "Heading 5", "Ctrl+Alt+5"],
+  ["h6", "Heading 6", "Ctrl+Alt+6"], ["c", "Code block"],
   ["quote", "Quote"],
   ["strong", "Strong", "Ctrl+B"], ["emphasis", "Emphasis", "Ctrl+I"], ["code", "Inline code", "Ctrl+E"],
   ["color", "Font colour…"], ["fill", "Fill colour…"],
@@ -29,6 +30,7 @@ const COMMANDS = [
   ["row-above", "Insert row above"], ["row-below", "Insert row below"], ["row-remove", "Remove row"],
   ["column-left", "Insert column left"], ["column-right", "Insert column right"],
   ["column-remove", "Remove column"], ["column-fit", "Fit column width"],
+  ["column-width", "Column width…"], ["row-height", "Row height…"],
   ["column-choices", "Choices…"], ["column-rule", "Colour by value…"],
   ["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"],
   ["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"],
@@ -46,16 +48,19 @@ const COMMANDS = [
   ["note", "Note…", "Shift+F2"], ["note-resolve", "Resolve note"],
   ["table-rename", "Rename table…"], ["table-chart", "Insert chart"], ["table-csv", "Export as CSV"],
   ["table-print", "Leave out of print"], ["table-remove", "Remove table"],
+  ["table-select", "Select table"],
 ];
+// The clipboard type that carries a whole table as ksmd's own source, so ksmd pastes it whole.
+const KSMD_TYPE = "application/x-ksmd";
 const COMMAND = new Map(COMMANDS.map(([name, label, key]) => [name, { label, key }]));
 
 // The table's commands, in groups, as the Table menu and the right-click menu both show them. A
 // group marked `true` is a flyout, so the menu fits a laptop's screen; Excel's cell menu holds Sort
-// and Filter as flyouts too. Rows, Columns and Note stay open, as the most used.
+// and Filter as flyouts too. Rows, Columns and Note stay open, as the most used; Size is a flyout, as Excel holds Row Height and Column Width under Format.
 const TABLE_GROUPS = [
   ["Rows", ["row-above", "row-below", "row-remove"]],
-  ["Columns", ["column-left", "column-right", "column-remove", "column-fit", "column-choices",
-    "column-rule"]],
+  ["Columns", ["column-left", "column-right", "column-remove", "column-choices", "column-rule"]],
+  ["Size", ["column-fit", "column-width", "row-height"], true],
   ["Fill", ["fill-down", "fill-right"], true],
   ["Sort", ["sort-up", "sort-down"], true],
   ["Filter", ["filter-column", "filter-value", "filter-clear"], true],
@@ -64,7 +69,7 @@ const TABLE_GROUPS = [
   ["Group", ["group-rows", "ungroup-rows", "group-hide", "group-show"], true],
   ["AutoSum", ["autosum-sum", "autosum-average", "autosum-count", "autosum-max", "autosum-min"], true],
   ["Note", ["note", "note-resolve"]],
-  ["Table", ["table-rename", "table-chart", "table-csv", "table-print", "table-remove"], true],
+  ["Table", ["table-select", "table-rename", "table-chart", "table-csv", "table-print", "table-remove"], true],
 ];
 
 // The menu bar: each menu's name and its items. "-" is a line between groups, and [name, items] a
@@ -148,6 +153,8 @@ const ICONS = {
   "column-right": `<path d="M2.5 2h5v12h-5z M9.5 8h5 M12 5.5l2.5 2.5-2.5 2.5"/>`,
   "column-remove": `<path d="M5.5 2h5v12h-5z M6.5 5.5l3 5 M9.5 5.5l-3 5"/>`,
   "column-fit": `<path d="M2 2v12 M14 2v12 M4.5 8h7 M6.5 6l-2 2 2 2 M9.5 6l2 2-2 2"/>`,
+  "column-width": `<path d="M2 2v12 M14 2v12 M4.5 8h7 M6.5 6l-2 2 2 2 M9.5 6l2 2-2 2"/>${T("%", 5, "", 5)}`,
+  "row-height": `<path d="M2 2h12 M2 14h12 M8 4.5v7 M6 6.5l2-2 2 2 M6 9.5l2 2 2-2"/>`,
   "column-choices": `<path d="M2.5 2.5h11v11h-11z M5 6l3 3 3-3"/>`,
   "column-rule": `<path class="f" d="M2 3h4v4H2z"/><path d="M2 9h4v4H2z M10 3h4v4h-4z"/><path class="f" d="M10 9h4v4h-4z"/>`,
   "fill-down": `<path d="M3 2.5h10v3H3z M8 7v7 M5 11l3 3 3-3"/>`,
@@ -182,6 +189,7 @@ const ICONS = {
   "table-csv": `<path d="M3 1.5h7l3 3v10H3z M10 1.5v3h3"/>${T("CSV", 4.5, "", 11.5)}`,
   "table-print": `<path d="M4.5 6V2.5h7V6 M4.5 11.5h-2v-5.5h11v5.5h-2 M4.5 9.5h7v4.5h-7z M1.5 1.5l13 13"/>`,
   "table-remove": `<path d="${GRID} M9 9l5.5 5.5 M14.5 9L9 14.5"/>`,
+  "table-select": `<path d="${GRID}"/><path class="f" d="M1 1h4v4H1z"/>`,
   "kind-list": T("¶", 16),
   "size-list": T("A", 8) + `<text x="9" y="12.5" font-size="11">A</text>`,
 };

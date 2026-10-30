@@ -2,7 +2,8 @@
 // formatting, the menus, tables, sorting and filtering, links, and memory that runs out, each
 // driven through the browser's own input events and checked by the canonical source the page
 // gives back. The menus, the quick access bar and the table's own tools are
-// `menus.mjs`; the tools over a whole document or a range of cells are `tools.mjs`.
+// `menus.mjs`; the tools over a whole document or a range of cells are `tools.mjs`; a table as a
+// whole, its sizes by number and the filter's dates are `tables.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -17,6 +18,7 @@ import { ALT, CTRL, SHIFT, driver, verdict } from "./drive.mjs";
 import { served } from "./served.mjs";
 import { menus } from "./menus.mjs";
 import { tools } from "./tools.mjs";
+import { tables } from "./tables.mjs";
 
 const [binary, pageFile, work, kssrv] = process.argv.slice(2);
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
@@ -667,6 +669,8 @@ const sections = {
 Object.assign(sections, menus({ browser, js, until, press, type, select, click, clickBelow, menu,
   point, rightClick, doubleClickAt, dragTo, load, saves, source, openCell }));
 Object.assign(sections, tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
+  saves, dragTo, rightClick, openCell, drag, doubleClickAt }));
+Object.assign(sections, tables({ browser, page, js, settle, until, press, type, select, click, menu, load,
   saves, dragTo, rightClick, openCell }));
 
 try {

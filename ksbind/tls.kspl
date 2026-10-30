@@ -1,5 +1,6 @@
 //< A TLS client: an encrypted connection on top of a `std/net` socket, through OpenSSL
 //< **It covers client connections only** (`TLS_client_method`), and needs OpenSSL 1.1.0 or later.
+//< The server half is `ksbind/tls_server.kspl`.
 //< **Every byte crosses through `std/net`**, so a write to a peer that is gone fails as a value
 //< and raises no SIGPIPE, in a library too.
 //< Caution: **The security level does not depend on the system's configuration.** OpenSSL does the
@@ -24,6 +25,11 @@ extern "C"
     struct SSL
     struct BIO
     struct BIO_METHOD
+    // The certificate's types, which only the server half and the tests take apart.
+    struct X509
+    struct X509_NAME
+    struct EVP_PKEY
+    struct ASN1_TIME
 
 // Caution: **Keep C's `long` as `Sz` going in and `I32` coming out** (the two `ctrl` functions and
 // `SSL_get_verify_result`). Written as `I64`, a result breaks on Windows ("What cannot be written
@@ -59,24 +65,25 @@ extern "C"
     fn SSL_write(ssl: SSL$@, buf: Void@, num: I32): I32
     fn SSL_shutdown(ssl: SSL$@): I32
 
-// The numbers behind the macros; each is the same in OpenSSL 1.1.0, 1.1.1 and 3.x.
+// The numbers behind the macros; each is the same in OpenSSL 1.1.0, 1.1.1 and 3.x. The ones
+// unmarked are shared with the server half (`ksbind/tls_server.kspl`).
 priv const SSL_VERIFY_PEER: I32 = 1 //< SSL_VERIFY_PEER
-priv const SSL_CTRL_SET_MIN_PROTO_VERSION: I32 = 123 //< SSL_CTRL_SET_MIN_PROTO_VERSION
-priv const TLS1_2_VERSION: Sz = 0x0303 //< TLS1_2_VERSION
+const SSL_CTRL_SET_MIN_PROTO_VERSION: I32 = 123 //< SSL_CTRL_SET_MIN_PROTO_VERSION
+const TLS1_2_VERSION: Sz = 0x0303 //< TLS1_2_VERSION
 priv const SSL_CTRL_SET_TLSEXT_HOSTNAME: I32 = 55 //< SSL_CTRL_SET_TLSEXT_HOSTNAME
 priv const TLSEXT_NAMETYPE_HOST_NAME: Sz = 0 //< TLSEXT_NAMETYPE_host_name
-priv const X509_V_OK: I32 = 0 //< X509_V_OK
-priv const SSL_ERROR_WANT_READ: I32 = 2 //< SSL_ERROR_WANT_READ: it waits for the peer's bytes
-priv const SSL_ERROR_ZERO_RETURN: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
+const X509_V_OK: I32 = 0 //< X509_V_OK
+const SSL_ERROR_WANT_READ: I32 = 2 //< SSL_ERROR_WANT_READ: it waits for the peer's bytes
+const SSL_ERROR_ZERO_RETURN: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
 
 // SSL_read takes the length as a C int, so a buf.len of 2^31 or more would become negative in the
 // cast. Partial I/O is already the contract (the caller loops), so clamping breaks nothing.
-priv const MAX_TLS_IO_LEN: Sz = 2147483647 // I32::MAX
+const MAX_TLS_IO_LEN: Sz = 2147483647 // I32::MAX
 
-priv fn clamp_tls_io_len(len: Sz): Sz
+fn clamp_tls_io_len(len: Sz): Sz
     return math.min(len, MAX_TLS_IO_LEN)
 
-priv const IO_CHUNK: Sz = 16 * 1024 //< the most one move between the socket and OpenSSL carries
+const IO_CHUNK: Sz = 16 * 1024 //< the most one move between the socket and OpenSSL carries
     //< One TLS record's plaintext at most, so one `write` encrypts no more than it sends.
 
 pub enum Tls_error //< why a secure connection could not be opened or used
@@ -93,7 +100,9 @@ pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resou
     priv ctx: SSL_CTX$@
     priv ssl: SSL$@
 
-priv fn client_ctx(): SSL_CTX$@!Tls_error //<
+// `client_ctx`, `client_ssl` and `go_on` are unmarked, so `ksbind/tests/records.kspl` can drive a
+// client that holds its records back.
+fn client_ctx(): SSL_CTX$@!Tls_error //<
     //< A client context that verifies the peer against the default CA store, at TLS 1.2 or above
     //< Caution: **State the lower bound outright.** `TLS_client_method` allows 1.0 up, so otherwise
     //< openssl.cnf's MinProtocol decides, and a loose environment connects at 1.0 or 1.1.
@@ -107,7 +116,7 @@ priv fn client_ctx(): SSL_CTX$@!Tls_error //<
         throw .ctx_failed
     return ctx
 
-priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
+fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
     //< One connection's SSL, sending `host` as SNI and verifying against it
     //< Caution: **A host name holding a NUL, or longer than OpenSSL takes, fails rather than being
     //< cut**: cut, verification would pass for another host.
@@ -134,7 +143,7 @@ priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
         throw .ctx_failed
     return ssl
 
-priv fn wait_before(tcp: net.Tcp_stream$@, interest: U8, deadline: I64): Bool //<
+fn wait_before(tcp: net.Tcp_stream$@, interest: U8, deadline: I64): Bool //<
     //< Waits until the socket is ready or the deadline passes: whether it became ready in time
     defer $watch: = Reactor()
     watch.register(tcp.raw_handle(), interest, 0)
@@ -198,7 +207,7 @@ priv fn take_more(tcp: net.Tcp_stream$@, ssl: SSL$@, deadline: I64 = 0): Bool //
         return false
     return BIO_write(SSL_get_rbio(ssl), Void@::chunk@, I32::n) == I32::n
 
-priv fn go_on(tcp: net.Tcp_stream$@, ssl: SSL$@, rc: I32, deadline: I64 = 0): Bool //<
+fn go_on(tcp: net.Tcp_stream$@, ssl: SSL$@, rc: I32, deadline: I64 = 0): Bool //<
     //< After an OpenSSL call that returned `rc` without finishing: whether to call it again
     //< It sends what the call queued (an alert included), and reads more where the call waits for
     //< the peer. Any other answer is an end: OpenSSL writes into memory, so it never waits to send.

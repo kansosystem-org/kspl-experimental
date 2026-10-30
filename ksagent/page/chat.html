@@ -1,0 +1,839 @@
+<!doctype html>
+<!--
+  ksagent's chat page: one file, served by a local server (`kssrv --local --page=<this file>`).
+  It asks by appending to <name>.ask.jsonl, and shows <name>.chat.jsonl and <name>.live.json,
+  which only ksagent writes. The reasons are "The chat page" in ksagent/docs/DESIGN-agent.md.
+  Caution: **Never hand the model's text to innerHTML.** The Markdown reader builds a tree of
+  allowed elements, and text goes into the page only as text nodes.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title>ksagent</title>
+<style>
+:root {
+  --bg: #ffffff; --side: #f5f4ef; --text: #1f1e1b; --muted: #6b6a64; --line: #e3e1d9;
+  --bubble: #efede6; --accent: #b4552d; --ok: #2f7a3e; --warn: #9a6400; --bad: #b3261e;
+  --code: #f4f3ee; --unchecked: #8a8880;
+  font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1e1d1b; --side: #262522; --text: #ecebe6; --muted: #a3a29b; --line: #3a3934;
+    --bubble: #33322e; --accent: #e08a5f; --ok: #7cc68a; --warn: #e2b55c; --bad: #f08a80;
+    --code: #2b2a27; --unchecked: #8f8d86; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+body { display: flex; }
+#side { width: 15rem; flex: none; background: var(--side); border-right: 1px solid var(--line);
+  padding: 0.75rem; overflow-y: auto; }
+#side button { width: 100%; }
+#chats { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+#chats a { display: block; padding: 0.35rem 0.5rem; border-radius: 0.4rem; color: inherit;
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chats a[aria-current] { background: var(--bubble); font-weight: 600; }
+main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#log { flex: 1; overflow-y: auto; padding: 1rem 1rem 2rem; }
+.turn, #notice, #ask { max-width: 46rem; margin: 0 auto; }
+.q { display: flex; justify-content: flex-end; margin: 1.25rem 0 0.75rem; }
+.q .bubble { background: var(--bubble); padding: 0.6rem 0.9rem; border-radius: 1rem;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 85%; }
+.a { line-height: 1.6; overflow-wrap: anywhere; }
+.badge { display: inline-block; font-size: 0.8rem; padding: 0.1rem 0.5rem; border-radius: 1rem;
+  border: 1px solid currentColor; margin-bottom: 0.4rem; }
+.checked .badge { color: var(--ok); } .unverified .badge { color: var(--warn); }
+.failed .badge, .stopped .badge { color: var(--bad); } .not_found .badge { color: var(--muted); }
+.writing .badge, .pending .badge { color: var(--muted); }
+.unchecked { border-left: 3px dashed var(--unchecked); padding-left: 0.75rem; color: var(--muted); }
+.phase { color: var(--muted); font-size: 0.9rem; }
+.md p, .md ul, .md ol, .md pre, .md blockquote, .md table { margin: 0.5rem 0; }
+.md h3, .md h4, .md h5, .md h6 { margin: 0.9rem 0 0.4rem; font-size: 1rem; }
+.md h3 { font-size: 1.15rem; }
+.md code { background: var(--code); padding: 0.05rem 0.3rem; border-radius: 0.25rem;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.9em; }
+.md pre { background: var(--code); padding: 0.6rem 0.8rem; border-radius: 0.5rem; overflow-x: auto; }
+.md pre code { padding: 0; background: none; }
+.md blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 0.8rem; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 0.25rem 0.6rem; }
+.md a, .sources a { color: var(--accent); }
+.sources { font-size: 0.9rem; margin: 0.5rem 0; padding-left: 1.25rem; }
+.sources blockquote { margin: 0.2rem 0 0.5rem; padding-left: 0.6rem; color: var(--muted);
+  border-left: 3px solid var(--ok); }
+.notes { font-size: 0.9rem; color: var(--muted); padding-left: 1.25rem; }
+.actions button { font-size: 0.85rem; }
+#notice { color: var(--bad); padding: 0 1rem; white-space: pre-wrap; }
+#ask { width: 100%; display: flex; gap: 0.5rem; padding: 0.75rem 1rem 1rem; }
+#ask textarea { flex: 1; resize: none; min-height: 2.8rem; max-height: 12rem; font: inherit;
+  padding: 0.6rem 0.8rem; border: 1px solid var(--line); border-radius: 0.8rem;
+  background: var(--bg); color: inherit; }
+button { font: inherit; padding: 0.45rem 0.9rem; border-radius: 0.6rem; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: inherit; }
+button.main { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: 0.5; cursor: default; }
+#latest { position: sticky; bottom: 0.5rem; display: none; margin: 0 auto; }
+@media (max-width: 640px) {
+  body { flex-direction: column; }
+  #side { width: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 9rem; }
+  #log { padding: 0.75rem 1rem 1.5rem; }
+}
+</style>
+</head>
+<body>
+<nav id="side" aria-label="Conversations">
+  <button id="new" type="button">New conversation</button>
+  <ul id="chats"></ul>
+</nav>
+<main>
+  <div id="log" role="log" aria-live="polite"><button id="latest" type="button">Latest</button></div>
+  <div id="notice" role="alert"></div>
+  <form id="ask">
+    <textarea id="text" rows="1" placeholder="Ask about the files in this folder" disabled></textarea>
+    <button id="send" class="main" type="submit" disabled>Ask</button>
+  </form>
+</main>
+<script id="markdown">
+"use strict";
+// A lenient reader of the Markdown a model writes: it never refuses, and reads a half-written
+// answer too, so an unclosed code fence runs to the end. It builds a tree of allowed elements
+// only; `render` turns that tree into nodes, its text always as text nodes. Raw HTML stays text,
+// a link goes only to http, https or mailto, and no image is ever loaded.
+const ksagentMarkdown = (() => {
+  const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+  const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t#]*$/;
+  const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+  const QUOTE = /^ {0,3}> ?(.*)$/;
+  const ITEM = /^( {0,3})([-*+]|(\d{1,9})[.)])(?:[ \t]+(.*))?$/;
+  const blank = (s) => s.trim() === "";
+  const indentOf = (s) => s.length - s.trimStart().length;
+  // **Quotes, lists and emphasis nest at most this deep**; deeper, they read as text. A reply of
+  // 20,000 `>` would otherwise nest the reader as deep, and overflow the browser's stack.
+  const MAX_NEST = 8;
+
+  function item(line) {
+    const m = ITEM.exec(line);
+    if (!m) return null;
+    return { indent: m[1].length, ordered: m[3] !== undefined, start: Number(m[3] || 1),
+      text: m[4] || "" };
+  }
+  function cells(line) {
+    let s = line.trim();
+    if (s.startsWith("|")) s = s.slice(1);
+    if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+    const out = [];
+    let cur = "";
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "\\" && s[i + 1] === "|") { cur += "|"; i++; } else if (s[i] === "|") {
+        out.push(cur.trim()); cur = "";
+      } else cur += s[i];
+    }
+    out.push(cur.trim());
+    return out;
+  }
+  const isDelimiter = (line) => line.includes("-") &&
+    cells(line).every((c) => /^:?-+:?$/.test(c));
+  const startsBlock = (line) => FENCE.test(line) || HEADING.test(line) || RULE.test(line) ||
+    QUOTE.test(line) || item(line) !== null;
+
+  function blocks(lines, depth = 0) {
+    if (depth >= MAX_NEST) return [{ t: "p", c: lines.flatMap((l, k) => (k > 0 ? [{ t: "br", c: [] }, l] : [l])) }];
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      let m;
+      if (blank(line)) { i++; continue; }
+      if ((m = FENCE.exec(line))) {
+        const body = [];
+        const close = new RegExp(`^ {0,3}${m[1][0] === "`" ? "`" : "~"}{${m[1].length},}[ \\t]*$`);
+        for (i++; i < lines.length && !close.test(lines[i]); i++) body.push(lines[i]);
+        i++;
+        out.push({ t: "pre", c: [{ t: "code", c: [body.join("\n")] }] });
+      } else if ((m = HEADING.exec(line))) {
+        out.push({ t: `h${Math.min(6, m[1].length + 2)}`, c: inline(m[2] || "") });
+        i++;
+      } else if (RULE.test(line)) {
+        out.push({ t: "hr", c: [] });
+        i++;
+      } else if (QUOTE.test(line)) {
+        const inner = [];
+        for (; i < lines.length && (m = QUOTE.exec(lines[i])); i++) inner.push(m[1]);
+        out.push({ t: "blockquote", c: blocks(inner, depth + 1) });
+      } else if (item(line)) {
+        i = list(lines, i, out, depth);
+      } else if (line.includes("|") && i + 1 < lines.length && isDelimiter(lines[i + 1])) {
+        i = table(lines, i, out);
+      } else {
+        const c = [];
+        for (; i < lines.length && !blank(lines[i]) && (c.length === 0 || !startsBlock(lines[i])); i++) {
+          if (c.length > 0) c.push({ t: "br", c: [] });
+          c.push(...inline(lines[i].trim()));
+        }
+        out.push({ t: "p", c });
+      }
+    }
+    return out;
+  }
+
+  // A list, and each item's body read as blocks again: a line indented two or more past the
+  // item's marker belongs to the item, so nesting by two, three or four spaces all reads.
+  function list(lines, i, out, depth) {
+    const first = item(lines[i]);
+    const node = { t: first.ordered ? "ol" : "ul", start: first.start, c: [] };
+    while (i < lines.length) {
+      const m = item(lines[i]);
+      if (!m || m.ordered !== first.ordered || m.indent > first.indent + 1) break;
+      const deeper = m.indent + 2;
+      const body = [m.text];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const l = lines[j];
+        if (blank(l)) {
+          // A run of blank lines is read once, so many of them cost time in step with their count.
+          const k = filledFrom(lines, j);
+          if (k === lines.length || indentOf(lines[k]) < deeper) break;
+          for (; j < k - 1; j++) body.push("");
+          body.push("");
+        } else if (indentOf(l) >= deeper) body.push(l.slice(Math.min(indentOf(l), deeper)));
+        else if (startsBlock(l)) break;
+        else body.push(l.trim());
+      }
+      let text = body.join("\n");
+      let box = "";
+      const task = /^\[([ xX])\][ \t]+/.exec(text);
+      if (task) { box = task[1] === " " ? "☐ " : "☑ "; text = text.slice(task[0].length); }
+      // A tight item, with no blank line inside, shows its first paragraph without a margin.
+      const inner = blocks(text.split("\n"), depth + 1);
+      const c = inner.length > 0 && inner[0].t === "p" && !body.includes("") ?
+        [...inner[0].c, ...inner.slice(1)] : inner;
+      if (box) c.unshift(box);
+      node.c.push({ t: "li", c });
+      i = j;
+      const k = filledFrom(lines, i);
+      if (k < lines.length && item(lines[k])) i = k;
+    }
+    out.push(node);
+    return i;
+  }
+  const filledFrom = (lines, j) => { // the first line at `j` or after that is not blank
+    let k = j;
+    while (k < lines.length && blank(lines[k])) k++;
+    return k;
+  };
+
+  function table(lines, i, out) {
+    const head = cells(lines[i]);
+    const align = cells(lines[i + 1]).map((c) => (c.endsWith(":") ? (c.startsWith(":") ?
+      "center" : "right") : ""));
+    const row = (t, cs) => ({ t: "tr", c: head.map((_, k) => ({ t, align: align[k] || "",
+      c: inline(cs[k] || "") })) });
+    const body = [];
+    for (i += 2; i < lines.length && !blank(lines[i]) && lines[i].includes("|"); i++) {
+      body.push(row("td", cells(lines[i])));
+    }
+    out.push({ t: "table", c: [{ t: "thead", c: [row("th", head)] },
+      { t: "tbody", c: body }] });
+    return i;
+  }
+
+  function safeHref(url) {
+    try {
+      const u = new URL(url.trim());
+      return ["http:", "https:", "mailto:"].includes(u.protocol) ? u.href : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // The target in `(...)` at `at`: { url, end } past the `)`, or null.
+  function target(s, at, sc) {
+    const k = s[at] === "(" ? sc.paren.get(at) : undefined;
+    if (k === undefined) return null;
+    let url = s.slice(at + 1, k).trim().replace(/\s+"[^"]*"$/, "");
+    if (url.startsWith("<") && url.endsWith(">")) url = url.slice(1, -1);
+    return { url, end: k + 1 };
+  }
+
+  const MARKS = ["**", "__", "~~", "*", "_"];
+  const TAGS = { "**": "strong", "__": "strong", "~~": "del", "*": "em", "_": "em" };
+  const word = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+
+  // What reading one text inline needs, each found in one pass: where each mark can close, and
+  // each bracket's and parenthesis's match. **No opening scans the rest of the text**, so a reply
+  // of many unmatched marks takes time in step with its length.
+  function scan(s) {
+    const inCode = new Uint8Array(s.length);
+    for (let k = 0; k < s.length; k++) {
+      if (s[k] !== "`") continue;
+      let e = k;
+      while (e < s.length && s[e] === "`") e++;
+      const end = s.indexOf(s.slice(k, e), e);
+      if (end > 0) inCode.fill(1, k, end + e - k);
+      k = (end > 0 ? end + e - k : e) - 1;
+    }
+    // A closing mark is preceded by a character that is not a space, and stands outside code.
+    const can = Object.fromEntries(MARKS.map((m) => [m, []]));
+    for (let k = 1; k < s.length; k++) {
+      if (inCode[k] || /\s/.test(s[k - 1])) continue;
+      for (const m of MARKS) {
+        if (s.startsWith(m, k) && !(m.length === 1 && s[k + 1] === m) &&
+          !(m[0] === "_" && word(s[k + m.length]))) can[m].push(k);
+      }
+    }
+    const bracket = new Map();
+    const paren = new Map();
+    const open = [];
+    for (let k = 0; k < s.length; k++) {
+      if (s[k] === "\\") k++;
+      else if (s[k] === "[") open.push(k);
+      else if (s[k] === "]" && open.length > 0) bracket.set(open.pop(), k);
+    }
+    open.length = 0;
+    for (let k = 0; k < s.length; k++) {
+      if (s[k] === "(") open.push(k);
+      else if (s[k] === ")" && open.length > 0) paren.set(open.pop(), k);
+    }
+    return { can, bracket, paren };
+  }
+
+  // Where the closing `mark` for an opening at `at` stands, or -1. An opening must be followed,
+  // and a closing preceded, by a character that is not a space, so `2 * 3 * 4` stays as it is.
+  function closer(s, at, mark, sc) {
+    const from = at + mark.length;
+    if (from >= s.length || /\s/.test(s[from])) return -1;
+    if (mark[0] === "_" && word(s[at - 1])) return -1;
+    const can = sc.can[mark];
+    let lo = 0;
+    let hi = can.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (can[mid] <= from) lo = mid + 1; else hi = mid;
+    }
+    return lo < can.length ? can[lo] : -1;
+  }
+
+  function inline(s, depth = 0) {
+    if (depth >= MAX_NEST) return s ? [s] : [];
+    const sc = scan(s);
+    const out = [];
+    let text = "";
+    const flush = () => { if (text) out.push(text); text = ""; };
+    for (let i = 0; i < s.length;) {
+      const ch = s[i];
+      if (ch === "\\" && i + 1 < s.length && /[!-/:-@[-`{-~]/.test(s[i + 1])) {
+        text += s[i + 1]; i += 2; continue;
+      }
+      if (ch === "`") {
+        const run = /^`+/.exec(s.slice(i))[0];
+        const end = s.indexOf(run, i + run.length);
+        if (end > 0) {
+          let code = s.slice(i + run.length, end);
+          if (code.length > 2 && code.startsWith(" ") && code.endsWith(" ")) code = code.slice(1, -1);
+          flush(); out.push({ t: "code", c: [code] }); i = end + run.length; continue;
+        }
+        text += run; i += run.length; continue;
+      }
+      const image = ch === "!" && s[i + 1] === "[";
+      if (ch === "[" || image) {
+        const open = image ? i + 1 : i;
+        const close = sc.bracket.has(open) ? sc.bracket.get(open) : -1;
+        const to = close > 0 ? target(s, close + 1, sc) : null;
+        if (to) {
+          const label = s.slice(open + 1, close);
+          const href = safeHref(to.url);
+          flush();
+          const c = label ? inline(label, depth + 1) : [to.url];
+          out.push(...(href ? [{ t: "a", href, c }] : c));
+          i = to.end;
+          continue;
+        }
+      }
+      if (ch === "<") {
+        const m = /^<([a-z][a-z0-9+.-]*:[^\s<>]+)>/i.exec(s.slice(i));
+        const href = m && safeHref(m[1]);
+        if (href) { flush(); out.push({ t: "a", href, c: [m[1]] }); i += m[0].length; continue; }
+      }
+      const mark = MARKS.find((mk) => s.startsWith(mk, i));
+      if (mark) {
+        const end = closer(s, i, mark, sc);
+        if (end > 0) {
+          flush();
+          out.push({ t: TAGS[mark], c: inline(s.slice(i + mark.length, end), depth + 1) });
+          i = end + mark.length;
+          continue;
+        }
+        text += mark; i += mark.length; continue;
+      }
+      text += ch; i++;
+    }
+    flush();
+    return out;
+  }
+
+  const ALLOWED = new Set(["p", "h3", "h4", "h5", "h6", "ul", "ol", "li", "pre", "code",
+    "blockquote", "table", "thead", "tbody", "tr", "th", "td", "hr", "br", "strong", "em",
+    "del", "a"]);
+  function render(nodes, into) {
+    for (const n of nodes) {
+      if (typeof n === "string") { into.appendChild(document.createTextNode(n)); continue; }
+      if (!ALLOWED.has(n.t)) continue;
+      const el = document.createElement(n.t);
+      if (n.t === "a") { el.href = n.href; el.rel = "noopener noreferrer"; el.target = "_blank"; }
+      if (n.t === "ol" && n.start !== 1) el.start = n.start;
+      if (n.align) el.style.textAlign = n.align;
+      render(n.c, el);
+      into.appendChild(el);
+    }
+    return into;
+  }
+  const parse = (text) => blocks(String(text).replace(/\r\n?/g, "\n").split("\n"));
+  return { parse, render };
+})();
+</script>
+<script>
+"use strict";
+// The page: the local server's protocol ("docs/SPEC-local-server.md" in the repository), the
+// three files of a conversation, and what each turn shows. **The page writes only the ask file**,
+// and every write names the bytes it read, so a write from another tab is never lost.
+(() => {
+  const TOKEN = /^[0-9a-f]{48}$/;
+  const KEY = "ksagent.token";
+  const LOOK_MS = 1000;
+  const HINT_MS = 15000;
+  const NAME = /^[\p{L}\p{N}._-]+$/u;
+  const $ = (id) => document.getElementById(id);
+  const ja = (navigator.language || "").startsWith("ja");
+  const W = ja ? {
+    checked: "出典を確認しました", unverified: "未確認", not_found: "見つかりません",
+    stopped: "止まりました", failed: "回答できませんでした", writing: "書いています (出典は未確認)",
+    pending: "ksagent を待っています", stopping: "止めています", sources: "出典", lines: "行目",
+    partial: "下の文は途中までで、出典は確認していません。", hint: "このフォルダーで ksagent watch が動いているか確かめてください。",
+    stop: "止める", again: "もう一度聞く", removed: "取り除いた出典", waiting: "モデルの返事を待っています",
+    thinking: "モデルが考えています", reading: "モデルがファイルを読んでいます: ",
+    writingPhase: "モデルが書いています", untaken: "ksagent が受け取る前に止めました。",
+    gaveUp: "ksagent は回答を記録できませんでした: ", unshown: "このやり取りは表示できません: ",
+  } : {
+    checked: "Sources checked", unverified: "Unverified", not_found: "Not found",
+    stopped: "Stopped", failed: "No answer", writing: "Being written: sources not checked yet",
+    pending: "Waiting for ksagent", stopping: "Stopping", sources: "Sources", lines: "lines",
+    partial: "The text below is not whole, and its sources were not checked.",
+    hint: "Check that ksagent watch runs on this folder.", stop: "Stop", again: "Ask again",
+    removed: "Sources removed", waiting: "Waiting for the model", thinking: "The model is thinking",
+    reading: "The model is reading: ", writingPhase: "The model is writing",
+    untaken: "Stopped before ksagent took it.", gaveUp: "ksagent could not record an answer: ",
+    unshown: "This turn cannot be shown: ",
+  };
+  if (ja) {
+    document.documentElement.lang = "ja";
+    $("new").textContent = "新しい会話";
+    $("send").textContent = "聞く";
+    $("text").placeholder = "このフォルダーのファイルについて聞く";
+  }
+
+  // The token: once from the fragment's `t=`, then from this tab's storage ("How the token gets
+  // across" in the protocol).
+  const token = (() => {
+    const got = new URLSearchParams(location.hash.slice(1)).get("t");
+    if (got !== null) history.replaceState(null, "", location.pathname + location.search);
+    if (got !== null && TOKEN.test(got)) {
+      try { sessionStorage.setItem(KEY, got); } catch (_) { /* a reload then asks for the URL */ }
+      return got;
+    }
+    try { return sessionStorage.getItem(KEY) || ""; } catch (_) { return ""; }
+  })();
+  const send = (url, how = {}) => fetch(url, { ...how, cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, ...(how.headers || {}) } });
+  const fileUrl = (p) => `/api/file?path=${encodeURIComponent(p)}`;
+  async function digest(bytes) {
+    const d = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(d), (n) => n.toString(16).padStart(2, "0")).join("");
+  }
+  async function read(path) {
+    const got = await send(fileUrl(path));
+    if (got.status === 404) return { bytes: null };
+    if (!got.ok) throw new Error(`the local server refused ${path} (${got.status})`);
+    return { bytes: new Uint8Array(await got.arrayBuffer()) };
+  }
+  async function stat(path) {
+    const got = await send(`/api/stat?path=${encodeURIComponent(path)}`);
+    if (got.status === 404) return "none";
+    if (!got.ok) throw new Error(`the local server refused ${path} (${got.status})`);
+    const s = await got.json();
+    return `${s.size}/${s.changed_at}`;
+  }
+  function hold() {
+    const holding = async () => {
+      for (;;) {
+        try {
+          const got = await send("/api/here");
+          if (got.ok && got.body) {
+            const r = got.body.getReader();
+            while (!(await r.read()).done) { /* the wait is the hold */ }
+          }
+        } catch (_) { /* the server went, or the connection broke */ }
+        await new Promise((go) => setTimeout(go, 5000));
+      }
+    };
+    if (navigator.locks) navigator.locks.request("ksagent-hold", holding); else holding();
+  }
+
+  // One JSON record a line; a line that cannot be read is named, never skipped without a word.
+  // `lacks` says why a record has no usable type or id; an ask file's rules take any, as "".
+  const noTypeOrId = (r) => (r && typeof r.id === "string" && typeof r.type === "string" ? "" :
+    "it has no type or id");
+  function records(bytes, file, lacks = noTypeOrId) {
+    const out = [];
+    const broken = [];
+    new TextDecoder().decode(bytes || new Uint8Array()).split("\n").forEach((line, k) => {
+      if (line.trim() === "") return;
+      let r;
+      try {
+        r = JSON.parse(line);
+      } catch (_) {
+        broken.push(`${file}, line ${k + 1}: it is not one JSON value`);
+        return;
+      }
+      const why = lacks(r);
+      if (why) broken.push(`${file}, line ${k + 1}: ${why}`);
+      else {
+        const o = r !== null && typeof r === "object" && !Array.isArray(r) ? r : {};
+        out.push({ ...o, id: typeof o.id === "string" ? o.id : "",
+          type: typeof o.type === "string" ? o.type : "", line: k + 1 });
+      }
+    });
+    return { out, broken };
+  }
+
+  // An ask file's records, read with ksagent's rules (`read_asks` in ksagent/chat.kspl), so a
+  // question ksagent passes over is named here too, never shown as waiting. The reasons are its
+  // words; the browser check compares them with what ksagent prints.
+  const ID = /^[A-Za-z0-9_-]{1,64}$/;
+  function asks(bytes, file) {
+    const { out, broken } = records(bytes, file, () => "");
+    const taken = [];
+    const asked = new Set();
+    for (const r of out) {
+      const why = !ID.test(r.id) ? (r.id.length === 0 || r.id.length > 64 ?
+        "the id must hold 1 to 64 characters" :
+        "the id holds a character other than ASCII letters, digits, - and _") :
+        r.type === "question" ? ((typeof r.text === "string" ? r.text : "").trim() === "" ?
+          "the question has no text" :
+          asked.has(r.id) ? "an earlier line has a question with the same id" : "") :
+          r.type === "stop" ? (asked.has(r.id) ? "" : "no earlier line has a question with this id") :
+            "its type is neither question nor stop";
+      if (why) broken.push(`${file}, line ${r.line}: ${why}`);
+      else {
+        if (r.type === "question") asked.add(r.id);
+        taken.push(r);
+      }
+    }
+    return { out: taken, broken };
+  }
+
+  const S = { name: "", ask: null, chat: null, live: null, refused: "", stamps: {},
+    askedAt: new Map(), shown: new Map(), problem: "", ready: false };
+  const path = (kind) => `${S.name}.${kind}`;
+
+  async function refresh(kind, file) {
+    const now = await stat(path(file));
+    if (S.stamps[kind] === now) return false;
+    const got = now === "none" ? { bytes: null } : await read(path(file));
+    S.stamps[kind] = now;
+    S[kind] = (kind === "ask" ? asks : records)(got.bytes, path(file));
+    return true;
+  }
+
+  // The turns to show: those the chat file records, then the questions it does not hold yet.
+  function turns() {
+    const list = [];
+    const byId = new Map();
+    const add = (id, text) => {
+      if (!byId.has(id)) { byId.set(id, { id, text, answer: null, stop: false }); list.push(byId.get(id)); }
+      return byId.get(id);
+    };
+    for (const r of (S.chat ? S.chat.out : [])) {
+      if (r.type === "question") add(r.id, String(r.text || ""));
+      else if (r.type === "answer" && byId.has(r.id)) byId.get(r.id).answer = r;
+    }
+    for (const r of (S.ask ? S.ask.out : [])) {
+      if (r.type === "question") add(r.id, String(r.text || ""));
+      else if (r.type === "stop" && byId.has(r.id)) byId.get(r.id).stop = true;
+    }
+    return list;
+  }
+  const isOpen = (t) => t.answer === null;
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function markdown(text) {
+    return ksagentMarkdown.render(ksagentMarkdown.parse(text), el("div", "md"));
+  }
+  function button(label, run) {
+    const b = el("button", "", label);
+    b.type = "button";
+    b.addEventListener("click", run);
+    return b;
+  }
+
+  // What one turn shows, and the state a check reads (`data-state`). **Only an answer record
+  // whose state is `checked` shows as checked**; the growing text and a stopped answer's partial
+  // text stand apart, marked as not checked.
+  function view(t) {
+    const live = S.live && S.live.id === t.id ? S.live : null;
+    const a = t.answer;
+    let state;
+    if (a) state = ["checked", "unverified", "not_found", "stopped", "failed"].includes(a.state) ?
+      a.state : "failed";
+    else if (live && live.phase === "stopped") state = "stopped";
+    else if (t.stop) state = live && live.phase !== "done" ? "stopping" : "untaken";
+    else state = live && live.phase !== "done" ? "writing" : "pending";
+    const box = el("div", `a ${state === "stopping" || state === "untaken" ? "stopped" : state}`);
+    box.appendChild(el("div", "badge", W[state] || W.stopped));
+    if (a) {
+      if (a.state === "checked" || a.state === "unverified" || a.state === "not_found") {
+        box.appendChild(markdown(a.text || ""));
+      }
+      if (typeof a.partial === "string" && a.partial !== "") {
+        box.appendChild(el("p", "phase", W.partial));
+        box.appendChild(markdown(a.partial)).classList.add("unchecked");
+      }
+      const srcs = Array.isArray(a.sources) ? a.sources : [];
+      if (srcs.length > 0 && a.state === "checked") {
+        box.appendChild(el("div", "phase", W.sources));
+        const ol = box.appendChild(el("ol", "sources"));
+        for (const s of srcs) {
+          const li = ol.appendChild(el("li"));
+          li.appendChild(el("code", "", String(s.path)));
+          li.appendChild(document.createTextNode(ja ? ` ${s.from_line}–${s.to_line}${W.lines}` :
+            ` ${W.lines} ${s.from_line}–${s.to_line}`));
+          li.appendChild(el("blockquote", "", String(s.quote)));
+        }
+      }
+      const notes = Array.isArray(a.notes) ? a.notes : [];
+      if (notes.length > 0) {
+        const ul = box.appendChild(el("ul", "notes"));
+        for (const n of notes) ul.appendChild(el("li", "", String(n)));
+      }
+      if (Array.isArray(a.removed) && a.removed.length > 0) {
+        const d = box.appendChild(el("details", "notes"));
+        d.appendChild(el("summary", "", W.removed));
+        for (const r of a.removed) d.appendChild(el("div", "", String(r)));
+      }
+      if (a.state === "stopped" || a.state === "failed") {
+        box.appendChild(el("div", "actions")).appendChild(button(W.again, () => ask(t.text)));
+      }
+    } else if (state === "writing" || state === "stopping") {
+      const phase = { waiting: W.waiting, thinking: W.thinking, writing: W.writingPhase,
+        reading: W.reading + String(live.tools || "") }[live.phase] || W.waiting;
+      box.appendChild(el("div", "phase", phase));
+      if (live.text) box.appendChild(markdown(live.text)).classList.add("unchecked");
+    } else if (state === "stopped") {
+      // ksagent gave up on recording the answer: the live file says why, beside the text shown.
+      box.appendChild(el("ul", "notes")).appendChild(el("li", "", W.gaveUp + String(live.why || "")));
+      if (live.text) {
+        box.appendChild(el("p", "phase", W.partial));
+        box.appendChild(markdown(live.text)).classList.add("unchecked");
+      }
+      box.appendChild(el("div", "actions")).appendChild(button(W.again, () => ask(t.text)));
+    } else if (state === "untaken") {
+      box.appendChild(el("div", "phase", W.untaken));
+      box.appendChild(el("div", "actions")).appendChild(button(W.again, () => ask(t.text)));
+    } else if (hinted(t)) {
+      box.appendChild(el("div", "phase", W.hint));
+    }
+    if (state === "writing" || state === "pending") {
+      box.appendChild(el("div", "actions")).appendChild(button(W.stop, () => stop(t.id)));
+    }
+    return { box, state };
+  }
+
+  const hinted = (t) => !S.refused && Date.now() - (S.askedAt.get(t.id) || Date.now()) > HINT_MS;
+
+  // A turn that cannot be shown says so, with its text as plain text, and the rest goes on.
+  function unshown(t, e) {
+    const box = el("div", "a failed");
+    box.appendChild(el("div", "phase", W.unshown + String(e && e.message)));
+    box.appendChild(el("pre", "unchecked", String((t.answer && t.answer.text) || "")));
+    return { box, state: "failed" };
+  }
+
+  // Draws only the turns whose records changed: **a turn is read and drawn again only when what
+  // it shows from changed**, so a growing answer leaves the rest of the page still and unread.
+  function draw() {
+    const log = $("log");
+    const bottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    const all = turns();
+    for (const t of all) {
+      if (!S.askedAt.has(t.id)) S.askedAt.set(t.id, Date.now());
+      const live = S.live && S.live.id === t.id ? S.live : null;
+      const from = [t.text, t.answer, t.stop, live, !t.answer && hinted(t)];
+      const had = S.shown.get(t.id);
+      if (had && from.every((x, k) => x === had.from[k])) continue;
+      let shown;
+      try {
+        shown = view(t);
+      } catch (e) {
+        shown = unshown(t, e);
+      }
+      const { box, state } = shown;
+      const turn = had ? had.node : el("section", "turn");
+      if (!had) {
+        turn.dataset.id = t.id;
+        turn.appendChild(el("div", "q")).appendChild(el("div", "bubble", t.text));
+        log.insertBefore(turn, $("latest"));
+      }
+      if (turn.children[1]) turn.children[1].remove();
+      turn.appendChild(box);
+      turn.dataset.state = state;
+      S.shown.set(t.id, { from, node: turn });
+    }
+    const broken = [...(S.ask ? S.ask.broken : []), ...(S.chat ? S.chat.broken : [])];
+    $("notice").textContent = [S.problem, S.refused, ...broken].filter((x) => x).join("\n");
+    if (bottom) log.scrollTop = log.scrollHeight;
+    $("latest").style.display = bottom ? "none" : "block";
+  }
+
+  // Appends one record to the ask file. The write names the digest of the bytes read, or
+  // `missing`; a 409 means another tab wrote meanwhile, so it reads again and appends again.
+  async function append(record) {
+    for (let tries = 0; tries < 5; tries++) {
+      const got = await read(path("ask.jsonl"));
+      const had = got.bytes ? new TextDecoder().decode(got.bytes) : "";
+      const sep = had === "" || had.endsWith("\n") ? "" : "\n";
+      const body = new TextEncoder().encode(`${had}${sep}${JSON.stringify(record)}\n`);
+      const put = await send(fileUrl(path("ask.jsonl")), { method: "PUT", body,
+        headers: { "X-Kanso-If-Content": got.bytes ? await digest(got.bytes) : "missing" } });
+      if (put.ok) return "";
+      if (put.status !== 409) return `The local server did not save the question (${put.status}).`;
+    }
+    return "The ask file kept changing while it was saved. Try again.";
+  }
+  async function ask(text) {
+    const id = crypto.randomUUID();
+    S.askedAt.set(id, Date.now());
+    S.problem = await append({ type: "question", id, text });
+    await look();
+  }
+  async function stop(id) {
+    S.problem = await append({ type: "stop", id });
+    await look();
+  }
+
+  async function look() {
+    try {
+      const a = await refresh("ask", "ask.jsonl");
+      const c = await refresh("chat", "chat.jsonl");
+      let l = false;
+      if (turns().some(isOpen)) {
+        const got = await read(path("live.json"));
+        let live = null;
+        try {
+          live = got.bytes ? JSON.parse(new TextDecoder().decode(got.bytes)) : null;
+        } catch (_) { /* ksagent replaces the file whole, so this is a file of another writer */ }
+        if (!live || typeof live.id !== "string") live = null;
+        // ksagent answers none of this conversation's questions, and says why (an empty id).
+        const refused = live && live.id === "" && live.phase === "refused" ? String(live.why || "") : "";
+        if (refused !== S.refused) { S.refused = refused; l = true; }
+        if (refused) live = null;
+        if (JSON.stringify(live) !== JSON.stringify(S.live)) { S.live = live; l = true; }
+      }
+      if (a || c || l || turns().some(isOpen)) draw();
+    } catch (e) {
+      S.problem = `${e.message}. Start the page again with the command that opened it.`;
+      draw();
+    }
+  }
+
+  async function listChats() {
+    const got = await send("/api/list?path=");
+    const said = got.ok ? await got.json() : { files: [] };
+    const names = new Set();
+    for (const f of said.files) {
+      const m = /^(.*)\.(ask|chat)\.jsonl$/.exec(f);
+      if (m && NAME.test(m[1])) names.add(m[1]);
+    }
+    return [...names].sort();
+  }
+  function newName() {
+    const d = new Date();
+    const two = (n) => String(n).padStart(2, "0");
+    return `chat-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-` +
+      `${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+  }
+  async function open(name) {
+    S.name = name;
+    S.ask = S.chat = S.live = null;
+    S.refused = "";
+    S.stamps = {};
+    S.shown.clear();
+    for (const t of [...document.querySelectorAll(".turn")]) t.remove();
+    history.replaceState(null, "", `${location.pathname}?chat=${encodeURIComponent(name)}`);
+    document.title = `${name} - ksagent`;
+    const names = await listChats();
+    if (!names.includes(name)) names.push(name);
+    const ul = $("chats");
+    ul.textContent = "";
+    for (const n of names.reverse()) {
+      const a = ul.appendChild(el("li")).appendChild(el("a", "", n));
+      a.href = `?chat=${encodeURIComponent(n)}`;
+      if (n === name) a.setAttribute("aria-current", "page");
+      a.addEventListener("click", (e) => { e.preventDefault(); open(n); });
+    }
+    await look();
+  }
+
+  async function start() {
+    let said = null;
+    try {
+      const got = await send("/api/status");
+      said = got.ok ? await got.json() : null;
+    } catch (_) { /* no local server: said stays null */ }
+    if (!said || said.local !== true || said.conditional_writes !== true) {
+      S.problem = "This page cannot reach its files. Open the URL the command printed, " +
+        "token included.";
+      draw();
+      return;
+    }
+    hold();
+    const asked = new URLSearchParams(location.search).get("chat");
+    const names = await listChats();
+    await open(asked && NAME.test(asked) ? asked : names[names.length - 1] || newName());
+    $("text").disabled = false;
+    $("send").disabled = false;
+    $("text").focus();
+    document.documentElement.dataset.chat = "ready";
+    // **The next look is set whatever this one meets**, so one error never stops the page.
+    const loop = async () => {
+      try { await look(); } catch (_) { /* look says its own errors */ }
+      setTimeout(loop, LOOK_MS);
+    };
+    setTimeout(loop, LOOK_MS);
+  }
+
+  $("ask").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = $("text").value.trim();
+    if (text === "") return;
+    $("text").value = "";
+    ask(text);
+  });
+  $("text").addEventListener("keydown", (e) => {
+    // **Enter during composition confirms the Japanese input**, and asks nothing.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      $("ask").requestSubmit();
+    }
+  });
+  $("new").addEventListener("click", () => open(newName()));
+  $("latest").addEventListener("click", () => { $("log").scrollTop = $("log").scrollHeight; });
+  start();
+})();
+</script>
+</body>
+</html>

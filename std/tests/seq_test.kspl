@@ -133,6 +133,44 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
     on_heap.free()
     verdict.pass("order_by sorts past its insertion runs and keeps equal keys in their order.")
 
+priv fn shaped_key(shape: Sz, k: I32, n: I32): I32 //< the k-th of n keys in one of five orders
+    //< In order: ascending, descending, all equal, up then down, and scattered.
+    if shape == 0
+        return k
+    if shape == 1
+        return n - k
+    if shape == 2
+        return 7
+    if shape == 3
+        return k if k < n / 2 else n - k
+    return (k * 37) % 4093
+
+fn test_seq_order_by_bounded(arena: Arena$@) //<
+    //< That order_by compares O(n log n) times whatever the order it is given
+    //< `std/json` sorts a large object's keys with it to find a repeat. The keys come from outside,
+    //< so no order they arrive in may make the sort quadratic.
+    verdict.start("[Seq] order_by compares O(n log n) times on any input test...")
+    n: Sz = 4096
+    // 16 a key covers the insertion runs (at most 7.5) and 8 merge levels (4096 / 16 = 2^8).
+    limit: = n * 16
+    $count: Sz = 0
+    calls: = count@
+    by_key: = fn(a: Seq_tagged@, b: Seq_tagged@; calls: Sz$@): I32
+        calls$ += 1
+        return a.key - b.key
+    for shape in Range.asc(5)
+        $xs: = List<|Seq_tagged|>(arena)
+        for i in Range.asc(n)
+            xs.push(Seq_tagged::{ .key = shaped_key(shape, I32::i, I32::n), .was = i })
+        count = 0
+        got: = xs.order_by(by_key, arena)
+        title: = arena.text().s("order_by on input shape \{shape\} stays within n x 16 comparisons")
+            .take()
+        verdict.check(title, got.len == n && count <= limit,
+            arena.text().s("\{count\} comparisons").take())
+    verdict
+        .pass("order_by's comparisons stay O(n log n) on sorted, reversed, equal and mixed input.")
+
 struct Seq_handle //< an owning handle, which must not be copied, and a key to sort it by
     key: I32
 impl Seq_handle: Move_only {} //< a copy would be a second owner

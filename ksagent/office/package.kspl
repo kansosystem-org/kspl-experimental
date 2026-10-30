@@ -1,0 +1,144 @@
+//< What Word and Excel files share: their relationships, and the text view they become
+//< An Office file is a zip of XML parts (OPC, ISO/IEC 29500-2). Each part names the parts it uses
+//< in a relationships part beside it (`_rels/<name>.rels`), by a type and a target. **A target is
+//< resolved as a name inside the zip**, never as a path on the disk.
+import "ksagent/office/xml"
+import "ksagent/office/zip" { Zip }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+fn open(data: U8[], arena: Arena$@): Zip!U8[] //< the zip of a Word or Excel file
+    //< **A file protected by a password is no zip**: Office keeps it encrypted inside a compound
+    //< file, the container of the old formats, which starts with the bytes D0 CF 11 E0.
+    if data.len >= 4 && data[0] == 0xD0U8 && data[1] == 0xCFU8 && data[2] == 0x11U8 &&
+        data[3] == 0xE0U8
+        throw "it is protected by a password, or is an old-format file under a new name: save it \
+            again with no password, as .docx or .xlsx"
+    return Zip.open(data, arena)!
+
+struct Rel //< one relationship of a part
+    id: U8[]
+    kind: U8[] //< the last segment of its type: `officeDocument`, `styles`, `worksheet` …
+    target: U8[] //< the part it names, as a name inside the zip
+
+fn rels_of(z: Zip$@, part: U8[], arena: Arena$@): List<|Rel|>!U8[] //<
+    //< The relationships of a part (`""` for the package itself); none when it has no rels part
+    //< A relationship to something outside the file (`TargetMode="External"`) is left out.
+    slash: = part.rfind_char('/')
+    dir: = part.sub(0, slash.unwrap_or(-1) + 1)
+    name: = part.sub_from(slash.unwrap_or(-1) + 1)
+    rels_name: = arena.text().s(dir).s("_rels/").s(name).s(".rels").take()
+    $out: = List<|Rel|>(arena)
+    if !z.has(rels_name, arena)
+        return out
+    $x: = xml.reader(z.part(rels_name, arena)!, arena)!
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            break
+        if !x.is(.start, "Relationship")
+            continue
+        mode: = x.attr_or("TargetMode", "", arena)!
+        if mode.equals("External")
+            continue
+        kind: = x.attr_or("Type", "", arena)!
+        target: = x.attr_or("Target", "", arena)!
+        out
+            .push(Rel::{ .id = x.attr_or("Id", "", arena)!,
+            .kind = kind.sub_from(kind.rfind_char('/').unwrap_or(-1) + 1),
+            .target = resolve(dir, target, arena)! })
+    return out
+
+fn find(rels: List<|Rel|>@, kind: U8[]): U8[] //< the target of the first relationship of a kind
+    for i in Range.asc(rels.len)
+        if rels.get(i).kind.equals(kind)
+            return rels.get(i).target
+    return ""
+
+fn main_part(z: Zip$@, arena: Arena$@): U8[]!U8[] //< the part the package's own rels name first
+    rels: = rels_of(z, "", arena)!
+    main: = find(rels@, "officeDocument")
+    if main.len == 0
+        throw "it names no main part, so it is not a Word or Excel file"
+    return main
+
+priv fn resolve(dir: U8[], target: U8[], arena: Arena$@): U8[]!U8[] //<
+    //< A target joined to the folder of the part that names it, with each `..` step taken
+    //< A target that starts with `/` is from the zip's root. A `..` above the root is refused.
+    $parts: = List<|U8[]|>(arena)
+    base: = "" if target.starts_with("/") else dir
+    for seg in arena.text().s(base).s(target).take().split('/', arena)
+        if seg.len == 0 || seg.equals(".")
+            continue
+        if seg.equals("..")
+            _up: = parts.pop() catch
+                throw "one of its relationships points above the file's root"
+            continue
+        parts.push(seg)
+    return "/".join(parts.slice(), arena)
+
+// ==========================================
+// The text view: one line per paragraph or row
+// ==========================================
+
+struct View //< the lines of a file's text view, as they are made
+    out: str.Arena_text$@
+    bytes: Sz
+    cap: Sz //< the most bytes the view may hold
+    work: Work //< the work reading the file may still take
+    arena: Arena$@
+
+fn view(cap: Sz, arena: Arena$@): View //< an empty view that may grow to `cap` bytes
+    return View::{ .out = arena.text(), .bytes = 0, .cap = cap,
+        .work = Work::{ .left = cap * WORK_PER_BYTE }, .arena = arena }
+
+const ITEM_WORK: Sz = 64 //< the work one item takes: a paragraph, a cell, a row, a sheet or a list
+    //< About the bytes its record takes in memory. A string built is charged its own bytes.
+priv const WORK_PER_BYTE: Sz = 32 //< the work a view may take for each byte it may hold
+    //< A sheet of one-digit numbers takes about 20 for each byte of its view, so the cap on the
+    //< view, not this one, refuses a file that only holds much text.
+
+struct Work //< the work one file's reading may still take, charged before it is done
+    //< **A few bytes of XML can ask for millions of empty cells**, labels or sheets, so each is
+    //< charged here first. One budget covers the whole file, and bounds its memory and time.
+    left: Sz
+
+impl Work
+    fn charge(r: Self$@, units: Sz): Void!U8[] //< takes `units` of the work left, or refuses
+        if units > r.left
+            throw "it holds more cells, rows, sheets, notes or list numbers than are read"
+        r.left -= units
+
+impl View
+    fn add(r: Self$@, line: U8[]): Void!U8[] //<
+        //< adds one line, made one line; an empty one is left out
+        clean: = one_line(line, r.arena)
+        if clean.len == 0
+            return
+        if r.cap - r.bytes < clean.len + 1
+            throw r.arena.text().s("its text is larger than ").s(size_words(r.cap, r.arena)).take()
+        r.out.s(clean).c('\n')
+        r.bytes += clean.len + 1
+
+    fn take(r: Self$@): U8[] //< the view's text
+        return r.out.take()
+
+fn size_words(bytes: Sz, arena: Arena$@): U8[] //< a size as a person reads it: `8 MiB`, `100 bytes`
+    if bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0
+        return arena.text().s("\{bytes / (1024 * 1024)\} MiB").take()
+    return arena.text().s("\{bytes\} bytes").take()
+
+fn one_line(text: U8[], arena: Arena$@): U8[] //<
+    //< The text with each tab and line break made a space, and no space at either end
+    $bad: = false
+    for c in text
+        bad = bad || c == '\n' || c == '\r' || c == '\t'
+    if !bad
+        return text.trim_spaces()
+    out: = arena.text()
+    for c in text
+        out.c(' ' if c == '\n' || c == '\r' || c == '\t' else c)
+    return out.take().trim_spaces()

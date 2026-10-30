@@ -4,8 +4,9 @@
 //< integer, so one wider than 53 bits does not round on the way through.
 import "std/bignat" // `f64_to_bits`
 import "std/chars"
-import "std/ds" { List, Map }
+import "std/ds" { List }
 import "std/mem" + { Arena, Own_arena }
+import "std/seq" // `List.order_by`, which sorts a large object's keys
 import "std/stack_limit" { Stack_limit }
 import "std/str" { Str_builder }
 import "std/strfmt"
@@ -344,7 +345,33 @@ priv fn parse_value(ctx: Parse_ctx$@): Value!Json_error
             return parse_number(ctx)!
     throw .invalid_character(c)
 
-priv const KEY_SCAN_MAX: Sz = 16 //< how many keys an object compares one by one before using a set
+priv const KEY_SCAN_MAX: Sz = 16 //< how many keys an object compares one by one before sorting
+
+priv struct Key_at //< one of a large object's keys, and where its name starts in the text
+    key: U8[]
+    at: Sz //< -1 for one of the first `KEY_SCAN_MAX` keys, which the scan found distinct
+
+priv fn first_repeat(keys: List<|Key_at|>@, arena: Arena$@): Sz //<
+    //< Where the earliest second use of a key starts, or -1 when every key differs
+    //< Sorted by name and then by position, each repeat stands right after an equal key. **No hash
+    //< takes part**, so keys chosen to collide cost the same O(n log n) as any others. The sort
+    //< works in the parse's arena and rewinds it, since freestanding code has no heap.
+    defer $work: = mem.scratch(arena)
+    sorted: = keys.order_by(fn(a: Key_at@, b: Key_at@; ): I32 {
+        c: = a.key.compare(b.key); return c if c != 0
+            else (0 if a.at == b.at else (-1 if a.at < b.at else 1));
+    }, work.arena)
+    $first: Sz = -1
+    for i in Range(1, sorted.len, 1)
+        k: = sorted.get(i)
+        if k.key.equals(sorted.get(i - 1).key) && (first < 0 || k.at < first)
+            first = k.at
+    return first
+
+priv fn refuse_repeat(keys: List<|Key_at|>@, arena: Arena$@): Void!Json_error
+    at: = first_repeat(keys, arena)
+    if at >= 0
+        throw .duplicate_key(at)
 
 priv fn parse_object(ctx: Parse_ctx$@): Value!Json_error
     enter_nesting(ctx)!
@@ -354,12 +381,26 @@ priv fn parse_object(ctx: Parse_ctx$@): Value!Json_error
     if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '}'
         ctx.pos += 1
         return .obj_val(Object::{ .head = null })
+    // **A large object's keys are sorted once it closes**, never put in a hash table. The keys
+    // come from outside, and keys chosen to collide make a table's lookups slow down with the
+    // square of their count. **The list lives in the parse's arena**, as the result does:
+    // freestanding code has no heap (a Cortex-M program reads its weights' JSON header this way).
+    defer $keys: = List<|Key_at|>(ctx.arena)
+    // Caution: **Check the keys before passing a later error on.** A repeat stands earlier in the
+    // text, and the first problem in the text is the one reported, at every size of object.
+    head: = parse_members(ctx, keys@) catch e
+        refuse_repeat(keys@, ctx.arena)!
+        throw e
+    refuse_repeat(keys@, ctx.arena)!
+    return .obj_val(Object::{ .head = head })
+
+priv fn parse_members(ctx: Parse_ctx$@, keys: List<|Key_at|>$@): Member$@!Json_error //<
+    //< An object's members up to its closing `}`; past `KEY_SCAN_MAX`, every key goes into `keys`
+    //< A few keys are compared one by one. One by one alone, an object of a hundred thousand
+    //< members costs billions of comparisons, so past that the caller sorts `keys`.
     $head: Member$@ = null
     $tail: Member$@ = null
-    // **A few keys are compared one by one; past that, a set of them.** One by one alone, an
-    // object of a hundred thousand members costs billions of comparisons.
     $count: Sz = 0
-    $seen: = Map<|U8[], Bool|>(ctx.arena)
     for
         skip_ws(ctx)
         // A close after a comma is refused as trailing_comma, not as an `invalid_string` key.
@@ -373,17 +414,13 @@ priv fn parse_object(ctx: Parse_ctx$@): Value!Json_error
                 if m.key.equals(key)
                     throw .duplicate_key(key_at)
                 m = m.next
-            if count + 1 == KEY_SCAN_MAX
+        else
+            if count == KEY_SCAN_MAX
                 $f: = head
                 for f != null
-                    seen.set(f.key, true)
+                    keys.push(Key_at::{ .key = f.key, .at = -1 })
                     f = f.next
-                seen.set(key, true)
-        else
-            before: = seen.len
-            seen.set(key, true)
-            if seen.len == before // set replaced rather than added: the key was there
-                throw .duplicate_key(key_at)
+            keys.push(Key_at::{ .key = key, .at = key_at })
         count += 1
 
         skip_ws(ctx)
@@ -397,7 +434,7 @@ priv fn parse_object(ctx: Parse_ctx$@): Value!Json_error
 
         if check_comma_or_end(ctx, '}')!
             break
-    return .obj_val(Object::{ .head = head })
+    return head
 
 priv fn parse_array(ctx: Parse_ctx$@): Value!Json_error
     enter_nesting(ctx)!

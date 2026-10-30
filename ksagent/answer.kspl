@@ -79,6 +79,10 @@ priv fn is_japanese(text: U8[], at: Sz): Bool //<
     return (cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) ||
         (cp >= 0xFF00 && cp <= 0xFFEF)
 
+struct Turn //< one earlier question and its answer, sent as the conversation so far
+    question: U8[]
+    answer: U8[]
+
 struct Source //< one place the answer cites
     path: U8[] //< the file, under the root
     from_line: I64 //< the first line cited, counting from 1
@@ -103,6 +107,15 @@ impl Answer
         return Answer::{ .outcome = outcome, .lang = lang, .text = "",
             .sources = List<|Source|>(arena), .removed = List<|U8[]|>(arena) }
 
+    fn is_answer(r: Self@): Bool //< whether the work ended in an answer: the model's, or not found
+        switch r.outcome
+        case .answered
+            return true
+        case .not_found
+            return true
+        default
+            return false
+
     fn is_unverified(r: Self@): Bool //< whether it is an answer that no checked source backs
         switch r.outcome
         case .answered
@@ -120,8 +133,11 @@ fn finish(root: U8[], text: U8[], given: List<|Source|>@, lang: Lang, arena: Are
     for i in Range.asc(given.len)
         s: = given.get(i)
         $checked: = s
-        why: = check_source(root, s, checked@, arena)
+        // **Each check reads its file in memory of its own**, so many sources do not add up.
+        defer one: = Arena(64 * 1024)
+        why: = check_source(root, s, checked@, one)
         if why.len == 0
+            checked.path = arena.dup_str(checked.path)
             a.sources.push(checked)
         else
             a.removed
@@ -225,24 +241,52 @@ fn ended_line(a: Answer@, arena: Arena$@): U8[] //<
 fn write_console(a: Answer@, out: Writer, arena: Arena$@) //<
     //< Writes the answer for a terminal: the text, then each checked source with its quote
     //< Each removed source is named with the reason, so whoever tries a model sees what it got
-    //< wrong.
+    //< wrong. Text from the model or a file goes through `write_shown`.
     switch a.outcome
     case .answered
-        out.s(a.text).c('\n')
+        write_shown(out, a.text)
+        out.c('\n')
     case .not_found
         out.s(a.lang.not_found_line()).c('\n')
     default
-        out.s(ended_line(a, arena)).c('\n')
+        write_shown(out, ended_line(a, arena))
+        out.c('\n')
         return
     if a.sources.len > 0
         out.c('\n').s(a.lang.sources_word()).c('\n')
     for i in Range.asc(a.sources.len)
         s: = a.sources.get(i)
-        out.s("- ").s(s.path).c(' ').s(span_words(s, a.lang, arena)).c('\n')
-        out.s("  > ").s(collapse_spaces(s.quote, arena)).c('\n')
+        out.s("- ")
+        write_shown(out, s.path)
+        out.c(' ').s(span_words(s, a.lang, arena)).s("\n  > ")
+        write_shown(out, collapse_spaces(s.quote, arena))
+        out.c('\n')
     if a.removed.len > 0
         out.c('\n').s(a.lang.removed_line(a.removed.len, arena)).c('\n')
         for i in Range.asc(a.removed.len)
-            out.s("  (").s(a.removed.get(i)).s(")\n")
+            out.s("  (")
+            write_shown(out, a.removed.get(i))
+            out.s(")\n")
     if a.is_unverified()
         out.c('\n').s(a.lang.unverified_line()).c('\n')
+
+fn write_shown(out: Writer, text: U8[]) //<
+    //< Writes text for a terminal, each control character but a line break and a tab made `�`
+    //< **The model, a file or a server can hold an escape sequence**, which a terminal would obey:
+    //< set its title, clear the screen, or move the cursor over what stands. C1 controls (U+0080
+    //< to U+009F) count too, since some terminals read U+009B as an escape.
+    $from: Sz = 0
+    $i: Sz = 0
+    for i < text.len
+        c: = text[i]
+        n: Sz =
+            (2
+            if c == 0xC2U8 && i + 1 < text.len && text[i + 1] < 0xA0U8 && text[i + 1] >= 0x80U8
+            else (1 if (c < 0x20U8 && c != '\n' && c != '\t') || c == 0x7FU8 else 0))
+        if n == 0
+            i += 1
+            continue
+        out.s(text.sub(from, i - from)).s("�")
+        i += n
+        from = i
+    out.s(text.sub(from, text.len - from))

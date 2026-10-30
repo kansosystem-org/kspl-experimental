@@ -16,7 +16,9 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   one `x86_64-w64-mingw32-gcc` names; Wine, which would run its output, is left out for its size,
 #   so no CI job runs that output: note 19 in `docs/SPEC-gates.md` says how to run it by hand)
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
-#   ksbind's own test (test-extract): libssl-dev · test-ksmd-browser: nodejs
+#   ksbind's own test (test-extract) and kssrv, which links OpenSSL for HTTPS (make kssrv,
+#   test-ksmd-browser, test-ksmd-open, test-ksagent-chat, test-llvm-pkgs): libssl-dev
+#   test-ksmd-browser: nodejs
 #   test-pytools: python3-numpy (without it, the Linux round fails)
 #   test-ksmd-desktop: desktop-file-utils, shared-mime-info
 #   the HTTPS download below (Chromium): ca-certificates

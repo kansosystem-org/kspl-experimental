@@ -1,0 +1,271 @@
+//< A small XML reader for the parts of Word and Excel files, one event at a time
+//< **It reads no DTD and expands no entity** but the five XML predefines and numeric references,
+//< so a part cannot grow on reading or reach anything outside itself. A part must be UTF-8 and hold
+//< no control character; elements must nest and close in order. Anything else is refused with a
+//< reason. **Names are compared by their local part** (`t` for `w:t`): the prefixes a writer
+//< chooses vary, and Office's own parts never give one local name two meanings that matter here.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+const MAX_DEPTH: Sz = 256 //< the deepest nesting read
+    //< Word nests tables in text boxes in tables, but never near this deep.
+
+enum Event //< what the reader stopped at
+    start //< an element's start tag; `empty` says whether it closes at once
+    end //< an element's end tag, or the end of an empty element
+    text //< text between tags, in `raw` as written (`text_of` gives the characters)
+    done //< the end of the part
+
+struct Reader //< where the reader stands in one part, and what it stopped at
+    src: U8[]
+    pos: Sz
+    event: Event
+    name: U8[] //< the element's local name, for `start` and `end`
+    attrs: U8[] //< the start tag's attributes, as written
+    raw: U8[] //< the text, for `text`
+    cdata: Bool //< whether the text is a CDATA section, whose characters are taken as they stand
+    empty: Bool //< whether the start tag closes itself (`<a/>`); its `end` comes next
+    open: List<|U8[]|> //< the qualified names of the open elements, outermost first
+        //< At a `start` it holds the element itself; at an `end`, no longer.
+
+fn reader(src: U8[], arena: Arena$@): Reader!U8[] //<
+    //< A reader at the start of a part, once the part is checked to be UTF-8 with no control byte
+    $body: = src
+    if body.len >= 3 && body[0] == 0xEFU8 && body[1] == 0xBBU8 && body[2] == 0xBFU8
+        body = body.sub_from(3) // the byte-order mark some writers put first
+    if body.len >= 2 && (body[0] == 0xFEU8 || body[0] == 0xFFU8)
+        throw "one of its parts is in UTF-16, which is not read"
+    $i: Sz = 0
+    for i < body.len
+        c: = body[i]
+        if c < 0x20U8 && c != '\t' && c != '\n' && c != '\r'
+            throw "one of its parts holds a control character, which XML does not allow"
+        if c < 0x80U8
+            i += 1
+            continue
+        n: = body.utf8_seq_len(i) catch
+            throw "one of its parts is not valid UTF-8"
+        i += n
+    return Reader::{ .src = body, .pos = 0, .event = .done, .name = "", .attrs = "", .raw = "",
+        .cdata = false, .empty = false, .open = List<|U8[]|>(arena) }
+
+impl Reader
+    fn depth(r: Self@): Sz //< how many elements are open (see `open`)
+        return r.open.len
+
+    fn next(r: Self$@): Event!U8[] //< moves to the next event and returns it
+        if r.event == Event.start && r.empty
+            _closed: = r.open.pop()
+            r.event = .end
+            return r.event
+        for
+            if r.pos >= r.src.len
+                if r.open.len > 0
+                    throw "one of its parts ends before its elements close"
+                r.event = .done
+                return r.event
+            if r.src[r.pos] != '<'
+                stop: = r.src.sub_from(r.pos).find_char('<').unwrap_or(r.src.len - r.pos)
+                r.raw = r.src.sub(r.pos, stop)
+                r.pos += stop
+                r.cdata = false
+                r.event = .text
+                return r.event
+            rest: = r.src.sub_from(r.pos)
+            if rest.starts_with("<?")
+                r.pos += skip_past(rest, "?>")!
+                continue
+            if rest.starts_with("<!--")
+                r.pos += skip_past(rest, "-->")!
+                continue
+            if rest.starts_with("<![CDATA[")
+                len: = skip_past(rest, "]]>")!
+                r.raw = rest.sub(9, len - 12)
+                r.pos += len
+                r.cdata = true
+                r.event = .text
+                return r.event
+            if rest.starts_with("<!")
+                throw "one of its parts declares a DTD, which Office files never hold"
+            if rest.starts_with("</")
+                return r.end_tag(rest)
+            return r.start_tag(rest)
+
+    priv fn start_tag(r: Self$@, rest: U8[]): Event!U8[] //< reads `<name attrs>` or `<name/>`
+        $i: Sz = 1
+        for i < rest.len && is_name_byte(rest[i])
+            i += 1
+        if i == 1
+            throw "one of its parts holds a `<` that starts no tag"
+        qname: = rest.sub(1, i - 1)
+        attrs_at: = i
+        $quote: U8 = 0U8
+        for i < rest.len
+            c: = rest[i]
+            if quote == 0U8 && c == '>'
+                break
+            if quote == 0U8 && c == '<'
+                throw "one of its parts holds a tag that does not close"
+            if quote != 0U8
+                if c == quote
+                    quote = 0U8
+            else if c == '"' || c == '\''
+                quote = c
+            i += 1
+        if i >= rest.len
+            throw "one of its parts ends inside a tag"
+        r.empty = rest[i - 1] == '/'
+        r.attrs = rest.sub(attrs_at, i - attrs_at - (1 if r.empty else 0))
+        r.name = local(qname)
+        r.pos += i + 1
+        if r.open.len == MAX_DEPTH
+            throw "one of its parts nests elements too deep"
+        r.open.push(qname)
+        r.event = .start
+        return r.event
+
+    priv fn end_tag(r: Self$@, rest: U8[]): Event!U8[] //< reads `</name>`
+        $i: Sz = 2
+        for i < rest.len && is_name_byte(rest[i])
+            i += 1
+        qname: = rest.sub(2, i - 2)
+        for i < rest.len && rest[i].is_space()
+            i += 1
+        if i >= rest.len || rest[i] != '>'
+            throw "one of its parts holds an end tag that does not close"
+        top: = r.open.pop() catch
+            throw "one of its parts closes an element it never opened"
+        if !top.equals(qname)
+            throw "one of its parts closes its elements out of order"
+        r.name = local(qname)
+        r.pos += i + 1
+        r.event = .end
+        return r.event
+
+    fn is(r: Self@, event: Event, name: U8[]): Bool //< whether it stands at that event of that name
+        return r.event == event && r.name.equals(name)
+
+    fn attr(r: Self@, name: U8[], arena: Arena$@): U8[]?!U8[] //<
+        //< The value of the start tag's attribute of that local name, its references replaced
+        $i: Sz = 0
+        a: = r.attrs
+        for i < a.len
+            for i < a.len && a[i].is_space()
+                i += 1
+            if i >= a.len
+                break
+            name_at: = i
+            for i < a.len && is_name_byte(a[i])
+                i += 1
+            qname: = a.sub(name_at, i - name_at)
+            for i < a.len && a[i].is_space()
+                i += 1
+            if qname.len == 0 || i >= a.len || a[i] != '='
+                throw "one of its parts holds an attribute with no value"
+            i += 1
+            for i < a.len && a[i].is_space()
+                i += 1
+            if i >= a.len || (a[i] != '"' && a[i] != '\'')
+                throw "one of its parts holds an attribute value with no quotes"
+            quote: = a[i]
+            close: = a.sub_from(i + 1).find_char(quote) catch
+                throw "one of its parts holds an attribute value that does not close"
+            value: = a.sub(i + 1, close)
+            i += close + 2
+            if local(qname).equals(name)
+                return .some(decode(value, arena)!)
+        return .none
+
+    fn attr_or(r: Self@, name: U8[], otherwise: U8[], arena: Arena$@): U8[]!U8[] //<
+        //< The attribute's value, or `otherwise` where the tag has none
+        v: = r.attr(name, arena)!
+        return v.unwrap_or(otherwise)
+
+    fn text_of(r: Self@, arena: Arena$@): U8[]!U8[] //< the characters of a `text` event
+        if r.cdata
+            return r.raw
+        return decode(r.raw, arena)!
+
+    fn skip(r: Self$@): Void!U8[] //< at a `start`, moves to its own `end`, past all it holds
+        target: = r.open.len - 1
+        for
+            ev: = r.next()!
+            if ev == Event.end && r.open.len == target
+                return
+
+priv fn skip_past(rest: U8[], close: U8[]): Sz!U8[] //< how far past `close` the text runs
+    at: = rest.find_str(close) catch
+        throw "one of its parts holds a comment, a CDATA or an instruction that does not close"
+    return at + close.len
+
+priv fn is_name_byte(c: U8): Bool //< whether the byte can stand in a tag's or attribute's name
+    return c.is_alnum() || c == ':' || c == '_' || c == '-' || c == '.' || c >= 0x80U8
+
+fn local(qname: U8[]): U8[] //< the name after its prefix: `t` for `w:t`
+    colon: = qname.rfind_char(':') catch
+        return qname
+    return qname.sub_from(colon + 1)
+
+fn decode(raw: U8[], arena: Arena$@): U8[]!U8[] //<
+    //< The text with each reference replaced by its character
+    //< Only `&lt;` `&gt;` `&amp;` `&quot;` `&apos;` and `&#N;` / `&#xN;` are known; any other is
+    //< refused, since without the DTD no other entity has a meaning.
+    amp: = raw.find_char('&') catch
+        return raw
+    out: = arena.text()
+    out.s(raw.sub(0, amp))
+    $i: = amp
+    for i < raw.len
+        c: = raw[i]
+        if c != '&'
+            out.c(c)
+            i += 1
+            continue
+        semi: = raw.sub_from(i).find_char(';') catch
+            throw "one of its parts holds an `&` that starts no reference"
+        name: = raw.sub(i + 1, semi - 1)
+        i += semi + 1
+        if name.equals("lt")
+            out.c('<')
+        else if name.equals("gt")
+            out.c('>')
+        else if name.equals("amp")
+            out.c('&')
+        else if name.equals("quot")
+            out.c('"')
+        else if name.equals("apos")
+            out.c('\'')
+        else if name.starts_with("#")
+            put_code_point(out, code_point(name.sub_from(1))!)
+        else
+            throw "one of its parts uses an entity XML does not define, which is not read"
+    return out.take()
+
+priv fn code_point(digits: U8[]): I32!U8[] //< the number of a `&#N;` or `&#xN;`, checked
+    hex: = digits.starts_with("x")
+    body: = digits.sub_from(1) if hex else digits
+    if body.len == 0 || body.len > 8
+        throw "one of its parts holds a character reference that is not a number"
+    $v: I32 = 0
+    for c in body
+        $d: I32 = -1
+        if hex
+            d = c.hex_val().unwrap_or(-1)
+        else if c.is_digit()
+            d = (c - '0')
+        if d < 0
+            throw "one of its parts holds a character reference that is not a number"
+        v = v * (16 if hex else 10) + d
+    allowed: =
+        v == 0x9 || v == 0xA || v == 0xD || (v >= 0x20 && v <= 0xD7FF) ||
+        (v >= 0xE000 && v <= 0xFFFD) || (v >= 0x10000 && v <= 0x10FFFF)
+    if !allowed
+        throw "one of its parts refers to a character XML does not allow"
+    return v
+
+priv fn put_code_point(out: str.Arena_text$@, cp: I32) //< writes the character as UTF-8
+    for k in Range.asc(chars.codepoint_len(cp))
+        out.c(chars.codepoint_byte(cp, k))

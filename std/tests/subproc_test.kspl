@@ -161,6 +161,28 @@ fn test_async_child_and_stdin(ksplc: U8[], arena: Arena$@) //< ksplc runs the ch
         .pass("Child.wait gave the child's code, a second wait or kill did nothing, and read_stdin \
             took all 100000 bytes.")
 
+priv const BOTH_SRC: U8[] = //< a child that writes one line to each output
+    """import "std/io"
+
+fn main()
+  io.out().s("to out\n")
+  io.err().s("to err\n")
+"""
+
+fn test_beside_child_writes_its_file(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< spawn_beside's child writes both outputs to the file named, and is reaped with its own code
+    verdict.start("[Sys] a child started beside this program writes its outputs to a file...")
+    log: = "out/tmp/kspl_test_child/beside.log"
+    $child: =
+        subproc.spawn_beside(sys_test.child_argv(ksplc, "both", BOTH_SRC, arena), "", log, log)
+        catch
+        panic("the child writing both outputs must start")
+    assert(child.wait().unwrap_or(-1) == 0, "its wait gives its own exit code")
+    got: = io.read_file(log, arena) catch ""
+    assert(got.find_str("to out").is_some() && got.find_str("to err").is_some(),
+        "both outputs stand in the one file")
+    verdict.pass("the child's two outputs reached its file, and its wait gave 0.")
+
 fn test_run_many_frees_slots_early(arena: Arena$@) //<
     //< A job that ends early frees its slot for the next, while an earlier job still runs
     //< The long job waits for the mark the third job leaves, and only then ends. Waited on in start

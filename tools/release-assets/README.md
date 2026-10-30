@@ -1,6 +1,6 @@
 # KSPL — get it running first
 
-This folder holds the KSPL compiler and its standard library, ready to use. Below: what is in it, how to run your first program, and how to build an executable.
+This folder holds the KSPL compiler and its standard library, ready to use.
 
 | name | what it is |
 | :-- | :-- |
@@ -14,7 +14,7 @@ This folder holds the KSPL compiler and its standard library, ready to use. Belo
 
 You need one thing besides this folder: a C compiler, `clang`, on the PATH. KSPL translates your program to C, and `clang` turns the C into machine code. The environment variable `CC` names a different C compiler if you prefer one.
 
-**On Windows, use MSYS2's UCRT64 clang**: install it with `pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH. Kanso is developed and built with it. LLVM's own Windows clang is a different build: it targets MSVC, Microsoft's toolchain. ksplc names that toolchain's link flags, but nothing builds or runs a program with it.
+**On Windows, use MSYS2's UCRT64 clang**: install it with `pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH. LLVM's own Windows clang targets MSVC, Microsoft's toolchain, and nothing builds or runs a program with it.
 
 Then:
 
@@ -33,11 +33,11 @@ Then:
    ./ksplc run hello.kspl            # on Windows, .\ksplc.exe run hello.kspl
    ```
 
-   It prints `Hello, Kanso!`. `run` translates, compiles, links and runs the program in one command. Building an executable yourself uses the same C compiler ("Making an executable" below).
+   It prints `Hello, Kanso!`. `run` translates, compiles, links and runs the program in one command.
 
 ## Splitting a program into files — how to write `import`
 
-**Where `import` looks depends on how it is written**, and this most often catches people out.
+**Where `import` looks depends on how it is written.**
 
 | how it is written | where it looks from |
 | :-- | :-- |
@@ -53,7 +53,7 @@ A function used only inside its own folder needs no `pub`; only what another fol
 
 ## Making an executable
 
-To get the executable itself rather than `run` it, `build` it:
+To get the executable itself, `build` it:
 
 ```sh
 ./ksplc build hello.kspl hello     # hello.c and hello.libs are left beside it

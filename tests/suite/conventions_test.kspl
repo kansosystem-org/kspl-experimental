@@ -192,35 +192,120 @@ priv fn check_descriptors(arena: Arena$@)
         "lines", bad@, "bring it to `T[]::arr` (the length enters from the type)")
 
 // ==========================================
-// 7. A folder taking keys from outside does not use `Map` (std/docs/DESIGN-core.md) `ds.Map` is open
-// addressing plus linear probing, and has no way to pass a seed to `Hashable`'s `hash`.
-// Note: If it fails, do not stop using `Map` — design the seed in the form
-// `std/docs/DESIGN-core.md` decides.
+// 7. Keys from outside never reach a `Map` (std/docs/DESIGN-core.md) `ds.Map` is open addressing
+// plus linear probing, with no seed for `Hashable`'s `hash`, so keys can be chosen to collide.
+// Note: A file that needs a table keyed from outside gets the seed `std/docs/DESIGN-core.md`
+// decides. Do not take its folder out of the list.
 // ==========================================
-priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "ksdb/", "ksmd/", "ksagent/" }
+priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "ksdb/", "ksmd/", "ksagent/", "ksai/",
+    "std/" } //< the folders whose files take keys from outside
+        //< **All of `std/` and `ksai/` are in it**: a library file cannot know where its caller's
+        //< bytes come from.
+
+priv const MODEL_KEYS_DIR: U8[] = "ksai/" //< where a line can mark its keys as the model's
+    //< A model file is trusted as a program is ("A model file is trusted, a prompt is not" in
+    //< `ksai/docs/DESIGN-learning.md`). Its `Map`s stay, each line marked `MODEL_KEYS_MARK`.
+priv const MODEL_KEYS_MARK: U8[] = "keys from the model" //< read in the line's comment
+    //< Caution: **The mark covers the map, not each write to it.** Text from a prompt put into a
+    //< marked map still breaks the rule; only review sees that.
+
+priv const MAP_OWN_FILES: U8[][_] = ::{ "std/ds.kspl", "std/tests/" } //< inside, yet out of it
+    //< `std/ds` defines `Map`, and std's tests read no outside input.
+
+priv fn takes_outside_keys(rel: U8[], _arena: Arena$@): Bool //< whether the rule holds a file
+    for own in MAP_OWN_FILES
+        if rel.starts_with(own)
+            return false
+    for d in UNTRUSTED_KEY_DIRS
+        if rel.starts_with(d)
+            return true
+    return false
+
+priv fn reads_model_keys(rel: U8[], _arena: Arena$@): Bool //< whether a file's mark counts
+    return rel.starts_with(MODEL_KEYS_DIR)
+
+priv fn marks_model_keys(line: U8[], _arena: Arena$@): Bool //< whether its comment has the mark
+    if at: = line.find_str("//")
+        return line.sub_from(at).find_str(MODEL_KEYS_MARK).is_some()
+    return false
+
+priv fn names_map(line: U8[], _arena: Arena$@): Bool //< whether a line writes a `Map` type
+    //< It reads text: a `Map` that a file reaches with no `Map<|` written still breaks the rule.
+    $rest: = line
+    for
+        if at: = rest.find_str("Map<|")
+            if !htext.is_word_before(rest, at)
+                return true
+            rest = rest.sub_from(at + 1)
+        else
+            return false
+
+// Caution: **Keep both sides in each table.** One side alone lets "always true" or "always false"
+// pass.
+priv const MAP_LINE_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "$seen: = Map<|U8[], Bool|>(arena)", .hits = true },
+    Sample::{ .text = "Map<|U8[], Sz|>.new_with_cap(8, arena)", .hits = true },
+    Sample::{ .text = "f: Hash_map<|K|>, g: ds.Map<|K, V|>", .hits = true },
+    Sample::{ .text = "f: Hash_map<|K|>", .hits = false },
+    Sample::{ .text = "$keys: = List<|Key_at|>(null)", .hits = false },
+}
+
+priv const MAP_FILE_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "std/json.kspl", .hits = true },
+    Sample::{ .text = "std/http_body.kspl", .hits = true },
+    Sample::{ .text = "kssrv/conn.kspl", .hits = true },
+    Sample::{ .text = "ksai/tokenizer.kspl", .hits = true },
+    Sample::{ .text = "ksai/examples/chat_server/request.kspl", .hits = true },
+    Sample::{ .text = "std/ds.kspl", .hits = false },
+    Sample::{ .text = "std/tests/encoding_test.kspl", .hits = false },
+    Sample::{ .text = "ksplc/pipeline.kspl", .hits = false },
+}
+
+priv const MODEL_MARK_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "priv merges: Map<|Bpe_key, I32|>$@ //< keys from the model", .hits = true },
+    Sample::{ .text = "m: = arena.create(Map<|U8[], Sz|>(arena)) // keys from the model",
+        .hits = true },
+    Sample::{ .text = "$seen: = Map<|U8[], Bool|>(arena)", .hits = false },
+    Sample::{ .text = "$cache: = Map<|U8[], I32|>(arena) // keys from a prompt", .hits = false },
+    Sample::{ .text = "say(\"keys from the model\") // a cache", .hits = false },
+}
+
+priv const MODEL_DIR_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "ksai/gguf.kspl", .hits = true },
+    Sample::{ .text = "ksai/examples/chat_server/engine.kspl", .hits = true },
+    Sample::{ .text = "std/json.kspl", .hits = false },
+    Sample::{ .text = "ksagent/agent.kspl", .hits = false },
+}
+
+priv fn check_map_fires(arena: Arena$@)
+    scan.check_samples("the judgment of a `Map` line can fire", Sample[]::MAP_LINE_SAMPLES,
+        "map_line_samples", names_map, arena)
+    scan.check_samples("the judgment of a file taking outside keys can fire",
+        Sample[]::MAP_FILE_SAMPLES, "map_file_samples", takes_outside_keys, arena)
+    scan.check_samples("the judgment of a line marking its keys as the model's can fire",
+        Sample[]::MODEL_MARK_SAMPLES, "model_mark_samples", marks_model_keys, arena)
+    scan.check_samples("the judgment of a file whose mark counts can fire",
+        Sample[]::MODEL_DIR_SAMPLES, "model_dir_samples", reads_model_keys, arena)
 
 priv fn check_map_at_boundary(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        $inside: = false
-        for d in UNTRUSTED_KEY_DIRS
-            if rel.starts_with(d)
-                inside = true
-        if !inside
+        if !takes_outside_keys(rel, arena)
             continue
+        marks_count: = reads_model_keys(rel, arena)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            if at: = line.find_str("Map<|")
-                if at == 0 || !htext.is_word_before(line, at)
-                    bad
-                        .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
-    verdict.check_list("a folder taking keys from outside does not use Map \
-        (kssrv/ksdb/ksmd/ksagent)", seen, "lines", bad@,
-        "design the seed before putting it in (the Map line under std/docs/DESIGN-core.md's 'Known \
-            holes')")
+            if names_map(line, arena) && !(marks_count && marks_model_keys(line, arena))
+                bad
+                    .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+    verdict.check_list("a file taking keys from outside does not use Map \
+        (kssrv/ksdb/ksmd/ksagent/ksai/std)", seen, "lines", bad@,
+        "sort or scan the keys instead, or design the seed (the Map line under \
+            std/docs/DESIGN-core.md's 'Known holes'). In ksai/, a map filled from the model file \
+            alone carries `MODEL_KEYS_MARK` in its line's comment")
 
 // ==========================================
 // 10. The strings by which the compiler names std really exist ksplc finds std's declarations by
@@ -664,6 +749,7 @@ fn main(): I32
     check_descriptor_fires(arena)
     cdoc.run_prose(arena)
     cplain.run(arena)
+    check_map_fires(arena)
     check_map_at_boundary(arena)
     cmerge.run(arena)
     cwin.run(arena)

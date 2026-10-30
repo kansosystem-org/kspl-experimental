@@ -1,0 +1,274 @@
+//< Tests of the TLS server half: loading a certificate and its key, and a session on a socket
+//< The client side is `ksbind/tls` itself, or a raw socket for a peer that speaks no TLS. The
+//< server's thread drives its session as a one-thread server does: it never waits inside a call,
+//< and waits on the socket with `wait_before`, the client's own wait.
+import "ksbind/tests/cert" + { Test_ca, Test_cert, Validity, VALID_NOW }
+import "ksbind/tests/records" { Record_client }
+import "ksbind/tls"
+import "ksbind/tls_server" { Tls_server, Tls_session, Tls_session_error, Tls_setup_error }
+import "std/chars" // `sub_mut`
+import "std/mem" { Arena }
+import "std/net"
+import "std/reactor" { READABLE, WRITABLE }
+import "std/str" // `equals`, `find_str`
+import "std/sys"
+import "std/thread"
+import "std/verdict"
+
+priv fn load_error(cert_pem: U8[], key_pem: U8[], arena: Arena$@): Tls_setup_error? //<
+    //< The refusal `Tls_server.load` gives, or none where it loads
+    s: = Tls_server.load(cert_pem, key_pem, arena) catch e
+        return .some(e)
+    s.free()
+    return .none
+
+priv fn refused_as(cert_pem: U8[], key_pem: U8[], want: Tls_setup_error, arena: Arena$@): Bool
+    if got: = load_error(cert_pem, key_pem, arena)
+        return got == want
+    return false
+
+fn test_tls_server_load_refusals()
+    verdict.start("[Tls_server] each wrong certificate or key being refused for its reason test...")
+    defer arena: = Arena(256 * 1024)
+    c: = cert.self_signed("localhost", arena)
+    verdict.check("no certificate in the text is refused as no_certificate",
+        refused_as("not a certificate", c.key_pem, .no_certificate, arena), "")
+    verdict.check("no key in the text is refused as no_key",
+        refused_as(c.cert_pem, "not a key", .no_key, arena), "")
+    // **A passphrase is never asked for.** OpenSSL's own prompt would wait at the terminal.
+    verdict.check("a key under a passphrase is refused as key_encrypted, with no prompt",
+        refused_as(c.cert_pem, c.locked_key_pem, .key_encrypted, arena), "")
+    verdict.check("another certificate's key is refused as key_mismatch",
+        refused_as(c.cert_pem, c.other_key_pem, .key_mismatch, arena), "")
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    backwards: = ca.issued_backwards("localhost", arena)
+    verdict.check("a chain whose CA comes first is refused as chain_out_of_order",
+        refused_as(backwards, c.key_pem, .chain_out_of_order, arena), "")
+    verdict.check("the certificate and its own key load",
+        load_error(c.cert_pem, c.key_pem, arena).is_none(), "")
+    verdict.pass("Each wrong certificate or key is refused, and says which it was.")
+
+priv fn loaded(c: Test_cert, arena: Arena$@): Tls_server$@ //< a server on `c`, which must load
+    return Tls_server.load(c.cert_pem, c.key_pem, arena)
+        catch panic("a certificate and its own key should load")
+
+fn test_tls_server_facts()
+    verdict.start("[Tls_server] what a loaded certificate says of its chain and its dates test...")
+    defer arena: = Arena(256 * 1024)
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    now: = sys.wall_seconds()
+    day: = 86400I64
+    lone: = loaded(ca.issue("localhost", VALID_NOW, false, arena), arena)
+    verdict.check("one certificate another issued is a lone leaf",
+        lone.chain_len == 1 && lone.lone_leaf, "")
+    verdict.check("its subject names its host",
+        lone.subject.find_str("CN=localhost").is_some(), lone.subject)
+    verdict.check("its expiry prints as a time", lone.expiry.len > 0, lone.expiry)
+    // A day either way, so the clock moving during the test cannot fail it.
+    verdict.check("it started a day ago",
+        lone.starts_at <= now - day + 60I64 && lone.starts_at >= now - day - 60I64, "")
+    verdict.check("it expires a day on",
+        lone.expires_at >= now + day - 60I64 && lone.expires_at <= now + day + 60I64, "")
+    lone.free()
+    chain: = loaded(ca.issue("localhost", VALID_NOW, true, arena), arena)
+    verdict.check("a certificate followed by its issuer is a chain of two, not a lone leaf",
+        chain.chain_len == 2 && !chain.lone_leaf, "")
+    chain.free()
+    own: = loaded(cert.self_signed("localhost", arena), arena)
+    verdict.check("a certificate its own key signed is not a lone leaf", !own.lone_leaf, "")
+    own.free()
+    // **The binding states the dates; the server decides.** So an expired one still loads.
+    old: =
+        loaded(ca.issue("localhost", Validity::{ .from_day = -3, .to_day = -1 }, false, arena),
+        arena)
+    verdict.check("an expired certificate loads, and its expiry lies in the past",
+        old.expires_at < now, "")
+    old.free()
+    verdict.pass("A loaded certificate tells its chain, its subject and its dates.")
+
+priv enum Srv_act //< what the server's thread does once a client connects
+    echo //< reads `PING`, answers `PONG`, then sends its close_notify
+    first_error //< reads until the session fails, and keeps the error
+    two_records //< as `echo`, but reads two `PING` records that came in one write
+
+priv struct Srv //< what the server's thread is handed, and what it saw
+    listener: net.Tcp_listener$@
+    server: Tls_server$@
+    act: Srv_act
+    error: Tls_session_error //< the session's first error, for `.first_error`
+    failed: Bool //< whether a session call failed
+    echoed: Bool //< whether it read the whole `PING` and sent `PONG`
+    idle_reads: Sz //< how many reads gave `would_block` before the first byte came
+    held: Bool //< for `.two_records`: whether `buffered` held the second record after the first
+    quiet: Bool //< whether the socket stayed unready meanwhile, so no wait would have woken
+    second: Bool //< whether a read with no wait gave the second record
+    drained: Bool //< whether `buffered` was false after it
+
+priv const SRV_WAIT_MS: I32 = 10000 //< how long the server's thread waits on its socket
+priv const PING: U8[] = "ping"
+priv const PONG: U8[] = "pong"
+priv const QUIET_MS: I32 = 200 //< how long the socket must stay unready with a record held
+
+priv fn wait_for(s: Tls_session$@, conn: net.Tcp_stream$@, deadline: I64): Bool //<
+    //< Waits for what the session needs next: the socket to take its bytes, or to bring more
+    return tls.wait_before(conn, WRITABLE if s.pending() else READABLE, deadline)
+
+priv fn read_all(p: Srv$@, s: Tls_session$@, conn: net.Tcp_stream$@, want: Sz, deadline: I64): Bool
+    $got: U8[16] = ::{}
+    $have: Sz = 0
+    for have < want
+        n: = s.read(conn, (U8$[]::got).sub_mut(have, want - have)) catch e
+            if e == Tls_session_error.would_block && wait_for(s, conn, deadline)
+                if have == 0
+                    p.idle_reads += 1
+                continue
+            p.error = e
+            p.failed = true
+            return false
+        if n == 0
+            return false
+        have += n
+    return (U8[]::got).sub(0, want).equals(PING)
+
+priv fn write_all(s: Tls_session$@, conn: net.Tcp_stream$@, bytes: U8[], deadline: I64): Bool
+    $sent: Sz = 0
+    for sent < bytes.len
+        n: = s.write(conn, bytes.sub_from(sent)) catch e
+            if e == Tls_session_error.would_block && wait_for(s, conn, deadline)
+                continue
+            return false
+        sent += n
+    for s.pending()
+        s.flush(conn) catch e
+            if e != Tls_session_error.would_block || !wait_for(s, conn, deadline)
+                return false
+    return true
+
+#export
+fn tls_server_test_peer(p: Srv$@): Void$@
+    conn: = p.listener.accept() catch panic("accept should succeed once a client connects")
+    conn.set_nonblocking() catch panic("the accepted socket should become non-blocking")
+    s: = Tls_session.start(p.server) catch panic("a session should start")
+    deadline: = sys.deadline_after_ms(SRV_WAIT_MS)
+    if read_all(p, s, conn, PING.len, deadline) && p.act != Srv_act.first_error
+        if p.act == Srv_act.two_records
+            read_second(p, s, conn)
+        p.echoed = write_all(s, conn, PONG, deadline)
+        s.close(conn)
+    s.free()
+    conn.free()
+    return null
+
+priv fn read_second(p: Srv$@, s: Tls_session$@, conn: net.Tcp_stream$@) //<
+    //< Reads the second of two records that came together, with no wait on the socket
+    p.held = s.buffered()
+    p.quiet = !tls.wait_before(conn, READABLE, sys.deadline_after_ms(QUIET_MS))
+    $got: U8[16] = ::{}
+    n: = s.read(conn, U8$[]::got) catch 0
+    p.second = (U8[]::got).sub(0, n).equals(PING)
+    p.drained = !s.buffered()
+
+priv fn spawn_srv(p: Srv$@): thread.Thread$@ //< starts the server's thread on `p`
+    return thread.Thread.spawn<|Srv|>(tls_server_test_peer, p) catch panic("thread spawn failed")
+
+priv fn srv_on(server: Tls_server$@, act: Srv_act): Srv //< a listener on a free loopback port
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed")
+    return Srv::{ .listener = listener, .server = server, .act = act }
+
+fn test_tls_server_talks_to_the_client()
+    verdict.start("[Tls_server] the client verifying the server half and trading bytes test...")
+    defer arena: = Arena(256 * 1024)
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    defer server: = loaded(ca.issue("localhost", VALID_NOW, false, arena), arena)
+    $p: = srv_on(server, .echo)
+    defer p.listener.free()
+    port: = p.listener.port() catch panic("a bound socket knows its port")
+    t: = spawn_srv(p@)
+    s: = tls.Tls_stream.connect("localhost", port)
+        catch panic("the client should verify the server half's certificate and connect")
+    sent: = s.write(PING) catch panic("the client's write should succeed")
+    assert(sent == PING.len, "the ping should go out whole")
+    $got: U8[4] = ::{}
+    $have: Sz = 0
+    for have < 4
+        n: = s.read((U8$[]::got).sub_mut(have, 4 - have)) catch panic("the pong should arrive")
+        assert(n > 0, "the pong should arrive before the end")
+        have += n
+    $rest: U8[8] = ::{}
+    // **0 only after a close_notify**, by the client's rule: so this shows `close` sent one.
+    end: = s.read(U8$[]::rest) catch panic("the server's close_notify should end the stream")
+    s.free()
+    t.join_and_free()
+    verdict.check("the server read the ping and answered", p.echoed && !p.failed, "")
+    verdict.check("the client read pong", (U8$[]::got).equals(PONG), "")
+    verdict.check("the stream ended at the server's close_notify", end == 0, "")
+    verdict.pass("The client verifies the server half, trades bytes both ways and ends at 0.")
+
+fn test_tls_server_holds_records_that_came_together()
+    verdict.start("[Tls_session] two records in one write, the second read with no wait test...")
+    defer arena: = Arena(256 * 1024)
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    defer server: = loaded(ca.issue("localhost", VALID_NOW, false, arena), arena)
+    $p: = srv_on(server, .two_records)
+    defer p.listener.free()
+    port: = p.listener.port() catch panic("a bound socket knows its port")
+    t: = spawn_srv(p@)
+    c: = Record_client.connect("localhost", port, SRV_WAIT_MS)
+        catch panic("the client should verify the server half's certificate and connect")
+    c.queue(PING) catch panic("the first record should be made")
+    c.queue(PING) catch panic("the second record should be made")
+    c.send(SRV_WAIT_MS) catch panic("both records should go out in one write")
+    answer: = c.read_to_end(SRV_WAIT_MS, arena).unwrap_or("(no close_notify)")
+    c.free()
+    t.join_and_free()
+    // **One `read` gives one record**, and the socket has nothing more to report: only
+    // `buffered` tells the caller to read again.
+    verdict.check("after the first record, buffered says the second is held", p.held, "")
+    verdict.check("the socket stays unready while the second record is held", p.quiet, "")
+    verdict.check("a read with no wait gives the second record", p.second, "")
+    verdict.check("buffered is false once both are read", p.drained, "")
+    verdict.check("the server answered both", p.echoed && answer.equals(PONG), answer)
+    verdict.pass("Records that come together are each read, and buffered tells of the held one.")
+
+priv fn first_error_for(bytes: U8[], arena: Arena$@): Srv //<
+    //< What the server's session made of a raw peer that sends `bytes`, then closes
+    c: = cert.self_signed("localhost", arena)
+    server: = loaded(c, arena)
+    $p: = srv_on(server, .first_error)
+    port: = p.listener.port() catch panic("a bound socket knows its port")
+    t: = spawn_srv(p@)
+    raw: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect locally")
+    // **A pause before the bytes**: the server's reads must give way rather than wait.
+    sys.sleep_ms(100)
+    raw.write_all(bytes) catch panic("the raw bytes should go out")
+    // Reads until the server closes, so it is not cut off while it answers.
+    $buf: U8[256] = ::{}
+    for
+        n: = raw.read_for(U8$[]::buf, SRV_WAIT_MS) catch
+            break
+        if n == 0
+            break
+    raw.free()
+    t.join_and_free()
+    p.listener.free()
+    server.free()
+    return p
+
+fn test_tls_server_refuses_what_is_not_tls()
+    verdict.start("[Tls_server] plain HTTP and a broken handshake each failing for its reason...")
+    defer arena: = Arena(256 * 1024)
+    http: = first_error_for("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", arena)
+    verdict.check("plain HTTP fails as not_tls",
+        http.failed && http.error == Tls_session_error.not_tls, "")
+    verdict.check("a read with nothing arrived gives way rather than waiting", http.idle_reads > 0,
+        "")
+    // A handshake record that holds no ClientHello.
+    broken: =
+        first_error_for(U8[]::{ 0x16, 0x03, 0x01, 0x00, 0x04, 0xff, 0xff, 0xff, 0xff }, arena)
+    verdict.check("a broken handshake fails as handshake_failed",
+        broken.failed && broken.error == Tls_session_error.handshake_failed, "")
+    verdict.pass("Plain HTTP is not_tls and a broken handshake is handshake_failed, at once.")

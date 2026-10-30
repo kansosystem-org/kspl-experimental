@@ -1,0 +1,352 @@
+//< Tests kssrv started with `--cert` and `--key`: HTTPS, and every refusal at its start
+//< Not a suite; part of `kssrv/tests/main.kspl`, as its run `https`.
+//< **The certificates are made at run time** (`ksbind/tests/cert.kspl`), so no key stands in the
+//< repository. The client is `ksbind/tls`, which verifies the certificate against a test CA.
+import "ksbind/tests/cert" { Test_ca, Test_cert, Validity, VALID_NOW }
+import "ksbind/tests/records" { Record_client }
+import "ksbind/tls"
+import "kssrv/tests/client"
+import "kssrv/tests/local" // `mode_column`, for a key file others can read
+import "kssrv/tests/start" { Running, bring_up, start_server }
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/math"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv const HOST: U8[] = "localhost" //< the name the certificates are for, and the client asks
+priv const READ_MS: I32 = 10000 //< the cap on waiting for an answer's next bytes
+priv const HANDSHAKE_S: I64 = 10I64 //< kssrv's cap on a handshake (`https.HANDSHAKE_TIME_US`)
+priv const SOON_DAYS: I32 = 10 //< a certificate this near its expiry is warned of
+priv const BIG_REL: U8[] = "https_big.bin" //< a file larger than the socket's buffers
+priv const BIG_BYTES: Sz = 4 * 1024 * 1024
+priv const SLOW_START_MS: I32 = 300 //< how long the slow reader waits before it reads
+priv const BIG_HEAD: Sz = 20000 //< a cookie that takes a head past one TLS record (16 KiB)
+priv const RECORD_BYTES: Sz = 16 * 1024 //< the most plain text one TLS record carries
+
+// The requests whose answers must match over plain HTTP and over HTTPS, each closing its
+// connection. A file, a folder's index, a refusal by path and by method, and a HEAD.
+priv const SAME_TARGETS: U8[][6] = ::{ "GET /", "GET /style.css", "GET /sub", "GET /nothing",
+    "GET /../secret.txt", "HEAD /index.html" }
+
+struct Pem_files //< a certificate chain and its keys, written where kssrv can read them
+    cert: U8[] //< the chain
+    key: U8[] //< its key, readable by its owner alone
+    locked_key: U8[] //< the same key under a passphrase
+    other_key: U8[] //< a key that does not belong to the chain
+
+priv fn write_pem(dir: U8[], name: U8[], text: U8[], arena: Arena$@): U8[] //<
+    //< Writes `text` to a new file readable by its owner alone, and returns its path
+    return fs.write_unique(dir, name, ".pem", text, arena)
+        catch panic("a PEM file should be written")
+
+fn write_cert(dir: U8[], c: Test_cert, arena: Arena$@): Pem_files //< writes `c`'s four texts
+    return Pem_files::{ .cert = write_pem(dir, "cert_", c.cert_pem, arena),
+        .key = write_pem(dir, "key_", c.key_pem, arena),
+        .locked_key = write_pem(dir, "locked_", c.locked_key_pem, arena),
+        .other_key = write_pem(dir, "other_", c.other_key_pem, arena) }
+
+priv fn tls_flags(chain: U8[], key: U8[], arena: Arena$@): U8[][] //< `--cert=` and `--key=`
+    $out: = List<|U8[]|>(arena)
+    out.push(arena.text().s("--cert=").s(chain).take())
+    out.push(arena.text().s("--key=").s(key).take())
+    return out.slice()
+
+priv fn read_to_end(s: tls.Tls_stream$@, arena: Arena$@): U8[]? //<
+    //< What the server sends until its close_notify; none where the stream breaks first
+    //< **Only a close_notify ends it** (the client's rule), so this also checks kssrv sends one.
+    got: = arena.text()
+    $buf: U8[4096] = ::{}
+    for
+        n: = s.read(U8$[]::buf) catch
+            return .none
+        if n == 0
+            return .some(got.take())
+        got.s(U8[]::{ .ptr = buf@, .len = n })
+
+fn fetch_tls(port: I32, raw: U8[], arena: Arena$@, wait_ms: I32 = 0): U8[]? //<
+    //< Sends `raw` over HTTPS and returns everything the answer holds; none where it fails
+    //< `wait_ms` waits before the first read, so the server's sends fill the socket first.
+    defer s: = tls.Tls_stream.connect(HOST, port) catch
+        return .none
+    $sent: Sz = 0
+    for sent < raw.len
+        n: = s.write(raw.sub_from(sent)) catch
+            return .none
+        sent += n
+    if wait_ms > 0
+        sys.sleep_ms(wait_ms)
+    return read_to_end(s, arena)
+
+priv fn fetch_plain(port: I32, raw: U8[], arena: Arena$@): U8[] //<
+    //< Sends `raw` over plain HTTP and returns what comes until the server closes
+    defer sock: = net.Tcp_stream.connect(client.HOST, port) catch
+        return ""
+    sock.write_all(raw) catch
+        return ""
+    got: = arena.text()
+    $buf: U8[4096] = ::{}
+    for
+        n: = sock.read_for(U8$[]::buf, READ_MS) catch
+            break
+        if n == 0
+            break
+        got.s(U8[]::{ .ptr = buf@, .len = n })
+    return got.take()
+
+priv fn closing(line: U8[], arena: Arena$@): U8[] //< `METHOD /path` as a request that closes
+    sp: = line.find_char(' ').unwrap_or(0)
+    return client.raw(line.sub(0, sp), line.sub_from(sp + 1), "Connection: close\r\n", "", arena)
+
+fn cases(tls_port: I32, plain_port: I32, srv: Running$@, arena: Arena$@) //<
+    //< Every check on a server answering HTTPS, beside a plain one on the same root
+    first: = fetch_tls(tls_port, closing("GET /", arena), arena).unwrap_or("")
+    verdict.check("a page is fetched over TLS, its certificate verified",
+        first.starts_with("HTTP/1.1 200") && first.ends_with("root index\n"),
+        client.short(first))
+    for t in SAME_TARGETS
+        raw: = closing(t, arena)
+        over_tls: = fetch_tls(tls_port, raw, arena).unwrap_or("(the TLS fetch failed)")
+        over_plain: = fetch_plain(plain_port, raw, arena)
+        verdict.check(arena.text().s("over HTTPS it answers as over HTTP: \{t\}").take(),
+            over_tls.equals(over_plain) && over_plain.len > 0,
+            arena.text().s(client.short(over_tls)).s(" / ").s(client.short(over_plain)).take())
+    keepalive_case(tls_port, arena)
+    records_cases(tls_port, plain_port, arena)
+    big_case(tls_port, arena)
+    plain_case(tls_port, arena)
+    stalled_case(tls_port, srv, arena)
+
+priv fn keepalive_case(port: I32, arena: Arena$@) //<
+    //< Checks that two requests sent in one write over one TLS connection are both answered
+    //< **They arrive in one TLS record**, so the second waits in `inbuf` with no notification.
+    two: = arena.text().s(client.raw("GET", "/style.css", "", "", arena))
+        .s(closing("GET /sub/one.txt", arena)).take()
+    got: = fetch_tls(port, two, arena).unwrap_or("")
+    verdict.check("two requests in one write over TLS are both answered",
+        got.ends_with("one\n") && got.find_str("body{}").is_some(), client.short(got))
+
+priv fn batched(port: I32, records: U8[][], arena: Arena$@, half_close: Bool = false): U8[]? //<
+    //< Sends each of `records` as TLS records, all in one write, and returns the whole answer
+    //< None where no close_notify ends the answer within `READ_MS`. `half_close` closes the
+    //< client's sending side of TCP after the write.
+    defer c: = Record_client.connect(HOST, port, READ_MS) catch
+        return .none
+    for r in records
+        c.queue(r) catch
+            return .none
+    c.send(READ_MS) catch
+        return .none
+    if half_close
+        c.shut_write() catch
+            return .none
+    return c.read_to_end(READ_MS, arena)
+
+priv fn records_cases(port: I32, plain_port: I32, arena: Arena$@) //<
+    //< Checks requests whose TLS records arrive together, as curl and browsers send them
+    //< **One TLS read gives one record**, and the records after it wait inside OpenSSL. No socket
+    //< notification tells of them, so kssrv must read on by itself.
+    cookie: = arena.text().s("Cookie: a=").s(client.filler(BIG_HEAD, arena))
+        .s("\r\nConnection: close\r\n").take()
+    big: = batched(port, U8[][]::{ client.raw("GET", "/", cookie, "", arena) }, arena)
+        .unwrap_or("(no answer)")
+    verdict.check("a head over 16 KiB, in two records in one write, is answered over TLS",
+        big.starts_with("HTTP/1.1 200") && big.ends_with("root index\n"), client.short(big))
+    post: = client.raw("POST", "/", "Connection: close\r\n", "0123456789", arena)
+    head_end: = post.find_str("\r\n\r\n").unwrap_or(0) + 4
+    split: = batched(port,
+        U8[][]::{ post.sub(0, head_end), post.sub_from(head_end) }, arena).unwrap_or("(no answer)")
+    over_plain: = fetch_plain(plain_port, post, arena)
+    verdict.check("a head and its body, in two records in one write, are answered over TLS",
+        split.equals(over_plain) && over_plain.len > 0,
+        arena.text().s(client.short(split)).s(" / ").s(client.short(over_plain)).take())
+    kept: = client.raw("GET", "/style.css", "", "", arena)
+    two: = batched(port, U8[][]::{ kept, closing("GET /sub/one.txt", arena) }, arena)
+        .unwrap_or("(no answer)")
+    verdict.check("two requests, in two records in one write, are both answered over TLS",
+        two.ends_with("one\n") && two.find_str("body{}").is_some(), client.short(two))
+    half_close_case(port, arena)
+
+priv fn half_close_case(port: I32, arena: Arena$@) //<
+    //< Checks that a client that half-closes after its request gets the whole answer, then the
+    //< close_notify
+    //< **The request fills two records exactly**, so kssrv reads on to the client's TCP end before
+    //< it answers. Without the close_notify, the client cannot tell the answer was not cut short.
+    sized: = "Connection: close\r\nContent-Length: 10000\r\n"
+    body_len: = 2 * RECORD_BYTES - client.raw("GET", "/", sized, "", arena).len
+    extra: = arena.text().s("Connection: close\r\nContent-Length: \{body_len\}\r\n").take()
+    raw: = client.raw("GET", "/", extra, client.filler(body_len, arena), arena)
+    got: = batched(port, U8[][]::{ raw }, arena, true).unwrap_or("(no close_notify)")
+    verdict.check("a client that half-closes gets the whole answer over TLS, then the close_notify",
+        raw.len == 2 * RECORD_BYTES && got.starts_with("HTTP/1.1 200") &&
+        got.ends_with("root index\n"), client.short(got))
+
+priv fn big_case(port: I32, arena: Arena$@) //<
+    //< Checks that a file larger than the socket's buffers arrives whole to a slow reader
+    //< **The server's sends stall**, so TLS holds encrypted bytes and the close_notify waits.
+    raw: = closing(arena.text().s("GET /").s(BIG_REL).take(), arena)
+    got: = fetch_tls(port, raw, arena, SLOW_START_MS).unwrap_or("")
+    at: = got.find_str("\r\n\r\n").unwrap_or(got.len)
+    body: = got.len - math.min(got.len, at + 4)
+    verdict.check("a large file arrives whole over TLS to a slow reader, then the close_notify",
+        body == BIG_BYTES, arena.text().s("\{body\} bytes of \{BIG_BYTES\}").take())
+
+priv fn plain_case(port: I32, arena: Arena$@) //<
+    //< Checks that plain HTTP on the HTTPS port gets a plain-text 400 at once, not silence
+    name: = "plain HTTP on the HTTPS port is answered 400 in plain text, at once"
+    start: = sys.mono_us()
+    r: =
+        client.request(port, closing("GET /", arena), 1, READ_MS, false, arena) catch e
+        verdict.check(name, false, e.reason())
+        return
+    elapsed_ms: = (sys.mono_us() - start) / 1000I64
+    ok: =
+        r.len == 1 && r.get(0).status == 400 &&
+        r.get(0).body.find_str("https://").is_some()
+    verdict.check(name, ok && elapsed_ms < I64::READ_MS,
+        arena.text().s("\{elapsed_ms\} ms").take())
+
+priv fn stalled_case(port: I32, srv: Running$@, arena: Arena$@) //<
+    //< Checks that a client stuck in its handshake neither stops others nor keeps its slot
+    //< It sends a handshake record's header and nothing more, so the server waits for the rest.
+    defer stuck: = net.Tcp_stream.connect(client.HOST, port) catch
+        verdict.check("a client stuck in its handshake connects", false, "")
+        return
+    stuck.write_all(U8[]::{ 0x16, 0x03, 0x01, 0x02, 0x00 }) catch {}
+    start: = sys.mono_us()
+    other: = fetch_tls(port, closing("GET /", arena), arena).unwrap_or("")
+    verdict.check("another client is served while one is stuck in its handshake",
+        other.ends_with("root index\n"), client.short(other))
+    // The server closes it once its handshake time is up: 0, or a reset on some systems.
+    $buf: U8[64] = ::{}
+    $closed: = false
+    deadline: = start + (HANDSHAKE_S + 20I64) * 1000000I64
+    for !closed && sys.mono_us() < deadline
+        n: = stuck.read_for(U8$[]::buf, READ_MS) catch e
+            closed = e != net.Net_error.timed_out
+            fallback 1
+        closed = closed || n == 0
+    waited_s: = (sys.mono_us() - start) / 1000000I64
+    // **The log is flushed at an interval**, so its line can come a moment after the close.
+    $said: = false
+    seen_by: = sys.mono_us() + 5000000I64
+    for !said && sys.mono_us() < seen_by
+        said = srv.log(arena).find_str("did not finish the TLS handshake").is_some()
+        if !said
+            sys.sleep_ms(100)
+    verdict.check("a client stuck in its handshake is closed once its time is up",
+        closed && said && waited_s >= HANDSHAKE_S - 1I64,
+        arena.text().s("after \{waited_s\} s\n").s(srv.log(arena)).take())
+
+priv fn refused( //< checks that kssrv does not start with `flags`, and says `why`
+    name: U8[], //< the check, as its line names it
+    exe: U8[],
+    root: U8[],
+    dir: U8[], //< where its logs go
+    flags: U8[][],
+    why: U8[], //< a piece of the error line it must print
+    arena: Arena$@,
+)
+    out_log: = fs.join(dir, "refused.out", arena)
+    err_log: = fs.join(dir, "refused.err", arena)
+    started: = start_server(exe, root, out_log, err_log, flags, arena)
+    if c: = started.child
+        $up: = c
+        up.kill()
+        verdict.check(name, false, "it started")
+        return
+    verdict.check(name, started.why.find_str(why).is_some(), started.why)
+
+priv fn warned( //< checks that kssrv starts with `flags`, and warns of `why`
+    name: U8[],
+    exe: U8[],
+    root: U8[],
+    dir: U8[],
+    log_name: U8[],
+    flags: U8[][],
+    why: U8[],
+    arena: Arena$@,
+)
+    up: = arena.text().s(name).s(": it starts all the same").take()
+    if got: = bring_up(exe, root, dir, log_name, flags, up, arena)
+        $srv: = got
+        said: = srv.log(arena)
+        verdict.check(name,
+            said.find_str(": W: ").is_some() && said.find_str(why).is_some(), said)
+        srv.stop()
+
+fn start_cases(exe: U8[], root: U8[], dir: U8[], ca: Test_ca, good: Pem_files, arena: Arena$@) //<
+    //< Every refusal and warning at start, each a server of its own that must stop or say it
+    refused("a key of another certificate is refused at start", exe, root, dir,
+        tls_flags(good.cert, good.other_key, arena), "does not belong to the certificate", arena)
+    refused("a key under a passphrase is refused at start, with no prompt", exe, root, dir,
+        tls_flags(good.cert, good.locked_key, arena), "never asks for one", arena)
+    old: =
+        write_cert(dir,
+        ca.issue(HOST, Validity::{ .from_day = -3, .to_day = -1 }, true, arena), arena)
+    refused("an expired certificate is refused at start", exe, root, dir,
+        tls_flags(old.cert, old.key, arena), "expired on", arena)
+    refused("--cert without --key is refused", exe, root, dir,
+        U8[][]::{ arena.text().s("--cert=").s(good.cert).take() }, "give both", arena)
+    local_flags: = U8[][]::{ "--local",
+        arena.text().s("--cert=").s(good.cert).take(),
+        arena.text().s("--key=").s(good.key).take() }
+    refused("--local with a certificate is refused", exe, root, dir, local_flags,
+        "--local serves this machine alone", arena)
+    // The same key as `good`'s, so the one fault is who can read it. Caution: **Set the mode with
+    // `chmod`**: the umask decides a new file's, so it may be private. **Windows is skipped by
+    // name**: an ACL decides there, which kssrv does not read, and MSYS2's `ls -l` shows a mode
+    // it makes up, so the mode alone would not tell.
+    open_key: =
+        write_pem(dir, "open_", io.read_file(good.key, arena)
+        catch panic("the key just written should read back"), arena)
+    if sys.is_windows()
+        verdict.skip_check("a key file others can read is refused at start",
+            "Windows decides with an ACL, which kssrv does not read: no POSIX mode is checked")
+    else if local.mode_column(open_key, "644", arena).len == 0
+        verdict.skip_check("a key file others can read is refused at start",
+            "this system has no POSIX mode for `chmod` to set and `ls -l` to read")
+    else
+        refused("a key file others can read is refused at start", exe, root, dir,
+            tls_flags(good.cert, open_key, arena), "others can read", arena)
+    near: = ca.issue(HOST, Validity::{ .from_day = -1, .to_day = SOON_DAYS }, true, arena)
+    soon: = write_cert(dir, near, arena)
+    warned("a certificate near its expiry is warned of at start", exe, root, dir, "kssrv-soon",
+        tls_flags(soon.cert, soon.key, arena), "renew it before then", arena)
+    lone: = write_cert(dir, ca.issue(HOST, VALID_NOW, false, arena), arena)
+    warned("a certificate with no intermediate is warned of at start", exe, root, dir, "kssrv-lone",
+        tls_flags(lone.cert, lone.key, arena), "add the intermediate", arena)
+
+fn run(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) //< the run `https`, from end to end
+    dir: = fs.join(tmp, "https", arena)
+    fs.mkdir_all(dir) catch panic("the folder for the certificates should be made")
+    io.write_file(fs.join(root, BIG_REL, arena), client.filler(BIG_BYTES, arena))
+        catch panic("the large file should be placed")
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    good: =
+        write_cert(dir,
+        ca.issue(HOST, Validity::{ .from_day = -1, .to_day = 90 }, true, arena), arena)
+    start_cases(exe, root, dir, ca, good, arena)
+    tls_up: =
+        bring_up(exe, root, dir, "kssrv-https", tls_flags(good.cert, good.key, arena),
+        "kssrv comes up answering HTTPS", arena)
+    plain_up: =
+        bring_up(exe, root, dir, "kssrv-plain", U8[][]::{},
+        "kssrv comes up answering plain HTTP beside it", arena)
+    if t: = tls_up
+        $srv: = t
+        if p: = plain_up
+            $plain: = p
+            cases(srv.port, plain.port, srv@, arena)
+            plain.stop()
+        srv.stop()
+    else if p: = plain_up
+        $plain: = p
+        plain.stop()

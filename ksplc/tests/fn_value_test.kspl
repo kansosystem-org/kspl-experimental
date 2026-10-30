@@ -197,6 +197,26 @@ fn test_fn_returning_fn_ptr()
 
     verdict.pass("")
 // ==========================================
+// A top-level function pointer set from a `const` of function type holds that constant's value,
+// alone, in a struct literal and in an array. LLVM once wrote the constant's own address there,
+// and the call jumped into the data.
+// ==========================================
+priv const CV_FIRST: Cb_i32 = fn_ptr_source_i32
+priv const CV_SECOND: Cb_i32 = CV_FIRST
+
+priv struct Cv_ops
+    f: Cb_i32
+
+priv const CV_IN_STRUCT: Cv_ops = ::{ .f = CV_FIRST }
+priv $cv_table: Cb_i32[2] = ::{ fn_ptr_source_i32, CV_SECOND }
+
+fn test_fn_const_from_fn_const()
+    verdict.start("[fn-ptr] a function-pointer constant set from another test...")
+    assert(CV_SECOND() == 9, "a constant set from another holds the function")
+    assert(CV_IN_STRUCT.f() == 9, "a struct literal's field holds the function")
+    assert(cv_table[0]() == 9 && cv_table[1]() == 9, "an array's element holds the function")
+    verdict.pass("")
+// ==========================================
 // A generic function named as a value is the specialization written after it (`same<|I32|>`):
 // that instance is built and its address taken. Without it the template's bare name reached C
 // and LLVM, which have no such function.

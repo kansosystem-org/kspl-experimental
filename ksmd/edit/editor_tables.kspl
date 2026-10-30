@@ -4,8 +4,9 @@
 //< before it.
 import "ksmd/base/dates" { is_date, typed_date, write_date }
 import "ksmd/base/marker" { is_decimal }
+import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { calculate }
-import "ksmd/calc/formula" { Positions, write_formula }
+import "ksmd/calc/formula" { Positions, bind, find_table, write_formula }
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error, Sort_key }
 import "ksmd/edit/editor" { Editor, Pos, Refused, end_block, replace }
@@ -13,10 +14,13 @@ import "ksmd/edit/history" { Transaction, begin, capture, is_empty, record_table
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
 import "ksmd/model/choice" { entry_of }
+import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers }
 import "ksmd/model/look" { Look_part, plain_look, with_part }
-import "ksmd/model/model" { Block, Cell, Cell_kind, Table }
+import "ksmd/model/model" { Block, Cell, Cell_kind, Column_filter, Document, MAX_NAME, Piece,
+    Table }
 import "ksmd/model/rule" { rule_of }
+import "ksmd/syntax/reader"
 import "std/chars"
 import "std/ds" { List }
 import "std/json"
@@ -80,10 +84,65 @@ impl Editor
         ed.apply(w@, tx@, got@, caret, caret)
         ed.close_table_step(before@, tx)!
 
+    fn paste_table(ed: Self$@, text: U8[]): Void!Refused //<
+        //< Puts the one table a copied ksmd source holds in a block after the caret's paragraph,
+        //< as one step, with its formulas, looks, formats, widths and filter
+        //< A name another table has gains `_2`, `_3` and on, and the table's own formulas follow
+        //< it.
+        kept: = ed.arena.dup_str(text)
+        src: = Source("clipboard.ksmd", kept) catch
+            throw .not_a_table
+        $from: = reader.read(src@, ed.arena) catch
+            throw .not_a_table
+        if from.blocks.len != 1 || from.blocks.get(0).kind != .table
+            throw .not_a_table
+        edit.rename_table(from@, 0,
+            free_name(ed.doc@, from.tables[0].name, ed.arena), ed.arena) catch why
+            throw .table(why)
+        // Each formula is written out under the new name, and bound again in this document.
+        defer scratch: = Arena(16 * 1024)
+        at: = Positions(from@, scratch)
+        $t: = from.tables[0]
+        $texts: = List<|U8[]|>(scratch)
+        defer $out: = Str_builder()
+        for cell in t.cells
+            if cell.kind == .formula
+                out.clear()
+                write_formula(from@, t@, cell, at@, 0, 0, out@)
+                texts.push(ed.arena.dup_str(out.slice()))
+        s: = ed.start_spot()
+        g: = gap_spot(s.block + 1 if s.place == .text else s.block)
+        before: = capture(ed.doc@, scratch)
+        $w: = ed.work(g, g, g.block, end_block(g), scratch)
+        $b: = from.blocks.get(0)
+        b.first = ed.doc.tables.len
+        b.offset = 0
+        $frag: = List<|Unit|>(scratch)
+        frag.push(whole_unit(b, scratch))
+        r: = replace(w@, frag@, scratch)
+        got: = settle(ed.doc@, w.units@, w.from, ed.arena, scratch) catch
+            throw .no_read_back
+        t.pieces = List<|Piece|>(ed.arena)
+        ed.doc.tables.push(t)
+        u: = ed.doc.tables.len - 1
+        $k: Sz = 0
+        for i in Range.asc(t.cells.len)
+            if t.cells[i].kind == .formula
+                first: = ed.doc.tables[u].pieces.len
+                count: = bind(ed.doc@, u, texts[k], ed.doc.tables[u].pieces@)
+                ed.doc.tables[u].cells[i].first = first
+                ed.doc.tables[u].cells[i].count = count
+                k += 1
+        edit.attach_loose(ed.doc@, ed.arena)
+        $tx: = begin(ed.selection(), ed.arena)
+        caret: = Pos::{ .unit = r.last, .offset = 0 }
+        ed.apply(w@, tx@, got@, caret, caret)
+        ed.close_table_step(before@, tx)!
+
     fn remove_table(ed: Self$@, block: Sz): Void!Refused //<
-        //< Removes a table block and empties its table; the caret takes the gap it leaves
+        //< Removes a table block and empties its table, as `remove_whole` does
         _u: = ed.table_of(block)!
-        ed.delete_range(gap_spot(block), gap_spot(block + 1), .other)!
+        ed.remove_whole(block)!
 
     fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz): Void!Refused //<
         //< Inserts or removes a row or a column of the table a block shows
@@ -288,6 +347,38 @@ impl Editor
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
+    fn set_filter(ed: Self$@, block: Sz, column: Sz, entry: U8[]): Void!Refused //<
+        //< Gives a column the filter `entry`, empty for none, as one step; column -1 clears every
+        //< column's (`ksmd/model/filter.kspl`)
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if column < -1 || column >= t.columns.len || (column < 0 && entry.len > 0)
+            throw .table(.outside)
+        if !is_filter_entry(entry)
+            throw .table(.not_a_filter)
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        $i: Sz = 0
+        for i < t.filters.len
+            if column < 0 || t.filters[i].column == t.columns[column]
+                t.filters.remove_at(i)
+            else
+                i += 1
+        if entry.len > 0
+            t.filters
+                .push(Column_filter::{ .column = t.columns[column],
+                .entry = ed.arena.dup_str(entry) })
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn set_heights(ed: Self$@, block: Sz, first: Sz, last: Sz, points: Sz): Void!Refused //<
+        //< Gives the data rows from `first` to `last` a least height in points, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_heights(ed.doc@, u, first, last, points) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
     fn group_rows(ed: Self$@, block: Sz, first: Sz, last: Sz, what: Group_edit): Void!Refused //<
         //< Groups or ungroups the data rows from `first` to `last`, or hides or shows a group, as
         //< one step: a group and whether it is hidden are saved in the file
@@ -448,6 +539,23 @@ impl Editor
         ed.change.tables = true
         ed.change.any = ed.change.any || !is_empty(tx@)
         ed.finish(tx, .other, false)!
+
+priv fn free_name(doc: Document@, name: U8[], arena: Arena$@): U8[] //<
+    //< The name, or where another table has it the first of `name_2`, `name_3` and on that none has
+    //< `_` keeps a plain name plain, so a formula still names it without quotes.
+    if find_table(doc, name).is_none()
+        return name
+    $n: Sz = 2
+    for
+        suffix: = arena.text().s("_\{n\}").take()
+        $keep: = name.len if name.len + suffix.len <= MAX_NAME else MAX_NAME - suffix.len
+        // A name is cut only between two characters.
+        for keep > 0 && keep < name.len && (name[keep] & 0xC0U8) == 0x80U8
+            keep -= 1
+        candidate: = arena.text().s(name.sub(0, keep)).s(suffix).take()
+        if find_table(doc, candidate).is_none()
+            return candidate
+        n += 1
 
 struct Value //< what typed text puts in a cell
     kind: Cell_kind

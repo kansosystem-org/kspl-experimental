@@ -8,7 +8,7 @@ const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
-  saves, dragTo, rightClick, openCell }) {
+  saves, dragTo, rightClick, openCell, drag, doubleClickAt }) {
   const text = (selector) => js(`document.querySelector(${JSON.stringify(selector)}).textContent`);
   const found = () => text(".find-count");
   const inRange = () => js("Array.from(document.querySelectorAll('#doc .in-range'))" +
@@ -770,6 +770,56 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await click(".contents-close");
       check(await js("document.querySelector('.contents').hidden && localStorage.getItem('ksmd.contents') === '0'"),
         "its close button hides them, and that choice is kept too");
+    },
+
+    // The edge between the contents and the document drags, as VS Code's side bar does, within
+    // limits that leave the document room. The keys move it too, and the width is kept.
+    async contentsWidth() {
+      const start = `${H}# One\n\nText.\n`;
+      await load(start);
+      if (await js("document.querySelector('.contents').hidden")) await menu("contents");
+      const wide = () => js("Math.round(document.querySelector('.contents').getBoundingClientRect().width)");
+      const room = () => js("Math.round(document.getElementById('doc').getBoundingClientRect().left - " +
+        "document.querySelector('.contents').getBoundingClientRect().right)");
+      const edge = ".contents-edge";
+      check(await js(`(() => { const e = document.querySelector("${edge}");
+        return !!e && e.getAttribute("role") === "separator" && e.tabIndex === 0 && !!e.getAttribute("aria-label"); })()`),
+      "the contents' edge is a separator that the keyboard reaches, with a name");
+      check(await wide() === 240, "the contents start 240 pixels wide", String(await wide()));
+      await drag(edge, 100);
+      check(await wide() === 340, "a drag of the edge widens them", String(await wide()));
+      check(await room() >= 0, "and the document moves aside, under none of it", String(await room()));
+      await drag(edge, -400);
+      check(await wide() === 160, "they narrow to 160 pixels at the least", String(await wide()));
+      await drag(edge, 2000);
+      check(await wide() === 480, "and widen to 480 at the most", String(await wide()));
+      await js(`document.querySelector("${edge}").focus()`);
+      await press("ArrowLeft");
+      check(await wide() === 464, "Left on the focused edge narrows them by 16 pixels", String(await wide()));
+      check(await js(`document.querySelector("${edge}").getAttribute("aria-valuenow")`) === "464",
+        "and the separator says the width");
+      await press("Home");
+      check(await wide() === 160, "Home narrows them to the least");
+      await press("End");
+      check(await wide() === 480, "End widens them to the most");
+      await page("Page.reload", {});
+      await until("document.documentElement.dataset.ready === '1'");
+      check(await wide() === 480, "a page opened again keeps the width", String(await wide()));
+      await page("Emulation.setDeviceMetricsOverride", { width: 800, height: 900, deviceScaleFactor: 1, mobile: false });
+      await settle();
+      const body = () => js("Math.round(document.getElementById('doc').getBoundingClientRect().width)");
+      check(await body() >= 400, "in a narrower window the document keeps 400 pixels",
+        `${await wide()} ${await body()}`);
+      await drag(edge, 2000);
+      check(await body() >= 400, "and a drag cannot take them", `${await wide()} ${await body()}`);
+      await page("Emulation.clearDeviceMetricsOverride", {});
+      await settle();
+      const [x, y] = await js(`(() => { const r = document.querySelector("${edge}").getBoundingClientRect();
+        return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+      await doubleClickAt(x, y);
+      check(await wide() === 240, "a double-click on the edge gives the first width back", String(await wide()));
+      await load(start);
+      await saves("the width changes nothing in the document", start);
     },
   };
 }

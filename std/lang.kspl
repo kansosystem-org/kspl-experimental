@@ -115,7 +115,7 @@ pub fn panic( //< stops the program and reports the location and reason
     libc.fflush(err)
     libc.abort()
 // The freestanding version stops without libc, including `fprintf` or `malloc`.
-// `kspl_bounds_breach` in `ksplc/gen/runtime/freestanding.h` also stops this way.
+// The run-time checks stop through it too (`check_panic` below).
 #cfg(freestanding)
 #noreturn
 pub fn panic( //< stops without libc and sends the message to the panic hook
@@ -130,6 +130,12 @@ pub fn panic( //< stops without libc and sends the message to the panic hook
     if panic_hook != null
         panic_hook(msg)
     for {}
+
+// A check's breach is a panic too; the reason is in `ksplc/gen/runtime/freestanding.h`.
+#cfg(freestanding)
+#noreturn
+fn check_panic(msg_ptr: U8$@, msg_len: Sz) //< the C runtime's way into `panic`
+    panic(U8$[]::{ .ptr = msg_ptr, .len = msg_len })
 
 pub fn assert( //< stops the program unless the condition holds
     cond: Bool, //< what must hold

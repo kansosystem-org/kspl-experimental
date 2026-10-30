@@ -22,7 +22,7 @@ measure-ksmd: $(STAGE1_EXE) $(KSSRV_EXE)
 # Opening a `.ksmd` from the desktop (`make ksmd`)
 # ==========================================
 # **The association points at this executable**, not `ksplc run`: a double-click stands elsewhere.
-# It looks for the server and the page beside itself (`BUILT` and `PAGE` in `tools/opener_aim.kspl`).
+# It looks for the server and the page beside itself (`KSMD` in `tools/opener_aim.kspl`).
 KSMD_OPEN_EXE := $(OUT_DIR)/ksmd_open.exe
 KSMD_ICON_DIR := ksmd/port/desktop
 
@@ -31,8 +31,9 @@ KSMD_ICON_DIR := ksmd/port/desktop
 KSMD_OPEN_RES :=
 ifeq ($(PLATFORM),win32)
 WINDRES ?= windres
-KSMD_OPEN_RES := $(OUT_DIR)/ksmd_open_icon.o
+KSMD_OPEN_RES := $(GEN_DIR)/ksmd_open_icon.o
 $(KSMD_OPEN_RES): $(KSMD_ICON_DIR)/ksmd.rc $(KSMD_ICON_DIR)/ksmd.ico | $(OUT_DIR)
+	@mkdir -p $(dir $@)
 	$(WINDRES) --include-dir=$(KSMD_ICON_DIR) -O coff $(KSMD_ICON_DIR)/ksmd.rc -o $@
 endif
 
@@ -57,8 +58,8 @@ test-ksmd-open: $(KSSRV_EXE) $(KSMD_OPEN_EXE)
 	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_OPEN_EXE) $(KSSRV_EXE) \
 		"$(KSMD_OPEN_WORK)"
 
-KSMD_DESKTOP := $(OUT_DIR)/ksmd.desktop
-KSMD_MIME := $(OUT_DIR)/ksmd-mime.xml
+KSMD_DESKTOP := $(GEN_DIR)/ksmd.desktop
+KSMD_MIME := $(GEN_DIR)/ksmd-mime.xml
 KSMD_ICON := $(KSMD_ICON_DIR)/ksmd.svg
 # The document `make ksmd` asks to double-click: an example with a table and an include.
 KSMD_SAMPLE := ksmd/examples/overview.ksmd

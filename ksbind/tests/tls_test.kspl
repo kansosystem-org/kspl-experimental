@@ -1,62 +1,25 @@
 //< Tests of the TLS client, against a peer on the loopback (no internet)
-//< **The peer is made here.** Its keys and certificates are built through OpenSSL in memory. So no
-//< key stands in the repository and no tool is started. Only a test CA's certificate (no key) is
-//< written to a scratch file for the length of a test. OpenSSL's default store reads a file.
+//< **The peer is made here**, on keys and certificates `ksbind/tests/cert.kspl` builds in memory.
+//< Only a test CA's certificate (no key) is written to a scratch file for the length of a test.
+//< OpenSSL's default store reads a file.
+import "ksbind/tests/cert" + { Test_ca }
 import "ksbind/tls"
 import "std/chars" // `sub_mut`
-import "std/fs"
 import "std/libc"
-import "std/mem" { dealloc, Arena }
+import "std/mem" { Arena }
 import "std/net"
-import "std/str" // `to_cstr`, `equals`
+import "std/str" // `equals`
 import "std/sys"
 import "std/thread"
 import "std/verdict"
 
-// What only the tests need: the server half on a socket, keys and certificates, and writing a
-// certificate out.
-// Ed25519 asks for no parameters, so no `ctrl` macro stands between (OpenSSL 1.1.1 or later).
-// `long` crosses as in `../tls.kspl`.
-extern "C"
-    struct EVP_PKEY
-    struct EVP_PKEY_CTX
-    struct EVP_MD
-    struct X509
-    struct X509_NAME
-    struct ASN1_INTEGER
-    struct ASN1_TIME
-
+// The server half the peer stands on: OpenSSL's own `SSL_accept` on the socket, so the client is
+// tested against a server that is not `ksbind/tls_server`.
 #link("ssl")
 #link("crypto")
 extern "C"
-    fn TLS_server_method(): tls.SSL_METHOD@
-    fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, x: X509$@): I32
-    fn SSL_CTX_use_PrivateKey(ctx: tls.SSL_CTX$@, pkey: EVP_PKEY$@): I32
     fn SSL_accept(ssl: tls.SSL$@): I32
-    fn EVP_PKEY_CTX_new_id(id: I32, engine: Void$@): EVP_PKEY_CTX$@
-    fn EVP_PKEY_keygen_init(ctx: EVP_PKEY_CTX$@): I32
-    fn EVP_PKEY_keygen(ctx: EVP_PKEY_CTX$@, out: EVP_PKEY$@$@): I32
-    fn EVP_PKEY_CTX_free(ctx: EVP_PKEY_CTX$@)
-    fn EVP_PKEY_free(pkey: EVP_PKEY$@)
-    fn X509_new(): X509$@
-    fn X509_free(x: X509$@)
-    fn X509_get_serialNumber(x: X509$@): ASN1_INTEGER$@
-    fn ASN1_INTEGER_set(a: ASN1_INTEGER$@, v: Sz): I32
-    fn X509_getm_notBefore(x: X509$@): ASN1_TIME$@
-    fn X509_getm_notAfter(x: X509$@): ASN1_TIME$@
-    fn X509_gmtime_adj(t: ASN1_TIME$@, adj: Sz): ASN1_TIME$@
-    fn X509_set_pubkey(x: X509$@, pkey: EVP_PKEY$@): I32
-    fn X509_get_subject_name(x: X509$@): X509_NAME$@
-    fn X509_NAME_add_entry_by_txt(name: X509_NAME$@, field: Void@, kind: I32, bytes: Void@,
-        len: I32, loc: I32, set: I32): I32
-    fn X509_set_issuer_name(x: X509$@, name: X509_NAME$@): I32
-    fn X509_sign(x: X509$@, pkey: EVP_PKEY$@, md: EVP_MD@): I32
-    fn BIO_new_file(filename: Void@, mode: Void@): tls.BIO$@
-    fn PEM_write_bio_X509(bp: tls.BIO$@, x: X509$@): I32
     fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
-
-priv const EVP_PKEY_ED25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
-priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
 
 priv enum Peer_act //< what the peer does once a client connects
     silent //< holds the TCP connection without a TLS response
@@ -160,95 +123,6 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
     conn.free()
     return null
 
-priv fn new_key(): EVP_PKEY$@ //< a fresh Ed25519 key, which the caller frees
-    kctx: = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, null)
-    assert(kctx != null && EVP_PKEY_keygen_init(kctx) == 1, "an Ed25519 key generator should start")
-    $pkey: EVP_PKEY$@ = null
-    assert(EVP_PKEY_keygen(kctx, pkey@) == 1, "an Ed25519 key should be made")
-    EVP_PKEY_CTX_free(kctx)
-    return pkey
-
-priv fn new_cert( //< a certificate for `key`, valid for an hour, which the caller frees
-    key: EVP_PKEY$@, //< the key it certifies
-    cn: U8[], //< its subject's CN, the name a client checks
-    serial: Sz, //< its serial number, distinct under one issuer
-    issuer: X509$@, //< the certificate of the CA signing it; null for one signed by `key` itself
-    signer: EVP_PKEY$@, //< the key that signs it: the issuer's, or `key` itself
-): X509$@
-    x: = X509_new()
-    assert(x != null, "a certificate should be made")
-    name: = X509_get_subject_name(x)
-    issuer_name: = name if issuer == null else X509_get_subject_name(issuer)
-    ok: =
-        ASN1_INTEGER_set(X509_get_serialNumber(x), serial) == 1 &&
-        X509_gmtime_adj(X509_getm_notBefore(x), 0) != null &&
-        X509_gmtime_adj(X509_getm_notAfter(x), 3600) != null && X509_set_pubkey(x, key) == 1 &&
-        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, Void@::cn.ptr, I32::cn.len, -1, 0) == 1
-        && X509_set_issuer_name(x, issuer_name) == 1 && X509_sign(x, signer, null) > 0
-    assert(ok, "the certificate should be filled in and signed")
-    return x
-
-priv fn server_ctx(cert: X509$@, key: EVP_PKEY$@): tls.SSL_CTX$@ //<
-    //< A server context answering with that certificate and key, holding references of its own
-    ctx: = tls.SSL_CTX_new(TLS_server_method())
-    assert(ctx != null, "a server context should be made")
-    assert(SSL_CTX_use_certificate(ctx, cert) == 1 && SSL_CTX_use_PrivateKey(ctx, key) == 1,
-        "the server context should take the certificate and its key")
-    return ctx
-
-priv fn self_signed_ctx(): tls.SSL_CTX$@ //<
-    //< A server context holding a fresh key and a certificate it signed itself, for "127.0.0.1"
-    //< **No client trusts it**, since no CA in the default store signed it.
-    key: = new_key()
-    x: = new_cert(key, "127.0.0.1", 1, null, key)
-    ctx: = server_ctx(x, key)
-    X509_free(x)
-    EVP_PKEY_free(key)
-    return ctx
-
-priv const CA_BASE: U8[] = "out/tmp/ksbind_tls" //< where a test CA's certificate is written
-
-priv struct Test_ca //< a CA made for one test, which the client trusts while it stands
-    key: EVP_PKEY$@
-    cert: X509$@
-    dir: U8[] //< the scratch folder holding `file`
-    file: U8[] //< the certificate as PEM, which `SSL_CERT_FILE` names
-
-impl Test_ca
-    fn trusted(arena: Arena$@): Test_ca //<
-        //< Makes a CA and points OpenSSL's default store at it alone (`SSL_CERT_FILE`)
-        //< **The client is left as it is.** It loads the default store, where OpenSSL reads the
-        //< variable. So the test runs the code a program runs.
-        key: = new_key()
-        cert: = new_cert(key, "Kanso test CA", 1, null, key)
-        dir: = fs.mkdir_unique(CA_BASE, "ca_", arena)
-            catch panic("the scratch folder should be made")
-        file: = fs.join(dir, "ca.pem", arena)
-        c_file: U8$@ = file.to_cstr() catch
-            panic("the scratch path holds no NUL")
-        bio: = BIO_new_file(Void@::c_file, "w")
-        dealloc(Void$@::c_file)
-        assert(bio != null && PEM_write_bio_X509(bio, cert) == 1, "the CA should be written out")
-        tls.BIO_free(bio)
-        sys.set_env("SSL_CERT_FILE", file) catch panic("SSL_CERT_FILE should be set")
-        return ::{ .key = key, .cert = cert, .dir = dir, .file = file }
-
-    fn issue_ctx(r: Self, host: U8[]): tls.SSL_CTX$@ //<
-        //< A server context answering with a fresh key and a certificate this CA issued for `host`
-        key: = new_key()
-        x: = new_cert(key, host, 2, r.cert, r.key)
-        ctx: = server_ctx(x, key)
-        X509_free(x)
-        EVP_PKEY_free(key)
-        return ctx
-
-    fn free(r: Self) //< stops trusting it, and removes what it wrote
-        sys.unset_env("SSL_CERT_FILE") catch panic("SSL_CERT_FILE could not be unset")
-        fs.remove_path(r.file) catch {}
-        fs.remove_path(r.dir) catch {}
-        X509_free(r.cert)
-        EVP_PKEY_free(r.key)
-
 priv enum Tls_seen //< how a connection to the test's peer ended
     connected
     handshake_failed
@@ -329,7 +203,7 @@ fn test_tls_handshake_failure_against_non_tls_peer()
 
 fn test_tls_untrusted_certificate_is_refused()
     verdict.start("[Tls] a certificate no CA signed being refused as such test...")
-    ctx: = self_signed_ctx()
+    ctx: = cert.self_signed_ctx()
     seen: = connect_to_peer(ctx, .refused, "127.0.0.1")
     tls.SSL_CTX_free(ctx)
     assert(seen == Tls_seen.cert_verify_failed,

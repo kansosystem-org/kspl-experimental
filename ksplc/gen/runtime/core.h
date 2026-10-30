@@ -75,7 +75,7 @@ KSPL_LINK void kspl_trace_record(const char* file, const char* func, int line);
 #define KSPL_START_TRACE() kspl_trace_start(__FILE__, __func__, __LINE__)
 
 /* What a breach does is each target's, defined after this file: hosted.h reports it and ends the
- * program, freestanding.h stops in a loop. */
+ * program, freestanding.h panics through std/lang (the hook runs, then it stops). */
 static inline KSPL_UNUSED KSPL_NORETURN void kspl_bounds_breach(int64_t idx, int64_t len,
     const char* file, int line);
 static inline KSPL_UNUSED KSPL_NORETURN void kspl_div_breach(const char* file, int line);

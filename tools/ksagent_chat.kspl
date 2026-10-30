@@ -1,0 +1,175 @@
+#!/usr/bin/env -S ksplc run
+//< Asks about a folder in one command: the model server, the chat page and its answers, until Ctrl+C
+//< It uses the model server answering at the port, or starts one and stops it at the end
+//< (`tools/model_server.kspl`). It reuses the chat server running for the folder, or starts
+//< `kssrv --local` with the chat page (`tools/opener.kspl`), and hands the URL to the browser. It
+//< then runs `ksagent watch` on the folder in the foreground. **This is a leaf**: neither ksagent
+//< nor kssrv knows the other. **Every choice is made here, and `--help` names each default**, so
+//< `make chat` only writes every option out ("A run target writes every option out" in
+//< `docs/DESIGN-repository.md`). The reasons are "Opening the chat page" in
+//< `tools/docs/DESIGN-tools.md`.
+
+// ==========================================
+// Usage:
+//     ksagent_chat [--show] --dir=<folder> [--model-file=<file>] [--port=<n>]
+//     ksagent_chat --model-only [--model-file=<file>] [--port=<n>]
+//     ksagent_chat --list | --stop=<folder> | --stop-all
+// ==========================================
+import "std/argparse"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "tools/model_server" + { Model_plan }
+import "tools/opener"
+import "tools/opener_aim" as aim
+
+priv const PORT_FROM: I32 = 30000 //< where a new chat server starts looking for a free port
+    //< **Above ksmd's ports** (`aim.PORT_BASE` and `aim.PORT_SPAN`), so a chat server never takes
+    //< a workspace's own port. The page keeps no draft, so its port needs not stay the same.
+priv const MODEL_WAIT_S: I64 = 600 //< how long a model server can take to load, unless told [s]
+    //< **Long enough for a model of several GB read from a slow disk**; a shorter wait would stop a
+    //< server that is only slow.
+priv const URL_OPTION: U8[] = "--model-url=" //< watch's option naming the model server
+priv const AGENT_NAMES: U8[][] = U8[][]::{ "ksagent.exe", "ksagent" } //<
+    //< The names ksagent is looked for by, beside the server
+
+priv fn say(): Writer //< standard error, with this program's name begun on a line
+    return io.err().s(sys.program_name()).s(": ")
+
+fn main(): I32 //< asks about a folder: the model server, the chat page, then `ksagent watch`
+    io.set_line_buffered()
+    defer arena: = Arena(64 * 1024)
+    $dir: U8[] = ""
+    $model_file: U8[] = ""
+    $port: U8[] = ""
+    $model_wait: I64 = MODEL_WAIT_S
+    $show_only: = false
+    $model_only: = false
+    $stop_said: U8[] = ""
+    // Caution: **Say in each option's help what empty means**: `make chat` hands on an empty value
+    // for a setting it was not given, so empty is the usual way to leave an option out.
+    p: = argparse.Parser.create(sys.program_name(), about(arena), arena)
+    p.str_opt("--dir", dir@, "the folder to ask about (empty: none, which stops with what to do)")
+    file_help: = arena.text()
+        .s("the model file in models/ to start (empty: \{model_server.default_file()\}, the first \
+            in models/README.md)").take()
+    p.str_opt("--model-file", model_file@, file_help)
+    port_help: = arena.text()
+        .s("the model server's port on this machine: used where one answers, otherwise started \
+            (empty: \{aim.port_in_url(model_server.DEFAULT_URL)\}, where ksagent asks)").take()
+    p.str_opt("--port", port@, port_help)
+    wait_help: = arena.text()
+        .s("the seconds a model server can take to load (default \{MODEL_WAIT_S\})").take()
+    p.int_opt("--model-wait", model_wait@, wait_help)
+    p.flag("--show", show_only@, "put the whole URL out, token included (no browser)")
+    p.flag("--model-only", model_only@,
+        "start the model server alone, for ksagent ask and eval, until Ctrl+C (no --dir)")
+    opener.tending_options(p, stop_said@)
+    p.parse_or_exit()
+    where: = opener.where_from(sys.args().get(0), aim.KSAGENT, arena)
+    if where.server.len == 0
+        say().s("kssrv not found (run `make chat` first)\n")
+        return 1
+    fs.mkdir_all(where.tmp) catch {}
+    if opener.tending(p)
+        stop_root: =
+            aim.plain(opener.full(stop_said, arena), arena) if stop_said.len > 0 else ""
+        return opener.tend_alone(p, where, stop_root, arena)
+    url: = model_server.url_at(port, arena) catch
+        say().s("--port takes a port number from 1 to 65535, or nothing: \{port\}\n")
+        return 1
+    plan: = Model_plan::{ .url = url, .model_file = model_file, .wait_s = model_wait,
+        .beside = aim.parent_of(where.server), .tmp = where.tmp }
+    if model_only
+        return model_alone(plan, dir, show_only, arena)
+    if dir.len == 0
+        say().s("name the folder to ask about: make chat DIR=<folder>, or --dir=<folder>\n")
+        return 1
+    root: = aim.plain(opener.full(dir, arena), arena)
+    if root.len == 0 || !fs.is_dir(root) || !aim.fits_note(root)
+        say().s("name a folder, without '..' and without a line break: \{dir\}\n")
+        return 1
+    agent: = agent_beside(where.server, arena)
+    if agent.len == 0 || !fs.exists(where.page)
+        say()
+            .s("ksagent or its chat page is missing beside \{where.server\} (run `make chat` \
+                first)\n")
+        return 1
+    $run: = model_server.ensure(plan, arena) catch
+        return 1
+    opened: = opener.open_or_start(where, root, PORT_FROM, show_only, arena)
+    if opened.url.len == 0
+        run.stop()
+        return 1
+    if show_only
+        io.out().s("\{opened.url\}\n")
+    else
+        io.out().s("\{sys.program_name()\}: opening \{aim.without_token(opened.url)\}\n")
+    opener.hand_and_tell(opened.url,
+        arena.text().s("the conversations in \{root\}").take(), show_only, where, arena)
+    code: = watch(agent, root, url, run.slow, arena)
+    // **A server started for `--show` has no idle stop**, so it stops with the questions' answerer.
+    if show_only
+        if c: = opened.child
+            $started: = c
+            started.kill()
+    run.stop()
+    return code
+
+priv fn about(arena: Arena$@): U8[] //< what `--help` says before the options: the choices made
+    return arena.text()
+        .s("ask about a folder on ksagent's chat page, starting the model server where none \
+            answers.\nIt starts llama-server where it is on PATH, otherwise chat_server beside this \
+            program,\nwhich `make chat-server NATIVE=1` builds. An option given empty is one not \
+            given.").take()
+
+priv fn model_alone( //< starts the model server alone, for `ksagent ask` and `eval`, until Ctrl+C
+    //< Returns the exit code.
+    plan: Model_plan,
+    dir: U8[],
+    show_only: Bool,
+    arena: Arena$@,
+): I32
+    // Caution: **Refuse what would do nothing here** (Principle 5 in `docs/DESIGN-principles.md`):
+    // no folder is opened, and no page.
+    if dir.len > 0 || show_only
+        say().s("--model-only opens no folder and no page, so --dir and --show would do nothing\n")
+        return 1
+    $run: = model_server.ensure(plan, arena) catch
+        return 1
+    if run.child.is_none()
+        return 0
+    io.out()
+        .s("\{sys.program_name()\}: ksagent ask and eval reach it at \{plan.url\}; stop it with \
+            Ctrl+C\n")
+    return run.wait()
+
+priv fn agent_beside(server: U8[], arena: Arena$@): U8[] //< ksagent beside the server, or empty
+    for one in AGENT_NAMES
+        at: = fs.join(aim.parent_of(server), one, arena)
+        if fs.can_run(at)
+            return at
+    return ""
+
+priv fn watch(agent: U8[], root: U8[], url: U8[], slow: Bool, arena: Arena$@): I32 //<
+    //< Runs `ksagent watch` on the folder in the foreground, and returns its exit code
+    //< **It asks the model server at `url`**, the one `model_server.ensure` found or started, so
+    //< the two cannot differ. A slow server gets a longer limit on one reply.
+    $argv: = List<|U8[]|>(arena)
+    argv.push(agent)
+    argv.push("watch")
+    argv.push(arena.text().s(URL_OPTION).s(url).take())
+    if slow
+        argv.push(model_server.SLOW_TIMEOUT)
+    argv.push(root)
+    io.out()
+        .s("\{sys.program_name()\}: ready. Ask on the page; the questions and answers stay in \
+            \{root\}. Stop with Ctrl+C\n")
+    return subproc.spawn_wait(argv.slice(), "") catch e
+        say().s("cannot start \{agent\} (\{e\})\n")
+        fallback 1

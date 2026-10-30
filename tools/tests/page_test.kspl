@@ -285,7 +285,8 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "page_", arena)
         catch panic("cannot create the working directory")
-    page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
+    page: = aim.write_page(SECRET_URL, aim.KSMD, dir, arena)
+        catch panic("the page should be written")
     for win in Bool[2]::{ false, true }
         way: = aim.browser_argv("xdg-open", page, win, arena)
         for one in way
@@ -300,7 +301,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     assert(owner_only(page, arena), "only its owner may read the page")
     // **The URL is written as an attribute's value**, so a `"` cannot end it.
     defer $text: = Str_builder()
-    quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", text@)
+    quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", aim.KSMD, text@)
     assert(quoted.find_str("a&quot;b&lt;c&gt;&amp;d").is_some() &&
         quoted.find_str("a\"b").is_none(), "a mark in the URL is escaped")
     fs.remove_path(page) catch {}
@@ -313,16 +314,17 @@ fn test_a_page_handed_long_ago_is_removed() //< a page goes once a browser has h
     defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "sweep_", arena)
         catch panic("cannot create the working directory")
-    page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
+    page: = aim.write_page(SECRET_URL, aim.KSMD, dir, arena)
+        catch panic("the page should be written")
     other: = fs.join(dir, "other.html", arena)
     io.write_file(other, "x") catch panic("the probe file must be writable")
     // **Another tool can share the folder**, and its pages are its own to sweep.
     theirs: = fs.join(dir, "other_open-1.html", arena)
     io.write_file(theirs, "x") catch panic("another tool's page must be writable")
     at: = (fs.stat(page) catch panic("the page should stand")).mtime
-    aim.sweep_pages(dir, at + aim.PAGE_KEEP_S, arena)
+    aim.sweep_pages(dir, aim.KSMD, at + aim.PAGE_KEEP_S, arena)
     assert(fs.exists(page), "a page within its time is kept")
-    aim.sweep_pages(dir, at + aim.PAGE_KEEP_S + 1, arena)
+    aim.sweep_pages(dir, aim.KSMD, at + aim.PAGE_KEEP_S + 1, arena)
     assert(!fs.exists(page), "a page past its time is removed")
     assert(fs.exists(other), "a file whose name the opener does not give is left alone")
     assert(fs.exists(theirs), "another tool's page is left alone")

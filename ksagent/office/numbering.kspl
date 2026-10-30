@@ -1,0 +1,353 @@
+//< Word's list numbers: the "第3条" and "（２）" a paragraph shows without holding them as text
+//< `numbering.xml` defines each list (an abstract number) with up to nine levels, and the numbers
+//< (`w:num`) that paragraphs name point at one. **A number's counters belong to its list**, so two
+//< numbers of one list continue each other, as Word shows them; a number that overrides a level's
+//< start restarts that level where it is first used. A paragraph is counted as the document is
+//< read, in order (`Numbering.count`), and only one with text gets its label written out.
+import "ksagent/office/index" + { Index, Keyed }
+import "ksagent/office/package" + { Work }
+import "ksagent/office/xml"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+priv const LEVELS: Sz = 9 //< the levels a list has
+priv const NO_START: I32 = -1 //< no start override for a level
+priv const MAX_LEVEL_TEXT: Sz = 256 //< the longest number pattern a level may have, in bytes
+    //< Word's own are a few characters (`第%1条`). A longer one is refused, since each paragraph's
+    //< label repeats it.
+
+priv struct Level //< how one level of a list writes its number
+    start: I32
+    format: U8[] //< `decimal`, `japaneseCounting`, `bullet` …
+    text: U8[] //< the label, with `%1` … `%9` standing for each level's number
+    legal: Bool //< `isLgl`: every level's number written in plain digits
+    keep: Bool //< `lvlRestart` 0: a shallower level's next number does not restart this one
+    suffix: U8[] //< what follows the label: `tab`, `space` or `nothing`
+
+priv struct List_def //< one abstract number: a list's levels, and its counters
+    levels: List<|Level|>
+    value: I32[9] //< each level's current number
+    used: Bool[9] //< whether the level has a number since it last restarted
+
+priv struct Num //< one number a paragraph names: its list, and its level starts
+    list_id: U8[] //< the id of its abstract number
+    list: Sz //< the index of its list in `Numbering.lists`, once read; -1 for none
+    starts: I32[9] //< each level's start override, or `NO_START`
+    begun: Bool //< whether a paragraph has used it yet
+
+struct Numbering //< every list of a document, and where each one's counting stands
+    priv lists: List<|List_def|>
+    priv nums: List<|Num|>
+    priv list_keys: List<|Keyed|> //< each abstract number's id, and its list, as read
+    priv num_keys: List<|Keyed|> //< each number's id, and its `Num`, as read
+    priv num_index: Index //< `num_keys` in order, once read
+
+fn empty(arena: Arena$@): Numbering //< a document with no lists
+    $none: = List<|Keyed|>(arena)
+    return Numbering::{ .lists = List<|List_def|>(arena), .nums = List<|Num|>(arena),
+        .list_keys = List<|Keyed|>(arena), .num_keys = List<|Keyed|>(arena),
+        .num_index = index.sorted(none@, arena) }
+
+fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
+    //< Reads `numbering.xml`, each list and number charged to the file's work before it is made
+    $n: = empty(arena)
+    $x: = xml.reader(src, arena)!
+    $list: Sz = -1 //< the list being read, or -1
+    $level: Sz = -1 //< the level being read, or -1
+    $num: Sz = -1 //< the number being read, or -1
+    $override: Sz = -1 //< the level a `lvlOverride` names, or -1
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            break
+        if ev == xml.Event.end
+            if x.name.equals("abstractNum")
+                list = -1
+            else if x.name.equals("lvl")
+                level = -1
+            else if x.name.equals("num")
+                num = -1
+            else if x.name.equals("lvlOverride")
+                override = -1
+            continue
+        if ev != xml.Event.start
+            continue
+        name: = x.name
+        if name.equals("abstractNum")
+            work.charge(LEVELS * package.ITEM_WORK)!
+            list = n.add_list(x.attr_or("abstractNumId", "", arena)!, arena)
+        else if name.equals("num") && list < 0
+            work.charge(package.ITEM_WORK)!
+            num = n.add_num(x.attr_or("numId", "", arena)!)
+        else if name.equals("abstractNumId") && num >= 0
+            at: = n.nums.at(num)
+            at.list_id = x.attr_or("val", "", arena)!
+        else if name.equals("lvlOverride") && num >= 0
+            override = level_number(x.attr_or("ilvl", "0", arena)!)
+        else if name.equals("startOverride") && num >= 0 && override >= 0
+            at: = n.nums.at(num)
+            at.starts[override] = whole(x.attr_or("val", "0", arena)!, 0)
+        else if name.equals("lvl") && list >= 0 && override < 0
+            level = level_number(x.attr_or("ilvl", "0", arena)!)
+        else if list >= 0 && level >= 0
+            lv: = n.lists.at(list).levels.at(level)
+            read_level_field(x@, lv, arena)!
+    // A number names its list by id; the ids are put in order once all are read.
+    lists: = index.sorted(n.list_keys@, arena)
+    for i in Range.asc(n.nums.len)
+        at: = n.nums.at(i)
+        at.list = lists.find(at.list_id).unwrap_or(-1)
+    n.num_index = index.sorted(n.num_keys@, arena)
+    return n
+
+priv fn read_level_field(x: xml.Reader@, lv: Level$@, arena: Arena$@): Void!U8[] //<
+    //< Takes one child of a `lvl` into the level
+    val: = x.attr_or("val", "", arena)!
+    if x.name.equals("start")
+        lv.start = whole(val, 1)
+    else if x.name.equals("numFmt")
+        lv.format = val
+    else if x.name.equals("lvlText")
+        if val.len > MAX_LEVEL_TEXT
+            throw arena.text()
+                .s("a list's number pattern (lvlText) is longer than \{MAX_LEVEL_TEXT\} bytes")
+                .take()
+        lv.text = val
+    else if x.name.equals("isLgl")
+        lv.legal = !val.equals("0") && !val.equals("false")
+    else if x.name.equals("lvlRestart")
+        lv.keep = val.equals("0")
+    else if x.name.equals("suff")
+        lv.suffix = val
+
+priv fn level_number(text: U8[]): Sz //< a level's index from its text; -1 outside 0 to 8
+    v: = whole(text, -1)
+    return v if v >= 0 && v < I32::LEVELS else -1
+
+priv fn whole(text: U8[], otherwise: I32): I32 //< the text as a whole number, or `otherwise`
+    v: = text.trim_spaces().to_i64() catch
+        return otherwise
+    if v < -1000000I64 || v > 1000000000I64
+        return otherwise
+    return I32::v
+
+impl Numbering
+    priv fn add_list(r: Self$@, id: U8[], arena: Arena$@): Sz //< a new list, with default levels
+        $levels: = List<|Level|>(arena)
+        for _k in Range.asc(LEVELS)
+            levels
+                .push(Level::{ .start = 0, .format = "decimal", .text = "", .legal = false,
+                .keep = false, .suffix = "tab" })
+        $def: = List_def::{ .levels = levels }
+        for k in Range.asc(LEVELS)
+            def.value[k] = 0
+            def.used[k] = false
+        r.list_keys.push(Keyed::{ .key = id, .pos = r.lists.len })
+        r.lists.push(def)
+        return r.lists.len - 1
+
+    priv fn add_num(r: Self$@, id: U8[]): Sz //< a new number, pointing at no list yet
+        $num: = Num::{ .list_id = "", .list = -1, .begun = false }
+        for k in Range.asc(LEVELS)
+            num.starts[k] = NO_START
+        r.num_keys.push(Keyed::{ .key = id, .pos = r.nums.len })
+        r.nums.push(num)
+        return r.nums.len - 1
+
+    fn count(r: Self$@, num_id: U8[], level: Sz): Sz? //<
+        //< Counts a paragraph of that number and level; the number's place, or none for no label
+        //< The paragraph's number goes up, and every deeper level restarts. An unknown number, or
+        //< `0`, counts nothing. `label` then gives the label, where the paragraph shows one.
+        found: = r.num_index.find(num_id) catch
+            return .none
+        if level < 0 || level >= LEVELS
+            return .none
+        num: = r.nums.at(found)
+        if num.list < 0
+            return .none
+        def: = r.lists.at(num.list)
+        if !num.begun
+            num.begun = true
+            for k in Range.asc(LEVELS)
+                if num.starts[k] != NO_START
+                    def.used[k] = false
+        if def.used[level]
+            def.value[level] += 1
+        else
+            def.value[level] = start_of(num, def, level)
+            def.used[level] = true
+        for k in Range(level + 1, LEVELS, 1)
+            if !def.levels.get(k).keep
+                def.used[k] = false
+        return .some(found)
+
+    fn label(r: Self$@, num: Sz, level: Sz, arena: Arena$@): U8[] //<
+        //< The label the paragraph `count` just counted shows, its suffix included
+        n: = r.nums.at(num)
+        return text_of(n, r.lists.at(n.list), level, arena)
+
+priv fn start_of(num: Num@, def: List_def@, level: Sz): I32 //< where a level starts counting
+    return (num.starts[level] if num.starts[level] != NO_START
+        else def.levels.get(level).start)
+
+priv fn text_of(num: Num@, def: List_def@, level: Sz, arena: Arena$@): U8[] //<
+    //< The label, with each `%N` replaced by that level's number, and its suffix
+    lv: = def.levels.get(level)
+    out: = arena.text()
+    if lv.format.equals("bullet")
+        out.s(bullet(lv.text))
+    else
+        t: = lv.text
+        $i: Sz = 0
+        for i < t.len
+            if t[i] == '%' && i + 1 < t.len && t[i + 1] >= '1' && t[i + 1] <= '9'
+                k: = Sz::(t[i + 1] - '1')
+                v: = def.value[k] if def.used[k] else start_of(num, def, k)
+                write_number(out, v, "decimal" if lv.legal else def.levels.get(k).format)
+                i += 2
+                continue
+            out.c(t[i])
+            i += 1
+    if !lv.suffix.equals("nothing")
+        out.c(' ')
+    return out.take()
+
+priv fn bullet(text: U8[]): U8[] //< a bullet's mark: its own, or `・` for a symbol font's
+    //< Word writes most bullets as a character of the Symbol or Wingdings font, which Unicode puts
+    //< in its private use area (U+E000 to U+F8FF). Shown as it is, that is a box, so it becomes
+    //< `・`.
+    private: =
+        text.len == 3 &&
+        (text[0] == 0xEEU8 || (text[0] == 0xEFU8 && text[1] <= 0xA3U8))
+    return "・" if text.len == 0 || private else text
+
+// ==========================================
+// Writing one number in a list's format
+// ==========================================
+
+priv const KANJI_DIGITS: U8[][10] = ::{ "〇", "一", "二", "三", "四", "五", "六", "七",
+    "八", "九" }
+priv const KANJI_UNITS: U8[][4] = ::{ "", "十", "百", "千" }
+priv const AIUEO: U8[] =
+    "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン"
+priv const IROHA: U8[] =
+    "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス"
+priv const STEMS: U8[] = "甲乙丙丁戊己庚辛壬癸" //<
+    //< `ideographTraditional`: the ten heavenly stems
+priv const ROMAN_VALUES: I32[13] = ::{ 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 }
+priv const ROMAN_MARKS: U8[][13] = ::{ "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V",
+    "IV", "I" }
+
+fn write_number(out: str.Arena_text$@, v: I32, format: U8[]) //<
+    //< Writes `v` in a list's number format
+    //< A format not known here, or a number the format cannot write, falls back to plain digits.
+    //< The katakana formats are written full width, also where Word writes them half width
+    //< (`aiueo`, `iroha`): both read the same, and a search types the full-width ones.
+    //< `japaneseLegal` (壱, 弐) is written in everyday kanji, as a person types them.
+    if v < 1 && !format.equals("decimalZero") && !format.equals("none")
+        out.s("\{v\}")
+        return
+    if format.equals("none")
+        return
+    if format.equals("decimalZero")
+        out.s("0" if v >= 0 && v < 10 else "").s("\{v\}")
+    else if format.equals("decimalFullWidth") || format.equals("decimalFullWidth2")
+        full_width(out, v)
+    else if format.equals("decimalEnclosedCircle") ||
+        format.equals("decimalEnclosedCircleChinese")
+        enclosed(out, v, 0x2460)
+    else if format.equals("decimalEnclosedParen")
+        enclosed(out, v, 0x2474)
+    else if format.equals("decimalEnclosedFullstop")
+        enclosed(out, v, 0x2488)
+    else if format.equals("upperLetter") || format.equals("lowerLetter")
+        letters(out, v, 'A' if format.equals("upperLetter") else 'a')
+    else if format.equals("upperRoman") || format.equals("lowerRoman")
+        roman(out, v, format.equals("lowerRoman"))
+    else if format.equals("japaneseCounting") || format.equals("chineseCounting") ||
+        format.equals("chineseCountingThousand") || format.equals("taiwaneseCounting") ||
+        format.equals("taiwaneseCountingThousand") || format.equals("japaneseLegal")
+        kanji_count(out, v)
+    else if format.equals("japaneseDigitalTenThousand") || format.equals("ideographDigital") ||
+        format.equals("taiwaneseDigital")
+        kanji_digits(out, v)
+    else if format.equals("aiueo") || format.equals("aiueoFullWidth")
+        nth_char(out, AIUEO, v)
+    else if format.equals("iroha") || format.equals("irohaFullWidth")
+        nth_char(out, IROHA, v)
+    else if format.equals("ideographTraditional")
+        nth_char(out, STEMS, v)
+    else
+        out.s("\{v\}")
+
+priv fn full_width(out: str.Arena_text$@, v: I32) //< digits from U+FF10, as `１２`
+    $div: = top_place(v)
+    for div > 0
+        out.c(0xEFU8).c(0xBCU8).c(U8::(0x90 + (v / div) % 10))
+        div = div / 10
+
+priv fn top_place(v: I32): I32 //< the power of ten of a positive number's first digit
+    $div: I32 = 1000000000
+    for div > 1 && v / div == 0
+        div = div / 10
+    return div
+
+priv fn enclosed(out: str.Arena_text$@, v: I32, first: I32) //< `①` and the like, 1 to 20
+    if v > 20
+        out.s("\{v\}")
+        return
+    put(out, first + v - 1)
+
+priv fn letters(out: str.Arena_text$@, v: I32, base: U8) //< `A` … `Z`, then `AA`, `BB` …
+    times: = (v - 1) / 26 + 1
+    if times > 4
+        out.s("\{v\}")
+        return
+    for _k in Range.asc(times)
+        out.c(base + U8::((v - 1) % 26))
+
+priv fn roman(out: str.Arena_text$@, v: I32, lower: Bool) //< `I`, `IV` … up to 3999
+    if v > 3999
+        out.s("\{v\}")
+        return
+    $left: = v
+    for k in Range.asc(13)
+        for left >= ROMAN_VALUES[k]
+            for c in ROMAN_MARKS[k]
+                out.c(c.to_lower() if lower else c)
+            left -= ROMAN_VALUES[k]
+
+priv fn kanji_count(out: str.Arena_text$@, v: I32) //< `一`, `十一`, `二百三` … up to 9999
+    if v > 9999
+        kanji_digits(out, v)
+        return
+    $place: Sz = 3
+    $div: I32 = 1000
+    for div > 0
+        d: = (v / div) % 10
+        if d > 0
+            if d > 1 || place == 0
+                out.s(KANJI_DIGITS[d])
+            out.s(KANJI_UNITS[place])
+        div = div / 10
+        place -= 1
+
+priv fn kanji_digits(out: str.Arena_text$@, v: I32) //< each digit as a kanji: `二〇二四`
+    $div: = top_place(v)
+    for div > 0
+        out.s(KANJI_DIGITS[((v / div) % 10)])
+        div = div / 10
+
+priv fn nth_char(out: str.Arena_text$@, set: U8[], v: I32) //<
+    //< The `v`-th of a set of three-byte characters, from 1, starting over past its end
+    count: = set.len / 3
+    at: = Sz::(v - 1) % count
+    out.s(set.sub(at * 3, 3))
+
+priv fn put(out: str.Arena_text$@, cp: I32) //< writes one character as UTF-8
+    for k in Range.asc(chars.codepoint_len(cp))
+        out.c(chars.codepoint_byte(cp, k))

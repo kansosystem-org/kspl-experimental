@@ -2,14 +2,18 @@
 // Each heading is a link that scrolls to it, indented by its level. The heading being read is
 // marked as the page scrolls, and the list follows every edit. Headings shown from an included
 // file stand in their place, marked with their file's path.
-// Whether the panel shows is the viewer's choice, kept in this browser's storage and never in the
-// document: another reader of the file keeps their own.
+// Whether the panel shows, and how wide it is, are the viewer's choices, kept in this browser's
+// storage and never in the document: another reader of the file keeps their own.
+// The edge between the panel and the document drags, as VS Code's side bar does. Left and Right
+// move it while it has the focus, Home and End go to the limits, and a double-click gives the first
+// width back. The document always keeps 400 pixels; a window too narrow lays the panel over it.
 "use strict";
 
 function ksmdContents(ks) {
   const panel = document.querySelector(".contents");
   if (!panel) return;
   const list = panel.querySelector(".contents-list");
+  const edge = document.querySelector(".contents-edge");
   const KEY = "ksmd.contents";
   // The heading elements the list shows, in the document's order.
   let heads = [];
@@ -113,6 +117,7 @@ function ksmdContents(ks) {
 
   function show(on, remember) {
     panel.hidden = !on;
+    edge.hidden = !on;
     document.body.classList.toggle("with-contents", on);
     for (const el of document.querySelectorAll('[data-cmd="contents"]')) {
       el.setAttribute("aria-checked", on ? "true" : "false");
@@ -124,6 +129,63 @@ function ksmdContents(ks) {
     }
     built = null;
     build();
+  }
+
+  // The panel's width in pixels: from 160 to 480, and never so wide that the document beside it
+  // has fewer than 400. Below 48rem the panel lies over the document, which keeps 48 pixels.
+  const WIDTH_KEY = "ksmd.contents-width";
+  const FIRST = 240;
+  const LEAST = 160;
+  let width = FIRST;
+  const most = () => {
+    const over = window.matchMedia("(max-width: 48rem)").matches;
+    return Math.max(LEAST, Math.min(480, window.innerWidth - (over ? 48 : 400)));
+  };
+  function setWidth(px, remember) {
+    width = Math.round(Math.max(LEAST, Math.min(most(), px)));
+    document.documentElement.style.setProperty("--contents-width", `${width}px`);
+    edge.setAttribute("aria-valuenow", String(width));
+    edge.setAttribute("aria-valuemin", String(LEAST));
+    edge.setAttribute("aria-valuemax", String(most()));
+    if (remember) {
+      try {
+        localStorage.setItem(WIDTH_KEY, String(width));
+      } catch (_) { /* storage is off: the width lasts while the page is open */ }
+    }
+  }
+  edge.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    if (e.detail >= 2) {
+      setWidth(FIRST, true);
+      return;
+    }
+    const x0 = e.clientX;
+    const w0 = width;
+    edge.classList.add("dragging");
+    const move = (m) => setWidth(w0 + m.clientX - x0, false);
+    const up = (u) => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      edge.classList.remove("dragging");
+      setWidth(w0 + u.clientX - x0, true);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+  edge.addEventListener("keydown", (e) => {
+    const to = { ArrowLeft: width - 16, ArrowRight: width + 16, Home: LEAST, End: most() }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    setWidth(to, true);
+  });
+  // A window made narrower keeps the document's room.
+  window.addEventListener("resize", () => setWidth(width, false));
+  try {
+    const kept = Number(localStorage.getItem(WIDTH_KEY));
+    setWidth(kept > 0 ? kept : FIRST, false);
+  } catch (_) {
+    setWidth(FIRST, false);
   }
 
   panel.querySelector(".contents-close").addEventListener("click", () => show(false, true));

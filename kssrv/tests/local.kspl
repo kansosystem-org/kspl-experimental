@@ -13,6 +13,7 @@ import "std/sha256"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
+import "std/sys"
 import "std/verdict"
 
 priv const PUT_BODY: U8[] = "かんそ\nwritten\n" //< the body written back
@@ -249,10 +250,19 @@ priv fn list_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!clie
         return
     // **A link is left out**, so the dialog never offers a way out of the root.
     linked: = make_link(listed, "d", "..", arena)
+    // **A name holding a `\` is left out too**: only POSIX allows one, and a save there fails.
+    if !sys.is_windows()
+        io.write_file(arena.text().s(listed).s("/b\\s.txt").take(), "s") catch
+            verdict.check("/api/list leaves out a name holding a `\\`", false,
+                "the file cannot be made")
+            return
     r: = client.get(port, "/api/list?path=listed", auth, arena)!
     want: = "{\"folders\":[\"c\"],\"files\":[\"a.txt\",\"b.txt\"],\"more\":false}"
     verdict.check("/api/list names the folders and files, sorted, hidden names left out",
         r.status == 200 && r.body.equals(want), client.shown(r, arena))
+    if !sys.is_windows()
+        back: = client.get(port, "/api/file?path=listed/b%5Cs.txt", auth, arena)!
+        client.expect_status("/api/file refuses a name holding a `\\` on POSIX", back, 403, arena)
     if !linked
         verdict.skip_check("/api/list leaves a link out",
             "a link cannot be made with `ln -s` in this environment")

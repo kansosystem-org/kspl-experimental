@@ -34,6 +34,13 @@ fn write(doc: Document@, out: Str_builder$@) //< appends the whole source to `ou
         out.c('\n')
         write_block(doc, doc.blocks.get(i), at@, out)
 
+fn write_one(doc: Document@, block: Sz, out: Str_builder$@) //<
+    //< Appends a source that holds one block of the document alone, as a copy of it carries it
+    defer scratch: = Arena(16 * 1024)
+    at: = Positions(doc, scratch)
+    out.s(HEADER).c('\n')
+    write_block(doc, doc.blocks.get(block), at@, out)
+
 fn size(doc: Document@): Sz //< how many bytes `write` appends
     return HEADER.len + blocks_size(doc, doc.blocks@, 0, doc.blocks.len)
 
@@ -126,6 +133,7 @@ priv fn write_table(doc: Document@, t: Table@, invisible: Bool, at: Positions@,
                 out.c(',')
             out.s("\{t.weights[c] / divisor\}")
         out.c('"')
+    write_heights(t, out)
     if has_format(t)
         out.s(" formats=\"")
         for c in Range.asc(t.formats.len)
@@ -148,6 +156,7 @@ priv fn write_table(doc: Document@, t: Table@, invisible: Bool, at: Positions@,
         out.s(" groups=\"")
         write_groups(t.groups@, out)
         out.c('"')
+    write_filter(t, out)
     write_invisible(invisible, out)
     out.c('\n')
     for r in Range.asc(t.rows.len + 1)
@@ -179,6 +188,47 @@ priv fn write_cell(doc: Document@, t: Table@, cell: Cell, at: Positions@, out: S
     if cell.kind != .empty || !plain
         out.c(' ')
     out.c('|')
+
+priv fn write_heights(t: Table@, out: Str_builder$@) //<
+    //< ` heights="..."`, one entry per data row, where a row that stands has a height
+    //< An entry whose row is gone stays in the model for an undo, and is left out here.
+    if t.heights.len == 0
+        return
+    defer scratch: = Arena(16 * 1024)
+    $by_id: = List<|Sz|>(scratch)
+    for _ in Range.asc(t.next_id)
+        by_id.push(0)
+    for h in t.heights
+        by_id[h.row] = h.points
+    $any: = false
+    for id in t.rows
+        any = any || by_id[id] > 0
+    if !any
+        return
+    out.s(" heights=\"")
+    for r in Range.asc(t.rows.len)
+        if r > 0
+            out.c(',')
+        if by_id[t.rows[r]] > 0
+            out.s("\{by_id[t.rows[r]]\}")
+    out.c('"')
+
+priv fn write_filter(t: Table@, out: Str_builder$@) //<
+    //< ` filter="..."`, one entry per column, where a column that stands narrows the rows
+    $any: = false
+    for f in t.filters
+        for id in t.columns
+            any = any || id == f.column
+    if !any
+        return
+    out.s(" filter=\"")
+    for c in Range.asc(t.columns.len)
+        if c > 0
+            out.c(',')
+        for f in t.filters
+            if f.column == t.columns[c]
+                out.escape_and_append(f.entry)
+    out.c('"')
 
 priv fn has_format(t: Table@): Bool //< whether any column has a number format
     for f in t.formats

@@ -1,12 +1,15 @@
-//< The HTTP side: one connection at a time, one request on each, answered whole with its length
+//< The HTTP side: one connection at a time, one request on each, answered whole or as a stream
 //< It answers `POST /v1/chat/completions` and `GET /v1/models`, and refuses every other path.
-//< **A request must arrive within `READ_WAIT_MS` and its answer leave within `WRITE_WAIT_MS`**,
-//< so a client that stops halfway cannot hold the one connection the server serves. Why one at a
-//< time, and why only the loopback, is in `ksai/docs/DESIGN-serving.md`.
-import "ksai/examples/chat_server/engine" { Engine, Picker }
+//< **It refuses a request that another web page could send** (`from_a_page`, and a POST body
+//< that is not `application/json`).
+//< **A request must arrive within `READ_WAIT_MS`, and each write leave within `WRITE_WAIT_MS`**,
+//< so a client that stops halfway cannot hold the one connection the server serves. A stream is
+//< server-sent events in chunks (`Stream`). Why one at a time, why only the loopback, and the
+//< stream's shape are in `ksai/docs/DESIGN-serving.md`.
+import "ksai/examples/chat_server/engine" { Engine, Finish, Picker, Unwatched, Watch }
 import "ksai/examples/chat_server/reply"
 import "ksai/examples/chat_server/request"
-import "ksai/examples/chat_server/template" + { Kind }
+import "ksai/examples/chat_server/template" + { Conversation, Kind }
 import "ksai/examples/chat_server/template35"
 import "std/chars"
 import "std/ds" { List }
@@ -19,19 +22,28 @@ import "std/net"
 import "std/prng"
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
+import "std/strnum" // `to_count`
 import "std/sys"
 
 const HOST: U8[] = "127.0.0.1" //< the only address it listens on: the loopback
 priv const CHAT_PATH: U8[] = "/v1/chat/completions"
 priv const MODELS_PATH: U8[] = "/v1/models"
 priv const READ_WAIT_MS: I64 = 30000I64 //< how long a whole request may take to arrive
-priv const WRITE_WAIT_MS: I32 = 30000 //< how long a whole answer may take to leave
+priv const WRITE_WAIT_MS: I32 = 30000 //< how long one write of an answer may take to leave
+priv const HOST_NAMES: U8[][_] = ::{ "127.0.0.1", "localhost" } //< what `Host` can name
+priv const PAGE_NAMES: U8[][_] = ::{ "127.0.0.1", "localhost", "[::1]" } //<
+    //< The names in an `Origin` of a page on this machine, whatever its port
+priv const PING_GAP_US: I64 = 10000000I64 //< the longest a stream goes with nothing written
+    //< A comment line then goes out: it keeps a client's own wait from ending, and a write to a
+    //< client that has gone fails, which stops the work for it.
+priv const STEP_CHUNK: Sz = 256 * 1024 //< the chunk of memory one stream step reads the text in
 priv const REQUEST_CHUNK: Sz = 1024 * 1024 //< the largest chunk of one request's memory
 
 struct Server //< what every request is answered from
     engine: Engine$@
     kind: Kind //< the chat template the model's file holds, which writes its prompts
     model_id: U8[] //< the name the answers and `GET /v1/models` give the model
+    port: I32 //< the port it listens on, which a request's `Host` must name
     max_tokens: Sz //< the cap on an answer's tokens; a request can ask for fewer
     answered: Sz //< chat answers given so far, which numbers each answer's id
     calls: Sz //< tool calls returned so far, which numbers each call's id
@@ -39,6 +51,7 @@ struct Server //< what every request is answered from
 priv struct Answer //< one HTTP answer: its status and its JSON body
     status: I32
     body: U8[]
+    streamed: Bool //< whether it went out already, as a stream; `body` is then empty
 
 fn serve(listener: net.Tcp_listener$@, s: Server$@) //< answers connections one by one, for good
     for
@@ -63,10 +76,12 @@ fn answer_one(conn: net.Tcp_stream$@, s: Server$@, arena: Arena$@) //<
         write_answer(conn, refusal_of(e, arena), arena)
         return
     started: = sys.mono_us()
-    a: = route(req, s, arena)
-    write_answer(conn, a, arena)
-    io.err().s(req.method).c(' ').s(req.target).s(" -> \{a.status\} in ")
-        .s("\{(sys.mono_us() - started) / 1000I64\} ms\n")
+    a: = route(req, s, conn, arena)
+    if !a.streamed
+        write_answer(conn, a, arena)
+    io.err().s(req.method).c(' ').s(req.target).s(" -> \{a.status\}")
+        .s(" (streamed)" if a.streamed else "")
+        .s(" in \{(sys.mono_us() - started) / 1000I64\} ms\n")
 
 priv fn read_request(conn: net.Tcp_stream$@, arena: Arena$@): http.Request$@!http.Http_error //<
     //< One whole request, all of it within `READ_WAIT_MS`
@@ -119,21 +134,27 @@ priv fn failure(status: I32, message: U8[], arena: Arena$@): Answer //<
     kind: = "server_error" if status >= 500 else "invalid_request_error"
     err: = b.obj().set("message", b.str_val(message)).set("type", b.str_val(kind)).build()
     return Answer::{ .status = status,
-        .body = dumped(b.obj().set("error", err).build(), arena) }
+        .body = dumped(b.obj().set("error", err).build(), arena), .streamed = false }
 
 priv fn dumped(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text
     defer $out: = Str_builder()
     v.dump(out@)
     return arena.dup_str(out.slice())
 
-priv fn route(req: http.Request$@, s: Server$@, arena: Arena$@): Answer //<
+priv fn route(req: http.Request$@, s: Server$@, conn: net.Tcp_stream$@, arena: Arena$@): Answer //<
     //< The answer for a request's method and path
     //< `GET /v1/models` reads nothing: clients ask it to see that the server is up, and which
     //< model it holds.
+    if why: = from_a_page(req, s.port, arena)
+        return failure(403, why, arena)
     if req.target.equals(CHAT_PATH)
         if !req.method.equals("POST")
             return failure(405, "use POST for /v1/chat/completions", arena)
-        return chat(req.body, s, arena)
+        media: = req.headers.find("Content-Type").unwrap_or("")
+        if !media.sub(0, media.find_char(';').unwrap_or(media.len)).trim_spaces()
+            .equals_ignore_case("application/json")
+            return failure(415, "send the body with Content-Type: application/json", arena)
+        return chat(req.body, s, conn, arena)
     if req.target.equals(MODELS_PATH)
         if !req.method.equals("GET")
             return failure(405, "use GET for /v1/models", arena)
@@ -142,12 +163,47 @@ priv fn route(req: http.Request$@, s: Server$@, arena: Arena$@): Answer //<
             .set("owned_by", b.str_val("ksai")).build()
         list: = b.obj().set("object", b.str_val("list"))
             .set("data", b.arr().push(one).build()).build()
-        return Answer::{ .status = 200, .body = dumped(list, arena) }
+        return Answer::{ .status = 200, .body = dumped(list, arena), .streamed = false }
     return failure(404,
         arena.text().s("there is no endpoint at ").s(req.target)
         .s(": this server answers POST /v1/chat/completions and GET /v1/models").take(), arena)
 
-priv fn chat(body: U8[], s: Server$@, arena: Arena$@): Answer //< one chat completion
+priv fn from_a_page(req: http.Request$@, port: I32, arena: Arena$@): U8[]? //<
+    //< Why a request that another web page could have sent is refused, or none
+    //< A page reaches the loopback too. **A `Host` other than this server's** comes from a page
+    //< whose name was pointed at 127.0.0.1, which could then read the answers. **An `Origin`
+    //< off this machine** comes from a page's form or `fetch`. A program sends no `Origin`.
+    host: = req.headers.find("Host").unwrap_or("")
+    named: = loopback_port(host, U8[][]::HOST_NAMES).unwrap_or(-2I64)
+    if named != I64::port && !(named == -1I64 && port == 80)
+        return .some(arena.text().s("the Host header names \"").s(host)
+            .s("\": this server answers 127.0.0.1:\{port\} and localhost:\{port\} only").take())
+    if origin: = req.headers.find("Origin")
+        $rest: U8[] = ""
+        for scheme in U8[][]::{ "http://", "https://" }
+            if origin.starts_with(scheme)
+                rest = origin.sub_from(scheme.len)
+        if rest.len == 0 || loopback_port(rest, U8[][]::PAGE_NAMES).is_none()
+            return .some(arena.text().s("the Origin header names the web page \"").s(origin)
+                .s("\": this server answers programs and pages on this machine only").take())
+    return .none
+
+priv fn loopback_port(authority: U8[], names: U8[][]): I64? //<
+    //< The port in `name[:port]` for one of the names, -1 where none is written; none for others
+    for name in names
+        if authority.len >= name.len &&
+            authority.sub(0, name.len).equals_ignore_case(name)
+            rest: = authority.sub_from(name.len)
+            if rest.len == 0
+                return .some(-1I64)
+            if rest[0] == ':'
+                n: = rest.sub_from(1).to_count(65535) catch
+                    return .none
+                return .some(n)
+    return .none
+
+priv fn chat(body: U8[], s: Server$@, conn: net.Tcp_stream$@, arena: Arena$@): Answer //<
+    //< One chat completion, written whole or streamed on `conn` once the request passes its checks
     c: = request.read_chat(body, arena) catch why
         return failure(400, why, arena)
     e: = s.engine
@@ -179,15 +235,116 @@ priv fn chat(body: U8[], s: Server$@, arena: Arena$@): Answer //< one chat compl
         limit = c.max_tokens
     $pick: = Picker::{ .cfg = c.cfg,
         .rng = prng.Prng(c.seed.unwrap_or(U64::sys.mono_us())) }
-    $g: = e.generate(prompt.slice(), limit, pick@, arena)
-    parsed: = reply.split_calls(e.tok.decode(g.tokens@, arena), s.kind, conv.tools@, conv.thinking,
-        arena)
     s.answered += 1
     ids: = reply.Answer_ids::{ .id = arena.text().s("chatcmpl-\{s.answered\}").take(),
         .first_call = s.calls + 1, .created = sys.wall_seconds(), .model = s.model_id }
+    if c.stream
+        return stream_chat(conn, s, conv@, prompt.slice(), limit, pick@, ids, c.include_usage,
+            arena)
+    $quiet: = Unwatched::{ .none = true }
+    $g: = e.generate(prompt.slice(), limit, pick@, quiet@, arena)
+    parsed: = reply.split_calls(e.tok.decode(g.tokens@, arena), s.kind, conv.tools@, conv.thinking,
+        arena)
     s.calls += parsed.calls.len
     use: = reply.Usage::{ .prompt = prompt.len, .completion = g.tokens.len, .cached = g.reused }
     io.err().s("  \{prompt.len\} prompt tokens (\{g.reused\} kept from before), ")
         .s("\{g.tokens.len\} generated\n")
     return Answer::{ .status = 200,
-        .body = reply.answer_json(parsed@, g.finish, ids, use, arena) }
+        .body = reply.answer_json(parsed@, g.finish, ids, use, arena), .streamed = false }
+
+// ==========================================
+// A stream: server-sent events, one HTTP chunk per write
+// ==========================================
+
+priv struct Stream //< a chat answer going out as it is generated, and how far it has got
+    conn: net.Tcp_stream$@
+    s: Server$@
+    conv: Conversation@
+    ids: reply.Answer_ids
+    text: Str_builder //< the generated text so far
+    sent: reply.Sent
+    last_write_us: I64 //< when bytes last went out (`sys.mono_us`)
+    gone: Bool //< whether a write failed: the client has gone, and the work stops
+    step: Arena$@ //< one step's readings, emptied after each
+
+impl Stream: Watch //< each piece and token sends what it adds; a client gone stops the work
+    fn piece_read(r: Self$@): Bool //< sends a comment line where nothing went out for a while
+        if sys.mono_us() - r.last_write_us >= PING_GAP_US
+            r.send(":\n\n")
+        return !r.gone
+
+    fn generated(r: Self$@, id: I32): Bool //< sends what the text so far adds to the answer
+        r.text.s(r.s.engine.tok.decode_one(id))
+        p: = reply.read_text(r.text.slice(), false, r.s.kind, r.conv.tools@, r.conv.thinking,
+            r.step)
+        $chunks: = reply.new_chunks(p@, r.sent@, r.ids, r.step)
+        r.send_chunks(chunks@, "")
+        if sys.mono_us() - r.last_write_us >= PING_GAP_US
+            r.send(":\n\n")
+        r.step.reset()
+        return !r.gone
+
+impl Stream
+    priv fn send_chunks(r: Self$@, chunks: List<|U8[]|>@, after: U8[]) //<
+        //< Sends each chunk as one event `data: <json>`, then `after`, in one write
+        if chunks.len == 0 && after.len == 0
+            return
+        defer $events: = Str_builder()
+        for i in Range.asc(chunks.len)
+            events.s("data: ").s(chunks.get(i)).s("\n\n")
+        events.s(after)
+        r.send(events.slice())
+
+    priv fn send(r: Self$@, events: U8[]) //< writes text as one HTTP chunk; a failure marks `gone`
+        if r.gone
+            return
+        defer $out: = Str_builder()
+        http.format_chunk(out@, events)
+        r.write(out.slice())
+
+    priv fn write(r: Self$@, bytes: U8[]) //< writes bytes within `WRITE_WAIT_MS`
+        r.conn.write_all_for(bytes, WRITE_WAIT_MS) catch
+            r.gone = true
+        r.last_write_us = sys.mono_us()
+
+priv fn stream_chat(conn: net.Tcp_stream$@, s: Server$@, conv: Conversation@, prompt: I32[],
+    limit: Sz, pick: Picker$@, ids: reply.Answer_ids, include_usage: Bool, arena: Arena$@): Answer //<
+        //< Writes the head and the role at once, then each piece as the model writes it
+        //< **The head goes out before the prompt is read**, which can take minutes on a CPU. Every
+        //< check has passed by then, so nothing is left to refuse with a status.
+    defer step: = Arena(STEP_CHUNK)
+    $st: = Stream::{ .conn = conn, .s = s, .conv = conv, .ids = ids, .text = Str_builder(),
+        .sent = reply.Sent::{ .reasoning = 0, .content = 0, .calls = 0, .arguments = 0 },
+        .last_write_us = 0I64, .gone = false, .step = step }
+    head: = http.headers(arena).add("Content-Type", "text/event-stream")
+        .add("Cache-Control", "no-cache").add("Connection", "close").build()
+    defer $opening: = Str_builder()
+    http.format_chunked_head(opening@, 200, head) catch
+        panic("a stream's head built here is well-formed HTTP")
+    http.format_chunk(opening@,
+        arena.text().s("data: ").s(reply.first_chunk(ids, arena)).s("\n\n").take())
+    st.write(opening.slice())
+    e: = s.engine
+    g: = e.generate(prompt, limit, pick, st@, arena)
+    io.err().s("  \{prompt.len\} prompt tokens (\{g.reused\} kept from before), ")
+        .s("\{g.tokens.len\} generated")
+        .s(", the client left" if g.finish == Finish.left else "").c('\n')
+    text: = arena.dup_str(st.text.slice())
+    st.text.free()
+    if st.gone || g.finish == Finish.left
+        return Answer::{ .status = 200, .body = "", .streamed = true }
+    p: = reply.read_text(text, true, s.kind, conv.tools@, conv.thinking, arena)
+    s.calls += p.calls.len
+    $last: = reply.new_chunks(p@, st.sent@, ids, arena)
+    $b: = Json_builder(arena)
+    last
+        .push(reply.chunk(ids, b.obj().build(), reply.finish_reason(p@, g.finish), arena))
+    if include_usage
+        use: = reply.Usage::{ .prompt = prompt.len, .completion = g.tokens.len,
+            .cached = g.reused }
+        last.push(reply.usage_chunk(ids, use, arena))
+    st.send_chunks(last@, "data: [DONE]\n\n")
+    defer $end: = Str_builder()
+    http.format_last_chunk(end@)
+    st.write(end.slice())
+    return Answer::{ .status = 200, .body = "", .streamed = true }

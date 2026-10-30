@@ -231,3 +231,35 @@ fn test_primitive_interpolation() //<
     verdict
         .pass("an unsigned comes out in decimal up to the upper bit, and the answer does not change \
             with or without a format specification.")
+// ==========================================
+// `\{e\}` on an enum writes its variant's name whatever expression gives it ("The default notation
+// for primitives" in docs/SPEC-programming-language.md). Only a plain name once did; a field, an
+// element, a call or a variant written out reached `put`, which found no `fmt`.
+// ==========================================
+priv enum Fmt_color
+    red
+    green
+
+priv struct Fmt_pixel
+    c: Fmt_color
+
+priv const FMT_FAVOURITE: Fmt_color = .green
+
+priv fn fmt_pick(): Fmt_color
+    return .green
+
+priv enum Fmt_maybe<|T|>
+    none
+    some(v: T)
+
+fn test_enum_interpolation_any_expression()
+    verdict.start("[fmt] an enum interpolated as any expression writes its variant's name test...")
+    defer $b: = Str_builder()
+    px: = Fmt_pixel::{ .c = .red }
+    colors: Fmt_color[2] = ::{ .green, .red }
+    some: = Fmt_maybe<|I32|>.some(4)
+    b.s("\{px.c\} \{colors[0]\} \{fmt_pick()\} \{FMT_FAVOURITE\} \{Fmt_color.red\}")
+    b.s(" \{Fmt_maybe<|I32|>.none\} \{some\}")
+    assert(b.slice().equals("red green green green red none some"),
+        "a field, an element, a call, a constant and a variant written out each give the name")
+    verdict.pass("")

@@ -11,6 +11,7 @@
 import "ksdb/log" as ksdblog
 import "ksdb/store" { Store }
 import "ksos/drivers/rp2040/flash"
+import "ksos/drivers/rp2040/watchdog"
 
 const KIND_MARKER: U16 = 0 //< the marker record's kind
     //< Caution: **Give each writer's kinds numbers of 1 or more** (0 is the marker).
@@ -21,6 +22,23 @@ const MARKER_MAX: Sz = 8 //< the maximum marker length
 priv $lg: ksdblog.Log
 priv $ready: Bool = false
 priv $erased_on_open: Bool = false
+
+// The record's three steps, each feeding the watchdog first. **Erasing while keeping the policy
+// and printing the whole record take seconds**, far past the watchdog's timeout, yet each step is
+// bounded: one sector erase is at most 400 ms, one page write 3 ms. So a step proves the task is
+// still moving, and the timeout only has to cover the longest single step. Before `watchdog.arm`
+// (and in the firmwares that never arm it) the feed does nothing.
+priv fn read_fed(at: Sz, dst: U8$[])
+    watchdog.feed()
+    flash.read_at(at, dst)
+
+priv fn program_fed(at: Sz, src: U8[]): Bool
+    watchdog.feed()
+    return flash.program_at(at, src)
+
+priv fn erase_fed(at: Sz): Bool
+    watchdog.feed()
+    return flash.erase_sector(at)
 
 fn claim(marker: U8[]): Bool //< opens the record
     //< **true if it could be opened.** If the marker differs it erases the whole region. The caller
@@ -33,9 +51,9 @@ fn claim(marker: U8[]): Bool //< opens the record
     flash.init() catch
         return false
     store: = Store::{
-        .read_at = flash.read_at,
-        .program_at = flash.program_at,
-        .erase_sector = flash.erase_sector,
+        .read_at = read_fed,
+        .program_at = program_fed,
+        .erase_sector = erase_fed,
         .capacity = flash.REGION_SIZE,
         .sector_size = flash.SECTOR_SIZE,
     }

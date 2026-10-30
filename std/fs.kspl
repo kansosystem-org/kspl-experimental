@@ -38,6 +38,7 @@ extern "C"
     fn kspl_replace_file(part_ptr: U8@, part_len: Sz, path_ptr: U8@, path_len: Sz, data: U8@,
         len: Sz, owner_only: I32): I32 //< 0=replaced, on the disk; 1=the name is taken; -1=refused
     fn kspl_dir_trust(path_ptr: U8@, path_len: Sz): I32 //< `Dir_trust`'s order, from 0
+    fn kspl_secret_trust(path_ptr: U8@, path_len: Sz): I32 //< `Secret_trust`'s order, from 0
     fn kspl_remove_path(path_ptr: U8@, path_len: Sz): I32
     fn kspl_lock_open(path_ptr: U8@, path_len: Sz): I64
     fn kspl_lock_take(handle: I64, wait: I32): I32 //< 0=taken, 1=held elsewhere, -1=failed
@@ -155,7 +156,7 @@ pub fn long_name( //< the name the file system keeps for a path's last segment
     //< **On Windows a short name names the same entry**: `GIT~1` can stand for `.git`. So a check
     //< on the name as written (does it start with a dot) misses it. Check the name this gives,
     //< the long one, at each segment. POSIX keeps one name, so it is the last segment as written.
-    path: U8[], //< a path that stands; a `*` or `?` in it fails on Windows
+    path: U8[], //< a path that stands; a wildcard in it (`*` `?` `<` `>` `"`) fails on Windows
     arena: Arena$@, //< where the name goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< fails as `not_found` where nothing stands at the path
     check_path(path)!
@@ -181,6 +182,34 @@ pub fn dir_trust( //< whether what a directory holds could have been put there b
     check_path(path) catch
         return .missing
     switch kspl_dir_trust(path.ptr, path.len)
+    case 0
+        return .own
+    case 2
+        return .foreign
+    case 3
+        return .shared
+    case 4
+        return .unchecked
+    default
+        return .missing
+
+pub enum Secret_trust //< who besides the current user could read or change a file with a secret
+    own //<
+        //< no one: the current user owns it, and neither its group nor everyone can read or write it
+    missing //< it is not a regular file, or cannot be read
+    foreign //< another user owns it
+    shared //< its group or everyone can read or write it
+    unchecked //< this OS's permissions are not read here (Windows, where an ACL decides)
+
+pub fn secret_trust( //< whether someone else could read or change a file holding a secret
+    //< For a private key or a password file, read before it is used ("A file holding a secret
+    //< must be private" in `std/docs/DESIGN-system.md`). A link is followed, so the file it
+    //< reaches is judged.
+    path: U8[],
+): Secret_trust
+    check_path(path) catch
+        return .missing
+    switch kspl_secret_trust(path.ptr, path.len)
     case 0
         return .own
     case 2

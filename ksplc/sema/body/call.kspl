@@ -470,6 +470,10 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         args_generic: = is_generic_call && inst_node.is_none()
         infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic)!
 
+        // **Before the instance is made**: `put`'s body calls `fmt`, which an enum lacks.
+        if is_generic_call
+            name_enum_put_value(c, node, left)!
+
         if is_generic_call
             type_id =
                 infer_generic_call_result(c, node, left, fn_tmpl, written, is_method_access,
@@ -650,3 +654,67 @@ priv fn check_and_infer_intrinsic(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
             arg2.infer_expr(c, val_id)!
             return finish_intrinsic(node, left, void_id)
     return -1
+
+priv fn name_enum_put_value(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): Void!Sema_error //<
+    //< Makes an interpolation's `put(w, e)` on an enum write `e.variant_name()` in place of `e`
+    //< A string interpolation `\{e\}` desugars into `put(w, e)`. Its arguments are typed by now, so
+    //< `e` may be any expression (`\{h.c\}`, `\{arr[0]\}`, `\{Color.red\}`). No `fmt` is
+    //< synthesized on an enum, since that would give every enum a `Formattable` vtable.
+    //< Caution: **Do not rewrite if the user wrote `fmt`**, or their format is silently ignored.
+    if left.kind_id != .k_expr_path && left.kind_id != .k_identifier
+        return
+    args: = node.find_child(.k_expr_args)
+    if args == null || args.children.len != 2
+        return
+    // Caution: **Decide by the FQN the desugaring wrote** (`PUT_FQN` in `../../base/core.kspl`).
+    // A user's own call to `put` that takes an enum would otherwise have its body silently
+    // replaced.
+    if left.kind_id == .k_expr_path && left.children.len > 1
+        return
+    written_name: = left.get_path_name() if left.kind_id == .k_expr_path else left.text
+    if !written_name.equals(base_core.PUT_FQN)
+        return
+    named: = c.read_written_name(left)
+    if named.template == null || !named.fqn.equals("std.lang.put")
+        return
+    value: = args.get_child(1)
+    base_id: = c.env.get_clean_real_type(c.env.receiver_base_id(value.type_id))
+    $is_enum: = false
+    switch c.env.get_info(base_id)
+    case .enum_type
+        is_enum = true
+    default {}
+    if !is_enum
+        return
+    t_entry: = c.env.id_to_type.get(base_id)
+    if t_entry == null
+        return
+    // Caution: **Finish building the method table before the lookup.** A generic enum first
+    // instantiated in a method's signature has its table deferred (ensure_instance_methods in
+    // mono_queue.kspl). Until it is built, the synthesized `variant_name` is invisible, and correct
+    // code fails with "`Formattable` not implemented".
+    c.ensure_instance_methods(base_id) catch {}
+    if _user_fmt: = t_entry.get_method("fmt")
+        return // the fmt the user wrote is respected
+    switch t_entry.get_method("variant_name")
+    case .none
+        return // no variant_name was synthesized (for a const generic, for example)
+    case .some {}
+    // Caution: **Only the new argument is inferred**, the value again inside it. The writer is
+    // left alone: a chain inferred twice (`arena.text().s(…)`) is refused as a temporary.
+    // **A variant written out (`Color.red`) is written as its name**: typed once, it holds no type
+    // name any more, and inferred again it is refused as a bare `.red`. One with a payload cannot
+    // be replaced by its name, since the payload may do work.
+    if value.kind_id == .k_enum_init_call
+        c.err(value,
+            "an enum variant built with its payload cannot be interpolated. Bind it to a name \
+                first, or write the variant's name as text")
+        throw .analysis_failed
+    $name_arg: Ast_node$@ = null
+    if value.kind_id == .k_enum_init
+        quoted: = base_core.arena.text().c('"').s(value.last_child().text).c('"').take()
+        name_arg = Ast_node(.k_string, quoted, value.loc)
+    else
+        name_arg = Ast_node.build_method_call(value, "variant_name", null, 0, value.loc)
+    args.children.set(1, name_arg)
+    name_arg.infer_expr(c, 0)!

@@ -4,14 +4,15 @@
 //< only ever added, so a block swapped back still names valid nodes.
 //< A table edit is recorded by comparing each table with a copy made before the edit: cell by
 //< cell and piece by piece where the table keeps its shape, or the whole table otherwise. Column
-//< widths, formats, choices and rules, and groups of rows, changed alone are recorded alone, so a
-//< large table's cells are not copied.
+//< widths, formats, choices, rules and filters, and groups and heights of rows, changed alone are
+//< recorded alone, so a large table's cells are not copied.
 //< Caution: **Undo and redo strictly in order.** A swap restores the exact state its action started
 //< from only when every later action has been undone first.
 import "ksmd/edit/region" { Spot, Style }
 import "ksmd/model/format" { Number_format, same_format }
 import "ksmd/model/look" { same_look }
-import "ksmd/model/model" { Block, Cell, Corner, Document, Group, Piece, Table }
+import "ksmd/model/model" { Block, Cell, Column_filter, Corner, Document, Group, Piece, Row_height,
+    Table }
 import "ksmd/model/rule" { Rule, same_rule }
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -47,13 +48,15 @@ struct Piece_swap //< another version of piece `index` of the table at `table`
     piece: Piece
 
 struct Columns_swap //< another version of the layout of the table at `table`
-    //< Its column weights, formats, choices and rules, and its groups of rows.
+    //< Its column weights, formats, choices, rules and filters, and its groups and heights of rows.
     table: Sz
     weights: List<|Sz|>
     formats: List<|Number_format|>
     choices: List<|U8[]|>
     rules: List<|Rule|>
     groups: List<|Group|>
+    heights: List<|Row_height|>
+    filters: List<|Column_filter|>
 
 struct Transaction //< what one action changed, and the selection before and after it
     blocks: List<|Blocks_swap|> //< in the order they were made
@@ -151,16 +154,22 @@ fn swap(doc: Document$@, tx: Transaction$@, undo: Bool, change: Change$@, scratc
         choices: = doc.tables[s.table].choices
         rules: = doc.tables[s.table].rules
         groups: = doc.tables[s.table].groups
+        heights: = doc.tables[s.table].heights
+        filters: = doc.tables[s.table].filters
         doc.tables[s.table].weights = s.weights
         doc.tables[s.table].formats = s.formats
         doc.tables[s.table].choices = s.choices
         doc.tables[s.table].rules = s.rules
         doc.tables[s.table].groups = s.groups
+        doc.tables[s.table].heights = s.heights
+        doc.tables[s.table].filters = s.filters
         s.weights = weights
         s.formats = formats
         s.choices = choices
         s.rules = rules
         s.groups = groups
+        s.heights = heights
+        s.filters = filters
     if tx.tables.len + tx.cells.len + tx.pieces.len + tx.columns.len > 0
         change.tables = true
         change.any = true
@@ -204,13 +213,16 @@ fn record_tables(doc: Document@, before: List<|Table|>@, tx: Transaction$@, aren
                     .push(Piece_swap::{ .table = u, .index = i, .piece = b.pieces[i] })
         if !same_ids(t.weights@, b.weights@) || !same_formats(t.formats@, b.formats@) ||
             !same_texts(t.choices@, b.choices@) || !same_rules(t.rules@, b.rules@) ||
-            !same_groups(t.groups@, b.groups@)
+            !same_groups(t.groups@, b.groups@) || !same_heights(t.heights@, b.heights@) ||
+            !same_filters(t.filters@, b.filters@)
             tx.columns
                 .push(Columns_swap::{ .table = u, .weights = copied_ids(b.weights@, arena),
                 .formats = copied_formats(b.formats@, arena),
                 .choices = copied_texts(b.choices@, arena),
                 .rules = copied_rules(b.rules@, arena),
-                .groups = copied_groups(b.groups@, arena) })
+                .groups = copied_groups(b.groups@, arena),
+                .heights = copied_heights(b.heights@, arena),
+                .filters = copied_filters(b.filters@, arena) })
 
 priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists copied into `arena`
     $c: = Table(t.name, arena)
@@ -228,6 +240,8 @@ priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists co
     c.choices = copied_texts(t.choices@, arena)
     c.rules = copied_rules(t.rules@, arena)
     c.groups = copied_groups(t.groups@, arena)
+    c.heights = copied_heights(t.heights@, arena)
+    c.filters = copied_filters(t.filters@, arena)
     return c
 
 priv fn copied_texts(texts: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
@@ -273,6 +287,36 @@ priv fn same_groups(a: List<|Group|>@, b: List<|Group|>@): Bool
     for i in Range.asc(a.len)
         if a[i].first != b[i].first || a[i].last != b[i].last ||
             a[i].closed != b[i].closed
+            return false
+    return true
+
+priv fn copied_filters(filters: List<|Column_filter|>@, arena: Arena$@): List<|Column_filter|> //<
+    //< The list copied into `arena`; each entry's text stays where it was, since none changes
+    $c: = List<|Column_filter|>(arena)
+    for f in filters
+        c.push(f)
+    return c
+
+priv fn same_filters(a: List<|Column_filter|>@, b: List<|Column_filter|>@): Bool
+    if a.len != b.len
+        return false
+    for i in Range.asc(a.len)
+        if a[i].column != b[i].column || !a[i].entry.equals(b[i].entry)
+            return false
+    return true
+
+priv fn copied_heights(heights: List<|Row_height|>@, arena: Arena$@): List<|Row_height|> //<
+    //< The list copied into `arena`
+    $c: = List<|Row_height|>(arena)
+    for h in heights
+        c.push(h)
+    return c
+
+priv fn same_heights(a: List<|Row_height|>@, b: List<|Row_height|>@): Bool
+    if a.len != b.len
+        return false
+    for i in Range.asc(a.len)
+        if a[i].row != b[i].row || a[i].points != b[i].points
             return false
     return true
 

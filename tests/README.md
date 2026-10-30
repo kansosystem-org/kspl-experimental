@@ -1,6 +1,6 @@
 # tests
 
-**The repository's suites live here.** A *suite* is one KSPL program that runs many checks on the repository and prints one verdict. This folder is for whoever adds a test or reads why a gate failed; `make ci` runs everything here. How to write a suite is in [`tests/docs/HOWTO-write-a-suite.md`](docs/HOWTO-write-a-suite.md); why the suites are built this way is in [`tests/docs/DESIGN-suites.md`](docs/DESIGN-suites.md).
+**The repository's suites live here.** A *suite* is one KSPL program that runs many checks on the repository and prints one verdict. This folder is for whoever adds a test or reads why a gate failed; `make ci` runs everything here.
 
 ## Run it
 
@@ -11,11 +11,11 @@ make test-conventions   # one suite: the conventions the documents state hold in
 make test-suites        # every suite here and in ksplc's folder, in parallel under make -j
 ```
 
-Each check prints a `pass` or `FAIL` line, and the run ends with one `RESULT:` line, such as `RESULT: ALL PASS`.
+Each check prints a `pass` or `FAIL` line, and the run ends with one `RESULT:` line.
 
 ## Placement and naming
 
-Each folder here holds one kind of thing, so a folder's name tells you whether `make` runs a file or a file is material for one. The diagram shows who calls what.
+The diagram shows who calls what.
 
 ```mermaid
 flowchart LR
@@ -26,27 +26,22 @@ flowchart LR
     D -->|"calls in turn"| P["each package's tests/all"]
 ```
 
+Each folder here holds one kind of thing, so a folder's name tells you whether `make` runs a file or a file is material for one.
+
 | Folder | What lives there |
 |---|---|
 | `tests/suite/` | One suite that runs with no arguments. `make test-<name>` calls it |
 | `tests/support/` | The code a suite reads. Not what it runs against |
-| `tests/tools/` | A tool `make` calls directly, passing its subject as an argument (a file or log to inspect) |
+| `tests/tools/` | A tool `make` calls directly, passing its subject as an argument (below) |
 | `tests/debug/` | `make debug`'s entry point, `main.kspl`: it calls each package's `tests/all` in turn. One package alone is `make debug-<name>`, through that package's own `<package>/tests/main.kspl` |
-| `tests/freestanding/` | Fixtures for one check, `make test-freestanding-math`. A *fixture* is a fixed input a check runs against. Here `probe.kspl` exports std/math's functions as built for a target with no operating system. `harness.c`, a C program, calls them and compares each answer with the C library's |
+| `tests/freestanding/` | Fixtures for `make test-freestanding-math`. `probe.kspl` exports std/math's functions as built with no operating system (`#cfg(freestanding)`). `harness.c` calls them and compares each answer with the real libm |
 | `tests/docs/` | This folder's documents (["Further reading"](#further-reading) below) |
 
-**Do not put a `.kspl` directly under `tests/`**: its name would not say whether `make` runs it or it is material. Only this guide and `ksplc.cfg` live there. Settings are found by walking upwards from a file's folder, so `ksplc.cfg` must be here to cover all of `tests/`.
+**Do not put a `.kspl` directly under `tests/`**: only this guide and `ksplc.cfg` live there, which covers all of `tests/`.
 
-Inside `tests/support/`, the name splits the files in two.
+**Inside `tests/support/`, a name starting `harness` is the foundation every suite shares**, and `<suite name>_<subject>` is a piece for that suite alone. **A fix to the foundation reaches every suite here.**
 
-| Name | Role |
-|---|---|
-| `harness*` | The foundation every suite shares. **A fix here reaches every suite here** |
-| `<suite name>_<subject>` | A piece for that suite alone, used from `tests/suite/` |
-
-Caution: **Do not put a foundation under a name other than `harness`.** Then the name does not say whether a file is shared or exclusive, and nobody can tell how far a fix reaches.
-
-The foundation is split by the reason for reading it.
+Caution: **Do not put a foundation under a name other than `harness`.** Then nobody can tell how far a fix reaches.
 
 | File | The reason to read it |
 |---|---|
@@ -54,40 +49,35 @@ The foundation is split by the reason for reading it.
 | `harness_text` | Looking at strings: one UTF-8 character, a word boundary and a text's words. Also a list written in a file, the line after a mark, and whether a list holds a string |
 | `harness_sanitizer` | Building a program through ksplc with a sanitizer, and running it with the package's environment (`race` and `sanitize` build through it) |
 
-The compiler's suites have their own foundation in ksplc's folder, including the build helper and the runner of `EXPECT:` fixtures ([ksplc](../ksplc/README.md)). **Its `harness` is the layer beneath this one.** A suite here imports it as `ksplc_harness`. `harness.begin` starts it on the repository's paths. Through it, a suite ends, starts a process and runs the compiler under test.
+**ksplc's own `harness` is the layer beneath this one** ([ksplc](../ksplc/README.md)). A suite here imports it as `ksplc_harness` to end, start a process and run the compiler under test.
 
 ## The suites
 
-Each suite has a make target, `make test-<name>`, and its opening comment says what it pins down.
+Each suite has a make target, `make test-<name>`, and its opening comment says what it pins down. **The list of suites is `SUITES` in [`mk/test.mk`](../mk/test.mk)**, and `make help` prints one line for each target.
 
-**The list of suites is `SUITES` in [`mk/test.mk`](../mk/test.mk)**, and `make help` prints one line for each target.
+**Suites that check only the compiler live in ksplc's folder** ([`ksplc/README.md`](../ksplc/README.md)), and `make test-<name>` runs them from here too ("What stays in the root tests folder" in [`tests/docs/DESIGN-suites.md`](docs/DESIGN-suites.md)).
 
-**Suites that check only the compiler live in ksplc's folder** ([`ksplc/README.md`](../ksplc/README.md)), and `make test-<name>` runs them from here too. What stays here reads more than one package ("What stays in the root tests folder" in [`tests/docs/DESIGN-suites.md`](docs/DESIGN-suites.md)).
-
-**Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-ksai-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken or random inputs to find one that crashes it; the *seeds* are the valid inputs those are made from.
+**Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-ksai-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken inputs, made from valid *seeds*, to find one that crashes it.
 
 ## The tools in tests/tools
 
-These are checks that read one file or log `make` hands them, rather than the whole tree.
-
 | Thing | How it is called |
 |---|---|
-| `tests/tools/llvm_ir_abi_check.kspl` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form of a compiled program). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
+| `tests/tools/llvm_ir_abi_check.kspl` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
 | `tests/tools/perf_guard.kspl` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
 
 ## The fixture folders
 
-These folders hold material that a package's own checks run against; this table says which command runs each.
+Other packages' material is run by their own `Makefile`:
 
 | Folder | How it is called |
 |---|---|
-| `tests/freestanding/` | `make test-freestanding-math`, comparing `#cfg(freestanding)`'s std/math (the build with no operating system under it) against the real libm |
-| `ksos/tests/` | ksos's own tests, run by its own [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI). They are the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs |
-| `ksmd/tests/browser/` | ksmd's checks on its page in a browser, run by its own [`ksmd/Makefile`](../ksmd/Makefile) (`make test-ksmd-browser` from here) |
+| `ksos/tests/` | [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI): the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs |
+| `ksmd/tests/browser/` | [`ksmd/Makefile`](../ksmd/Makefile) (`make test-ksmd-browser` from here): ksmd's checks on its page in a browser |
 
 ## Files near the limit and how they split
 
-One file here has its split planned before it reaches the line limit for one file. The table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). A package's tests live in its `tests/`, so how they split is in that package's README.
+How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). A package's tests split as that package's README says.
 
 | File | What to split out | Destination | Why it parts there |
 | :-- | :-- | :-- | :-- |

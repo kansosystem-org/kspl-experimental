@@ -1,0 +1,376 @@
+//< The server half of TLS: a certificate with its key, and each connection's TLS on a socket
+//< It needs OpenSSL 1.1.1 or later. **Every call returns at once**: a connection's TLS never waits
+//< on its socket, so one server thread can serve many connections ("The server half never waits"
+//< in `ksbind/docs/DESIGN-bindings.md`). The caller keeps each deadline.
+//< **Every byte crosses through `std/net`**, as in `ksbind/tls.kspl`, so no SIGPIPE is raised.
+//< Caution: **A passphrase is never asked for.** A key protected by one is refused, so no start
+//< waits for a person at the keyboard.
+import "ksbind/tls"
+import "std/math"
+import "std/mem" + { Arena, dealloc }
+import "std/net"
+import "std/sys"
+
+// OpenSSL's C API that only the server half calls. `long` crosses as in `ksbind/tls.kspl`.
+typedef Pem_password_cb = fn(buf: U8$@, size: I32, rwflag: I32, u: Void$@): I32 //<
+    //< what OpenSSL calls for a key's passphrase (`pem_password_cb`)
+
+#link("ssl")
+#link("crypto")
+extern "C"
+    fn TLS_server_method(): tls.SSL_METHOD@
+    fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, x: tls.X509$@): I32
+    fn SSL_CTX_use_PrivateKey(ctx: tls.SSL_CTX$@, pkey: tls.EVP_PKEY$@): I32
+    fn SSL_CTX_check_private_key(ctx: tls.SSL_CTX$@): I32
+    fn SSL_CTX_set_cipher_list(ctx: tls.SSL_CTX$@, list: Void@): I32
+    fn SSL_CTX_set_options(ctx: tls.SSL_CTX$@, op: Sz)
+    fn SSL_set_accept_state(ssl: tls.SSL$@)
+    fn SSL_is_init_finished(ssl: tls.SSL@): I32
+    fn SSL_pending(ssl: tls.SSL@): I32
+    fn BIO_new_mem_buf(buf: Void@, len: I32): tls.BIO$@
+    fn PEM_read_bio_X509(bp: tls.BIO$@, x: Void$@, cb: Void@, u: Void$@): tls.X509$@
+    fn PEM_read_bio_PrivateKey(bp: tls.BIO$@, x: Void$@, cb: Pem_password_cb, u: Void$@):
+        tls.EVP_PKEY$@
+    fn X509_free(x: tls.X509$@)
+    fn EVP_PKEY_free(pkey: tls.EVP_PKEY$@)
+    fn X509_check_issued(issuer: tls.X509$@, subject: tls.X509$@): I32
+    fn X509_get0_notBefore(x: tls.X509$@): tls.ASN1_TIME@
+    fn X509_get0_notAfter(x: tls.X509$@): tls.ASN1_TIME@
+    fn ASN1_TIME_diff(pday: I32$@, psec: I32$@, from: tls.ASN1_TIME@, to: tls.ASN1_TIME@): I32
+    fn ASN1_TIME_print(bp: tls.BIO$@, t: tls.ASN1_TIME@): I32
+    fn X509_get_subject_name(x: tls.X509$@): tls.X509_NAME$@
+    fn X509_NAME_oneline(name: tls.X509_NAME$@, buf: U8$@, size: I32): U8$@
+
+priv const SSL_CTRL_CHAIN_CERT: I32 = 89 //< SSL_CTRL_CHAIN_CERT, behind SSL_CTX_add0_chain_cert
+priv const SSL_OP_NO_RENEGOTIATION: Sz = 0x40000000 //< SSL_OP_NO_RENEGOTIATION
+priv const TLS_RECORD_HANDSHAKE: U8 = 22 //< the first byte of every TLS handshake's first record
+priv const MAX_CHAIN: Sz = 10 //< the most certificates a chain file is read for
+priv const TEXT_CAP: Sz = 256 //< room for the subject's or the expiry's text
+priv const READ_CHUNKS: Sz = 4 //< the most socket reads one `read` makes before it gives way
+
+// Caution: **Name the TLS 1.2 suites, and leave TLS 1.3's to OpenSSL.** OpenSSL's own 1.2 list
+// keeps suites without forward secrecy and CBC suites. Every TLS 1.3 suite is AEAD already.
+priv const TLS12_CIPHERS: U8[] = "ECDHE+AESGCM:ECDHE+CHACHA20\0" //<
+    //< the TLS 1.2 suites taken: an ephemeral key exchange and an AEAD cipher, nothing else
+
+pub enum Tls_setup_error //< why a certificate and its key could not serve
+    no_certificate //< the certificate text holds no PEM certificate
+    certificate_refused //< OpenSSL refused the certificate: a key too weak for its level, say
+    chain_out_of_order //< a certificate after the first did not issue the one before it
+    no_key //< the key text holds no PEM private key that can be read
+    key_encrypted //< a passphrase protects the key, and none is ever asked for
+    key_mismatch //< the key does not belong to the first certificate
+    ctx_failed //< OpenSSL setup failed (SSL_CTX_new and similar)
+
+pub enum Tls_session_error //< why a connection's TLS did not go on
+    would_block //< the socket has nothing for it yet, or takes nothing more: call again when ready
+    not_tls //< the peer's first byte opens no TLS handshake: plain HTTP on this port, say
+    handshake_failed //< the handshake was refused: no version or cipher in common, broken data
+    io_failed //< the socket failed, or the peer closed it in the middle of the handshake
+
+pub struct Tls_server //< a certificate chain and its key, ready to answer handshakes
+    priv ctx: tls.SSL_CTX$@
+    pub chain_len: Sz //< how many certificates the chain holds, the server's own first
+    pub lone_leaf: Bool //< one certificate another issued: its intermediate is likely missing
+    pub starts_at: I64 //< when the first certificate becomes valid, in Unix epoch seconds
+    pub expires_at: I64 //< when the first certificate stops being valid, in Unix epoch seconds
+    pub subject: U8[] //< the first certificate's subject, as OpenSSL prints it on one line
+    pub expiry: U8[] //< the first certificate's expiry, as OpenSSL prints a time
+
+#export
+fn ksbind_refuse_passphrase(_buf: U8$@, _size: I32, _rwflag: I32, u: Void$@): I32 //<
+    //< Answers a passphrase request with none, and marks that one was asked for
+    //< Caution: **Never leave the callback null.** OpenSSL's own then prompts on the terminal, and
+    //< a server started unattended waits there for good.
+    asked: = Bool$@::u
+    asked$ = true
+    return -1
+
+priv fn seconds_until(t: tls.ASN1_TIME@): I64 //< how far from now `t` lies, negative for a past one
+    $days: I32 = 0
+    $secs: I32 = 0
+    if ASN1_TIME_diff(days@, secs@, null, t) != 1
+        return 0I64
+    return I64::days * 86400I64 + I64::secs
+
+priv fn time_text(t: tls.ASN1_TIME@, arena: Arena$@): U8[] //< `t` as OpenSSL prints a time
+    bio: = tls.BIO_new(tls.BIO_s_mem())
+    if bio == null
+        return ""
+    defer tls.BIO_free(bio)
+    $buf: U8[TEXT_CAP] = ::{}
+    if ASN1_TIME_print(bio, t) != 1
+        return ""
+    n: = tls.BIO_read(bio, Void$@::buf@, I32::TEXT_CAP)
+    if n <= 0
+        return ""
+    return arena.dup_str(U8[]::{ .ptr = buf@, .len = n })
+
+priv fn subject_text(x: tls.X509$@, arena: Arena$@): U8[] //< the subject on one line (`/CN=...`)
+    $buf: U8[TEXT_CAP] = ::{}
+    if X509_NAME_oneline(X509_get_subject_name(x), buf@, I32::TEXT_CAP) == null
+        return ""
+    $n: Sz = 0
+    for n < TEXT_CAP && buf[n] != 0U8
+        n += 1
+    return arena.dup_str(U8[]::{ .ptr = buf@, .len = n })
+
+priv fn pem_bio(text: U8[]): tls.BIO$@? //< a read-only memory BIO over `text`
+    //< None where OpenSSL cannot make one, or the text is longer than its length can say.
+    if text.len > tls.MAX_TLS_IO_LEN
+        return .none
+    bio: = BIO_new_mem_buf(Void@::text.ptr, I32::text.len)
+    if bio == null
+        return .none
+    return .some(bio)
+
+priv fn use_chain(r: Tls_server$@, cert_pem: U8[], arena: Arena$@): Void!Tls_setup_error //<
+    //< Gives the context the chain in `cert_pem`, the server's own certificate first
+    bio: tls.BIO$@ = pem_bio(cert_pem) catch
+        throw .no_certificate
+    defer tls.BIO_free(bio)
+    first: = PEM_read_bio_X509(bio, null, null, null)
+    if first == null
+        throw .no_certificate
+    // `SSL_CTX_use_certificate` takes a reference of its own, so this one is freed here.
+    defer X509_free(first)
+    if SSL_CTX_use_certificate(r.ctx, first) != 1
+        throw .certificate_refused
+    r.starts_at = sys.wall_seconds() + seconds_until(X509_get0_notBefore(first))
+    r.expires_at = sys.wall_seconds() + seconds_until(X509_get0_notAfter(first))
+    r.subject = subject_text(first, arena)
+    r.expiry = time_text(X509_get0_notAfter(first), arena)
+    r.chain_len = 1
+    $prev: tls.X509$@ = first
+    self_issued: = X509_check_issued(first, first) == tls.X509_V_OK
+    for r.chain_len < MAX_CHAIN
+        next: = PEM_read_bio_X509(bio, null, null, null)
+        if next == null
+            break
+        if X509_check_issued(next, prev) != tls.X509_V_OK
+            X509_free(next)
+            throw .chain_out_of_order
+        // `add0` takes this reference over, and the context frees it with itself.
+        if tls.SSL_CTX_ctrl(r.ctx, SSL_CTRL_CHAIN_CERT, 0, Void$@::next) != 1
+            X509_free(next)
+            throw .ctx_failed
+        prev = next
+        r.chain_len += 1
+    // The read past the last certificate leaves "no start line" in the error queue.
+    tls.ERR_clear_error()
+    r.lone_leaf = r.chain_len == 1 && !self_issued
+
+priv fn use_key(ctx: tls.SSL_CTX$@, key_pem: U8[]): Void!Tls_setup_error //<
+    //< Gives the context the key in `key_pem`, and checks that it belongs to the certificate
+    bio: tls.BIO$@ = pem_bio(key_pem) catch
+        throw .no_key
+    defer tls.BIO_free(bio)
+    $asked: = false
+    key: = PEM_read_bio_PrivateKey(bio, null, ksbind_refuse_passphrase, Void$@::asked@)
+    tls.ERR_clear_error()
+    if asked
+        if key != null
+            EVP_PKEY_free(key)
+        throw .key_encrypted
+    if key == null
+        throw .no_key
+    defer EVP_PKEY_free(key)
+    if SSL_CTX_use_PrivateKey(ctx, key) != 1 || SSL_CTX_check_private_key(ctx) != 1
+        tls.ERR_clear_error()
+        throw .key_mismatch
+
+impl Tls_server
+    pub fn load( //< reads a PEM certificate chain and its PEM key, and checks they belong together
+        //< It reads text, not files, so where the files are and who may read them stay the
+        //< caller's. Neither text is kept: OpenSSL holds its own copy.
+        cert_pem: U8[], //< the server's certificate first, then each one that issued the last
+        key_pem: U8[], //< the private key, unencrypted
+        arena: Arena$@, //< holds `subject` and `expiry`
+    ): Tls_server$@!Tls_setup_error
+        ctx: = tls.SSL_CTX_new(TLS_server_method())
+        if ctx == null
+            throw .ctx_failed
+        s: = mem.alloc_as<|Tls_server|>()
+        s.ctx = ctx
+        // Caution: **State the floor and the 1.2 suites outright**, as the client does: otherwise
+        // openssl.cnf decides them. Renegotiation is off: a peer could make it cost the server CPU.
+        SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION)
+        if tls.SSL_CTX_ctrl(ctx, tls.SSL_CTRL_SET_MIN_PROTO_VERSION, tls.TLS1_2_VERSION, null) != 1
+            || SSL_CTX_set_cipher_list(ctx, Void@::TLS12_CIPHERS.ptr) != 1
+            s.free()
+            throw .ctx_failed
+        use_chain(s, cert_pem, arena) catch e
+            s.free()
+            throw e
+        use_key(ctx, key_pem) catch e
+            s.free()
+            throw e
+        return s
+
+impl Tls_server: Manual_free //< it owns its OpenSSL context and frees it with `free()`
+    pub fn free(r: Self$@) //< frees the context; sessions started from it hold their own reference
+        tls.SSL_CTX_free(r.ctx)
+        dealloc(Void$@::r)
+
+pub struct Tls_session //< one connection's TLS, server side, on a non-blocking `std/net` socket
+    //< Caution: **It does not own the socket.** The caller closes the socket after `free()`.
+    priv ssl: tls.SSL$@
+    priv started: Bool //< whether the peer's first byte has been looked at
+    priv held_from: Sz //< where the bytes in `held` not yet sent start
+    priv held_to: Sz //< where they end
+    priv held: U8[tls.IO_CHUNK] //< bytes taken from OpenSSL that the socket did not take yet
+
+impl Tls_session
+    pub fn start(server: Tls_server$@): Tls_session$@!tls.Tls_error //<
+        //< Starts the TLS of one accepted connection; the handshake runs inside `read`
+        ssl: = tls.SSL_new(server.ctx)
+        if ssl == null
+            throw .ctx_failed
+        // Caution: **Give OpenSSL memory, never the socket**, for the reason in `ksbind/tls.kspl`.
+        rbio: = tls.BIO_new(tls.BIO_s_mem())
+        wbio: = tls.BIO_new(tls.BIO_s_mem())
+        if rbio == null || wbio == null
+            tls.BIO_free(rbio)
+            tls.BIO_free(wbio)
+            tls.SSL_free(ssl)
+            throw .ctx_failed
+        tls.SSL_set_bio(ssl, rbio, wbio)
+        SSL_set_accept_state(ssl)
+        s: = mem.alloc_as<|Tls_session|>()
+        s.ssl = ssl
+        s.started = false
+        s.held_from = 0
+        s.held_to = 0
+        return s
+
+    pub fn ready(r: Self$@): Bool //< whether the handshake has finished
+        return SSL_is_init_finished(r.ssl) == 1
+
+    pub fn pending(r: Self$@): Bool //< whether bytes wait for the socket to take them
+        //< While true, watch the socket for writable and call `flush`.
+        return r.held_from < r.held_to ||
+            tls.BIO_ctrl_pending(tls.SSL_get_wbio(r.ssl)) > 0
+
+    pub fn buffered(r: Self$@): Bool //< whether bytes already received wait inside OpenSSL
+        //< While true, call `read` again: **no socket wait reports these bytes**, since they have
+        //< left the socket. A `read` that gives `would_block` leaves none behind.
+        return SSL_pending(r.ssl) > 0 ||
+            tls.BIO_ctrl_pending(tls.SSL_get_rbio(r.ssl)) > 0
+
+    pub fn flush(r: Self$@, tcp: net.Tcp_stream$@): Void!Tls_session_error //<
+        //< Sends what waits for the socket; `would_block` where the socket took only part
+        for
+            if r.held_from < r.held_to
+                rest: = U8[]::{ .ptr = r.held[r.held_from]@, .len = r.held_to - r.held_from }
+                n: = tcp.write(rest) catch e
+                    if e == net.Net_error.would_block
+                        throw .would_block
+                    throw .io_failed
+                if n == 0
+                    throw .io_failed
+                r.held_from += n
+                continue
+            wbio: = tls.SSL_get_wbio(r.ssl)
+            if tls.BIO_ctrl_pending(wbio) == 0
+                return
+            m: = tls.BIO_read(wbio, Void$@::r.held[0]@, I32::tls.IO_CHUNK)
+            if m <= 0
+                throw .io_failed
+            r.held_from = 0
+            r.held_to = m
+
+    priv fn flush_some(r: Self$@, tcp: net.Tcp_stream$@): Void!Tls_session_error //<
+        //< Sends what it can; bytes the socket does not take yet stay held
+        r.flush(tcp) catch e
+            if e != Tls_session_error.would_block
+                throw e
+
+    priv fn take_more(r: Self$@, tcp: net.Tcp_stream$@): Bool!Tls_session_error //<
+        //< Hands OpenSSL the next bytes the socket holds; false where the peer closed TCP
+        $chunk: U8[tls.IO_CHUNK] = ::{}
+        n: = tcp.read(U8$[]::chunk) catch e
+            if e == net.Net_error.would_block
+                throw .would_block
+            throw .io_failed
+        if n == 0
+            return false
+        // **Look at the very first byte before OpenSSL does**, so the caller can answer plain
+        // HTTP in plain text: OpenSSL's own refusal is a TLS alert, which a browser shows as
+        // nothing.
+        if !r.started
+            r.started = true
+            if chunk[0] != TLS_RECORD_HANDSHAKE
+                throw .not_tls
+        if tls.BIO_write(tls.SSL_get_rbio(r.ssl), Void@::chunk@, I32::n) != I32::n
+            throw .io_failed
+        return true
+
+    pub fn read( //< receives and returns how much arrived; 0 once the peer has ended
+        //< It runs the handshake first, and gives one record at most: **call it again while
+        //< `buffered` is true**. 0 comes for a close_notify and for a TCP close alike: the
+        //< request's own length shows a cut request ("The server half never waits" in
+        //< `ksbind/docs/DESIGN-bindings.md`).
+        r: Self$@,
+        tcp: net.Tcp_stream$@,
+        buf: U8$[], //< where the bytes go
+    ): Sz!Tls_session_error
+        $chunks: Sz = 0
+        for
+            tls.ERR_clear_error()
+            n: = tls.SSL_read(r.ssl, Void$@::buf.ptr, I32::tls.clamp_tls_io_len(buf.len))
+            if n > 0
+                r.flush_some(tcp)!
+                return Sz::n
+            err: = tls.SSL_get_error(r.ssl, n)
+            // An alert that ends the handshake, or a key update, goes out before anything else.
+            r.flush_some(tcp) catch e
+                if err == tls.SSL_ERROR_WANT_READ
+                    throw e
+            if err == tls.SSL_ERROR_ZERO_RETURN
+                return 0
+            if err != tls.SSL_ERROR_WANT_READ
+                tls.ERR_clear_error()
+                throw .io_failed if r.ready() else .handshake_failed
+            // Caution: **Give way after a few reads**, or one fast peer holds the thread. OpenSSL
+            // has taken in every byte read so far, so what is left stays in the socket, which the
+            // caller's wait reports again.
+            if chunks >= READ_CHUNKS
+                throw .would_block
+            chunks += 1
+            if !r.take_more(tcp)!
+                if r.ready()
+                    return 0
+                throw .io_failed
+
+    pub fn write( //< encrypts some of `buf` and returns how much it took; a partial take is normal
+        //< **It takes nothing while bytes still wait for the socket** (`would_block`), so a slow
+        //< reader holds at most one record per connection.
+        r: Self$@,
+        tcp: net.Tcp_stream$@,
+        buf: U8[], //< the bytes to send
+    ): Sz!Tls_session_error
+        r.flush(tcp)!
+        want: = math.min(buf.len, tls.IO_CHUNK)
+        if want == 0
+            return 0
+        tls.ERR_clear_error()
+        n: = tls.SSL_write(r.ssl, Void@::buf.ptr, I32::want)
+        if n <= 0
+            tls.ERR_clear_error()
+            throw .io_failed
+        r.flush_some(tcp)!
+        return Sz::n
+
+    pub fn close(r: Self$@, tcp: net.Tcp_stream$@) //<
+        //< Queues the close_notify and sends what the socket takes at once; it never waits
+        //< A peer that does not read loses the close_notify, and needs none to see the end.
+        if r.ready()
+            tls.ERR_clear_error()
+            tls.SSL_shutdown(r.ssl)
+            tls.ERR_clear_error()
+        r.flush(tcp) catch {}
+
+impl Tls_session: Manual_free //< it owns its OpenSSL state and frees it with `free()`
+    pub fn free(r: Self$@) //< frees the TLS state, sending nothing; the socket stays the caller's
+        tls.SSL_free(r.ssl)
+        dealloc(Void$@::r)

@@ -150,16 +150,20 @@ install: self-host self-host-ship install-lsp
 
 # **On Linux, `make install` then ties `.ksmd` to its launcher** (`install-desktop` in
 # `mk/ksmd.mk`); elsewhere a person ties it by hand, as the HOWTO says. The page needs clang's
-# wasm32 tools, which building ksplc does not. **Where they are missing it is a note**, so `ksplc`
-# still installs with a C compiler and Make alone; `ksmd/Makefile`'s `web-tools` says what is missing.
+# wasm32 tools, and the launcher's kssrv needs OpenSSL; building ksplc needs neither. **Where one is
+# missing it is a note**, so `ksplc` still installs with a C compiler and Make alone.
+# `ksmd/Makefile`'s `web-tools` and the root's `kssrv-libs` each say what is missing.
 ifeq ($(PLATFORM),linux)
 define install_desktop_step
-	@if why=$$($(MAKE) --no-print-directory -C ksmd web-tools 2>&1); then \
+	@ok=1; \
+	tools=$$($(MAKE) --no-print-directory -C ksmd web-tools 2>&1) || ok=0; \
+	libs=$$($(MAKE) --no-print-directory kssrv-libs 2>&1) || ok=0; \
+	if [ "$$ok" = 1 ]; then \
 		$(MAKE) --no-print-directory install-desktop; \
 	else \
-		echo "# note: .ksmd is not tied to its launcher: its page cannot be built here."; \
-		printf '%s\n' "$$why" | sed -e '/^make/d' -e 's/^/#   /'; \
-		echo "#   Install the tools named, then run: make install-desktop"; \
+		echo "# note: .ksmd is not tied to its launcher: what the launcher needs cannot be built here."; \
+		printf '%s\n' "$$tools" "$$libs" | sed -e '/^make/d' -e '/^$$/d' -e 's/^/#   /'; \
+		echo "#   Install what is named, then run: make install-desktop"; \
 	fi
 endef
 endif
@@ -205,7 +209,7 @@ OPENER_SRC := tools/opener.kspl tools/opener_aim.kspl
 # **Keep `Path=`**: a double-click stands in the home or `/`. **`%f`, not `%F`**: one file per run.
 # **The absolute path comes from `$$PWD`**, as `$(CURDIR)` is unquoted and splits at a space.
 define desktop_entry
-	@here="$$PWD"; printf '%s\n' \
+	@mkdir -p "$(dir $(1))"; here="$$PWD"; printf '%s\n' \
 		'[Desktop Entry]' 'Type=Application' 'Version=1.0' \
 		'Name=$(2)' 'Comment=Open this file with $(2) in a browser' \
 		"Exec=$$here/$(3) %f" \
@@ -224,7 +228,7 @@ endef
 # `xdg-mime install` reads. Linux ties a program to a MIME type, not to an extension, so an
 # undeclared extension reads as `application/octet-stream`, which no program can be tied to alone.
 define mime_entry
-	@printf '%s\n' \
+	@mkdir -p "$(dir $(1))"; printf '%s\n' \
 		'<?xml version="1.0" encoding="UTF-8"?>' \
 		'<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">' \
 		'  <mime-type type="$(2)">' \

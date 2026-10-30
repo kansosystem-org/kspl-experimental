@@ -26,6 +26,10 @@ priv $cut_at: Sz = 0
 priv $cut_bytes: Sz = 0
 // How many times `program_at` has been called, counted only to find the armed call.
 priv $calls: Sz = 0
+// The armed power cut during an erase, counted apart from the writes (see `arm_erase_cut`).
+priv $erase_cut_at: Sz = 0
+priv $erase_cut_bytes: Sz = 0
+priv $erase_calls: Sz = 0
 
 priv fn read_at(at: Sz, dst: U8$[])
     for i in Range.asc(dst.len)
@@ -54,6 +58,17 @@ priv fn program_at(at: Sz, src: U8[]): Bool //<
 
 priv fn erase_sector_at(at: Sz): Bool
     base: = at - (at % sector)
+    erase_calls += 1
+    if erase_cut_at != 0 && erase_calls == erase_cut_at
+        // Disarmed after one cut, as in `program_at`. **Only the sector's first bytes are erased**;
+        // the rest keeps what it held, as an erase stopped partway leaves it.
+        erase_cut_at = 0
+        $n: Sz = erase_cut_bytes
+        if n > sector
+            n = sector
+        part: = cell.sub_mut(base, n)
+        part.fill(0xff)
+        return false
     v: = cell.sub_mut(base, sector)
     v.fill(0xff)
     erases += 1
@@ -74,6 +89,9 @@ pub fn make( //< a `Store` on `buf`, erased and ready to use; the caller keeps `
     cut_at = 0
     cut_bytes = 0
     calls = 0
+    erase_cut_at = 0
+    erase_cut_bytes = 0
+    erase_calls = 0
     buf.fill(0xff)
     return Store::{
         .read_at = read_at,
@@ -93,6 +111,16 @@ pub fn arm_cut( //< arms one power cut; only the tests use it
     cut_at = at
     cut_bytes = bytes
     calls = 0
+
+pub fn arm_erase_cut( //< arms one power cut during an erase; only the tests use it
+    //< The cut hits the `at`-th `erase_sector` call, once. It is counted apart from `arm_cut`, so a
+    //< test can move a cut over the erases alone.
+    at: Sz, //< the `erase_sector` call to cut, counting from 1; 0 means "do not arm"
+    bytes: Sz, //< how many bytes from the sector's start are erased before the cut
+)
+    erase_cut_at = at
+    erase_cut_bytes = bytes
+    erase_calls = 0
 
 pub fn tear( //< corrupts a finished record afterwards; only the tests use it
     //< Makes `len` bytes from `at` look half-written (it mixes 0s in), as a power cut leaves them.

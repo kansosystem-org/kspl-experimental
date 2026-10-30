@@ -3,7 +3,7 @@
 //< is the tiny Qwen3 model in `ksai/tests/qwen_data/`. Its vocabulary holds Qwen's markers, and
 //< its chat template is Qwen3-Instruct-2507's. Its answers mean nothing, so the tests check the
 //< server's own work only. The HTTP round trip is `ksai/tests/examples_chat_http.kspl`.
-import "ksai/examples/chat_server/engine" { Engine, Finish, Generated, Picker }
+import "ksai/examples/chat_server/engine" { Engine, Finish, Generated, Picker, Unwatched }
 import "ksai/examples/chat_server/reply"
 import "ksai/examples/chat_server/request"
 import "ksai/examples/chat_server/template"
@@ -173,7 +173,8 @@ fn test_chat_tool_calls_read(arena: Arena$@) //<
             \"leave\"}}\n</tool_call>", arena)
     assert(one.calls.len == 1 && one.content.len == 0 &&
         one.calls.get(0).name.equals("search") &&
-        one.calls.get(0).arguments.equals("{\"text\":\"leave\"}"), "one call is read whole")
+        one.calls.get(0).arguments.equals("{\"text\": \"leave\"}"),
+        "one call is read whole, its arguments as the model wrote them")
     two: =
         split("Let me look.\n<tool_call>\n{\"name\": \"list\", \"arguments\": {\"path\": \
             \"\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"read\", \"arguments\": \"{\\\"path\\\": \
@@ -185,12 +186,19 @@ fn test_chat_tool_calls_read(arena: Arena$@) //<
     open: = split("<tool_call>\n{\"name\": \"list\", \"arguments\": {}}", arena)
     assert(open.calls.len == 1 && open.calls.get(0).arguments.equals("{}"),
         "a last block with no closing tag is read")
-    broken_text: = "Here.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\n</tool_call>"
+    // **A block whose start reads as a call is a call**: its arguments stay cut where it ends.
+    cut: =
+        split("Here.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\n</tool_call>", arena)
+    assert(cut.calls.len == 1 && cut.content.equals("Here.") &&
+        cut.calls.get(0).arguments.equals("{\n"),
+        U8$[]::arena.text().s("a call cut short keeps its arguments as they stand: '")
+        .s(cut.content).s("'").take())
+    broken_text: = "Here.\n<tool_call>\n{\"name\": search}\n</tool_call>"
     broken: = split(broken_text, arena)
     assert(broken.calls.len == 0 && broken.content.equals(broken_text),
-        U8$[]::arena.text().s("a broken block stays in the content as written: '")
+        U8$[]::arena.text().s("a block that is no call stays in the content as written: '")
         .s(broken.content).s("'").take())
-    verdict.pass("each call is read, text around them is the content, a broken block stays text")
+    verdict.pass("each call is read, text around them is the content, a block no call stays text")
 
 fn test_chat_answer_shape(arena: Arena$@) //<
     //< The answer holds every field an OpenAI-style client reads, the calls' arguments as text
@@ -217,7 +225,7 @@ fn test_chat_answer_shape(arena: Arena$@) //<
         call.get("id").as_str().unwrap_or("").equals("call_3") &&
         call.get("type").as_str().unwrap_or("").equals("function") &&
         call.get("function").get("name").as_str().unwrap_or("").equals("search") &&
-        args.equals("{\"text\":\"leave\"}"), "the message, the call and its id are as sent")
+        args.equals("{\"text\": \"leave\"}"), "the message, the call and its id are as sent")
     assert(v.get("choices").get_at(0).get("finish_reason").as_str().unwrap_or("")
         .equals("tool_calls"), "an answer with calls finishes with tool_calls")
     u: = v.get("usage")
@@ -235,6 +243,16 @@ fn test_chat_answer_shape(arena: Arena$@) //<
         first.get("message").find("tool_calls").is_none() &&
         first.get("finish_reason").as_str().unwrap_or("").equals("length"),
         "plain text is the content, with no calls, and a cut answer finishes with length")
+    // A call cut by the limit stays a call, as a stream has sent it, but finishes with length.
+    late: =
+        split("<tool_call>\n{\"name\": \"run\", \"arguments\": {\"cmd\": \"rm -rf /tmp/a", arena)
+    early: = split("<tool_call>\n{\"name\": \"ru", arena)
+    assert(late.calls.len == 1 && early.calls.len == 0 &&
+        reply.finish_reason(late@, .length).equals("length") &&
+        reply.finish_reason(early@, .length).equals("length") &&
+        reply.finish_reason(late@, .stop).equals("tool_calls"),
+        "a call cut by the limit, early or late, finishes with length, and only a whole one with \
+            tool_calls")
     verdict.pass("id, object, model, message, calls, finish_reason and usage are all there")
 
 // ==========================================
@@ -270,10 +288,10 @@ fn test_chat_stops_and_limits(arena: Arena$@) //<
     $e: = engine_of(arena)
     prompt: = rendered(PLAIN_REQUEST, e@, arena)
     $pick: = greedy()
-    free_run: = e.generate(prompt.slice(), 6, pick@, arena)
+    free_run: = generated(e@, prompt.slice(), 6, pick@, arena)
     assert(free_run.tokens.len == 6 && free_run.finish == Finish.length,
         U8$[]::arena.text().s("the free run gave \{free_run.tokens.len\} tokens, not 6").take())
-    one: = e.generate(prompt.slice(), 1, pick@, arena)
+    one: = generated(e@, prompt.slice(), 1, pick@, arena)
     assert(same_start(one@, free_run.tokens@, 1) && one.finish == Finish.length,
         "a limit of one gives the first token, and finishes with length")
     // The last token that has not come before ends the run there, and no earlier one does.
@@ -283,18 +301,29 @@ fn test_chat_stops_and_limits(arena: Arena$@) //<
             k = i
     held: = e.marks
     e.marks.im_end = free_run.tokens.get(k)
-    stopped: = e.generate(prompt.slice(), 6, pick@, arena)
+    stopped: = generated(e@, prompt.slice(), 6, pick@, arena)
     e.marks = held
     assert(same_start(stopped@, free_run.tokens@, k) && stopped.finish == Finish.stop,
         U8$[]::arena.text().s("the end marker as token \{k\} gave \{stopped.tokens.len\} tokens")
         .take())
     e.context = prompt.len + 1
-    full: = e.generate(prompt.slice(), 6, pick@, arena)
+    full: = generated(e@, prompt.slice(), 6, pick@, arena)
     e.context = CONTEXT
     assert(same_start(full@, free_run.tokens@, 2) && full.finish == Finish.length,
         U8$[]::arena.text().s("a context one past the prompt gave \{full.tokens.len\} tokens, ")
         .s("not 2").take())
     verdict.pass("the end marker stops before itself; the limit and a full context cut the answer")
+
+fn generated(e: Engine$@, prompt: I32[], limit: Sz, pick: Picker$@, arena: Arena$@): Generated //<
+    //< A generation that no watch stops, as an answer sent whole runs
+    $quiet: = Unwatched::{ .none = true }
+    return e.generate(prompt, limit, pick, quiet@, arena)
+
+fn fed(e: Engine$@, prompt: I32[]): Sz //< the tokens a feed that no watch stops keeps
+    $quiet: = Unwatched::{ .none = true }
+    kept: = e.feed(prompt, quiet@) catch
+        panic("a feed with no watch reads the whole prompt")
+    return kept
 
 fn last_scores(e: Engine$@, arena: Arena$@): List<|F32|> //< a copy of the engine's scores
     $out: = List<|F32|>(arena)
@@ -317,17 +346,17 @@ fn test_chat_cache_kept_matches_fresh(arena: Arena$@) //<
     $kept: = engine_of(arena)
     first: = rendered(PLAIN_REQUEST, kept@, arena)
     $pick: = greedy()
-    answer: = kept.generate(first.slice(), 4, pick@, arena)
+    answer: = generated(kept@, first.slice(), 4, pick@, arena)
     follow: = arena.text().s("{\"messages\":[{\"role\":\"user\",\"content\":")
         .s("\"How many days of paid leave?\"},{\"role\":\"assistant\",\"content\":\"")
         .s("Ten\"},{\"role\":\"user\",\"content\":\"And sick days?\"}]}").take()
     second: = rendered(follow, kept@, arena)
-    reused: = kept.feed(second.slice())
+    reused: = fed(kept@, second.slice())
     assert(reused >= first.len,
         U8$[]::arena.text().s("only \{reused\} of the first prompt's \{first.len\} tokens were ")
         .s("kept").take())
     $fresh: = engine_of(arena)
-    fresh_reused: = fresh.feed(second.slice())
+    fresh_reused: = fed(fresh@, second.slice())
     assert(fresh_reused == 0 && answer.tokens.len == 4, "a fresh engine keeps nothing")
     kept_scores: = last_scores(kept@, arena)
     fresh_scores: = last_scores(fresh@, arena)
@@ -340,9 +369,9 @@ fn test_chat_cache_kept_matches_fresh(arena: Arena$@) //<
         rendered("{\"messages\":[{\"role\":\"system\",\"content\":\"Be \
             brief.\"},{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}", kept@,
         arena)
-    parted: = kept.feed(other.slice())
+    parted: = fed(kept@, other.slice())
     $fresh2: = engine_of(arena)
-    _none: = fresh2.feed(other.slice())
+    _none: = fed(fresh2@, other.slice())
     parted_scores: = last_scores(kept@, arena)
     fresh2_scores: = last_scores(fresh2@, arena)
     assert(parted > 0 && parted < first.len && same_scores(parted_scores@, fresh2_scores@),

@@ -1,0 +1,233 @@
+//< HTTPS: the certificate and key a run is started with, and each connection's bytes through TLS
+//< **The checks a person can act on are made at start**: a key others can read, a key under a
+//< passphrase, a key of another certificate and an expired certificate each stop the start.
+//< Then the accept loop in `kssrv/main.kspl` reads and writes every connection through here, so
+//< plain HTTP and HTTPS share one path. TLS itself is `ksbind/tls_server`.
+import "ksbind/tls_server" { Tls_server, Tls_session, Tls_session_error, Tls_setup_error }
+import "kssrv/conn"
+import "std/fs"
+import "std/io"
+import "std/log" { Log }
+import "std/mem" + { Arena }
+import "std/net"
+import "std/sys"
+
+const HANDSHAKE_TIME_US: I64 = 10000000I64 //<
+    //< How long a TLS handshake may take, from accept to its end
+    //< A handshake is two round trips. Without the cap, a client that connects and sends part of a
+    //< handshake holds a slot until the idle timer, three times as long.
+
+priv const SOON_S: I64 = 30I64 * 86400I64 //< how near its expiry a certificate is warned of
+    //< 30 days, the time certificate tools leave themselves to renew one.
+
+priv const PLAIN_ANSWER: U8[] = "This port speaks HTTPS: use an https:// address.\n" //<
+    //< The body of the plain-text 400 that plain HTTP on the HTTPS port gets
+
+// ==========================================
+// Loading the certificate and key at start
+// ==========================================
+
+struct Https //< what a run started with `--cert` and `--key` serves with
+    server: Tls_server$@
+    expires_at: I64 //< when the certificate expires, in Unix epoch seconds
+    warned: I32 //< 0 nothing said, 1 its expiry is near, 2 it has expired; said once each
+
+priv fn key_is_private(path: U8[], lg: Log$@): Bool //<
+    //< Whether only this account can read or change the key file; says why not where it is not
+    //< **Windows answers unchecked** (an ACL decides there, which std does not read), so the key
+    //< is read as it stands.
+    switch fs.secret_trust(path)
+    case .own, .unchecked
+        return true
+    case .shared
+        if ln: = lg.at(.error)
+            ln
+                .s("others can read or change the key file: \{path\}. Make it private with `chmod \
+                    600 \{path\}`")
+    case .foreign
+        if ln: = lg.at(.error)
+            ln
+                .s("the key file belongs to another user: \{path\}. Copy it to a file this account \
+                    owns, with mode 600")
+    case .missing
+        if ln: = lg.at(.error)
+            ln.s("no key file can be read at \{path\}")
+    return false
+
+priv fn say_refused(e: Tls_setup_error, cert: U8[], key: U8[], lg: Log$@) //<
+    //< Says why the certificate and key cannot serve, then what to do
+    ln: = lg.at(.error) catch
+        return
+    switch e
+    case .no_certificate
+        ln.s("no PEM certificate is in \{cert\}")
+    case .certificate_refused
+        ln.s("OpenSSL refused the certificate in \{cert\}: its key is too weak, say")
+    case .chain_out_of_order
+        ln
+            .s("a certificate in \{cert\} comes before the one it issued. Put the server's own \
+                certificate first, then each one that issued the one before it")
+    case .no_key
+        ln.s("no PEM private key can be read in \{key\}")
+    case .key_encrypted
+        // Caution: **Never ask for the passphrase.** A restart with nobody at the keyboard would
+        // wait for it for good.
+        ln
+            .s("a passphrase protects the key in \{key\}, and kssrv never asks for one. Write a \
+                copy without it (`openssl pkey -in \{key\} -out <new file>`), and make that copy \
+                private with chmod 600")
+    case .key_mismatch
+        ln.s("the key in \{key\} does not belong to the certificate in \{cert\}")
+    case .ctx_failed
+        ln.s("OpenSSL could not be set up for TLS")
+
+priv fn dates_fit(s: Tls_server$@, cert: U8[], lg: Log$@): Bool //<
+    //< Whether the certificate is valid now; says why not where it is not
+    //< Caution: **Refuse an expired certificate at start.** Served, it makes every browser show
+    //< a warning page, and the server's own log would show nothing wrong.
+    now: = sys.wall_seconds()
+    if now < s.starts_at
+        if ln: = lg.at(.error)
+            ln.s("the certificate in \{cert\} is not valid yet; check this machine's clock")
+        return false
+    if now >= s.expires_at
+        if ln: = lg.at(.error)
+            ln.s("the certificate in \{cert\} expired on \{s.expiry\}. Renew it")
+        return false
+    return true
+
+fn load(cert: U8[], key: U8[], lg: Log$@, arena: Arena$@): Https? //<
+    //< Reads and checks the certificate chain and key; none once it has said why they cannot serve
+    //< The key's text is zeroed once OpenSSL holds its own copy.
+    if !key_is_private(key, lg)
+        return .none
+    cert_pem: = io.read_file(cert, arena) catch
+        if ln: = lg.at(.error)
+            ln.s("no certificate file can be read at \{cert\}")
+        return .none
+    key_pem: = io.read_file(key, arena) catch
+        if ln: = lg.at(.error)
+            ln.s("no key file can be read at \{key\}")
+        return .none
+    loaded: = Tls_server.load(cert_pem, key_pem, arena)
+    mem.zero(Void$@::key_pem.ptr, key_pem.len)
+    s: = loaded catch e
+        say_refused(e, cert, key, lg)
+        return .none
+    if !dates_fit(s, cert, lg)
+        s.free()
+        return .none
+    $h: = Https::{ .server = s, .expires_at = s.expires_at }
+    days: = (s.expires_at - sys.wall_seconds()) / 86400I64
+    if ln: = lg.at(.information)
+        ln
+            .s("HTTPS with the certificate for \{s.subject\}, which expires on \{s.expiry\} (in \
+                \{days\} days)")
+    // A chain with no intermediate works in a browser that has the intermediate cached, and fails
+    // in every other client, so nobody testing with a browser notices.
+    if s.lone_leaf
+        if ln: = lg.at(.warning)
+            ln
+                .s("\{cert\} holds one certificate, which another issued. A client that lacks the \
+                    issuer refuses it: add the intermediate certificate after it in the file")
+    watch_expiry(h@, lg)
+    return .some(h)
+
+fn watch_expiry(h: Https$@, lg: Log$@) //<
+    //< Says once when the certificate's expiry comes near, and once when it has passed
+    //< **A server stays up for months**, so the start's check alone cannot see the day come.
+    left: = h.expires_at - sys.wall_seconds()
+    if left <= 0I64 && h.warned < 2
+        h.warned = 2
+        lg.say(.error, "the certificate has expired: clients now refuse it. Renew it and restart")
+    else if left < SOON_S && h.warned < 1
+        h.warned = 1
+        if ln: = lg.at(.warning)
+            ln.s("the certificate expires in \{left / 86400I64\} days: renew it before then")
+
+// ==========================================
+// One connection's bytes, through TLS or not
+// ==========================================
+
+enum Io_end //< why a read or a write on a connection stopped short
+    wait //< the socket is not ready: wait for it, then go on
+    broken //< the connection cannot go on: close it
+    plain_http //< plain HTTP came to the HTTPS port: answer it in plain text, then close
+
+fn start(c: conn.Conn$@, h: Https$@, lg: Log$@): Bool //< starts the TLS of a connection accepted
+    s: = Tls_session.start(h.server) catch
+        lg.say(.error, "cannot start TLS on an accepted connection")
+        return false
+    c.tls = s
+    return true
+
+fn handshake_late(c: conn.Conn$@, now: I64): Bool //< whether its handshake ran past its time
+    return c.tls != null && !c.tls.ready() && c.lingering_since_us == 0I64 &&
+        now - c.accepted_us >= HANDSHAKE_TIME_US
+
+fn pending(c: conn.Conn$@): Bool //< whether TLS holds bytes the socket has not taken yet
+    return c.tls != null && c.tls.pending()
+
+fn buffered(c: conn.Conn$@): Bool //< whether TLS holds bytes received that are not read yet
+    //< **No socket notification comes for them** (`Tls_session.buffered`). A lingering connection
+    //< reads the socket raw, so it has none.
+    return c.tls != null && c.lingering_since_us == 0I64 && c.tls.buffered()
+
+priv fn session_end(c: conn.Conn$@, e: Tls_session_error, lg: Log$@): Io_end //<
+    //< The connection's answer to a TLS error, logged where a person can act on it
+    switch e
+    case .would_block
+        return .wait
+    case .not_tls
+        return .plain_http
+    case .handshake_failed
+        // The peer may be an old client: the log names the connection, so the case can be found.
+        if ln: = lg.at(.information)
+            ln.s("conn #\{c.serial\}: the TLS handshake failed")
+    default {}
+    return .broken
+
+fn read_some(c: conn.Conn$@, buf: U8$[], lg: Log$@): Sz!Io_end //<
+    //< Reads what has arrived: through TLS, except while lingering, when bytes are only drained
+    //< 0 means the peer has ended.
+    if c.tls == null || c.lingering_since_us != 0I64
+        n: = c.stream.read(buf) catch e
+            throw .wait if e == net.Net_error.would_block else .broken
+        return n
+    n: = c.tls.read(c.stream, buf) catch e
+        throw session_end(c, e, lg)
+    return n
+
+fn write_some(c: conn.Conn$@, bytes: U8[], lg: Log$@): Sz!Io_end //<
+    //< Writes what the socket takes, through TLS where the connection has it; never 0
+    if c.tls == null
+        n: = c.stream.write(bytes) catch e
+            throw .wait if e == net.Net_error.would_block else .broken
+        if n == 0
+            throw .broken
+        return n
+    n: = c.tls.write(c.stream, bytes) catch e
+        throw session_end(c, e, lg)
+    return n
+
+fn flush(c: conn.Conn$@, lg: Log$@): Void!Io_end //< sends what TLS holds for the socket
+    if c.tls == null
+        return
+    c.tls.flush(c.stream) catch e
+        throw session_end(c, e, lg)
+
+fn close_notify(c: conn.Conn$@): Bool //< queues the close_notify once; whether it waits to go
+    //< Caution: **Do not shut the sending side while it waits**: the peer would read a cut stream.
+    if c.tls == null
+        return false
+    if !c.tls_closed
+        c.tls_closed = true
+        c.tls.close(c.stream)
+    return c.tls.pending()
+
+fn answer_plain(c: conn.Conn$@) //< drops the TLS and queues the plain-text 400 for plain HTTP
+    //< **Answered, not just closed**: a closed connection shows nothing, and a person would not
+    //< know to type https.
+    c.tls.free()
+    c.tls = null
+    conn.queue_response(c, 400, "text/plain; charset=utf-8", PLAIN_ANSWER, false)

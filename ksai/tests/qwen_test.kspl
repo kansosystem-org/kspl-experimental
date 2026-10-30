@@ -6,14 +6,15 @@
 import "ksai/gguf" { Gguf }
 import "ksai/qwen" { Qwen, Qwen_error }
 import "ksai/tensor" { Tensor }
-import "ksai/tests/gguf_test" { said, tiny }
+import "ksai/tests/gguf_test" { put32, put64, put_str, said, tiny }
 import "ksai/tokenizer"
 import "std/chars"
 import "std/ds" { List }
 import "std/math"
 import "std/mem" { Arena }
-import "std/str" // `arena.text()`
+import "std/str" { Str_builder } // and `arena.text()`
 import "std/strfmt" as _strfmt
+import "std/strnum" // `to_count`
 import "std/verdict"
 
 embed "ksai/tests/qwen_data/tiny_qwen3.gguf" as model_file
@@ -196,6 +197,126 @@ fn test_qwen35_refuses_what_it_does_not_compute(arena: Arena$@) //<
     expect(refused(f, CONTEXT, arena), "gguf missing blk.1.attn_qkv.weight",
         "blocks the interval makes delta nets", arena)
     verdict.pass("a RoPE section, a state width and the layer pattern")
+
+// ==========================================
+// A Qwen3.5 file built here: two blocks, a delta net and an attention block, whose tensors fit
+// its settings however large the settings are
+// ==========================================
+
+priv const BUILT_WIDTH: Sz = 8 //< the built file's width between blocks, and its feed-forward's
+priv const F32_10000: U32 = 0x461C4000U32 //< the bits of the F32 10000.0, RoPE's base
+priv const F32_1E_6: U32 = 0x358637BDU32 //< the bits of the F32 0.000001, the norms' epsilon
+
+priv struct Gguf_parts //< a GGUF file being built: its keys, its tensors' entries, their bytes
+    keys: Str_builder
+    n_keys: U64
+    infos: Str_builder
+    n_tensors: U64
+    data: Str_builder
+
+impl Gguf_parts
+    priv fn key(r: Self$@, name: U8[], kind: U32) //< a key's name and type; its value follows
+        put_str(r.keys@, name)
+        put32(r.keys@, kind)
+        r.n_keys += 1U64
+
+    priv fn count(r: Self$@, name: U8[], v: Sz) //< a key holding a U32
+        r.key(name, 4U32)
+        put32(r.keys@, U32::v)
+
+    priv fn tensor(r: Self$@, name: U8[], cols: Sz, rows: Sz) //< an F32 tensor of zeros
+        //< One row of `cols` numbers where `rows` is 0, as ggml writes a vector.
+        put_str(r.infos@, name)
+        put32(r.infos@, 1U32 if rows == 0 else 2U32)
+        put64(r.infos@, U64::cols)
+        if rows > 0
+            put64(r.infos@, U64::rows)
+        put32(r.infos@, 0U32)
+        put64(r.infos@, U64::r.data.len)
+        for _i in Range.asc(cols * (1 if rows == 0 else rows) * 4)
+            r.data.c(0)
+        // Each tensor starts at a multiple of the file's alignment, 32 by default.
+        for r.data.len % 32 != 0
+            r.data.c(0)
+        r.n_tensors += 1U64
+
+priv fn built35(state: Sz, head: Sz, trained: Sz, arena: Arena$@): U8[] //<
+    //< A Qwen3.5 file whose delta net's state rows are `state` wide and its heads `head` wide
+    //< The tensors' numbers are zeros: the file is for loading, not for scores.
+    $g: = Gguf_parts::{ .keys = Str_builder(), .n_keys = 0U64, .infos = Str_builder(),
+        .n_tensors = 0U64, .data = Str_builder() }
+    g.key("general.architecture", 8U32)
+    put_str(g.keys@, "qwen35")
+    w: = BUILT_WIDTH
+    for kv in U8[][]::{ "block_count=2", "embedding_length=8", "feed_forward_length=8",
+        "attention.head_count=1", "attention.head_count_kv=1", "rope.dimension_count=2",
+        "full_attention_interval=2", "ssm.conv_kernel=2", "ssm.group_count=1",
+        "ssm.time_step_rank=1" }
+        at: = kv.find_char('=').unwrap_or(0)
+        g.count(arena.text().s("qwen35.").s(kv.sub(0, at)).take(),
+            kv.sub_from(at + 1).to_count(64) catch 0)
+    g.count("qwen35.context_length", trained)
+    g.count("qwen35.attention.key_length", head)
+    g.count("qwen35.attention.value_length", head)
+    g.count("qwen35.ssm.state_size", state)
+    g.count("qwen35.ssm.inner_size", state)
+    g.key("qwen35.rope.dimension_sections", 9U32)
+    put32(g.keys@, 5U32)
+    put64(g.keys@, 4U64)
+    for v in U32[]::{ 1U32, 1U32, 1U32, 0U32 }
+        put32(g.keys@, v)
+    g.key("qwen35.rope.freq_base", 6U32)
+    put32(g.keys@, F32_10000)
+    g.key("qwen35.attention.layer_norm_rms_epsilon", 6U32)
+    put32(g.keys@, F32_1E_6)
+    g.tensor("token_embd.weight", w, 4)
+    g.tensor("output_norm.weight", w, 0)
+    channels: = 3 * state
+    g.tensor("blk.0.attn_qkv.weight", w, channels)
+    g.tensor("blk.0.attn_gate.weight", w, state)
+    g.tensor("blk.0.ssm_alpha.weight", w, 1)
+    g.tensor("blk.0.ssm_beta.weight", w, 1)
+    g.tensor("blk.0.ssm_conv1d.weight", 2, channels)
+    g.tensor("blk.0.ssm_dt.bias", 1, 0)
+    g.tensor("blk.0.ssm_a", 1, 0)
+    g.tensor("blk.0.ssm_norm.weight", state, 0)
+    g.tensor("blk.0.ssm_out.weight", state, w)
+    g.tensor("blk.1.attn_q.weight", w, 2 * head)
+    g.tensor("blk.1.attn_k.weight", w, head)
+    g.tensor("blk.1.attn_v.weight", w, head)
+    g.tensor("blk.1.attn_output.weight", head, w)
+    g.tensor("blk.1.attn_q_norm.weight", head, 0)
+    g.tensor("blk.1.attn_k_norm.weight", head, 0)
+    for b in Range.asc(2)
+        for part in U8[][]::{ "attn_norm.weight", "post_attention_norm.weight" }
+            g.tensor(arena.text().s("blk.\{b\}.").s(part).take(), w, 0)
+        for part in U8[][]::{ "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight" }
+            g.tensor(arena.text().s("blk.\{b\}.").s(part).take(), w, w)
+    defer $file: = Str_builder()
+    file.s("GGUF")
+    put32(file@, 3U32)
+    put64(file@, g.n_tensors)
+    put64(file@, g.n_keys)
+    file.s(g.keys.slice()).s(g.infos.slice())
+    for file.len % 32 != 0
+        file.c(0)
+    file.s(g.data.slice())
+    g.keys.free()
+    g.infos.free()
+    g.data.free()
+    return arena.dup_str(file.slice())
+
+fn test_qwen_refuses_memory_no_machine_holds(arena: Arena$@) //<
+    //< Settings that fit their tensors but ask for a state or a cache past its cap are refused
+    //< **Each setting alone is in its range**, and every tensor has the shape they give. A state
+    //< row 65,536 wide makes the state 16 GiB, and the server keeps several copies of it.
+    verdict.start("[Qwen] settings that ask for more memory than the caps are refused by name")
+    expect(refused(built35(64, 8, 4096, arena), CONTEXT, arena), "", "the built file", arena)
+    expect(refused(built35(65536, 8, 4096, arena), CONTEXT, arena),
+        "bad_setting qwen35.ssm.state_size", "a state of 16 GiB", arena)
+    expect(refused(built35(64, 65536, 1048576, arena), 1048576, arena),
+        "bad_setting qwen35.context_length", "a cache of 512 GiB", arena)
+    verdict.pass("a state past 1 GiB and a cache past 256 GiB")
 
 priv fn id_of(tokens: List<|U8[]|>@, text: U8[]): I32 //< a token's ID: its place in the list
     for i in Range.asc(tokens.len)

@@ -1,0 +1,102 @@
+//< A TLS client for tests that sends several records in one TCP write
+//< `Tls_stream` sends each record as soon as it makes it, so a server may get them one wakeup at a
+//< time. **A browser or curl sends records together**, and a server must answer them all. This
+//< client makes that case on purpose: `queue` keeps the records, and `send` writes them at once.
+//< It verifies the certificate as `Tls_stream` does, through the same steps of `ksbind/tls`.
+import "ksbind/tls"
+import "std/chars" // `sub_from`
+import "std/math"
+import "std/mem" + { Arena, dealloc }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/sys"
+
+pub struct Record_client //< a TLS connection whose records go out only when `send` is called
+    priv tcp: net.Tcp_stream$@
+    priv ctx: tls.SSL_CTX$@
+    priv ssl: tls.SSL$@
+
+impl Record_client
+    pub fn connect(host: U8[], port: I32, wait_ms: I32): Record_client$@!tls.Tls_error //<
+        //< Connects and does the handshake, verifying the certificate, all within `wait_ms`
+        tcp: = net.Tcp_stream.connect(host, port) catch
+            throw .connect_failed
+        ctx: = tls.client_ctx() catch e
+            tcp.free()
+            throw e
+        ssl: = tls.client_ssl(ctx, host) catch e
+            tls.SSL_CTX_free(ctx)
+            tcp.free()
+            throw e
+        s: = mem.alloc_as<|Record_client|>()
+        s.tcp = tcp
+        s.ctx = ctx
+        s.ssl = ssl
+        tcp.set_nonblocking() catch
+            s.free()
+            throw .handshake_failed
+        deadline: = sys.deadline_after_ms(wait_ms)
+        for
+            tls.ERR_clear_error()
+            rc: = tls.SSL_connect(ssl)
+            if rc == 1
+                break
+            if !tls.go_on(tcp, ssl, rc, deadline)
+                s.free()
+                throw .handshake_failed
+        // The handshake's last message goes out with the first records.
+        return s
+
+    pub fn queue(r: Self$@, bytes: U8[]): Void!tls.Tls_error //<
+        //< Encrypts `bytes` as records of at most 16 KiB each, and keeps them for `send`
+        $at: Sz = 0
+        for at < bytes.len
+            want: = math.min(bytes.len - at, tls.IO_CHUNK)
+            tls.ERR_clear_error()
+            n: = tls.SSL_write(r.ssl, Void@::bytes.sub_from(at).ptr, I32::want)
+            if n <= 0
+                throw .io_failed
+            at += Sz::n
+
+    pub fn send(r: Self$@, wait_ms: I32): Void!tls.Tls_error //<
+        //< Sends every record queued in one write, within `wait_ms`
+        wbio: = tls.SSL_get_wbio(r.ssl)
+        defer $all: = Str_builder()
+        $chunk: U8[tls.IO_CHUNK] = ::{}
+        for tls.BIO_ctrl_pending(wbio) > 0
+            n: = tls.BIO_read(wbio, Void$@::chunk@, I32::tls.IO_CHUNK)
+            if n <= 0
+                throw .io_failed
+            all.s(U8[]::{ .ptr = chunk@, .len = n })
+        if !tls.send_before(r.tcp, all.slice(), sys.deadline_after_ms(wait_ms))
+            throw .io_failed
+
+    pub fn shut_write(r: Self$@): Void!tls.Tls_error //<
+        //< Closes the sending side of TCP alone, with no close_notify, as a client that half-closes
+        r.tcp.shut_write() catch
+            throw .io_failed
+
+    pub fn read_to_end(r: Self$@, wait_ms: I32, arena: Arena$@): U8[]? //<
+        //< What the server sends until its close_notify, within `wait_ms`
+        //< None where the time passes or TCP ends first, so this also checks that a close_notify
+        //< came.
+        deadline: = sys.deadline_after_ms(wait_ms)
+        got: = arena.text()
+        $buf: U8[4096] = ::{}
+        for
+            tls.ERR_clear_error()
+            n: = tls.SSL_read(r.ssl, Void$@::buf@, I32::buf.len)
+            if n > 0
+                got.s(U8[]::{ .ptr = buf@, .len = n })
+                continue
+            if tls.SSL_get_error(r.ssl, n) == tls.SSL_ERROR_ZERO_RETURN
+                return .some(got.take())
+            if !tls.go_on(r.tcp, r.ssl, n, deadline)
+                return .none
+
+impl Record_client: Manual_free //< it owns its connection and frees it with `free()`
+    pub fn free(r: Self$@) //< closes the connection without a close_notify, and frees it all
+        tls.SSL_free(r.ssl)
+        tls.SSL_CTX_free(r.ctx)
+        r.tcp.free()
+        dealloc(Void$@::r)

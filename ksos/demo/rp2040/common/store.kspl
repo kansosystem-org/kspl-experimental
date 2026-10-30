@@ -15,21 +15,25 @@ const KIND_POLICY: U16 = 1 //< the record kinds
 const KIND_SAMPLE: U16 = 2
 
 fn wipe(marker: U8[], blob: U8[]): Bool //<
-    //< Erases the record, and writes back only the marker and the policy
-    //< **true if they were written back.**
-    //< Caution: **Do not erase the policy too.** It is in the same region. A naive erase leaves
-    //< the car unable to move at all on the next start-up with no PC there. **The observations do
-    //< go.**
+    //< Erases the record but keeps the marker and the policy
+    //< **true if both are in place afterwards.**
+    //< Caution: **Keep the policy.** Erased with the rest, a start with no PC cannot move. **The
+    //< observations do go.** `reset_keeping` copies the marker and the stored policy aside before
+    //< it erases, so a power cut at any moment leaves both readable.
     if !records.ok()
         return false
     lg: = records.handle()
-    lg.reset() catch
+    kinds: U16[2] = ::{ records.KIND_MARKER, KIND_POLICY }
+    lg.reset_keeping(U16[]::kinds) catch
         return false
-    // The observations are gone, so the recorder starts again, whatever the write-back does.
+    // The observations are gone, so the recorder starts again, whatever comes next.
     csample.restart()
-    lg.append(records.KIND_MARKER, marker) catch
-        return false
-    if blob.len == 0
+    // **Append only what was not kept.** The policy in force can be a fresh one that could not be
+    // stored (the record was full); appended after the erase, a cut leaves the stored one.
+    if !lg.last_equals(records.KIND_MARKER, marker)
+        lg.append(records.KIND_MARKER, marker) catch
+            return false
+    if blob.len == 0 || lg.last_equals(KIND_POLICY, blob)
         return true
     lg.append(KIND_POLICY, blob) catch
         return false

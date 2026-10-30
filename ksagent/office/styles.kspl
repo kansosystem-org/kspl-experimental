@@ -1,0 +1,110 @@
+//< Word's paragraph styles: which style is a heading, and which brings list numbering
+//< A style names its parent (`basedOn`), and takes from it what it does not set. **A heading is
+//< known by its outline level**, or by the built-in name `heading N` where no level is set: a
+//< style's id is translated (`見出し 1` in a Japanese Word), its name is not.
+import "ksagent/office/index" + { Index, Keyed }
+import "ksagent/office/xml"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strnum"
+
+priv const MAX_CHAIN: Sz = 16 //< the most parents followed; a loop of `basedOn` stops here
+
+priv struct Style //< what one paragraph style sets itself
+    parent: U8[] //< the id of the style it is based on; empty for none
+    name: U8[]
+    outline: I32 //< its outline level, 0 to 8; -1 where it sets none
+    num_id: U8[] //< the list number it brings; empty where it sets none
+    level: I32 //< the list level it brings; -1 where it sets none
+
+struct Styles //< every paragraph style of a document, by id
+    priv list: List<|Style|>
+    priv by_id: Index //< each style's id, to its place in `list`
+
+fn empty(arena: Arena$@): Styles //< a document with no styles part
+    $none: = List<|Keyed|>(arena)
+    return Styles::{ .list = List<|Style|>(arena), .by_id = index.sorted(none@, arena) }
+
+fn read(src: U8[], arena: Arena$@): Styles!U8[] //< reads `styles.xml`
+    $list: = List<|Style|>(arena)
+    $keys: = List<|Keyed|>(arena)
+    $x: = xml.reader(src, arena)!
+    $id: U8[] = ""
+    $s: = Style::{ .parent = "", .name = "", .outline = -1, .num_id = "", .level = -1 }
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            break
+        if x.is(.end, "style") && id.len > 0
+            keys.push(Keyed::{ .key = id, .pos = list.len })
+            list.push(s)
+            id = ""
+            continue
+        if ev != xml.Event.start
+            continue
+        if x.name.equals("style")
+            kind: = x.attr_or("type", "paragraph", arena)!
+            id = x.attr_or("styleId", "", arena)! if kind.equals("paragraph") else ""
+            s = Style::{ .parent = "", .name = "", .outline = -1, .num_id = "", .level = -1 }
+            continue
+        if id.len == 0
+            continue
+        if x.name.equals("pPrChange") || x.name.equals("rPr")
+            x.skip()!
+        else if x.name.equals("basedOn")
+            s.parent = x.attr_or("val", "", arena)!
+        else if x.name.equals("name")
+            s.name = x.attr_or("val", "", arena)!
+        else if x.name.equals("outlineLvl")
+            s.outline = small(x.attr_or("val", "", arena)!)
+        else if x.name.equals("numId")
+            s.num_id = x.attr_or("val", "", arena)!
+        else if x.name.equals("ilvl")
+            s.level = small(x.attr_or("val", "", arena)!)
+    return Styles::{ .list = list, .by_id = index.sorted(keys@, arena) }
+
+fn small(text: U8[]): I32 //< a level from 0 to 9, or -1 where the text is none
+    v: = text.trim_spaces().to_i64() catch
+        return -1
+    return I32::v if v >= 0I64 && v <= 9I64 else -1
+
+impl Styles
+    priv fn style(r: Self@, id: U8[]): Style? //< the style of that id
+        pos: = r.by_id.find(id) catch
+            return .none
+        return .some(r.list.get(pos))
+
+    fn heading(r: Self@, id: U8[]): I32 //< the heading level a style gives, from 1; 0 for none
+        $at: = id
+        for _k in Range.asc(MAX_CHAIN)
+            s: = r.style(at) catch
+                return 0
+            if s.outline >= 0
+                return s.outline + 1 if s.outline < 9 else 0
+            if s.name.len == 9 && s.name.sub(0, 8).equals_ignore_case("heading ") &&
+                s.name[8] >= '1' && s.name[8] <= '9'
+                return (s.name[8] - '0')
+            at = s.parent
+        return 0
+
+    fn numbering(r: Self@, id: U8[]): U8[] //< the list number a style brings; empty for none
+        $at: = id
+        for _k in Range.asc(MAX_CHAIN)
+            s: = r.style(at) catch
+                return ""
+            if s.num_id.len > 0
+                return s.num_id
+            at = s.parent
+        return ""
+
+    fn numbering_level(r: Self@, id: U8[]): I32 //< the list level a style brings; 0 where unset
+        $at: = id
+        for _k in Range.asc(MAX_CHAIN)
+            s: = r.style(at) catch
+                return 0
+            if s.level >= 0
+                return s.level
+            at = s.parent
+        return 0

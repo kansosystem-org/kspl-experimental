@@ -319,6 +319,19 @@ KSPL_LINK I32 kspl_dir_trust(const U8 *path_ptr, Sz path_len) {
     return 0;
 }
 
+/* Who besides the current user could read or change a file holding a secret (for std/fs.kspl's
+ * secret_trust). The answers are kspl_dir_trust's, for a regular file: 3 means its group or
+ * everyone can read or write it. It follows a link, as the reader of the file does. */
+KSPL_LINK I32 kspl_secret_trust(const U8 *path_ptr, Sz path_len) {
+    char path[4096];
+    struct stat st;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 1;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return 1;
+    if (st.st_uid != geteuid()) return 2;
+    if ((st.st_mode & (S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH)) != 0) return 3;
+    return 0;
+}
+
 /* It peeks and turns a directory over to rmdir(), as the Windows side must (see the heading).
  * Caution: **Use lstat, not stat.** stat answers "a directory" for a link to one, rmdir fails with
  * ENOTDIR, and **the link can never be taken off**. */
@@ -437,8 +450,15 @@ static int kspl_path_to_wide(const U8 *path_ptr, Sz path_len, wchar_t *out, Sz o
     if (kspl_wide_is_verbatim(out)) return 1;
     n = GetFullPathNameW(out, (DWORD)KSPL_WPATH_CAP, full, NULL);
     if (n == 0 || (Sz)n >= KSPL_WPATH_CAP) return 0;
-    /* A relative path that resolves short goes as written: the OS resolves it the same way. */
-    if ((Sz)n + 1 < KSPL_WPATH_LEGACY) return 1;
+    /* A short relative path goes as written: the OS resolves it the same way.
+     * Caution: **A long path that resolves short goes resolved.** Win32 measures the path as
+     * written, so `C:\root\sub` followed by 3,900 `\` fails though it names `C:\root\sub`. */
+    if ((Sz)n + 1 < KSPL_WPATH_LEGACY) {
+        if (len + 1 < KSPL_WPATH_LEGACY) return 1;
+        if ((Sz)n + 1 > out_cap) return 0;
+        memcpy(out, full, (size_t)(n + 1) * sizeof(wchar_t));
+        return 1;
+    }
     if (full[0] == L'\\' && full[1] == L'\\') {
         prefix = L"\\\\?\\UNC\\";
         body = full + 2;
@@ -568,16 +588,20 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
 }
 
 /* The POSIX side's meanings. **A short name (`GIT~1` for `.git`) gives its long name**, which
- * FindFirstFileW reports for the entry whatever name found it. A `*` or a `?` is refused: there
- * it would match other names. */
+ * FindFirstFileW reports for the entry whatever name found it. **Every byte the directory search
+ * reads as a wildcard is refused**: `*` and `?`, and the DOS forms `<`, `>` and `"`, which the NT
+ * search matches like `*`, `?` and `.`. Each would match other names, and another entry's name
+ * would come back. No file name may hold one of them. */
 KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
+    static const char wildcards[] = "*?<>\"";
     wchar_t path[KSPL_WPATH_CAP];
     WIN32_FIND_DATAW fd;
     char utf8[MAX_PATH * 3 + 1];
     HANDLE h;
     int len;
-    if (memchr(path_ptr, '*', (size_t)path_len) != NULL) return -1;
-    if (memchr(path_ptr, '?', (size_t)path_len) != NULL) return -1;
+    for (Sz i = 0; i < path_len; i++) {
+        if (memchr(wildcards, path_ptr[i], sizeof(wildcards) - 1) != NULL) return -1;
+    }
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
     h = FindFirstFileW(path, &fd);
     if (h == INVALID_HANDLE_VALUE) return -1;
@@ -680,6 +704,16 @@ KSPL_LINK I32 kspl_dir_trust(const U8 *path_ptr, Sz path_len) {
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return 1;
     attr = GetFileAttributesW(path);
     if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) return 1;
+    return 4;
+}
+
+/* The POSIX side's meanings. A regular file is 4, "not checked", for the reason above. */
+KSPL_LINK I32 kspl_secret_trust(const U8 *path_ptr, Sz path_len) {
+    wchar_t path[KSPL_WPATH_CAP];
+    DWORD attr;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return 1;
+    attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) return 1;
     return 4;
 }
 

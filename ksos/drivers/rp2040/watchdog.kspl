@@ -1,0 +1,109 @@
+//< The RP2040's hardware watchdog: it resets the chip when the program stops feeding it
+//< **A reset puts every peripheral back in reset**, so the PWM pins fall back to their reset state
+//< and the motors stop, whatever the program was doing when it stopped answering.
+//< Caution: **Call clocks.init() before `arm`**: the counter counts the 1µs tick that clocks.init
+//< sets up (the same tick TIMER counts). This file never writes that tick (`WATCHDOG_TICK` in
+//< `clocks.kspl` owns it).
+
+// ==========================================
+// "The watchdog (`watchdog.kspl`)" in ksos/docs/DESIGN-rtos.md gives the timeout chosen for the
+// car, who feeds it, and what a restart after it does.
+// ==========================================
+
+// QEMU has no RP2040 model: the register values are checked on the host
+// (`ksos/tests/watchdog_test.kspl`), the reset itself on a real Pico W
+// (ksos/docs/HOWTO-bring-up.md).
+import "ksos/drivers/mmio"
+
+// WATCHDOG_BASE = 0x40058000: the RP2040 datasheet's "Watchdog" section, its "List of Registers".
+// CTRL's TIME (bits 23..0) and TICK (+0x2c, clocks.kspl's) are not used here.
+priv const CTRL: U32 = 0x40058000
+priv const LOAD: U32 = 0x40058004 //< writing it reloads the counter (24 bits)
+priv const REASON: U32 = 0x40058008 //< bit 0 TIMER, bit 1 FORCE; both 0 after a power-on reset
+priv const SCRATCH4: U32 = 0x4005801c //<
+    //< Where `arm` leaves its mark
+    //< The boot ROM reads SCRATCH4 to 7 for a reboot request of its own, and clears SCRATCH4 when
+    //< it reboots the chip itself (after a UF2 copy). So a reboot by the boot ROM does not carry
+    //< the mark, and reads as `other`, not as this watchdog firing. **Never write 0xb007c0d3
+    //< there**: the boot ROM would take it as a request to jump to SCRATCH7.
+priv const PSM_WDSEL: U32 = 0x40010008 //< which blocks the watchdog resets (bits 16..0)
+    //< PSM_BASE = 0x40010000: the datasheet's "Power-On State Machine" section, its "List of
+    //< Registers".
+
+priv const CTRL_ENABLE: U32 = 1U32 << 30
+priv const CTRL_PAUSE_DEBUG: U32 = 7U32 << 24 //< PAUSE_DBG1, PAUSE_DBG0 and PAUSE_JTAG
+priv const REASON_TIMER: U32 = 1U32 << 0
+priv const REASON_FORCE: U32 = 1U32 << 1
+
+const WDSEL_ALL_BUT_OSCILLATORS: U32 = 0x1fffc //< every PSM block except ROSC (bit 0) and XOSC
+    //< (bit 1)
+    //< **The RESETS block is among them**, so every peripheral is held in reset after the watchdog
+    //< fires: PWM stops driving its pins. The oscillators keep running, so the restart does not
+    //< wait for the crystal again. WDSEL is 0 out of reset, which would reset nothing.
+
+const ARMED_MARK: U32 = 0x6ab73121 //< the value `arm` leaves in SCRATCH4
+    //< pico-sdk's `watchdog_enable` leaves the same value, so either side reads the other's reset.
+
+const TICKS_PER_MS: U32 = 1000 //< the counter's input is the 1µs tick from clocks.init
+const COUNTS_PER_TICK: U32 = 2 //< the counter goes down twice per tick (erratum RP2040-E1)
+    //< So LOAD holds twice the ticks wanted; leaving it out halves every timeout.
+const LOAD_MAX: U32 = 0xffffff //< LOAD has 24 bits
+const MAX_MS: U32 = LOAD_MAX / (TICKS_PER_MS * COUNTS_PER_TICK) //< the longest timeout, 8388 ms
+
+enum Reset_reason //< why the chip started this time
+    power_on //< power-on, the RUN pin, or a brown-out: REASON reads 0
+    watchdog //< this watchdog fired: the program stopped feeding it after `arm`
+    other //< the watchdog block reset the chip for someone else
+        //< The boot ROM after a UF2 copy, a debugger or picotool: REASON is set, but the mark
+        //< `arm` leaves is absent.
+
+fn load_for(ms: U32): U32!mmio.Driver_error //< the LOAD value for a timeout of ms milliseconds
+    //< `out_of_range` for 0 (the chip would reset at once) and above `MAX_MS`.
+    if ms == 0 || ms > MAX_MS
+        throw .out_of_range
+    return ms * TICKS_PER_MS * COUNTS_PER_TICK
+
+fn reason_of(reason: U32, scratch4: U32): Reset_reason //< reads REASON and SCRATCH4's values
+    if (reason & (REASON_TIMER | REASON_FORCE)) == 0
+        return .power_on
+    if (reason & REASON_TIMER) != 0 && scratch4 == ARMED_MARK
+        return .watchdog
+    return .other
+
+fn ctrl_armed(ctrl: U32): U32 //< CTRL with the counter running and paused while debugging
+    //< **It pauses while a debugger halts a core**, so a breakpoint does not reset the chip under
+    //< the person reading it. The PWM keeps its last duty meanwhile; debug with the wheels off the
+    //< ground.
+    return ctrl | CTRL_ENABLE | CTRL_PAUSE_DEBUG
+
+// The LOAD value `feed` writes. Set only by `arm`.
+priv $load: U32 = 0
+
+fn last_reset(): Reset_reason //< why the chip started this time
+    //< **Ask before `arm`**: arming leaves the mark again.
+    return reason_of(mmio.read32(REASON), mmio.read32(SCRATCH4))
+
+fn arm(ms: U32): Void!mmio.Driver_error //< starts the countdown; the chip resets after ms
+    //< milliseconds without a `feed`
+    //< `out_of_range` as `load_for`; the watchdog is left as it was then.
+    value: = load_for(ms)!
+    disarm()
+    mmio.write32(PSM_WDSEL, WDSEL_ALL_BUT_OSCILLATORS)
+    mmio.write32(SCRATCH4, ARMED_MARK)
+    load = value
+    mmio.write32(LOAD, value)
+    mmio.write32(CTRL, ctrl_armed(mmio.read32(CTRL)))
+
+fn feed() //< starts the countdown again from the full timeout
+    //< Caution: **Feed only from the code whose progress it vouches for**, never from an interrupt
+    //< or a timer: those keep running while the task is stuck. Before `arm` it does nothing.
+    if load != 0
+        mmio.write32(LOAD, load)
+
+fn disarm() //< stops the countdown
+    //< **Call it first thing at start-up**: a watchdog left running by the previous program (or
+    //< kept running through a debugger's reset) would otherwise fire during a start-up longer than
+    //< its timeout. Call it too before handing the chip to anything that does not feed it, such as
+    //< the boot ROM's USB boot.
+    mmio.write32(CTRL, mmio.read32(CTRL) & ~CTRL_ENABLE)
+    load = 0

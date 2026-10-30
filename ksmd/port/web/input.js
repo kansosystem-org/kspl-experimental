@@ -186,6 +186,8 @@ function ksmdInput(ks) {
     flush();
     const data = e.clipboardData;
     if (data && image(data.files)) return;
+    // A whole table copied from ksmd goes after the caret's paragraph, as the same table.
+    if (ks.where !== "cell" && ks.pasteTable(data, -1)) return;
     const text = data ? data.getData("text/plain") : "";
     if (ks.tooLarge(text)) return;
     // Cells copied from a spreadsheet: at a chosen cell they fill the table from there, and in
@@ -203,6 +205,24 @@ function ksmdInput(ks) {
       ks.say("Pasted as plain text. Formatting from the clipboard is not kept.");
     }
   });
+
+  // Pastes the table a ksmd copy left on the clipboard, after the caret's paragraph, or into the gap
+  // before block `at` where it is 0 or more. False where the clipboard holds no such table.
+  ks.pasteTable = (data, at) => {
+    const own = data ? data.getData(KSMD_TYPE) : "";
+    if (!/^%ksmd 1\r?\n\r?\n:::table /.test(own) || ks.tooLarge(own)) return false;
+    ks.table.take();
+    if (at >= 0) {
+      ks.cell = null;
+      ks.setPlace("text");
+      ks.root.focus({ preventScroll: true });
+      ks.select([1, at, 0, 0], [1, at, 0, 0]);
+    } else {
+      ks.sync();
+    }
+    ks.act("ksmd_web_paste_ksmd", ks.put(own));
+    return true;
+  };
 
   root.addEventListener("drop", (e) => {
     if (ks.table.owns(e.target)) return;

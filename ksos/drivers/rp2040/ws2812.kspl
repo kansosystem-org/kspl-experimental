@@ -84,13 +84,13 @@ priv fn fill_wire(pixels: U32[]): Sz //< builds the bytes sent on the line
 // above).
 // Caution: **Take both the address and the value as arguments.** Within the slack, all it can do
 // is "write one of the two".
-// **Call no function either** (a flash read overruns the slack). **Whenever arithmetic is added,
-// read the generated instructions again.**
+// **Call no function either** (a flash read overruns the slack), a check's breach included: so
+// `for … in` reads the bytes, unchecked, not `wire[i]`. Re-read the instructions after any change.
 #noinline
 #section(".ram_text")
-priv fn send_window(ctr: U32, cc: U32, lo: U32, hi: U32, low: U32, len: Sz)
-    for i in Range.asc(len)
-        b: = U32::wire[i]
+priv fn send_window(ctr: U32, cc: U32, lo: U32, hi: U32, low: U32, bytes: U8[])
+    for byte in bytes
+        b: = U32::byte
         $mask: U32 = 0x80
         for mask != 0
             w: = hi if (b & mask) != 0 else lo
@@ -116,7 +116,8 @@ fn send(pixels: U32[]): Bool //< sends the LEDs' colours (one LED = 0xRRGGBB)
         return false
     len: = fill_wire(pixels)
     st: = task.irq_save()
-    send_window(ctr_addr, cc_addr, cc_for_0, cc_for_1, cc_for_low, len)
+    send_window(ctr_addr, cc_addr, cc_for_0, cc_for_1, cc_for_low,
+        U8[]::{ .ptr = wire[0]@, .len = len })
     task.irq_restore(st)
     // The latch wait happens after interrupts are restored (it may be long).
     timer.delay_us(LATCH_US)

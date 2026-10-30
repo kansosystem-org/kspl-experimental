@@ -31,6 +31,7 @@ import "ksos/demo/rp2040/common/store"
 import "ksos/drivers/rp2040/ir_nec" as ir
 import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/watchdog"
 import "ksos/kernel/task" + { Task }
 import "std/mem" { Arena }
 
@@ -84,6 +85,17 @@ const LINE_INTERVAL_MS: U32 = 10 //<
     //< **Make it divide loop_interval_ms** — otherwise the remainder goes unsteered.
 const EMERGENCY_MM: U32 = 100 //<
     //< The distance at which it backs off, before the policy's decision [mm]
+
+const WATCHDOG_MS: U32 = 1000 //< how long the loop may go without feeding the watchdog [ms]
+    //< **Longer than the longest step between two feeds**: a lap (100ms, stretched by IR frames
+    //< and a report line to about 300ms) and one Flash sector erase (at most 400ms). **Short enough
+    //< to stop quickly**: at the speed cap the car rolls well under a metre in a second. The
+    //< reasons are in "The watchdog (`watchdog.kspl`)" in ksos/docs/DESIGN-rtos.md.
+const HANG_AFTER_ROUNDS: U32 = 0 //< a test build's forced hang: the loop stops after this many
+    //< driving rounds; 0 is never
+    //< **Only for the on-car check of the watchdog** (stage 7 in ksos/docs/HOWTO-bring-up.md).
+    //< Caution: **Build with it at 0 for every other use**: set, the car stops answering on
+    //< purpose.
 
 // Set once anything has failed; it stays stopped from then on.
 $halted: Bool = false
@@ -365,29 +377,72 @@ priv fn report(ln: con.Line$@) //< prints one line
     _sent: = ln.flush()
 
 priv fn take_policy( //< loads blob as the policy in force; true if it loaded
+    //< **It does not halt**: a refused fresh policy still leaves the stored one to try, so the
+    //< caller decides.
     ln: con.Line$@,
     p: policy.Policy$@,
     blob: U8[],
-    why: status.State, //< the halt when it did not load
+    which: U8[], //< "fresh" or "stored", named on the refusal's line
     arena: Arena$@,
 ): Bool
+    mark: = arena.save()
+    $took: = true
     p$ = policy.load(blob, arena) catch e
-        // **Print which check refused it.** The halt's text says only which policy it was, and
-        // each check has its own cause: a file that is not safetensors, another version, a shape.
+        // **Print which policy and which check refused it.** Each check has its own cause: a file
+        // that is not safetensors, another version, a shape.
         ln.reset()
-        ln.str("[car] policy refused: ")
+        ln.str("[car] ")
+        ln.str(which)
+        ln.str(" policy refused: ")
         ln.str(e.variant_name())
         _sent: = ln.flush()
-        halt(why)
+        took = false
         fallback policy.empty()
-    if halted
+    if !took
+        // What the refused one left on the arena goes, so the next one has the room.
+        arena.restore(mark)
         return false
     policy_bytes = blob
     return true
 
+priv fn decide_once(p: policy.Policy$@, arena: Arena$@) //< makes one decision and throws it away
+    //< **Run it before saving a fresh policy.** A file that loads but stops the program at its
+    //< first decision is then never saved, so the next start still has the stored one.
+    mark: = arena.save()
+    _first: = policy.decide(p, 0I64, 0I64, arena)
+    arena.restore(mark)
+
+priv fn stop_wheels(_msg: U8$[]) //< the panic hook: the wheels stop before the program does
+    //< Caution: **A freestanding panic loops for ever, and the PWM keeps its last duty.** With no
+    //< hook a panic while driving leaves the car running with nothing deciding.
+    //< An index out of range or a division by zero stops in the runtime without calling this
+    //< hook. So `policy.load` still has to refuse every file that could cause one.
+    motor.stop()
+
+priv fn say_restart(ln: con.Line$@, why: watchdog.Reset_reason) //<
+    //< Says on the console why the chip started, and the panic left by the run before, if any
+    //< **A watchdog restart is the only trace of a hang**: the run that hung could print nothing.
+    if why == watchdog.Reset_reason.watchdog
+        con.say(ln, "[car]", "restarted by the watchdog: the program had stopped answering")
+    else if why == watchdog.Reset_reason.other
+        con.say(ln, "[car]", "restarted by a reboot (boot ROM or debugger)")
+    switch take_panic_record()
+    case .some(info)
+        ln.reset()
+        ln.str("[car] the run before panicked: ")
+        ln.str(info.msg)
+        _sent: = ln.flush()
+    case .none {}
+
 fn car_task(_arg: Void$@): Void
+    // Read why it started **before arming**, which leaves the mark again. **Stop a watchdog left
+    // running first**: start-up takes far longer than its timeout, and nothing feeds it yet.
+    started_by: = watchdog.last_reset()
+    watchdog.disarm()
     if !pilot_boot.bring_up()
         return
+    // From here the motors are set up, so stopping them in a panic is safe.
+    panic_hook = stop_wheels
     $ln: = con.Line()
     abuf: = U8$[]::arena_buf
     $arena: = Arena.from_buffer(Void$@::abuf.ptr, abuf.len)
@@ -405,6 +460,7 @@ fn car_task(_arg: Void$@): Void
         // **Keep it lit through the wait** (seconds on battery).
         status.State.starting.show(false)
 
+    say_restart(ln@, started_by)
     if !records.claim(RECORD_MARKER)
         con.say(ln@, "[car]", "no on-board records (flash region unavailable)")
     else if records.wiped()
@@ -412,31 +468,51 @@ fn car_task(_arg: Void$@): Void
     else
         csample.say_last(ln@, store.KIND_SAMPLE)
 
+    // What halts it if no policy can be used: the PC's was refused, the stored one was, or there
+    // is none.
+    $why_none: status.State = .no_policy
     if pilot_boot.connect(ln@)
         blob: = pilot_boot.fetch_policy(ln@, arena@)
         // Caution: Read it to the end before closing (the reason is at nc.drain_stream).
         _rest: = nc.drain_stream(pilot_boot.FETCH_IDLE_MS)
         nc.close_conn()
         if blob.len > 0
-            ready = take_policy(ln@, p@, blob, .bad_policy, arena@)
+            ready = take_policy(ln@, p@, blob, "fresh", arena@)
             if ready
+                decide_once(p@, arena@)
                 store.save_policy(ln@, blob)
+                con.say(ln@, "[car]", "using the fresh policy")
+            else
+                why_none = .bad_policy
 
-    // With no fresh policy it starts with the saved one: **the point of the record**, deciding with
-    // no link or kssrv.
-    if !ready && !halted
+    // With no usable fresh policy it starts with the saved one: **the point of the record**,
+    // deciding with no link or kssrv. **A refused fresh one falls back to it too**; the saved one
+    // was taken by an earlier start, and stopping would gain nothing.
+    // Caution: **Read the record only after a refusal or no download.** It is read into the buffer
+    // the fresh policy's weights point into (`pilot_boot.stored_policy`).
+    if !ready
         // One stored but larger than the buffer is a bad stored policy, not "no policy".
         kept: = pilot_boot.stored_policy() catch e
             if e == ksdblog.Ksdb_error.too_small
-                con.say(ln@, "[car]", "policy refused: the stored one is larger than its buffer")
-                halt(.bad_stored_policy)
+                con.say(ln@, "[car]", "stored policy refused: larger than its buffer")
+                if why_none == status.State.no_policy
+                    why_none = .bad_stored_policy
             fallback ""
         if kept.len > 0
-            ready = take_policy(ln@, p@, kept, .bad_stored_policy, arena@)
-            if ready
+            ready = take_policy(ln@, p@, kept, "stored", arena@)
+            if ready && why_none == status.State.bad_policy
+                con.say(ln@, "[car]", "fresh policy refused — using the one stored on board")
+            else if ready
                 con.say(ln@, "[car]", "no fresh policy — using the one stored on board")
-    if !ready && !halted
-        halt(.no_policy)
+            else if why_none == status.State.no_policy
+                why_none = .bad_stored_policy
+    if !ready
+        halt(why_none)
+    else if started_by == watchdog.Reset_reason.watchdog
+        // **It does not set off again by itself after a hang**: whatever hung may hang again, and a
+        // car that restarts and drives in fits is worse than one that waits. A held press brings
+        // it back.
+        halt_remote(.watchdog)
 
     if ready
         // No exchange with the PC from here on: driving with no link is what this stage claims.
@@ -446,8 +522,17 @@ fn car_task(_arg: Void$@): Void
     // After the policy: resetting to before here loses what the weights point at.
     work: = arena.save()
 
+    // **Armed only here, where the wheels can first turn.** Start-up (the console, the link and
+    // the download) waits up to tens of seconds, past the watchdog's longest timeout, while the
+    // wheels stay stopped. The motor stop is what the watchdog is for.
+    watchdog.arm(WATCHDOG_MS) catch
+        con.say(ln@, "[car]", "FAILED to arm the watchdog")
+
     // It does not return; the lines **that keep flowing** are the sign of life.
     for
+        // **Fed once per lap, here in the loop**, not from an interrupt or a timer, which keep
+        // running while the loop is stuck. The record's steps feed too (`records`).
+        watchdog.feed()
         loops += 1
         // Caution: **Call all three every round, stopped too**, or a way back goes unnoticed.
         // **If any one is false it does not drive.**
@@ -472,6 +557,8 @@ fn car_task(_arg: Void$@): Void
             prev_rot: = last_rot
             one_round(p@, arena@)
             arena.restore(work)
+            if HANG_AFTER_ROUNDS > 0 && driving_rounds >= HANG_AFTER_ROUNDS
+                for {} // the forced hang of a test build; the watchdog must reset the chip
             // Caution: **Always save a round that changed**, or the change itself goes missing.
             changed: = last_lon != prev_lon || last_lat != prev_lat || last_rot != prev_rot
             if changed || loops % SAMPLE_EVERY == 0

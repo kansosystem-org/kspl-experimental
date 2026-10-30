@@ -81,7 +81,11 @@ priv fn rel_checked(root: U8[], rel: U8[]): U8[]? //<
     //< The path itself, if it stays under the root (`fs.stays_under`)
     //< **Empty means the root itself.** An absolute path in any OS's spelling (`/x`, `\\x`, `C:x`)
     //< is refused by `fs.stays_under`'s text check, on every OS.
+    //< Caution: **Refuse a `\` on POSIX.** There it is a byte of a name, which `fs.replace_file`
+    //< refuses, so a page could open such a file and never save it. On Windows it separates.
     if rel.len > 0 && !fs.stays_under(root, rel)
+        return .none
+    if !sys.is_windows() && rel.find_char('\\').is_some()
         return .none
     return .some(rel)
 
@@ -210,7 +214,8 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     $listed: Sz = 0
     $more: = false
     for name in sorted
-        if name.len == 0 || name[0] == '.'
+        // A name with a `\` is left out too: only POSIX allows one, and `rel_checked` refuses it.
+        if name.len == 0 || name[0] == '.' || name.find_char('\\').is_some()
             continue
         full: = fs.join(folder, name, c.arena)
         if fs.is_link(full)

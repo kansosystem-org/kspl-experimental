@@ -1,0 +1,361 @@
+//< `make explain`: reading make's database and make files, and the explanation of real targets
+//< **A wrong place or value looks as plausible as a right one**, so each is held to what make
+//< itself says: a variable's file and line to `make -pn`, the commands to `make -n`. A fixture
+//< of its own holds each kind of variable, a `?=` given on the command line and a pattern rule.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tools/make_db"
+
+priv const FIXTURE: U8[] = "out/tmp/make_explain_fixture" //< where the fixture's make file is
+priv const SEED: U8[] = "out/ksplc_seed.exe" //< what runs the tool, as `make explain` does
+priv const WAIT_MS: I32 = 300000 //< how long one explanation may take, the tool's build included
+
+priv const DB_SAMPLE: U8[] =
+    "# Make data base, printed on A\n# Variables\n\n# default\nNAME = wrong\n# Make data base, \
+        printed on B\n# Variables\n\n# makefile (from 'Makefile', line 2)\nNAME = world\n# makefile \
+        (from 'Makefile', line 4)\nFLAGS := -a -b\n# makefile (from 'Makefile', line 9)\ndefine \
+        BANNER\n== $(GREETING) ==\nendef\n# command line\nMODE = fast\n# variable set hash-table \
+        stats:\n\n# Files\n\n# Not a target:\na.src:\n#  Implicit rule search has been done.\n\n# \
+        makefile (from 'Makefile', line 15)\nall: X := 1\nall: out/a.txt | out\n#  Phony target \
+        (prerequisite of .PHONY).\n#  Needs to be updated (-q is set).\n#  recipe to execute (from \
+        'Makefile', line 17):\n\t@echo $(GREETING)\n\n# Finished Make data base\n" //<
+            //< Two databases as a recursive make prints them; only the second, the main one, is read
+
+fn test_reading_the_database(arena: Arena$@) //< variables, entries, and the last database alone
+    verdict.start("[tools/make_db] reading make's database test...")
+    db: = make_db.parse_db(make_db.last_db(DB_SAMPLE), arena)
+    name: = db.vars.get("NAME") catch
+        assert(false, "a variable is read")
+        return
+    assert(name.value.equals("world") && name.file.equals("Makefile") && name.line == 2 &&
+        !name.simple, "the main database's recursive variable, with its place")
+    assert(db.vars.get("FLAGS").unwrap_or(name).simple, "`:=` reads as simple")
+    banner: = db.vars.get("BANNER").unwrap_or(name)
+    assert(banner.value.equals("== $(GREETING) ==") && banner.line == 9, "a define's body")
+    assert(db.vars.get("MODE").unwrap_or(name).origin.equals("command line"),
+        "a command line's value keeps its origin")
+    all: = db.files.get("all") catch
+        assert(false, "an entry is read")
+        return
+    assert(all.phony && all.stale && all.target, "the entry's flags")
+    assert(all.prereqs.len == 1 && all.prereqs.get(0).equals("out/a.txt") &&
+        all.order_only.len == 1 && all.order_only.get(0).equals("out"),
+        "the prerequisites, and those after `|` apart")
+    assert(all.recipe_file.equals("Makefile") && all.recipe_line == 17 && all.recipe.len == 1 &&
+        all.recipe.get(0).equals("@echo $(GREETING)"), "the recipe and its place")
+    assert(all.vars.len == 1 && all.vars.get(0).name.equals("X") &&
+        all.vars.get(0).line == 15, "a variable set for the target alone")
+    assert(!db.files.get("a.src").unwrap_or(all).target, "a file no rule makes is no target")
+    // **A target's own `+=` is kept, marked as appended**: dropped, its value went unexplained.
+    own: = make_db.parse_db("# Files\n\n# makefile (from 'M', line 3)\ngo: F += -x\n# makefile \
+        (from 'M', line 4)\ngo: Q = q\ngo:\n#  Phony target (prerequisite of .PHONY).\n\n", arena)
+    go: = own.files.get("go").unwrap_or(all)
+    assert(go.vars.len == 2 && go.vars.get(0).name.equals("F") && go.vars.get(0).append &&
+        go.vars.get(0).value.equals("-x") && !go.vars.get(1).append,
+        "a target's own `+=` is read as appended to the value outside")
+    verdict.pass("the last database is read: values, places, prerequisites, recipe, flags.")
+
+fn test_the_names_text_reads(arena: Arena$@) //< references, a loop's own name and `$(call)`
+    verdict.start("[tools/make_db] the names a text reads test...")
+    got: = make_db.refs("$(A) $${B} $(call F,$(C)) $(foreach v,$(L),$(v)) $(D:.c=.o) $@ $(1) ${E}",
+        arena)
+    want: = U8[][]::{ "A", "F", "C", "L", "D", "E" }
+    assert(got.len == want.len, "each name once, and no automatic, argument or loop name")
+    for k in Range.asc(want.len)
+        assert(got.get(k).equals(want[k]), "in the order they are first read")
+    assert(make_db.cond_refs("ifdef LOGGING", arena).get(0).equals("LOGGING"),
+        "`ifdef` reads a name written bare")
+    assert(make_db.cond_refs("else of ifeq ($(LLVM),1)", arena).get(0).equals("LLVM"),
+        "`ifeq` reads its references")
+    verdict.pass("a text's names are found once each, and the ones set as it runs are left out.")
+
+fn test_reading_the_make_files(arena: Arena$@) //< operators, rule lines, conditionals
+    verdict.start("[tools/make_db] reading the make files test...")
+    for pair in U8[][]::{ "X ?= 1|?=", "X += 1|+=", "X != echo|!=", "X := 1|:=", "X ::= 1|::=",
+        "X = a=b|=", "define X|define", "export X := 1|:=" }
+        bar: = pair.find_char('|').unwrap_or(0)
+        assert(make_db.source_op(pair.sub(0, bar)).equals(pair.sub_from(bar + 1)),
+            "each operator is read as written")
+    assert(make_db.source_op("all: x").len == 0, "a rule sets no variable")
+    for text in U8[][]::{ "X := a:b", "X = a:b", "t: X = 1", "ifeq ($(A),b:c)" }
+        assert(make_db.rule_of(line(text), "M").is_none(), "an assignment is no rule")
+    r: = make_db.rule_of(line("$(OUT)/%.txt: %.src | out ; cp"), "M") catch
+        assert(false, "a pattern rule with a recipe after `;` is a rule")
+        return
+    assert(r.targets.equals("$(OUT)/%.txt") && r.prereqs.equals("%.src | out") && !r.double,
+        "its targets and prerequisites as written, the recipe cut")
+    assert(make_db.rule_of(line("a:: b"), "M").unwrap_or(r).double, "`::` is a rule of its own")
+    lines: = make_db.logical_lines("A := 1 \\\n  2 # note\ndefine B\nx: y\nendef\nall: A\n\techo\n",
+        arena)
+    assert(lines.len == 4 && lines.get(0).text.trim_spaces().equals("A := 1 2") &&
+        lines.get(1).first == 3 && lines.get(2).first == 6 && lines.get(3).recipe,
+        "continuations joined, the comment cut, a define's body left out")
+    branches: = make_db.logical_lines("ifeq ($(M),1)\nS := 9\nelse\nS := 1\nendif\nT ?= x\n", arena)
+    set: = make_db.assignments(branches@, "M", arena)
+    assert(set.len == 3 && set.get(0).conds.get(0).text.equals("ifeq ($(M),1)") &&
+        set.get(1).conds.get(0).text.equals("else of ifeq ($(M),1)") &&
+        set.get(2).conds.len == 0 && set.get(2).op.equals("?=") &&
+        set.get(2).value.equals("x"),
+        "each line that sets a variable, with the conditionals around it")
+    flags: = make_db.makeflags_sets(" -j4 --jobserver-auth=3,4 -- T=chat MODEL=a\\ b", arena)
+    assert(flags.len == 2 && flags.get(0).equals("T=chat") &&
+        flags.get(1).equals("MODEL=a b"), "MAKEFLAGS's settings, without its flags")
+    assert(make_db.makeflags_sets("k", arena).len == 0, "flags alone carry no setting")
+    // make doubles a `$` in MAKEFLAGS, as it expands the variable when it reads it back.
+    dollar: = make_db.makeflags_sets("-- X=a$$$$b\\ c", arena)
+    assert(dollar.len == 1 && dollar.get(0).equals("X=a$$b c"), "a `$` comes back single")
+    assert(make_db.distance("chta", "chat", arena) == 2 &&
+        make_db.gnu_make_major("GNU Make 4.3\n") == 4 &&
+        make_db.gnu_make_major("make 3.81") == 0, "the distance and the version")
+    verdict.pass("operators, rule lines, conditionals and MAKEFLAGS are read as make reads them.")
+
+priv fn line(text: U8[]): make_db.Source_line //< one logical line, not a recipe
+    return make_db.Source_line::{ .first = 1, .text = text, .recipe = false }
+
+// ==========================================
+// The explanation itself, run as `make explain` runs it: the tool built by the seed.
+// ==========================================
+
+priv const FIXTURE_MAKEFILE: U8[] =
+    "OUT := out\nNAME ?= world\nGREETING = hello $(NAME)\nFLAGS := -a\nFLAGS += -b\nSUB != echo \
+        sub\nifeq ($(MODE),fast)\nSPEED := 9\nelse\nSPEED := 1\nendif\ndefine BANNER\n== \
+        $(GREETING) ==\nendef\n\nall: $(OUT)/a.txt | $(OUT)\n\t@echo $(GREETING) $(FLAGS) $(SUB) \
+        $(SPEED)\n\t@echo \"$(BANNER)\"\n\n$(OUT)/%.txt: %.src\n\tcp $< $@\n\n$(OUT):\n\tmkdir -p \
+        $@\n\ngroup: all\n.PHONY: all group\n" //<
+            //< Each kind of variable (`:=`, `=`, `?=`, `+=`, `!=`, `define`), one made of others, one
+            //< set in a conditional, a pattern rule, and a rule with no recipe. Its line numbers
+            //< are written into the checks below.
+
+priv fn gnu_make(arena: Arena$@): U8[] //<
+    //< The make that runs the build, which `make explain` passes on too; else GNU make 4's name
+    //< here: `gmake` where it stands, or `make`
+    // **The name alone can start another make**: on MSYS2 it can find UCRT64's, which the root
+    // make file refuses, so make stops before it reads a rule.
+    if given: = sys.get_env("KANSO_MAKE")
+        return given
+    for name in U8[][]::{ "gmake", "make" }
+        r: =
+            subproc.run_capture(U8[][]::{ name, "--version" }, "", 10000, 4096, arena) catch
+            continue
+        if make_db.gnu_make_major(r.stdout_data) >= 4
+            return name
+    assert(false, "GNU make 4 runs here (macOS: brew install make, which installs gmake)")
+    return ""
+
+priv fn run(argv: U8[][], arena: Arena$@): subproc.Run_result //< runs one child to its end
+    // **The make running these tests does not hand its flags on** (`-j`'s jobserver, `-k`).
+    sys.unset_env("MAKEFLAGS") catch {}
+    sys.unset_env("MAKELEVEL") catch {}
+    r: = subproc.run_capture(argv, "", WAIT_MS, 64 * 1024 * 1024, arena) catch
+        assert(false, "the child starts")
+        return subproc.Run_result::{ .exit_code = .none, .stdout_data = "", .stderr_data = "",
+            .output_lost = false }
+    return r
+
+priv fn explain(make: U8[], target: U8[], sets: U8[][], arena: Arena$@): subproc.Run_result //<
+    //< The tool's answer for one target, as `make explain T=<target>` gives it
+    assert(fs.exists(SEED), "the seed is built (make builds it first)")
+    $argv: = List<|U8[]|>(arena)
+    for w in U8[][]::{ SEED, "run", "tools/make_explain.kspl",
+        arena.text().s("--make=").s(make).take(), "--not-settings=T,LOGGING", target, "LOGGING=1" }
+        argv.push(w)
+    for s in sets
+        argv.push(s)
+    return run(argv.slice(), arena)
+
+priv fn section(out: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //< one section's lines
+    //< The lines under the heading starting `head`, up to the blank line, without their indent
+    $got: = List<|U8[]|>(arena)
+    $inside: = false
+    for l in out.lines(arena)
+        if inside && l.len == 0
+            break
+        if inside
+            got.push(l.strip_prefix("  "))
+        inside = inside || l.starts_with(head)
+    return got
+
+fn test_explaining_the_fixture(arena: Arena$@) //< every kind of variable, and a pattern rule
+    verdict.start("[tools/make_explain] the fixture's targets test...")
+    make: = gnu_make(arena)
+    fs.mkdir_all(fs.join(FIXTURE, "out", arena)) catch {}
+    // `a.txt` is written after its source, so make finds it up to date.
+    io.write_file(fs.join(FIXTURE, "Makefile", arena), FIXTURE_MAKEFILE) catch {}
+    io.write_file(fs.join(FIXTURE, "a.src", arena), "a\n") catch {}
+    io.write_file(fs.join(FIXTURE, "out/a.txt", arena), "a\n") catch {}
+    sets: = U8[][]::{ "NAME=there", "MODE=fast" }
+    // A make exports its command line's settings to its recipes, `make explain`'s included; the
+    // defaults must still be the make file's, not these.
+    sys.set_env("NAME", "there") catch {}
+    sys.set_env("MODE", "fast") catch {}
+    at: = arena.text().s(FIXTURE).s(":all").take()
+    got: = explain(make, at, sets, arena)
+    sys.unset_env("NAME") catch {}
+    sys.unset_env("MODE") catch {}
+    out: = got.stdout_data
+    assert(got.exited_with(0), "the fixture's `all` is explained")
+    mf: = arena.text().s(FIXTURE).s("/Makefile:").take()
+    for want in U8[][]::{ "16  all: $(OUT)/a.txt | $(OUT)", "3\n",
+        "5 (appended to; the whole is :=)", "6\n", "8\n", "12\n" }
+        assert(out.find_str(arena.text().s(mf).s(want).take()).is_some(),
+            "each rule and variable names its file and line")
+    for want in U8[][]::{ "GREETING                  =  ", "FLAGS                     +=  ",
+        "SUB                       !=  ", "SPEED                     :=  ",
+        "BANNER                    define  ", "now: hello there",
+        "inside `else of ifeq ($(MODE),fast)` (line 9)", "stands inside `ifeq ($(MODE),fast)`",
+        "NAME        given: there. The default is world (?= at ", "MODE        given: fast.",
+        "read by `ifeq ($(MODE),fast)` at " }
+        assert(out.find_str(want).is_some(), "each flavour, a `?=` given, a conditional")
+    // **The commands are `make -n`'s**: with its prerequisites up to date, plain `make -n` shows
+    // this target's recipe alone.
+    plain: =
+        run(U8[][]::{ make, "--no-print-directory", "-C", FIXTURE, "-n", "all", sets[0],
+        sets[1] }, arena)
+    assert(section(out, "Commands, filled in", arena).len == plain.stdout_data.lines(arena).len,
+        "as many commands as make -n prints")
+    $k: Sz = 0
+    for l in plain.stdout_data.lines(arena)
+        assert(section(out, "Commands, filled in", arena).get(k).equals(l), "make -n's commands")
+        k += 1
+    pattern: =
+        explain(make, arena.text().s(FIXTURE).s(":out/a.txt").take(), sets, arena)
+    assert(pattern.stdout_data.find_str("`%` standing for 'a'").is_some() &&
+        pattern.stdout_data
+        .find_str(arena.text().s(mf).s("20  $(OUT)/%.txt: %.src").take()).is_some(),
+        "a pattern rule's target names the rule and its stem")
+    // **An up-to-date file still shows its recipe**, decided from the database, not make's words.
+    cmds: = section(pattern.stdout_data, "Commands, filled in", arena)
+    // **The failure names what the tool printed**, so a run on another make shows its answer.
+    said: = arena.text().s("an up-to-date target's commands, as if its prerequisite had changed; ")
+        .s("the tool printed:\n")
+    for l in pattern.stdout_data.lines(arena)
+        said.s("  | ").s(l).c('\n')
+    assert(cmds.len == 1 && cmds.get(0).equals("cp a.src out/a.txt"), U8$[]::said.take())
+    group: =
+        explain(make, arena.text().s(FIXTURE).s(":group").take(), sets, arena)
+    assert(group.stdout_data.find_str("Commands: none").is_some(), "a rule with no recipe")
+    verdict.pass("each flavour is named with its place, and the commands are make -n's.")
+
+fn test_explaining_real_targets(arena: Arena$@) //< `chat` and `help`, held to make's own answers
+    verdict.start("[tools/make_explain] the root build's targets test...")
+    make: = gnu_make(arena)
+    chat: = explain(make, "chat", U8[][]::{}, arena)
+    assert(chat.exited_with(0), "`chat` is explained")
+    // **Each variable's place is the database's**: the text `make -pn` writes above it.
+    db: =
+        run(U8[][]::{ make, "--no-print-directory", "-pn", "LOGGING=1", "chat" }, arena)
+    $checked: Sz = 0
+    for l in section(chat.stdout_data, "Variables", arena)
+        w: = make_db.words(l, arena)
+        if w.len < 3 ||
+            !(w.get(1).equals("=") || w.get(1).equals(":=") || w.get(1).equals("?="))
+            continue
+        colon: = w.get(2).rfind_char(':') catch
+            continue
+        mark: = arena.text().s("(from '").s(w.get(2).sub(0, colon)).s("', line ")
+            .s(w.get(2).sub_from(colon + 1)).s(")\n").s(w.get(0)).s(" ").take()
+        assert(db.stdout_data.find_str(mark).is_some(), "a variable's place is make -pn's")
+        checked += 1
+    // **The failure names what the tool printed**, so a run on another make shows its answer.
+    seen: = arena.text()
+        .s("the places of chat's variables were compared (\{checked\} of at least 5); ")
+        .s("the tool printed:\n")
+    for l in chat.stdout_data.lines(arena)
+        seen.s("  | ").s(l).c('\n')
+    assert(checked >= 5, U8$[]::seen.take())
+    assert(chat.stdout_data.find_str("MODEL       not given.").is_some() &&
+        chat.stdout_data.find_str("DIR         not given.").is_some(),
+        "the settings chat reads are named")
+    help: = explain(make, "help", U8[][]::{}, arena)
+    plain: =
+        run(U8[][]::{ make, "--no-print-directory", "-n", "LOGGING=1", "help" }, arena)
+    shown: = section(help.stdout_data, "Commands, filled in", arena)
+    lines: = plain.stdout_data.lines(arena)
+    assert(shown.len == lines.len && shown.len > 0, "as many commands as make -n prints")
+    for k in Range.asc(lines.len)
+        assert(shown.get(k).equals(lines.get(k)), "help's commands are make -n's")
+    unknown: = explain(make, "chta", U8[][]::{}, arena)
+    assert(unknown.exit_code.unwrap_or(0) == 1 &&
+        unknown.stderr_data.find_str("Nearest names: chat").is_some(),
+        "an unknown target is refused, with the nearest names")
+    verdict.pass("places are make -pn's, commands make -n's, and an unknown name is refused.")
+
+priv const ACTS: U8[] = "out/tmp/make_explain_acts" //< where the fixture that would act is
+
+priv const ACTS_MAKEFILE: U8[] =
+    "LANG_SEEN := $(LC_MESSAGES)|$(LC_ALL)|$(LANGUAGE)\nWHO = there\nGREET = hi $(WHO)\nCURLY = \
+        ${shell echo shell >> ran.txt}\nSTOP = ${error stopped}\nMAYBE = $(if $(NO),$(STOP))\n\ngo: \
+        dep\n\t@echo go >> ran.txt; $(MAKE) -s inner\n\t@echo $(LANG_SEEN) $(MAYBE) $(GREET)\n\t@: \
+        $(CURLY)\n\ndep:\n\t+@echo dep >> ran.txt\n\ninner:\n\t@echo inner >> ran.txt\n\ngo: FLAGS \
+        += -tgt\n.PHONY: go dep inner\n" //<
+            //< Every way a look at a target could act: a `$(MAKE)` line and a `+` line, which make
+            //< runs even under `-n`, a `${shell}` and a `${error}` in braces, and the language of
+            //< make's own words, which the tool reads
+
+fn test_explaining_runs_nothing(arena: Arena$@) //< no recipe, no command, and make's own words
+    verdict.start("[tools/make_explain] a look that acts on nothing test...")
+    make: = gnu_make(arena)
+    fs.mkdir_all(ACTS) catch {}
+    ran: = fs.join(ACTS, "ran.txt", arena)
+    fs.remove_path(ran) catch {}
+    io.write_file(fs.join(ACTS, "Makefile", arena), ACTS_MAKEFILE) catch {}
+    // **A Japanese make translates the database's comments**, which the tool reads. Where no
+    // translation is installed this proves less, so the language make ran in is checked too.
+    sys.set_env("LC_ALL", "ja_JP.UTF-8") catch {}
+    sys.set_env("LANGUAGE", "ja") catch {}
+    got: =
+        explain(make, arena.text().s(ACTS).s(":go").take(), U8[][]::{}, arena)
+    sys.unset_env("LC_ALL") catch {}
+    sys.unset_env("LANGUAGE") catch {}
+    out: = got.stdout_data
+    assert(got.exited_with(0), "the target is explained under a Japanese locale")
+    assert(!fs.exists(ran), "no recipe line ran, nor a `${shell}` in one")
+    cmds: = section(out, "Commands, filled in", arena)
+    assert(cmds.len == 4 && cmds.get(1).equals("echo C||  hi there"),
+        "make ran with its messages in English, and the commands are still make -n's")
+    assert(out.find_str("now: hi there").is_some(),
+        "a `${error}` is not expanded, so the other values are still asked")
+    assert(out.find_str("set for this target alone: FLAGS").is_some(),
+        "a target's own `+=` is named")
+    assert(out.find_str("which gives nothing here").is_some(), "a `$(shell)` not run is said")
+    verdict.pass("no recipe or command ran, make's words were English, and each value is shown.")
+
+priv fn argv_of(line: U8[], program: U8[], arena: Arena$@): U8[] //<
+    //< The words the shell hands the program on a command line, each in `[ ]`
+    assert(line.starts_with(program), "the command starts the program")
+    script: = arena.text().s("printf '[%s]\\n'").s(line.sub_from(program.len)).take()
+    r: = run(U8[][]::{ "bash", "-c", script }, arena)
+    return r.stdout_data
+
+fn test_values_reach_programs_as_typed(arena: Arena$@) //< quotes, `$` and backticks in a value
+    verdict.start("[tools/make_explain] values handed on as typed test...")
+    make: = gnu_make(arena)
+    // `$$` is how a person types one `$` to make; the program must get it, not the shell.
+    typed: = "it's \"a\" $$HOME `x`"
+    want: = "it's \"a\" $HOME `x`"
+    chat: =
+        explain(make, "chat",
+        U8[][]::{ arena.text().s("DIR=").s(typed).take() }, arena)
+    cmds: = section(chat.stdout_data, "Commands, filled in", arena)
+    assert(cmds.len == 1, "chat runs one command")
+    words: = argv_of(cmds.get(0), "./out/ksagent_chat.exe", arena)
+    assert(words.lines(arena).get(0)
+        .equals(arena.text().s("[--dir=").s(want).s("]").take()),
+        "`DIR` reaches the launcher as typed")
+    asked: =
+        explain(make, "explain",
+        U8[][]::{ arena.text().s("T=").s(typed).take() }, arena)
+    shown: = section(asked.stdout_data, "Commands, filled in", arena)
+    assert(shown.len >= 1, "explain runs a command")
+    all: = argv_of(shown.get(0), "./out/ksplc_seed.exe", arena).lines(arena)
+    assert(all.len > 0 &&
+        all.get(all.len - 1)
+        .equals(arena.text().s("[").s(want).s("]").take()), "`T` reaches the tool as typed")
+    verdict.pass("a quote, a `$` and a backtick reach the program as one word, as typed.")

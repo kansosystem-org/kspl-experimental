@@ -1,0 +1,43 @@
+//< Names a file chooses, sorted once and found by halving
+//< Caution: **Do not key a `Map` with a name from a file.** `std/ds`'s `Map` takes no seed, so a
+//< file could choose names that all fall in one bucket and make each lookup slow. Sorting costs
+//< n log n comparisons, whatever the names are.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+
+struct Keyed //< a name, and the place in the caller's list it stands for
+    key: U8[]
+    pos: Sz
+
+struct Index //< names in order, each found by halving
+    priv items: List<|Keyed|>
+
+fn sorted(items: List<|Keyed|>@, arena: Arena$@): Index //< the names put in order
+    //< Equal names keep the order they were given in, so `find` gives the first one given.
+    in_order: = items.order_by(fn(p: Keyed@, q: Keyed@; ): I32 {
+        return p.key.compare(q.key);
+    }, arena)
+    return Index::{ .items = in_order }
+
+impl Index
+    fn find(r: Self@, key: U8[]): Sz? //< the place the first item of that name stands for
+        $lo: Sz = 0
+        $hi: = r.items.len
+        for lo < hi
+            mid: = lo + (hi - lo) / 2
+            if r.items.get(mid).key.compare(key) < 0
+                lo = mid + 1
+            else
+                hi = mid
+        if lo < r.items.len && r.items.get(lo).key.equals(key)
+            return .some(r.items.get(lo).pos)
+        return .none
+
+    fn repeats(r: Self@): Bool //< whether some name stands twice
+        for i in Range(1, r.items.len, 1)
+            if r.items.get(i).key.equals(r.items.get(i - 1).key)
+                return true
+        return false

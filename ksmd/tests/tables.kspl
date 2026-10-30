@@ -30,6 +30,7 @@ fn run()
     sorting()
     looks()
     pasting()
+    pasting_whole()
     kept_small()
     filling()
     series()
@@ -131,8 +132,8 @@ priv fn removing()
     saves("a removed table's references from another table stay as written", ed@, arena,
         "%ksmd 1\n\nText\n\n:::table name=\"b\"\n| \"y\" |\n| =a.A1*2 |\n:::\n")
     verdict.check("and calculate as #REF!", is_error(ed@, 1, 0, 0, arena), "")
-    verdict.check("the caret takes the gap the table left",
-        ed.focus.place == .block_gap && ed.focus.block == 1, "")
+    verdict.check("the caret goes to the end of the text before, as a table stands after",
+        ed.focus.place == .text && ed.focus.block == 0 && ed.focus.offset == 4, "")
     inserted(ed@, 1, 1)
     verdict.check("a new table takes the free name, and no removed table answers to it",
         source_of(ed@, arena).find_str("name=\"table1\"").is_some(), "")
@@ -365,6 +366,31 @@ priv fn looks()
     ed.set_look(0, 0, 0, 0, 0, .size, "100") catch
         refused_look = true
     verdict.check("a size outside 6 to 72 points is refused", refused_look, "")
+
+priv fn pasting_whole()
+    defer arena: = Arena(64 * 1024)
+    copy: =
+        ":::table name=\"t\" widths=\"1,2\" filter=\",above:1\"\n| \"a\" | \"b\" |\n| 1 | \
+            =t.A1+u.A1 |\n:::\n"
+    pasted: =
+        ":::table name=\"t_2\" widths=\"1,2\" filter=\",above:1\"\n| \"a\" | \"b\" |\n| 1 | \
+            =t_2.A1+u.A1 |\n:::\n"
+    before: = arena.text().s("%ksmd 1\n\nText\n\n").s(copy).take()
+    $ed: = opened(before, arena)
+    at: = text_spot(0, 0, 2)
+    ed.select(at, at)
+    ed.paste_table(arena.text().s("%ksmd 1\n\n").s(copy).take()) catch e
+        verdict.check("pasting a whole table", false, e.message())
+    saves("a whole table pastes after the caret's paragraph, its name made free and followed", ed@,
+        arena,
+        arena.text().s("%ksmd 1\n\nText\n\n").s(pasted).s("\n").s(copy).take())
+    ed.undo()
+    saves("and one undo takes it out", ed@, arena, before)
+    for wrong in U8[][]::{ "%ksmd 1\n\nText\n", "Text", "%ksmd 1\n\n:::table name=\"x\"\n" }
+        $refused_paste: = false
+        ed.paste_table(wrong) catch e
+            refused_paste = e.message().starts_with("The clipboard holds no table")
+        verdict.check("text that is no ksmd source of one table is refused", refused_paste, wrong)
 
 priv fn pasting()
     defer arena: = Arena(64 * 1024)

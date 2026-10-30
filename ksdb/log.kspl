@@ -30,6 +30,9 @@ priv const CRC_SEED: U32 = 0xffffffff //< CRC-32 starts from this and is finishe
 pub const MAX_PAYLOAD: Sz = 0xfffe //< the largest content one record can hold.
     //< `0xFFFF` marks an empty slot, so it cannot be a content length.
 priv const EMPTY_LEN: U16 = 0xffff //< the `len` an erased slot reads as (nothing is written yet)
+priv const MAX_KEPT: Sz = 8 //< how many kinds `reset_keeping` can keep
+    //< Their places are held on the stack, since the log holds no heap; a device keeps two or
+    //< three.
 priv const CHUNK_SIZE: Sz = 64 //< how many bytes are read at a time
     //< Caution: The buffer lives on the stack, so keep it small: a microcontroller's task stack is
     //< only a few kilobytes.
@@ -103,6 +106,30 @@ priv fn is_erased(store: Store, at: Sz, len: Sz): Bool //< whether len bytes fro
             if b != 0xff
                 return false
     return true
+
+priv fn erase_or_throw(store: Store, at: Sz): Void!Ksdb_error //< erases the sector holding at
+    if !store.erase_sector(at)
+        throw .write_failed
+
+priv fn copy_record(store: Store, from: Sz, to: Sz): Void!Ksdb_error //<
+    //< Copies the finished record at `from` to the erased place `to`, the content first
+    //< **The header goes last, as in `append`**, so a cut partway leaves an empty slot or a broken
+    //< record, never a header over missing content. The header is copied as it is: the same
+    //< `len`, `kind` and content give the same CRC.
+    $h: U8[HEADER_SIZE] = ::{}
+    store.read_at(from, U8$[]::h)
+    header: = U8[]::h
+    $chunk: U8[CHUNK_SIZE] = ::{}
+    $rd: = Chunks::{ .store = store, .at = from + HEADER_SIZE,
+        .left = header.get_u16_le(LEN_AT) }
+    $at: Sz = to + HEADER_SIZE
+    for rd.left > 0
+        part: = rd.next(U8$[]::chunk)
+        if !store.program_at(at, part)
+            throw .write_failed
+        at += part.len
+    if !store.program_at(to, header)
+        throw .write_failed
 
 priv fn cursor(store: Store, end: Sz): Cursor //< a walk over the records in [0, end)
     return Cursor::{ .store = store, .at = 0, .end = end, .started = false, .len = 0, .kind = 0 }
@@ -186,6 +213,78 @@ impl Log
                 throw .write_failed
             at += r.store.sector_size
         r.tail = 0
+
+    pub fn reset_keeping( //< erases the medium but keeps the newest record of each kind listed
+        //< **A power cut at any step leaves each kept kind's newest record readable**, as it was:
+        //< they are copied to a spare sector before anything else is erased, then copied back to
+        //< the head ("Keeping a few records through an erase" in `ksdb/docs/DESIGN-storage.md`).
+        //< `too_large`, with nothing erased, when the kept records do not fit in one sector, when
+        //< more than eight kinds are listed, or when no sector after the head is free of them.
+        r: Self$@,
+        kinds: U16[], //< the kinds to keep; a kind with no record is skipped
+    ): Void!Ksdb_error
+        if kinds.len > MAX_KEPT
+            throw .too_large
+        // Where each kept record is now, its span, and how much room the copies need together.
+        $kept_at: Sz[MAX_KEPT] = ::{}
+        $kept_span: Sz[MAX_KEPT] = ::{}
+        $kept: Sz = 0
+        $room: Sz = 0
+        for kind in kinds
+            $found: = true
+            it: = r.find_last(kind) catch
+                found = false
+                fallback cursor(r.store, 0)
+            // A kind listed twice is copied once.
+            for i in Range.asc(kept)
+                if kept_at[i] == it.at
+                    found = false
+            if found
+                kept_at[kept] = it.at
+                kept_span[kept] = record_span(it.len)
+                room += kept_span[kept]
+                kept += 1
+        if kept == 0
+            r.reset()!
+            return
+        size: = r.store.sector_size
+        if room > size
+            throw .too_large
+        // The spare sector: the first one after the head that holds none of the kept records.
+        // **Not the head itself**: the copies end there, so they must be staged somewhere else.
+        $spare: Sz = size
+        $busy: = true
+        for busy && spare < r.store.capacity
+            busy = false
+            for i in Range.asc(kept)
+                if r.store.sector_base(kept_at[i]) == spare
+                    busy = true
+            if busy
+                spare += size
+        if busy
+            throw .too_large
+        // 1. Stage the copies in the spare sector. Erasing it loses no kept record.
+        erase_or_throw(r.store, spare)!
+        $to: Sz = spare
+        for i in Range.asc(kept)
+            copy_record(r.store, kept_at[i], to)!
+            to += kept_span[i]
+        // 2. Erase everything else. From here the spare sector's copies stand in for the originals.
+        // Caution: **Erase from the head upward.** A kind's older records lie before its newest, so
+        // they go first. Erased downward, a cut just after the newest original went would leave an
+        // older one beyond the spare sector, which would then read as that kind's newest.
+        $at: Sz = 0
+        for at < r.store.capacity
+            if at != spare
+                erase_or_throw(r.store, at)!
+            at += size
+        // 3. Copy them back to the head, then drop the staged ones.
+        $off: Sz = 0
+        for i in Range.asc(kept)
+            copy_record(r.store, spare + off, off)!
+            off += kept_span[i]
+        erase_or_throw(r.store, spare)!
+        r.tail = room
 
     pub fn used(r: Self$@): Sz //< the number of bytes in use, which is where the next record goes
         return r.tail

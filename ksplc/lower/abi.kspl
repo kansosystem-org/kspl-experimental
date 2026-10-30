@@ -10,6 +10,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/display" as _sema_type_display // `display`, a type's KSPL spelling
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
@@ -17,39 +18,81 @@ import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { Map }
 import "std/str" { Str_builder }
-fn run(r: Ast_node$@, c: Sema_ctx$@) //< the ABI conversion pass's entry point
+fn run(r: Ast_node$@, c: Sema_ctx$@, runtime_names: U8[][]) //<
+    //< The ABI conversion pass's entry point
     //< It overwrites names with their mangled forms in place, recursively over the whole tree.
+    //< runtime_names: the names the C runtime spells (`c_names` in `../gen/runtime.kspl`). The
+    //< pipeline hands them in, since this layer imports nothing of the generators.
     base_diag.ice_assert(r != null, "abi.apply: file_node is null")
     $names: = C_names::{ .globals = global_c_names(c),
-        .declared = Map<|U8[], Sema_symbol$@|>(null) }
+        .declared = Map<|U8[], C_claim|>(null) }
     defer names.globals.free()
     defer names.declared.free()
+    for n in runtime_names
+        names.declared.set(n, C_claim::{ .name = "", .node = null, .type_id = 0 })
+    names.claim_made_types(c)
     r.apply_abi_recursive(c, names@, 0)
+
+priv struct C_claim //< what holds a C name: the C runtime, a type with no declaration, or a global
+    name: U8[] //< the KSPL spelling; empty for a name of the C runtime
+    node: Ast_node$@ //< the declaration, for its position; null where there is none
+    type_id: I32 //< the type it names (a made type, or a type's declaration), or 0
 
 priv struct C_names //< the C names the pass deals in, for the checks on them
     globals: Map<|U8[], Bool|> //< what a local must not spell (`global_c_names`)
-    declared: Map<|U8[], Sema_symbol$@|> //< each global declaration's C name, and whose it is
+    declared: Map<|U8[], C_claim|> //< each global C name, and what holds it
 
 impl C_names
-    priv fn claim(r: Self$@, c: Sema_ctx$@, at: Ast_node$@, sym: Sema_symbol$@, c_name: U8[]) //<
-        //< Records c_name (on the arena) as sym's, and reports it where another global took it first
-        //< **Two KSPL names can meet in C**: `_`, `.` and `/` all become `_`, so `a_b/c.Foo` and
-        //< `a/b_c.Foo` are both `p_a_b_c_Foo`. The C compiler would refuse the second, far from the
-        //< source. A name written as it stands (`extern`, `#export`) is C's own and not checked.
+    priv fn claim_made_types(r: Self$@, c: Sema_ctx$@) //<
+        //< Records the C names of the types C defines with no declaration: arrays and functions
+        //< They are what genc defines from `complex_types` (`../gen/c/decl.kspl`). One name reached
+        //< by two ids (a read-only one and the plain one) is one C type, so the first id holds it.
+        defer $spelled: = Str_builder()
+        for type_id in c.env.complex_types
+            switch c.env.get_info(type_id)
+            case .array(_b, size)
+                if size == -1
+                    continue
+            default {}
+            spelled.clear()
+            c.env.mangle_type_id_to(type_id, spelled)
+            if r.declared.get(spelled.slice()).is_none()
+                r.declared
+                    .set(base_core.arena.dup_str(spelled.slice()),
+                    C_claim::{ .name = c.env.display(type_id), .node = null, .type_id = type_id })
+
+    priv fn claim(r: Self$@, c: Sema_ctx$@, at: Ast_node$@, sym: Sema_symbol$@, c_name: U8[],
+        type_id: I32) //<
+            //< Records c_name (on the arena) as sym's, and reports it where something took it first
+            //< type_id is the type a type's declaration names, or 0. **Two KSPL names can meet in
+            //< C**: `a_b/c.Foo` and `a/b_c.Foo` are both `p_a_b_c_Foo`. So can the C runtime's
+            //< (`check` in a file `bounds`) and a type with no declaration (`Foo[4]`). C would
+            //< refuse the second, far from the source. A name written as it stands (`extern`,
+            //< `#export`) is C's own and not checked.
         if other: = r.declared.get(c_name)
+            $holder: = ""
+            if other.name.len == 0
+                holder = "the C runtime"
+            else if other.node == null
+                if type_id != 0 &&
+                    c.env.get_real_type(type_id) == c.env.get_real_type(other.type_id)
+                    return
+                holder = base_core.arena.text().s("'\{other.name\}'").take()
             // A generic trait's default method has a clone per instance of the trait, each with
             // its symbol; a clone keeps its declaration's position.
-            if other.node != null && sym.node != null &&
-                !other.node.loc.same_as(sym.node.loc)
+            else if sym.node != null && !other.node.loc.same_as(sym.node.loc)
                 file: = base_diag.shown_file(other.node.loc.file())
                 line: = c.line_of(other.node.loc)
+                holder = base_core.arena.text().s("'\{other.name\}' at \{file\}:\{line\}").take()
+            if holder.len > 0
                 c.clear_scratch()
                     .s("'\{sym.name\}' takes the name '\{c_name\}' in the generated C, and so does \
-                        '\{other.name\}' at \{file\}:\{line\}. Rename one of them, or the folder or \
-                        file that holds it")
+                        \{holder\}. Rename one of them, or the folder or file that holds it")
                 c.err(at, c.scratch.slice())
             return
-        r.declared.set(c_name, sym)
+        r.declared
+            .set(c_name,
+            C_claim::{ .name = sym.name, .node = sym.node, .type_id = type_id })
 
 priv fn global_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
     //< The C names of the program's globals that a local can spell: verbatim ones and types'
@@ -132,8 +175,10 @@ impl Ast_node
             return
 
         w: = c.clear_scratch()
-        if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum ||
+        is_type_decl: =
+            r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum ||
             r.kind_id == .k_decl_typedef || r.kind_id == .k_decl_trait
+        if is_type_decl
             // Caution: **A type's declaration takes its type's own name** (`mangle_type_id_to`),
             // the one every use of the type is written with. A name spelled again here from the
             // file's path lost the dot of a folder like `.hidden`. The type's name kept it as `_`,
@@ -148,7 +193,7 @@ impl Ast_node
         id_node.text = base_core.arena.dup_str(w.slice())
         // Caution: **Pass the arena's copy**: a report reuses the scratch the name was spelled in.
         if !sym.uses_verbatim_c_name()
-            names.claim(c, id_node, sym, id_node.text)
+            names.claim(c, id_node, sym, id_node.text, sym.type_id if is_type_decl else 0)
 
     fn receiver_wants_ptr(r: Ast_node$@, c: Sema_ctx$@): Bool //<
         //< Whether the method that the method access `r` calls takes its receiver by pointer

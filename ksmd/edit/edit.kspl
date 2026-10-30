@@ -14,7 +14,7 @@ import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers
 import "ksmd/model/group" { after_insert, after_remove, fault_of, innermost, order }
 import "ksmd/model/look" { Look_part, is_note, plain_look, with_part }
 import "ksmd/model/model" { Cell, Cell_kind, Corner, Document, Group, MAX_CELLS, MAX_COLUMNS,
-    MAX_FORMULA, MAX_ROWS, MAX_WEIGHT, Piece, Table }
+    MAX_FORMULA, MAX_HEIGHT, MAX_ROWS, MAX_WEIGHT, MIN_HEIGHT, Piece, Row_height, Table }
 import "ksmd/model/rule" { Rule, no_rule }
 import "ksmd/syntax/chart" { reads_back }
 import "ksmd/syntax/clause" { is_table_name, reads_as_formula }
@@ -36,6 +36,8 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     not_a_name //< a table name is 1 to 255 bytes of text, with no control character
     name_taken //< another table of this source has the name
     not_widths //< a table takes one width per column, each a whole number from 1 to 10,000
+    not_a_height //< a row's height is a whole number of points from 6 to 409
+    not_a_filter //< a column's filter that the `filter` attribute does not hold
     not_a_look //< a colour is `#rrggbb`, a size 6 to 72 points, an alignment left, center or right
     not_a_format //< a number format the `formats` attribute does not hold
     no_format //< the columns have no number format whose places could change
@@ -79,6 +81,11 @@ impl Edit_error
         case .not_widths
             return "These column widths cannot be saved. Give each column one whole number from 1 \
                 to 10,000."
+        case .not_a_filter
+            return "This filter cannot be saved. Clear it, and choose the values or the condition \
+                again."
+        case .not_a_height
+            return "A row's height is a whole number of points from 6 to 409."
         case .not_a_format
             return "This number format cannot be saved. A currency is three capital letters, as USD \
                 or JPY."
@@ -508,6 +515,22 @@ fn set_widths(doc: Document$@, u: Sz, weights: List<|Sz|>@): Void!Edit_error //<
     for weight in weights
         t.weights.push(weight)
 
+fn set_heights(doc: Document$@, u: Sz, first: Sz, last: Sz, points: Sz): Void!Edit_error //<
+    //< Gives the data rows from `first` to `last` a least height in points; 0 takes it away
+    t: = table_at(doc, u)!
+    if first < 0 || last < first || last >= t.rows.len
+        throw .outside
+    if points != 0 && (points < MIN_HEIGHT || points > MAX_HEIGHT)
+        throw .not_a_height
+    for r in Range(first, last + 1, 1)
+        $i: Sz = 0
+        for i < t.heights.len && t.heights[i].row != t.rows[r]
+            i += 1
+        if i < t.heights.len
+            t.heights.remove_at(i)
+        if points > 0
+            t.heights.push(Row_height::{ .row = t.rows[r], .points = points })
+
 fn set_format(doc: Document$@, u: Sz, first: Sz, last: Sz, f: Number_format, arena: Arena$@):
     Void!Edit_error //<
         //< Gives columns `first` to `last` one number format; no format clears theirs
@@ -734,7 +757,7 @@ priv fn charts_found(doc: Document@, u: Sz): Void!Edit_error //<
             !reads_back(doc, doc.charts[b.first]@)
             throw .chart_name
 
-priv fn attach_loose(doc: Document$@, arena: Arena$@) //<
+fn attach_loose(doc: Document$@, arena: Arena$@) //<
     //< Binds again each formula holding a reference kept as text that names a cell now
     //< So a formula's reference is attached whenever it names a cell, as after reading.
     defer scratch: = Arena(16 * 1024)

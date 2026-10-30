@@ -115,9 +115,9 @@ pub struct Gguf //< a parsed GGUF file, whose values and tensors borrow the file
     pub alignment: Sz //< every tensor's data starts on a multiple of this
     pub data_offset: Sz //< where the data section starts in the file
     priv kvs: List<|Kv|>$@
-    priv kv_index: Map<|U8[], Sz|>$@
+    priv kv_index: Map<|U8[], Sz|>$@ //< a key's name -> its place in `kvs`; keys from the model
     priv list: List<|Gguf_tensor|>$@
-    priv tensor_index: Map<|U8[], Sz|>$@
+    priv tensor_index: Map<|U8[], Sz|>$@ //< a name -> its place in `list`; keys from the model
 
 priv struct Cursor //< reads the file front to back, each read checked against the end
     raw: U8[]
@@ -229,11 +229,16 @@ impl Gguf
             throw .bad_version(version)
         n_tensors: = c.count("tensors", MIN_INFO_BYTES)!
         n_kvs: = c.count("keys", MIN_KV_BYTES)!
-        $g: = Gguf::{ .raw = file, .version = version, .alignment = DEFAULT_ALIGNMENT,
-            .data_offset = 0, .kvs = List<|Kv|>.create(arena),
-            .kv_index = arena.create(Map<|U8[], Sz|>(arena)),
+        $g: = Gguf::{
+            .raw = file,
+            .version = version,
+            .alignment = DEFAULT_ALIGNMENT,
+            .data_offset = 0,
+            .kvs = List<|Kv|>.create(arena),
+            .kv_index = arena.create(Map<|U8[], Sz|>(arena)), // keys from the model
             .list = List<|Gguf_tensor|>.create(arena),
-            .tensor_index = arena.create(Map<|U8[], Sz|>(arena)) }
+            .tensor_index = arena.create(Map<|U8[], Sz|>(arena)) // keys from the model
+        }
         for _i in Range.asc(n_kvs)
             g.read_kv(c@)!
         g.alignment = g.read_alignment()!

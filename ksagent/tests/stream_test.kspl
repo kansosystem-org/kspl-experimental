@@ -1,0 +1,278 @@
+//< A reply that streams: its pieces joined, a stream cut short, a refused stream, the live file
+import "ksagent/answer"
+import "ksagent/chat"
+import "ksagent/events" { Event_reader }
+import "ksagent/files"
+import "ksagent/model"
+import "ksagent/progress" + { Progress }
+import "ksagent/tests/agent_test"
+import "ksagent/tests/stub"
+import "ksagent/watch"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv const QUOTE: U8[] = "receives 10 days of paid leave after six months" //< from `rules/leave.md`
+
+priv fn leave_args(text: U8[], arena: Arena$@): U8[] //<
+    //< an `answer` call's arguments, citing lines 3-4
+    cites: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, QUOTE, arena) }, arena)
+    return stub.answer_args(text, cites, arena)
+
+fn test_a_streamed_answer_is_checked(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a streamed reply is joined piece by piece, and its answer checked")
+    root: = stub.folder(work, "streamed", arena)
+    search: = stub.streamed_call("Let me search the rules.", "search", "{\"text\": \"paid leave\"}",
+        arena)
+    done: = stub.streamed_call("", "answer", leave_args("新入社員は10日です。", arena),
+        arena)
+    s: = stub.start(U8[][]::{ search, done }, arena)
+    a: = agent_test.ask(s, root, "How much paid leave?", arena)
+    verdict.check("the answer joined from pieces keeps its checked source",
+        a.text.equals("新入社員は10日です。") && a.sources.len == 1 &&
+        a.removed.len == 0, a.text)
+    verdict.check("the search joined from pieces ran, and the thinking went back to no server",
+        s.bodies.len == 2 && s.bodies.get(1).find_str("rules/leave.md:3:").is_some() &&
+        s.bodies.get(1).find_str("Let me search").is_none(), s.bodies.get(1))
+    stub.release(s)
+
+fn test_a_stream_cut_short_fails(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a stream that ends before its reply does is no answer")
+    root: = stub.folder(work, "cut", arena)
+    $b: = List<|U8[]|>(arena)
+    b.push(stub.delta("{\"content\": \"Ten\"}", "", arena))
+    no_end: = stub.sse_raw(b.slice(), "", arena)
+    half: = no_end.sub(0, no_end.len - 5)
+    error: = stub.sse_raw(U8[][]::{ stub.delta("{\"content\": \"Ten\"}", "", arena),
+        "{\"error\": {\"message\": \"the context is full\", \"type\": \"server_error\"}}" }, "",
+        arena)
+    $i: Sz = 0
+    cases: = U8[][]::{ no_end, "ended before the reply did", half, "closed the connection", error,
+        "the context is full" }
+    for i < cases.len
+        s: = stub.start(U8[][]::{ cases[i] }, arena)
+        a: = agent_test.ask(s, root, "How much leave?", arena)
+        ended: = answer.ended_line(a@, arena)
+        verdict.check(arena.text().s("a broken stream says: ").s(cases[i + 1]).take(),
+            ended.find_str("broke off").is_some() &&
+            ended.find_str(cases[i + 1]).is_some(), ended)
+        stub.release(s)
+        i += 2
+
+fn test_a_reply_cut_at_its_length_limit_is_not_used(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a reply the length limit cut runs no tool, and is taken for no answer")
+    root: = stub.folder(work, "cut-limit", arena)
+    // The arguments cut before `, "from_line": …` are still valid JSON, as can happen by chance.
+    read: = stub.call("read", "{\"path\": \"rules/leave.md\"}", arena)
+    whole: = stub.calls_ending(U8[][]::{ read }, "length", arena)
+    streamed: = stub.streamed_ending("", "answer", "{\"text\": \"Ten days.\", \"sources\": []}",
+        "length", arena)
+    cases: = U8[][]::{ whole, "a whole reply cut in a read call", streamed,
+        "a streamed reply cut in an answer call" }
+    $i: Sz = 0
+    for i < cases.len
+        s: = stub.start(U8[][]::{ cases[i], cases[i] }, arena)
+        job: = agent_test.job_at(s.port, root, arena)
+        a: = agent_test.ask_on(job, "How much paid leave?", arena)
+        stub.finish(s)
+        ended: = answer.ended_line(a@, arena)
+        verdict.check(arena.text().s(cases[i + 1]).s(": the question ends, saying why").take(),
+            s.bodies.len == 1 && a.text.len == 0 &&
+            ended.find_str("length limit").is_some(), ended)
+        stub.release(s)
+        i += 2
+
+fn test_a_refused_stream_is_asked_whole(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a server that refuses a stream is asked for whole replies")
+    root: = stub.folder(work, "refused", arena)
+    refusal: =
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: \
+            60\r\n\r\n{\"error\": {\"message\": \"streaming is not supported here.\"}}"
+    cites: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, QUOTE, arena) }, arena)
+    whole: = stub.one_call(stub.answer_call("Ten days.", cites, arena), arena)
+    s: = stub.start(U8[][]::{ refusal, whole, whole }, arena)
+    job: = agent_test.job_at(s.port, root, arena)
+    first: = agent_test.ask_on(job, "How much paid leave?", arena)
+    second: = agent_test.ask_on(job, "And again?", arena)
+    stub.finish(s)
+    verdict.check("the question is answered all the same, and the next one too",
+        first.sources.len == 1 && second.sources.len == 1, first.text)
+    verdict.check("the stream is asked once, then never again",
+        s.bodies.len == 3 && s.bodies.get(0).find_str("\"stream\":true").is_some() &&
+        s.bodies.get(1).find_str("\"stream\":false").is_some() &&
+        s.bodies.get(2).find_str("\"stream\":false").is_some(), "")
+    stub.release(s)
+
+fn test_events_are_read_as_the_standard_has_them()
+    verdict.start("[ksagent] server-sent events: line ends, comments, fields and many data lines")
+    defer $r: = Event_reader()
+    defer $got: = List<|U8[]|>(null)
+    defer arena: = Arena(4096)
+    text: = ":ping\r\n\r\nevent: x\r\ndata: one\r\ndata:two\r\rdata: three\n\ndata: cut"
+    for i in Range.asc(text.len)
+        r.add(text.sub(i, 1))
+        for
+            data: = r.next(false) catch
+                break
+            got.push(arena.dup_str(data))
+    tail: = r.next(true)
+    verdict.check("each event's data, its lines joined; a comment and an event cut off give none",
+        got.len == 2 && got.get(0).equals("one\ntwo") && got.get(1).equals("three") &&
+        tail.is_none(), "")
+
+fn test_the_answer_text_grows_as_its_json_arrives()
+    verdict.start("[ksagent] the answer's text is read from arguments cut anywhere")
+    defer arena: = Arena(64 * 1024)
+    args: =
+        "{\"sources\": [{\"quote\": \"a \\\"b\\\"}\"}], \"text\": \"10日 \
+            \\\"x\\\"\\n\\u00e9\\ud83d\\ude00 end\"}"
+    want: = "10日 \"x\"\né😀 end"
+    $grows: = true
+    $last: U8[] = ""
+    defer $reader: = progress.Text_reader()
+    for n in Range.asc(args.len + 1)
+        reader.more(args.sub(0, n))
+        got: = arena.dup_str(reader.out.slice())
+        if !got.starts_with(last)
+            grows = false
+        last = got
+    verdict.check("each cut gives a start of the whole text, and the whole gives all of it",
+        grows && last.equals(want), last)
+    defer $cut: = progress.Text_reader()
+    cut.more("{\"text\": \"ab\\u00")
+    cut.more("{\"text\": \"ab\\u00e9\\ud83d")
+    half: = arena.dup_str(cut.out.slice())
+    cut.more("{\"text\": \"ab\\u00e9\\ud83d\\ude00\"}")
+    verdict.check("an escape cut in two waits for its end; so does a surrogate pair",
+        half.equals("abé") && cut.out.slice().equals("abé😀"), half)
+    verdict.check("the not-found marker shows nothing while it can still be one",
+        shown_of("NOT_FO", arena).len == 0 && shown_of(" not_found", arena).len == 0 &&
+        shown_of("NOTE", arena).equals("NOTE"), "")
+
+fn test_a_long_streamed_answer_takes_memory_in_step_with_its_length()
+    verdict
+        .start("[ksagent] an answer streamed in many pieces takes memory in step with its length")
+    defer arena: = Arena(64 * 1024)
+    defer $shown: = Progress(false, .en, arena)
+    $partial: = model.Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+        .calls = List<|model.Growing_call|>(arena) }
+    partial.calls
+        .push(model.Growing_call::{ .id = "call_1", .name = "answer",
+        .arguments = Str_builder() })
+    args: = (partial.calls.ptr + 0).arguments@
+    args.s("{\"text\": \"")
+    for _k in Range.asc(8000)
+        args.s("ab\\n")
+        shown.saw(partial@)
+    used: = arena.get_total_used()
+    whole: = shown.text.len == 8000 * 3
+    args.free()
+    partial.reasoning.free()
+    partial.content.free()
+    verdict.check(arena.text()
+        .s("24 KB in 8000 pieces is shown whole, within 1 MiB (\{used / 1024\} KiB)").take(),
+        whole && used < 1024 * 1024, "")
+
+priv fn shown_of(content: U8[], arena: Arena$@): U8[] //<
+    //< What the growing text shows of a reply that holds this plain text
+    defer $shown: = Progress(false, .en, arena)
+    $partial: = model.Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+        .calls = List<|model.Growing_call|>(arena) }
+    partial.content.s(content)
+    shown.saw(partial@)
+    out: = arena.dup_str(shown.text.slice())
+    partial.reasoning.free()
+    partial.content.free()
+    return out
+
+fn test_the_live_file_follows_the_answer(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a live file shows the answer as it grows, then that it is recorded")
+    root: = stub.folder(work, "live", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    io.write_file(ask, ASKED_LEAVE) catch panic("the ask file can be written")
+    done: = stub.streamed_call("", "answer", leave_args("Ten days.", arena), arena)
+    s: = stub.start(U8[][]::{ done }, arena)
+    wrote: = watch_one(s, root, ask, arena)
+    live: = io.read_file(files.live_path(ask, arena), arena) catch
+        fallback ""
+    recorded: = io.read_file(files.chat_path(ask, arena), arena) catch
+        fallback ""
+    verdict.check("the answer stands in the chat file, checked",
+        wrote &&
+        recorded.find_str("\"state\":\"checked\",\"text\":\"Ten days.\"").is_some(), recorded)
+    verdict.check("the live file ends saying the turn is recorded, and holds no text",
+        live.equals("{\"id\":\"q1\",\"phase\":\"done\"}\n"), live)
+    verdict.check("a chat file is no source: a search passes it over",
+        files.tool_search(root, "Ten days", "", arena).find_str("team.").is_none(), "")
+
+fn test_a_removed_question_stops_its_answer(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a question gone from its ask file while its answer streams stops it")
+    root: = stub.folder(work, "stop", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    io.write_file(ask, ASKED_LEAVE) catch panic("the ask file can be written")
+    slow: = stub.streamed_call("", "answer", leave_args("Ten days, after six months.", arena),
+        arena)
+    s: = stub.start_dripping(U8[][]::{ slow }, ask, "", 100, arena)
+    started: = sys.mono_us()
+    wrote: = watch_one(s, root, ask, arena)
+    seconds: = (sys.mono_us() - started) / 1000000I64
+    full: = I64::(slow.len / 48 + 1) / 10I64
+    recorded: = io.read_file(files.chat_path(ask, arena), arena) catch
+        fallback ""
+    verdict.check("the stream stops before it ends", wrote && seconds < full,
+        arena.text().s("\{seconds\} s of \{full\} s").take())
+    verdict.check("the turn is recorded as stopped, saying why",
+        recorded.find_str("\"state\":\"stopped\"").is_some() &&
+        recorded.find_str("the question is no longer in its ask file").is_some(), recorded)
+
+priv fn watch_one(s: stub.Stub$@, root: U8[], ask: U8[], arena: Arena$@): Bool //<
+    //< Answers the pending question of an ask file through the stand-in, as `watch` would, quietly
+    asks: = chat.read_asks(ASKED_LEAVE, arena)
+    none: = chat.read_chat("", arena) catch panic("an empty chat file reads")
+    p: = chat.find_pending(asks@, none@, arena) catch
+        panic("the question is pending")
+    wrote: = watch.answer_one(agent_test.job_at(s.port, root, arena), ask, p, arena)
+    stub.finish(s)
+    stub.release(s)
+    return wrote
+
+priv const ASKED_LEAVE: U8[] =
+    "{\"type\": \"question\", \"id\": \"q1\", \"text\": \"How much paid leave?\"}\n" //<
+        //< an ask file with one question
+
+fn test_a_stopped_answer_stays_marked_unchecked(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] text shown before a stop stays in the live file, marked stopped")
+    root: = stub.folder(work, "unchecked", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    live: = files.live_path(ask, arena)
+    defer $shown: = Progress.following(ask, live, "q1", .en, false, arena)
+    $partial: = model.Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+        .calls = List<|model.Growing_call|>(arena) }
+    partial.calls
+        .push(model.Growing_call::{ .id = "call_1", .name = "answer",
+        .arguments = Str_builder() })
+    (partial.calls.ptr + 0).arguments.s("{\"text\": \"Ten days, after")
+    shown.saw(partial@)
+    growing: = io.read_file(live, arena) catch
+        fallback ""
+    shown.ended("the model server broke off", false)
+    text: = io.read_file(live, arena) catch
+        fallback ""
+    (partial.calls.ptr + 0).arguments.free()
+    partial.reasoning.free()
+    partial.content.free()
+    waiting: = "{\"id\":\"q1\",\"phase\":\"waiting\",\"tools\":\"\",\"text\":\"\"}\n"
+    writing: = "{\"id\":\"q1\",\"phase\":\"writing\",\"tools\":\"\",\"text\":\"Ten days, after\"}\n"
+    stopped: =
+        "{\"id\":\"q1\",\"phase\":\"stopped\",\"why\":\"the model server broke off\",\"text\":\"Ten \
+            days, after\"}\n"
+    verdict.check("while it grows, the live file names the question, the phase and the text",
+        growing.equals(waiting) || growing.equals(writing), growing)
+    verdict.check("after the stop, it says stopped and why, beside the text shown",
+        text.equals(stopped), text)

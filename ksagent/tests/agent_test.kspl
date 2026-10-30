@@ -4,6 +4,7 @@ import "ksagent/answer" + { Answer, Lang }
 import "ksagent/chat"
 import "ksagent/files"
 import "ksagent/model"
+import "ksagent/progress" { Progress }
 import "ksagent/tests/stub" + { Stub }
 import "std/chars"
 import "std/ds" { List }
@@ -23,10 +24,24 @@ fn job_at(port: I32, root: U8[], arena: Arena$@): agent.Ask //<
 
 fn ask(s: Stub$@, root: U8[], question: U8[], arena: Arena$@): Answer //<
     //< Asks one question of the stand-in, and waits for it to stop
-    none: = List<|agent.Turn|>(arena)
-    a: = agent.run(job_at(s.port, root, arena), question, none@, Lang.of(question), arena)
+    a: = ask_on(job_at(s.port, root, arena), question, arena)
     stub.finish(s)
     return a
+
+fn ask_on(job: agent.Ask, question: U8[], arena: Arena$@): Answer //<
+    //< Asks one question with what a job holds, showing nothing as the answer grows
+    none: = List<|answer.Turn|>(arena)
+    lang: = Lang.of(question)
+    defer $shown: = Progress(false, lang, arena)
+    return agent.run(job, question, none@, lang, shown@, arena)
+
+fn recorded(a: Answer@, arena: Arena$@): U8[] //<
+    //< The answer's record, as `watch` writes it into a chat file for the question `q1`
+    none: = List<|answer.Turn|>(arena)
+    p: = chat.Pending::{ .id = "q1", .question = "How much paid leave?", .lang = a.lang,
+        .history = none }
+    lines: = chat.turn_lines(p@, a, "", arena)
+    return lines.sub_from(lines.find_char('\n').unwrap_or(0) + 1)
 
 fn test_a_round_whose_quote_checks(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] search, read and answer, with a quote that stands there")
@@ -42,16 +57,37 @@ fn test_a_round_whose_quote_checks(work: U8[], arena: Arena$@)
     a: = ask(s, root, "How much paid leave does a new employee get?", arena)
     verdict.check("the answer keeps its one source, checked",
         a.sources.len == 1 && a.removed.len == 0 && !a.is_unverified(), a.text)
-    verdict.check("the first request offers the tools and asks for no stream",
+    verdict.check("the first request offers the tools and asks for a stream",
         s.bodies.len == 3 && s.bodies.get(0).find_str("\"tools\"").is_some() &&
-        s.bodies.get(0).find_str("\"stream\":false").is_some(), "")
+        s.bodies.get(0).find_str("\"stream\":true").is_some(), "")
     verdict.check("a search finds the line whatever its ASCII case, and skips out/ and chat files",
         s.bodies.get(1).find_str("rules/leave.md:3: A new employee").is_some() &&
         s.bodies.get(1).find_str("build output").is_none() &&
-        s.bodies.get(1).find_str("team.chat.ksmd").is_none(), s.bodies.get(1))
+        s.bodies.get(1).find_str("team.chat.jsonl").is_none(), s.bodies.get(1))
     verdict.check("a read numbers its lines",
         s.bodies.get(2).find_str("4: after six months of work.").is_some(), s.bodies.get(2))
     stub.release(s)
+
+fn test_the_console_gets_no_control_character()
+    verdict
+        .start("[ksagent] text from the model or a file reaches the console with no control code")
+    defer arena: = Arena(64 * 1024)
+    $a: = Answer.ended(.answered, .en, arena)
+    a.text = arena.text().s("Ten").c(27U8).s("]0;title").c(7U8).s(" days\r\n").c(27U8)
+        .s("[2J\tdone").c(0xC2U8).c(0x9BU8).s("x").take()
+    a.removed
+        .push(arena.text().s("rules/").c(27U8).s("[31mx.md: wrong").take())
+    out: = arena.text()
+    answer.write_console(a@, out, arena)
+    shown: = out.take()
+    $clean: = true
+    for i in Range.asc(shown.len)
+        c: = shown[i]
+        if (c < 0x20U8 && c != '\n' && c != '\t') || c == 0x7FU8 ||
+            (c == 0xC2U8 && i + 1 < shown.len && shown[i + 1] >= 0x80U8 && shown[i + 1] < 0xA0U8)
+            clean = false
+    verdict.check("each control character but a line break and a tab is replaced",
+        clean && shown.starts_with("Ten�]0;title� days�\n�[2J\tdone�x\n"), shown)
 
 fn test_a_wrong_quote_is_removed_and_counted(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a source whose quote does not stand there is removed")
@@ -67,10 +103,14 @@ fn test_a_wrong_quote_is_removed_and_counted(work: U8[], arena: Arena$@)
     verdict.check("the quote that stands there is kept, line breaks aside", a.sources.len == 1, "")
     verdict.check("the wrong quote, the too-wide range and the one-word quote are removed, and \
         counted", a.removed.len == 3, "")
-    block: = chat.answer_block(a@, arena)
-    verdict.check("the chat answer says how many were removed, and shows the kept quote",
-        block.find_str("Removed 3 cited source(s)").is_some() &&
-        block.find_str("`rules/leave.md` lines 3–4\n\n> 10 days of paid leave").is_some(), block)
+    block: = recorded(a@, arena)
+    kept: =
+        "\"path\":\"rules/leave.md\",\"from_line\":3,\"to_line\":4,\"quote\":\"10 days of paid \
+            leave\""
+    why: = "\"removed\":[\"rules/leave.md lines 3–4: the quote does not stand"
+    verdict.check("the answer's record says how many were removed, and why, and keeps the quote",
+        block.find_str("\"notes\":[\"Removed 3 cited source(s)").is_some() &&
+        block.find_str(why).is_some() && block.find_str(kept).is_some(), block)
     stub.release(s)
 
 fn test_an_escaping_path_is_refused(work: U8[], arena: Arena$@)
@@ -78,7 +118,7 @@ fn test_an_escaping_path_is_refused(work: U8[], arena: Arena$@)
     root: = stub.folder(work, "escape", arena)
     $paths: = List<|U8[]|>(arena)
     for p in U8[][]::{ "../escape-outside.txt", "/etc/passwd", ".env", ".hidden/notes.md",
-        "rules/../../escape-outside.txt", "data.bin", "team.chat.ksmd" }
+        "rules/../../escape-outside.txt", "data.bin", "team.chat.jsonl" }
         paths.push(p)
     linked: = make_link(root, "link.md", "../escape-outside.txt", arena)
     if linked
@@ -107,9 +147,48 @@ fn test_an_escaping_path_is_refused(work: U8[], arena: Arena$@)
     verdict.check("a listing leaves out hidden names, links and chat files",
         listing.find_str(".env").is_none() && listing.find_str(".hidden").is_none() &&
         listing.find_str("link.md").is_none() &&
-        listing.find_str("team.chat.ksmd").is_none() &&
+        listing.find_str("team.chat.jsonl").is_none() &&
         listing.find_str("rules/").is_some(), listing)
     stub.release(s)
+
+fn test_an_empty_segment_or_a_missing_name_is_no_hidden_name(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an empty segment is skipped, and a name not there yet is not hidden")
+    // Caution: **A long name that cannot be read counts as hidden only where something stands.**
+    // `eval --out` names a file it is about to make, and Windows reads no long name for `rules/`.
+    root: = stub.folder(work, "segments", arena)
+    for p in U8[][]::{ "rules//leave.md", "rules/new.md", "new/report.md" }
+        verdict.check(arena.text().s("the path is taken: ").s(p).take(), taken(root, p, arena), "")
+    verdict.check("a hidden name behind an empty segment is still refused",
+        !taken(root, ".hidden//notes.md", arena), "")
+
+priv fn taken(root: U8[], given: U8[], arena: Arena$@): Bool //< whether `files.resolve` takes it
+    switch files.resolve(root, given, arena)
+    case .ok
+        return true
+    case .refused
+        return false
+
+fn test_a_conversation_file_in_any_case_is_no_source(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a conversation's file named in any ASCII case is no source")
+    // Windows and macOS open `team.CHAT.jsonl` as `team.chat.jsonl`, so the name rule ignores case
+    // on every system; Linux, where the two are apart, shows that the rule holds.
+    root: = stub.folder(work, "case", arena)
+    names: = U8[][]::{ "Team.CHAT.jsonl", "rules/x.ASK.JSONL", "y.Live.Json", "old.Chat.KSMD" }
+    said: = "paid leave, as a conversation said it\n"
+    fs.write_tree(root, names, U8[][]::{ said, said, said, said }, arena)
+        catch panic("the files can be written")
+    for k in Range.asc(3)
+        got: = files.tool_read(root, names[k], 1I64, 5I64, arena)
+        verdict.check(arena.text().s("reading ").s(names[k]).s(" is refused").take(),
+            got.starts_with("refused: a conversation's file"), got)
+    listing: = files.tool_list(root, "", arena)
+    hits: = files.tool_search(root, "paid leave", "", arena)
+    verdict.check("a listing and a search leave them out",
+        listing.find_str("Team.").is_none() && listing.find_str("y.Live").is_none() &&
+        hits.find_str("Team.").is_none() && hits.find_str("x.ASK").is_none() &&
+        hits.find_str("y.Live").is_none(), hits)
+    verdict.check("a chat file of the old form is found whatever its case",
+        files.old_chat_file(root, arena).ends_with("old.Chat.KSMD"), "")
 
 priv fn said_not_found(a: Answer@): Bool //< whether the answer is the not-found answer
     switch a.outcome
@@ -125,6 +204,58 @@ priv fn make_link(root: U8[], name: U8[], target: U8[], arena: Arena$@): Bool //
         subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
         return false
     return r.exited_with(0) && fs.is_link(at)
+
+priv fn big_text(arena: Arena$@): U8[] //< about 1 MiB of lines that hold no word asked for
+    out: = arena.text()
+    for k in Range.asc(32 * 1024)
+        out.s("filler line \{k\} of a large file\n")
+    return out.take()
+
+fn test_a_search_keeps_only_the_lines_it_found(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a search over large files keeps only the lines it found")
+    root: = stub.folder(work, "big-search", arena)
+    big: = big_text(arena)
+    fs.write_tree(root, U8[][]::{ "big/a.txt", "big/b.txt", "big/c.txt", "big/d.txt" },
+        U8[][]::{ big, big, big, big }, arena) catch panic("the large files can be written")
+    defer own: = Arena(64 * 1024)
+    hits: = files.tool_search(root, "paid leave", "", own)
+    used: = own.get_total_used()
+    verdict.check(arena.text().s("4 MiB searched, within 256 KiB kept (\{used / 1024\} KiB)").take(),
+        hits.find_str("rules/leave.md:3:").is_some() && used < 256 * 1024, hits)
+
+fn test_a_tool_call_keeps_no_file_it_read(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a question keeps what each tool gave back, not the files it read")
+    root: = stub.folder(work, "big-read", arena)
+    fs.write_tree(root, U8[][]::{ "big/a.txt" }, U8[][]::{ big_text(arena) }, arena)
+        catch panic("the large file can be written")
+    call: = stub.call("read", "{\"path\": \"big/a.txt\", \"from_line\": 1, \"to_line\": 3}", arena)
+    read: = stub.one_call(call, arena)
+    src: = stub.source("big/a.txt", 2, 3, "filler line 1 of a large file", arena)
+    cites: = stub.list_of(U8[][]::{ src, src, src }, arena)
+    done: = stub.one_call(stub.answer_call("Fillers.", cites, arena), arena)
+    s: = stub.start(U8[][]::{ read, read, read, done }, arena)
+    job: = job_at(s.port, root, arena)
+    defer own: = Arena(64 * 1024)
+    a: = ask_on(job, "What fills the file?", own)
+    stub.finish(s)
+    stub.release(s)
+    used: = own.get_total_used()
+    verdict.check(arena.text()
+        .s("three reads and three checks of 1 MiB, within 512 KiB kept (\{used / 1024\} KiB)")
+        .take(), a.sources.len == 3 && used < 512 * 1024, a.text)
+
+fn test_a_search_skips_out_unless_given_it(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a search skips every folder named out, unless its path is given")
+    root: = stub.folder(work, "out-rule", arena)
+    fs.write_tree(root, U8[][]::{ "rules/out/deep.md" },
+        U8[][]::{ "paid leave, deep output\n" }, arena)
+        catch panic("the nested folder can be written")
+    all: = files.tool_search(root, "paid leave", "", arena)
+    given: = files.tool_search(root, "paid leave", "rules/out", arena)
+    verdict.check("a search of the root passes over out/ and rules/out/",
+        all.find_str("build output").is_none() && all.find_str("deep output").is_none(), all)
+    verdict.check("a search given rules/out reads it",
+        given.find_str("rules/out/deep.md:1:").is_some(), given)
 
 fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds Japanese text as plain bytes")
@@ -165,9 +296,9 @@ fn test_plain_text_is_an_unverified_answer(work: U8[], arena: Arena$@)
     text: = stub.text_reply("Ten days, I think.", arena)
     s: = stub.start(U8[][]::{ text, text }, arena)
     a: = ask(s, root, "How much paid leave?", arena)
-    block: = chat.answer_block(a@, arena)
-    verdict.check("it is marked unverified",
-        a.is_unverified() &&
+    block: = recorded(a@, arena)
+    verdict.check("it is marked unverified, in its state and in a note",
+        a.is_unverified() && block.find_str("\"state\":\"unverified\"").is_some() &&
         block.find_str("Unverified: no cited source passed the check.").is_some(), block)
     verdict.check("the model was asked once to call answer, and only once",
         s.bodies.len == 2 &&
@@ -205,28 +336,61 @@ fn test_the_round_cap_stops_the_loop(work: U8[], arena: Arena$@)
         ended.find_str("tool rounds").is_some(), ended)
     stub.release(s)
 
+fn test_the_request_cap_stops_before_the_servers_context(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a conversation that outgrows the launcher's context stops at the cap")
+    root: = stub.folder(work, "request-cap", arena)
+    wide: = arena.text()
+    for k in Range.asc(1000)
+        wide
+            .s("a line of about a hundred bytes, so that one read returns its cap of 32 KiB: \
+                \{k\}\n")
+    fs.write_tree(root, U8[][]::{ "big/wide.txt" }, U8[][]::{ wide.take() }, arena)
+        catch panic("the large file can be written")
+    call: = stub.call("read", "{\"path\": \"big/wide.txt\", \"from_line\": 1, \"to_line\": 400}",
+        arena)
+    read: = stub.one_call(call, arena)
+    s: = stub.start(U8[][]::{ read, read, read, read }, arena)
+    a: = ask(s, root, "What fills the file?", arena)
+    ended: = answer.ended_line(a@, arena)
+    verdict.check("the request after one read of 32 KiB goes out; the one after two stops at the \
+        cap", s.bodies.len == 2 && ended.find_str("cap of 64 KiB").is_some(), ended)
+    stub.release(s)
+
+fn test_a_request_refused_twice_names_the_context(work: U8[], arena: Arena$@)
+    verdict
+        .start("[ksagent] a request refused with and without a stream says the context can be why")
+    root: = stub.folder(work, "refused-twice", arena)
+    refusal: =
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: \
+            44\r\n\r\n{\"error\": {\"message\": \"too long for it\"}}"
+    s: = stub.start(U8[][]::{ refusal, refusal }, arena)
+    a: = ask(s, root, "How much paid leave?", arena)
+    ended: = answer.ended_line(a@, arena)
+    verdict.check("the line gives the server's words, then what to do about the context",
+        ended.find_str("too long for it").is_some() &&
+        ended.find_str("larger context").is_some(), ended)
+    stub.release(s)
+
 fn test_an_unreachable_server_answers_in_one_line(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a model server that does not answer gives a one-line answer")
     root: = stub.folder(work, "unreachable", arena)
     listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("a free port can be taken")
     port: = listener.port() catch panic("a bound socket knows its port")
     listener.free()
-    none: = List<|agent.Turn|>(arena)
-    a: = agent.run(job_at(port, root, arena), "How much leave?", none@, .en, arena)
-    block: = chat.answer_block(a@, arena)
-    body: = block.strip_prefix("## Answer\n\n")
-    verdict.check("the answer is one line saying the server does not answer",
-        body.find_char('\n').unwrap_or(0) == body.len - 1 &&
-        body.find_str("does not answer").is_some(), block)
+    a: = ask_on(job_at(port, root, arena), "How much leave?", arena)
+    block: = recorded(a@, arena)
+    verdict.check("the answer is a failure, with one note saying the server does not answer",
+        block.find_str("\"state\":\"failed\",\"text\":\"\"").is_some() &&
+        block.find_str("\"notes\":[\"No answer: ").is_some() &&
+        block.find_str("does not answer").is_some(), block)
 
-fn test_a_chunked_reply_is_named(work: U8[], arena: Arena$@)
-    verdict.start("[ksagent] a chunked reply fails with a message that names it")
-    root: = stub.folder(work, "chunked", arena)
-    raw: = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+fn test_a_reply_with_no_length_is_named(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a reply that names no length and is not chunked fails, saying why")
+    root: = stub.folder(work, "no-length", arena)
+    raw: = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"choices\": []}"
     s: = stub.start(U8[][]::{ raw }, arena)
     a: = ask(s, root, "How much leave?", arena)
     ended: = answer.ended_line(a@, arena)
-    verdict.check("the message names chunks, and the servers that send a length",
-        ended.find_str("Transfer-Encoding: chunked").is_some() &&
-        ended.find_str("llama-server and vLLM").is_some(), ended)
+    verdict.check("the message says a cut reply could not be told from a whole one",
+        ended.find_str("cannot be told from a whole one").is_some(), ended)
     stub.release(s)

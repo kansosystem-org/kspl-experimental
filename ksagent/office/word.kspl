@@ -1,0 +1,372 @@
+//< A Word file (.docx) as lines of text: one paragraph a line, one table row a line
+//< The body is read in order. **What the reader of the document sees is kept**: inserted text,
+//< text boxes, list numbers and footnotes. **What the reader does not see is left out**: deleted
+//< text, hidden text, comments, field codes, and the copy of a text box kept for older readers.
+//< Headers and footers are left out too: they repeat on every page, and hold page numbers.
+//< A heading opens with one `#` per level. A footnote's mark is `[^1]` in the text, and the note
+//< is a line at the end, `[^1]: …`. A table row's cells are joined by ` | `, and a cell merged
+//< down from the row above repeats its text, so each row reads whole.
+import "ksagent/office/index" + { Index, Keyed }
+import "ksagent/office/numbering" + { Numbering }
+import "ksagent/office/package" + { View }
+import "ksagent/office/styles" + { Styles }
+import "ksagent/office/xml"
+import "ksagent/office/zip" { Zip }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+priv const MAX_NOTES: Sz = 1000 //< the most notes given a mark; a later reference shows none
+    //< Each reference looks through the marks given, so this bounds the work a reference takes.
+priv const MAX_GRID: Sz = 4096 //< the widest table whose cells merge downwards; Word allows 63
+
+fn text_of(data: U8[], cap: Sz, arena: Arena$@): U8[]!U8[] //<
+    //< The text view of a Word file's bytes, at most `cap` bytes; or why it cannot be read
+    $z: = package.open(data, arena)!
+    main: = package.main_part(z@, arena)!
+    rels: = package.rels_of(z@, main, arena)!
+    $doc: = Doc::{ .styles = styles.empty(arena), .lists = numbering.empty(arena),
+        .view = package.view(cap, arena), .notes = List<|Note_ref|>(arena), .arena = arena }
+    styles_part: = package.find(rels@, "styles")
+    if styles_part.len > 0
+        doc.styles = styles.read(z.part(styles_part, arena)!, arena)!
+    numbering_part: = package.find(rels@, "numbering")
+    if numbering_part.len > 0
+        doc.lists = numbering.read(z.part(numbering_part, arena)!, doc.view.work@, arena)!
+    _none: = walk(doc@, z.part(main, arena)!, .body)!
+    if doc.notes.len == 0
+        return doc.view.take()
+    foot: = notes_of(z@, package.find(rels@, "footnotes"), doc@)!
+    end: = notes_of(z@, package.find(rels@, "endnotes"), doc@)!
+    for i in Range.asc(doc.notes.len)
+        n: = doc.notes.get(i)
+        text: = (end if n.endnote else foot).text(n.id)
+        doc.view.add(arena.text().s(n.mark).s(": ").s(text).take())!
+    return doc.view.take()
+
+priv struct Doc //< what reading one document needs
+    styles: Styles
+    lists: Numbering
+    view: View
+    notes: List<|Note_ref|> //< the notes the text refers to, in the order of their marks
+    arena: Arena$@
+
+priv struct Note_ref //< one footnote or endnote the text refers to
+    endnote: Bool
+    id: U8[]
+    mark: U8[] //< `[^1]` for a footnote, `[^e1]` for an endnote
+
+priv enum Part //< which part is read, which decides where a line outside every box goes
+    body //< the view
+    notes //< nowhere: in a notes part, only the text inside a note counts
+
+priv struct Notes //< the text of each note in a notes part, by id
+    ids: Index //< each note's id, to its place in `texts`
+    texts: List<|U8[]|>
+
+impl Notes
+    fn text(r: Self@, id: U8[]): U8[] //< the text of the note of that id; empty for none
+        pos: = r.ids.find(id) catch
+            return ""
+        return r.texts.get(pos)
+
+priv fn notes_of(z: Zip$@, part: U8[], doc: Doc$@): Notes!U8[] //<
+    //< The notes of a footnotes or endnotes part; none where there is no part
+    $w: =
+        (walk(doc, z.part(part, doc.arena)!, .notes)! if part.len > 0
+        else Part.notes.new_walk(doc.arena))
+    return Notes::{ .ids = index.sorted(w.note_ids@, doc.arena), .texts = w.note_texts }
+
+// ==========================================
+// Boxes: what collects the text being read
+// ==========================================
+
+priv enum Kind
+    para //< a paragraph
+    cell //< a table cell
+    note //< a footnote or an endnote
+
+priv struct Box //< one open paragraph, table cell or note, and the text it has so far
+    kind: Kind
+    depth: Sz //< the reader's depth at its start tag; its end comes back one below it
+    text: str.Arena_text$@
+    empty: Bool //< nothing is written into `text` yet
+    after: List<|U8[]|> //< a paragraph's text boxes' lines, which follow its own line
+    style: U8[] //< a paragraph's style id
+    num_id: U8[] //< its own list number; empty where its properties name none
+    level: I32 //< its own list level; -1 where they name none
+    outline: I32 //< its own outline level; -1 where they name none
+    span: Sz //< a cell's width in grid columns
+    merge: I32 //< a cell's vertical merge: 0 none, 1 the first cell, 2 a cell merged into it
+    id: U8[] //< a note's id
+
+priv struct Table //< one open table: the row being read, and the cells merged downwards
+    depth: Sz
+    cells: List<|U8[]|> //< the current row's cells so far
+    col: Sz //< the grid column the next cell starts at
+    above: List<|U8[]|> //< each grid column's text where its last cell started, to `MAX_GRID`
+
+priv struct Walk //< the boxes and tables open where the reader stands
+    part: Part
+    boxes: List<|Box$@|>
+    tables: List<|Table$@|>
+    in_t: Bool //< inside a `t`, whose text is the document's text
+    hidden: Bool //< the current run is hidden text (`vanish`)
+    note_ids: List<|Keyed|> //< each note read so far, by id, to its place in `note_texts`
+    note_texts: List<|U8[]|>
+
+impl Kind
+    fn new_box(r: Self, depth: Sz, arena: Arena$@): Box$@ //< an empty box of this kind
+        return arena
+            .create(Box::{ .kind = r, .depth = depth, .text = arena.text(), .empty = true,
+            .after = List<|U8[]|>(arena), .style = "", .num_id = "", .level = -1, .outline = -1,
+            .span = 1, .merge = 0, .id = "" })
+
+impl Box
+    fn put(r: Self$@, text: U8[]) //< appends text, a space between it and what is there
+        if text.len == 0
+            return
+        if !r.empty
+            r.text.c(' ')
+        r.text.s(text)
+        r.empty = false
+
+    fn put_raw(r: Self$@, text: U8[]) //< appends text as it stands
+        r.text.s(text)
+        r.empty = r.empty && text.len == 0
+
+// ==========================================
+// Reading a part
+// ==========================================
+
+impl Part
+    fn new_walk(r: Self, a: Arena$@): Walk //< a walk of a part of this kind, with nothing open yet
+        return Walk::{ .part = r, .boxes = List<|Box$@|>(a), .tables = List<|Table$@|>(a),
+            .in_t = false, .hidden = false, .note_ids = List<|Keyed|>(a),
+            .note_texts = List<|U8[]|>(a) }
+
+priv fn walk(doc: Doc$@, src: U8[], part: Part): Walk!U8[] //<
+    //< Reads one part to its end, sending each finished line where it belongs
+    //< Returns the walk, which holds the notes the part holds; a body holds none.
+    a: = doc.arena
+    $x: = xml.reader(src, a)!
+    $w: = part.new_walk(a)
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            return w
+        if ev == xml.Event.text
+            if w.in_t && !w.hidden && w.boxes.len > 0
+                w.boxes.get(w.boxes.len - 1).put_raw(x.text_of(a)!)
+        else if ev == xml.Event.end
+            end_of(doc, x@, w@)!
+        else if skipped(x.name)
+            x.skip()!
+        else
+            start_of(doc, x@, w@)!
+
+priv fn skipped(name: U8[]): Bool //< whether an element and all it holds are left out
+    //< Deleted text (`del`, `moveFrom`), the copy of a text box for older readers (`Fallback`),
+    //< tab stops (`tabs`, whose `tab` is no tab character), the record of earlier formatting
+    //< (`…Change`), and a section's properties.
+    return name.equals("del") || name.equals("moveFrom") || name.equals("Fallback") ||
+        name.equals("tabs") || name.ends_with("Change") || name.equals("sectPr")
+
+priv fn start_of(doc: Doc$@, x: xml.Reader$@, w: Walk$@): Void!U8[] //< takes one start tag
+    //< Each paragraph, table, row and cell is charged to the file's work before it is made.
+    a: = doc.arena
+    name: = x.name
+    if name.equals("p") || name.equals("tbl") || name.equals("tr") || name.equals("tc") ||
+        name.equals("footnote") || name.equals("endnote")
+        doc.view.work.charge(package.ITEM_WORK)!
+    if name.equals("p")
+        w.boxes.push(Kind.para.new_box(x.depth(), a))
+    else if name.equals("t")
+        w.in_t = true
+    else if name.equals("r")
+        w.hidden = false
+    else if name.equals("tbl")
+        tb: = a
+            .create(Table::{ .depth = x.depth(), .cells = List<|U8[]|>(a), .col = 0,
+            .above = List<|U8[]|>(a) })
+        w.tables.push(tb)
+    else if name.equals("tr") && w.tables.len > 0
+        tb: = w.tables.get(w.tables.len - 1)
+        tb.cells = List<|U8[]|>(a)
+        tb.col = 0
+    else if name.equals("tc") && w.tables.len > 0
+        w.boxes.push(Kind.cell.new_box(x.depth(), a))
+    else if name.equals("gridBefore") && w.tables.len > 0
+        // **The cells skipped stop at the widest grid read**: past it no cell merges downwards,
+        // and a few bytes could otherwise ask for millions of empty cells.
+        tb: = w.tables.get(w.tables.len - 1)
+        before: = count_of(x.attr_or("val", "0", a)!)
+        for _k in Range.asc(before)
+            if tb.col >= MAX_GRID
+                break
+            doc.view.work.charge(package.ITEM_WORK)!
+            tb.cells.push("")
+            tb.col += 1
+    else if (name.equals("footnote") || name.equals("endnote")) && w.part == Part.notes
+        kind: = x.attr_or("type", "normal", a)!
+        if kind.equals("separator") || kind.equals("continuationSeparator") ||
+            kind.equals("continuationNotice")
+            x.skip()!
+            return
+        box: = Kind.note.new_box(x.depth(), a)
+        box.id = x.attr_or("id", "", a)!
+        w.boxes.push(box)
+    else if w.boxes.len > 0
+        in_box(doc, x, w.boxes.get(w.boxes.len - 1), w)!
+
+priv fn in_box(doc: Doc$@, x: xml.Reader$@, top: Box$@, w: Walk$@): Void!U8[] //<
+    //< Takes a start tag that changes the innermost open box
+    a: = doc.arena
+    name: = x.name
+    if name.equals("vanish")
+        val: = x.attr_or("val", "true", a)!
+        w.hidden = !val.equals("0") && !val.equals("false") && !val.equals("off")
+    else if name.equals("tab") || name.equals("br") || name.equals("cr")
+        top.put_raw(" ")
+    else if name.equals("noBreakHyphen")
+        top.put_raw("-")
+    else if name.equals("pStyle")
+        top.style = x.attr_or("val", "", a)!
+    else if name.equals("numId")
+        top.num_id = x.attr_or("val", "", a)!
+    else if name.equals("ilvl")
+        top.level = styles.small(x.attr_or("val", "", a)!)
+    else if name.equals("outlineLvl")
+        top.outline = styles.small(x.attr_or("val", "", a)!)
+    else if name.equals("gridSpan")
+        span: = count_of(x.attr_or("val", "1", a)!)
+        top.span = span if span > 1 else 1
+    else if name.equals("vMerge")
+        top.merge = 1 if x.attr_or("val", "continue", a)!.equals("restart") else 2
+    else if name.equals("footnoteReference") || name.equals("endnoteReference")
+        top
+            .put_raw(note_mark(doc, name.equals("endnoteReference"), x.attr_or("id", "", a)!)!)
+
+priv fn count_of(text: U8[]): Sz //< a count of grid columns, 0 to 1000; 0 where the text is none
+    v: = text.trim_spaces().to_i64() catch
+        return 0
+    return Sz::v if v >= 0I64 && v <= 1000I64 else 0
+
+priv fn note_mark(doc: Doc$@, endnote: Bool, id: U8[]): U8[]!U8[] //<
+    //< The mark of a note the text refers to: `[^1]` for the first footnote referred to
+    //< Each mark given is one step of the look, charged to the file's work.
+    a: = doc.arena
+    doc.view.work.charge(doc.notes.len)!
+    $n: Sz = 1
+    for i in Range.asc(doc.notes.len)
+        given: = doc.notes.get(i)
+        if given.endnote == endnote && given.id.equals(id)
+            return given.mark
+        if given.endnote == endnote
+            n += 1
+    if doc.notes.len == MAX_NOTES
+        return ""
+    mark: = a.text().s("[^e" if endnote else "[^").s("\{n\}]").take()
+    doc.notes.push(Note_ref::{ .endnote = endnote, .id = id, .mark = mark })
+    return mark
+
+priv fn end_of(doc: Doc$@, x: xml.Reader$@, w: Walk$@): Void!U8[] //< takes one end tag
+    if x.name.equals("t")
+        w.in_t = false
+        return
+    if w.tables.len > 0
+        tb: = w.tables.get(w.tables.len - 1)
+        if x.name.equals("tr") && x.depth() == tb.depth
+            row_done(doc, tb, w)!
+            return
+        if x.name.equals("tbl") && x.depth() + 1 == tb.depth
+            _done: = w.tables.pop()
+            return
+    if w.boxes.len == 0
+        return
+    top: = w.boxes.get(w.boxes.len - 1)
+    if x.depth() + 1 != top.depth
+        return
+    _popped: = w.boxes.pop()
+    switch top.kind
+    case .para
+        para_done(doc, top, w)!
+    case .cell
+        if w.tables.len == 0
+            return
+        tb: = w.tables.get(w.tables.len - 1)
+        $text: = top.text.take()
+        for i in Range.asc(top.after.len)
+            text = doc.arena.text().s(text).c(' ').s(top.after.get(i)).take()
+        if tb.col < MAX_GRID
+            for tb.above.len <= tb.col
+                tb.above.push("")
+            if top.merge == 2
+                text = tb.above.get(tb.col)
+            else
+                tb.above.set(tb.col, text)
+        tb.cells.push(text)
+        tb.col += top.span
+    case .note
+        w.note_ids.push(Keyed::{ .key = top.id, .pos = w.note_texts.len })
+        w.note_texts.push(package.one_line(top.text.take(), doc.arena))
+
+priv fn para_done(doc: Doc$@, p: Box$@, w: Walk$@): Void!U8[] //<
+    //< Sends a finished paragraph's line, and its text boxes' lines, where they belong
+    a: = doc.arena
+    $num_id: = p.num_id
+    $level: = p.level
+    if num_id.len == 0
+        num_id = doc.styles.numbering(p.style)
+        if level < 0
+            level = doc.styles.numbering_level(p.style)
+    // **A paragraph with no text counts in its list, and builds no label**: it shows no line.
+    body: = package.one_line(p.text.take(), a)
+    $line: U8[] = ""
+    at: = level if level >= 0 else 0
+    if num_id.len > 0
+        if num: = doc.lists.count(num_id, at)
+            if body.len > 0
+                line = doc.lists.label(num, at, a)
+                doc.view.work.charge(line.len)!
+    if body.len > 0
+        line = a.text().s(line).s(body).take()
+    heading: =
+        (p.outline + 1 if p.outline >= 0 && p.outline < 9
+        else (0 if p.outline >= 9 else doc.styles.heading(p.style)))
+    send(doc, w, line, heading)!
+    for i in Range.asc(p.after.len)
+        send(doc, w, p.after.get(i), 0)!
+
+priv fn row_done(doc: Doc$@, tb: Table$@, w: Walk$@): Void!U8[] //<
+    //< Sends a finished table row as one line, its cells joined by ` | `; an empty row as none
+    $any: = false
+    for i in Range.asc(tb.cells.len)
+        any = any || tb.cells.get(i).len > 0
+    if any
+        send(doc, w, " | ".join(tb.cells.slice(), doc.arena), 0)!
+
+priv fn send(doc: Doc$@, w: Walk$@, line: U8[], heading: I32): Void!U8[] //<
+    //< Sends a finished line to the box it stands in, or to the view outside every box
+    //< A heading's `#` marks go on only at the top level; in a cell they would split no text.
+    if line.len == 0
+        return
+    if w.boxes.len > 0
+        below: = w.boxes.get(w.boxes.len - 1)
+        if below.kind == Kind.para
+            below.after.push(line)
+        else
+            below.put(line)
+        return
+    if w.part == Part.notes
+        return
+    if heading <= 0
+        doc.view.add(line)!
+        return
+    marks: = doc.arena.text()
+    for _k in Range.asc(heading)
+        marks.c('#')
+    doc.view.add(marks.c(' ').s(line).take())!

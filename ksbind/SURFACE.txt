@@ -14,3 +14,37 @@ ksbind/tls	Tls_stream.free	pub fn free(r: Self$@)	closes the connection and free
 ksbind/tls	Tls_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Tls_error	receives and returns how much arrived; 0 only after the peer's close_notify
 ksbind/tls	Tls_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz!Tls_error	sends and returns how much was sent; a partial send is normal, so loop
 ksbind/tls	Tls_stream:Manual_free	impl Tls_stream: Manual_free	it owns its memory and frees it with `free()`
+ksbind/tls_server	Tls_server	pub struct Tls_server	a certificate chain and its key, ready to answer handshakes
+ksbind/tls_server	Tls_server.chain_len	pub chain_len: Sz	how many certificates the chain holds, the server's own first
+ksbind/tls_server	Tls_server.expires_at	pub expires_at: I64	when the first certificate stops being valid, in Unix epoch seconds
+ksbind/tls_server	Tls_server.expiry	pub expiry: U8[]	the first certificate's expiry, as OpenSSL prints a time
+ksbind/tls_server	Tls_server.free	pub fn free(r: Self$@)	frees the context; sessions started from it hold their own reference
+ksbind/tls_server	Tls_server.load	pub fn load(cert_pem: U8[], key_pem: U8[], arena: Arena$@): Tls_server$@!Tls_setup_error	reads a PEM certificate chain and its PEM key, and checks they belong together. It reads text, not files, so where the files are and who may read them stay the caller's. Neither text is kept: OpenSSL holds its own copy.
+ksbind/tls_server	Tls_server.lone_leaf	pub lone_leaf: Bool	one certificate another issued: its intermediate is likely missing
+ksbind/tls_server	Tls_server.starts_at	pub starts_at: I64	when the first certificate becomes valid, in Unix epoch seconds
+ksbind/tls_server	Tls_server.subject	pub subject: U8[]	the first certificate's subject, as OpenSSL prints it on one line
+ksbind/tls_server	Tls_server:Manual_free	impl Tls_server: Manual_free	it owns its OpenSSL context and frees it with `free()`
+ksbind/tls_server	Tls_session	pub struct Tls_session	one connection's TLS, server side, on a non-blocking `std/net` socket. Caution: **It does not own the socket.** The caller closes the socket after `free()`.
+ksbind/tls_server	Tls_session.buffered	pub fn buffered(r: Self$@): Bool	whether bytes already received wait inside OpenSSL. While true, call `read` again: **no socket wait reports these bytes**, since they have left the socket. A `read` that gives `would_block` leaves none behind.
+ksbind/tls_server	Tls_session.close	pub fn close(r: Self$@, tcp: net.Tcp_stream$@)	Queues the close_notify and sends what the socket takes at once; it never waits. A peer that does not read loses the close_notify, and needs none to see the end.
+ksbind/tls_server	Tls_session.flush	pub fn flush(r: Self$@, tcp: net.Tcp_stream$@): Void!Tls_session_error	Sends what waits for the socket; `would_block` where the socket took only part
+ksbind/tls_server	Tls_session.free	pub fn free(r: Self$@)	frees the TLS state, sending nothing; the socket stays the caller's
+ksbind/tls_server	Tls_session.pending	pub fn pending(r: Self$@): Bool	whether bytes wait for the socket to take them. While true, watch the socket for writable and call `flush`.
+ksbind/tls_server	Tls_session.read	pub fn read(r: Self$@, tcp: net.Tcp_stream$@, buf: U8$[]): Sz!Tls_session_error	receives and returns how much arrived; 0 once the peer has ended. It runs the handshake first, and gives one record at most: **call it again while `buffered` is true**. 0 comes for a close_notify and for a TCP close alike: the request's own length shows a cut request ("The server half never waits" in `ksbind/docs/DESIGN-bindings.md`).
+ksbind/tls_server	Tls_session.ready	pub fn ready(r: Self$@): Bool	whether the handshake has finished
+ksbind/tls_server	Tls_session.start	pub fn start(server: Tls_server$@): Tls_session$@!tls.Tls_error	Starts the TLS of one accepted connection; the handshake runs inside `read`
+ksbind/tls_server	Tls_session.write	pub fn write(r: Self$@, tcp: net.Tcp_stream$@, buf: U8[]): Sz!Tls_session_error	encrypts some of `buf` and returns how much it took; a partial take is normal. **It takes nothing while bytes still wait for the socket** (`would_block`), so a slow reader holds at most one record per connection.
+ksbind/tls_server	Tls_session:Manual_free	impl Tls_session: Manual_free	it owns its OpenSSL state and frees it with `free()`
+ksbind/tls_server	Tls_session_error	pub enum Tls_session_error	why a connection's TLS did not go on
+ksbind/tls_server	Tls_session_error.handshake_failed	handshake_failed	the handshake was refused: no version or cipher in common, broken data
+ksbind/tls_server	Tls_session_error.io_failed	io_failed	the socket failed, or the peer closed it in the middle of the handshake
+ksbind/tls_server	Tls_session_error.not_tls	not_tls	the peer's first byte opens no TLS handshake: plain HTTP on this port, say
+ksbind/tls_server	Tls_session_error.would_block	would_block	the socket has nothing for it yet, or takes nothing more: call again when ready
+ksbind/tls_server	Tls_setup_error	pub enum Tls_setup_error	why a certificate and its key could not serve
+ksbind/tls_server	Tls_setup_error.certificate_refused	certificate_refused	OpenSSL refused the certificate: a key too weak for its level, say
+ksbind/tls_server	Tls_setup_error.chain_out_of_order	chain_out_of_order	a certificate after the first did not issue the one before it
+ksbind/tls_server	Tls_setup_error.ctx_failed	ctx_failed	OpenSSL setup failed (SSL_CTX_new and similar)
+ksbind/tls_server	Tls_setup_error.key_encrypted	key_encrypted	a passphrase protects the key, and none is ever asked for
+ksbind/tls_server	Tls_setup_error.key_mismatch	key_mismatch	the key does not belong to the first certificate
+ksbind/tls_server	Tls_setup_error.no_certificate	no_certificate	the certificate text holds no PEM certificate
+ksbind/tls_server	Tls_setup_error.no_key	no_key	the key text holds no PEM private key that can be read

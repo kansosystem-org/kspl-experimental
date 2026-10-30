@@ -280,8 +280,9 @@ function ksmdCommands(ks) {
   // The commands that act on the chosen cell's table.
   const aligns = { "align-left": "left", "align-center": "center", "align-right": "right",
     "align-none": "" };
-  const onTable = new Set([...Object.keys(rows), ...Object.keys(columns), "column-fit", "sort-up",
-    "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-csv", "table-chart", "table-print", "table-remove",
+  const onTable = new Set([...Object.keys(rows), ...Object.keys(columns), "column-fit", "column-width",
+    "row-height", "sort-up",
+    "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-csv", "table-chart", "table-print", "table-remove", "table-select",
     ...["Number format", "AutoSum"].flatMap((name) => TABLE_GROUPS.find(([group]) => group === name)[1]),
     "fill-down", "fill-right", "column-choices", "column-rule", "group-rows", "ungroup-rows", "group-hide", "group-show"]);
 
@@ -435,6 +436,7 @@ function ksmdCommands(ks) {
   ks.setReadOnly = (on) => {
     if (on) ks.table.take();
     ks.readOnly = on;
+    if (ks.filter) ks.filter.readOnly();
     document.body.classList.toggle("read-only", on);
     ks.root.contentEditable = on ? "false" : "true";
     for (const el of document.querySelectorAll('[data-cmd="read-only"]')) {
@@ -524,10 +526,11 @@ function ksmdCommands(ks) {
     switch (name) {
       case "table-remove":
         ks.cell = null;
-        ks.root.focus();
-        return ks.act("ksmd_web_remove_table", c.block);
+        return ks.view.removeBlock("ksmd_web_remove_table", c.block);
       case "table-rename":
         return ks.table.rename(c.block);
+      case "table-select":
+        return ks.range.selectTable(c.block);
       case "table-csv":
         return ks.table.csv(c.block);
       case "table-print":
@@ -536,6 +539,10 @@ function ksmdCommands(ks) {
         return ks.act("ksmd_web_insert_chart", c.block);
       case "column-fit":
         return ks.table.fit(c.block, c.column);
+      case "column-width":
+        return ks.table.askWidth(c.block);
+      case "row-height":
+        return ks.table.askHeight(c.block);
       case "column-choices":
         return ks.choices.ask(c.block, c.column);
       case "column-rule":

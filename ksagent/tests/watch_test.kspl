@@ -1,0 +1,127 @@
+//< Following a folder: when a look answers, a second `watch`, and a turn another watch recorded
+import "ksagent/chat"
+import "ksagent/files"
+import "ksagent/tests/agent_test"
+import "ksagent/tests/stub"
+import "ksagent/watch"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv fn asked(n: Sz, arena: Arena$@): U8[] //< an ask file of `n` questions, `q1` to `qn`
+    out: = arena.text()
+    for k in Range(1, n + 1, 1)
+        out.s("{\"type\": \"question\", \"id\": \"q\{k\}\", \"text\": \"Question \{k\}?\"}\n")
+    return out.take()
+
+priv fn not_found(n: Sz, arena: Arena$@): List<|U8[]|> //< `n` replies that each find nothing
+    $out: = List<|U8[]|>(arena)
+    for _k in Range.asc(n)
+        out.push(stub.one_call(stub.answer_call("NOT_FOUND", "[]", arena), arena))
+    return out
+
+priv fn answers_in(text: U8[]): Sz //< how many answer records a chat file's text holds
+    $n: Sz = 0
+    $at: Sz = 0
+    for
+        found: = text.sub_from(at).find_str("\"type\":\"answer\"") catch
+            return n
+        n += 1
+        at += found + 1
+
+fn test_a_repaired_chat_file_is_answered_at_the_next_look(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] once a broken chat file is repaired, the next look answers")
+    root: = stub.folder(work, "repair", arena)
+    ask: = fs.join(root, "fix.ask.jsonl", arena)
+    chat_file: = files.chat_path(ask, arena)
+    io.write_file(ask, asked(1, arena)) catch panic("the ask file can be written")
+    io.write_file(chat_file, "{\"type\":\"question\",\"id\":\"q0\",\"text\":\"Cut\n")
+        catch panic("the chat file can be written")
+    $replies: = not_found(1, arena)
+    s: = stub.start(replies.slice(), arena)
+    job: = agent_test.job_at(s.port, root, arena)
+    defer keep: = Arena(64 * 1024)
+    $seen: = List<|watch.Seen|>(keep)
+    watch.look(job, seen@, keep)
+    before: = s.bodies.len
+    io.write_file(chat_file, "") catch panic("the chat file can be repaired")
+    watch.look(job, seen@, keep)
+    stub.finish(s)
+    after: = io.read_file(chat_file, arena) catch
+        fallback ""
+    verdict.check("nothing is asked while it is broken, and the question is answered once repaired",
+        before == 0 && s.bodies.len == 1 && answers_in(after) == 1, after)
+    stub.release(s)
+
+fn test_questions_past_one_look_are_answered_at_the_next(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] questions past what one look answers wait only for the next look")
+    root: = stub.folder(work, "many", arena)
+    ask: = fs.join(root, "many.ask.jsonl", arena)
+    io.write_file(ask, asked(21, arena)) catch panic("the ask file can be written")
+    $replies: = not_found(21, arena)
+    s: = stub.start(replies.slice(), arena)
+    job: = agent_test.job_at(s.port, root, arena)
+    defer keep: = Arena(64 * 1024)
+    $seen: = List<|watch.Seen|>(keep)
+    watch.look(job, seen@, keep)
+    watch.look(job, seen@, keep)
+    stub.finish(s)
+    after: = io.read_file(files.chat_path(ask, arena), arena) catch
+        fallback ""
+    verdict.check("all 21 are answered in two looks, though the ask file did not change",
+        answers_in(after) == 21,
+        arena.text().s("\{answers_in(after)\} answered").take())
+    stub.release(s)
+
+fn test_a_turn_another_watch_recorded_is_not_written_again(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a question another watch recorded meanwhile is not recorded twice")
+    root: = stub.folder(work, "twice", arena)
+    ask: = fs.join(root, "two.ask.jsonl", arena)
+    chat_file: = files.chat_path(ask, arena)
+    io.write_file(ask, asked(1, arena)) catch panic("the ask file can be written")
+    theirs: =
+        "{\"type\":\"question\",\"id\":\"q1\",\"text\":\"Question \
+            1?\",\"lang\":\"en\"}\n{\"type\":\"answer\",\"id\":\"q1\",\"state\":\"not_found\",\"text\":\"\",\"sources\":[],\"removed\":[],\"notes\":[]}\n"
+    $replies: = not_found(1, arena)
+    s: = stub.start_editing(replies.slice(), chat_file, theirs, arena)
+    asks: = chat.read_asks(asked(1, arena), arena)
+    none: = chat.read_chat("", arena) catch panic("an empty chat file reads")
+    p: = chat.find_pending(asks@, none@, arena) catch
+        panic("the question is pending")
+    watch.answer_one(agent_test.job_at(s.port, root, arena), ask, p, arena)
+    stub.finish(s)
+    after: = io.read_file(chat_file, arena) catch
+        fallback ""
+    $readable: = true
+    _r: = chat.read_chat(after, arena) catch
+        readable = false
+        fallback none
+    verdict.check("the chat file stays as the other watch wrote it, and can be read",
+        after.equals(theirs) && readable, after)
+    stub.release(s)
+
+fn test_a_watch_inside_another_is_refused(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a watch on a folder inside or around a watched one does not start")
+    root: = stub.folder(work, "nested", arena)
+    inner: = fs.join(root, "rules", arena)
+    verdict.check("with no other watch, none is found",
+        watch.other_watch(root, arena).len == 0, "")
+    $outer: = fs.File_lock.try_take(fs.join(root, ".ksagent.lock", arena))
+        catch panic("the outer lock can be taken")
+    above: = watch.other_watch(inner, arena)
+    verdict.check("inside a watched folder, the folder watched is found",
+        above.len > 0 && above.ends_with(sys.get_file_name(root)), above)
+    outer.free()
+    $inside: =
+        fs.File_lock.try_take(fs.join(inner, ".ksagent.lock", arena))
+        catch panic("the inner lock can be taken")
+    below: = watch.other_watch(root, arena)
+    verdict.check("around a watched folder, the folder watched is found",
+        below.ends_with("rules"), below)
+    inside.free()

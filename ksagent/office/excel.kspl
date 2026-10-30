@@ -1,0 +1,432 @@
+//< An Excel file (.xlsx) as lines of text: one row a line, each naming its sheet and row
+//< A line reads `規程一覧!12: 有給休暇 | 20日`: the sheet, the row number Excel shows, then the
+//< cells from the sheet's first used column, joined by ` | `. An empty cell keeps its place, so
+//< a column is the same column on every line of a sheet. **A cell shows what Excel shows**: a
+//< formula's last computed value, a date as `yyyy-mm-dd` (`cell_format`), TRUE or FALSE. **A merged
+//< cell's text stands in every row of the merge**, so each line reads whole. Hidden sheets and
+//< empty rows have no line; a hidden sheet is one the person reading the file does not see.
+import "ksagent/office/cell_format" + { Format }
+import "ksagent/office/index" + { Keyed }
+import "ksagent/office/package" + { Rel, View }
+import "ksagent/office/xml"
+import "ksagent/office/zip"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+priv const MAX_ROW: I32 = 1048576 //< the last row Excel has
+priv const MAX_COL: I32 = 16384 //< the last column Excel has, XFD
+priv const MAX_MERGES: Sz = 100000 //< the most merged ranges one sheet may hold
+
+fn text_of(data: U8[], cap: Sz, arena: Arena$@): U8[]!U8[] //<
+    //< The text view of an Excel file's bytes, at most `cap` bytes; or why it cannot be read
+    $z: = package.open(data, arena)!
+    main: = package.main_part(z@, arena)!
+    rels: = package.rels_of(z@, main, arena)!
+    $view: = package.view(cap, arena)
+    $book: = Book::{ .strings = List<|U8[]|>(arena), .formats = List<|Format|>(arena),
+        .date1904 = false, .owner = List<|Sz|>(arena), .work = view.work@, .arena = arena }
+    strings_part: = package.find(rels@, "sharedStrings")
+    if strings_part.len > 0
+        read_strings(book@, z.part(strings_part, arena)!)!
+    styles_part: = package.find(rels@, "styles")
+    if styles_part.len > 0
+        read_formats(book@, z.part(styles_part, arena)!)!
+    sheets: = read_sheets(book@, z.part(main, arena)!)!
+    shown: = shown_sheets(sheets@, rels@, arena)!
+    for _k in Range.asc(MAX_COL + 1)
+        book.owner.push(-1)
+    for i in Range.asc(shown.len)
+        s: = shown.get(i)
+        read_sheet(book@, s.name, z.part(s.target, arena)!, view@)!
+    return view.take()
+
+priv struct Book //< what every sheet of a workbook shares
+    strings: List<|U8[]|> //< the shared strings, by index
+    formats: List<|Format|> //< each cell style's number format, by the style's index
+    date1904: Bool //< days count from 1904-01-01, as in workbooks made on old Macs
+    owner: List<|Sz|> //< each column's covering merge in the row being written; -1 for none
+        //< Made once per workbook, and left all -1 after each sheet (`write_rows`).
+    work: package.Work$@ //< the work the file's reading may still take
+    arena: Arena$@
+
+priv struct Sheet //< one sheet the workbook lists
+    name: U8[]
+    rel_id: U8[] //< the relationship that names its part
+    target: U8[] //< its part, once found; empty for a sheet that shows nothing
+    hidden: Bool
+
+priv fn shown_sheets(sheets: List<|Sheet|>@, rels: List<|Rel|>@, arena: Arena$@):
+    List<|Sheet|>!U8[] //<
+        //< The visible worksheets, each with its part; a part that two of them name is refused
+        //< A chart sheet or a macro sheet holds no cells, so it shows nothing. **A sheet listed
+        //< twice would be read twice**, so a few bytes could ask for any number of readings.
+    $ids: = List<|Keyed|>(arena)
+    for i in Range.asc(rels.len)
+        ids.push(Keyed::{ .key = rels.get(i).id, .pos = i })
+    by_id: = index.sorted(ids@, arena)
+    $out: = List<|Sheet|>(arena)
+    $parts: = List<|Keyed|>(arena)
+    for i in Range.asc(sheets.len)
+        $s: = sheets.get(i)
+        at: = by_id.find(s.rel_id) catch
+            continue
+        r: = rels.get(at)
+        if s.hidden || !r.kind.equals("worksheet")
+            continue
+        s.target = r.target
+        // A zip's names compare with ASCII case ignored, so two spellings name one part.
+        parts.push(Keyed::{ .key = zip.lower(r.target, arena), .pos = out.len })
+        out.push(s)
+    if index.sorted(parts@, arena).repeats()
+        throw "it lists one sheet twice"
+    return out
+
+// ==========================================
+// The workbook's own parts
+// ==========================================
+
+priv fn read_sheets(book: Book$@, src: U8[]): List<|Sheet|>!U8[] //<
+    //< The sheets `workbook.xml` lists, in order, and whether it counts days from 1904
+    a: = book.arena
+    $out: = List<|Sheet|>(a)
+    $x: = xml.reader(src, a)!
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            return out
+        if ev != xml.Event.start
+            continue
+        if x.name.equals("workbookPr")
+            v: = x.attr_or("date1904", "0", a)!
+            book.date1904 = v.equals("1") || v.equals("true")
+        else if x.name.equals("sheet")
+            book.work.charge(package.ITEM_WORK)!
+            state: = x.attr_or("state", "visible", a)!
+            out
+                .push(Sheet::{ .name = x.attr_or("name", "", a)!,
+                .rel_id = x.attr_or("id", "", a)!, .target = "",
+                .hidden = !state.equals("visible") })
+
+priv fn read_strings(book: Book$@, src: U8[]): Void!U8[] //<
+    //< The shared strings: each `si`'s text, its runs joined
+    //< **The furigana a Japanese Excel keeps beside a string (`rPh`) is left out**: it is no part
+    //< of the text shown in the cell, and read with it `社内規程` would become
+    //< `社内規程シャナイキテイ`.
+    a: = book.arena
+    $x: = xml.reader(src, a)!
+    $text: = a.text()
+    $in_t: = false
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            return
+        if ev == xml.Event.text
+            if in_t
+                text.s(x.text_of(a)!)
+        else if ev == xml.Event.start
+            if x.name.equals("rPh")
+                x.skip()!
+            else if x.name.equals("si")
+                book.work.charge(package.ITEM_WORK)!
+                text = a.text()
+            else if x.name.equals("t")
+                in_t = true
+        else if x.name.equals("t")
+            in_t = false
+        else if x.name.equals("si")
+            book.strings.push(text.take())
+
+priv fn read_formats(book: Book$@, src: U8[]): Void!U8[] //<
+    //< Each cell style's number format, from `styles.xml`'s `cellXfs`
+    a: = book.arena
+    $codes: = List<|U8[]|>(a) //< the custom format codes, as read
+    $code_ids: = List<|Keyed|>(a) //< each custom format's id, to its code in `codes`
+    $ids: = List<|U8[]|>(a) //< each cell style's format id
+    $x: = xml.reader(src, a)!
+    $in_xfs: = false
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            break
+        if ev == xml.Event.end
+            if x.name.equals("cellXfs")
+                in_xfs = false
+            continue
+        if ev != xml.Event.start
+            continue
+        if x.name.equals("numFmt") || (x.name.equals("xf") && in_xfs)
+            book.work.charge(package.ITEM_WORK)!
+        if x.name.equals("numFmt")
+            code_ids
+                .push(Keyed::{ .key = x.attr_or("numFmtId", "", a)!.trim_spaces(),
+                .pos = codes.len })
+            codes.push(x.attr_or("formatCode", "", a)!)
+        else if x.name.equals("cellXfs")
+            in_xfs = !x.empty
+        else if x.name.equals("xf") && in_xfs
+            ids.push(x.attr_or("numFmtId", "0", a)!.trim_spaces())
+            if !x.empty
+                x.skip()!
+    // A custom format can take a built-in format's id, and then stands in its place.
+    custom: = index.sorted(code_ids@, a)
+    for i in Range.asc(ids.len)
+        at: = custom.find(ids.get(i))
+        book.formats
+            .push(cell_format.of_code(codes.get(at.unwrap_or(0))) if at.is_some()
+            else cell_format.built_in(whole(ids.get(i))))
+
+priv fn whole(text: U8[]): I32 //< a small whole number, or -1 where the text is none
+    v: = text.trim_spaces().to_i64() catch
+        return -1
+    return I32::v if v >= 0I64 && v <= 100000000I64 else -1
+
+// ==========================================
+// One sheet
+// ==========================================
+
+priv struct Cell //< one cell that shows something
+    col: I32 //< from 1, A
+    text: U8[]
+
+priv struct Row //< one row of the sheet, with its cells in column order
+    num: I32 //< from 1, as Excel shows it
+    cells: List<|Cell|>
+
+priv struct Merge //< a range of merged cells, and the text its first cell holds
+    top: I32
+    bottom: I32
+    left: I32
+    right: I32
+    text: U8[]
+
+priv struct Value //< what one `c` element holds while it is read
+    kind: U8[] //< its `t`: `s` (shared string), `inlineStr`, `str`, `b`, `e`, `d`, or `n`
+    style: I32
+    v: str.Arena_text$@ //< the stored value
+    f: str.Arena_text$@ //< the formula, without its `=`
+    inline: str.Arena_text$@ //< an inline string's text
+
+priv fn read_sheet(book: Book$@, name: U8[], src: U8[], view: View$@): Void!U8[] //<
+    //< Adds one sheet's rows to the view
+    a: = book.arena
+    $rows: = List<|Row|>(a)
+    $merges: = List<|Merge|>(a)
+    $x: = xml.reader(src, a)!
+    $row: = Row::{ .num = 0, .cells = List<|Cell|>(a) }
+    $in_row: = false
+    $col: I32 = 0
+    $cell: = Value::{ .kind = "n", .style = 0, .v = a.text(), .f = a.text(),
+        .inline = a.text() }
+    $into: Sz = 0 //< where text goes: 0 nowhere, 1 `v`, 2 `f`, 3 the inline string
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            break
+        if ev == xml.Event.text
+            text: = x.text_of(a)!
+            if into == 1
+                cell.v.s(text)
+            else if into == 2
+                cell.f.s(text)
+            else if into == 3
+                cell.inline.s(text)
+            continue
+        if ev == xml.Event.end
+            if x.name.equals("v") || x.name.equals("f") || x.name.equals("t")
+                into = 0
+            else if x.name.equals("c") && in_row
+                shown: = show(book, cell@)!
+                if shown.len > 0
+                    row.cells.push(Cell::{ .col = col, .text = shown })
+            else if x.name.equals("row") && in_row
+                rows.push(row)
+                in_row = false
+            continue
+        if x.name.equals("row") || x.name.equals("c") || x.name.equals("mergeCell")
+            book.work.charge(package.ITEM_WORK)!
+        if x.name.equals("row")
+            given: = x.attr_or("r", "", a)!
+            num: = (row.num + 1 if given.len == 0 else whole(given))
+            if num <= row.num || num > MAX_ROW
+                throw "a sheet's rows are out of order, or past Excel's last row"
+            row = Row::{ .num = num, .cells = List<|Cell|>(a) }
+            in_row = true
+            col = 0
+        else if x.name.equals("c")
+            if !in_row
+                throw "a sheet holds a cell outside every row"
+            given: = x.attr_or("r", "", a)!
+            next: = col + 1 if given.len == 0 else column_of(given)
+            if next <= col || next > MAX_COL
+                throw "a sheet's cells are out of order, or past Excel's last column"
+            col = next
+            cell = Value::{ .kind = x.attr_or("t", "n", a)!,
+                .style = whole(x.attr_or("s", "0", a)!), .v = a.text(), .f = a.text(),
+                .inline = a.text() }
+        else if x.name.equals("v")
+            into = 1
+        else if x.name.equals("f")
+            into = 2
+        else if x.name.equals("t")
+            into = 3
+        else if x.name.equals("rPh")
+            x.skip()!
+        else if x.name.equals("mergeCell")
+            if merges.len == MAX_MERGES
+                throw "a sheet holds more merged ranges than are read"
+            merges.push(merge_of(x.attr_or("ref", "", a)!)!)
+    write_rows(book, name, rows@, merges@, view)!
+
+priv fn show(book: Book$@, c: Value$@): U8[]!U8[] //< what a cell shows, from what it stores
+    a: = book.arena
+    v: = c.v.take()
+    f: = c.f.take()
+    if c.kind.equals("inlineStr")
+        return c.inline.take()
+    if v.len == 0
+        // A formula no program has computed yet, as libraries write them: its text is all there is.
+        return "" if f.len == 0 else a.text().c('=').s(f).take()
+    if c.kind.equals("s")
+        idx: = whole(v)
+        if idx < 0 || Sz::idx >= book.strings.len
+            throw "a cell refers to a shared string the file does not hold"
+        return book.strings.get(idx)
+    if c.kind.equals("b")
+        return ("TRUE" if v.equals("1") else "FALSE" if v.equals("0") else v)
+    if c.kind.equals("n")
+        format: =
+            (book.formats.get(c.style) if c.style >= 0 && Sz::c.style < book.formats.len
+            else cell_format.plain())
+        return cell_format.show(v, format, book.date1904, a)
+    return v
+
+priv fn column_of(ref: U8[]): I32 //< the column of a reference like `AB12`, from 1; -1 if none
+    $col: I32 = 0
+    $i: Sz = 0
+    for i < ref.len && ref[i].is_alpha()
+        if i == 3
+            return -1
+        col = col * 26 + I32::(ref[i].to_lower() - 'a') + 1
+        if col > MAX_COL
+            return -1
+        i += 1
+    return col if i > 0 else -1
+
+priv fn row_of(ref: U8[]): I32 //< the row of a reference like `AB12`; -1 if none
+    $i: Sz = 0
+    for i < ref.len && ref[i].is_alpha()
+        i += 1
+    return whole(ref.sub_from(i)) if i < ref.len else -1
+
+priv fn merge_of(ref: U8[]): Merge!U8[] //< a merged range from its reference, `A4:B5`
+    colon: = ref.find_char(':') catch
+        throw "a sheet names a merged range that is no range"
+    first: = ref.sub(0, colon)
+    last: = ref.sub_from(colon + 1)
+    m: = Merge::{ .top = row_of(first), .bottom = row_of(last), .left = column_of(first),
+        .right = column_of(last), .text = "" }
+    if m.top < 1 || m.bottom < m.top || m.bottom > MAX_ROW || m.left < 1 || m.right < m.left ||
+        m.right > MAX_COL
+        throw "a sheet names a merged range that is no range"
+    return m
+
+// ==========================================
+// Writing a sheet's rows as lines
+// ==========================================
+
+priv fn write_rows(book: Book$@, name: U8[], rows: List<|Row|>@, merges: List<|Merge|>@,
+    view: View$@): Void!U8[] //<
+        //< Adds a line for each row that shows something, merged cells' text filled in
+    a: = book.arena
+    // Only a merge over several rows fills anything: a merge in one row shows its text once.
+    $tall: = List<|Merge|>(a)
+    for i in Range.asc(merges.len)
+        $m: = merges.get(i)
+        if m.bottom > m.top
+            m.text = cell_text(rows, m.top, m.left)
+            if m.text.len > 0
+                tall.push(m)
+    sorted: = tall.order_by(fn(p: Merge@, q: Merge@; ): I32 {
+        return p.top - q.top;
+    }, a)
+    $first_col: I32 = MAX_COL
+    for i in Range.asc(rows.len)
+        r: = rows.get(i)
+        if r.cells.len > 0 && r.cells.get(0).col < first_col
+            first_col = r.cells.get(0).col
+    for i in Range.asc(sorted.len)
+        if sorted.get(i).left < first_col
+            first_col = sorted.get(i).left
+    // The merges covering the current row: at most one per column, the one that started last.
+    // `owner` gives each column's as its place in `sorted`, and is all -1 again once this ends.
+    $owner: = book.owner
+    $active: = List<|I32|>(a) //< the columns `owner` names a merge for
+    $next: Sz = 0
+    $slots: = List<|U8[]|>(a)
+    for i in Range.asc(rows.len)
+        r: = rows.get(i)
+        for next < sorted.len && sorted.get(next).top < r.num
+            left: = sorted.get(next).left
+            if owner.get(left) < 0
+                active.push(left)
+            owner.set(left, next)
+            next += 1
+        slots.clear()
+        for k in Range.asc(r.cells.len)
+            c: = r.cells.get(k)
+            put_slot(slots@, (c.col - first_col), c.text)
+        $kept: Sz = 0
+        for k in Range.asc(active.len)
+            col: = active.get(k)
+            m: = sorted.get(owner.get(col))
+            if m.bottom < r.num
+                owner.set(col, -1)
+                continue
+            active.set(kept, col)
+            kept += 1
+            at: = Sz::(col - first_col)
+            if at >= slots.len || slots.get(at).len == 0
+                put_slot(slots@, at, m.text)
+        for active.len > kept
+            _gone: = active.pop()
+        if slots.len == 0
+            continue
+        line: = a.text().s(name).s("!\{r.num\}: ").s(" | ".join(slots.slice(), a)).take()
+        view.add(line)!
+    for k in Range.asc(active.len)
+        owner.set(active.get(k), -1)
+
+priv fn put_slot(slots: List<|U8[]|>$@, at: Sz, text: U8[]) //< sets one slot, growing the list
+    for slots.len <= at
+        slots.push("")
+    slots.set(at, text)
+
+priv fn cell_text(rows: List<|Row|>@, num: I32, col: I32): U8[] //< what a cell shows; empty if none
+    // Rows and cells are in order (`read_sheet` refuses any other), so both are found by halving.
+    $lo: Sz = 0
+    $hi: Sz = rows.len
+    for lo < hi
+        mid: = lo + (hi - lo) / 2
+        if rows.get(mid).num < num
+            lo = mid + 1
+        else
+            hi = mid
+    if lo == rows.len || rows.get(lo).num != num
+        return ""
+    cells: = rows.get(lo).cells
+    $clo: Sz = 0
+    $chi: Sz = cells.len
+    for clo < chi
+        mid: = clo + (chi - clo) / 2
+        if cells.get(mid).col < col
+            clo = mid + 1
+        else
+            chi = mid
+    if clo == cells.len || cells.get(clo).col != col
+        return ""
+    return cells.get(clo).text

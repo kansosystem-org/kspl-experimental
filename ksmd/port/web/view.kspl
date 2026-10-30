@@ -253,7 +253,7 @@ priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
     out.c(']')
 
 priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
-    //< `"name"`, the column weights `"w"`, the column names, the identities of the rows (`"ri"`)
+    //< `"name"`, the column weights `"w"`, the rows' heights `"h"`, the columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`)
     //< and columns (`"ci"`), the groups of rows (`"g"`), and each data row's values
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
@@ -263,6 +263,27 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         if i > 0
             out.c(',')
         out.s("\{t.weights[i]\}")
+    // Each data row's least height in points, 0 for none.
+    out.s("],\"h\":[")
+    defer tall: = Arena(16 * 1024)
+    $by_id: = List<|Sz|>(tall)
+    for _ in Range.asc(t.next_id)
+        by_id.push(0)
+    for h in t.heights
+        by_id[h.row] = h.points
+    for r in Range.asc(t.rows.len)
+        if r > 0
+            out.c(',')
+        out.s("\{by_id[t.rows[r]]\}")
+    // Each column's filter entry (`ksmd/model/filter.kspl`), empty for none.
+    out.s("],\"fl\":[")
+    for c in Range.asc(t.columns.len)
+        if c > 0
+            out.c(',')
+        $entry: U8[] = ""
+        for f in t.filters
+            entry = f.entry if f.column == t.columns[c] else entry
+        text(entry, out)
     out.s("],\"names\":[")
     for c in Range.asc(t.columns.len)
         if c > 0

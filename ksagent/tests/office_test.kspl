@@ -1,0 +1,199 @@
+//< Word and Excel files: their text views, and the tools and the citation check on them
+//< The files in `office_data/` come from python-docx and openpyxl, with what those cannot write
+//< added by hand (`make_office_fixtures.py` beside this file says what). The tests need no Python.
+import "ksagent/answer" + { Source }
+import "ksagent/files"
+import "ksagent/office/cell_format"
+import "ksagent/office/excel"
+import "ksagent/office/numbering"
+import "ksagent/office/word"
+import "std/chars"
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+embed "ksagent/tests/office_data/rules.docx" as rules_docx
+embed "ksagent/tests/office_data/leave.xlsx" as leave_xlsx
+
+const VIEW_CAP: Sz = 8 * 1024 * 1024 //< the cap the tools give a view
+
+priv const RULES_VIEW: U8[] =
+    """
+# 就業規則
+## 第1章 総則
+第1条 この規則は、従業員の労働条件を定める。
+Overtime work requires prior approval by the manager.
+## 第2章 休暇
+第2条 年次有給休暇は、次のとおり付与する。
+（１） 入社6か月後に10日を付与する
+（２） 以後1年ごとに1日を加算する[^1]
+① 出勤率が8割以上であること
+第3条 特別休暇は、5日とする。
+・ 休暇の申請は、所属長へ行う。
+勤続年数 | 付与日数 | 備考
+6か月 | 10日 | 最大20日まで
+1年6か月 | 11日 | 最大20日まで
+※ 出勤率8割以上が条件 | 最大20日まで
+相談は次の窓口へ。
+相談窓口：人事部（内線1234）
+附則　この規則は、2024年4月1日から施行する。
+[^1]: 出勤率は、全労働日に対する出勤日の割合をいう。
+"""
+
+priv const LEAVE_VIEW: U8[] =
+    """
+規程一覧!1: 項目 | 内容 | 施行日 | 日数
+規程一覧!2: 有給休暇 | 入社6か月後に付与 | 2024-04-01 | 10
+規程一覧!3: 特別休暇 | 慶弔時 | 2025-10-01 | 5
+規程一覧!4: 休職 | 私傷病 |  | 90
+規程一覧!5: 休職 | 家族の介護 |  | 93
+規程一覧!6: 合計 |  |  | 198
+規程一覧!7: 割増賃金率 | 25%
+規程一覧!9: 始業時刻 | 09:00 | TRUE | 1234.5
+規程一覧!10: インライン文字列
+規程一覧!11: 社内規程
+"""
+
+fn test_a_word_file_reads_as_its_paragraphs()
+    verdict.start("[ksagent] a Word file is read as one paragraph a line, as its reader sees it")
+    defer arena: = Arena(1024 * 1024)
+    view: = word.text_of(rules_docx, VIEW_CAP, arena) catch why
+        verdict.check("the Word file is read", false, why)
+        return
+    verdict.check("the view is the paragraphs in order: numbers, a table, a text box, a footnote",
+        view.equals(RULES_VIEW), view)
+    verdict.check("deleted text, comments, the header and the text box's second copy are left out",
+        view.find_str("3日").is_none() && view.find_str("要確認").is_none() &&
+        view.find_str("社外秘").is_none() && view.count_str("相談窓口") == 1, view)
+
+fn test_an_excel_file_reads_as_its_rows()
+    verdict
+        .start("[ksagent] an Excel file is read as one row a line, each naming its sheet and row")
+    defer arena: = Arena(1024 * 1024)
+    view: = excel.text_of(leave_xlsx, VIEW_CAP, arena) catch why
+        verdict.check("the Excel file is read", false, why)
+        return
+    verdict.check("the view shows dates, a formula's value, a percentage, merged and inline cells",
+        view.equals(LEAVE_VIEW), view)
+    verdict.check("the hidden sheet and the furigana are left out",
+        view.find_str("旧規程").is_none() && view.find_str("15日").is_none() &&
+        view.find_str("シャナイ").is_none(), view)
+
+fn test_list_numbers_take_each_format()
+    verdict.start("[ksagent] a list number is written in its format: kanji, kana, letters, roman")
+    defer arena: = Arena(64 * 1024)
+    cases: = U8[][]::{ "japaneseCounting:1:一", "japaneseCounting:10:十",
+        "japaneseCounting:21:二十一", "japaneseCounting:105:百五",
+        "japaneseCounting:2024:二千二十四", "japaneseDigitalTenThousand:2024:二〇二四",
+        "aiueoFullWidth:2:イ", "iroha:3:ハ", "decimalFullWidth:12:１２",
+        "decimalEnclosedCircle:3:③", "decimalEnclosedCircle:21:21", "upperLetter:27:AA",
+        "lowerRoman:1994:mcmxciv", "decimalZero:7:07", "ideographTraditional:2:乙",
+        "someFutureFormat:5:5" }
+    for c in cases
+        parts: = c.split(':', arena)
+        out: = arena.text()
+        numbering.write_number(out, I32::number(parts.get(1)), parts.get(0))
+        got: = out.take()
+        verdict.check(c, got.equals(parts.get(2)), got)
+
+fn test_a_cell_number_is_shown_as_its_format_shows_it()
+    verdict.start("[ksagent] a cell's number is shown as a date, a time, a percentage or digits")
+    defer arena: = Arena(64 * 1024)
+    date: = cell_format.of_code("yyyy\"年\"m\"月\"d\"日\"")
+    era: = cell_format.of_code("[$-411]ggge\"年\"m\"月\"d\"日\"")
+    time: = cell_format.of_code("h:mm")
+    hours: = cell_format.of_code("[h]:mm:ss")
+    percent: = cell_format.of_code("0.0%")
+    money: = cell_format.of_code("#,##0\"円\";[Red]-#,##0\"円\"")
+    general: = cell_format.of_code("General")
+    results: = U8[][]::{ cell_format.show("45383", date, false, arena),
+        cell_format.show("45383", era, false, arena),
+        cell_format.show("60", date, false, arena),
+        cell_format.show("59", date, false, arena),
+        cell_format.show("61", date, false, arena), cell_format.show("0", date, true, arena),
+        cell_format.show("0.375", time, false, arena),
+        cell_format.show("45383.75", cell_format.built_in(22), false, arena),
+        cell_format.show("1.5", hours, false, arena),
+        cell_format.show("0.255", percent, false, arena),
+        cell_format.show("300000", money, false, arena),
+        cell_format.show("0.30000000000000004", general, false, arena),
+        cell_format.show("1.5E-3", general, false, arena),
+        cell_format.show("123456789012345678", general, false, arena),
+        cell_format.show("-12.50", general, false, arena),
+        cell_format.show("99999999999999999", general, false, arena),
+        cell_format.show("abc", date, false, arena) }
+    expected: = U8[][]::{ "2024-04-01", "2024-04-01", "1900-02-29", "1900-02-28", "1900-03-01",
+        "1904-01-01", "09:00", "2024-04-01 18:00", "36:00:00", "25.5%", "300000", "0.3", "0.0015",
+        "1.23456789012346E+17", "-12.5", "1E+17", "abc" }
+    for i in Range.asc(expected.len)
+        verdict.check(arena.text().s("shows ").s(expected[i]).take(),
+            results[i].equals(expected[i]), results[i])
+
+priv fn number(text: U8[]): I64 //< a test case's number
+    $v: I64 = 0
+    for c in text
+        v = v * 10 + I64::(c - '0')
+        if v > 1000000I64
+            return v
+    return v
+
+// ==========================================
+// Through the tools: search, read, and the citation check
+// ==========================================
+
+priv fn office_folder(work: U8[], arena: Arena$@): U8[] //<
+    //< A fresh folder holding the two files, an old-format one, a damaged one and a locked one
+    root: = fs.mkdir_unique(work, "office-", arena) catch panic("the test folder can be made")
+    rels: = U8[][]::{ "規程/rules.docx", "規程/leave.xlsx", "規程/old.doc",
+        "規程/broken.xlsx", "規程/locked.docx" }
+    bodies: = U8[][]::{ rules_docx, leave_xlsx, ole(" an old Word file", arena), "not a zip at all",
+        ole(" a file Office encrypted", arena) }
+    fs.write_tree(root, rels, bodies, arena) catch panic("the test folder can be written")
+    return root
+
+priv fn ole(rest: U8[], arena: Arena$@): U8[] //< bytes that open as a compound file does
+    return arena.text().c(0xD0U8).c(0xCFU8).c(0x11U8).c(0xE0U8).s(rest).take()
+
+fn test_the_tools_search_and_read_word_and_excel_files(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] search and read reach a Word and an Excel file by their text views")
+    root: = office_folder(work, arena)
+    hits: = files.tool_search(root, "有給休暇", "", arena)
+    verdict.check("a search finds the Excel row, named by its sheet and row, and the Word paragraph",
+        hits
+        .find_str("規程/leave.xlsx:2: 規程一覧!2: 有給休暇 | 入社6か月後に付与")
+        .is_some() &&
+        hits.find_str("規程/rules.docx:6: 第2条 年次有給休暇は").is_some(), hits)
+    numbered: = files.tool_search(root, "第3条", "", arena)
+    verdict.check("a search finds an article by the number Word's list numbering writes",
+        numbered.find_str("規程/rules.docx:10: 第3条 特別休暇は、5日とする。")
+        .is_some(), numbered)
+    read: = files.tool_read(root, "規程/leave.xlsx", 7, 7, arena)
+    verdict.check("a read numbers the view's lines",
+        read.find_str("7: 規程一覧!7: 割増賃金率 | 25%").is_some(), read)
+    refusals: = U8[][]::{ "規程/old.doc", "save it as .docx", "規程/broken.xlsx",
+        "it is not a zip file", "規程/locked.docx", "protected by a password" }
+    for k in Range.asc(refusals.len / 2)
+        got: = files.tool_read(root, refusals[2 * k], 1, 5, arena)
+        verdict.check(arena.text().s("reading ").s(refusals[2 * k]).s(" is refused with what to do")
+            .take(),
+            got.starts_with("refused: ") && got.find_str(refusals[2 * k + 1]).is_some(), got)
+
+fn test_a_citation_of_a_word_or_excel_file_is_checked(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a quote from a Word or Excel file is checked against its view's lines")
+    root: = office_folder(work, arena)
+    cases: = U8[][]::{ "規程/rules.docx", "特別休暇は、5日とする", "規程/leave.xlsx",
+        "割増賃金率 | 25%" }
+    for k in Range.asc(cases.len / 2)
+        s: = Source::{ .path = cases[2 * k], .from_line = 10I64 if k == 0 else 7I64,
+            .to_line = 10I64 if k == 0 else 7I64, .quote = cases[2 * k + 1] }
+        $out: = s
+        why: = answer.check_source(root, s, out@, arena)
+        verdict.check(arena.text().s("a true quote from ").s(cases[2 * k]).s(" passes").take(),
+            why.len == 0, why)
+    deleted: = Source::{ .path = "規程/rules.docx", .from_line = 10I64, .to_line = 10I64,
+        .quote = "特別休暇は、3日とする" }
+    $out: = deleted
+    why: = answer.check_source(root, deleted, out@, arena)
+    verdict.check("a quote of deleted text fails, since the view holds the text as changed",
+        why.len > 0, why)

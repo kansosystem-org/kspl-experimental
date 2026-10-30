@@ -44,6 +44,21 @@ struct Checkpoint //< a copy of the running state, and when it was made
 enum Finish //< why generation stopped
     stop //< the model ended its turn
     length //< the token limit or the context was reached
+    left //< the watch asked to stop: the client that waited has gone
+
+trait Watch //< what generation tells its caller as it goes; an answer of false stops it
+    //< **A stream writes from here**, so a client that has gone stops the work at its next piece.
+    fn piece_read(r: Self): Bool //< a piece of the prompt was read (`PROMPT_PIECE` tokens at most)
+    fn generated(r: Self, id: I32): Bool //< a token was generated; the turn's end is not reported
+
+struct Unwatched //< the watch of an answer sent whole: generation runs to its end
+    none: Bool //< no state; a struct holds at least one field
+
+impl Unwatched: Watch //< generation that nothing stops: each piece and token goes on
+    fn piece_read(_r: Self): Bool
+        return true
+    fn generated(_r: Self, _id: I32): Bool
+        return true
 
 struct Generated //< what one generation gave
     tokens: List<|I32|> //< the generated tokens, the one that ended the turn left out
@@ -74,41 +89,43 @@ impl Engine
                 return .some(id)
         return .none
 
-    fn feed(r: Self$@, prompt: I32[]): Sz //<
+    fn feed(r: Self$@, prompt: I32[], watch: Watch): Sz? //<
         //< Brings the cache to `prompt` and the scores to its last token; returns the tokens kept
         //< **At least the last token is computed again**: its scores are not kept, only its keys.
-        //< The rest is read `PROMPT_PIECE` tokens at a time. `prompt` must be non-empty, fit
-        //< `context`, and pass `outside_vocab`. A running state goes back to its latest copy at or
-        //< before the shared start. It is copied again where the answer's turn opens: the next
-        //< prompt shares the text before it, whether it goes on with this answer or writes the
-        //< answer back without its thinking.
+        //< The rest is read `PROMPT_PIECE` tokens at a time; none is returned where the watch
+        //< stops it. `prompt` must be non-empty, fit `context`, and pass `outside_vocab`. A running
+        //< state goes back to its latest copy at or before the shared start, and is copied again
+        //< where the answer's turn opens ("The cache is kept across requests" in DESIGN-serving).
         $keep: Sz = 0
         for keep < r.seen.len && keep + 1 < prompt.len && r.seen[keep] == prompt[keep]
             keep += 1
         r.requests += 1
         if !r.model.recurrent()
             r.seen.len = keep
-            r.read(prompt, keep, prompt.len)
-            return keep
+            return .some(keep) if r.read(prompt, keep, prompt.len, watch) else .none
         keep = r.go_back(keep)
         r.seen.len = keep
         $turn: = prompt.len - 1
         for turn > 0 && prompt[turn] != r.marks.im_start
             turn -= 1
         if turn >= keep
-            r.read(prompt, keep, turn)
+            if !r.read(prompt, keep, turn, watch)
+                return .none
             r.save()
-            r.read(prompt, turn, prompt.len)
-        else
-            r.read(prompt, keep, prompt.len)
-        return keep
+            return .some(keep) if r.read(prompt, turn, prompt.len, watch) else .none
+        return .some(keep) if r.read(prompt, keep, prompt.len, watch) else .none
 
-    priv fn read(r: Self$@, prompt: I32[], from: Sz, to: Sz) //< tokens [from, to), in pieces
+    priv fn read(r: Self$@, prompt: I32[], from: Sz, to: Sz, watch: Watch): Bool //<
+        //< Reads tokens [from, to) in pieces; false where the watch stopped it after one
+        //< The cache then holds the pieces read, which a later prompt can still reuse.
         $at: = from
         for at < to
             n: = math.min(PROMPT_PIECE, to - at)
             r.advance(prompt.sub(at, n))
             at += n
+            if !watch.piece_read()
+                return false
+        return true
 
     priv fn go_back(r: Self$@, keep: Sz): Sz //<
         //< the tokens kept once the state stands at or before `keep`
@@ -152,10 +169,14 @@ impl Engine
         for id in ids
             r.seen.push(id)
 
-    fn generate(r: Self$@, prompt: I32[], limit: Sz, pick: Picker$@, arena: Arena$@): Generated //<
-        //< Generates after `prompt` until the turn ends, `limit` tokens, or the context is full
-        reused: = r.feed(prompt)
-        $out: = Generated::{ .tokens = List<|I32|>(arena), .reused = reused, .finish = .length }
+    fn generate(r: Self$@, prompt: I32[], limit: Sz, pick: Picker$@, watch: Watch, arena: Arena$@):
+        Generated //<
+            //< Generates after `prompt` until the turn ends, `limit` tokens, or the context is full
+            //< The watch hears of each piece and token, and can stop it (`Finish.left`).
+        $out: = Generated::{ .tokens = List<|I32|>(arena), .reused = 0, .finish = .left }
+        out.reused = r.feed(prompt, watch) catch
+            return out
+        out.finish = .length
         for
             next: = sampler.sample(r.logits, pick.cfg, pick.rng@, r.step)
             r.step.reset()
@@ -163,6 +184,9 @@ impl Engine
                 out.finish = .stop
                 break
             out.tokens.push(next)
+            if !watch.generated(next)
+                out.finish = .left
+                break
             if out.tokens.len >= limit || r.seen.len >= r.context
                 break
             one: I32[1] = ::{ next }

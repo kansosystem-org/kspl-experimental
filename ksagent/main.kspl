@@ -1,9 +1,10 @@
 #!/usr/bin/env -S ksplc run
 //< Answers questions about the files in one folder, through a model server on this machine
 //< Each answer cites the file and lines it comes from, and each cited quote is checked against
-//< the file. `ask` answers one question, `watch` answers the questions added to chat files, and
+//< the file. `ask` answers one question, `watch` answers the questions a chat page asks, and
 //< `eval` scores a model on questions whose answers are known.
-//< **It only reads the folder**, except the chat files it answers in and the table `--out` names.
+//< **It only reads the folder**, except the chat and live files it records answers in, the lock
+//< `watch` holds, and the table `--out` names.
 
 // ==========================================
 // Usage:
@@ -16,6 +17,7 @@ import "ksagent/answer" + { Lang }
 import "ksagent/evaluate"
 import "ksagent/files"
 import "ksagent/model"
+import "ksagent/progress" { Progress }
 import "ksagent/watch"
 import "std/argparse"
 import "std/chars"
@@ -49,7 +51,7 @@ priv fn read_args(o: Options$@, arena: Arena$@): Bool //<
         "answers questions about the files in one folder, citing the lines each answer comes from",
         arena)
     cli.subcommand("ask", "answer one question and print the answer and its checked sources")
-    cli.subcommand("watch", "answer each question saved into a *.chat.ksmd file under <folder>")
+    cli.subcommand("watch", "answer each question a chat page asks in a *.ask.jsonl file")
     cli.subcommand("eval", "ask the questions of a questions file and print how many passed")
     cli.command_form("ask", "[options...] <folder> \"<question>\"")
     cli.command_form("watch", "[options...] <folder>")
@@ -84,7 +86,14 @@ fn main(): I32
     if o.timeout_s < 1I64 || o.timeout_s > MAX_TIMEOUT_S
         io.err().s("\{NAME\}: --timeout must be from 1 to \{MAX_TIMEOUT_S\} seconds\n")
         return 1
-    server: =
+    // **No command starts beside a chat file of the old form**: its answers would count as sources.
+    old: = files.old_chat_file(root, arena)
+    if old.len > 0
+        io.err()
+            .s("\{NAME\}: \{old\} is a chat file of the old form, and the tools would read its \
+                answers as sources. Delete it, or ask its questions again on the chat page\n")
+        return 1
+    $server: =
         model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), arena) catch why
         io.err().s("\{NAME\}: ").s(why).c('\n')
         return 1
@@ -94,8 +103,11 @@ fn main(): I32
     if o.command.equals("eval")
         return run_eval(job, o.rest[1], o.out, arena)
     question: = o.rest[1]
-    none: = List<|agent.Turn|>(arena)
-    a: = agent.run(job, question, none@, Lang.of(question), arena)
+    none: = List<|answer.Turn|>(arena)
+    lang: = Lang.of(question)
+    defer $shown: = Progress(job.trace, lang, arena)
+    a: = agent.run(job, question, none@, lang, shown@, arena)
+    shown.ended("", false)
     answer.write_console(a@, io.out(), arena)
     return 1 if answer.ended_line(a@, arena).len > 0 else 0
 
@@ -114,7 +126,7 @@ priv fn run_eval(job: agent.Ask, questions: U8[], out: U8[], arena: Arena$@): I3
             io.err().s("\{NAME\}: --out must name a .md or a .ksmd file\n")
             return 1
         // **The same guards as the model's paths** (`files.resolve`), so the table cannot land
-        // outside the folder, on a hidden name or on a chat file.
+        // outside the folder, on a hidden name or on a conversation's file.
         switch files.resolve(job.root, out, arena)
         case .ok(full, _rel)
             target = full

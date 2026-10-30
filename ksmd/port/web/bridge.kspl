@@ -545,6 +545,23 @@ fn ksmd_web_paste_table(len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
+#export
+fn ksmd_web_paste_ksmd(len: Sz): Sz //<
+    //< Puts the table of the ksmd source written in after the caret's paragraph, as a copy left it
+    if !begin()
+        return full()
+    ed.paste_table(text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_block_source(block: Sz): Sz //< a source that holds that block alone, for a copy
+    ensure()
+    out.clear()
+    if block >= 0 && block < ed.doc.blocks.len
+        writer.write_one(ed.doc@, block, out)
+    return out.slice().len
+
 priv fn grid_in(len: Sz, scratch: Arena$@): List<|List<|U8[]|>|> //<
     //< The grid the script wrote in; text that is not one reads as an empty grid
     $grid: = List<|List<|U8[]|>|>(scratch)
@@ -724,6 +741,24 @@ fn ksmd_web_set_widths(block: Sz, len: Sz): Sz //<
     if !parse_weights(text_in(len), weights@)
         return refused(.table(.not_widths))
     ed.set_widths(block, weights@) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_set_filter(block: Sz, column: Sz, len: Sz): Sz //<
+    //< Gives a column the filter entry written in, empty for none; column -1 clears every column's
+    if !begin()
+        return full()
+    ed.set_filter(block, column, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_set_heights(block: Sz, first: Sz, last: Sz, points: Sz): Sz //<
+    //< Gives the data rows from `first` to `last` a least height in points; 0 takes it away
+    if !begin()
+        return full()
+    ed.set_heights(block, first, last, points) catch e
         return refused(e)
     return result(true, "")
 

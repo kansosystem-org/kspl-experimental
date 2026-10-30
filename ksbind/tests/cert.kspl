@@ -1,0 +1,217 @@
+//< Keys and certificates made at run time for the TLS tests, in memory or as PEM text
+//< **No key stands in the repository, and no tool is started**: OpenSSL makes each key when a
+//< test asks. A package that uses ksbind takes them for its own tests, as PEM text.
+//< The keys are Ed25519, which ask for no parameters, so no `ctrl` macro stands between
+//< (OpenSSL 1.1.1 or later). `long` crosses as in `../tls.kspl`.
+import "ksbind/tls"
+import "ksbind/tls_server"
+import "std/fs"
+import "std/mem" { dealloc, Arena }
+import "std/str" // `to_cstr`
+import "std/sys"
+
+extern "C"
+    struct EVP_PKEY_CTX
+    struct EVP_MD
+    struct EVP_CIPHER
+    struct ASN1_INTEGER
+
+#link("ssl")
+#link("crypto")
+extern "C"
+    fn EVP_PKEY_CTX_new_id(id: I32, engine: Void$@): EVP_PKEY_CTX$@
+    fn EVP_PKEY_keygen_init(ctx: EVP_PKEY_CTX$@): I32
+    fn EVP_PKEY_keygen(ctx: EVP_PKEY_CTX$@, out: tls.EVP_PKEY$@$@): I32
+    fn EVP_PKEY_CTX_free(ctx: EVP_PKEY_CTX$@)
+    fn EVP_aes_256_cbc(): EVP_CIPHER@
+    fn X509_new(): tls.X509$@
+    fn X509_get_serialNumber(x: tls.X509$@): ASN1_INTEGER$@
+    fn ASN1_INTEGER_set(a: ASN1_INTEGER$@, v: Sz): I32
+    fn X509_getm_notBefore(x: tls.X509$@): tls.ASN1_TIME$@
+    fn X509_getm_notAfter(x: tls.X509$@): tls.ASN1_TIME$@
+    fn X509_time_adj_ex(t: tls.ASN1_TIME$@, offset_day: I32, offset_sec: Sz, in_tm: Void$@):
+        tls.ASN1_TIME$@
+    fn X509_set_pubkey(x: tls.X509$@, pkey: tls.EVP_PKEY$@): I32
+    fn X509_NAME_add_entry_by_txt(name: tls.X509_NAME$@, field: Void@, kind: I32, bytes: Void@,
+        len: I32, loc: I32, set: I32): I32
+    fn X509_set_issuer_name(x: tls.X509$@, name: tls.X509_NAME$@): I32
+    fn X509_sign(x: tls.X509$@, pkey: tls.EVP_PKEY$@, md: EVP_MD@): I32
+    fn BIO_new_file(filename: Void@, mode: Void@): tls.BIO$@
+    fn PEM_write_bio_X509(bp: tls.BIO$@, x: tls.X509$@): I32
+    fn PEM_write_bio_PrivateKey(bp: tls.BIO$@, x: tls.EVP_PKEY$@, enc: EVP_CIPHER@, kstr: Void@,
+        klen: I32, cb: Void@, u: Void$@): I32
+
+priv const EVP_PKEY_ED25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
+priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
+priv const PASSPHRASE: U8[] = "kanso-test" //< what `Test_cert.locked_key_pem` is locked with
+
+fn new_key(): tls.EVP_PKEY$@ //< a fresh Ed25519 key, which the caller frees
+    kctx: = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, null)
+    assert(kctx != null && EVP_PKEY_keygen_init(kctx) == 1, "an Ed25519 key generator should start")
+    $pkey: tls.EVP_PKEY$@ = null
+    assert(EVP_PKEY_keygen(kctx, pkey@) == 1, "an Ed25519 key should be made")
+    EVP_PKEY_CTX_free(kctx)
+    return pkey
+
+pub struct Validity //< when a certificate is valid, in whole days from now
+    pub from_day: I32 //< the first day; negative for one in the past
+    pub to_day: I32 //< the last day; negative for a certificate that has expired
+
+pub const VALID_NOW: Validity = ::{ .from_day = -1, .to_day = 1 } //< valid from yesterday a day on
+
+fn new_cert( //< a certificate for `key`, which the caller frees
+    key: tls.EVP_PKEY$@, //< the key it certifies
+    cn: U8[], //< its subject's CN, the name a client checks
+    serial: Sz, //< its serial number, distinct under one issuer
+    issuer: tls.X509$@, //< the certificate of the CA signing it; null for one signed by `key` itself
+    signer: tls.EVP_PKEY$@, //< the key that signs it: the issuer's, or `key` itself
+    valid: Validity, //< when it is valid
+): tls.X509$@
+    x: = X509_new()
+    assert(x != null, "a certificate should be made")
+    name: = tls_server.X509_get_subject_name(x)
+    issuer_name: = name if issuer == null else tls_server.X509_get_subject_name(issuer)
+    ok: =
+        ASN1_INTEGER_set(X509_get_serialNumber(x), serial) == 1 &&
+        X509_time_adj_ex(X509_getm_notBefore(x), valid.from_day, 0, null) != null &&
+        X509_time_adj_ex(X509_getm_notAfter(x), valid.to_day, 0, null) != null &&
+        X509_set_pubkey(x, key) == 1 &&
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, Void@::cn.ptr, I32::cn.len, -1, 0) == 1
+        && X509_set_issuer_name(x, issuer_name) == 1 && X509_sign(x, signer, null) > 0
+    assert(ok, "the certificate should be filled in and signed")
+    return x
+
+fn server_ctx(cert: tls.X509$@, key: tls.EVP_PKEY$@): tls.SSL_CTX$@ //<
+    //< A server context answering with that certificate and key, holding references of its own
+    ctx: = tls.SSL_CTX_new(tls_server.TLS_server_method())
+    assert(ctx != null, "a server context should be made")
+    assert(tls_server.SSL_CTX_use_certificate(ctx, cert) == 1 &&
+        tls_server.SSL_CTX_use_PrivateKey(ctx, key) == 1,
+        "the server context should take the certificate and its key")
+    return ctx
+
+fn self_signed_ctx(): tls.SSL_CTX$@ //<
+    //< A server context holding a fresh key and a certificate it signed itself, for "127.0.0.1"
+    //< **No client trusts it**, since no CA in the default store signed it.
+    key: = new_key()
+    x: = new_cert(key, "127.0.0.1", 1, null, key, VALID_NOW)
+    ctx: = server_ctx(x, key)
+    tls_server.X509_free(x)
+    tls_server.EVP_PKEY_free(key)
+    return ctx
+
+priv fn drain(bio: tls.BIO$@, arena: Arena$@): U8[] //< everything a memory BIO holds, as text
+    n: = tls.BIO_ctrl_pending(bio)
+    buf: = U8$@::arena.alloc(n + 1)
+    got: = tls.BIO_read(bio, Void$@::buf, I32::n)
+    assert(got >= 0 && Sz::got == n, "a memory BIO should give back what it holds")
+    return U8[]::{ .ptr = buf, .len = n }
+
+fn cert_pem(x: tls.X509$@, arena: Arena$@): U8[] //< a certificate as PEM text
+    bio: = tls.BIO_new(tls.BIO_s_mem())
+    assert(bio != null && PEM_write_bio_X509(bio, x) == 1, "the certificate should print as PEM")
+    defer tls.BIO_free(bio)
+    return drain(bio, arena)
+
+fn key_pem(key: tls.EVP_PKEY$@, locked: Bool, arena: Arena$@): U8[] //<
+    //< A private key as PEM text; `locked` protects it with `PASSPHRASE`
+    bio: = tls.BIO_new(tls.BIO_s_mem())
+    assert(bio != null, "a memory BIO should be made")
+    defer tls.BIO_free(bio)
+    cipher: = EVP_aes_256_cbc() if locked else null
+    pass: = Void@::PASSPHRASE.ptr if locked else null
+    klen: = I32::PASSPHRASE.len if locked else 0
+    assert(PEM_write_bio_PrivateKey(bio, key, cipher, pass, klen, null, null) == 1,
+        "the key should print as PEM")
+    return drain(bio, arena)
+
+pub struct Test_cert //< a fresh key and a certificate for it, as the PEM text a server reads
+    pub cert_pem: U8[] //< the certificate, then the CA's when it is a chain
+    pub key_pem: U8[] //< its key, unencrypted
+    pub locked_key_pem: U8[] //< the same key under a passphrase
+    pub other_key_pem: U8[] //< a key that does not belong to the certificate
+
+priv const CA_BASE: U8[] = "out/tmp/ksbind_tls" //< where a test CA's certificate is written
+
+pub struct Test_ca //< a CA made for one test, which the client trusts while it stands
+    key: tls.EVP_PKEY$@
+    cert: tls.X509$@
+    dir: U8[] //< the scratch folder holding `file`
+    file: U8[] //< the certificate as PEM, which `SSL_CERT_FILE` names
+
+impl Test_ca
+    pub fn trusted(arena: Arena$@): Test_ca //<
+        //< Makes a CA and points OpenSSL's default store at it alone (`SSL_CERT_FILE`)
+        //< **The client is left as it is.** It loads the default store, where OpenSSL reads the
+        //< variable. So the test runs the code a program runs.
+        key: = new_key()
+        cert: =
+            new_cert(key, "Kanso test CA", 1, null, key,
+            Validity::{ .from_day = -1, .to_day = 30 })
+        dir: = fs.mkdir_unique(CA_BASE, "ca_", arena)
+            catch panic("the scratch folder should be made")
+        file: = fs.join(dir, "ca.pem", arena)
+        c_file: U8$@ = file.to_cstr() catch
+            panic("the scratch path holds no NUL")
+        bio: = BIO_new_file(Void@::c_file, "w")
+        dealloc(Void$@::c_file)
+        assert(bio != null && PEM_write_bio_X509(bio, cert) == 1, "the CA should be written out")
+        tls.BIO_free(bio)
+        sys.set_env("SSL_CERT_FILE", file) catch panic("SSL_CERT_FILE should be set")
+        return ::{ .key = key, .cert = cert, .dir = dir, .file = file }
+
+    fn issue_ctx(r: Self, host: U8[]): tls.SSL_CTX$@ //<
+        //< A server context answering with a fresh key and a certificate this CA issued for `host`
+        key: = new_key()
+        x: = new_cert(key, host, 2, r.cert, r.key, VALID_NOW)
+        ctx: = server_ctx(x, key)
+        tls_server.X509_free(x)
+        tls_server.EVP_PKEY_free(key)
+        return ctx
+
+    pub fn issue( //< a fresh key and a certificate this CA issued for `host`, as PEM text
+        r: Self,
+        host: U8[], //< the name the certificate is for
+        valid: Validity, //< when it is valid
+        with_ca: Bool, //< whether the CA's certificate follows it, as a chain
+        arena: Arena$@, //< holds the text
+    ): Test_cert
+        key: = new_key()
+        defer tls_server.EVP_PKEY_free(key)
+        other: = new_key()
+        defer tls_server.EVP_PKEY_free(other)
+        x: = new_cert(key, host, 3, r.cert, r.key, valid)
+        defer tls_server.X509_free(x)
+        $chain: = cert_pem(x, arena)
+        if with_ca
+            chain = arena.text().s(chain).s(cert_pem(r.cert, arena)).take()
+        return Test_cert::{ .cert_pem = chain, .key_pem = key_pem(key, false, arena),
+            .locked_key_pem = key_pem(key, true, arena),
+            .other_key_pem = key_pem(other, false, arena) }
+
+    pub fn issued_backwards(r: Self, host: U8[], arena: Arena$@): U8[] //<
+        //< A chain in the wrong order: the CA's certificate first, then one it issued for `host`
+        key: = new_key()
+        defer tls_server.EVP_PKEY_free(key)
+        x: = new_cert(key, host, 4, r.cert, r.key, VALID_NOW)
+        defer tls_server.X509_free(x)
+        return arena.text().s(cert_pem(r.cert, arena)).s(cert_pem(x, arena)).take()
+
+    pub fn free(r: Self) //< stops trusting it, and removes what it wrote
+        sys.unset_env("SSL_CERT_FILE") catch panic("SSL_CERT_FILE could not be unset")
+        fs.remove_path(r.file) catch {}
+        fs.remove_path(r.dir) catch {}
+        tls_server.X509_free(r.cert)
+        tls_server.EVP_PKEY_free(r.key)
+
+pub fn self_signed(host: U8[], arena: Arena$@): Test_cert //<
+    //< A fresh key and a certificate it signed itself for `host`, as PEM text
+    key: = new_key()
+    defer tls_server.EVP_PKEY_free(key)
+    other: = new_key()
+    defer tls_server.EVP_PKEY_free(other)
+    x: = new_cert(key, host, 1, null, key, VALID_NOW)
+    defer tls_server.X509_free(x)
+    return Test_cert::{ .cert_pem = cert_pem(x, arena), .key_pem = key_pem(key, false, arena),
+        .locked_key_pem = key_pem(key, true, arena),
+        .other_key_pem = key_pem(other, false, arena) }

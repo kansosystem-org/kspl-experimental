@@ -493,6 +493,22 @@ pub fn spawn_redirect( //< starts a child without waiting, with its outputs goin
         throw .spawn_failed
     return Child::{ .handle = handle }
 
+// **Its child stays on this program's console**, so Ctrl+C there reaches both, on every OS.
+// `spawn_redirect`'s child has no console on Windows, so Ctrl+C does not reach it there.
+// Caution: **Use it only from a program with a console.** On Windows a console child of a program
+// with none gets a new, empty console window.
+#cfg(!freestanding)
+pub fn spawn_beside( //< starts a helper that runs while this program does, its outputs to files
+    argv: U8[][], //< the executable and its arguments
+    cwd: U8[], //< the working directory; empty inherits the caller's
+    out_path: U8[], //< the file standard output is written to
+    err_path: U8[], //< the file standard error is written to
+): Child!Spawn_error //< the running child, to wait on or kill; fails if it cannot start
+    handle: = start(argv, cwd, 0, out_path, err_path)
+    if handle == 0
+        throw .spawn_failed
+    return Child::{ .handle = handle }
+
 #cfg(!freestanding)
 impl Child
     pub fn alive(r: Self@): Bool //< whether it is still running

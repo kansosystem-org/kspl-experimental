@@ -140,6 +140,13 @@ impl Ast_node
                 return .none
             c.statics.deepest_float = math.max(c.statics.deepest_float, deepest)
             return .some(kept.value)
+        // A cycle (`const A = B + 1.0; const B = A + 1.0;`) folds to nothing here, as
+        // eval_ident_or_path stops an integer one, so the initializer's check reports the cycle.
+        // Followed to the depth limit, it was reported as nesting too deep.
+        if c.resolving.consts.get(key).unwrap_or(false)
+            return .none
+        c.resolving.consts.set(key, true)
+        defer c.resolving.consts.remove(key)
         outer_deepest: = c.statics.deepest_float
         c.statics.deepest_float = I32::depth
         folded: = r.get_var_decl_expr().fold_float_at(c, depth)

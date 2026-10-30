@@ -269,8 +269,33 @@ function ksmdView(ks) {
     const b = e.target.closest && e.target.closest(".block-remove");
     if (!b || b.closest(".include .inside")) return;
     const block = blocks().indexOf(b.closest(".b"));
-    if (block >= 0) ks.act("ksmd_web_remove_block", block);
+    if (block >= 0) removeBlock("ksmd_web_remove_block", block);
   });
+
+  // Removes a whole block through an action, and shows the caret on the block that takes its
+  // place (`remove_whole` in `ksmd/edit/editor.kspl`). The focus comes back without a scroll:
+  // a focused document would otherwise jump to its top.
+  function removeBlock(name, block) {
+    ks.root.focus({ preventScroll: true });
+    const r = ks.act(name, block);
+    caretIntoSight();
+    return r;
+  }
+
+  // Scrolls the window, as little as it can, so the caret stands under the header and in sight.
+  function caretIntoSight() {
+    const s = window.getSelection();
+    if (s.rangeCount === 0 || !ks.root.contains(s.focusNode)) return;
+    let r = s.getRangeAt(0).getBoundingClientRect();
+    if (r.height === 0) {
+      const el = s.focusNode.nodeType === Node.ELEMENT_NODE ? s.focusNode : s.focusNode.parentElement;
+      r = el.getBoundingClientRect();
+    }
+    const head = document.querySelector(".top");
+    const top = head ? head.getBoundingClientRect().bottom : 0;
+    if (r.top < top) window.scrollBy(0, r.top - top - 8);
+    else if (r.bottom > window.innerHeight) window.scrollBy(0, r.bottom - window.innerHeight + 8);
+  }
 
   // A link opens in a tab of its own, on Ctrl+click (Cmd+click on a Mac), and in Read-only on a
   // plain click too, as in Word. **It never leads this tab away**: the unsaved edits and the
@@ -435,5 +460,5 @@ function ksmdView(ks) {
   }
 
   ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,
-    removeGap, removeButton };
+    removeGap, removeButton, removeBlock };
 }

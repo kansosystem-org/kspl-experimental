@@ -4,9 +4,17 @@
 // The steps for building and running it have their one source in `make test-freestanding-math`
 // (mk/test.mk).
 // ==========================================
+#define _POSIX_C_SOURCE 200809L /* alarm(), which -std=c99 alone hides */
 #include <stdio.h>
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <signal.h>
+#include <unistd.h>
+#endif
 
 double probe_sqrt(double x);
 double probe_exp(double x);
@@ -19,6 +27,10 @@ double probe_pow(double a, double b);
 size_t probe_format_float(char* out, size_t cap, double v, int precision);
 size_t probe_format_ptr(char* out, size_t cap, void* p);
 size_t probe_exact_precision(void);
+// A run-time check's breach going through the program's panic hook.
+void probe_install_hook(void);
+int probe_index(ptrdiff_t i);
+int probe_divide(int a, int b);
 
 static int fails = 0;
 // A relative error of 1e-9, well tighter than inference's F32 (~1e-7).
@@ -144,6 +156,84 @@ static void check_float_format(void) {
     }
 }
 
+// What the hook was handed, and how many times. **The hook leaves by a jump back**, as a port's
+// hook would reset the board: a breach does not return, and the harness has more to check.
+// Caution: **Use `__builtin_setjmp`, not `setjmp`.** On Windows, `longjmp` unwinds the frames
+// between (RtlUnwindEx), and the probe's frames have no unwind data, as bare-metal code has none
+// (clang leaves it out under `-ffreestanding`). The unwind then fails and the process dies with
+// nothing printed. The builtin puts the stack and frame back without unwinding, on every host.
+static void* hook_exit[5];
+static int hook_calls = 0;
+static char hook_msg[160];
+
+void harness_panic_seen(const unsigned char* msg, size_t len) {
+    size_t n = len < sizeof(hook_msg) - 1 ? len : sizeof(hook_msg) - 1;
+    memcpy(hook_msg, msg, n);
+    hook_msg[n] = 0;
+    hook_calls++;
+    __builtin_longjmp(hook_exit, 1);
+}
+
+// A breach that never reaches the hook stops in std/lang's `panic` loop. **A time limit turns
+// that hang into a failure** with its own line, on Windows as on POSIX.
+#define BREACH_LIMIT_S 60
+static const char breach_hung[] = "FAIL a breach did not reach the hook within 60 s\n"
+                                  "RESULT: SOME FAILED (1)\n";
+#ifdef _WIN32
+static DWORD WINAPI breach_watch(LPVOID unused) {
+    DWORD wrote;
+    (void)unused;
+    Sleep(BREACH_LIMIT_S * 1000);
+    WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), breach_hung, sizeof(breach_hung) - 1, &wrote, NULL);
+    ExitProcess(1);
+    return 0;
+}
+static void arm_breach_limit(void) {
+    HANDLE t = CreateThread(NULL, 0, breach_watch, NULL, 0, NULL);
+    if (t != NULL) CloseHandle(t);
+}
+#else
+static void breach_timed_out(int sig) {
+    (void)sig;
+    if (write(STDOUT_FILENO, breach_hung, sizeof(breach_hung) - 1) < 0) _exit(2);
+    _exit(1);
+}
+static void arm_breach_limit(void) {
+    signal(SIGALRM, breach_timed_out);
+    alarm(BREACH_LIMIT_S);
+}
+#endif
+
+// The message is hosted's (`kspl_bounds_fail` in ksplc/gen/runtime/hosted.c) without `panic: `
+// and the place.
+static void check_breach(const char* name, int which, const char* want) {
+    hook_calls = 0;
+    hook_msg[0] = 0;
+    if (__builtin_setjmp(hook_exit) == 0) {
+        int got = which == 0 ? probe_index(7) : probe_divide(1, 0);
+        printf("FAIL %s: the breach did not stop (it gave %d)\n", name, got);
+        fails++;
+        return;
+    }
+    // **Back from the hook, the compiler must read what it wrote again**: GCC takes the builtin's
+    // second return for no call, and keeps the 0 it stored above.
+    __asm__ __volatile__("" ::: "memory");
+    if (hook_calls != 1 || strcmp(hook_msg, want) != 0) {
+        printf("FAIL %s: the hook ran %d time(s) with '%s'; want once with '%s'\n", name,
+            hook_calls, hook_msg, want);
+        fails++;
+    }
+}
+
+static void check_breaches(void) {
+    // What is printed so far is kept if a breach ends the process instead of the hook.
+    fflush(stdout);
+    arm_breach_limit();
+    probe_install_hook();
+    check_breach("index out of range", 0, "index out of bounds in array (idx: 7, len: 4)");
+    check_breach("division by zero", 1, "division by zero");
+}
+
 // The host libc's `%p` differs per implementation (glibc, MSVC UCRT), so what is checked is **its
 // own contract of "0x" plus lower-case hex**.
 static void check_ptr_format(void) {
@@ -226,9 +316,10 @@ int main(void) {
     check_edges();
     check_float_format();
     check_ptr_format();
+    check_breaches();
 
     if (fails == 0) {
-        printf("RESULT: ALL PASS (freestanding std/math vs libm, rel_err < %.0e; std/str fmt vs snprintf)\n",
+        printf("RESULT: ALL PASS (freestanding std/math vs libm, rel_err < %.0e; std/str fmt vs snprintf; check breaches reach the panic hook)\n",
             kTol);
         return 0;
     }

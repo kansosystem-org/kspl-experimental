@@ -3,6 +3,7 @@
 //< **The code here only builds responses**; the accept loop in `kssrv/main.kspl` sends them.
 //< **`Rc<|Conn|>` manages only the memory's lifetime.** `conn_close` frees the socket, the arena
 //< and the two buffers explicitly.
+import "ksbind/tls_server" { Tls_session }
 import "std/chars"
 import "std/fs"
 import "std/http"
@@ -130,6 +131,11 @@ struct Conn
     // whole (`conn_send` in `kssrv/main.kspl`).
     file: io.File_stream
     file_left: Sz //< how many of the file's bytes, of the length the head named, are still to go
+    // The connection's TLS; null for plain HTTP. **Every byte goes through it**
+    // (`kssrv/https.kspl`), so `outbuf` and `inbuf` hold plain HTTP either way.
+    tls: Tls_session$@
+    tls_closed: Bool //< whether its close_notify is queued (`https.close_notify`)
+    accepted_us: I64 //< when it was accepted, on the monotonic clock; the handshake counts from it
 
 struct Conn_table //< the connection table
     //< Caution: **Put the array in a struct's field.** `@` on an array makes a pointer to the first
@@ -160,11 +166,14 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
         .outbuf = Str_builder(),
         .serial = serial,
         .moved_us = sys.mono_us(),
+        .accepted_us = sys.mono_us(),
     }
     return Rc<|Conn|>(fresh)
 
 fn conn_close(c: Conn$@) //< frees a connection's resources
     //< Caution: Call it before emptying the slot, or the socket and the buffers leak.
+    if c.tls != null
+        c.tls.free()
     c.stream.free()
     c.arena.free()
     c.inbuf.free()

@@ -1,0 +1,353 @@
+//< Reads a response from a connection: its body whole, or piece by piece as it arrives
+//< **A body comes by its `Content-Length` or in chunks** (`Transfer-Encoding: chunked`). One that
+//< runs to the close is refused, since a body cut off early cannot be told from a whole one.
+//< `read_response_head` hands the body out piece by piece (`Body_reader.next`), for a reply that
+//< streams; `read_response` reads it whole. Both read the head as `std/http` does.
+
+// ==========================================
+// Caution: **Refuse every chunk line another reader could cut elsewhere**: a bare CR or LF, a size
+// with a sign or a space, a malformed extension. Each is refused with a reason (`invalid_chunk`).
+// ==========================================
+import "std/chars"
+import "std/http" + { Headers, Http_error, Response }
+import "std/mem" + { Arena, Own_arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/sys"
+
+pub const MAX_CHUNK_LINE: Sz = 4096 //< the longest chunk-size line, its extensions included
+    //< A size needs at most 16 digits; the rest is extensions, which servers rarely send.
+priv const READ_PIECE: Sz = 4096 //< how much one read from a connection takes
+
+priv enum Framing //< how the rest of a body is delimited, and where its reading stands
+    length(left: Sz) //< by a length; `left` bytes are still due
+    chunk_size //< a chunk's size line comes next
+    chunk_data(left: Sz) //< inside a chunk, with `left` bytes still due
+    chunk_end //< the CRLF after a chunk's data comes next
+    trailers(seen: Sz) //< the trailer lines come next; `seen` bytes of them have been read
+    done //< the body is whole
+
+pub enum Body_piece //< what one `Body_reader.next` gives
+    data(bytes: U8[]) //< the next bytes of the body, valid until the next call
+    waiting //< nothing more arrived within the wait; the body goes on
+    done //< the body is whole
+
+pub struct Body_reader //< a response's body, handed out piece by piece as it arrives
+    //< **It holds the connection, not owns it**: the caller closes the connection after it.
+    priv stream: net.Tcp_stream$@
+    priv buf: Str_builder //< bytes received and not handed out yet
+    priv handed: Sz //< the bytes at `buf`'s start the last piece viewed; dropped at the next call
+    priv framing: Framing
+    priv scanned: Sz //< how far the line at `buf`'s start has been searched (`scan_line`)
+    priv room: Sz //< how many more body bytes the caller's limit allows
+    priv used: Sz //< the bytes of the connection the response has used so far, head included
+    priv deadline_us: I64 //< when the whole response must have arrived (`sys.mono_us`)
+
+impl Body_reader
+    priv fn on(stream: net.Tcp_stream$@, max_body: Sz): Body_reader //< a reader with no head yet
+        return Body_reader::{ .stream = stream, .buf = Str_builder(), .handed = 0,
+            .framing = .done, .scanned = 0, .room = max_body, .used = 0, .deadline_us = 0I64 }
+
+    pub fn next( //< the next piece of the body, or that none came within the wait, or its end
+        //< A chunked body comes out as its data alone: sizes, extensions and trailers are read,
+        //< checked and dropped. Fails with `connection_closed` where the body stops short.
+        r: Self$@,
+        wait_ms: I32, //< how long to wait for more bytes; the response's own time limit still holds
+    ): Body_piece!Http_error
+        r.buf.drop_prefix(r.handed)
+        r.handed = 0
+        until: = sys.deadline_after_ms(wait_ms)
+        for
+            if piece: = r.take()!
+                return piece
+            if !r.fill(until)!
+                return .waiting
+
+    priv fn fill(r: Self$@, until: I64): Bool!Http_error //<
+        //< Reads more bytes into `buf`; false where none came before `until`
+        //< Past the response's deadline it fails with `.io(.timed_out)`, as `read_response` does.
+        now: = sys.mono_us()
+        if now >= r.deadline_us
+            throw .io(.timed_out)
+        end: = until if until < r.deadline_us else r.deadline_us
+        left_ms: = (end - now) / 1000I64
+        $chunk: U8[READ_PIECE] = ::{}
+        n: = r.stream.read_for(U8$[]::chunk, I32::left_ms) catch e
+            if e == net.Net_error.timed_out
+                if sys.mono_us() >= r.deadline_us
+                    throw .io(.timed_out)
+                return false
+            throw .io(e)
+        if n == 0
+            throw .connection_closed
+        r.buf.s((U8[]::chunk).sub(0, n))
+        return true
+
+    priv fn hand(r: Self$@, n: Sz): Body_piece //< hands out the first n buffered bytes
+        r.handed = n
+        r.used += n
+        r.room -= n
+        return .data(r.buf.slice().sub(0, n))
+
+    priv fn drop(r: Self$@, n: Sz) //< drops n buffered bytes that are framing, not body
+        r.buf.drop_prefix(n)
+        r.used += n
+
+    priv fn take(r: Self$@): Body_piece?!Http_error //<
+        //< The next piece the buffered bytes give, or none until more arrive
+        for
+            have: = r.buf.len
+            switch r.framing
+            case .length(left)
+                if left == 0
+                    r.framing = .done
+                    return .some(.done)
+                if have == 0
+                    return .none
+                n: = left if left < have else have
+                r.framing = .length(left - n)
+                return .some(r.hand(n))
+            case .chunk_size
+                line: = r.line(true)!
+                if text: = line
+                    size: = chunk_size(text, r.room)!
+                    r.drop(text.len + 2)
+                    r.framing = .trailers(0) if size == 0 else .chunk_data(size)
+                    continue
+                return .none
+            case .chunk_data(left)
+                if have == 0
+                    return .none
+                n: = left if left < have else have
+                r.framing = .chunk_end if n == left else .chunk_data(left - n)
+                return .some(r.hand(n))
+            case .chunk_end
+                got: = r.buf.slice()
+                if (have >= 1 && got[0] != '\r') || (have >= 2 && got[1] != '\n')
+                    throw .invalid_chunk("a chunk's data does not end with CRLF")
+                if have < 2
+                    return .none
+                r.drop(2)
+                r.framing = .chunk_size
+            case .trailers(seen)
+                line: = r.line(false)!
+                text: = line catch
+                    if seen + have > http.MAX_HEAD_BYTES
+                        throw .invalid_chunk("the trailers are larger than 64 KiB")
+                    return .none
+                // Caution: **Check the line before dropping it**: `text` views the buffer.
+                if text.len == 0
+                    r.drop(2)
+                    r.framing = .done
+                    return .some(.done)
+                check_trailer(text)!
+                r.drop(text.len + 2)
+                r.framing = .trailers(seen + text.len + 2)
+            case .done
+                return .some(.done)
+
+    priv fn line(r: Self$@, size_line: Bool): U8[]?!Http_error //<
+        //< The CRLF-ended line at `buf`'s start, without its CRLF, or none until it is whole
+        //< Caution: **Cap a size line still arriving**, or a peer that never ends one fills memory.
+        //< A trailer line's cap is the trailers' (`MAX_HEAD_BYTES`), which the caller counts.
+        found: = scan_line(r.buf.slice(), r.scanned@) catch
+            throw .invalid_chunk("a chunk line holds a bare CR or LF")
+        text: = found catch
+            if size_line && r.buf.len > MAX_CHUNK_LINE + 2
+                throw .invalid_chunk("a chunk's size line is longer than 4 KiB")
+            return .none
+        if size_line && text.len > MAX_CHUNK_LINE
+            throw .invalid_chunk("a chunk's size line is longer than 4 KiB")
+        return .some(text)
+
+impl Body_reader: Manual_free //< `free()` lets go the bytes it holds; the connection stays open
+    pub fn free(r: Self$@) //< frees the buffer of bytes not handed out
+        r.buf.free()
+
+fn scan_line(src: U8[], from: Sz$@): U8[]?!Http_error //<
+    //< The CRLF-ended line at `src`'s start, without its CRLF, or none until it is whole
+    //< `from` is how far earlier calls searched it, and moves on, so a line that arrives a byte at
+    //< a time is searched once. It is 0 again once the line is whole. Searched from the start
+    //< each time, such a line would cost its length squared. Fails as `http.read_line` does.
+    start: = from$
+    $ctx: = http.Scan_ctx::{ .src = src, .pos = start }
+    tail: = http.read_line(ctx@) catch e
+        switch e
+        case .incomplete
+            from$ = ctx.pos
+            return .none
+        default
+            throw e
+    from$ = 0
+    return .some(src.sub(0, start + tail.len))
+
+priv fn chunk_size(line: U8[], room: Sz): Sz!Http_error //<
+    //< The size a chunk-size line names, its extensions checked and dropped
+    //< A size past `room` fails as `body_too_large` before its digits run out, so no digit
+    //< count can overflow.
+    $at: Sz = 0
+    $size: Sz = 0
+    for at < line.len
+        d: = line[at].hex_val() catch
+            break
+        if size > room / 16 || size * 16 + Sz::d > room
+            throw .body_too_large
+        size = size * 16 + Sz::d
+        at += 1
+    if at == 0
+        throw .invalid_chunk("a chunk's size is not hexadecimal")
+    check_extensions(line.sub_from(at))!
+    return size
+
+priv fn check_extensions(rest: U8[]): Void!Http_error //<
+    //< Checks what follows a chunk's size: `*( BWS ";" BWS name [ BWS "=" BWS value ] )`
+    //< RFC 9112 §7.1.1's grammar. The extensions mean nothing here, so a well-formed one is
+    //< dropped. Caution: **Refuse white space that ends the line**: the grammar has none there.
+    $at: Sz = 0
+    for at < rest.len
+        at = skip_bws(rest, at)
+        if at == rest.len
+            throw .invalid_chunk("a chunk's size line ends in white space")
+        if rest[at] != ';'
+            throw .invalid_chunk("a chunk's size is followed by something other than an extension")
+        at = skip_bws(rest, at + 1)
+        name_end: = token_end(rest, at)
+        if name_end == at
+            throw .invalid_chunk("a chunk extension has no name")
+        at = name_end
+        after: = skip_bws(rest, at)
+        if after < rest.len && rest[after] == '='
+            at = skip_bws(rest, after + 1)
+            if at < rest.len && rest[at] == '"'
+                at = quoted_end(rest, at)!
+            else
+                value_end: = token_end(rest, at)
+                if value_end == at
+                    throw .invalid_chunk("a chunk extension's value is empty")
+                at = value_end
+
+priv fn skip_bws(s: U8[], from: Sz): Sz //< past the spaces and tabs from `from`
+    $at: = from
+    for at < s.len && (s[at] == ' ' || s[at] == '\t')
+        at += 1
+    return at
+
+priv fn token_end(s: U8[], from: Sz): Sz //< past the token characters from `from`
+    $at: = from
+    for at < s.len && http.is_token(s.sub(at, 1))
+        at += 1
+    return at
+
+priv fn quoted_end(s: U8[], open: Sz): Sz!Http_error //<
+    //< Past the quoted string that opens at `open`, by RFC 9110 §5.6.4's `quoted-string`
+    $at: = open + 1
+    for at < s.len
+        c: = s[at]
+        if c == '"'
+            return at + 1
+        if c == '\\'
+            if at + 1 >= s.len || !is_quoted_byte(s[at + 1])
+                throw .invalid_chunk("a chunk extension's quoted value holds a bad escape")
+            at += 2
+            continue
+        if !is_quoted_byte(c)
+            throw .invalid_chunk("a chunk extension's quoted value holds a control byte")
+        at += 1
+    throw .invalid_chunk("a chunk extension's quoted value does not close")
+
+priv fn is_quoted_byte(c: U8): Bool //< a byte a quoted string can hold: no control byte but a tab
+    return c == '\t' || (c >= ' ' && c != 127)
+
+priv fn check_trailer(line: U8[]): Void!Http_error //< refuses a trailer line that is no field line
+    //< A trailer is checked as a header line is, then dropped: RFC 9110 §6.5.1 forbids merging one
+    //< into the headers unasked.
+    colon: = line.find_char(':') catch
+        throw .invalid_chunk("a trailer line is not a header field")
+    if !http.is_token(line.sub(0, colon)) ||
+        !http.is_field_value(line.sub_from(colon + 1).trim_spaces())
+        throw .invalid_chunk("a trailer line is not a header field")
+
+// ==========================================
+// Reading the head, then the body
+// ==========================================
+
+pub struct Response_head //< a response whose head has arrived; its body is read through `body`
+    pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
+    pub status: I32 //< the status number
+    pub reason: U8$[] //< the reason phrase, as the peer wrote it
+    pub headers: Headers //< the headers in the order they arrived
+    pub body: Body_reader //< the body, piece by piece
+    priv own: Own_arena //< the arena it lives in, when it was read with a null arena
+
+impl Response_head: Manual_free //< `free()` lets go the body's buffer, and its arena if it owns one
+    pub fn free(r: Self$@) //< frees what it holds; the connection stays open
+        r.body.free()
+        $own: = r.own
+        own.free()
+
+priv struct Opened //< a response's head, read, with the body's framing set in its reader
+    line: http.Status_line
+    head: Headers
+
+priv fn open(reader: Body_reader$@, arena: Arena$@, timeout_ms: I32): Opened!Http_error //<
+    //< Reads the head through `reader`'s buffer and sets how the body after it is delimited
+    //< Caution: **Copy the first line's fields before dropping the head**: they view the buffer.
+    //< **Look for the empty line only where it can newly be**, from three bytes before what the
+    //< last read added. Searched from the start each time, a head that arrives a byte at a time
+    //< costs its length squared.
+    reader.deadline_us = sys.deadline_after_ms(timeout_ms)
+    $from: Sz = 0
+    for reader.buf.slice().sub_from(from).find_str("\r\n\r\n").is_none() &&
+        reader.buf.len <= http.MAX_HEAD_BYTES
+        from = reader.buf.len - 3 if reader.buf.len > 3 else 0
+        reader.fill(reader.deadline_us)!
+    h: = http.scan_head(reader.buf.slice(), reader.room, arena)!
+    line: = http.parse_status_line(h.first_line, arena)!
+    if h.chunked
+        // RFC 9112 §6.1: no chunked body on a status without one, nor on HTTP/1.0.
+        if !http.may_carry_body(line.status) || !http.is_1_1_or_later(line.version)
+            throw .unsupported_transfer_encoding
+        reader.framing = .chunk_size
+    else
+        reader.framing = .length(http.response_body_len(h, line.status)!)
+    reader.drop(h.head_end)
+    return Opened::{ .line = line, .head = h.head }
+
+pub fn read_response_head( //< reads a response's head, leaving its body to be read piece by piece
+    //< For a reply that streams, such as server-sent events: each piece is handed on as it comes.
+    //< Free it when done (`defer head: = …`); the connection stays the caller's.
+    stream: net.Tcp_stream$@, //< the connection to read from, which blocks
+    arena: Arena$@, //< where the parts go; null means an arena of the head's own and a `free()`
+    max_body: Sz, //< the largest body accepted; a larger one fails once its length is known
+    timeout_ms: I32, //< how long the whole response, body included, can take to arrive
+): Response_head$@!Http_error
+    defer $work: = mem.scratch(arena)
+    $reader: = Body_reader.on(stream, max_body)
+    o: = open(reader@, work.arena, timeout_ms) catch e
+        reader.free()
+        throw e
+    at: = work.arena
+    return at
+        .create(Response_head::{ .own = work.keep(), .version = o.line.version,
+        .status = o.line.status, .reason = o.line.reason, .headers = o.head, .body = reader })
+
+pub fn read_response( //< reads one whole response from a connection and splits it into its parts
+    //< A chunked body comes back as its data joined, its framing dropped.
+    stream: net.Tcp_stream$@, //< the connection to read from, which blocks
+    arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
+    max_body: Sz, //< the largest body accepted; a larger one is refused, not read
+    timeout_ms: I32, //< how long the whole response can take to arrive; past it `.io(.timed_out)`
+): Response$@!Http_error //< the response, held in `arena`; fails if the connection closes first
+    // The scratch gives its work back where the read fails; `build_response` keeps it.
+    defer $work: = mem.scratch(arena)
+    defer $reader: = Body_reader.on(stream, max_body)
+    o: = open(reader@, work.arena, timeout_ms)!
+    defer $body: = Str_builder()
+    for
+        left: = (reader.deadline_us - sys.mono_us()) / 1000I64
+        switch reader.next(I32::(left if left < 0x7FFFFFFFI64 else 0x7FFFFFFFI64))!
+        case .data(bytes)
+            body.s(bytes)
+        case .waiting {}
+        case .done
+            return http.build_response(work@, o.line, o.head, body.slice(), reader.used)

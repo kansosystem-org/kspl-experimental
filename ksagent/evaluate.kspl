@@ -1,11 +1,11 @@
 //< Scoring a model on questions whose right answer is known: `ksagent eval`
-//< The questions file uses the chat file's headings. Each `## Question` section's last line says
+//< The questions file is Markdown or ksmd. Each `## Question` section's last line says
 //< where the answer stands: `Expect: <path> <from>-<to>`, or `Expect: none` when the files do not
 //< hold it. Each question runs the same loop as `ask` (`agent.run`).
 import "ksagent/agent"
 import "ksagent/answer" + { Answer, Lang }
-import "ksagent/chat"
 import "ksagent/files"
+import "ksagent/progress" { Progress }
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -29,12 +29,10 @@ struct Case //< one question and where its answer stands
 fn read_cases(text: U8[], arena: Arena$@): List<|Case|>!U8[] //<
     //< The questions of a questions file, in order, or why one cannot be read
     $out: = List<|Case|>(arena)
-    all: = chat.sections(text, arena)
+    all: = questions_of(text, arena)
     for i in Range.asc(all.len)
         s: = all.get(i)
-        if s.kind != chat.Kind.question
-            continue
-        body: = s.body(text)
+        body: = s.body
         cut: = body.rfind_char('\n').unwrap_or(0)
         last: = body.sub_from(cut).trim_spaces()
         question: = body.sub(0, cut).trim_spaces()
@@ -51,6 +49,55 @@ fn read_cases(text: U8[], arena: Arena$@): List<|Case|>!U8[] //<
     if out.len == 0
         throw "the file holds no `## Question` section"
     return out
+
+priv struct Section //< one `## Question` or `## 質問` section of a questions file
+    lang: Lang //< the heading's language: `質問` is `ja`
+    body: U8[] //< its text, without its heading or edge spaces
+
+priv fn questions_of(text: U8[], arena: Arena$@): List<|Section|> //<
+    //< The file's question sections, in order; each ends at the next level 1 or 2 heading
+    //< **A heading inside a ``` fence or a `:::` block does not count**, so a sample question in a
+    //< code block asks nothing.
+    $out: = List<|Section|>(arena)
+    $fence: Sz = 0
+    $in_block: = false
+    $open: = false
+    $s: = Section::{ .lang = .en, .body = "" }
+    $body_at: Sz = 0
+    $at: Sz = 0
+    for at <= text.len
+        nl: = text.sub_from(at).find_char('\n').unwrap_or(text.len - at)
+        line: = text.sub(at, nl).trim_end()
+        heading: =
+            fence == 0 && !in_block &&
+            (line.starts_with("# ") || line.starts_with("## "))
+        if at == text.len || heading
+            if open
+                s.body = text.sub(body_at, at - body_at).trim_spaces()
+                out.push(s)
+            name: = line.sub_from(3).trim_spaces() if line.starts_with("## ") else ""
+            open = name.equals("Question") || name.equals("質問")
+            s.lang = .ja if name.equals("質問") else .en
+            body_at = text.len if at + nl + 1 > text.len else at + nl + 1
+        else if fence > 0
+            if line.len == fence && backticks(line) == fence
+                fence = 0
+        else if in_block
+            in_block = !line.equals(":::")
+        else if backticks(line) >= 3
+            fence = backticks(line)
+        else if line.starts_with(":::") && line.len > 3
+            in_block = true
+        if at == text.len
+            break
+        at = text.len if at + nl + 1 > text.len else at + nl + 1
+    return out
+
+priv fn backticks(line: U8[]): Sz //< how many backticks open the line
+    $n: Sz = 0
+    for n < line.len && line[n] == '`'
+        n += 1
+    return n
 
 priv fn read_expect(rest: U8[], c: Case$@): Bool //< reads `<path> <from>-<to>` or `none` into c
     if rest.equals("none")
@@ -107,19 +154,24 @@ struct Totals //< the line under the table
 
 fn run_all(job: agent.Ask, cases: List<|Case|>@, arena: Arena$@): List<|Row|> //<
     //< Asks each question in turn and scores its answer
+    //< **Each question works in memory of its own**, and only its row stays: a long run would
+    //< otherwise keep every request it sent.
     $rows: = List<|Row|>(arena)
     for i in Range.asc(cases.len)
         c: = cases.get(i)
         if job.trace
             io.err().s("question \{i + 1\} of \{cases.len\}\n")
         started: = sys.mono_us()
-        none: = List<|agent.Turn|>(arena)
-        a: = agent.run(job, c.question, none@, c.lang, arena)
+        defer one: = Arena(256 * 1024)
+        none: = List<|answer.Turn|>(one)
+        defer $shown: = Progress(job.trace, c.lang, one)
+        a: = agent.run(job, c.question, none@, c.lang, shown@, one)
+        shown.ended("", false)
         seconds: = F64::(sys.mono_us() - started) / 1000000.0
         expected: =
             ("none" if c.path.len == 0
             else arena.text().s(c.path).s(" \{c.from_line\}-\{c.to_line\}").take())
-        result: = score(c@, a@, arena)
+        result: = arena.dup_str(score(c@, a@, one))
         rows
             .push(Row::{ .question = c.question, .expected = expected, .result = result,
             .passed = result.equals("pass"), .unverified = a.is_unverified(), .seconds = seconds })

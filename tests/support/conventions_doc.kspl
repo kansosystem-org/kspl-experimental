@@ -17,9 +17,9 @@ import "tests/support/harness"
 // Note: The convention itself is "Document naming" in `docs/SPEC-documents.md`. This file **only
 // turns it into a check**.
 // ==========================================
-priv const KIND_NAMES: U8[][_] = ::{ "README.md", "TUTORIAL.md", "PLAN.md" } //<
+priv const KIND_NAMES: U8[][_] = ::{ "README.md", "PLAN.md" } //<
     //< the kinds a folder holds at most one of
-priv const KIND_HEADS: U8[][_] = ::{ "SPEC-", "HOWTO-", "DESIGN-" } //<
+priv const KIND_HEADS: U8[][_] = ::{ "TUTORIAL-", "SPEC-", "HOWTO-", "DESIGN-" } //<
     //< the kinds that carry a subject
 priv const OUTSIDE_NAMES: U8[][_] = ::{ "CONTRIBUTING.md", "LICENSE.md", "THIRD-PARTY-NOTICES.md",
     "SECURITY.md" } //<
@@ -42,15 +42,22 @@ fn is_kind_name(name: U8[], _arena: Arena$@): Bool //< whether one file name is 
 
 priv const NAME_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "README.md", .hits = true },
-    Sample::{ .text = "TUTORIAL.md", .hits = true },
+    // **Every tutorial names its topic**: the bare `TUTORIAL.md` says only the kind.
+    Sample::{ .text = "TUTORIAL.md", .hits = false },
+    Sample::{ .text = "TUTORIAL-programming-language.md", .hits = true },
     Sample::{ .text = "TOUR.md", .hits = false },
     Sample::{ .text = "SPEC-programming-language.md", .hits = true },
+    Sample::{ .text = "TUTORIAL-ask-about-your-files.md", .hits = true },
     Sample::{ .text = "HOWTO-bring-up.md", .hits = true },
     Sample::{ .text = "DESIGN-tools.md", .hits = true },
     Sample::{ .text = "CONTRIBUTING.md", .hits = true },
     // **The kind alone with no subject is not a name.** `SPEC-.md` says nothing.
     Sample::{ .text = "SPEC-.md", .hits = false },
     Sample::{ .text = "DESIGN-.md", .hits = false },
+    Sample::{ .text = "TUTORIAL-.md", .hits = false },
+    // **A misspelt kind is no kind**: the plural and an underscore each fail.
+    Sample::{ .text = "TUTORIALS-ask.md", .hits = false },
+    Sample::{ .text = "TUTORIAL_ask.md", .hits = false },
     // **A design document names its theme too**: `DESIGN.md` says only the kind.
     Sample::{ .text = "DESIGN.md", .hits = false },
     Sample::{ .text = "RATIONALE.md", .hits = false },
@@ -74,7 +81,7 @@ priv fn check_names(arena: Arena$@)
                 .push(arena.text().s(rel).s(": `").s(name).s("` is none of the six kinds").take())
     verdict.check_list("every document carries one of the six kinds' names (docs/SPEC-documents.md)",
         seen, "files", bad@,
-        "README / TUTORIAL / HOWTO-<task> / SPEC-<subject> / DESIGN-<subject> / PLAN")
+        "README / TUTORIAL-<topic> / HOWTO-<task> / SPEC-<subject> / DESIGN-<subject> / PLAN")
 
 priv fn check_kind_fires(arena: Arena$@)
     scan.check_samples("the judgment of a kind's name can fire", Sample[]::NAME_SAMPLES,

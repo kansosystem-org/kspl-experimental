@@ -9,6 +9,7 @@ import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
 import "std/str"
+import "std/sys"
 import "std/verdict"
 
 fn test_tokenizer_roundtrip(arena: Arena$@)
@@ -61,9 +62,9 @@ fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
 
 fn test_tokenizer_keeps_its_size() //<
     //< A tokenizer used for its lifetime grows only while its cache of chunks fills
-    //< **Every result is on the caller's arena**, and a chunk past the cache's cap is merged in the
-    //< result itself. A server keeps one tokenizer for its lifetime. So anything else it put on its
-    //< own arena would grow without limit.
+    //< **Every result is on the caller's arena**, and a chunk past the cache's cap is merged in
+    //< working lists freed before `encode` returns. A server keeps one tokenizer for its lifetime.
+    //< So anything else it put on its own arena would grow without limit.
     verdict.start("[Tokenizer] encoding and decoding leave the tokenizer's arena as it was...")
     defer own: = Arena(1024 * 1024)
     $tok: = ai_tokenizer.Tokenizer(own)
@@ -81,6 +82,12 @@ fn test_tokenizer_keeps_its_size() //<
         assert(tok.decode_one(3).equals("ab"), "one ID decodes to its word")
         work.reset()
     assert(own.get_total_used() == held, "a cached text adds nothing to the tokenizer")
+    defer $long: = str.Str_builder()
+    for _i in Range.asc(500)
+        long.s("ab")
+    _long: = tok.encode(long.slice(), work)
+    work.reset()
+    assert(own.get_total_used() == held, "a chunk too long for the cache adds nothing")
     // More distinct words than the cache holds, then new ones once it is full. Letters, since
     // each digit is a chunk of its own.
     defer $words: = str.Str_builder()
@@ -92,6 +99,57 @@ fn test_tokenizer_keeps_its_size() //<
     full: = own.get_total_used()
     _past: = tok.encode(" zzzzza zzzzzb zzzzzc", work)
     assert(own.get_total_used() == full, "a word past the cache's cap adds nothing")
+    verdict.pass("")
+
+priv const LONG_WORD_BYTES: Sz = 256 * 1024 //< the long chunk's length: one word, one chunk
+priv const LONG_WORD_WAIT_US: I64 = 10000000I64 //< how long its merging may take, generously
+    //< A queue of pairs merges it in milliseconds, even under a sanitizer. Rescanning the chunk
+    //< for each merge takes minutes, as the work grows with the square of the length.
+priv const LONG_WORDS: U8[][_] = ::{ "a", "b", "c", "d", "aa", "ab", "cd", "abcd", "bc",
+    "abcdabcd" } //< the long-chunk test's vocabulary; a word's ID is its place from 1
+
+priv fn word_id(w: U8[]): I32 //< the ID `LONG_WORDS` gives a word; 0 for none
+    for i in Range.asc(LONG_WORDS.len)
+        if LONG_WORDS[i].equals(w)
+            return I32::i + 1
+    return 0
+
+priv fn merged_as(tok: ai_tokenizer.Tokenizer$@, text: U8[], want: U8[], arena: Arena$@): Bool //<
+    //< Whether the text encodes to the words `want` lists, separated by spaces
+    got: = tok.encode(text, arena)
+    words: = want.split(' ', arena)
+    if got.len != words.len
+        return false
+    for i in Range.asc(got.len)
+        if got[i] != word_id(words[i])
+            return false
+    return true
+
+fn test_tokenizer_long_chunk(arena: Arena$@) //<
+    //< One long word merges in time near its length, in the order a scan for the best pair gives
+    //< A server tokenizes a whole request before it can refuse it, so a word of 256 KiB must not
+    //< hold it. The short cases pin the order: the smallest rank first, the leftmost of one rank,
+    //< and a pair that a merge forms taken by its own rank.
+    verdict.start("[Tokenizer] a long chunk merges quickly, in the rank order")
+    $tok: = ai_tokenizer.Tokenizer(arena)
+    for w in LONG_WORDS
+        tok.add_token(w, word_id(w))
+    for rule in U8[][]::{ "a a aa", "a b ab", "c d cd", "ab cd abcd", "b c bc",
+        "abcd abcd abcdabcd" }
+        parts: = rule.split(' ', arena)
+        tok.add_merge(word_id(parts[0]), word_id(parts[1]), word_id(parts[2]))
+    assert(merged_as(tok@, "aaaaa", "aa aa a", arena), "the leftmost pair of a rank merges first")
+    assert(merged_as(tok@, "bcd", "b cd", arena), "the smaller rank merges first")
+    assert(merged_as(tok@, "abcdabcd", "abcdabcd", arena), "a pair a merge forms is merged too")
+    defer $long: = str.Str_builder()
+    for _i in Range.asc(LONG_WORD_BYTES / 4)
+        long.s("abcd")
+    started: = sys.mono_us()
+    ids: = tok.encode(long.slice(), arena)
+    took: = sys.mono_us() - started
+    assert(took < LONG_WORD_WAIT_US, "merging a long chunk took longer than its bound")
+    assert(ids.len == LONG_WORD_BYTES / 8, "each abcdabcd merges to one word")
+    assert(tok.decode(ids, arena).equals(long.slice()), "the long chunk decodes back")
     verdict.pass("")
 
 priv fn letters(n: Sz, out: str.Str_builder$@) //< a word of its own for each number, in a to p

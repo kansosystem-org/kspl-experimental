@@ -6,6 +6,8 @@
 // Delete clears the range, Ctrl+D fills it down and Ctrl+R right, and the handle at its corner
 // fills it by a drag. A copy puts its shown values on the clipboard as tab-separated rows, and a
 // paste of such rows fills cells from its corner. Each is one action.
+// The whole table, names and all, is chosen by Ctrl+A twice, by the corner left of the column
+// letters, or by Select table. It copies as ksmd's own source too, and Delete removes it.
 "use strict";
 
 function ksmdRange(ks) {
@@ -93,9 +95,27 @@ function ksmdRange(ks) {
   // The marks show only while the person works in the table.
   ks.placeHooks.push(mark);
 
+  // Whether the range holds the whole table: its names and every row and column.
+  function whole() {
+    const c = ks.cell;
+    if (!c || !wrapOf(c.block)) return false;
+    const r = rect();
+    const s = size(c.block);
+    return r.r1 === -1 && r.r2 === s.rows - 1 && r.c1 === 0 && r.c2 === s.columns - 1;
+  }
+
+  // Chooses the whole table, as Word's handle at a table's corner does.
+  function selectTable(block) {
+    const s = size(block);
+    ks.table.take();
+    set(block, -1, 0, { row: s.rows - 1, column: s.columns - 1 });
+    focusChosen();
+  }
+
   // Marks the range's cells and the chosen one, and puts the fill handle at the range's corner.
   function mark() {
     if (ks.figures) ks.figures.update();
+    for (const el of ks.root.querySelectorAll(".whole-table")) el.classList.remove("whole-table");
     for (const el of marked) {
       if (el.classList.contains("fill-handle")) el.remove();
       else el.classList.remove("in-range", "chosen", "corner");
@@ -122,6 +142,7 @@ function ksmdRange(ks) {
     }
     const corner = find(r.block, r.r2, r.c2);
     if (corner && r.r1 >= 0) handle(corner);
+    if (whole()) wrapOf(c.block).classList.add("whole-table");
   }
 
   // Sets the range: the chosen cell, and the far corner or null.
@@ -235,6 +256,12 @@ function ksmdRange(ks) {
   ks.root.addEventListener("mousedown", (e) => {
     if (!e.target.closest || e.target.closest(".include") || e.button !== 0) return;
     if (e.target.closest(".col-edge") || e.detail > 1) return;
+    const corner = e.target.closest(".table thead tr:first-child > th:first-child");
+    if (corner) {
+      e.preventDefault();
+      selectTable(ks.view.blocks().indexOf(corner.closest(".table")));
+      return;
+    }
     const head = e.target.closest(".table th.row-number, .table th.letter");
     if (!head) return;
     e.preventDefault();
@@ -271,9 +298,24 @@ function ksmdRange(ks) {
       collapse();
       const [dr, dc] = steps[e.key];
       ks.table.choose(c.block, dr ? ks.table.step(c.block, c.row, dr) : c.row, Math.max(0, c.column + dc));
+    } else if ((e.key === "Delete" || e.key === "Backspace") && whole()) {
+      // The whole table goes, as Backspace on a table Word has selected takes it away.
+      e.preventDefault();
+      removeTable();
     } else if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       clear();
+    } else if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "a") {
+      // Ctrl+A chooses the data cells, and again the whole table with its names, as in Excel.
+      e.preventDefault();
+      const s = size(c.block);
+      const r = rect();
+      const data = r.r1 === 0 && r.r2 === s.rows - 1 && r.c1 === 0 && r.c2 === s.columns - 1;
+      if (data || s.rows === 0) selectTable(c.block);
+      else {
+        set(c.block, 0, 0, { row: s.rows - 1, column: s.columns - 1 });
+        focusChosen();
+      }
     } else if (e.key === "Enter" || e.key === "Tab") {
       // Enter moves down and Tab right, Shift back, as in a spreadsheet; F2 opens the cell.
       e.preventDefault();
@@ -465,8 +507,28 @@ function ksmdRange(ks) {
     return `${lines.join("\r\n")}\r\n`;
   }
 
+  // The whole table as an HTML table, as Word and Excel take one from the clipboard: the names,
+  // then each row's values as the table shows them.
+  function html(block) {
+    const wrap = wrapOf(block);
+    const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const shown = (v) => (v.length > 2 ? v[2] : ks.filter.shown(v));
+    const head = wrap.names.map((n) => `<th>${esc(n)}</th>`).join("");
+    const rows = wrap.values.map((row) => `<tr>${row.map((v) => `<td>${esc(shown(v))}</td>`).join("")}</tr>`);
+    return `<table><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  }
+
+  // Removes the whole table chosen, as one step; the caret takes its place.
+  function removeTable() {
+    const block = ks.cell.block;
+    ks.cell = null;
+    end = null;
+    return ks.view.removeBlock("ksmd_web_remove_table", block);
+  }
+
   // A copy while a range is chosen, or no cell is open, takes the cells' shown values; a cut
-  // clears them after.
+  // clears them after. The whole table also goes as ksmd's own source, which a paste in ksmd
+  // takes whole, and as HTML; a cut of it removes the table.
   for (const type of ["copy", "cut"]) {
     document.addEventListener(type, (e) => {
       if (ks.where !== "cell" || !ks.cell || !wrapOf(ks.cell.block)) return;
@@ -474,6 +536,12 @@ function ksmdRange(ks) {
       if (ks.table.editing() && !end) return;
       e.preventDefault();
       e.clipboardData.setData("text/plain", copied());
+      if (whole()) {
+        e.clipboardData.setData("text/html", html(ks.cell.block));
+        e.clipboardData.setData(KSMD_TYPE, ks.out(ks.w.ksmd_web_block_source(ks.cell.block)));
+        if (type === "cut") removeTable();
+        return;
+      }
       if (type === "cut") clear();
     });
   }
@@ -484,11 +552,13 @@ function ksmdRange(ks) {
     if (!el || !el.matches || !el.matches(".table [data-r]") || el.closest(".include")) return;
     e.preventDefault();
     e.stopPropagation();
+    // A whole table copied from ksmd, pasted on a whole table chosen, goes after that table.
+    if (whole() && ks.pasteTable(e.clipboardData, ks.cell.block + 1)) return;
     const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
     if (!ks.tooLarge(text)) pasteGrid(text, true);
   });
 
-  ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, mark,
+  ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, mark, selectTable,
     // Puts the focus on the chosen cell, so the keys act on it.
     focus: focusChosen,
     // Whether a range of more than one cell is chosen.

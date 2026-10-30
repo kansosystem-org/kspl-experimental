@@ -1,0 +1,61 @@
+//< `make install`'s tying of `.ksmd` on Linux, against the real recipe, with stand-in checks
+//< **Where the launcher cannot be built, the tie is a note and the install goes on.** Stand-ins
+//< take the place of the two checks it asks, so each case lacks one piece on purpose.
+import "std/chars" // `find_str`
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/harness"
+
+// **The probe is named `Makefile`**: the recipe asks `$(MAKE) kssrv-libs` with no `-f`, so the
+// make it starts reads the folder's `Makefile`, as at the root.
+priv const PROBE: U8[] =
+    """
+include $(RULES)
+.PHONY: probe kssrv-libs install-desktop
+probe:
+	$(install_desktop_step)
+kssrv-libs:
+	@if [ "$(FAIL)" = libs ]; then echo "kssrv links -lssl -lcrypto, which do not link here."; \
+	echo "Debian/Ubuntu: install libssl-dev"; exit 1; fi
+install-desktop:
+	@touch tied
+"""
+
+priv const WEB_TOOLS: U8[] =
+    """
+web-tools:
+	@if [ "$(FAIL)" = tools ]; then echo "wasm-ld is not installed. The link needs it."; exit 1; fi
+"""
+
+priv fn put(path: U8[], text: U8[]) //< places one fixture or stops the test
+    io.write_file(path, text) catch panic("cannot write the desktop fixture")
+
+priv fn one(missing: U8[], names: U8[], arena: Arena$@) //<
+    //< One fresh sandbox, lacking `missing` ("" for nothing); the note must hold `names`
+    dir: = harness.sandbox(arena.text().s("install_desktop_").s(missing).take())
+    fs.mkdir_all(fs.join(dir, "ksmd", arena)) catch panic("cannot make the desktop fixture")
+    put(fs.join(dir, "Makefile", arena), PROBE)
+    put(fs.join(dir, "ksmd/Makefile", arena), WEB_TOOLS)
+    rules: = fs.join(harness.root(), "mk/install.mk", arena)
+    r: = harness
+        .make(U8[][]::{ "--no-print-directory", "-C", dir, "probe",
+        arena.text().s("RULES=").s(rules).take(),
+        arena.text().s("FAIL=").s(missing).take(), "PLATFORM=linux" })
+    tied: = fs.exists(fs.join(dir, "tied", arena))
+    if missing.len == 0
+        verdict.check("install: with every tool, .ksmd is tied to its launcher",
+            r.exited_with(0) && tied && !r.out.find_str("# note:").is_some(), r.out)
+        return
+    verdict.check(arena.text().s("install: without ").s(names)
+        .s(", the tie is a note naming it, and the install goes on").take(),
+        r.exited_with(0) && !tied &&
+        r.out.find_str("# note: .ksmd is not tied").is_some() &&
+        r.out.find_str(names).is_some(), r.out)
+
+fn run(arena: Arena$@) //< every piece present, then each of the two missing
+    one("", "", arena)
+    one("libs", "libssl-dev", arena)
+    one("tools", "wasm-ld", arena)

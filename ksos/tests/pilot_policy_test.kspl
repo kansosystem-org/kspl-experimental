@@ -1,0 +1,138 @@
+import "ksai/examples/car_pilot/encoding"
+import "ksai/safetensors" as st
+import "ksai/tensor" { Tensor }
+import "ksos/demo/common/pilot_policy" as policy
+import "std/bytes"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// ksos/demo/common/pilot_policy: which files `load` refuses, and the cause it names.
+//
+// **A file `load` takes must not stop the car at its first decision.** The car saves a policy it
+// took, so a file that loads and then stops the program does so again on every start.
+// ==========================================
+
+priv const HIDDEN: Sz = 24
+priv const ACTIONS: Sz = 10
+
+priv const W1: Sz[_] = ::{ encoding.FEATURE_COUNT, HIDDEN } //< the shapes a well-formed policy has
+priv const B1: Sz[_] = ::{ HIDDEN }
+priv const W2: Sz[_] = ::{ HIDDEN, ACTIONS }
+priv const B2: Sz[_] = ::{ ACTIONS }
+priv const MAN: Sz[_] = ::{ ACTIONS, encoding.DRIVE_FIELDS }
+
+priv fn add(w: st.Safetensors_writer$@, name: U8[], shape: Sz[], swap: U8[], swap_shape: Sz[],
+    arena: Arena$@) //< adds `name` with its shape, or with `swap_shape` if it is `swap`
+    s: = swap_shape if name.equals(swap) else shape
+    // An empty shape leaves the tensor out.
+    if s.len > 0
+        w.add(name, Tensor<|F32|>(s, arena))
+
+priv fn write( //< a policy file, all zeros, with one tensor's shape changed
+    swap: U8[], //< the tensor whose shape changes; "" changes none
+    swap_shape: Sz[], //< its shape; empty leaves it out of the file
+    arena: Arena$@,
+): U8[]
+    $w: = st.Safetensors_writer()
+    add(w@, "fc1.weight", Sz[]::W1, swap, swap_shape, arena)
+    add(w@, "fc1.bias", Sz[]::B1, swap, swap_shape, arena)
+    add(w@, "fc2.weight", Sz[]::W2, swap, swap_shape, arena)
+    add(w@, "fc2.bias", Sz[]::B2, swap, swap_shape, arena)
+    add(w@, "maneuvers", Sz[]::MAN, swap, swap_shape, arena)
+    w.set_meta("kspl_pilot", encoding.FORMAT_VERSION)
+    w.set_meta("far_mm", "1000")
+    defer $out: = w.finish()
+    return arena.dup_str(out.slice())
+
+priv fn refused_as(swap: U8[], swap_shape: Sz[], arena: Arena$@): U8[] //<
+    //< the cause `load` names for a file with that one shape changed; "" if it loads
+    return refusal(write(swap, swap_shape, arena), arena)
+
+priv fn with_header_entry(blob: U8[], entry: U8[], arena: Arena$@): U8[] //<
+    //< The same file with one more header entry first; the tensors' bytes stay where they were
+    hl: = Sz::blob.get_u64_le(0)
+    defer $head: = Str_builder()
+    head.s("{").s(entry).s(",").s(U8[]::{ .ptr = blob.ptr + 9, .len = hl - 1 })
+    for (head.len + 8) % 8 != 0
+        head.s(" ")
+    $len_bytes: U8[8] = ::{}
+    len_slice: = U8$[]::len_bytes
+    len_slice.put_u64_le(0, U64::head.len)
+    defer $out: = Str_builder()
+    out.s(U8[]::len_bytes).s(head.slice())
+    out.s(U8[]::{ .ptr = blob.ptr + 8 + hl, .len = blob.len - 8 - hl })
+    return arena.dup_str(out.slice())
+
+priv fn refusal(blob: U8[], arena: Arena$@): U8[] //< the cause `load` names; "" if it loads
+    $why: U8[] = ""
+    _p: = policy.load(blob, arena) catch e
+        why = e.variant_name()
+        fallback policy.empty()
+    return why
+
+fn test_pilot_policy_refuses_a_wrong_rank() //<
+    //< A weight or table that is not 2-D, or a bias that is not 1-D, is refused at load
+    //< Caution: **Checking only the dimensions it reads is not enough.** `[5, 24, 1]` has the right
+    //< first two, loads, and stops the program in the first matrix product.
+    verdict.start("[ksos/pilot_policy] refusing a tensor of the wrong rank test...")
+    defer arena: = Arena(1024 * 1024)
+    assert(refused_as("", Sz[]::{}, arena).equals(""), "a well-formed policy loads")
+    w1: Sz[3] = ::{ encoding.FEATURE_COUNT, HIDDEN, 1 }
+    assert(refused_as("fc1.weight", Sz[]::w1, arena).equals("bad_shape"),
+        "fc1.weight [5, 24, 1] is refused")
+    b1: Sz[2] = ::{ HIDDEN, 2 }
+    assert(refused_as("fc1.bias", Sz[]::b1, arena).equals("bad_shape"),
+        "fc1.bias [24, 2] is refused")
+    w2: Sz[3] = ::{ HIDDEN, ACTIONS, 1 }
+    assert(refused_as("fc2.weight", Sz[]::w2, arena).equals("bad_shape"),
+        "fc2.weight [24, 10, 1] is refused")
+    b2: Sz[2] = ::{ ACTIONS, 1 }
+    assert(refused_as("fc2.bias", Sz[]::b2, arena).equals("bad_shape"),
+        "fc2.bias [10, 1] is refused")
+    man: Sz[3] = ::{ ACTIONS, encoding.DRIVE_FIELDS, 0 }
+    assert(refused_as("maneuvers", Sz[]::man, arena).equals("bad_shape"),
+        "maneuvers [10, 3, 0] is refused")
+    verdict.pass("only tensors of the rank and sizes the policy multiplies with load.")
+
+fn test_pilot_policy_names_the_cause() //<
+    //< The refusal names what is wrong with the file, not "missing" for every tensor read
+    //< The car prints it as `policy refused: <cause>`, and a wrong cause sends the reader to look
+    //< for a tensor that is there.
+    verdict.start("[ksos/pilot_policy] naming why a policy is refused test...")
+    defer arena: = Arena(1024 * 1024)
+    blob: = write("", Sz[]::{}, arena)
+    assert(refused_as("maneuvers", Sz[]::{}, arena).equals("missing"),
+        "a file with no maneuvers is missing")
+    cut: = U8[]::{ .ptr = blob.ptr, .len = blob.len - 100 }
+    assert(refusal(cut, arena).equals("bad_blob"), "a file cut short is a bad blob, not missing")
+
+    // F16 is as long as F32, so only the element width changes.
+    wide: = arena.dup_str(blob)
+    $at: Sz = 0
+    for !U8[]::{ .ptr = wide.ptr + at, .len = 5 }.equals("\"F32\"")
+        at += 1
+    wide[at + 2] = '1'
+    wide[at + 3] = '6'
+    assert(refusal(wide, arena).equals("bad_dtype"), "an F16 tensor is a wrong dtype, not missing")
+    verdict.pass("a missing tensor, a cut file and a wrong element type each name their own cause.")
+
+fn test_pilot_policy_refuses_a_deep_header() //<
+    //< A header nested deeper than a policy's own three levels is refused before it is parsed
+    //< Caution: **Each level costs the parser about 176 bytes of stack.** The car's task stack is
+    //< 2560 bytes, and on bare metal nothing else stops the recursion before it runs out.
+    verdict.start("[ksos/pilot_policy] refusing a deeply nested header test...")
+    defer arena: = Arena(1024 * 1024)
+    blob: = write("", Sz[]::{}, arena)
+    three: = with_header_entry(blob, "\"pad\":[[1]]", arena)
+    assert(refusal(three, arena).equals(""),
+        "an extra entry three levels deep, as a shape is, loads")
+    // A `[` inside a string is no nesting.
+    assert(refusal(with_header_entry(blob, "\"p[[[[\\\"[[\":[1]", arena), arena).equals(""),
+        "brackets inside a string do not count")
+    deep: = with_header_entry(blob, "\"pad\":[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]", arena)
+    assert(refusal(deep, arena).equals("too_deep"), "a header twenty levels deep is refused")
+    four: = with_header_entry(blob, "\"pad\":[[[1]]]", arena)
+    assert(refusal(four, arena).equals("too_deep"), "four levels is one too many")
+    verdict.pass("a header deeper than a policy's own is refused before the parser recurses.")

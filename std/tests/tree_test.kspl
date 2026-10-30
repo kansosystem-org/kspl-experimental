@@ -305,6 +305,38 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others can write from one th
         .pass("A folder its owner alone writes is own, one everyone writes is shared, and one not \
             there is missing.")
 
+priv fn secret_at_mode(file: U8[], mode: U8[], arena: Arena$@): fs.Secret_trust //<
+    //< `secret_trust`'s answer once `chmod` has given the file that mode
+    r: =
+        subproc.run_capture(U8[][]::{ "chmod", mode, file }, "", 60000, 1024, arena)
+        catch panic("the child must start")
+    assert(r.exited_with(0), "chmod must change the file's mode")
+    return fs.secret_trust(file)
+
+fn test_fs_secret_trust() //< secret_trust tells a file others can read from one they cannot
+    verdict.start("[Fs] secret_trust: a file its owner alone reads, others read, and none test...")
+    defer arena: = Arena(64 * 1024)
+    dir: = fs.mkdir_unique(BASE, "secret_", arena)
+        catch panic("mkdir_unique should make a directory")
+    file: = fs.join(dir, "key.pem", arena)
+    assert(fs.secret_trust(file) == fs.Secret_trust.missing, "a file that is not there is missing")
+    io.write_file(file, "secret") catch panic("the file should be written")
+    assert(fs.secret_trust(dir) == fs.Secret_trust.missing, "a folder holds no secret")
+    if sys.is_windows()
+        assert(fs.secret_trust(file) == fs.Secret_trust.unchecked, "Windows's ACL is not read")
+        fs_test.clear_tree_best_effort(dir, arena)
+        verdict.pass("A file not there and a folder are missing, and Windows answers unchecked.")
+        return
+    // The umask decides the new file's mode, so it is set on purpose before each look.
+    assert(secret_at_mode(file, "600", arena) == fs.Secret_trust.own, "its owner alone reads it")
+    assert(secret_at_mode(file, "640", arena) == fs.Secret_trust.shared, "its group reads it")
+    assert(secret_at_mode(file, "604", arena) == fs.Secret_trust.shared, "everyone reads it")
+    assert(secret_at_mode(file, "620", arena) == fs.Secret_trust.shared, "its group writes it")
+    fs_test.clear_tree_best_effort(dir, arena)
+    verdict
+        .pass("A file its owner alone reads is own, one its group or everyone can read or write is \
+            shared, and one not there is missing.")
+
 // ==========================================
 // Tests of `std/fs`'s walks past links, made with `ln -s` (where there is none, the test skips)
 // ==========================================

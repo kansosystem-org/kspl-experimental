@@ -1,0 +1,236 @@
+//< DEFLATE decoding (RFC 1951): stored, fixed and dynamic Huffman blocks
+//< The decoder follows Mark Adler's `puff`: a canonical code is held as the count of each code
+//< length and the symbols in code order, and read one bit at a time. **The output's size is known
+//< before decoding** (a zip entry names it), so the caller gives a buffer of exactly that size.
+//< Data that would run past it, or stop short of it, is refused, so a forged size cannot make the
+//< decoder write more than the caller allowed.
+import "std/chars"
+import "std/mem"
+
+priv const MAX_BITS: Sz = 15 //< the longest code DEFLATE has
+priv const MAX_LIT_CODES: Sz = 286 //< literal and length codes a dynamic block may declare
+priv const MAX_DIST_CODES: Sz = 30 //< distance codes a dynamic block may declare
+priv const FIXED_LIT_CODES: Sz = 288 //< the fixed code's literal and length codes, two unused
+
+priv struct Bits //< the input, read from its lowest bit upwards
+    src: U8[]
+    pos: Sz //< the next byte to load
+    buf: U32 //< the bits loaded and not yet used, lowest first
+    count: Sz //< how many bits `buf` holds; below 8 between calls, as `take` loads byte by byte
+
+impl Bits
+    fn take(r: Self$@, n: Sz): U32!U8[] //< the next `n` bits, at most 15, as a number
+        for r.count < n
+            if r.pos >= r.src.len
+                throw "the packed data ends early"
+            r.buf |= U32::r.src[r.pos] << U32::r.count
+            r.pos += 1
+            r.count += 8
+        v: = r.buf & ((1U32 << U32::n) - 1U32)
+        r.buf = r.buf >> U32::n
+        r.count -= n
+        return v
+
+priv struct Huffman //< a canonical code: how many codes of each length, then the symbols by code
+    count: U16[16] //< `count[k]` codes are `k` bits long; `count[0]` counts unused symbols
+    symbol: U16[288] //< the symbols, shortest code first and in symbol order within a length
+
+impl Huffman
+    fn build(r: Self$@, lengths: U16[]): I32 //<
+        //< Builds the code from each symbol's length; 0 when complete, above 0 when codes are left
+        //< over, below 0 when the lengths ask for more codes than exist
+        for k in Range.asc(MAX_BITS + 1)
+            r.count[k] = 0U16
+        for len in lengths
+            r.count[len] += 1U16
+        if Sz::r.count[0] == lengths.len
+            return 0
+        $left: I32 = 1
+        for k in Range(1, MAX_BITS + 1, 1)
+            left = left * 2 - I32::r.count[k]
+            if left < 0
+                return left
+        $offs: U16[16] = ::{}
+        offs[1] = 0U16
+        for k in Range(1, MAX_BITS, 1)
+            offs[k + 1] = offs[k] + r.count[k]
+        for sym in Range.asc(lengths.len)
+            len: = Sz::lengths[sym]
+            if len != 0
+                r.symbol[offs[len]] = U16::sym
+                offs[len] += 1U16
+        return left
+
+    fn decode(r: Self@, bits: Bits$@): Sz!U8[] //< the next symbol the input holds in this code
+        $code: I32 = 0 //< the bits read so far, first bit highest
+        $first: I32 = 0 //< the first code of the current length
+        $index: I32 = 0 //< where the current length's symbols start in `symbol`
+        for len in Range(1, MAX_BITS + 1, 1)
+            bit: = bits.take(1)!
+            code |= I32::bit
+            n: = I32::r.count[len]
+            if code - n < first
+                return Sz::r.symbol[(index + (code - first))]
+            index += n
+            first = (first + n) << 1
+            code = code << 1
+        throw "the packed data holds a code no table has"
+
+// RFC 1951's tables for the lengths and the distances: the base of each code, and its extra bits.
+priv const LEN_BASE: U16[29] = ::{ 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43,
+    51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 }
+priv const LEN_EXTRA: U8[29] = ::{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4,
+    4, 4, 5, 5, 5, 5, 0 }
+priv const DIST_BASE: U16[30] = ::{ 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257,
+    385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577 }
+priv const DIST_EXTRA: U8[30] = ::{ 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9,
+    10, 10, 11, 11, 12, 12, 13, 13 }
+priv const CODE_LEN_ORDER: U8[19] = ::{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14,
+    1, 15 } //< the order in which a dynamic block lists the code-length code's lengths
+
+priv struct Out //< the output buffer and how much of it is written
+    buf: U8$[]
+    len: Sz
+
+fn inflate(src: U8[], out: U8$[]): Void!U8[] //<
+    //< Decodes raw DEFLATE data into `out`, which it must fill exactly
+    //< Bytes after the last block are ignored, as zip readers do.
+    $bits: = Bits::{ .src = src, .pos = 0, .buf = 0U32, .count = 0 }
+    $o: = Out::{ .buf = out, .len = 0 }
+    $last: = false
+    for !last
+        final_bit: = bits.take(1)!
+        last = final_bit == 1U32
+        kind: = bits.take(2)!
+        if kind == 0U32
+            stored(bits@, o@)!
+        else if kind == 1U32
+            fixed(bits@, o@)!
+        else if kind == 2U32
+            dynamic(bits@, o@)!
+        else
+            throw "the packed data holds a block of an unknown kind"
+    if o.len != out.len
+        throw "the packed data unpacks to fewer bytes than its size says"
+
+priv fn stored(bits: Bits$@, o: Out$@): Void!U8[] //< copies one stored block
+    // The bits left in the current byte are padding; the block starts at the next byte.
+    bits.buf = 0U32
+    bits.count = 0
+    if bits.src.len - bits.pos < 4
+        throw "the packed data ends early"
+    len: = Sz::bits.src[bits.pos] | (Sz::bits.src[bits.pos + 1] << 8)
+    nlen: = Sz::bits.src[bits.pos + 2] | (Sz::bits.src[bits.pos + 3] << 8)
+    bits.pos += 4
+    if len != (~nlen & 0xFFFF)
+        throw "a stored block's length does not match its check"
+    if bits.src.len - bits.pos < len
+        throw "the packed data ends early"
+    if o.buf.len - o.len < len
+        throw "the packed data unpacks to more bytes than its size says"
+    mem.copy(Void$@::(o.buf.ptr + o.len), Void$@::(bits.src.ptr + bits.pos), len)
+    o.len += len
+    bits.pos += len
+
+priv fn fixed(bits: Bits$@, o: Out$@): Void!U8[] //< decodes one block in the fixed code
+    $lengths: U16[288] = ::{}
+    for sym in Range.asc(FIXED_LIT_CODES)
+        lengths[sym] = (8U16 if sym < 144 else 9U16 if sym < 256 else 7U16 if sym < 280 else 8U16)
+    $lit: Huffman = ::{}
+    _ok_lit: = lit.build(U16[]::lengths)
+    $dist_lengths: U16[30] = ::{}
+    for sym in Range.asc(MAX_DIST_CODES)
+        dist_lengths[sym] = 5U16
+    $dist: Huffman = ::{}
+    _ok_dist: = dist.build(U16[]::dist_lengths)
+    codes(bits, o, lit@, dist@)!
+
+priv fn dynamic(bits: Bits$@, o: Out$@): Void!U8[] //< reads a dynamic block's codes, then its data
+    nlit_bits: = bits.take(5)!
+    ndist_bits: = bits.take(5)!
+    ncode_bits: = bits.take(4)!
+    nlit: = Sz::nlit_bits + 257
+    ndist: = Sz::ndist_bits + 1
+    ncode: = Sz::ncode_bits + 4
+    if nlit > MAX_LIT_CODES || ndist > MAX_DIST_CODES
+        throw "a block declares more codes than DEFLATE has"
+    $lengths: U16[316] = ::{}
+    for k in Range.asc(19)
+        lengths[k] = 0U16
+    for k in Range.asc(ncode)
+        len: = bits.take(3)!
+        lengths[CODE_LEN_ORDER[k]] = U16::len
+    $lencode: Huffman = ::{}
+    all: = U16[]::lengths
+    if lencode.build(all.sub(0, 19)) != 0
+        throw "a block's code-length code is incomplete"
+    // The lengths of both codes come as one run, which a repeat may cross.
+    $at: Sz = 0
+    for at < nlit + ndist
+        sym: = lencode.decode(bits)!
+        if sym < 16
+            lengths[at] = U16::sym
+            at += 1
+            continue
+        $repeat: Sz = 0
+        $value: U16 = 0U16
+        if sym == 16
+            if at == 0
+                throw "a block repeats a length before giving one"
+            value = lengths[at - 1]
+            extra: = bits.take(2)!
+            repeat = 3 + Sz::extra
+        else if sym == 17
+            extra: = bits.take(3)!
+            repeat = 3 + Sz::extra
+        else
+            extra: = bits.take(7)!
+            repeat = 11 + Sz::extra
+        if at + repeat > nlit + ndist
+            throw "a block's lengths run past the codes it declares"
+        for _k in Range.asc(repeat)
+            lengths[at] = value
+            at += 1
+    if lengths[256] == 0U16
+        throw "a block has no end-of-block code"
+    // A code with one symbol is incomplete by nature, and allowed; any other must be complete.
+    $lit: Huffman = ::{}
+    lit_left: = lit.build(all.sub(0, nlit))
+    if lit_left < 0 || (lit_left > 0 && nlit - Sz::lit.count[0] != 1)
+        throw "a block's literal code does not fit its lengths"
+    $dist: Huffman = ::{}
+    dist_left: = dist.build(all.sub(nlit, ndist))
+    if dist_left < 0 || (dist_left > 0 && ndist - Sz::dist.count[0] != 1)
+        throw "a block's distance code does not fit its lengths"
+    codes(bits, o, lit@, dist@)!
+
+priv fn codes(bits: Bits$@, o: Out$@, lit: Huffman@, dist: Huffman@): Void!U8[] //<
+    //< Decodes literals and matches until the end-of-block code
+    for
+        sym: = lit.decode(bits)!
+        if sym < 256
+            if o.len == o.buf.len
+                throw "the packed data unpacks to more bytes than its size says"
+            o.buf[o.len] = U8::sym
+            o.len += 1
+            continue
+        if sym == 256
+            return
+        k: = sym - 257
+        if k >= 29
+            throw "the packed data holds a length code DEFLATE does not have"
+        len_extra: = bits.take(LEN_EXTRA[k])!
+        len: = Sz::LEN_BASE[k] + Sz::len_extra
+        d: = dist.decode(bits)!
+        if d >= 30
+            throw "the packed data holds a distance code DEFLATE does not have"
+        dist_extra: = bits.take(DIST_EXTRA[d])!
+        back: = Sz::DIST_BASE[d] + Sz::dist_extra
+        if back > o.len
+            throw "the packed data refers back past its start"
+        if o.buf.len - o.len < len
+            throw "the packed data unpacks to more bytes than its size says"
+        // Byte by byte: a match may overlap the bytes it is writing.
+        for _i in Range.asc(len)
+            o.buf[o.len] = o.buf[o.len - back]
+            o.len += 1

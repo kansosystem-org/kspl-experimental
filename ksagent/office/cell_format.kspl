@@ -1,0 +1,287 @@
+//< How an Excel cell's number is shown: as a date, a time, a percentage, or plain digits
+//< A cell stores a number; its number format decides what a person sees. **A date is a number of
+//< days** (45383 is 2024-04-01), so a reader that ignores the format shows the wrong thing. Dates
+//< are written `yyyy-mm-dd` and times `hh:mm`, whatever the format's own spelling: one spelling
+//< is what a search can find. Other formats' details (separators, decimals, currency) are not
+//< applied: the value is shown with up to 15 significant digits, as Excel itself keeps.
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+enum Shown //< which way a format shows a number
+    plain //< digits
+    percent //< a hundred times the value, and `%`
+    date //< `yyyy-mm-dd`
+    time //< `hh:mm`, or `hh:mm:ss`
+    date_time //< `yyyy-mm-dd hh:mm`, or with seconds
+    hours //< elapsed time, `[h]:mm`: hours past 24 count on
+
+struct Format //< what a number format means for showing a number
+    shown: Shown
+    seconds: Bool //< a time shows its seconds
+
+priv const SIGNIFICANT: Sz = 15 //< the digits Excel keeps of a number
+priv const LAST_SERIAL: F64 = 2958465.0 //< 9999-12-31, the last date Excel shows
+
+fn plain(): Format //< the format of a cell with none
+    return Format::{ .shown = .plain, .seconds = false }
+
+fn built_in(id: I32): Format //< the format a built-in number format id stands for
+    //< The ids from 27 to 36 and 50 to 58 are the East Asian date formats Japanese Excel uses.
+    if id == 9 || id == 10
+        return Format::{ .shown = .percent, .seconds = false }
+    if (id >= 14 && id <= 17) || (id >= 27 && id <= 31) || (id >= 34 && id <= 36) ||
+        (id >= 50 && id <= 58)
+        return Format::{ .shown = .date, .seconds = false }
+    if id == 22
+        return Format::{ .shown = .date_time, .seconds = false }
+    if id == 18 || id == 20 || id == 32
+        return Format::{ .shown = .time, .seconds = false }
+    if id == 19 || id == 21 || id == 33 || id == 45 || id == 47
+        return Format::{ .shown = .time, .seconds = true }
+    if id == 46
+        return Format::{ .shown = .hours, .seconds = true }
+    return plain()
+
+fn of_code(code: U8[]): Format //< what a custom format code (`yyyy"年"m"月"d"日"`) shows
+    //< Only its first section counts, the one for a positive number. Quoted text, escaped
+    //< characters, colours and locales are passed over: their letters are not format letters.
+    $date: = false
+    $hour: = false
+    $second: = false
+    $month: = false
+    $elapsed: = false
+    $percent: = false
+    $i: Sz = 0
+    for i < code.len
+        c: = code[i].to_lower()
+        if c == ';'
+            break
+        if c == '"'
+            close: = code.sub_from(i + 1).find_char('"').unwrap_or(code.len - i - 1)
+            i += close + 2
+            continue
+        if c == '\\' || c == '_' || c == '*'
+            i += 2
+            continue
+        if c == '['
+            close: = code.sub_from(i + 1).find_char(']').unwrap_or(code.len - i - 1)
+            inner: = code.sub(i + 1, close)
+            if inner.len > 0 &&
+                (inner[0].to_lower() == 'h' || inner[0].to_lower() == 'm' ||
+                inner[0].to_lower() == 's')
+                elapsed = true
+                hour = true
+            i += close + 2
+            continue
+        if starts_ignoring_case(code, i, "general")
+            i += 7
+            continue
+        if starts_ignoring_case(code, i, "am/pm")
+            i += 5
+            continue
+        if starts_ignoring_case(code, i, "a/p")
+            i += 3
+            continue
+        if c == 'e' && i + 1 < code.len && (code[i + 1] == '+' || code[i + 1] == '-')
+            i += 2 // the exponent of a number in scientific form
+            continue
+        date = date || c == 'y' || c == 'd' || c == 'g' || c == 'e'
+        hour = hour || c == 'h'
+        second = second || c == 's'
+        month = month || c == 'm'
+        percent = percent || c == '%'
+        i += 1
+    date = date || (month && !hour && !second)
+    if elapsed
+        return Format::{ .shown = .hours, .seconds = second }
+    if date && (hour || second)
+        return Format::{ .shown = .date_time, .seconds = second }
+    if date
+        return Format::{ .shown = .date, .seconds = false }
+    if hour || second
+        return Format::{ .shown = .time, .seconds = second }
+    if percent
+        return Format::{ .shown = .percent, .seconds = false }
+    return plain()
+
+priv fn starts_ignoring_case(text: U8[], at: Sz, word: U8[]): Bool //< whether `word` stands at `at`
+    if text.len - at < word.len
+        return false
+    return text.sub(at, word.len).equals_ignore_case(word)
+
+fn show(raw: U8[], f: Format, date1904: Bool, arena: Arena$@): U8[] //<
+    //< A stored number (`<v>`'s text) as its format shows it; text that is no number as it stands
+    switch f.shown
+    case .plain
+        return digits(raw, 0, arena)
+    case .percent
+        return arena.text().s(digits(raw, 2, arena)).c('%').take()
+    default {}
+    serial: = raw.to_f64() catch
+        return raw
+    days_f: = serial + (1462.0 if date1904 else 0.0)
+    if days_f < 0.0 || days_f >= LAST_SERIAL + 1.0
+        return digits(raw, 0, arena)
+    $days: = I64::days_f
+    $secs: = I64::((days_f - F64::days) * 86400.0 + 0.5)
+    if secs >= 86400I64
+        days += 1I64
+        secs -= 86400I64
+    out: = arena.text()
+    switch f.shown
+    case .date
+        write_date(out, days)
+    case .date_time
+        write_date(out, days)
+        out.c(' ')
+        write_time(out, secs / 3600I64, secs, f.seconds)
+    case .time
+        write_time(out, secs / 3600I64, secs, f.seconds)
+    case .hours
+        write_time(out, days * 24I64 + secs / 3600I64, secs, f.seconds)
+    default {}
+    return out.take()
+
+priv fn write_date(out: str.Arena_text$@, serial: I64) //< a day's serial number as `yyyy-mm-dd`
+    //< Excel counts 1900 as a leap year, as Lotus 1-2-3 did, so its day 60 is 1900-02-29, a day
+    //< that never was. It is shown as Excel shows it; the days before it are one off from after.
+    if serial == 60I64
+        out.s("1900-02-29")
+        return
+    // Days from 1970-01-01: Excel's day 25569, or 25568 before the false leap day.
+    unix: = serial - (25569I64 if serial > 60I64 else 25568I64)
+    // From civil-from-days by Howard Hinnant, for the proleptic Gregorian calendar.
+    z: = unix + 719468I64
+    era: = (z if z >= 0I64 else z - 146096I64) / 146097I64
+    doe: = z - era * 146097I64
+    yoe: = (doe - doe / 1460I64 + doe / 36524I64 - doe / 146096I64) / 365I64
+    doy: = doe - (365I64 * yoe + yoe / 4I64 - yoe / 100I64)
+    mp: = (5I64 * doy + 2I64) / 153I64
+    day: = doy - (153I64 * mp + 2I64) / 5I64 + 1I64
+    month: = mp + 3I64 if mp < 10I64 else mp - 9I64
+    year: = yoe + era * 400I64 + (1I64 if month <= 2I64 else 0I64)
+    out.s("\{year\}-")
+    two(out, month)
+    out.c('-')
+    two(out, day)
+
+priv fn write_time(out: str.Arena_text$@, hours: I64, secs: I64, seconds: Bool) //<
+    //< `hh:mm`, or `hh:mm:ss`; the minutes and seconds come from `secs` within the day
+    two(out, hours)
+    out.c(':')
+    two(out, secs % 3600I64 / 60I64)
+    if seconds
+        out.c(':')
+        two(out, secs % 60I64)
+
+priv fn two(out: str.Arena_text$@, v: I64) //< a number of at least two digits
+    if v < 10I64
+        out.c('0')
+    out.s("\{v\}")
+
+// ==========================================
+// Digits: a stored number rounded to 15 significant digits, worked on its text
+// ==========================================
+
+fn digits(raw: U8[], shift: I32, arena: Arena$@): U8[] //<
+    //< The number `raw` holds, times 10 to the `shift`, with at most 15 significant digits
+    //< **The text is worked on, not a float**: `0.25` shown as a percentage is `25`, never
+    //< `25.000000000000004`. Text that is no number comes back as it stands.
+    $i: Sz = 0
+    negative: = raw.len > 0 && raw[0] == '-'
+    if negative
+        i = 1
+    // The value is `ds` (digits, no point) times 10 to `exp`.
+    ds: = arena.text()
+    $count: Sz = 0
+    $exp: I32 = shift
+    $point: = false
+    $any: = false
+    for i < raw.len && (raw[i].is_digit() || (raw[i] == '.' && !point))
+        if raw[i] == '.'
+            point = true
+        else
+            any = true
+            if count > 0 || raw[i] != '0'
+                ds.c(raw[i])
+                count += 1
+            if point
+                exp -= 1
+        i += 1
+    if !any
+        return raw
+    if i < raw.len && (raw[i] == 'e' || raw[i] == 'E')
+        e: = raw.sub_from(i + 1).to_i64() catch
+            return raw
+        if e < -400I64 || e > 400I64
+            return raw
+        exp += I32::e
+        i = raw.len
+    if i != raw.len
+        return raw
+    $d: U8[] = ds.take()
+    if d.len == 0
+        return "0"
+    rounded: = round_digits(d, arena)
+    d = rounded.digits
+    exp += rounded.dropped
+    // Trailing zeros go into the exponent.
+    $len: = d.len
+    for len > 1 && d[len - 1] == '0'
+        len -= 1
+        exp += 1
+    d = d.sub(0, len)
+    return place_point(d, exp, negative, arena)
+
+priv struct Rounded //< digits cut to `SIGNIFICANT`, and how many places were dropped
+    digits: U8[]
+    dropped: I32
+
+priv fn round_digits(d: U8[], arena: Arena$@): Rounded //< rounds half up to `SIGNIFICANT` digits
+    if d.len <= SIGNIFICANT
+        return Rounded::{ .digits = d, .dropped = 0 }
+    buf: = arena.dup_str(d.sub(0, SIGNIFICANT))
+    if d[SIGNIFICANT] >= '5'
+        $k: = SIGNIFICANT
+        for k > 0
+            k -= 1
+            if buf[k] != '9'
+                buf[k] += 1U8
+                break
+            buf[k] = '0'
+            if k == 0
+                // Every digit carried: 999… became 1000…, one place longer.
+                carried: = arena.text().c('1').s(buf.sub(0, SIGNIFICANT - 1)).take()
+                return Rounded::{ .digits = carried,
+                    .dropped = I32::(d.len - SIGNIFICANT) + 1 }
+    return Rounded::{ .digits = buf, .dropped = I32::(d.len - SIGNIFICANT) }
+
+priv fn place_point(d: U8[], exp: I32, negative: Bool, arena: Arena$@): U8[] //<
+    //< The digits `d` times 10 to `exp`, written with a point, or with `E` when very large or small
+    out: = arena.text()
+    if negative
+        out.c('-')
+    whole: = I32::d.len + exp //< how many digits stand before the point
+    if whole > 15 || whole < -5
+        out.c(d[0])
+        if d.len > 1
+            out.c('.').s(d.sub_from(1))
+        out.s("E+" if whole - 1 >= 0 else "E-").s("\{abs_i32(whole - 1)\}")
+    else if exp >= 0
+        out.s(d)
+        for _k in Range.asc(exp)
+            out.c('0')
+    else if whole > 0
+        out.s(d.sub(0, whole)).c('.').s(d.sub_from(whole))
+    else
+        out.s("0.")
+        for _k in Range.asc((-whole))
+            out.c('0')
+        out.s(d)
+    return out.take()
+
+priv fn abs_i32(v: I32): I32 //< the value without its sign
+    return -v if v < 0 else v

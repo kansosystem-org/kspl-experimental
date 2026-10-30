@@ -12,7 +12,10 @@ import "ksos/net/tcp_conn" as tcpc
 
 const WAIT_FRAME_MS: U32 = 2000 //< the limit on waiting for the peer's answer
 
-// Global: too large for the task stack (2048); Tcp_conn alone is over 3KB.
+const DRAIN_LIMIT_US: U32 = 5000000 //< the most time `drain_stream` spends, gaps or not [us]
+const DRAIN_LIMIT_BYTES: Sz = 64 * 1024 //< the most bytes `drain_stream` reads and discards
+
+// Global: too large for a task stack (2048 or 2560 bytes); Tcp_conn alone is over 3KB.
 $conn: tcpc.Tcp_conn
 $tx_buf: U8[1536] // where a frame is built; once built, call send_now(len)
 $rx_buf: U8[1536] // where next_frame puts the frame it received
@@ -171,11 +174,15 @@ fn read_stream(out: U8$[], ms: U32): Sz //<
 
 fn drain_stream(ms: U32): Sz //<
     //< reads the rest, discards it, and returns how many bytes were discarded
+    //< It stops when nothing comes for `ms`, when the peer closes, or at `DRAIN_LIMIT_US` or
+    //< `DRAIN_LIMIT_BYTES`.
     //< Caution: **Do not stop reading partway and send a FIN**, or the peer's connection is closed
-    //< with unsent data left.
+    //< with unsent data left. **Only the limits cut it short**: without them a peer that keeps
+    //< sending, with gaps under `ms`, holds the caller for ever (the car would never start).
+    t0: = timer.now_us()
     $total: Sz = 0
     $idle: U32 = 0
-    for idle < ms
+    for idle < ms && total < DRAIN_LIMIT_BYTES && timer.elapsed_us(t0) < DRAIN_LIMIT_US
         usb.poll_once()
         n: = tcpc.tcp_stream_recv(Void$@::conn@, scratch[0]@, 512)
         if n > 0

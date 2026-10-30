@@ -32,6 +32,7 @@ enum Refused //< why an action changed nothing
     look //< a colour, a size or an alignment the format does not hold
     not_noted //< a note stands on a paragraph or a heading, and holds 1 to 1,000 bytes
     not_whole //< no table, include or image stands at that place
+    not_a_table //< the pasted text is no ksmd source of one table
     stale //< the text or the cells to replace are no longer where they were found
     too_many_blocks //< a source holds at most 100,000 blocks
     too_large //< a source holds at most 8 MiB
@@ -48,6 +49,8 @@ impl Refused
             return why.message()
         case .not_whole
             return "No table, include or image stands there."
+        case .not_a_table
+            return "The clipboard holds no table copied from ksmd, so nothing was pasted."
         case .not_noted
             return "A note stands on a paragraph, a heading or a table cell, and holds 1 to 1,000 \
                 bytes of text."
@@ -576,12 +579,27 @@ impl Editor
 
     fn remove_block(ed: Self$@, block: Sz): Void!Refused //<
         //< Removes a whole block, a table, an include or an image, as one step
-        //< The caret takes the gap it leaves. A removed include drops only the reference: the
-        //< included file stays as it is. A removed table is emptied, as `remove_table` does.
+        //< A removed include drops only the reference: the included file stays as it is. A removed
+        //< table is emptied, as `remove_table` does.
         if block < 0 || block >= ed.doc.blocks.len ||
             is_text_block(ed.doc.blocks.get(block).kind)
             throw .not_whole
+        ed.remove_whole(block)!
+
+    fn remove_whole(ed: Self$@, block: Sz): Void!Refused //<
+        //< Removes a whole block as one step, and puts the caret on the block that takes its place
+        //< That is the start of the text after it, else the end of the text before it, else the
+        //< gap it leaves. A gap would show as an empty line that no one typed.
         ed.delete_range(gap_spot(block), gap_spot(block + 1), .other)!
+        defer scratch: = Arena(16 * 1024)
+        $to: = ed.next_start(ed.focus)
+        if to.is_none()
+            to = ed.previous_end(ed.focus, scratch)
+        if spot: = to
+            ed.anchor = spot
+            ed.focus = spot
+            last: = ed.history.done[ed.history.done.len - 1]@
+            last.after = ed.selection()
 
     fn delete_range(ed: Self$@, s: Spot, e: Spot, kind: Step_kind): Void!Refused //<
         //< Removes everything between two spots, joining the text on either side

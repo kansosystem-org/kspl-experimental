@@ -1,6 +1,6 @@
 # Plain language for technical documents and reports
 
-This specification sets rules for clear, consistent writing. It covers instructions, descriptions, messages and reports. The general and language rules apply across fields. Separate chapters add the rules for a field and a project.
+This specification sets rules for clear, consistent writing in instructions, descriptions, messages and reports. The general and language rules apply across fields; separate chapters add a field's and a project's rules.
 
 ## How the chapters fit together
 
@@ -11,34 +11,34 @@ This specification sets rules for clear, consistent writing. It covers instructi
 | Field rules: software | Software text, names, comments and messages | Replace for another field |
 | Project rules: Kanso | Scope, terminology sources, notation and checks | Replace for another project |
 
-**The core and English chapters stand alone.** They require no software convention, project document or local glossary name. The field and project chapters supply those details without repeating the general rules.
+**The core and English chapters stand alone**, with no software convention, project document or local glossary name. The field and project chapters supply those without repeating the general rules.
 
 ### What a replacement chapter contains
 
-A field chapter defines its technical terms, protected text and rules for its document types. It includes examples from that field. A project chapter names its readers, working language, terminology sources, document conventions and checks.
+A field chapter defines its technical terms, protected text, rules for its document types, and examples. A project chapter names its readers, working language, terminology sources, document conventions and checks.
 
 **Additional chapters must not silently change the general rules.** State each exception with the affected rule, its scope and the rule that applies instead. A narrower rule adds a requirement; an exception replaces one only within its stated scope. Examples do not create exceptions.
 
-**Keep references pointing from specific chapters to general chapters.** Replacing a field or project chapter must not require edits to the core or language chapters. Keep general examples independent of local tools and names.
+**Keep references pointing from specific chapters to general chapters**, so replacing a field or project chapter needs no edit to the others. Keep general examples independent of local tools and names.
 
 ## The core
 
 ### Write for the reader's task
 
-State who the text is for and what the reader must already know. Put the information needed for the task before background. Use headings that name what the reader can find or do.
+State who the text is for and what the reader must already know. Put the information needed for the task before background, under headings that name what the reader can find or do.
 
 **Preserve the meaning when simplifying text.** Keep conditions, limits, exceptions, responsibilities and uncertainty. Do not remove a necessary fact to meet a length limit. Split the sentence or explain the term instead.
 
 ### One word, one meaning
 
-**Use each word with one meaning only, and use one word for each thing within the subject.** Use the same term in text, labels and tables. Do not alternate synonyms for variety.
+**Use each word with one meaning only, and use one word for each thing within the subject**, in text, labels and tables alike. Do not alternate synonyms for variety.
 
 | Avoid | Use |
 | :-- | :-- |
 | The form arrives. Check the document. Return the sheet. | The form arrives. Check the form. Return the form. |
 | Use "close" for both ending an order and shutting a door | Use "complete the order" and "close the door" |
 
-**Define a new technical term in the applicable glossary before using it.** Give its meaning and permitted use. Use ordinary words from a general dictionary where a technical term is unnecessary. The field and project chapters identify the applicable glossaries.
+**Define a new technical term in the applicable glossary before using it**, with its meaning and permitted use. Use ordinary words where a technical term is unnecessary. The field and project chapters identify the applicable glossaries.
 
 ### Plain words
 
@@ -50,7 +50,7 @@ State who the text is for and what the reader must already know. Put the informa
 | give the proposal the green light | approve the proposal |
 | under the hood | inside |
 
-**Use the language's usual expression.** Do not translate a phrase word by word from another language. Use examples that readers can understand without local or cultural knowledge.
+**Use the language's usual expression**, not a phrase translated word by word. Use examples that readers understand without local or cultural knowledge.
 
 ### One topic, one sentence
 
@@ -60,13 +60,13 @@ State who the text is for and what the reader must already know. Put the informa
 
 **Name who or what acts, then the action.** Make each pronoun's reference clear. Repeat a noun where "it", "this" or "they" could refer to more than one thing.
 
-Put a condition before the instruction that depends on it. Write "If the form is incomplete, return it to the applicant." Prefer a sentence that names the actor.
+Put a condition before the instruction that depends on it: "If the form is incomplete, return it to the applicant."
 
 ### Instructions
 
 **Write an instruction as a command:** "Complete the form." **Give one instruction per step.** Use a numbered list when order matters. State prerequisites before the steps that need them.
 
-Put a caution before the action to which it applies. State a result separately when the reader must check it. Describe how the reader can recognize completion or failure. Keep an explanation separate from the action it explains.
+Put a caution before the action to which it applies. State a result the reader must check separately, with how to recognize completion or failure. Keep an explanation separate from the action it explains.
 
 ### Requirement and possibility
 
@@ -85,9 +85,9 @@ Put a caution before the action to which it applies. State a result separately w
 
 ### What the rules do not touch
 
-**Keep required names, labels, symbols and exact quotations unchanged.** Identify quoted text as a quotation. Explain an unfamiliar term outside the protected text. Do not alter a required name to make it simpler.
+**Keep required names, labels, symbols and exact quotations unchanged**, even to make them simpler. Identify quoted text as a quotation, and explain an unfamiliar term outside it.
 
-The field chapter identifies text that must keep its exact spelling. Protected text is exempt from rewriting and word limits. The surrounding explanation follows the writing rules. Ordinary prose must not be marked as protected text to avoid a rule.
+The field chapter identifies text that must keep its exact spelling. Protected text is exempt from rewriting and word limits; the explanation around it is not. Ordinary prose must not be marked as protected text to avoid a rule.
 
 ## English
 
@@ -99,7 +99,7 @@ The field chapter identifies text that must keep its exact spelling. Protected t
 | A description | 25 words |
 | A heading | 10 words |
 
-**A list item and a table cell follow the same limits.** Exclude protected text when counting words. Keep the necessary meaning when dividing a long sentence. A short sentence must still identify the action and its conditions.
+**A list item and a table cell follow the same limits.** Exclude protected text when counting words. A divided sentence must still identify the action and its conditions.
 
 ### Voice
 
@@ -153,19 +153,19 @@ Use established software terms with their technical meanings. Write "the caller"
 
 ### Comments in source
 
-Comments follow the general and English rules. Each comment line follows the sentence limits. Keep code separate from prose. The project chapter sets comment markers, summary conventions and size limits.
+Comments follow the general and English rules, and each comment line the sentence limits. Keep code separate from prose. The project chapter sets comment markers, summaries and size limits.
 
 ### Diagnostic messages
 
 **State what is wrong, then what the reader can do.** Use separate sentences for the problem and the action. For example: "This byte does not form a valid character. Save the file as UTF-8."
 
-Do not claim an action succeeded unless the program has established that result. If no recovery action is known, state the failure without inventing a remedy.
+Do not claim an action succeeded unless the program has established it. If no recovery action is known, state the failure without inventing one.
 
 ## Project rules: Kanso
 
 ### Scope and language
 
-These rules apply to every Kanso document, source comment, diagnostic message and report to a person. Repository text is written in English. The core, English and software chapters all apply.
+These rules apply to every Kanso document, source comment, diagnostic message and report to a person, in English. The core, English and software chapters all apply.
 
 [`SPEC-documents.md`](SPEC-documents.md) sets document names, headings, markers and links.
 
@@ -187,8 +187,8 @@ The first line of a `//<` comment is its one-line summary, and the detail starts
 
 ### Document tense and reports
 
-Documents state the present behavior and its reasons. Use the past in reports of completed work and the future in plans. A work report states the result, supporting checks and anything not checked.
+Documents state the present behavior and its reasons. Reports of completed work use the past, and plans the future. A work report states the result, supporting checks and anything not checked.
 
 ### Checking the rules
 
-`make test-conventions` checks published document sentence and heading lengths. `make lint` checks a comment's length. Neither establishes compliance with every writing rule. Review meaning, terminology, instructions and the remaining limits separately. The checks and their scope are specified in [`SPEC-gates.md`](SPEC-gates.md).
+`make test-conventions` checks published sentence and heading lengths, and `make lint` a comment's length ([`SPEC-gates.md`](SPEC-gates.md)). Review checks meaning, terminology, instructions and the remaining limits.

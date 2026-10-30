@@ -1,0 +1,724 @@
+//< Reads what GNU make knows of a build: its database, the make files' rule lines, a value's names
+//< `tools/make_explain.kspl` asks make and prints the answer; this file only reads text, so its
+//< test drives it without running make. **The values and the places come from make's own
+//< database** (`make -p`), so they cannot drift from the make files. The make files are read
+//< only for what the database leaves out: the line of a rule with no recipe, the names written in
+//< its prerequisites, and the operator a variable was set with (`?=` reads as `=` there).
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strnum"
+
+struct Var //< one variable as make's database records it
+    name: U8[]
+    origin: U8[] //< `makefile`, `command line`, `environment`, `default`, `automatic` or `override`
+    file: U8[] //< the make file that set it last; empty where the database names none
+    line: Sz //< its line in that file; 0 where none
+    simple: Bool //< `:=`, expanded once where it is set; false for `=`, expanded at each use
+    append: Bool //< a target's own `+=`: its value goes after the one set outside the target
+    value: U8[] //< expanded for a simple variable, as written for a recursive one
+
+struct Entry //< one file the database records: a target, or a file a target names
+    name: U8[]
+    prereqs: List<|U8[]|> //< the normal prerequisites, in order
+    order_only: List<|U8[]|> //< those after `|`: made first, but never a reason to remake
+    target: Bool //< a rule names it as its target (the database does not mark it `Not a target`)
+    phony: Bool
+    stem: U8[] //< what a pattern rule's `%` matched; empty where no pattern rule made it
+    stale: Bool //< make would remake it now (`-q` found it out of date)
+    current: Bool //< make found it up to date
+    exists: Bool //< the file is there (the database does not say `File does not exist`)
+    recipe_file: U8[] //< where its recipe is written; empty for none, `(built-in)` for make's own
+    recipe_line: Sz //< the recipe's first line there
+    recipe: List<|U8[]|> //< the recipe as written, one physical line each, without the tab
+    vars: List<|Var|> //< the variables set for this target alone
+
+struct Db //< make's database: every variable and every file it recorded
+    vars: Map<|U8[], Var|>
+    files: Map<|U8[], Entry|>
+    order: List<|U8[]|> //< the files' names in the order the database lists them
+
+priv const ORIGINS: U8[][] = U8[][]::{ "default", "environment", "environment under -e",
+    "automatic", "command line", "override", "makefile", "'override' directive" } //<
+        //< The origins `make -p` writes on the line above a variable
+
+fn last_db(out: U8[]): U8[] //< the main make's database, the last one printed
+    //< **A recursive make prints its own database first**: with `-p` in `MAKEFLAGS`, every
+    //< sub-make a recipe starts prints one, and the make asked prints its own when it ends.
+    $at: Sz = 0
+    $from: Sz = 0
+    for
+        found: = out.sub_from(at).find_str("# Make data base, printed on") catch
+            break
+        from = at + found
+        at = from + 1
+    return out.sub_from(from)
+
+priv struct Origin //< what an origin line says
+    origin: U8[]
+    file: U8[]
+    line: Sz
+
+priv fn origin_of(line: U8[]): Origin? //< the origin a `# <origin>` line names, if it is one
+    if !line.starts_with("# ")
+        return .none
+    rest: = line.sub_from(2)
+    $word: = rest
+    $file: U8[] = ""
+    $at: Sz = 0
+    if open: = rest.find_str(" (from '")
+        word = rest.sub(0, open)
+        tail: = rest.sub_from(open + 8)
+        close: = tail.find_str("', line ") catch
+            return .none
+        file = tail.sub(0, close)
+        at = tail.parse_size(close + 8) catch 0
+    for o in ORIGINS
+        if word.equals(o)
+            return .some(Origin::{ .origin = word, .file = file, .line = at })
+    return .none
+
+priv fn var_line(head: U8[], o: Origin): Var? //< `NAME = value`, `NAME := value` or a target's own
+    //< A target's own variable can also read `NAME += value`, appended to the value outside it, or
+    //< `NAME ?= value`.
+    text: = head.strip_prefix("override ")
+    if text.starts_with("define ")
+        return .some(Var::{ .name = text.sub_from(7).trim_spaces(), .origin = o.origin,
+            .file = o.file, .line = o.line, .simple = false, .append = false, .value = "" })
+    sp: = text.find_char(' ') catch
+        return .none
+    rest: = text.sub_from(sp + 1)
+    end: = rest.find_char(' ').unwrap_or(rest.len)
+    op: = rest.sub(0, end)
+    if !(op.equals("=") || op.equals(":=") || op.equals("+=") || op.equals("?="))
+        return .none
+    return .some(Var::{ .name = text.sub(0, sp), .origin = o.origin, .file = o.file,
+        .line = o.line, .simple = op.equals(":="), .append = op.equals("+="),
+        .value = rest.sub_from(end + 1) if end < rest.len else "" })
+
+fn parse_db(text: U8[], arena: Arena$@): Db //< reads one database, as `last_db` cut it
+    $db: = Db::{ .vars = Map<|U8[], Var|>(arena), .files = Map<|U8[], Entry|>(arena),
+        .order = List<|U8[]|>(arena) }
+    lines: = text.lines(arena)
+    $i: Sz = 0
+    $section: U8[] = ""
+    for i < lines.len
+        line: = lines.get(i)
+        if line.starts_with("# Variables") || line.starts_with("# Files") ||
+            line.starts_with("# Implicit Rules") || line.starts_with("# Directories") ||
+            line.starts_with("# Pattern-specific") || line.starts_with("# VPATH") ||
+            line.starts_with("# files hash-table")
+            section = line
+            i += 1
+            continue
+        if section.starts_with("# Variables")
+            i = read_var(lines, i, db.vars@, arena)
+        else if section.starts_with("# Files")
+            i = read_entry(lines, i, db@, arena)
+        else
+            i += 1
+    return db
+
+priv fn read_var(lines: List<|U8[]|>, at: Sz, into: Map<|U8[], Var|>$@, arena: Arena$@): Sz //<
+    //< Reads the variable whose origin line is at `at`; where the next one starts
+    //< **A value can take several lines**: a `define`, or `:=` of one. It runs to the next origin.
+    o: = origin_of(lines.get(at)) catch
+        return at + 1
+    if at + 1 >= lines.len
+        return at + 1
+    head: = lines.get(at + 1)
+    $v: = var_line(head, o) catch
+        return at + 2
+    $i: = at + 2
+    body: = arena.text()
+    body.s(v.value)
+    is_define: = head.strip_prefix("override ").starts_with("define ")
+    // A value on the head line goes on with a newline; a define's body starts on the next line.
+    $newline: = !is_define
+    for i < lines.len
+        l: = lines.get(i)
+        if origin_of(l).is_some() || l.starts_with("# variable set hash-table")
+            break
+        if is_define && l.equals("endef")
+            i += 1
+            break
+        if newline
+            body.c('\n')
+        newline = true
+        body.s(l)
+        i += 1
+    v.value = body.take().trim_end() if !is_define else body.take()
+    into.set(v.name, v)
+    return i
+
+priv fn new_entry(name: U8[], arena: Arena$@): Entry //< an entry with nothing recorded yet
+    return Entry::{ .name = name, .prereqs = List<|U8[]|>(arena),
+        .order_only = List<|U8[]|>(arena), .target = true, .phony = false, .stem = "",
+        .stale = false, .current = false, .exists = true, .recipe_file = "", .recipe_line = 0,
+        .recipe = List<|U8[]|>(arena), .vars = List<|Var|>(arena) }
+
+priv fn header_colon(line: U8[]): Sz? //< where an entry's `name:` ends, at a colon then a space
+    for i in Range.asc(line.len)
+        if line[i] == ':' &&
+            (i + 1 == line.len || line[i + 1] == ' ' || line[i + 1] == ':')
+            return .some(i)
+    return .none
+
+priv fn read_entry(lines: List<|U8[]|>, at: Sz, db: Db$@, arena: Arena$@): Sz //<
+    //< Reads one file's entry starting at `at`; where the next one starts
+    //< The lines above its `name: prerequisites` can mark it `# Not a target:` or set variables
+    //< for it alone (an origin line, then `name: VAR := value`).
+    $i: = at
+    $target: = true
+    $vars: = List<|Var|>(arena)
+    for i < lines.len && lines.get(i).len == 0
+        i += 1
+    for i < lines.len
+        l: = lines.get(i)
+        if l.equals("# Not a target:")
+            target = false
+            i += 1
+            continue
+        if o: = origin_of(l)
+            i = read_target_var(lines, i + 1, o, vars@, arena)
+            continue
+        break
+    if i >= lines.len || lines.get(i).starts_with("#")
+        return i + 1
+    head: = lines.get(i)
+    colon: = header_colon(head) catch
+        return i + 1
+    $e: = new_entry(head.sub(0, colon), arena)
+    e.target = target
+    e.vars = vars
+    $in_order: = false
+    for word in head.sub_from(colon + 1).strip_prefix(":").split(' ', arena)
+        if word.equals("|")
+            in_order = true
+        else if word.len > 0
+            if in_order
+                e.order_only.push(word)
+            else
+                e.prereqs.push(word)
+    i += 1
+    for i < lines.len && lines.get(i).len > 0
+        read_flag(lines.get(i), e@)
+        i += 1
+    if db.files.get(e.name).is_none()
+        db.order.push(e.name)
+    db.files.set(e.name, e)
+    return i
+
+priv fn read_target_var(lines: List<|U8[]|>, at: Sz, o: Origin, into: List<|Var|>$@,
+    arena: Arena$@): Sz //<
+        //< Reads `name: VAR := value` and the lines its value runs on; where the next line starts
+    if at >= lines.len
+        return at
+    l: = lines.get(at)
+    colon: = header_colon(l) catch
+        return at + 1
+    name: = l.sub(0, colon)
+    $v: = var_line(l.sub_from(colon + 1).trim_start(), o) catch
+        return at + 1
+    $i: = at + 1
+    body: = arena.text()
+    body.s(v.value)
+    for i < lines.len
+        n: = lines.get(i)
+        if n.len == 0 || origin_of(n).is_some() ||
+            n.starts_with(name) && n.sub_from(name.len).starts_with(":")
+            break
+        body.c('\n').s(n)
+        i += 1
+    v.value = body.take()
+    into.push(v)
+    return i
+
+priv fn read_flag(l: U8[], e: Entry$@) //< takes one line of an entry's body into the entry
+    if l.starts_with("\t")
+        e.recipe.push(l.sub_from(1))
+    else if l.starts_with("#  Phony target")
+        e.phony = true
+    else if l.starts_with("#  Implicit/static pattern stem: '")
+        e.stem = l.sub_from(34).strip_suffix("'")
+    else if l.starts_with("#  Needs to be updated")
+        e.stale = true
+    else if l.starts_with("#  Successfully updated")
+        e.current = true
+    else if l.starts_with("#  File does not exist")
+        e.exists = false
+    else if l.starts_with("#  recipe to execute (built-in)")
+        e.recipe_file = "(built-in)"
+    else if l.starts_with("#  recipe to execute (from '")
+        rest: = l.sub_from(28)
+        if close: = rest.find_str("', line ")
+            e.recipe_file = rest.sub(0, close)
+            e.recipe_line = rest.parse_size(close + 8) catch 0
+
+// ==========================================
+// The names a piece of make text uses. **Read, never evaluated**: make gives the values. A name
+// built by a function (`$($(x))`) is not a name here; the names inside it are.
+// ==========================================
+
+priv const FUNCTIONS: U8[][] = U8[][]::{ "subst", "patsubst", "strip", "findstring", "filter",
+    "filter-out", "sort", "word", "wordlist", "words", "firstword", "lastword", "dir", "notdir",
+    "suffix", "basename", "addsuffix", "addprefix", "join", "wildcard", "realpath", "abspath",
+    "error", "warning", "info", "shell", "origin", "flavor", "foreach", "if", "or", "and", "call",
+    "eval", "file", "value", "let", "intcmp", "guile" } //<
+        //< GNU make 4's functions: `$(name args)` with one of these calls a function, not a variable
+
+fn is_automatic(name: U8[]): Bool //< `$@`, `$<`, `$(@D)` and the rest: set per target as it runs
+    return name.len > 0 && "@<^?*%+|".find_char(name[0]).is_some()
+
+priv fn closing(text: U8[], open: Sz): Sz //< the index of the bracket closing the one at `open`
+    //< **Only the same kind nests**, as make counts them: inside `$(`, a `{` is plain text.
+    o: = text[open]
+    c: = ')' if o == '(' else '}'
+    $depth: Sz = 0
+    for i in Range(open, text.len, 1)
+        if text[i] == o
+            depth += 1
+        else if text[i] == c
+            depth -= 1
+            if depth == 0
+                return i
+    return text.len
+
+priv fn args_of(text: U8[], arena: Arena$@): List<|U8[]|> //< a function's arguments, split at `,`
+    //< A comma inside a nested `$(…)` belongs to that call.
+    $out: = List<|U8[]|>(arena)
+    $depth: Sz = 0
+    $start: Sz = 0
+    for i in Range.asc(text.len)
+        ch: = text[i]
+        if ch == '(' || ch == '{'
+            depth += 1
+        else if ch == ')' || ch == '}'
+            depth -= 1
+        else if ch == ',' && depth == 0
+            out.push(text.sub(start, i - start))
+            start = i + 1
+    out.push(text.sub_from(start))
+    return out
+
+fn refs(text: U8[], arena: Arena$@): List<|U8[]|> //< the variables the text names, once each
+    //< In order of first use. Automatic variables, `$(1)` and a loop's own name are left out.
+    $out: = List<|U8[]|>(arena)
+    $local: = List<|U8[]|>(arena)
+    add_refs(text, out@, local@, arena)
+    return out
+
+priv fn push_name(name: U8[], out: List<|U8[]|>$@, local: List<|U8[]|>@) //< adds one name
+    if name.len == 0 || is_automatic(name) || name[0].is_digit() || local.contains(name)
+        return
+    for n in out.slice()
+        if n.equals(name)
+            return
+    out.push(name)
+
+priv fn add_refs(text: U8[], out: List<|U8[]|>$@, local: List<|U8[]|>$@, arena: Arena$@) //<
+    //< Walks the text once, adding each name it meets to `out`
+    $i: Sz = 0
+    for i + 1 < text.len
+        if text[i] != '$'
+            i += 1
+            continue
+        next: = text[i + 1]
+        if next == '$'
+            i += 2
+            continue
+        if next != '(' && next != '{'
+            push_name(text.sub(i + 1, 1), out, local)
+            i += 2
+            continue
+        close: = closing(text, i + 1)
+        inner: = text.sub(i + 2, close - i - 2)
+        add_inner(inner, out, local, arena)
+        i = close + 1
+
+priv fn add_inner(inner: U8[], out: List<|U8[]|>$@, local: List<|U8[]|>$@, arena: Arena$@) //<
+    //< One `$(…)`'s content: a function's call, or a variable's name
+    $sp: Sz = 0
+    for sp < inner.len && !inner[sp].is_space() && inner[sp] != ':' && inner[sp] != '$'
+        sp += 1
+    word: = inner.sub(0, sp)
+    if sp < inner.len && inner[sp].is_space() && FUNCTIONS.contains(word)
+        args: = args_of(inner.sub_from(sp + 1), arena)
+        first: = args.get(0).trim_spaces()
+        if word.equals("foreach") || word.equals("let")
+            names: = first.split(' ', arena)
+            for n in names
+                local.push(n)
+            for k in Range(1, args.len, 1)
+                add_refs(args.get(k), out, local, arena)
+            for _ in names
+                local.pop()
+            return
+        if (word.equals("call") || word.equals("origin") || word.equals("flavor") ||
+            word.equals("value")) && first.find_char('$').is_none()
+            push_name(first, out, local)
+        for a in args
+            add_refs(a, out, local, arena)
+        return
+    // `$(NAME:a=b)` is a substitution reference: the name is before the colon.
+    name: = inner.sub(0, inner.find_char(':').unwrap_or(inner.len))
+    if name.find_char('$').is_some()
+        add_refs(inner, out, local, arena)
+        return
+    push_name(name.trim_spaces(), out, local)
+    add_refs(inner.sub_from(name.len), out, local, arena)
+
+fn expand(text: U8[], db: Db@, depth: Sz, arena: Arena$@): U8[]? //< plain references filled in
+    //< **Only `$(NAME)` and `$$`**, with the database's values; none where a function is called,
+    //< or the text names an automatic variable. For reading a rule line's target, not for a value
+    //< make would compute: that is make's to say (`--eval` in `tools/make_explain.kspl`).
+    if depth > 16
+        return .none
+    out: = arena.text()
+    $i: Sz = 0
+    for i < text.len
+        if text[i] != '$' || i + 1 >= text.len
+            out.c(text[i])
+            i += 1
+            continue
+        next: = text[i + 1]
+        if next == '$'
+            out.c('$')
+            i += 2
+            continue
+        $name: U8[] = text.sub(i + 1, 1)
+        $end: = i + 2
+        if next == '(' || next == '{'
+            close: = closing(text, i + 1)
+            name = text.sub(i + 2, close - i - 2)
+            end = close + 1
+        if is_automatic(name) || name.find_char(' ').is_some() ||
+            name.find_char('$').is_some() || name.find_char(':').is_some() ||
+            name.find_char(',').is_some()
+            return .none
+        if v: = db.vars.get(name)
+            if v.simple
+                out.s(v.value)
+            else
+                inner: = expand(v.value, db, depth + 1, arena) catch
+                    return .none
+                out.s(inner)
+        i = end
+    return .some(out.take())
+
+// ==========================================
+// The make files' own lines: where a rule is written, and what its prerequisites name.
+// ==========================================
+
+struct Source_line //< one logical line of a make file: continuations joined, comment cut
+    first: Sz //< its first physical line, from 1
+    text: U8[]
+    recipe: Bool //< it starts with a tab: a recipe line, not make's own syntax
+
+fn logical_lines(text: U8[], arena: Arena$@): List<|Source_line|> //<
+    //< The file's logical lines; of a `define … endef`, only its first line
+    //< **A comment starts at a `#` not escaped by `\`**, as make cuts it, except in a recipe.
+    $out: = List<|Source_line|>(arena)
+    phys: = text.lines(arena)
+    $i: Sz = 0
+    $in_define: Sz = 0
+    for i < phys.len
+        first: = i + 1
+        joined: = arena.text()
+        $l: = phys.get(i)
+        for l.ends_with("\\") && i + 1 < phys.len
+            joined.s(l.sub(0, l.len - 1).trim_end()).c(' ')
+            i += 1
+            l = phys.get(i).trim_start()
+        joined.s(l)
+        i += 1
+        whole: = joined.take()
+        recipe: = whole.starts_with("\t")
+        body: = whole if recipe else cut_comment(whole)
+        word: = body.trim_start().strip_prefix("override ").strip_prefix("export ")
+        if !recipe && (word.starts_with("define ") || word.equals("define"))
+            if in_define == 0
+                out.push(Source_line::{ .first = first, .text = body, .recipe = false })
+            in_define += 1
+            continue
+        if in_define > 0
+            if !recipe && body.trim_spaces().equals("endef")
+                in_define -= 1
+            continue
+        out.push(Source_line::{ .first = first, .text = body, .recipe = recipe })
+    return out
+
+priv fn cut_comment(line: U8[]): U8[] //< the line before its comment
+    for i in Range.asc(line.len)
+        if line[i] == '#' && (i == 0 || line[i - 1] != '\\')
+            return line.sub(0, i)
+    return line
+
+struct Rule_line //< a rule as one line writes it
+    file: U8[]
+    line: Sz //< its first physical line
+    targets: U8[] //< as written, before the colon
+    prereqs: U8[] //< as written, after it, with `|` kept; empty for none
+    double: Bool //< `::`, a rule of its own for each
+
+fn rule_of(l: Source_line, file: U8[]): Rule_line? //< the rule the line writes, if it writes one
+    //< **Not a rule**: a recipe, a directive, an assignment (an `=` before the colon, or `:=`),
+    //< and a target's own variable (`t: VAR = x`), whose place the database gives.
+    if l.recipe
+        return .none
+    t: = l.text.trim_start()
+    for d in U8[][]::{ "include ", "-include ", "sinclude ", "ifeq", "ifneq", "ifdef ", "ifndef ",
+        "else", "endif", "export ", "unexport ", "vpath", "undefine ", "define ", "override " }
+        if t.starts_with(d)
+            return .none
+    $depth: Sz = 0
+    for i in Range.asc(t.len)
+        ch: = t[i]
+        if ch == '(' || ch == '{'
+            depth += 1
+        else if ch == ')' || ch == '}'
+            depth -= 1
+        else if depth == 0 && ch == '='
+            return .none
+        if depth == 0 && ch == ':'
+            rest: = t.sub_from(i + 1)
+            if rest.starts_with("=") || rest.starts_with(":=") || rest.starts_with("::=")
+                return .none
+            double: = rest.starts_with(":")
+            $after: = rest.strip_prefix(":")
+            after = after.sub(0, after.find_char(';').unwrap_or(after.len))
+            if top_level_has(after, '=')
+                return .none
+            return .some(Rule_line::{ .file = file, .line = l.first, .targets = t.sub(0, i),
+                .prereqs = after.trim_spaces(), .double = double })
+    return .none
+
+priv fn top_level_has(text: U8[], want: U8): Bool //< the byte appears outside every `$(…)`
+    $depth: Sz = 0
+    for ch in text
+        if ch == '(' || ch == '{'
+            depth += 1
+        else if ch == ')' || ch == '}'
+            depth -= 1
+        else if depth == 0 && ch == want
+            return true
+    return false
+
+fn words(text: U8[], arena: Arena$@): List<|U8[]|> //< the words, split at spaces and tabs
+    $out: = List<|U8[]|>(arena)
+    $start: Sz = 0
+    $in_word: = false
+    for i in Range.asc(text.len + 1)
+        space: = i == text.len || text[i].is_space()
+        if space && in_word
+            out.push(text.sub(start, i - start))
+            in_word = false
+        else if !space && !in_word
+            start = i
+            in_word = true
+    return out
+
+fn rule_before(lines: List<|Source_line|>@, recipe_line: Sz, file: U8[]): Rule_line? //<
+    //< The rule a recipe belongs to: the last rule line written before the recipe's first line
+    $found: Rule_line? = .none
+    for l in lines$
+        if l.first >= recipe_line
+            break
+        if l.text.trim_spaces().len == 0
+            continue
+        found = rule_of(l, file)
+    return found
+
+fn source_op(line: U8[]): U8[] //< the operator a make file's line sets a variable with
+    //< `?=`, `+=`, `!=`, `:=`, `::=`, `=` or `define`; empty where the line sets none
+    //< (a value made by `$(eval)` names the line of the call).
+    t: = line.trim_start().strip_prefix("override ").strip_prefix("export ")
+        .strip_prefix("private ")
+    if t.starts_with("define ")
+        return "define"
+    eq: = t.find_char('=') catch
+        return ""
+    if eq == 0
+        return "="
+    before: = t[eq - 1]
+    if before == '?'
+        return "?="
+    if before == '+'
+        return "+="
+    if before == '!'
+        return "!="
+    if before == ':'
+        return "::=" if eq >= 2 && t[eq - 2] == ':' else ":="
+    return "="
+
+fn help_line(lines: U8[], target: U8[], arena: Arena$@): Help? //< the `##` line describing it
+    //< `## <group>|<target>|<description>` ([`mk/help.mk`](../mk/help.mk)); a target ending in
+    //< `*` names a family, matched by what comes before the `*`.
+    $family: Help? = .none
+    $n: Sz = 0
+    for l in lines.lines(arena)
+        n += 1
+        if !l.starts_with("## ")
+            continue
+        parts: = l.sub_from(3).split('|', arena)
+        if parts.len < 3
+            continue
+        spec: = parts.get(1).trim_spaces()
+        rest: = l.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1)
+        h: = Help::{ .line = n, .group = parts.get(0).trim_spaces(), .spec = spec, .text = rest }
+        if spec.equals(target)
+            return .some(h)
+        if spec.ends_with("*") && target.starts_with(spec.sub(0, spec.len - 1)) &&
+            family.is_none()
+            family = .some(h)
+    return family
+
+struct Help //< one `##` line of `make help`
+    line: Sz
+    group: U8[]
+    spec: U8[] //< the target, or a family's name ending in `*`
+    text: U8[]
+
+fn distance(a: U8[], b: U8[], arena: Arena$@): Sz //< how many one-byte edits turn a into b
+    $prev: = List<|Sz|>(arena)
+    $cur: = List<|Sz|>(arena)
+    for j in Range.asc(b.len + 1)
+        prev.push(j)
+        cur.push(0)
+    for i in Range(1, a.len + 1, 1)
+        cur.set(0, i)
+        for j in Range(1, b.len + 1, 1)
+            $best: = prev.get(j - 1) + (0 if a[i - 1] == b[j - 1] else 1)
+            if prev.get(j) + 1 < best
+                best = prev.get(j) + 1
+            if cur.get(j - 1) + 1 < best
+                best = cur.get(j - 1) + 1
+            cur.set(j, best)
+        for j in Range.asc(b.len + 1)
+            prev.set(j, cur.get(j))
+    return prev.get(b.len)
+
+struct Cond //< a conditional a line stands inside
+    text: U8[] //< as written (`ifeq ($(LLVM),1)`), or `else of` and that
+    line: Sz
+
+struct Assign //< a line that sets a variable, and the conditionals it stands inside
+    file: U8[]
+    line: Sz
+    name: U8[]
+    op: U8[] //< as `source_op` reads it
+    value: U8[] //< what follows the operator, as written; empty for a `define`
+    conds: List<|Cond|> //< outermost first; empty where the line always takes effect
+
+fn assignments(lines: List<|Source_line|>@, file: U8[], arena: Arena$@): List<|Assign|> //<
+    //< Every line of one make file that sets a variable, with the conditionals around it
+    //< **Only make's own conditionals are followed**; a value chosen inside `$(if …)`, or set by
+    //< `$(eval)`, is not a line that sets it.
+    $out: = List<|Assign|>(arena)
+    $stack: = List<|Cond|>(arena)
+    for l in lines$
+        if l.recipe
+            continue
+        t: = l.text.trim_spaces()
+        if is_conditional(t)
+            stack.push(Cond::{ .text = t, .line = l.first })
+            continue
+        if t.equals("endif") || t.starts_with("endif ")
+            stack.pop()
+            continue
+        if t.equals("else") || t.starts_with("else ")
+            if top: = stack.pop()
+                $text: = t
+                if t.len == 4
+                    text = arena.text().s("else of ").s(top.text.strip_prefix("else of ")).take()
+                stack.push(Cond::{ .text = text, .line = l.first })
+            continue
+        name: = assigned_name(t)
+        if name.len == 0
+            continue
+        $conds: = List<|Cond|>(arena)
+        for c in stack
+            conds.push(c)
+        op: = source_op(t)
+        $value: U8[] = ""
+        if !op.equals("define")
+            value = t.sub_from(t.find_char('=').unwrap_or(t.len - 1) + 1).trim_spaces()
+        out
+            .push(Assign::{ .file = file, .line = l.first, .name = name, .op = op, .value = value,
+            .conds = conds })
+    return out
+
+priv fn is_conditional(t: U8[]): Bool //< whether the line opens `ifeq`, `ifneq`, `ifdef`, `ifndef`
+    for w in U8[][]::{ "ifeq", "ifneq", "ifdef", "ifndef" }
+        if t.starts_with(w) && t.len > w.len && (t[w.len] == ' ' || t[w.len] == '(')
+            return true
+    return false
+
+priv fn assigned_name(t: U8[]): U8[] //< the variable the line sets; empty where it sets none
+    body: = t.strip_prefix("override ").strip_prefix("export ").strip_prefix("private ")
+    if body.starts_with("define ")
+        rest: = body.sub_from(7).trim_spaces()
+        return rest.sub(0, rest.find_char(' ').unwrap_or(rest.len))
+    if rule_of(Source_line::{ .first = 0, .text = body, .recipe = false }, "").is_some()
+        return ""
+    op: = source_op(body)
+    if op.len == 0
+        return ""
+    eq: = body.find_char('=').unwrap_or(0)
+    name: = body.sub(0, eq + 1 - op.len).trim_spaces()
+    if name.len == 0 || name.find_char(' ').is_some() || name.find_char(':').is_some() ||
+        name.find_char('$').is_some() || name.find_char('(').is_some()
+        return ""
+    return name
+
+fn cond_refs(text: U8[], arena: Arena$@): List<|U8[]|> //< the variables a conditional reads
+    //< `ifdef NAME` reads NAME by its name alone, where `ifeq` reads `$(NAME)` like any text.
+    t: = text.strip_prefix("else of ").strip_prefix("else ").trim_start()
+    for w in U8[][]::{ "ifdef ", "ifndef " }
+        if t.starts_with(w) && t.find_char('$').is_none()
+            $out: = List<|U8[]|>(arena)
+            out.push(t.sub_from(w.len).trim_spaces())
+            return out
+    return refs(t, arena)
+
+fn makeflags_sets(flags: U8[], arena: Arena$@): List<|U8[]|> //< the settings `MAKEFLAGS` carries
+    //< They follow ` -- `; a space inside one is written `\ `, and a `$` as `$$`. The flags before
+    //< it are dropped: `-j` and its jobserver belong to the make that set them.
+    $out: = List<|U8[]|>(arena)
+    $rest: U8[] = ""
+    if flags.starts_with("-- ")
+        rest = flags.sub_from(3)
+    else if at: = flags.find_str(" -- ")
+        rest = flags.sub_from(at + 4)
+    else
+        return out
+    $one: = arena.text()
+    $len: Sz = 0
+    $i: Sz = 0
+    for i < rest.len
+        ch: = rest[i]
+        // `$$` is one `$`: make doubles it, as it expands MAKEFLAGS when it reads it back.
+        if ch == '\\' && i + 1 < rest.len ||
+            ch == '$' && i + 1 < rest.len && rest[i + 1] == '$'
+            one.c(rest[i + 1])
+            len += 1
+            i += 2
+            continue
+        if ch == ' '
+            if len > 0
+                out.push(one.take())
+                one = arena.text()
+                len = 0
+        else
+            one.c(ch)
+            len += 1
+        i += 1
+    if len > 0
+        out.push(one.take())
+    return out
+
+fn gnu_make_major(version: U8[]): Sz //< the major version `make --version` names; 0 if not GNU make
+    if !version.starts_with("GNU Make ")
+        return 0
+    return version.parse_size(9) catch 0

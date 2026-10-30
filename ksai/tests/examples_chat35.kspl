@@ -126,10 +126,31 @@ fn test_chat35_tool_calls_read(arena: Arena$@) //<
         two.calls.get(0).arguments.equals("{\"path\":\"12\"}") &&
         two.calls.get(1).arguments.equals("{\"path\":\"b.md\"}"),
         "two calls, the last with no closing tag, a text parameter kept as text")
-    broken_text: = "Here.\n<tool_call>\n<function=read>\n<parameter=path>\na.md\n</tool_call>"
+    cut: = split("Here.\n<tool_call>\n<function=read>\n<parameter=path>\na.md\n", false, arena)
+    assert(cut.calls.len == 1 && cut.content.equals("Here.") &&
+        cut.calls.get(0).arguments.equals("{\"path\":\"a.md\\n"),
+        "a call cut short keeps its arguments as they stand")
+    // A block closed by its tag gives whole JSON, however the model broke what is inside.
+    closed_open: =
+        split("<tool_call>\n<function=read>\n<parameter=path>\na.md\n</tool_call>", false, arena)
+    no_close: =
+        split("<tool_call>\n<function=read>\n<parameter=from_line>\n7\n</function>\n</tool_call>",
+        false, arena)
+    stray: =
+        split("<tool_call>\n<function=read>\n<parameter=from_line>\n1\n</parameter>\nok\n<parameter=path>\nb\n</parameter>\n</tool_call>",
+        false, arena)
+    key: = split("<tool_call>\n<function=read>\n<parameter=pa\n</tool_call>", false, arena)
+    assert(closed_open.calls.get(0).arguments.equals("{\"path\":\"a.md\"}") &&
+        no_close.calls.get(0).arguments.equals("{\"from_line\":\"7\\n</function>\"}") &&
+        stray.calls.get(0).arguments.equals("{\"from_line\":1}") &&
+        key.calls.get(0).arguments.equals("{}"),
+        U8$[]::arena.text().s("a closed block ends its open value and its object: ")
+        .s(closed_open.calls.get(0).arguments).c(' ').s(no_close.calls.get(0).arguments).c(' ')
+        .s(stray.calls.get(0).arguments).c(' ').s(key.calls.get(0).arguments).take())
+    broken_text: = "Here.\n<tool_call>\nread a.md\n</tool_call>"
     broken: = split(broken_text, false, arena)
     assert(broken.calls.len == 0 && broken.reasoning.len == 0 &&
-        broken.content.equals(broken_text), "a broken block stays in the content as written")
+        broken.content.equals(broken_text), "a block no call opens stays in the content as written")
     p: = split("Mulling.\n</think>\n\nTen days.", true, arena)
     ids: = reply.Answer_ids::{ .id = "chatcmpl-1", .first_call = 1, .created = 1700000000I64,
         .model = "mini" }
@@ -141,7 +162,8 @@ fn test_chat35_tool_calls_read(arena: Arena$@) //<
     assert(msg.get("content").as_str().unwrap_or("").equals("Ten days.") &&
         msg.get("reasoning_content").as_str().unwrap_or("").equals("Mulling."),
         "the thinking goes to reasoning_content, apart from the content")
-    verdict.pass("calls typed by their parameters, thinking apart, a broken block kept as text")
+    verdict
+        .pass("calls typed by their parameters, thinking apart, a block no call opens kept as text")
 
 priv const FIRST_REQUEST: U8[] =
     "{\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}"
@@ -162,9 +184,9 @@ priv fn kept_matches_fresh(e: Engine$@, body: U8[], arena: Arena$@): Sz //<
     //< Feeds a prompt to `e` and to a fresh engine; stops unless the scores match bit for bit
     //< Returns how many tokens `e` kept.
     prompt: = prompt_of(body, e, arena)
-    kept: = e.feed(prompt.slice())
+    kept: = chat.fed(e, prompt.slice())
     $fresh: = chat.engine_over(model_bytes, arena)
-    _none: = fresh.feed(prompt.slice())
+    _none: = chat.fed(fresh@, prompt.slice())
     a: = chat.last_scores(e, arena)
     b: = chat.last_scores(fresh@, arena)
     assert(chat.same_scores(a@, b@),
@@ -186,7 +208,7 @@ fn test_chat35_state_kept_matches_fresh(arena: Arena$@) //<
     $e: = chat.engine_over(model_bytes, arena)
     first: = prompt_of(FIRST_REQUEST, e@, arena)
     $pick: = chat.greedy()
-    answer: = e.generate(first.slice(), 4, pick@, arena)
+    answer: = chat.generated(e@, first.slice(), 4, pick@, arena)
     assert(answer.reused == 0 && answer.tokens.len == 4, "the first request keeps nothing")
     // The follow-up writes the answer back with no thinking block, so it parts from the cache
     // inside the first prompt's last turn: it reads on from the copy where that turn opens.

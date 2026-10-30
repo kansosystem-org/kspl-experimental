@@ -1,7 +1,7 @@
-//< Opens one document on the local server: finds or starts the server, and hands the URL on
-//< ksmd's opener (`tools/ksmd_open.kspl`) chooses the folder to serve and the port to start from;
-//< this file does the rest. **This is a leaf**: neither ksmd nor `kssrv` knows the other, so only
-//< `tools/` may know both ("Reference direction
+//< Opens a page on the local server: finds or starts the server, and hands the URL on
+//< Each opener (`tools/ksmd_open.kspl`, `tools/ksagent_chat.kspl`) chooses the folder to serve and
+//< the port to start from; this file does the rest. **This is a leaf**: neither ksmd nor ksagent
+//< knows `kssrv`, nor it them, so only `tools/` may know them together ("Reference direction
 //< between documents" in `docs/SPEC-documents.md`). The paths and the URL are built in
 //< `tools/opener_aim.kspl`, which a test can check alone. `--list`, `--stop=<folder>` and
 //< `--stop-all` tend the servers an opener left (`tend`).
@@ -19,6 +19,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/http"
+import "std/http_body"
 import "std/io"
 import "std/mem" { Arena }
 import "std/net"
@@ -60,8 +61,9 @@ priv const OPENERS_WIN: U8[][] = U8[][]::{ "explorer" } //< the tool that starts
     //< browser. **Keep a separate list per environment.** A tool that starts counts as "passed on",
     //< so an earlier tool in the list that is there but opens nothing would end the search.
 
-struct Where //< every path this run needs, found once
+struct Where //< every path this run needs, found once, and what it opens
     //< **Find them once and pass them around** (looked up in two places, only one gets fixed).
+    app: aim.App //< what this opener opens: its name, its files' names and its page
     server: U8[] //< the path of the server to start
     tmp: U8[] //< the folder the pages handed to the browser and the servers' logs go in
     state: U8[] //< where the note of the running servers is kept
@@ -70,8 +72,8 @@ struct Where //< every path this run needs, found once
         //< Caution: **Do not throw it away** (when it cannot start, it says what is missing).
     page: U8[] //< the page returned for `/`; without it nothing opens
 
-fn where_from(argv0: U8[], arena: Arena$@): Where //<
-    //< Finds the server and the paths next to it
+fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
+    //< Finds the server and the paths next to it, for what `app` opens
     //< **Where it is not found, `server` is empty.**
     for dir in U8[][]::{ aim.parent_of(argv0), SERVER_NEAR }
         for one in SERVER_NAMES
@@ -79,15 +81,16 @@ fn where_from(argv0: U8[], arena: Arena$@): Where //<
             if fs.can_run(at)
                 home: = aim.parent_of(at)
                 tmp: = fs.join(home, TMP_REL, arena)
-                return Where::{ .server = at, .tmp = tmp,
-                    .state = fs.join(tmp, named(".state", arena), arena),
-                    .lock = fs.join(tmp, named(".lock", arena), arena),
-                    .browser = fs.join(tmp, named(".browser.log", arena), arena),
-                    .page = fs.join(fs.join(home, aim.BUILT, arena), aim.PAGE, arena) }
-    return Where::{ .server = "", .tmp = "", .state = "", .lock = "", .browser = "", .page = "" }
+                return Where::{ .app = app, .server = at, .tmp = tmp,
+                    .state = fs.join(tmp, named(app, ".state", arena), arena),
+                    .lock = fs.join(tmp, named(app, ".lock", arena), arena),
+                    .browser = fs.join(tmp, named(app, ".browser.log", arena), arena),
+                    .page = fs.join(fs.join(home, app.built, arena), app.page, arena) }
+    return Where::{ .app = app, .server = "", .tmp = "", .state = "", .lock = "", .browser = "",
+        .page = "" }
 
-priv fn named(tail: U8[], arena: Arena$@): U8[] //< a file name in `tmp/` for the opener
-    return arena.text().s(aim.FILES).s(tail).take()
+priv fn named(app: aim.App, tail: U8[], arena: Arena$@): U8[] //< a file name in `tmp/`
+    return arena.text().s(app.files).s(tail).take()
 
 fn full(p: U8[], arena: Arena$@): U8[] //<
     //< Turns a relative path into an absolute one, from the working directory
@@ -119,7 +122,7 @@ priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
         return 0
     // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
     answer: =
-        http.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
+        http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
         return 0
     return answer.status
 
@@ -265,11 +268,11 @@ priv fn page_for_browser(open_url: U8[], where: Where, arena: Arena$@): U8[] //<
     //< Writes the page that hands the URL to the browser, and returns its path
     //< **Empty, with the reason said, where it cannot be written.**
     //< Caution: **Hand the browser the page, never the URL** (the reason is at `aim.page_text`).
-    aim.sweep_pages(where.tmp, sys.wall_seconds(), arena)
+    aim.sweep_pages(where.tmp, where.app, sys.wall_seconds(), arena)
     // **Hand it an absolute path**: a browser already running reads a relative one from its own
     // working folder.
     dir: = fs.absolute(where.tmp, arena) catch where.tmp
-    return aim.write_page(open_url, dir, arena) catch
+    return aim.write_page(open_url, where.app, dir, arena) catch
         io.err()
             .s("\{sys.program_name()\}: cannot write the page for the browser in \{where.tmp\}\n")
         return ""
@@ -287,7 +290,7 @@ priv fn start_browser(page: U8[], where: Where, arena: Arena$@): Bool //<
         return true
     return false
 
-priv fn tell_how(doc: U8[], show_only: Bool, page: U8[], log: U8[]) //<
+priv fn tell_how(doc: U8[], show_only: Bool, page: U8[], log: U8[], tip: U8[]) //<
     //< The instructions printed after it opens
     //< `page` is the page handed to the browser, empty where none was; `log` is what starting the
     //< browser said.
@@ -296,7 +299,7 @@ priv fn tell_how(doc: U8[], show_only: Bool, page: U8[], log: U8[]) //<
     //< Caution: **Say how to open it by hand even when the browser was started.**
     io.out().s("\n")
     io.out().s("  * this page opens \{doc\} itself\n")
-    io.out().s("  * \{aim.TIP\}\n")
+    io.out().s("  * \{tip\}\n")
     if show_only
         io.out()
             .s("  * hand the URL over to its very end (drop the token part and the page cannot read \
@@ -308,18 +311,18 @@ priv fn tell_how(doc: U8[], show_only: Bool, page: U8[], log: U8[]) //<
                 said: \{log\})\n")
     io.out().s("  * --show puts the whole URL out, token included, and starts no browser\n")
 
-priv fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, arena: Arena$@) //<
+fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, arena: Arena$@) //<
     //< Passes the URL to the browser and prints the instructions
     //< Caution: **Do not copy it into two places.** Both the "reused" and the "started" paths need
     //< it; copied, only one gets fixed. With `--show`, nothing is passed to the browser.
     if show_only
-        tell_how(doc, true, "", "")
+        tell_how(doc, true, "", "", where.app.tip)
         return
     page: = page_for_browser(open_url, where, arena)
     if page.len > 0 && !start_browser(page, where, arena)
         io.err()
             .s("\{sys.program_name()\}: could not start a browser. Open \{page\} in one yourself\n")
-    tell_how(doc, false, page, where.browser)
+    tell_how(doc, false, page, where.browser, where.app.tip)
 
 priv fn wait_for_url(log: U8[], child: subproc.Child$@): U8[] //<
     //< The URL the server writes to its log once it is up, or "" after `wait_steps` tries
@@ -383,11 +386,11 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
     // Caution: **Send the output to a file**: the token appears only on that one line. **Make it
     // for its owner alone first**; the server's output then goes into that file.
     log: = fs.join(where.tmp,
-        arena.text().s(aim.FILES).c('.').s(serve_at).s(LOG_EXT).take(), arena)
+        arena.text().s(where.app.files).c('.').s(serve_at).s(LOG_EXT).take(), arena)
     aim.write_owned(log, "") catch
         io.err().s("\{sys.program_name()\}: cannot make the log: \{log\}\n")
         return Opened::{ .url = "", .log = "", .child = .none }
-    // Caution: **Name the page from outside the root** (the reason is at `aim.PAGE`).
+    // Caution: **Name the page from outside the root** (the reason is at `aim.App.page`).
     // **The idle stop is passed only when this tool exits** (with `--show`, Ctrl+C is right there;
     // `--idle` in `kssrv/main.kspl`).
     all: U8[][6] = ::{ where.server, serve_at, root, "--local",
@@ -395,7 +398,7 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
         arena.text().s("--idle=\{IDLE_HOLD\}").take() }
     told: = U8[][]::all
     argv: = told.sub(0, 5) if show_only else told
-    $child: = subproc.spawn_redirect(argv, "", log, log) catch
+    $child: = spawn_server(argv, log, show_only) catch
         // **Say what to check.** Either the server or the log can be the cause. Naming one alone
         // leads to suspecting a file that is fine.
         io.err()
@@ -417,6 +420,19 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
         io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
     return Opened::{ .url = url, .log = log, .child = .some(child) }
 
+priv fn spawn_server( //< starts the server, both its outputs to `log`
+    //< Caution: **With `--show`, keep it on this console** (`subproc.spawn_beside`). It has no idle
+    //< stop then. On Windows only a child on this console gets the Ctrl+C that stops this tool, so
+    //< it would otherwise run for good. Without `--show` it outlives this tool, and a double click
+    //< has no console to share.
+    argv: U8[][],
+    log: U8[],
+    show_only: Bool,
+): subproc.Child!subproc.Spawn_error
+    if show_only
+        return subproc.spawn_beside(argv, "", log, log)!
+    return subproc.spawn_redirect(argv, "", log, log)!
+
 fn hand_over( //< prints the URL, hands it to the browser, and says what happens next
     //< Returns the exit code. **A server this run started is left running** for the next open
     //< (`reusable`), unless `--show` asked to wait on it here.
@@ -428,9 +444,9 @@ fn hand_over( //< prints the URL, hands it to the browser, and says what happens
     where: Where,
     arena: Arena$@,
 ): I32
-    // Caution: **Put the token out only with `--show`**, asked for at a terminal. A double-click
-    // sends the output where others can read it (the system journal on Linux). The URL with its
-    // token reads and writes every file in the folder served.
+    // Caution: **On opening, put the token out only with `--show`**, asked for at a terminal. A
+    // double-click sends the output where others can read it (the system journal on Linux). The
+    // URL with its token reads and writes every file in the folder served.
     if show_only
         io.out().s("\{open_url\}\n")
     else
@@ -442,7 +458,7 @@ fn hand_over( //< prints the URL, hands it to the browser, and says what happens
         // behind per document for someone not watching a terminal (a double click).
         if !show_only
             io.out().s("  * the server stays (the next open uses this one)\n")
-            io.out().s("  * it stops itself once every \{aim.APP_NAME\} tab has been closed\n")
+            io.out().s("  * it stops itself once every \{where.app.name\} tab has been closed\n")
             io.out()
                 .s("  * --list shows the servers left running, --stop=\{root\} stops this one\n\n")
             return 0

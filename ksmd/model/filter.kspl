@@ -1,0 +1,46 @@
+//< A column's filter, as the `filter` attribute saves it: which rows the column lets show
+//< `filter=",in:apple|fig,"` holds one entry per column, empty for a column that narrows nothing.
+//< An entry is `in:` and the shown values that stay, separated by `|`, where an empty value stands
+//< for empty cells. Or it is a condition: `is:`, `not:`, `contains:`, `above:` or `below:` and a
+//< value, or `empty` or `filled` alone. A value is the text a cell shows, in lower case since the
+//< page compares without regard to case. `%25`, `%2C` and `%7C` stand for `%`, `,` and `|`.
+import "std/chars"
+import "std/str"
+
+const MAX_FILTER: Sz = 65536 //< the bytes of one column's entry
+
+fn is_filter_entry(entry: U8[]): Bool //< whether an entry can be saved; empty for no filter
+    if entry.len == 0 || entry.equals("empty") || entry.equals("filled")
+        return true
+    if entry.len > MAX_FILTER
+        return false
+    $at: Sz = 0
+    for at < entry.len && entry[at] != ':'
+        at += 1
+    if at == entry.len
+        return false
+    kind: = entry.sub(0, at)
+    value: = entry.sub_from(at + 1)
+    if kind.equals("in")
+        return is_value(value, true)
+    known: =
+        kind.equals("is") || kind.equals("not") || kind.equals("contains") ||
+        kind.equals("above") || kind.equals("below")
+    return known && value.len > 0 && is_value(value, false)
+
+priv fn is_value(text: U8[], listed: Bool): Bool //<
+    //< No capital A to Z or `,`, and `%` only in its three escapes; a `|` separates values where
+    //< `listed` says so
+    $i: Sz = 0
+    for i < text.len
+        c: = text[i]
+        if c == ',' || (c >= 'A' && c <= 'Z') || (c == '|' && !listed)
+            return false
+        if c == '%'
+            escape: = text.sub(i, 3) if i + 3 <= text.len else ""
+            if !escape.equals("%25") && !escape.equals("%2C") && !escape.equals("%7C")
+                return false
+            i += 3
+            continue
+        i += 1
+    return true

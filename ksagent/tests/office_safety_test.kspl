@@ -1,0 +1,453 @@
+//< Word and Excel files from anyone: DEFLATE against zlib, zip bombs, XML that asks too much, and
+//< files damaged at random, none of which may crash ksagent, grow its output past the cap, or
+//< take more memory than a small bound
+//< `deflate_cases.bin` holds raw DEFLATE that Python's `zlib` wrote at each of its strategies,
+//< with the SHA-256 of what it packed (`make_office_fixtures.py` gives the layout).
+import "ksagent/office/excel"
+import "ksagent/office/inflate"
+import "ksagent/office/word"
+import "ksagent/office/xml"
+import "ksagent/office/zip" { Zip }
+import "std/bytes"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/prng"
+import "std/sha256"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+embed "ksagent/tests/office_data/deflate_cases.bin" as deflate_cases
+embed "ksagent/tests/office_data/rules.docx" as rules_docx
+embed "ksagent/tests/office_data/leave.xlsx" as leave_xlsx
+
+priv const TRIALS: Sz = 300 //< the damaged copies tried per file and per way of damaging it
+priv const SMALL_CAP: Sz = 4096 //< the view cap the damaged copies get, so it too is reached
+
+priv struct Packed //< one DEFLATE case
+    name: U8[]
+    size: Sz //< the bytes it unpacks to
+    digest: U8[] //< their SHA-256
+    data: U8[]
+
+priv fn cases(): List<|Packed|> //< every case in `deflate_cases.bin`
+    $out: = List<|Packed|>(null)
+    count: = Sz::deflate_cases.get_u32_le(4)
+    $at: Sz = 8
+    for _i in Range.asc(count)
+        n: = Sz::deflate_cases.get_u32_le(at)
+        size: = Sz::deflate_cases.get_u32_le(at + 4)
+        k: = Sz::deflate_cases.get_u32_le(at + 8)
+        at += 12
+        out
+            .push(Packed::{ .name = deflate_cases.sub(at, n), .size = size,
+            .digest = deflate_cases.sub(at + n, 32),
+            .data = deflate_cases.sub(at + n + 32, k) })
+        at += n + 32 + k
+    return out
+
+priv fn inflated(data: U8[], size: Sz, arena: Arena$@): U8[]!U8[] //<
+    //< `data` unpacked to `size` bytes
+    out: = U8$[]::{ .ptr = U8$@::arena.alloc(size + 1), .len = size }
+    inflate.inflate(data, out)!
+    return out
+
+fn test_deflate_unpacks_as_zlib_packed()
+    verdict.start("[ksagent] DEFLATE unpacks each of zlib's block kinds byte for byte")
+    defer arena: = Arena(1024 * 1024)
+    defer $all: = cases()
+    verdict.check("the cases are there", all.len >= 10, "")
+    for i in Range.asc(all.len)
+        c: = all.get(i)
+        got: = inflated(c.data, c.size, arena) catch why
+            verdict.check(c.name, false, why)
+            continue
+        digest: = sha256.hash(got)
+        verdict.check(arena.text().s(c.name).s(" unpacks to the bytes zlib packed").take(),
+            (U8[]::digest).equals(c.digest), "")
+        if c.size == 0
+            continue
+        short: = inflated(c.data.sub(0, c.data.len / 2), c.size, arena)
+        long_out: = inflated(c.data, c.size + 1, arena)
+        small_out: = inflated(c.data, c.size - 1, arena)
+        verdict.check(arena.text().s(c.name).s(": cut short, or given a wrong size, it is refused")
+            .take(), short.is_err() && long_out.is_err() && small_out.is_err(), "")
+
+// ==========================================
+// Zip files made here, to hold what no fixture should
+// ==========================================
+
+priv struct Entry_spec //< one entry of a zip made for a test
+    name: U8[]
+    data: U8[] //< the bytes as stored
+    method: U16 //< 0 stored, 8 DEFLATE
+    size: Sz //< the size it declares unpacked
+    crc: U32
+
+priv fn stored(name: U8[], data: U8[]): Entry_spec //< an entry stored as it is
+    return Entry_spec::{ .name = name, .data = data, .method = 0U16, .size = data.len,
+        .crc = data.crc32(0xFFFFFFFFU32) ^ 0xFFFFFFFFU32 }
+
+priv fn zip_of(entries: Entry_spec[], arena: Arena$@): U8[] //< the entries as one zip file
+    out: = arena.text()
+    $at: Sz = 0
+    $offsets: = List<|Sz|>(arena)
+    for e in entries
+        offsets.push(at)
+        u32(out, 0x04034b50U32)
+        u16(out, 20)
+        u16(out, 0)
+        u16(out, e.method)
+        u32(out, 0U32)
+        u32(out, e.crc)
+        u32(out, U32::e.data.len)
+        u32(out, U32::e.size)
+        u16(out, I32::e.name.len)
+        u16(out, 0)
+        out.s(e.name).s(e.data)
+        at += 30 + e.name.len + e.data.len
+    cd_at: = at
+    for k in Range.asc(entries.len)
+        e: = entries[k]
+        u32(out, 0x02014b50U32)
+        u16(out, 20)
+        u16(out, 20)
+        u16(out, 0)
+        u16(out, e.method)
+        u32(out, 0U32)
+        u32(out, e.crc)
+        u32(out, U32::e.data.len)
+        u32(out, U32::e.size)
+        u16(out, I32::e.name.len)
+        for _z in Range.asc(4)
+            u16(out, 0)
+        u32(out, 0U32)
+        u32(out, U32::offsets.get(k))
+        out.s(e.name)
+        at += 46 + e.name.len
+    u32(out, 0x06054b50U32)
+    u16(out, 0)
+    u16(out, 0)
+    u16(out, I32::entries.len)
+    u16(out, I32::entries.len)
+    u32(out, U32::(at - cd_at))
+    u32(out, U32::cd_at)
+    u16(out, 0)
+    return out.take()
+
+priv fn u16(out: str.Arena_text$@, v: I32) //< two bytes, least significant first
+    out.c(U8::(v & 0xFF)).c(U8::((v >> 8) & 0xFF))
+
+priv fn u32(out: str.Arena_text$@, v: U32) //< four bytes, least significant first
+    out.c(U8::(v & 0xFFU32)).c(U8::((v >> 8U32) & 0xFFU32)).c(U8::((v >> 16U32) & 0xFFU32))
+        .c(U8::(v >> 24U32))
+
+fn test_a_zip_bomb_is_refused_before_it_unpacks()
+    verdict.start("[ksagent] a zip that unpacks past the caps is refused, not unpacked")
+    defer arena: = Arena(1024 * 1024)
+    defer $all: = cases()
+    $run: = all.get(0)
+    for i in Range.asc(all.len)
+        if all.get(i).name.equals("long_run")
+            run = all.get(i)
+    huge: = Entry_spec::{ .name = "word/document.xml", .data = run.data, .method = 8U16,
+        .size = 100 * 1024 * 1024, .crc = 0U32 }
+    $z: = Zip.open(zip_of(Entry_spec[]::{ huge }, arena), arena) catch panic("the zip opens")
+    why: = z.part("word/document.xml", arena).is_err()
+    msg: = z.part("word/document.xml", arena) catch e
+        fallback e
+    verdict.check("a part that declares 100 MiB is refused by its size, before unpacking",
+        why && msg.find_str("more than 64 MiB").is_some(), msg)
+    lying: = Entry_spec::{ .name = "word/document.xml", .data = run.data, .method = 8U16,
+        .size = 1000, .crc = 0U32 }
+    $z2: = Zip.open(zip_of(Entry_spec[]::{ lying }, arena), arena) catch panic("the zip opens")
+    msg2: = z2.part("word/document.xml", arena) catch e
+        fallback e
+    verdict.check("a part that unpacks to more than it declares stops at what it declares",
+        msg2.find_str("more bytes than its size says").is_some(), msg2)
+    many: = arena.text().c('P').c('K').c(5U8).c(6U8)
+    u16(many, 0)
+    u16(many, 0)
+    u16(many, 20000)
+    u16(many, 20000)
+    u32(many, 0U32)
+    u32(many, 0U32)
+    u16(many, 0)
+    crowd: = Zip.open(many.take(), arena)
+    verdict.check("a zip that names more than 10000 parts is refused", crowd.is_err(), "")
+    twice: =
+        zip_of(Entry_spec[]::{ stored("a.xml", "<a/>"), stored("A.XML", "<b/>") }, arena)
+    verdict.check("a zip that names one part twice is refused",
+        Zip.open(twice, arena).is_err(), "")
+
+// ==========================================
+// XML that asks for more than a part should hold
+// ==========================================
+
+priv fn all_text(src: U8[], arena: Arena$@): U8[]!U8[] //< every text in a part, read to its end
+    $x: = xml.reader(src, arena)!
+    out: = arena.text()
+    for
+        ev: = x.next()!
+        if ev == xml.Event.done
+            return out.take()
+        if ev == xml.Event.text
+            out.s(x.text_of(arena)!)
+
+fn test_xml_expands_no_entity_of_its_own()
+    verdict.start("[ksagent] XML is read with no DTD and only XML's own references")
+    defer arena: = Arena(64 * 1024)
+    good: = all_text("<a>&lt;&amp;&#x41;&#12354;<![CDATA[&lt;]]></a>", arena) catch e
+        fallback e
+    verdict.check("the five predefined entities, numeric references and CDATA are read",
+        good.equals("<&Aあ&lt;"), good)
+    bad: = U8[][]::{ "<!DOCTYPE a [<!ENTITY b \"bbbbbbbb\"><!ENTITY c \"&b;&b;&b;&b;\">]><a>&c;</a>",
+        "<a>&nbsp;</a>", "<a>&#0;</a>", "<a>&#xD800;</a>", "<a>&amp</a>", "<a><b></a></b>", "<a>",
+        "</a>", "<a x=\"1></a>" }
+    for k in Range.asc(bad.len)
+        r: = all_text(bad[k], arena)
+        verdict.check(arena.text().s("refused: ").s(bad[k]).take(), r.is_err(), "")
+    control: = arena.text().s("<a>").c(1U8).s("</a>").take()
+    verdict.check("refused: a control character", all_text(control, arena).is_err(), "")
+
+// ==========================================
+// Files damaged at random
+// ==========================================
+
+priv const MARKUP: U8[] = "<>/&;\"'= #x0123456789abcdefrtvpcsi" //< bytes XML gives meaning to
+
+priv struct Damage //< what the trials of one file came to
+    read: Sz //< still read, within the cap
+    refused: Sz //< refused with a reason
+    over: Sz //< read past the cap, or refused with no reason: each one a failure
+
+priv fn convert(is_word: Bool, data: U8[], cap: Sz, d: Damage$@, arena: Arena$@) //<
+    //< Reads one damaged file, and counts how it went
+    view: =
+        (word.text_of(data, cap, arena) if is_word else excel.text_of(data, cap, arena)) catch why
+        if why.len > 0
+            d.refused += 1
+        else
+            d.over += 1
+        return
+    if view.len <= cap
+        d.read += 1
+    else
+        d.over += 1
+
+priv fn damaged(data: U8[], rng: prng.Prng$@, arena: Arena$@): U8[] //<
+    //< A copy with a few bytes changed: to random bytes, to markup, or cut short
+    out: = arena.dup_str(data)
+    if data.len == 0
+        return out
+    if rng.chance(15)
+        return out.sub(0, rng.below(data.len))
+    for _k in Range.asc(1 + rng.below(4))
+        at: = rng.below(data.len)
+        out[at] =
+            (U8::rng.below(256) if rng.chance(50) else MARKUP[rng.below(MARKUP.len)])
+    return out
+
+fn test_a_damaged_file_is_refused_or_read_within_the_cap()
+    verdict.start("[ksagent] files damaged at random are read or refused, never crash or overflow")
+    defer arena: = Arena(1024 * 1024)
+    $rng: = prng.Prng(20261028U64)
+    files: = U8[][]::{ rules_docx, leave_xlsx }
+    for f in Range.asc(2)
+        is_word: = f == 0
+        $whole: = Damage::{ .read = 0, .refused = 0, .over = 0 }
+        for _t in Range.asc(TRIALS)
+            defer trial: = Arena(256 * 1024)
+            convert(is_word, damaged(files[f], rng@, trial), SMALL_CAP, whole@, trial)
+        $parts: = Damage::{ .read = 0, .refused = 0, .over = 0 }
+        for _t in Range.asc(TRIALS)
+            defer trial: = Arena(256 * 1024)
+            convert(is_word, with_damaged_part(files[f], is_word, rng@, trial), SMALL_CAP, parts@,
+                trial)
+        name: = "the Word file" if is_word else "the Excel file"
+        verdict.check(arena.text().s(name).s(", its bytes changed: every copy read or refused")
+            .s(" (\{whole.read\} read, \{whole.refused\} refused)").take(),
+            whole.over == 0 && whole.read + whole.refused == TRIALS, "")
+        verdict.check(arena.text().s(name).s(", one XML part changed: every copy read or refused")
+            .s(" (\{parts.read\} read, \{parts.refused\} refused)").take(),
+            parts.over == 0 && parts.read > 0 && parts.refused > 0, "")
+
+priv const WORD_PARTS: U8[][6] = ::{ "_rels/.rels", "word/_rels/document.xml.rels",
+    "word/document.xml", "word/styles.xml", "word/numbering.xml", "word/footnotes.xml" }
+priv const EXCEL_PARTS: U8[][6] = ::{ "_rels/.rels", "xl/_rels/workbook.xml.rels",
+    "xl/workbook.xml", "xl/sharedStrings.xml", "xl/styles.xml", "xl/worksheets/sheet1.xml" }
+
+priv fn with_damaged_part(file: U8[], is_word: Bool, rng: prng.Prng$@, arena: Arena$@): U8[] //<
+    //< The file made again from the parts it is read by, one of them damaged
+    //< A changed byte in the zip mostly fails its checksum; this reaches the XML readers instead.
+    names: = U8[][]::WORD_PARTS if is_word else U8[][]::EXCEL_PARTS
+    $z: = Zip.open(file, arena) catch panic("the fixture opens")
+    which: = rng.below(names.len)
+    $entries: = List<|Entry_spec|>(arena)
+    for k in Range.asc(names.len)
+        body: = z.part(names[k], arena) catch panic("the fixture holds its parts")
+        entries
+            .push(stored(names[k], damaged(body, rng, arena) if k == which else body))
+    return zip_of(entries.slice(), arena)
+
+fn test_a_tall_merge_fills_only_the_rows_that_stand()
+    verdict.start("[ksagent] a merge over a million rows fills only the rows the sheet holds")
+    defer arena: = Arena(256 * 1024)
+    sheet: =
+        "<worksheet><sheetData><row r=\"1\"><c r=\"A1\" \
+            t=\"inlineStr\"><is><t>区分</t></is></c></row><row r=\"2\"><c r=\"B2\" \
+            t=\"inlineStr\"><is><t>x</t></is></c></row></sheetData><mergeCells><mergeCell \
+            ref=\"A1:A1048576\"/></mergeCells></worksheet>"
+    book: = "<workbook><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"xl/workbook.xml\"/></Relationships>"
+    book_rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/worksheet\" \
+            Target=\"sheet.xml\"/></Relationships>"
+    data: =
+        zip_of(Entry_spec[]::{ stored("_rels/.rels", rels), stored("xl/workbook.xml", book),
+        stored("xl/_rels/workbook.xml.rels", book_rels), stored("xl/sheet.xml", sheet) }, arena)
+    view: = excel.text_of(data, SMALL_CAP, arena) catch e
+        fallback e
+    verdict.check("two lines, the merged text repeated in the second",
+        view.equals("S!1: 区分\nS!2: 区分 | x\n"), view)
+
+// ==========================================
+// Files of a few bytes that ask for much work
+// ==========================================
+
+priv const VIEW_CAP: Sz = 8 * 1024 * 1024 //< the cap the tools give a view
+priv const SMALL_WORK: Sz = 2 * 1024 * 1024 //< the memory a small file may take to be read
+    //< Each file below is a few KiB, and asks for far more work than its text can show.
+
+priv struct Reading //< what reading one file came to
+    view: U8[] //< its text view; empty where it was refused
+    why: U8[] //< why it was refused; empty where it was read
+    used: Sz //< the bytes of memory the reading took
+
+priv fn reading(is_word: Bool, data: U8[], cap: Sz, arena: Arena$@): Reading //<
+    //< Reads one file in an arena of its own, and measures the memory it took
+    defer own: = Arena(64 * 1024)
+    $r: = Reading::{ .view = "", .why = "", .used = 0 }
+    view: =
+        (word.text_of(data, cap, own) if is_word else excel.text_of(data, cap, own)) catch why
+        r.why = arena.dup_str(why)
+        fallback ""
+    r.view = arena.dup_str(view)
+    r.used = own.get_total_used()
+    return r
+
+priv fn repeated(text: U8[], n: Sz, arena: Arena$@): U8[] //< the text written `n` times
+    out: = arena.text()
+    for _k in Range.asc(n)
+        out.s(text)
+    return out.take()
+
+priv fn docx_of(document: U8[], numbering: U8[], arena: Arena$@): U8[] //<
+    //< A Word file of a document part, and a numbering part where it is not empty
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"word/document.xml\"/></Relationships>"
+    doc_rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/numbering\" \
+            Target=\"numbering.xml\"/></Relationships>"
+    $entries: = List<|Entry_spec|>(arena)
+    entries.push(stored("_rels/.rels", rels))
+    entries.push(stored("word/document.xml", document))
+    if numbering.len > 0
+        entries.push(stored("word/_rels/document.xml.rels", doc_rels))
+        entries.push(stored("word/numbering.xml", numbering))
+    return zip_of(entries.slice(), arena)
+
+priv fn worked(what: U8[], r: Reading, arena: Arena$@): U8[] //< a check's name, with the memory
+    return arena.text().s(what).s(" (\{r.used / 1024\} KiB; at most \{SMALL_WORK / 1024\} KiB)")
+        .take()
+
+fn test_a_sheet_listed_many_times_is_refused()
+    verdict.start("[ksagent] a workbook that lists one sheet many times is refused, at once")
+    defer arena: = Arena(1024 * 1024)
+    book: = arena.text().s("<workbook><sheets>")
+        .s(repeated("<sheet name=\"s\" sheetId=\"1\" r:id=\"rId1\"/>", 1000, arena))
+        .s("</sheets></workbook>").take()
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"xl/workbook.xml\"/></Relationships>"
+    book_rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/worksheet\" \
+            Target=\"sheet.xml\"/></Relationships>"
+    data: =
+        zip_of(Entry_spec[]::{ stored("_rels/.rels", rels), stored("xl/workbook.xml", book),
+        stored("xl/_rels/workbook.xml.rels", book_rels),
+        stored("xl/sheet.xml", "<worksheet><sheetData/></worksheet>") }, arena)
+    r: = reading(false, data, VIEW_CAP, arena)
+    verdict.check(worked("refused, naming the sheet listed twice", r, arena),
+        r.why.find_str("lists one sheet twice").is_some() && r.used < SMALL_WORK, r.why)
+
+fn test_many_sheets_take_little_memory_each()
+    verdict.start("[ksagent] each sheet of a workbook takes little memory of its own")
+    defer arena: = Arena(1024 * 1024)
+    book: = arena.text().s("<workbook><sheets>")
+    rels: = arena.text().s("<Relationships>")
+    $entries: = List<|Entry_spec|>(arena)
+    for k in Range.asc(300)
+        book.s("<sheet name=\"s\{k\}\" r:id=\"r\{k\}\"/>")
+        rels.s("<Relationship Id=\"r\{k\}\" Type=\"x/worksheet\" Target=\"s\{k\}.xml\"/>")
+        entries
+            .push(stored(arena.text().s("xl/s\{k\}.xml").take(), "<worksheet/>"))
+    top: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"xl/workbook.xml\"/></Relationships>"
+    entries.push(stored("_rels/.rels", top))
+    entries.push(stored("xl/workbook.xml", book.s("</sheets></workbook>").take()))
+    entries
+        .push(stored("xl/_rels/workbook.xml.rels", rels.s("</Relationships>").take()))
+    r: = reading(false, zip_of(entries.slice(), arena), VIEW_CAP, arena)
+    verdict.check(worked("300 empty sheets are read", r, arena),
+        r.why.len == 0 && r.used < SMALL_WORK, r.why)
+
+fn test_cells_before_a_row_stop_at_the_grid()
+    verdict.start("[ksagent] cells skipped before a table row stop at the widest grid read")
+    defer arena: = Arena(1024 * 1024)
+    doc: = arena.text().s("<document><body><tbl><tr>")
+        .s(repeated("<gridBefore val=\"1000\"/>", 1000, arena))
+        .s("<tc><p><r><t>x</t></r></p></tc></tr></tbl></body></document>").take()
+    r: = reading(true, docx_of(doc, "", arena), VIEW_CAP, arena)
+    verdict.check(worked("the row is read, its cell after 4096 empty ones", r, arena),
+        r.why.len == 0 && r.view.ends_with(" | x\n") && r.view.len < 4097 * 3 &&
+        r.used < SMALL_WORK, r.why)
+
+priv fn numbering_of(pattern: U8[], arena: Arena$@): U8[] //< a list whose one level shows `pattern`
+    return arena.text()
+        .s("<numbering><abstractNum abstractNumId=\"1\"><lvl ilvl=\"0\"><numFmt val=\"decimal\"/>")
+        .s("<lvlText val=\"").s(pattern).s("\"/></lvl></abstractNum>")
+        .s("<num numId=\"1\"><abstractNumId val=\"1\"/></num></numbering>").take()
+
+fn test_an_empty_numbered_paragraph_builds_no_label()
+    verdict.start("[ksagent] a numbered paragraph with no text counts, and builds no label")
+    defer arena: = Arena(1024 * 1024)
+    para: = "<p><pPr><numPr><numId val=\"1\"/></numPr></pPr></p>"
+    doc: = arena.text().s("<document><body>").s(repeated(para, 10000, arena))
+        .s("<p><pPr><numPr><numId val=\"1\"/></numPr></pPr><r><t>last</t></r></p>")
+        .s("</body></document>").take()
+    r: =
+        reading(true,
+        docx_of(doc, numbering_of(repeated("%1.", 40, arena), arena), arena), VIEW_CAP, arena)
+    verdict.check(worked("one line, the last paragraph's, numbered after the empty ones", r, arena),
+        r.why.len == 0 && r.view.starts_with("10000.10000.") && r.view.ends_with(". last\n") &&
+        r.used < SMALL_WORK, r.view if r.why.len == 0 else r.why)
+    long: =
+        reading(true,
+        docx_of(doc, numbering_of(repeated("%1", 100000, arena), arena), arena), VIEW_CAP, arena)
+    verdict.check(worked("a list number pattern of 100000 numbers is refused", long, arena),
+        long.why.find_str("lvlText").is_some() && long.used < SMALL_WORK, long.why)
+
+fn test_work_past_the_budget_is_refused()
+    verdict.start("[ksagent] a file whose reading takes more work than its view may is refused")
+    defer arena: = Arena(1024 * 1024)
+    doc: = arena.text().s("<document><body><tbl><tr>").s(repeated("<tc/>", 20000, arena))
+        .s("</tr></tbl></body></document>").take()
+    r: = reading(true, docx_of(doc, "", arena), SMALL_CAP, arena)
+    verdict.check(worked("20000 empty cells, read with a view of 4 KiB, are refused", r, arena),
+        r.why.find_str("than are read").is_some() && r.used < SMALL_WORK, r.why)

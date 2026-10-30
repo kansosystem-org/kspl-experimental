@@ -1,6 +1,6 @@
 //< A `POST /v1/chat/completions` body read into the conversation and the choices it asks for
-//< **A field is applied, or refused by name**: `stream` set to true, and every field in
-//< `UNAPPLIED` not set to the value that changes nothing. A refusal is a sentence the client shows.
+//< **A field is applied, or refused by name**: every field in `UNAPPLIED` not set to the value that
+//< changes nothing. A refusal is a sentence the client shows.
 //< Caution: **A field in neither list is passed over unseen**: `std/json` does not list an object's
 //< members, so the reader can only ask for the names it knows.
 import "ksai/examples/chat_server/template" { Call, Conversation, Message }
@@ -17,6 +17,8 @@ struct Chat //< one request, read and checked
     cfg: sampler.Sample_config
     seed: U64? //< the sampling's seed; none where the request gave none
     thinking: Bool? //< `chat_template_kwargs.enable_thinking`; none where the request gave none
+    stream: Bool //< whether the answer goes out in pieces as it is generated (`"stream": true`)
+    include_usage: Bool //< `stream_options.include_usage`: a last piece carries the token counts
 
 priv struct Unapplied //< a field this server does not apply, and its value that changes nothing
     name: U8[]
@@ -34,17 +36,24 @@ priv const UNAPPLIED: Unapplied[_] = ::{
     Unapplied::{ .name = "max_completion_tokens", .no_op = "null" },
 }
 
-const STREAM_REFUSED: U8[] =
-    "streaming is not supported: send \"stream\": false. This server answers each request whole, \
-        with a Content-Length." //< the refusal of `"stream": true`
-
 fn read_chat(body: U8[], arena: Arena$@): Chat!U8[] //<
     //< The request a body holds, or why it is refused
     doc: = json.parse(body, arena) catch
         throw "the body is not JSON"
     v: = doc.val
-    if v.get("stream").as_bool().unwrap_or(false)
-        throw STREAM_REFUSED
+    $stream: = false
+    if found: = v.find("stream")
+        stream = found.as_bool() catch
+            throw "stream must be true or false"
+    $include_usage: = false
+    if options: = v.find("stream_options")
+        if !options.equals(.null_val)
+            // Options for an answer sent whole would change nothing, so they are refused.
+            if !stream
+                throw "stream_options is only for \"stream\": true"
+            if found: = options.find("include_usage")
+                include_usage = found.as_bool() catch
+                    throw "stream_options.include_usage must be true or false"
     for u in UNAPPLIED
         if got: = v.find(u.name)
             same: = json.parse(u.no_op, arena) catch panic("UNAPPLIED holds JSON")
@@ -54,7 +63,7 @@ fn read_chat(body: U8[], arena: Arena$@): Chat!U8[] //<
     $chat: = Chat::{ .conv = Conversation::{ .messages =
         read_messages(v.get("messages"), arena)!, .tools = v.get("tools").arr_list(arena),
         .thinking = false }, .max_tokens = 0, .cfg = sampler.Sample_config.greedy(), .seed = .none,
-        .thinking = .none }
+        .thinking = .none, .stream = stream, .include_usage = include_usage }
     if found: = v.get("chat_template_kwargs").find("enable_thinking")
         flag: = found.as_bool() catch
             throw "chat_template_kwargs.enable_thinking must be true or false"

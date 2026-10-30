@@ -1,119 +1,276 @@
-//< The chat file: which question is pending, and how the answer is written back
-import "ksagent/answer" { Lang }
+//< A conversation's files: reading the questions asked, recording each turn, stopping, refusals
+import "ksagent/answer" + { Lang }
 import "ksagent/chat"
+import "ksagent/files"
 import "ksagent/tests/agent_test"
 import "ksagent/tests/stub"
 import "ksagent/watch"
+import "std/chars"
+import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
 import "std/verdict"
 
-priv const FENCED: U8[] =
+priv const ASKED: U8[] =
     """
-%ksmd 1
+{"type": "question", "id": "q1", "text": "How much paid leave?"}
+{"type": "question", "id": "q2", "text": "Is 2 * 3 six?"}
 
-# Notes
-
-## Question
-
-How much paid leave?
-
-## Answer
-
-Ten days.
-
-## Notes
-
-```text
-## Question
-inside a fence
-```
-
-:::table name="t"
-| "Kind" |
-:::
-
-## 質問
-
-有給休暇は何日ですか?
-
-## Question
-
-Asked later.
+{"type": "stop", "id": "q2"}
+{"type": "question", "id": "q3", "text": "有給休暇は何日ですか?"}
 """
 
-fn test_the_pending_question_is_found()
-    verdict.start("[ksagent] the first question with no answer is pending; fences hide headings")
+priv const RECORDED: U8[] =
+    """
+{"type":"question","id":"q1","text":"How much paid leave?","lang":"en"}
+{"type":"answer","id":"q1","state":"checked","text":"**Ten days**, after:\n- six months","sources":[],"removed":[],"notes":[]}
+{"type":"question","id":"q0","text":"Stopped one","lang":"en"}
+{"type":"answer","id":"q0","state":"stopped","text":"","partial":"Ten d","sources":[],"removed":[],"notes":[]}
+"""
+
+fn test_an_ask_file_gives_its_questions_in_order()
+    verdict.start("[ksagent] an ask file gives each question in order, and marks the stopped one")
     defer arena: = Arena(64 * 1024)
-    p: = chat.find_pending(FENCED, arena) catch
-        verdict.check("a pending question is found", false, "")
+    asks: = chat.read_asks(ASKED, arena)
+    verdict.check("three questions, the empty line passed over, none refused",
+        asks.questions.len == 3 && asks.refused.len == 0, "")
+    verdict.check("the text stands as the page wrote it, `*` and Japanese included",
+        asks.questions.get(1).text.equals("Is 2 * 3 six?") &&
+        asks.questions.get(2).text.equals("有給休暇は何日ですか?"),
+        asks.questions.get(1).text)
+    verdict.check("only the question with a stop record is stopped",
+        !asks.questions.get(0).stopped && asks.questions.get(1).stopped &&
+        !asks.questions.get(2).stopped, "")
+
+fn test_a_broken_ask_line_is_refused_alone()
+    verdict.start("[ksagent] each line of an ask file that cannot be read is refused, saying why")
+    defer arena: = Arena(64 * 1024)
+    text: =
+        """
+{"type": "question", "id": "a", "text": "Kept?"}
+{"type": "question", "id": "b", "text": "cut off
+{"type": "question", "id": "a", "text": "Again?"}
+{"type": "question", "id": "x y", "text": "A space in the id"}
+{"type": "stop", "id": "never"}
+{"type": "question", "id": "c", "text": "  "}
+{"type": "edit", "id": "a"}
+[1, 2]
+{"type": "question", "id": "d", "text": "Kept too?", "type": "stop"}
+{"type": "question", "id": "e", "text": "Last"}
+"""
+    asks: = chat.read_asks(text, arena)
+    want: = U8[][]::{ "line 2: it is not one JSON value",
+        "line 3: an earlier line has a question with the same id",
+        "line 4: the id holds a character other than ASCII letters, digits, - and _",
+        "line 5: no earlier line has a question with this id", "line 6: the question has no text",
+        "line 7: its type is neither question nor stop",
+        "line 8: the id must hold 1 to 64 characters", "line 9: it is not one JSON value" }
+    $same: = asks.refused.len == want.len
+    for i in Range.asc(want.len)
+        if same && !asks.refused.get(i).equals(want[i])
+            same = false
+    verdict.check("each broken line is named with its number and its reason", same,
+        asks.refused.get(0) if asks.refused.len > 0 else "")
+    verdict.check("the lines around them are still read",
+        asks.questions.len == 2 && asks.questions.get(0).id.equals("a") &&
+        asks.questions.get(1).id.equals("e"), "")
+
+fn test_a_chat_file_gives_its_turns()
+    verdict.start("[ksagent] a chat file gives the ids answered and the turns sent again")
+    defer arena: = Arena(64 * 1024)
+    rec: = chat.read_chat(RECORDED, arena) catch why
+        verdict.check("the chat file is read", false, why)
         return
-    verdict.check("the pending question is the Japanese one, not the fenced one",
-        p.question.equals("有給休暇は何日ですか?") && p.lang == Lang.ja, p.question)
-    verdict.check("the answered question before it is the history",
-        p.history.len == 1 && p.history.get(0).question.equals("How much paid leave?") &&
-        p.history.get(0).answer.equals("Ten days."), "")
-    answered: = "## Question\n\nOne?\n\n## Answer\n\nYes.\n"
-    verdict.check("an answered question is not answered again",
-        chat.find_pending(answered, arena).is_none(), "")
-    empty: = "## 質問\n\n## Question\n\n"
-    verdict.check("a question with no text yet is passed over",
-        chat.find_pending(empty, arena).is_none(), "")
+    verdict.check("both questions count as answered, the stopped one too",
+        chat.answered(rec@, "q1") && chat.answered(rec@, "q0") && !chat.answered(rec@, "q3"), "")
+    verdict.check("only the answered turn is sent again, its Markdown as it was written",
+        rec.turns.len == 1 &&
+        rec.turns.get(0).answer.equals("**Ten days**, after:\n- six months"),
+        rec.turns.get(0).answer if rec.turns.len > 0 else "")
+    asks: = chat.read_asks(ASKED, arena)
+    p: = chat.find_pending(asks@, rec@, arena) catch
+        verdict.check("a question is pending", false, "")
+        return
+    verdict.check("the pending one is the Japanese question: q1 is answered and q2 stopped",
+        p.id.equals("q3") && p.lang == Lang.ja && p.history.len == 1, p.id)
 
-fn test_an_answer_cannot_add_a_question()
-    verdict.start("[ksagent] an answer's text is escaped, so it starts no heading or block")
+fn test_a_broken_chat_line_refuses_the_file()
+    verdict.start("[ksagent] a chat file with a broken line is refused whole, naming the line")
     defer arena: = Arena(64 * 1024)
-    out: = arena.text()
-    chat.write_text(out, "## Question\n- item *bold* [x]\n1. first\n\n  ::: table", arena)
-    written: = out.take()
-    want: = "\\## Question\\\n\\- item \\*bold\\* \\[x\\]\\\n1\\. first\n\n\\::: table\n"
-    verdict.check("each block mark and inline mark is escaped", written.equals(want), written)
-    verdict.check("so the written answer holds no pending question",
-        chat.find_pending(written, arena).is_none(), "")
+    cases: = U8[][]::{ "{\"type\":\"question\",\"id\":\"q1\",\"text\":\"A\"}\n{\"type\":\"answer\",\"id\":\"q1\"",
+        "line 2: it is not one JSON value",
+        "{\"type\":\"answer\",\"id\":\"q1\",\"state\":\"checked\",\"text\":\"\"}",
+        "line 1: no earlier line has a question with this id",
+        "{\"type\":\"question\",\"id\":\"q1\",\"text\":\"A\"}\n{\"type\":\"answer\",\"id\":\"q1\",\"state\":\"fine\"}",
+        "line 2: its state is none of",
+        "{\"type\":\"question\",\"id\":\"q1\",\"text\":\"A\"}\n{\"type\":\"answer\",\"id\":\"q1\",\"state\":\"failed\"}\n{\"type\":\"answer\",\"id\":\"q1\",\"state\":\"failed\"}",
+        "line 3: an earlier line has an answer with the same id" }
+    $i: Sz = 0
+    for i < cases.len
+        why: = refusal_of(cases[i], arena)
+        verdict.check(arena.text().s("refused: ").s(cases[i + 1]).take(),
+            why.starts_with(cases[i + 1]), why)
+        i += 2
 
-fn test_the_answer_lands_after_its_question(work: U8[], arena: Arena$@)
-    verdict.start("[ksagent] the answer is written after its question, keeping what was added")
-    root: = stub.folder(work, "chat-added", arena)
-    path: = fs.join(root, "team.chat.ksmd", arena)
-    before: = "%ksmd 1\n\n## Question\n\nHow much paid leave?\n\n## Notes\n\nLater.\n"
-    edited: =
-        "%ksmd 1\n\nAdded meanwhile.\n\n## Question\n\nHow much paid leave?\n\n## Notes\n\nLater.\n"
-    io.write_file(path, before) catch panic("the chat file can be written")
-    answer_with(stub.start_editing(U8[][]::{ leave_answer(arena) }, path, edited, arena), root,
-        path, before, arena)
-    after: = io.read_file(path, arena) catch panic("the chat file can be read")
-    want: =
-        "%ksmd 1\n\nAdded meanwhile.\n\n## Question\n\nHow much paid leave?\n\n## Answer\n\nTen \
-            days.\n\nSources:\n\n`rules/leave.md` lines 3–4\n\n> receives 10 days of paid \
-            leave\n\n## Notes\n\nLater.\n"
-    verdict.check("the answer stands after the question, and the added text stays",
-        after.equals(want), after)
-    verdict.check("the question is answered now",
-        chat.find_pending(after, arena).is_none(), "")
+priv fn refusal_of(text: U8[], arena: Arena$@): U8[] //< why a chat file is refused, or empty
+    _r: = chat.read_chat(text, arena) catch why
+        return why
+    return ""
 
-fn test_a_changed_question_gets_no_answer(work: U8[], arena: Arena$@)
-    verdict.start("[ksagent] a question changed while it was answered gets no answer")
-    root: = stub.folder(work, "chat-changed", arena)
-    path: = fs.join(root, "team.chat.ksmd", arena)
-    before: = "%ksmd 1\n\n## Question\n\nHow much paid leave?\n"
-    edited: = "%ksmd 1\n\n## Question\n\nHow much sick leave?\n"
-    io.write_file(path, before) catch panic("the chat file can be written")
-    answer_with(stub.start_editing(U8[][]::{ leave_answer(arena) }, path, edited, arena), root,
-        path, before, arena)
-    after: = io.read_file(path, arena) catch panic("the chat file can be read")
-    verdict.check("the file holds the person's change, and no answer", after.equals(edited), after)
-
-priv fn answer_with(s: stub.Stub$@, root: U8[], path: U8[], text: U8[], arena: Arena$@) //<
-    //< Answers the pending question of `text` through the stand-in, as `watch` would
-    p: = chat.find_pending(text, arena) catch
-        panic("the file holds a pending question")
-    _wrote: = watch.answer_one(agent_test.job_at(s.port, root, arena), path, p, arena)
+fn test_a_turn_is_recorded_after_the_others(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a question's record and its answer's go after the turns recorded")
+    root: = stub.folder(work, "chat-turn", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    chat_file: = files.chat_path(ask, arena)
+    io.write_file(ask, ASKED) catch panic("the ask file can be written")
+    io.write_file(chat_file, RECORDED) catch panic("the chat file can be written")
+    src: = stub.source("規程/休暇.md", 3, 3, "入社6か月後に10日付与する", arena)
+    cites: = stub.list_of(U8[][]::{ src }, arena)
+    call: = stub.answer_call("**10日**です。\n\n| 期間 | 日数 |\n| -- | -- |", cites, arena)
+    reply: = stub.one_call(call, arena)
+    s: = stub.start(U8[][]::{ reply }, arena)
+    watch.answer_pending(agent_test.job_at(s.port, root, arena), ask, arena)
     stub.finish(s)
+    after: = io.read_file(chat_file, arena) catch panic("the chat file can be read")
+    want: =
+        """
+{"type":"question","id":"q3","text":"有給休暇は何日ですか?","lang":"ja"}
+{"type":"answer","id":"q3","state":"checked","text":"**10日**です。\n\n| 期間 | 日数 |\n| -- | -- |","sources":[{"path":"規程/休暇.md","from_line":3,"to_line":3,"quote":"入社6か月後に10日付与する"}],"removed":[],"notes":[]}
+
+"""
+    verdict.check("the turn follows the earlier ones, the model's Markdown kept as it wrote it",
+        after
+        .equals(arena.text().s(RECORDED).s(want.trim_end()).c('\n').take()), after)
+    verdict.check("the earlier answer went to the model as it was written, with no escape",
+        s.bodies.len == 1 &&
+        s.bodies.get(0).find_str("**Ten days**, after:\\n- six months").is_some() &&
+        s.bodies.get(0).find_str("\\\\*").is_none(), s.bodies.get(0))
+    live: = io.read_file(files.live_path(ask, arena), arena) catch
+        fallback ""
+    verdict.check("the live file says the turn is recorded",
+        live.equals("{\"id\":\"q3\",\"phase\":\"done\"}\n"), live)
     stub.release(s)
 
-priv fn leave_answer(arena: Arena$@): U8[] //< a reply answering the paid-leave question
+fn test_a_stopped_question_is_recorded_as_stopped(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a question stopped on the page while it streams is recorded stopped")
+    root: = stub.folder(work, "chat-stop", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    asked: = "{\"type\": \"question\", \"id\": \"q1\", \"text\": \"How much paid leave?\"}\n"
+    io.write_file(ask, asked) catch panic("the ask file can be written")
     src: = stub.source("rules/leave.md", 3, 4, "receives 10 days of paid leave", arena)
     cites: = stub.list_of(U8[][]::{ src }, arena)
-    return stub.one_call(stub.answer_call("Ten days.", cites, arena), arena)
+    args: = stub.answer_args("Ten days, after six months of work, and more.", cites, arena)
+    slow: = stub.streamed_call("", "answer", args, arena)
+    stopped: = arena.text().s(asked).s("{\"type\": \"stop\", \"id\": \"q1\"}\n").take()
+    s: = stub.start_dripping(U8[][]::{ slow }, ask, stopped, 100, arena)
+    watch.answer_pending(agent_test.job_at(s.port, root, arena), ask, arena)
+    stub.finish(s)
+    after: = io.read_file(files.chat_path(ask, arena), arena) catch
+        fallback ""
+    verdict.check("the answer is recorded as stopped, with no text and no source",
+        after.find_str("\"state\":\"stopped\",\"text\":\"\",\"sources\":[]").is_some() &&
+        after
+        .find_str("\"notes\":[\"Stopped without an answer: the question was stopped on the page\"]")
+        .is_some(), after)
+    verdict.check("no line of it reads as checked", after.find_str("\"checked\"").is_none(), after)
+    stub.release(s)
+
+fn test_unchecked_text_stays_apart_from_the_answer()
+    verdict.start("[ksagent] text shown before a stop is kept as `partial`, never as the answer")
+    defer arena: = Arena(64 * 1024)
+    none: = List<|answer.Turn|>(arena)
+    p: = chat.Pending::{ .id = "q1", .question = "How much?", .lang = .en, .history = none }
+    stopped: = answer.Answer.ended(.stopped("the model server broke off"), .en, arena)
+    lines: = chat.turn_lines(p@, stopped@, "Ten days, aft", arena)
+    verdict.check("a stopped answer keeps the text shown in `partial`, with an empty `text`",
+        lines.find_str("\"state\":\"stopped\",\"text\":\"\"").is_some() &&
+        lines.find_str("\"partial\":\"Ten days, aft\"").is_some(), lines)
+    $done: = answer.Answer.ended(.answered, .en, arena)
+    done.text = "Ten days."
+    whole: = chat.turn_lines(p@, done@, "Ten days.", arena)
+    verdict.check("an answer has no `partial`, and with no checked source it is unverified",
+        whole.find_str("partial").is_none() &&
+        whole.find_str("\"state\":\"unverified\",\"text\":\"Ten days.\"").is_some(), whole)
+
+fn test_a_broken_chat_file_gets_no_answer(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a conversation whose chat file has a broken line gets no answer")
+    root: = stub.folder(work, "chat-broken", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    chat_file: = files.chat_path(ask, arena)
+    broken: = "{\"type\":\"question\",\"id\":\"q0\",\"text\":\"Cut\n"
+    io.write_file(ask, ASKED) catch panic("the ask file can be written")
+    io.write_file(chat_file, broken) catch panic("the chat file can be written")
+    s: = stub.start(U8[][]::{}, arena)
+    watch.answer_pending(agent_test.job_at(s.port, root, arena), ask, arena)
+    stub.finish(s)
+    after: = io.read_file(chat_file, arena) catch panic("the chat file can be read")
+    verdict.check("nothing is asked of the model, and the chat file stays as it was",
+        s.bodies.len == 0 && after.equals(broken), after)
+    stub.release(s)
+
+fn test_a_chat_file_of_the_old_form_is_found(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a chat file of the old form is found, so no command starts beside it")
+    root: = stub.folder(work, "chat-old", arena)
+    verdict.check("a folder with none gives nothing",
+        files.old_chat_file(root, arena).len == 0, "")
+    io.write_file(fs.join(root, "rules/team.chat.ksmd", arena), "## Question\n\nOld?\n")
+        catch panic("the old chat file can be written")
+    found: = files.old_chat_file(root, arena)
+    verdict.check("one under a folder is found", found.ends_with("rules/team.chat.ksmd"), found)
+
+priv struct Conversation //< the text of an ask file and of its chat file
+    asks: U8[]
+    recorded: U8[]
+
+priv fn asked_and_answered(n: Sz, arena: Arena$@): Conversation //<
+    //< An ask file of `n` questions, and a chat file that answers all but the last
+    asks: = arena.text()
+    recorded: = arena.text()
+    for k in Range.asc(n)
+        asks.s("{\"type\": \"question\", \"id\": \"q\{k\}\", \"text\": \"Question \{k\}?\"}\n")
+        if k + 1 < n
+            recorded.s("{\"type\":\"question\",\"id\":\"q\{k\}\",\"text\":\"Question \{k\}?\"}\n")
+                .s("{\"type\":\"answer\",\"id\":\"q\{k\}\",\"state\":\"failed\"}\n")
+    return Conversation::{ .asks = asks.take(), .recorded = recorded.take() }
+
+priv fn pending_us(c: Conversation): I64 //< the fastest of three finds of the pending question [us]
+    $best: I64 = 0I64
+    for k in Range.asc(3)
+        defer one: = Arena(1024 * 1024)
+        started: = sys.mono_us()
+        asks: = chat.read_asks(c.asks, one)
+        rec: = chat.read_chat(c.recorded, one) catch panic("the chat file reads")
+        _p: = chat.find_pending(asks@, rec@, one)
+        took: = sys.mono_us() - started
+        best = took if k == 0 || took < best else best
+    return best
+
+fn test_finding_the_pending_question_grows_in_step_with_the_files()
+    verdict.start("[ksagent] finding the pending question takes time in step with the files")
+    defer arena: = Arena(1024 * 1024)
+    small: = pending_us(asked_and_answered(3000, arena))
+    large: = pending_us(asked_and_answered(12000, arena))
+    name: = arena.text().s("four times the questions take less than eight times as long ")
+        .s("(\{small\} us, then \{large\} us)").take()
+    verdict.check(name, large < 8I64 * (small + 1000I64), "")
+
+fn test_an_ask_file_past_its_cap_is_refused(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an ask file larger than its cap is not read, and the page is told why")
+    root: = stub.folder(work, "chat-full", arena)
+    ask: = fs.join(root, "full.ask.jsonl", arena)
+    many: = asked_and_answered(20000, arena)
+    io.write_file(ask, many.asks) catch panic("the ask file can be written")
+    s: = stub.start(U8[][]::{}, arena)
+    watch.answer_pending(agent_test.job_at(s.port, root, arena), ask, arena)
+    stub.finish(s)
+    live: = io.read_file(files.live_path(ask, arena), arena) catch
+        fallback ""
+    verdict.check("nothing is asked, and the live file says the conversation is full",
+        many.asks.len > files.MAX_ASK_BYTES && s.bodies.len == 0 &&
+        live.find_str("\"phase\":\"refused\"").is_some() &&
+        live.find_str("larger than 1 MiB").is_some(), live)
+    stub.release(s)

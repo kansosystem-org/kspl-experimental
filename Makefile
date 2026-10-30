@@ -40,6 +40,7 @@ OUT_DIR     := out
 GEN_DIR     := $(OUT_DIR)/gen
 LOG_DIR     := $(OUT_DIR)/log
 TMP_DIR     := $(OUT_DIR)/tmp
+TEST_DIR    := $(OUT_DIR)/test
 CI_LOG_DIR    := $(LOG_DIR)/ci
 LINT_LOG_DIR  := $(LOG_DIR)/lint
 SUITE_LOG_DIR := $(LOG_DIR)/suite
@@ -92,6 +93,11 @@ C_FMT     := clang-format -style="{ColumnLimit: 0}" -i
 # requires it (`seed_fmt_help`).
 c_fmt = if command -v $(firstword $(C_FMT)) >/dev/null 2>&1; then $(C_FMT) $(1); else \
   printf '\# clang-format is not installed: %s is left as generated (it builds the same)\n' $(1); fi
+# `$(call shq,<value>)` hands a value a person typed (`DIR=`, `T=`) to a program as one word, as
+# typed. **Single quotes**, a `'` in it written `'\''`: in double quotes a `"`, `$` or backtick
+# would end the word or have the shell run text ("A run target writes every option out" in
+# docs/DESIGN-repository.md).
+shq = '$(subst ','\'',$(1))'
 KSPL_FMT   := --in-place
 # Names the std, so a machine's KSPLC_STD_DIR brings in no other and seed.c's byte-match holds.
 # Caution: **Keep it relative**: $(CURDIR) word-splits unquoted, and ksplc.exe cannot open `/c/...`.
@@ -186,7 +192,7 @@ STAGE2_GEN := $(call stage_gen,$(STAGE2_OUT))
 STAGE2_WHOLE := $(GEN_DIR)/ksplc_stage2_whole.$(TARGET_EXT)
 # One per backend: shared, the other backend's newer file looked up to date and its verdict
 # was read for this one.
-DIFF_TXT   := $(OUT_DIR)/stage_diff_$(BACKEND).txt
+DIFF_TXT   := $(LOG_DIR)/stage_diff_$(BACKEND).txt
 
 # --- Deciding the platform --- **Ask `uname` nowhere else**, or the branches hold two answers.
 ifeq ($(OS),Windows_NT)
@@ -244,7 +250,7 @@ endif
 	stage1 self-host self-host-ship commit-seed test-seed-sum \
 	fmt lint debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install install-check \
-	run fim-corpus fim-model fim-eval qwen chat-server kssrv ksagent model-server perf-log
+	run fim-corpus fim-model fim-eval qwen chat-server kssrv kssrv-libs ksagent perf-log
 
 # A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
 define nl
@@ -343,10 +349,11 @@ $(SHIP_EXE): $(STAGE2_WHOLE)
 # on behaviour the stages' `-O0` never shows, so the shipped build must emit stage2's C to the byte.
 SHIP_OUT  := $(GEN_DIR)/ksplc_ship.$(TARGET_EXT)
 SHIP_RT   := $(if $(STAGE2_RT),$(GEN_DIR)/ksplc_ship_runtime.c)
-SHIP_DIFF := $(OUT_DIR)/ship_diff.txt
+SHIP_DIFF := $(LOG_DIR)/ship_diff.txt
 ## Gates|self-host-ship|See that the optimized ksplc `make install` ships emits stage2's notation to the byte
 self-host-ship: $(SHIP_EXE)
 	@echo "# VERIFYING THE SHIPPED EXECUTABLE"
+	@mkdir -p $(LOG_DIR)
 	@$(ksplc_step) translate WITH=$(SHIP_EXE) TO=$(SHIP_OUT) RT=$(SHIP_RT) SPLIT=1
 	@$(ksplc_step) compare FROM=$(STAGE2_WHOLE) TO=$(SHIP_OUT) DIFF=$(SHIP_DIFF) SPLIT=1
 	@$(ksplc_step) verdict DIFF=$(SHIP_DIFF) LABEL='the shipped executable, $(BACKEND) backend'
@@ -354,6 +361,7 @@ self-host-ship: $(SHIP_EXE)
 # The old $(STAGE2_EXE) goes at the end: stale once stage2's C is remade, yet newer than stage1.exe.
 $(DIFF_TXT): $(STAGE1_GEN) $(STAGE2_GEN)
 	@echo "# VERIFYING SELF-HOSTING"
+	@mkdir -p $(LOG_DIR)
 	@$(ksplc_step) compare FROM=$(STAGE1_OUT) TO=$(STAGE2_OUT) DIFF=$(DIFF_TXT)
 	@rm -f $(STAGE2_EXE)
 
@@ -498,18 +506,35 @@ qwen: $(STAGE1_EXE)
 	$(call kspl_build,ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	@echo "# built -> $(OUT_DIR)/qwen_infer.exe"
 
-# --- The chat server for a Qwen2.5-Instruct model (ksai/examples/chat_server) --- Build only.
+# --- The chat server for a Qwen model (ksai/examples/chat_server) --- Build only.
+# **A file with the sources and the switches it was built from.** So `make chat-server` builds it
+# again after a source changed, and `make chat-server NATIVE=1` builds it again after a build
+# without. `make chat` does not build it: its launcher names this target where it is missing.
+CHAT_SERVER_EXE := $(OUT_DIR)/chat_server.exe
+CHAT_SERVER_SWITCHES := $(GEN_DIR)/chat_server.switches
 ## Run|chat-server|Build the chat server a client with tools asks (`ksai/examples/chat_server`; `NATIVE=1` for this machine's CPU)
-chat-server: $(STAGE1_EXE)
+chat-server: $(CHAT_SERVER_EXE)
+$(CHAT_SERVER_EXE): $(STAGE1_EXE) $(CHAT_SERVER_SWITCHES) $(call kspl_unrecorded,$(GEN_DIR)/chat_server)
 	@echo "# BUILDING THE CHAT SERVER (BLAS=$(BLAS) NATIVE=$(NATIVE))"
-	$(call kspl_build,ksai/examples/chat_server/main.kspl,chat_server,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
-	@echo "# built -> $(OUT_DIR)/chat_server.exe"
+	$(call kspl_build,ksai/examples/chat_server/main.kspl,chat_server,$(AI_KSPL_FLAGS) \
+	  --emit-deps=$(GEN_DIR)/chat_server.deps,$(AI_CFLAGS))
+	$(call kspl_dep_rules,$@,$(GEN_DIR)/chat_server)
+	@echo "# built -> $(CHAT_SERVER_EXE)"
+-include $(GEN_DIR)/chat_server.d
+# The switches that change the build, written down. **The file is written only when they change**,
+# so a run with the same switches leaves it older than the server and builds nothing.
+$(CHAT_SERVER_SWITCHES): FORCE
+	@mkdir -p $(GEN_DIR)
+	@s='BLAS=$(BLAS) NATIVE=$(NATIVE)'; \
+	if [ "$$(cat $@ 2>/dev/null)" != "$$s" ]; then printf '%s\n' "$$s" > $@; fi
 
-# --- Servers ksmd's launcher left running --- **On Windows a running program's file can be neither
-# replaced nor removed**, so a build or a clean would stop with "Permission denied". The launcher
-# stops them first; an open page keeps its edits as a draft, and opens again on a double-click.
+# --- Servers the launchers left running (ksmd's and the chat page's) --- **On Windows a running
+# program's file can be neither replaced nor removed**, so a build or a clean would stop with
+# "Permission denied". Each launcher stops its own first; an open ksmd page keeps its edits as a
+# draft, and a chat page's questions are already in their file.
 ifeq ($(PLATFORM),win32)
-stop_ksmd_servers = @if [ -x "$(KSMD_OPEN_EXE)" ]; then "./$(KSMD_OPEN_EXE)" --stop-all || true; fi
+stop_ksmd_servers = @for o in "$(KSMD_OPEN_EXE)" "$(KSAGENT_CHAT_EXE)"; do \
+    if [ -x "$$o" ]; then "./$$o" --stop-all || true; fi; done
 else
 stop_ksmd_servers =
 endif
@@ -527,6 +552,23 @@ $(KSSRV_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/kssrv)
 	@echo "# built -> $(KSSRV_EXE) (try: ./$(KSSRV_EXE) 8080 .)"
 -include $(GEN_DIR)/kssrv.d
 
+# Whether the libraries kssrv links are installed: OpenSSL's libssl and libcrypto, for HTTPS.
+# `make install` asks it before it ties `.ksmd` to its launcher, which starts kssrv. **The libraries
+# are asked of ksplc** (`--emit-libs`, from the sources' `#link`), and an empty program is linked
+# against them, as `ksbind/Makefile`'s `test` does. So a fault in kssrv's own code is not reported
+# as a missing library.
+KSSRV_PROBE := $(GEN_DIR)/kssrv_probe
+## Build-and-install|kssrv-libs|Say whether the libraries kssrv links (OpenSSL's) are installed here
+kssrv-libs: $(STAGE1_EXE)
+	@mkdir -p $(GEN_DIR)
+	@./$(STAGE1_EXE) $(KSPL_FLAGS) --emit-libs=$(KSSRV_PROBE).libs kssrv/main.kspl $(KSSRV_PROBE).c
+	@printf 'int main(void) { return 0; }\n' > $(KSSRV_PROBE)_main.c
+	@$(CC) $(KSSRV_PROBE)_main.c @$(KSSRV_PROBE).libs -o $(KSSRV_PROBE).exe \
+	  2> $(KSSRV_PROBE).log || { \
+	  echo "kssrv links $$(cat $(KSSRV_PROBE).libs), which do not link here ($(KSSRV_PROBE).log says why)."; \
+	  echo "Debian/Ubuntu: install libssl-dev"; \
+	  exit 1; }
+
 # --- The folder's question answerer (ksagent/) --- Build only (it needs a model server to answer).
 KSAGENT_EXE := $(OUT_DIR)/ksagent.exe
 ## Run|ksagent|Build the program that answers questions about a folder's files through a local model
@@ -537,15 +579,6 @@ $(KSAGENT_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/ksagent)
 	$(call kspl_dep_rules,$@,$(GEN_DIR)/ksagent)
 	@echo "# built -> $(KSAGENT_EXE) (try: ./$(KSAGENT_EXE) ask docs \"What is KSPL?\")"
 -include $(GEN_DIR)/ksagent.d
-
-# --- The model ksagent asks: llama.cpp's server on a file in models/ (models/README.md) ---
-# Caution: **The options stand here alone.** models/README.md names this target, not the command.
-MODEL ?= Qwen3-4B-Instruct-2507-Q4_K_M.gguf
-## Run|model-server|Start llama.cpp's server on a model file in `models/`, at 127.0.0.1:8081 where ksagent asks (`MODEL=<file>`; the first model by default)
-model-server:
-	@command -v llama-server >/dev/null 2>&1 || { echo "llama-server is not on PATH: install llama.cpp as models/README.md says"; exit 1; }
-	@test -f "models/$(MODEL)" || { echo "models/$(MODEL) is not there: download it as models/README.md says"; exit 1; }
-	llama-server -m "models/$(MODEL)" --jinja --port 8081 -c 32768
 
 # --- Kanso OS (RTOS): `ksos/Makefile`'s own targets, called here by the same names ---
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only
@@ -578,6 +611,9 @@ ksos-%: $(STAGE1_EXE)
 
 # --- ksmd: the editing page and the browser checks on it ---
 include mk/ksmd.mk
+
+# --- ksagent's chat page, its opener and the browser check on it ---
+include mk/ksagent.mk
 
 # **Last**: `make help` lists the `##` lines read before it (the reason is in mk/help.mk's header).
 include mk/help.mk

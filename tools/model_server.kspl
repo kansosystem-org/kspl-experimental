@@ -1,0 +1,324 @@
+//< Makes sure a model server answers where ksagent asks: uses one that answers, or starts one
+//< It starts llama.cpp's `llama-server` when it is on PATH, otherwise ksai's `chat_server` beside
+//< this program, and waits until the model is loaded. Where neither is there, it stops with the
+//< command that builds `chat_server`. **Only the server it started is stopped**,
+//< by `Model_run.stop`, or by the Ctrl+C that stops the launcher (`subproc.spawn_beside`). The
+//< reasons are "Starting the model server" in `tools/docs/DESIGN-tools.md`.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/http"
+import "std/http_body"
+import "std/io"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "tools/opener_aim" as aim
+
+const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where ksagent asks unless told otherwise
+    //< Caution: **Keep it equal to `DEFAULT_URL` in `ksagent/model.kspl`**: `make model-server`
+    //< starts a server here for `ksagent ask`, which asks there. `tools/tests/chat_launch.mjs`
+    //< compares the two.
+priv const LLAMA: U8[] = "llama-server" //< llama.cpp's server, looked up in PATH
+priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--jinja", "-c", "32768", "--flash-attn", "on",
+    "--cache-type-k", "q8_0", "--cache-type-v", "q8_0" } //<
+        //< **The one place llama-server's options stand**: `--jinja`, or it offers no tool calls,
+        //< which ksagent works through; `-c`, the conversation's length in tokens. Caution: **Keep
+        //< it in step with `MAX_REQUEST_BYTES` in `ksagent/agent.kspl`**, which is sized to fit it.
+        //<
+        //< **The conversation's memory (its key and value cache) is kept at 8 bits**, not the
+        //< default 16, so 32,768 tokens and the first model fit a graphics card with 6 GB. An 8-bit
+        //< value cache needs flash attention, so `--flash-attn on`, a form llama.cpp takes from
+        //< b6325.
+        //<
+        //< At 8 bits, 32 numbers take 34 bytes. Qwen3-4B keeps 36 layers × 8 heads × 128 × 2
+        //< numbers a token: 76.5 KiB, so 2.4 GiB in all (4.5 GiB at 16 bits). Qwen3.5-9B keeps 8
+        //< layers × 4 heads × 256 × 2: 17 KiB, so 0.53 GiB. Its other 24 layers keep a fixed 0.2
+        //< GiB for its 4 slots. `models/README.md` gives the sums.
+priv const CHAT_NAMES: U8[][] = U8[][]::{ "chat_server.exe", "chat_server" } //<
+    //< The names ksai's chat server is looked for by, beside this program
+const SLOW_TIMEOUT: U8[] = "--timeout=3600" //< what ksagent waits for one reply from chat_server
+    //< **chat_server reads a prompt several times slower than llama-server**, so ksagent's own
+    //< limit of 600 seconds would end a question it is still answering.
+priv const ANSWER_WAIT_MS: I32 = 5000 //< how long one question to a server may take
+priv const NOTE_EVERY_S: I64 = 10 //< how often the wait says that it still waits [s]
+priv const TAIL_LINES: Sz = 12 //< how many of a failed server's last lines are shown
+
+struct Known_model //< a model `models/README.md` lists, and where it is downloaded from
+    file: U8[] //< its file name in `models/`, and in the repository it is downloaded from
+    size: U8[] //< its size, for the person deciding to download it
+    repo: U8[] //< the Hugging Face repository that holds it
+        //< Caution: **Keep the URL as `models/README.md` and the tutorial write it**
+        //< (`tell_download`): `tools/tests/chat_launch.mjs` looks for the printed command in both.
+
+priv const FIRST: Known_model = Known_model::{ .file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    .size = "2.5 GB", .repo = "unsloth/Qwen3-4B-Instruct-2507-GGUF" } //<
+        //< **The default**, the first model `models/README.md` lists
+priv const SECOND: Known_model = Known_model::{ .file = "Qwen3.5-9B-Q3_K_M.gguf", .size = "4.7 GB",
+    .repo = "unsloth/Qwen3.5-9B-GGUF" } //<
+        //< The second model `models/README.md` lists
+priv const MODELS: Known_model[] = Known_model[]::{ FIRST, SECOND } //< the models it can name
+
+struct Model_plan //< what the person asked for, and where this program's files are
+    url: U8[] //< the address ksagent asks
+    model_file: U8[] //< the file in `models/` to start; empty for `FIRST`
+    wait_s: I64 //< how long a server can take to load its model [s]
+    beside: U8[] //< the folder this program, kssrv and `chat_server` are built into
+    tmp: U8[] //< where the log of a server started goes
+
+struct Model_run //< the model server ksagent asks
+    name: U8[] //< what answers: `llama-server`, `chat_server`, or a server not started here
+    slow: Bool //< whether ksagent needs `SLOW_TIMEOUT`
+    log: U8[] //< the started server's log; empty for one not started here
+    child: subproc.Child? //< the server this run started; none for one it found
+
+priv fn say(): Writer //< standard output, with this program's name begun on a line
+    return io.out().s(sys.program_name()).s(": ")
+
+priv fn warn(): Writer //< standard error, with this program's name begun on a line
+    return io.err().s(sys.program_name()).s(": ")
+
+impl Model_run
+    fn stop(r: Self$@) //< stops the server this run started, and says so; leaves any other alone
+        if r.halt()
+            say().s("stopped \{r.name\}, which this command started\n")
+
+    priv fn halt(r: Self$@): Bool //< stops the server this run started; false where there is none
+        if c: = r.child
+            $started: = c
+            started.kill()
+            r.child = .none
+            return true
+        return false
+
+    fn wait(r: Self$@): I32 //< waits for the server this run started to end; 0 at once for another
+        if c: = r.child
+            $started: = c
+            r.child = .none
+            code: = started.wait().unwrap_or(1)
+            warn().s("\{r.name\} ended with exit code \{code\} (its log: \{r.log\})\n")
+            return code
+        return 0
+
+priv enum Probe //< what answers at the model server's port
+    nothing //< nothing listens there
+    other(what: U8[]) //< something answers, but not as a model server
+    loading //< a model server, still loading its model
+    ready //< a model server that can answer a question
+
+struct Answer //< one reply to a GET
+    status: I32 //< its status; 0 where nothing came back, -1 where nothing listens
+    body: U8[]
+
+priv fn get(at: I32, target: U8[], arena: Arena$@): Answer //< asks one GET of the loopback port
+    defer stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
+        return Answer::{ .status = -1, .body = "" }
+    head: = http.headers(arena).add("Host", arena.text().s("127.0.0.1:\{at\}").take()).build()
+    http.write_request(stream, "GET", target, head, "", ANSWER_WAIT_MS) catch
+        return Answer::{ .status = 0, .body = "" }
+    // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
+    got: =
+        http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
+        return Answer::{ .status = 0, .body = "" }
+    return Answer::{ .status = got.status, .body = got.body }
+
+priv fn probe(at: I32, arena: Arena$@): Probe //< what answers at the port
+    //< **A model server is one whose `GET /v1/models` lists models.** llama-server answers it while
+    //< it loads, too, and then answers `GET /health` with 503 until it is ready. chat_server
+    //< listens only once it is ready, and has no `/health`.
+    models: = get(at, "/v1/models", arena)
+    if models.status == -1
+        return .nothing
+    if models.status == 503
+        return .loading
+    if models.status != 200 || models.body.find_str("\"data\"").is_none()
+        if models.status == 0
+            return .other("no HTTP answer")
+        return .other(arena.text().s("HTTP \{models.status\} to GET /v1/models").take())
+    return .loading if get(at, "/health", arena).status == 503 else .ready
+
+impl Probe
+    priv fn is_ready(p: Self): Bool //< whether the probe found a server that can answer
+        switch p
+        case .ready
+            return true
+        default
+            return false
+
+fn default_file(): U8[] //< the model file started where none is named: the first in the list
+    return FIRST.file
+
+fn url_at(port: U8[], arena: Arena$@): U8[]? //< the model server's address on this machine
+    //< **Empty means `DEFAULT_URL`**, where ksagent asks unless told. None where `port` is not a
+    //< port number.
+    if port.len == 0
+        return .some(DEFAULT_URL)
+    at: = aim.port_num(port)
+    if at == 0
+        return .none
+    return .some(arena.text().s("http://127.0.0.1:\{at\}").take())
+
+fn ensure(plan: Model_plan, arena: Arena$@): Model_run? //<
+    //< The model server ksagent can ask, started here where none answers
+    //< It is the one at `plan.url`, on this machine. **None, with the reason and what to do said,
+    //< where there is none.**
+    found: = Model_run::{ .name = "the model server", .slow = false, .log = "", .child = .none }
+    at: = aim.port_num(aim.port_in_url(plan.url))
+    switch probe(at, arena)
+    case .ready
+        if names_in_vain(plan)
+            return .none
+        say()
+            .s("model server: using the one already answering at \{plan.url\} (it keeps running \
+                when this ends)\n")
+        return .some(found)
+    case .loading
+        if names_in_vain(plan)
+            return .none
+        say().s("model server: one at \{plan.url\} is still loading its model\n")
+        $run: = found
+        return .some(run) if wait_ready(run@, plan, at, arena) else .none
+    case .other(what)
+        warn()
+            .s("port \{at\} answers, but not as a model server (\{what\}). Stop the program using \
+                it, or name another port: make chat DIR=<folder> PORT=<port>\n")
+        return .none
+    case .nothing
+        say().s("model server: nothing answers at \{plan.url\}, so this command starts one\n")
+        $run: = start(plan, at, arena) catch
+            return .none
+        return .some(run) if wait_ready(run@, plan, at, arena) else .none
+
+priv fn names_in_vain(plan: Model_plan): Bool //< true, said, where a model file was named
+    //< Caution: **A file named for a server not started here would do nothing** (Principle 5 in
+    //< `docs/DESIGN-principles.md`): that server keeps its own model.
+    if plan.model_file.len == 0
+        return false
+    warn()
+        .s("the model server at \{plan.url\} is not started here, and keeps its own model, so \
+            MODEL=\{plan.model_file\} would change nothing. Stop that server, or leave MODEL out\n")
+    return true
+
+priv fn known(file: U8[]): Known_model? //< the listed model with that file name
+    for m in MODELS
+        if m.file.equals(file)
+            return .some(m)
+    return .none
+
+priv fn start(plan: Model_plan, at: I32, arena: Arena$@): Model_run? //<
+    //< Starts llama-server on the model file, or chat_server where llama-server is not on PATH
+    //< **None, with the reason said, where neither starts.**
+    file: = plan.model_file if plan.model_file.len > 0 else FIRST.file
+    full: = fs.absolute(plan.beside, arena) catch plan.beside
+    tidy: = aim.plain(full, arena)
+    root: = aim.parent_of(tidy if tidy.len > 0 else full)
+    model: = fs.join(fs.join(root, "models", arena), file, arena)
+    if !fs.exists(model) || fs.is_dir(model)
+        tell_download(file, root)
+        return .none
+    port: = arena.text().s("\{at\}").take()
+    log: = fs.join(plan.tmp, arena.text().s("model.\{at\}.log").take(), arena)
+    shown: = arena.text().s("models/").s(file).take()
+    $llama: = List<|U8[]|>(arena)
+    llama.push(LLAMA)
+    llama.push("-m")
+    llama.push(model)
+    for o in LLAMA_OPTIONS
+        llama.push(o)
+    llama.push("--port")
+    llama.push(port)
+    // **A program that is not on PATH fails to start, on every OS**, so starting it is the test.
+    if c: = spawned(llama.slice(), log)
+        say()
+            .s("model server: starting llama-server on \{shown\} (it is on PATH, and uses the \
+                graphics card)\n")
+        return .some(Model_run::{ .name = LLAMA, .slow = false, .log = log, .child = .some(c) })
+    // Caution: **Name the build, do not start it**: llama.cpp is the better choice, and a build
+    // started here would commit the person to answers that take minutes. A program `make` started
+    // would also need make's name and settings to run it again.
+    chat: = chat_beside(plan.beside, arena)
+    if chat.len == 0
+        warn()
+            .s("llama-server is not on PATH, and chat_server is not built beside this program. \
+                Install llama.cpp (ksagent/docs/TUTORIAL-ask-about-your-files.md), then run this \
+                again. Or build chat_server, which runs on the CPU only and takes minutes per \
+                answer: make chat-server NATIVE=1\n")
+        return .none
+    argv: U8[][3] = ::{ chat, model, arena.text().s("--port=\{at\}").take() }
+    c: = spawned(U8[][]::argv, log) catch
+        warn().s("cannot start \{chat\} (its log: \{log\})\n")
+        return .none
+    say()
+        .s("model server: starting chat_server on \{shown\}, since llama-server is not on PATH. It \
+            runs on the CPU only, so an answer takes minutes\n")
+    return .some(Model_run::{ .name = "chat_server", .slow = true, .log = log,
+        .child = .some(c) })
+
+priv fn spawned(argv: U8[][], log: U8[]): subproc.Child? //< the child started, both outputs to log
+    c: = subproc.spawn_beside(argv, "", log, log) catch
+        return .none
+    return .some(c)
+
+priv fn chat_beside(beside: U8[], arena: Arena$@): U8[] //< chat_server beside this program, or ""
+    for one in CHAT_NAMES
+        at: = fs.join(beside, one, arena)
+        if fs.can_run(at)
+            return at
+    return ""
+
+priv fn tell_download(file: U8[], root: U8[]) //< says that the model file is missing, and the fix
+    if m: = known(file)
+        warn().s("models/\{file\} is not there. Download it (\{m.size\}) in \{root\} with:\n")
+        io.err()
+            .s("  curl -L -o models/\{file\} \
+                https://huggingface.co/\{m.repo\}/resolve/main/\{file\}\n")
+        return
+    warn()
+        .s("models/\{file\} is not there. Put that GGUF file in the folder models in \{root\}, or \
+            leave MODEL out to use \{FIRST.file\}\n")
+
+priv fn wait_ready(run: Model_run$@, plan: Model_plan, at: I32, arena: Arena$@): Bool //<
+    //< Waits until the server answers questions; false, said, where it ended or took too long
+    //< Caution: **Say that it waits, and keep saying it**: loading takes seconds to minutes, and
+    //< a silent wait reads as a hang.
+    say().s("waiting for \{run.name\} to load the model (seconds to a minute)\n")
+    began: = sys.mono_us()
+    $noted: I64 = 0
+    for
+        if c: = run.child
+            if !c.alive()
+                run.child = .none
+                warn().s("\{run.name\} stopped before it was ready. Its last lines:\n")
+                tell_tail(run.log, arena)
+                return false
+        if probe(at, arena).is_ready()
+            say().s("model server: ready at \{plan.url\}\n")
+            return true
+        waited: = (sys.mono_us() - began) / 1000000I64
+        if waited >= plan.wait_s
+            warn().s("\{run.name\} was not ready after \{waited\} seconds")
+            if run.halt()
+                io.err().s(", so it was stopped. Its last lines:\n")
+                tell_tail(run.log, arena)
+            else
+                io.err().s(". Stop it, then run this again\n")
+            return false
+        if waited >= noted + NOTE_EVERY_S
+            noted = waited
+            say().s("  still loading (\{waited\} s)\n")
+        sys.sleep_ms(500)
+
+priv fn tell_tail(log: U8[], arena: Arena$@) //< shows a failed server's last lines, and the fix
+    body: = io.read_file(log, arena) catch ""
+    lines: = body.lines(arena)
+    from: = lines.len - TAIL_LINES if lines.len > TAIL_LINES else 0
+    for i in Range.asc(lines.len - from)
+        io.err().s("  | ").s(lines.get(from + i)).s("\n")
+    io.err().s("  the whole log: \{log\}\n")
+    if body.find_str("out of memory").is_some()
+        warn()
+            .s("the model does not fit in memory: close programs that use the graphics card, or use \
+                a smaller model (models/README.md)\n")

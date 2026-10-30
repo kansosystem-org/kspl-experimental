@@ -1,11 +1,13 @@
-//< The model server: one chat request goes out, one reply comes back
+//< The model server: one chat request goes out, its reply comes back as it is written
 //< It speaks the chat-completions protocol many local servers share: `POST /v1/chat/completions`
-//< with `"tools"`, and `"stream": false`. **Only plain http, and only a reply that names its
-//< length** (`Content-Length`): `std/http` reads no other. Why is "The model server" in
-//< `ksagent/docs/DESIGN-agent.md`.
+//< with `"tools"`, and `"stream": true` (`Exchange`). **A reply that comes whole is read too**,
+//< for a server that does not stream. Only plain http, and a reply chunked or with its length.
+//< Why is "The model server" in `ksagent/docs/DESIGN-agent.md`.
+import "ksagent/events" { Event_reader }
 import "std/chars"
 import "std/ds" { List }
 import "std/http"
+import "std/http_body"
 import "std/json"
 import "std/mem" { Arena }
 import "std/net"
@@ -14,7 +16,7 @@ import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/sys"
 
-const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where `llama-server --port 8081` listens
+const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where `make model-server` starts one
 const API_KEY_ENV: U8[] = "KSAGENT_API_KEY" //< the environment variable an API key comes from
     //< Caution: **Never an option.** The command line shows in the process list, to anyone on the
     //< machine.
@@ -31,6 +33,7 @@ struct Server //< where the model server is, and what each request to it carries
     model: U8[] //< the model name each request names
     timeout_ms: I32 //< how long one reply may take to arrive whole
     api_key: U8[] //< sent as `Authorization: Bearer`; empty sends none
+    stream: Bool //< whether a request asks for a stream; false once the server refused one
 
 fn parse_url(url: U8[], model: U8[], timeout_ms: I32, arena: Arena$@): Server!U8[] //<
     //< The server a `--model-url` names, or why it cannot be used
@@ -57,7 +60,8 @@ fn parse_url(url: U8[], model: U8[], timeout_ms: I32, arena: Arena$@): Server!U8
         throw "the port in the model URL is out of range (1-65535)"
     key: = sys.get_env(API_KEY_ENV).unwrap_or("")
     return Server::{ .host = arena.dup_str(host), .port = I32::port,
-        .base = arena.dup_str(base), .model = model, .timeout_ms = timeout_ms, .api_key = key }
+        .base = arena.dup_str(base), .model = model, .timeout_ms = timeout_ms, .api_key = key,
+        .stream = true }
 
 impl Server
     fn address(r: Self@, arena: Arena$@): U8[] //< the server as a URL, for a message
@@ -71,13 +75,16 @@ struct Call //< one tool call the model asked for
 struct Reply //< what the model said in one turn
     content: U8[] //< its text; empty when it only called tools
     calls: List<|Call|> //< the tool calls it asked for, in order
+    cut: Bool //< whether the server's length limit ended it (`finish_reason` is `length`)
+        //< Caution: **Use no part of a cut reply.** A call cut short can still be valid JSON, as
+        //< `{"path": "a.md"}` cut before its line numbers.
 
 enum Model_error //< why a request to the model server got no usable reply
     unreachable //< nothing answers at the address
     timed_out //< no whole reply arrived within the timeout
-    no_length(chunked: Bool) //<
-        //< the reply names no `Content-Length`; `chunked` says it came in chunks
+    no_length //< the reply is neither chunked nor names its length, so its end cannot be told
     status(code: I32, detail: U8[]) //< the server refused the request
+    broke_off(detail: U8[]) //< the reply began, then stopped short or with an error
     bad_reply(detail: U8[]) //< the reply cannot be read
 
 impl Model_error
@@ -88,50 +95,207 @@ impl Model_error
         switch e
         case .unreachable
             out
-                .s("the model server at \{where\} does not answer. Start it, for example with \
-                    `llama-server --jinja --port 8081`, or give its address with --model-url.")
+                .s("the model server at \{where\} does not answer. Start it, for example with `make \
+                    model-server` in Kanso's repository, or give its address with --model-url.")
         case .timed_out
             out
                 .s("the model server at \{where\} gave no whole reply within \
                     \{s.timeout_ms / 1000\} seconds. Give it longer with --timeout, or use a \
                     smaller model.")
-        case .no_length(chunked)
-            if chunked
-                out
-                    .s("the model server sent its reply in chunks (Transfer-Encoding: chunked), \
-                        which ksagent cannot read yet. ")
-            else
-                out
-                    .s("the model server's reply names no Content-Length, which ksagent cannot read \
-                        yet. ")
-            out.s("llama-server and vLLM answer with a Content-Length when \"stream\" is false.")
+        case .no_length
+            out
+                .s("the model server's reply is not chunked and names no Content-Length, so a cut \
+                    reply cannot be told from a whole one. llama-server and vLLM send either.")
         case .status(code, detail)
             out.s("the model server at \{where\} refused the request with HTTP \{code\}: ")
                 .s(detail)
+        case .broke_off(detail)
+            out.s("the reply from the model server at \{where\} broke off: ").s(detail)
         case .bad_reply(detail)
             out.s("the reply from the model server at \{where\} cannot be read: ").s(detail)
         return out.take()
 
-fn ask(s: Server@, body: U8[], arena: Arena$@): Reply!Model_error //<
-    //< Sends one request body and reads the reply, on a connection of its own
+    fn is_bad_request(e: Self): Bool //< whether the server refused the request as malformed (400)
+        switch e
+        case .status(code, _detail)
+            return code == 400
+        default
+            return false
+
+// ==========================================
+// One exchange: the request, then the reply as it arrives
+// ==========================================
+
+struct Growing_call //< one tool call as its pieces arrive
+    id: U8[]
+    name: U8[]
+    arguments: Str_builder //< the arguments' JSON text so far
+
+struct Partial //< a reply as far as it has arrived
+    reasoning: Str_builder //< the model's thinking (`reasoning_content`), which goes no further
+    content: Str_builder //< its text
+    calls: List<|Growing_call|> //< its tool calls, by their index
+
+enum Step //< what one wait for the reply gave
+    grew //< more of the reply arrived
+    idle //< nothing arrived within the wait
+    whole //< the reply is whole
+
+struct Exchange //< one request to the model server, its reply arriving piece by piece
     //< **One connection per request, closed after it**: a turn waits seconds or minutes for the
     //< model, so keeping a connection alive between turns saves nothing worth its state.
-    defer stream: = net.Tcp_stream.connect(s.host, s.port) catch
+    conn: net.Tcp_stream$@
+    head: http_body.Response_head$@
+    events: Bool //< whether the reply streams as server-sent events; else it comes whole
+    reader: Event_reader
+    body: Str_builder //< a whole reply's body
+    partial: Partial
+    finished: Bool //< whether a piece named a finish reason, or `[DONE]` came
+    cut: Bool //< whether a piece named the finish reason `length`
+    scratch: Arena$@ //< one event's JSON, emptied after each
+    arena: Arena$@
+
+fn open(s: Server@, body: U8[], arena: Arena$@): Exchange$@!Model_error //<
+    //< Sends one request, and reads the head of its reply; the body follows through `next`
+    //< A refusal is read whole here, so its message can be named. `--timeout` bounds the whole
+    //< reply, head and body.
+    conn: = net.Tcp_stream.connect(s.host, s.port) catch
         throw .unreachable
     host: = arena.text().s(s.host).s(":\{s.port\}").take()
     $head: = http.headers(arena).add("Host", host).add("Content-Type", "application/json")
-        .add("Accept", "application/json").add("Connection", "close")
+        .add("Accept", "application/json, text/event-stream").add("Connection", "close")
     if s.api_key.len > 0
         head = head.add("Authorization",
             arena.text().s("Bearer ").s(s.api_key).take())
     target: = arena.text().s(s.base).s(CHAT_PATH).take()
-    http.write_request(stream, "POST", target, head.build(), body, SEND_WAIT_MS) catch e
+    http.write_request(conn, "POST", target, head.build(), body, SEND_WAIT_MS) catch e
+        conn.free()
         throw http_failure(e)
-    resp: = http.read_response(stream, arena, MAX_REPLY_BYTES, s.timeout_ms) catch e
+    got: =
+        http_body.read_response_head(conn, arena, MAX_REPLY_BYTES, s.timeout_ms) catch e
+        conn.free()
         throw http_failure(e)
-    if resp.status != 200
-        throw .status(resp.status, refusal_detail(resp.body, arena))
-    return parse_reply(resp.body, arena)!
+    x: = arena
+        .create(Exchange::{ .conn = conn, .head = got,
+        .events = got.headers.find("Content-Type").unwrap_or("").starts_with("text/event-stream"),
+        .reader = Event_reader(), .body = Str_builder(),
+        .partial = Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+        .calls = List<|Growing_call|>(arena) }, .finished = false, .cut = false,
+        .scratch = Arena(16 * 1024), .arena = arena })
+    if got.status != 200
+        x.events = false
+        for
+            step: = x.next(s.timeout_ms) catch
+                break
+            if step == Step.whole
+                break
+        detail: = refusal_detail(arena.dup_str(x.body.slice()), arena)
+        x.free()
+        throw .status(got.status, detail)
+    return x
+
+impl Exchange
+    fn next(r: Self$@, wait_ms: I32): Step!Model_error //<
+        //< Waits up to `wait_ms` for more of the reply, and reads what came
+        //< **A stream must end with a finish reason or `[DONE]`**: one whose body ends first was
+        //< cut off, and fails as `broke_off`.
+        piece: = r.head.body.next(wait_ms) catch e
+            throw http_failure(e)
+        switch piece
+        case .waiting
+            return .idle
+        case .data(bytes)
+            if !r.events
+                r.body.s(bytes)
+                return .grew
+            r.reader.add(bytes)
+            r.read_events(false)!
+            return .grew
+        case .done
+            if !r.events
+                return .whole
+            r.read_events(true)!
+            if !r.finished
+                throw .broke_off("the stream ended before the reply did")
+            return .whole
+
+    priv fn read_events(r: Self$@, over: Bool): Void!Model_error //< applies each whole event
+        for
+            data: = r.reader.next(over) catch
+                return
+            if data.equals("[DONE]")
+                r.finished = true
+                continue
+            defer r.scratch.reset()
+            doc: = json.parse(data, r.scratch) catch
+                throw .bad_reply("an event of the stream is not JSON")
+            if doc.val.find("error").is_some()
+                throw .broke_off(refusal_detail(r.arena.dup_str(data), r.arena))
+            r.apply(doc.val.get("choices").get_at(0))
+
+    priv fn apply(r: Self$@, choice: json.Value) //< adds one piece's delta to the reply
+        //< **Thinking comes as `reasoning_content`**, as `llama-server` sends it, or as
+        //< `reasoning`. A call's pieces are joined by their `index`; one with no index joins the
+        //< last call, or opens one where it brings an id.
+        d: = choice.get("delta")
+        r.partial.reasoning.s(d.get("reasoning_content").as_str().unwrap_or(""))
+        r.partial.reasoning.s(d.get("reasoning").as_str().unwrap_or(""))
+        r.partial.content.s(d.get("content").as_str().unwrap_or(""))
+        calls: = d.get("tool_calls").arr_list(r.scratch)
+        for i in Range.asc(calls.len)
+            c: = calls.get(i)
+            $at: = r.partial.calls.len
+            if n: = c.get("index").as_int64()
+                at = Sz::n
+            else if c.find("id").is_none() && at > 0
+                at -= 1
+            if at < 0 || at > r.partial.calls.len + 64
+                continue
+            for r.partial.calls.len <= at
+                r.partial.calls
+                    .push(Growing_call::{ .id = "", .name = "", .arguments = Str_builder() })
+            g: = r.partial.calls.ptr + at
+            if id: = c.get("id").as_str()
+                g.id = r.arena.dup_str(id)
+            f: = c.get("function")
+            if name: = f.get("name").as_str()
+                if g.name.len == 0
+                    g.name = r.arena.dup_str(name)
+            if args: = f.get("arguments").as_str()
+                g.arguments.s(args)
+        if !choice.get("finish_reason").equals(.null_val)
+            r.finished = true
+            r.cut = r.cut || is_cut(choice)
+
+    fn reply(r: Self$@): Reply!Model_error //< the whole reply, once `next` said it is whole
+        if !r.events
+            return parse_reply(r.body.slice(), r.arena)
+        $out: = Reply::{ .content = r.arena.dup_str(r.partial.content.slice()),
+            .calls = List<|Call|>(r.arena), .cut = r.cut }
+        for i in Range.asc(r.partial.calls.len)
+            g: = r.partial.calls.ptr + i
+            $id: = g.id
+            if id.len == 0
+                id = r.arena.text().s("call_\{i\}").take()
+            out.calls
+                .push(Call::{ .id = id, .name = g.name,
+                .arguments = r.arena.dup_str(g.arguments.slice()) })
+        return out
+
+impl Exchange: Manual_free //< `free()` closes the connection and lets go what it holds
+    fn free(r: Self$@) //< closes the connection; the server stops a stream it can no longer send
+        r.head.free()
+        r.conn.free()
+        r.reader.free()
+        r.body.free()
+        r.partial.reasoning.free()
+        r.partial.content.free()
+        for i in Range.asc(r.partial.calls.len)
+            (r.partial.calls.ptr + i).arguments.free()
+        r.scratch.free()
+
+priv fn is_cut(choice: json.Value): Bool //< whether a choice ended at the length limit
+    return choice.get("finish_reason").as_str().unwrap_or("").equals("length")
 
 priv fn http_failure(e: http.Http_error): Model_error //< what a failure of `std/http` means here
     switch e
@@ -140,15 +304,15 @@ priv fn http_failure(e: http.Http_error): Model_error //< what a failure of `std
         case .timed_out
             return .timed_out
         default
-            return .bad_reply("the connection failed midway")
-    case .unsupported_transfer_encoding
-        return .no_length(true)
+            return .broke_off("the connection failed midway")
     case .unsupported_close_delimited
-        return .no_length(false)
+        return .no_length
     case .connection_closed
-        return .bad_reply("the server closed the connection before its reply was whole")
+        return .broke_off("the server closed the connection before its reply was whole")
     case .body_too_large
         return .bad_reply("the reply is larger than 8 MiB")
+    case .invalid_chunk(why)
+        return .bad_reply(why)
     default
         return .bad_reply("the reply is not well-formed HTTP")
 
@@ -176,11 +340,12 @@ fn parse_reply(body: U8[], arena: Arena$@): Reply!Model_error //<
     //< **The arguments can come as JSON text or as an object**; both are kept as text.
     doc: = json.parse(body, arena) catch
         throw .bad_reply("it is not JSON")
-    msg: = doc.val.get("choices").get_at(0).get("message")
+    choice: = doc.val.get("choices").get_at(0)
+    msg: = choice.get("message")
     if msg.find("role").is_none() && msg.find("content").is_none()
         throw .bad_reply("it holds no choices[0].message")
     $reply: = Reply::{ .content = msg.get("content").as_str().unwrap_or(""),
-        .calls = List<|Call|>(arena) }
+        .calls = List<|Call|>(arena), .cut = is_cut(choice) }
     calls: = msg.get("tool_calls").arr_list(arena)
     for i in Range.asc(calls.len)
         c: = calls.get(i)

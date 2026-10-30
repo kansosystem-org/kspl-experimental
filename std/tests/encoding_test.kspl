@@ -507,8 +507,8 @@ priv fn repeat_at(src: U8[], arena: Arena$@): I64 //< where parse finds a repeat
 
 fn test_json_duplicate_keys(arena: Arena$@) //<
     //< std/json: a repeated key is refused, and the builder replaces
-    //< Caution: **Test both sizes of object.** Past `key_scan_max` members the parser checks keys
-    //< with a set, a path a small object never takes.
+    //< Caution: **Test both sizes of object.** Past `key_scan_max` members the parser sorts the
+    //< keys, a path a small object never takes.
     verdict.start("[Json] a duplicated key test...")
     defer $out: = Str_builder()
     flat: U8[] = "{\"a\":1,\"a\":2}"
@@ -543,6 +543,55 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
         .set("x", jb.int_val(3I64)).build()
     assert(dumped(order, out@).equals("{\"x\":3,\"y\":2}"), "json: replacing must keep the order")
     verdict.pass("a repeated key is refused at any size, and building replaces in order.")
+priv fn members_to(out: Str_builder$@, n: Sz) //< writes `{` and n members `"k0":0` to `"k<n-1>"`
+    out.c('{')
+    for i in Range.asc(n)
+        if i > 0
+            out.c(',')
+        out.s("\"k\{i\}\":\{i\}")
+
+fn test_json_large_object_repeats(arena: Arena$@) //<
+    //< std/json: in a large object, the first repeat in the text is refused, before a later error
+    //< Past 16 members the keys are sorted once the object closes, so the repeat is found late.
+    //< Caution: **The reported position and error must not depend on that.** A repeat earlier
+    //< than a syntax error is the error reported, as in a small object.
+    verdict.start("[Json] a repeated key in a large object test...")
+    defer $src: = Str_builder()
+    members_to(src@, 40)
+    at_late: = src.slice().len + 1
+    src.s(",\"k25\":0,\"k30\":0}")
+    verdict.check("a repeat of a key past the 16th is refused at its second name",
+        repeat_at(src.slice(), arena) == I64::at_late, "")
+
+    src.clear()
+    members_to(src@, 40)
+    at_first: = src.slice().len + 1
+    src.s(",\"k30\":0,\"k20\":0}")
+    verdict.check("of two repeats, the earlier second name is reported",
+        repeat_at(src.slice(), arena) == I64::at_first, "")
+
+    src.clear()
+    members_to(src@, 20)
+    at_before: = src.slice().len + 1
+    src.s(",\"k18\":0,\"z\":}")
+    verdict.check("a repeat before a syntax error is the error reported",
+        repeat_at(src.slice(), arena) == I64::at_before, "")
+
+    src.clear()
+    members_to(src@, 20)
+    src.s(",\"q\":tru,\"k3\":0}")
+    verdict.check("a syntax error before a repeat is the error reported",
+        repeat_at(src.slice(), arena) == -2, "")
+
+    // A large object with no repeat keeps every member, the last one included.
+    src.clear()
+    members_to(src@, 20000)
+    src.c('}')
+    doc: = json.parse(src.slice(), arena) catch panic("json: 20000 distinct keys must parse")
+    verdict.check("a large object with no repeat keeps every member",
+        doc.val.get("k19999").as_int().unwrap_or(-1) == 19999 &&
+        doc.val.get("k0").as_int().unwrap_or(-1) == 0, "")
+    verdict.pass("a large object refuses the first repeat in the text, before any later error.")
 // ==========================================
 // std/json: writing out with indentation.
 // ==========================================

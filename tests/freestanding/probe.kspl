@@ -76,3 +76,27 @@ fn probe_format_ptr(out: U8$@, cap: Sz, val: Void$@): Sz
 #export
 fn probe_exact_precision(): Sz
     return strfmt.FLOAT_MAX_PRECISION
+
+// ==========================================
+// A run-time check's breach is a panic on bare metal too: the program's `panic_hook` runs once,
+// with the message hosted prints. harness.c's own function stands in for a port's hook (one that
+// stops the motors) and returns to the harness, so each breach is seen and the next can run.
+// ==========================================
+extern "C"
+    fn harness_panic_seen(msg_ptr: U8@, msg_len: Sz)
+
+priv fn probe_hook(msg: U8$[])
+    harness_panic_seen(msg.ptr, msg.len)
+
+#export
+fn probe_install_hook()
+    panic_hook = probe_hook
+
+#export
+fn probe_index(i: Sz): I32
+    xs: I32[4] = ::{ 1, 2, 3, 4 }
+    return xs[i]
+
+#export
+fn probe_divide(a: I32, b: I32): I32
+    return a / b

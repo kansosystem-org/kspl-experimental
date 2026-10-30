@@ -1,0 +1,68 @@
+//< Server-sent events read from a body as it arrives: each event's data, one at a time
+//< The model server streams its reply as `data: {...}` lines, an empty line after each event,
+//< as the HTML standard's `text/event-stream` has it. **A line ends at CRLF, LF or CR**, and a
+//< line opening with `:` is a comment (a server's sign that it is still working). Fields other
+//< than `data` (`event`, `id`, `retry`) mean nothing to a chat reply and are passed over.
+import "std/chars"
+import "std/str" { Str_builder }
+
+struct Event_reader //< the bytes of a body not read yet, and the event they are building
+    pending: Str_builder //< bytes that do not make a whole line yet
+    data: Str_builder //< the data lines of the event being read, joined by line breaks
+    has_data: Bool //< whether a `data` line came since the last event ended
+    handed: Bool //< whether `data` holds the event handed out last; emptied at the next call
+
+impl Event_reader
+    fn new(): Event_reader //< a reader with nothing read yet
+        return Event_reader::{ .pending = Str_builder(), .data = Str_builder(), .has_data = false,
+            .handed = false }
+
+    fn add(r: Self$@, bytes: U8[]) //< adds bytes of the body as they arrive
+        r.pending.s(bytes)
+
+    fn next(r: Self$@, over: Bool): U8[]? //<
+        //< The data of the next whole event, or none until more bytes come
+        //< `over` says the body has ended: a CR at the very end is then a line's end too. An event
+        //< with no empty line after it is dropped at the end, as the standard has it. The data
+        //< stays valid until the next call.
+        if r.handed
+            r.data.clear()
+            r.has_data = false
+            r.handed = false
+        for
+            text: = r.pending.slice()
+            $end: Sz = 0
+            for end < text.len && text[end] != '\n' && text[end] != '\r'
+                end += 1
+            if end == text.len || (text[end] == '\r' && end + 1 == text.len && !over)
+                return .none
+            $skip: Sz = 1
+            if text[end] == '\r' && end + 1 < text.len && text[end + 1] == '\n'
+                skip = 2
+            dispatch: = r.line(text.sub(0, end))
+            r.pending.drop_prefix(end + skip)
+            if dispatch
+                r.handed = true
+                return .some(r.data.slice())
+
+    priv fn line(r: Self$@, line: U8[]): Bool //< reads one line; true where it ends an event
+        if line.len == 0
+            return r.has_data
+        if line[0] == ':'
+            return false
+        colon: = line.find_char(':').unwrap_or(line.len)
+        if !line.sub(0, colon).equals("data")
+            return false
+        $value: = line.sub_from(colon + 1) if colon < line.len else ""
+        if value.starts_with(" ")
+            value = value.sub_from(1)
+        if r.has_data
+            r.data.c('\n')
+        r.data.s(value)
+        r.has_data = true
+        return false
+
+impl Event_reader: Manual_free //< `free()` lets go the bytes it holds
+    fn free(r: Self$@) //< frees both buffers
+        r.pending.free()
+        r.data.free()

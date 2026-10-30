@@ -1,0 +1,588 @@
+#!/usr/bin/env -S ksplc run
+//< Says what one make target is made of, in one screen (`make explain T=<target>`)
+//< Where its rule is written, its prerequisites and where each is made, the commands filled in,
+//< every variable they read with its value and place, and the settings a person can give. **All
+//< of it comes from make itself** (`make -p`, `make -n`, `--eval`), so it cannot drift from the
+//< make files. The reasons are "Explaining a make target" in `tools/docs/DESIGN-tools.md`.
+
+// ==========================================
+// Usage:
+//     ksplc run tools/make_explain.kspl [--make=<make>] [--not-settings=<A,B>] <target>
+//         [<NAME>=<value>...]
+// `<target>` can be `<folder>:<target>`, for the folder's own Makefile (`ksmd:test`). The
+// settings in `MAKEFLAGS` (a make running this one passes its own) are used too.
+// ==========================================
+import "std/argparse"
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "tools/make_db" + { Assign, Entry, Rule_line, Var }
+import "tools/make_settings" { Call, Report, collect, conds_shown, cut, made_of, pad, print_settings,
+    read_sources, run_make, set_name, shown_path, var_of, written_op }
+
+priv const NEAREST: Sz = 6 //< how many names an unknown target is answered with
+priv const EVAL_TARGET: U8[] = "make-explain-values" //< the target `--eval` defines to print values
+
+fn main(): I32
+    defer arena: = Arena(1024 * 1024)
+    $make: U8[] = "make"
+    $quiet: U8[] = ""
+    p: = argparse.Parser
+        .create(sys.program_name(), "say what one make target is made of", arena)
+    p.positional("<target> [<NAME>=<value>...]")
+    p.str_opt("--make", make@, "the make to ask (make passes its own)")
+    p.str_opt("--not-settings", quiet@, "names the caller sets for itself, comma-separated")
+    p.parse_or_exit()
+    $c: = Call::{ .make = make, .dir = "", .sets = List<|U8[]|>(arena), .target = "",
+        .quiet = List<|U8[]|>(arena) }
+    for s in make_db.makeflags_sets(sys.get_env("MAKEFLAGS").unwrap_or(""), arena)
+        c.sets.push(s)
+    // As on make's own command line, a word holding `=` is a setting and the other the target.
+    for a in p.rest
+        if a.find_char('=').is_some()
+            c.sets.push(a)
+        else if c.target.len == 0
+            c.target = a
+        else
+            io.err().s("make_explain: explain one target at a time ('\{c.target\}' and '\{a\}')\n")
+            return 2
+    if c.target.len == 0
+        io.err().s("name the target to explain: make explain T=<target>\n")
+        return 2
+    for q in quiet.split(',', arena)
+        if q.len > 0
+            c.quiet.push(q)
+    split_folder(c@, arena)
+    // **This make's own flags are not handed on** (`-n` would stop every answer), nor its depth.
+    sys.unset_env("MAKEFLAGS") catch {}
+    sys.unset_env("MAKELEVEL") catch {}
+    // **make speaks English here, whatever the locale**: under a Japanese one it translates the
+    // database's comments (`# Not a target:`), which this tool reads. Only its messages are set:
+    // under `LC_ALL=C` the character set is ASCII too, and the root make file warns of that.
+    if all: = sys.get_env("LC_ALL")
+        sys.set_env("LANG", all) catch {}
+    sys.unset_env("LC_ALL") catch {}
+    sys.set_env("LC_MESSAGES", "C") catch {}
+    sys.unset_env("LANGUAGE") catch {}
+    c.quiet.push("LC_MESSAGES")
+    // **A make exports its command line's settings to its recipes too.** Left there, they would
+    // reach the run without the person's settings as if from the environment.
+    for s in c.sets
+        sys.unset_env(set_name(s)) catch {}
+    return explain(c@, arena)
+
+priv fn split_folder(c: Call$@, arena: Arena$@) //<
+    //< `ksmd:test` names the target `test` of `ksmd`'s make file
+    colon: = c.target.find_char(':') catch
+        return
+    dir: = c.target.sub(0, colon)
+    for name in U8[][]::{ "GNUmakefile", "makefile", "Makefile" }
+        if fs.exists(fs.join(dir, name, arena))
+            c.dir = dir
+            c.target = c.target.sub_from(colon + 1)
+            return
+
+priv fn explain(c: Call@, arena: Arena$@): I32 //< asks make, then prints the explanation
+    // **GNU make 4 alone writes the database read here** (and takes `--eval`); macOS's own make
+    // is 3.81, so its make passes gmake (`ci_make` in `mk/ci.mk`).
+    version: = run_make(c, U8[][]::{ "--version" }, false, arena)
+    if make_db.gnu_make_major(version.stdout_data) < 4
+        io.err()
+            .s("make_explain: \{c.make\} is not GNU make 4 or later, whose database this reads.")
+            .s(" Install it (macOS: brew install make) and pass --make=<it>.\n")
+        return 2
+    asked: = run_make(c, U8[][]::{ "-pqk", c.target }, true, arena)
+    db: = make_db.parse_db(make_db.last_db(asked.stdout_data), arena)
+    $r: = Report::{ .c = c, .db = db, .base = db, .files = List<|U8[]|>(arena),
+        .sources = Map<|U8[], List<|make_db.Source_line|>|>(arena),
+        .rules = List<|Rule_line|>(arena), .assigns = List<|Assign|>(arena),
+        .now = Map<|U8[], U8[]|>(arena), .now_names = List<|U8[]|>(arena) }
+    read_sources(r@, arena)
+    e: = db.files.get(c.target) catch
+        return unknown(r@, asked.stderr_data, arena)
+    if !e.target && !e.exists
+        return unknown(r@, asked.stderr_data, arena)
+    // **A file with no rule may mean make stopped before it read the rule**: what make said then
+    // is the cause, so it is shown rather than left out.
+    if !e.target
+        for l in asked.stderr_data.lines(arena)
+            if l.find_str("No rule").is_none() &&
+                l.find_str("Nothing to be done").is_none()
+                io.out().s("make said: ").s(l).s("\n")
+    if has_person_sets(c)
+        base_run: = run_make(c, U8[][]::{ "-pqk", c.target }, false, arena)
+        r.base = make_db.parse_db(make_db.last_db(base_run.stdout_data), arena)
+    print_head(r@, e, arena)
+    print_prereqs(r@, e, arena)
+    print_commands(r@, e, arena)
+    names: = used_names(r@, e, arena)
+    ask_values(r@, names@, arena)
+    print_vars(r@, names@, arena)
+    print_settings(r@, e, names@, arena)
+    return 0
+
+priv fn has_person_sets(c: Call@): Bool //< whether a setting was given beyond the caller's own
+    for s in c.sets
+        if !c.quiet.contains(set_name(s))
+            return true
+    return false
+
+// ==========================================
+// Where it is written, and what it needs first
+// ==========================================
+
+priv fn rules_for(r: Report@, e: Entry, arena: Arena$@): List<|Rule_line|> //< the rule lines for it
+    //< The rule its recipe follows comes first, found from the recipe's line in the database. Then
+    //< each line whose targets, filled in, name it and whose prerequisites the database holds.
+    //< **The check drops a line in a branch make did not take** (`ifeq`), which reading alone
+    //< cannot tell.
+    $out: = List<|Rule_line|>(arena)
+    if e.recipe_line > 0
+        if lines: = r.sources.get(e.recipe_file)
+            if rule: = make_db.rule_before(lines@, e.recipe_line, e.recipe_file)
+                out.push(rule)
+    for rule in r.rules
+        if names_target(r, rule, e.name, arena) && holds_prereqs(r, rule, e, arena) &&
+            !(out.len > 0 && out.get(0).file.equals(rule.file) &&
+            out.get(0).line == rule.line)
+            out.push(rule)
+    return out
+
+priv fn names_target(r: Report@, rule: Rule_line, name: U8[], arena: Arena$@): Bool //<
+    //< Whether the rule's targets, filled in, include the name
+    $text: = rule.targets
+    if filled: = make_db.expand(rule.targets, r.db@, 0, arena)
+        text = filled
+    for w in make_db.words(text, arena)
+        if w.equals(name)
+            return true
+    return false
+
+priv fn holds_prereqs(r: Report@, rule: Rule_line, e: Entry, arena: Arena$@): Bool //<
+    //< Whether every prerequisite the line names is among those the database records
+    filled: = make_db.expand(rule.prereqs, r.db@, 0, arena) catch
+        return true
+    for w in make_db.words(filled, arena)
+        if !w.equals("|") && !e.prereqs.contains(w) && !e.order_only.contains(w)
+            return false
+    return true
+
+priv fn print_head(r: Report@, e: Entry, arena: Arena$@) //< the target, and where it is written
+    o: = io.out()
+    o.s("make ").s(e.name)
+    if r.c.dir.len > 0
+        o.s(" (in ").s(r.c.dir).s("/, as `make -C ").s(r.c.dir).s(" ").s(e.name).s("`)")
+    o.s(": ").s(kind_of(e)).s("\n")
+    rules: = rules_for(r, e, arena)
+    for rule in rules
+        o.s("  rule  ").s(shown_path(r, rule.file, arena)).s(":\{rule.line\}  ").s(rule.targets)
+            .s(":").s(":" if rule.double else "").s(" " if rule.prereqs.len > 0 else "")
+            .s(rule.prereqs).s("\n")
+    if rules.len == 0 && e.recipe_line > 0
+        o.s("  rule  ").s(shown_path(r, e.recipe_file, arena))
+            .s(":\{e.recipe_line\}  (the recipe's first line; the rule is made by a function such \
+                as $(eval))\n")
+    if e.stem.len > 0
+        o.s("  made by the pattern rule above, `%` standing for '").s(e.stem).s("'\n")
+    print_help(r, e.name, arena)
+    // One with no file is make's own (`.SHELLSTATUS`, after a `$(shell)` in its recipe).
+    for v in e.vars
+        if v.file.len == 0
+            continue
+        o.s("  set for this target alone: ").s(v.name).s(" (")
+            .s(shown_path(r, v.file, arena)).s(":\{v.line\})\n")
+
+priv fn kind_of(e: Entry): U8[] //< what kind of target it is, in a few words
+    if e.phony
+        return "phony (no file: its recipe runs each time it is asked for)"
+    if !e.target
+        return "a file no rule makes; make only checks that it is there"
+    if e.stale
+        return "a file, out of date: make would remake it now"
+    return "a file, up to date"
+
+priv fn print_help(r: Report@, name: U8[], arena: Arena$@) //<
+    //< its `##` line from `make help`, if any
+    for file in r.files
+        text: = io.read_file(shown_path(r, file, arena), arena) catch
+            continue
+        if h: = make_db.help_line(text, name, arena)
+            io.out().s("  help  ").s(shown_path(r, file, arena)).s(":\{h.line\}  ").s(h.text)
+                .s(" (`make help`, group ").s(h.group).s(")\n")
+            return
+
+priv fn print_prereqs(r: Report@, e: Entry, arena: Arena$@) //< each prerequisite, and its state
+    if e.prereqs.len + e.order_only.len == 0
+        io.out().s("\nPrerequisites: none\n")
+        return
+    io.out().s("\nPrerequisites (made first; `make explain T=<name>` explains one)\n")
+    raw: = raw_prereq_words(r, e, arena)
+    for p in e.prereqs
+        print_prereq(r, p, raw@, false, arena)
+    for p in e.order_only
+        print_prereq(r, p, raw@, true, arena)
+
+priv fn raw_prereq_words(r: Report@, e: Entry, arena: Arena$@): List<|U8[]|> //<
+    //< The words the rule lines write for its prerequisites, as written
+    $out: = List<|U8[]|>(arena)
+    for rule in rules_for(r, e, arena)
+        for w in make_db.words(rule.prereqs, arena)
+            if !w.equals("|")
+                out.push(w)
+    return out
+
+priv fn print_prereq(r: Report@, p: U8[], raw: List<|U8[]|>@, order_only: Bool, arena: Arena$@) //<
+    //< One prerequisite's line: its name, how the rule writes it, where it is made, its state
+    $written: U8[] = ""
+    for w in raw$
+        if !w.equals(p) && w.find_char('$').is_some()
+            if filled: = make_db.expand(w, r.db@, 0, arena)
+                if filled.trim_spaces().equals(p)
+                    written = w
+                    break
+    $where: U8[] = "(not in the database)"
+    $state: U8[] = ""
+    if pe: = r.db.files.get(p)
+        rules: = rules_for(r, pe, arena)
+        where = "(no rule line found)"
+        if rules.len > 0
+            where = arena.text().s(shown_path(r, rules.get(0).file, arena))
+                .s(":\{rules.get(0).line\}").take()
+        else if !pe.target
+            where = "-"
+        state = state_of(pe)
+    io.out().s("  ").s(pad(p, 28, arena)).s(" ").s(pad(written, 22, arena)).s(" ")
+        .s(pad(where, 20, arena)).s(" ").s(state)
+        .s(" (order-only: never a reason to remake)" if order_only else "").s("\n")
+
+priv fn state_of(e: Entry): U8[] //< whether make would make it now
+    if e.phony
+        return "phony: made each time"
+    if e.stale
+        return "out of date: make makes it first"
+    if e.current
+        return "up to date" if e.target else "a file no rule makes"
+    return "not checked"
+
+// ==========================================
+// The commands, filled in
+// ==========================================
+
+priv fn print_commands(r: Report@, e: Entry, arena: Arena$@) //< what make -n runs for it alone
+    //< **Its prerequisites are taken as made** (`-o`), so their own builds do not bury its recipe.
+    //< **A file that is there is shown as if its first prerequisite had changed** (`-W`): with
+    //< every prerequisite taken as made, make remakes only a phony target or a missing file. The
+    //< database says which it is, so make's words are never read for it.
+    if e.recipe.len == 0
+        io.out().s("\nCommands: none (no recipe: asking for it only has its prerequisites made)\n")
+        return
+    $args: = List<|U8[]|>(arena)
+    args.push("-n")
+    $note: U8[] = "its prerequisites taken as made"
+    if e.exists && !e.phony
+        if e.prereqs.len > 0
+            args.push("-W")
+            args.push(e.prereqs.get(0))
+            note = "its prerequisites taken as made, and the first as just changed"
+        else
+            args.push("-B")
+            note = "remade as if new (-B)"
+    // **Each prerequisite is also kept** (`.SECONDARY`). Taken as made with `-o`, make 4.4 reads a
+    // prerequisite a pattern rule reaches as an in-between file, and adds an `rm` of it that no
+    // real build runs; make 4.3 does not.
+    for p in e.prereqs
+        args.push("-o")
+        args.push(p)
+        args.push(arena.text().s("--eval=.SECONDARY: ").s(p).take())
+    for p in e.order_only
+        args.push("-o")
+        args.push(p)
+    args.push(r.c.target)
+    got: = run_make(r.c, args.slice(), true, arena)
+    io.out().s("\nCommands, filled in (make -n, \{note\})\n")
+    // make writes `make: Nothing to be done` and the like on standard output too.
+    for l in got.stdout_data.lines(arena)
+        said: = l.starts_with("make: ") || l.starts_with("make[")
+        io.out().s("  make said: " if said else "  ").s(l).s("\n")
+    for l in got.stderr_data.lines(arena)
+        io.out().s("  make said: ").s(l).s("\n")
+    if reaches(r, recipe_text(e, arena), U8[][]::{ "shell" }, false, 0, arena)
+        io.out()
+            .s("  (it reads a $(shell ...), which gives nothing here: explaining runs no command)\n")
+
+// ==========================================
+// The variables, followed one level at a time
+// ==========================================
+
+priv fn used_names(r: Report@, e: Entry, arena: Arena$@): List<|U8[]|> //< what it reads, in order
+    //< The recipe first, then the rule lines' prerequisites, then its own variables' values.
+    text: = arena.text()
+    for l in e.recipe
+        text.s(l).c('\n')
+    for rule in rules_for(r, e, arena)
+        text.s(rule.prereqs).c('\n')
+    for v in e.vars
+        text.s(v.value).c('\n')
+    return make_db.refs(text.take(), arena)
+
+priv fn ask_values(r: Report$@, names: List<|U8[]|>@, arena: Arena$@) //< what make expands each to
+    //< **Asked only where expanding cannot act or stop make**: a value that runs a command or
+    //< reads a function's arguments is shown as written. One `--eval` asks for all of them.
+    $all: = List<|U8[]|>(arena)
+    collect(r, names$, all@, 0, arena)
+    recipe: = arena.text()
+    recipe.s(EVAL_TARGET).s(": ; @:")
+    $asked: Sz = 0
+    for n in all
+        v: = r.db.vars.get(n) catch
+            continue
+        if v.simple || !safe_to_expand(r, v.value, arena)
+            continue
+        recipe.s("$(info @@make-explain ").s(n).s(")$(info $(").s(n).s("))")
+        asked += 1
+    if asked == 0
+        return
+    eval: = arena.text().s("--eval=").s(recipe.take()).take()
+    got: = run_make(r.c, U8[][]::{ "-s", eval, EVAL_TARGET }, true, arena)
+    read_values(r, got.stdout_data, arena)
+
+priv const ACTING: U8[][] = U8[][]::{ "shell", "error", "warning", "info", "eval", "file", "guile" } //<
+    //< the functions whose expansion runs a command, stops make or writes
+
+priv fn safe_to_expand(r: Report@, value: U8[], arena: Arena$@): Bool //<
+    //< Whether make can expand it at no risk: no command run, no stop, no target's own value
+    return !reaches(r, value, ACTING, true, 0, arena)
+
+priv fn reaches(r: Report@, text: U8[], names: U8[][], own: Bool, depth: Sz, arena: Arena$@): Bool //<
+    //< Whether the text, or a recursive variable it reads, calls one of these functions, or
+    //< with `own` reads a value set per target or per call (`$@`, `$(1)`)
+    if depth > 8 || calls(text, names, own)
+        return true
+    for n in make_db.refs(text, arena)
+        if v: = r.db.vars.get(n)
+            if !v.simple && reaches(r, v.value, names, own, depth + 1, arena)
+                return true
+    return false
+
+priv fn calls(text: U8[], names: U8[][], own: Bool): Bool //< the text alone, as `reaches` asks
+    //< **Both brackets are make's**: `${shell date}` runs as `$(shell date)` does.
+    $i: Sz = 0
+    for i + 1 < text.len
+        i += 1
+        if text[i - 1] != '$'
+            continue
+        if text[i] == '$'
+            i += 1
+            continue
+        $at: = i
+        if text[at] == '(' || text[at] == '{'
+            at += 1
+        if at == text.len
+            continue
+        if own && (make_db.is_automatic(text.sub(at, 1)) || text[at].is_digit())
+            return true
+        if at == i + 1
+            $end: = at
+            for end < text.len && text[end] != ' ' && text[end] != '\t' && text[end] != ')' &&
+                text[end] != '}'
+                end += 1
+            if end < text.len && (text[end] == ' ' || text[end] == '\t') &&
+                names.contains(text.sub(at, end - at))
+                return true
+    return false
+
+priv fn recipe_text(e: Entry, arena: Arena$@): U8[] //< its recipe as one text
+    text: = arena.text()
+    for l in e.recipe
+        text.s(l).c('\n')
+    return text.take()
+
+priv fn read_values(r: Report$@, out: U8[], arena: Arena$@) //< takes `--eval`'s printed values
+    mark: = "@@make-explain "
+    $name: U8[] = ""
+    $value: = arena.text()
+    $first: = true
+    for l in out.lines(arena)
+        if l.starts_with(mark)
+            if name.len > 0
+                r.now.set(name, value.take())
+                r.now_names.push(name)
+                value = arena.text()
+            name = l.sub_from(mark.len)
+            first = true
+            continue
+        if name.len > 0
+            if !first
+                value.c('\n')
+            value.s(l)
+            first = false
+    if name.len > 0
+        r.now.set(name, value.take())
+        r.now_names.push(name)
+
+priv fn print_vars(r: Report@, names: List<|U8[]|>@, arena: Arena$@) //< the tree of variables
+    io.out()
+        .s("\nVariables (how each is set and where; a value made of variables is followed below \
+            it)\n")
+    e: = r.db.files.get(r.c.target) catch
+        return
+    $seen: = List<|U8[]|>(arena)
+    for n in names$
+        print_var(r, n, e, 1, seen@, arena)
+    if names.len == 0
+        io.out().s("  none\n")
+
+priv fn print_var(r: Report@, n: U8[], e: Entry, depth: Sz, seen: List<|U8[]|>$@, arena: Arena$@) //<
+    //< One variable, then the variables its value is made of, one level further in
+    o: = io.out()
+    indent: = "                ".sub(0, 2 * depth)
+    o.s(indent).s(pad(n, 24, arena)).s("  ")
+    $v: = Var::{ .name = n, .origin = "", .file = "", .line = 0, .simple = false, .append = false,
+        .value = "" }
+    $set: = false
+    if found: = var_of(r, n, e)
+        v = found
+        set = true
+    o.s(how_set(r, v, arena) if set else "not set")
+    if seen.contains(n)
+        o.s("  (shown above)\n")
+        return
+    seen.push(n)
+    o.s("\n")
+    if set
+        o.s(indent).s("    ").s(cut(v.value, arena)).s("\n")
+        if written: = written_value(r, v, arena)
+            o.s(indent).s("    written: ").s(cut(written, arena)).s("\n")
+    // **A target's own `+=` goes after the value outside the target**, which `now` expands.
+    $outside: = v.value
+    if v.append
+        if g: = r.db.vars.get(n)
+            outside = g.value
+            o.s(indent).s("    after the value outside this target (").s(how_set(r, g, arena))
+                .s("): ").s(cut(g.value, arena)).s("\n")
+    if now: = r.now.get(n)
+        if !now.equals(outside)
+            o.s(indent).s("    now: ").s(cut(now, arena)).s("\n")
+    print_assigns(r, n, v, indent, arena)
+    if depth >= 8
+        return
+    for inner in made_of(r, n, v.value, arena)
+        print_var(r, inner, e, depth + 1, seen, arena)
+
+priv fn written_value(r: Report@, v: Var, arena: Arena$@): U8[]? //<
+    //< how a simple variable's line writes its value
+    //< None where it is recursive (its value is already as written) or reads the same.
+    if !v.simple
+        return .none
+    for a in r.assigns
+        if a.file.equals(v.file) && a.line == v.line && a.value.len > 0
+            return .none if same_words(a.value, v.value, arena) else .some(a.value)
+    return .none
+
+priv fn same_words(a: U8[], b: U8[], arena: Arena$@): Bool //< the same words, however spaced
+    wa: = make_db.words(a, arena)
+    wb: = make_db.words(b, arena)
+    if wa.len != wb.len
+        return false
+    for k in Range.asc(wa.len)
+        if !wa.get(k).equals(wb.get(k))
+            return false
+    return true
+
+priv fn print_assigns(r: Report@, n: U8[], v: Var, indent: U8[], arena: Arena$@) //<
+    //< The other lines that set it, and the conditionals each stands inside
+    //< **The database names only the line that took effect**; one in an `ifeq` branch not taken
+    //< sets nothing now but would under another setting.
+    o: = io.out()
+    $shown: Sz = 0
+    $more: Sz = 0
+    for a in r.assigns
+        if !a.name.equals(n)
+            continue
+        here: = a.file.equals(v.file) && a.line == v.line
+        conds: = conds_shown(r, a, arena)
+        if here && conds.len == 0
+            continue
+        if shown >= 4
+            more += 1
+            continue
+        shown += 1
+        o.s(indent).s("    ")
+        if here
+            o.s("that line stands")
+        else
+            o.s("also set at ").s(shown_path(r, a.file, arena)).s(":\{a.line\} (").s(a.op).s(")")
+        if conds.len == 0
+            o.s(", inside no conditional\n")
+            continue
+        o.s(" inside")
+        for k in Range.asc(conds.len)
+            c: = conds.get(k)
+            o.s(" and" if k > 0 else "").s(" `").s(c.text).s("` (line \{c.line\})")
+        o.s("\n")
+    if more > 0
+        o.s(indent).s("    and \{more\} more lines set it\n")
+
+priv fn how_set(r: Report@, v: Var, arena: Arena$@): U8[] //< its operator, its place, its origin
+    flavour: = ":=" if v.simple else "="
+    if v.file.len == 0
+        if v.origin.equals("default")
+            return arena.text().s(flavour).s("  make's own default").take()
+        return arena.text().s(flavour).s("  ").s(v.origin).take()
+    $op: = written_op(r, v.file, v.line)
+    if op.len == 0
+        op = flavour
+    where: = arena.text()
+    where.s(op).s("  ").s(shown_path(r, v.file, arena)).s(":\{v.line\}")
+    if op.equals("+=")
+        where.s(" (appended to; the whole is ").s(flavour).s(")")
+    if !v.origin.equals("makefile")
+        where.s("  ").s(v.origin)
+    return where.take()
+
+// ==========================================
+// An unknown target
+// ==========================================
+
+priv fn unknown(r: Report@, said: U8[], arena: Arena$@): I32 //<
+    //< says it has no rule, with the nearest
+    io.err().s("make has no rule for '").s(r.c.target).s("', and no file of that name")
+    if r.c.dir.len > 0
+        io.err().s(" in ").s(r.c.dir).s("/")
+    io.err().s(".\n")
+    $near: = List<|U8[]|>(arena)
+    $dist: = List<|Sz|>(arena)
+    limit: = 2 if r.c.target.len < 9 else r.c.target.len / 3
+    for name in r.db.order
+        e: = r.db.files.get(name) catch
+            continue
+        if !e.target || name.starts_with(".") || name.find_char('%').is_some()
+            continue
+        d: = make_db.distance(r.c.target, name, arena)
+        if d <= limit ||
+            r.c.target.len >= 3 && name.find_str(r.c.target).is_some()
+            insert_near(near@, dist@, name, d)
+    if near.len > 0
+        io.err().s("Nearest names:")
+        for k in Range.asc(near.len if near.len < NEAREST else NEAREST)
+            io.err().s(" ").s(near.get(k))
+        io.err().s("\n")
+    for l in said.lines(arena)
+        if l.find_str("No rule").is_none()
+            io.err().s("make said: ").s(l).s("\n")
+    io.err().s("`make help` lists what can be typed.\n")
+    return 1
+
+priv fn insert_near(near: List<|U8[]|>$@, dist: List<|Sz|>$@, name: U8[], d: Sz) //<
+    //< keeps them sorted
+    $at: Sz = 0
+    for at < near.len &&
+        (dist.get(at) < d || dist.get(at) == d && near.get(at).compare(name) < 0)
+        at += 1
+    near.insert(at, name)
+    dist.insert(at, d)

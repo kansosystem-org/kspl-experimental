@@ -16,7 +16,7 @@ OUT ?= out
 # Where the page is written: `ksmd.html` with its scripts, its style and its wasm beside it.
 WEB ?= $(OUT)/web
 
-.PHONY: test web web-tools test-browser measure
+.PHONY: test web web-tools test-browser measure browser-path
 
 test:
 	"$(KSPLC)" run tests/main.kspl
@@ -110,6 +110,9 @@ KSMD_BROWSER := $(or $(firstword $(wildcard /opt/chrome-linux/chrome) \
     for d in "$$PROGRAMFILES" "$$(printenv 'ProgramFiles(x86)')" "$$LOCALAPPDATA"; do \
         [ -n "$$d" ] || continue; p="$$(cygpath -m "$$d")/Google/Chrome/Application/chrome.exe"; \
         [ -f "$$p" ] && { echo "$$p"; break; }; done)))
+# The browser found, on one line, empty where none is: one lookup for every gate that drives a page.
+browser-path:
+	@printf '%s\n' "$(KSMD_BROWSER)"
 # Where it is 1, finding no browser is a failure rather than a SKIP, so a round that lost the tool
 # does not stay green. From the root it is 1 on Linux, whose image holds a browser
 # (`REQUIRE_SWITCHES` in the root's `mk/test.mk`); here it is off unless given.

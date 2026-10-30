@@ -1,104 +1,212 @@
-//< A chat file: questions a person adds under `## Question`, and the answers ksagent writes back
-//< **This reads a small part of ksmd's syntax, not all of it**: level 1 and 2 headings, and the
-//< ``` and `:::` fences that hide a heading. ksmd's own reader is internal to ksmd. The reasons
-//< are "The chat file" in `ksagent/docs/DESIGN-agent.md`.
-//< **What it writes is ksmd a page can open**: the model's text is escaped (`write_text`).
-import "ksagent/agent" { Turn }
-import "ksagent/answer" + { Answer, Lang }
+//< A conversation's files: the questions a page asks, and the turns ksagent records
+//< **Each file has one writer**, so no save is lost between a read and a write: the page appends
+//< to `<name>.ask.jsonl`, and ksagent alone writes `<name>.chat.jsonl`. One JSON record stands on
+//< each line. A question and its answer share the id the page gave the question. The model's text
+//< is kept as it wrote it. Why is "The chat files" in `ksagent/docs/DESIGN-agent.md`.
+import "ksagent/answer" + { Answer, Lang, Turn }
+import "ksagent/office/index" + { Index, Keyed }
 import "std/chars"
 import "std/ds" { List }
+import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str"
+import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 
 const MAX_HISTORY_TURNS: Sz = 4 //< the most earlier questions sent with a new one
 const MAX_HISTORY_BYTES: Sz = 16 * 1024 //< the most bytes of earlier questions and answers sent
     //< The latest turns are kept: a follow-up question refers to what was asked just before.
 
-enum Kind //< what a level 1 or 2 heading starts
-    question //< `## Question` or `## 質問`
-    answer //< `## Answer` or `## 回答`
-    other //< any other heading of level 1 or 2
+const MAX_ID_BYTES: Sz = 64 //< the longest id a question can have
+    //< An id names a question in three files and on the console, so it holds only ASCII letters,
+    //< digits, `-` and `_` (`id_problem`).
 
-struct Section //< a part of the file that a level 1 or 2 heading starts
-    kind: Kind
-    lang: Lang //< the heading's language: `質問` and `回答` are `ja`
-    body_at: Sz //< where the text after the heading line starts
-    end: Sz //< where the next level 1 or 2 heading starts, or the file's length
+struct Asked //< one question the page asked
+    id: U8[]
+    text: U8[]
+    stopped: Bool //< whether the page asked for its answer to stop
 
-impl Section
-    fn body(r: Self@, text: U8[]): U8[] //< the section's text, without its heading or edge spaces
-        return text.sub(r.body_at, r.end - r.body_at).trim_spaces()
+struct Asks //< what an ask file holds
+    questions: List<|Asked|> //< in the order they were asked
+    refused: List<|U8[]|> //< one line for each line that cannot be read: its number and why
 
-fn sections(text: U8[], arena: Arena$@): List<|Section|> //<
-    //< The file's sections, in order; what stands before the first heading belongs to none
-    //< A heading inside a ``` fence or a `:::` block does not count.
-    $out: = List<|Section|>(arena)
-    $fence: Sz = 0
-    $in_block: = false
-    $at: Sz = 0
-    for at < text.len
-        nl: = text.sub_from(at).find_char('\n').unwrap_or(text.len - at)
-        next: = at + nl + 1
-        line: = text.sub(at, nl).trim_end()
-        if fence > 0
-            if line.len == fence && backticks(line) == fence
-                fence = 0
-        else if in_block
-            in_block = !line.equals(":::")
-        else if backticks(line) >= 3
-            fence = backticks(line)
-        else if line.starts_with(":::") && line.len > 3
-            in_block = true
-        else if line.starts_with("# ") || line.starts_with("## ")
-            if out.len > 0
-                out[out.len - 1].end = at
-            out.push(heading(line, next if next < text.len else text.len, text.len))
-        at = next
+fn read_asks(text: U8[], arena: Arena$@): Asks //<
+    //< The questions of an ask file, and the lines refused, each with the reason
+    //< **A line that cannot be read is refused alone**, so one broken line stops only its own
+    //< question. A `stop` record marks the question with its id.
+    $out: = Asks::{ .questions = List<|Asked|>(arena), .refused = List<|U8[]|>(arena) }
+    f: = parsed(text, arena)
+    $question_at: = no_slots(f.lines.len, arena) //< each id's question in `out.questions`
+    for i in Range.asc(f.lines.len)
+        r: = f.lines.get(i)
+        $why: = r.why
+        if why.len == 0
+            why = take_ask(out@, question_at@, f.slot(r.id), r@)
+        if why.len > 0
+            out.refused.push(arena.text().s("line \{r.n\}: ").s(why).take())
     return out
 
-priv fn backticks(line: U8[]): Sz //< how many backticks open the line
-    $n: Sz = 0
-    for n < line.len && line[n] == '`'
-        n += 1
-    return n
-
-priv fn heading(line: U8[], body_at: Sz, end: Sz): Section //< the section a heading line starts
-    $s: = Section::{ .kind = .other, .lang = .en, .body_at = body_at, .end = end }
-    if !line.starts_with("## ")
-        return s
-    name: = line.sub_from(3).trim_spaces()
-    if name.equals("Question") || name.equals("質問")
-        s.kind = .question
-    else if name.equals("Answer") || name.equals("回答")
-        s.kind = .answer
-    s.lang = .ja if name.equals("質問") || name.equals("回答") else .en
-    return s
-
-struct Pending //< the first question in a file that has no answer yet
-    question: U8[] //< its text
-    lang: Lang //< its heading's language, which the answer's heading follows
-    history: List<|Turn|> //< the answered questions before it, oldest first, within the caps
-
-fn find_pending(text: U8[], arena: Arena$@): Pending? //<
-    //< The first question with no `## Answer` right after it, or none
-    //< **A question with no text yet is passed over**: the person saved before writing it.
-    all: = sections(text, arena)
-    $turns: = List<|Turn|>(arena)
-    for i in Range.asc(all.len)
-        s: = all.get(i)
-        if s.kind != Kind.question
-            continue
-        q: = s.body(text)
-        answered: = i + 1 < all.len && all.get(i + 1).kind == Kind.answer
-        if answered
-            turns.push(Turn::{ .question = q, .answer = all.get(i + 1).body(text) })
-            continue
+priv fn take_ask(out: Asks$@, question_at: List<|Sz|>$@, slot: Sz, r: Line@): U8[] //<
+    //< Adds one record of an ask file; why it cannot be read, or empty
+    at: = question_at.get(slot)
+    if r.kind.equals("question")
+        q: = r.val.get("text").as_str().unwrap_or("").trim_spaces()
         if q.len == 0
+            return "the question has no text"
+        if at >= 0
+            return "an earlier line has a question with the same id"
+        question_at.set(slot, out.questions.len)
+        out.questions.push(Asked::{ .id = r.id, .text = q, .stopped = false })
+        return ""
+    if r.kind.equals("stop")
+        if at < 0
+            return "no earlier line has a question with this id"
+        out.questions[at].stopped = true
+        return ""
+    return "its type is neither question nor stop"
+
+fn id_problem(id: U8[]): U8[] //< why a question's id cannot be used, or empty
+    if id.len == 0 || id.len > MAX_ID_BYTES
+        return "the id must hold 1 to 64 characters"
+    for c in id
+        if !c.is_alnum() && c != '-' && c != '_'
+            return "the id holds a character other than ASCII letters, digits, - and _"
+    return ""
+
+// ==========================================
+// The lines of a conversation's file, and a place for each id
+// ==========================================
+
+priv struct Line //< one record of a conversation's file, read on its own
+    n: Sz //< its line number, from 1
+    kind: U8[] //< its `type`
+    id: U8[]
+    val: json.Value
+    why: U8[] //< why it cannot be read; empty where it can
+
+priv struct Parsed //< every record of a file, and each id's slot
+    //< **An id is found by halving** (`ksagent/office/index.kspl`), not by a walk per line, so a
+    //< file of many questions is read in time in step with its length. A slot is the place of the
+    //< first line that names the id, so what is kept by slot is kept per id.
+    lines: List<|Line|>
+    slots: Index
+
+impl Parsed
+    fn slot(r: Self@, id: U8[]): Sz //< the slot of an id that a readable line names
+        return r.slots.find(id).unwrap_or(0)
+
+priv fn parsed(text: U8[], arena: Arena$@): Parsed //< each line's record, and the ids' slots
+    $lines: = List<|Line|>(arena)
+    $keys: = List<|Keyed|>(arena)
+    $n: Sz = 0
+    for line in text.lines(arena)
+        n += 1
+        t: = line.trim_spaces()
+        if t.len == 0
             continue
-        return .some(Pending::{ .question = q, .lang = s.lang,
-            .history = recent(turns@, arena) })
+        r: = line_of(n, t, arena)
+        if r.why.len == 0
+            keys.push(Keyed::{ .key = r.id, .pos = lines.len })
+        lines.push(r)
+    return Parsed::{ .lines = lines, .slots = index.sorted(keys@, arena) }
+
+priv fn line_of(n: Sz, text: U8[], arena: Arena$@): Line //< one line's record, read alone
+    doc: = json.parse(text, arena) catch
+        return Line::{ .n = n, .kind = "", .id = "", .val = .null_val,
+            .why = "it is not one JSON value" }
+    v: = doc.val
+    id: = v.get("id").as_str().unwrap_or("")
+    return Line::{ .n = n, .kind = v.get("type").as_str().unwrap_or(""), .id = id, .val = v,
+        .why = id_problem(id) }
+
+priv fn no_slots(n: Sz, arena: Arena$@): List<|Sz|> //< `n` slots, each holding -1
+    $out: = List<|Sz|>(arena)
+    for _k in Range.asc(n)
+        out.push(-1)
+    return out
+
+struct Recorded //< what a chat file records
+    answered: Index //< the id of every question that has an answer record
+    turns: List<|Turn|> //< the questions that got an answer, oldest first, for the model
+
+fn read_chat(text: U8[], arena: Arena$@): Recorded!U8[] //<
+    //< What a chat file records, or why it cannot be read: the first broken line and its reason
+    //< **The whole file is refused at a broken line**, never read up to it: a record written after
+    //< it would hide it, and the turns after it would be lost without a word.
+    $turns: = List<|Turn|>(arena)
+    $answers: = List<|Keyed|>(arena)
+    f: = parsed(text, arena)
+    $question_at: = no_slots(f.lines.len, arena) //< each id's question, as its place in `lines`
+    $answer_at: = no_slots(f.lines.len, arena) //< each id's answer, as its place in `lines`
+    for i in Range.asc(f.lines.len)
+        r: = f.lines.get(i)
+        $why: = r.why
+        if why.len == 0
+            slot: = f.slot(r.id)
+            why = take_record(r@, i, question_at@, answer_at@, slot)
+            if why.len == 0 && r.kind.equals("answer")
+                answers.push(Keyed::{ .key = r.id, .pos = i })
+                state: = r.val.get("state").as_str().unwrap_or("")
+                if state.equals("checked") || state.equals("unverified") ||
+                    state.equals("not_found")
+                    q: = f.lines.get(question_at.get(slot))
+                    turns
+                        .push(Turn::{ .question = q.val.get("text").as_str().unwrap_or(""),
+                        .answer = r.val.get("text").as_str().unwrap_or("") })
+        if why.len > 0
+            throw arena.text().s("line \{r.n\}: ").s(why).take()
+    return Recorded::{ .answered = index.sorted(answers@, arena), .turns = turns }
+
+priv fn take_record(r: Line@, at: Sz, question_at: List<|Sz|>$@, answer_at: List<|Sz|>$@, slot: Sz):
+    U8[] //<
+        //< Takes one record of a chat file, the `at`-th line read; why it cannot be read, or empty
+    if r.kind.equals("question")
+        if question_at.get(slot) >= 0
+            return "an earlier line has a question with the same id"
+        question_at.set(slot, at)
+        return ""
+    if !r.kind.equals("answer")
+        return "its type is neither question nor answer"
+    if question_at.get(slot) < 0
+        return "no earlier line has a question with this id"
+    if answer_at.get(slot) >= 0
+        return "an earlier line has an answer with the same id"
+    if !is_state(r.val.get("state").as_str().unwrap_or(""))
+        return "its state is none of checked, unverified, not_found, stopped and failed"
+    answer_at.set(slot, at)
+    return ""
+
+priv fn is_state(s: U8[]): Bool //< whether a word is one of the five states an answer ends in
+    return s.equals("checked") || s.equals("unverified") || s.equals("not_found") ||
+        s.equals("stopped") || s.equals("failed")
+
+struct Pending //< the first question asked that has no answer yet
+    id: U8[]
+    question: U8[]
+    lang: Lang //< the question's language, which the lines ksagent adds follow
+    history: List<|Turn|> //< the turns recorded before it, oldest first, within the caps
+
+fn find_pending(asks: Asks@, rec: Recorded@, arena: Arena$@): Pending? //<
+    //< The first question that is neither stopped nor answered, or none
+    for i in Range.asc(asks.questions.len)
+        q: = asks.questions.get(i)
+        if q.stopped || answered(rec, q.id)
+            continue
+        return .some(Pending::{ .id = q.id, .question = q.text, .lang = Lang.of(q.text),
+            .history = recent(rec.turns@, arena) })
     return .none
+
+fn answered(rec: Recorded@, id: U8[]): Bool //< whether the chat file has an answer for the id
+    return rec.answered.find(id).is_some()
+
+fn stop_reason(ask_text: U8[], id: U8[], arena: Arena$@): U8[] //<
+    //< Why the answer to the question with this id must stop, or empty while it is still asked
+    //< While an answer is written, this tells that the page stopped it, or that its file lost it.
+    asks: = read_asks(ask_text, arena)
+    for i in Range.asc(asks.questions.len)
+        q: = asks.questions.get(i)
+        if q.id.equals(id)
+            return "the question was stopped on the page" if q.stopped else ""
+    return "the question is no longer in its ask file"
 
 priv fn recent(turns: List<|Turn|>@, arena: Arena$@): List<|Turn|> //<
     //< The latest turns that fit `MAX_HISTORY_TURNS` and `MAX_HISTORY_BYTES`, oldest first
@@ -115,103 +223,84 @@ priv fn recent(turns: List<|Turn|>@, arena: Arena$@): List<|Turn|> //<
         out.push(turns.get(i))
     return out
 
-fn insert_answer(fresh: U8[], question: U8[], block: U8[], arena: Arena$@): U8[]? //<
-    //< The file with the answer put right after the question, or none if it is no longer pending
-    //< `fresh` is the file read again just before writing. **Only the same text still waiting for
-    //< an answer takes it**: a question the person changed or removed meanwhile gets none.
-    all: = sections(fresh, arena)
-    for i in Range.asc(all.len)
-        s: = all.get(i)
-        answered: = i + 1 < all.len && all.get(i + 1).kind == Kind.answer
-        if s.kind != Kind.question || answered || !s.body(fresh).equals(question)
-            continue
-        out: = arena.text()
-        head: = fresh.sub(0, s.end)
-        out.s(head)
-        if head.len > 0 && !head.ends_with("\n")
-            out.c('\n')
-        if !head.ends_with("\n\n")
-            out.c('\n')
-        out.s(block)
-        if s.end < fresh.len
-            out.c('\n').s(fresh.sub_from(s.end))
-        return .some(out.take())
-    return .none
-
 // ==========================================
-// Writing an answer as ksmd
+// Writing a turn into the chat file
 // ==========================================
 
-fn answer_block(a: Answer@, arena: Arena$@): U8[] //<
-    //< The `## Answer` section for a chat file, its heading in the question's language
-    //< Each source is its path and lines, then its quote as a `> ` quote, so the evidence shows
-    //< without opening the file. **The path stands in backticks, not as a link**: a ksmd link
-    //< goes only to a web address.
-    out: = arena.text()
-    out.s("## 回答\n\n" if a.lang == Lang.ja else "## Answer\n\n")
-    switch a.outcome
-    case .answered
-        write_text(out, a.text, arena)
-    case .not_found
-        write_text(out, a.lang.not_found_line(), arena)
-    default
-        write_text(out, answer.ended_line(a, arena), arena)
-        return out.take()
-    if a.sources.len > 0
-        out.c('\n')
-        write_text(out, a.lang.sources_word(), arena)
+fn turn_lines(p: Pending@, a: Answer@, partial: U8[], arena: Arena$@): U8[] //<
+    //< The question's record and its answer's, as two lines that end in a line break
+    //< `partial` is the unchecked text shown before an answer stopped. **It goes into its own
+    //< member, `partial`, never into `text`**, so no reader can take it for an answer.
+    $b: = Json_builder(arena)
+    question: = b.obj().set("type", b.str_val("question")).set("id", b.str_val(p.id))
+        .set("text", b.str_val(p.question)).set("lang", b.str_val(lang_word(p.lang))).build()
+    $sources: = b.arr()
     for i in Range.asc(a.sources.len)
         s: = a.sources.get(i)
+        sources = sources
+            .push(b.obj().set("path", b.str_val(s.path))
+            .set("from_line", b.int_val(s.from_line)).set("to_line", b.int_val(s.to_line))
+            .set("quote", b.str_val(answer.collapse_spaces(s.quote, arena))).build())
+    $removed: = b.arr()
+    for i in Range.asc(a.removed.len)
+        removed = removed.push(b.str_val(a.removed.get(i)))
+    $notes: = b.arr()
+    for line in notes_of(a, arena)
+        notes = notes.push(b.str_val(line))
+    $reply: = b.obj().set("type", b.str_val("answer")).set("id", b.str_val(p.id))
+        .set("state", b.str_val(state_of(a))).set("text", b.str_val(text_of(a)))
+        .set("sources", sources.build()).set("removed", removed.build())
+        .set("notes", notes.build())
+    if !a.is_answer() && partial.len > 0
+        reply = reply.set("partial", b.str_val(partial))
+    defer $out: = Str_builder()
+    question.dump(out@)
+    out.c('\n')
+    reply.build().dump(out@)
+    out.c('\n')
+    return arena.dup_str(out.slice())
+
+fn appended(chat_text: U8[], lines: U8[], arena: Arena$@): U8[] //<
+    //< The chat file with the lines added at its end, on a line of their own
+    out: = arena.text()
+    out.s(chat_text)
+    if chat_text.len > 0 && !chat_text.ends_with("\n")
         out.c('\n')
-        write_path(out, s.path)
-        out.c(' ').s(answer.span_words(s, a.lang, arena)).s("\n\n> ")
-        write_line(out, answer.collapse_spaces(s.quote, arena))
-        out.c('\n')
+    return out.s(lines).take()
+
+fn state_of(a: Answer@): U8[] //< the state a record names: how the work on the question ended
+    //< **`checked` only where a source passed the check**, so an unchecked answer never reads as
+    //< checked in the file either.
+    switch a.outcome
+    case .answered
+        return "unverified" if a.is_unverified() else "checked"
+    case .not_found
+        return "not_found"
+    case .stopped
+        return "stopped"
+    case .failed
+        return "failed"
+
+priv fn text_of(a: Answer@): U8[] //< the answer's text: the model's, or ksagent's not-found line
+    switch a.outcome
+    case .answered
+        return a.text
+    case .not_found
+        return a.lang.not_found_line()
+    default
+        return ""
+
+priv fn notes_of(a: Answer@, arena: Arena$@): U8[][] //<
+    //< The lines ksagent adds under the answer, in the question's language
+    $out: = List<|U8[]|>(arena)
+    ended: = answer.ended_line(a, arena)
+    if ended.len > 0
+        out.push(ended)
     if a.removed.len > 0
-        out.c('\n')
-        write_text(out, a.lang.removed_line(a.removed.len, arena), arena)
+        out.push(a.lang.removed_line(a.removed.len, arena))
     if a.is_unverified()
-        out.c('\n')
-        write_text(out, a.lang.unverified_line(), arena)
-    return out.take()
+        out.push(a.lang.unverified_line())
+    return out.slice()
 
-fn write_text(out: Writer, text: U8[], arena: Arena$@) //<
-    //< Writes text as ksmd paragraphs that show it as it is: no mark in it takes effect
-    //< A blank line parts two paragraphs. Each other line break stays one, as a hard break (a `\`
-    //< at the line's end), and leading spaces go: ksmd refuses an indented line.
-    $open: = false
-    for line in text.lines(arena)
-        t: = line.trim_spaces()
-        if t.len == 0
-            if open
-                out.s("\n\n")
-            open = false
-            continue
-        if open
-            out.s("\\\n")
-        write_line(out, t)
-        open = true
-    if open
-        out.c('\n')
-
-priv fn write_line(out: Writer, t: U8[]) //<
-    //< Writes one line of text, escaped so ksmd reads it as plain text
-    //< **A mark that would start a block is escaped at the line's start** (`\#`, `\-`, `\>`, `\|`,
-    //< `\{`, `\:`, and the period of `1.`). So a `## Question` line in an answer is no question.
-    $digits: Sz = 0
-    for digits < t.len && t[digits].is_digit()
-        digits += 1
-    for i in Range.asc(t.len)
-        c: = t[i]
-        first: = i == 0 && (c == '#' || c == '-' || c == '>' || c == '|' || c == '{' || c == ':')
-        period: = digits > 0 && i == digits && c == '.'
-        if first || period || c == '\\' || c == '*' || c == '`' || c == '[' || c == ']'
-            out.c('\\')
-        out.c(c)
-
-priv fn write_path(out: Writer, path: U8[]) //<
-    //< writes a path in backticks, or escaped where it holds one
-    if path.find_char('`').is_some()
-        write_line(out, path)
-        return
-    out.c('`').s(path).c('`')
+fn lang_word(l: Lang): U8[] //< the language as a record names it: `en` or `ja`
+    return "ja" if l == Lang.ja else "en"

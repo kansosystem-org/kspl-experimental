@@ -1,8 +1,8 @@
 # The specification for the documents
 
-This file sets the rules that every document in this repository follows. They cover which words it uses and what the file is called. They also cover how the text is worded and laid out, and which other documents it can point at. Read it before you add or change a document.
+This file sets the rules that every document in this repository follows. They cover its words, its name, its wording and layout, and what it can point at. Read it before you add or change a document.
 
-It is a specification: it states the rules, and does not argue for them. Two gates (checks that CI runs and that can fail the build) check the parts a machine can see. `make test-docref` checks references, and `make test-conventions` checks names and layout. Which document to read for what is in [`README.md`](README.md).
+It states the rules; the reasons are in [`DESIGN-repository.md`](DESIGN-repository.md). `make test-docref` checks references, and `make test-conventions` checks names and layout.
 
 ## Terms of art
 
@@ -28,7 +28,7 @@ Caution: **Do not reach for a synonym.** If one thing has two names, the reader 
 | **interface** | The way one part is reached from another. Narrowing access to one interface is a design decision, so it gets a name |
 | **leaf** | The layer that only points upward (`tests/` / `tools/`). See the layer table below |
 
-**Another language's vocabulary stays in that language's words.** Java's package, Go's module and apt's package are not translated into other words. A reader could not look a paraphrase up in that language's own documentation.
+**Another language's vocabulary stays in that language's words** (Java's package, Go's module), so a reader can look it up in that language's documentation.
 
 ## Words used throughout
 
@@ -66,57 +66,55 @@ Four words name the units that code is organized in. Every document and source c
 | package | Each of `ksplc/` `std/` … listed under "implementation" in the layer table below. It is the unit that is distributed, and a name with no visibility keyword is visible inside its package. **Packages do not nest**: only a top-level folder is one, and `ksmd/port/` is a folder (Java's and Python's packages nest; that is the one difference) |
 | all | Everywhere: what `pub` opens a name to |
 
-**When you name another product's unit, name its owner too** (`MSYS2's package` / `Java's package` / `an ES module`). A bare `package` is always KSPL's.
-
-The rules for visibility and `import` are in [`SPEC-programming-language.md`](SPEC-programming-language.md). This section only sets which word to use.
+**When you name another product's unit, name its owner too** (`MSYS2's package`, `an ES module`). A bare `package` is always KSPL's.
 
 ### A folder's name is plural where it names its contents
 
-**A folder that holds many things of one kind takes a plural name. A folder that names one part of the package around it takes a singular name.**
+**A folder that holds many things of one kind takes a plural name. A folder that names one part of the package around it takes a singular name.** `make test-conventions` guards the rule.
 
 | The folder's name says | Number | Examples |
 | :-- | :-- | :-- |
 | What it holds, many of a kind | Plural | `tests/` `tools/` `docs/` `examples/` `benches/` `boards/` `drivers/` |
 | One step or one aspect of the package it sits in | Singular | `parse/` `sema/` `lower/` `gen/` `fmt/` `lsp/` `model/` `lay/` `write/` `port/` `kernel/` |
 
-**Which spelling is picked matters less than that a check guards it.** Where no build tool fixes a folder's name, every project spells it its own way, and a reader has to look before they can guess. So `make test-conventions` guards the rule, not anyone's memory.
+**Do not give a folder and a file beside it the same name** (a `verdict/` beside `verdict.kspl`): nothing refuses it, but `ls` shows two `verdict` entries.
 
-**Do not give a folder and a file beside it the same name** (a `verdict/` beside `verdict.kspl`). An import finds a file by adding the extension to the name, so both resolve and nothing refuses them. But `ls` shows two `verdict` entries, and the reader cannot tell which is which.
-
-**A folder inside a package can share a name with one at the root** (`std/tests/` beside `tests/`, `std/docs/` beside `docs/`). That is intended: one word means one thing wherever it is written. So code that reads a path takes its first folder from where the path begins, not from the first folder name it recognises.
+**A folder inside a package can share a name with one at the root** (`std/tests/` beside `tests/`). So code that reads a path takes its first folder from where the path begins, not from the first name it recognises.
 
 ## Document naming
 
-**Every document is one of six kinds, and its file name says which kind.** A folder's listing then tells the reader what each document is for before they open any of them. No document holds what belongs to another kind.
+**Every document is one of six kinds, and its file name says which kind.** No document holds what belongs to another kind.
 
 | Name | The kind — what the reader does with it | Who reads it | What it holds | What it does not hold |
 | :-- | :-- | :-- | :-- | :-- |
-| `README.md` | **Route.** Arrive, and find the way | Everyone arriving; the one kind that greets all of them at once | What is here, the smallest usage example, further reading | An explanation, a manual, a rule of its own — it routes to the document that holds them |
-| `TUTORIAL.md` | **Learn.** Read the whole once | Whoever is learning to write KSPL | A walk through the language, generated from a program the gates compile and run | Anything written by hand |
+| `README.md` | **Route.** Arrive, and find the way | Everyone arriving | What is here, the smallest usage example, further reading | An explanation, a manual, a rule of its own |
+| `TUTORIAL-<topic>.md` | **Learn.** Read the whole once, from start to end | A newcomer: to KSPL, or to one package. A package's tutorial says in its first sentence what you must already have | A walk from nothing to a first result. KSPL's (`docs/TUTORIAL-programming-language.md`) is generated from a program the gates compile and run. A package's, in its `docs/`, is written by hand: the steps in order, each with its command line and what it prints | One task for a reader who already knows the subject, which is a HOWTO's. In KSPL's, anything written by hand |
 | `HOWTO-<task>.md` | **Do.** Carry out one task | Varies with the task, so its first sentence says what you must already have | The steps in order, each with its command line and what it prints | Why a step is what it is, past the one sentence that stops the reader skipping it |
-| `SPEC-<subject>.md` | **Look up.** Rely on an agreement | Whoever relies on the subject and cannot change it — the language, a tool's options, a board's wiring | The rules others can rely on, which change only with care | The reason a rule was chosen; anything that does not exist yet |
+| `SPEC-<subject>.md` | **Look up.** Rely on an agreement | Whoever relies on the subject and cannot change it, such as a tool's options | The rules others can rely on, which change only with care | The reason a rule was chosen; anything that does not exist yet |
 | `DESIGN-<subject>.md` | **Understand.** Change it without breaking what it protects | Whoever changes Kanso | Decisions, their grounds, and what each gives up, in the present tense | A rule's statement, a roadmap, a history |
-| `PLAN.md` | **See what is left.** Know what is not done, and in what order | Whoever changes Kanso | The stages ahead, what marks each as done, and what is still undecided. **One for the repository**, [`PLAN.md`](PLAN.md) here: a section per package with work left, and one for what spans packages | Anything done — a done stage is deleted, and its result goes into the document of its kind |
+| `PLAN.md` | **See what is left.** Know what is not done, and in what order | Whoever changes Kanso | The stages ahead, what marks each as done, and what is undecided. **One for the repository** ([`PLAN.md`](PLAN.md)), a section per package with work left | Anything done: a done stage is deleted, and its result goes into the document of its kind |
 
-**The name is written in capitals. A subject follows every kind that can stand more than once in a folder** (`SPEC-programming-language.md`, `HOWTO-bring-up.md`), even where the folder holds one. A name that says only the kind does not say what the document is about. **A folder's design is split by theme.** Each `DESIGN-<subject>.md` holds the decisions on one theme that a reader comes to understand. A theme stands in one file. A file holds as few themes as stay readable through. There is no entry document among them; the folder's `README.md` lists each one with what it holds. The subject can be any number of words. Choose the form the reader will understand ([`SPEC-local-server.md`](SPEC-local-server.md)). A name that does not say what the document is fails as an entry point, however short it is.
+**A `TUTORIAL-<topic>.md` and a `HOWTO-<task>.md` differ by their reader.** A HOWTO does one task for someone who already knows the package. A `TUTORIAL-<topic>.md` takes a newcomer to the package from nothing to a first result.
 
-**One file, one kind.** A passage written for another kind moves to that kind's document once it is longer than a sentence. A `README.md` keeps the smallest usage example, but not a manual. A `HOWTO-` keeps a sentence of why, but not a chapter. The gates guard two things: every tracked `.md` carries one of the six names or one fixed from outside (`make test-conventions`), and a `SPEC-<subject>.md` cites no `PLAN.md` (`make test-docref`).
+**The name is written in capitals. A subject follows every kind that can stand more than once in a folder** (`SPEC-programming-language.md`), even where the folder holds one. The subject is as many words as the reader needs ([`SPEC-local-server.md`](SPEC-local-server.md)). **A folder's design is split by theme**: each theme stands in one `DESIGN-<subject>.md`, with as few themes per file as stay readable. There is no entry document among them; the folder's `README.md` lists each one.
 
-**Do not move a kind into a differently named document.** Putting the grounds in a `RATIONALE.md`, or the entry point in an `OVERVIEW.md`, makes two documents of one kind, and nothing decides which one is canonical. The six names are a closed list.
+**One file, one kind.** A passage written for another kind moves to that kind's document once it is longer than a sentence. Every tracked `.md` carries one of the six names or one fixed from outside (`make test-conventions`). A `SPEC-<subject>.md` cites no `PLAN.md` (`make test-docref`).
 
-**A package with nothing left to do has no section in [`PLAN.md`](PLAN.md).** An empty section is one more heading for the reader to skip.
+**Do not move a kind into a differently named document**, such as a `RATIONALE.md` or an `OVERVIEW.md`: nothing would decide which of the two is canonical. The six names are a closed list.
+
+**A package with nothing left to do has no section in [`PLAN.md`](PLAN.md).**
 
 ### Where documents sit
 
-**Every folder that holds a document also holds a `README.md`, and a package's `README.md` is its entry point.** GitHub shows a folder's README without being asked, so it always speaks to the reader who has just arrived. The root README routes to every package's README, and a package's README routes to its deeper folders that have one.
+**Every folder that holds a document also holds a `README.md`, and a package's `README.md` is its entry point.** The root README routes to every package's README, and a package's README routes to its deeper folders that have one.
 
-**A package's `docs/` is the one exception: the package's own `README.md` lists its documents.** A `README.md` inside `docs/` could only repeat that list, a second copy to keep in step, and a reader reaches `docs/` from the package's README anyway.
+**A package's `docs/` is the one exception: the package's own `README.md` lists its documents**, so `docs/` holds no `README.md` of its own.
 
-**A package's other documents sit under `<package>/docs/`; only its `README.md` stands beside the sources.** People open a package's folder to find a source file, and each document beside the sources is one more name to read past. The `README.md` stays there because an arriving reader must meet it without being told where to look, and GitHub shows it on the way in.
+**A package's other documents sit under `<package>/docs/`; only its `README.md` stands beside the sources.**
 
 ### Documents whose name is fixed from outside
 
-A few documents have names chosen by a tool or a convention outside this repository, which looks for them by that name. Renaming one hides it from the way people arrive at it. Each is listed in the entry point's table, since its name does not say which of the six kinds it is.
+A few documents have names chosen by a tool or a convention outside this repository, which looks for them by that name. Do not rename one. Each is listed in the entry point's table, since its name does not say which of the six kinds it is.
 
 | Name | Who fixes it | What it is among the six |
 | :-- | :-- | :-- |
@@ -130,14 +128,12 @@ A few documents have names chosen by a tool or a convention outside this reposit
 
 | Element | Contents |
 | :-- | :-- |
-| **What is here** | A map of what the folder contains (a file table, a reading order, or an index organized by purpose). |
+| **What is here** | A map: a file table, a reading order, or an index by purpose. |
 | **The smallest usage example** | A code block that can be copied and run, or one line of `make`. |
-| **Further reading** | A guide at the end, under that heading, listing the same folder's other documents and the entry points of closely related folders. |
-| **Who reads it** | A column on that guide **wherever the answer differs between the folder's documents**. The column says who each one is for, and what they must already have (a toolchain, a browser, the board itself). Where every document has the same answer, the guide says it once instead of in a column. `make test-conventions` refuses a document the folder's README never names (for a package's `docs/`, the package's README). |
+| **Further reading** | A guide at the end, under that heading: the folder's other documents and the entry points of related folders. |
+| **Who reads it** | A column on that guide **wherever the answer differs between the folder's documents**. It says who each one is for, and what they must already have (a toolchain, a browser, the board itself). Where every document has the same answer, the guide says it once. `make test-conventions` refuses a document the folder's README never names (for a package's `docs/`, the package's README). |
 
-**The root `docs/README.md`, which only routes to its folder's documents, carries no usage example.** The documents it routes to hold the examples, and a copy in the index would be a second copy to keep in step.
-
-**A folder in which nothing works says so at the top, instead of carrying a usage example.** An example that does not run, or an empty section, sends the reader looking for something that is not there.
+**The root `docs/README.md`, which only routes to its folder's documents, carries no usage example.** **A folder in which nothing works says so at the top, instead of carrying a usage example.**
 
 **There is one skeleton for a README's headings.** A README need not have every section, but the sections it has take these headings, in this order. A section on a particular subject can sit between them.
 
@@ -152,37 +148,33 @@ A few documents have names chosen by a tool or a convention outside this reposit
 | `Files near the limit and how they split` | Where the folder needs it (below) |
 | `Further reading` | The guide, always last |
 
-**A README's heading carries no number and no time estimate** ("(30 seconds)"). Nobody can check a time estimate, and a number has to change whenever a section is added.
+**A README's heading carries no number and no time estimate** ("(30 seconds)").
 
 ### Where a file's splitting plan is written
 
-**A file can come near the line cap, the most lines that a source file can have. Then the `README.md` of its top-level folder says how the file will be split.** It says so under the heading "Files near the limit and how they split". What counts as near is "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md). The check is `make test-conventions`.
+**When a file comes near the line cap, the `README.md` of its top-level folder says how the file will be split.** It says so under the heading "Files near the limit and how they split". What counts as near is "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md). The check is `make test-conventions`.
 
-**Do not write a file's line count there.** It changes with every edit, so only what is split out and where it goes are written.
+**Do not write a file's line count there**, only what is split out and where it goes.
 
 Caution: **Read the plan before touching a file it names.** A file named there is touched only once "what is split out" and "where it goes" are written for it.
 
-**Write where it goes as a name plus the folder it will sit in**, not as a path: "a new `locate.kspl` under `ksplc/base/`". A path reads as pointing at a file that exists, and `make test-docref` reports one that does not. The destination is a file nobody has made yet, so there is nothing to point at.
+**Write where it goes as a name plus its folder**, not as a path, which `make test-docref` would report: "a new `locate.kspl` under `ksplc/base/`".
 
 ## Wording and formatting rules
 
-These rules keep every document written the same way. **Adding to the documents without reading them makes them inconsistent.** What the markers mean, and how lines are wrapped, start to differ from one section to the next.
-
 ### A fact goes where its neighbours already are
 
-**Where a table already covers a subject, a new fact about it becomes a row or a column of that table.** It does not become a paragraph beside the table. Written as a paragraph, the subject is stated in two places, and when one is edited nothing shows that the other is out of date. The reader pays first: they read the table, believe they have the whole subject, and skip the paragraph.
+**Where a table already covers a subject, a new fact about it becomes a row or a column of that table.** It does not become a paragraph beside it.
 
-**A paragraph beside a table says only what the table cannot hold.** That is why a column exists, a caution about filling one in, or the one consequence that does not fit in a cell.
+**A paragraph beside a table says only what the table cannot hold.** That is why a column exists, a caution about filling one in, or a consequence too big for a cell.
 
-**A passage that repeats what another document states is deleted, not reworded.** A pointer to that document replaces it, so there is one place to edit.
+**A passage that repeats another document is replaced by a pointer to it, not reworded.**
 
-**No count decides this.** A person reads for it, as with "one file, one kind". A machine can see that a table and a paragraph sit side by side, but not that they say the same thing. Other projects' style guides set the shape a list takes and stop there.
+**No count decides this**; a person reads for it.
 
 ### Caution markers go only on things that break if ignored
 
-Two labels can open a paragraph: `Caution:` for something that breaks if the reader ignores it, and `Note:` for a pointer to somewhere the reader can go. Everything else carries no label. **This rule applies to documents and source comments.**
-
-Both labels are plain ASCII.
+Two plain-ASCII labels can open a paragraph: `Caution:` and `Note:`. Everything else carries no label. **This rule applies to documents and source comments.**
 
 | Label | What it goes on |
 | :-- | :-- |
@@ -200,29 +192,27 @@ flowchart TD
     Q2 -->|no| X["no label: a fact or rule<br/>opens with a bold sentence"]
 ```
 
-**A name in backquotes on its own does not count as a place.** To a person, `check_line_wrap` reads as a pointer; to a machine, it is just another word in backquotes. What earns the `Note:` label is a destination that can be opened. That is a link, a `§`, a document's name, a path holding a `/`, or a `make` target in backquotes.
+**A name in backquotes on its own is not a place**: `Note:` needs a link, a `§`, a document's name, a path holding a `/`, or a `make` target. **A supplement that names nowhere is still written, with no label.**
 
-**A supplement that names nowhere is still written; only the label goes.** A measured figure is still stated, and a reason is still given.
+**A fact or a rule of the specification gets no label** ("X is Y", "there is no X"); a bold opening sentence does that job. No other lead word is a label either. A paragraph opening with "The rule:", "The decision:" or "Settlement:" drops that word and keeps its bold sentence.
 
-**A fact or a rule of the specification gets no label** ("X is Y", "there is no X", "X becomes Y"). A bold opening sentence already does that job. No other lead word is a label either. A paragraph opening with "The rule:", "The decision:" or "Settlement:" drops that word and keeps its bold sentence.
-
-**Do not rewrite the sentence when removing a label.** Only the label goes; the sentence keeps its position and its words.
+**Do not rewrite the sentence when removing a label.** Only the label goes.
 
 Caution: **Do not put a label on every assertion.** Then the reader cannot pick out what to obey, and in the end skips the labels altogether.
 
 #### Where a label goes
 
-**The label comes first, and a line holds only one.** In a source comment it follows the comment opener directly, whether the comment has the line to itself or follows code. In a document, where a paragraph is one line, it opens its own paragraph. Two labels on one line are two thoughts sharing a line, so the second takes a line of its own.
+**The label comes first, and a line holds only one.** In a source comment it follows the comment opener directly; in a document it opens its own paragraph.
 
-**A label stands alone.** Two labels within four lines are read as one, and readers learn to skip them. Where two are needed in one place, the second keeps its words and drops its label. A bold `**Do not X.**` still reads as a prohibition with nothing before it.
+**A label stands alone.** Two labels within four lines are read as one. Where two are needed in one place, the second keeps its words and drops its label; a bold `**Do not X.**` still reads as a prohibition.
 
-**Do not put a label inside a table cell or a heading.** A cell is short, and a label in one cell throws it out of balance with the cell beside it. A heading is already the loudest line on the screen. In a comparison table every cell is a contrast, so a label there would carry no more weight than its neighbours.
+**Do not put a label inside a table cell or a heading.**
 
 #### The two exceptions
 
-**One alert box stands in the whole tree: the root `README.md`'s status notice**, written as GitHub's alert (`> [!CAUTION]`) directly under the title. It is the one caution every arriving reader must see before anything else, and a coloured box is what reaches them. Repeated elsewhere, the box would stop standing out, so every other caution keeps the plain label.
+**One alert box stands in the whole tree: the root `README.md`'s status notice**, written as GitHub's alert (`> [!CAUTION]`) directly under the title. Every other caution keeps the plain label.
 
-**The two labels are not the compiler's words.** A diagnostic (a message from the compiler) carries `error` / `warning` / `information` / `hint`, and neither label is one of them. So `warning` in a line of text is always the compiler speaking, and a label is always a person speaking to the reader. That is why `Warning:`, which Google's style guide offers, is not used here. A few diagnostics use the bare word `Note:` inside their own message text; that is the compiler, not a label.
+**The two labels are not the compiler's words** (`error` / `warning` / `information` / `hint`), so `Warning:` is not a label. A diagnostic's own `Note:` inside its message is the compiler, not a label.
 
 #### No gate counts the labels
 
@@ -239,9 +229,9 @@ Caution: **Do not put a label on every assertion.** Then the reader cannot pick 
 
 ### Another product is named for its behavior, not judged
 
-**Name a product, a language or a company only where what it does grounds a decision here, and describe what it does.** This grounds a choice: "Excel and Word put redo and repeat on one key, so which a press does cannot be told beforehand". This does not: "Excel is complained about for this". Where only the complaint grounds the decision, the complaint stays and the name goes ("a common complaint is …").
+**Name a product, a language or a company only where what it does grounds a decision here, and describe what it does.** Write "Excel and Word put redo and repeat on one key", not "Excel is complained about for this". Where only the complaint grounds the decision, the complaint stays and the name goes ("a common complaint is …").
 
-**Do not write a verdict on another product, nor that this one does better**: "a classic accident", "not well regarded", "ahead of". A verdict reads as a claim against that product's users. A behavior is a fact anyone can check, and only a fact grounds a decision. This holds in documents and comments alike.
+**Do not write a verdict on another product, nor that this one does better** ("a classic accident", "ahead of"), in documents and comments alike. Only a fact anyone can check grounds a decision.
 
 ### Sentences follow the plain-language specification
 
@@ -249,13 +239,11 @@ Caution: **Do not put a label on every assertion.** Then the reader cannot pick 
 
 ### Do not hard-wrap paragraphs
 
-**One paragraph, or one bullet item, is written on one line.** Wrapping is left to the width of the reader's window.
-
-**Do not pick a column and wrap by hand.** Markdown shows a newline inside a paragraph as a space, so a stray space appears mid-sentence. The wrap points also move every time the text is edited, so the diff looks like a change in content.
+**One paragraph, or one bullet item, is written on one line.** Wrap points that move make a diff look like a change in content.
 
 ### A document carries no list of its own headings
 
-**A document holds no hand-written table of contents.** The editor's outline and GitHub's outline button list the headings from the headings themselves. A list written by hand has to be edited with every heading it names. A heading added later is missing from it, with nothing to show it.
+**A document holds no hand-written table of contents.** The editor's and GitHub's outlines list the headings.
 
 ### Escape vertical bars only inside tables
 
@@ -266,18 +254,17 @@ prose       `Option<|T|>`
 table cell  `Option<\|T\|>`
 ```
 
-* **A bare `|` inside a table splits the cell**, even inside backticks: GitHub's Markdown cuts a row into cells before it reads what is inside them. Cells beyond the header's count are thrown away, so the prose after `<|` disappears from the rendered page, and reading the source does not reveal it.
-* **A backslash before it in prose shows up as a backslash**: inside a code span (backticks) it is not an escape.
-* To show the escaping itself, put it in a code block, where it comes out as written.
+* **A bare `|` inside a table splits the cell**, even inside backticks, and the text after it disappears from the rendered page.
+* **A backslash before it in prose shows up as a backslash**: inside a code span it is not an escape.
 * The check is `make test-conventions`, which also checks that a table row's number of columns agrees with the header.
 
 ### A heading holds no double quote
 
-**Write a quote inside a heading as `'`**, outside a code span. A comment or a document cites a heading by its text in double quotes. So a `"` inside the heading would end the citation early. Nothing would then check that the citation still matches. `make test-docref` refuses such a heading. A code span can hold the notation it names (`` `~"..."` ``).
+**Write a quote inside a heading as `'`**, outside a code span. A citation puts a heading's text in double quotes, so a `"` inside the heading would end it early. `make test-docref` refuses such a heading. A code span can hold the notation it names (`` `~"..."` ``).
 
 ### A code block compiles, or says why not
 
-**A ` ```kspl ` or ` ```ksplb ` block is KSPL, and `make test-docsnippet` compiles it.** It compiles the block inside a copy of the package whose documents hold it. So a name that the package keeps to itself resolves as it does for the package's own files. A reader copies what a document shows, and a model takes it for the language.
+**A ` ```kspl ` or ` ```ksplb ` block is KSPL, and `make test-docsnippet` compiles it** inside a copy of the package whose documents hold it.
 
 | The block | What it must do |
 | :-- | :-- |
@@ -293,22 +280,22 @@ table cell  `Option<\|T\|>`
 | Opens a block: `fn first(xs: U8[]): U8 // error: …` | That line, and every line after it that is indented deeper (the function's body) |
 | Leaves a bracket open: `n: = pick(1, // error: …` | That line, and the lines after it up to the one that closes the bracket |
 
-`make test-docsnippet` first compiles the block with every covered line taken out, as the table above asks. Then, for each mark, it puts back only that mark's lines: the compile must fail, and every error must fall inside what that mark covers. Where a block has two marks or more, it also puts all of them back at once. Every error must still fall inside some mark's cover. So each mark points at a real error, and no error hides on a line no mark covers.
+`make test-docsnippet` first compiles the block with every covered line taken out. Then, for each mark, it puts back only that mark's lines: the compile must fail, with every error inside that mark's cover. Where a block has two marks or more, it also puts all back at once. Every error must still fall inside some mark's cover.
 
-**A mark ends the line it marks, spelt `// error`.** On a line of its own it names no line, and `// Error` would be a second spelling of one mark.
+**A mark ends the line it marks, spelt `// error`** (not `// Error`).
 
-**Two marks excuse a whole program, or a block carrying `// error`, that does not compile.** Each is written where the reader sees it:
+**Two marks excuse a whole program, or a block carrying `// error`, that does not compile:**
 
 * **An elision**: `...` or `…` outside a comment, where the writer left part out.
-* **A first line naming the file it needs beside it**: `// app.kspl (the KSPL customer; greet_api.kspl is beside it)`. A block with this line that compiles alone fails, since the line no longer says anything true.
+* **A first line naming the file it needs beside it**: `// app.kspl (the KSPL customer; greet_api.kspl is beside it)`. A block with this line that compiles alone fails.
 
-**A tour's blocks are steps of one program.** `make test-docs` joins them in order, compiles and runs the result. The result must print what the program prints. So the blocks are not compiled one by one.
+**A tour's blocks are steps of one program.** `make test-docs` joins them in order, compiles and runs the result, which must print what the program prints.
 
-There is a gap. A fragment that does not compile is taken as leaning on the prose, whatever the reason. So a refusal in it goes unseen unless the fragment carries a mark. A form that escapes the check is still a violation.
+There is a gap. A fragment that does not compile is taken as leaning on the prose, so a refusal in it goes unseen without a mark. A form that escapes the check is still a violation.
 
 ## Reference direction between documents
 
-**A reference between layers or packages points one way only.** It points down from the index, from a package to a package it imports, and up from tests and tools. References are useful: they are the shortest path to "why is it this way". The trouble is that they go out of date without anyone noticing. So rather than cutting how many there are, **`make test-docref` checks every reference**, and the rules below fix which way each can point.
+**A reference between layers or packages points one way only.** It points down from the index, from a package to a package it imports, and up from tests and tools. **`make test-docref` checks every reference**, and the rules below fix which way each can point.
 
 ### The layers
 
@@ -317,7 +304,7 @@ The repository has three layers. From the top:
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `ksbind/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `ksbind→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`) |
+| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `ksbind/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `ksbind→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→ksbind`, `ksos→ksdb`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
 The chart shows the shape with a few of the packages; the table above is the full list of directions.
@@ -335,44 +322,40 @@ flowchart BT
     I --> IM
 ```
 
-`ksos→ksdb` exists because `ksos` keeps an append-only record inside a device. `ksdb/` itself uses only `std/`.
+`ksos→ksdb` exists because `ksos` keeps an append-only record inside a device. **Do not create the reverse.**
 
-**Do not create the reverse.** Once `ksdb/` knows a particular device or document, the point of being able to use it anywhere is lost.
+Caution: **Do not create sideways references between packages.** A pointer from `std/` to `ksplc/` or `ksos/` has no dependency behind it, so moving either end goes unnoticed.
 
-Caution: **Do not create sideways references between packages.** A pointer from `std/` to `ksplc/` or `ksos/` has no dependency behind it, so moving either end goes unnoticed. The same holds between `ksplc/`, `kssrv/` and the other packages.
+**No edge goes from implementation to leaf, data included.** A package's examples and benchmarks stand inside it. The `ksos` Cortex-M demo embeds the weights in `ksai/examples/` through `ksos→ksai`. Do not copy the weights into `ksos/`: only the retrained set would be current.
 
-**No edge goes from implementation to leaf, data included.** A package's examples and benchmarks stand inside it. So whatever is built on its parts goes with them. The `ksos` Cortex-M demo embeds the weights in `ksai/examples/` through `ksos→ksai`, an arrow in the table. Do not copy the weights into `ksos/`: a copy makes two sets, and only the retrained one is current.
+**Do not build a documentation signpost from implementation toward leaf.** "Which tool is built on these parts" and "which suite runs them" belong to the leaf and to the index.
 
-**Do not build a documentation signpost from implementation toward leaf.** "Which tool is built on these parts" and "which suite runs them" belong to the leaf and to the index. The leaf can point upward, and the index can point downward. If a package held them, a lower layer would know the names of its users, and would need editing every time a user is added.
+**When adding an edge of this shape, fix both the table and the check.** `make test-conventions` checks that they agree; the check's list is `LAYER_TO` in `tests/suite/docref_test.kspl`.
 
-**When adding an edge of this shape, fix both the table and the check.** `make test-conventions` checks that they agree; the machine-readable list the check holds is `LAYER_TO` in `tests/suite/docref_test.kspl`.
-
-Note: **The code is read against the same table.** `embed` (baking a file's contents into the program) is a reference between packages just as `import` is. So the check "import's and embed's directions are as the convention says too" in `make test-docref` reads both, and only those two, in `.kspl`. A path string opened at run time (one passed to `io.read_file`) and names written in build files escape it. A form that escapes is still a violation (Principle 8).
+Note: **The code is read against the same table.** `embed` (baking a file's contents into the program) is a reference between packages just as `import` is. The check "import's and embed's directions are as the convention says too" in `make test-docref` reads both in `.kspl`. A path string opened at run time and names in build files escape it. A form that escapes is still a violation (Principle 8).
 
 ### Naming is not depending
 
-**Keep "naming" and "depending" apart.** The layer table forbids a tie in a direction where there is no dependency. The two kinds of name below are dependencies in themselves, so the source names them even in a direction the table does not list.
+**Keep "naming" and "depending" apart.** The two kinds of name below are dependencies in themselves, so the source names them even in a direction the table does not list.
 
 | May be named | Example | What happens if it is not written |
 | :-- | :-- | :-- |
 | **One half of an implementation** | The bodies behind `std`'s `extern` are in `ksplc/gen/runtime/`, and the region holding the panic record is defined by `ksos/port/*/link.ld` | If a name drifts, it breaks silently. Whoever fixes one half cannot fix the other |
 | **A premise behind a rule** | `Map`'s hashing is not randomized because `kssrv/` and `ksdb/` do not use `Map` | When the premise changes, the rule stays with nothing to show why |
 
-**Anything whose name one package alone cannot fix is also "one half of an implementation".** `ksplc/` matches names written in `std` (trait and operator names), turns syntax into calls on `std` (string interpolation, `for..in`, inserting `retain`/`release`), and rejects certain forms on sight (deciding use-after-free). In each case the pair is split across two packages, and when one half is renamed the other silently comes loose.
+**Anything whose name one package alone cannot fix is also "one half of an implementation".** `ksplc/` matches names written in `std` (trait and operator names). It turns syntax into calls on `std` (string interpolation, `for..in`, `retain`/`release`), and rejects certain forms on sight (use-after-free).
 
-**Do not add these to the arrow table.** Naming is not depending, so the set of directions `make test-docref` allows does not grow.
-
-**Do not name anything that is not one of those two.** "Who uses this" and "which test guards this" are not dependencies but signposts. The first belongs with the user, and the second is stated by the name of the make target (as in `make debug` / `make test-conventions`).
+**Do not add these to the arrow table**, and **do not name anything that is not one of those two.** "Who uses this" belongs with the user. "Which test guards this" is stated by the make target's name (`make debug`, `make test-conventions`).
 
 **Do not name a test's file.** When the test moves, the annotation in the lower layer is left stale.
 
-**Links between documents are not made even for the two above.** Between `.md` files the check refuses on direction alone, so it allows no exception. An implementation half or a premise is named in the source (in an annotation), and documents link to each other through the index.
+**Links between documents are not made even for the two above.** Between `.md` files the check refuses on direction alone. An implementation half or a premise is named in the source, in an annotation.
 
 Note: `make test-docref` checks that what is named exists, so a deleted name cannot rot silently.
 
 ### What a SPEC can point at
 
-**A specification states every rule its reader needs.** Include the applicable conditions, limits, errors and exceptions. Design documents hold the reasons and tradeoffs. The folder's README directs readers to those documents.
+**A specification states every rule its reader needs**, with the conditions, limits, errors and exceptions. Design documents hold the reasons and tradeoffs.
 
 **A specification does not reference a DESIGN document**, including in the same folder or a higher layer. A DESIGN document may reference a specification.
 
@@ -391,7 +374,7 @@ Note: `make test-docref` checks that what is named exists, so a deleted name can
 
 ### Writing a reference
 
-**If you write a section number, name its document in the same sentence.** `make test-docref` reads two forms: a number with its document named, and a number in the current document. A bare `§N` that is neither has nothing to match against. Where the number can be avoided, pointing by the heading's name is sturdier.
+**If you write a section number, name its document in the same sentence.** Where the number can be avoided, pointing by the heading's name is sturdier.
 
 | Form | Check |
 | :-- | :-- |
@@ -399,13 +382,13 @@ Note: `make test-docref` checks that what is named exists, so a deleted name can
 | `§6.1` in this document | Checks that it exists here |
 | `§6.1` with no document named nearby | **Fails** (nothing to match against) |
 
-**There are gaps.** A paragraph that names document A is exempt as a whole, so a section number from document B written there escapes the check. A form that escapes still breaks the rule.
+**There are gaps**: in a paragraph that names document A, a section number from document B escapes the check. A form that escapes still breaks the rule.
 
-**A link's destination is relative to the file it is written in.** The bare form (`ksmd/README.md`) can also count from the repository root, but the destination of `[…](…)` counts from that file's folder, as Markdown defines it. `make test-docref` checks that it exists.
+**A link's destination is relative to the file it is written in.** The bare form (`ksmd/README.md`) can also count from the repository root. `make test-docref` checks that it exists.
 
-**A link whose text is a file's name points at that file.** In `` [`X`](Y) ``, the file name that ends X is the one that ends Y; the folders can differ, since each is written from its own place. The check reads a citation's name in the file that the text names, while the reader opens the target. So a link naming one file and pointing at another sends the two to different places. `make test-docref` refuses it, in documents and comments alike.
+**A link whose text is a file's name points at that file.** In `` [`X`](Y) ``, the file name that ends X is the one that ends Y; the folders can differ. `make test-docref` refuses a link naming one file and pointing at another, in documents and comments alike.
 
-Caution: **Do not write `[I0301](description)`.** A `(` directly after `]` makes a link, so what was meant as a description becomes a link to a file that does not exist. To add a description, separate it: `[I0301] the description`.
+Caution: **Do not write `[I0301](description)`.** A `(` directly after `]` makes a link to a file that does not exist. Separate a description: `[I0301] the description`.
 
 **If you point at a heading by name, prefer a link.** A link's `](…#anchor)` must match a heading exactly, so it is the tightest check.
 
@@ -418,17 +401,17 @@ Caution: **Do not write `[I0301](description)`.** A `(` directly after `]` makes
 | At the head of a table cell or a list item | Yes |
 | Anywhere else | No |
 
-A mention anywhere else does not count. A document mentions its partner's names when it cites them back, and such a citation must not keep a renamed name alive. A quoted name is still looser than a link, because any part of a heading matches. So a wrong name survives as long as its words stay inside some heading.
+A quoted name is still looser than a link: a wrong name survives as long as its words stay inside some heading.
 
-**The anchor of a heading that starts with an emoji carries a leading hyphen.** The id of `## 🏗 Architecture` is `#-architecture`: the symbol drops out and the one remaining space becomes `-`. It looks like a typo but is correct; removing the hyphen makes `make test-docref` report that the heading does not exist.
+**The anchor of a heading that starts with an emoji carries a leading hyphen**: the id of `## 🏗 Architecture` is `#-architecture`.
 
-**A `Phase N` is named with `README.md` nearby**, so the reader can trace the numbering to the root README ("Terms of art" above); `make test-docref` checks this too.
+**A `Phase N` is named with `README.md` nearby**, so the reader can trace the numbering to the root README; `make test-docref` checks this too.
 
-**A stage in another document is named with its document** ("the board material's stage 8", "the tools plan's stage 1"), since every plan counts its stages from 1.
+**A stage in another document is named with its document** ("the board material's stage 8"), since every plan counts its stages from 1.
 
 ## Linking documents to source
 
-**A document points at the source by file and symbol name, and no marker in the source points back at a document.** References are needed not only between documents but also **between a document and the source**. They go from a design document to its implementation, and from a specification to its check.
+**A document points at the source by file and symbol name, and no marker in the source points back at a document.**
 
 * **The canonical source is the source, and there is one.** A document points at it and never copies it.
 * **The direction is document → source only.** No marker on a symbol names a document.
@@ -439,11 +422,11 @@ A mention anywhere else does not count. A document mentions its partner's names 
 
 **Do not add markers in the source.** Markers are for things only a machine can tell (the origin of a generated file, and a few others like it).
 
-**What the check reads of a name** is a name in backticks tied to a file in backticks. It reads three forms, in documents and comments alike: `` `name` in `file` `` (or `of` / `inside`), a run `` `a` / `b` in `file` ``, and `` `name`(`file`) ``. The file must exist and hold the name as a word. For `` `Owner.member` `` it must hold the member as well as the owner. A form that escapes is still a violation. The check does not read a name joined by "and", or a file named without backticks, but the rule applies to them all the same.
+**What the check reads of a name** is a name in backticks tied to a file in backticks: `` `name` in `file` `` (or `of` / `inside`), `` `a` / `b` in `file` ``, and `` `name`(`file`) ``. The file must exist and hold the name as a word; for `` `Owner.member` `` it must hold both. A name joined by "and", or a file without backticks, escapes the check but not the rule.
 
-**In a comment, the compiler reads a dotted name tied to no file** as the code beside the comment would read it. A dotted name is an owner and a member joined by a dot, such as `List.push` or `io.out()`. The compiler looks the owner up among the names that the commenting file can see. Those are its own declarations, its imports, and `std/lang`, which every file sees. Then it looks for the member in that owner. The owner can be found and the member not, as with a method since renamed. Then the name leads nowhere and gets a warning (`[W0211]`). `ksplc explain W0211` gives what is read and what is left alone. The editor's hover reads the name the same way and links it to its declaration. Write a name another product owns with its owner in front ("Python's `` `json.dumps` ``"). That is the one wording both readers, the compiler and `make test-docref`, leave alone.
+**In a comment, the compiler reads a dotted name tied to no file** (`List.push`, `io.out()`) as the code beside the comment would. The editor's hover reads it the same way. An owner found without the member gets a warning (`[W0211]`); `ksplc explain W0211` gives what is read. Write a name another product owns with its owner in front ("Python's `` `json.dumps` ``").
 
-**A dotted name in a document tied to no file is read against the declarations of the whole tree**, as `ksplc doc --surface-scope=all` lists them. A document imports nothing, so it has no smaller set of names to be read against. `make test-docref` judges the name by its first part:
+**A dotted name in a document tied to no file is read against the declarations of the whole tree**, as `ksplc doc --surface-scope=all` lists them. `make test-docref` judges the name by its first part:
 
 | The first part | Example | Refused when |
 | :-- | :-- | :-- |
@@ -451,13 +434,8 @@ A mention anywhere else does not count. A document mentions its partner's names 
 | The name of a standard library file directly under `std/` | `io.out` | That file declares no such name |
 | Anything else | `root.children` | Never: a lower-case word is as often a variable the prose speaks of |
 
-A member that the document's own KSPL blocks declare counts too, so a document can name what its example declares. The spellings that a comment's reading leaves alone are left alone here as well:
+A member that the document's own KSPL blocks declare counts too. A name tied to its file is checked against that file instead. The check leaves alone another product's name, a file's name (`edit.kspl`) and a code fragment (`io.out().s("x")`).
 
-* a name tied to its file, which is checked against that file instead, as described above;
-* a name introduced as another product's;
-* a file's name (`edit.kspl`);
-* a code fragment (`io.out().s("x")`).
+**A `make` command in a document names a target make has**, in a code span or a fence; `make test-docref` asks make itself. A document inside a package with its own `Makefile` can name its targets, as can a sentence naming the package (``ksbind's own `make test` ``).
 
-**A `make` command in a document names a target make has.** A code span opening with `make`, or a line of a fence, is read, and `make test-docref` asks make itself for its rules. A document inside a package with its own `Makefile` can name that file's targets, and so can a sentence that names the target a package's (``ksbind's own `make test` ``).
-
-**A description written in a source is read where it is written.** `ksplc doc` prints it as it stands, with nothing rendered beside it, so a relative link in it resolves from the source's folder, as in any comment.
+**A description written in a source is read where it is written.** `ksplc doc` prints it as it stands, so a relative link in it resolves from the source's folder.

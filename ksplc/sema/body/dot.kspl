@@ -28,67 +28,6 @@ import "std/ds" { List }
 import "std/math"
 import "std/str" { Str_builder }
 
-fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool!Sema_error //<
-    //< Rewrites `\{e\}` on an enum into `w.s(e.variant_name())`
-    //< A string interpolation `\{e\}` desugars into `put(w, e)`; it is rewritten only for an enum.
-    //< No `fmt` is synthesized on an enum, since that would give every enum a `Formattable` vtable.
-    //< Caution: **Do not rewrite if the user wrote `fmt`**, or their format is silently ignored.
-    if left == null || (left.kind_id != .k_expr_path && left.kind_id != .k_identifier)
-        return false
-    args: = node.find_child(.k_expr_args)
-    if args == null || args.children.len != 2
-        return false
-    // Caution: **Decide by the FQN the desugaring wrote** (`PUT_FQN` in `../../base/core.kspl`).
-    // A user's own call to `put` that takes an enum would otherwise have its body silently
-    // replaced.
-    if left.kind_id == .k_expr_path && left.children.len > 1
-        return false
-    callee_name: = left.get_path_name() if left.kind_id == .k_expr_path else left.text
-    if !callee_name.equals(base_core.PUT_FQN)
-        return false
-    named: = c.read_written_name(left)
-    if named.template == null || !named.fqn.equals("std.lang.put")
-        return false
-    recv: = args.get_child(1)
-    // **recv must not be inferred here**: every non-enum `put(w, X)` would be inferred twice,
-    // breaking its method resolution. So only an identifier counts; for `\{x.field\}` write
-    // `\{x.field.variant_name()\}`.
-    if recv == null || (recv.kind_id != .k_expr_path && recv.kind_id != .k_identifier)
-        return false
-    sym: = c.read_written_name(recv).sym
-    if sym == null || !sym.kind.is_var_or_const() || sym.type_id == 0
-        return false
-    base_id: = c.env.get_clean_real_type(c.env.receiver_base_id(sym.type_id))
-    $is_enum: = false
-    switch c.env.get_info(base_id)
-    case .enum_type
-        is_enum = true
-    default {}
-    if !is_enum
-        return false
-    t_entry: = c.env.id_to_type.get(base_id)
-    if t_entry == null
-        return false
-    // Caution: **Finish building the method table before the lookup.** A generic enum first
-    // instantiated in a method's signature has its table deferred (ensure_instance_methods in
-    // mono_queue.kspl). Until it is built, the synthesized `variant_name` is invisible, and correct
-    // code fails with "`Formattable` not implemented".
-    c.ensure_instance_methods(base_id) catch {}
-    if _user_fmt: = t_entry.get_method("fmt")
-        return false // the fmt the user wrote is respected
-    switch t_entry.get_method("variant_name")
-    case .none
-        return false // no variant_name was synthesized (for a const generic, for example)
-    case .some {}
-
-    writer: = args.get_child(0)
-    name_call: = Ast_node.build_method_call(recv, "variant_name", null, 0, node.loc)
-    rewritten: = Ast_node.build_method_call(writer, "s", name_call, 0, node.loc)
-    node.morph(rewritten.kind_id, rewritten.text)
-    node.children = rewritten.children
-    node.type_id = 0
-    return true
-
 priv fn refuse_variant_list(c: Sema_ctx$@, node: Ast_node$@, enum_id: I32, member: U8[]): Bool //<
     //< Reports `variants` or `from_variant_name` asked of an enum whose variant carries data
     //< The compiler makes the two only for an enum whose variants carry no payload

@@ -1,5 +1,5 @@
 #!/usr/bin/env -S ksplc run
-//< Writes and checks the language tutorial (`docs/TUTORIAL.md`)
+//< Writes and checks the language tutorial (`docs/TUTORIAL-programming-language.md`)
 //< It is built from `ksplc/tests/notation/tutorial.kspl` and a run.
 //< **The page is committed.** So a change to the program, or to what the compiler makes of it,
 //< shows as a diff. `make tutorial` rewrites it, and `make test-docs` fails when it is out of date.
@@ -7,10 +7,11 @@
 //< the page shows the whole program. Both subcommands refuse a page that does not.
 
 // ==========================================
-//     ksplc run tools/tutorial.kspl write   # rewrites docs/TUTORIAL.md
+//     ksplc run tools/tutorial.kspl write   # rewrites docs/TUTORIAL-programming-language.md
 //     ksplc run tools/tutorial.kspl check   # checks the page against the program's current output
 // ==========================================
 import "std/argparse"
+import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" // `equals`
@@ -19,8 +20,9 @@ import "std/sys"
 import "tools/tutorial_page" as page
 
 priv const LAID_SRC: U8[] = "ksplc/tests/notation/tutorial.kspl"
-priv const PAGE_PATH: U8[] = "docs/TUTORIAL.md"
-priv const JOINED_PATH: U8[] = "out/tutorial_joined.kspl" //<
+priv const PAGE_PATH: U8[] = "docs/TUTORIAL-programming-language.md"
+priv const JOINED_DIR: U8[] = "out/tmp" //< the scratch folder `JOINED_PATH` stands in
+priv const JOINED_PATH: U8[] = "out/tmp/tutorial_joined.kspl" //<
     //< the page's code blocks, joined to be run
 priv const DEFAULT_KSPLC: U8[] = "out/ksplc_stage1.exe"
 priv const RUN_TIMEOUT_MS: I32 = 300000
@@ -72,6 +74,8 @@ priv fn stands_alone( //< whether the page's code blocks, joined, are the progra
     ksplc: U8[],
     arena: Arena$@,
 ): Bool!Tutorial_error
+    fs.mkdir_all(JOINED_DIR) catch
+        throw .not_written
     io.write_file(JOINED_PATH, joined_code(text, arena)) catch
         throw .not_written
     got: =
@@ -120,7 +124,7 @@ fn main(): I32 //< writes or checks the language tutorial
     $ksplc: U8[] = ""
     p: = argparse.Parser
         .create(sys.program_name(), "make / match the tutorial of the language", arena)
-    p.subcommand("write", "remake docs/TUTORIAL.md")
+    p.subcommand("write", "remake docs/TUTORIAL-programming-language.md")
     p.subcommand("check", "match the page against what the program gives today (exit 1 on a drift)")
     p.str_opt("--ksplc", ksplc@, "the compiler to use (default out/ksplc_stage1.exe)")
     p.parse_or_exit()

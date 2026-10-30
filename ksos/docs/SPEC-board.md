@@ -1,8 +1,8 @@
 # The Freenove 4WD car — what is wired to what
 
-**This document gives the hardware's own facts** for a Raspberry Pi Pico W (RP2040 / Cortex-M0+, CYW43439 WiFi) on a Freenove FNK0089 4WD mecanum car. The facts are pin numbers, PWM frequencies, and the conversion formulae a driver must match. A driver is the code that talks to one part of the car, such as a motor or a sensor.
+**This document gives the hardware's own facts** for a Raspberry Pi Pico W (RP2040 / Cortex-M0+, CYW43439 WiFi) on a Freenove FNK0089 4WD mecanum car. The facts are pin numbers, PWM frequencies, and the conversion formulae a driver (the code for one part of the car) must match.
 
-**"The car" is a palm-sized commercial kit carrying one Pico W**, not one a person rides in. The Pico W is a small board holding the RP2040 microcontroller (a computer on one chip) and a CYW43439 WiFi chip.
+**"The car" is a palm-sized commercial kit**, not one a person rides in.
 
 **Nothing here is ksos's to decide.** These are facts about a board somebody else made, matched against the vendor's material and never the code. Where they disagree, the board is right. The bring-up order is in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 
@@ -13,14 +13,14 @@ This table is the one definition of the words for the board's parts and pins.
 | Word | What it means here |
 | :-- | :-- |
 | GPIO | A general-purpose pin of the RP2040 that a program can switch High or Low, or read. Pins are named by number: GPIO 2, GPIO 3 … |
-| PWM | Switching a pin on and off very fast. The share of each cycle it is on is the *duty* (0 to 100%); the cycles per second are its frequency. The duty sets a motor's speed; the frequency sets the buzzer's pitch |
+| PWM | Switching a pin on and off very fast. The share of each cycle it is on is the *duty* (0 to 100%), which sets a motor's speed. The frequency sets the buzzer's pitch |
 | ADC | Analog-to-digital converter: it turns a voltage on a pin into a number. The RP2040's has 12 bits: 0 to 4095 |
 | H bridge | The motor-driver circuit that lets a pair of pins turn a motor either way |
-| mecanum wheel | A wheel with rollers set at an angle around its rim. Turning four of them in different directions moves the car sideways or diagonally without steering |
+| mecanum wheel | A wheel with angled rollers around its rim. Four of them turning in different directions move the car sideways or diagonally |
 | servo | A small motor that turns to an angle it is told, rather than spinning |
 | I2C | A two-wire bus, SDA (data) and SCL (clock), on which each device answers at its own address. **ACK** is a device's "received"; **NACK** is no answer or a refusal |
 | BOOTSEL | A button on the Pico W. Held while USB is plugged in, it makes the chip show up as a USB drive instead of running its program |
-| UF2 | A firmware file format. Copying a `.uf2` file onto the Pico's USB drive (see BOOTSEL) writes the firmware into the chip's flash |
+| UF2 | A firmware file format. Copying a `.uf2` file onto the Pico's USB drive writes the firmware into the chip's flash |
 | SWD probe | A debugging adapter wired to the chip's debug pins |
 | USB CDC | A kind of USB device that looks like a serial port to the PC: a COM port on Windows, `/dev/ttyACM0` on Linux |
 
@@ -32,7 +32,7 @@ Every number is read off `Mecanum_wheels/Sketches/06.2_Multi_Functional_Car/` in
 
 ## The pin assignment (GPIO numbers)
 
-This table says which RP2040 pin goes to which part of the car. The source is the `#define`s of Freenove's shared header `Freenove_4WD_Car_For_Pico_W.h`, not the sketch, together with Tutorial.pdf's "Pins of the Car" table.
+The source is the `#define`s of Freenove's shared header `Freenove_4WD_Car_For_Pico_W.h`, not the sketch, together with Tutorial.pdf's "Pins of the Car" table.
 
 **Do not work a pin back from the code that calls it.** The plausible guess "4/5 collide with I2C, so it must be 22/17" is wrong, since 22 and 17 are Unused GPIO.
 
@@ -55,7 +55,7 @@ This table says which RP2040 pin goes to which part of the car. The source is th
 
 ### The ultrasonic and the LED matrix exclude each other
 
-GPIO 4 / 5 are **one connector shared by two modules** (the official table's "I2C port/Ultrasonic module interface"). In the mecanum arrangement, only one can be plugged in mechanically. The pins change meaning with the module:
+GPIO 4 / 5 are **one connector shared by two modules** (the official table's "I2C port/Ultrasonic module interface"). In the mecanum arrangement only one fits at a time, and the pins change meaning with it:
 
 | The module plugged in | GPIO 4 | GPIO 5 |
 |---|---|---|
@@ -64,7 +64,7 @@ GPIO 4 / 5 are **one connector shared by two modules** (the official table's "I2
 
 ### Which side is which
 
-Tutorial.pdf's table names only Track1–3 and A1/A2, which do not say left from right. **The header names the sides.**
+Tutorial.pdf's names (Track1–3, A1/A2) do not say left from right. **The header names the sides.**
 
 | The definition | GPIO |
 |---|---|
@@ -93,14 +93,7 @@ BL = LY - LX - RX      BR = LY + LX + RX
 Motor_M_Move(FL, BL, BR, FR)   // the third argument is BR and the fourth is FR
 ```
 
-`Motor_M_Move(M1,M2,M3,M4)` sends each argument to one pin group:
-
-* M1 to the front-left pin group;
-* M2 to the rear-left;
-* M3 to the right's first group;
-* M4 to the right's third.
-
-So the real correspondence is:
+`Motor_M_Move(M1,M2,M3,M4)` sends M1 to the front-left pin group, M2 to the rear-left, M3 to the right's first group and M4 to the right's third. So the real correspondence is:
 
 | The pin group | The real wheel |
 |---|---|
@@ -109,7 +102,7 @@ So the real correspondence is:
 | 7 / 6 | The **rear** right (named `RIGHT1/2`) |
 | 9 / 8 | The **front** right (named `RIGHT3/4`) |
 
-The left goes front then rear, the right rear then front (the board's connectors mirror left and right). **Ported as if symmetric, straight moves forwards, backwards, left and right all look correct, while only diagonals and turns break.** That is hard to notice.
+The left goes front then rear, the right rear then front. **Ported as if symmetric, straight moves all look correct, while only diagonals and turns break**, which is hard to notice.
 
 ### The direction of rotation differs from unit to unit
 
@@ -117,14 +110,12 @@ The motors' wiring differs per unit (on the unit here, all four are reversed). T
 
 ## The servos
 
-A servo turns to the angle its PWM signal asks for.
-
 * PWM at **50 Hz**, mapping 0–180° linearly onto a duty of 2.5% to 12.5% (a pulse of 0.5 to 2.5ms in every 20ms).
 * The software limits it to **30° to 150°**. Beyond that, the mechanism interferes with itself.
 
 ## The battery voltage
 
-The battery reaches the ADC through a voltage divider. The divider is two resistors that scale the voltage down to what the pin can read. So the reading is multiplied back up:
+The battery reaches the ADC through a voltage divider (two resistors that scale the voltage down), so the reading is multiplied back up:
 
 ```
 voltage = (the ADC value / 1023 * 3.3) * 4       (4 is the voltage divider's coefficient)
@@ -138,8 +129,6 @@ For example, an ADC value of 640 gives about 8.26V.
 
 ## The ultrasonic sensor (HC-SR04)
 
-The sensor sends a burst of sound and times its echo; the time gives the distance.
-
 * It sends a **10µs** High pulse on TRIG and measures ECHO's High width.
 * The distance in cm is `the High width in µs * 340 / 2 / 10000` (sound at 340 m/s, halved for the way there and back). A width of 1000µs is 17cm.
 * The timeout is `a maximum distance of 300cm × 60` = **18000µs**. Beyond it, the distance is taken as 300cm.
@@ -147,29 +136,25 @@ The sensor sends a burst of sound and times its echo; the time gives the distanc
 
 ## Line tracking
 
-Three sensors under the front of the car tell a dark line from a light floor.
-
-* Three GPIO inputs. **White = 0 / black = 1**.
+* Three sensors under the front, read as GPIO inputs. **White = 0 / black = 1**.
 * They pack into the three bits left<<2 | centre<<1 | right, which are branched on (`010` = only the centre is black = go straight).
 * **The sensors sit 20 to 25mm apart, about 100mm ahead of the point the car turns about.** Measured on this unit: a 20mm line cannot cover two neighbours, and a 50mm line covers all three.
 * **Some units have the left and right sensors mounted swapped.**
 
 ## The WS2812 LEDs
 
-Each WS2812 is an RGB LED with a small control chip inside it; eight are chained on GPIO 16.
+Eight WS2812 RGB LEDs, each with a small control chip inside, are chained on GPIO 16.
 
-* **A dark element still uses current.** The control IC inside each element takes a static current whether a colour is lit or not, about 0.6mA in Worldsemi's WS2812B datasheet (V5). A lit colour adds its LED's current on top, so darkening an element saves only that part.
+* **A dark element still uses current.** The control IC takes a static current whether lit or not, about 0.6mA in Worldsemi's WS2812B datasheet (V5). Darkening an element saves only its LED's current.
 * **The part fitted on this unit is not checked against its marking.** The static current differs by revision (the WS2812B-V6 rates it under 1µA).
 
 ## Flashing the firmware, and the debug output
 
-Flashing means writing the program (the firmware) into the Pico's storage. The debug output is how the program reports what it is doing.
-
 * Writing it takes **the BOOTSEL button plus a UF2** copied to USB mass storage; no SWD probe is needed.
 * **A standard Pico / Pico W carries 2MB of QSPI Flash**, a W25Q16JVxQ or equivalent. The part fitted on this unit is not checked against its marking.
-* **Semihosting cannot be used here.** Semihosting is printing through an attached debugger: it needs a debugger attached, and with no SWD probe the output halts the instruction that produces it.
+* **Semihosting cannot be used here.** It prints through an attached debugger, and with no SWD probe the output halts the instruction that produces it.
 * Reaching the Arduino IDE's Serial Monitor takes a USB CDC driver for the RP2040's USB controller: `ksos/drivers/rp2040/usb_cdc.kspl`.
-  * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** (Enumeration is the exchange in which the PC learns what a newly plugged-in USB device is.) What each beep count means is stage 2b in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
-* **USB takes no GPIO.** The RP2040's dedicated pins (`USB_DP` / `USB_DM`) go straight to the micro-USB connector, not the 40-pin header (whose `VBUS` is USB's 5V supply, not a data line). So USB Ethernet can provide the link layer with zero extra parts and zero extra GPIO.
-* **The Serial Monitor's COM port is USB CDC (a virtual serial port), not the UART on GPIO 0/1.** The car has two serial paths: USB's virtual serial, and the physical UART (a serial port on two wires) on connector P7. Only the first is in use. The `[0]`, `[1]`, `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins.
-* **The Pico W's on-board LED is wired to the WiFi chip (CYW43439), not a GPIO** (the plain Pico's is GPIO25). So blinking it needs the WiFi chip initialized and does not suit a first check. This is not checked against the data sheet.
+  * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** What each beep count means is stage 2b in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
+* **USB takes no GPIO.** The RP2040's dedicated pins (`USB_DP` / `USB_DM`) go straight to the micro-USB connector, so USB Ethernet needs no extra parts or GPIO.
+* **The Serial Monitor's COM port is USB CDC, not the UART on GPIO 0/1.** Of the car's two serial paths, the physical UART on connector P7 is unused. The `[0]`, `[1]`, `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins.
+* **The Pico W's on-board LED is wired to the WiFi chip (CYW43439), not a GPIO** (the plain Pico's is GPIO25). So it does not suit a first check. This is not checked against the data sheet.

@@ -1,0 +1,142 @@
+//< The parts of a zip file, as Word and Excel store their files
+//< **A name inside the zip is only ever a key**, compared with the parts asked for; it never
+//< becomes a path on the disk. Every size and offset is checked against the file before use. The
+//< caps (`MAX_ENTRIES`, `MAX_PART_BYTES`, `MAX_UNPACKED_BYTES`) are checked against the sizes the
+//< zip declares before anything is unpacked. The decoder then refuses to write past them, so a zip
+//< bomb is refused at once.
+import "ksagent/office/index" + { Index, Keyed }
+import "ksagent/office/inflate"
+import "std/bytes"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+const MAX_ENTRIES: Sz = 10000 //< the most entries a zip may hold
+    //< A Word or Excel file holds tens; a sheet per entry still leaves room for thousands.
+const MAX_PART_BYTES: Sz = 64 * 1024 * 1024 //< the most bytes one part may unpack to
+    //< Ten times the text a tool reads (8 MiB): XML spends most of its bytes on markup.
+const MAX_UNPACKED_BYTES: Sz = 128 * 1024 * 1024 //< the most bytes one file's parts unpack to
+    //< It bounds the memory reading one file takes, however many parts it holds.
+
+priv const SIG_LOCAL: U32 = 0x04034b50U32 //< "PK\3\4", a local header
+priv const SIG_CENTRAL: U32 = 0x02014b50U32 //< "PK\1\2", a central directory entry
+priv const SIG_END: U32 = 0x06054b50U32 //< "PK\5\6", the end of the central directory
+priv const END_SIZE: Sz = 22 //< the end record's size, without its comment
+
+priv struct Entry //< one part, as the central directory names it
+    name: U8[]
+    flags: U16
+    method: U16
+    crc: U32
+    packed: Sz //< its size in the zip
+    size: Sz //< its size unpacked
+    local: Sz //< where its local header starts
+
+struct Zip //< a zip file read into memory, with its central directory
+    data: U8[]
+    priv entries: List<|Entry|>
+    priv index: Index //< each name in ASCII lower case, to its entry
+    priv unpacked: Sz //< the bytes unpacked so far, held to `MAX_UNPACKED_BYTES`
+
+impl Zip
+    fn open(data: U8[], arena: Arena$@): Zip!U8[] //< reads the central directory of a zip file
+        end: = find_end(data)!
+        if data.get_u16_le(end + 4) != 0U16 || data.get_u16_le(end + 6) != 0U16
+            throw "it is a zip split over several files"
+        count: = Sz::data.get_u16_le(end + 10)
+        cd_size: = Sz::data.get_u32_le(end + 12)
+        cd_at: = Sz::data.get_u32_le(end + 16)
+        if count == 0xFFFF || cd_size == Sz::0xFFFFFFFFU32 || cd_at == Sz::0xFFFFFFFFU32
+            throw "it is a ZIP64 file, which is not read: save it again from Word or Excel"
+        if count > MAX_ENTRIES
+            throw arena.text().s("it holds more than \{MAX_ENTRIES\} parts").take()
+        if cd_at > end || cd_size > end - cd_at
+            throw "its table of parts lies outside the file"
+        $entries: = List<|Entry|>(arena)
+        $keys: = List<|Keyed|>(arena)
+        $at: = cd_at
+        for _k in Range.asc(count)
+            if cd_at + cd_size - at < 46 || data.get_u32_le(at) != SIG_CENTRAL
+                throw "its table of parts is damaged"
+            name_len: = Sz::data.get_u16_le(at + 28)
+            skip: = Sz::data.get_u16_le(at + 30) + Sz::data.get_u16_le(at + 32)
+            if cd_at + cd_size - at - 46 < name_len + skip
+                throw "its table of parts is damaged"
+            e: = Entry::{ .name = data.sub(at + 46, name_len),
+                .flags = data.get_u16_le(at + 8), .method = data.get_u16_le(at + 10),
+                .crc = data.get_u32_le(at + 16), .packed = Sz::data.get_u32_le(at + 20),
+                .size = Sz::data.get_u32_le(at + 24),
+                .local = Sz::data.get_u32_le(at + 42) }
+            keys.push(Keyed::{ .key = lower(e.name, arena), .pos = entries.len })
+            entries.push(e)
+            at += 46 + name_len + skip
+        names: = index.sorted(keys@, arena)
+        if names.repeats()
+            throw "it names one part twice"
+        return Zip::{ .data = data, .entries = entries, .index = names, .unpacked = 0 }
+
+    fn has(r: Self@, name: U8[], arena: Arena$@): Bool //< whether a part of that name is there
+        return r.index.find(lower(name, arena)).is_some()
+
+    fn part(r: Self$@, name: U8[], arena: Arena$@): U8[]!U8[] //<
+        //< The unpacked bytes of the part of that name, ASCII case ignored, as OPC compares names
+        //< Its checksum is checked, so a damaged part is refused rather than read wrong.
+        idx: = r.index.find(lower(name, arena)) catch
+            throw arena.text().s("it has no part ").s(name).take()
+        e: = r.entries.get(idx)
+        if (e.flags & 1U16) != 0U16
+            throw "it is encrypted"
+        if e.size > MAX_PART_BYTES
+            throw arena.text().s("its part ").s(name)
+                .s(" unpacks to more than \{MAX_PART_BYTES / (1024 * 1024)\} MiB").take()
+        if e.size > MAX_UNPACKED_BYTES - r.unpacked
+            throw arena.text()
+                .s("its parts unpack to more than \{MAX_UNPACKED_BYTES / (1024 * 1024)\} MiB")
+                .take()
+        d: = r.data
+        if e.local > d.len || d.len - e.local < 30 || d.get_u32_le(e.local) != SIG_LOCAL
+            throw arena.text().s("its part ").s(name).s(" is damaged").take()
+        start: =
+            e.local + 30 + Sz::d.get_u16_le(e.local + 26) + Sz::d.get_u16_le(e.local + 28)
+        if start > d.len || d.len - start < e.packed
+            throw arena.text().s("its part ").s(name).s(" lies outside the file").take()
+        packed: = d.sub(start, e.packed)
+        $out: U8[] = ""
+        if e.method == 0U16
+            if e.packed != e.size
+                throw arena.text().s("its part ").s(name).s(" is damaged").take()
+            out = packed
+        else if e.method == 8U16
+            buf: = U8$[]::{ .ptr = U8$@::arena.alloc(e.size), .len = e.size }
+            inflate.inflate(packed, buf) catch why
+                throw arena.text().s("its part ").s(name).s(" is damaged: ").s(why).take()
+            out = buf
+        else
+            throw arena.text().s("its part ").s(name)
+                .s(" is packed in a way other than DEFLATE, which is not read").take()
+        r.unpacked += e.size
+        if (out.crc32(0xFFFFFFFFU32) ^ 0xFFFFFFFFU32) != e.crc
+            throw arena.text().s("its part ").s(name).s(" is damaged: its checksum differs").take()
+        return out
+
+priv fn find_end(data: U8[]): Sz!U8[] //< where the end record of the central directory starts
+    //< The record ends the file, after a comment of at most 65535 bytes, so it is found from the
+    //< end.
+    if data.len < END_SIZE
+        throw "it is not a zip file: it is too short"
+    $at: = data.len - END_SIZE
+    lowest: = 0 if at < 65535 else at - 65535
+    for at >= lowest
+        if data.get_u32_le(at) == SIG_END &&
+            at + END_SIZE + Sz::data.get_u16_le(at + 20) == data.len
+            return at
+        at -= 1
+    throw "it is not a zip file, or its end is damaged"
+
+fn lower(name: U8[], arena: Arena$@): U8[] //< the name with ASCII letters made lower case
+    out: = arena.text()
+    for c in name
+        out.c(c.to_lower())
+    return out.take()

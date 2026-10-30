@@ -1,6 +1,6 @@
 # Contributing to Kanso
 
-**Start here to change Kanso itself**: the compiler, the libraries, the tools or the documents. If you only want to write programs in KSPL, the quick start in the root [`README.md`](../README.md) is enough.
+**Start here to change Kanso itself**: the compiler, the libraries, the tools or the documents. To write programs in KSPL, the quick start in the root [`README.md`](../README.md) is enough.
 
 Install a C compiler and Make as described in [`HOWTO-build.md`](HOWTO-build.md). Then run these commands:
 
@@ -9,7 +9,7 @@ make help        # every target you can type, one line each
 make ci          # every gate this machine runs: run it before you propose a change
 ```
 
-**Use the table in [`README.md`](README.md) to find a document for your task.** It covers building, gates, principles, document rules, plans and security reports. These three starting points are outside that table:
+**Use the table in [`README.md`](README.md) to find a document for your task.** These three starting points are outside it:
 
 | To | Read |
 | :-- | :-- |
@@ -19,17 +19,15 @@ make ci          # every gate this machine runs: run it before you propose a cha
 
 ## The make targets
 
-**`make help` lists the targets.** Every available target has a one-line description. `make test-recipe-bytes` fails when a target lacks one. How to write a description is in the header of `mk/help.mk`.
+**`make help` lists every target with a one-line description**; `make test-recipe-bytes` fails when a target lacks one. How to write a description is in the header of `mk/help.mk`.
 
 Caution: **Do not copy the list into this document.** Adding a target would make the copy outdated (Principle 4 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-The list names targets only. A variable is a setting passed as `NAME=value`. Each task describes its variables: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), `STOP=1` and `CI_GATE_CAP=` in [`SPEC-gates.md`](SPEC-gates.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
+A variable is a setting passed as `NAME=value`, described with its task: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), `STOP=1` and `CI_GATE_CAP=` in [`SPEC-gates.md`](SPEC-gates.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
 
 ## Setting your git identity
 
-Set your commit name and e-mail address for each repository. Configure git to stop when no identity is set.
-
-**Do not put a default identity into `~/.gitconfig`.** Git would use it even in repositories where you want another identity. Follow these steps:
+**Set your commit name and e-mail address for each repository.** Do not put a default identity into `~/.gitconfig`: git would use it even where you want another.
 
 1. Add the one setting that stops git unless an identity is set:
 
@@ -46,13 +44,13 @@ Set your commit name and e-mail address for each repository. Configure git to st
    git config user.email "<address>"
    ```
 
-**If you forget step 2, the commit stops** with `fatal: no email was given and auto-detection is disabled`. Without `useConfigOnly`, git constructs an identity from the computer's user and host names. It accepts the commit without checking that identity.
+**If you forget step 2, the commit stops** with `fatal: no email was given and auto-detection is disabled`. Without `useConfigOnly`, git would make up an identity from the computer's user and host names.
 
-`git config --show-origin --show-scope user.email` shows where an identity comes from. **If `$HOME` differs between MSYS2 and Windows, each reads a different `.gitconfig`.** Run the command from both shells. To switch identity per folder, use `~/.gitconfig`'s `includeIf "gitdir/i:<folder>/"`, still with no default.
+`git config --show-origin --show-scope user.email` shows where an identity comes from; **run it from both MSYS2 and Windows, whose `$HOME` can differ.** To switch identity per folder, use `~/.gitconfig`'s `includeIf "gitdir/i:<folder>/"`, still with no default.
 
 ## Reading a document's diff
 
-**Read a document's diff with `--word-diff`** (`git diff --word-diff`). A paragraph occupies one line ("Wording and formatting rules" in [`SPEC-documents.md`](SPEC-documents.md)). A plain diff therefore marks the whole line as replaced for a one-word edit. No setting is needed: git splits words at whitespace. The changed word then shows inside the line:
+**Read a document's diff with `--word-diff`** (`git diff --word-diff`). A paragraph occupies one line ("Wording and formatting rules" in [`SPEC-documents.md`](SPEC-documents.md)), so a plain diff marks the whole line for a one-word edit. With it, the changed word shows inside the line:
 
 ```
 | **rule** | A settled [-decision.-]{+verdict.+} Not a suggestion |
@@ -60,7 +58,7 @@ Set your commit name and e-mail address for each repository. Configure git to st
 
 ## How a change gets in
 
-**The maintainers review pull requests in the published repository as proposals.** They do not merge them there. Each publication copies the development repository into one snapshot commit. Maintainers apply accepted changes to the development repository by hand. The next snapshot includes those changes. Merging into the published repository would create history that the next snapshot omits.
+**The maintainers review pull requests in the published repository as proposals, and do not merge them there.** Each publication copies the development repository into one snapshot commit. Maintainers apply accepted changes to the development repository by hand, and the next snapshot includes them. A merge in the published repository would create history that the next snapshot omits.
 
 The path of a change, from you to the published repository and back:
 
@@ -76,17 +74,17 @@ sequenceDiagram
     Pub->>You: the pull request closed, with a note crediting you
 ```
 
-* **Open an issue first** for anything beyond a small fix. Describe the problem and the expected result. This lets maintainers decide whether they want the change before work starts.
-* **Submit a pull request as a proposal.** Maintainers review it and include accepted changes in the next snapshot. They then close the pull request with a note crediting its author. A snapshot commit does not name each contributor.
-* **Run the gates before proposing a change.** Every change must pass the applicable gates. Run `make ci`. Outside Linux, also run it in the dev container to cover the Linux-only gates. [`SPEC-gates.md`](SPEC-gates.md) lists each platform's gates.
+* **Open an issue first** for anything beyond a small fix, with the problem and the expected result. Maintainers then decide whether they want the change before work starts.
+* **Submit a pull request as a proposal.** Maintainers close an accepted one with a note crediting its author, since a snapshot commit does not name each contributor.
+* **Run the gates before proposing a change**: `make ci`. Outside Linux, also run it in the dev container to cover the Linux-only gates ([`SPEC-gates.md`](SPEC-gates.md)).
 
 ## How AI-written work is handled
 
-**Kanso uses AI coding agents for development.** The gates check their work like any other change. AI-written work **carries the same MIT license** ([`LICENSE.md`](../LICENSE.md)). Whoever submits it is responsible for its content.
+**Kanso uses AI coding agents for development.** The gates check their work like any other change. AI-written work **carries the same MIT license** ([`LICENSE.md`](../LICENSE.md)), and whoever submits it is responsible for its content.
 
 Caution: **Read it yourself before submitting.** Generated code can closely resemble another author's code. Do not rely on someone reviewing it after the merge.
 
-Review also covers the conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md). These apply to AI-written work too. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
+The conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md) apply to AI-written work too. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
 
 ## Further reading
 

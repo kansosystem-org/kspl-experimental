@@ -16,6 +16,7 @@ import "ksplc/gen/c/stmt" as gen_c_stmt
 import "ksplc/gen/c/types" as gen_c_types
 import "ksplc/gen/entry" as gen_entry
 import "ksplc/gen/runtime" as gen_runtime
+import "ksplc/lower/abi" as lower_abi
 import "ksplc/lower/prune" as lower_prune
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
@@ -42,7 +43,18 @@ fn run(root: Ast_node$@, cg: Genc_ctx$@)
     // The body calls it through the declaration half's externs. It goes in one unit only (it holds
     // non-static functions).
     if cg.writes_bodies() && cg.owns_singleton()
+        emit_check_panic(cg)
         gen_runtime.write_impl(cg)
+
+priv fn emit_check_panic(cg: Genc_ctx$@) //<
+    //< Defines the runtime's `kspl_check_panic` as a call of std/lang's `check_panic`
+    //< On bare metal a check's breach calls it (gen/runtime/freestanding.h). **A plain definition,
+    //< not an `#export`**: a wasm page would export one. A hosted program holds no `check_panic`.
+    if sym: = cg.env.find_check_panic_symbol()
+        defer $name: = Str_builder()
+        lower_abi.get_c_identifier_for_sym_to(sym, sym.name, name@)
+        cg.s("void kspl_check_panic(U8 *msg_ptr, Sz msg_len) {\n    ").s(name.slice())
+            .s("(msg_ptr, msg_len);\n}\n")
 
 priv fn emit_layout_checks(cg: Genc_ctx$@) //<
     //< A compile-time check of each layout number sema folded, at the line that folded it

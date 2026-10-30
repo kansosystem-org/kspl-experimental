@@ -1,8 +1,8 @@
 # ksplc
 
-**`ksplc` is the KSPL compiler.** It reads KSPL source and writes C99 (the 1999 edition of C) by default (`--to=c`). It can also write LLVM IR (`--to=llvm`). LLVM IR is the text form of code that LLVM, the toolkit behind clang, turns into machine code. It is written in KSPL itself, so it compiles its own source (*self-hosting*).
+**`ksplc` is the KSPL compiler.** It reads KSPL source and writes C99 by default (`--to=c`), or LLVM IR (`--to=llvm`), the text form of code that LLVM turns into machine code. It is written in KSPL itself, so it compiles its own source (*self-hosting*).
 
-**This page is a map of the compiler's source, for whoever reads or changes it.** It says which folder does what, and which file holds what. The internal design and its reasons are in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md). The words it uses (AST, Sema, ARC and the rest) are defined in its glossary, "The glossary" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md). To only use the compiler, the quick start in the root README is enough.
+**This page is a map of the compiler's source, for whoever reads or changes it.** The internal design and its reasons are in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md), whose "The glossary" defines the words used here. To only use the compiler, the quick start in the root README is enough.
 
 ## Run it
 
@@ -11,7 +11,7 @@ ksplc build hello.kspl hello            # the default target, C99, compiled and 
 ksplc --to=llvm hello.kspl hello.ll   # then clang hello.ll with the runtime ksplc emit-runtime puts out
 ```
 
-The first line makes an executable `hello`. The second writes LLVM IR. To make an executable from it, compile it with clang together with the C runtime that `ksplc emit-runtime` writes. The C runtime is the support code that every program needs.
+The first line makes an executable `hello`. The second writes LLVM IR, which clang compiles together with the C runtime (the support code every program needs) that `ksplc emit-runtime` writes.
 
 Two `make` commands, run in this folder ([`ksplc/Makefile`](Makefile)), test and rebuild the compiler:
 
@@ -20,11 +20,11 @@ Two `make` commands, run in this folder ([`ksplc/Makefile`](Makefile)), test and
 | `make test` | **Runs the compiler's own tests.** First the compiler's answers, checked by programs it builds (`make test-answers`, [`ksplc/tests/`](tests/)). Then the suites that drive this folder's compiler from outside (`make test-suites`, [`ksplc/tests/suite/`](tests/suite/)) | Only a `ksplc` and the kspeg this package uses |
 | `make self-host` | **Rebuilds this folder's compiler** from the `ksplc` it is given, and requires the result to reproduce itself exactly | A `ksplc` |
 
-ksplc names itself as a package in [`ksplc/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs both the same way. The repository's `make` does the same rebuild, starting from [`seed.c`](seed.c). Building that first compiler from the seed is the repository's job. So are the checks on the built compiler that reach past this folder (the repository's `tests/`).
+ksplc names itself as a package in [`ksplc/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs both the same way. The repository's `make` does the same rebuild, starting from [`seed.c`](seed.c). Building from the seed, and the checks that reach past this folder (the repository's `tests/`), are the repository's job.
 
 ## The idea
 
-**The compiler is a pipeline: one tree passes through a fixed row of stages, strictly one way.** The tree is the AST (abstract syntax tree), the program held as nested nodes instead of text. Each stage reads the tree the stage before it left and never reaches back (why is "From source code to a binary" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md)).
+**The compiler is a pipeline: one tree, the AST (abstract syntax tree), passes through a fixed row of stages, strictly one way.** Each stage reads the tree the stage before it left and never reaches back (why is "From source code to a binary" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md)).
 
 ```mermaid
 flowchart LR
@@ -48,23 +48,23 @@ flowchart LR
 
 ## What is here
 
-The pipeline's folders come first, in the order the data flows (the two backends and their shared runtime under `gen/`). Then come the four folders outside the pipeline: `base/`, `lsp/`, `fmt/` and `tools/`, the grammar and the seed, and last the suites under `tests/`. Each folder's section names its files; the design of each stage is the chapter named at the section's end.
+The pipeline's folders come first, in the order the data flows. Then come `base/`, `lsp/`, `fmt/` and `tools/`, the grammar and the seed, and the suites under `tests/`. Each section names its folder's files and ends with its design chapter.
 
 Directly in this folder:
 
 * [`main.kspl`](main.kspl) — the entry point: it starts the subcommand [`cli.kspl`](cli.kspl) read from the command line. The usage text is in [`usage.kspl`](usage.kspl).
 * [`pipeline.kspl`](pipeline.kspl) — the `Compiler` that runs the stages in order.
-* [`source_checks.kspl`](source_checks.kspl) — the checks on the source's own spelling, run once the declarations are collected. They read the indentation, a `//<` that reaches nothing, a comment's pointer, and a comment's length and place.
+* [`source_checks.kspl`](source_checks.kspl) — the checks on the source's own spelling (the indentation, the comments), run once the declarations are collected.
 
 ### parse/ — the Parse layer
 
-**It reads the source text, builds the abstract syntax tree and normalizes it.** Normalizing reshapes the parser's raw tree so that every kind of node has one fixed layout.
+**It reads the source text, builds the AST and normalizes it**, so that every kind of node has one fixed layout.
 
 * [`load.kspl`](parse/load.kspl) — `load_and_parse_file`, the one function that runs the loading, and follows the `import`s itself.
 * [`normalize.kspl`](parse/normalize.kspl), with [`normalize_decl.kspl`](parse/normalize_decl.kspl) and [`normalize_stmt.kspl`](parse/normalize_stmt.kspl) — normalizing the tree, with declarations and statements apart.
-* [`layout.kspl`](parse/layout.kspl) — turns a file in the indentation notation (`.kspl`) into the brace shape; [`line_cont.kspl`](parse/line_cont.kspl) decides what joins a line to the next. The formatter asks it too, so both read a line alike.
+* [`layout.kspl`](parse/layout.kspl) — turns the indentation notation (`.kspl`) into the brace shape; [`line_cont.kspl`](parse/line_cont.kspl) decides what joins a line to the next, for the formatter too.
 * [`source_fix.kspl`](parse/source_fix.kspl) — fixes the source's spelling before analysis.
-* [`desugar.kspl`](parse/desugar.kspl), with [`desugar_slice.kspl`](parse/desugar_slice.kspl) and [`desugar_closure.kspl`](parse/desugar_closure.kspl) — the sugar that needs no types; [`format_spec.kspl`](parse/format_spec.kspl) reads a string interpolation's `SPEC`, its format specifier (the `6` in `\{x:6\}`).
+* [`desugar.kspl`](parse/desugar.kspl), with [`desugar_slice.kspl`](parse/desugar_slice.kspl) and [`desugar_closure.kspl`](parse/desugar_closure.kspl) — the sugar that needs no types; [`format_spec.kspl`](parse/format_spec.kspl) reads a string interpolation's format specifier (the `6` in `\{x:6\}`).
 * [`ast_cache.kspl`](parse/ast_cache.kspl) — keeps the normalized AST on disk so the next parse is skipped; [`syntax_msg.kspl`](parse/syntax_msg.kspl) writes a syntax error's message.
 
 It drives the grammar [`kspl.kspeg`](kspl.kspeg) through the engine in [kspeg](../kspeg/README.md).
@@ -77,12 +77,12 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 
 ### sema/ — the Sema layer
 
-**It walks the AST to work out the types (type inference), to find what each name refers to (symbol resolution), and to track scopes.** It has two entry points. `run` in [`decl/collect.kspl`](sema/decl/collect.kspl) registers every file's declarations first. `run` in [`body/infer.kspl`](sema/body/infer.kspl) is the main walk. There are five folders, listed from the bottom layer up. A folder can import the folders below it, never those above. The exact directions are in "How sema is split into folders, and their dependencies" in [`ksplc/docs/DESIGN-sema.md`](docs/DESIGN-sema.md).
+**It works out the types, finds what each name refers to, and tracks scopes.** `run` in [`decl/collect.kspl`](sema/decl/collect.kspl) registers every file's declarations first; `run` in [`body/infer.kspl`](sema/body/infer.kspl) is the main walk. The folders are listed from the bottom up; each imports only those below it ("How sema is split into folders, and their dependencies" in [`ksplc/docs/DESIGN-sema.md`](docs/DESIGN-sema.md)).
 
 | Folder | The question it answers | Files |
 | :-- | :-- | :-- |
-| [`type/`](sema/type/) | How is a type or a name expressed? | `def` holds the types' shapes. `env` / `query` / `arc` hold the type table and its queries. `naming` gives output names and instantiation-cache keys. `scope` is the symbol table: from a name to what it declares. `display` gives the strings that a diagnostic prints |
-| [`session/`](sema/session/) | What is shared through one analysis? | `ctx` holds `Sema_ctx` itself, the diagnostics, and declaring a symbol. Then `state`. `import_table` / `imports` hold the import declarations and their ledger. `pointer` says what a comment's pointer stands for. `c_boundary` says what the generated C cannot hold. `prof` gives the breakdown of sema's time |
+| [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `naming` (output names and cache keys), `scope` (the symbol table), `display` (what a diagnostic prints) |
+| [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx`, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the imports and their ledger), `pointer` (a comment's pointer), `c_boundary` (what the generated C cannot hold), `prof` (sema's time) |
 | [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
 | [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
 | [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` and `lint_written` |
@@ -91,20 +91,20 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 make debug-ksplc   # the compiler's own tests, the type checks and the diagnostics among them
 ```
 
-The design is "The Sema layer: it knows the types" in [`ksplc/docs/DESIGN-sema.md`](docs/DESIGN-sema.md). Where a check goes and what a diagnostic points at is "The design rules for the checks and the diagnostics" in [`ksplc/docs/DESIGN-diagnostics.md`](docs/DESIGN-diagnostics.md). The diagnostic codes this layer emits are listed in [`ksplc/docs/SPEC-diagnostics.md`](docs/SPEC-diagnostics.md).
+The design is "The Sema layer: it knows the types" in [`ksplc/docs/DESIGN-sema.md`](docs/DESIGN-sema.md). The rules for checks are "The design rules for the checks and the diagnostics" in [`ksplc/docs/DESIGN-diagnostics.md`](docs/DESIGN-diagnostics.md), and the codes are in [`ksplc/docs/SPEC-diagnostics.md`](docs/SPEC-diagnostics.md).
 
 ### lower/ — the Lower layer
 
-**It flattens the checked tree into a shape that does not depend on either backend.** Nested control flow becomes a plain sequence of steps that C and LLVM IR can both write directly. [`ksplc/docs/DESIGN-lower.md`](docs/DESIGN-lower.md) gives the order of the passes. Its heading names them: "The internal flow: flatten, add vtables, mangle, prune, verify".
+**It flattens the checked tree into a shape that does not depend on either backend.** The order of its passes is "The internal flow: flatten, add vtables, mangle, prune, verify" in [`ksplc/docs/DESIGN-lower.md`](docs/DESIGN-lower.md).
 
 * [`root.kspl`](lower/root.kspl) — the one recursive walk that flattens the control flow. Inside it:
   * [`expr.kspl`](lower/expr.kspl) hoists expressions: it moves a part out into a temporary before the statement.
   * [`defer.kspl`](lower/defer.kspl) flattens `defer` and the exits that run it.
   * [`order.kspl`](lower/order.kspl) moves an operand into a temporary where C could run it out of the written order.
   * [`ctx.kspl`](lower/ctx.kspl) holds the walk's state.
-* [`arc.kspl`](lower/arc.kspl) — inserts ARC's `retain()` / `release()` on the way (ARC: automatic reference counting, where a value is freed when its last holder lets go).
-* [`vtable.kspl`](lower/vtable.kspl) — a trait value's thunks and vtables. These are the go-between functions and the tables of function pointers. They let one call reach whichever type stands behind a trait.
-* [`abi.kspl`](lower/abi.kspl) — the ABI mangling (turning KSPL's names into unique names in the output by a fixed rule), and desugaring the method calls.
+* [`arc.kspl`](lower/arc.kspl) — inserts ARC's `retain()` / `release()` (automatic reference counting).
+* [`vtable.kspl`](lower/vtable.kspl) — a trait value's thunks and vtables, which let one call reach whichever type stands behind a trait.
+* [`abi.kspl`](lower/abi.kspl) — the ABI mangling (unique output names by a fixed rule), and desugaring the method calls.
 * [`prune.kspl`](lower/prune.kspl) — drops the functions and types nothing calls.
 * [`verify.kspl`](lower/verify.kspl) — checks that the tree's types mesh at the exit.
 
@@ -118,7 +118,7 @@ The design is "The Lower layer: a flat tree independent of backends" in [`ksplc/
 
 **What the two outputs must agree on is written once, directly under `gen/`** (why is "What the two generators share: the decisions, not the spelling" in [`ksplc/docs/DESIGN-backends.md`](docs/DESIGN-backends.md)).
 
-* [`runtime.kspl`](gen/runtime.kspl) — hands out the C runtime that completes either output. The runtime is the support code in C that every program links, such as reading files or stopping with a message. The runtime itself is [`gen/runtime/`](gen/runtime/): `core.*` for every target, plus one of two halves. `hosted.*` is for an OS beneath the program. It is split by subject into `hosted_fs` / `hosted_net` / `hosted_proc` / `hosted_spawn` / `hosted_thread`. `freestanding.*` is for bare metal (no OS).
+* [`runtime.kspl`](gen/runtime.kspl) — hands out the C runtime that every program links. The runtime itself is [`gen/runtime/`](gen/runtime/): `core.*` for every target, plus `hosted.*` for an OS beneath the program or `freestanding.*` for bare metal. `hosted.*` is split into `hosted_fs` / `hosted_net` / `hosted_proc` / `hosted_spawn` / `hosted_thread`.
 * [`entry.kspl`](gen/entry.kspl) — what the generated `main` does around `kspl_main`.
 * [`embed.kspl`](gen/embed.kspl) — reads the file an `embed` names.
 
@@ -128,7 +128,7 @@ make test-emit-runtime   # the runtime handed out whole, and one entry point whi
 
 ### gen/c/ — the C99 backend
 
-**It turns the flattened AST into C99.** The `.c` file holds the C runtime too (`gen/` above). Under `--library`, everything in it but the `#export` functions is `static`.
+**It turns the flattened AST into C99.** The `.c` file holds the C runtime too. Under `--library`, everything in it but the `#export` functions is `static`.
 
 * [`root.kspl`](gen/c/root.kspl) — `run`, the single entry.
 * [`ctx.kspl`](gen/c/ctx.kspl) — the context and its fluent output API (calls chained one after another).
@@ -141,7 +141,7 @@ make test-ship   # two libraries built with --library link into one C program an
 
 ### gen/llvm/ — the LLVM IR backend
 
-**It turns the same flattened AST into LLVM IR** (`--to=llvm`). It emits no debug information. The bodies of the features that need the OS are the C runtime's ([`gen/runtime/`](gen/runtime/)), which its output links against.
+**It turns the same flattened AST into LLVM IR** (`--to=llvm`), with no debug information. Its output links against the C runtime ([`gen/runtime/`](gen/runtime/)) for what needs the OS.
 
 * [`module.kspl`](gen/llvm/module.kspl) — `run`, the entry, matching the C backend's.
 * [`ctx.kspl`](gen/llvm/ctx.kspl) — the context at the centre: the output buffer and the SSA numbering (in LLVM IR each value gets a fresh number, `%1`, `%2`, …).
@@ -151,7 +151,7 @@ Both backends' design, and what each refuses, is "The backends (Genc / Genllvm) 
 
 ### base/ — the foundation every layer stands on
 
-**The lowest tier, below the pipeline.** Every layer opens with a line like this one; nothing here runs on its own.
+**The lowest tier, below the pipeline.** Every layer imports it; nothing here runs on its own.
 
 ```kspl
 import "ksplc/base/ast" { Ast_node }
@@ -160,21 +160,18 @@ import "ksplc/base/ast" { Ast_node }
 | Subject | Files |
 | :-- | :-- |
 | **The tree** | [`ast.kspl`](base/ast.kspl) is the general-purpose node `Ast_node` and its verification. [`ast_kinds.kspl`](base/ast_kinds.kspl) is the closed set of node kinds. [`ast_ext.kspl`](base/ast_ext.kspl) holds the safe accessors. [`ast_place.kspl`](base/ast_place.kspl) holds the predicates a node's shape alone answers (does an expression have a side effect?). [`ast_spell.kspl`](base/ast_spell.kspl) spells a node back as text. [`ast_doc.kspl`](base/ast_doc.kspl) reads the `//<` description that a declaration carries |
-| **The shared state** | [`core.kspl`](base/core.kspl) holds the shared arenas (memory pools freed all at once) and the compiler's configuration. It also holds the string pool (each distinct string kept once). [`setup.kspl`](base/setup.kspl) starts and ends the layer in one go. [`target.kspl`](base/target.kspl) is the table of machines that ksplc lays values out for, and which one a compile is for |
+| **The shared state** | [`core.kspl`](base/core.kspl) holds the shared arenas, the string pool and the compiler's configuration. [`setup.kspl`](base/setup.kspl) starts and ends the layer in one go. [`target.kspl`](base/target.kspl) is the table of machines that ksplc lays values out for, and which one a compile is for |
 | **The source** | [`as_written.kspl`](base/as_written.kspl) keeps the text as typed before the indentation is fixed (what a diagnostic quotes). [`locate.kspl`](base/locate.kspl) says where a source comes from and its logical name. [`lines.kspl`](base/lines.kspl) finds where a line begins and ends. [`literal.kspl`](base/literal.kspl) reads a literal's spelling |
 | **The diagnostics** (the compiler's messages about your code) | [`diag.kspl`](base/diag.kspl) prints them, [`lint_codes.kspl`](base/lint_codes.kspl) is the registry of their codes, and [`cfg_inactive.kspl`](base/cfg_inactive.kspl) keeps the ranges a `#cfg()` left out, so the editor can say why nothing stands there |
 | **The names emitted** | [`mangle.kspl`](base/mangle.kspl) turns KSPL's names into C and LLVM identifiers, and [`c_name.kspl`](base/c_name.kspl) avoids the C names that cannot be used plain |
 | **The settings and the packages** | [`config_file.kspl`](base/config_file.kspl) reads `ksplc.cfg`, and [`package.kspl`](base/package.kspl) its `[package]` section: a package's name, what it uses, and the logical name of a file inside it |
 | **The measurements** | [`cache.kspl`](base/cache.kspl) places the cache on disk, and [`stats.kspl`](base/stats.kspl) counts each stage's time and arena use |
 
-The design is "The compiler as a whole" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md). The same document holds two more parts of it:
-
-* the rules for handling the AST that every layer shares: "The rules for handling an AST, shared by every layer";
-* the arena model: "Memory management: the arena model".
+The design is "The compiler as a whole", "The rules for handling an AST, shared by every layer" and "Memory management: the arena model" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md).
 
 ### lsp/ — the language server
 
-**It answers an editor's questions (go to definition, hover, completion) by driving the pipeline from outside, once per request.** The editor and the server talk the Language Server Protocol (LSP), in JSON-RPC messages.
+**It answers an editor's questions (go to definition, hover, completion) over the Language Server Protocol, driving the pipeline once per request.**
 
 * [`server.kspl`](lsp/server.kspl) — the supervisor of a child worker.
 * [`worker.kspl`](lsp/worker.kspl) — builds the state a request is answered from, and routes each method from one table.
@@ -195,12 +192,7 @@ The design is "The compiler as a whole" in [`ksplc/docs/DESIGN-compiler.md`](doc
 make test-lsp   # starts the server once and drives every request against it
 ```
 
-The design is in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md), in the sections between these two headings:
-
-* "The arena is rewound after each request (a worked example)";
-* "A URI is converted to the logical name and back".
-
-What the editor can rely on is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md), "The language server (ksplc lsp)".
+The design is [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) from "The arena is rewound after each request (a worked example)" to "A URI is converted to the logical name and back". What the editor can rely on is "The language server (ksplc lsp)" in [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md).
 
 ### fmt/ — the formatter
 
@@ -211,13 +203,13 @@ What the editor can rely on is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md),
 * What it reads from, kept apart. [`kinds.kspl`](fmt/kinds.kspl) sorts the node kinds and the token spellings. [`source.kspl`](fmt/source.kspl) reads the original text around a position. [`measure.kspl`](fmt/measure.kspl) reads a node's shape and width.
 * [`import.kspl`](fmt/import.kspl) — puts the run of `import`s into name order before the printer runs.
 * [`text.kspl`](fmt/text.kspl) — the one path through a text that both `ksplc fmt` and the lint take (the imports' order, the printer, the rounds that put parentheses in).
-* [`file.kspl`](fmt/file.kspl) — one file's round trip for `ksplc fmt`, and writing back. It takes off and puts back the line terminator, the shebang (`#!` first line) and the BOM. The BOM is an invisible mark that some editors put at a file's start.
+* [`file.kspl`](fmt/file.kspl) — one file's round trip for `ksplc fmt`, and writing back. It takes off and puts back the line terminator, the shebang and the BOM.
 
 ```sh
 make fmt    # every tracked .kspl
 ```
 
-What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md), "3. The formatter (ksplc fmt)". The formatter's own decisions are in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). They are the `import`s reordered as text before the printer, nothing folded by default, and four spaces a level. They also cover blank lines and the line terminator. The sections run from "The formatter reorders the `import`s as text, before the printer" to "Blank lines and the line terminator".
+What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md). Its own decisions are in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md), from "The formatter reorders the `import`s as text, before the printer" to "Blank lines and the line terminator".
 
 ### tools/ — the tools that work on the pipeline's artifact
 
@@ -241,18 +233,15 @@ The CLI options, and the formatter, the language server and the linter as seen f
 
 ### kspl.kspeg / seed.c — the grammar and the seed
 
-**`ksplc/kspl.kspeg` is the canonical text of KSPL's own grammar** (the one place the rules for reading KSPL text live). It is a build input that `ksplc/main.kspl` embeds, not documentation. Its KSPEG notation is specified in [`kspeg/docs/SPEC-notation.md`](../kspeg/docs/SPEC-notation.md), and the engine that interprets it is in `kspeg/`.
+**`ksplc/kspl.kspeg` is the canonical text of KSPL's own grammar**, a build input that `ksplc/main.kspl` embeds. Its notation is specified in [`kspeg/docs/SPEC-notation.md`](../kspeg/docs/SPEC-notation.md), and the engine that interprets it is in `kspeg/`.
 
 **`ksplc/seed.c` is the bootstrap's seed compiler**: the compiler at one moment, translated to C and checked in, so the first build needs only a C compiler.
 
-Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update the seed with `make commit-seed`.** Otherwise the seed keeps building the old compiler. Follow these two sections in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md):
-
-* "The bootstrap, and keeping the seed in step";
-* "Keeping the grammar and the AST node kinds in step".
+Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update the seed with `make commit-seed`.** Otherwise the seed keeps building the old compiler. Follow "The bootstrap, and keeping the seed in step" and "Keeping the grammar and the AST node kinds in step" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md).
 
 ### tests/ — the suites and their fixtures
 
-**A suite is a test program run by one ksplc that inspects another.** A broken compiler and a failed check would look alike if one compiler did both. [`ksplc/Makefile`](Makefile) names the three places a suite uses:
+**A suite is a test program run by one ksplc that inspects another**, so a broken compiler and a failed check do not look alike. [`ksplc/Makefile`](Makefile) names the three places a suite uses:
 
 | Name | What it is | What the repository fills it with |
 | :-- | :-- | :-- |
@@ -272,9 +261,9 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 | [`tests/notation/`](tests/notation/) | `test-notation`'s samples of the indentation notation. The language tour is written from one of them |
 | [`tests/ship/`](tests/ship/) | `test-ship`'s two vendors and two customers: libraries built with `--library`, a C program and a KSPL program using them. `app.kspl` imports an interface the suite writes, so it compiles only there |
 
-**The shared foundation is split by the reason for reading it.** It is `harness`, `harness_build`, `harness_expect`, `harness_markers` and `harness_grow`. `harness_build` is the only caller of the C compiler and the linker. Each file says in its opening comment what it holds.
+**The shared foundation is split by the reason for reading it**: `harness`, `harness_build`, `harness_expect`, `harness_markers` and `harness_grow`. `harness_build` is the only caller of the C compiler and the linker.
 
-The CLI suite keeps command selection and diagnostics in `tests/suite/cli_test.kspl`; `tests/support/cli_emit.kspl` holds the emitted-file checks and their shared command assertions. The package-location suite keeps std discovery in `tests/suite/std_dir_test.kspl`; `tests/support/std_dir_named.kspl` holds named-package and path-identity checks, with the child-environment setup both halves use.
+Two suites are split in two. `tests/suite/cli_test.kspl` keeps command selection and diagnostics, and `tests/support/cli_emit.kspl` the emitted-file checks. `tests/suite/std_dir_test.kspl` keeps std discovery, and `tests/support/std_dir_named.kspl` the named-package and path-identity checks.
 
 ## Adding a fixture
 
@@ -286,11 +275,12 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 
 * **`make fmt` uses the seed**, so in a split that touches the grammar, run `make commit-seed` first (why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md)).
 * [`fmt/printer.kspl`](fmt/printer.kspl): **the decisions on where a line breaks** move to a new `fmt/wrap.kspl`, an `impl Formatter` as `fmt/trivia.kspl` is. That is `calc_will_break`, `reader_joins`, `ends_open_catch`, `break_before_choice` and `wrap_before_next_element`. The cut lies between deciding a break and writing tokens: `write_token` and `format_internal` stay, and call across it.
+* [`gen/runtime/hosted_fs.c`](gen/runtime/hosted_fs.c): **the Windows half** (from its `#else` to the closing `#endif`) moves to a new `gen/runtime/hosted_fs_win.c`. A second `embed` in `gen/runtime.kspl` joins it right after the POSIX half, and the shared head stays. The two halves are read for different systems, and no name crosses between them.
 * [`sema/flow/track.kspl`](sema/flow/track.kspl): call-release effects and raw-storage argument checks move into `sema/flow/call.kspl`. Local state, expression traversal and assignment tracking remain together.
 * [`tests/lang_test.kspl`](tests/lang_test.kspl): **the tests of generic functions** (`test_generic_fn_returning_own_type_param` to `test_instantiation_before_generic_impl`) move into a new file of tests, `lang_generic_test.kspl`, beside it.
 * [`tests/lang_types_test.kspl`](tests/lang_types_test.kspl): **the tests of a trait upcast** (`test_trait_upcast_lifetimes` and the three after it) move into a new file of tests, `lang_upcast_test.kspl`, beside it.
 * **A file of tests splits with no list to edit.** The new file needs one import line in `tests/all.kspl`, whose suite then runs its `test_…` functions.
-* **A suite splits where what it reads splits.** Some answers need the repository's whole tree, such as a common word read across every package, or a rename reaching another package's files. A copy of this folder has no such tree, so this folder does not ask them. The queries this folder can answer for itself stay in `lsp`, with this folder as the workspace.
+* **A suite splits where what it reads splits.** A copy of this folder has no repository tree, so an answer that needs one (a rename reaching another package) is not asked here. The queries this folder can answer stay in `lsp`, with this folder as the workspace.
 
 ## Further reading
 
@@ -298,7 +288,7 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 | :-- | :-- | :-- |
 | [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md) | The CLI options, the formatter, the language server and the linter as seen from outside. | Whoever writes KSPL and runs the tools. Needs a built `ksplc` to try them against |
 | [`ksplc/docs/SPEC-diagnostics.md`](docs/SPEC-diagnostics.md) | What each diagnostic code means and how to fix it, and the errors that have no code; the text `ksplc explain` prints. | Whoever meets a diagnostic, and whoever adds one |
-| [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md) | The compiler's internal design as a whole. It holds the map of the layers and the data flow, and the rules that every layer shares. It also holds the arena, the conventions and the glossary. | Whoever changes ksplc. **Read at least "The compiler as a whole" and "The Development Principles" before touching anything here** |
+| [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md) | The compiler's internal design as a whole, the rules every layer shares, and the glossary. | Whoever changes ksplc. **Read at least "The compiler as a whole" and "The Development Principles" before touching anything here** |
 | [`ksplc/docs/DESIGN-parse.md`](docs/DESIGN-parse.md) | The Parse layer with Desugar: from the source text to the normalized AST, and the sugar rewritten without the types. | Whoever changes `parse/` or the grammar |
 | [`ksplc/docs/DESIGN-sema.md`](docs/DESIGN-sema.md) | The Sema layer: type inference, name resolution, generics' instantiation, and the AST nodes it creates. | Whoever changes `sema/` |
 | [`ksplc/docs/DESIGN-lower.md`](docs/DESIGN-lower.md) | The Lower layer, which flattens the typed tree for both backends, and the rules for implementing ARC. | Whoever changes `lower/` or what ARC inserts |
@@ -306,7 +296,7 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 | [`ksplc/docs/DESIGN-diagnostics.md`](docs/DESIGN-diagnostics.md) | The design rules for the checks and the diagnostics. | Whoever adds or changes a check or a message |
 | [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) | How the language server, the formatter and `ksplc run` work inside, and how the tools' settings are read. | Whoever changes `lsp/`, `fmt/`, `ksplc run` or a setting |
 | [`ksplc/docs/HOWTO-extend.md`](docs/HOWTO-extend.md) | The steps for a diagnostic code, an AST node kind, a primitive type, a subcommand, a target machine and the seed update. | Whoever extends the compiler; needs a clone that builds |
-| [`ksplc/docs/HOWTO-add-a-fixture.md`](docs/HOWTO-add-a-fixture.md) | The steps for adding a fixture to a suite: the folder, the case's head and marks, and the rules each fixture folder keeps. | Whoever adds or moves a test case; needs a clone that builds |
+| [`ksplc/docs/HOWTO-add-a-fixture.md`](docs/HOWTO-add-a-fixture.md) | The steps for adding a fixture to a suite, and the rules each fixture folder keeps. | Whoever adds or moves a test case; needs a clone that builds |
 | [`docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md) | The language specification being implemented. | Whoever writes KSPL, and whoever changes ksplc |
 | [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) | The build procedure and the two-stage bootstrap. | Whoever changes ksplc. Needs a C compiler |
 | [`docs/SPEC-gates.md`](../docs/SPEC-gates.md) | What every gate checks, per platform. | Whoever changes ksplc |

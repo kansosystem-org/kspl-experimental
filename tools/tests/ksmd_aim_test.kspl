@@ -6,6 +6,7 @@
 import "std/fs"
 import "std/mem" { Arena }
 import "std/str"
+import "std/sys"
 import "std/verdict"
 import "tools/opener_aim" as aim
 
@@ -44,6 +45,11 @@ fn test_one_folder_has_one_spelling(arena: Arena$@) //< `.` and doubled separato
     assert(aim.plain("/a/../b.ksmd", arena).len == 0 && aim.plain("/a/b/..", arena).len == 0,
         "a `..` anywhere is refused")
     assert(aim.plain("/a/..b/c", arena).equals("/a/..b/c"), "a name starting `..` is a name")
+    // **Windows ignores a drive letter's case**, so `c:\notes` and `C:\notes` would start two
+    // servers. Elsewhere `c:` is an ordinary name, kept as written.
+    want: = "C:\\notes" if sys.is_windows() else "c:\\notes"
+    assert(aim.plain("c:\\notes\\", arena).equals(want), "a drive letter is upper-cased on Windows")
+    assert(aim.plain("C:/notes", arena).equals("C:/notes"), "an upper-case drive stays")
     verdict.pass("`.` and doubled separators drop, and a path holding `..` is refused.")
 
 fn test_inside_a_workspace() //< a path is inside a folder only past a separator

@@ -1,0 +1,61 @@
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/watchdog"
+import "std/verdict"
+
+// ==========================================
+// ksos/drivers/rp2040/watchdog: the values the driver writes and how it reads why the chip started.
+//
+// QEMU has no RP2040 model and a host cannot stand in for a register write, so **the driver
+// computes every value in a function of its own**, and this file checks those. Whether the chip
+// resets is checked on the car (HOWTO-bring-up.md).
+// ==========================================
+
+fn test_watchdog_load_doubles_for_the_erratum() //<
+    //< LOAD holds twice the ticks, and a timeout the counter cannot hold is refused
+    //< Caution: **Without the doubling every timeout is halved** (erratum RP2040-E1), and a
+    //< timeout chosen just above the longest Flash erase fires during one.
+    verdict.start("[ksos/watchdog] the load value for a timeout test...")
+    one_s: = watchdog.load_for(1000) catch panic("1000 ms fits")
+    assert(one_s == 2000000, "1000 ms is 1000000 ticks of 1µs, counted down twice each")
+    top: = watchdog.load_for(watchdog.MAX_MS) catch panic("MAX_MS fits")
+    assert(top <= watchdog.LOAD_MAX, "the longest timeout fits LOAD's 24 bits")
+    assert(watchdog.MAX_MS == 8388, "the longest timeout is 8388 ms")
+    $refused: Sz = 0
+    timeouts: U32[2] = ::{ 0, watchdog.MAX_MS + 1 }
+    for ms in timeouts
+        _v: = watchdog.load_for(ms) catch e
+            if e == mmio.Driver_error.out_of_range
+                refused += 1
+            fallback 0
+    assert(refused == 2, "0 ms (an instant reset) and one past MAX_MS are refused")
+    verdict.pass("LOAD is twice the ticks, and 0 and too long a timeout are refused.")
+
+fn test_watchdog_reads_why_the_chip_started() //<
+    //< Only REASON's timer bit with the mark reads as this watchdog
+    //< **A reboot by the boot ROM sets REASON too**, so REASON alone would report a UF2 copy as a
+    //< hang.
+    verdict.start("[ksos/watchdog] why the chip started test...")
+    mark: = watchdog.ARMED_MARK
+    assert(watchdog.reason_of(0, mark) == watchdog.Reset_reason.power_on,
+        "REASON 0 is a power-on, whatever SCRATCH4 kept")
+    assert(watchdog.reason_of(1, mark) == watchdog.Reset_reason.watchdog,
+        "the timer bit with the mark is this watchdog")
+    assert(watchdog.reason_of(1, 0) == watchdog.Reset_reason.other,
+        "the timer bit without the mark is someone else's reboot")
+    assert(watchdog.reason_of(2, mark) == watchdog.Reset_reason.other,
+        "a forced reset is not a missed feed")
+    verdict.pass("Only a timeout after `arm` reads as the watchdog.")
+
+fn test_watchdog_ctrl_and_wdsel() //<
+    //< Arming sets ENABLE and the pauses and keeps CTRL's other bits; the reset reaches RESETS
+    verdict.start("[ksos/watchdog] the CTRL and WDSEL values test...")
+    armed: = watchdog.ctrl_armed(0)
+    assert(armed == ((1U32 << 30) | (7U32 << 24)), "ENABLE (bit 30) and the three pauses (26..24)")
+    assert((watchdog.ctrl_armed(0x80000000) & 0x80000000) != 0, "the other bits are kept")
+    wdsel: = watchdog.WDSEL_ALL_BUT_OSCILLATORS
+    assert((wdsel & 3) == 0, "the oscillators (bits 0 and 1) are not reset")
+    assert((wdsel & (1U32 << 3)) != 0, "RESETS (bit 3) is reset, so the PWM stops driving its pins")
+    assert((wdsel | 3) == 0x1ffff, "every other block of WDSEL's 17 is reset")
+    verdict
+        .pass("CTRL turns the counter on, paused while debugging; WDSEL resets all but the \
+            oscillators.")

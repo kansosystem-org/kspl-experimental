@@ -7,6 +7,7 @@ import "ksai/tests/examples_chat" as chat
 import "std/chars"
 import "std/fs"
 import "std/http"
+import "std/http_body"
 import "std/json"
 import "std/mem" { Arena }
 import "std/net"
@@ -62,14 +63,27 @@ struct Got //< one answer, or why none came
 
 fn asked(port: I32, method: U8[], path: U8[], body: U8[], arena: Arena$@): Got //<
     //< One request on a connection of its own, and the whole answer
+    return asked_as(port, method, path, body,
+        Asker::{ .host = arena.text().s("127.0.0.1:\{port\}").take(),
+        .content_type = "application/json", .origin = "" }, arena)
+
+struct Asker //< the headers that say who asks, as a client or a web page sends them
+    host: U8[]
+    content_type: U8[] //< empty where none is sent
+    origin: U8[] //< the page's origin; empty where none is sent, as from a program
+
+fn asked_as(port: I32, method: U8[], path: U8[], body: U8[], who: Asker, arena: Arena$@): Got //<
+    //< One request with those headers, on a connection of its own, and the whole answer
     defer stream: = net.Tcp_stream.connect("127.0.0.1", port) catch
         return Got::{ .status = 0, .body = "the server cannot be reached", .typed = false }
-    head: = http.headers(arena)
-        .add("Host", arena.text().s("127.0.0.1:\{port\}").take())
-        .add("Content-Type", "application/json").add("Connection", "close").build()
-    http.write_request(stream, method, path, head, body, ASK_WAIT_MS) catch
+    $head: = http.headers(arena).add("Host", who.host).add("Connection", "close")
+    if who.content_type.len > 0
+        head = head.add("Content-Type", who.content_type)
+    if who.origin.len > 0
+        head = head.add("Origin", who.origin)
+    http.write_request(stream, method, path, head.build(), body, ASK_WAIT_MS) catch
         return Got::{ .status = 0, .body = "the request cannot be sent", .typed = false }
-    r: = http.read_response(stream, arena, 8 * 1024 * 1024, ASK_WAIT_MS) catch
+    r: = http_body.read_response(stream, arena, 8 * 1024 * 1024, ASK_WAIT_MS) catch
         return Got::{ .status = 0, .body = "no whole answer by its Content-Length",
             .typed = false }
     typed: =
@@ -151,13 +165,6 @@ priv fn asked_all(port: I32, arena: Arena$@): U8[] //<
             .s(json_text(again, arena)).take()
     verdict.pass("the same request again gives the same answer from the kept cache")
 
-    stream: =
-        asked(port, "POST", "/v1/chat/completions",
-        "{\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}", arena)
-    if !refused(stream, 400, "streaming is not supported", arena)
-        return arena.text().s("a stream request got \{stream.status\}: ").s(stream.body).take()
-    verdict.pass("a request for streaming is refused, saying so")
-
     think: =
         asked(port, "POST", "/v1/chat/completions",
         "{\"chat_template_kwargs\":{\"enable_thinking\":true},\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}",
@@ -190,6 +197,10 @@ priv fn asked_all(port: I32, arena: Arena$@): U8[] //<
         return "one seed gave two sampled answers"
     verdict.pass("sampling with a seed answers, the same way twice")
 
+    if fault: = some_text(cross_site_fault(port, arena))
+        return fault
+    verdict.pass("a request a web page could send is refused, and a local client's is answered")
+
     models: = asked(port, "GET", "/v1/models", "", arena)
     listed: = json_of(models, arena).get("data").get_at(0).get("id").as_str().unwrap_or("")
     wrong_method: = asked(port, "GET", "/v1/chat/completions", "", arena)
@@ -199,6 +210,51 @@ priv fn asked_all(port: I32, arena: Arena$@): U8[] //<
         !refused(nowhere, 404, "no endpoint", arena)
         return arena.text().s("/v1/models got \{models.status\}, a GET chat ")
             .s("\{wrong_method.status\}, another path \{nowhere.status\}").take()
+    return ""
+
+priv fn cross_site_fault(port: I32, arena: Arena$@): U8[] //<
+    //< Empty where a request another web page could send is refused, else the first fault
+    //< A form or `fetch` sends a POST of plain text with no preflight. A page whose name was
+    //< pointed at 127.0.0.1 sends its own name as the Host. Each is refused by its header.
+    here: = arena.text().s("127.0.0.1:\{port\}").take()
+    plain: =
+        asked_as(port, "POST", "/v1/chat/completions", ASK_BODY,
+        Asker::{ .host = here, .content_type = "text/plain", .origin = "" }, arena)
+    untyped: =
+        asked_as(port, "POST", "/v1/chat/completions", ASK_BODY,
+        Asker::{ .host = here, .content_type = "", .origin = "" }, arena)
+    page: =
+        asked_as(port, "POST", "/v1/chat/completions", ASK_BODY,
+        Asker::{ .host = here, .content_type = "application/json",
+        .origin = "http://attacker.example" }, arena)
+    sandboxed: =
+        asked_as(port, "GET", "/v1/models", "",
+        Asker::{ .host = here, .content_type = "", .origin = "null" }, arena)
+    rebound: =
+        asked_as(port, "GET", "/v1/models", "",
+        Asker::{ .host = arena.text().s("evil.example:\{port\}").take(), .content_type = "",
+        .origin = "" }, arena)
+    other_port: =
+        asked_as(port, "GET", "/v1/models", "",
+        Asker::{ .host = "127.0.0.1:1", .content_type = "", .origin = "" }, arena)
+    if !refused(plain, 415, "application/json", arena) ||
+        !refused(untyped, 415, "application/json", arena) ||
+        !refused(page, 403, "Origin", arena) || !refused(sandboxed, 403, "Origin", arena) ||
+        !refused(rebound, 403, "Host", arena) || !refused(other_port, 403, "Host", arena)
+        return arena.text().s("text/plain got \{plain.status\}, no type \{untyped.status\}, ")
+            .s("another page \{page.status\}, a null origin \{sandboxed.status\}, another ")
+            .s("Host \{rebound.status\}, another port \{other_port.status\}").take()
+    local: =
+        asked_as(port, "GET", "/v1/models", "",
+        Asker::{ .host = arena.text().s("LocalHost:\{port\}").take(), .content_type = "",
+        .origin = "http://localhost:3000" }, arena)
+    typed: =
+        asked_as(port, "POST", "/v1/chat/completions", ASK_BODY,
+        Asker::{ .host = here, .content_type = "Application/JSON; charset=utf-8",
+        .origin = "http://127.0.0.1" }, arena)
+    if local.status != 200 || typed.status != 200
+        return arena.text().s("a page on this machine got \{local.status\}, and JSON with a ")
+            .s("charset \{typed.status\}: ").s(typed.body).take()
     return ""
 
 fn some_text(text: U8[]): U8[]? //< the text, or none where it is empty

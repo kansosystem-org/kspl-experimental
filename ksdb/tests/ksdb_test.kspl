@@ -1,5 +1,6 @@
 import "ksdb/log" as ksdblog
 import "ksdb/ram_store" as ram
+import "ksdb/store" { Store }
 import "std/bytes"
 import "std/prng"
 import "std/str"
@@ -578,3 +579,108 @@ fn test_a_scrambled_store_is_survivable()
     verdict
         .pass("Garbling with the place and width scattered, the scan ends and nothing but the \
             content written is returned.")
+
+// ==========================================
+// Erasing while keeping the marker and the policy, with the power cut at every step.
+// Caution: **Cut every write and every erase `reset_keeping` makes**, as the run above does for
+// `append`. The step that loses the policy is one step among dozens.
+// ==========================================
+
+priv const KEEP_MARKER: U16 = 0
+priv const KEEP_MARKER_TEXT: U8[] = "mk1"
+priv const OLD_POLICY: U8[] = "policy-v1-0123456789abcdefghijkl" //< 32 bytes, a 40-byte record
+priv const NEW_POLICY: U8[] = "policy-v2-zyxwvutsrqponmlkjihgfe" //< the newest; it must survive
+
+priv const ERASE_CUT_BYTES_MODES: Sz[3] = ::{ 0, 1, CUT_SECTOR / 2 } //<
+    //< how much of the sector is erased when the power is cut during an erase
+    //< 0 leaves the sector as it was, 1 garbles only its first header, and half leaves a header
+    //< erased in front of records still intact.
+
+priv $keep_store: Store //< the medium `fill_for_keeping` laid out last, for reopening it
+
+priv fn fill_for_keeping(): ksdblog.Log //< a medium laid out as the car's, in 64-byte sectors
+    //< The marker in sector 0; an older policy in sector 2, **beyond the spare sector** (sector 1);
+    //< the newest in sector 3; samples around and after them.
+    //< Caution: **Keep an older policy between the spare sector and the newest one.** Erased in the
+    //< wrong order, it is what a cut brings back as the newest.
+    keep_store = ram.make(U8$[]::store_buf, CUT_SECTOR)
+    $lg: = ksdblog.Log.open(keep_store)
+    lg.append(KEEP_MARKER, KEEP_MARKER_TEXT) catch panic("append marker")
+    for _i in Range.asc(7)
+        lg.append(KIND_SAMPLE, "sample-8") catch panic("append sample")
+    lg.append(KIND_POLICY, OLD_POLICY) catch panic("append old policy")
+    lg.append(KIND_SAMPLE, "sample-8") catch panic("append sample")
+    lg.append(KIND_POLICY, NEW_POLICY) catch panic("append new policy")
+    for _i in Range.asc(12)
+        lg.append(KIND_SAMPLE, "sample-8") catch panic("append sample")
+    return lg
+
+priv fn kept_ones_read(lg: ksdblog.Log$@): Bool //< whether the marker and the newest policy read
+    $buf: U8[48] = ::{}
+    mn: = lg.last(KEEP_MARKER, U8$[]::buf) catch
+        return false
+    if !U8[]::{ .ptr = buf[0]@, .len = mn }.equals(KEEP_MARKER_TEXT)
+        return false
+    pn: = lg.last(KIND_POLICY, U8$[]::buf) catch
+        return false
+    return U8[]::{ .ptr = buf[0]@, .len = pn }.equals(NEW_POLICY)
+
+priv const KEEP_KINDS: U16[2] = ::{ KEEP_MARKER, KIND_POLICY }
+
+fn test_reset_keeping_leaves_only_the_kept() //< what a finished `reset_keeping` leaves
+    verdict.start("[ksdb] erasing while keeping the marker and the policy test...")
+    $lg: = fill_for_keeping()
+    lg.reset_keeping(U16[]::KEEP_KINDS) catch panic("reset_keeping should succeed")
+    $again: = ksdblog.Log.open(keep_store)
+    assert(kept_ones_read(again@), "the marker and the newest policy are kept")
+    $seen: Sz = 0
+    $it: = again.iter()
+    for it.next()
+        seen += 1
+    assert(seen == 2, "the samples and the older policy are gone")
+    // **The copies sit at the head**, so the whole medium is free again behind them.
+    assert(again.used() == 12 + 40, "the next append goes right after the two kept records")
+    assert(again.used() == lg.used(), "the log and a reopening agree on where to append")
+    verdict.pass("Only the marker and the newest policy are left, at the head of the medium.")
+
+fn test_every_power_cut_while_keeping_keeps_the_policy()
+    verdict
+        .start("[ksdb] whichever write or erase of reset_keeping the power cut hits, the policy \
+            stays test...")
+    // Counted, not hard-coded, as `count_programs` does.
+    $plain: = fill_for_keeping()
+    programs_before: = ram.programs
+    erases_before: = ram.erases
+    plain.reset_keeping(U16[]::KEEP_KINDS) catch panic("reset_keeping should succeed")
+    programs: = ram.programs - programs_before
+    erases: = ram.erases - erases_before
+    assert(programs > 0 && erases > 0, "it writes and erases")
+    $checked: Sz = 0
+    for $cut: Sz = 1; cut <= programs + erases; cut += 1
+        modes: = CUT_BYTES_MODES.len if cut <= programs else ERASE_CUT_BYTES_MODES.len
+        for m in Range.asc(modes)
+            $lg: = fill_for_keeping()
+            if cut <= programs
+                ram.arm_cut(cut, CUT_BYTES_MODES[m])
+            else
+                ram.arm_erase_cut(cut - programs, ERASE_CUT_BYTES_MODES[m])
+            $failed: = false
+            lg.reset_keeping(U16[]::KEEP_KINDS) catch
+                failed = true
+            assert(failed, "the armed cut is reached")
+            // It restarts after the cut. Caution: **Read the medium, not the same `Log`.**
+            $again: = ksdblog.Log.open(keep_store)
+            assert(kept_ones_read(again@), "the marker and the newest policy survive the cut")
+            // **Erasing again after the cut finishes the job**, as the car's next long press does.
+            again.reset_keeping(U16[]::KEEP_KINDS) catch panic("reset_keeping after a cut")
+            $after: = ksdblog.Log.open(keep_store)
+            assert(kept_ones_read(after@), "a second erase keeps them too")
+            assert(after.used() == 12 + 40, "a second erase leaves them at the head")
+            after.append(KIND_SAMPLE, "after") catch panic("appending goes on after it")
+            checked += 1
+    // Caution: **Compare the cases seen with the count**, or a run that saw none passes.
+    assert(checked == programs * CUT_BYTES_MODES.len + erases * ERASE_CUT_BYTES_MODES.len,
+        "not one way of cutting the power was skipped")
+    verdict
+        .pass("Under each write and each erase of reset_keeping, cut in each way, the marker and \
+            the newest policy read after the restart, and erasing again finishes the job.")

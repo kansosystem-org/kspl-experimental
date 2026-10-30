@@ -23,7 +23,7 @@ import "tests/support/harness_text" as htext
 priv const PROBE_STEM: U8[] = "probe file" //< the name used for `make debug-file`'s check
     //< Caution: **Include a space.** make's `$(notdir)` / `$(basename)` split on whitespace, so a
     //< naive recipe turns `probe file.kspl` into another name and F5 starts the last executable.
-priv const PROBE_DIR: U8[] = "out/vscode_test src"
+priv const PROBE_DIR: U8[] = "out/tmp/vscode_test src"
 
 priv const PROBE_SRC: U8[] =
     """import "std/io"
@@ -199,7 +199,8 @@ priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
     rel: = arena.text().s("\{PROBE_DIR\}/\{PROBE_STEM\}.kspl").take()
     src: = fs.join(root, rel, arena)
     exe: = arena.text().s("\{root\}/out/\{PROBE_STEM\}.exe").take()
-    gen: = arena.text().s("\{root\}/out/\{PROBE_STEM\}.c").take()
+    gen: = arena.text().s("\{root\}/out/gen/\{PROBE_STEM\}.c").take()
+    libs: = arena.text().s("\{root\}/out/gen/\{PROBE_STEM\}.libs").take()
     io.write_file(src, PROBE_SRC) catch
         verdict.check(name, false, "cannot write the material")
         return
@@ -210,6 +211,7 @@ priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
         fs.remove_path(src_dir) catch {}
         fs.remove_path(exe) catch {}
         fs.remove_path(gen) catch {}
+        fs.remove_path(libs) catch {}
 
     src_arg: = arena.text().s("SRC_KSPL=\{rel\}").take()
     $args: = List<|U8[]|>(arena)

@@ -8,6 +8,7 @@
 import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "std/chars"
+import "std/ds" { List, Map }
 import "std/str" { Str_builder }
 // The runtime's sources (the type definitions, the tracing machinery, the panic and bounds checks,
 // the process isolation). They are kept in `.h` and `.c` files and built into the compiler with
@@ -222,3 +223,51 @@ fn write_unit($w: Writer): Writer //<
     // runtime itself" out of the emitted file at this line.
     w = w.s("\nvoid ").s(sym.slice()).s("(void) {}\n")
     return w
+
+fn c_names(): List<|U8[]|> //<
+    //< Every `kspl_` name the runtime written for this build spells in its code, once each
+    //< A program's own global spelled the same meets it in C (`C_names` in `../lower/abi.kspl`).
+    //< Comments and literals are skipped, so a name only a comment mentions is no name. The
+    //< names are copies on the compilation's arena; the list is the caller's to free.
+    defer $text: = Str_builder()
+    write_impl(write_decls(text@))
+    s: = text.slice()
+    $out: = List<|U8[]|>(null)
+    defer $seen: = Map<|U8[], Bool|>(null)
+    $i: Sz = 0
+    for i < s.len
+        b: = s[i]
+        if b == '/' && i + 1 < s.len && s[i + 1] == '*'
+            i = skip_past(s, i + 2, "*/")
+        else if b == '/' && i + 1 < s.len && s[i + 1] == '/'
+            i = skip_past(s, i + 2, "\n")
+        else if b == '"' || b == '\''
+            i = skip_literal(s, i)
+        else if b.is_alpha()
+            $end: = i + 1
+            for end < s.len && s[end].is_alnum()
+                end += 1
+            word: = s.sub(i, end - i)
+            if word.starts_with("kspl_") && seen.get(word).is_none()
+                seen.set(word, true)
+                out.push(base_core.arena.dup_str(word))
+            i = end
+        else if b.is_digit()
+            // A number's letters (`0x1Fu`) are no name.
+            for i < s.len && (s[i].is_alnum() || s[i] == '.')
+                i += 1
+        else
+            i += 1
+    return out
+
+priv fn skip_past(s: U8[], from: Sz, close: U8[]): Sz //< the position after the next `close`
+    if at: = s.sub_from(from).find_str(close)
+        return from + at + close.len
+    return s.len
+
+priv fn skip_literal(s: U8[], open: Sz): Sz //< the position after the C literal opening at `open`
+    quote: = s[open]
+    $i: = open + 1
+    for i < s.len && s[i] != quote && s[i] != '\n'
+        i += 1 if s[i] != '\\' else 2
+    return i + 1 if i < s.len else s.len

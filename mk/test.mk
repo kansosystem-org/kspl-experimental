@@ -7,12 +7,16 @@
 debug: $(STAGE1_EXE)
 	@echo "# RUNNING DEBUG TESTS ($(BACKEND), BLAS=$(BLAS))"
 	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tests/debug/main.kspl OUT_STEM=test_debug \
-		$(C_FMT_OFF)
-	./$(OUT_DIR)/test_debug.exe
+		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
+	./$(TEST_DIR)/test_debug.exe
 
 # --- Building a single file for debugging (VS Code's F5) ---
 # Caution: **The output's name agrees with launch.json's `${fileBasenameNoExtension}.exe`**, or F5
 # silently starts the previous executable. It is the shell's basename of $(SRC_KSPL), **quoted**.
+# The executable goes in `DEBUG_EXE_DIR`, where F5 looks, and a gate's build names `$(TEST_DIR)`.
+# What it is built from goes in `$(GEN_DIR)` ("What goes where in `out/`" in
+# docs/DESIGN-repository.md).
+DEBUG_EXE_DIR := $(OUT_DIR)
 export DEBUG_FILE_USAGE_NOTE := (normally called from VS Code's F5 / the task "build-current-file")
 ## Local-cycle|debug-file|Build one `.kspl` with debug information (`SRC_KSPL=`; VS Code's F5 calls this)
 debug-file: $(STAGE1_EXE)
@@ -24,12 +28,13 @@ debug-file: $(STAGE1_EXE)
 	fi; \
 	stem="$(OUT_STEM)"; \
 	if [ -z "$$stem" ]; then stem="$$(basename "$(SRC_KSPL)")"; stem="$${stem%.*}"; fi; \
-	gen="$(OUT_DIR)/$$stem.$(TARGET_EXT)"; exe="$(OUT_DIR)/$$stem.exe"; libf="$(OUT_DIR)/$$stem.libs"; \
+	mkdir -p "$(GEN_DIR)" "$(DEBUG_EXE_DIR)"; \
+	gen="$(GEN_DIR)/$$stem.$(TARGET_EXT)"; exe="$(DEBUG_EXE_DIR)/$$stem.exe"; libf="$(GEN_DIR)/$$stem.libs"; \
 	echo "# BUILDING $(SRC_KSPL) FOR DEBUGGING ($(BACKEND))"; \
 	echo "./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) \"$(SRC_KSPL)\" \"$$gen\""; \
 	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs="$$libf" "$(SRC_KSPL)" "$$gen"; \
 	if [ "$(BACKEND)" = "c" ]; then $(call c_fmt,"$$gen"); fi; \
-	rt=""; if [ "$(BACKEND)" = "llvm" ]; then rt="$(OUT_DIR)/$$stem.runtime.c"; ./$(STAGE1_EXE) emit-runtime "$$rt"; fi; \
+	rt=""; if [ "$(BACKEND)" = "llvm" ]; then rt="$(GEN_DIR)/$$stem.runtime.c"; ./$(STAGE1_EXE) emit-runtime "$$rt"; fi; \
 	echo "$(CC) $(CFLAGS) \"$$gen\" $$rt \"@$$libf\" $(LDLIBS) -o \"$$exe\""; \
 	$(CC) $(CFLAGS) "$$gen" $$rt "@$$libf" $(LDLIBS) -o "$$exe"; \
 	echo "# BUILT $$exe"
@@ -52,10 +57,11 @@ C_FMT_OFF := C_FMT=:
 # with nothing said. Hence `debug_`.
 ## Local-cycle|debug-*|Run only that package's tests (the names are `OWN_MAKE_PKGS` in `mk/test.mk`)
 ## Local-cycle|debug-tools|Run only the tests of `tools/`
+# `KANSO_MAKE`: the make that `make explain` runs, for its tests to run the same one.
 debug-tools: $(STAGE1_EXE)
 	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tools/tests/main.kspl OUT_STEM=debug_tools \
-		$(C_FMT_OFF)
-	./$(OUT_DIR)/debug_tools.exe
+		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
+	KANSO_MAKE=$(call shq,$(ci_make)) ./$(TEST_DIR)/debug_tools.exe
 
 # --- kssrv and ksbind through the LLVM backend ---
 # **`make LLVM=1 debug` holds neither** (they run only as their own `make test`), so genllvm broken
@@ -67,15 +73,15 @@ debug-tools: $(STAGE1_EXE)
 ## Gates|test-llvm-pkgs|Build kssrv and ksbind's tests through the LLVM backend, and run kssrv's and ksbind's tests on them
 test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm
+		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm DEBUG_EXE_DIR=$(TEST_DIR)
 	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
-	cd kssrv && KSPLC_STD_DIR="$(abspath std)" \
+	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
 		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspl)" \
-		"$(abspath $(OUT_DIR))/kssrv_llvm.exe" \
+		"$(abspath $(TEST_DIR))/kssrv_llvm.exe" \
 		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=ksbind/tests/main.kspl OUT_STEM=ksbind_llvm
-	./$(OUT_DIR)/ksbind_llvm.exe
+		SRC_KSPL=ksbind/tests/main.kspl OUT_STEM=ksbind_llvm DEBUG_EXE_DIR=$(TEST_DIR)
+	./$(TEST_DIR)/ksbind_llvm.exe
 
 .PHONY: test-llvm-pkgs
 
@@ -365,7 +371,7 @@ test-surface: $(STAGE1_EXE)
 .PHONY: surface test-surface
 
 # --- The language tutorial ---
-## Measure-and-inspect|tutorial|Rewrite the language tutorial (`docs/TUTORIAL.md`) from its program
+## Measure-and-inspect|tutorial|Rewrite the language tutorial (`docs/TUTORIAL-programming-language.md`) from its program
 tutorial: $(STAGE1_EXE)
 	@echo "# WRITING THE TUTORIAL OF THE LANGUAGE"
 	./$(STAGE1_EXE) run tools/tutorial.kspl write --ksplc=$(STAGE1_EXE)

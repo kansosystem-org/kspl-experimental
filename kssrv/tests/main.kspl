@@ -6,6 +6,7 @@
 //< 0.0.0.0, so Windows Defender asks permission for incoming connections.
 import "kssrv/tests/client"
 import "kssrv/tests/guard"
+import "kssrv/tests/https"
 import "kssrv/tests/local"
 import "kssrv/tests/memory"
 import "kssrv/tests/start" { Running, bring_up, read_log, start_server }
@@ -25,8 +26,9 @@ priv const USAGE: U8[] = "usage: ksplc run tests/main.kspl <kssrv> <work_dir> [<
     //< With a run's name, only that run goes, to reproduce one by hand. `--RUNS` prints the names,
     //< one a line. So whoever picks one does not have to read them out of this file.
 
-priv const RUNS: U8[][7] = ::{ "outward", "local", "linked", "page", "idle", "stop", "memory" } //<
-    //< The server runs, each a process of its own on a free port the system chose
+priv const RUNS: U8[][8] = ::{ "outward", "https", "local", "linked", "page", "idle", "stop",
+    "memory" } //<
+        //< The server runs, each a process of its own on a free port the system chose
 priv const PAGE_REL: U8[] = "ui/app.html" //< the page placed outside the root
     //< **Not under the root** (that is the case being tested).
 priv const PAGE_BODY: U8[] = "<title>outside page</title>\n"
@@ -43,7 +45,7 @@ priv const LINK_ESCAPES: U8[][4] = ::{ "/link.txt", "/dlink/secret.txt", "/dlink
         //< What they reach is placed **outside** the root, so reaching it is an escape.
         //< Caution: **Try a link mid-path too**: an implementation that checks only the last step
         //< misses a folder link. **And one whose name holds a backslash**, an ordinary byte on
-        //< POSIX. A check that splits there and joins with `/` looks at names that do not exist.
+        //< POSIX, where a path holding one is refused before any link is looked at.
 
 priv const OUTSIDE_RELS: U8[][1] = ::{ "secret.txt" }
 priv const OUTSIDE_BODIES: U8[][1] = ::{ "secret\n" }
@@ -177,6 +179,8 @@ priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server ru
     //< listens on the free port the system gave it, so a leftover from one cannot answer another.
     if name.equals("outward")
         serve_outward_and_check(at, arena)
+    else if name.equals("https")
+        https.run(at.exe, at.root, at.tmp, arena)
     else if name.equals("local")
         serve_local_and_check(at, arena)
     else if name.equals("linked")

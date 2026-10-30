@@ -72,7 +72,14 @@ priv const FAMILIES: Family[3] = ::{ //< every family built here, and how they d
 }
 
 priv const MAX_WIDTH: I64 = 1048576I64 //< the cap on a width, a count of heads or of blocks
-    //< No real model comes near it. It keeps a broken setting from asking for all memory.
+    //< No real model comes near it. It keeps one broken setting from asking for all memory;
+    //< settings that fit one another can still ask for it together, which the caps below stop.
+priv const MAX_STATE_BYTES: I64 = 1024I64 * 1024I64 * 1024I64 //< one copy of every delta state
+    //< Qwen3.5-9B's states take about 50 MiB in all. A chat server keeps several copies, so a
+    //< state past this is a broken file, refused before the memory is asked for.
+priv const MAX_CACHE_BYTES: I64 = 256I64 * 1024I64 * 1024I64 * 1024I64 //< the keys and values
+    //< The largest dense model of these families, Qwen2.5-72B, takes 80 GiB over its trained
+    //< 131,072 positions, and Qwen3-4B-Instruct-2507 72 GiB over its 262,144.
 priv const DEFAULT_INTERVAL: I64 = 4I64 //< Qwen3.5's `full_attention_interval` where it is absent
     //< llama.cpp takes the same default.
 
@@ -111,7 +118,8 @@ impl Qwen_config
         g: Gguf@, //< the parsed file
         arena: Arena$@, //< where the keys' names are built
     ): Qwen_config!Qwen_error
-        $l: = Loader::{ .g = g, .seen = arena.create(Map<|U8[], Bool|>(arena)), .arena = arena }
+        seen: = arena.create(Map<|U8[], Bool|>(arena)) // keys from the model
+        $l: = Loader::{ .g = g, .seen = seen, .arena = arena }
         return read_config(l@)!
 
 priv struct Attention //< an attention block's weights and its cache
@@ -154,7 +162,7 @@ pub struct Qwen_state //< a copy of the delta nets' running state, and the token
 
 priv struct Loader //< what loading reads from, and the tensor names it has read
     g: Gguf@
-    seen: Map<|U8[], Bool|>$@
+    seen: Map<|U8[], Bool|>$@ //< the names of the tensors read; keys from the model
     arena: Arena$@
 
 impl Loader
@@ -261,9 +269,15 @@ impl Qwen
         context: Sz, //< the positions the cache holds, from 1 to the trained context
         arena: Arena$@, //< where the cache, the states, the shapes and the lists go
     ): Qwen!Qwen_error
-        $l: = Loader::{ .g = g, .seen = arena.create(Map<|U8[], Bool|>(arena)), .arena = arena }
+        seen: = arena.create(Map<|U8[], Bool|>(arena)) // keys from the model
+        $l: = Loader::{ .g = g, .seen = seen, .arena = arena }
         cfg: = read_config(l@)!
         if context < 1 || context > cfg.trained_context
+            throw .bad_setting(l.key(cfg.arch, "context_length"))
+        // A block keeps a key and a value of `n_kv_heads × head_dim` F32 numbers per position.
+        // Each factor is capped alone, so their product is compared by division, never formed.
+        position: = 8 * cfg.n_kv_heads * cfg.head_dim
+        if I64::position > MAX_CACHE_BYTES / I64::context / I64::cfg.attention_blocks()
             throw .bad_setting(l.key(cfg.arch, "context_length"))
         embedding: = l.matrix("token_embd.weight", cfg.vocab, cfg.hidden)!
         blocks: = Block$@::arena.alloc(cfg.n_layers * sizeof(Block))
@@ -534,6 +548,11 @@ priv fn read_delta(l: Loader$@, cfg: Qwen_config$@): Void!Qwen_error //<
         throw .bad_setting(l.key(arch, "ssm.time_step_rank"))
     if l.setting(l.key(arch, "ssm.inner_size"), 1I64)! != s.inner()
         throw .bad_setting(l.key(arch, "ssm.inner_size"))
+    // `state_len` stays far below `Sz`'s range, as each factor is capped; the count of blocks
+    // is divided into the cap rather than multiplied.
+    delta_blocks: = cfg.n_layers - cfg.attention_blocks()
+    if delta_blocks > 0 && I64::s.state_len() > MAX_STATE_BYTES / 4I64 / I64::delta_blocks
+        throw .bad_setting(l.key(arch, "ssm.state_size"))
     cfg.delta = s
 
 priv fn check_sections(l: Loader$@, arch: U8[], rope_dims: Sz, head_dim: Sz): Void!Qwen_error //<

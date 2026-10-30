@@ -9,11 +9,13 @@ import "ksmd/base/marker" { is_decimal, leading, quoted_end }
 import "ksmd/base/source" { Diagnostic, Line, Source }
 import "ksmd/calc/formula" { text_piece }
 import "ksmd/model/choice" { has_choices, is_entry }
+import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { format_of }
 import "ksmd/model/group" { Group_fault, read_groups }
 import "ksmd/model/look" { look_of, note_of, plain_look }
 import "ksmd/model/model" { Block, Cell, Chart, Document, Image, UNBOUND, MAX_CELLS, MAX_COLUMNS,
-    MAX_FORMULA, MAX_NAME, MAX_ROWS, MAX_WEIGHT, Table }
+    MAX_FORMULA, MAX_HEIGHT, MAX_NAME, MAX_ROWS, MAX_WEIGHT, MIN_HEIGHT, Column_filter, Row_height,
+    Table }
 import "ksmd/model/rule" { has_rule, rule_of }
 import "ksmd/syntax/chart" { kind_of, split_names }
 import "std/chars"
@@ -123,8 +125,10 @@ priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc
     names: Keyed<|Bool|>$@, arena: Arena$@): Sz!Diagnostic //<
         //< A header row of quoted names, then data rows, each with as many cells
     allow(src, attributes,
-        U8[][]::{ "name", "widths", "formats", "choices", "rules", "groups", "invisible" },
-        "':::table' takes only name, widths, formats, choices, rules, groups and invisible")!
+        U8[][]::{ "name", "widths", "heights", "formats", "choices", "rules", "groups", "filter",
+        "invisible" },
+        "':::table' takes only name, widths, heights, formats, choices, rules, groups, filter and \
+            invisible")!
     name: =
         required(src, first, attributes, "name", "':::table' needs a name, as in name=\"budget\"")!
     name_at: = attribute_at(attributes, "name")
@@ -166,6 +170,8 @@ priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc
         throw src.diagnostic(first.offset, "a table has a header row of quoted names")
     if a: = find(attributes, "widths")
         read_widths(src, a, t@)!
+    if a: = find(attributes, "heights")
+        read_heights(src, a, t@)!
     if a: = find(attributes, "formats")
         read_formats(src, a, t@)!
     if a: = find(attributes, "choices")
@@ -174,6 +180,8 @@ priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc
         read_rule_list(src, a, t@, arena)!
     if a: = find(attributes, "groups")
         read_group_list(src, a, t@)!
+    if a: = find(attributes, "filter")
+        read_filter_list(src, a, t@)!
     doc.blocks
         .push(Block::{ .kind = .table, .level = 0, .label = "", .text = "",
         .first = doc.tables.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
@@ -301,6 +309,35 @@ priv fn read_widths(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
     if t.weights.len != t.columns.len
         throw src.diagnostic(a.offset, "widths has one weight per column")
 
+priv fn read_heights(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `heights=",20,,"`: one entry per data row, its least height in whole points, empty for none
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    $count: Sz = 0
+    $start: Sz = 0
+    for i in Range.asc(a.value.len + 1)
+        if i < a.value.len && a.value[i] != ','
+            continue
+        entry: = a.value.sub(start, i - start)
+        start = i + 1
+        if count == t.rows.len
+            throw src.diagnostic(a.offset, "heights has one entry per data row, empty for none")
+        row: = t.rows[count]
+        count += 1
+        if entry.len == 0
+            continue
+        points: = entry.to_count(MAX_HEIGHT) catch
+            throw src.diagnostic(a.offset,
+                "a row's height is a whole number of points from 6 to 409, or nothing")
+        if points < MIN_HEIGHT
+            throw src.diagnostic(a.offset,
+                "a row's height is a whole number of points from 6 to 409, or nothing")
+        t.heights.push(Row_height::{ .row = row, .points = points })
+    if count != t.rows.len
+        throw src.diagnostic(a.offset, "heights has one entry per data row, empty for none")
+    if t.heights.len == 0
+        throw src.diagnostic(a.offset, "leave out heights when no row has one")
+
 priv fn read_formats(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
     //< `formats="grouped:2,,percent:1"`: one number format per column, empty for none
     //< A diagnostic points at the entry itself where the value holds no escape.
@@ -378,6 +415,31 @@ priv fn read_group_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic
         throw src.diagnostic(a.offset, "leave out groups when the table has none")
     read_groups(a.value, t.rows.len, t.groups@) catch f
         throw src.diagnostic(a.offset, message_of(f))
+
+priv fn read_filter_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `filter=",in:apple|fig,"`: one entry per column, empty for a column that narrows nothing
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    $count: Sz = 0
+    $start: Sz = 0
+    for i in Range.asc(a.value.len + 1)
+        if i < a.value.len && a.value[i] != ','
+            continue
+        entry: = a.value.sub(start, i - start)
+        start = i + 1
+        if count == t.columns.len
+            throw src.diagnostic(a.offset, "filter has one entry per column, empty for none")
+        if !is_filter_entry(entry)
+            throw src.diagnostic(a.offset,
+                "a column's filter is in: and values separated by '|', is:, not:, contains:, above: \
+                    or below: and a value, empty, filled, or nothing")
+        if entry.len > 0
+            t.filters.push(Column_filter::{ .column = t.columns[count], .entry = entry })
+        count += 1
+    if count != t.columns.len
+        throw src.diagnostic(a.offset, "filter has one entry per column, empty for none")
+    if t.filters.len == 0
+        throw src.diagnostic(a.offset, "leave out filter when no column has one")
 
 priv fn message_of(f: Group_fault): U8[] //< what the reader says of groups it cannot read
     switch f

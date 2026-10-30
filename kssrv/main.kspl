@@ -3,15 +3,18 @@
 //< It returns the files under `<root>` for GET/HEAD, and JSON under `/api/`, multiplexing the
 //< connections on one thread with `std/reactor` and keeping them alive (HTTP/1.1's default).
 //< `--local` makes it **for local use**; `--page` names the file for `/` and `/index.html`.
+//< `--cert` and `--key` make it answer HTTPS, facing outward (`kssrv/https.kspl`).
 //< **Every socket is non-blocking.**
 
 // ==========================================
 // Usage:
 //     kssrv <port> <root> [--local] [--page=<file>] [--idle=<seconds>]
+//                         [--cert=<chain.pem> --key=<key.pem>]
 // A port of 0 lets the system choose a free one; the line "listening on" names it.
 // ==========================================
 import "kssrv/api"
 import "kssrv/conn"
+import "kssrv/https"
 import "std/argparse"
 import "std/chars" // single-character tests and slicing
 import "std/fs"
@@ -154,12 +157,20 @@ priv fn hides_long_name(root: U8[], rel: U8[], arena: Arena$@): Bool //<
     //< Whether a segment of `rel`, by the name the file system keeps, starts with a dot
     //< Caution: **Windows answers to a short name too**: `/GIT~1/config` opens `.git/config`, and
     //< the name as asked for starts with no dot. So each segment's long name is checked as well.
-    for $at: Sz = 0; at <= rel.len; at += 1
-        if at < rel.len && !sys.is_path_sep(rel[at])
+    //< Caution: **Skip an empty segment** (`a//b`). Windows reads no long name for `a/`, and each
+    //< extra `/` would cost one more lookup on the server's one thread.
+    //< Caution: **A long name that cannot be read hides what stands there.** Only where nothing
+    //< stands is the path not hidden, and nothing deeper can stand either, so the walk ends.
+    $start: Sz = 0
+    for start <= rel.len
+        end: = sys.segment_end(rel, start)
+        empty: = end == start
+        start = end + 1
+        if empty
             continue
-        long: =
-            fs.long_name(fs.join(root, rel.sub(0, at), arena), arena) catch
-            return false
+        prefix: = fs.join(root, rel.sub(0, end), arena)
+        long: = fs.long_name(prefix, arena) catch
+            return fs.exists(prefix)
         if long.starts_with(".") && !long.equals(WELL_KNOWN)
             return true
     return false
@@ -378,21 +389,16 @@ priv fn head_decided(c: conn.Conn$@): Bool //<
     c.head_from = s.len - 1
     return false
 
-priv fn conn_send(c: conn.Conn$@): Bool //< sends as much of `outbuf` as can be sent
+priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf` as can be sent
     //< False means close.
     $refills: Sz = 0
     for
         for c.sent < c.outbuf.len
             rest: = c.outbuf.slice().sub(c.sent, c.outbuf.len - c.sent)
             n: =
-                c.stream.write(rest.sub(0, IO_CHUNK) if rest.len > IO_CHUNK else rest) catch e
-                switch e
-                case .would_block
-                    return true // wait for writable
-                default
-                    return false
-            if n == 0
-                return false // no progress (the peer closed)
+                https.write_some(c, rest.sub(0, IO_CHUNK) if rest.len > IO_CHUNK else rest, lg)
+                catch e
+                return e == https.Io_end.wait // wait for writable, or close
             c.sent += n
             c.moved_us = sys.mono_us()
         c.outbuf.clear()
@@ -408,6 +414,10 @@ priv fn conn_send(c: conn.Conn$@): Bool //< sends as much of `outbuf` as can be 
         if refills >= MAX_READ_ROUNDS
             return true
     if !c.close_after_send
+        return true
+    // **TLS ends with its close_notify**, sent before the sending side closes. A peer that
+    // half-closed gets it too: it is still reading the answer. Close once it has gone.
+    if https.close_notify(c)
         return true
     // A peer that closed its sending side has nothing left to drain.
     if c.peer_done
@@ -438,12 +448,16 @@ priv fn refill_from_file(c: conn.Conn$@): Bool //< moves the file's next chunk i
 priv fn conn_read(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the socket
     //< False means close.
     //< Caution: **Cap the reads per notification**, or one client that keeps sending makes everyone
-    //< else wait (the rest comes back as readable at the next `wait()`).
+    //< else wait. The rest comes back as readable at the next `wait()`, or, where TLS holds it,
+    //< `drive_backlog` reads it.
     $chunk: U8[IO_CHUNK] = ::{}
     for _round in Range.asc(MAX_READ_ROUNDS)
-        n: = c.stream.read(U8$[]::chunk) catch e
+        n: = https.read_some(c, U8$[]::chunk, ctx.lg) catch e
             switch e
-            case .would_block
+            case .wait
+                return true
+            case .plain_http
+                https.answer_plain(c)
                 return true
             default
                 return false
@@ -463,8 +477,9 @@ priv fn conn_read(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the sock
             conn.queue_error(c, 431)
             c.inbuf.clear()
             return true
-        // Check the head before collecting further body chunks.
-        if c.need == 0 || n < IO_CHUNK
+        // Check the head before collecting further body chunks. **A short read ends the socket's
+        // bytes, but not TLS's**: one TLS read gives one record, and the next may wait inside it.
+        if c.need == 0 || (n < IO_CHUNK && !https.buffered(c))
             return true
     return true
 
@@ -473,6 +488,16 @@ priv fn conn_pump(c: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<
     //< False means close.
     //< The table owns the connection for the whole pass; the caller drops its slot afterwards.
     c.backlog = false
+    // **What TLS holds goes out first**, a handshake's reply or the end of an answer: no
+    // notification but writable comes for it.
+    if https.pending(c)
+        https.flush(c, ctx.lg) catch e
+            return e == https.Io_end.wait
+        c.moved_us = sys.mono_us()
+        // Caution: **Finish a close that waited for those bytes**: no answer is left to send, so
+        // nothing else would close the sending side.
+        if c.outbuf.len == 0 && c.close_after_send && c.lingering_since_us == 0I64
+            return conn_send(c, ctx.lg)
     if c.lingering_since_us != 0I64
         return !can_read || conn_read(c, ctx)
     // **Do not read once `peer_done` is set.** EOF stays readable, so reading would spin.
@@ -483,7 +508,7 @@ priv fn conn_pump(c: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<
         conn_build(c, ctx)
         if c.outbuf.len == 0
             return true // nothing to build (the request has not arrived)
-        if !conn_send(c)
+        if !conn_send(c, ctx.lg)
             return false
         if c.outbuf.len > 0
             return true // not all sent; wait for writable
@@ -495,17 +520,29 @@ priv fn conn_pump(c: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<
     c.backlog = true
     return true
 
+priv fn reads_held(c: conn.Conn$@): Bool //< whether it would read now what TLS holds received
+    //< **Only while nothing waits to go**: otherwise `conn_pump` does not read, and the loop would
+    //< not sleep for nothing. A read that finds a record cut short empties what TLS holds.
+    return https.buffered(c) && !c.backlog && !c.peer_done && c.outbuf.len == 0 &&
+        !https.pending(c)
+
 priv fn drive_backlog(t: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
-    //< Drives each connection the cap left with requests already read (`conn.Conn.backlog`)
-    //< True means one still has some, so the next `wait()` must not sleep.
+    //< Drives each connection with work no notification brings
+    //< That is requests already read, left by the cap (`conn.Conn.backlog`), or bytes TLS took in
+    //< from the socket and holds (`reads_held`). True means one still has some, so the next
+    //< `wait()` must not sleep.
     $left: = false
     for i in Range.asc(conn.MAX_CONNS)
-        if t.slots[i].is_empty() || !t.slots[i].get().backlog
+        if t.slots[i].is_empty()
             continue
-        if !conn_pump(t.slots[i].get(), ctx, false)
+        c: = t.slots[i].get()
+        held: = reads_held(c)
+        if !c.backlog && !held
+            continue
+        if !conn_pump(c, ctx, held)
             conn.table_drop(t, i, ctx.lg)
             continue
-        left = left || t.slots[i].get().backlog
+        left = left || c.backlog || reads_held(c)
     return left
 
 // ==========================================
@@ -529,9 +566,11 @@ priv fn say_refused(lg: Log$@, per_peer: Bool) //<
                         connections are refused until one closes")
     conn.stats.connections_refused += 1I64
 
-priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@, outward: Bool) //<
-    //< Accepts every pending connection into a free slot, or refuses it
-    //< Facing outward, one address may hold at most `conn.MAX_CONNS_PER_PEER` of the slots.
+priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@, outward: Bool,
+    h: https.Https$@) //<
+        //< Accepts every pending connection into a free slot, or refuses it
+        //< Facing outward, one address may hold at most `conn.MAX_CONNS_PER_PEER` of the slots.
+        //< With `h`, each starts its TLS; null serves plain HTTP.
     for
         stream: = listener.accept() catch e
             switch e
@@ -577,6 +616,8 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         fresh: = t.slots[slot].get()
         fresh.peer = host
         fresh.peer_len = p.host_len
+        if h != null && !https.start(fresh, h, lg)
+            conn.table_drop(t, slot, lg)
 
 priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
     t: conn.Conn_table$@) //<
@@ -591,7 +632,7 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
         c: = t.slots[i].get()
         // Caution: **Do not watch a connection whose peer closed its sending side while there is
         // nothing to send.** EOF is always readable, so `wait()` returns at once and burns the CPU.
-        if c.peer_done && c.outbuf.len == 0
+        if c.peer_done && c.outbuf.len == 0 && !https.pending(c)
             continue
         // **Do not read more while requests already read wait** (`drive_backlog` drives them): TCP
         // then holds the client back, rather than its requests piling up here.
@@ -599,7 +640,8 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
             continue
         // **Watch for writable only while partly sent.** An empty send buffer is always writable,
         // so `wait()` would return at once and burn the CPU.
-        interest: = reactor.WRITABLE if c.outbuf.len > 0 else reactor.READABLE
+        sending: = c.outbuf.len > 0 || https.pending(c)
+        interest: = reactor.WRITABLE if sending else reactor.READABLE
         r.register(c.stream.raw_handle(), interest, i)
 
 priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
@@ -624,7 +666,13 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
         slow: =
             c.request_since_us != 0I64 && c.inbuf.len > 0 && c.outbuf.len == 0 && !c.backlog &&
             c.lingering_since_us == 0I64 && now - c.request_since_us >= REQUEST_TIME_US
-        if idle
+        late: = https.handshake_late(c, now)
+        if late
+            if ln: = ctx.lg.at(.information)
+                ln
+                    .s("conn #\{c.serial\} did not finish the TLS handshake in \
+                        \{https.HANDSHAKE_TIME_US / US_PER_S\} s; closed")
+        else if idle
             if ln: = ctx.lg.at(.information)
                 ln.s("conn #\{c.serial\} passed nothing for \{IDLE_CONN_US / US_PER_S\} s; closed")
         else if slow
@@ -632,7 +680,8 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
                 ln
                     .s("conn #\{c.serial\} did not send a whole request in \
                         \{REQUEST_TIME_US / US_PER_S\} s; closed")
-        else if !lingered && (!c.peer_done || c.outbuf.len > 0 || c.backlog)
+        else if !lingered &&
+            (!c.peer_done || c.outbuf.len > 0 || c.backlog || https.pending(c))
             continue
         conn.table_drop(t, i, ctx.lg)
 
@@ -668,6 +717,8 @@ priv struct Options //< the command line, read and checked
     page: U8[] //< the file `/` and `/index.html` answer with, or empty
     local: Bool
     idle_s: I64 //< how long no page may hold it before it stops; 0 keeps it up
+    cert: U8[] //< the PEM certificate chain for HTTPS, or empty for plain HTTP
+    key: U8[] //< the PEM private key for HTTPS, or empty
 
 priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     //< Reads the command line into `o` and checks it; the exit code of a failure, or 0
@@ -675,6 +726,8 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     $local: = false
     $page: U8[] = ""
     $idle_s: I64 = 0I64
+    $cert: U8[] = ""
+    $key: U8[] = ""
     cli: = argparse.Parser
         .create("kssrv",
         "serves the files under <root>, and JSON under /api/; port 0 takes a free port", arena)
@@ -687,6 +740,8 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     // `../docs/SPEC-local-server.md`).
     cli.int_opt("--idle", idle_s@,
         "stop once no page has held it this many seconds (absent: stay up)")
+    cli.str_opt("--cert", cert@, "answer HTTPS with this PEM certificate chain (needs --key)")
+    cli.str_opt("--key", key@, "the PEM private key of --cert, unencrypted, readable by you alone")
     cli.parse_or_exit()
     if cli.rest.len != 2
         cli.print_usage(io.err())
@@ -718,8 +773,18 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         if ln: = lg.at(.error)
             ln.s("not a directory: \{root\}")
         return 1
+    // Caution: **A certificate and its key come together**: either alone could serve nothing.
+    if (cert.len > 0) != (key.len > 0)
+        lg.say(.error, "--cert and --key name the certificate and its key: give both, or neither")
+        return 1
+    // **The loopback needs no TLS** ("HTTPS faces outward only" in `kssrv/docs/DESIGN-server.md`).
+    if local && cert.len > 0
+        lg.say(.error,
+            "--local serves this machine alone, where HTTPS adds nothing: drop --cert and --key, or \
+                --local")
+        return 1
     o$ = Options::{ .port = I32::port64, .root = root, .page = page, .local = local,
-        .idle_s = idle_s }
+        .idle_s = idle_s, .cert = cert, .key = key }
     return 0
 
 priv fn listen(host: U8[], port: I32, lg: Log$@): net.Tcp_listener$@!net.Net_error //<
@@ -775,6 +840,17 @@ fn main(): I32
             return 1
         token = U8[]::{ .ptr = token_buf@, .len = TOKEN_BYTES * 2 }
 
+    // **The certificate is checked before the port is taken**, so a refusal leaves nothing bound.
+    $tls: https.Https = ::{}
+    $h: https.Https$@ = null
+    if o.cert.len > 0
+        tls = https.load(o.cert, o.key, lg@, arg_arena) catch
+            return 1
+        h = tls@
+    defer
+        if h != null
+            h.server.free()
+
     host: = LOCAL_HOST if o.local else ANY_HOST
     defer listener: = listen(host, o.port, lg@) catch
         return 1
@@ -798,7 +874,7 @@ fn main(): I32
 
     conn.stats.started_s = sys.wall_seconds()
     announce(o@, host, port, token, lg@)
-    return serve(listener, r@, table@, ctx@, o.idle_s)
+    return serve(listener, r@, table@, ctx@, o.idle_s, h)
 
 priv fn serve( //< answers until asked to stop, or until no page holds it for `idle_s`
     listener: net.Tcp_listener$@,
@@ -806,6 +882,7 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
     table: conn.Conn_table$@,
     ctx: conn.Ctx$@,
     idle_s: I64, //< 0 keeps it up
+    h: https.Https$@, //< what HTTPS serves with; null for plain HTTP
 ): I32 //< the exit code
     lg: = ctx.lg
     // Caution: **Flush in this one place, not per line.** A flush blocks the accepting thread, and
@@ -819,6 +896,8 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
         rebuild_interests(r, listener, table)
         now_us: = sys.mono_us()
         if now_us - flushed_us >= FLUSH_GAP_US
+            if h != null
+                https.watch_expiry(h, lg)
             lg.done()
             flushed_us = now_us
         // **Asked to stop, it stops once the answer has gone out** (`api.queue_api_stop`), whoever
@@ -858,4 +937,4 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
         ready.free()
         sweep_done(table, ctx)
         if accepting
-            accept_all(listener, table, lg, !ctx.is_local())
+            accept_all(listener, table, lg, !ctx.is_local(), h)

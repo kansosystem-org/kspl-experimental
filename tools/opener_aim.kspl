@@ -1,6 +1,7 @@
-//< ksmd's opener's rules: the URL, the page handing it on, the note, the workspace and its port
-//< **There is no child process and no network here** (those are in `tools/opener.kspl` and
-//< `tools/ksmd_open.kspl`). So a test can confirm from the paths and the files written alone that
+//< The openers' rules: the URL, the page handing it on, the note, a workspace and its port
+//< **There is no child process and no network here** (those are in `tools/opener.kspl` and the
+//< openers, `tools/ksmd_open.kspl` and `tools/ksagent_chat.kspl`). Each opener names what it opens
+//< in an `App`. So a test can confirm from the paths and the files written alone that
 //< the right path is opened (`tools/tests/page_test.kspl`, `tools/tests/ksmd_aim_test.kspl`). It
 //< can also confirm that the token stays off every command line. The reasons are "Opening a
 //< `.ksmd` document" in `tools/docs/DESIGN-tools.md`.
@@ -14,20 +15,26 @@ import "std/strnum"
 import "std/sys"
 import "std/url" as url_text
 
-const APP_NAME: U8[] = "ksmd" //< the application's name, in messages and the handed page's title
+struct App //< what one opener opens, and where its runs keep their files
+    name: U8[] //< the application's name, in messages and the handed page's title
+    files: U8[] //< how every file its runs leave in `tmp/` starts: the note, the lock, the logs
+        //< **One per opener**, so each keeps its own note: a ksmd server and a chat server for one
+        //< folder serve different pages, and neither may be reused for the other.
+    built: U8[] //< the folder beside the server that the page is built into (`OUT=`)
+    page: U8[] //< the built page, inside `built`
+        //< Caution: **Do not copy the page into the served folder.** Requiring "under the root"
+        //< would copy a page of megabytes into the user's folder. kssrv returns the file named by
+        //< `--page` for `/` ("Where it listens" in `docs/SPEC-local-server.md`).
+    tip: U8[] //< one line on using the page, printed once it opens
 
-const FILES: U8[] = "ksmd_open" //<
-    //< How every file the opener's runs leave in `tmp/` starts: the note, the lock, the logs
+const KSMD: App = App::{ .name = "ksmd", .files = "ksmd_open", .built = "ksmd",
+    .page = "web/ksmd.html", .tip = "Ctrl+S saves, and this browser keeps a draft until then" } //<
+        //< ksmd's editing page, where ksmd's make writes it
 
-const BUILT: U8[] = "ksmd" //< the folder ksmd's make writes into, beside the server (`OUT=`)
-
-const PAGE: U8[] = "web/ksmd.html" //< the built page, inside `BUILT`
-    //< Caution: **Do not copy the page into the served folder.** Requiring "under the root" would
-    //< copy a page of megabytes into the user's folder. kssrv returns the file named by `--page`
-    //< for `/` ("Where it listens" in `docs/SPEC-local-server.md`).
-
-const TIP: U8[] = "Ctrl+S saves, and this browser keeps a draft until then" //<
-    //< One line on using the page, printed once it opens
+const KSAGENT: App = App::{ .name = "ksagent", .files = "ksagent_chat", .built = "ksagent",
+    .page = "chat.html",
+    .tip = "Enter asks; an answer shows as it is written, and its sources once checked" } //<
+        //< ksagent's chat page, which the root's make copies beside the server
 
 fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its last name
     //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder. The note
@@ -150,7 +157,7 @@ const PAGE_KEEP_S: I64 = 600 //< how long a handed page is kept [s]
     //< **Long enough for a cold browser to start and read it**; the next run removes it after that
     //< (`sweep_pages`).
 
-fn page_text(open_url: U8[], text: Str_builder$@): U8[] //<
+fn page_text(open_url: U8[], app: App, text: Str_builder$@): U8[] //<
     //< The page handed to the browser in place of the URL, which moves on to the URL
     //< **The browser is handed this page's path, never the URL.** A command line is open to every
     //< user on the machine (`ps`), and the URL holds the token. The page moves on at once
@@ -159,9 +166,9 @@ fn page_text(open_url: U8[], text: Str_builder$@): U8[] //<
     text.s("<!doctype html>\n<meta charset=\"utf-8\">\n")
     text.s("<meta http-equiv=\"refresh\" content=\"0;url=")
     attr_into(text, open_url)
-    text.s("\">\n<title>").s(APP_NAME).s("</title>\n<a href=\"")
+    text.s("\">\n<title>").s(app.name).s("</title>\n<a href=\"")
     attr_into(text, open_url)
-    text.s("\">open ").s(APP_NAME).s("</a>\n")
+    text.s("\">open ").s(app.name).s("</a>\n")
     return text.slice()
 
 priv fn attr_into(text: Str_builder$@, s: U8[]) //< writes s as a quoted attribute's value
@@ -181,14 +188,16 @@ fn write_page( //< writes the page for the URL, readable by its owner alone, and
     //< **A name of its own each time** (`fs.write_unique`). Otherwise two documents opened at once
     //< (several chosen and opened together) would each hand the browser the other's page.
     open_url: U8[], //< the URL to move on to, token included
+    app: App, //< what is opened: its name titles the page and starts the file's name
     dir: U8[], //< the folder it goes in
     arena: Arena$@, //< where the path goes
 ): U8[]!fs.Fs_error
     defer $text: = Str_builder()
-    return fs.write_unique(dir, page_prefix(arena), PAGE_EXT, page_text(open_url, text@), arena)
+    return fs.write_unique(dir, page_prefix(app, arena), PAGE_EXT,
+        page_text(open_url, app, text@), arena)
 
-priv fn page_prefix(arena: Arena$@): U8[] //< how a handed page's name starts
-    return arena.text().s(FILES).c('-').take()
+priv fn page_prefix(app: App, arena: Arena$@): U8[] //< how a handed page's name starts
+    return arena.text().s(app.files).c('-').take()
 
 fn browser_argv( //< the command that starts the browser on a page
     //< **It takes the page's path, not the URL** (the reason is at `page_text`).
@@ -206,14 +215,14 @@ fn browser_argv( //< the command that starts the browser on a page
         turned.c('\\' if c == '/' else c)
     return U8[][2]::{ tool, turned.take() }
 
-fn sweep_pages(dir: U8[], now: I64, arena: Arena$@) //<
+fn sweep_pages(dir: U8[], app: App, now: I64, arena: Arena$@) //<
     //< Removes the pages the opener handed long enough ago
     //< **A page is needed only until the browser has read it**, and nothing tells when that was:
     //< the opener exits once the browser is started. So each run removes the pages older than
     //< `PAGE_KEEP_S`. Only names this file gives are touched: another tool can share the folder.
     names: = fs.read_dir(dir, arena) catch
         return
-    prefix: = page_prefix(arena)
+    prefix: = page_prefix(app, arena)
     for name in names
         if !name.starts_with(prefix) || !name.ends_with(PAGE_EXT)
             continue
@@ -327,9 +336,15 @@ fn plain(path: U8[], arena: Arena$@): U8[] //<
     //< **The workspace and its port are found from the text**, so one folder must have one
     //< spelling: `/a/./b` and `/a//b` are `/a/b`. Caution: **Do not fold a `..` away.** Behind a
     //< link, `a/link/..` is another folder than `a`, so the file opened would not be the one named.
+    //< **A drive letter is upper-cased** (`c:\notes` is `C:\notes`): Windows ignores its case. Only
+    //< Windows reads a drive as a root (`sys.root_len`), so elsewhere `c:` stays a name.
     root: = sys.root_len(path)
     out: = arena.text()
-    out.s(path.sub(0, root))
+    if root >= 2 && path[1] == ':'
+        drive: = path[0]
+        out.c(drive - ('a' - 'A') if drive.is_lower() else drive).s(path.sub(1, root - 1))
+    else
+        out.s(path.sub(0, root))
     $kept: Sz = 0
     $at: Sz = root
     for at < path.len

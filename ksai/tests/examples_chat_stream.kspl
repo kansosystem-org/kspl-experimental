@@ -1,0 +1,300 @@
+//< Checks `chat_server`'s stream: its pieces put together are the answer sent whole, bit for bit
+//< Not a suite; part of `ksai/tests/examples_main.kspl`. **Each prepared text is read a byte at a
+//< time**, so a piece ends inside a tag, an escape and a character; the pieces must still join to
+//< what the whole text gives. The built server then streams to a client over HTTP.
+import "ksai/examples/chat_server/reply" + { Parsed, Sent }
+import "ksai/examples/chat_server/template" { Kind }
+import "ksai/tests/examples_chat" as chat
+import "ksai/tests/examples_chat_http" as http_test
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/http"
+import "std/http_body"
+import "std/json"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum" // `to_count`
+import "std/verdict"
+
+priv const ASK_WAIT_MS: I32 = 60000 //< how long one answer may take, under a sanitizer too
+
+struct Joined //< a stream's pieces put together, as a client joins them
+    reasoning: Str_builder
+    content: Str_builder
+    ids: List<|U8[]|> //< each call's id, by its index
+    names: List<|U8[]|>
+    arguments: List<|Str_builder|>
+    finish: U8[] //< the last finish reason; empty while none came
+    usage: json.Value //< the counts a last piece carried; null where none did
+    fault: U8[] //< the first piece that broke the protocol; empty where none did
+
+impl Joined
+    fn new(arena: Arena$@): Joined //< nothing joined yet
+        return Joined::{ .reasoning = Str_builder(), .content = Str_builder(),
+            .ids = List<|U8[]|>(arena), .names = List<|U8[]|>(arena),
+            .arguments = List<|Str_builder|>(arena), .finish = "", .usage = .null_val,
+            .fault = "" }
+
+    fn add(r: Self$@, chunk: U8[], arena: Arena$@) //< joins one piece's JSON text
+        doc: = json.parse(chunk, arena) catch
+            r.fault = arena.text().s("a piece is not JSON: ").s(chunk).take()
+            return
+        v: = doc.val
+        if !v.get("object").as_str().unwrap_or("").equals("chat.completion.chunk")
+            r.fault = arena.text().s("a piece is no chat.completion.chunk: ").s(chunk).take()
+            return
+        if found: = v.find("usage")
+            r.usage = found
+        choice: = v.get("choices").get_at(0)
+        d: = choice.get("delta")
+        r.reasoning.s(d.get("reasoning_content").as_str().unwrap_or(""))
+        r.content.s(d.get("content").as_str().unwrap_or(""))
+        calls: = d.get("tool_calls").arr_list(arena)
+        for i in Range.asc(calls.len)
+            c: = calls.get(i)
+            at: = Sz::c.get("index").as_int().unwrap_or(-1)
+            if at == r.names.len
+                r.ids.push(c.get("id").as_str().unwrap_or(""))
+                r.names
+                    .push(c.get("function").get("name").as_str().unwrap_or(""))
+                r.arguments.push(Str_builder())
+            else if at < 0 || at > r.names.len || c.find("id").is_some()
+                r.fault = arena.text().s("a piece names call \{at\} out of turn: ").s(chunk).take()
+                return
+            r.arguments[at]
+                .s(c.get("function").get("arguments").as_str().unwrap_or(""))
+        if reason: = choice.get("finish_reason").as_str()
+            r.finish = reason
+
+    fn differs(r: Self$@, p: Parsed@, first_call: Sz, arena: Arena$@): U8[] //<
+        //< Empty where the joined pieces equal a whole reading; else what differs
+        if !r.reasoning.slice().equals(p.reasoning) ||
+            !r.content.slice().equals(p.content)
+            return arena.text().s("joined '").s(r.reasoning.slice()).s("' / '")
+                .s(r.content.slice()).s("', whole '").s(p.reasoning).s("' / '").s(p.content).s("'")
+                .take()
+        if r.names.len != p.calls.len
+            return arena.text().s("\{r.names.len\} calls joined, \{p.calls.len\} whole").take()
+        for i in Range.asc(p.calls.len)
+            c: = p.calls.get(i)
+            id: = arena.text().s("call_\{first_call + i\}").take()
+            if !r.names.get(i).equals(c.name) ||
+                !r.arguments[i].slice().equals(c.arguments) || !r.ids.get(i).equals(id)
+                return arena.text().s("call \{i\} joined as ").s(r.names.get(i)).c(' ')
+                    .s(r.arguments[i].slice()).s(", whole ").s(c.name).c(' ').s(c.arguments).take()
+        return ""
+
+impl Joined: Manual_free //< `free()` lets go the joined text
+    fn free(r: Self$@) //< frees the joined text
+        r.reasoning.free()
+        r.content.free()
+        for i in Range.asc(r.arguments.len)
+            r.arguments[i].free()
+
+priv const TOOLS35: U8[] =
+    "{\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"from_line\":{\"type\":\"integer\"}}}}},{\"type\":\"function\",\"function\":{\"name\":\"answer\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"sources\":{\"type\":\"array\"}}}}}]}" //<
+        //< Qwen3.5's tools: a text and a whole number to read, a text and a list to answer
+
+priv struct Case //< one generated text, and how the model that wrote it reads
+    text: U8[]
+    kind: Kind
+    thinking: Bool
+
+priv const CASES: Case[_] = ::{
+    Case::{ .kind = .instruct_2507, .thinking = false,
+        .text =
+        "Let me look.\n<tool_call>\n{\"name\": \"list\", \"arguments\": {\"path\": \
+            \"\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"read\", \"arguments\": \"{\\\"path\\\": \
+            \\\"a\\\"}\"}\n</tool_call>" },
+    Case::{ .kind = .instruct_2507, .thinking = false,
+        .text =
+        "<tool_call>\n{\"name\": \"answer\", \"arguments\": {\"text\": \
+            \"新入社員は10日の\\\"有給\\\"休暇を\\n受け取る。\", \"sources\": \
+            [{\"path\": \"規程/休暇.md\", \"from_line\": 3, \"to_line\": 3, \"quote\": \
+            \"年次有給休暇は}\"}]}}\n</tool_call>" },
+    Case::{ .kind = .instruct_2507, .thinking = false,
+        .text = "  Ten days. <tool not a tag> and </think> stay text, as does <tool_call\n\n" },
+    Case::{ .kind = .instruct_2507, .thinking = false,
+        .text = "Here.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\"text\": \"lea" },
+    Case::{ .kind = .instruct_2507, .thinking = false,
+        .text = "Here.\n<tool_call>\n{\"name\": search}\n</tool_call> After." },
+    Case::{ .kind = .instruct_2507, .thinking = false,
+        .text = "<tool_call>\n{\"arguments\": {\"path\": \"x\"}, \"name\": \"read\"}\n</tool_call>" },
+    Case::{ .kind = .qwen35, .thinking = true,
+        .text =
+        "Let me \
+            read.\n</think>\n\nSure.\n\n<tool_call>\n<function=read>\n<parameter=path>\nleave.md\n</parameter>\n<parameter=from_line>\n3\n</parameter>\n</function>\n</tool_call>" },
+    Case::{ .kind = .qwen35, .thinking = true,
+        .text =
+        "Find it.\n<tool_call>\n<function=answer>\n<parameter=text>\n日本語の\n答え \
+            \"です\"\n\n</parameter>\n<parameter=sources>\n[{\"path\": \
+            \"a.md\"}]\n</parameter>\n</function>\n</tool_call>" },
+    Case::{ .kind = .qwen35, .thinking = true, .text = "Still thinking about </thi" },
+    Case::{ .kind = .qwen35, .thinking = false,
+        .text = "<tool_call>\n<function=answer>\n<parameter=text>\nTen days\n</tool_call> after" },
+    Case::{ .kind = .qwen35, .thinking = false,
+        .text =
+        "<tool_call>\n<function=answer>\n<parameter=text>\nTen\n</function>\n</tool_call>\n<tool_call>\n<function=read>\n<parameter=from_line>\n1\n</parameter>\nok\n</tool_call>" },
+    Case::{ .kind = .qwen35, .thinking = false,
+        .text =
+        "Here.\n<tool_call>\nread \
+            a.md\n</tool_call>\n<tool_call>\n<function=read>\n<parameter=path>\nb.md" },
+}
+
+fn test_chat_stream_pieces_join(arena: Arena$@) //<
+    //< Each text read a byte at a time gives pieces that join to the whole text's answer
+    verdict.start("[chat_server] a stream's pieces join to the answer sent whole")
+    doc: = json.parse(TOOLS35, arena) catch panic("the tools are JSON")
+    tools35: = doc.val.get("tools").arr_list(arena)
+    none: = List<|json.Value|>(arena)
+    ids: = reply.Answer_ids::{ .id = "chatcmpl-1", .first_call = 4, .created = 1700000000I64,
+        .model = "mini" }
+    for k in Range.asc(CASES.len)
+        c: = CASES[k]
+        tools: = tools35@ if c.kind == Kind.qwen35 else none@
+        whole: = reply.split_calls(c.text, c.kind, tools, c.thinking, arena)
+        $joined: = Joined(arena)
+        $sent: = Sent::{ .reasoning = 0, .content = 0, .calls = 0, .arguments = 0 }
+        for n in Range.asc(c.text.len + 1)
+            p: = reply.read_text(c.text.sub(0, n), n == c.text.len, c.kind, tools, c.thinking,
+                arena)
+            chunks: = reply.new_chunks(p@, sent@, ids, arena)
+            for i in Range.asc(chunks.len)
+                joined.add(chunks.get(i), arena)
+        fault: =
+            joined.fault if joined.fault.len > 0 else joined.differs(whole@, 4, arena)
+        joined.free()
+        assert(fault.len == 0,
+            U8$[]::arena.text().s("case \{k\}: ").s(fault).take())
+    verdict
+        .pass("tags, escapes and characters cut anywhere, calls cut short: the pieces join whole")
+
+priv struct Streamed //< what one streamed answer gave, as a client reads it
+    status: I32
+    joined: Joined
+    done: Bool //< whether `data: [DONE]` ended it
+    typed: Bool //< whether it came chunked, as `text/event-stream`
+    why: U8[] //< why it could not be read; empty where it was
+
+priv fn asked_stream(port: I32, body: U8[], arena: Arena$@): Streamed //<
+    //< One streamed request, its body read piece by piece and its events joined
+    $out: = Streamed::{ .status = 0, .joined = Joined(arena), .done = false, .typed = false,
+        .why = "" }
+    defer conn: = net.Tcp_stream.connect("127.0.0.1", port) catch
+        out.why = "the server cannot be reached"
+        return out
+    head: = http.headers(arena)
+        .add("Host", arena.text().s("127.0.0.1:\{port\}").take())
+        .add("Content-Type", "application/json").add("Connection", "close").build()
+    http.write_request(conn, "POST", "/v1/chat/completions", head, body, ASK_WAIT_MS) catch
+        out.why = "the request cannot be sent"
+        return out
+    defer r: =
+        http_body.read_response_head(conn, null, 8 * 1024 * 1024, ASK_WAIT_MS) catch
+        out.why = "no head arrived"
+        return out
+    out.status = r.status
+    out.typed =
+        r.headers.find("Transfer-Encoding").unwrap_or("").equals("chunked") &&
+        r.headers.find("Content-Type").unwrap_or("").equals("text/event-stream")
+    defer $events: = Str_builder()
+    for
+        piece: = r.body.next(ASK_WAIT_MS) catch
+            out.why = "the body broke off"
+            return out
+        switch piece
+        case .data(bytes)
+            events.s(bytes)
+        case .waiting {}
+        case .done
+            break
+    // Each event here is one `data:` line, or a comment line that keeps the wait alive.
+    for line in events.slice().split('\n', arena)
+        if line.len == 0 || line.starts_with(":")
+            continue
+        if !line.starts_with("data: ") || out.done
+            out.why = arena.text().s("a line that is no data, or after [DONE]: ").s(line).take()
+            return out
+        data: = line.sub_from("data: ".len)
+        if data.equals("[DONE]")
+            out.done = true
+        else
+            out.joined.add(data, arena)
+    return out
+
+fn test_chat_stream_http(chat_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< The built server streams an answer whose events join to the same answer sent whole
+    //< Caution: **Kill the server before any failure stops this program** (as in
+    //< `examples_chat_http.kspl`). So the checks return their failure.
+    verdict.start("[chat_server] the built server streams the answer it sends whole")
+    $child: = http_test.started(chat_exe,
+        fs.join(chat.chat_dir(work, arena), chat.MODEL_FILE, arena), arena)
+    port: = http_test.port_of(child@, arena)
+    fault: = streamed_all(port, arena)
+    child.kill()
+    assert(fault.len == 0, arena.dup_str(fault))
+    verdict.pass("stream_options without a stream is refused; a client that leaves early is not")
+
+priv const ASK: U8[] =
+    "\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}" //<
+        //< the end of a request body, after the fields each case sets
+
+priv fn streamed_all(port: I32, arena: Arena$@): U8[] //<
+    //< Asks the running server for a stream and a whole answer; empty where both agree
+    $s: =
+        asked_stream(port,
+        arena.text().s("{\"stream\":true,\"stream_options\":{\"include_usage\":true},").s(ASK)
+        .take(), arena)
+    if s.why.len > 0 || s.status != 200 || !s.typed || !s.done || s.joined.fault.len > 0
+        return arena.text().s("the stream got \{s.status\}, chunked: \{s.typed\}, [DONE]: ")
+            .s("\{s.done\}: ").s(s.why).s(s.joined.fault).take()
+    asked: = http_test.asked(port, "POST", "/v1/chat/completions",
+        arena.text().s("{\"stream\":false,").s(ASK).take(), arena)
+    whole: = http_test.json_of(asked, arena)
+    choice: = whole.get("choices").get_at(0)
+    msg: = choice.get("message")
+    $calls: = List<|reply.Call_out|>(arena)
+    tool_calls: = msg.get("tool_calls").arr_list(arena)
+    for i in Range.asc(tool_calls.len)
+        f: = tool_calls.get(i).get("function")
+        calls
+            .push(reply.Call_out::{ .name = f.get("name").as_str().unwrap_or(""),
+            .arguments = f.get("arguments").as_str().unwrap_or("") })
+    p: = Parsed::{ .reasoning = msg.get("reasoning_content").as_str().unwrap_or(""),
+        .content = msg.get("content").as_str().unwrap_or(""), .calls = calls }
+    $first: Sz = 1
+    if tool_calls.len > 0
+        first =
+            tool_calls.get(0).get("id").as_str().unwrap_or("call_1").sub_from(5).to_count(1000000)
+            catch 1
+    differs: = s.joined.differs(p@, first, arena)
+    u: = whole.get("usage")
+    if differs.len > 0 ||
+        !s.joined.finish.equals(choice.get("finish_reason").as_str().unwrap_or("")) ||
+        !s.joined.usage.get("prompt_tokens").equals(u.get("prompt_tokens")) ||
+        !s.joined.usage.get("completion_tokens").equals(u.get("completion_tokens"))
+        return arena.text().s("the stream differs from the whole answer: ").s(differs).c(' ')
+            .s(s.joined.finish).c(' ').s(http_test.json_text(s.joined.usage, arena)).c(' ')
+            .s(http_test.json_text(whole, arena)).take()
+    s.joined.free()
+    verdict.pass("the stream's pieces, finish reason and counts are the whole answer's")
+    lone: = http_test.asked(port, "POST", "/v1/chat/completions",
+        arena.text().s("{\"stream_options\":{\"include_usage\":true},").s(ASK).take(), arena)
+    if !http_test.refused(lone, 400, "stream_options", arena)
+        return arena.text().s("stream_options without a stream got \{lone.status\}").take()
+    // A client that reads the head and leaves: the next request is answered all the same.
+    left: = net.Tcp_stream.connect("127.0.0.1", port) catch
+        return "the server cannot be reached"
+    head: = http.headers(arena).add("Host", "127.0.0.1").add("Connection", "close").build()
+    http.write_request(left, "POST", "/v1/chat/completions", head,
+        arena.text().s("{\"stream\":true,").s(ASK).take(), ASK_WAIT_MS) catch {}
+    $one: U8[64] = ::{}
+    _n: = left.read_for(U8$[]::one, ASK_WAIT_MS) catch 0
+    left.free()
+    after: = http_test.asked(port, "GET", "/v1/models", "", arena)
+    if after.status != 200
+        return arena.text().s("after a client left, /v1/models got \{after.status\}").take()
+    return ""

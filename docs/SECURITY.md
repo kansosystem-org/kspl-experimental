@@ -1,10 +1,10 @@
 # Reporting a security problem
 
-**Do not report a vulnerability in an Issue.** Anyone can read an Issue, so the way to attack would be public before the fix. Report it from GitHub's `Security` tab → `Report a vulnerability`, which only the administrators see.
+**Do not report a vulnerability in an Issue**, which anyone can read before the fix. Report it from GitHub's `Security` tab → `Report a vulnerability`, which only the administrators see.
 
 ## What counts as a vulnerability
 
-**A vulnerability is anything that lets the author of an input take over execution or writing.** A crafted file, frame or request makes the program run code that it must not run. Or the input makes it read or write memory or files outside what it is allowed. These are in scope:
+**A vulnerability is anything that lets the author of an input take over execution or writing.** A crafted file, frame or request makes the program run code, or reach memory or files, that it must not. These are in scope:
 
 | Part | In scope when a crafted input makes it … |
 | :-- | :-- |
@@ -18,8 +18,6 @@
 **A compiler crash on corrupted input is not by itself a vulnerability.** It is an ordinary defect, so an Issue is fine.
 
 ## Out of scope, and what goes upstream
-
-**Some problems belong to another project or to a tool that is not shipped**, so they are not reported here.
 
 | Where the problem is | What to do |
 | :-- | :-- |

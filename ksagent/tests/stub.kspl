@@ -25,9 +25,11 @@ struct Stub //< one stand-in server and what it saw
     bodies: List<|U8[]|> //< the request bodies it received, in order
     own: Arena$@ //< the thread's own memory, for `bodies`
     edit_path: U8[] //< a file it writes when the first request comes; empty writes none
-        //< **It stands for a person saving while the model works**: the write lands between
-        //< ksagent's first read of a chat file and its second.
+        //< **It stands for a page saving while the model works**, such as a stop record added to
+        //< an ask file.
     edit_body: U8[]
+    drip_ms: I32 //< the wait between two pieces of a reply; 0 writes each reply at once
+        //< **It stands for a model that writes slowly**, so ksagent can stop it midway.
     worker: thread.Thread$@
 
 fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that gives these replies
@@ -35,13 +37,18 @@ fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that giv
 
 fn start_editing(replies: U8[][], edit_path: U8[], edit_body: U8[], arena: Arena$@): Stub$@ //<
     //< Starts a stand-in that also writes `edit_body` to `edit_path` when the first request comes
+    return start_dripping(replies, edit_path, edit_body, 0, arena)
+
+fn start_dripping(replies: U8[][], edit_path: U8[], edit_body: U8[], drip_ms: I32, arena: Arena$@):
+    Stub$@ //<
+        //< Starts a stand-in that writes each reply in pieces, `drip_ms` apart, and edits as above
     listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("the stand-in can listen")
     listener.set_nonblocking() catch panic("the stand-in's socket can stop blocking")
     port: = listener.port() catch panic("a bound socket knows its port")
     s: = arena
         .create(Stub::{ .listener = listener, .port = port, .replies = replies,
         .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = edit_path,
-        .edit_body = edit_body, .worker = null })
+        .edit_body = edit_body, .drip_ms = drip_ms, .worker = null })
     s.bodies = List<|U8[]|>(s.own)
     s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
     return s
@@ -62,9 +69,24 @@ fn serve(s: Stub$@): Void$@ //< answers each request with its reply, until the r
         if i == 0 && s.edit_path.len > 0
             fs.replace_file(s.edit_path, s.edit_body, .kept) catch {}
         s.bodies.push(body)
-        conn.write_all(s.replies[i]) catch {}
+        drip(conn, s.replies[i], s.drip_ms)
         conn.free()
     return null
+
+priv fn drip(conn: net.Tcp_stream$@, reply: U8[], drip_ms: I32) //<
+    //< Writes a reply whole, or in pieces `drip_ms` apart until the client stops reading it
+    if drip_ms == 0
+        conn.write_all(reply) catch {}
+        return
+    $at: Sz = 0
+    for at < reply.len
+        n: = DRIP_PIECE if reply.len - at > DRIP_PIECE else reply.len - at
+        conn.write_all(reply.sub(at, n)) catch
+            return
+        at += n
+        sys.sleep_ms(drip_ms)
+
+priv const DRIP_PIECE: Sz = 48 //< the bytes of one piece a dripping stand-in writes
 
 priv fn accept_within(listener: net.Tcp_listener$@): net.Tcp_stream$@? //<
     //< The next connection, or none when none comes within `WAIT_US`
@@ -115,14 +137,85 @@ fn call(name: U8[], args: U8[], arena: Arena$@): U8[] //<
     return dumped(v, arena)
 
 fn calls_reply(calls: U8[][], arena: Arena$@): U8[] //< a reply that asks for these tool calls
+    return calls_ending(calls, "tool_calls", arena)
+
+fn calls_ending(calls: U8[][], finish: U8[], arena: Arena$@): U8[] //<
+    //< A reply that asks for these tool calls, and ends for the reason `finish`
     out: = arena.text()
     out
         .s("{\"choices\": [{\"index\": 0, \"message\": {\"role\": \"assistant\", \"content\": null, \
             ").s("\"tool_calls\": [")
     for i in Range.asc(calls.len)
         out.s(", " if i > 0 else "").s(calls[i])
-    out.s("]}, \"finish_reason\": \"tool_calls\"}]}")
+    out.s("]}, \"finish_reason\": \"").s(finish).s("\"}]}")
     return http_ok(out.take(), arena)
+
+// ==========================================
+// Replies that stream, as server-sent events in chunks
+// ==========================================
+
+fn sse_reply(events: U8[][], arena: Arena$@): U8[] //<
+    //< A streamed reply: each event's data in a chunk of its own, then `[DONE]` and the last chunk
+    return sse_raw(events, "data: [DONE]\n\n", arena)
+
+fn sse_raw(events: U8[][], after: U8[], arena: Arena$@): U8[] //<
+    //< A streamed reply whose events are followed by `after` as it stands, then the last chunk
+    defer $out: = Str_builder()
+    head: = http.headers(arena).add("Content-Type", "text/event-stream").build()
+    http.format_chunked_head(out@, 200, head) catch panic("the stand-in's head is well-formed")
+    for e in events
+        http.format_chunk(out@,
+            arena.text().s("data: ").s(e).s("\n\n").take())
+    http.format_chunk(out@, after)
+    http.format_last_chunk(out@)
+    return arena.dup_str(out.slice())
+
+fn delta(d: U8[], finish: U8[], arena: Arena$@): U8[] //<
+    //< One piece of a stream: a delta's JSON text, and a finish reason or none where empty
+    reason: =
+        ("null" if finish.len == 0
+        else arena.text().c('"').s(finish).c('"').take())
+    return arena.text().s("{\"object\": \"chat.completion.chunk\", \"choices\": [{\"index\": 0, ")
+        .s("\"delta\": ").s(d).s(", \"finish_reason\": ").s(reason).s("}]}").take()
+
+fn streamed_call(thinking: U8[], name: U8[], args: U8[], arena: Arena$@): U8[] //<
+    //< A streamed reply: its thinking, then one call whose arguments come 5 bytes at a time
+    //< Each piece goes in as a JSON string of its own, so a piece can end inside an escape of the
+    //< arguments' text, but never inside a character.
+    return streamed_ending(thinking, name, args, "tool_calls", arena)
+
+fn streamed_ending(thinking: U8[], name: U8[], args: U8[], finish: U8[], arena: Arena$@): U8[] //<
+    //< A streamed reply as `streamed_call` gives it, which ends for the reason `finish`
+    $events: = List<|U8[]|>(arena)
+    events.push(delta("{\"role\": \"assistant\", \"content\": null}", "", arena))
+    for piece in pieces(thinking, arena)
+        events.push(delta(member("reasoning_content", piece, arena), "", arena))
+    opening: = arena.text().s("{\"tool_calls\": [{\"index\": 0, \"id\": \"call_s\", ")
+        .s("\"type\": \"function\", \"function\": {\"name\": \"").s(name)
+        .s("\", \"arguments\": \"\"}}]}").take()
+    events.push(delta(opening, "", arena))
+    for piece in pieces(args, arena)
+        more: = arena.text().s("{\"tool_calls\": [{\"index\": 0, \"function\": ")
+            .s(member("arguments", piece, arena)).s("}]}").take()
+        events.push(delta(more, "", arena))
+    events.push(delta("{}", finish, arena))
+    return sse_reply(events.slice(), arena)
+
+priv fn member(key: U8[], text: U8[], arena: Arena$@): U8[] //< `{"key": "text"}` as JSON text
+    $b: = Json_builder(arena)
+    return dumped(b.obj().set(key, b.str_val(text)).build(), arena)
+
+priv fn pieces(text: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The text cut into pieces of about 5 bytes, each ending at a character's end
+    $out: = List<|U8[]|>(arena)
+    $at: Sz = 0
+    for at < text.len
+        $end: = at + 5 if at + 5 < text.len else text.len
+        for end < text.len && (text[end] & 0xC0U8) == 0x80U8
+            end += 1
+        out.push(text.sub(at, end - at))
+        at = end
+    return out
 
 fn one_call(c: U8[], arena: Arena$@): U8[] //< a reply that asks for one tool call
     return calls_reply(U8[][]::{ c }, arena)
@@ -136,10 +229,13 @@ fn text_reply(text: U8[], arena: Arena$@): U8[] //< a reply with plain text and 
 
 fn answer_call(text: U8[], sources: U8[], arena: Arena$@): U8[] //<
     //< An `answer` call; `sources` is the JSON text of its list
+    return call("answer", answer_args(text, sources, arena), arena)
+
+fn answer_args(text: U8[], sources: U8[], arena: Arena$@): U8[] //<
+    //< An `answer` call's arguments as JSON text; `sources` is the JSON text of its list
     $b: = Json_builder(arena)
-    args: = arena.text().s("{\"text\": ").s(dumped(b.str_val(text), arena)).s(", \"sources\": ")
+    return arena.text().s("{\"text\": ").s(dumped(b.str_val(text), arena)).s(", \"sources\": ")
         .s(sources).s("}").take()
-    return call("answer", args, arena)
 
 fn list_of(items: U8[][], arena: Arena$@): U8[] //< JSON texts joined into a JSON list's text
     out: = arena.text()
@@ -174,17 +270,19 @@ const KYUKA: U8[] =
         //< `規程/休暇.md`, so a search finds Japanese as plain bytes
 
 priv const RELS: U8[][7] = ::{ "rules/leave.md", "規程/休暇.md", ".env", ".hidden/notes.md",
-    "data.bin", "out/build.md", "team.chat.ksmd" }
+    "data.bin", "out/build.md", "team.chat.jsonl" }
 
 fn folder(work: U8[], name: U8[], arena: Arena$@): U8[] //<
     //< Makes a fresh folder under `work` holding the files the tests ask about, and returns it
     //< Beside it stands `<name>-outside.txt`, which no tool may reach. `data.bin` holds a NUL.
-    //< A search skips `out/`, build output, and `team.chat.ksmd`, a chat file. **The folder's name
-    //< is new on every run**, so a link left by an earlier run cannot turn a check into a skip.
+    //< A search skips `out/`, build output, and `team.chat.jsonl`, a conversation's record. **The
+    //< folder's name is new on every run**, so a link left by an earlier run cannot turn a check
+    //< into a skip.
     prefix: = arena.text().s(name).c('-').take()
     root: = fs.mkdir_unique(work, prefix, arena) catch panic("the test folder can be made")
     bodies: = U8[][]::{ LEAVE, KYUKA, "TOKEN=secret-value\n", "hidden notes\n", "abc\0def\n",
-        "paid leave, in build output\n", "## Question\n\nHow much paid leave?\n" }
+        "paid leave, in build output\n",
+        "{\"type\": \"question\", \"id\": \"q1\", \"text\": \"How much paid leave?\"}\n" }
     fs.write_tree(root, U8[][]::RELS, bodies, arena) catch panic("the test folder can be written")
     outside: = arena.text().s(name).s("-outside.txt").take()
     fs.write_tree(work, U8[][]::{ outside }, U8[][]::{ "outside contents\n" }, arena)

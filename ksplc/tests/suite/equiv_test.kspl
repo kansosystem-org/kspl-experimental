@@ -21,6 +21,7 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 
 priv const SRC: U8[] = "tests/prog/equiv.kspl"
+priv const FOR_INDEX: U8[] = "__k_for_idx" //< how the C names the index of a `for … in`
 
 priv const TRAP_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0",
     "-fsanitize=alignment,signed-integer-overflow",
@@ -210,6 +211,7 @@ fn main(): I32
     for i in Range.asc(lits.len)
         found.s(", " if i > 0 else "").s(lits.get(i))
     verdict.check("there is no binary literal in the generated C", lits.len == 0, found.take())
+    check_for_in_index(gen_text, arena)
     check_traps(work, c_gen, c.out, arena)
     alt_cc: = other_cc()
     // **Mandatory where `KANSO_REQUIRE_BOTH_CC=1`** (set on Linux, whose image holds both).
@@ -236,6 +238,25 @@ fn main(): I32
         first_diff(c.out, l.out, arena))
     check_packed_ir(fs.join(work, "l.ll", arena), arena)
     return harness.finish()
+
+priv fn check_for_in_index(text: U8[], arena: Arena$@) //<
+    //< Every index a `for … in` counts with is an `Sz`, as wide as the length it is held below
+    //< An `I32` index wraps past 2^31 and reads outside a longer slice. Running that many steps
+    //< costs seconds, so the text of the declaration is checked; sema gives both backends the type.
+    $seen: Sz = 0
+    $bad: = List<|U8[]|>(arena)
+    for line in text.lines(arena)
+        t: = line.trim_spaces()
+        // A declaration is the one line where nothing but a type stands before the name.
+        at: = t.find_str(FOR_INDEX).unwrap_or(0)
+        head: = t.sub(0, at)
+        if at == 0 || head.find_str("=").is_some() || head.find_str("(").is_some()
+            continue
+        seen += 1
+        if !head.ends_with("Sz ")
+            bad.push(t)
+    verdict.check_list("a `for … in` counts its index in `Sz`", seen, "indexes", bad@,
+        "declare the index as `Sz` (build_index_loop in `sema/body/for_in.kspl`)")
 
 priv fn check_traps(work: U8[], c_gen: U8[], want: U8[], arena: Arena$@) //<
     //< The C built with trap_cflags prints what the plain build does, and the traps can fire

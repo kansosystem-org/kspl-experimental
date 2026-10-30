@@ -62,6 +62,8 @@ function ksmdTable(ks) {
     wrap.appendChild(name);
     const table = document.createElement("table");
     wrap.weights = b.w;
+    wrap.heights = b.h;
+    wrap.filterEntries = b.fl;
     if (b.w.length > 0) showWidths(table, b.w);
     const head = document.createElement("thead");
     const lettersRow = document.createElement("tr");
@@ -105,6 +107,7 @@ function ksmdTable(ks) {
       number.textContent = String(r + 1);
       tr.appendChild(number);
       row.forEach((value, c) => tr.appendChild(cellEl("td", r, c, value)));
+      if (b.h[r] > 0) tr.style.height = `${b.h[r]}pt`;
       body.appendChild(tr);
     });
     table.appendChild(body);
@@ -464,11 +467,6 @@ function ksmdTable(ks) {
     const name = window.prompt("Table name", was);
     if (name === null || name === was) return null;
     const r = ks.act("ksmd_web_rename_table", block, ks.put(name));
-    // A filter keeps to its table under the new name.
-    if (r && r.ok) {
-      ks.filter.renamed(was, name);
-      ks.filter.apply(ks.view.blocks()[block]);
-    }
     return r;
   }
 
@@ -527,6 +525,58 @@ function ksmdTable(ks) {
     const out = px.map((p, c) => (c === column ? width : (p * (total - width)) / others));
     const weights = out.map((p) => Math.max(1, Math.round((1000 * p) / total)));
     return ks.act("ksmd_web_set_widths", block, ks.put(weights.join(",")));
+  }
+
+  // Column width…, as Excel's dialog: the chosen columns each take a share of the table's width,
+  // in percent, and the other columns share what is left in the proportions they have. A share is
+  // the one width that holds on every page, since a table fills the width it is given.
+  function askWidth(block) {
+    const wrap = ks.view.blocks()[block];
+    const px = pixels(wrap);
+    if (px.length < 2) {
+      ks.say("A table with one column takes the whole width.");
+      return null;
+    }
+    const r = ks.range.rect();
+    const total = px.reduce((a, x) => a + x, 0);
+    const now = Math.round((100 * px[r.c1]) / total);
+    const typed = window.prompt("Column width, in percent of the table's width (1 to 99)", String(now));
+    if (typed === null) return null;
+    const share = Number(typed.trim());
+    const count = r.c2 - r.c1 + 1;
+    if (!/^\d+(\.\d)?$/.test(typed.trim()) || share < 1 || share > 99) {
+      ks.say("A column's width is a percent of the table's width from 1 to 99, such as 25, with at most one decimal place.");
+      return null;
+    }
+    if (share * count > 100 - (px.length - count)) {
+      ks.say(`The ${count} chosen columns cannot take ${share}% each: the other columns need 1% each at least. Widths from 1 to 99 fit.`);
+      return null;
+    }
+    // Weights in steps of a hundredth of a percent, which the writer then divides by their
+    // greatest common divisor.
+    const own = Math.round(share * 100);
+    const left = 10000 - own * count;
+    const others = px.reduce((a, x, c) => (c >= r.c1 && c <= r.c2 ? a : a + x), 0);
+    const weights = px.map((p, c) => (c >= r.c1 && c <= r.c2 ? own : Math.max(1, Math.round((left * p) / others))));
+    return ks.act("ksmd_web_set_widths", block, ks.put(weights.join(",")));
+  }
+
+  // Row height…, as Excel's dialog: the chosen rows take a least height in points, the unit of a
+  // font's size. A row still grows where its text needs more room, so no value is ever cut off.
+  function askHeight(block) {
+    const r = ks.range.rect();
+    const first = Math.max(0, r.r1);
+    const wrap = ks.view.blocks()[block];
+    const now = wrap.heights[first] || "";
+    const typed = window.prompt("Row height, in points (6 to 409). Leave it empty for the height the text needs",
+      String(now));
+    if (typed === null) return null;
+    const t = typed.trim();
+    if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 6 || Number(t) > 409)) {
+      ks.say("A row's height is a whole number of points from 6 to 409, or empty for the height its text needs.");
+      return null;
+    }
+    return ks.act("ksmd_web_set_heights", block, first, Math.max(first, r.r2), t === "" ? 0 : Number(t));
   }
 
   // The column whose right border a press stands on, within a few pixels; -1 when none.
@@ -642,6 +692,8 @@ function ksmdTable(ks) {
     csv,
     format,
     fit,
+    askWidth,
+    askHeight,
     // Makes a column wider or narrower by a step, as Alt+Right and Alt+Left do.
     widen,
     range: () => ks.range.rect(),

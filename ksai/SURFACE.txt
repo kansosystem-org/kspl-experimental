@@ -55,6 +55,8 @@ ksai/examples/car_pilot/encoding	LINE_LEFT	pub const LINE_LEFT: I64 = 4	the left
 ksai/examples/car_pilot/encoding	LINE_MIDDLE	pub const LINE_MIDDLE: I64 = 2	the middle sensor's bit
 ksai/examples/car_pilot/encoding	LINE_RIGHT	pub const LINE_RIGHT: I64 = 1	the right sensor's bit
 ksai/examples/car_pilot/encoding	features	pub fn features(dist_mm: I64, line: I64, far_mm: I64, arena: Arena$@): Tensor<|F32|>	an observation as the feature vector the policy takes
+ksai/examples/chat_server/engine	Unwatched:Watch	impl Unwatched: Watch	generation that nothing stops: each piece and token goes on
+ksai/examples/chat_server/serve	Stream:Watch	impl Stream: Watch	each piece and token sends what it adds; a client gone stops the work
 ksai/gguf	Gguf	pub struct Gguf	a parsed GGUF file, whose values and tensors borrow the file's bytes. The bytes must outlive it and everything read from it.
 ksai/gguf	Gguf.alignment	pub alignment: Sz	every tensor's data starts on a multiple of this
 ksai/gguf	Gguf.data_offset	pub data_offset: Sz	where the data section starts in the file
@@ -405,7 +407,7 @@ ksai/tokenizer	Token_key:ds.Hashable<|Token_key|>	impl Token_key: ds.Hashable<|T
 ksai/tokenizer	Tokenizer	pub struct Tokenizer	the vocabulary and merge rules that turn text into token IDs
 ksai/tokenizer	Tokenizer.add_merge	pub fn add_merge(r: Self$@, id1: I32, id2: I32, merged_id: I32)	adds one merge rule: this pair, when adjacent, becomes that one word. Caution: **The call order is the rank**, so the rules must arrive in priority order (`load()` and `train_bpe.kspl`'s merges.txt already do). A pair given again keeps its first rank, as llama.cpp keeps it.
 ksai/tokenizer	Tokenizer.add_token	pub fn add_token(r: Self$@, token: U8[], id: I32)	adds one word to the vocabulary, looked up in both directions from then on
-ksai/tokenizer	Tokenizer.arena	pub arena: Arena$@	the arena for every word, every rule and every cached chunk. **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena), so a tokenizer kept for a server's lifetime grows only up to `CHUNK_CACHE_CAP`.
+ksai/tokenizer	Tokenizer.arena	pub arena: Arena$@	the arena for every word and every rule. **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena), so a tokenizer kept for a server's lifetime does not grow.
 ksai/tokenizer	Tokenizer.decode	pub fn decode(r: Self$@, tokens: List<|I32|>$@, arena: Arena$@): U8[]	the text for the IDs
 ksai/tokenizer	Tokenizer.decode_one	pub fn decode_one(r: Self$@, id: I32): U8[]	the text for one ID, for printing each generated token as it comes. **It allocates nothing**: the result is the vocabulary's own bytes, which stay valid while the tokenizer's arena does. An ID not in the vocabulary gives an empty text.
 ksai/tokenizer	Tokenizer.encode	pub fn encode(r: Self$@, text: U8[], arena: Arena$@): List<|I32|>$@	the token IDs for a text. Each user-defined marker's text becomes its ID first. The rest is split into chunks (`pretokenizer.chunk_end`), and within each chunk the pair of the smallest rank merges every time; no merge crosses a chunk, as during training.
@@ -415,6 +417,6 @@ ksai/tokenizer	Tokenizer.load_text	pub fn load_text(r: Self$@, vocab: U8[], merg
 ksai/tokenizer	Tokenizer.new	pub fn new(arena: Arena$@): Tokenizer	an empty tokenizer, to be filled by a `load` or by `add_token` / `add_merge`
 ksai/tokenizer	Tokenizer.next_rank	pub next_rank: I32	the rank the next `add_merge` gets; the call order is the rank
 ksai/tokenizer	Tokenizer.set_split	pub fn set_split(r: Self$@, rule: Split_rule)	the rule that splits a text into chunks before merging. It must be the rule the vocabulary was made with: GGUF's `tokenizer.ggml.pre` names it (`Split_rule.named`). Qwen2's rule is taken until this is called.
-ksai/tokenizer	Tokenizer.vocab	pub vocab: Map<|U8[], I32|>$@	each word's byte sequence, mapped to its ID
+ksai/tokenizer	Tokenizer.vocab	pub vocab: Map<|U8[], I32|>$@	each word's byte sequence -> its ID; keys from the model
 ksai/tokenizer	UNK_ID	pub const UNK_ID: I32 = 0	`<unk>`, the ID a byte the vocabulary lacks is encoded as
 ksai/tokenizer	parse_token_id	pub fn parse_token_id(text: U8[]): I32?	a decimal ID that fits an `I32`, or none

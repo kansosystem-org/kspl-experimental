@@ -88,6 +88,19 @@ struct Table //< a calculating table: a header row of names, then rows of cells
     choices: List<|U8[]|> //< one entry of choices per column, or none (`ksmd/model/choice.kspl`)
     rules: List<|Rule|> //< one colour rule per column, or none (`ksmd/model/rule.kspl`)
     groups: List<|Group|> //< its groups of rows, in the writer's order (`ksmd/model/group.kspl`)
+    heights: List<|Row_height|> //< the rows given a height, by identity, so they follow every edit
+    filters: List<|Column_filter|> //< the columns that narrow the rows shown, by identity
+
+const MIN_HEIGHT: Sz = 6 //< the least height a row can be given, in points
+const MAX_HEIGHT: Sz = 409 //< the most, in points, as Excel's limit
+
+struct Row_height //< a data row's least height in points; its text can make it taller
+    row: Sz //< the row's identity; an entry whose row is gone is kept for an undo, and not written
+    points: Sz
+
+struct Column_filter //< which rows one column lets show (`ksmd/model/filter.kspl`)
+    column: Sz //< the column's identity; as for a height, a gone column's entry is not written
+    entry: U8[]
 
 struct Group //< data rows that show and hide together, by their places from the top
     first: Sz
@@ -172,7 +185,8 @@ impl Table
             .columns = List<|Sz|>(arena), .next_id = 0, .pieces = List<|Piece|>(arena),
             .weights = List<|Sz|>(arena), .formats = List<|Number_format|>(arena),
             .choices = List<|U8[]|>(arena), .rules = List<|Rule|>(arena),
-            .groups = List<|Group|>(arena) }
+            .groups = List<|Group|>(arena), .heights = List<|Row_height|>(arena),
+            .filters = List<|Column_filter|>(arena) }
 
     fn at(t: Self@, row: Sz, column: Sz): Sz //< where a data cell stands in `cells`
         return (row + 1) * t.columns.len + column

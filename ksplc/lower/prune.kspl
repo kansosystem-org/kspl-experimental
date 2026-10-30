@@ -73,8 +73,8 @@ priv fn mark_roots(root: Ast_node$@, c: Sema_ctx$@, w: Walk$@) //<
     //< It marks the roots, of which there are four kinds
     //< Drop one and everything reached only from it disappears. 1. `main`. 2. `#export`
     //< functions. 3. References from a non-function top-level initializer (a vtable naming a thunk
-    //< **as data**). 4. What the backend's entry point calls from a template string
-    //< (find_backtrace_symbol in `sema/type/env.kspl`).
+    //< **as data**). 4. What the entry point or the C runtime calls from outside the tree
+    //< (find_backtrace_symbol and find_check_panic_symbol in `sema/type/env.kspl`).
     switch c.env.find_main_symbol()
     case .some(ms)
         if ms.node != null
@@ -84,6 +84,11 @@ priv fn mark_roots(root: Ast_node$@, c: Sema_ctx$@, w: Walk$@) //<
     case .some(bs)
         if bs.node != null
             w.mark(bs.node)
+    default {}
+    switch c.env.find_check_panic_symbol()
+    case .some(cs)
+        if cs.node != null
+            w.mark(cs.node)
     default {}
     for child_node in root.children
         child: = child_node.unwrap_top_level()
