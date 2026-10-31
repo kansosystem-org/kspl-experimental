@@ -13,6 +13,7 @@
 import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
+import "std/fs"
 import "std/io"
 import "std/json" { Json_builder }
 import "std/mem" { Arena }
@@ -27,8 +28,7 @@ priv const STRIDE: Sz = 3 // every third line that holds text is tried as a hole
 priv const STEM: U8[] = "_eval_tmp"
 priv const VOCAB_PATH: U8[] = "tools/ai_assist/tokenizer/vocab.txt"
 priv const MERGES_PATH: U8[] = "tools/ai_assist/tokenizer/merges.txt"
-priv const HOLES_PATH: U8[] = "out/eval_fim_holes.jsonl"
-priv const ANSWERS_PATH: U8[] = "out/eval_fim_answers.jsonl"
+priv const WORK_DIR: U8[] = "out/tmp" //< the holes handed to the model, and its answers
 priv const CODER_WAIT_MS: I32 = 3600000 // the cap on one run of the model over every hole
 
 priv struct Hole
@@ -69,15 +69,20 @@ priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], sample
         b.obj().set("prefix", b.str_val(h.prefix)).set("suffix", b.str_val(h.suffix)).build()
             .dump(text@)
         text.c('\n')
-    io.write_file(HOLES_PATH, text.slice()) catch
-        io.err().s("[error] cannot write \{HOLES_PATH\}\n")
+    holes_path: = fs.join(WORK_DIR, "eval_fim_holes.jsonl", arena)
+    answers_path: = fs.join(WORK_DIR, "eval_fim_answers.jsonl", arena)
+    fs.mkdir_all(WORK_DIR) catch e
+        io.err().s("[error] cannot make \{WORK_DIR\}: \{e\}\n")
+        sys.exit(1)
+    io.write_file(holes_path, text.slice()) catch
+        io.err().s("[error] cannot write \{holes_path\}\n")
         sys.exit(1)
     argv: = U8[][]::{ coder, "complete",
         arena.text().s("--vocab=").s(VOCAB_PATH).take(),
         arena.text().s("--merges=").s(MERGES_PATH).take(),
         arena.text().s("--weights=").s(weights).take(),
-        arena.text().s("--in=").s(HOLES_PATH).take(),
-        arena.text().s("--out=").s(ANSWERS_PATH).take(),
+        arena.text().s("--in=").s(holes_path).take(),
+        arena.text().s("--out=").s(answers_path).take(),
         arena.text().s("--samples=").s(samples).take() }
     r: = subproc.run_capture(argv, "", CODER_WAIT_MS, 1024 * 1024, arena) catch
         io.err().s("[error] \{coder\} could not be started\n")
@@ -85,8 +90,8 @@ priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], sample
     if !r.exited_with(0)
         io.err().s("[error] \{coder\} did not answer\n\{r.stderr_data\}")
         sys.exit(1)
-    recs: = oracle.load_jsonl(ANSWERS_PATH, arena) catch
-        io.err().s("[error] cannot read \{ANSWERS_PATH\}\n")
+    recs: = oracle.load_jsonl(answers_path, arena) catch
+        io.err().s("[error] cannot read \{answers_path\}\n")
         sys.exit(1)
     if recs.len != holes.len
         io.err().s("[error] \{holes.len\} holes went out, \{recs.len\} answers came back\n")
@@ -125,14 +130,14 @@ fn main() //< measures the completion's compile-pass and exact-match rates
     defer arena: = Arena(512 * 1024 * 1024)
     $model: U8[] = "oracle"
     $coder: U8[] = "out/fim_coder.exe"
-    $weights: U8[] = "out/fim_coder.safetensors"
+    $weights: U8[] = "out/ai_assist/fim_coder.safetensors"
     $samples: U8[] = "4"
     p: = argparse.Parser
         .create(sys.program_name(), "measure the compile-pass rate of FIM completion over val.jsonl",
         arena)
     p.str_opt("--model", model@, "the model scored (oracle / empty / native)")
     p.str_opt("--coder", coder@, "native: the fim_coder executable (out/fim_coder.exe)")
-    p.str_opt("--weights", weights@, "native: the weights (out/fim_coder.safetensors)")
+    p.str_opt("--weights", weights@, "native: the weights (out/ai_assist/fim_coder.safetensors)")
     p.str_opt("--samples", samples@, "native: candidates per hole, the greedy one first (4)")
     p.parse_or_exit()
     if !model.equals("oracle") && !model.equals("empty") && !model.equals("native")

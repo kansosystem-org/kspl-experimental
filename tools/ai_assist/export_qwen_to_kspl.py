@@ -12,7 +12,7 @@ It puts it into the format `Qwen_model.load` in `ksai/examples/qwen_infer/model.
 
 Running it (on a machine with a GPU/CPU and transformers installed):
   python3 tools/ai_assist/export_qwen_to_kspl.py \
-      --base-model Qwen/Qwen2.5-Coder-0.5B --out out/qwen_kspl.safetensors
+      --base-model Qwen/Qwen2.5-Coder-0.5B --out out/ai_assist/qwen_kspl.safetensors
 
 The self-test (no GPU or torch needed): python3 tools/ai_assist/export_qwen_to_kspl.py
   It confirms on synthesized HF-layout weights that the logits of "the HF-style forward" and "the
@@ -78,7 +78,7 @@ def read_rope_theta(c, default=1000000.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-model", required=True)
-    ap.add_argument("--out", default="out/qwen_kspl.safetensors")
+    ap.add_argument("--out", default="out/ai_assist/qwen_kspl.safetensors")
     args = ap.parse_args()
     try:
         import torch

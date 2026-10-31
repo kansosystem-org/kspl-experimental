@@ -215,9 +215,12 @@ priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
                 ended = false
                 if races.len == 0
                     why.s("it did not end with 0, and left no report:\n").s(outs.get(j).out)
-                    for stack in harness_sanitizer.reports_in(runs.get(i).log_dir, "tsan.",
-                        aborts_in, arena)
-                        why.s("where it stopped, as the sanitizer logged it:\n").s(stack)
+        // **The stacks are read once per check**: the runs of one check share its log folder, so
+        // a read per failed run would print each stack again.
+        if !ended && races.len == 0
+            for stack in harness_sanitizer.reports_in(runs.get(i).log_dir, "tsan.", aborts_in,
+                arena)
+                why.s("where it stopped, as the sanitizer logged it:\n").s(stack)
         if races.len > 0
             why.s("the whole reports are in ").s(runs.get(i).log_dir)
         verdict.check(name, races.len == 0 && ended, why.take())

@@ -23,7 +23,7 @@ import "std/sys"
 
 priv const BENCH_DIR: U8[] = "ksai/benches"
 priv const KSPLC: U8[] = "out/ksplc_stage1.exe"
-priv const OUT_DIR: U8[] = "out"
+priv const OUT_DIR: U8[] = "out/benches" //< what it builds: the C, the libraries and each program
 
 priv const BUILD_TIMEOUT_MS: I32 = 600000 //<
     //< The cap on waiting for a build, and the cap on the output collected
@@ -59,6 +59,27 @@ priv fn build(argv: U8[][], arena: Arena$@): Bool //< builds one
     r: = subproc.run_capture(argv, "", BUILD_TIMEOUT_MS, CAPTURE_CAP, arena) catch
         return false
     return r.exited_with(0)
+
+priv fn build_train(stem: U8[], define: U8[], src: U8[], arena: Arena$@): U8[] //<
+    //< Builds `bench_train.kspl` as `OUT_DIR/{stem}.exe`, with `define` (empty for none)
+    //< Returns the program's path, or empty if a build fails.
+    //< The libraries the program needs are the ones `--emit-libs` wrote, passed to clang as a
+    //< response file (`@`), so none is repeated here.
+    c: = fs.join(OUT_DIR, arena.text().s(stem).s(".c").take(), arena)
+    libs: = fs.join(OUT_DIR, arena.text().s(stem).s(".libs").take(), arena)
+    exe: = fs.join(OUT_DIR, arena.text().s(stem).s(".exe").take(), arena)
+    $argv: = List<|U8[]|>(arena)
+    argv.push(KSPLC)
+    if define.len > 0
+        argv.push(define)
+    argv.push(arena.text().s("--emit-libs=").s(libs).take())
+    argv.push(src)
+    argv.push(c)
+    if build(argv.slice(), arena) &&
+        build(U8[][]::{ "clang", "-std=c99", "-O3", c,
+        arena.text().c('@').s(libs).take(), "-lm", "-o", exe }, arena)
+        return exe
+    return ""
 
 priv fn measure(exe: U8[], pin: U8[], cores: U8[], arena: Arena$@) //< runs the one that was built
     //< **Stream the child's output as is** (`spawn_wait`); printing it again breaks the columns.
@@ -101,12 +122,9 @@ priv fn run_all(threads: U8[], arena: Arena$@)
     src: = fs.join(BENCH_DIR, "bench_train.kspl", arena)
 
     io.out().s("--- pure KSPL matmul (zero dependencies, the default) ---\n")
-    // The libraries the program needs are the ones `--emit-libs` wrote, passed to clang as a
-    // response file (`@`), so none is repeated here.
-    if build(U8[][]::{ KSPLC, "--emit-libs=out/bt_pure.libs", src, "out/bt_pure.c" }, arena) &&
-        build(U8[][]::{ "clang", "-std=c99", "-O3", "out/bt_pure.c", "@out/bt_pure.libs", "-lm",
-        "-o", "out/bt_pure.exe" }, arena)
-        measure("out/bt_pure.exe", pin, cores, arena)
+    pure: = build_train("bt_pure", "", src, arena)
+    if pure.len > 0
+        measure(pure, pin, cores, arena)
     else
         io.out().s("  (the build failed)\n")
 
@@ -116,20 +134,17 @@ priv fn run_all(threads: U8[], arena: Arena$@)
                 libopenblas-dev)\n")
     else
         io.out().s("--- KSPL+BLAS(system OpenBLAS) ---\n")
-        if build(U8[][]::{ KSPLC, "--define=blas", "--emit-libs=out/bt_blas.libs", src,
-            "out/bt_blas.c" }, arena) &&
-            build(U8[][]::{ "clang", "-std=c99", "-O3", "out/bt_blas.c", "@out/bt_blas.libs", "-lm",
-            "-o", "out/bt_blas.exe" }, arena)
-            measure("out/bt_blas.exe", pin, cores, arena)
+        blas: = build_train("bt_blas", "--define=blas", src, arena)
+        if blas.len > 0
+            measure(blas, pin, cores, arena)
         else
             io.out().s("  (the build failed)\n")
 
         ref: = fs.join(BENCH_DIR, "bench_ref.c", arena)
         io.out().s("--- the C reference (the same system OpenBLAS = the control) ---\n")
-        ref_argv: = U8[][]::{ "clang", "-std=c99", "-O3", ref, "-lopenblas", "-o",
-            "out/bench_ref.exe" }
-        if build(ref_argv, arena)
-            measure("out/bench_ref.exe", pin, cores, arena)
+        ref_exe: = fs.join(OUT_DIR, "bench_ref.exe", arena)
+        if build(U8[][]::{ "clang", "-std=c99", "-O3", ref, "-lopenblas", "-o", ref_exe }, arena)
+            measure(ref_exe, pin, cores, arena)
         else
             io.out().s("  (the build failed)\n")
 

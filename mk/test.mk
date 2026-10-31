@@ -55,7 +55,9 @@ C_FMT_OFF := C_FMT=:
 
 # **The `make explain` tests run the make that `make explain` runs** (`ci_make`): found by its name,
 # make can be another one, such as MSYS2's UCRT64 make, which the root make file refuses.
-export KANSO_MAKE = $(ci_make)
+# **`:=`, so the `$(shell)` in `ci_make` runs once**: an exported `=` is expanded again for the
+# environment of every recipe line. `mk/ci.mk`, included before this file, defines `ci_make`.
+export KANSO_MAKE := $(ci_make)
 
 # Caution: **Not `out/tools.exe`**: tools look names up in `out/` and would start the wrong program
 # with nothing said. Hence `debug_`.

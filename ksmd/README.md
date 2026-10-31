@@ -113,6 +113,7 @@ flowchart BT
 | [files/image.kspl](files/image.kspl) | An image's format and size, read from its header |
 | [edit/series.kspl](edit/series.kspl) | How a line of cells goes on when the fill handle drags it |
 | [edit/edit.kspl](edit/edit.kspl) | Inserts, removes and moves rows and columns, sets and copies cells, and adds, removes and renames tables |
+| [edit/sort.kspl](edit/sort.kspl) | Orders a table's data rows by one key for each row |
 | [edit/styled.kspl](edit/styled.kspl) | A block's text as segments with marks, and the inline nodes built from them |
 | [edit/region.kspl](edit/region.kspl) | Blocks taken apart into units of text, and settled into blocks again |
 | [edit/history.kspl](edit/history.kspl) | Undo and redo: each action's changes, kept to swap back |
@@ -122,16 +123,9 @@ flowchart BT
 | [edit/editor_looks.kspl](edit/editor_looks.kspl) | The editor's looks of text, Clear format, and what stands at the selection |
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
-| [port/web/](port/web/) | The editing page: the wasm bridge (`bridge.kspl`, `view.kspl`, and `moving.kspl` for paths after a Save As), and its scripts and style. Each script is named for what it holds, such as `range.js`, `outline.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
+| [port/web/](port/web/) | The editing page: the wasm bridge (`bridge.kspl`, its actions on tables and charts in `bridge_tables.kspl`, `view.kspl`, and `moving.kspl` for paths after a Save As), and its scripts and style. Each script is named for what it holds, such as `range.js`, `outline.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
 | [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
 | [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server, and `measure.mjs` times it |
-
-## Files near the limit and how they split
-
-**How to choose the cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).**
-
-* [`port/web/bridge.kspl`](port/web/bridge.kspl): **the table actions**, from `ksmd_web_table_edit` to `ksmd_web_cell_text`, move to a new `bridge_tables.kspl` under `ksmd/port/web/`. `begin`, `full`, `refused`, `result` and `text_in` open from `priv` for it. `#export` names a symbol, not an import, so the actions stay in the page's wasm wherever they stand.
-* [`edit/edit.kspl`](edit/edit.kspl): **sorting**, `Sort_key`, `sort_rows`, `compare_keys` and `compare_within`, moves to a new `sort.kspl` under `ksmd/edit/`. Only `table_at` and `fits` cross the cut, opened from `priv`.
 
 ## Further reading
 

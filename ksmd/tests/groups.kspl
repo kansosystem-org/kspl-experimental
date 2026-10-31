@@ -3,6 +3,7 @@
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
+import "ksmd/model/format" { format_of }
 import "ksmd/syntax/reader"
 import "ksmd/tests/tables" { opened, saves }
 import "std/chars"
@@ -133,14 +134,25 @@ priv fn heights()
     saves("a new row has no height", ed@, arena,
         with_rows_heights(",,30,,,,9", "| 1 |\n| |\n| 2 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
     ed.undo()
-    ed.set_heights(0, 0, 2, 20) catch e
+    ed.set_heights(0, Sz[]::{ 0, 1, 2 }, 20) catch e
         verdict.check("setting heights", false, e.message())
     saves("rows 1 to 3 take a height of 20 points in one step", ed@, arena,
         arena.text().s(OPEN).s(" heights=\"20,20,20,,,9\"").s(ROWS).take())
     last: = ed.history.done[ed.history.done.len - 1]@
     verdict.check("the step records the heights alone, and no copy of the table",
         last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
-    ed.set_heights(0, 0, 5, 0) catch e
+    ed.set_heights(0, Sz[]::{ 3, 5 }, 12) catch e
+        verdict.check("setting heights of rows apart", false, e.message())
+    saves("rows listed apart take the height, and the rows between keep theirs", ed@, arena,
+        arena.text().s(OPEN).s(" heights=\"20,20,20,12,,12\"").s(ROWS).take())
+    ed.undo()
+    $refused_rows: = false
+    ed.set_heights(0, Sz[]::{ 3, 6 }, 12) catch
+        refused_rows = true
+    verdict.check("a row past the table is refused", refused_rows, "")
+    saves("and the refusal changes no row", ed@, arena,
+        arena.text().s(OPEN).s(" heights=\"20,20,20,,,9\"").s(ROWS).take())
+    ed.set_heights(0, Sz[]::{ 0, 1, 2, 3, 4, 5 }, 0) catch e
         verdict.check("taking heights away", false, e.message())
     saves("0 takes every height away, and the attribute with it", ed@, arena,
         table_with("", arena))
@@ -149,7 +161,7 @@ priv fn heights()
     saves("undo gives each height back", ed@, arena, tall)
     for points in Sz[]::{ 5, 410 }
         $refused_height: = false
-        ed.set_heights(0, 0, 0, points) catch e
+        ed.set_heights(0, Sz[]::{ 0 }, points) catch e
             refused_height = e.message().find_str("6 to 409").is_some()
         verdict.check("a height outside 6 to 409 points is refused", refused_height, "")
     for wrong in U8[][]::{ "7,8", ",,,,,,7" }
@@ -189,6 +201,15 @@ priv fn filters()
         "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n| 2 |\n:::\n")
     ed.undo()
     saves("and undo brings both back", ed@, arena, with(",in:x", arena))
+    changed(ed@, .insert_row, 1)
+    saves("an inserted row takes the filter away, since the filter would hide the empty row", ed@,
+        arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| | |\n| 2 | \"y\" \
+            |\n:::\n")
+    ed.undo()
+    saves("and one undo brings the filter back with the row gone", ed@, arena,
+        with(",in:x", arena))
+    formats(ed@, arena)
     ed.set_filter(0, 0, "below:2") catch e
         verdict.check("a second filter", false, e.message())
     ed.set_filter(0, -1, "") catch e
@@ -208,6 +229,48 @@ priv fn filters()
     refused_in(with("in:x", arena), "filter has one entry per column, empty for none")
     refused_in(with("in:x,,", arena), "filter has one entry per column, empty for none")
     refused_in(with(",", arena), "leave out filter when no column has one")
+
+priv fn formats(ed: Editor$@, arena: Arena$@) //<
+    //< A change of format takes the column's filter away in its step, since the filter matches the
+    //< text a cell shows
+    with: = fn(attributes: U8[], arena: Arena$@): U8[]
+        return arena.text().s("%ksmd 1\n\n:::table name=\"t\"").s(attributes)
+            .s("\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| 2 | \"y\" |\n:::\n").take()
+    ed.set_filter(0, 0, "in:1") catch e
+        verdict.check("a filter on the numbers", false, e.message())
+    f: = format_of("number:2") catch
+        panic("a test's format is valid")
+    ed.set_format(0, 0, 0, f) catch e
+        verdict.check("a column's format", false, e.message())
+    saves("a column's new format takes its filter away, and the other column's stays", ed, arena,
+        with(" formats=\"number:2,\" filter=\",in:x\"", arena))
+    ed.step_places(0, 0, 0, true) catch e
+        verdict.check("a place more", false, e.message())
+    ed.set_filter(0, 0, "in:1.000") catch e
+        verdict.check("a filter on the formatted numbers", false, e.message())
+    ed.step_places(0, 0, 0, false) catch e
+        verdict.check("a place fewer", false, e.message())
+    saves("so does a place more or fewer", ed, arena,
+        with(" formats=\"number:2,\" filter=\",in:x\"", arena))
+    ed.set_filter(0, 0, "in:1.00") catch e
+        verdict.check("a filter again", false, e.message())
+    ed.set_look(0, 0, 0, 0, 0, .format, "percent:1") catch e
+        verdict.check("a cell's format", false, e.message())
+    saves("and so does a cell's own format", ed, arena,
+        "%ksmd 1\n\n:::table name=\"t\" formats=\"number:2,\" filter=\",in:x\"\n| \"a\" | \"b\" \
+            |\n| 1 {format=\"percent:1\"} | \"x\" |\n| 2 | \"y\" |\n:::\n")
+    ed.undo()
+    saves("one undo brings the format and the filter back together", ed, arena,
+        with(" formats=\"number:2,\" filter=\"in:1.00,in:x\"", arena))
+    ed.set_look(0, 0, 0, 0, 0, .color, "#ff0000") catch e
+        verdict.check("a cell's colour", false, e.message())
+    saves("a change of look that leaves the format keeps the filter", ed, arena,
+        "%ksmd 1\n\n:::table name=\"t\" formats=\"number:2,\" filter=\"in:1.00,in:x\"\n| \"a\" | \
+            \"b\" |\n| 1 {color=\"#ff0000\"} | \"x\" |\n| 2 | \"y\" |\n:::\n")
+    ed.undo()
+    for _ in Range.asc(6)
+        ed.undo()
+    saves("and undo goes back to the start", ed, arena, with(" filter=\",in:x\"", arena))
 
 // ---- Helpers ----
 

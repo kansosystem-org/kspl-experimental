@@ -132,6 +132,8 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     await menu("row-below");
     check(await visible() === 4, "a new row shows every row again, so the new row can be seen");
     await menu("undo");
+    check(await visible() === 1, "and one undo takes the row away and brings the filter back");
+    await click(".filter-note .filter-clear");
     await click('#doc td[data-r="0"][data-c="1"]');
     await click('#doc td[data-r="0"][data-c="1"]');
     await press(";", CTRL);

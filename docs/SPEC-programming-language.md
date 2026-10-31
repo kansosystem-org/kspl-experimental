@@ -1891,7 +1891,7 @@ pub fn assert(cond: Bool, msg: U8$[], file: U8[] = caller_file, line: Sz = calle
 
 * They take **the call's position**, and an explicit argument overrides them.
 * **They go back only one step.** To carry the position down a chain of calls, have each function in between take the same two parameters and pass them on (the `panic(msg, file, line)` above).
-* They work on a `trait`'s method too. **An entry point that does not receive the position emits none** (`std/ds`'s `bounds_panic` is passed an empty one). The library's own line never stands for a user's mistake.
+* They work on a `trait`'s method too. **An entry point that does not receive the position emits none.** A caller with no position passes `""` and `0`, and the stop then ends without ` at <file>:<line>`. The library's own line never stands for a user's mistake.
 * Note: The out-of-range check on a built-in slice or array embeds the position in the generated code instead ([13. Conditions that stop execution at run time](#13-conditions-that-stop-execution-at-run-time)).
 
 #### 8.1.2 Anonymous functions

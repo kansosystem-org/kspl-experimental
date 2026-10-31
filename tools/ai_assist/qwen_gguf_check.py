@@ -4,7 +4,7 @@
 It needs the downloaded model and llama.cpp's Python packages `llama_cpp` and `gguf`, so no gate
 runs it. Build the program it drives first, then run it from the repository's root:
 
-  out/ksplc_stage1.exe build --cflags=-O3 ksai/benches/bench_qwen.kspl out/bench_qwen.exe
+  out/ksplc_stage1.exe build --cflags=-O3 ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
   python3 tools/ai_assist/qwen_gguf_check.py --model models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
   python3 tools/ai_assist/qwen_gguf_check.py --model models/Qwen3.5-9B-Q3_K_M.gguf
 
@@ -231,7 +231,7 @@ def main():
         return
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--model", default="models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf")
-    ap.add_argument("--bench", default="out/bench_qwen.exe")
+    ap.add_argument("--bench", default="out/benches/bench_qwen.exe")
     ap.add_argument("--cases", default="",
                     help="the template cases; by default the file's family's in ksai/tests/qwen_data")
     ap.add_argument("--generate", type=int, default=32)

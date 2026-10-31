@@ -107,6 +107,8 @@ priv fn explain(c: Call@, arena: Arena$@): I32 //< asks make, then prints the ex
         return unknown(r@, asked.stderr_data, arena)
     if !e.target && !e.exists
         return unknown(r@, asked.stderr_data, arena)
+    if e.double_colon
+        return double_colon(r@, arena)
     // **A file with no rule may mean make stopped before it read the rule**: what make said then
     // is the cause, so it is shown rather than left out.
     if !e.target
@@ -544,6 +546,24 @@ priv fn how_set(r: Report@, v: Var, arena: Arena$@): U8[] //< its operator, its 
     if !v.origin.equals("makefile")
         where.s("  ").s(v.origin)
     return where.take()
+
+// ==========================================
+// A target this tool does not explain
+// ==========================================
+
+priv fn double_colon(r: Report@, arena: Arena$@): I32 //< says a `::` target is not explained
+    //< **The database is read as one entry per target**, and a `::` target has one per rule. A
+    //< partial answer would look as plausible as a whole one, so none is given.
+    io.err().s("make_explain: '").s(r.c.target).s("' is a double-colon (`::`) target. Make runs ")
+        .s("each of its rules on its own, and this tool reads only one, so it is not explained.\n")
+    $found: = false
+    for rule in r.rules
+        if rule.double && names_target(r, rule, r.c.target, arena)
+            if !found
+                io.err().s("Its rules:\n")
+            found = true
+            io.err().s("  ").s(shown_path(r, rule.file, arena)).s(":\{rule.line\}\n")
+    return 1
 
 // ==========================================
 // An unknown target

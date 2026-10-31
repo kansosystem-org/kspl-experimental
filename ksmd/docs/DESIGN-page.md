@@ -4,7 +4,7 @@
 
 ## Input, menus and tables
 
-`ksmd/port/web/` holds the page: `bridge.kspl` and `view.kspl` built as wasm32, and the script and style that show the model. `make ksmd-web` builds it as `out/ksmd/web/ksmd.html`.
+`ksmd/port/web/` holds the page: `bridge.kspl`, `bridge_tables.kspl` and `view.kspl` built as wasm32, and the script and style that show the model. `make ksmd-web` builds it as `out/ksmd/web/ksmd.html`.
 
 **Text arrives through `beforeinput`, which the page cancels.** The page runs the matching action, renders the blocks it changed, and puts the selection back from model spots. So the browser's own undo has nothing to undo. A dropped item is refused.
 
@@ -37,7 +37,7 @@
 * A condition is folded away under the list: is, is not, contains, is greater than, is less than, is empty, is not empty.
 * Typing in the search box narrows the list shown, and never unticks a value.
 * The values are listed in the order the column sorts in. Values that differ only in case are one value, and empty cells one value listed last. The list stops at 1,000 values and says so.
-* **A column's dates stand in a tree: years, then months, then days.** Each year and month starts folded, and its button or Right and Left open and fold it. A month is named in the browser's language.
+* **A column's dates stand in a tree: years, then months, then days.** Each year and month starts folded, and its button or Right and Left open and fold it. A month is named in the browser's language. A day stands by its date, whatever format its cell shows it in, so a year stands once.
 * **A year's or a month's box ticks every day under it.** Where only some are ticked, it shows a mix, as (Select all) does.
 * **A search opens the years and months that hold a match**, and hides those that hold none. A day matches by its whole date, `2026-01-15`, or as its format shows it.
 * **The column's other values, text, numbers and blanks, stand after the tree, as a list.** A date column that holds a stray text keeps it in sight to be ticked or not.
@@ -50,8 +50,8 @@
 * **The next reader sees at once that rows are hidden.** The line above the table says how many of how many rows show, and its Show all rows takes the filter away.
 * **The file still holds every row**, and a formula counts every row, shown or not. Only the page hides them.
 * **Each change of a filter is one step of undo**, since it changes the file.
-* **A new row shows every row again**, since the filter would hide an empty row at once.
-* **With no value ticked, OK cannot be pressed**, as in Excel: no row would show.
+* **A new row takes the filter away, in the same step of undo as the row.** The filter would hide the empty row at once. One undo brings back the filter and takes the row away.
+* **With no value ticked and no condition, OK cannot be pressed**, as in Excel: no row would show. A condition counts once its value is typed, or at once for is empty and is not empty.
 * **In Read-only, a filter is the viewer's alone.** It narrows the rows for them, and the file keeps its own. Editing again shows the file's.
 
 **Under the menu bar stands a quick access bar: one row of the tools the person chose, as icons.** The menus hold every command, so the bar needs only the few a person uses most. View, Quick access bar opens the chooser, and a right-click on a command adds it or takes it off. The bar keeps the menus' order, and a tool its menu hides stands nowhere on it.
@@ -70,9 +70,9 @@
 
 **Shift+click chooses a range of cells from the chosen one, and so does a drag across cells** ("Ranges of cells" below). Once the drag reaches another cell, the open cell closes unchanged, and the range follows the pointer until the button comes up.
 
-**The Number format group sets the format of the chosen cells in one step**, or of columns chosen whole by their letters. Currency asks for a code, and takes no places for JPY and KRW and two for every other code. The filter panel lists and matches the text a format shows.
+**The Number format group sets the format of the chosen cells in one step**, or of columns chosen whole by their letters. Currency asks for a code, and takes no places for JPY and KRW and two for every other code. The filter panel lists and matches the text a format shows. So a change of format takes the filter of each column it reaches away, in the same step: its entries would match no row.
 
-**Three ways choose a whole table: Ctrl+A twice in a cell, the corner left of its column letters, and Select table.** Select table stands in the Table flyout. The first Ctrl+A chooses the data cells, as in Excel, and the second adds the names. A frame shows round the table.
+**Three ways choose a whole table: Ctrl+A twice in a cell, the corner left of its column letters, and Select table.** Select table stands in the Table flyout. The first Ctrl+A chooses the data cells, as in Excel, and the second adds the names. A frame shows round the table. Only these three choose it whole: in a table with no data rows, a press on a name chooses that cell alone.
 
 * **A copy of the whole table carries it three ways**: as ksmd's own source (`application/x-ksmd`), as tab-separated rows, and as an HTML table. A spreadsheet takes the rows, a word processor the HTML, and ksmd its own source, so nothing is lost between two ksmd documents.
 * **A paste of it in text puts the same table after the caret's paragraph**, as one step: its formulas, looks, formats, widths, heights and filter. A paste on a whole table chosen puts it after that table.
@@ -90,8 +90,9 @@
 
 **Column width… and Row height… ask for a number**, as Excel's dialogs do. Both stand in the Size flyout of the Table menu and the right-click menu, beside Fit column width. Each change is one step of undo.
 
-* **Column width takes a percent of the table's width, from 1 to 99, with at most one decimal place.** The chosen columns each take it, and the other columns share the rest in the proportions they have. A table fills the width of its page, so a share is the one width that holds on every screen and on paper. Excel's characters would mean another width on each screen.
+* **Column width takes a percent of the table's width, from 1 to 99, with at most one decimal place.** The chosen columns each take it, and the other columns share the rest in the proportions they have. With every column chosen, nothing is left to share, so a share that does not add up to 100% is refused with the reason. A table fills the width of its page, so a share is the one width that holds on every screen and on paper. Excel's characters would mean another width on each screen.
 * **Row height takes whole points from 6 to 409**, saved in `heights` ("Model and editor architecture" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)). An empty answer takes the height away. The rows keep their heights on paper too.
+* **Only the data rows in sight take the height**, as in Excel. A row a filter or a closed group hides keeps its own. Row height cannot be pressed on the names row, which takes the height its text needs.
 * **A number outside the limits is refused, and the page says which numbers it takes.** Nothing changes then.
 * **Neither has a key of its own.** Excel's Alt, H, O, W and Alt, H, O, H walk its ribbon, which the page does not have.
 

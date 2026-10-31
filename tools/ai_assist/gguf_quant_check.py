@@ -6,10 +6,10 @@ GGUF file it picks a few tensors of every format ksai reads. It writes each one 
 file: the tensor's raw bytes, and the numbers `gguf`'s reference decodes from them. The layout is
 the one `make_quant_fixtures.py` writes, and `ksai/benches/bench_quant.kspl` reads it:
 
-  python3 tools/ai_assist/gguf_quant_check.py --out-dir out/gguf_check \\
+  python3 tools/ai_assist/gguf_quant_check.py --out-dir out/ai_assist/gguf_check \\
       qwen2.5-0.5b-instruct-q8_0.gguf qwen2.5-0.5b-instruct-q4_k_m.gguf
-  out/ksplc_stage1.exe build ksai/benches/bench_quant.kspl out/bench_quant.exe
-  out/bench_quant.exe out/gguf_check/*.bin
+  out/ksplc_stage1.exe build ksai/benches/bench_quant.kspl out/benches/bench_quant.exe
+  out/benches/bench_quant.exe out/ai_assist/gguf_check/*.bin
 
 A file that is not there is skipped with a line saying so, so the same command runs anywhere.
 Run with no argument, it self-tests which tensors it picks, which needs numpy alone.

@@ -1,7 +1,8 @@
 // A table as a whole, and its columns and rows by number: selecting, copying, pasting and removing a
 // whole table, the caret after a block is removed, a column's width and a row's height typed in,
-// and the filter's tree of dates. Each is driven through the browser's own input events, as
-// `main.mjs` drives the rest, and checked by the saved source and its undo.
+// the filter's tree of dates, and the edits that change what a filter matches. Each is driven
+// through the browser's own input events, as `main.mjs` drives the rest, and checked by the saved
+// source and its undo.
 // `tables(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
 import { CTRL, SHIFT, verdict } from "./drive.mjs";
 
@@ -97,6 +98,26 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await paste({ "application/x-ksmd": "%ksmd 1\n\nNot a table\n", "text/plain": "Not a table" });
       await saves("clipboard text that is no ksmd table pastes as its plain text",
         `${H}Intro\n\n${clause("t", "t")}\nAfterNot a table\n`);
+      // In a table with no data rows, the names row alone reaches every row and column; it is
+      // still cells, not the whole table.
+      const bare = `${H}Intro\n\n:::table name="e"\n| "a" |\n:::\n`;
+      await load(bare);
+      await click('#doc th.name[data-c="0"]');
+      check(!await whole(), "a press on the name of a table with no data rows chooses the cell alone");
+      await press("Delete");
+      check((await js("ksmd.source()")).includes(':::table name="e"'),
+        "so Delete there leaves the table in place", await js("ksmd.source()"));
+      await load(bare);
+      await click('#doc th.name[data-c="0"]');
+      await clip("cut");
+      check((await js("ksmd.source()")).includes(':::table name="e"'), "and so does a cut",
+        await js("ksmd.source()"));
+      await load(bare);
+      await click('#doc th.name[data-c="0"]');
+      await menu("table-select");
+      check(await whole(), "Select table still chooses such a table whole");
+      await press("Delete");
+      await saves("and Delete then removes it", `${H}Intro\n`);
     },
 
     // Column width and row height typed as numbers, as Excel's dialogs take them: a column's share
@@ -151,6 +172,36 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await menu("undo");
       await menu("undo");
       await saves("each change was one step of undo", t3(""));
+      // With every column chosen, nothing is left to share, so the shares must add to 100.
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await press("a", CTRL);
+      await answer("30");
+      await menu("column-width");
+      check((await status()).includes("add to 100%"), "with every column chosen, a share that does not add to 100 is refused",
+        await status());
+      await saves("so nothing changes", t3(""));
+      // Row height: the names row takes the height its text needs, and rows a filter hides keep theirs.
+      // Row height on the names row asks nothing and changes nothing.
+      const heightOff = async (start) => {
+        await js("window.__asked = false; window.prompt = () => { window.__asked = true; return '30'; }");
+        await menu("row-height");
+        return !await js("window.__asked") && await js("ksmd.source()") === start;
+      };
+      await click('#doc th.name[data-c="0"]');
+      check(await heightOff(t3("")), "Row height cannot be pressed on the names row");
+      const t1 = (attrs) => `${H}:::table name="t"${attrs}\n| "a" |\n| 1 |\n| 2 |\n| 3 |\n:::\n`;
+      await load(t1(' filter="not:2"'));
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await click('#doc td[data-r="2"][data-c="0"]', SHIFT);
+      await answer("30");
+      await menu("row-height");
+      await saves("Row height across a row a filter hides leaves that row as it was",
+        t1(' heights="30,,30" filter="not:2"'));
+      await menu("undo");
+      await saves("in one step of undo", t1(' filter="not:2"'));
+      await load(`${H}:::table name="e"\n| "a" |\n:::\n`);
+      await click('#doc th.name[data-c="0"]');
+      check(await heightOff(`${H}:::table name="e"\n| "a" |\n:::\n`), "nor on a table with no data rows");
     },
 
     // A column of dates filters by a tree, as Excel's does: years, then months, then days, each with
@@ -208,6 +259,59 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await saves("the file keeps the filter: the days ticked, the text and the blanks", kept);
       await load(kept);
       check(await shown() === "100111", "and a document opened again shows the same rows", await shown());
+      // A cell's own format can show its date otherwise than the column's; the tree still sorts
+      // by the day, so each year stands once.
+      await load(`${H}:::table name="d"\n| "when" |\n| 2025-11-07 {format="date:yyyy/mm/dd"} |\n| 2026-01-15 |\n| 2025-12-01 |\n:::\n`);
+      await click('#doc th.name[data-c="0"] .filter-arrow');
+      check(await listed(".filter-panel [role=treeitem]") === "2025,2026",
+        "a date in a format of its own stands in its year, which is listed once", await listed(".filter-panel [role=treeitem]"));
+      await press("Escape");
+    },
+
+    // A filter and the edits that change what it matches: a new row, a change of number format,
+    // and a panel with nothing that OK could take.
+    async filterSteps() {
+      const table = (attrs, rows = "| 1.5 | \"x\" |\n| 2 | \"y\" |\n") =>
+        `${H}:::table name="t"${attrs}\n| "n" | "s" |\n${rows}:::\n`;
+      const shown = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
+      await load(table(' filter=",in:x"'));
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await menu("row-below");
+      await saves("a new row on a filtered table takes the filter away with the row",
+        table("", "| 1.5 | \"x\" |\n| | |\n| 2 | \"y\" |\n"));
+      check(await shown() === "111", "so the new row can be seen", await shown());
+      await menu("undo");
+      await saves("and one undo brings back the filter and takes the row away", table(' filter=",in:x"'));
+      check(await shown() === "10", "with the rows it showed", await shown());
+      // A value filter matches the text a format shows, so a new format takes it away.
+      await load(table(' filter="in:1.5,"'));
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await menu("format-number");
+      await saves("a number format on a filtered column takes its filter away in the same step",
+        table("", "| 1.5 {format=\"number:2\"} | \"x\" |\n| 2 | \"y\" |\n"));
+      await menu("undo");
+      await saves("and one undo brings both back", table(' filter="in:1.5,"'));
+      // OK takes ticked values or a condition with its value; with neither, it waits.
+      await click('#doc th.name[data-c="1"] .filter-arrow');
+      await js("document.querySelectorAll('.filter-values input').forEach((b) => { b.checked = false; b.dispatchEvent(new Event('change', { bubbles: true })); })");
+      const okOff = () => js("document.querySelector('.filter-panel .filter-ok').disabled");
+      await click(".filter-panel summary");
+      await settle();
+      check(await okOff(), "with no value ticked, opening the condition with no value leaves OK off");
+      await click(".filter-panel details input");
+      await type("x");
+      check(!await okOff(), "typing the condition's value lets OK be pressed");
+      await press("Backspace");
+      check(await okOff(), "and taking it away again turns OK off");
+      await press("Enter");
+      check(!!await js("document.querySelector('.filter-panel')"), "so Enter there takes nothing either");
+      await js("(() => { const s = document.querySelector('.filter-panel select'); s.value = 'empty'; s.dispatchEvent(new Event('change')); })()");
+      check(!await okOff(), "is empty needs no value, so OK can be pressed");
+      await click(".filter-panel summary");
+      await settle();
+      check(await okOff(), "and folding the condition away turns OK off again");
+      await press("Escape");
+      await saves("nothing was saved", table(' filter="in:1.5,"'));
     },
 
     // A table's filter is kept in the file, as Excel keeps it, so the document opens as it was left.

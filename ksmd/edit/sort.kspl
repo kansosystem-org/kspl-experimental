@@ -1,0 +1,62 @@
+//< Sorting a table's data rows by one key for each row, as one edit
+//< The editor makes each row's key from its calculated value; this file orders the rows by them.
+import "ksmd/base/marker" { compare_text }
+import "ksmd/edit/edit" { Edit_error, fits, table_at }
+import "ksmd/model/model" { Cell, Document }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+
+struct Sort_key //< where one data row sorts, by the value of its cell in the sorted column
+    group: Sz //< 0 a number, 1 a date, 2 text, 3 true or false, 4 an error, 5 an empty cell
+    number: F64 //< a number's value, a date's day; 0 for false and 1 for true
+    text: U8[] //< a text's bytes; an error's mark, so equal errors stay together
+    row: Sz //< the row's place before the sort
+
+fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, arena: Arena$@):
+    Void!Edit_error //<
+        //< Orders the data rows by their keys, one key per row; rows with equal keys keep their order
+        //< Ascending puts numbers first, smallest first, then dates, earliest first, then text
+        //< from A to Z, then false and true, then errors.
+        //< Descending reverses that order. Empty cells stand last either way, as spreadsheets put
+        //< them. Text compares letters A to Z without regard to case, then by the bytes of other
+        //< characters. Each row moves with its identity, so a reference stays on the cell it named.
+    t: = table_at(doc, u)!
+    if keys.len != t.rows.len
+        throw .outside
+    sorted: = keys.order_by(fn(a: Sort_key@, b: Sort_key@; descending: Bool): I32 {
+        return compare_keys(a, b, descending);
+    }, arena)
+    columns: = t.columns.len
+    $rows: = List<|Sz|>(arena)
+    $cells: = List<|Cell|>(arena)
+    for i in Range.asc(t.rows.len)
+        rows.push(t.rows[i])
+        for c in Range.asc(columns)
+            cells.push(t.cells[t.at(i, c)])
+    for i in Range.asc(sorted.len)
+        from: = sorted[i].row
+        t.rows[i] = rows[from]
+        for c in Range.asc(columns)
+            t.cells[t.at(i, c)] = cells[from * columns + c]
+    fits(doc) catch
+        for i in Range.asc(rows.len)
+            t.rows[i] = rows[i]
+            for c in Range.asc(columns)
+                t.cells[t.at(i, c)] = cells[i * columns + c]
+        throw .too_long
+
+priv fn compare_keys(a: Sort_key@, b: Sort_key@, descending: Bool): I32 //<
+    //< Below zero when `a` sorts first; empty cells sort last in either direction
+    if a.group == b.group
+        within: = compare_within(a, b)
+        return -within if descending else within
+    if a.group == 5 || b.group == 5
+        return -1 if b.group == 5 else 1
+    first: = a.group > b.group if descending else a.group < b.group
+    return -1 if first else 1
+
+priv fn compare_within(a: Sort_key@, b: Sort_key@): I32 //< two keys of one group
+    if a.group != 2 && a.group != 4
+        return -1 if a.number < b.number else 1 if a.number > b.number else 0
+    return compare_text(a.text, b.text)

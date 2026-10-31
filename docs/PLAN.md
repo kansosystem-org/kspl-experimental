@@ -74,7 +74,7 @@ flowchart TD
     G["4. regression gate:<br/>compares new and old output;<br/>promotes / rejects / holds<br/>(missing)"]
     U -->|"usage_log.jsonl (nothing writes it yet)"| R
     R -->|"feedback_train.jsonl"| C
-    C -->|"out/kanso_lora_vN.safetensors (a new version)"| G
+    C -->|"out/ai_assist/kanso_lora_vN.safetensors (a new version)"| G
     G -->|"promoted: it becomes the current adapter"| U
 ```
 

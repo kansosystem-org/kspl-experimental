@@ -477,6 +477,8 @@ FIM_BATCH ?= 4
 # `sgd` or `adam`; empty, fim_coder's own default (Adam) holds, so it is settled in one place.
 FIM_OPTIMIZER ?=
 FIM_AI := tools/ai_assist
+# The trained weights, in the folder for what tools/ai_assist makes.
+FIM_WEIGHTS := $(OUT_DIR)/ai_assist/fim_coder.safetensors
 # **One BLAS thread** (under `BLAS=1`): its matrices are a few hundred rows, where the threads cost
 # more than they share out; the cores go to the batch's sequences instead. Without BLAS it is not
 # read.
@@ -486,9 +488,10 @@ fim-model: fim-corpus
 	$(call kspl_build,$(FIM_AI)/train_bpe.kspl,train_bpe,)
 	./$(OUT_DIR)/train_bpe.exe --vocab=2000
 	$(call kspl_build,ksai/examples/fim_coder/main.kspl,fim_coder,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
+	@mkdir -p $(dir $(FIM_WEIGHTS))
 	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe train --corpus=$(FIM_AI)/corpus/fim_train.jsonl \
 		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
-		--out=$(OUT_DIR)/fim_coder.safetensors --steps=$(FIM_STEPS) --batch=$(FIM_BATCH) \
+		--out=$(FIM_WEIGHTS) --steps=$(FIM_STEPS) --batch=$(FIM_BATCH) \
 		$(if $(FIM_OPTIMIZER),--optimizer=$(FIM_OPTIMIZER))
 
 ## Run|fim-eval|Score the coding model: its held-out loss, then the rate at which ksplc accepts its completions
@@ -496,8 +499,8 @@ fim-eval: $(STAGE1_EXE)
 	$(call kspl_build,$(FIM_AI)/eval_fim.kspl,eval_fim,)
 	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe loss --corpus=$(FIM_AI)/corpus/fim_val.jsonl \
 		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
-		--weights=$(OUT_DIR)/fim_coder.safetensors
-	$(FIM_ENV) ./$(OUT_DIR)/eval_fim.exe --model=native
+		--weights=$(FIM_WEIGHTS)
+	$(FIM_ENV) ./$(OUT_DIR)/eval_fim.exe --model=native --weights=$(FIM_WEIGHTS)
 
 # --- Native inference for the Qwen family (ksai/examples/qwen_infer) --- Build only.
 ## Run|qwen|Build native inference for the Qwen family (`ksai/examples/qwen_infer`)

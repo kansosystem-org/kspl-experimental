@@ -25,7 +25,7 @@ impl U8[]
         offset: Sz, //< where the code point begins; a truncated tail steps only to the end
     ): Sz
         // A negative offset fails too: Sz is signed, and it would read before r.ptr.
-        if U64::offset >= U64::r.len
+        if U64::offset >= U64::r.len || r.len < 0
             return 0
         c: = (r.ptr + offset)$
         // A lead byte's high bits (0xxxxxxx/110xxxxx/1110xxxx/11110xxx) give the width
@@ -44,7 +44,7 @@ impl U8[]
         r: U8[],
         offset: Sz, //< where the sequence begins; out of range gives none
     ): Sz?
-        if U64::offset >= U64::r.len
+        if U64::offset >= U64::r.len || r.len < 0
             return .none
         c: = (r.ptr + offset)$
         if c < 0x80U8
@@ -80,7 +80,7 @@ impl U8[]
         r: U8[],
         at: Sz, //< where the four digits begin
     ): I32?
-        if at < 0 || at > r.len || r.len - at < 4
+        if U64::at > U64::r.len || r.len < 0 || r.len - at < 4
             return .none
         $v: I32 = 0
         for k in Range.asc(4)
@@ -133,7 +133,7 @@ impl U8[]
         offset: Sz = 0, //< where to look; omitted, the start
     ): Bool
         // Check the offset first: offset + prefix.len could overflow before the bounds check.
-        if offset < 0 || offset > r.len || prefix.len > r.len - offset
+        if U64::offset > U64::r.len || r.len < 0 || prefix.len > r.len - offset
             return false
         if prefix.len == 0
             return true
@@ -294,7 +294,7 @@ impl<|T|> T[]
         r: T[],
         start: Sz, //< where the part begins
     ): T[]
-        n: = sub_count(r.len, start, r.len - start if start >= 0 && start < r.len else 0)
+        n: = sub_count(r.len, start, r.len - start if U64::start < U64::r.len else 0)
         return (T[]::{ .ptr = null, .len = 0 } if n == 0
             else T[]::{ .ptr = r.ptr + start, .len = n })
 

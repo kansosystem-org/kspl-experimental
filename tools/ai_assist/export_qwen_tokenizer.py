@@ -18,9 +18,9 @@ format every fast tokenizer implements).
 
 How to use it:
   python3 tools/ai_assist/export_qwen_tokenizer.py --base-model Qwen/Qwen2.5-Coder-0.5B \
-      --out-dir out/qwen_tokenizer
+      --out-dir out/ai_assist/qwen_tokenizer
 
-What comes out: out/qwen_tokenizer/{vocab.txt,merges.txt}
+What comes out: out/ai_assist/qwen_tokenizer/{vocab.txt,merges.txt}
   (`Tokenizer.load(vocab_path, merges_path)` in `ksai/tokenizer.kspl` reads it as it stands)
 """
 import argparse
@@ -94,7 +94,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base-model", required=True)
-    ap.add_argument("--out-dir", default="out/qwen_tokenizer")
+    ap.add_argument("--out-dir", default="out/ai_assist/qwen_tokenizer")
     args = ap.parse_args()
     try:
         from transformers import AutoTokenizer

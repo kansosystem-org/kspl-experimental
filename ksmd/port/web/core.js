@@ -570,15 +570,13 @@ function ksmdCommands(ks) {
         break;
     }
     if (name in rows) {
-      // A new row is empty, so a filter would hide it at once; the filter goes first.
-      if (name !== "row-remove" && ks.filter.on(c.block)) {
-        ks.filter.clearAll(c.block);
-        const r = ks.act("ksmd_web_table_edit", c.block, rows[name][0], Math.max(c.row, 0) + rows[name][1]);
-        if (r && r.ok) ks.say("All rows are shown again, so the new row can be seen.");
-        return r;
-      }
+      // A new row is empty, so a filter would hide it at once: the editor takes the filter away in
+      // the same step (`edit_table` in `ksmd/edit/editor_tables.kspl`).
       const [what, after] = rows[name];
-      return ks.act("ksmd_web_table_edit", c.block, what, Math.max(c.row, 0) + after);
+      const filtered = name !== "row-remove" && ks.filter.on(c.block);
+      const r = ks.act("ksmd_web_table_edit", c.block, what, Math.max(c.row, 0) + after);
+      if (filtered && r && r.ok) ks.say("All rows are shown again, so the new row can be seen.");
+      return r;
     }
     const [what, after] = columns[name];
     return ks.act("ksmd_web_table_edit", c.block, what, c.column + after);

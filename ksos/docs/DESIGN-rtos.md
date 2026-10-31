@@ -608,12 +608,14 @@ A range spanning pages is written page by page, with 0xFF in the bytes not touch
 | :-- | :-- |
 | One lap of the control loop | 100ms, stretched by IR frames, the distance reading and a report line to about 300ms |
 | One Flash sector erase | At most 400ms (the 2MB flash's data sheet; typically 45ms) |
-| One Flash page write | At most 3ms |
+| One line of the record's dump | At most 50ms waiting for the console, and one record read |
+| One append to the record | A read of at most the 64KB region, and page writes of at most 3ms each |
 
-**Who feeds it, and from where:** the control loop, once per lap. Each step the record takes feeds it too: a read, a page write, a sector erase (`ksos/demo/rp2040/common/records.kspl`).
+**Who feeds it, and from where:** the control loop, once per lap. Each step the record takes feeds it too, once: an append and a sector erase (`ksos/demo/rp2040/common/records.kspl`), and one line of the dump (`ksos/demo/rp2040/common/sample.kspl`).
 
 * **Never from an interrupt or a timer.** They keep running while the loop is stuck, so a watchdog fed from there never fires when it matters.
 * **The record's steps feed because erasing while keeping the policy and printing the whole record take seconds.** Each step is short and bounded, so it proves the task is still moving. A timeout covering the whole operation would be several seconds, too long to stop the car.
+* **Not on each Flash read or page write.** A loop that keeps reading the record would then keep the watchdog fed while the control loop does not run. The motors would keep their last duty. A read of the whole 64KB region through XIP is far shorter than the timeout, so no read needs a feed of its own.
 
 **It is armed only where the wheels can first turn**, just before the control loop. Start-up can take tens of seconds, more than the longest timeout: it waits for the console and the link, and downloads. The wheels stay stopped meanwhile. Covering start-up would mean feeding inside its waits, which is the feeding that hides a stuck wait.
 

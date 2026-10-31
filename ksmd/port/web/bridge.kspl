@@ -11,14 +11,11 @@
 import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
 import "ksmd/calc/calc" { Results }
 import "ksmd/calc/calc"
-import "ksmd/calc/formula" { Positions }
 import "ksmd/calc/value" { Value }
 import "ksmd/edit/editor" { Editor, Input, Refused }
 import "ksmd/edit/editor"
-import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_looks"
 import "ksmd/edit/editor_replace" { Cell_text, Span }
-import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
 import "ksmd/edit/history" { Change }
 import "ksmd/edit/region" { Place, Spot, paragraph_style }
 import "ksmd/edit/styled" { Mark }
@@ -26,13 +23,10 @@ import "ksmd/files/assemble" { assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
 import "ksmd/files/files" { Refusal, parse, resolve_text }
 import "ksmd/files/image" { measure }
-import "ksmd/model/format" { currency_of, format_of, write_format }
-import "ksmd/model/look" { Look_part }
+import "ksmd/port/web/bridge_tables" as _tables // the table actions; this brings them into the wasm
 import "ksmd/port/web/moving"
 import "ksmd/port/web/view" { Inside }
 import "ksmd/port/web/view"
-import "ksmd/syntax/chart" { kind_of }
-import "ksmd/syntax/clause" { parse_weights }
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
 import "std/chars"
@@ -64,7 +58,7 @@ $doc_path: U8[] = "" //< the open document's path from the workspace root
 priv fn give_up(msg: U8$[]) //< the panic hook: the reason goes to the script, which throws
     ksmd_js_gave_up(msg.ptr, msg.len)
 
-priv fn ensure() //< sets up the heap, the output and an empty document, once
+fn ensure() //< sets up the heap, the output and an empty document, once
     if ready
         return
     mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
@@ -424,62 +418,10 @@ fn ksmd_web_redo(): Sz
     return result(true, "")
 
 #export
-fn ksmd_web_insert_table(columns: Sz, rows: Sz): Sz //< a new table in place of the selection
-    if !begin()
-        return full()
-    ed.insert_table(columns, rows) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
 fn ksmd_web_remove_block(block: Sz): Sz //< removes a table, an include or an image block
     if !begin()
         return full()
     ed.remove_block(block) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_remove_table(block: Sz): Sz
-    if !begin()
-        return full()
-    ed.remove_table(block) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz): Sz //<
-    //< 0 inserts a row before row `at`, 1 removes it, 2 inserts a column, 3 removes one
-    if !begin()
-        return full()
-    edit: Table_edit =
-        (.insert_row if what == 0 else .remove_row if what == 1 else .insert_column if what == 2
-        else .remove_column)
-    ed.edit_table(block, edit, at) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_set_cell(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
-    //< Puts typed text in a cell; row -1 names a column
-    if !begin()
-        return full()
-    ed.set_cell(block, row, column, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
-    part: I32, len: Sz): Sz //<
-        //< Sets one part of the look of a rectangle of cells: 0 the text's colour, 1 the
-        //< background's, 2 the font size in points, 3 the alignment, 4 every part, 5 the cell's own
-        //< number format, as `formats` writes an entry or `general`; empty text clears it
-    if !begin()
-        return full()
-    which: Look_part =
-        (.color if part == 0 else .fill if part == 1 else .size if part == 2
-        else .align if part == 3 else .format if part == 5 else .all)
-    ed.set_look(block, from_row, from_column, to_row, to_column, which, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -492,165 +434,10 @@ fn ksmd_web_clear_look(): Sz //< takes the selected text's colour and alignment 
     return result(true, "")
 
 #export
-fn ksmd_web_cell_places(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
-    more: I32): Sz //<
-        //< One more (1), or one fewer (0), decimal place in each cell of a rectangle
-    if !begin()
-        return full()
-    ed.step_cell_places(block, from_row, from_column, to_row, to_column, more != 0) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_cell_currency(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
-    len: Sz): Sz //<
-        //< Shows the cells' numbers as money in the currency written in, as `USD`
-    if !begin()
-        return full()
-    f: = currency_of(text_in(len)) catch
-        return refused(.table(.not_a_format))
-    defer $entry: = Str_builder()
-    write_format(f, entry@)
-    ed.set_look(block, from_row, from_column, to_row, to_column, .format, entry.slice()) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
 fn ksmd_web_align(len: Sz): Sz //< aligns the selected paragraphs and headings; empty for none
     if !begin()
         return full()
     ed.set_align(text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_paste_cells(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
-    //< Pastes a grid, written in as a JSON array of rows of strings, into a table from a cell
-    if !begin()
-        return full()
-    defer scratch: = Arena(64 * 1024)
-    grid: = grid_in(len, scratch)
-    ed.paste_cells(block, row, column, grid@) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_paste_table(len: Sz): Sz //<
-    //< Puts a new table made from a grid, written in as `ksmd_web_paste_cells` takes it
-    if !begin()
-        return full()
-    defer scratch: = Arena(64 * 1024)
-    grid: = grid_in(len, scratch)
-    ed.insert_grid(grid@) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_paste_ksmd(len: Sz): Sz //<
-    //< Puts the table of the ksmd source written in after the caret's paragraph, as a copy left it
-    if !begin()
-        return full()
-    ed.paste_table(text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_block_source(block: Sz): Sz //< a source that holds that block alone, for a copy
-    ensure()
-    out.clear()
-    if block >= 0 && block < ed.doc.blocks.len
-        writer.write_one(ed.doc@, block, out)
-    return out.slice().len
-
-priv fn grid_in(len: Sz, scratch: Arena$@): List<|List<|U8[]|>|> //<
-    //< The grid the script wrote in; text that is not one reads as an empty grid
-    $grid: = List<|List<|U8[]|>|>(scratch)
-    doc: = json.parse(text_in(len), scratch) catch
-        return grid
-    for line in doc.val.arr_list(scratch)
-        $cells: = List<|U8[]|>(scratch)
-        for cell in line.arr_list(scratch)
-            cells.push(cell.as_str().unwrap_or(""))
-        grid.push(cells)
-    return grid
-
-#export
-fn ksmd_web_sort(block: Sz, column: Sz, descending: I32): Sz //<
-    //< Orders a table's data rows by one column's values; 1 sorts descending
-    if !begin()
-        return full()
-    ed.sort_table(block, column, descending == 1) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_group(block: Sz, how: I32, first: Sz, last: Sz): Sz //<
-    //< Groups the data rows from `first` to `last` (how 0), takes away the smallest group that holds
-    //< them (1), hides that group's rows (2) or shows them (3)
-    if how < 0 || how > 3
-        return result(false, "")
-    if !begin()
-        return full()
-    what: Group_edit =
-        (.group if how == 0 else .ungroup if how == 1 else .hide if how == 2 else .show)
-    ed.group_rows(block, first, last, what) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_choices(block: Sz, column: Sz, len: Sz): Sz //<
-    //< Gives a column the choices typed as `Open, Done` in the `len` bytes written in; none for empty
-    if !begin()
-        return full()
-    ed.set_choices(block, column, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_rule(block: Sz, column: Sz, len: Sz): Sz //<
-    //< Gives a column the colour rule an entry names, `<0;color:#9c0006`, in the `len` bytes
-    //< written in; none for empty
-    if !begin()
-        return full()
-    ed.set_rule(block, column, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_insert_chart(block: Sz): Sz //< a bar chart of a table, after the table
-    if !begin()
-        return full()
-    ed.insert_chart(block) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
-    //< New settings for a chart, written in as JSON: `{"t":table,"k":"bar","l":labels column,
-    //< "v":[columns],"title":text}`, the columns by their places
-    if !begin()
-        return full()
-    defer scratch: = Arena(16 * 1024)
-    doc: = json.parse(text_in(len), scratch) catch
-        return result(false, "The chart's settings did not arrive whole, so nothing changed.")
-    $values: = List<|Sz|>(scratch)
-    for v in doc.val.get("v").arr_list(scratch)
-        values.push(number(v))
-    kind: = kind_of(doc.val.get("k").as_str().unwrap_or("")) catch
-        return result(false, "A chart is a bar chart or a line chart.")
-    settings: = Chart_settings::{ .table = number(doc.val.get("t")), .kind = kind,
-        .labels = number(doc.val.get("l")), .values = values,
-        .title = doc.val.get("title").as_str().unwrap_or("") }
-    ed.set_chart(block, settings@) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_cell_note(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
-    //< Gives a cell the note in the `len` bytes written in; resolves it with none
-    if !begin()
-        return full()
-    ed.set_cell_note(block, row, column, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -660,18 +447,6 @@ fn ksmd_web_block_note(block: Sz, len: Sz): Sz //<
     if !begin()
         return full()
     ed.set_block_note(block, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz,
-    series: I32): Sz //<
-        //< Copies the `height` by `width` cells at `top`, `left` over the range up to `bottom`,
-        //< `right`, repeating them, as fill down and fill right do; 1 in `series` goes on with a
-        //< series where the cells make one, as the fill handle does
-    if !begin()
-        return full()
-    ed.fill_cells(block, top, left, height, width, bottom, right, series == 1) catch e
         return refused(e)
     return result(true, "")
 
@@ -700,138 +475,26 @@ fn ksmd_web_replace(len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-priv fn number(v: json.Value): Sz //<
+fn number(v: json.Value): Sz //<
     //< a whole number written in; -2, a place that names nothing, if not
     if n: = v.as_int()
         return n
     return -2
 
-#export
-fn ksmd_web_table_texts(block: Sz): Sz //<
-    //< Each cell's text as a person edits it, names first: `[[name,…],[cell,…],…]`, written to the
-    //< output; empty outside a table. A search reads it.
-    ensure()
-    out.clear()
-    if block < 0 || block >= ed.doc.blocks.len ||
-        ed.doc.blocks.get(block).kind != .table
-        return 0
-    u: = ed.doc.blocks.get(block).first
-    t: = ed.doc.tables[u]@
-    defer scratch: = Arena(64 * 1024)
-    at: = Positions(ed.doc@, scratch)
-    out.c('[')
-    for r in Range(-1, t.rows.len, 1)
-        out.s("[" if r < 0 else ",[")
-        for c in Range.asc(t.columns.len)
-            if c > 0
-                out.c(',')
-            defer cell: = Arena(1024)
-            out.c('"').escape_and_append(ed.cell_text_at(u, r, c, at@, cell)).c('"')
-        out.c(']')
-    out.c(']')
-    return out.slice().len
-
-#export
-fn ksmd_web_set_widths(block: Sz, len: Sz): Sz //<
-    //< Gives the table's columns the relative widths written in, as `widths` holds them: `1,2,1`
-    if !begin()
-        return full()
-    defer scratch: = Arena(4096)
-    $weights: = List<|Sz|>(scratch)
-    if !parse_weights(text_in(len), weights@)
-        return refused(.table(.not_widths))
-    ed.set_widths(block, weights@) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_set_filter(block: Sz, column: Sz, len: Sz): Sz //<
-    //< Gives a column the filter entry written in, empty for none; column -1 clears every column's
-    if !begin()
-        return full()
-    ed.set_filter(block, column, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_set_heights(block: Sz, first: Sz, last: Sz, points: Sz): Sz //<
-    //< Gives the data rows from `first` to `last` a least height in points; 0 takes it away
-    if !begin()
-        return full()
-    ed.set_heights(block, first, last, points) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_column_format(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
-    //< Gives columns `first` to `last` the number format written in, as `formats` writes one
-    //< entry, as `grouped:2`; empty clears it
-    if !begin()
-        return full()
-    f: = format_of(text_in(len)) catch
-        return refused(.table(.not_a_format))
-    ed.set_format(block, first, last, f) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_column_currency(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
-    //< Shows the columns' numbers as money in the currency written in, as `USD`
-    if !begin()
-        return full()
-    f: = currency_of(text_in(len)) catch
-        return refused(.table(.not_a_format))
-    ed.set_format(block, first, last, f) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_column_places(block: Sz, first: Sz, last: Sz, more: I32): Sz //<
-    //< Shows one more decimal place in the formatted columns, or one fewer for `more` 0
-    if !begin()
-        return full()
-    ed.step_places(block, first, last, more == 1) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_rename_table(block: Sz, len: Sz): Sz
-    if !begin()
-        return full()
-    ed.rename_table(block, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
-    //< The text a cell shows to edit, written to the output; empty outside a table
-    ensure()
-    out.clear()
-    if block < 0 || block >= ed.doc.blocks.len ||
-        ed.doc.blocks.get(block).kind != .table
-        return 0
-    u: = ed.doc.blocks.get(block).first
-    t: = ed.doc.tables[u]@
-    if column < 0 || column >= t.columns.len || row < -1 || row >= t.rows.len
-        return 0
-    defer scratch: = Arena(16 * 1024)
-    out.s(ed.cell_text(u, row, column, scratch))
-    return out.slice().len
-
-priv fn begin(): Bool //< whether an action may start; it clears what the last one changed
+fn begin(): Bool //< whether an action may start; it clears what the last one changed
     ensure()
     ed.change = Change.none(ed.doc@)
     return mem.heap_used_bytes() + RESERVE <= HEAP_BYTES
 
-priv fn full(): Sz //< the refusal of an action for want of memory
+fn full(): Sz //< the refusal of an action for want of memory
     return result(false,
         "The editor's memory is used up, so the change was not made. Save the document, then open \
             it again.")
 
-priv fn refused(e: Refused): Sz
+fn refused(e: Refused): Sz
     return result(false, e.message())
 
-priv fn result(ok: Bool, why: U8[]): Sz //<
+fn result(ok: Bool, why: U8[]): Sz //<
     //< `{"ok","why","from","tail","blocks","tables","sel","here","changed","undo","redo"}`: the blocks
     //< from `from` up to the `tail` unchanged at the end, and each other table when values may have
     //< changed. `changed` is 1 when the document changed, so a host knows to save it.
@@ -898,7 +561,7 @@ priv fn shows_files(from: Sz, to: Sz): Bool //< whether an include or an image i
             return true
     return false
 
-priv fn text_in(len: Sz): U8[] //< the text the script wrote into the input buffer
+fn text_in(len: Sz): U8[] //< the text the script wrote into the input buffer
     if len <= 0 || input == null
         return ""
     return U8[]::{ .ptr = input, .len = len if len <= input_cap else input_cap }

@@ -6,6 +6,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
+import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
@@ -202,7 +203,7 @@ fn lint_counting_loop(c: Sema_ctx$@, r: Ast_node$@, shape: Counting_loop, body: 
     msg.s("[I0314] This loop counts '\{shape.index\}' in three parts. Write ")
     if shape.bound_len_of.len > 0 && shape.start.equals("0") &&
         reads_index_anywhere(body, shape.index) &&
-        reads_index_as_element(body, shape.index, shape.bound_len_of)
+        reads_index_as_element(c, body, shape.index, shape.bound_len_of)
         msg.s("'for x in \{shape.bound_len_of\}', and read each element as 'x'")
     else if shape.start.equals("0")
         msg.s("'for \{shape.index\} in Range.asc(\{shape.bound\})'")
@@ -300,7 +301,7 @@ priv fn method_may_write(c: Sema_ctx$@, access: Ast_node$@): Bool //<
     case .none
         return true
 
-priv fn reads_index_as_element(node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
+priv fn reads_index_as_element(c: Sema_ctx$@, node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
     //< Whether every use of the index under `node` is `seq[index]` or `seq.get(index)`, read
     if node == null
         return true
@@ -309,12 +310,12 @@ priv fn reads_index_as_element(node: Ast_node$@, index: U8[], seq: U8[]): Bool /
         left: = node.get_assign_left()
         if reads_index_anywhere(left, index) || root_name(left).equals(seq_root(seq))
             return false
-    if is_element_read(node, index, seq)
+    if is_element_read(c, node, index, seq)
         return true
     if names(node, index)
         return false
     for child in node.children
-        if !reads_index_as_element(child, index, seq)
+        if !reads_index_as_element(c, child, index, seq)
             return false
     return true
 
@@ -331,18 +332,38 @@ priv fn reads_index_anywhere(node: Ast_node$@, index: U8[]): Bool
             return true
     return false
 
-priv fn is_element_read(node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
-    //< Whether `node` is `seq[index]` or `seq.get(index)`
-    //< The arguments after the index are `List.get`'s caller position, filled in by then.
+priv fn is_element_read(c: Sema_ctx$@, node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
+    //< Whether `node` is `seq[index]` or `seq.get(index)`, over a `seq` that `for x in` walks
+    //< **An argument after the index must not read it.** `List.get`'s caller position is filled
+    //< in by then, but `g.get(i, i)` reads a different element than `x` would.
     if node.kind_id != .k_expr_postfix || node.children.len < 3
         return false
     op: = node.postfix_op_text()
     recv: = node.get_postfix_receiver()
     arg: = node.get_child(2)
     if op.equals("[")
-        return path_text(recv).equals(seq) && names(arg, index)
+        return path_text(recv).equals(seq) && names(arg, index) && walks_by_index(c, recv)
     if !op.equals("(") || recv.kind_id != .k_method_access ||
         !recv.get_postfix_member().text.equals("get")
         return false
-    return path_text(recv.get_postfix_receiver()).equals(seq) && arg.children.len >= 1 &&
-        names(arg.get_child(0), index)
+    owner: = recv.get_postfix_receiver()
+    if !path_text(owner).equals(seq) || arg.children.len < 1 ||
+        !names(arg.get_child(0), index) || !walks_by_index(c, owner)
+        return false
+    for k in Range(1, arg.children.len, 1)
+        if reads_index_anywhere(arg.get_child(k), index)
+            return false
+    return true
+
+priv fn walks_by_index(c: Sema_ctx$@, seq: Ast_node$@): Bool //<
+    //< Whether `for x in seq` reads `seq[0]`, `seq[1]` and on, so `x` is the element read
+    //< A struct with only a `get` of its own has no `[]` to walk, and an `Iter` is walked by
+    //< `next()`.
+    base: = c.env.strip_ptr(seq.type_id)
+    if c.env.is_slice(base) || c.env.is_array(base)
+        return true
+    if sema_body_for_in.drives_by_next(c, base)
+        return false
+    return c.env.has_implemented_operator_trait(base, "Index_place") ||
+        c.env.has_implemented_operator_trait(base, "Index_ref") ||
+        c.env.has_implemented_operator_trait(base, "Index")

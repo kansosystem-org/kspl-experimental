@@ -24,6 +24,7 @@ struct Entry //< one file the database records: a target, or a file a target nam
     prereqs: List<|U8[]|> //< the normal prerequisites, in order
     order_only: List<|U8[]|> //< those after `|`: made first, but never a reason to remake
     target: Bool //< a rule names it as its target (the database does not mark it `Not a target`)
+    double_colon: Bool //< its rules are `::`, each one of its own; the entry holds only the last
     phony: Bool
     stem: U8[] //< what a pattern rule's `%` matched; empty where no pattern rule made it
     stale: Bool //< make would remake it now (`-q` found it out of date)
@@ -154,9 +155,9 @@ priv fn read_var(lines: List<|U8[]|>, at: Sz, into: Map<|U8[], Var|>$@, arena: A
 
 priv fn new_entry(name: U8[], arena: Arena$@): Entry //< an entry with nothing recorded yet
     return Entry::{ .name = name, .prereqs = List<|U8[]|>(arena),
-        .order_only = List<|U8[]|>(arena), .target = true, .phony = false, .stem = "",
-        .stale = false, .current = false, .exists = true, .recipe_file = "", .recipe_line = 0,
-        .recipe = List<|U8[]|>(arena), .vars = List<|Var|>(arena) }
+        .order_only = List<|U8[]|>(arena), .target = true, .double_colon = false, .phony = false,
+        .stem = "", .stale = false, .current = false, .exists = true, .recipe_file = "",
+        .recipe_line = 0, .recipe = List<|U8[]|>(arena), .vars = List<|Var|>(arena) }
 
 priv fn header_colon(line: U8[]): Sz? //< where an entry's `name:` ends, at a colon then a space
     for i in Range.asc(line.len)
@@ -192,6 +193,8 @@ priv fn read_entry(lines: List<|U8[]|>, at: Sz, db: Db$@, arena: Arena$@): Sz //
     $e: = new_entry(head.sub(0, colon), arena)
     e.target = target
     e.vars = vars
+    // **A `::` target has one entry per rule**, each with its own prerequisites and recipe.
+    e.double_colon = head.sub_from(colon + 1).starts_with(":")
     $in_order: = false
     for word in head.sub_from(colon + 1).strip_prefix(":").split(' ', arena)
         if word.equals("|")

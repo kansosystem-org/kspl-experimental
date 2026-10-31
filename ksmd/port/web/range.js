@@ -16,6 +16,8 @@ function ksmdRange(ks) {
   // The range by identities: { u, a, f, at }, `a` and `f` as [row id, column id] (-1 for the
   // names), and `at` the chosen cell it was taken for.
   let kept = null;
+  // The block whose whole table was chosen, or -1; choosing any other range sets it back.
+  let tableChosen = -1;
 
   const wrapOf = (block) => {
     const el = ks.view.blocks()[block];
@@ -95,10 +97,12 @@ function ksmdRange(ks) {
   // The marks show only while the person works in the table.
   ks.placeHooks.push(mark);
 
-  // Whether the range holds the whole table: its names and every row and column.
+  // Whether the whole table is chosen: by Select table, Ctrl+A twice or the corner, and the range
+  // still holds its names and every row and column. A range that only reaches as far is cells: in a
+  // table with no data rows, the names row alone covers it.
   function whole() {
     const c = ks.cell;
-    if (!c || !wrapOf(c.block)) return false;
+    if (!c || !wrapOf(c.block) || tableChosen !== c.block) return false;
     const r = rect();
     const s = size(c.block);
     return r.r1 === -1 && r.r2 === s.rows - 1 && r.c1 === 0 && r.c2 === s.columns - 1;
@@ -109,6 +113,8 @@ function ksmdRange(ks) {
     const s = size(block);
     ks.table.take();
     set(block, -1, 0, { row: s.rows - 1, column: s.columns - 1 });
+    tableChosen = block;
+    mark();
     focusChosen();
   }
 
@@ -148,6 +154,7 @@ function ksmdRange(ks) {
   // Sets the range: the chosen cell, and the far corner or null.
   function set(block, row, column, to) {
     ks.cell = { block, row, column };
+    tableChosen = -1;
     ks.setPlace("cell");
     end = to && (to.row !== row || to.column !== column) ? to : null;
     keep();
@@ -157,6 +164,7 @@ function ksmdRange(ks) {
   // The chosen cell alone again; a cell opened or chosen calls it.
   function collapse() {
     end = null;
+    tableChosen = -1;
     keep();
     mark();
   }

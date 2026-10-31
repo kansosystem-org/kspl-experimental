@@ -310,7 +310,7 @@ Each error has its own mark, since each is fixed differently.
 
 ### How references follow edits
 
-Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert, remove and move a row or a column, sort the rows, set a cell and copy a cell.
+Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert, remove and move a row or a column, set a cell and copy a cell. `ksmd/edit/sort.kspl` sorts the rows.
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
@@ -472,6 +472,8 @@ The table's `widths` attribute, when present, is a quoted comma-separated list o
 | `empty`, `filled` | Rows whose cell is empty, or holds a value |
 
 * **A value is the text the cell shows, in lower case**, since the page compares without regard to case. `%25`, `%2C` and `%7C` stand for `%`, `,` and `|`, which separate the entries.
+* **A change of number format takes the column's entry away, in the same step of undo.** The format of the column or of a cell in it changes the text the cell shows, so `in:1.5` would hide every row once 1.5 shows as 1.50.
+* **A row inserted takes every entry away, in the same step of undo**, since an entry would hide the empty row at once.
 * **The model keeps each entry by the column's identity**, so it moves with its column, and an undo of a removed column brings it back.
 * **The file keeps every row; a filter only hides some on the page and on paper.** A reader that does not know the attribute refuses the file rather than show rows the writer hid ("Source boundaries" above).
 

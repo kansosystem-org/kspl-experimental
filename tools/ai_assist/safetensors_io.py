@@ -13,6 +13,7 @@ where the format is read wrongly, both go wrong the same way and matching them u
 (this is a deliberate second implementation).
 """
 import json
+import os
 import struct
 
 
@@ -26,6 +27,8 @@ def write_safetensors(entries, path):
         offset += len(raw)
     header_bytes = json.dumps(header).encode("utf-8")
     header_bytes += b" " * ((-len(header_bytes)) % 8)
+    # The folder is made where it is missing: each tool's default output lies in out/ai_assist/.
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "wb") as f:
         f.write(struct.pack("<Q", len(header_bytes)))
         f.write(header_bytes)

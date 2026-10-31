@@ -278,6 +278,25 @@ fn main(): I32
   $b: I32[2] = ::{ 0, 0 }
   fill(I32$[]::b)
   return sum(I32[]::a) + sum_list(List<|I32|>.create(arena)) + count(2)
+// ==== case counting_loop_over_a_get_that_is_not_an_element
+//< A `get` that is not the element `for x in` would give leaves the advice at `Range.asc`
+//< `g.get(i, i)` reads the index twice, and `Grid` has no `[]` to walk, so `x` would not exist.
+// EXPECT: [I0314] This loop counts 'i' in three parts. Write 'for i in Range.asc(g.len)'
+// EXPECT-NOT: Write 'for x in g'
+struct Grid
+  len: Sz
+  cols: Sz
+
+impl Grid
+  fn get(r: Self@, row: Sz, col: Sz): Sz
+    return row * r.cols + col
+
+fn main(): I32
+  g: = Grid::{ .len = 3, .cols = 4 }
+  $sum: Sz = 0
+  for $i: = 0; i < g.len; i += 1
+    sum += g.get(i, i)
+  return I32::sum
 // ==== case counting_loop_that_must_stay
 //< A loop whose body may change its index or its bound keeps the three parts, and is no finding
 //< The body skips an element, shortens the bound, grows the list the bound reads, or hands the

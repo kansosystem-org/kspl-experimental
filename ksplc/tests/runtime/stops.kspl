@@ -173,7 +173,7 @@ struct Cells //< a few I32s, indexed the way a container outside std indexes its
 
 impl Cells: Index_place<|Sz, I32|> //< so `c[i]` reads and writes one cell
     fn at(r: Self@, index: Sz, file: U8[], line: Sz): I32$@ //< one cell's place
-        if index < 0 || index >= r.size
+        if U64::index >= U64::r.size
             bounds_panic("Cells.at", index, r.size, file, line)
         return r.data + index
 
@@ -342,4 +342,20 @@ $buf: I32[2] = ::{ 1, 2 }
 fn main(): I32
     s: I32[] = ::{ .ptr = buf[0]@, .len = 2 }
     io.out().s("\{s[9]\}\n")
+    return 0
+// ==== case slice_negative_length
+//< A slice built by hand with a negative length stops at any index
+//< The unsigned comparison alone would let index 1 through and read past the memory. The test
+//< on the length beside it stops it ("Indexing costs one comparison; the stop is out of line" in
+//< `std/docs/DESIGN-core.md`).
+// EXPECT: panic: index out of bounds in Slice.at_ref (idx: 1, len: -1)
+// EXPECT-NOT: must not get here
+import "std/io"
+
+$buf: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+    s: I32[] = ::{ .ptr = buf[0]@, .len = -1 }
+    io.out().s("\{s[1]\}\n")
+    io.out().s("must not get here\n")
     return 0

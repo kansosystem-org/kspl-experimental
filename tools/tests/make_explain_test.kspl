@@ -334,7 +334,37 @@ fn test_explaining_runs_nothing(arena: Arena$@) //< no recipe, no command, and m
     assert(out.find_str("set for this target alone: FLAGS").is_some(),
         "a target's own `+=` is named")
     assert(out.find_str("which gives nothing here").is_some(), "a `$(shell)` not run is said")
+    // **A `SHELL` given on the command line still runs nothing**: make lets a command line's value
+    // beat a target's own one not marked `override`, and the tool hands the settings on.
+    shelled: =
+        explain(make, arena.text().s(ACTS).s(":go").take(), U8[][]::{ "SHELL=/bin/sh" }, arena)
+    assert(shelled.exited_with(0), "the target is explained with `SHELL` given")
+    assert(!fs.exists(ran), "with `SHELL` given, no recipe line ran")
     verdict.pass("no recipe or command ran, make's words were English, and each value is shown.")
+
+priv const DOUBLE: U8[] = "out/tmp/make_explain_double" //< where the `::` fixture is
+
+fn test_double_colon_refused(arena: Arena$@) //< a `::` target is refused, not half explained
+    verdict.start("[tools/make_explain] a double-colon target test...")
+    make: = gnu_make(arena)
+    if make.len == 0
+        return
+    fs.mkdir_all(DOUBLE) catch {}
+    io.write_file(fs.join(DOUBLE, "Makefile", arena),
+        "go:: a\n\t@echo one\ngo:: b\n\t@echo two\na b:\n\t@:\n.PHONY: a b\n") catch {}
+    got: =
+        explain(make, arena.text().s(DOUBLE).s(":go").take(), U8[][]::{}, arena)
+    assert(got.exit_code.unwrap_or(0) == 1 && got.stdout_data.len == 0,
+        "a `::` target gets no explanation")
+    mf: = arena.text().s(DOUBLE).s("/Makefile:").take()
+    assert(got.stderr_data.find_str("double-colon").is_some() &&
+        got.stderr_data.find_str(arena.text().s(mf).s("1\n").take()).is_some() &&
+        got.stderr_data.find_str(arena.text().s(mf).s("3\n").take()).is_some(),
+        "the refusal says why and names each of its rules")
+    plain: =
+        explain(make, arena.text().s(DOUBLE).s(":a").take(), U8[][]::{}, arena)
+    assert(plain.exited_with(0), "a plain target in the same make file is still explained")
+    verdict.pass("a `::` target is refused with its rules named, and a plain one is explained.")
 
 priv fn argv_of(line: U8[], program: U8[], arena: Arena$@): U8[] //<
     //< The words the shell hands the program on a command line, each in `[ ]`

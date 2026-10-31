@@ -13,7 +13,7 @@ How to use it (on the GPU side):
   python3 lora_finetune_external.py \
       --base-model Qwen/Qwen2.5-Coder-0.5B \
       --train-jsonl tools/ai_assist/corpus/fim_train.jsonl \
-      --out out/kanso_lora.safetensors
+      --out out/ai_assist/kanso_lora.safetensors
 
 What comes out is safetensors the KSPL side reads as it stands: `Qkv_lora.load_set_from` in
 `ksai/lora_set.kspl` (which calls `lora_load_from` inside), `load_qkv_lora_set` in
@@ -133,7 +133,7 @@ def main():
     ap.add_argument("--continue-from", default=None,
                      help="phase 4: continue training from an existing kanso-format LoRA "
                           "(safetensors). The rank is matched to that file automatically")
-    ap.add_argument("--out", default="out/kanso_lora.safetensors")
+    ap.add_argument("--out", default="out/ai_assist/kanso_lora.safetensors")
     ap.add_argument("--rank", type=int, default=8)
     ap.add_argument("--alpha", type=float, default=16.0)
     ap.add_argument("--epochs", type=int, default=1)
@@ -219,7 +219,7 @@ def main():
 
     lr = args.lr if args.lr is not None else (1e-4 if args.continue_from else 5e-4)
     trainer = Trainer(model=model, args=TrainingArguments(
-        output_dir="out/lora_run", num_train_epochs=args.epochs, learning_rate=lr,
+        output_dir="out/tmp/lora_run", num_train_epochs=args.epochs, learning_rate=lr,
         per_device_train_batch_size=args.batch_size, gradient_accumulation_steps=args.grad_accum,
         logging_steps=10, save_strategy="no"), train_dataset=Ds())
     trainer.train()

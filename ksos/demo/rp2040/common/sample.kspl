@@ -16,6 +16,7 @@
 import "ksos/demo/rp2040/common/bringup" as boot
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
+import "ksos/drivers/rp2040/watchdog"
 import "std/bytes"
 
 const SAMPLE_BYTES: Sz = 8 //< the size of one observation
@@ -102,7 +103,7 @@ fn append(kind: U16, s: Sample) //< appends one
         return
     $buf: U8[SAMPLE_BYTES] = ::{}
     encode(U8$[]::buf, s)
-    records.handle().append(kind, U8[]::buf) catch e
+    records.append(kind, U8[]::buf) catch e
         // Caution: Do not discard the reason; full is expected, a failed write is not.
         stop_reason = e.variant_name()
         return
@@ -138,6 +139,9 @@ fn say_last(ln: con.Line$@, kind: U16) //< prints the newest one as one line
 priv fn emit_line(ln: con.Line$@): Bool //< prints one line
     //< Caution: **Wait for room before printing**; a line that does not fit is discarded (flush in
     //< ksos/demo/rp2040/common/console.kspl). true if it was printed.
+    //< **Each line feeds the watchdog once**: the whole dump takes seconds, and one line reads one
+    //< record and waits at most `DUMP_WAIT_MS`.
+    watchdog.feed()
     for $waited: U32 = 0; !con.can_flush() && waited < DUMP_WAIT_MS; waited += 1
         boot.pump(1)
     return ln.flush()

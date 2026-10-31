@@ -3,7 +3,7 @@
 // sizes, the outputs reused, real time, min-of-7.
 // Where KSPL+BLAS and this C version agree, the difference sits in the caller rather than in
 // the library, and that can be told apart.
-//   The build: clang -std=c99 -O3 ksai/benches/bench_ref.c -lopenblas -o out/bench_ref.exe
+//   The build: clang -std=c99 -O3 ksai/benches/bench_ref.c -lopenblas -o out/benches/bench_ref.exe
 #define _ISOC11_SOURCE 1 // makes aligned_alloc (C11) declared even under -std=c99
 #include <stdio.h>
 #include <stdlib.h>

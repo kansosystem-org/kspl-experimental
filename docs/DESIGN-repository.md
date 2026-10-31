@@ -449,11 +449,11 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 | `out/` itself | The programs a person runs or a document names, such as `ksplc_stage1.exe`, `kssrv.exe` and `ksmd.exe` |
 | `out/gen/` | What a build writes for a later step: generated C and LLVM IR, `.libs` and `.deps` files, and the `.desktop` entry |
 | `out/test/` | A program built only for a gate, such as `test_debug.exe`, `debug_tools.exe` and `kssrv_llvm.exe` |
-| `out/log/` | Logs and reports: `make.log`, each gate's log under `ci/`, and the comparisons `stage_diff_c.txt` and `ship_diff.txt` |
+| `out/log/` | Logs and reports: `make.log`, each gate's log under `ci/`, the comparisons `stage_diff_c.txt` and `ship_diff.txt`, and the repository's size `repo_stat.txt` |
 | `out/tmp/` | Scratch that a gate or a tool writes during its run |
-| A folder named for a package or a tool | That package's build as its own `Makefile` lays it out (`ksmd/`, `ksos_posix/`), or one tool's output (`surface/`, `docs/`) |
+| A folder named for a package or a tool | That package's build as its own `Makefile` lays it out (`ksmd/`, `ksos_posix/`), or one tool's output (`surface/`, `docs/`, `ai_assist/` for the models and tokenizers `tools/ai_assist` makes, `benches/` for ksai's benchmarks) |
 
-**A new output goes into one of these folders.** It goes at the top only when a person runs it, since its path then becomes part of what the documents promise. `make debug-file` (VS Code's F5) is such a case: its program stands at the top, where the debugger looks. `make clean` removes `out/` whole, so a folder needs no cleaning rule of its own.
+**A new output goes into one of these folders.** It goes at the top only when a person runs it, since its path then becomes part of what the documents promise. `make debug-file` (VS Code's F5) is such a case: its program stands at the top, where the debugger looks. A benchmark goes into `out/benches/`, although a person runs it: `ksplc build` leaves a program's C and libraries beside it, and they would fill the top. `make clean` removes `out/` whole, so a folder needs no cleaning rule of its own.
 
 **What it gives up**: a gate's program is one folder deeper to type, as `./out/test/test_debug.exe`.
 

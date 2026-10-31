@@ -1,16 +1,16 @@
-//< Editing a table: inserting, removing, moving and sorting rows and columns, setting and copying
-//< a cell
+//< Editing a table: inserting, removing and moving rows and columns, setting and copying a cell
+//< Sorting the rows is in `sort.kspl`.
 //< A reference stays attached to its row and column, so an insertion or a move changes only where
 //< the reference is written. Removing a row or a column turns a reference to it into `#REF!`, and
 //< moves a range's corner on it one line inward.
 //< Caution: **An edit that would write a formula longer than 4,096 bytes is undone and refused.**
 //< The reader refuses such a formula, so the saved source could not be opened again.
 import "ksmd/base/dates" { is_date }
-import "ksmd/base/marker" { compare_text, is_decimal }
+import "ksmd/base/marker" { is_decimal }
 import "ksmd/calc/formula" { BROKEN, Positions, bind, find_table, has_attachable, text_piece,
     write_formula }
 import "ksmd/model/choice" { choice_of, is_entry }
-import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers }
+import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, same_format, shows_numbers }
 import "ksmd/model/group" { after_insert, after_remove, fault_of, innermost, order }
 import "ksmd/model/look" { Look_part, is_note, plain_look, with_part }
 import "ksmd/model/model" { Cell, Cell_kind, Corner, Document, Group, MAX_CELLS, MAX_COLUMNS,
@@ -21,7 +21,6 @@ import "ksmd/syntax/clause" { is_table_name, reads_as_formula }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/seq"
 import "std/str" { Str_builder }
 import "std/strnum"
 
@@ -264,60 +263,6 @@ fn move_row(doc: Document$@, u: Sz, from: Sz, to: Sz): Void!Edit_error //<
         shift_row(t, to, from)
         throw .too_long
 
-struct Sort_key //< where one data row sorts, by the value of its cell in the sorted column
-    group: Sz //< 0 a number, 1 a date, 2 text, 3 true or false, 4 an error, 5 an empty cell
-    number: F64 //< a number's value, a date's day; 0 for false and 1 for true
-    text: U8[] //< a text's bytes; an error's mark, so equal errors stay together
-    row: Sz //< the row's place before the sort
-
-fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, arena: Arena$@):
-    Void!Edit_error //<
-        //< Orders the data rows by their keys, one key per row; rows with equal keys keep their order
-        //< Ascending puts numbers first, smallest first, then dates, earliest first, then text
-        //< from A to Z, then false and true, then errors.
-        //< Descending reverses that order. Empty cells stand last either way, as spreadsheets put
-        //< them. Text compares letters A to Z without regard to case, then by the bytes of other
-        //< characters. Each row moves with its identity, so a reference stays on the cell it named.
-    t: = table_at(doc, u)!
-    if keys.len != t.rows.len
-        throw .outside
-    sorted: = keys.order_by(fn(a: Sort_key@, b: Sort_key@; descending: Bool): I32 {
-        return compare_keys(a, b, descending);
-    }, arena)
-    columns: = t.columns.len
-    $rows: = List<|Sz|>(arena)
-    $cells: = List<|Cell|>(arena)
-    for i in Range.asc(t.rows.len)
-        rows.push(t.rows[i])
-        for c in Range.asc(columns)
-            cells.push(t.cells[t.at(i, c)])
-    for i in Range.asc(sorted.len)
-        from: = sorted[i].row
-        t.rows[i] = rows[from]
-        for c in Range.asc(columns)
-            t.cells[t.at(i, c)] = cells[from * columns + c]
-    fits(doc) catch
-        for i in Range.asc(rows.len)
-            t.rows[i] = rows[i]
-            for c in Range.asc(columns)
-                t.cells[t.at(i, c)] = cells[i * columns + c]
-        throw .too_long
-
-priv fn compare_keys(a: Sort_key@, b: Sort_key@, descending: Bool): I32 //<
-    //< Below zero when `a` sorts first; empty cells sort last in either direction
-    if a.group == b.group
-        within: = compare_within(a, b)
-        return -within if descending else within
-    if a.group == 5 || b.group == 5
-        return -1 if b.group == 5 else 1
-    first: = a.group > b.group if descending else a.group < b.group
-    return -1 if first else 1
-
-priv fn compare_within(a: Sort_key@, b: Sort_key@): I32 //< two keys of one group
-    if a.group != 2 && a.group != 4
-        return -1 if a.number < b.number else 1 if a.number > b.number else 0
-    return compare_text(a.text, b.text)
-
 fn move_column(doc: Document$@, u: Sz, from: Sz, to: Sz): Void!Edit_error //<
     //< Moves the column at `from` so that it stands at `to`, with its name and width
     t: = table_at(doc, u)!
@@ -434,6 +379,8 @@ fn set_look(doc: Document$@, u: Sz, row: Sz, column: Sz, part: Look_part, value:
     index: = column if row < 0 else t.at(row, column)
     look: = with_part(t.cells[index].look, part, arena.dup_str(value)) catch
         throw .not_a_look
+    if row >= 0 && !same_format(t.cells[index].look.format, look.format)
+        drop_filters(t, column, column)
     t.cells[index].look = look
 
 fn group_rows(doc: Document$@, u: Sz, first: Sz, last: Sz): Void!Edit_error //<
@@ -515,14 +462,18 @@ fn set_widths(doc: Document$@, u: Sz, weights: List<|Sz|>@): Void!Edit_error //<
     for weight in weights
         t.weights.push(weight)
 
-fn set_heights(doc: Document$@, u: Sz, first: Sz, last: Sz, points: Sz): Void!Edit_error //<
-    //< Gives the data rows from `first` to `last` a least height in points; 0 takes it away
+fn set_heights(doc: Document$@, u: Sz, rows: Sz[], points: Sz): Void!Edit_error //<
+    //< Gives each data row listed a least height in points; 0 takes it away
+    //< Every row is checked first, so a refusal changes none.
     t: = table_at(doc, u)!
-    if first < 0 || last < first || last >= t.rows.len
+    if rows.len == 0
         throw .outside
+    for r in rows
+        if r < 0 || r >= t.rows.len
+            throw .outside
     if points != 0 && (points < MIN_HEIGHT || points > MAX_HEIGHT)
         throw .not_a_height
-    for r in Range(first, last + 1, 1)
+    for r in rows
         $i: Sz = 0
         for i < t.heights.len && t.heights[i].row != t.rows[r]
             i += 1
@@ -549,6 +500,7 @@ fn set_format(doc: Document$@, u: Sz, first: Sz, last: Sz, f: Number_format, are
         t.formats[c] = kept
         for r in Range(-1, t.rows.len, 1)
             t.cells[t.at(r, c)].look.format = no_format()
+    drop_filters(t, first, last)
     for g in t.formats
         if g.kind != .none
             return
@@ -569,10 +521,12 @@ fn step_places(doc: Document$@, u: Sz, first: Sz, last: Sz, more: Bool): Void!Ed
         places: = t.formats[c].places
         if more && places < MAX_PLACES
             t.formats[c].places = places + 1
-            changed = true
         else if !more && places > 0
             t.formats[c].places = places - 1
-            changed = true
+        else
+            continue
+        changed = true
+        drop_filters(t, c, c)
     if !formatted
         throw .no_format
     if !changed
@@ -733,7 +687,7 @@ priv fn restore(doc: Document$@, saved: List<|Saved|>$@) //< puts back the piece
     for s in saved
         doc.tables[s.table].pieces[s.index] = s.piece
 
-priv fn fits(doc: Document@): Void!Edit_error //<
+fn fits(doc: Document@): Void!Edit_error //<
     //< Refuses when a formula would be written too long
     //< Every formula is measured: one whose reference became `#REF!` refers to no table now.
     defer scratch: = Arena(16 * 1024)
@@ -878,7 +832,20 @@ priv fn with_line($c: Corner, row: Bool, id: Sz): Corner
         c.column = id
     return c
 
-priv fn table_at(doc: Document$@, u: Sz): Table$@!Edit_error //< the table at place `u`
+fn drop_filters(t: Table$@, first: Sz, last: Sz) //<
+    //< Takes away the filters of columns `first` to `last`
+    //< A filter matches the text a cell shows, so a change of format makes its entry stale.
+    $i: Sz = 0
+    for i < t.filters.len
+        $kept: = true
+        for c in Range(first, last + 1, 1)
+            kept = kept && t.filters[i].column != t.columns[c]
+        if kept
+            i += 1
+        else
+            t.filters.remove_at(i)
+
+fn table_at(doc: Document$@, u: Sz): Table$@!Edit_error //< the table at place `u`
     if u < 0 || u >= doc.tables.len
         throw .outside
     return doc.tables[u]@

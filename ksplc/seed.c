@@ -22421,7 +22421,7 @@ Result_Void_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_expan
 void kspl_ksplc_base_ast_Ast_node_build_index_loop(ksplc_base_ast_Ast_node *r, ksplc_base_ast_Ast_node *item_id, ksplc_base_ast_Ast_node *coll_ref, Bool over_slice);
 void kspl_ksplc_base_ast_Ast_node_build_step_loop(ksplc_base_ast_Ast_node *r, ksplc_base_ast_Ast_node *item_id, ksplc_base_ast_Ast_node *coll_ref);
 void kspl_ksplc_base_ast_Ast_node_replace_loop_parts(ksplc_base_ast_Ast_node *r, ksplc_base_ast_Ast_node *init_node, ksplc_base_ast_Ast_node *cond_node, ksplc_base_ast_Ast_node *step_node, ksplc_base_ast_Ast_node *item_decl);
-static Bool kspl_priv_ksplc_sema_body_for_in_drives_by_next(ksplc_sema_session_ctx_Sema_ctx *c, I32 subject_id);
+Bool kspl_ksplc_sema_body_for_in_drives_by_next(ksplc_sema_session_ctx_Sema_ctx *c, I32 subject_id);
 static Bool kspl_priv_ksplc_sema_body_for_in_is_named_place(ksplc_base_ast_Ast_node *e);
 static Slice_U8 kspl_priv_ksplc_sema_body_for_in_next_temp_name(Slice_U8 prefix);
 Sz kspl_ksplc_sema_body_for_in_enter_fn_serial(void);
@@ -22444,10 +22444,11 @@ static Bool kspl_priv_ksplc_sema_body_lint_loop_may_write(ksplc_sema_session_ctx
 static Bool kspl_priv_ksplc_sema_body_lint_loop_writes_place(ksplc_base_ast_Ast_node *left, ksplc_sema_body_lint_loop_Counting_loop shape);
 static Bool kspl_priv_ksplc_sema_body_lint_loop_passes_watched(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *call, ksplc_sema_body_lint_loop_Counting_loop shape);
 static Bool kspl_priv_ksplc_sema_body_lint_loop_method_may_write(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *access);
-static Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq);
+static Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq);
 static Slice_U8 kspl_priv_ksplc_sema_body_lint_loop_seq_root(Slice_U8 seq);
 static Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere(ksplc_base_ast_Ast_node *node, Slice_U8 index);
-static Bool kspl_priv_ksplc_sema_body_lint_loop_is_element_read(ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq);
+static Bool kspl_priv_ksplc_sema_body_lint_loop_is_element_read(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq);
+static Bool kspl_priv_ksplc_sema_body_lint_loop_walks_by_index(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *seq);
 static Bool kspl_priv_ksplc_sema_body_stmt_escape_is_frame_binding(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node);
 Bool kspl_ksplc_sema_body_stmt_escape_is_frame_storage(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node);
 static ksplc_sema_body_stmt_escape_Frame_escape kspl_priv_ksplc_sema_body_stmt_escape_find_in_each(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *nodes, Bool with_address);
@@ -32143,7 +32144,7 @@ void kspl_std_lang_print_trace(void) {
 }
 
 Sz kspl_std_lang_sub_count(Sz count, Sz start, Sz len) {
-  if ((U64)start >= (U64)count) {
+  if ((U64)start >= (U64)count || count < (Sz)0) {
     return (Sz)0;
   }
 
@@ -37965,7 +37966,7 @@ Result_U64_std_rand_Rand_error kspl_std_rand_u64(void) {
 static const KSPL_UNUSED Slice_U8 kspl_lit_247 = KSPL_STR_INIT("args: index out of bounds");
 static const KSPL_UNUSED Slice_U8 kspl_lit_248 = KSPL_STR_INIT("std/sys");
 Slice_U8 kspl_std_sys_Args_get(const std_sys_Args *r, Sz index) {
-  kspl_std_lang_assert(index >= (Sz)0 && index < r->len, kspl_lit_247, kspl_lit_248, (Sz)24);
+  kspl_std_lang_assert((U64)index < (U64)r->len, kspl_lit_247, kspl_lit_248, (Sz)24);
   return kspl_U8_to_slice((*(argv + index)));
 }
 
@@ -94060,7 +94061,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_body_defer_decl_report(ksplc_sema_s
 
 Result_I32_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_hold_for_in_subject(ksplc_base_ast_Ast_node *r, ksplc_sema_session_ctx_Sema_ctx *c, I32 subject_id) {
   ksplc_base_ast_Ast_node *subject = kspl_ksplc_base_ast_Ast_node_get_var_decl_expr(r);
-  if (!kspl_priv_ksplc_sema_body_for_in_is_named_place(subject) || kspl_ksplc_sema_type_env_is_unknown(subject_id) || kspl_priv_ksplc_sema_body_for_in_drives_by_next(c, subject_id) || kspl_ksplc_sema_session_ctx_Sema_ctx_packed_place_align(c, subject) != (Sz)0) {
+  if (!kspl_priv_ksplc_sema_body_for_in_is_named_place(subject) || kspl_ksplc_sema_type_env_is_unknown(subject_id) || kspl_ksplc_sema_body_for_in_drives_by_next(c, subject_id) || kspl_ksplc_sema_session_ctx_Sema_ctx_packed_place_align(c, subject) != (Sz)0) {
     return (Result_I32_ksplc_sema_session_ctx_Sema_error){.tag = kspl_Result_I32_ksplc_sema_session_ctx_Sema_error_ok, .payload.ok = {subject_id}};
   }
 
@@ -94111,7 +94112,7 @@ Result_Void_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_expan
   }
 
   I32 coll_id = __k_tmp1.payload.ok.value;
-  if (kspl_priv_ksplc_sema_body_for_in_drives_by_next(c, coll_id)) {
+  if (kspl_ksplc_sema_body_for_in_drives_by_next(c, coll_id)) {
     kspl_ksplc_base_ast_Ast_node_build_step_loop(r, item_id, coll_ref);
     return (Result_Void_ksplc_sema_session_ctx_Sema_error){.tag = kspl_Result_Void_ksplc_sema_session_ctx_Sema_error_ok};
   }
@@ -94212,7 +94213,7 @@ void kspl_ksplc_base_ast_Ast_node_replace_loop_parts(ksplc_base_ast_Ast_node *r,
   return;
 }
 
-static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_for_in_drives_by_next(ksplc_sema_session_ctx_Sema_ctx *c, I32 subject_id) {
+Bool kspl_ksplc_sema_body_for_in_drives_by_next(ksplc_sema_session_ctx_Sema_ctx *c, I32 subject_id) {
   return kspl_ksplc_sema_type_env_Env_implemented_trait_instance(c->env, subject_id, kspl_priv_ksplc_sema_body_for_in_ITER_TRAIT_FQN) != 0;
 }
 
@@ -94568,7 +94569,7 @@ void kspl_ksplc_sema_body_lint_loop_lint_counting_loop(ksplc_sema_session_ctx_Se
 
   std_str_Arena_text *msg = kspl_std_mem_Arena_text(kspl_ksplc_base_core_arena);
   (void)(kspl_std_str_Arena_text_s(kspl_put_std_str_Arena_text_Ptr_Slice_U8_Const(kspl_std_str_Arena_text_s(msg, kspl_lit_1845), shape.index), kspl_lit_1846));
-  if (shape.bound_len_of.len > (Sz)0 && kspl_Slice_U8_Const_equals(shape.start, kspl_lit_48) && kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere(body, shape.index) && kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(body, shape.index, shape.bound_len_of)) {
+  if (shape.bound_len_of.len > (Sz)0 && kspl_Slice_U8_Const_equals(shape.start, kspl_lit_48) && kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere(body, shape.index) && kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(c, body, shape.index, shape.bound_len_of)) {
     (void)(kspl_std_str_Arena_text_s(kspl_put_std_str_Arena_text_Ptr_Slice_U8_Const(kspl_std_str_Arena_text_s(msg, kspl_lit_1847), shape.bound_len_of), kspl_lit_1848));
   }
 
@@ -94591,7 +94592,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_bound_fits_range(ksp
     return false;
   }
 
-  KSPL_UNUSED ksplc_sema_type_env_Builtin_type_id __k_tmp1 = (ksplc_sema_type_env_Builtin_type_id)kspl_tag_check((int64_t)(kspl_ksplc_sema_type_env_Env_get_real_type(c->env, bound->type_id)), (const int64_t[]){0LL, 1LL, 2LL, 3LL, 4LL, 5LL, 6LL, 7LL, 8LL, 9LL, 10LL, 11LL, 12LL, 13LL, 14LL}, 15, "ksplc.sema.type.env.Builtin_type_id", "ksplc/sema/body/lint_loop", 221);
+  KSPL_UNUSED ksplc_sema_type_env_Builtin_type_id __k_tmp1 = (ksplc_sema_type_env_Builtin_type_id)kspl_tag_check((int64_t)(kspl_ksplc_sema_type_env_Env_get_real_type(c->env, bound->type_id)), (const int64_t[]){0LL, 1LL, 2LL, 3LL, 4LL, 5LL, 6LL, 7LL, 8LL, 9LL, 10LL, 11LL, 12LL, 13LL, 14LL}, 15, "ksplc.sema.type.env.Builtin_type_id", "ksplc/sema/body/lint_loop", 222);
   switch (__k_tmp1) {
   case kspl_ksplc_sema_type_env_Builtin_type_id_i8_type:
   case kspl_ksplc_sema_type_env_Builtin_type_id_u8_type:
@@ -94613,7 +94614,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_watches(ksplc_sema_b
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      Slice_U8 w = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)228)));
+      Slice_U8 w = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)229)));
       if (kspl_Slice_U8_Const_equals(w, name)) {
         return true;
       }
@@ -94672,7 +94673,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_may_write(ksplc_sema
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)260)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)261)));
       if (kspl_priv_ksplc_sema_body_lint_loop_may_write(c, child, shape)) {
         return true;
       }
@@ -94703,7 +94704,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_passes_watched(ksplc
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *arg = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)283)));
+      ksplc_base_ast_Ast_node *arg = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)284)));
       if (kspl_priv_ksplc_sema_body_lint_loop_watches(shape, kspl_priv_ksplc_sema_body_lint_loop_root_name(arg)) && (kspl_ksplc_sema_type_env_Env_is_pointer(c->env, arg->type_id) || kspl_ksplc_sema_type_env_Env_is_slice(c->env, arg->type_id))) {
         return true;
       }
@@ -94736,7 +94737,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_method_may_write(ksp
   }
 }
 
-static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq) {
+static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq) {
   if (node == null) {
     return true;
   }
@@ -94754,7 +94755,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_eleme
     }
   }
 
-  if (kspl_priv_ksplc_sema_body_lint_loop_is_element_read(node, index, seq)) {
+  if (kspl_priv_ksplc_sema_body_lint_loop_is_element_read(c, node, index, seq)) {
     return true;
   }
 
@@ -94766,8 +94767,8 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_eleme
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)316)));
-      if (!kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(child, index, seq)) {
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)317)));
+      if (!kspl_priv_ksplc_sema_body_lint_loop_reads_index_as_element(c, child, index, seq)) {
         return false;
       }
     }
@@ -94798,7 +94799,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)329)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_1855, (Sz)330)));
       if (kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere(child, index)) {
         return true;
       }
@@ -94807,7 +94808,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere
   return false;
 }
 
-static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_is_element_read(ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq) {
+static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_is_element_read(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node, Slice_U8 index, Slice_U8 seq) {
   if (node->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_postfix || node->children->len < (Sz)3) {
     return false;
   }
@@ -94816,14 +94817,43 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_is_element_read(kspl
   ksplc_base_ast_Ast_node *recv = kspl_ksplc_base_ast_Ast_node_get_postfix_receiver(node);
   ksplc_base_ast_Ast_node *arg = kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)2);
   if (kspl_Slice_U8_Const_equals(op, kspl_lit_403)) {
-    return kspl_Slice_U8_Const_equals(kspl_priv_ksplc_sema_body_lint_loop_path_text(recv), seq) && kspl_priv_ksplc_sema_body_lint_loop_names(arg, index);
+    return kspl_Slice_U8_Const_equals(kspl_priv_ksplc_sema_body_lint_loop_path_text(recv), seq) && kspl_priv_ksplc_sema_body_lint_loop_names(arg, index) && kspl_priv_ksplc_sema_body_lint_loop_walks_by_index(c, recv);
   }
 
   if (!kspl_Slice_U8_Const_equals(op, kspl_lit_384) || recv->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_method_access || !kspl_Slice_U8_Const_equals(kspl_ksplc_base_ast_Ast_node_get_postfix_member(recv)->text, kspl_lit_1230)) {
     return false;
   }
 
-  return kspl_Slice_U8_Const_equals(kspl_priv_ksplc_sema_body_lint_loop_path_text(kspl_ksplc_base_ast_Ast_node_get_postfix_receiver(recv)), seq) && arg->children->len >= (Sz)1 && kspl_priv_ksplc_sema_body_lint_loop_names(kspl_ksplc_base_ast_Ast_node_get_child(arg, (Sz)0), index);
+  ksplc_base_ast_Ast_node *owner = kspl_ksplc_base_ast_Ast_node_get_postfix_receiver(recv);
+  if (!kspl_Slice_U8_Const_equals(kspl_priv_ksplc_sema_body_lint_loop_path_text(owner), seq) || arg->children->len < (Sz)1 || !kspl_priv_ksplc_sema_body_lint_loop_names(kspl_ksplc_base_ast_Ast_node_get_child(arg, (Sz)0), index) || !kspl_priv_ksplc_sema_body_lint_loop_walks_by_index(c, owner)) {
+    return false;
+  }
+
+  KSPL_UNUSED Range __k_for_coll1 = kspl_Range_new((Sz)1, arg->children->len, (Sz)1);
+  {
+    KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
+    for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
+      KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
+      Sz k = __k_tmp3;
+      if (kspl_priv_ksplc_sema_body_lint_loop_reads_index_anywhere(kspl_ksplc_base_ast_Ast_node_get_child(arg, k), index)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_lint_loop_walks_by_index(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *seq) {
+  I32 base = kspl_ksplc_sema_type_env_Env_strip_ptr(c->env, seq->type_id);
+  if (kspl_ksplc_sema_type_env_Env_is_slice(c->env, base) || kspl_ksplc_sema_type_env_Env_is_array(c->env, base)) {
+    return true;
+  }
+
+  if (kspl_ksplc_sema_body_for_in_drives_by_next(c, base)) {
+    return false;
+  }
+
+  return kspl_ksplc_sema_type_env_Env_has_implemented_operator_trait(c->env, base, kspl_lit_715) || kspl_ksplc_sema_type_env_Env_has_implemented_operator_trait(c->env, base, kspl_lit_1227) || kspl_ksplc_sema_type_env_Env_has_implemented_operator_trait(c->env, base, kspl_lit_1228);
 }
 
 static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_stmt_escape_is_frame_binding(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node) {
@@ -131335,7 +131365,7 @@ I32 kspl_ksplc_tools_keywords__anon_env_2_call(KSPL_UNUSED const ksplc_tools_key
 
 static const KSPL_UNUSED Slice_U8 kspl_lit_3165 = KSPL_STR_INIT("Slice.at_ref");
 const U8 *kspl_Slice_U8_Const_at_ref(const Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
-  if (index < (Sz)0 || index >= r->len) {
+  if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
     kspl_std_lang_bounds_panic(kspl_lit_3165, index, r->len, file, line);
   }
 
@@ -131343,7 +131373,7 @@ const U8 *kspl_Slice_U8_Const_at_ref(const Slice_U8 *r, Sz index, Slice_U8 file,
 }
 
 Sz kspl_Slice_U8_Const_next_codepoint(Slice_U8 r, Sz offset) {
-  if ((U64)offset >= (U64)r.len) {
+  if ((U64)offset >= (U64)r.len || r.len < (Sz)0) {
     return (Sz)0;
   }
 
@@ -131394,7 +131424,7 @@ Sz kspl_Slice_U8_Const_next_codepoint(Slice_U8 r, Sz offset) {
 }
 
 Option_Sz kspl_Slice_U8_Const_utf8_seq_len(Slice_U8 r, Sz offset) {
-  if ((U64)offset >= (U64)r.len) {
+  if ((U64)offset >= (U64)r.len || r.len < (Sz)0) {
     return (Option_Sz){.tag = kspl_Option_Sz_none};
   }
 
@@ -131479,7 +131509,7 @@ Option_Sz kspl_Slice_U8_Const_utf8_seq_len(Slice_U8 r, Sz offset) {
 }
 
 Option_I32 kspl_Slice_U8_Const_hex4(Slice_U8 r, Sz at) {
-  if (at < (Sz)0 || at > r.len || (Sz)((size_t)(r.len) - (size_t)(at)) < (Sz)4) {
+  if ((U64)at > (U64)r.len || r.len < (Sz)0 || (Sz)((size_t)(r.len) - (size_t)(at)) < (Sz)4) {
     return (Option_I32){.tag = kspl_Option_I32_none};
   }
 
@@ -131596,7 +131626,7 @@ Bool kspl_Slice_U8_Const_equals_ignore_case(Slice_U8 r, Slice_U8 b) {
 }
 
 Bool kspl_Slice_U8_Const_starts_with(Slice_U8 r, Slice_U8 prefix, Sz offset) {
-  if (offset < (Sz)0 || offset > r.len || prefix.len > (Sz)((size_t)(r.len) - (size_t)(offset))) {
+  if ((U64)offset > (U64)r.len || r.len < (Sz)0 || prefix.len > (Sz)((size_t)(r.len) - (size_t)(offset))) {
     return false;
   }
 
@@ -131759,7 +131789,7 @@ Slice_U8 kspl_Slice_U8_Const_sub(Slice_U8 r, Sz start, Sz len) {
 
 Slice_U8 kspl_Slice_U8_Const_sub_from(Slice_U8 r, Sz start) {
   KSPL_UNUSED Sz __k_tmp1 = {0};
-  if (start >= (Sz)0 && start < r.len) {
+  if ((U64)start < (U64)r.len) {
     __k_tmp1 = (Sz)((size_t)(r.len) - (size_t)(start));
   }
 
@@ -132172,7 +132202,7 @@ U32 kspl_Slice_U8_Const_get_u32_le(Slice_U8 r, Sz at) {
 }
 
 Result_I64_std_strnum_Strnum_error kspl_Slice_U8_Const_parse_int_core(Slice_U8 r, Sz start, Bool *out_is_neg) {
-  if ((U64)start >= (U64)r.len) {
+  if ((U64)start >= (U64)r.len || r.len < (Sz)0) {
     KSPL_START_TRACE();
     return (Result_I64_std_strnum_Strnum_error){.tag = kspl_Result_I64_std_strnum_Strnum_error_err, .payload.err = {.error = (std_strnum_Strnum_error)kspl_std_strnum_Strnum_error_out_of_bounds}};
   }
@@ -135413,7 +135443,7 @@ U8 *kspl_Option_U8_Ptr_unwrap_or(Option_U8_Ptr r, U8 *alt) {
 }
 
 const Slice_U8 *kspl_Slice_Slice_U8_Const_Const_at_ref(const Slice_Slice_U8_Const *r, Sz index, Slice_U8 file, Sz line) {
-  if (index < (Sz)0 || index >= r->len) {
+  if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
     kspl_std_lang_bounds_panic(kspl_lit_3165, index, r->len, file, line);
   }
 
@@ -135437,7 +135467,7 @@ Bool kspl_Slice_Slice_U8_Const_Const_contains(Slice_Slice_U8_Const r, const Slic
 
 static const KSPL_UNUSED Slice_U8 kspl_lit_3237 = KSPL_STR_INIT("Slice.at");
 U8 *kspl_Slice_U8_at(const Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
-  if ((U64)index >= (U64)r->len) {
+  if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
     kspl_std_lang_bounds_panic(kspl_lit_3237, index, r->len, file, line);
   }
 
@@ -135445,7 +135475,7 @@ U8 *kspl_Slice_U8_at(const Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
 }
 
 Bool kspl_Slice_U8_starts_with(Slice_U8 r, Slice_U8 prefix, Sz offset) {
-  if (offset < (Sz)0 || offset > r.len || prefix.len > (Sz)((size_t)(r.len) - (size_t)(offset))) {
+  if ((U64)offset > (U64)r.len || r.len < (Sz)0 || prefix.len > (Sz)((size_t)(r.len) - (size_t)(offset))) {
     return false;
   }
 
@@ -135498,7 +135528,7 @@ Slice_U8 kspl_Slice_U8_sub(Slice_U8 r, Sz start, Sz len) {
 
 Slice_U8 kspl_Slice_U8_sub_from(Slice_U8 r, Sz start) {
   KSPL_UNUSED Sz __k_tmp1 = {0};
-  if (start >= (Sz)0 && start < r.len) {
+  if ((U64)start < (U64)r.len) {
     __k_tmp1 = (Sz)((size_t)(r.len) - (size_t)(start));
   }
 
@@ -135534,7 +135564,7 @@ Bool kspl_Slice_U8_equals(Slice_U8 r, Slice_U8 b) {
 }
 
 Sz kspl_Slice_U8_copy_from(const Slice_U8 *r, Sz at, Slice_U8 src) {
-  if ((U64)at >= (U64)r->len) {
+  if ((U64)at >= (U64)r->len || r->len < (Sz)0) {
     return (Sz)0;
   }
 
@@ -138115,7 +138145,7 @@ void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_push(std_ds_List_ksplc_base_as
 
 static const KSPL_UNUSED Slice_U8 kspl_lit_3238 = KSPL_STR_INIT("List.insert");
 void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_insert(std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, ksplc_base_ast_Ast_node *item, Slice_U8 file, Sz line) {
-  if (index < (Sz)0 || index > r->len) {
+  if ((U64)index > (U64)r->len) {
     kspl_std_lang_bounds_panic(kspl_lit_3238, index, r->len, file, line);
   }
 
@@ -140061,7 +140091,7 @@ ksplc_sema_type_def_Entry *kspl_std_mem_Arena_create_ksplc_sema_type_def_Entry(s
 }
 
 const I32 *kspl_Slice_I32_Const_at_ref(const Slice_I32 *r, Sz index, Slice_U8 file, Sz line) {
-  if (index < (Sz)0 || index >= r->len) {
+  if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
     kspl_std_lang_bounds_panic(kspl_lit_3165, index, r->len, file, line);
   }
 

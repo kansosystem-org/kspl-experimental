@@ -59,6 +59,8 @@ function ksmdFilter(ks) {
   function compare(a, b) {
     if (group(a) !== group(b)) return group(a) - group(b);
     if (a[0] === 1) return a[1] - b[1];
+    // A date sorts by its day, as `2026-10-23`: a cell's own format can show it otherwise.
+    if (a[0] === 5) return a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0;
     const x = shownText(a).toLowerCase();
     const y = shownText(b).toLowerCase();
     return x < y ? -1 : x > y ? 1 : 0;
@@ -267,15 +269,21 @@ function ksmdFilter(ks) {
       box.checked = seen.length > 0 && on === seen.length;
       box.indeterminate = on > 0 && on < seen.length;
     };
+    // The condition OK takes: open, and with its value where it needs one.
+    const condition = () => more.open && (op.value === "empty" || op.value === "filled" || arg.value !== "");
+    // With no value ticked no row would show, so OK waits for a tick or a condition, as in Excel.
+    const takes = () => condition() || boxes.some((b) => b.checked);
     const sync = () => {
       for (const node of list.querySelectorAll("[role=treeitem]")) {
         mark(node.querySelector(":scope > .tree-row input"), inSight(node.querySelector(":scope > .tree-kids")));
       }
       mark(all, inSight());
-      // With no value ticked no row would show, so OK waits for a tick or a condition, as in Excel.
-      ok.disabled = !more.open && !boxes.some((b) => b.checked);
+      ok.disabled = !takes();
     };
     sync();
+    more.addEventListener("toggle", sync);
+    op.addEventListener("change", sync);
+    arg.addEventListener("input", sync);
     list.addEventListener("change", (e) => {
       const node = e.target.closest(".tree-row") && e.target.closest("[role=treeitem]");
       if (e.target === all || node) {
@@ -313,8 +321,8 @@ function ksmdFilter(ks) {
     });
     cancel.addEventListener("click", close);
     const take = () => {
-      const argNeeded = op.value !== "empty" && op.value !== "filled";
-      if (more.open && (!argNeeded || arg.value !== "")) {
+      if (!takes()) return;
+      if (condition()) {
         set(block, column, { op: op.value, arg: arg.value });
       } else if (boxes.every((b) => b.checked) && values.length <= FILTER_LIST_CAP) {
         set(block, column, null);

@@ -4,10 +4,10 @@
 
 ## Run it
 
-After `make` has built the compiler, this writes the repository's size to `out/repo_stat.txt`:
+After `make` has built the compiler, this writes the repository's size to `out/log/repo_stat.txt`:
 
 ```sh
-./out/ksplc_stage1.exe run tools/repo_stat.kspl   # the repository's size -> out/repo_stat.txt
+./out/ksplc_stage1.exe run tools/repo_stat.kspl   # the repository's size -> out/log/repo_stat.txt
 ```
 
 ## What is here

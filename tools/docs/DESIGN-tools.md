@@ -37,7 +37,7 @@ The answer has five parts, in this order:
 | Decision | Why |
 | :-- | :-- |
 | **Every value and place comes from make itself**: its database (`make -p`), `make -n`, and `--eval` | A hand-written description drifts from the make files. Make's own answer cannot, whatever a make file does |
-| **No recipe line runs: every target's shell is one that does nothing** (`--eval='%: SHELL := true'`) | Make runs a line holding `$(MAKE)`, or starting with `+`, even under `-n` and `-q`, so a look at a gate ran the whole gate. The shell is set per target, so a `$(shell)` read while make parses still runs, and the values stay the build's |
+| **No recipe line runs: every target's shell is one that does nothing** (`--eval='%: override SHELL := true'`) | Make runs a line holding `$(MAKE)`, or starting with `+`, even under `-n` and `-q`, so a look at a gate ran the whole gate. The shell is set per target, so a `$(shell)` read while make parses still runs, and the values stay the build's. It is marked `override`: a value on make's command line beats a target's own one, and the tool hands on the person's settings. Without it, `make explain T=<target> SHELL=/bin/sh` runs those lines |
 | **Make is run with its messages in English** (`LC_MESSAGES=C`, no `LC_ALL` or `LANGUAGE`) | A make in a Japanese locale writes the database's comments in Japanese, and every target then reads as unknown. The character set stays the person's: under `LC_ALL=C` it is ASCII, and the root make file warns of that. The messages make prints are fixed text in this language alone |
 | **The make files are read only for what the database leaves out** | The database names no line for a rule without a recipe, writes `?=` as `=`, and records no line in a branch not taken |
 | **A rule line read from the files is kept only where the database holds its prerequisites** | Reading alone cannot tell which `ifeq` branch make took. Make's record of the prerequisites can |
@@ -61,6 +61,7 @@ The answer has five parts, in this order:
 * **A rule made by `$(eval)` is placed by its recipe's line alone.** A target name built by a function, such as `$($(x))`, is not found in the make files.
 * **A value that would run a command when expanded is shown as written**, not as make would expand it. In the commands, a `$(shell)` gives nothing, and a line under them says so.
 * **A target that sets its own `SHELL` keeps it**, as make lets a target's own value win. Its `$(MAKE)` lines would then run. The repository's make files set none.
+* **A double-colon (`::`) target is not explained.** Make runs each of its rules on its own. The database is read as one entry per target, so only the last rule would be shown. The tool says so and names each rule's line instead. The repository's make files have none.
 * **A sub-make's own target is not followed.** The answer names the sub-make, and `T=<folder>:<target>` explains that target.
 * **It asks make several times**, each a parse of the whole build. That takes a few seconds, and runs any `$(shell)` the make files run at parse time.
 

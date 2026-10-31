@@ -12,7 +12,7 @@ ksplc run ksai/benches/run_bench.kspl 1     # pinned to one core (a fair kernel 
 ksplc run ksai/benches/run_bench.kspl 4     # 4 cores (how each library scales with threads)
 ```
 
-Run these commands from the repository root. The benchmark prints microseconds (μs) per step for each size and backend. If `python3` or numpy is missing, it says so and skips the numpy reference.
+Run these commands from the repository root. What they build goes into `out/benches/`: each program with its C and its libraries. The benchmark prints microseconds (μs) per step for each size and backend. If `python3` or numpy is missing, it says so and skips the numpy reference.
 
 ## The idea
 
@@ -64,8 +64,8 @@ Why pure KSPL is still the default is "The matrix backend is chosen where it is 
 A model generating text multiplies each weight matrix by one input row per token. Reading a prompt, it multiplies by 64 rows at a time, as `chat_server` reads them. So these two products set a model's speed in tokens per second. `bench_quant.kspl` times both on one thread and on every CPU, the fastest of seven runs each.
 
 ```sh
-out/ksplc_stage1.exe build --cflags=-O3 ksai/benches/bench_quant.kspl out/bench_quant.exe
-out/bench_quant.exe                          # a 4096 × 4096 Q4_K matrix of random blocks
+out/ksplc_stage1.exe build --cflags=-O3 ksai/benches/bench_quant.kspl out/benches/bench_quant.exe
+out/benches/bench_quant.exe                  # a 4096 × 4096 Q4_K matrix of random blocks
 ```
 
 That matrix has the shape of one weight of a 7B to 9B model. The multiply-adds a second, divided by those of one token through the model, bound the tokens a second. For the build for the machine's own CPU, add `-march=native` to `--cflags`.
@@ -73,8 +73,8 @@ That matrix has the shape of one weight of a 7B to 9B model. The multiply-adds a
 **Real tensors are checked by hand, not by a gate**, since the models are large and not in this repository. `tools/ai_assist/gguf_quant_check.py` takes a few tensors of each format out of GGUF files. It writes each tensor's bytes and the numbers llama.cpp's `gguf` package decodes from them. `bench_quant` then checks that ksai decodes the same bits, and times the larger tensors:
 
 ```sh
-python3 tools/ai_assist/gguf_quant_check.py --out-dir out/gguf_check <model.gguf>...
-out/bench_quant.exe out/gguf_check/*.bin     # exits 1 if one number differs
+python3 tools/ai_assist/gguf_quant_check.py --out-dir out/ai_assist/gguf_check <model.gguf>...
+out/benches/bench_quant.exe out/ai_assist/gguf_check/*.bin  # exits 1 if one number differs
 ```
 
 The following relationships held on a 4-CPU x86-64 machine with AVX-512 that other work shared:
@@ -90,9 +90,9 @@ The following relationships held on a 4-CPU x86-64 machine with AVX-512 that oth
 `bench_qwen.kspl` reads token IDs from standard input as a prompt, then generates greedily. It prints each generated token with its two top scores, and how many tokens a second it read and generated. `tools/ai_assist/qwen_gguf_check.py` runs it beside llama.cpp on the same file, to compare both the tokens and the speed; its docstring says how to run it.
 
 ```sh
-out/ksplc_stage1.exe build "--cflags=-O3 -march=native" ksai/benches/bench_qwen.kspl out/bench_qwen.exe
+out/ksplc_stage1.exe build "--cflags=-O3 -march=native" ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
 echo "151644 872 198 9707 151645 198 151644 77091 198" | \
-    out/bench_qwen.exe models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --generate=32 --threads=4
+    out/benches/bench_qwen.exe models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --generate=32 --threads=4
 ```
 
 Leave out `-march=native` for the default build. `--piece` sets how many prompt tokens are read together, 64 as in `chat_server`. `--scores=<file>` writes the scores after the prompt as raw F32 numbers.

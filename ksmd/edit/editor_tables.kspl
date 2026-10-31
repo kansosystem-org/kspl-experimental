@@ -8,11 +8,12 @@ import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { calculate }
 import "ksmd/calc/formula" { Positions, bind, find_table, write_formula }
 import "ksmd/edit/edit"
-import "ksmd/edit/edit" { Edit_error, Sort_key }
+import "ksmd/edit/edit" { Edit_error }
 import "ksmd/edit/editor" { Editor, Pos, Refused, end_block, replace }
 import "ksmd/edit/history" { Transaction, begin, capture, is_empty, record_tables, swap }
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
+import "ksmd/edit/sort" { Sort_key, sort_rows }
 import "ksmd/model/choice" { entry_of }
 import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers }
@@ -146,6 +147,7 @@ impl Editor
 
     fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz): Void!Refused //<
         //< Inserts or removes a row or a column of the table a block shows
+        //< A new row is empty, so a filter would hide it at once: the step takes every filter away.
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
@@ -153,6 +155,7 @@ impl Editor
         case .insert_row
             edit.insert_rows(ed.doc@, u, at, 1, ed.arena) catch why
                 throw .table(why)
+            ed.doc.tables[u].filters.clear()
         case .remove_row
             edit.remove_row(ed.doc@, u, at) catch why
                 throw .table(why)
@@ -214,7 +217,7 @@ impl Editor
                 key.group = 5
             keys.push(key)
         before: = capture(ed.doc@, scratch)
-        edit.sort_rows(ed.doc@, u, keys@, descending, scratch) catch why
+        sort_rows(ed.doc@, u, keys@, descending, scratch) catch why
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
@@ -358,24 +361,22 @@ impl Editor
             throw .table(.not_a_filter)
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
-        $i: Sz = 0
-        for i < t.filters.len
-            if column < 0 || t.filters[i].column == t.columns[column]
-                t.filters.remove_at(i)
-            else
-                i += 1
+        if column < 0
+            t.filters.clear()
+        else
+            edit.drop_filters(t, column, column)
         if entry.len > 0
             t.filters
                 .push(Column_filter::{ .column = t.columns[column],
                 .entry = ed.arena.dup_str(entry) })
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
-    fn set_heights(ed: Self$@, block: Sz, first: Sz, last: Sz, points: Sz): Void!Refused //<
-        //< Gives the data rows from `first` to `last` a least height in points, as one step
+    fn set_heights(ed: Self$@, block: Sz, rows: Sz[], points: Sz): Void!Refused //<
+        //< Gives each data row listed a least height in points, as one step
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
-        edit.set_heights(ed.doc@, u, first, last, points) catch why
+        edit.set_heights(ed.doc@, u, rows, points) catch why
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
@@ -481,6 +482,8 @@ impl Editor
                 f.code = ed.arena.dup_str(f.code)
                 t.cells[at].look.format = f
                 changed = true
+                if row >= 0
+                    edit.drop_filters(t, column, column)
         if !formatted
             throw .table(.no_format)
         if !changed

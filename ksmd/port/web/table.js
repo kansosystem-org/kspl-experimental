@@ -548,6 +548,11 @@ function ksmdTable(ks) {
       ks.say("A column's width is a percent of the table's width from 1 to 99, such as 25, with at most one decimal place.");
       return null;
     }
+    // With every column chosen, nothing is left to share: their widths must add to the whole.
+    if (count === px.length && Math.abs(share * count - 100) > 1e-9) {
+      ks.say(`All ${count} columns are chosen, so their widths add to 100%. Choose fewer columns to give some of them ${share}% each.`);
+      return null;
+    }
     if (share * count > 100 - (px.length - count)) {
       ks.say(`The ${count} chosen columns cannot take ${share}% each: the other columns need 1% each at least. Widths from 1 to 99 fit.`);
       return null;
@@ -563,11 +568,18 @@ function ksmdTable(ks) {
 
   // Row height…, as Excel's dialog: the chosen rows take a least height in points, the unit of a
   // font's size. A row still grows where its text needs more room, so no value is ever cut off.
+  // The names row takes the height its text needs. Rows a filter or a closed group hides keep
+  // theirs, as Excel changes only the rows it shows.
   function askHeight(block) {
     const r = ks.range.rect();
-    const first = Math.max(0, r.r1);
     const wrap = ks.view.blocks()[block];
-    const now = wrap.heights[first] || "";
+    const rows = [];
+    for (let row = Math.max(0, r.r1); row <= r.r2; row++) if (!hiddenRow(block, row)) rows.push(row);
+    if (rows.length === 0) {
+      ks.say("The names row takes the height its text needs. Choose data rows to give them a height.");
+      return null;
+    }
+    const now = wrap.heights[rows[0]] || "";
     const typed = window.prompt("Row height, in points (6 to 409). Leave it empty for the height the text needs",
       String(now));
     if (typed === null) return null;
@@ -576,7 +588,7 @@ function ksmdTable(ks) {
       ks.say("A row's height is a whole number of points from 6 to 409, or empty for the height its text needs.");
       return null;
     }
-    return ks.act("ksmd_web_set_heights", block, first, Math.max(first, r.r2), t === "" ? 0 : Number(t));
+    return ks.act("ksmd_web_set_heights", block, ks.put(rows.join(",")), t === "" ? 0 : Number(t));
   }
 
   // The column whose right border a press stands on, within a few pixels; -1 when none.

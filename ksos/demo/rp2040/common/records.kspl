@@ -6,7 +6,7 @@
 
 // ==========================================
 //   if !records.claim("car1") { … }        // a different marker per writer
-//   records.handle().append(kind_sample, …) catch { … };
+//   records.append(kind_sample, …) catch { … };
 // ==========================================
 import "ksdb/log" as ksdblog
 import "ksdb/store" { Store }
@@ -23,19 +23,11 @@ priv $lg: ksdblog.Log
 priv $ready: Bool = false
 priv $erased_on_open: Bool = false
 
-// The record's three steps, each feeding the watchdog first. **Erasing while keeping the policy
-// and printing the whole record take seconds**, far past the watchdog's timeout, yet each step is
-// bounded: one sector erase is at most 400 ms, one page write 3 ms. So a step proves the task is
-// still moving, and the timeout only has to cover the longest single step. Before `watchdog.arm`
-// (and in the firmwares that never arm it) the feed does nothing.
-priv fn read_fed(at: Sz, dst: U8$[])
-    watchdog.feed()
-    flash.read_at(at, dst)
-
-priv fn program_fed(at: Sz, src: U8[]): Bool
-    watchdog.feed()
-    return flash.program_at(at, src)
-
+// **The watchdog is fed once per record step**: per append (`append`) and per sector erase (here).
+// Erasing while keeping the policy takes seconds, yet each erase is at most 400 ms, so the timeout
+// covers one step. Before `watchdog.arm` the feed does nothing.
+// Caution: **Do not feed on a read or a page write.** A loop that keeps reading the record would
+// then keep the watchdog fed while the control loop does not run.
 priv fn erase_fed(at: Sz): Bool
     watchdog.feed()
     return flash.erase_sector(at)
@@ -51,8 +43,8 @@ fn claim(marker: U8[]): Bool //< opens the record
     flash.init() catch
         return false
     store: = Store::{
-        .read_at = read_fed,
-        .program_at = program_fed,
+        .read_at = flash.read_at,
+        .program_at = flash.program_at,
         .erase_sector = erase_fed,
         .capacity = flash.REGION_SIZE,
         .sector_size = flash.SECTOR_SIZE,
@@ -64,7 +56,7 @@ fn claim(marker: U8[]): Bool //< opens the record
     lg.reset() catch
         ready = false
         return false
-    lg.append(KIND_MARKER, marker) catch
+    append(KIND_MARKER, marker) catch
         ready = false
         return false
     erased_on_open = true
@@ -78,8 +70,16 @@ fn ok(): Bool //< whether it is open
     return ready
 
 fn handle(): ksdblog.Log$@ //< the record itself
-    //< Caution: **Use it only after `claim` returns true.**
+    //< Caution: **Use it only after `claim` returns true.** Append through `append`, which feeds
+    //< the watchdog.
     return lg@
+
+fn append(kind: U16, data: U8[]): Void!ksdblog.Ksdb_error //< adds one record, one record step
+    //< It feeds the watchdog first. One append is a scan of at most the 64KB region and a few page
+    //< writes of at most 3 ms each, so it ends well inside the timeout.
+    //< Caution: **Use it only after `claim` returns true.**
+    watchdog.feed()
+    lg.append(kind, data)!
 
 fn read_last(kind: U16, dst: U8$[]): Sz //< copies the newest record of kind into dst
     //< 0 if there is none (or if dst is too small). Swallowing the failure suits only this place,

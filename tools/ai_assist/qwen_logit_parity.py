@@ -3,8 +3,8 @@
 
 Puts out the final-position logits of HF (transformers) Qwen for the same token-ID sequence.
 Matched against the output of KSPL's
-`echo "<ids>" | out/qwen_infer.exe out/qwen_kspl.safetensors`, it confirms whether the native
-implementation reproduces the base model correctly.
+`echo "<ids>" | out/qwen_infer.exe out/ai_assist/qwen_kspl.safetensors`, it confirms whether the
+native implementation reproduces the base model correctly.
 
   python3 tools/ai_assist/qwen_logit_parity.py --base-model Qwen/Qwen2.5-Coder-0.5B --tokens "3 1 4"
 

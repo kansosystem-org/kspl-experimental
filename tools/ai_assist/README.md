@@ -10,11 +10,11 @@ Words used here: the *corpus* is the body of source text the model learns from. 
 
 ```sh
 make fim-corpus   # the corpus and the FIM examples -> tools/ai_assist/corpus/
-make fim-model    # the tokenizer, then the KSPL-native model -> out/fim_coder.safetensors
+make fim-model    # the tokenizer, then the KSPL-native model -> out/ai_assist/fim_coder.safetensors
 make fim-eval     # the model's held-out loss, then the rate at which ksplc accepts its completions
 ```
 
-The held-out loss is the model's error on validation files it never trained on. Each KSPL tool also runs alone: `./out/ksplc_stage1.exe run tools/ai_assist/<tool>.kspl`, with the usage in the file's header.
+The held-out loss is the model's error on validation files it never trained on. What these tools make, such as a model's weights or a converted tokenizer, goes into `out/ai_assist/`. Each KSPL tool also runs alone: `./out/ksplc_stage1.exe run tools/ai_assist/<tool>.kspl`, with the usage in the file's header.
 
 ```mermaid
 flowchart LR
@@ -79,9 +79,9 @@ These two checks show that KSPL runs a real Qwen2.5-Coder-0.5B as the reference 
 
 ```sh
 python3 tools/ai_assist/export_qwen_to_kspl.py --base-model Qwen/Qwen2.5-Coder-0.5B \
-    --out out/qwen_kspl.safetensors
+    --out out/ai_assist/qwen_kspl.safetensors
 make qwen
-echo "3 1 4" | ./out/qwen_infer.exe out/qwen_kspl.safetensors
+echo "3 1 4" | ./out/qwen_infer.exe out/ai_assist/qwen_kspl.safetensors
 python3 tools/ai_assist/qwen_logit_parity.py --base-model Qwen/Qwen2.5-Coder-0.5B --tokens "3 1 4"
 ```
 
@@ -91,11 +91,11 @@ The two print the same argmax (the token with the top score). Their logits diffe
 
 ```sh
 python3 tools/ai_assist/export_qwen_tokenizer.py --base-model Qwen/Qwen2.5-Coder-0.5B \
-    --out-dir out/qwen_tokenizer
+    --out-dir out/ai_assist/qwen_tokenizer
 make qwen
 echo "def add(a, b):
-    return a" | ./out/qwen_infer.exe generate out/qwen_kspl.safetensors \
-    out/qwen_tokenizer/vocab.txt out/qwen_tokenizer/merges.txt 151643
+    return a" | ./out/qwen_infer.exe generate out/ai_assist/qwen_kspl.safetensors \
+    out/ai_assist/qwen_tokenizer/vocab.txt out/ai_assist/qwen_tokenizer/merges.txt 151643
 ```
 
 It writes Python that stays coherent across several functions. **The prompt is Python on purpose.** The model has never seen KSPL, so a KSPL prompt could not show whether the pipeline is broken. Decoding is greedy with no repetition penalty, so a numeric prompt such as `let n = ` can repeat digits without end.
@@ -105,7 +105,7 @@ It writes Python that stays coherent across several functions. **The prompt is P
 This check shows that ksai runs the user's model, Qwen3-4B-Instruct-2507, as llama.cpp runs the same GGUF file. It needs `gguf`, `llama-cpp-python` and `numpy`, and the file that [`models/README.md`](../../models/README.md) names:
 
 ```sh
-out/ksplc_stage1.exe build "--cflags=-O3 -march=native" ksai/benches/bench_qwen.kspl out/bench_qwen.exe
+out/ksplc_stage1.exe build "--cflags=-O3 -march=native" ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
 python3 tools/ai_assist/qwen_gguf_check.py --model models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 python3 tools/ai_assist/qwen_gguf_check.py --model models/Qwen3.5-9B-Q3_K_M.gguf
 ```
