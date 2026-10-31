@@ -23,7 +23,8 @@ enum Shard //< which job runs a gate on Linux and Windows
     linux //<
         //< The Linux job alone (`make ci-shard-linux`)
         //< Either only its image holds the tool, or the answer cannot differ by platform, so a
-        //< second platform would pay for the same answer.
+        //< second platform would pay for the same answer. A gate of that kind can also stand in a
+        //< shared job's Linux run (`Gate.linux_only`), so the three Linux jobs end together.
     none //< neither: macOS alone runs it (`Gate.macos`)
 
 enum Par //< how `make` is asked to run one gate's targets
@@ -54,6 +55,10 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
         //< **For two gates that each keep about one core busy and share no file.** The two rows
         //< stand next to each other, name each other, and agree on `stops` and `early`
         //< (`pair_fault`). A set that runs only one of them runs it alone.
+    linux_only: Bool //<
+        //< Of the shared jobs (`core`, `rest`), only the Linux one runs it
+        //< **For a gate that `Shard.linux` would also suit**, put in a shared job because the Linux
+        //< job would otherwise end last. That job's start-up is paid already, so the move is free.
     not_on: U8[] //<
         //< The platforms `ci-full` leaves it out on, space-separated as `PLATFORM` spells them
         //< **Only for a gate that cannot give a true answer there**, never for a missing tool: the
@@ -69,8 +74,10 @@ const GATES: Gate[_] = ::{
     Gate::{ .log = "debug", .args = "debug", .par = .serial, .verdict = true, .shard = .none,
         .macos = true, .stops = false, .early = false },
     // tools/ has tests but no `Makefile`, so no copy runs them; `debug` holds them on macOS.
+    // **Not on Windows**: `debug_llvm` runs the same tests there, on the same Windows calls. Only
+    // the backend differs, and the C one is checked there on every package's copy.
     Gate::{ .log = "debug_tools", .args = "debug-tools", .par = .serial, .verdict = true,
-        .shard = .rest, .macos = false, .stops = false, .early = false },
+        .shard = .rest, .linux_only = true, .macos = false, .stops = false, .early = false },
     Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .linux,
         .macos = false, .stops = false, .early = true },
     // **Only this `-j` shrinks the suites' time**, and the order they start in settles it (`SUITES`
@@ -141,8 +148,10 @@ const GATES: Gate[_] = ::{
     Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = .serial, .verdict = false,
         .shard = .linux, .macos = false, .stops = false, .early = false },
     // ksmd's page in Chromium, driven by real input events (`ksmd/tests/browser/main.mjs`).
+    // **The browser gates run in the core job's Linux run**, the shortest Linux job without them.
+    // They stay together there, so the server and the page are built once.
     Gate::{ .log = "ksmd_browser", .args = "test-ksmd-browser", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false },
+        .shard = .core, .linux_only = true, .macos = false, .stops = false, .early = false },
     Gate::{ .log = "ksmd_desktop", .args = "test-ksmd-desktop KSMD_REQUIRE_DESKTOP=1",
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false,
         .early = false, .not_on = "win32 darwin" },
@@ -150,12 +159,12 @@ const GATES: Gate[_] = ::{
     // (`tools/tests/ksmd_launch.kspl`). **Linux alone**, so the launcher's lock on Windows goes
     // unchecked ("What each platform runs" in `docs/SPEC-gates.md`).
     Gate::{ .log = "ksmd_open", .args = "test-ksmd-open", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false },
+        .shard = .core, .linux_only = true, .macos = false, .stops = false, .early = false },
     // The launcher's model server, then ksagent's chat page in Chromium, through kssrv, `ksagent
     // watch` and a stand-in model server (`tools/tests/chat_launch.mjs`, `chat_page.mjs`).
     // **Linux alone**, as the other browser gate.
     Gate::{ .log = "ksagent_chat", .args = "test-ksagent-chat", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false },
+        .shard = .core, .linux_only = true, .macos = false, .stops = false, .early = false },
     // Caution: **Build and run the BLAS backend for real.** `make lint` reads its branch, but only
     // a link shows whether the FFI is right.
     Gate::{ .log = "blas", .args = "test-blas", .par = .serial, .verdict = true, .shard = .linux,
@@ -279,17 +288,19 @@ fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
 impl Set
     fn runs(s: Self, g: Gate, platform: U8[] = "linux"): Bool //< selected gates for this host
         shared: = g.shard == Shard.core || g.shard == Shard.rest
+        here: = !g.linux_only || platform.equals("linux") //< a shared job on this host runs it
         switch s
         case .ci
-            return shared || (g.shard == Shard.linux && platform.equals("linux"))
+            return (shared && here) ||
+                (g.shard == Shard.linux && platform.equals("linux"))
         case .ci_shard_linux
             return g.shard == Shard.linux
         case .ci_macos
             return g.macos
         case .ci_shard_core
-            return g.shard == Shard.core
+            return g.shard == Shard.core && here
         case .ci_shard_rest
-            return g.shard == Shard.rest
+            return g.shard == Shard.rest && here
         case .ci_full
             // `Shard.none` is macOS's stand-in for the copies `test-extract` builds, which this set
             // runs, so it would check the same thing twice.

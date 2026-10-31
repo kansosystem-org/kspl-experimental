@@ -167,10 +167,16 @@ fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
             "Linux's ci runs the union of all three workflow sections")
         assert(!(core && rest) && !(core && linux) && !(rest && linux),
             "no gate is in more than one section")
-        assert(ci_gates.Set.ci.runs(g, "win32") == (core || rest),
-            "Windows' ci runs exactly the two shared sections")
-        assert(ci_gates.Set.ci.runs(g, "darwin") == (core || rest),
-            "macOS's ci runs exactly the two shared sections, with no container")
+        for host in U8[][]::{ "win32", "darwin" }
+            shared: =
+                ci_gates.Set.ci_shard_core.runs(g, host) ||
+                ci_gates.Set.ci_shard_rest.runs(g, host)
+            assert(ci_gates.Set.ci.runs(g, host) == shared,
+                "Windows' and macOS's ci run exactly the two shared sections, with no container")
+            assert(!shared || core || rest, "a shared section runs nothing Linux's leaves out")
+        // A Linux-only gate in a shared job is left out of that job on Windows.
+        assert(!g.linux_only || ((core || rest) && !ci_gates.Set.ci.runs(g, "win32")),
+            "a gate a shared job runs on Linux alone stands in a shared job, and Windows skips it")
     verdict.pass("ci selects what each host runs natively: three sections on Linux, two elsewhere.")
 
 fn test_ci_full_takes_every_answer() //< `ci-full` adds the Linux-only gates a host can answer

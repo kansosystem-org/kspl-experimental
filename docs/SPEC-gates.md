@@ -104,8 +104,8 @@ To add a pair of gates that share no file, put the two rows next to each other, 
 | Target | What it runs |
 | :-- | :-- |
 | `ci` | Every gate this host runs natively. Linux: `ci-shard-core`, `ci-shard-rest` and `ci-shard-linux`; Windows and macOS: `ci-shard-core` and `ci-shard-rest` |
-| `ci-shard-core`, `ci-shard-rest` | The two shared sections the Linux and Windows jobs run |
-| `ci-shard-linux` | The gates whose tools only Linux has; it refuses to run elsewhere |
+| `ci-shard-core`, `ci-shard-rest` | The two shared sections the Linux and Windows jobs run. A gate marked `linux_only` runs only in the Linux job of its section |
+| `ci-shard-linux` | Most of the gates that only Linux runs; it refuses to run elsewhere |
 | `ci-macos` | The macOS job's set: what differs on macOS, kept small because its minutes cost the most |
 | `ci-full` | Every gate this host can answer, for a person checking all on one machine. Linux: the same as `ci`; Windows and macOS: `ci`'s gates and the Linux-only ones too |
 
@@ -138,6 +138,8 @@ flowchart TD
     T --> G["the gates run one after another, one pair side by side;<br/>each ends with one RESULT line"]
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
+
+**The gates that only Linux runs are dealt over the three Linux jobs**, so the three end at about the same time. Most stand in `ci-shard-linux`. The browser gates (`test-ksmd-browser`, `test-ksmd-open`, `test-ksagent-chat`) stand in `ci-shard-core`, and `debug-tools` in `ci-shard-rest`, each with `linux_only` (`Gate.linux_only` in `tools/ci_gates.kspl`). The Windows job of the same section leaves them out. Moving a gate between the Linux jobs costs no start-up, as each job pays its own already.
 
 **The common gates run as two sections, in parallel, as separate jobs.** `ci-shard-core` runs C self-hosting and one share of the regression suites. `ci-shard-rest` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler's extraction checks deal its suite list between the jobs, longest first, in opposite directions for successive pairs. They use separate copies and scratch folders, and `make test-extract-ksplc` runs both shares. std's copy (`extract-std`) runs in the rest job, and every other package's copy (`extract-rest`) in the core job. The number of sections is set by the job start-ups that can be paid for.
 
@@ -175,7 +177,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-seed-sum (the seed was re-baked after the last compiler change, by the record `make commit-seed` keeps in `ksplc/seed.sum`) | ✅ | ➖(note 26) | ➖(note 26) |
 | self-host-ship (the shipped `-O2` build emits stage2's C to the byte) | ✅ | ➖(note 20) | ➖(note 20) |
 | debug tests | ➖(note 27) | ✅ | ➖(note 27) |
-| debug-tools (the tests of `tools/`, the one folder of tests without a `Makefile`) | ✅ | ➖(note 27) | ✅ |
+| debug-tools (the tests of `tools/`, the one folder of tests without a `Makefile`) | ✅ | ➖(note 27) | ➖(note 27) |
 | lint (every entry point; ksai's tests a second time with the `#cfg(blas)` branch on) | ✅ | ➖(note 26) | ➖(note 26) |
 | test-negative | ✅ | ✅ | ✅ |
 | test-equiv (C⇔LLVM equivalence) | ✅(note 1) | ✅(note 1) | ✅ |
@@ -302,6 +304,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`); the suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.
   * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF. `make ci-full` still runs both on every platform.
 * **note 27**: `make debug` runs the tests of every package but kssrv and ksbind in one program; those two run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's and ksbind's tests unrun.
+  * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux still runs both.
 * **note 28**: `make LLVM=1 debug` holds neither kssrv nor ksbind (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci-full` does.
 * **note 29**: `test-sanitize` builds ksplc's, std's and ksmd's tests (`<package>/tests/main.kspl`) through both backends with clang's `-fsanitize=address,undefined`, the leak sanitizer included. It runs each as its package's own `make test` does, std's from a fresh folder per build, since they write fixed names. It fails on any report from any process, or on a non-zero exit.
   * **It shows that it can fire.** Four faults are written on purpose: a use after free, a read past an allocation, a leak and a misaligned store. Each must be reported as what it is. **And that the LLVM build is watched through its marks**: the read past the end, built through LLVM without `--sanitize`, must go unreported.

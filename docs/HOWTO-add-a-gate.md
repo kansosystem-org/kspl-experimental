@@ -16,13 +16,16 @@
    ```
 
    The group must be one of `HELP_GROUPS` in `mk/help.mk`. A target missing from `.PHONY` or the help line fails `make test-recipe-bytes`. The CI runner reads the closing `RESULT: ALL PASS` line ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)).
-2. **Add its row** to `GATES` in `tools/ci_gates.kspl`. The row's place is its order in the run. Where it runs follows from two fields:
+2. **Add its row** to `GATES` in `tools/ci_gates.kspl`. The row's place is its order in the run. Where it runs follows from three fields:
 
-   | `shard` | `macos` | Where it runs |
-   | :-- | :-- | :-- |
-   | `.core` or `.rest` | either | Linux and Windows, in that job; macOS too if `macos` is true |
-   | `.linux` | either | Linux alone (its tool is only in Linux's image, or the answer cannot differ by platform) |
-   | `.none` | `true` | macOS alone |
+   | `shard` | `linux_only` | `macos` | Where it runs |
+   | :-- | :-- | :-- | :-- |
+   | `.core` or `.rest` | `false` | either | Linux and Windows, in that job; macOS too if `macos` is true |
+   | `.core` or `.rest` | `true` | either | That job's Linux run alone; macOS too if `macos` is true |
+   | `.linux` | `false` | either | Linux alone (its tool is only in Linux's image, or the answer cannot differ by platform) |
+   | `.none` | `false` | `true` | macOS alone |
+
+   A gate for Linux alone goes in `.linux`, unless that job would then end after the others. Then it goes in the shorter shared job, with `linux_only`.
 
    The runner refuses at start a row no set runs, and `macos` with `par = .synced` (macOS's `make` has no `--output-sync`). Leave `beside` out unless the gate is one of a pair ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)).
 3. **Name every SKIP it can print** in an `Expected_skip` row in the same file: the platforms that expect it, and a piece of its line. An unnamed SKIP fails the gate with "a SKIP no row of `expected_skips` holds". **A tool that Linux's image holds is required there instead**, through a switch in `REQUIRE_SWITCHES` in `mk/test.mk`. Its skip lines go in `switch_skips` ("The switches that require a tool" in [`SPEC-gates.md`](SPEC-gates.md)).

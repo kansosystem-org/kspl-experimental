@@ -524,9 +524,13 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 | test-suites | With the cores full, **the total amount of work** fixes it. **No job is added for them**: each job pays its own start-up and billing ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `SUITES` is kept longest first (the grounds are at `SUITES` in `mk/test.mk`) |
 | test-race / test-sanitize / self-host-ship | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer or at `-O2` |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
-| test-ksmd-browser / test-ksmd-open | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)) |
+| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)). **They run in the core job's Linux run**, the shortest Linux job without them, and stay together there so those files are built once |
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, and a fine-grained name points straight at the cause. Only the same property inspected in two places can be merged.
+
+**A gate that only Linux runs can stand in any of the three Linux jobs.** Each job pays its start-up already. So a move between them costs nothing, and lets the three end together ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)).
+
+**A test that waits for something that must not come waits only until it can no longer come.** A stand-in server holding a reply for a request too many stops waiting once its asker has returned (`done_asking` in `ksagent/tests/stub.kspl`). A fixed wait there costs every job that runs the test, on every backend.
 
 **When reducing the total, look at the heavy individuals, not the count.** `ksplc/tests/negative/` is mostly a handful of cases that exceed the 1000 levels the compiler's type walks allow (`MAX_TYPE_UNWRAP_DEPTH` in `ksplc/sema/type/query.kspl`). They cost quadratically in the level count.
 

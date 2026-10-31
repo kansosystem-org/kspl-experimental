@@ -3,6 +3,8 @@
 //< request with the next reply prepared for it, on a free loopback port, in a thread of its own.
 //< It keeps every request body, so a test can check what ksagent sent back (a tool's refusal).
 //< Caution: **It never waits for good**: a request that does not come within `WAIT_US` ends it.
+//< **Nor once the asker has returned** (`done_asking`): a reply kept to catch a request too many
+//< then costs no wait.
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -31,6 +33,7 @@ struct Stub //< one stand-in server and what it saw
     drip_ms: I32 //< the wait between two pieces of a reply; 0 writes each reply at once
         //< **It stands for a model that writes slowly**, so ksagent can stop it midway.
     worker: thread.Thread$@
+    asked: thread.Atomic_sz //< 1 once the asker has returned, so no request is still to come
 
 fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that gives these replies
     return start_editing(replies, "", "", arena)
@@ -48,7 +51,8 @@ fn start_dripping(replies: U8[][], edit_path: U8[], edit_body: U8[], drip_ms: I3
     s: = arena
         .create(Stub::{ .listener = listener, .port = port, .replies = replies,
         .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = edit_path,
-        .edit_body = edit_body, .drip_ms = drip_ms, .worker = null })
+        .edit_body = edit_body, .drip_ms = drip_ms, .worker = null,
+        .asked = thread.Atomic_sz(0) })
     s.bodies = List<|U8[]|>(s.own)
     s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
     return s
@@ -57,13 +61,19 @@ fn finish(s: Stub$@) //< waits for the stand-in to stop, then closes its socket
     s.worker.join_and_free()
     s.listener.free()
 
+fn done_asking(s: Stub$@) //< stops it waiting, as the asker has returned, then finishes it
+    //< **For an asker that returns only after its last request is answered**, as `agent.run` does.
+    //< A request it made is then accepted already, or waiting to be.
+    s.asked.store(1)
+    finish(s)
+
 fn release(s: Stub$@) //< lets go the memory of the bodies it kept
     s.own.free()
 
 #export
 fn serve(s: Stub$@): Void$@ //< answers each request with its reply, until the replies run out
     for i in Range.asc(s.replies.len)
-        conn: = accept_within(s.listener) catch
+        conn: = accept_within(s) catch
             return null
         body: = read_body(conn, s.own)
         if i == 0 && s.edit_path.len > 0
@@ -88,11 +98,14 @@ priv fn drip(conn: net.Tcp_stream$@, reply: U8[], drip_ms: I32) //<
 
 priv const DRIP_PIECE: Sz = 48 //< the bytes of one piece a dripping stand-in writes
 
-priv fn accept_within(listener: net.Tcp_listener$@): net.Tcp_stream$@? //<
-    //< The next connection, or none when none comes within `WAIT_US`
+priv fn accept_within(s: Stub$@): net.Tcp_stream$@? //<
+    //< The next connection, or none when none comes within `WAIT_US` or the asker has returned
+    //< **A connection already made is taken first**, so one the asker made is never dropped.
     deadline: = sys.mono_us() + WAIT_US
     for sys.mono_us() < deadline
-        conn: = listener.accept() catch
+        conn: = s.listener.accept() catch
+            if s.asked.load() != 0
+                return .none
             sys.sleep_ms(2)
             continue
         return .some(conn)
