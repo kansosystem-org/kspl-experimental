@@ -5,7 +5,8 @@
 // on its cells when the table is shown again, sorted, or has rows added above.
 // Delete clears the range, Ctrl+D fills it down and Ctrl+R right, and the handle at its corner
 // fills it by a drag. A copy puts its shown values on the clipboard as tab-separated rows, and a
-// paste of such rows fills cells from its corner. Each is one action.
+// paste of such rows fills cells from its corner. A cut puts them there too, and its cells wait for
+// a paste that moves them (`cut.js`). Each is one action.
 // The whole table, names and all, is chosen by Ctrl+A twice, by the corner left of the column
 // letters, or by Select table. It copies as ksmd's own source too, and Delete removes it.
 "use strict";
@@ -18,6 +19,9 @@ function ksmdRange(ks) {
   let kept = null;
   // The block whose whole table was chosen, or -1; choosing any other range sets it back.
   let tableChosen = -1;
+  // Whole lines chosen by their row numbers or column letters: { block, rows }, or null. Choosing
+  // any other range sets it back, as for the whole table.
+  let linesChosen = null;
 
   const wrapOf = (block) => {
     const el = ks.view.blocks()[block];
@@ -108,6 +112,31 @@ function ksmdRange(ks) {
     return r.r1 === -1 && r.r2 === s.rows - 1 && r.c1 === 0 && r.c2 === s.columns - 1;
   }
 
+  // The whole lines chosen by their row numbers or column letters: { block, rows, first, last },
+  // while the range still holds every column of those rows, or every row of those columns.
+  function lines() {
+    const c = ks.cell;
+    if (!c || !wrapOf(c.block) || !linesChosen || linesChosen.block !== c.block) return null;
+    const r = rect();
+    const s = size(c.block);
+    if (linesChosen.rows) {
+      const all = r.r1 >= 0 && r.c1 === 0 && r.c2 === s.columns - 1;
+      return all ? { block: c.block, rows: true, first: r.r1, last: r.r2 } : null;
+    }
+    const all = s.rows > 0 && r.r1 === 0 && r.r2 === s.rows - 1;
+    return all ? { block: c.block, rows: false, first: r.c1, last: r.c2 } : null;
+  }
+
+  // Chooses whole rows from `from` to `to`, or whole columns, as a press on their numbers or
+  // letters does; the chosen cell stands in line `from`.
+  function chooseLines(block, rows, from, to) {
+    const s = size(block);
+    if (rows) set(block, from, 0, { row: to, column: s.columns - 1 });
+    else set(block, 0, from, { row: s.rows - 1, column: to });
+    linesChosen = { block, rows };
+    focusChosen();
+  }
+
   // Chooses the whole table, as Word's handle at a table's corner does.
   function selectTable(block) {
     const s = size(block);
@@ -155,6 +184,7 @@ function ksmdRange(ks) {
   function set(block, row, column, to) {
     ks.cell = { block, row, column };
     tableChosen = -1;
+    linesChosen = null;
     ks.setPlace("cell");
     end = to && (to.row !== row || to.column !== column) ? to : null;
     keep();
@@ -165,6 +195,7 @@ function ksmdRange(ks) {
   function collapse() {
     end = null;
     tableChosen = -1;
+    linesChosen = null;
     keep();
     mark();
   }
@@ -280,13 +311,12 @@ function ksmdRange(ks) {
     const was = e.shiftKey && ks.cell && ks.cell.block === block ? ks.cell : null;
     if (head.classList.contains("row-number")) {
       const row = head.parentElement.sectionRowIndex;
-      set(block, was ? Math.max(0, was.row) : row, 0, { row, column: s.columns - 1 });
+      chooseLines(block, true, was ? Math.max(0, was.row) : row, row);
     } else {
       const column = head.cellIndex - 1;
       if (s.rows === 0) return;
-      set(block, 0, was ? was.column : column, { row: s.rows - 1, column });
+      chooseLines(block, false, was ? was.column : column, column);
     }
-    focusChosen();
   });
 
   // The keys on a chosen cell that is not open: the range, Delete, the fills, undo, and opening a
@@ -348,8 +378,10 @@ function ksmdRange(ks) {
       collapse();
       ks.table.open(c.block, c.row, c.column);
     } else if (e.key === "Escape") {
+      // Esc drops a cut first, and keeps the range, as in Excel.
       e.preventDefault();
-      if (end) collapse();
+      if (ks.cut.drop()) ks.say("");
+      else if (end) collapse();
       else ks.leaveTable();
     } else if (mod && !e.altKey && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
       // Undo and redo, as in the text: the focus stands on the cell, not in the document.
@@ -534,39 +566,47 @@ function ksmdRange(ks) {
     return ks.view.removeBlock("ksmd_web_remove_table", block);
   }
 
-  // A copy while a range is chosen, or no cell is open, takes the cells' shown values; a cut
-  // clears them after. The whole table also goes as ksmd's own source, which a paste in ksmd
-  // takes whole, and as HTML; a cut of it removes the table.
+  // A copy while a range is chosen, or no cell is open, takes the cells' shown values. The whole
+  // table also goes as ksmd's own source, which a paste in ksmd takes whole, and as HTML; a cut of
+  // it removes the table. A cut of other cells clears nothing: they wait, marked, for a paste that
+  // moves them (`cut.js`).
   for (const type of ["copy", "cut"]) {
     document.addEventListener(type, (e) => {
       if (ks.where !== "cell" || !ks.cell || !wrapOf(ks.cell.block)) return;
       if (e.target && e.target.nodeType === Node.ELEMENT_NODE && !ks.root.contains(e.target)) return;
       if (ks.table.editing() && !end) return;
       e.preventDefault();
-      e.clipboardData.setData("text/plain", copied());
+      const text = copied();
+      e.clipboardData.setData("text/plain", text);
       if (whole()) {
         e.clipboardData.setData("text/html", html(ks.cell.block));
         e.clipboardData.setData(KSMD_TYPE, ks.out(ks.w.ksmd_web_block_source(ks.cell.block)));
         if (type === "cut") removeTable();
         return;
       }
-      if (type === "cut") clear();
+      if (type !== "cut") return;
+      // In Read-only the clear is refused, and the page says why.
+      if (ks.readOnly) clear();
+      else ks.cut.take(rect(), lines(), text);
     });
   }
 
-  // A paste on a chosen cell that is not open fills the range.
+  // A paste on a chosen cell that is not open moves the cells a cut left waiting, or else fills the
+  // range.
   ks.root.addEventListener("paste", (e) => {
     const el = chosenOf(e.target);
     if (!el || !el.matches || !el.matches(".table [data-r]") || el.closest(".include")) return;
     e.preventDefault();
     e.stopPropagation();
+    const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
+    if (ks.cut.paste(text)) return;
     // A whole table copied from ksmd, pasted on a whole table chosen, goes after that table.
     if (whole() && ks.pasteTable(e.clipboardData, ks.cell.block + 1)) return;
-    const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
     if (!ks.tooLarge(text)) pasteGrid(text, true);
   });
 
   ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, mark, selectTable,
+    lines, chooseLines,
     // Puts the focus on the chosen cell, so the keys act on it.
     focus: focusChosen,
     // Whether a range of more than one cell is chosen.

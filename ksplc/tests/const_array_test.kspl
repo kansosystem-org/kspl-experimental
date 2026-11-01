@@ -163,6 +163,26 @@ fn test_const_slice_over_an_array_literal()
     assert(SLICE_NESTED[0][1] == 2 && SLICE_NESTED[1][0] == 3, "a slice in a slice has its own")
     assert(slice_var.len == 2 && slice_var[0] == 4, "a `$` variable's slice is the same shape")
     verdict.pass("")
+
+// ==========================================
+// A top-level slice over a global array by its name (`T[]::g`) takes the global's address, as
+// `g@` does, and reads no value. Taken as a read of a variable, it was refused as "not a
+// compile-time constant" (classify_static_postfix in sema/body/static_init.kspl).
+// ==========================================
+priv $slice_store: I32[3] = ::{ 1, 2, 3 }
+priv $slice_of_store: I32$[] = I32$[]::slice_store
+priv const SLICE_OF_STORE_RO: I32[] = I32[]::slice_store
+
+fn test_slice_over_a_global_array()
+    verdict.start("[sema] a top-level slice over a global array by its name test...")
+    slice_of_store[1] = 20
+    assert(slice_of_store.len == 3 && slice_store[1] == 20,
+        "the slice must point at the global itself, not at a copy")
+    assert(SLICE_OF_STORE_RO[1] == 20 && SLICE_OF_STORE_RO.len == 3,
+        "a read-only slice of it must see the same elements")
+    slice_store[1] = 2
+    verdict.pass("")
+
 fn test_multi_dim_array() //< that multi-dimensional fixed-length arrays share one struct tag in C
     //< Caution: **Choose the tag only after stripping every level of the element's immutable
     //< qualifier** (gen/c/decl.kspl). Test both an immutable binding and a mutable one. The

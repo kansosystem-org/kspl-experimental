@@ -103,6 +103,41 @@ fn main(): I32
   _whole: = m@
   m.d.x += m.nums[1]
   return take(k.n@)
+// ==== case addr_of_packed_field_upcast
+//< Making a trait value from a field that `#packed` leaves under-aligned is refused, as `@` is
+//< The trait value keeps the field's address, and each method call through it assumes the type's
+//< alignment. A field that keeps its alignment passes.
+// EXPECT: as making a trait value would. A pointer to
+// EXPECT: Finished with 1 error(s)
+
+trait Show
+  fn get(r: Self): I64
+
+priv struct In
+  v: I64
+
+impl In: Show
+  fn get(r: Self@): I64
+    return r.v
+
+#packed
+priv struct Rec
+  tag: U8
+  inner: In
+
+#packed
+#align(8)
+priv struct Kept //< its field sits at offset 8, and the struct starts at a multiple of 8
+  pad: I64
+  inner: In
+
+priv fn show(s: Show): I64
+  return s.get()
+
+fn main(): I32
+  r: Rec = ::{ .tag = 1, .inner = ::{ .v = 7 } }
+  k: Kept = ::{}
+  return I32::(show(r.inner) + show(k.inner))
 // ==== case arc_assign_through_call
 //< An assignment into an ARC-managed place must release the value it overwrites
 //< With a call in the left-hand side's subexpression, the release's receiver cannot be made (the
@@ -209,6 +244,69 @@ fn main()
   upcast_into_global()
   marked_local_into_global()
   io.out().s("\{kept_inside()\}\n")
+// ==== case frame_pointer_stored_in_outer_local
+//< A slice, an interface value or a closure made in an inner block is refused in an outer local
+//< The C backend ends a block's storage at its end, so the outer local would point at a dead
+//< block. The storage's own block decides, not the statement's: `kept_where_it_lives` slices an
+//< outer array in an inner block, stores into a parameter, or keeps a local in its own block, and
+//< passes.
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored into 'c', a local of an outer block, and outlive the block whose end frees what it points at. Declare 'c' in that block
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 's', a local of an outer block
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 'h', a local of an outer block
+// EXPECT: cannot store an interface value built from local storage. The interface value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into 'shape', a local of an outer block
+// EXPECT: cannot store 't': it was set from a slice or an interface value built from local storage. Its pointer points into this function's frame. The compiler makes that pointer, so no '@' appears. It would be stored into 's', a local of an outer block
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 's', a local of an outer block
+// EXPECT: Finished with 6 error(s)
+import "std/io"
+
+trait Shape
+  fn area(r: Self): I32
+
+struct Sq
+  n: I32
+
+impl Sq: Shape
+  fn area(r: Self): I32
+    return r.n * r.n
+
+struct View
+  s: I32[]
+
+fn kept_out_of_its_block(): I32
+  $c: Callable1<|I32, I32|> = fn(x: I32; ): I32 { return x; }
+  $s: I32[] = I32[]::{ 0 }
+  $h: View = ::{ .s = I32[]::{ 0 } }
+  $shape: Shape? = .none
+  inner:
+    n: = 5
+    arr: I32[2] = ::{ 5, 6 }
+    sq: = Sq::{ .n = 2 }
+    c = fn(x: I32; n: I32): I32 { return x + n; }
+    s = I32[]::arr
+    h.s = I32[]::arr
+    shape = .some(sq)
+    t: = I32[]::arr
+    s = t
+  for $i: = 0; i < 2; i += 1
+    s = I32[]::{ i, i }
+  return c.call(1) + s[0] + h.s[0]
+
+fn kept_where_it_lives($p: I32[]): I32
+  outer: I32[2] = ::{ 1, 2 }
+  $s: I32[] = I32[]::{ 0 }
+  inner:
+    s = I32[]::outer
+    p = I32[]::outer
+    t: = I32[]::outer
+    s = t
+    own: I32[2] = ::{ 3, 4 }
+    $u: = I32[]::own
+    u = I32[]::own
+    s = I32[]::outer if u[0] > 0 else t
+  return s[0] + p[0]
+
+fn main()
+  io.out().s("\{kept_out_of_its_block()\} \{kept_where_it_lives(I32[]::{ 0 })\}\n")
 // ==== case frame_address_leaves
 //< The address of the frame's own storage is refused where it leaves by `return` or `throw`
 //< Each of these reads a dead frame: a local's or a by-value parameter's `@`, of a field or an
@@ -364,6 +462,57 @@ pub fn main(): I32
   ok_owned: = U8$[]::buf // memory one holds oneself passes
   io.out().s("\{bad_const.len\}\{bad_literal.len\}\{ok_immutable.len\}\{ok_owned.len\}\n")
   return 0
+// ==== case writable_from_string_literal
+//< A string literal must not be taken where a writable `U8$[]` or `U8$@` is expected
+//< The literal is placed in read-only memory, so a write through the writable form faults on a
+//< host and writes to ROM on freestanding. The implicit form is refused as the cast is: as an
+//< argument, a field, a return value and a default value. `""` passes: with no element, the
+//< bounds check refuses every write.
+// EXPECT: a string literal cannot be used as 'U8$[]'
+// EXPECT: a string literal cannot be used as 'U8$@'
+// EXPECT-NOT: expected 'U8$[]', but got 'U8[]'
+struct Holder
+  s: U8$[]
+
+priv fn writes_elem(s: U8$[])
+  s[0] = 9
+
+priv fn writes_through(p: U8$@)
+  p$ = 9
+
+priv fn gives(): U8$[]
+  return "abc"
+
+priv fn with_default(s: U8$[] = "abc"): Sz
+  return s.len
+
+fn main(): I32
+  writes_elem("abc")
+  writes_through("abc")
+  h: = Holder::{ .s = "abc" }
+  empty: U8$[] = "" // passes: nothing in it can be written
+  return I32::(h.s.len + gives().len + with_default() + empty.len)
+// ==== case read_only_pointer_as_writable_void
+//< A read-only pointer must not become a writable `Void$@`
+//< The callee could write through it, to a `const` in ROM among others. A writable pointer passes,
+//< and so does any pointer as the read-only `Void@` or through the explicit cast.
+// EXPECT: a read-only 'I32@' cannot be passed as a writable 'Void$@'
+// EXPECT-NOT: a read-only 'I32$@'
+const N: I32 = 5
+
+priv fn writes(p: Void$@): Sz
+    return Sz::(p != null)
+
+priv fn reads(p: Void@): Sz
+    return Sz::(p != null)
+
+fn main(): I32
+    $m: I32 = 1
+    bad: = writes(N@) // refused: read-only memory
+    ok_writable: = writes(m@)
+    ok_read_only: = reads(N@)
+    ok_cast: = writes(Void$@::m@)
+    return I32::(bad + ok_writable + ok_read_only + ok_cast)
 // ==== case null_without_a_type
 //< A declaration from `null` alone names its pointer type
 //< `null` fits every pointer type, so it gives the name none. Taking `Void@` in silence would

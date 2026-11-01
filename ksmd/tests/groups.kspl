@@ -5,7 +5,7 @@ import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
 import "ksmd/model/format" { format_of }
 import "ksmd/syntax/reader"
-import "ksmd/tests/tables" { opened, saves }
+import "ksmd/tests/support" { opened, saves }
 import "std/chars"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -179,7 +179,8 @@ priv fn filters()
     with: = fn(filter: U8[], arena: Arena$@): U8[]
         return arena.text().s("%ksmd 1\n\n:::table name=\"t\" filter=\"").s(filter)
             .s("\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| 2 | \"y\" |\n:::\n").take()
-    for f in U8[][]::{ "in:1|,", ",is:x", "above:1,contains:%2C%7C%25", "empty,filled", "in:," }
+    for f in U8[][]::{ "in:1|,", ",is:x", "above:1,contains:%2C%7C%25", "empty,filled", "in:,",
+        "out:a|,out:" }
         text: = with(f, arena)
         ed: = opened(text, arena)
         saves(arena.text().s("a filter reads and saves unchanged: \{f\}").take(), ed@, arena, text)
@@ -217,15 +218,15 @@ priv fn filters()
     saves("column -1 clears every column's filter, and the attribute goes", ed@, arena, two)
     ed.undo()
     saves("undo gives both back", ed@, arena, with("below:2,in:x", arena))
-    for wrong in U8[][]::{ "in:A", "is:", "ranks:1", "is:a|b", "in:a%2", "in:a%41" }
+    for wrong in U8[][]::{ "in:A", "is:", "ranks:1", "is:a|b", "in:a%2", "in:a%41", "out:A" }
         $refused_filter: = false
         ed.set_filter(0, 0, wrong) catch e
             refused_filter = e.message().starts_with("This filter cannot be saved")
         verdict.check(arena.text().s("a filter that cannot be saved is refused: \{wrong\}").take(),
             refused_filter, "")
         refused_in(with(arena.text().s(wrong).s(",").take(), arena),
-            "a column's filter is in: and values separated by '|', is:, not:, contains:, above: or \
-                below: and a value, empty, filled, or nothing")
+            "a column's filter is in: or out: and values separated by '|', is:, not:, contains:, \
+                above: or below: and a value, empty, filled, or nothing")
     refused_in(with("in:x", arena), "filter has one entry per column, empty for none")
     refused_in(with("in:x,,", arena), "filter has one entry per column, empty for none")
     refused_in(with(",", arena), "leave out filter when no column has one")

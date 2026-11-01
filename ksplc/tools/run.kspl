@@ -56,8 +56,7 @@ priv fn strips_unused_sections(): Bool //<
 
 priv fn append_section_flags(list: List<|U8[]|>$@) //< run_section_flags, where the removal works
     if strips_unused_sections()
-        for f in RUN_SECTION_FLAGS
-            list.push(f)
+        list.push_all(U8[][]::RUN_SECTION_FLAGS)
 
 priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is compiled with
     //< Caution: **The cache keys read them from here as well** (append_flags_key). A flag given to
@@ -464,8 +463,7 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
             .s("ksplc run: cannot set \{sys.SCRIPT_ENV_NAME\}. script_path() will report none\n")
     $argv: = List<|U8[]|>(arena)
     argv.push(exe)
-    for a in script_args
-        argv.push(a)
+    argv.push_all(script_args.slice())
     return spawn_or_exit(argv@, exe, "")
 
 priv fn commit_path(from: U8[], to: U8[]): Bool //<
@@ -723,8 +721,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
     link_argv.push(under_slot(slot.new_exe, slot.dir))
     // Libraries go after the objects, the program's own before the common ones (they may need
     // `-lm`): GNU ld resolves from the left only.
-    for lib in named_libs
-        link_argv.push(lib)
+    link_argv.push_all(named_libs.slice())
     append_link_libs(link_argv@, arena)
     append_dead_strip_flag(link_argv@, arena)
     append_stack_flag(link_argv@, arena)
@@ -790,8 +787,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     $cc: = List<|U8[]|>(arena)
     cc.push(cc_name())
     cc.push(RUN_CFLAGS)
-    for f in BUILD_OPT_FLAGS
-        cc.push(f)
+    cc.push_all(U8[][]::BUILD_OPT_FLAGS)
     // **`--sanitize` is the one way to ask**: `-fsanitize=` in `--cflags` is refused
     // (`check_sanitize` in `../cli.kspl`).
     if base_core.config.sanitize.len > 0
@@ -801,8 +797,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
         if w.len > 0
             cc.push(w)
     cc.push(c_path)
-    for lib in named_libs
-        cc.push(lib)
+    cc.push_all(named_libs.slice())
     append_link_libs(cc@, arena)
     append_exe_flags(cc@, arena)
     cc.push("-o")

@@ -65,6 +65,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 * The floor of TLS 1.2 holds whatever openssl.cnf says.
 * **The verification's own answer decides the error.** A certificate that does not verify stops the handshake as `cert_verify_failed`. A peer that speaks no TLS is `handshake_failed`.
 * A host name holding a NUL, or longer than OpenSSL takes, **fails rather than being cut**, which would verify a different host.
+* **A host given as an IP address is checked as an address**, against the certificate's IP entries. It is not sent as SNI, which takes only a name. OpenSSL before 3.0 checks a name only, so an address would fail against its own certificate there.
 
 **The handshake has one deadline.** `Tls_stream.connect` gives it 10 seconds by default, or the budget `handshake_ms` sets; a non-positive budget expires at once. The TCP connection and certificate-store setup come before it. The deadline covers every handshake read and write, the final queued message included, so a peer sending occasional bytes cannot restart it.
 

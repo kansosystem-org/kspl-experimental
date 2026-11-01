@@ -555,29 +555,35 @@ fn source_op(line: U8[]): U8[] //< the operator a make file's line sets a variab
         return "::=" if eq >= 2 && t[eq - 2] == ':' else ":="
     return "="
 
-fn help_line(lines: U8[], target: U8[], arena: Arena$@): Help? //< the `##` line describing it
-    //< `## <group>|<target>|<description>` ([`mk/help.mk`](../mk/help.mk)); a target ending in
-    //< `*` names a family, matched by what comes before the `*`.
+fn help_line(texts: U8[][], target: U8[], arena: Arena$@): Help? //< the `##` line describing it
+    //< `## <group>|<target>|<description>` ([`mk/help.mk`](../mk/help.mk)), looked up in every
+    //< make file's text. A target ending in `*` names a family, matched by what comes before the
+    //< `*`.
+    //< Caution: **The exact line wins in any file, and then the longest family.** Make reads
+    //< `mk/test.mk`'s `test-*` before `mk/ksmd.mk`'s `test-ksmd-open`, so the first match is wrong.
     $family: Help? = .none
-    $n: Sz = 0
-    for l in lines.lines(arena)
-        n += 1
-        if !l.starts_with("## ")
-            continue
-        parts: = l.sub_from(3).split('|', arena)
-        if parts.len < 3
-            continue
-        spec: = parts.get(1).trim_spaces()
-        rest: = l.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1)
-        h: = Help::{ .line = n, .group = parts.get(0).trim_spaces(), .spec = spec, .text = rest }
-        if spec.equals(target)
-            return .some(h)
-        if spec.ends_with("*") && target.starts_with(spec.sub(0, spec.len - 1)) &&
-            family.is_none()
-            family = .some(h)
+    for file in Range.asc(texts.len)
+        $n: Sz = 0
+        for l in texts[file].lines(arena)
+            n += 1
+            if !l.starts_with("## ")
+                continue
+            parts: = l.sub_from(3).split('|', arena)
+            if parts.len < 3
+                continue
+            spec: = parts.get(1).trim_spaces()
+            rest: = l.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1)
+            h: = Help::{ .file = file, .line = n, .group = parts.get(0).trim_spaces(), .spec = spec,
+                .text = rest }
+            if spec.equals(target)
+                return .some(h)
+            if spec.ends_with("*") && target.starts_with(spec.sub(0, spec.len - 1)) &&
+                (family.is_none() || spec.len > family.unwrap_or(h).spec.len)
+                family = .some(h)
     return family
 
 struct Help //< one `##` line of `make help`
+    file: Sz //< which of the texts given holds it
     line: Sz
     group: U8[]
     spec: U8[] //< the target, or a family's name ending in `*`
@@ -641,8 +647,7 @@ fn assignments(lines: List<|Source_line|>@, file: U8[], arena: Arena$@): List<|A
         if name.len == 0
             continue
         $conds: = List<|Cond|>(arena)
-        for c in stack
-            conds.push(c)
+        conds.push_all(stack.slice())
         op: = source_op(t)
         $value: U8[] = ""
         if !op.equals("define")

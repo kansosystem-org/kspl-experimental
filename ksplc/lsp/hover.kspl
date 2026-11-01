@@ -14,7 +14,6 @@ import "ksplc/lsp/nav" as lsp_nav
 import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/spell" as lsp_spell
 import "ksplc/lsp/state" { Doc_state }
-import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue // the entry point that builds tables
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
@@ -33,7 +32,7 @@ fn handle(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Are
     //< editor's features are dead (the reason is at `send_cfg_inactive_hover`).
     if send_cfg_inactive_hover(state, params, id_val, arena)
         return
-    defer path: = lsp_position.find_path_at_params(state, params)
+    defer path: = lsp_position.find_path_at_params(state, params, arena)
     if path.len == 0
         lsp_msg.send_null_response(id_val, arena)
         return
@@ -46,7 +45,7 @@ priv fn send_cfg_inactive_hover(state: Doc_state$@, params: json.Value, id_val: 
         //< Caution: **Do not silently return null.** A dropped declaration leaves nothing in the
         //< AST. Without the reason, the editor's features look dead on that file alone ("How code
         //< covered by `#cfg()` is handled" in ksplc/docs/SPEC-tools.md).
-    offset: = lsp_msg.offset_at(state.src_perm, params)
+    offset: = lsp_msg.offset_at(state.src_perm, params, arena)
     // By the logical name the range was recorded under, not the URI: a copy under another folder
     // name (`alone/log.kspl` for `ksdb/log`) shares no tail with it.
     if region: = base_cfg_inactive.find_cfg_inactive(state.mod_name_perm, offset)
@@ -73,7 +72,7 @@ priv fn send_markdown(id_val: json.Value, md: U8[], arena: Arena$@) //<
 
 priv struct Hover_ctx
     type_id: I32
-    prefix: U8$[]
+    prefix: U8[]
     def_node: Ast_node$@
     fallback_str: Str_builder
 // The type a method or associated function belongs to, "" for a free function.
@@ -171,10 +170,10 @@ priv fn find_parent_type_name(state: Doc_state$@, def_node: Ast_node$@, keep_arg
     if state.sema == null
         return ""
     if def_node.is_fn_decl()
-        // Caution: **Build every entrusted table, not just the one wanted.** A table is built only
-        // on demand, and the scan below needs one. Which type holds the function is the question,
-        // so there is no id to look up by. The set is only what this document instantiated.
-        state.sema.build_entrusted_tables()
+        // Caution: **Build no deferred method table here.** Only an instance's methods are put
+        // off, and a method instance is made after its owner's table was looked up, so the scan
+        // finds every one that exists. Building them would make new instances whose tables are
+        // put off again (`Keep<|Keep<|…|>|>` in `std/seq`). Each hover would then add a level.
         return find_owner_of_fn(state, def_node, keep_args)
     for entry in state.sema.env.id_to_type
         if declares(entry, def_node)
@@ -568,7 +567,7 @@ priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     else
         ctx.prefix = unresolved_prefix(path, target_node)
     ctx.fallback_str.s(target_node.text)
-priv fn unresolved_prefix(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): U8$[] //<
+priv fn unresolved_prefix(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): U8[] //<
     //< It guesses an unresolved identifier's prefix from the node that precedes it
     if path.len < 2
         return "(Unresolved) "

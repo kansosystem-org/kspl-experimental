@@ -176,12 +176,31 @@ priv fn globals_beside_own(): I32 //< locals spelled as the C names of types and
     return ksplc_tests_c_keyword_names_Rect + r.int + Slice_U8 + I32::s.len +
         kspl_ksplc_tests_c_keyword_names_c_named_twice + c_named_twice(3) + global_named(6, "ab")
 
+priv fn library_names_beside_own(n: I32): Sz //<
+    //< Locals spelled as the C library names the generated code writes inside a body
+    //< Each is declared before the code that writes the name: `Sz`'s `+` computes in `size_t`, a
+    //< string literal's slice holds `uint8_t` and `ptrdiff_t`, and a tag check casts to `int64_t`.
+    size_t: Sz = 3
+    uint8_t: I32 = 1
+    ptrdiff_t: I32 = 2
+    int64_t: I64 = 4
+    exit: I32 = 5
+    s: = "abc"
+    level: = Level::n
+    return size_t + s.len + Sz::uint8_t + Sz::ptrdiff_t + Sz::int64_t + Sz::exit + Sz::(I32::level)
+
+priv enum Level: I32 //< a scalar enum, whose cast from an integer is checked at run time
+    low
+    high
+
 fn test_made_names() //< the source's names never meet the names the compiler makes beside them
     verdict.start("[Genc] a local spelled like a compiler-made one stays the source's test...")
     assert(catch_reads_own_e() == 43, "made names: a catch block reads the source's _e")
     assert(temps_beside_own() == 3, "made names: Lower's temporaries leave the source's alone")
     assert(for_in_beside_own() == 117, "made names: a for … in leaves the source's locals alone")
     assert(globals_beside_own() == 29, "made names: a local spelled as a global's C name")
+    assert(library_names_beside_own(1) == 19,
+        "made names: a local spelled as a C library name the body writes")
     verdict.pass("each name the compiler makes is one no source can spell.")
 
 fn test_c_keyword_names()

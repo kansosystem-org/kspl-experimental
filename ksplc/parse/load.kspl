@@ -410,6 +410,19 @@ priv fn read_error(e: io.Io_error, failed_path: U8[]): Parse_error
     default {}
     return .io(.file_not_found(failed_path))
 
+priv fn refused_file_name(name: U8[]): U8[] //<
+    //< Why a source file's name cannot be written into the generated code; empty where it can
+    //< **Both backends write the name into a quoted string**: genc's `#line`, genllvm's
+    //< `source_filename`, and `caller_file`, a trace or a bounds check's report on both. A `"` or
+    //< a control byte would end or break that string. Refused here, where every file is loaded,
+    //< the name needs no escape in any writer. Windows allows neither in a file name.
+    for ch in name
+        if ch == '"' || ch < 0x20U8 || ch == 0x7FU8
+            return base_core.arena.text()
+                .s("the file name '\{name\}' holds a '\"' or a control character, which the \
+                    generated code cannot record. Rename the file").take()
+    return ""
+
 fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_file: Ast_node$@,
     parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$@, import_stack: List<|U8$[]|>$@,
     src_is_disk: Bool): Void!Parse_error //<
@@ -429,6 +442,12 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         if loaded_path.equals(import_path)
             return
 
+    // An import is refused where it is written (below); the entry file has no such place.
+    if import_stack.len == 0
+        why: = refused_file_name(import_path)
+        if why.len > 0
+            base_diag.print_unplaced("", 0, why)
+            throw .syntax_error
     perm_path: = base_core.arena.dup_str(import_path)
     loaded_files.push(perm_path)
     // Report progress per file read: one entry file pulls in hundreds of imports, and a long
@@ -505,6 +524,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         // `../base/package.kspl`).
         refuse_at_import(base_package.refused_use(import_path, perm_slice), decl, import_path,
             perm_src)!
+        refuse_at_import(refused_file_name(perm_slice), decl, import_path, perm_src)!
         load_and_parse_file(perm_slice, loaded_files, root_file, parser, source_map, import_stack,
             false) catch e
             if e.report_bad_import(decl, next_path, import_path, perm_src)

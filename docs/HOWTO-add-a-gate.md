@@ -20,8 +20,8 @@
 
    | `shard` | `linux_only` | `macos` | Where it runs |
    | :-- | :-- | :-- | :-- |
-   | `.core` or `.rest` | `false` | either | Linux and Windows, in that job; macOS too if `macos` is true |
-   | `.core` or `.rest` | `true` | either | That job's Linux run alone; macOS too if `macos` is true |
+   | `.a` or `.b` | `false` | either | Linux and Windows, in that job; macOS too if `macos` is true |
+   | `.a` or `.b` | `true` | either | That job's Linux run alone; macOS too if `macos` is true |
    | `.linux` | `false` | either | Linux alone (its tool is only in Linux's image, or the answer cannot differ by platform) |
    | `.none` | `false` | `true` | macOS alone |
 

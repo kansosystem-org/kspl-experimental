@@ -9,7 +9,8 @@ Start with the eight Development Principles. The design documents apply them one
 * **Each section opens with the decision in plain words**, then gives the details, the reasons, and what the decision gives up.
 * **This document holds only KSPL's decisions and their grounds**, not a survey of other languages. History is not written here (Principle 7).
 * **The headings carry no numbers.** A section is cited by its heading's words, since a number shifts whenever a section is inserted above it.
-* **New to KSPL?** The two tables below give the notation and the words the chapters assume. The tour is [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md).
+* **A reference to "Principle N" names one of the eight Development Principles below.**
+* **New to KSPL?** The table below gives the notation the chapters use. Shared technical terms are defined in "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md#words-used-throughout). The tour is [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md).
 
 ### The notation the examples use
 
@@ -29,10 +30,6 @@ KSPL reads like C written left to right. These are the forms the chapters use mo
 | `Sz` | The signed size and index type | `ptrdiff_t` |
 | `fn m(r: Self@)` | A method; `r` is its *receiver*, the `a` in `a.m()` | `void m(const T *r)` |
 | `pub` / `priv` | Visible from every file / from this file only; with neither, from this package | — |
-
-### Words used throughout
-
-Shared technical terms are defined in "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md). A reference to "Principle N" names one of the eight Development Principles below.
 
 ## Development Principles
 

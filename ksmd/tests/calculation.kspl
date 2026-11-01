@@ -7,9 +7,8 @@ import "ksmd/calc/calc" { Results }
 import "ksmd/calc/calc"
 import "ksmd/calc/value" { Calc_error, Value_kind }
 import "ksmd/edit/edit"
-import "ksmd/model/model" { Document }
 import "ksmd/syntax/reader"
-import "ksmd/syntax/writer"
+import "ksmd/tests/support" { join, read, written }
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -627,19 +626,3 @@ priv fn kind(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Value_ki
 priv fn results(rows: U8[], arena: Arena$@): Results //< the values of table `t` with these rows
     doc: = read(join(HEAD, rows, arena), arena)
     return calc.calculate(doc@, TODAY, arena)
-
-priv fn read(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
-    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
-        verdict.check("a test source is valid", false, e.message)
-        panic("a test source was refused")
-    return reader.read(src@, arena) catch e
-        verdict.check("a test document reads", false, e.message)
-        panic("a test document was refused")
-
-priv fn written(doc: Document@, arena: Arena$@): U8[] //< the source the writer saves
-    defer $out: = Str_builder()
-    writer.write(doc, out@)
-    return arena.dup_str(out.slice())
-
-priv fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
-    return arena.text().s(a).s(b).take()

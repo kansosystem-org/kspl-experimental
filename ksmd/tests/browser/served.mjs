@@ -245,6 +245,12 @@ const SECTIONS = {
       "a file that is not PNG or JPEG is refused, whatever its name", await shown("pics/fake.png"));
     check((await shown("pics/none.png")).includes("no file stands at this path"),
       "a missing image is an error at its clause", await shown("pics/none.png"));
+    // The printed page's header: the document's name in the middle, and the time of the print.
+    const printed = (name) => d.js(`getComputedStyle(document.documentElement).getPropertyValue('${name}').trim()`);
+    check(await printed("--print-name") === '"top.ksmd"', "a printed page's header names the open document",
+      await printed("--print-name"));
+    await d.js("window.dispatchEvent(new Event('beforeprint'))");
+    check(/\d/.test(await printed("--print-date")), "and gives the time of the print", await printed("--print-date"));
     await d.menu("contents");
     const listed = await d.js("Array.from(document.querySelectorAll('.contents-list li'))" +
       ".map((li) => `${li.className}:${li.textContent}`).join('|')");
@@ -309,6 +315,37 @@ const SECTIONS = {
     check((await noticed(d)).includes("held aside as a draft"),
       "and this page's version is held aside as a draft", await noticed(d));
     await choose(d, "Discard them");
+    await ctx.browser.closeTab(d.page);
+  },
+
+  // A key typed while the page loads a file changed on disk is never overwritten. The page holds
+  // the second digest it takes, the first after it decided that nothing is unsaved, and the key
+  // is typed while it is held. Before the fix, `take` took that digest just before laying in the
+  // file's bytes, so the bytes replaced the key, and no draft held it.
+  async typedWhileLoading(ctx) {
+    const file = path.join(ctx.root, "top.ksmd");
+    const before = ctx.disk("top.ksmd");
+    const d = await tab(ctx, "?doc=top.ksmd");
+    await d.js(`window.digests = 0;
+      window.held = null;
+      const real = crypto.subtle.digest.bind(crypto.subtle);
+      crypto.subtle.digest = (...args) => {
+        window.digests += 1;
+        if (window.digests !== 2) return real(...args);
+        return new Promise((r) => { window.held = () => r(real(...args)); });
+      };`);
+    const theirs = before.replace("First paragraph.", "Their paragraph.");
+    fs.writeFileSync(file, theirs);
+    await d.js("window.dispatchEvent(new Event('focus'))");
+    await d.until("window.held !== null", 3000);
+    await typeAtEnd(d, 1, " Typed.");
+    await d.js("window.held && window.held()");
+    await idle(d);
+    check((await d.js("ksmd.source()")).includes(" Typed."),
+      "a key typed while a file changed on disk is loaded stays on the page");
+    await d.press("s", CTRL);
+    await idle(d);
+    fs.writeFileSync(file, before);
     await ctx.browser.closeTab(d.page);
   },
 

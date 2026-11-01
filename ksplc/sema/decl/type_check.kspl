@@ -57,6 +57,14 @@ priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@,
     w: = c.read_written_type(node)
     if w.spelled.len == 0
         return
+    // `Self` is the type an `impl` or a `trait` is for. Elsewhere it names nothing, and C would
+    // meet the bare name.
+    if w.name.equals("Self") && w.alias_file.len == 0 && c.self_scopes == 0 &&
+        c.fn_ctx.impl_name.len == 0
+        c.err(err_node,
+            "'Self' names the type of the `impl` or `trait` it stands in, and there is none here. \
+                Write the type's own name")
+        return
     kind: = c.type_kind_of(w, gen_params)
     switch kind
     case .found
@@ -360,6 +368,9 @@ impl Ast_node
         if r.kind_id == .k_decl_impl
             if trait_node: = r.get_impl_trait_node()
                 check_and_report_type(trait_node, c, gen_params, trait_node)
+        is_self_scope: = r.kind_id == .k_decl_impl || r.kind_id == .k_decl_trait
+        if is_self_scope
+            c.self_scopes += 1
         if r.kind_id == .k_type_constraint
             for p_node in r.children
                 if p_node.kind_id == .k_type_path || p_node.kind_id == .k_expr_path
@@ -395,5 +406,7 @@ impl Ast_node
                     c.template_of_args(r, child).unwrap_or(null), gen_params, inner_bound)
             else if child != left_to_body
                 child.validate_all_type_exprs(c, gen_params, inner_bound)
+        if is_self_scope
+            c.self_scopes -= 1
         if added_params > 0
             gen_params.len -= added_params

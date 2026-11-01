@@ -141,8 +141,13 @@ impl Body_reader
                     r.framing = .done
                     return .some(.done)
                 check_trailer(text)!
+                // **The cap counts whole lines too**, not only one still arriving: a peer whose
+                // reads each end on a line's end would otherwise send trailers without end.
+                total: = seen + text.len + 2
+                if total > http.MAX_HEAD_BYTES
+                    throw .invalid_chunk("the trailers are larger than 64 KiB")
                 r.drop(text.len + 2)
-                r.framing = .trailers(seen + text.len + 2)
+                r.framing = .trailers(total)
             case .done
                 return .some(.done)
 

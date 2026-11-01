@@ -59,6 +59,10 @@ const sections = {
       await js("Array.from(document.querySelectorAll('.files [data-cmd]')).filter((b) => !b.hidden)" +
         ".map((b) => b.dataset.cmd).join() === 'print'"),
     "a page opened from a file offers Print alone in File; a host gives it a source");
+    const names = await js("[document.querySelector('.menubar .doc-name').textContent, document.title, " +
+      "getComputedStyle(document.documentElement).getPropertyValue('--print-name').trim()].join('|')");
+    check(names === 'Untitled|Untitled - ksmd|"Untitled"',
+      "a document with no file is Untitled in the menu bar, the window's title and the printed header", names);
   },
 
   async typing() {

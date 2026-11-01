@@ -145,8 +145,7 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Bui
     //< Compiles entry (from the folder dir) to C and links it with the sanitizer into exe
     //< `opt` is `opt_for_run` or `opt_for_build`.
     $flags: = List<|U8[]|>(arena)
-    for f in TSAN_CFLAGS
-        flags.push(f)
+    flags.push_all(U8[][]::TSAN_CFLAGS)
     flags.push(opt)
     return harness_sanitizer.build(dir, entry, exe, flags.slice(), false, "", arena)
 
@@ -173,15 +172,13 @@ struct Raced //< one sanitized run: the check it reports to, where it runs, and 
 priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[][] //<
     //< argv as a raced run starts it: under `RACE_STACK_KIB`, its logs in log_dir, env set
     $out: = List<|U8[]|>(arena)
-    for w in U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", RACE_STACK_KIB, "env" }
-        out.push(w)
+    out
+        .push_all(U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", RACE_STACK_KIB, "env" })
     out
         .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena))
         .s(":handle_abort=1").take())
-    for e in env
-        out.push(e)
-    for a in argv
-        out.push(a)
+    out.push_all(env)
+    out.push_all(argv)
     return out.slice()
 
 priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<

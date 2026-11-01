@@ -117,10 +117,30 @@ priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@,
         //< The elements must fit the declared length; **if not counted here, the C compiler reports
         //< it.** A `T[_]` is sized earlier (size_inferred_array_literal), so `arr_size < 0` means
         //< uncheckable, not "not known yet".
+        //< Caution: **Refuse an index that is not a constant from 0 up, and a field name.** Both
+        //< were once taken as the next position in silence; a negative index stores before the
+        //< array.
+    if name_node: = child.get_field_init_name()
+        c.clear_scratch()
+            .s("an array's element has no field name '.\{name_node.text\}'. Write its index ('[0] = \
+                …'), or write the value alone")
+        c.err(name_node, c.scratch.slice())
+        walk.at += 1
+        return
     if idx_node: = child.get_field_init_index()
         idx_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)!
-        if at: = c.try_eval_constexpr(idx_node)
-            walk.at = at
+        switch c.try_eval_constexpr_wide(idx_node)
+        case .some(at)
+            if at < 0
+                c.clear_scratch().s("an array's index cannot be negative, but this one is \{at\}")
+                c.err(idx_node, c.scratch.slice())
+                return
+            walk.at = Sz::at
+        case .none
+            c.err(idx_node,
+                "an array literal's index must be a compile-time constant. Write the value with no \
+                    index, or assign the element after the declaration ('a[i] = v')")
+            return
     if arr_size >= 0 && walk.at >= Sz::arr_size
         c.clear_scratch()
             .s("too many initializers for an array of length \{arr_size\}. This initializer has \

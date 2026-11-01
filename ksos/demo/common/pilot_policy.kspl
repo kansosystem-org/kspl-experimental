@@ -32,6 +32,7 @@ enum Pilot_error
     missing //< a required tensor is absent
     bad_dtype //< a tensor's elements are not F32
     bad_shape //< a tensor's shape differs from what this version expects
+    bad_value //< a manoeuvre value lies outside ±`encoding.DRIVE_MAX`, or is not a number
 
 struct Drive //< values that can be passed to the car's `motor.drive` as they are
     //< **Positive = forward / right / clockwise**.
@@ -145,6 +146,12 @@ fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
         throw .bad_shape
     if !is_shape(man, actions, encoding.DRIVE_FIELDS)
         throw .bad_shape
+    // Caution: **Check every manoeuvre value too.** The car multiplies each by its cap in I32, and
+    // a huge value wraps there, so the wheels turn the other way. Written so a NaN fails too.
+    max: = F32::encoding.DRIVE_MAX
+    for i in Range.asc(actions * encoding.DRIVE_FIELDS)
+        if !(man[i] >= -max && man[i] <= max)
+            throw .bad_value
 
     // The same nn.Mlp as the producer: one forward pass, not a copy of the formula.
     $mlp: = nn.Mlp<|F32|>(encoding.FEATURE_COUNT, hidden, actions, arena)
@@ -162,7 +169,8 @@ fn decide(p: Policy$@, dist_mm: I64, line: I64, compute: Arena$@): Drive //<
     //< are 0, and number 0 is "stop".
     x: = encoding.features(dist_mm, line, p.far_mm, compute)
     best: = Sz::sampler.argmax(p.mlp.forward(x))
-    // The manoeuvre table holds small integers as F32, so truncation recovers them exactly.
+    // The manoeuvre table holds small integers as F32 (`load` checked their range), so truncation
+    // recovers them exactly.
     row: = best * encoding.DRIVE_FIELDS
     return Drive::{ .lon = I32::p.maneuvers[row], .lat = I32::p.maneuvers[row + 1],
         .rot = I32::p.maneuvers[row + 2] }

@@ -23,7 +23,6 @@ Caution: **Do not reach for a synonym.** If one thing has two names, the reader 
 | **declare** | What a file or a type does when it states what it is, so the reader need not guess |
 | **block** | A region marked off by indentation or by braces. **Not a stage and not a table column** (see the next row) |
 | **stage** | One step of a plan in `PLAN.md`, numbered inside its section. Every section counts from 1 again, and a stage that branches gets a letter (`stage 6a`) |
-| **phase** | One step of the project's status in the root [`../README.md`](../README.md) (`Phase N`), and nothing else. A `PLAN.md`'s stage 2 and the README's Phase 2 are different things |
 | **entry point** | Where control enters: a `main`, a folder's `README.md`, the first file a tool reads |
 | **interface** | The way one part is reached from another. Narrowing access to one interface is a design decision, so it gets a name |
 | **leaf** | The layer that only points upward (`tests/` / `tools/`). See the layer table below |
@@ -404,8 +403,6 @@ Caution: **Do not write `[I0301](description)`.** A `(` directly after `]` makes
 A quoted name is still looser than a link: a wrong name survives as long as its words stay inside some heading.
 
 **The anchor of a heading that starts with an emoji carries a leading hyphen**: the id of `## 🏗 Architecture` is `#-architecture`.
-
-**A `Phase N` is named with `README.md` nearby**, so the reader can trace the numbering to the root README; `make test-docref` checks this too.
 
 **A stage in another document is named with its document** ("the board material's stage 8"), since every plan counts its stages from 1.
 

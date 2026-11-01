@@ -159,6 +159,9 @@ test-ksos-cap:
 POSIX_PORT_SRC := port/posix/ksos_port_posix.c
 
 POSIX_OUT := $(OUT)/ksos_posix
+# The same folder as the start of a command: a relative one needs `./` (the shell looks a bare
+# name up in PATH), and an absolute one must not have it (`.//tmp/...` is no file).
+POSIX_BIN := $(if $(filter /%,$(POSIX_OUT))$(findstring :,$(POSIX_OUT)),,./)$(POSIX_OUT)
 
 # $(call posix_link,<src.kspl>,<the output stem>): the demo's executable; the caller runs it.
 define posix_link
@@ -171,7 +174,7 @@ endef
 ksos:
 	@echo "# BUILDING KANSO OS (POSIX host demo)"
 	$(call posix_link,demo/posix/producer_consumer.kspl,ksos_demo)
-	$(call ksos_capped_run,./$(POSIX_OUT)/ksos_demo.exe)
+	$(call ksos_capped_run,$(POSIX_BIN)/ksos_demo.exe)
 
 # --- The demos run on a POSIX host -------------------------------------------------
 # A row is `<suffix>:<input>`: `ksos-<suffix>` builds `demo/posix/<input>.kspl` into
@@ -194,7 +197,7 @@ define ksos_posix_demo_rule
 ksos-$(1):
 	@echo "# BUILDING KANSO OS (POSIX demo/posix/$(2).kspl)"
 	$$(call posix_link,demo/posix/$(2).kspl,ksos_$(call us,$(1)))
-	$$(call ksos_capped_run,./$$(POSIX_OUT)/ksos_$(call us,$(1)).exe)
+	$$(call ksos_capped_run,$$(POSIX_BIN)/ksos_$(call us,$(1)).exe)
 endef
 $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
 
@@ -210,6 +213,9 @@ ksos_posix_panic_needle_delete-holder := ksos: a task ended holding a mutex
 ksos_posix_panic_needle_timeout-zero := ticks must be greater than 0
 ksos_posix_panic_needle_event-no-bits := wanted must name at least one bit
 ksos_posix_panic_needle_stop-outside := ksos: stop_scheduler while no scheduler runs
+ksos_posix_panic_needle_wait-masked := ksos: a waiting call with interrupts off
+ksos_posix_panic_needle_delay-before-start := ksos: task-only call with no running task
+ksos_posix_panic_needle_create-again := ksos: Task.create on a task still in the task table
 
 KSOS_POSIX_PANIC := $(sort $(patsubst ksos_posix_panic_needle_%,%,\
     $(filter ksos_posix_panic_needle_%,$(.VARIABLES))))
@@ -221,7 +227,7 @@ define ksos_posix_panic_rule
 ksos-$(1):
 	@echo "# BUILDING KANSO OS (POSIX demo/posix/panic_demo.kspl $(1), which must panic)"
 	$$(call posix_link,demo/posix/panic_demo.kspl,ksos_$(call us,$(1)))
-	@$$(call ksos_capped,./$$(POSIX_OUT)/ksos_$(call us,$(1)).exe $(1) >$$(POSIX_OUT)/ksos_$(call us,$(1)).out 2>&1); \
+	@$$(call ksos_capped,$$(POSIX_BIN)/ksos_$(call us,$(1)).exe $(1) >$$(POSIX_OUT)/ksos_$(call us,$(1)).out 2>&1); \
 	sed 's/^/| /' $$(POSIX_OUT)/ksos_$(call us,$(1)).out >&2; \
 	if grep -q "$(ksos_posix_panic_needle_$(1))" $$(POSIX_OUT)/ksos_$(call us,$(1)).out; then \
 		echo "RESULT: ALL PASS (ksos-$(1): the kernel stopped with the expected message)"; \
@@ -346,7 +352,7 @@ nrf51_link = $(call bare_link,$(CM0_CC),$(NRF51_OUT),$(NRF51_DIR)/link.ld,$(NRF5
 # (Armv6-M has none; the RP2040's come from its SIO): the AI, heap, pilot and car probes stay on
 # the Cortex-M3.
 KSOS_CM0_DEMOS := min preempt mq pi event timeout isr-block isr-unlock isr-give stack-guard \
-    panic-probe
+    panic-probe wait-masked
 
 CM0_WHERE := Cortex-M0 (thumbv6m, QEMU microbit)
 $(foreach r,$(KSOS_CM0_DEMOS),$(eval $(call qemu_demo_rule,cm0,$(r),demo/cortex_m/cortex_m_,$$(NRF51_LINK_OBJS),$$(NRF51_OUT),nrf51_link,microbit,cortex-m0,CM0_WHERE)))

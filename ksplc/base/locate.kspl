@@ -117,17 +117,23 @@ priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empt
             return base_core.perm_arena.dup_str(at)
     return ""
 
-priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
+fn append_exe_path(out: Str_builder$@): Bool //<
+    //< It writes this executable's path, links resolved, into out; false where it is unknown
     //< Caution: **Do not take the executable from argv[0]** (the reason is at `kspl_exe_path` in
     //< `gen/runtime/hosted_spawn.c`).
     $buf: U8[OS_PATH_BYTES] = ::{}
     n: = kspl_exe_path(buf[0]@, OS_PATH_BYTES)
     if n == 0
-        return ""
+        return false
     // `/` throughout, as cwd() below does, so `info std-dir` names it in one spelling.
-    defer $exe: = Str_builder()
     for c in U8[]::{ .ptr = buf[0]@, .len = n }
-        exe.c('/' if sys.is_path_sep(c) else c)
+        out.c('/' if sys.is_path_sep(c) else c)
+    return true
+
+priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
+    defer $exe: = Str_builder()
+    if !append_exe_path(exe@)
+        return ""
     return base_core.arena.dup_str(sys.get_dir_name(exe.slice()))
 
 fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked for
@@ -355,15 +361,26 @@ fn to_project_relative(path: U8[]): U8[] //<
 
 fn rest_under(path: U8[], dir: U8[]): U8[] //<
     //< What follows `dir` and a separator in `path`; empty where `path` is not under it
-    //< `/` and `\` match each other (Windows mixes them); nothing else is normalized, so write both
-    //< from the same root.
+    //< `/` and `\` match each other (Windows mixes them), and so does a drive letter in either
+    //< case on Windows. Nothing else is normalized, so write both from the same root.
+    return rest_under_drive(path, dir, sys.is_windows())
+
+fn rest_under_drive(path: U8[], dir: U8[], has_drive: Bool): U8[] //<
+    //< `rest_under`, where `has_drive` says whether a path can open with a drive (`C:`)
+    //< **A drive letter matches in either case**: Windows reads `c:` and `C:` as one drive, and an
+    //< editor writes it in lower case in a URI (`file:///c%3A/…`) while the working folder has it
+    //< in upper case. Read as two, a file in the workspace would be outside it. The parameter lets
+    //< a test on any OS check the Windows answer.
     if dir.len == 0 || path.len <= dir.len + 1 ||
         !sys.is_path_sep((path.ptr + dir.len)$)
         return ""
+    drive: = has_drive && dir.len >= 2 && dir[1] == ':'
     for i in Range.asc(dir.len)
         a: = (path.ptr + i)$
         b: = (dir.ptr + i)$
-        if a != b && !(sys.is_path_sep(a) && sys.is_path_sep(b))
+        if a == b || (sys.is_path_sep(a) && sys.is_path_sep(b))
+            continue
+        if !(drive && i == 0 && a.to_lower() == b.to_lower())
             return ""
     return path.sub_from(dir.len + 1)
 

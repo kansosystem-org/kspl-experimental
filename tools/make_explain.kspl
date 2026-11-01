@@ -210,13 +210,13 @@ priv fn kind_of(e: Entry): U8[] //< what kind of target it is, in a few words
 
 priv fn print_help(r: Report@, name: U8[], arena: Arena$@) //<
     //< its `##` line from `make help`, if any
+    $texts: = List<|U8[]|>(arena)
     for file in r.files
-        text: = io.read_file(shown_path(r, file, arena), arena) catch
-            continue
-        if h: = make_db.help_line(text, name, arena)
-            io.out().s("  help  ").s(shown_path(r, file, arena)).s(":\{h.line\}  ").s(h.text)
-                .s(" (`make help`, group ").s(h.group).s(")\n")
-            return
+        // A file that cannot be read keeps its place, so h.file still names it in r.files.
+        texts.push(io.read_file(shown_path(r, file, arena), arena) catch "")
+    if h: = make_db.help_line(texts.slice(), name, arena)
+        io.out().s("  help  ").s(shown_path(r, r.files.get(h.file), arena)).s(":\{h.line\}  ")
+            .s(h.text).s(" (`make help`, group ").s(h.group).s(")\n")
 
 priv fn print_prereqs(r: Report@, e: Entry, arena: Arena$@) //< each prerequisite, and its state
     if e.prereqs.len + e.order_only.len == 0

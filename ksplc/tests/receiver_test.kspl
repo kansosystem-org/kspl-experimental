@@ -194,3 +194,19 @@ fn test_write_through_a_method_result(arena: Arena$@)
     h.me().nums[2] = 7
     assert(h.xs[0] == 113 && h.nums[2] == 7, "the same through two calls in a row")
     verdict.pass("a write through a method's result reaches the place it returns.")
+
+impl U8[]
+    priv fn rv_drop_last(r: Self$@): Sz //< changes the descriptor, not the bytes
+        r.len -= 1
+        return r.len
+
+fn test_string_literal_taken_by_address() //<
+    //< A string literal whose address is taken is a fresh value each time
+    //< A literal read as a value is a named `static const` in the C. `&` on that constant would
+    //< hand a writing receiver read-only memory, so the C warns and the write crashes.
+    verdict.start("[Receiver] a writing method and '@' on a string literal test...")
+    assert("abcd".rv_drop_last() == 3, "a method that changes the descriptor runs on a literal")
+    assert("abcd".rv_drop_last() == 3, "and the next use of the same literal starts from 4")
+    p: = "abcd"@
+    assert(p.len == 4 && "abcd".len == 4, "an address taken of a literal reads it whole")
+    verdict.pass("a literal whose address is taken is its own value, not the shared constant.")

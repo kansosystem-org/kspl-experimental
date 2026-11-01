@@ -108,17 +108,6 @@ A row counts only what actually ran.
 
 **The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("🤖 The AI on bare metal" in [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md)). [`ksos/docs/HOWTO-bring-up.md`](ksos/docs/HOWTO-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
 
-### Phases
-
-**These foundation phases are complete**, in this order. The table above states how far each part is confirmed.
-
-| Phase | Subject | State |
-| :--: | :-- | :--: |
-| 0 | Self-hosting from a minimal seed written in C | ✅ |
-| 1 | The formatter, the Language Server and the linter | ✅ |
-| 2 | A general-purpose language: `std/`, `ksai/`, `ksos/`, and what bare metal needs (inline assembly, `volatile`, custom linker scripts) | ✅ |
-| 3 | Embedded systems, the Internet of Things (IoT) and edge AI. The Edge AI loop stores its result across power cycles in `ksdb/`. | ✅ |
-
 **Current work improves the existing parts** rather than adding features. [`docs/PLAN.md`](docs/PLAN.md) lists the remaining work by package.
 
 ### Where it is supported

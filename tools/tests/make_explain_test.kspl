@@ -116,6 +116,25 @@ fn test_reading_the_make_files(arena: Arena$@) //< operators, rule lines, condit
         make_db.gnu_make_major("make 3.81") == 0, "the distance and the version")
     verdict.pass("operators, rule lines, conditionals and MAKEFLAGS are read as make reads them.")
 
+fn test_choosing_the_help_line(arena: Arena$@) //< the exact line first, in any file
+    //< **A family read first must not hide an exact line**: `mk/test.mk`'s `test-*` comes before
+    //< `mk/ksmd.mk`'s `test-ksmd-open` in make's order.
+    verdict.start("[tools/make_db] choosing the help line test...")
+    family: = "## Gates|test-*|One suite\n## Run|ksos-*|One demo\n"
+    exact: = "## Run|ksos-cm-*|One Cortex-M demo\n## Gates|test-x|The x gate\n"
+    texts: = U8[][]::{ family, exact }
+    h: = make_db.help_line(texts, "test-x", arena) catch
+        assert(false, "a target with a line has a help line")
+        return
+    assert(h.file == 1 && h.line == 2 && h.text.equals("The x gate"),
+        "the exact line wins over a family read before it")
+    assert(make_db.help_line(texts, "test-y", arena).unwrap_or(h).text.equals("One suite"),
+        "a target with no line of its own takes its family's")
+    assert(make_db.help_line(texts, "ksos-cm-min", arena).unwrap_or(h).text
+        .equals("One Cortex-M demo"), "the longest family wins over a shorter one read before it")
+    assert(make_db.help_line(texts, "other", arena).is_none(), "a target with no line has none")
+    verdict.pass("the exact help line wins in any file, and then the longest family.")
+
 priv fn line(text: U8[]): make_db.Source_line //< one logical line, not a recipe
     return make_db.Source_line::{ .first = 1, .text = text, .recipe = false }
 
@@ -140,8 +159,10 @@ priv fn gnu_make(arena: Arena$@): U8[] //<
     // **The name alone can start another make**: on MSYS2 it can find UCRT64's, which the root
     // make file refuses, so make stops before it reads a rule.
     $names: = U8[][]::{ "gmake", "make" }
+    $given_one: U8[][1] = ::{ "" }
     if given: = sys.get_env("KANSO_MAKE")
-        names = U8[][]::{ given }
+        given_one[0] = given
+        names = U8[][]::given_one
     for name in names
         r: =
             subproc.run_capture(U8[][]::{ name, "--version" }, "", 10000, 4096, arena) catch
@@ -169,8 +190,7 @@ priv fn explain(make: U8[], target: U8[], sets: U8[][], arena: Arena$@): subproc
     for w in U8[][]::{ SEED, "run", "tools/make_explain.kspl",
         arena.text().s("--make=").s(make).take(), "--not-settings=T,LOGGING", target, "LOGGING=1" }
         argv.push(w)
-    for s in sets
-        argv.push(s)
+    argv.push_all(sets)
     return run(argv.slice(), arena)
 
 priv fn section(out: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //< one section's lines
@@ -242,7 +262,7 @@ fn test_explaining_the_fixture(arena: Arena$@) //< every kind of variable, and a
         .s("the tool printed:\n")
     for l in pattern.stdout_data.lines(arena)
         said.s("  | ").s(l).c('\n')
-    assert(cmds.len == 1 && cmds.get(0).equals("cp a.src out/a.txt"), U8$[]::said.take())
+    assert(cmds.len == 1 && cmds.get(0).equals("cp a.src out/a.txt"), said.take())
     group: =
         explain(make, arena.text().s(FIXTURE).s(":group").take(), sets, arena)
     assert(group.stdout_data.find_str("Commands: none").is_some(), "a rule with no recipe")
@@ -276,7 +296,7 @@ fn test_explaining_real_targets(arena: Arena$@) //< `chat` and `help`, held to m
         .s("the tool printed:\n")
     for l in chat.stdout_data.lines(arena)
         seen.s("  | ").s(l).c('\n')
-    assert(checked >= 5, U8$[]::seen.take())
+    assert(checked >= 5, seen.take())
     assert(chat.stdout_data.find_str("MODEL       not given.").is_some() &&
         chat.stdout_data.find_str("DIR         not given.").is_some(),
         "the settings chat reads are named")
@@ -399,4 +419,12 @@ fn test_values_reach_programs_as_typed(arena: Arena$@) //< quotes, `$` and backt
     assert(all.len > 0 &&
         all.get(all.len - 1)
         .equals(arena.text().s("[").s(want).s("]").take()), "`T` reaches the tool as typed")
+    opened: =
+        explain(make, "ksmd-open",
+        U8[][]::{ arena.text().s("FILE=").s(typed).take() }, arena)
+    opens: = section(opened.stdout_data, "Commands, filled in", arena)
+    assert(opens.len >= 1, "ksmd-open runs a command")
+    last: = opens.get(opens.len - 1)
+    assert(argv_of(last, "./out/ksmd.exe", arena).lines(arena).get(0)
+        .equals(arena.text().s("[").s(want).s("]").take()), "`FILE` reaches the launcher as typed")
     verdict.pass("a quote, a `$` and a backtick reach the program as one word, as typed.")

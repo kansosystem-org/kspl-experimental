@@ -197,13 +197,11 @@ fn test_tokenizer_load_lists(arena: Arena$@) //<
     want: = I32[]::{ 6, 7, 5, 8, 2, 10, 11, 2, 11, 12 }
     assert(ids.len == want.len, "the text gives one ID per chunk and per marker")
     for i in Range.asc(want.len)
-        assert(ids[i] == want[i],
-            U8$[]::arena.text().s("ID \{i\} is \{ids[i]\}").take())
+        assert(ids[i] == want[i], arena.text().s("ID \{i\} is \{ids[i]\}").take())
     assert(tok.decode(ids, arena).equals(text), "the IDs decode back to the text")
     assert(refused(tokens.slice(), I32[]::{ NORMAL }, merges).equals("types"), "a short type list")
     $raw: = List<|U8[]|>(arena)
-    for t in tokens
-        raw.push(t)
+    raw.push_all(tokens.slice())
     raw[3] = " " // a space is not in GPT-2's mapping: the mapping writes it `Ġ`
     assert(refused(raw.slice(), types, merges).equals("tokens"), "a byte outside the mapping")
     raw[3] = "a"
@@ -304,6 +302,12 @@ fn test_sampler(arena: Arena$@)
     for _i in Range.asc(20)
         top1_tok: = ai_sampler.sample(logits, top1, rng@, arena)
         assert(top1_tok == 1, "Sampler: top_k=1 must always return the argmax token")
+    // A temperature above 0 but so small that a score divided by it is infinite. Each such
+    // score then gave inf - inf = NaN, and the pick fell to the last token in the vocabulary.
+    tiny: = ai_sampler.Sample_config::{ .temperature = 1.0e-300 / 1.0e20, .top_k = 0,
+        .top_p = 1.0 }
+    tiny_tok: = ai_sampler.sample(logits, tiny, rng@, arena)
+    assert(tiny_tok == 1, "Sampler: a tiny temperature must pick the argmax, not the last token")
     verdict.pass("")
 priv fn insertion_pick(logits: Tensor<|F32|>, cfg: ai_sampler.Sample_config, rng: prng.Prng$@,
     arena: Arena$@): I32 //<

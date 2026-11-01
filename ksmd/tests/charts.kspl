@@ -1,17 +1,13 @@
 //< Charts: how `:::chart` reads and saves, how it follows its table, and inserting and setting one
-import "ksmd/base/source" { Source }
 import "ksmd/edit/edit"
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_tables"
-import "ksmd/syntax/reader"
-import "ksmd/syntax/writer"
-import "ksmd/tests/tables" { opened, saves }
+import "ksmd/tests/support" { opened, refused, saves, written }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
-import "std/str" { Str_builder }
 import "std/verdict"
 
 priv const TABLE: U8[] =
@@ -96,16 +92,16 @@ priv fn names()
     ed.set_cell(0, -1, 2, "cost") catch e
         verdict.check("a name after a drawn one's", false, e.message())
     verdict.check("a column after a drawn one can take its name, which still finds the first",
-        source_of(ed@, arena).find_str("| \"cost\" | \"cost\" |").is_some(), "")
+        written(ed.doc@, arena).find_str("| \"cost\" | \"cost\" |").is_some(), "")
     $twice: =
         opened("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"x\" | \"x\" |\n| 1 | 2 | 3 \
             |\n:::\n\n:::chart table=\"t\" kind=\"bar\" labels=\"a\" values=\"x\"\n:::\n", arena)
-    before: = source_of(twice@, arena)
+    before: = written(twice.doc@, arena)
     $moved: = true
-    edit.move_column(twice.doc@, 0, 2, 0) catch
+    edit.move_columns(twice.doc@, 0, 2, 1, 0) catch
         moved = false
     verdict.check("a column does not move before a drawn column of the same name",
-        !moved && source_of(twice@, arena).equals(before), "")
+        !moved && written(twice.doc@, arena).equals(before), "")
     unnamed: = "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"cost\" |\n| \"Jan\" | 1 |\n:::\n"
     $blank: = opened(unnamed, arena)
     $inserted: = true
@@ -125,20 +121,5 @@ priv fn lost(ed: Editor$@, what: U8[], column: Sz, name: U8[], text: U8[], arena
         return
     verdict.check(what, false, "the name was set")
 
-priv fn source_of(ed: Editor@, arena: Arena$@): U8[] //< the source the document saves as
-    defer $out: = Str_builder()
-    writer.write(ed.doc@, out@)
-    return arena.dup_str(out.slice())
-
 priv fn doc_with(chart: U8[], arena: Arena$@): U8[] //< the table `t`, then a chart clause
     return arena.text().s("%ksmd 1\n\n").s(TABLE).s("\n").s(chart).take()
-
-priv fn refused(text: U8[], what: U8[]) //< the reader refuses the source
-    defer arena: = Arena(64 * 1024)
-    src: = Source("bad.ksmd", text) catch e
-        verdict.check(what, false, e.message)
-        return
-    _doc: = reader.read(src@, arena) catch
-        verdict.check(arena.text().s("refused: ").s(what).take(), true, "")
-        return
-    verdict.check(arena.text().s("refused: ").s(what).take(), false, "the source was read")

@@ -220,22 +220,22 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
     verdict.start("[examples] qwen_infer answers as the reference does")
     weights: = fs.join(work, "mini_qwen.safetensors", arena)
     fs.mkdir_all(work) catch
-        panic(U8$[]::arena.text().s("cannot create the working directory: \{work\}").take())
+        panic(arena.text().s("cannot create the working directory: \{work\}").take())
     assert(write_weights(weights, VOCAB, arena),
-        U8$[]::arena.text().s("cannot write \{weights\}").take())
+        arena.text().s("cannot write \{weights\}").take())
 
     said: = ran(qwen_exe, weights, TOKENS_IN, arena)
     // The shape read matches the config. **Check this first**: with the wrong shape the answer
     // never matches, so this tells "the weights are not being read" apart.
     shape_said: = "layers=2 hidden=8 heads=2/1 vocab=8"
     assert(said.err.find_str(shape_said).is_some(),
-        U8$[]::arena.text().s("it did not name the shape \{shape_said\}: \{said.err\}").take())
+        arena.text().s("it did not name the shape \{shape_said\}: \{said.err\}").take())
     verdict
         .pass(arena.text().s("it names the shape it read (").s(shape_said).s(")").take())
 
     got_argmax: = i64_or(after(said.out, ARGMAX_HEAD, arena), -1I64)
     assert(got_argmax == WANT_ARGMAX,
-        U8$[]::arena.text().s("the largest logit is at \{got_argmax\}, the reference's at ")
+        arena.text().s("the largest logit is at \{got_argmax\}, the reference's at ")
         .s("\{WANT_ARGMAX\}: \{said.out.trim_spaces()\}").take())
     verdict
         .pass(arena.text()
@@ -243,7 +243,7 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
 
     got: = logits_of(said.out, arena)
     assert(got.len == VOCAB,
-        U8$[]::arena.text().s("\{I32::got.len\} logits came out: \{said.out.trim_spaces()\}").take())
+        arena.text().s("\{I32::got.len\} logits came out: \{said.out.trim_spaces()\}").take())
     verdict
         .pass(arena.text().s("as many logits as the vocabulary come out (\{I32::got.len\})").take())
     $wrong: Sz = 0
@@ -253,7 +253,7 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
             wrong += 1
             off.s(" [\{I32::i\}] got=\{got.get(i)\} ref=\{WANT_LOGITS[i]\}")
     assert(wrong == 0,
-        U8$[]::arena.text().s("the logits differ from the reference:").s(off.take()).take())
+        arena.text().s("the logits differ from the reference:").s(off.take()).take())
     verdict
         .pass(arena.text().s("the logits match the reference values (tolerance \{TOL\})").take())
     // The gap between the top two. **If it is small, `ARGMAX` matching is luck** (the ranks swap
@@ -268,7 +268,7 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
         else if i > 0 && v > second
             second = v
     assert(top - second > NEED_GAP,
-        U8$[]::arena.text().s("the top two are \{top - second\} apart").take())
+        arena.text().s("the top two are \{top - second\} apart").take())
     verdict
         .pass(arena.text()
         .s("the gap between the top two is larger than \{NEED_GAP\} (\{top - second\})").take())
@@ -277,7 +277,7 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
     // rebuild would add translation differences, so a difference could not be pinned down.
     twice: = ran(qwen_exe, weights, TOKENS_IN, arena)
     assert(twice.out.equals(said.out),
-        U8$[]::arena.text().s("the second round said otherwise: \{twice.out.trim_spaces()\}").take())
+        arena.text().s("the second round said otherwise: \{twice.out.trim_spaces()\}").take())
     verdict.pass("the second round puts out the same answer")
 
     // The run with no tokens.
@@ -285,7 +285,7 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
     // read".
     empty: = ran(qwen_exe, weights, "", arena)
     assert(empty.err.find_str("there is no token ID on standard input").is_some(),
-        U8$[]::arena.text().s("with no token it said: \{empty.err.trim_spaces()\}").take())
+        arena.text().s("with no token it said: \{empty.err.trim_spaces()\}").take())
     verdict.pass("with no token handed over it says the reason")
 
     // **An adapter for another model is refused when read, naming the file.** Let through, it
@@ -297,9 +297,8 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
     tuned: = ran(qwen_exe, weights, TOKENS_IN, arena, fits)
     assert(tuned.err.find_str("LoRA adapter loaded").is_some() &&
         after(tuned.out, ARGMAX_HEAD, arena).len > 0,
-        U8$[]::arena.text().s("the adapters that fit were not used: \{tuned.err\}").take())
+        arena.text().s("the adapters that fit were not used: \{tuned.err\}").take())
     refused: = ran(qwen_exe, weights, TOKENS_IN, arena, foreign)
     assert(refused.err.find_str(arena.text().s("LoRA load failed: \{foreign\}").take()).is_some(),
-        U8$[]::arena.text().s("an adapter for another model was not refused: \{refused.err\}")
-        .take())
+        arena.text().s("an adapter for another model was not refused: \{refused.err\}").take())
     verdict.pass("adapters that fit are used, and ones for another model are refused by name")

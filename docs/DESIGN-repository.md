@@ -348,13 +348,10 @@ sequenceDiagram
 
 **The token goes across once, in the fragment, and stays in the tab.** (The *fragment* is the part of a URL after `#`.) Whoever holds it can read and write every file under the root.
 
-| The token is not… | Why |
-| :-- | :-- |
-| **In a query** (after `?`) | A fragment is never sent to the server, so another process cannot get the token by sending `GET /` |
-| **In the response that serves the page**, or in a response header | Anyone who knows the address could read it there |
-| **In a cookie** | The browser attaches a cookie on its own, to a malicious page's requests too. So the token rides in a header |
-| **On the command line** | `ps` shows it to anyone on the machine |
-| **Compared byte by byte with an early exit** | A page can send requests to the loopback address. A difference in return time would let it guess the token a byte at a time |
+Where else the token must not travel, and why, is "How the token gets across" in [`SPEC-local-server.md`](SPEC-local-server.md). Two reasons are not written there:
+
+* **Not in a cookie**: the browser attaches a cookie on its own, to a malicious page's requests too. So the token rides in a header.
+* **Not on the command line**: `ps` shows it to anyone on the machine.
 
 **What it gives up**: a person opens one URL once per start-up. `history.replaceState` keeps the token out of the browser's history.
 
@@ -513,7 +510,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 
 **The shared jobs divide the compiler's extraction suites too**, so the heavy suites do not collect in one job ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). Each share repeats the bootstrap, since each job needs a compiler of its own. Every regression suite runs in exactly one job, and no job is added.
 
-**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race`, `test-sanitize` and `test-ksmd-browser` in the Linux job. On a round that starts with nothing built, `self-host-ship` and self-host ×2 join them.
+**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race` and `test-sanitize` in the Linux job, and `test-ksmd-browser` in job a's Linux run. On a round that starts with nothing built, `self-host-ship` and self-host ×2 join them.
 
 **`-j` barely takes effect on GitHub's runners**, so a runner is effectively one core, and the only route to faster gates is less total work. The reproduction is `taskset -c 0 make -j1 test-suites`: `sys.cpu_count` follows the affinity, so the suites' own side-by-side runs drop to one as well.
 
@@ -524,7 +521,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 | test-suites | With the cores full, **the total amount of work** fixes it. **No job is added for them**: each job pays its own start-up and billing ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `SUITES` is kept longest first (the grounds are at `SUITES` in `mk/test.mk`) |
 | test-race / test-sanitize / self-host-ship | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer or at `-O2` |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
-| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)). **They run in the core job's Linux run**, the shortest Linux job without them, and stay together there so those files are built once |
+| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)). **They run in job a's Linux run**, the shortest Linux job without them, and stay together there so those files are built once |
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, and a fine-grained name points straight at the cause. Only the same property inspected in two places can be merged.
 

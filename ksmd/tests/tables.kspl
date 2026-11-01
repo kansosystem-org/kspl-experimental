@@ -2,15 +2,12 @@
 //< names, column widths, pasting and filling
 //< Each check compares the saved source, and undo and redo give back the source before and after.
 //< Values are checked through calculation, so a reference left on the wrong cell shows.
-import "ksmd/base/source" { Source }
 import "ksmd/calc/calc"
 import "ksmd/edit/editor" { Editor, Refused }
-import "ksmd/edit/editor"
 import "ksmd/edit/editor_tables" { Table_edit }
 import "ksmd/edit/history" { capture }
 import "ksmd/edit/region" { gap_spot, text_spot }
-import "ksmd/syntax/reader"
-import "ksmd/syntax/writer"
+import "ksmd/tests/support" { opened, saves, written }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -53,7 +50,7 @@ priv fn inserting()
     saves("undo takes the new table back out", ed@, arena,
         join3("%ksmd 1\n\nAb\n\n", T1, "\ncd\n", arena))
     ed.redo()
-    redone: = source_of(ed@, arena)
+    redone: = written(ed.doc@, arena)
     verdict.check("redo puts it back with its name",
         redone.ends_with("\n:::table name=\"table2\"\n| \"\" |\n:::\n"), redone)
     $loose: =
@@ -136,7 +133,7 @@ priv fn removing()
         ed.focus.place == .text && ed.focus.block == 0 && ed.focus.offset == 4, "")
     inserted(ed@, 1, 1)
     verdict.check("a new table takes the free name, and no removed table answers to it",
-        source_of(ed@, arena).find_str("name=\"table1\"").is_some(), "")
+        written(ed.doc@, arena).find_str("name=\"table1\"").is_some(), "")
     ed.undo()
     ed.undo()
     saves("undo brings the table back", ed@, arena, before)
@@ -166,7 +163,7 @@ priv fn naming()
     refused(ed@, "a name the reader refuses is refused", .bad_name, "control characters")
     ed.undo()
     verdict.check("undo gives the old name back",
-        source_of(ed@, arena).find_str("name=\"a\"").is_some(), "")
+        written(ed.doc@, arena).find_str("name=\"a\"").is_some(), "")
     ed.rename_table(0, "Q1 sales | \"net\"") catch e
         verdict.check("a name with spaces, a pipe and quotes", false, e.message())
     quoted: =
@@ -224,12 +221,12 @@ priv fn widths()
 
 priv fn wrong_widths(ed: Editor$@, what: U8[], weights: U8[], arena: Arena$@) //<
     //< Giving block 0's table these widths is refused, and changes nothing
-    before: = source_of(ed, arena)
+    before: = written(ed.doc@, arena)
     list: = weights_of(weights, arena)
     ed.set_widths(0, list@) catch e
         verdict.check(what,
             e.message().find_str("whole number").is_some() &&
-            source_of(ed, arena).equals(before), e.message())
+            written(ed.doc@, arena).equals(before), e.message())
         return
     verdict.check(what, false, "the action was taken")
 
@@ -357,7 +354,7 @@ priv fn looks()
     saves("a look is set on every cell of a rectangle, the names included", ed@, arena, painted)
     set(ed@, 0, 0, 1, "20")
     verdict.check("a new value keeps the cell's look",
-        source_of(ed@, arena).find_str("| 20 {fill=\"#fff2cc\" align=\"center\"} |").is_some(), "")
+        written(ed.doc@, arena).find_str("| 20 {fill=\"#fff2cc\" align=\"center\"} |").is_some(), "")
     ed.undo()
     ed.undo()
     ed.undo()
@@ -572,15 +569,6 @@ priv fn sorted(ed: Editor$@, column: Sz, descending: Bool) //< sorts block 0's t
     ed.sort_table(0, column, descending) catch e
         verdict.check("a sort", false, e.message())
 
-fn opened(bytes: U8[], arena: Arena$@): Editor
-    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
-        verdict.check("a test source is valid", false, e.message)
-        panic("a test source was refused")
-    doc: = reader.read(src@, arena) catch e
-        verdict.check("a test document reads", false, e.message)
-        panic("a test document was refused")
-    return editor.open(doc, "2026-10-23", arena)
-
 priv fn inserted(ed: Editor$@, columns: Sz, rows: Sz)
     ed.insert_table(columns, rows) catch e
         verdict.check("inserting a table", false, e.message())
@@ -607,24 +595,5 @@ priv fn is_error(ed: Editor@, u: Sz, row: Sz, column: Sz, arena: Arena$@): Bool
     r: = calc.calculate(ed.doc@, ed.today, arena)
     return r.at(u, row, column).kind == .error
 
-priv fn source_of(ed: Editor@, arena: Arena$@): U8[]
-    defer $out: = Str_builder()
-    writer.write(ed.doc@, out@)
-    return arena.dup_str(out.slice())
-
 priv fn join3(a: U8[], b: U8[], c: U8[], arena: Arena$@): U8[]
     return arena.text().s(a).s(b).s(c).take()
-
-fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
-    //< The document saves as `expected`, and that source reads and saves again unchanged
-    got: = source_of(ed, arena)
-    verdict.check(what, got.equals(expected), got)
-    src: = Source("again.ksmd", got) catch e
-        verdict.check(what, false, e.message)
-        return
-    again: = reader.read(src@, arena) catch e
-        verdict.check(what, false, e.message)
-        return
-    defer $second: = Str_builder()
-    writer.write(again@, second@)
-    verdict.check(what, second.slice().equals(got), "a second save changed")

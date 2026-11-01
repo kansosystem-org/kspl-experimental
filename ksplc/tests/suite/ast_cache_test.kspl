@@ -64,8 +64,7 @@ priv fn build(dir: U8[], cache: U8[], stem: U8[], src: U8[], extra: U8[][], aren
     gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
     $args: = List<|U8[]|>(arena)
     args.push("--stats")
-    for e in extra
-        args.push(e)
+    args.push_all(extra)
     args.push(src)
     args.push(gen)
     sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
@@ -147,10 +146,53 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
         lsp_client.at_pos(FIXTURE, cfg_probe_line(src), 9, arena), LSP_MS, arena)
     return lsp_client.hover_text(got)
 
-priv fn other_spelling(exe: U8[]): U8[] //< it points at the same executable by a different path
-    //< `argv[0]`'s path, size and time decide the generation's key. So another path makes **a new
-    //< generation in the same directory** with no copy of the executable.
-    return harness.arena().text().s("\{sys.get_dir_name(exe)\}/./\{sys.get_file_name(exe)\}").take()
+priv fn copy_of_ksplc(dir: U8[], arena: Arena$@): U8[] //<
+    //< A copy of the compiler under inspection in `dir`, under its own file name; empty on failure
+    //< The cache tells builds apart by the executable's real path, size and time. So **a copy
+    //< stands for another build**: the key differs, though the code is the same.
+    exe: = harness.ksplc_exe()
+    fs.mkdir_all(dir) catch
+        return ""
+    copy: = fs.join(dir, sys.get_file_name(exe), arena)
+    fs.copy_file(exe, copy) catch
+        return ""
+    return copy
+
+priv fn generations_through_path(work: U8[], arena: Arena$@): U8[] //<
+    //< Why two builds started by one bare name share cache entries; empty where they do not
+    //< Started through PATH, argv[0] is the bare name. **The working folder holds an entry by
+    //< that name**, as the repository holds `ksplc/`, so an identity read from argv[0] finds it
+    //< and gives both builds one key.
+    name: = sys.get_file_name(harness.ksplc_exe())
+    fs.mkdir_all(fs.join(work, name, arena)) catch {}
+    cache: = fs.join(work, "cache_path", arena)
+    fixture: = fs.absolute(FIXTURE, arena) catch
+        return "the fixture's path cannot be made absolute"
+    path: = sys.get_env("PATH").unwrap_or("")
+    sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
+    $why: U8[] = ""
+    for build in U8[][]::{ "path_a", "path_b" }
+        bin: = copy_of_ksplc(fs.join(work, build, arena), arena)
+        if bin.len == 0
+            why = "the compiler cannot be copied"
+            break
+        sys.set_env("PATH", sys.get_dir_name(bin)) catch panic("PATH could not be set")
+        out_c: = fs.join(work, arena.text().s(build).s(".c").take(), arena)
+        ran: = harness.run_in(U8[][]::{ name,
+            arena.text().s("--std-dir=\{harness.std_dir()\}").take(), fixture, out_c }, work)
+        if !ran.exited_with(0)
+            why = arena.text().s("the build in \{build\} fails\n").s(ran.out).take()
+            break
+    // An empty PATH would read as unset to a later case, so the old value goes back as it was.
+    if path.len > 0
+        sys.set_env("PATH", path) catch panic("PATH could not be set")
+    if why.len > 0
+        return why
+    gens: = fs.read_dir(fs.join(cache, "ast", arena), arena) catch
+        return "the generations' place cannot be read"
+    if gens.len != 2
+        return arena.text().s("\{gens.len\} generations for two builds").take()
+    return ""
 
 fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
@@ -268,7 +310,7 @@ fn main(): I32
     // It makes a new generation: the sweep runs only then, not on a build in an existing one.
     sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
     other: = harness
-        .run(U8[][]::{ other_spelling(harness.ksplc_exe()),
+        .run(U8[][]::{ copy_of_ksplc(fs.join(work, "other", arena), arena),
         arena.text().s("--std-dir=\{harness.std_dir()\}").take(), FIXTURE,
         fs.join(work, "ac_other.c", arena) })
     gens_after: = fs.read_dir(ast_dir, arena) catch
@@ -277,4 +319,10 @@ fn main(): I32
         other.exited_with(0) && gens_after.len < gens_before.len,
         arena.text().s("before the sweep \{gens_before.len\} -> after \{gens_after.len\} ")
         .s("(code=\{other.code.unwrap_or(-1)\})\n").s(other.out).take())
+
+    // --- two builds started by one name through PATH keep their entries apart ---
+    // Shared, a fixed compiler would take the AST the old one made, and the fix would not show.
+    split: = generations_through_path(fs.join(work, "through_path", arena), arena)
+    verdict.check("two builds started through PATH by one name get a generation each",
+        split.len == 0, split)
     return harness.finish()

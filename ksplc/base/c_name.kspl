@@ -43,6 +43,16 @@ fn hiding_local_name(name: U8[], hidden_count: I32): U8[] //<
     stem: = name.made_stem() if name.is_made_name() else name
     return made_name(base_core.arena.text().s("shadow\{hidden_count\}_").s(stem).take())
 
+const BODY_C_NAMES: U8[][_] = ::{ "size_t", "ptrdiff_t", "intptr_t", "uintptr_t", "intmax_t",
+    "uintmax_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t",
+    "uint64_t", "exit" } //<
+        //< The C library's names the generated code can spell inside a function body
+        //< A local of such a name would hide it, so it takes a made name (`global_c_names` in
+        //< `../lower/abi.kspl`). `size_t` is `Sz`'s `+`, `uint8_t` a string literal's slice, `exit`
+        //< ends `main`. The whole `<stddef.h>` and `<stdint.h>` type family is listed in advance.
+        //< Caution: **Do not escape them with `C_NAME_SUFFIX`**: `std/libc`'s `exit` keeps its C
+        //< name. **Add each new name to `ksplc/tests/c_keyword_names.kspl`.**
+
 const C_NAME_SUFFIX: U8[] = "_kw" //<
     //< The suffix added in the generated C to a name that equals a C reserved word
     //< Caution: **Keep the rule as "just add it".** If it searched for a free name instead, every

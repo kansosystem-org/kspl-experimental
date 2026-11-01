@@ -65,13 +65,15 @@ impl U8[]
         //< in (the reason is at get_line_info in base/core.kspl).
         info: = r.get_line_info(target_offset, starts)
         return Position::{ .line = info.line - 1, .character = info.char_idx }
-    fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz): Sz //<
+    fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz, arena: Arena$@): Sz //<
         //< The byte offset of a 0-based line and a character in UTF-16 code units
-        //< It is `get_line_char`'s inverse.
+        //< It is `get_line_char`'s inverse. The line-start table it builds goes on `arena`.
+        //< Caution: **Pass the request's arena, never `base_core.arena`.** A request that reuses
+        //< the document's analysis does not rewind that arena, so each request would add a table.
         //<
         //< A position past a line's end lands on that line's end (`offset_of_utf16` in
         //< base/core.kspl).
-        return r.offset_of_utf16(target_line, target_col, r.line_starts(base_core.arena))
+        return r.offset_of_utf16(target_line, target_col, r.line_starts(arena))
 
     fn clamp_offset(r: U8[], offset: Sz): Sz //<
         //< It clamps the offset to the source length's range [0, len-1] (shared across the LSP)
@@ -115,11 +117,12 @@ const MAX_CONTENT_LENGTH: I32 = 128 * 1024 * 1024 //<
     //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
     //< It leaves ample room for an ordinary LSP message.
 
-fn offset_at(src: U8[], params: json.Value): Sz //<
+fn offset_at(src: U8[], params: json.Value, arena: Arena$@): Sz //<
     //< The offset in `src` of the position a request names (`params.position`)
+    //< `arena` is the request's (`get_offset_from_pos` above).
     pos: = params.get("position")
     return src.get_offset_from_pos(pos.get("line").as_int().unwrap_or(0),
-        pos.get("character").as_int().unwrap_or(0))
+        pos.get("character").as_int().unwrap_or(0), arena)
 
 fn read_message(out: Str_builder$@): Void!Lsp_error //<
     //< It reads one message from stdin, its header and then its body, into `out`

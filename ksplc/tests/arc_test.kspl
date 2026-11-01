@@ -161,14 +161,14 @@ priv struct Arc_nest
     tag: I32
 
 priv fn arc_field_body()
-    $p: = Arc_pair::{ .a = Rc<|I32|>(10), .b = Rc<|I32|>(20) }
+    p: = Arc_pair::{ .a = Rc<|I32|>(10), .b = Rc<|I32|>(20) }
     assert(p.a.get()$ == 10 && p.b.get()$ == 20, "struct ARC fields must be readable")
-    $q: = p // a struct copy -> each ARC field is chain-retained and shared
+    q: = p // a struct copy -> each ARC field is chain-retained and shared
     assert(q.a.get()$ == 10 && q.b.get()$ == 20, "a copied struct shares its ARC fields")
     // Leaving the scope: q's and p's fields are each chain-released and every ctrl is freed.
 
 priv fn arc_nest_body()
-    $w: = Arc_nest::{ .p = Arc_pair::{ .a = Rc<|I32|>(1), .b = Rc<|I32|>(2) }, .tag = 7 }
+    w: = Arc_nest::{ .p = Arc_pair::{ .a = Rc<|I32|>(1), .b = Rc<|I32|>(2) }, .tag = 7 }
     assert(w.p.a.get()$ == 1 && w.tag == 7, "a nested struct ARC field must be readable")
     // Leaving the scope: w.p.a / w.p.b are chain-released, following the nesting.
 
@@ -198,8 +198,8 @@ enum Arc_wrap
     empty
     filled(v: Rc<|I32|>)
 
-priv fn arc_is_alive(r: Rc<|I32|>$@): Bool
-    $w: = r.downgrade()
+priv fn arc_is_alive(r: Rc<|I32|>@): Bool
+    w: = r.downgrade()
     $alive: = true
     _got: = w.upgrade() catch
         alive = false
@@ -379,7 +379,7 @@ priv fn arc_hold(_r: Rc<|I32|>!Arc_err) {} //< takes a Result and reads nothing 
 
 priv fn arc_result_unwrapped_body() //< the receiving shape
     r: = arc_make_ok()
-    $v: = r catch
+    v: = r catch
         fallback Rc<|I32|>(0)
     assert(v.get()$ == 5, "an unwrapped Result payload must be readable")
 
@@ -428,13 +428,13 @@ priv struct Arc_kept
     watch: Weak_rc<|I32|>
 
 priv fn arc_handed_through_unwrap(): Arc_kept //< its first owner gone, the copy alone holds it
-    $a: = Rc<|I32|>(5)
+    a: = Rc<|I32|>(5)
     w: = a.downgrade()
     return Arc_kept::{ .owner = arc_unwrap_place(a), .watch = w }
 
 priv fn arc_unwrap_keeps_body(): Bool
-    $k: = arc_handed_through_unwrap()
-    $alive: = k.watch.upgrade() catch
+    k: = arc_handed_through_unwrap()
+    alive: = k.watch.upgrade() catch
         return false
     return alive.get()$ == 5 && k.owner.get()$ == 5
 
@@ -527,7 +527,7 @@ priv fn arc_dirty_small_bins() //<
 
 priv fn arc_new_of_arc_bearing_body()
     arc_dirty_small_bins()
-    $b: = Rc<|Arc_slot|>(Arc_slot::{ .used = true, .rc = Rc<|I32|>(9) })
+    b: = Rc<|Arc_slot|>(Arc_slot::{ .used = true, .rc = Rc<|I32|>(9) })
     p: = b.get()
     assert(p.used && p.rc.get()$ == 9, "an ARC value carried into Rc.new must stay readable")
 
@@ -571,25 +571,25 @@ priv fn arc_chain_body(n: I32, walk: Bool)
         head = next
 
 priv fn arc_self_watch_body()
-    $b: = Rc<|Arc_self_watch|>(Arc_self_watch::{})
+    b: = Rc<|Arc_self_watch|>(Arc_self_watch::{})
     p: = b.get()
     p.me = b.downgrade()
 
-priv fn arc_keep($x: Rc<|I32|>): I32 //< takes a count by value, as any parameter does
+priv fn arc_keep(x: Rc<|I32|>): I32 //< takes a count by value, as any parameter does
     return x.get()$
 
 priv fn arc_give(b: Rc<|Arc_holder|>$@): Rc<|I32|> //< returns a copy read through `get()`
-    $bb: = b$
+    bb: = b$
     return bb.get().v
 
 priv fn arc_through_call_body()
     $b: = Rc<|Arc_holder|>(Arc_holder::{ .v = Rc<|I32|>(5) })
-    $bb: = b
-    $x: = bb.get().v
+    bb: = b
+    x: = bb.get().v
     n: = arc_keep(bb.get().v)
-    $h: = Arc_holder::{ .v = bb.get().v }
+    h: = Arc_holder::{ .v = bb.get().v }
     _w: = Arc_wrap.filled(bb.get().v)
-    $g: = arc_give(b@)
+    g: = arc_give(b@)
     $y: = Rc<|I32|>.empty()
     y = bb.get().v
     assert(n == 5 && h.v.get()$ == 5 && g.get()$ == 5 && y.get()$ == 5 && !x.is_empty(),
@@ -661,7 +661,7 @@ priv fn arc_list_index_body()
     empty: Rc<|I32|>[1] = ::{}
     l.push(Rc<|I32|>(11))
     release_on_exit:
-        $e: = l[0]
+        e: = l[0]
         assert(e.get()$ == 11, "reading an element through l[i] must be usable")
         // e's release must not free it here (the read inserted a retain).
     assert(l[0].get()$ == 11, "reading an element must not steal the stored reference")
@@ -694,7 +694,7 @@ priv fn arc_list_owns_elements_body()
     for i in Range.asc(40)
         l.push(Rc<|I32|>(I32::i)) // put a few growths in between
     release_on_exit:
-        $e: = l.get(3)
+        e: = l.get(3)
         assert(e.get()$ == 3, "get() must return a usable element")
         // The stored element must survive this release (it does, if get retained).
     assert(l[3].get()$ == 3, "get() must not steal the stored reference")
@@ -709,7 +709,7 @@ priv fn arc_map_owns_values_body()
     $m: = Map<|I32, Rc<|I32|>|>(null)
     for i in Range.asc(40)
         m.set(I32::i, Rc<|I32|>(I32::i)) // put a few resizes in between
-    $got: = m.get(7).unwrap_or(Rc<|I32|>(-1))
+    got: = m.get(7).unwrap_or(Rc<|I32|>(-1))
     assert(got.get()$ == 7, "a value must survive the table's resizes")
     removed: = m.remove(7)
     assert(removed, "remove() must report that the key was present")

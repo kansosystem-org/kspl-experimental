@@ -45,8 +45,8 @@ $(KSMD_EXE): $(STAGE1_EXE) $(KSMD_RES) tools/ksmd.kspl $(OPENER_SRC)
 
 ## Run|ksmd-open|Open one `.ksmd` document in a browser (`FILE=` is wanted)
 ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_EXE)
-	@test -n "$(FILE)" || { echo "usage: make ksmd-open FILE=<path to a .ksmd document>"; exit 1; }
-	./$(KSMD_EXE) "$(FILE)"
+	@test -n $(call shq,$(FILE)) || { echo "usage: make ksmd-open FILE=<path to a .ksmd document>"; exit 1; }
+	./$(KSMD_EXE) $(call shq,$(FILE))
 
 # **The launcher as a double-click runs it**, on scratch workspaces with a stand-in page, and with
 # `--show`, so no browser starts (`tools/tests/ksmd_launch.kspl`). Its work folder is emptied first.
@@ -74,7 +74,7 @@ else ifeq ($(PLATFORM),darwin)
 KSMD_ASSOC_LEAD := associate it for your user:
 KSMD_ASSOC_STEPS := \
 	'Automator -> New Document -> Application -> Run Shell Script' \
-	'its body: $(KSMD_EXE) "$$1"  (Pass input: as arguments); save the app' \
+	'its body: "$(abspath $(KSMD_EXE))" "$$1"  (Pass input: as arguments); save the app' \
 	'Finder -> Get Info on $(KSMD_SAMPLE) -> Open with -> that app -> Change All'
 else
 KSMD_ASSOC_LEAD := tie it for your user:
@@ -86,11 +86,34 @@ KSMD_MIME_TYPE := application/x-ksmd
 
 # **It writes the entry and the declaration alone**, so the gate costs no build. It installs them
 # into a scratch data folder, as `make install-desktop` does. `KSMD_REQUIRE_DESKTOP=1` fails where
-# `desktop-file-validate` or a cache tool is missing (the gate passes it); else a SKIP.
+# `desktop-file-validate`, `gio` or a cache tool is missing (the gate passes it); else a SKIP.
 KSMD_REQUIRE_DESKTOP ?=
-## Gates|test-ksmd-desktop|Whether the entry `make ksmd` writes is a valid `.desktop` file, and installs as `make install-desktop` puts it in
+# **A clone's path can hold a space**, and `desktop-file-validate` accepts an Exec that splits there.
+# So the gate writes a second entry, for a probe program in a folder whose name holds a space and
+# each character Exec escapes, and `gio launch` runs it with a file. The probe writes what it was
+# given. **Only on Linux**: Windows and macOS start no `.desktop` entry, and MSYS2's `gio` refuses
+# to launch one. Caution: **No `%` in the name**: GLib looks for the program before it reads `%%`
+# as `%`, so no entry it launches can name a program with `%` in its path.
+KSMD_PROBE_ENTRY := $(TMP_DIR)/desktop_probe.desktop
+KSMD_PROBE_DIR := desktop probe $$x `y` "q" \z
+## Gates|test-ksmd-desktop|Whether the entry `make ksmd` writes is a valid `.desktop` file that starts its program from a folder with a space, and installs as `make install-desktop` puts it in
 test-ksmd-desktop: | $(OUT_DIR)
 	$(call desktop_entry,$(KSMD_DESKTOP),ksmd,$(KSMD_EXE),$(KSMD_ICON),$(KSMD_MIME_TYPE);,$(KSMD_REQUIRE_DESKTOP))
+	@d="$$PWD/$(TMP_DIR)/"'$(KSMD_PROBE_DIR)'; rm -rf "$$d"; mkdir -p "$$d" && \
+	printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$$0" "$$@" > "$$(dirname "$$0")/given"' > "$$d/probe" && \
+	chmod +x "$$d/probe"
+	$(call desktop_entry,$(KSMD_PROBE_ENTRY),probe,probe,probe.svg,$(KSMD_MIME_TYPE);,$(KSMD_REQUIRE_DESKTOP),"$$PWD/$(TMP_DIR)/"'$(KSMD_PROBE_DIR)')
+	@d="$$PWD/$(TMP_DIR)/"'$(KSMD_PROBE_DIR)'; \
+	if [ "$(PLATFORM)" = win32 ] || [ "$(PLATFORM)" = darwin ]; then \
+		echo "SKIP launch: a .desktop entry is started on Linux alone, so none is started here"; \
+	elif command -v gio >/dev/null 2>&1; then \
+		gio launch "$$PWD/$(KSMD_PROBE_ENTRY)" "$$d/a b.ksmd" || exit 1; \
+		n=0; while [ ! -s "$$d/given" ] && [ $$n -lt 100 ]; do sleep 0.1; n=$$((n + 1)); done; \
+		printf '%s\n' "$$d/probe" "$$d/a b.ksmd" | cmp -s - "$$d/given" || \
+			{ echo "RESULT: SOME FAILED (1) -> the entry's Exec did not start $$d/probe with the file: $$(cat "$$d/given" 2>/dev/null)"; exit 1; }; \
+	elif [ "$(KSMD_REQUIRE_DESKTOP)" = 1 ]; then \
+		echo "RESULT: SOME FAILED (1) -> gio is not installed, where it is required (Debian/Ubuntu: install libglib2.0-bin)"; exit 1; \
+	else echo "SKIP launch: gio is not installed, so no entry is started"; fi
 	$(call mime_entry,$(KSMD_MIME),$(KSMD_MIME_TYPE),ksmd document,text/plain,*.ksmd)
 	$(call desktop_check,$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE),ksmd,$(KSMD_REQUIRE_DESKTOP))
 

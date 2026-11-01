@@ -586,6 +586,75 @@ fn main()
     while: = 3
     while x > 0
         return
+// ==== case made_binding_is_read_only
+//< A binding the compiler makes only reads: a `case` payload, an `if name: =`, a `for … in` item
+//< and a `catch`'s error
+//< Each holds a copy, so a write would change only the copy and be lost ("Branching" in
+//< `../../../docs/SPEC-programming-language.md`). A `Self$@` method on one writes as well.
+// EXPECT: cannot write to 'payload'. A binding that a 'case', an 'if name: =', a 'for … in' or a 'catch' makes is read-only
+// EXPECT: cannot write to 'bumped'. A binding
+// EXPECT: cannot write to 'found'. A binding
+// EXPECT: cannot write to 'item'. A binding
+// EXPECT: cannot write to 'each'. A binding
+// EXPECT: cannot write to 'counted'. A binding
+// EXPECT: cannot write to 'e'. A binding
+// EXPECT: Copy it into a '$' name first ('$w: = item') and write to that
+priv struct Cell
+  a: I32[2]
+  n: I32
+
+impl Cell
+  fn bump(r: Self$@)
+    r.n += 1
+
+priv struct Countdown
+  n: I32
+
+impl Countdown: Iter<|I32|>
+  fn next(r: Self$@): I32?
+    if r.n <= 0
+      return .none
+    r.n -= 1
+    return .some(r.n)
+
+priv enum Fault
+  bad
+
+priv fn fails(k: I32): I32!Fault
+  if k > 0
+    throw .bad
+  return k
+
+priv fn case_payload(o: Cell?): I32
+  switch o
+  case .some(payload)
+    payload.n = 3
+  case .none {}
+  switch o
+  case .some(bumped)
+    bumped.bump()
+  case .none {}
+  if found: = o
+    found.a[0] += 1
+  return 0
+
+priv fn case_loop(xs: Cell[2]): I32
+  for item in xs
+    item.n = 1
+  for each in xs
+    each.a[1] = 2
+  for counted in Countdown::{ .n = 3 }
+    counted = 0
+  return 0
+
+priv fn case_catch(): I32
+  v: = fails(1) catch e
+    e = .bad
+    fallback 0
+  return v
+
+fn main(): I32
+  return case_payload(.none) + case_loop(::{}) + case_catch()
 // ==== case missing_return_after_other_error
 //< An error in one function does not hide the diagnostics of the functions after it
 //< Counted over the whole compilation, the first error silenced every later "control may reach
@@ -676,6 +745,40 @@ fn main(): I32
     return 1
   default
     return 0
+// ==== case switch_payload_names_too_many
+//< A `case` names no more bindings than its variant has payload fields
+//< A name past the last field holds nothing: the C compiler then finds it undeclared, and LLVM gets
+//< invalid IR. Fewer names than fields bind the leading fields and pass.
+// EXPECT: variant 'click' carries 2 payload field(s), but this pattern names 3
+// EXPECT: variant 'quit' carries no payload, so its 'case' binds no names. Write 'case .quit'
+// EXPECT: Finished with 2 error(s)
+enum Ev
+  click(x: I32, y: I32)
+  quit
+
+fn three(e: Ev): I32
+  switch e
+  case .click(a, b, z)
+    return a + b + z
+  case .quit
+    return 0
+
+fn on_quit(e: Ev): I32
+  switch e
+  case .click(a, b)
+    return a + b
+  case .quit(z)
+    return z
+
+fn leading(e: Ev): I32
+  switch e
+  case .click(a)
+    return a
+  case .quit
+    return 0
+
+fn main(): I32
+  return three(.quit) + on_quit(.quit) + leading(.quit)
 // ==== case switch_written_as_match
 //< Rust's and Python's `match` suggests `switch`, its cases opening with `case`
 //< The note writes the head with the subject the line gave; `match` stays a name, as the call on

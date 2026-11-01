@@ -1,0 +1,49 @@
+//< ARM Cortex-M: a waiting call with interrupts off panics, as it does on POSIX
+//< The switch away from a waiting task happens only once interrupts are on again. A `take` between
+//< the application's own `irq_save` and `irq_restore` would go on as if another task ran: it would
+//< mark each ready task blocked in turn and then stop with a message about no scheduler. The
+//< kernel checks the interrupt state as the call opens its critical section and stops at once.
+//< **The giver is ready**, so a take let through would have a task to wait for. Success is the
+//< panic, so panic_hook matches the message and prints the summary.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/chars"
+
+const EXPECTED: U8[] = "ksos: a waiting call with interrupts off"
+
+$g_sem: sync.Sem
+$tcb_w: Task
+$tcb_g: Task
+$stack_w: U8[1024]
+$stack_g: U8[1024]
+
+fn on_panic(msg: U8[]) //< Check that the panic message is the kernel's refusal, and end
+    con.puts("PANIC: ")
+    con.puts(msg)
+    con.puts("\n")
+    con.check("a take with interrupts off stops with the kernel's panic",
+        msg.starts_with(EXPECTED))
+    con.print_summary("Cortex-M wait with interrupts off")
+    con.exit()
+
+fn waiter(_arg: Void$@): Void
+    con.puts("=== Kanso OS (Cortex-M) waiting with interrupts off ===\n")
+    s: = task.irq_save()
+    g_sem.take()
+    task.irq_restore(s)
+    con.check("take with interrupts off returned instead of stopping", false)
+    con.print_summary("Cortex-M wait with interrupts off")
+    con.exit()
+
+fn giver(_arg: Void$@): Void
+    g_sem.give()
+
+#export
+fn ksos_main()
+    panic_hook = on_panic
+    g_sem.init(0) // empty: the take would wait for the giver
+    tcb_w.create(U8$[]::stack_w, waiter, null, 2, "w")
+    tcb_g.create(U8$[]::stack_g, giver, null, 1, "g")
+    task.start_scheduler()
+    for {}

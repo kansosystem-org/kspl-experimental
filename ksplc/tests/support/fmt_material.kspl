@@ -245,6 +245,37 @@ const SRC_CLOSURE_SEP: U8[] =
     return 0
 """
 
+// A closure body inside a struct literal keeps its braces and `;` when a comment breaks the
+// literal over several lines. The `::{` is a written bracket: inside it a newline joins the line,
+// so a body written as indented lines would not read back.
+const SRC_CLOSURE_IN_LITERAL_IN: U8[] =
+    """priv typedef Unary_op = fn(a: I32): I32
+
+priv struct Op_slot
+    priv op: Unary_op
+
+fn main(): I32
+    s: = Op_slot::{ .op = fn(a: I32): I32 {
+        return a - 5; // the comment that breaks the literal
+    } }
+    return s.op(5)
+"""
+
+const SRC_CLOSURE_IN_LITERAL_OUT: U8[] =
+    """priv typedef Unary_op = fn(a: I32): I32
+
+priv struct Op_slot
+    priv op: Unary_op
+
+fn main(): I32
+    s: = Op_slot::{
+        .op = fn(a: I32): I32 {
+            return a - 5; // the comment that breaks the literal
+        }
+    }
+    return s.op(5)
+"""
+
 // Idempotence means something only from a broken input (a formatted shape does not move at all).
 // Hence the newline in an empty block and the space in a unary minus.
 const SRC_MESSY: U8[] =

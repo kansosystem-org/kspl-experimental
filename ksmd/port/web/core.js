@@ -181,6 +181,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdFigures(ks);
     ksmdAutosum(ks);
     ksmdRange(ks);
+    ksmdCut(ks);
+    ksmdPoint(ks);
     ksmdFilter(ks);
     ksmdInput(ks);
     // The menus and the quick access bar stand before the commands set their ticks.
@@ -226,6 +228,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
         }
         ks.root.textContent = "";
         ks.cell = null;
+        ks.cut.drop();
         ks.setPlace("text");
         // Showing a large document can use up the memory too; the page then says it stopped.
         if (!ks.act("ksmd_web_render")) {
@@ -340,8 +343,49 @@ function ksmdCommands(ks) {
 
   ks.command = (name) => {
     if (name === "redo" && !ks.canRedo) return ks.repeat();
+    // Cut and Copy run the browser's own, so they act as Ctrl+X and Ctrl+C do where the focus
+    // stands. An open cell stays open, and its selected text is what goes.
+    if (name === "cut" || name === "copy") {
+      document.execCommand(name);
+      return null;
+    }
+    if (name === "paste") {
+      paste();
+      return null;
+    }
     return runs(name, () => command(name));
   };
+
+  // Paste reads the clipboard through the browser, as Excel for the web does. It hands what it read
+  // to the place the focus stands as a paste event, so it acts as Ctrl+V does there. A browser can refuse to read, or lack the means: a cut waiting in the page then
+  // still moves, and anything else asks for Ctrl+V.
+  async function paste() {
+    const at = document.activeElement && ks.root.contains(document.activeElement) ?
+      document.activeElement : ks.root;
+    const data = new DataTransfer();
+    try {
+      if (navigator.clipboard.read) {
+        for (const item of await navigator.clipboard.read()) {
+          for (const type of ["text/plain", "text/html"]) {
+            if (item.types.includes(type)) data.setData(type, await (await item.getType(type)).text());
+          }
+        }
+      } else {
+        data.setData("text/plain", await navigator.clipboard.readText());
+      }
+    } catch (_) {
+      if (!ks.cut.text()) {
+        ks.say("Press Ctrl+V to paste.");
+        return;
+      }
+      data.setData("text/plain", ks.cut.text());
+    }
+    const e = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
+    // An input takes the text where no handler took the paste, as the browser's own paste puts it.
+    if (at.dispatchEvent(e) && at.matches("input, textarea")) {
+      document.execCommand("insertText", false, data.getData("text/plain"));
+    }
+  }
 
   // A command first takes the open cell. Text there that the editor refuses stays, and the
   // command does nothing, so a menu never drops what was typed.
@@ -401,8 +445,13 @@ function ksmdCommands(ks) {
     return h ? h.a : "";
   };
 
-  // An open cell's edit is taken before the browser prints, also when Ctrl+P prints.
-  window.addEventListener("beforeprint", () => ks.table.take());
+  // An open cell's edit is taken before the browser prints, also when Ctrl+P prints. The printed
+  // page's header shows the time of this print (`@top-left` in `print.css`).
+  window.addEventListener("beforeprint", () => {
+    ks.table.take();
+    const at = new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+    document.documentElement.style.setProperty("--print-date", `"${at}"`);
+  });
 
   // Sets one part of a look, or clears it with an empty value: on the chosen cells where a cell
   // was worked in last, or else on the selected text: its colour, or its paragraphs' alignment.
@@ -478,7 +527,7 @@ function ksmdCommands(ks) {
 
   // Enables only the commands that can act now, so no item is pressed for nothing. Read-only
   // leaves those that only look: finding, the view, printing, files, filters and CSV.
-  const LOOKS = new Set(["find", "contents", "width-full", "width-reading", "read-only", "print", "quick-choose",
+  const LOOKS = new Set(["copy", "find", "contents", "width-full", "width-reading", "read-only", "print", "quick-choose",
     "file-open", "file-save", "file-save-as", "filter-column", "filter-value", "filter-clear",
     "table-csv"]);
   const MARKS = new Set(["strong", "emphasis", "code", "link"]);
@@ -509,6 +558,20 @@ function ksmdCommands(ks) {
       el.disabled = !c || (ks.readOnly && !LOOKS.has(name)) ||
         (name === "filter-clear" && !ks.filter.on(c.block)) ||
         ((name === "filter-value" || name.startsWith("row-")) && c.row < 0);
+      // While lines of this table are cut, Insert row above or Insert column left reads as the
+      // insert of them, in the same place (`CUT_FORMS` in `commands.js`).
+      if (name in CUT_FORMS) {
+        const cutForm = c && ks.cut.waiting(c.block, name === "row-above");
+        const [text, icon] = cutForm ? CUT_FORMS[name] : [COMMAND.get(name).label, name];
+        label(el, text);
+        if (el.closest(".quick")) el.title = text;
+        const glyph = el.querySelector(".glyph");
+        if (glyph && (glyph.dataset.icon || name) !== icon) {
+          const next = ksmdIcon(icon);
+          next.dataset.icon = icon;
+          glyph.replaceWith(next);
+        }
+      }
       if (name === "table-print") {
         const text = c && leftOut(c.block) ? "Put back in print" : "Leave out of print";
         label(el, text);
@@ -568,6 +631,9 @@ function ksmdCommands(ks) {
         if (name.startsWith("format-")) return ks.table.format(c.block, name);
         if (name.startsWith("autosum-")) return ks.autosum.run(name, c);
         break;
+    }
+    if (name in CUT_FORMS && ks.cut.waiting(c.block, name === "row-above")) {
+      return ks.cut.insert(c.block, name === "row-above");
     }
     if (name in rows) {
       // A new row is empty, so a filter would hide it at once: the editor takes the filter away in

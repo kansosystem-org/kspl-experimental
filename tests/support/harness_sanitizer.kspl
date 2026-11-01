@@ -50,12 +50,10 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
     if !made.exited_with(0)
         return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(made.out).take() }
     $flags: = List<|U8[]|>(arena)
-    for f in cflags
-        flags.push(f)
+    flags.push_all(cflags)
     flags.push("-std=c99")
     if llvm
-        for f in harness_build.LLVM_CFLAGS
-            flags.push(f)
+        flags.push_all(U8[][]::harness_build.LLVM_CFLAGS)
     linked: = harness_build.build_listed_exe(gen, exe, flags.slice(), llvm, libs)
     if !linked.exited_with(0)
         return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
@@ -85,17 +83,14 @@ fn runs_with( //<
         return "cannot write the probe"
     $argv: = List<|U8[]|>(arena)
     argv.push(ksplc_harness.cc())
-    for f in cflags
-        argv.push(f)
-    for w in U8[][]::{ c, "-o", exe }
-        argv.push(w)
+    argv.push_all(cflags)
+    argv.push_all(U8[][]::{ c, "-o", exe })
     built: = ksplc_harness.run(argv.slice())
     if !built.exited_with(0)
         return built.out
     $run: = List<|U8[]|>(arena)
     run.push("env")
-    for e in env
-        run.push(e)
+    run.push_all(env)
     run.push(exe)
     ran: = ksplc_harness.run(run.slice())
     return ("" if ran.exited_with(0)
@@ -105,14 +100,15 @@ fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto the ar
     //< Caution: **A run keeps its words past the call that names them**, so a literal list (on that
     //< call's frame) is copied here first.
     $out: = List<|U8[]|>(arena)
-    for w in words
-        out.push(w)
+    out.push_all(words)
     return out.slice()
 
 fn pkg_env(arena: Arena$@): U8[][] //<
     //< What a package's tests that start a child compiler, or name another package, find them by
+    //< `KANSO_SANITIZED` tells a test that its build runs under a sanitizer. A check that times
+    //< work skips there: the sanitizer slows some work many times more than other work.
     return kept(U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take(),
-        arena.text().s("KSPLC_PKG_SRC_DIR=").s(harness.root()).take() }, arena)
+        arena.text().s("KSPLC_PKG_SRC_DIR=").s(harness.root()).take(), "KANSO_SANITIZED=1" }, arena)
 
 // ==========================================
 // Reading a sanitizer's logs

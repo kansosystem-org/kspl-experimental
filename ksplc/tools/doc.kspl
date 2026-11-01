@@ -25,6 +25,7 @@ import "std/io"
 import "std/mem" { dealloc }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt // `\{n\}` on a `Sz`
+import "std/sys"
 
 priv fn shown(e: Line): Bool //< whether the line is an entry of its own, not a part or the file
     return !tools_surface.is_file_row(e.key) && tools_surface.owner_of(e.key).len == 0
@@ -316,7 +317,11 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
     for path in paths
         if !path.has_kspl_ext()
             continue
-        rest: = path.sub_from(dir.len + 1)
+        // **`dir` may end in a separator** (`--std-dir=std/`): what follows it is the name, with
+        // any separator in front of it skipped.
+        $rest: = path.sub_from(dir.len)
+        for rest.len > 0 && sys.is_path_sep(rest[0])
+            rest = rest.sub_from(1)
         // The current folder's files are named from it, with no `./` in front.
         logical: =
             (rest.strip_kspl_ext() if name.equals(".")
@@ -356,7 +361,11 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     if !last.equals(".") && !last.equals("..")
         if dot_rel: = last.find_char('.')
             cut = after_slash + dot_rel
-    name: = target.sub(0, cut)
+    // **The name is made logical first**, as a compile makes its input's: `kspeg/`, `./kspeg`
+    // and `kspeg` are one folder, and its files are listed under one name.
+    $name: = base_locate.to_project_relative(target.sub(0, cut))
+    if name.len == 0
+        name = "."
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
     defer $out: = Str_builder()
     path: = file_path_of(name)

@@ -146,9 +146,51 @@ impl Env
         full.s(inst.template)
         if inst.args.len > 0
             defer $args: = Str_builder()
-            r.type_args_to(inst.args, args)
+            for i in Range.asc(inst.args.len)
+                if i > 0
+                    args.s(base_ast.TYPE_ARG_SEP)
+                r.c_arg_text_to(inst.args[i], args@, 0)
             args.slice().drop_c_type_module_to(full.s("_"))
         return full.slice().mangle_c_type_name_to(w)
+
+    priv fn c_arg_text_to(r: Self$@, type_id: I32, w: Str_builder$@, depth: Sz) //<
+        //< Writes one type argument's text for an instance's C name: its canonical string, except
+        //< that an immutable instance is written `Const_` and then the instance's name
+        //< Why: rule 4 of "Immutability marks in a type, and the API that asks" in
+        //< `../../docs/DESIGN-sema.md`.
+        //< Caution: **Keep the other branches the same as `write_suffix_base` and
+        //< `register_suffixed` in `env.kspl`**, or every instance's name changes.
+        if depth >= MAX_MANGLE_DEPTH
+            io.err()
+                .s("\nfatal: type expression nesting too deep. The chain of pointer, array or slice \
+                    types may be unbounded.\n")
+            sys.exit(1)
+        switch r.get_info(type_id)
+        case .const_of(b)
+            if r.instance_of(b).is_some()
+                w.s("Const_").s(r.get_str(b))
+                return
+            r.c_arg_base_to(b, w, depth)
+            w.s(base_core.IMMUT_MARK)
+        case .pointer(b)
+            r.c_arg_base_to(b, w, depth)
+            w.c('@')
+        case .array(b, size)
+            r.c_arg_base_to(b, w, depth)
+            if size >= 0
+                w.s("[\{size\}]")
+            else
+                w.s("[_]")
+        default
+            w.s(r.get_str(type_id))
+
+    priv fn c_arg_base_to(r: Self$@, base_id: I32, w: Str_builder$@, depth: Sz) //<
+        //< The base a postfix applies to, a function type bracketed as `write_suffix_base` does
+        switch r.get_info(base_id)
+        case .fn_type
+            w.c('(').s(r.get_str(base_id)).c(')')
+        default
+            r.c_arg_text_to(base_id, w, depth + 1)
 
 struct Mangle_seen //< the record for emitting a composite type "once per mangled name"
     //< Caution: **Do not write how duplicates are skipped anywhere but here.** Two generators walk

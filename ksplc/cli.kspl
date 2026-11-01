@@ -7,6 +7,7 @@
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/lint_codes" as base_lint_codes
+import "ksplc/base/locate" as base_locate
 import "ksplc/base/target" as base_target
 import "ksplc/fmt/style" as fmt_style
 import "ksplc/tools/explain" as tools_explain
@@ -379,6 +380,21 @@ priv fn source_input(path: U8[]): U8[] //<
         usage.error_exit(said)
     return path
 
+priv fn refuse_output_on_input(command: U8[], input: U8[], outputs: U8[][]) //<
+    //< Exits where a file `ksplc <command>` writes is its input: the write would replace the source
+    //< An empty output is one not asked for. The paths are compared absolute, with `.` and `..`
+    //< folded, so `./a.kspl` and `a.kspl` are one file. **A link to the input is not seen**: that
+    //< needs the filesystem, and `canonical_path` reads the spelling only.
+    if input.equals(base_core.STDIN_NAME)
+        return
+    source: = base_locate.canonical_path(input)
+    for out in outputs
+        if out.len > 0 && base_locate.canonical_path(out).equals(source)
+            msg: = base_core.arena.text()
+                .s("ksplc \{command\}: the output '\{out\}' is the input file, so writing it would \
+                    replace the source. Name another output\n").take()
+            usage.error_exit(msg)
+
 priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o: Cli$@): Mode //<
     //< The mode the subcommand names, with its inputs checked
     switch face
@@ -429,10 +445,8 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
         // The program is the option's, so every argument after the options is the program's own.
         if p.saw("--eval")
             args: = List<|U8[]|>.create(base_core.arena)
-            for f in in_files
-                args.push(f)
-            for a in o.script_args
-                args.push(a)
+            args.push_all(in_files.slice())
+            args.push_all(o.script_args.slice())
             return .run_source(o.eval_source, args)
         if in_files.len == 0
             usage.command_usage_exit(face.face_name())
@@ -442,6 +456,8 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
     case .build
         if in_files.len != 2
             usage.command_usage_exit(face.face_name())
+        refuse_output_on_input(face.face_name(), in_files.get(0),
+            U8[][]::{ in_files.get(1) })
         return .build(source_input(in_files.get(0)), in_files.get(1), o.cflags)
     case .compile
         if in_files.len != 2
@@ -453,6 +469,8 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
                 for f in in_files
                     io.err().s("  ").s(f).c('\n')
             usage.usage_exit()
+        refuse_output_on_input(face.face_name(), in_files.get(0),
+            U8[][]::{ in_files.get(1), o.deps_path, o.libs_path })
         return .compile(source_input(in_files.get(0)), in_files.get(1), o.deps_path, o.libs_path)
 
 impl Mode

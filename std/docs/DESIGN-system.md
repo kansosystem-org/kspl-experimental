@@ -472,6 +472,16 @@ Caution: **Do not look at `FILE_ATTRIBUTE_REPARSE_POINT` alone on Windows.** One
 
 The LLVM backend's degenerate case is -1 too. Made 0, it would land on the unsafe side.
 
+### A hidden name is found by its long name too
+
+`fs.has_hidden_on_path(root, rel, shown)` is the one check that a path under a root names a hidden file: a segment whose name starts with a dot. A root that is a checkout or holds settings has `.git/` and `.env`, so a program that serves or reads a root for others keeps them back. The caller names the dot names it lets through in `shown`. A web server passes `.well-known` (RFC 8615), since certificate issuance reads under it.
+
+**Each segment's long name is checked too** (`fs.long_name`), because Windows opens `.git` by its short name `GIT~1`. The name as written starts with no dot.
+
+* **A segment ends at `\` too.** Windows opens `sub\.env` as `sub/.env`.
+* **An empty segment (`a//b`) is skipped.** Windows reads no long name for `a/`. A lookup for each extra `/` would also let one request keep a server's one thread busy.
+* **A long name that cannot be read hides what stands there.** Only where nothing stands is the path not hidden, and the walk ends there, since nothing deeper can stand. So a file that a program is about to write is not refused.
+
 ### A link test answers true when it cannot tell
 
 | Function | Answers when it cannot tell |

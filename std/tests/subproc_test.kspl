@@ -53,7 +53,17 @@ fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
     idle.write(big, -1) catch e
         write_up = e == subproc.Write_end.timed_out
     neg_ms: = (sys.mono_us() - t_neg) / 1000I64
+    // **An empty buffer is refused, not read as the end**: a read of 0 bytes returns 0, which once
+    // said the running child had finished.
+    $empty_out: = subproc.Read_end.closed
+    idle.read(U8$[]::{ .ptr = buf[0]@, .len = 0 }, 300) catch e
+        empty_out = e
+    $empty_err: = subproc.Read_end.closed
+    idle.read_err(U8$[]::{ .ptr = buf[0]@, .len = 0 }, 300) catch e
+        empty_err = e
     idle.kill()
+    assert(empty_out == subproc.Read_end.failed && empty_err == subproc.Read_end.failed,
+        "a read into an empty buffer fails as failed, not as closed, while the child runs")
     assert(timed_out, "a write to a child that reads nothing fails as timed_out")
     $m: = Panic_msg()
     assert(took_ms < 15000I64,

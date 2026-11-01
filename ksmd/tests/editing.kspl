@@ -1,11 +1,9 @@
 //< Row and column identities: how references attach, and what each table edit writes
 //< Each edit is checked against the source it saves, and that source must save again unchanged.
-import "ksmd/base/source" { Source }
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
 import "ksmd/model/model" { Cell_kind, Document, Piece_kind }
-import "ksmd/syntax/reader"
-import "ksmd/syntax/writer"
+import "ksmd/tests/support" { join, read, written }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -289,8 +287,8 @@ priv fn refused(what: U8[], doc: Document$@, change: Change, at: Sz, want: Edit_
     verdict.check(what, false, "the edit was made")
 
 priv fn apply(doc: Document$@, change: Change, at: Sz, arena: Arena$@): Void!Edit_error
-    last_row: = doc.tables[0].rows.len - 1
-    last_column: = doc.tables[0].columns.len - 1
+    rows: = doc.tables[0].rows.len
+    columns: = doc.tables[0].columns.len
     switch change
     case .none {}
     case .insert_row
@@ -298,13 +296,13 @@ priv fn apply(doc: Document$@, change: Change, at: Sz, arena: Arena$@): Void!Edi
     case .remove_row
         edit.remove_row(doc, 0, at)!
     case .move_row
-        edit.move_row(doc, 0, at, last_row)!
+        edit.move_rows(doc, 0, at, 1, rows)!
     case .insert_column
         edit.insert_columns(doc, 0, at, 1, arena)!
     case .remove_column
         edit.remove_column(doc, 0, at)!
     case .move_column
-        edit.move_column(doc, 0, at, last_column)!
+        edit.move_columns(doc, 0, at, 1, columns)!
 
 priv fn refused_set(what: U8[], doc: Document$@, kind: Cell_kind, text: U8[], arena: Arena$@) //<
     //< Setting cell A1 of table 0 to `text` is refused as no value, and changes nothing
@@ -314,19 +312,3 @@ priv fn refused_set(what: U8[], doc: Document$@, kind: Cell_kind, text: U8[], ar
             e == Edit_error.not_a_value && written(doc, arena).equals(before), "")
         return
     verdict.check(what, false, "the value was set")
-
-priv fn read(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
-    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
-        verdict.check("a test source is valid", false, e.message)
-        panic("a test source was refused")
-    return reader.read(src@, arena) catch e
-        verdict.check("a test document reads", false, e.message)
-        panic("a test document was refused")
-
-priv fn written(doc: Document@, arena: Arena$@): U8[] //< the source the writer saves
-    defer $out: = Str_builder()
-    writer.write(doc, out@)
-    return arena.dup_str(out.slice())
-
-priv fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
-    return arena.text().s(a).s(b).take()

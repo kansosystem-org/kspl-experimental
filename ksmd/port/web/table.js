@@ -10,6 +10,7 @@
 // Shift+click, and Shift with an arrow key, choose a range of cells from the chosen one
 // (`range.js`).
 // A right-click on a cell, a row number or a column letter opens the table's menu (`menu.js`).
+// While a formula is typed, a press on a cell can write its reference instead (`point.js`).
 // Groups of rows show beside the row numbers (`outline.js`).
 "use strict";
 
@@ -666,7 +667,8 @@ function ksmdTable(ks) {
 
   // Whether a cell stands in the chosen range of more than one cell.
   function inRange(block, row, column) {
-    if (!ks.cell || ks.cell.block !== block || !ks.range.any()) return false;
+    // Whole lines chosen stay so even where they are one cell, so a cut from the menu cuts them.
+    if (!ks.cell || ks.cell.block !== block || (!ks.range.any() && !ks.range.lines())) return false;
     const r = ks.range.rect();
     return row >= r.r1 && row <= r.r2 && column >= r.c1 && column <= r.c2;
   }
@@ -723,8 +725,8 @@ function ksmdTable(ks) {
     choose: (block, row, column) => moveTo(block, row, column, false),
     // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
     step: (block, row, dr) => stepRow(block, row, dr),
-    // The cell being edited, whose row a filter keeps in sight: { block, row } or null.
-    editing: () => (open ? { block: open.block, row: open.row } : null),
+    // The cell being edited, whose row a filter keeps in sight: { block, row, input } or null.
+    editing: () => (open ? { block: open.block, row: open.row, input: open.input } : null),
     // The open cell's text where it differs from the cell's own, not yet taken into the
     // document: { block, row, column, text } or null.
     pending: () => (open && open.input.value !== open.before ?

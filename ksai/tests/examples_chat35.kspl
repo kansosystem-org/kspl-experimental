@@ -29,14 +29,14 @@ priv const MODEL_FILE: U8[] = "tiny_qwen35.gguf" //< the tiny model's file under
 priv fn rendered(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@!U8[] //<
     //< The prompt a request body renders to, thinking on unless the request turns it off
     c: = request.read_chat(body, arena) catch why
-        panic(U8$[]::arena.text().s("the request is refused: ").s(why).take())
+        panic(arena.text().s("the request is refused: ").s(why).take())
     $conv: = c.conv
     conv.thinking = c.thinking.unwrap_or(true)
     return template35.render(conv@, e.tok, e.marks, arena)!
 
 priv fn prompt_of(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@ //< a prompt that renders
     return rendered(body, e, arena) catch why
-        panic(U8$[]::arena.text().s("the conversation is refused: ").s(why).take())
+        panic(arena.text().s("the conversation is refused: ").s(why).take())
 
 fn test_chat35_template_tokens(arena: Arena$@) //<
     //< Each case renders to llama.cpp's text for it, every marker by its ID
@@ -55,7 +55,7 @@ fn test_chat35_template_tokens(arena: Arena$@) //<
         got: = prompt_of(body.slice(), e@, arena)
         text: = e.tok.decode(got, arena)
         if !text.equals(want)
-            panic(U8$[]::arena.text().s("case \{i\} renders otherwise:\n").s(text)
+            panic(arena.text().s("case \{i\} renders otherwise:\n").s(text)
                 .s("\n--- llama.cpp renders:\n").s(want).take())
         $in_messages: Sz = 0
         messages: = cases.get(i).get("request").get("messages").arr_list(arena)
@@ -65,7 +65,7 @@ fn test_chat35_template_tokens(arena: Arena$@) //<
                 in_messages += chat
                     .control_texts_in(m.get("content").as_str().unwrap_or(""))
         assert(chat.marks_in(got, e.marks) + in_messages == chat.mark_texts_in(want),
-            U8$[]::arena.text().s("case \{i\}: a marker is written as text").take())
+            arena.text().s("case \{i\}: a marker is written as text").take())
     g: = Gguf.parse(model_bytes, arena) catch panic("the tiny Qwen3.5 model is read")
     own: = g.text("tokenizer.chat_template") catch ""
     assert(template35.matches(own) && !template35.matches(own.sub(0, own.len - 1)) &&
@@ -116,7 +116,7 @@ fn test_chat35_tool_calls_read(arena: Arena$@) //<
     assert(one.reasoning.equals("Let me read.") && one.content.equals("Sure.") &&
         one.calls.len == 1 && one.calls.get(0).name.equals("read") &&
         one.calls.get(0).arguments.equals("{\"path\":\"leave.md\",\"from_line\":3,\"note\":null}"),
-        U8$[]::arena.text().s("one call with its thinking: ").s(one.calls.get(0).arguments).take())
+        arena.text().s("one call with its thinking: ").s(one.calls.get(0).arguments).take())
     // A text parameter keeps a number as text; thinking cut short by a call ends at the call.
     two: =
         split("Find \
@@ -144,7 +144,7 @@ fn test_chat35_tool_calls_read(arena: Arena$@) //<
         no_close.calls.get(0).arguments.equals("{\"from_line\":\"7\\n</function>\"}") &&
         stray.calls.get(0).arguments.equals("{\"from_line\":1}") &&
         key.calls.get(0).arguments.equals("{}"),
-        U8$[]::arena.text().s("a closed block ends its open value and its object: ")
+        arena.text().s("a closed block ends its open value and its object: ")
         .s(closed_open.calls.get(0).arguments).c(' ').s(no_close.calls.get(0).arguments).c(' ')
         .s(stray.calls.get(0).arguments).c(' ').s(key.calls.get(0).arguments).take())
     broken_text: = "Here.\n<tool_call>\nread a.md\n</tool_call>"
@@ -190,8 +190,7 @@ priv fn kept_matches_fresh(e: Engine$@, body: U8[], arena: Arena$@): Sz //<
     a: = chat.last_scores(e, arena)
     b: = chat.last_scores(fresh@, arena)
     assert(chat.same_scores(a@, b@),
-        U8$[]::arena.text().s("after keeping \{kept\} tokens the scores are not a fresh run's")
-        .take())
+        arena.text().s("after keeping \{kept\} tokens the scores are not a fresh run's").take())
     return kept
 
 priv fn turn_of(prompt: List<|I32|>$@, e: Engine$@): Sz //< where the prompt's last turn opens
@@ -214,8 +213,7 @@ fn test_chat35_state_kept_matches_fresh(arena: Arena$@) //<
     // inside the first prompt's last turn: it reads on from the copy where that turn opens.
     follow: = kept_matches_fresh(e@, FOLLOW_REQUEST, arena)
     assert(follow == turn_of(first, e@),
-        U8$[]::arena.text().s("the follow-up kept \{follow\} tokens, not \{turn_of(first, e@)\}")
-        .take())
+        arena.text().s("the follow-up kept \{follow\} tokens, not \{turn_of(first, e@)\}").take())
     second: = prompt_of(FOLLOW_REQUEST, e@, arena)
     // The same prompt again goes back to the copy where its own last turn opens.
     same: = kept_matches_fresh(e@, FOLLOW_REQUEST, arena)
@@ -227,7 +225,7 @@ fn test_chat35_state_kept_matches_fresh(arena: Arena$@) //<
         "{\"messages\":[{\"role\":\"system\",\"content\":\"Be \
             brief.\"},{\"role\":\"user\",\"content\":\"Hi\"}]}", arena)
     assert(same == turn_of(second, e@) && third == second.len && other == 0,
-        U8$[]::arena.text().s("kept \{same\}, \{third\} and \{other\} tokens, not ")
+        arena.text().s("kept \{same\}, \{third\} and \{other\} tokens, not ")
         .s("\{turn_of(second, e@)\}, \{second.len\} and 0").take())
     verdict
         .pass(arena.text().s("a follow-up, the same prompt, a longer one and another kept ")

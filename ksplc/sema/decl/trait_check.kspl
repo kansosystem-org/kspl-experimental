@@ -43,6 +43,36 @@ impl Sema_ctx
                 target.get_method(method.name)
         default {}
 
+    fn refuse_read_only_upcast(c: Self$@, r: Ast_node$@, type_id: I32, trait_id: I32): Bool //<
+        //< Refuses a trait value made of a read-only place where a method would write through it
+        //< **A direct call, `@` and an upcast must agree** ("Places, and the rules for when they
+        //< may be written" in docs/SPEC-programming-language.md). Otherwise `grow(q)` writes an
+        //< immutable `q`, and a `const` in ROM, where `q.scale()` is refused.
+        writer: = c.env.trait_slot_writing_receiver(type_id, trait_id).unwrap_or("")
+        if writer.len == 0
+            return false
+        // The node has no type yet, so a pointer or a slice is told apart by type_id. **They follow
+        // the direct call**: a `T@` points at read-only memory, and a slice is refused only where
+        // it is no place (`"ab"`).
+        $read_only: = false
+        if c.env.is_pointer(type_id)
+            read_only = c.env.is_const(c.env.strip_ptr(type_id))
+        else if c.env.is_slice(type_id)
+            read_only = !c.env.is_place_expr(r)
+        else
+            read_only = c.place_is_readonly(r)
+        if !read_only
+            return false
+        if c.refuse_made_binding_write(r)
+            return true
+        c.clear_scratch()
+            .s("cannot make a '\{c.env.display(trait_id)\}' value of a read-only location. \
+                '\{c.env.display(type_id)\}' implements '\{writer\}' with a 'Self$@' receiver, \
+                which would write through it. Make the binding mutable ('$x'), or pass a writable \
+                pointer")
+        c.err(r, c.scratch.slice())
+        return true
+
     fn add_trait_method(r: Self$@, m_node: Ast_node$@, m_name: U8[],
         trait_def: sema_type_def.Trait_def$@, trait_vis: sema_type_scope.Visibility):
         Sema_symbol$@!Sema_error //<

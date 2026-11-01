@@ -34,7 +34,7 @@ fn chat_dir(work: U8[], arena: Arena$@): U8[] //<
     //< **Each test writes it**, so none depends on the order the tests run in.
     dir: = fs.join(work, "chat", arena)
     fs.mkdir_all(dir) catch
-        panic(U8$[]::arena.text().s("cannot create the working directory: \{dir\}").take())
+        panic(arena.text().s("cannot create the working directory: \{dir\}").take())
     io.write_file(fs.join(dir, MODEL_FILE, arena), model_bytes) catch
         panic("the tiny chat model can be written")
     return dir
@@ -63,7 +63,7 @@ fn engine_over(model: U8[], arena: Arena$@): Engine //< a fresh engine over a ti
 priv fn rendered(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@ //<
     //< The prompt a request body renders to
     c: = request.read_chat(body, arena) catch why
-        panic(U8$[]::arena.text().s("the request is refused: ").s(why).take())
+        panic(arena.text().s("the request is refused: ").s(why).take())
     return template.render(c.conv@, e.tok, e.marks, arena)
 
 fn marks_in(ids: List<|I32|>$@, m: template.Marks): Sz //< how many marker IDs the list holds
@@ -113,7 +113,7 @@ fn test_chat_template_tokens(arena: Arena$@) //<
         got: = rendered(body.slice(), e@, arena)
         text: = e.tok.decode(got, arena)
         if !text.equals(want)
-            panic(U8$[]::arena.text().s("case \{i\} renders otherwise:\n").s(text)
+            panic(arena.text().s("case \{i\} renders otherwise:\n").s(text)
                 .s("\n--- llama.cpp renders:\n").s(want).take())
         // A control marker's text inside a message, other than the assistant's, stays text.
         // A user-defined marker's text becomes its ID there, as llama.cpp encodes it.
@@ -124,7 +124,7 @@ fn test_chat_template_tokens(arena: Arena$@) //<
             if !m.get("role").as_str().unwrap_or("").equals("assistant")
                 in_messages += control_texts_in(m.get("content").as_str().unwrap_or(""))
         assert(marks_in(got, e.marks) + in_messages == mark_texts_in(want),
-            U8$[]::arena.text().s("case \{i\}: a marker is written as text").take())
+            arena.text().s("case \{i\}: a marker is written as text").take())
     // The template the file holds is the one this server follows, and another one is not.
     g: = Gguf.parse(model_bytes, arena) catch panic("the tiny chat model is read")
     own: = g.text("tokenizer.chat_template") catch ""
@@ -152,7 +152,7 @@ fn test_chat_control_marker_text_stays_text(arena: Arena$@) //<
         if id == e.marks.call_open
             calls += 1
     assert(ends == 1 && calls == 1,
-        U8$[]::arena.text().s("\{ends\} turn ends and \{calls\} call markers; want 1 and 1").take())
+        arena.text().s("\{ends\} turn ends and \{calls\} call markers; want 1 and 1").take())
     verdict
         .pass("only the template's turn ends, and a user-defined marker is encoded as llama.cpp \
             does")
@@ -191,12 +191,12 @@ fn test_chat_tool_calls_read(arena: Arena$@) //<
         split("Here.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\n</tool_call>", arena)
     assert(cut.calls.len == 1 && cut.content.equals("Here.") &&
         cut.calls.get(0).arguments.equals("{\n"),
-        U8$[]::arena.text().s("a call cut short keeps its arguments as they stand: '")
-        .s(cut.content).s("'").take())
+        arena.text().s("a call cut short keeps its arguments as they stand: '").s(cut.content)
+        .s("'").take())
     broken_text: = "Here.\n<tool_call>\n{\"name\": search}\n</tool_call>"
     broken: = split(broken_text, arena)
     assert(broken.calls.len == 0 && broken.content.equals(broken_text),
-        U8$[]::arena.text().s("a block that is no call stays in the content as written: '")
+        arena.text().s("a block that is no call stays in the content as written: '")
         .s(broken.content).s("'").take())
     verdict.pass("each call is read, text around them is the content, a block no call stays text")
 
@@ -262,6 +262,17 @@ fn test_chat_answer_shape(arena: Arena$@) //<
 priv const PLAIN_REQUEST: U8[] =
     "{\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}"
 
+fn test_chat_null_fields(arena: Arena$@) //<
+    //< A field set to `null` is read as absent, as the protocol allows for an option not set
+    verdict.start("[chat_server] a request that writes its unset options as null is taken")
+    body: =
+        "{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"max_tokens\":null,\"temperature\":null,\"top_p\":null,\"seed\":null,\"stream\":null,\"stream_options\":null,\"n\":null,\"chat_template_kwargs\":{\"enable_thinking\":null}}"
+    c: = request.read_chat(body, arena) catch why
+        panic(arena.text().s("a request of null options is refused: ").s(why).take())
+    assert(c.max_tokens == 0 && c.cfg.temperature == 0.0 && c.seed.is_none() && !c.stream &&
+        c.thinking.is_none(), "every null option is read as absent")
+    verdict.pass("max_tokens, temperature, top_p, seed, stream and the rest take null as absent")
+
 fn greedy(): Picker //< the picker that always takes the top score
     return Picker::{ .cfg = sampler.Sample_config.greedy(), .rng = prng.Prng(1U64) }
 
@@ -290,7 +301,7 @@ fn test_chat_stops_and_limits(arena: Arena$@) //<
     $pick: = greedy()
     free_run: = generated(e@, prompt.slice(), 6, pick@, arena)
     assert(free_run.tokens.len == 6 && free_run.finish == Finish.length,
-        U8$[]::arena.text().s("the free run gave \{free_run.tokens.len\} tokens, not 6").take())
+        arena.text().s("the free run gave \{free_run.tokens.len\} tokens, not 6").take())
     one: = generated(e@, prompt.slice(), 1, pick@, arena)
     assert(same_start(one@, free_run.tokens@, 1) && one.finish == Finish.length,
         "a limit of one gives the first token, and finishes with length")
@@ -304,14 +315,13 @@ fn test_chat_stops_and_limits(arena: Arena$@) //<
     stopped: = generated(e@, prompt.slice(), 6, pick@, arena)
     e.marks = held
     assert(same_start(stopped@, free_run.tokens@, k) && stopped.finish == Finish.stop,
-        U8$[]::arena.text().s("the end marker as token \{k\} gave \{stopped.tokens.len\} tokens")
-        .take())
+        arena.text().s("the end marker as token \{k\} gave \{stopped.tokens.len\} tokens").take())
     e.context = prompt.len + 1
     full: = generated(e@, prompt.slice(), 6, pick@, arena)
     e.context = CONTEXT
     assert(same_start(full@, free_run.tokens@, 2) && full.finish == Finish.length,
-        U8$[]::arena.text().s("a context one past the prompt gave \{full.tokens.len\} tokens, ")
-        .s("not 2").take())
+        arena.text().s("a context one past the prompt gave \{full.tokens.len\} tokens, ").s("not 2")
+        .take())
     verdict.pass("the end marker stops before itself; the limit and a full context cut the answer")
 
 fn generated(e: Engine$@, prompt: I32[], limit: Sz, pick: Picker$@, arena: Arena$@): Generated //<
@@ -353,8 +363,8 @@ fn test_chat_cache_kept_matches_fresh(arena: Arena$@) //<
     second: = rendered(follow, kept@, arena)
     reused: = fed(kept@, second.slice())
     assert(reused >= first.len,
-        U8$[]::arena.text().s("only \{reused\} of the first prompt's \{first.len\} tokens were ")
-        .s("kept").take())
+        arena.text().s("only \{reused\} of the first prompt's \{first.len\} tokens were ").s("kept")
+        .take())
     $fresh: = engine_of(arena)
     fresh_reused: = fed(fresh@, second.slice())
     assert(fresh_reused == 0 && answer.tokens.len == 4, "a fresh engine keeps nothing")
@@ -375,6 +385,6 @@ fn test_chat_cache_kept_matches_fresh(arena: Arena$@) //<
     parted_scores: = last_scores(kept@, arena)
     fresh2_scores: = last_scores(fresh2@, arena)
     assert(parted > 0 && parted < first.len && same_scores(parted_scores@, fresh2_scores@),
-        U8$[]::arena.text().s("a prompt parting early kept \{parted\} tokens").take())
+        arena.text().s("a prompt parting early kept \{parted\} tokens").take())
     verdict
         .pass("a prompt parting from the cache early keeps the shared start, with the same scores")

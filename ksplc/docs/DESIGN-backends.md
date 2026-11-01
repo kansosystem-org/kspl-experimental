@@ -66,7 +66,7 @@ The backends only translate, as the first stage that knows the target. They rece
 
 ### The runtime memory layout and the ABI specification
 
-Every KSPL value has one fixed layout, which Sema fixes and both backends follow, so C output and LLVM output can call each other. This is the *ABI* ("Words used throughout" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout)).
+Every KSPL value has one fixed layout, which Sema fixes and both backends follow, so C output and LLVM output can call each other. This is the *ABI* ("Words used throughout" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#words-used-throughout)).
 
 | KSPL value | Its layout | Note |
 | :-- | :-- | :-- |
@@ -317,6 +317,7 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 | A `for … in` over a slice | The element read as `(coll.ptr + idx)$`; the loop condition already bounds the index | `build_index_loop` in `sema/body/for_in.kspl` | about 1% |
 
 * **genllvm keeps the expanded `&&` / `||`**: it has no short-circuit of its own.
+* **A string slice whose address is taken stays a compound literal** (`emit_address_of` in `gen/c/expr.kspl`). The constant is `static const`, so `&` on it would hand a `Self$@` receiver read-only memory. A method that changes the descriptor would then crash.
 * Names took 78% of the seed's bytes, yet shortening them saved no compile time: the C compiler reads a name once.
 
 ### Genllvm (LLVM IR): why the structure differs, and managing SSA
@@ -386,6 +387,15 @@ Bounds, division, shift and enum-tag checks keep their comparisons inline, so ea
 **Do not give one option two meanings**: the thunks, vtable constants and ARC drop glue that `lower` synthesizes already carry their final names.
 
 Caution: Do not borrow `is_export` to prevent a double prefix. `is_export` also means "pass by the C ABI", so the thunks alone would use the C ABI, and caller and callee would disagree. The symptom is "`io.out().s(...)` prints nothing". The meanings are split into `is_premangled` (emit the name as it is) and `is_export` / `is_ext` (pass by the C ABI).
+
+#### A narrow integer is widened at every call
+
+**A value narrower than 32 bits (`U8`, `I8`, `U16`, `I16`, `Bool`) carries `zeroext` or `signext` wherever it is passed or returned**: in a `declare`, a `define` and a `call`. clang's C relies on the other side to widen it. On x86-64 and Apple arm64, `int f(uint8_t c) { return c; }` reads the whole register. LLVM widens only where the attribute tells it to, so without it a C function read what the high bits held before. A program built with `--to=llvm` that passed a `U8` to clang-built C got a wrong answer.
+
+* An unsigned value and a `Bool` widen with zeros, a signed one with its sign. One place decides it: `Genllvm_ctx.ext_attr`.
+* **Every function carries it, not only a C one.** A function value can hold a C function, and C can call a KSPL one, so both sides of every call agree.
+* A variadic call's function type takes none: LLVM refuses an attribute there. Its variadic part is widened to 32 bits already.
+* `make test-llvm-abi` links `ksplc/tests/prog/narrow_c_abi.kspl` with its C built by clang at `-O2`, so a missing attribute shows as a wrong sum.
 
 #### A huge aggregate is not handled as a first-class value
 

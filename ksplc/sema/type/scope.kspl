@@ -32,6 +32,10 @@ enum Visibility: I32 //< the three levels of visibility
 
 struct Sym_flags
     is_mut: Bool
+    is_made_binding: Bool //<
+        //< Whether the compiler made this binding: a `case` payload, an `if name: =`, a `for … in`
+        //< item, or a `catch`'s error. It only reads, and no `$` can be written on it, so the
+        //< report for a write tells the writer to copy it into a `$` name.
     is_method: Bool
     is_inline: Bool
     is_ext: Bool
@@ -80,6 +84,12 @@ struct Sema_symbol
         //< define_symbol counts it. The ABI pass gives such a local a C name of its own
         //< (`hiding_local_name` in `ksplc/base/c_name.kspl`). In C, a declaration's own initializer
         //< already sees the new name, so `x: = x + 1` would read itself.
+    scope_depth: I32 //< how many scopes stood open where a local was declared; 0 for a global
+        //< define_symbol sets it. The escape check compares it, to tell a local of an outer block
+        //< from one of the block that holds a value (`ksplc/sema/body/stmt_escape.kspl`).
+    frame_pointer_depth: I32 //<
+        //< The deepest block whose storage a local set from a frame pointer points into
+        //< note_frame_pointer sets it with holds_frame_pointer. It is a scope_depth.
 
 struct File_env
     file_name: U8[]
@@ -227,6 +237,7 @@ impl Symbol_table
         else
             if outer: = r.peek_local(id)
                 sym.hidden_count = outer.hidden_count + 1
+            sym.scope_depth = I32::r.scope_stack.len
             scope: = r.scope_stack.get(r.scope_stack.len - 1)
             scope.set(id, sym)
         if sym.node != null

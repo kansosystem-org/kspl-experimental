@@ -373,6 +373,50 @@ pub fn stays_under( //< whether a relative path really stays inside the root, li
 ): Bool //< true only when neither the text nor a link climbs out
     return sys.is_safe_relative(rel) && !has_link_on_path(root, rel)
 
+pub fn has_hidden_on_path( //< whether a segment of a path under the root names a hidden file
+    //< A hidden name starts with a dot (`.git`, `.env`). A segment ends at `\` too, and its long
+    //< name (`long_name`) is checked as well: Windows opens `.git` by its short name `GIT~1`.
+    //< Caution: **A long name that cannot be read hides what stands there**; where nothing stands,
+    //< the path is not hidden. The rules are "A hidden name is found by its long name too" in
+    //< `std/docs/DESIGN-system.md`.
+    root: U8[], //< the directory the path is under
+    rel: U8[], //< the path under the root, already checked to stay there (`stays_under`)
+    shown: U8[][], //< the dot names not hidden, compared byte for byte (`.well-known`)
+): Bool
+    $start: Sz = 0
+    for start <= rel.len
+        end: = sys.segment_end(rel, start)
+        if is_hidden_name(rel.sub(start, end - start), shown)
+            return true
+        start = end + 1
+    start = 0
+    for start <= rel.len
+        end: = sys.segment_end(rel, start)
+        empty: = end == start
+        start = end + 1
+        if empty
+            continue
+        // The paths looked at go on the heap and back at once, so a caller needs no arena.
+        prefix: = join(root, rel.sub(0, end), null)
+        long: = long_name(prefix, null) catch
+            there: = exists(prefix)
+            dealloc(Void$@::prefix.ptr)
+            return there
+        dealloc(Void$@::prefix.ptr)
+        hidden: = is_hidden_name(long, shown)
+        dealloc(Void$@::long.ptr)
+        if hidden
+            return true
+    return false
+
+priv fn is_hidden_name(name: U8[], shown: U8[][]): Bool //< whether one name starts with a dot
+    if !name.starts_with(".")
+        return false
+    for s in shown
+        if name.equals(s)
+            return false
+    return true
+
 pub fn mkdir_all(path: U8[]): Void!Fs_error //< creates every missing level (`mkdir -p`)
     //< A level that already exists counts as success. On a failure part way, it **stops there and
     //< throws** `mkdir_failed` with the segment it could not create.

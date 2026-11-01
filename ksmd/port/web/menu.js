@@ -6,7 +6,7 @@
 // next menu, Left back out. Enter and Space press the item that has the focus.
 // The menu bar holds every command, each with its icon (`MENUS` in `commands.js`). The table's
 // commands stand in its Table menu and in the right-click menu alike, from one list,
-// `TABLE_GROUPS`. Shift+F10 or the menu key opens the right-click menu from a cell. A command's
+// `TABLE_GROUPS`; the right-click menu holds Cut, Copy and Paste above them. Shift+F10 or the menu key opens the right-click menu from a cell. A command's
 // key, which its item shows, runs it from a cell through the same list. A right-click on an item
 // offers to add it to the quick access bar, or to take it off (`quick.js`).
 "use strict";
@@ -125,8 +125,9 @@ function ksmdMenus(ks) {
   context.setAttribute("role", "menu");
   context.setAttribute("aria-label", "Table");
   context.hidden = true;
-  // Flyouts side by side share one line above and below them, as one group of names.
-  fill(context, MENUS.find(([name]) => name === "Table")[1]);
+  // Cut, Copy and Paste stand first, as in Excel's cell menu. Flyouts side by side share one line
+  // above and below them, as one group of names.
+  fill(context, ["cut", "copy", "paste", "-", ...MENUS.find(([name]) => name === "Table")[1]]);
   document.body.appendChild(context);
 
   // The open top menu's name, or null; and where the focus was before a menu took it.

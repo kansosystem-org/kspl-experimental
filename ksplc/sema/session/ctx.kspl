@@ -78,6 +78,11 @@ struct Fn_ctx
         //< The effective visibility of the function being analysed
         //< For a method it is min(the impl's target type, the method itself). check_type_vis_leak
         //< compares the return type's visibility with it.
+    body_depth: I32 //<
+        //< The scope_depth of the function's own block, one inside its parameters' scope
+        //< A parameter and a local of that block both live until the function returns, so the
+        //< escape check counts every depth up to this one as this one (`frame_depth` in
+        //< `../body/stmt_escape.kspl`).
 
 enum Sema_error
     analysis_failed
@@ -136,6 +141,10 @@ struct Sema_ctx
     layout: Layout_state
     resolving: Resolving_state
     statics: Static_state //< the decisions on top-level initializers (`../body/static_init.kspl`)
+    self_scopes: I32 //<
+        //< How many `impl` and `trait` declarations the type walk stands in
+        //< `Self` names a type only inside one (`validate_all_type_exprs` in
+        //< `../decl/type_check.kspl`).
     infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
         //< Hands an expression's type inference to the layer above (ksplc/sema/body)
         //< **This is the only way decl can call body.** If decl imported body, parse would reject
@@ -666,7 +675,7 @@ impl Sema_ctx
             r.source = src
         r.symtab.current_file = r.env.file_env_for(file_name)
 
-    fn check_snake_case(r: Self$@, name: U8[], node: Ast_node$@, kind_name: U8$[])
+    fn check_snake_case(r: Self$@, name: U8[], node: Ast_node$@, kind_name: U8[])
         if !r.suppress_errors && base_core.config.run_lint_checks && name.len > 0 &&
             !name.starts_with("_")
             $is_snake: = true

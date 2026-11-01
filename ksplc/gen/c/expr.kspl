@@ -75,6 +75,18 @@ impl Ast_node
             return
         r.emit_expr_prec(c, 14)
 
+    fn emit_address_of(r: Self$@, c: Genc_ctx$@) //<
+        //< Writes `&` and r, for `x@`, a `Self$@` receiver lowered to it, and a trait's object
+        //< **A string slice gets a compound literal of its own here, not its named constant.** The
+        //< constant is `static const`: `&` on it gives a pointer to const, which C warns of where a
+        //< writable one is expected, and a `Self$@` method that changes the descriptor (its `len`)
+        //< then writes to `.rodata` and crashes. The compound literal is a fresh object each time.
+        c.s("&")
+        if r.kind_id == .k_string && c.env.is_slice(r.type_id)
+            r.emit_string_value(c, false)
+        else
+            r.emit_expr_prec(c, 13)
+
     fn emit_expr_prec(r: Self$@, c: Genc_ctx$@, min_prec: I32)
         if get_c_expr_precedence(c, r) < min_prec
             c.s("(")

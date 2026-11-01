@@ -96,7 +96,8 @@ fn view(cap: Sz, arena: Arena$@): View //< an empty view that may grow to `cap` 
         .work = Work::{ .left = cap * WORK_PER_BYTE }, .arena = arena }
 
 const ITEM_WORK: Sz = 64 //< the work one item takes: a paragraph, a cell, a row, a sheet or a list
-    //< About the bytes its record takes in memory. A string built is charged its own bytes.
+    //< About the bytes its record takes in memory. A string built is charged its own bytes
+    //< (`View.charge_text`).
 priv const WORK_PER_BYTE: Sz = 32 //< the work a view may take for each byte it may hold
     //< A sheet of one-digit numbers takes about 20 for each byte of its view, so the cap on the
     //< view, not this one, refuses a file that only holds much text.
@@ -109,7 +110,8 @@ struct Work //< the work one file's reading may still take, charged before it is
 impl Work
     fn charge(r: Self$@, units: Sz): Void!U8[] //< takes `units` of the work left, or refuses
         if units > r.left
-            throw "it holds more cells, rows, sheets, notes or list numbers than are read"
+            throw "it holds more cells, rows, sheets, notes, list numbers or copies of text than \
+                are read"
         r.left -= units
 
 impl View
@@ -118,10 +120,32 @@ impl View
         clean: = one_line(line, r.arena)
         if clean.len == 0
             return
-        if r.cap - r.bytes < clean.len + 1
-            throw r.arena.text().s("its text is larger than ").s(size_words(r.cap, r.arena)).take()
+        r.charge_text(clean.len + 1, clean.len + 1)!
         r.out.s(clean).c('\n')
         r.bytes += clean.len + 1
+
+    fn charge_text(r: Self$@, size: Sz, added: Sz): Void!U8[] //<
+        //< Charges `added` bytes about to be written to a string that then holds `size` bytes
+        //< **Each string a reader builds is charged here before it is built.** A table copies a
+        //< cell's text into each row merged down and into each table around it, so a few bytes
+        //< of XML can ask for many copies. A string longer than the view's room can never be
+        //< shown, so it is refused at once.
+        if size > r.cap - r.bytes
+            throw r.arena.text().s("its text is larger than ").s(size_words(r.cap, r.arena)).take()
+        r.work.charge(added)!
+
+    fn row_of(r: Self$@, head: U8[], cells: U8[][]): U8[]!U8[] //<
+        //< `head`, then the cells joined by ` | `: a table row's line, charged before it is built
+        $size: = head.len
+        for i in Range.asc(cells.len)
+            size += cells[i].len + (3 if i > 0 else 0)
+        r.charge_text(size, size)!
+        out: = r.arena.text().s(head)
+        for i in Range.asc(cells.len)
+            if i > 0
+                out.s(" | ")
+            out.s(cells[i])
+        return out.take()
 
     fn take(r: Self$@): U8[] //< the view's text
         return r.out.take()

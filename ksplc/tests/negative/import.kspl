@@ -116,6 +116,16 @@ import "std/no_such_file_here" as gone
 
 fn main(): I32
   return 0
+// ==== case import_path_holds_a_quote
+//< A file whose name holds a `"` is refused where the import names it
+//< Both backends write the name into a quoted string (`#line`, `source_filename`), which the `"`
+//< would end. `refused_file_name` in `ksplc/parse/load.kspl` refuses it for an entry file too.
+// EXPECT: holds a '"' or a control character
+// EXPECT-NOT: import not found
+import "q\"x"
+
+fn main(): I32
+  return 0
 // ==== case import_path_interpolated
 //< An import's path cannot hold an interpolation
 //< The grammar allows a general `String` in an import's path, so this passes as syntax. Without
@@ -361,6 +371,34 @@ fn main()
   w: = mem.alloc_as<|S|>()
   w.free()
   _z: = w.v
+// ==== case use_after_free_param_set_again_ok
+//< A callee that sets its parameter to another value, then frees it, frees the other value
+//< The caller's argument is still live after the call (body_frees_param_directly in
+//< sema/flow/release.kspl). The case fails on purpose on another variable.
+// EXPECT: variable 'w' may already be freed here
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: variable 'a'
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv fn swap_free($p: I32$@, other: I32$@)
+  p = other
+  dealloc(Void$@::p)
+
+priv fn just_free(p: I32$@)
+  dealloc(Void$@::p)
+
+fn main()
+  a: = mem.alloc_as<|I32|>()
+  b: = mem.alloc_as<|I32|>()
+  a$ = 5
+  swap_free(a, b)
+  _v: = a$
+  dealloc(Void$@::a)
+
+  w: = mem.alloc_as<|I32|>()
+  just_free(w)
+  _z: = w$
 // ==== case use_after_free_via_dealloc_fn
 //< A release is not only the method form (`x.free()`)
 //< A `dealloc(x)` is a release too. Its argument usually carries a cast to `Void$@`. So the

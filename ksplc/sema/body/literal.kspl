@@ -3,6 +3,8 @@
 //< checked only where its type is known, and not while a generic is being instantiated.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_path_or_ident`
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_path_or_ident_name`
 import "ksplc/base/core" as base_core // is_comparison_op
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/eval" as sema_decl_eval
@@ -125,8 +127,26 @@ priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     // which does not build. `2.0` is the one spelling of that value.
     if !sema_type_env.is_unknown(expected_id) && c.env.is_numeric(expected_id) &&
         !c.env.is_float(expected_id)
+        if c.env.is_scalar_enum(expected_id)
+            refuse_implicit_enum(c, node, I32::sema_type_env.Builtin_type_id.i32_type, expected_id)
         return expected_id
     return I32::sema_type_env.Builtin_type_id.i32_type
+
+fn refuse_implicit_enum(c: Sema_ctx$@, node: Ast_node$@, from_id: I32, enum_id: I32) //<
+    //< Reports an integer or another enum written where an enum is expected
+    //< **Only the cast `E::n` makes an enum** ("Type conversion (`::`) and implicit casts" in
+    //< docs/SPEC-programming-language.md). It checks that the value is a tag. Taken implicitly,
+    //< `x: E = 5` would hold a value that is no variant, unchecked.
+    shown: = c.env.display(enum_id)
+    $operand: = "(…)"
+    if node.kind_id == .k_integer
+        operand = node.text
+    else if node.is_path_or_ident()
+        operand = node.get_path_or_ident_name()
+    c.clear_scratch()
+        .s("cannot convert '\{c.env.display(from_id)\}' to the enum '\{shown\}' implicitly. Write \
+            the cast '\{shown\}::\{operand\}'")
+    c.err(node, c.scratch.slice())
 
 priv fn check_integer_literal_width(c: Sema_ctx$@, node: Ast_node$@) //<
     //< Reports an integer literal too long to fit any integer type

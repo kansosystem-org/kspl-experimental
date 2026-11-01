@@ -16,15 +16,39 @@ Run with no argument, it self-tests which tensors it picks, which needs numpy al
 """
 import argparse
 import os
+import re
 import sys
 
 from types import SimpleNamespace
 
 import numpy as np
 
+import make_quant_fixtures
 from make_quant_fixtures import write_case
 
-READ_BY_KSAI = ("F32", "F16", "BF16", "Q5_0", "Q8_0", "Q4_K", "Q6_K")  # the formats' gguf names
+QUANT_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ksai",
+                            "quant.kspl")
+
+
+def read_by_ksai(source=QUANT_SOURCE):
+    """The formats ksai reads, by their gguf names: the members of `Quant_format` in its source.
+
+    Read from there, not written here, so a format ksai learns is taken from real models at once.
+    """
+    names, inside = [], False
+    with open(source, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("pub enum Quant_format"):
+                inside = True
+            elif inside and not line.startswith("    "):
+                break
+            elif inside and not line.startswith("     ") and not line.lstrip().startswith("//"):
+                names.append(line.split()[0].upper())
+    return tuple(names)
+
+
+READ_BY_KSAI = read_by_ksai()  # the formats' gguf names
+FORMAT_CASE = re.compile(r"^(b?f\d+|q\d_[0k])_case$")  # make_quant_fixtures's case of one format
 PER_FORMAT = 3  # tensors taken of each format in each file
 MOST_NUMBERS = 5_000_000  # a larger tensor writes a decoded file of more than 20 MB
 
@@ -67,6 +91,10 @@ def self_test():
     assert names == ["e", "b", "c", "a"], names
     print("[self-test] it takes the largest tensors of each format it reads, at most 3 of each.")
     print("[self-test] it leaves out a format ksai does not read, and a tensor over its size cap.")
+    fixtures = {m.group(1).upper() for m in map(FORMAT_CASE.match, dir(make_quant_fixtures)) if m}
+    missed = fixtures - set(READ_BY_KSAI)
+    assert not missed, f"formats with fixtures that it never takes from a model: {sorted(missed)}"
+    print("[self-test] it takes every format make_quant_fixtures.py writes a fixture of.")
     print("[self-test] To check real tensors, install gguf and give it --out-dir and GGUF files.")
 
 

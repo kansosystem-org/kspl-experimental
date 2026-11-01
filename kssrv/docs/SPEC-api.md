@@ -97,16 +97,7 @@ $ curl -s localhost:8080/api/status
 | `local` | whether it is for local use |
 | `root` | the root's path, only for local use. Empty facing outward, where it would tell anyone the machine's layout |
 
-For local use only (the page's endpoints; their rules are in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)):
-
-| Method | Path | What it does | Answers |
-| :-- | :-- | :-- | :-- |
-| `GET` | `/api/file?path=<p>` | Reads a file | that file's byte sequence |
-| `PUT` | `/api/file?path=<p>` | Writes the body to that name | `{"wrote":<byte count>}` |
-| `GET` | `/api/stat?path=<p>` | Tells whether a file changed | the size and the last modification |
-| `GET` | `/api/list?path=<p>` | Lists the names in one folder, for a Save As dialog | `{"folders":[…],"files":[…],"more":false}`, links and hidden names left out |
-| `GET` | `/api/here` | Keeps the server alive while a page is open | a head naming no length, then nothing until the client closes ("Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
-| `POST` | `/api/stop` | Stops the server | `{}`, then the server stops |
+For local use only, the six endpoints a page uses: `GET` and `PUT` on `/api/file`, and `GET /api/stat`, `GET /api/list`, `GET /api/here` and `POST /api/stop`. What each takes and answers is set in "Only four things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 Anything else under `/api/`:
 
@@ -119,9 +110,9 @@ Anything else under `/api/`:
 
 ### The file endpoints for local use
 
-Started with `--local`, the server lets a program on the same machine read and write files under the root. Each request carries the token in the header `Authorization: Bearer <token>`.
+Started with `--local`, the server lets a program on the same machine read and write files under the root, with the token it prints.
 
-**`path=<p>` names a place relative to the root.** An absolute path, in any operating system's spelling (`/etc/passwd`, `C:\x`, `\\server\share\x`), is refused with 403 on every OS.
+**These endpoints are the protocol's, and their rules stand there.** They cover the token and its header, which paths are refused, and why there is no `HEAD`. They also cover the type a file comes back as, and how a write keeps the original whole. They are "Where it listens", "Only four things can be asked for" and "How it refuses" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 ```console
 $ ./out/kssrv.exe 8080 ./public --local
@@ -139,26 +130,6 @@ $ curl -s -H "Authorization: Bearer $T" -X PUT --data-binary @notes.md \
 
 Caution: **The token above is a sample. Do not paste a token you ran into a document**: a reader would take it as a value to paste.
 
-The diagram follows one request, and shows which refusal comes from which check. The statuses are the ones in "How it refuses" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
-
-```mermaid
-sequenceDiagram
-    participant U as you
-    participant S as kssrv --local
-    participant C as the client (page or curl)
-    U->>S: start it
-    S-->>U: prints the URL to open, the token after its hash sign
-    U->>C: hand it the token
-    C->>S: GET /api/stat?path=notes.md<br/>header Authorization: Bearer TOKEN
-    Note over S: head names a body over the cap: 413 at once
-    Note over S: Host is not 127.0.0.1 or localhost: 403
-    Note over S: token missing or wrong: 401
-    Note over S: path outside the root: 403<br/>no such file: 404
-    S-->>C: 200 and the JSON size and changed_at
-```
-
-**These endpoints are the protocol's, and their rules stand there.** They cover the token, why there is no `HEAD`, the type a file comes back as, and how a write keeps the original whole. They are "How the token gets across" and "Only four things can be asked for" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
-
 ## The car's policy file
 
 The small robot car takes its driving policy from kssrv once, at start-up, as a plain file. It asks for `GET /pilot_policy.safetensors`, so kssrv serves the folder that holds that file, as any other file under the root.
@@ -168,7 +139,7 @@ $ ./out/kssrv.exe 8080 <the folder that holds pilot_policy.safetensors>
 $ curl -s -o pilot.safetensors localhost:8080/pilot_policy.safetensors
 ```
 
-The steps for connecting the car (a Freenove 4WD mecanum car and a Pico W) are in Phase 3 of [What works, and how far](../../README.md#-what-works-and-how-far). kssrv does not know the file's contents.
+The car is a Freenove 4WD mecanum car with a Pico W. The steps for connecting it are in ksos's bring-up guide, named in the root [`README.md`](../../README.md#-what-works-and-how-far). kssrv does not know the file's contents.
 
 The `Content-Type` is looked up from the extension. **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so the policy file is returned this way.
 

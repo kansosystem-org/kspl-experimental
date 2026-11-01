@@ -349,7 +349,7 @@ flowchart TD
 
 **An entry carries everything normalizing produced that a later stage reads**: the declarations, and the ranges a `#cfg()` dropped (`base/cfg_inactive.record_cfg_inactive`). Otherwise a hit would answer otherwise than a cold run; `make test-ast-cache` compares the two.
 
-Caution: **Always mix ksplc's own identity into the key** (`base/cache.append_self_identity`). The grammar and the normalizing rules live inside ksplc, so otherwise a new compiler takes an old AST as its own. Where the identity cannot be told (`argv[0]` cannot be stat'd), the cache is skipped.
+Caution: **Always mix ksplc's own identity into the key** (`base/cache.append_self_identity`). The grammar and the normalizing rules live inside ksplc, so otherwise a new compiler takes an old AST as its own. The identity is the executable's real path, size and time. It is never taken from `argv[0]`: started through PATH, ksplc gets a bare name there, which names a file in the working folder. Where the identity cannot be told, the cache is skipped.
 
 **A broken or old-format file is silently discarded, and the file is parsed.** The cache is for speed alone. The checks (the magic, the format's version, the key, the length, the range of `kind_id`) run before reading, and restored nodes pass the same `validate_layout()`.
 

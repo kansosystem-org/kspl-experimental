@@ -203,23 +203,29 @@ install-check:
 # What every opener is built from besides its own file, so a change to it builds the opener again.
 OPENER_SRC := tools/opener.kspl tools/opener_aim.kspl
 
-# $(call desktop_entry,<entry>,<name>,<opener>,<icon>,<MIME types>,<require>): writes the `.desktop`
-# entry that opens one file with <opener>, and checks it with `desktop-file-validate`. Where that is
-# missing it says SKIP, or fails when <require> is 1 (the gates pass 1: the image holds it).
+# $(call desktop_entry,<entry>,<name>,<opener>,<icon>,<MIME types>,<require>[,<folder>]): writes
+# the `.desktop` entry that opens one file with <opener>, and checks it with `desktop-file-validate`.
+# Where that is missing it says SKIP, or fails when <require> is 1 (the gates pass 1: the image
+# holds it). <opener> and <icon> stand under <folder>, a shell word, `"$$PWD"` when left out.
 # **Keep `Path=`**: a double-click stands in the home or `/`. **`%f`, not `%F`**: one file per run.
 # **The absolute path comes from `$$PWD`**, as `$(CURDIR)` is unquoted and splits at a space.
+# **Exec quotes its program**, since Exec splits at a space. Inside the quotes, `"`, `` ` ``, `$`
+# and `\` take a `\` before them, and `%` is written `%%`. Then every `\` is doubled, as in any
+# value of the file, Path's and Icon's too.
 define desktop_entry
-	@mkdir -p "$(dir $(1))"; here="$$PWD"; printf '%s\n' \
+	@set -o pipefail; mkdir -p "$(dir $(1))" && here=$(if $(7),$(7),"$$PWD") && \
+	program=$$(printf '%s' "$$here/$(3)" | sed -e 's/[\\"`$$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g') && \
+	at=$$(printf '%s' "$$here" | sed -e 's/\\/\\\\/g') && printf '%s\n' \
 		'[Desktop Entry]' 'Type=Application' 'Version=1.0' \
 		'Name=$(2)' 'Comment=Open this file with $(2) in a browser' \
-		"Exec=$$here/$(3) %f" \
-		"Path=$$here" "Icon=$$here/$(4)" 'Terminal=false' 'NoDisplay=true' \
+		"Exec=\"$$program\" %f" \
+		"Path=$$at" "Icon=$$at/$(4)" 'Terminal=false' 'NoDisplay=true' \
 		'MimeType=$(5)' \
 		> $(1)
 	@if command -v desktop-file-validate >/dev/null 2>&1; then \
 		desktop-file-validate $(1) || exit 1; \
 	elif [ "$(6)" = 1 ]; then \
-		echo "RESULT: SOME FAILED (1) -> desktop-file-validate is not installed, where it is required"; \
+		echo "RESULT: SOME FAILED (1) -> desktop-file-validate is not installed, where it is required (Debian/Ubuntu: install desktop-file-utils)"; \
 		exit 1; \
 	else echo "SKIP entry: desktop-file-validate is not installed, so $(1) is not validated"; fi
 endef
@@ -286,13 +292,13 @@ define desktop_check
 		test -f "$$d/mime/$(4).xml" || \
 			{ echo "RESULT: SOME FAILED (1) -> the MIME database in $$d lacks $(4)"; exit 1; }; \
 	elif [ "$(6)" = 1 ]; then \
-		echo "RESULT: SOME FAILED (1) -> update-mime-database is not installed, where it is required"; exit 1; \
+		echo "RESULT: SOME FAILED (1) -> update-mime-database is not installed, where it is required (Debian/Ubuntu: install shared-mime-info)"; exit 1; \
 	else echo "SKIP install: update-mime-database is not installed, so the MIME database is not checked"; fi; \
 	if command -v update-desktop-database >/dev/null 2>&1; then \
 		grep -q "^$(4)=.*$(notdir $(1))" "$$d/applications/mimeinfo.cache" || \
 			{ echo "RESULT: SOME FAILED (1) -> $$d/applications/mimeinfo.cache does not tie $(4) to $(notdir $(1))"; exit 1; }; \
 	elif [ "$(6)" = 1 ]; then \
-		echo "RESULT: SOME FAILED (1) -> update-desktop-database is not installed, where it is required"; exit 1; \
+		echo "RESULT: SOME FAILED (1) -> update-desktop-database is not installed, where it is required (Debian/Ubuntu: install desktop-file-utils)"; exit 1; \
 	else echo "SKIP install: update-desktop-database is not installed, so its cache is not checked"; fi; \
 	echo "RESULT: ALL PASS ($(notdir $(1)), its MIME declaration and its icon install into a scratch data folder)"
 endef

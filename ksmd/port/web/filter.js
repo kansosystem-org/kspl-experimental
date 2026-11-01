@@ -19,7 +19,8 @@ const FILTER_LIST_CAP = 1000;
 
 function ksmdFilter(ks) {
   // In Read-only, the conditions a viewer set, by the table's name: a Map from a column to
-  // { values: Set of lower-case texts } or { op, arg }. They stand over the file's own.
+  // { values: Set of lower-case texts }, { out: Set of them } or { op, arg }. They stand over the
+  // file's own.
   const viewed = new Map();
   // A value in an entry: `%`, `,` and `|` written as escapes, since they separate the entries.
   const enc = (t) => t.replace(/%/g, "%25").replace(/,/g, "%2C").replace(/\|/g, "%7C");
@@ -31,12 +32,15 @@ function ksmdFilter(ks) {
     const at = entry.indexOf(":");
     const kind = entry.slice(0, at);
     const rest = entry.slice(at + 1);
-    if (kind === "in") return { values: new Set(rest.split("|").map((v) => dec(v).toLowerCase())) };
+    const set = () => new Set(rest.split("|").map((v) => dec(v).toLowerCase()));
+    if (kind === "in") return { values: set() };
+    if (kind === "out") return { out: set() };
     return { op: kind, arg: dec(rest) };
   }
   function entryOf(cond) {
     if (!cond) return "";
     if (cond.values) return `in:${Array.from(cond.values).map(enc).join("|")}`;
+    if (cond.out) return `out:${Array.from(cond.out).map(enc).join("|")}`;
     if (cond.op === "empty" || cond.op === "filled") return cond.op;
     return `${cond.op}:${enc(cond.arg.toLowerCase())}`;
   }
@@ -72,6 +76,7 @@ function ksmdFilter(ks) {
   function meets(cond, v) {
     const text = shownText(v).toLowerCase();
     if (cond.values) return cond.values.has(text);
+    if (cond.out) return !cond.out.has(text);
     const arg = cond.arg.toLowerCase();
     const number = Number(cond.arg);
     const numeric = v[0] === 1 && cond.arg.trim() !== "" && Number.isFinite(number);
@@ -198,6 +203,18 @@ function ksmdFilter(ks) {
       if (!distinct.has(key)) distinct.set(key, v);
     }
     const values = Array.from(distinct.entries()).sort((a, b) => compare(a[1], b[1]));
+    // Whether each value is ticked, by its key. The list shows at most FILTER_LIST_CAP values, so
+    // this holds the ones it does not show as well.
+    const ticked = new Map(values.map(([key, v]) => [key, !cond || meets(cond, v)]));
+    // The text a search matches: a day by its whole date, `2026-01-15`, or as its format shows it.
+    const searched = (key) => {
+      const v = distinct.get(key);
+      if (v[0] === 5) return shownText(v) === v[1] ? v[1] : `${v[1]} ${shownText(v)}`.toLowerCase();
+      return key === "" ? "(blanks)" : key;
+    };
+    const matches = (q, key) => q === "" || searched(key).includes(q);
+    // The values the search leaves in; the list shows the first FILTER_LIST_CAP of them.
+    let found = values;
     const list = document.createElement("div");
     list.className = "filter-values";
     const allBox = document.createElement("label");
@@ -212,24 +229,28 @@ function ksmdFilter(ks) {
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = key;
-      box.checked = !cond || (cond.values ? cond.values.has(key) : meets(cond, v));
+      box.checked = ticked.get(key);
       label.append(box, ` ${text}`);
       boxes.push(box);
       return label;
     };
-    const listed = values.slice(0, FILTER_LIST_CAP);
-    const tree = dateTree(listed.filter(([, v]) => v[0] === 5), valueBox);
-    if (tree) list.appendChild(tree);
-    for (const [key, v] of listed) {
-      if (v[0] !== 5) list.appendChild(valueBox(key, v, key === "" ? "(Blanks)" : shownText(v)));
-    }
-    el.appendChild(list);
-    if (values.length > FILTER_LIST_CAP) {
-      const capped = document.createElement("p");
-      capped.className = "filter-capped";
-      capped.textContent = `Only the first ${FILTER_LIST_CAP.toLocaleString("en")} of ${values.length.toLocaleString("en")} values are listed. Search to find the others.`;
-      el.appendChild(capped);
-    }
+    const capped = document.createElement("p");
+    capped.className = "filter-capped";
+    // Lists the first values `found` holds, with the boxes as `ticked` holds them.
+    const fill = () => {
+      boxes.length = 0;
+      for (const node of Array.from(list.children)) if (node !== allBox) node.remove();
+      const listed = found.slice(0, FILTER_LIST_CAP);
+      const tree = dateTree(listed.filter(([, v]) => v[0] === 5), valueBox);
+      if (tree) list.appendChild(tree);
+      for (const [key, v] of listed) {
+        if (v[0] !== 5) list.appendChild(valueBox(key, v, key === "" ? "(Blanks)" : shownText(v)));
+      }
+      capped.hidden = found.length <= FILTER_LIST_CAP;
+      capped.textContent = `Only the first ${FILTER_LIST_CAP.toLocaleString("en")} of ${found.length.toLocaleString("en")} values are listed. Search to find the others.`;
+    };
+    fill();
+    el.append(list, capped);
 
     const more = document.createElement("details");
     const summary = document.createElement("summary");
@@ -261,23 +282,24 @@ function ksmdFilter(ks) {
     el.appendChild(ends);
 
     // (Select all) shows whether every value the search leaves in is ticked, and ticks or unticks
-    // them; a year's or a month's box does the same for the days under it. A day in a folded month
-    // still counts: folding hides it from sight, not from the filter.
-    const inSight = (within = list) => boxes.filter((b) => !b.out && within.contains(b));
+    // them, listed or not; a year's or a month's box does the same for the days under it. A day in
+    // a folded month still counts: folding hides it from sight, not from the filter.
+    const inSight = (within) => boxes.filter((b) => !b.out && within.contains(b));
     const mark = (box, seen) => {
-      const on = seen.filter((b) => b.checked).length;
+      const on = seen.filter((t) => t).length;
       box.checked = seen.length > 0 && on === seen.length;
       box.indeterminate = on > 0 && on < seen.length;
     };
     // The condition OK takes: open, and with its value where it needs one.
     const condition = () => more.open && (op.value === "empty" || op.value === "filled" || arg.value !== "");
     // With no value ticked no row would show, so OK waits for a tick or a condition, as in Excel.
-    const takes = () => condition() || boxes.some((b) => b.checked);
+    const takes = () => condition() || values.some(([key]) => ticked.get(key));
     const sync = () => {
       for (const node of list.querySelectorAll("[role=treeitem]")) {
-        mark(node.querySelector(":scope > .tree-row input"), inSight(node.querySelector(":scope > .tree-kids")));
+        mark(node.querySelector(":scope > .tree-row input"),
+          inSight(node.querySelector(":scope > .tree-kids")).map((b) => b.checked));
       }
-      mark(all, inSight());
+      mark(all, found.filter(([key]) => matches(search.value.toLowerCase(), key)).map(([key]) => ticked.get(key)));
       ok.disabled = !takes();
     };
     sync();
@@ -286,17 +308,26 @@ function ksmdFilter(ks) {
     arg.addEventListener("input", sync);
     list.addEventListener("change", (e) => {
       const node = e.target.closest(".tree-row") && e.target.closest("[role=treeitem]");
-      if (e.target === all || node) {
-        for (const b of inSight(node ? node.querySelector(":scope > .tree-kids") : list)) b.checked = e.target.checked;
+      if (e.target === all) {
+        const q = search.value.toLowerCase();
+        for (const [key] of found) if (matches(q, key)) ticked.set(key, all.checked);
+        for (const b of inSight(list)) b.checked = all.checked;
+      } else if (node) {
+        for (const b of inSight(node.querySelector(":scope > .tree-kids"))) b.checked = e.target.checked;
       }
+      for (const b of boxes) ticked.set(b.value, b.checked);
       sync();
     });
     search.addEventListener("input", () => {
       const q = search.value.toLowerCase();
+      // Past the cap, the list is made again from the values the search finds, so a value past the
+      // first FILTER_LIST_CAP can be found. Under it, the boxes stay, and those left out hide.
+      if (values.length > FILTER_LIST_CAP) {
+        found = values.filter(([key]) => matches(q, key));
+        fill();
+      }
       for (const b of boxes) {
-        // A day matches by its whole date, as `2026-01-15` or as its format shows it.
-        const text = b.dataset.date || b.parentElement.textContent;
-        b.out = q !== "" && !text.toLowerCase().includes(q);
+        b.out = !matches(q, b.value);
         b.parentElement.hidden = b.out;
       }
       // A year or a month shows while a day under it matches, and opens while the search finds one.
@@ -324,10 +355,14 @@ function ksmdFilter(ks) {
       if (!takes()) return;
       if (condition()) {
         set(block, column, { op: op.value, arg: arg.value });
-      } else if (boxes.every((b) => b.checked) && values.length <= FILTER_LIST_CAP) {
-        set(block, column, null);
       } else {
-        set(block, column, { values: new Set(boxes.filter((b) => b.checked).map((b) => b.value)) });
+        const on = values.filter(([key]) => ticked.get(key)).map(([key]) => key);
+        const off = values.filter(([key]) => !ticked.get(key)).map(([key]) => key);
+        // Past the cap, a value never listed was never unticked. So the filter keeps whichever is
+        // fewer: the values ticked, or those left out, which lets a value added later show.
+        if (off.length === 0) set(block, column, null);
+        else if (values.length <= FILTER_LIST_CAP || on.length <= off.length) set(block, column, { values: new Set(on) });
+        else set(block, column, { out: new Set(off) });
       }
       close();
     };

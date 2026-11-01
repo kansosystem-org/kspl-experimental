@@ -175,6 +175,32 @@ impl Wrapped: reflect.Reflectable {}
 
 fn main(): I32
   return 0
+// ==== case reflect_derive_packed_under_aligned
+//< A field that `#packed` leaves under-aligned cannot be in a derived table
+//< `std/reflect` reads each field through a pointer of the field's own type, which promises that
+//< type's alignment. A word read at an odd address faults on a Cortex-M0. A one-byte field, and a
+//< field that `#align` keeps at its alignment, pass.
+// EXPECT: 'Reflectable' cannot read field 'b'. '#packed' leaves it aligned to 1 byte(s), but the table reads it through a pointer to 'I64', which promises 8
+// EXPECT: Finished with 1 error(s)
+
+import "std/reflect"
+
+#packed
+priv struct Loose
+  a: U8
+  b: I64
+
+#packed
+#align(4)
+priv struct Kept //< its fields sit at multiples of 4, and the struct starts at one
+  pad: I32
+  n: I32
+
+impl Loose: reflect.Reflectable {}
+impl Kept: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
 // ==== case sizeof_cycle
 //< A `sizeof` whose size depends on itself is rejected
 //< Caution: **Report one item alone.** The fold failure follows from the cycle. So the array-size

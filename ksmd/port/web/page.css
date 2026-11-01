@@ -17,6 +17,14 @@
   --look-paper: #ffffff;
   --look-ink: #1d1d1f;
   color-scheme: light dark;
+  /* The page's sizes: compact, as a list or a sheet is in a spreadsheet or a file manager. Each is
+     set here alone. The reasons are "A compact page" in `ksmd/docs/DESIGN-page.md`. */
+  --text-line: 1.4;
+  --block-gap: 0.5em;
+  --cell-line: 1.3;
+  --cell-pad: 2px 6px;
+  --target: 24px;
+  --status-height: 28px;
 }
 
 /* The same tokens when the system asks for a dark scheme; the document's own colours stay.
@@ -43,7 +51,7 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font: 16px/1.5 system-ui, sans-serif;
+  font: 16px/var(--text-line) system-ui, sans-serif;
 }
 
 /* The menu bar, the quick access bar and a notice stay in sight while the document scrolls. */
@@ -109,7 +117,7 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 6px 16px;
+  padding: 3px 16px;
   background: var(--notice);
   border-bottom: 1px solid var(--line);
 }
@@ -139,9 +147,10 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
 }
 
 .menu-name {
+  min-height: var(--target);
   font: inherit;
   font-size: 14px;
-  padding: 4px 10px;
+  padding: 2px 8px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: none;
@@ -170,7 +179,8 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   box-shadow: 0 4px 16px var(--shadow);
 }
 
-.menu[hidden] {
+.menu[hidden],
+.menu button[hidden] {
   display: none;
 }
 
@@ -181,9 +191,10 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   align-items: center;
   gap: 10px;
   font: inherit;
+  min-height: var(--target);
   font-size: 14px;
   text-align: left;
-  padding: 4px 14px 4px 26px;
+  padding: 3px 14px 3px 26px;
   border: none;
   background: none;
   color: var(--ink);
@@ -260,14 +271,14 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   max-width: none;
   min-height: 70vh;
   margin: 0 auto;
-  padding: 16px 32px 6rem;
+  padding: 8px 32px 6rem;
   outline: none;
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
 
 .doc > * {
-  margin: 0.75em 0;
+  margin: var(--block-gap) 0;
 }
 
 .doc pre,
@@ -357,10 +368,16 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
 .table th,
 .table td {
   border: 1px solid var(--line);
-  padding: 4px 8px;
+  padding: var(--cell-pad);
+  line-height: var(--cell-line);
   text-align: left;
   vertical-align: top;
   min-width: 3em;
+}
+
+/* The column letters stay a target a pointer hits, though their text is small. */
+.table thead tr:first-child {
+  height: var(--target);
 }
 
 .table th.letter,
@@ -378,7 +395,6 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
 .table thead tr > th:first-child {
   width: 1%;
   min-width: 0;
-  padding: 4px 6px;
   white-space: nowrap;
 }
 
@@ -636,6 +652,49 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   outline-offset: -2px;
 }
 
+/* Rows or columns cut and waiting to be inserted: a dashed frame round them, as Excel's moving
+   border (`cut.js`). The cells a formula's pointing names: a solid one (`point.js`). Each cell
+   draws the edges of the frame it stands on. Paper never shows either. */
+@media screen {
+  .table .cut,
+  .table .pointed {
+    position: relative;
+  }
+
+  .table .cut::after,
+  .table .pointed::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 0 dashed var(--mark);
+    pointer-events: none;
+  }
+
+  .table .pointed::after {
+    border-style: solid;
+  }
+
+  .table .cut-top::after,
+  .table .point-top::after {
+    border-top-width: 2px;
+  }
+
+  .table .cut-bottom::after,
+  .table .point-bottom::after {
+    border-bottom-width: 2px;
+  }
+
+  .table .cut-left::after,
+  .table .point-left::after {
+    border-left-width: 2px;
+  }
+
+  .table .cut-right::after,
+  .table .point-right::after {
+    border-right-width: 2px;
+  }
+}
+
 /* What a table's filter shows, with the button that shows every row again. */
 .filter-note {
   color: var(--muted);
@@ -721,7 +780,7 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
 }
 
 .include .inside > * {
-  margin: 0.75em 0;
+  margin: var(--block-gap) 0;
 }
 
 .status {
@@ -729,11 +788,12 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   bottom: 0;
   left: 0;
   right: 0;
+  box-sizing: border-box;
+  min-height: var(--status-height);
   margin: 0;
-  padding: 4px 16px;
+  padding: 2px 16px;
   background: var(--soft);
   border-top: 1px solid var(--line);
-  min-height: 1.5em;
 }
 
 /* View, Reading width: lines kept short, as a printed page keeps them. */
@@ -758,7 +818,7 @@ body.reading .doc {
 
 /* A quote, set in from the left with a bar, and a divider between two parts. */
 .doc blockquote {
-  margin: 0.75em 0;
+  margin: var(--block-gap) 0;
   padding-left: 1em;
   border-left: 3px solid var(--line);
   color: var(--muted);

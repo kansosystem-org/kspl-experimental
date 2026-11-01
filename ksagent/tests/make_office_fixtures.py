@@ -53,15 +53,31 @@ def deflate_raw(data, level=6, strategy=zlib.Z_DEFAULT_STRATEGY, mem_level=8):
     return c.compress(data) + c.flush()
 
 
+def far_matches(rng):
+    """Random bytes, then a copy from each range of far distance codes (26 to 29).
+
+    The random bytes hold no shorter match, so zlib can use only the distance each copy names. The
+    largest is 30,000: zlib matches no farther than 32,768 less 262.
+    """
+    window = bytes(rng.getrandbits(8) for _ in range(30000))
+    out = bytearray(window)
+    for distance in (10000, 14000, 20000, 30000):  # codes 26, 27, 28 and 29
+        start = len(out) - distance
+        out += out[start:start + 1000]
+    return bytes(out)
+
+
 def deflate_cases():
     """The cases: each block type, long matches, far distances, and the empty input."""
     rng = random.Random(SEED)
     text = ("第3条 年次有給休暇は、入社6か月後に10日を付与する。"
             "Overtime work requires prior approval. ").encode("utf-8")
-    noise = bytes(rng.getrandbits(8) for _ in range(20000))
-    window = bytes(rng.getrandbits(8) for _ in range(32768))
+    noise = bytes(rng.getrandbits(8) for _ in range(4000))
+    far = far_matches(rng)
     mixed = b"".join(text[: rng.randint(1, len(text))] + bytes([rng.getrandbits(8)])
-                     for _ in range(800))
+                     for _ in range(250))
+    runs = b"".join(text[: rng.randint(1, len(text))] + bytes([rng.getrandbits(8)])
+                    * rng.randint(3, 40) for _ in range(250))
     return [
         ("empty", b"", deflate_raw(b"")),
         ("empty_stored", b"", deflate_raw(b"", level=0)),
@@ -70,11 +86,12 @@ def deflate_cases():
         ("text_fixed", text * 40, deflate_raw(text * 40, strategy=zlib.Z_FIXED)),
         ("text_dynamic", text * 200, deflate_raw(text * 200, level=9)),
         ("noise", noise, deflate_raw(noise)),
-        ("stored_blocks", text * 700, deflate_raw(text * 700, level=0)),
+        # A small memory level gives a small block, so the input still fills two stored blocks.
+        ("stored_blocks", text * 100, deflate_raw(text * 100, level=0, mem_level=1)),
         ("long_run", b"a" * 100000, deflate_raw(b"a" * 100000, level=9)),
-        ("far_distance", window + window, deflate_raw(window + window, level=9)),
+        ("far_distance", far, deflate_raw(far, level=9)),
         ("huffman_only", mixed, deflate_raw(mixed, strategy=zlib.Z_HUFFMAN_ONLY)),
-        ("rle", mixed, deflate_raw(mixed, strategy=zlib.Z_RLE)),
+        ("rle", runs, deflate_raw(runs, strategy=zlib.Z_RLE)),
         ("mixed_small_window", mixed, deflate_raw(mixed, level=1, mem_level=1)),
         ("one_byte", b"\x00", deflate_raw(b"\x00")),
     ]

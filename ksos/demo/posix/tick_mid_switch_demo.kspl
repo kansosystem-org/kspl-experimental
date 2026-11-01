@@ -9,7 +9,7 @@
 
 // ==========================================
 //   start     main switches into the first task (start_scheduler) with a tick held.
-//   yield     the second task yields into the third, which has never run, with a tick held.
+//   resume    the second task resumes the third (higher, never run) with a tick held.
 //   restart   main starts the scheduler many times over under a fast tick, with no critical
 //             section of its own.
 // The timer is set too slow to fire during the first two, so every tick there is one raised here.
@@ -40,7 +40,7 @@ fn first(_arg: Void$@): Void //< the task main's start_scheduler switches into w
 fn second(_arg: Void$@): Void //< switches into third, which has never run, with a tick held
     s: = task.irq_save()
     sys.raise_signal(SIGALRM)
-    Task.yield()
+    tcb_3.resume() // third outranks this task, so the switch happens here
     task.irq_restore(s)
     g_ran[1] = 1
 
@@ -53,10 +53,11 @@ fn restart_a(_arg: Void$@): Void
 fn restart_b(_arg: Void$@): Void
     g_restart_ran[1] += 1
 
-fn held_ticks() //< the start and the yield, each with a tick held over its switch
+fn held_ticks() //< the start and the resume, each with a tick held over its switch
     tcb_1.create(U8$[]::stack_1, first, null, 1, "first")
     tcb_2.create(U8$[]::stack_2, second, null, 1, "second")
-    tcb_3.create(U8$[]::stack_3, third, null, 1, "third")
+    tcb_3.create(U8$[]::stack_3, third, null, 2, "third")
+    tcb_3.suspend() // kept out of the start until second resumes it
     // It installs the tick's handler; at 1000 s the timer never fires during the run.
     task.enable_preemption(1000000000)
     s: = task.irq_save()
@@ -64,8 +65,8 @@ fn held_ticks() //< the start and the yield, each with a tick held over its swit
     task.start_scheduler() // returns once every task is done
     task.irq_restore(s)
     assert(g_ran[0] == 1, "tick_mid_switch: the task started with a tick held never ran its code")
-    assert(g_ran[1] == 1, "tick_mid_switch: the task that yielded with a tick held never resumed")
-    assert(g_ran[2] == 1, "tick_mid_switch: the task yielded into with a tick held never ran")
+    assert(g_ran[1] == 1, "tick_mid_switch: the task that resumed with a tick held never went on")
+    assert(g_ran[2] == 1, "tick_mid_switch: the task resumed with a tick held never ran")
     assert(task.current_tick() == 2, "tick_mid_switch: each held tick must arrive exactly once")
     tcb_1.delete()
     tcb_2.delete()

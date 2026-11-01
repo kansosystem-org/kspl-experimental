@@ -442,7 +442,6 @@ priv struct Doc_check //< the per-file checks' findings, one Finding per verdict
     misnamed_link: Finding
     wrong_dir: Finding
     spec_ref: Finding
-    bare_phase: Finding
     bad_numbering: Finding
     stray_sym: Finding
     bare_sec: Finding
@@ -457,10 +456,10 @@ impl Doc_check
             .missing_src = new_finding(arena), .stale = new_finding(arena),
             .bad_anchor = new_finding(arena), .bad_link = new_finding(arena),
             .misnamed_link = new_finding(arena), .wrong_dir = new_finding(arena),
-            .spec_ref = new_finding(arena), .bare_phase = new_finding(arena),
-            .bad_numbering = new_finding(arena), .stray_sym = new_finding(arena),
-            .bare_sec = new_finding(arena), .unit_ref = new_finding(arena),
-            .stale_quote = new_finding(arena), .quoted_head = new_finding(arena) }
+            .spec_ref = new_finding(arena), .bad_numbering = new_finding(arena),
+            .stray_sym = new_finding(arena), .bare_sec = new_finding(arena),
+            .unit_ref = new_finding(arena), .stale_quote = new_finding(arena),
+            .quoted_head = new_finding(arena) }
 
     fn is_generated(d: Self$@, path: U8[]): Bool //<
         //< whether the build makes it, so absence is right
@@ -488,10 +487,6 @@ impl Doc_check
         // backticks mislead just as a document's do.
         symbol_ref_defects(rel, here, text, d.dirs, d.generated@, d.missing_src@, d.stray_sym@,
             arena)
-        // **`Phase N` is used only by the root README.md**; elsewhere the same number would point
-        // at different things. A document counts "stage N", and names README.md next to a Phase.
-        if !rel.equals("README.md")
-            d.check_bare_phase(rel, text)
         d.check_src_paths(rel, here, text)
         d.check_doc_paths(rel, here, text)
         d.check_doc_quotes(rel, here, text)
@@ -556,25 +551,6 @@ impl Doc_check
                 if scan.quotes_in_heading(line)
                     d.quoted_head.bad
                         .push(d.arena.text().s(rel).s(":\{n\}: ").s(line).take())
-
-    fn check_bare_phase(d: Self$@, rel: U8[], text: U8[]) //<
-        //< That a `Phase N` names README.md within two lines of it
-        arena: = d.arena
-        lines: = text.lines(arena)
-        for i in Range.asc(lines.len)
-            line: = lines.get(i)
-            if at: = line.find_str("Phase")
-                if cite.read_section_number(line, at + 5, arena).len == 0
-                    continue
-                near: = arena.text()
-                lo: = 0 if i < 2 else i - 2
-                hi: = lines.len if i + 3 > lines.len else i + 3
-                for k in Range(lo, hi, 1)
-                    near.s(lines.get(k)).s("\n")
-                d.bare_phase.seen += 1
-                if near.take().find_str("README.md").is_none()
-                    d.bare_phase.bad
-                        .push(arena.text().s(rel).s(":\{i + 1\}: ").s(line.trim_spaces()).take())
 
     fn check_src_paths(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each implementation or test file named exists
@@ -749,8 +725,6 @@ fn main(): I32
         d.unit_ref@, "the source is the table in docs/SPEC-documents.md", arena)
     report("SPEC files cite no DESIGN or PLAN and no specification below or beside them", 0,
         d.spec_ref@, "keep the rules in SPEC and route design readers through README", arena)
-    report("a \"Phase N\" outside README names README.md nearby", d.bare_phase.seen,
-        d.bare_phase@, "", arena)
     report("numbered headings are unique and consecutive per document", 0, d.bad_numbering@, "",
         arena)
     report("every named symbol is in that file", d.stray_sym.seen, d.stray_sym@,

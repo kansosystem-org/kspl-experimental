@@ -189,15 +189,17 @@ All three break with no diagnostic. A returned error code gets forgotten, so kso
 
 ### Interrupt handlers
 
-**An interrupt handler (ISR, interrupt service routine) never waits: ksos stops one that tries to.** A wait inside one would block the interrupted task silently. `refuse_in_isr` in `ksos/kernel/task.kspl` panics **first in every waiting call** (each `*_until` loop, `Task.delay`, `Task.yield`). Otherwise a `take` that finds a count would pass, and the misuse would show only the day the count is 0 (`make ksos-cm-isr-block`). `Mutex.unlock` goes through `require_current`, since an unlock there would release the interrupted task's mutex (`make ksos-cm-isr-unlock`).
+**An interrupt handler (ISR, interrupt service routine) never waits: ksos stops one that tries to.** A wait inside one would block the interrupted task silently. `open_wait` in `ksos/kernel/task.kspl` opens the critical section of **every waiting call** (each `*_until` loop, `Task.delay`, `Task.delay_until`, `Task.yield`), and its `refuse_in_isr` panics first. Otherwise a `take` that finds a count would pass, and the misuse would show only the day the count is 0 (`make ksos-cm-isr-block`). `Mutex.unlock` goes through `require_current`, since an unlock there would release the interrupted task's mutex (`make ksos-cm-isr-unlock`).
 
 **Only what does not wait can be called from an ISR** (`give` / `set` / `try_*`, `Queue<|T|>.try_send`/`.try_recv` among them). Those need no dedicated version, because `irq_save` nests (`make ksos-isr`).
+
+**A task never waits with interrupts off either.** A wait between the application's own `irq_save` and `irq_restore` panics on every port (`make ksos-wait-masked`, `make ksos-cm-wait-masked`). The switch away happens only once interrupts are on again. So on Cortex-M the call would go on as if another task ran. It would mark each ready task blocked in turn, then stop with a wrong message or return a false timeout. On POSIX the same program would wait and work. Letting the wait open the section instead would break the application's critical section without a word. So the call is refused, and a program behaves alike on both ports.
 
 Only Cortex-M has a handler mode (`IPSR`), so only it detects the misuse. The POSIX stand-in interrupt, `SIGUSR1`, does only async-signal-safe work: `try_send` and a counter.
 
 ### A task's life, its stack and the idle task
 
-* **Pausing, resuming and deleting a task** (`make ksos-lifecycle`): the Task and the stack are static, so a delete reclaims neither. It returns the scheduler's slot and the port's context, so create and delete repeat without running out. A task whose entry returned is `done` but keeps both until deleted, so a task manager still lists it.
+* **Pausing, resuming and deleting a task** (`make ksos-lifecycle`): the Task and the stack are static, so a delete reclaims neither. It returns the scheduler's slot and the port's context, so create and delete repeat without running out. A task whose entry returned is `done` but keeps both until deleted, so a task manager still lists it. **`Task.create` on a task still in the table panics** (`make ksos-create-again`): let through, each round would take one more slot, until the table is full.
 * **The stack-overflow canary**: `Task.create` writes a known byte run at the stack's lowest-address end, and every `schedule()` matches it. The demo damages it directly (`make ksos-stack-overflow`), since a real overflow depends on the optimization and can die as a SEGV first.
 * **The idle task (`enable_idle_task` in `ksos/kernel/task.kspl`)** calls its hook between pauses. **With nothing ready and nothing waiting on the clock, it sleeps until an interrupt** (`make ksos-sleep`); otherwise it pauses on `Task.delay(1)`, so tickless idle still moves the time. `install_idle_reap` in `ksos/kernel/dynamic.kspl` makes reclaiming deleted tasks its hook. It never ends, so `start_scheduler` returns only on `stop_scheduler`.
 
@@ -293,7 +295,7 @@ Three things keep it sound:
 
 Picking inside PendSV itself would also avoid the window. ksos keeps one `schedule()` for every port instead, and the POSIX port switches inside it directly.
 
-Caution: **The window reaches into a critical section an application holds itself.** A `give` inside one that wakes a higher-priority task has already made that task current, and the switch waits for `irq_restore`. Until then, anything that acts on the running task (`Task.current`, a delay, a yield, a lock, a take) acts on the woken one. `irq_restore` in `ksos/kernel/task.kspl` says so where it is called.
+Caution: **The window reaches into a critical section an application holds itself.** A `give` inside one that wakes a higher-priority task has already made that task current, and the switch waits for `irq_restore`. Until then, `Task.current` and anything else that acts on the running task acts on the woken one. A delay, a yield, a lock or a take there is refused with a panic (see "Interrupt handlers" above). `irq_restore` in `ksos/kernel/task.kspl` says so where it is called.
 
 #### Preemption
 
@@ -506,6 +508,8 @@ A composite device that offers **two functions** on one USB cable:
 * the 67-byte configuration descriptor sent as two packets, 64+3 (exactly 64 is not a short packet, so the host waits for more);
 * a way to receive the zero-length OUT after the data stage;
 * a STALL, not an empty answer, for a request it cannot answer.
+
+**A buffer goes to the controller in two writes**: the length and the PID first, then AVAILABLE a few cycles later (`hand_over` in `ksos/drivers/rp2040/usb_hw.kspl`). The controller runs on clk_usb (48 MHz), slower than the CPU's 125 MHz. In one write it could see AVAILABLE before the other fields, and send a packet with the old length or PID. The RP2040 datasheet asks for this order ("Concurrent access" in its USB chapter). It is not yet confirmed on the real chip.
 
 Caution: **Always run ksos's `make test` after touching a descriptor** (`make debug-ksos` from the repository's root). One byte out of place makes enumeration fail without a word. Each descriptor is a `U8[_]` array, whose length is its element count; a length written out pads silently. `ksos/tests/usb_descriptors.kspl` checks their length bytes.
 

@@ -103,8 +103,8 @@ To add a pair of gates that share no file, put the two rows next to each other, 
 
 | Target | What it runs |
 | :-- | :-- |
-| `ci` | Every gate this host runs natively. Linux: `ci-shard-core`, `ci-shard-rest` and `ci-shard-linux`; Windows and macOS: `ci-shard-core` and `ci-shard-rest` |
-| `ci-shard-core`, `ci-shard-rest` | The two shared sections the Linux and Windows jobs run. A gate marked `linux_only` runs only in the Linux job of its section |
+| `ci` | Every gate this host runs natively. Linux: `ci-shard-a`, `ci-shard-b` and `ci-shard-linux`; Windows and macOS: `ci-shard-a` and `ci-shard-b` |
+| `ci-shard-a`, `ci-shard-b` | The two shared sections the Linux and Windows jobs run. A gate marked `linux_only` runs only in the Linux job of its section |
 | `ci-shard-linux` | Most of the gates that only Linux runs; it refuses to run elsewhere |
 | `ci-macos` | The macOS job's set: what differs on macOS, kept small because its minutes cost the most |
 | `ci-full` | Every gate this host can answer, for a person checking all on one machine. Linux: the same as `ci`; Windows and macOS: `ci`'s gates and the Linux-only ones too |
@@ -129,8 +129,8 @@ The chart shows one run, from the workflow down to the logs.
 
 ```mermaid
 flowchart TD
-    W["ci.yml<br/>one job per platform"] --> LX["linux: three sections in parallel<br/>ci-shard-core<br/>ci-shard-rest<br/>ci-shard-linux"]
-    W --> WN["windows-ucrt64: two sections in parallel<br/>ci-shard-core<br/>ci-shard-rest"]
+    W["ci.yml<br/>one job per platform"] --> LX["linux: three sections in parallel<br/>ci-shard-a<br/>ci-shard-b<br/>ci-shard-linux"]
+    W --> WN["windows-ucrt64: two sections in parallel<br/>ci-shard-a<br/>ci-shard-b"]
     W --> MC["macos: ci-macos"]
     LX --> T["the seed reads the table<br/>gates in tools/ci_gates.kspl"]
     WN --> T
@@ -139,9 +139,9 @@ flowchart TD
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
 
-**The gates that only Linux runs are dealt over the three Linux jobs**, so the three end at about the same time. Most stand in `ci-shard-linux`. The browser gates (`test-ksmd-browser`, `test-ksmd-open`, `test-ksagent-chat`) stand in `ci-shard-core`, and `debug-tools` in `ci-shard-rest`, each with `linux_only` (`Gate.linux_only` in `tools/ci_gates.kspl`). The Windows job of the same section leaves them out. Moving a gate between the Linux jobs costs no start-up, as each job pays its own already.
+**The gates that only Linux runs are dealt over the three Linux jobs**, so the three end at about the same time. Most stand in `ci-shard-linux`. The browser gates (`test-ksmd-browser`, `test-ksmd-open`, `test-ksagent-chat`) stand in `ci-shard-a`, and `debug-tools`, `lint` and `test-suites-text` in `ci-shard-b`, each with `linux_only` (`Gate.linux_only` in `tools/ci_gates.kspl`). The Windows job of the same section leaves them out. Moving a gate between the Linux jobs costs no start-up, as each job pays its own already.
 
-**The common gates run as two sections, in parallel, as separate jobs.** `ci-shard-core` runs C self-hosting and one share of the regression suites. `ci-shard-rest` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler's extraction checks deal its suite list between the jobs, longest first, in opposite directions for successive pairs. They use separate copies and scratch folders, and `make test-extract-ksplc` runs both shares. std's copy (`extract-std`) runs in the rest job, and every other package's copy (`extract-rest`) in the core job. The number of sections is set by the job start-ups that can be paid for.
+**The common gates run as two sections, in parallel, as separate jobs.** The two hold no difference in importance; their gates are dealt so they take about as long. `ci-shard-a` runs C self-hosting and one share of the regression suites. `ci-shard-b` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler's extraction checks deal its suite list between the jobs, longest first, in opposite directions for successive pairs. They use separate copies and scratch folders, and `make test-extract-ksplc` runs both shares. std's copy (`extract-std`) runs in job b, and every other package's copy (`extract-rest`) in job a. The number of sections is set by the job start-ups that can be paid for.
 
 **Always measure the usage time before adding a section**; choosing which jobs run is cheaper.
 
@@ -197,7 +197,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-ksos-link (bare-metal linking, `test-ksos-ramtext` with it) | ✅ | ➖(note 2) | ✅(note 6) |
 | test-ksos-qemu (bare-metal execution under QEMU) | ✅ | ➖(note 7) | ➖(note 7) |
 | test-ksmd-browser (the ksmd page edited in a browser, and served by `kssrv --local`) | ✅ | ➖(note 31) | ➖(note 31) |
-| test-ksmd-desktop (the `.desktop` entry `make ksmd` writes is valid, and installs) | ✅ | ➖(note 23) | ➖(note 23) |
+| test-ksmd-desktop (the `.desktop` entry `make ksmd` writes is valid, starts its program from a folder with a space, and installs) | ✅ | ➖(note 23) | ➖(note 23) |
 | test-ksmd-open (the ksmd launcher) | ✅ | ➖(note 32) | ➖(note 32) |
 | test-ksagent-chat (the launcher's model server, then ksagent's chat page in a browser, through kssrv and `ksagent watch`) | ✅ | ➖(note 33) | ➖(note 33) |
 | test-debug-line (the debug position points at the `.kspl`) | ✅ | ➖(note 2) | ✅(note 10) |
@@ -242,7 +242,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | ksbind's own tests, in `test-extract` and `test-race` (note 18) | OpenSSL (`libssl-dev`) | `KSBIND_REQUIRE_LIBS` | The binding, linked and run, as on macOS. kssrv does not build at all without it |
 | `cli`'s two cases on a cache folder (note 22) | Root, or `sudo` without a password, to hand a folder to another user | `KANSO_REQUIRE_CHOWN` | That ksplc refuses a cache folder another user owns. Windows runs neither case |
 | `test-ship`'s Windows half, in `test-extract` (note 19) | `x86_64-w64-mingw32-gcc` and its `ar` (`gcc-mingw-w64-x86-64-win32`), and Wine to run the result | `KANSO_REQUIRE_MINGW`, for the cross compiler alone. The image leaves Wine out for its size | That the shipped libraries build and link for Windows, static and DLL. A green Linux run has not run them |
-| `test-ksmd-desktop` (note 23) | `desktop-file-validate`, `update-desktop-database` (`desktop-file-utils`), `update-mime-database` (`shared-mime-info`) | The gate's row sets `KSMD_REQUIRE_DESKTOP=1` | The part whose tool is missing |
+| `test-ksmd-desktop` (note 23) | `desktop-file-validate`, `update-desktop-database` (`desktop-file-utils`), `update-mime-database` (`shared-mime-info`), `gio` (`libglib2.0-bin`) | The gate's row sets `KSMD_REQUIRE_DESKTOP=1` | The part whose tool is missing |
 | `test-layout-targets`'s wasm32 run (note 24) | `wasm-ld`, `node` and clang's wasm32 builtins (`libclang-rt-<version>-dev-wasm32`) | No switch: the image holds them | The wasm32 run; the C checks for every machine still run |
 | `test-vscode`'s run of the extension's client side | `node` | No switch: the image holds it | That run; the checks on the extension's files still run |
 | std's two tests over the IPv6 loopback (`std/tests/net_test.kspl`) | `::1` on the loopback | No switch (below) | Those two tests. The macOS and Windows runners have `::1` |
@@ -298,7 +298,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 20**: `self-host-ship` pays for one `-O2` build of ksplc, so CI runs it once, in `ci-shard-linux`. **The release runs it on each of its three platforms** (`.github/workflows/release.yml`).
 * **note 21**: std's and ksai's `test-fuzz` build what they fuzz with the address sanitizer where the C compiler holds it, and print which build they made. ksplc's fuzz runs the compiler unsanitized.
 * **note 22**: two of `cli`'s cases check that ksplc refuses a cache folder that others could plant entries in. Windows's permissions are an ACL, which ksplc does not read, so neither case runs there.
-* **note 23**: `test-ksmd-desktop` writes the entry and its MIME declaration, building nothing, and installs them into a scratch data folder as `make install-desktop` does. macOS and Windows associate a file with a program another way.
+* **note 23**: `test-ksmd-desktop` writes the entry and its MIME declaration, building nothing, and installs them into a scratch data folder as `make install-desktop` does. It also writes an entry for a probe program in a folder whose name holds a space, and starts it. `desktop-file-validate` accepts an Exec that splits at that space. macOS and Windows associate a file with a program another way.
 * **note 24**: `ksplc/tests/suite/layout_targets_test.kspl` needs only clang, which builds for every machine in `MACHINES` in `ksplc/base/target.kspl`. The wasm32 build also needs `wasm-ld`, `node` and clang's wasm32 builtins, for a 128-bit product that links only with them. A folded size decides through a static `if`, a constant chain, a `case` label and reflection; each must answer as wasm32 lays values out.
 * **note 25**: Linux and Windows run the same check through `test-extract`, where ksai's own `make test` trains `llama_engine` (`ksai/tests/examples_main.kspl`). macOS runs `make run` instead.
 * **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`); the suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.

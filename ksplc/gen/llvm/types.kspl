@@ -190,6 +190,32 @@ impl Genllvm_ctx
         //< It maps a Kanso type ID to its LLVM IR type
         return r.t_impl(type_id, 0)
 
+    fn ext_attr(r: Self$@, type_id: I32): U8[] //<
+        //< `zeroext` or `signext` for a value narrower than 32 bits, empty for any other
+        //< **The one place that decides it.** clang's C reads a narrow argument or result as the
+        //< whole register, widened by the other side; LLVM widens only where this says so. A scalar
+        //< enum counts as its base type. Why every function carries it: "A narrow integer is
+        //< widened at every call" in ksplc/docs/DESIGN-backends.md.
+        id: = r.env.scalar_repr_id(type_id)
+        if !r.env.is_integer(id) && !r.env.is_bool(id)
+            return ""
+        if r.env.get_primitive_bit_size(id) >= 32
+            return ""
+        return "zeroext" if r.env.is_unsigned(id) else "signext"
+
+    fn t_arg(r: Self$@, type_id: I32): Self$@ //<
+        //< A parameter's or an argument's type, with its ext_attr after it (`i8 zeroext`)
+        attr: = r.ext_attr(type_id)
+        r.t(type_id)
+        return r.s(" ").s(attr) if attr.len > 0 else r
+
+    fn t_ret(r: Self$@, type_id: I32): Self$@ //<
+        //< A return type of a `define`, `declare` or `call`, with its ext_attr before it
+        attr: = r.ext_attr(type_id)
+        if attr.len > 0
+            r.s(attr).s(" ")
+        return r.t(type_id)
+
     fn t_impl(r: Self$@, type_id: I32, depth: Sz): Self$@
         if depth >= MAX_LLVM_TYPE_DEPTH
             if !r.had_error
@@ -454,8 +480,10 @@ impl Ast_node
                     cg.s("ptr")
                 else if opts.kspl_abi && cg.is_llvm_aggregate(p_type_id)
                     cg.emit_agg_param_type()
-                else
+                else if opts.is_fn_type
                     cg.t(p_type_id)
+                else
+                    cg.t_arg(p_type_id)
                 if opts.with_names
                     id_node: = param.find_child(.k_identifier)
                     cg.s(" ").s(cg.param_reg(id_node.text if id_node != null else "unknown"))

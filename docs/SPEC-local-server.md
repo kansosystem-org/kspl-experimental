@@ -36,7 +36,7 @@ The page reads what it shows through `GET /api/file`, a picture beside the docum
 
 | Refusal | What it refuses | Why it is needed |
 | :-- | :-- | :-- |
-| **The text** | `..` levels, an absolute path, a NUL, a Windows device name (such as `CON` or `NUL`). `%XX` is decoded exactly once (`%252e` is a name reading `%2e`, and does not become `.`) | These spellings leave the root by themselves |
+| **The text** | `..` levels, an absolute path in any system's spelling (`/etc/passwd`, `C:\x`, `\\server\share\x`, refused on every system), a NUL, a Windows device name (such as `CON` or `NUL`). `%XX` is decoded exactly once (`%252e` is a name reading `%2e`, and does not become `.`) | These spellings leave the root by themselves |
 | **A link inside the root** | A symbolic link at any level of the path. Each level is inspected | The text check alone cannot close this hole: `link.txt` is a legitimate name, so a check looking for `..` lets it through |
 
 Caution: **Do not inspect only the last level**: a link on a folder would pass unseen.

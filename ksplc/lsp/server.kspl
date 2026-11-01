@@ -250,12 +250,17 @@ priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@): subpro
         // Caution: **Start again from the first document, never carry on in a new worker.** The
         // documents handed over so far went down with the old one, and would be missing from
         // the new: their requests would answer nothing.
-        if c: = w
-            c.kill()
+        stop_worker(w)
         switch handed
         case .write_failed
             return .none
         default {}
+
+priv fn stop_worker(worker: subproc.Piped_child?) //< kills the worker and reaps it, if there is one
+    //< Every caller drops or replaces its own handle next, so only the child's end matters here.
+    if c: = worker
+        $child: = c
+        child.kill()
 
 priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?@, lost_uri: U8[], arena: Arena$@):
     Worker_end //<
@@ -301,8 +306,7 @@ priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], are
         end.log_worker_giveup("textDocument/didOpen", docs.restore_count())
     default
         quarantine(docs, uri, end)
-    if c: = worker
-        c.kill()
+    stop_worker(worker)
     return restart_worker(docs, "", arena)
 
 priv fn message_of(body: U8[], arena: Arena$@): json.Value //<
@@ -430,8 +434,7 @@ fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
         if reader: = start_editor_reader()
             supervise(reader, worker)
             return
-        if c: = worker
-            c.kill()
+        stop_worker(worker)
     lsp_worker.run_lsp_worker(base_parser)
 
 priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) //<
@@ -482,8 +485,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
             end.log_worker_giveup(method, docs.restore_count())
             // A crash or a hang: kill, restart and hand every document over. Only a document that
             // crashes its own analysis is quarantined, none in advance.
-            if c: = worker
-                c.kill()
+            stop_worker(worker)
             worker = restart_worker(docs@, named, arena)
             // A request awaiting an answer gets an empty one, so the editor is not left waiting.
             $has_id: = true
@@ -498,5 +500,4 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         if method.equals("shutdown")
             break
 
-    if c: = worker
-        c.kill()
+    stop_worker(worker)

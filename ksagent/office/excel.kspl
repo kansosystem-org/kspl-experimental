@@ -29,7 +29,7 @@ fn text_of(data: U8[], cap: Sz, arena: Arena$@): U8[]!U8[] //<
     rels: = package.rels_of(z@, main, arena)!
     $view: = package.view(cap, arena)
     $book: = Book::{ .strings = List<|U8[]|>(arena), .formats = List<|Format|>(arena),
-        .date1904 = false, .owner = List<|Sz|>(arena), .work = view.work@, .arena = arena }
+        .date1904 = false, .owner = List<|Sz|>(arena), .view = view@, .arena = arena }
     strings_part: = package.find(rels@, "sharedStrings")
     if strings_part.len > 0
         read_strings(book@, z.part(strings_part, arena)!)!
@@ -42,7 +42,7 @@ fn text_of(data: U8[], cap: Sz, arena: Arena$@): U8[]!U8[] //<
         book.owner.push(-1)
     for i in Range.asc(shown.len)
         s: = shown.get(i)
-        read_sheet(book@, s.name, z.part(s.target, arena)!, view@)!
+        read_sheet(book@, s.name, z.part(s.target, arena)!)!
     return view.take()
 
 priv struct Book //< what every sheet of a workbook shares
@@ -51,7 +51,7 @@ priv struct Book //< what every sheet of a workbook shares
     date1904: Bool //< days count from 1904-01-01, as in workbooks made on old Macs
     owner: List<|Sz|> //< each column's covering merge in the row being written; -1 for none
         //< Made once per workbook, and left all -1 after each sheet (`write_rows`).
-    work: package.Work$@ //< the work the file's reading may still take
+    view: View$@ //< the view the rows go to, which holds the work the reading may still take
     arena: Arena$@
 
 priv struct Sheet //< one sheet the workbook lists
@@ -105,7 +105,7 @@ priv fn read_sheets(book: Book$@, src: U8[]): List<|Sheet|>!U8[] //<
             v: = x.attr_or("date1904", "0", a)!
             book.date1904 = v.equals("1") || v.equals("true")
         else if x.name.equals("sheet")
-            book.work.charge(package.ITEM_WORK)!
+            book.view.work.charge(package.ITEM_WORK)!
             state: = x.attr_or("state", "visible", a)!
             out
                 .push(Sheet::{ .name = x.attr_or("name", "", a)!,
@@ -120,6 +120,7 @@ priv fn read_strings(book: Book$@, src: U8[]): Void!U8[] //<
     a: = book.arena
     $x: = xml.reader(src, a)!
     $text: = a.text()
+    $len: Sz = 0 //< the bytes written into `text`
     $in_t: = false
     for
         ev: = x.next()!
@@ -127,13 +128,17 @@ priv fn read_strings(book: Book$@, src: U8[]): Void!U8[] //<
             return
         if ev == xml.Event.text
             if in_t
-                text.s(x.text_of(a)!)
+                run: = x.text_of(a)!
+                book.view.charge_text(len + run.len, run.len)!
+                text.s(run)
+                len += run.len
         else if ev == xml.Event.start
             if x.name.equals("rPh")
                 x.skip()!
             else if x.name.equals("si")
-                book.work.charge(package.ITEM_WORK)!
+                book.view.work.charge(package.ITEM_WORK)!
                 text = a.text()
+                len = 0
             else if x.name.equals("t")
                 in_t = true
         else if x.name.equals("t")
@@ -160,7 +165,7 @@ priv fn read_formats(book: Book$@, src: U8[]): Void!U8[] //<
         if ev != xml.Event.start
             continue
         if x.name.equals("numFmt") || (x.name.equals("xf") && in_xfs)
-            book.work.charge(package.ITEM_WORK)!
+            book.view.work.charge(package.ITEM_WORK)!
         if x.name.equals("numFmt")
             code_ids
                 .push(Keyed::{ .key = x.attr_or("numFmtId", "", a)!.trim_spaces(),
@@ -211,7 +216,7 @@ priv struct Value //< what one `c` element holds while it is read
     f: str.Arena_text$@ //< the formula, without its `=`
     inline: str.Arena_text$@ //< an inline string's text
 
-priv fn read_sheet(book: Book$@, name: U8[], src: U8[], view: View$@): Void!U8[] //<
+priv fn read_sheet(book: Book$@, name: U8[], src: U8[]): Void!U8[] //<
     //< Adds one sheet's rows to the view
     a: = book.arena
     $rows: = List<|Row|>(a)
@@ -248,7 +253,7 @@ priv fn read_sheet(book: Book$@, name: U8[], src: U8[], view: View$@): Void!U8[]
                 in_row = false
             continue
         if x.name.equals("row") || x.name.equals("c") || x.name.equals("mergeCell")
-            book.work.charge(package.ITEM_WORK)!
+            book.view.work.charge(package.ITEM_WORK)!
         if x.name.equals("row")
             given: = x.attr_or("r", "", a)!
             num: = (row.num + 1 if given.len == 0 else whole(given))
@@ -280,7 +285,7 @@ priv fn read_sheet(book: Book$@, name: U8[], src: U8[], view: View$@): Void!U8[]
             if merges.len == MAX_MERGES
                 throw "a sheet holds more merged ranges than are read"
             merges.push(merge_of(x.attr_or("ref", "", a)!)!)
-    write_rows(book, name, rows@, merges@, view)!
+    write_rows(book, name, rows@, merges@)!
 
 priv fn show(book: Book$@, c: Value$@): U8[]!U8[] //< what a cell shows, from what it stores
     a: = book.arena
@@ -339,8 +344,8 @@ priv fn merge_of(ref: U8[]): Merge!U8[] //< a merged range from its reference, `
 // Writing a sheet's rows as lines
 // ==========================================
 
-priv fn write_rows(book: Book$@, name: U8[], rows: List<|Row|>@, merges: List<|Merge|>@,
-    view: View$@): Void!U8[] //<
+priv fn write_rows(book: Book$@, name: U8[], rows: List<|Row|>@, merges: List<|Merge|>@):
+    Void!U8[] //<
         //< Adds a line for each row that shows something, merged cells' text filled in
     a: = book.arena
     // Only a merge over several rows fills anything: a merge in one row shows its text once.
@@ -396,8 +401,8 @@ priv fn write_rows(book: Book$@, name: U8[], rows: List<|Row|>@, merges: List<|M
             _gone: = active.pop()
         if slots.len == 0
             continue
-        line: = a.text().s(name).s("!\{r.num\}: ").s(" | ".join(slots.slice(), a)).take()
-        view.add(line)!
+        head: = a.text().s(name).s("!\{r.num\}: ").take()
+        book.view.add(book.view.row_of(head, slots.slice())!)!
     for k in Range.asc(active.len)
         owner.set(active.get(k), -1)
 

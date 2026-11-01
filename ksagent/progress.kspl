@@ -181,7 +181,9 @@ impl Progress
         out.c('\n')
         fs.replace_file(r.live, out.slice(), .kept) catch e
             if r.console
-                io.err().s("  cannot write \{r.live\} (\{e\}); the answer goes on\n")
+                answer.write_shown(io.err(),
+                    r.arena.text().s("  cannot write \{r.live\} (\{e\}); the answer goes on\n")
+                    .take())
             r.live = ""
 
 fn refused(live: U8[], why: U8[], arena: Arena$@) //<
@@ -349,21 +351,28 @@ impl Text_reader
         if e != 'u'
             r.out.c(simple_escape(e))
             return 2
-        $cp: = hex4(s, at + 2) catch
+        if at + 6 > s.len
             return 0
+        // What cannot stand as a character shows as U+FFFD: a bad digit, or a surrogate without
+        // its other half. The reader shows text as it comes, so it goes on where std's
+        // `unescape_to_arena` refuses, and it still writes only well-formed UTF-8.
+        $cp: = s.hex4(at + 2).unwrap_or(0xFFFD)
         $used: Sz = 6
         if cp >= 0xD800 && cp < 0xDC00
             // A high surrogate takes the low one after it, once that has come.
             if at + 12 > s.len && (s.len <= at + 6 || s[at + 6] == '\\') &&
                 (s.len <= at + 7 || s[at + 7] == 'u')
                 return 0
-            low: = hex4(s, at + 8).unwrap_or(0)
+            low: = s.hex4(at + 8).unwrap_or(0)
             if !s.starts_with("\\u", at + 6) || low < 0xDC00 || low >= 0xE000
                 cp = 0xFFFD
             else
                 cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
                 used = 12
-        put_utf8(r.out@, cp)
+        else if cp >= 0xDC00 && cp < 0xE000
+            cp = 0xFFFD
+        for k in Range.asc(chars.codepoint_len(cp))
+            r.out.c(chars.codepoint_byte(cp, k))
         return used
 
 impl Text_reader: Manual_free //< `free()` lets go the text it keeps
@@ -389,28 +398,6 @@ priv fn simple_escape(e: U8): U8 //< the character a one-letter JSON escape stan
         return 12U8
     default
         return e
-
-priv fn hex4(s: U8[], from: Sz): I32? //< the four hex digits at `from`, or none until they come
-    if from + 4 > s.len
-        return .none
-    $v: I32 = 0
-    for i in Range.asc(4)
-        d: = s[from + i].hex_val() catch
-            return .some(0xFFFD)
-        v = v * 16 + d
-    return .some(v)
-
-priv fn put_utf8(out: Str_builder$@, cp: I32) //< writes a code point as UTF-8
-    if cp < 0x80
-        out.c(U8::cp)
-    else if cp < 0x800
-        out.c(U8::(0xC0 | (cp >> 6))).c(U8::(0x80 | (cp & 0x3F)))
-    else if cp < 0x10000
-        out.c(U8::(0xE0 | (cp >> 12))).c(U8::(0x80 | ((cp >> 6) & 0x3F)))
-            .c(U8::(0x80 | (cp & 0x3F)))
-    else
-        out.c(U8::(0xF0 | (cp >> 18))).c(U8::(0x80 | ((cp >> 12) & 0x3F)))
-            .c(U8::(0x80 | ((cp >> 6) & 0x3F))).c(U8::(0x80 | (cp & 0x3F)))
 
 priv fn whole_chars(t: U8[]): U8[] //< the text up to a last UTF-8 character still arriving
     $back: Sz = 1

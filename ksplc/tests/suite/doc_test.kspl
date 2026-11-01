@@ -10,6 +10,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
+import "std/str" // `text`
 import "std/verdict"
 
 // A type, a member, and a label in the detail.
@@ -89,8 +90,7 @@ priv const FINE_SRC: U8[] = """pub fn fine() //< reads well
 priv fn doc(dir: U8[], args: U8[][], arena: Arena$@): verdict.Run_out //< one `ksplc doc` run
     $argv: = List<|U8[]|>(arena)
     argv.push("doc")
-    for a in args
-        argv.push(a)
+    argv.push_all(args)
     return harness.run_in(harness.ksplc_argv(argv.slice()), dir)
 
 priv fn before(out: U8[], first: U8[], then: U8[]): Bool //< whether both stand, `first` earlier
@@ -144,8 +144,17 @@ fn main(): I32
         U8[][]::{ "* `../pk/argparse` — 2 entries", "* `../pk2/fine`" },
         U8[][]::{ "no file or folder" }, up.out)
     inside: = doc(dir, U8[][]::{ "pk/." }, arena)
-    harness_markers.check("a folder named with a last `.` is that folder",
-        U8[][]::{ "* `pk/./argparse` — 2 entries" }, U8[][]::{ "no file or folder" }, inside.out)
+    harness_markers.check("a folder named with a last `.` is that folder, its files named logically",
+        U8[][]::{ "* `pk/argparse` — 2 entries" }, U8[][]::{ "no file or folder", "pk/./" },
+        inside.out)
+    // **A folder's name is made logical first**: a `/` at the end once cut the first letter of
+    // each file's name (`pk//rgparse`), and a `./` in front stayed in it.
+    for spelling in U8[][]::{ "pk/", "./pk" }
+        other: = doc(dir, U8[][]::{ spelling }, arena)
+        harness_markers.check("a folder written with a `/` at the end or a `./` in front lists the \
+            files under their logical names",
+            U8[][]::{ "# pk — the API reference", "* `pk/argparse` — 2 entries" },
+            U8[][]::{ "no file or folder", "pk//", "./pk" }, other.out)
     // The specification's own example: the extension is read as an entry's key.
     ext: = doc(dir, U8[][]::{ "pk/argparse.kspl" }, arena)
     verdict.check("a name written with its extension asks for the entry `kspl`",
@@ -206,6 +215,13 @@ fn main(): I32
     std: = doc(dir, U8[][]::{ "std/prng" }, arena)
     harness_markers.check("a std file is found where an import would find it",
         U8[][]::{ "# std/prng — the API reference", "Prng.next_u64" }, none, std.out)
+    // **A std folder given with a `/` at the end** (`--std-dir=std/`) once cut the first letter
+    // of each file's name. `pk` stands in for std here.
+    slashed: = harness
+        .ksplc_bare(U8[][]::{ arena.text().s("--std-dir=").s(pk_dir).s("/").take(), "doc", "std" })
+    harness_markers.check("a std folder given with a `/` at the end names its files whole",
+        U8[][]::{ "* `std/argparse` — 2 entries" }, U8[][]::{ "std/rgparse", "std//" },
+        slashed.out)
 
     // **A name that names nothing is an error**, so a typo does not read as an empty package.
     gone: = doc(dir, U8[][]::{ "pk/nope" }, arena)

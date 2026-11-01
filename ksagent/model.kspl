@@ -25,6 +25,10 @@ priv const MAX_REPLY_BYTES: Sz = 8 * 1024 * 1024 //< a larger reply is refused, 
 priv const SEND_WAIT_MS: I32 = 30000 //< how long sending one request may take
     //< The reply's wait is the person's `--timeout`; a send only waits for the server to read.
 priv const DETAIL_BYTES: Sz = 300 //< how much of a refusal's body a message shows
+priv const MAX_CALLS: Sz = 64 //< the most tool calls one reply may ask for; more is refused
+    //< A model asks for one call at a time, or a few at once to read several files. A stream
+    //< names each call by its number, so without a cap a reply of a few MiB could open millions
+    //< of empty calls, and each one would run.
 
 struct Server //< where the model server is, and what each request to it carries
     host: U8[] //< a name or an IPv4 address
@@ -231,9 +235,10 @@ impl Exchange
                 throw .bad_reply("an event of the stream is not JSON")
             if doc.val.find("error").is_some()
                 throw .broke_off(refusal_detail(r.arena.dup_str(data), r.arena))
-            r.apply(doc.val.get("choices").get_at(0))
+            r.apply(doc.val.get("choices").get_at(0))!
 
-    priv fn apply(r: Self$@, choice: json.Value) //< adds one piece's delta to the reply
+    priv fn apply(r: Self$@, choice: json.Value): Void!Model_error //<
+        //< Adds one piece's delta to the reply
         //< **Thinking comes as `reasoning_content`**, as `llama-server` sends it, or as
         //< `reasoning`. A call's pieces are joined by their `index`; one with no index joins the
         //< last call, or opens one where it brings an id.
@@ -249,8 +254,10 @@ impl Exchange
                 at = Sz::n
             else if c.find("id").is_none() && at > 0
                 at -= 1
-            if at < 0 || at > r.partial.calls.len + 64
+            if at < 0
                 continue
+            if at >= MAX_CALLS
+                throw too_many_calls(r.arena)
             for r.partial.calls.len <= at
                 r.partial.calls
                     .push(Growing_call::{ .id = "", .name = "", .arguments = Str_builder() })
@@ -293,6 +300,10 @@ impl Exchange: Manual_free //< `free()` closes the connection and lets go what i
         for i in Range.asc(r.partial.calls.len)
             (r.partial.calls.ptr + i).arguments.free()
         r.scratch.free()
+
+priv fn too_many_calls(arena: Arena$@): Model_error //< a reply that asks for too many tool calls
+    return .bad_reply(arena.text().s("it asks for more than \{MAX_CALLS\} tool calls at once")
+        .take())
 
 priv fn is_cut(choice: json.Value): Bool //< whether a choice ended at the length limit
     return choice.get("finish_reason").as_str().unwrap_or("").equals("length")
@@ -347,6 +358,8 @@ fn parse_reply(body: U8[], arena: Arena$@): Reply!Model_error //<
     $reply: = Reply::{ .content = msg.get("content").as_str().unwrap_or(""),
         .calls = List<|Call|>(arena), .cut = is_cut(choice) }
     calls: = msg.get("tool_calls").arr_list(arena)
+    if calls.len > MAX_CALLS
+        throw too_many_calls(arena)
     for i in Range.asc(calls.len)
         c: = calls.get(i)
         f: = c.get("function")

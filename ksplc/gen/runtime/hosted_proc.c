@@ -477,18 +477,27 @@ KSPL_LINK Bool kspl_proc_alive(I64 handle) {
 
 /* The rest is one text for both: the fields it touches have one name on each side. */
 
+/* The bytes one read may ask for: at most what the I32 result holds.
+   Caution: **Refuse an empty buffer before this (-2), never pass it on.** A read of 0 bytes
+ * returns 0, which means "the child ended", so the stream would be marked ended while the child
+ * runs. On Windows a size cut to a DWORD loses its high bits, so one of a multiple of 4 GiB would
+ * become 0 the same way; the bound here keeps it whole. */
+static Sz kspl_proc_read_cap(Sz cap) {
+    return cap > INT32_MAX ? INT32_MAX : cap;
+}
+
 KSPL_LINK I32 kspl_proc_read(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
-    if (handle == 0) return -2;
+    if (handle == 0 || cap <= 0) return -2;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
-    I32 n = kspl_proc_read_end(h->from_w, buf, cap, timeout_ms);
+    I32 n = kspl_proc_read_end(h->from_w, buf, kspl_proc_read_cap(cap), timeout_ms);
     if (n == 0) h->out_eof = 1;
     return n;
 }
 
 KSPL_LINK I32 kspl_proc_read_err(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
-    if (handle == 0) return -2;
+    if (handle == 0 || cap <= 0) return -2;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
-    I32 n = kspl_proc_read_end(h->from_err, buf, cap, timeout_ms);
+    I32 n = kspl_proc_read_end(h->from_err, buf, kspl_proc_read_cap(cap), timeout_ms);
     if (n == 0) h->err_eof = 1;
     return n;
 }

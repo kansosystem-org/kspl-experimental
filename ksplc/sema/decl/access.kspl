@@ -311,37 +311,56 @@ impl Sema_ctx
         //< **This level's own type is not checked**, or an immutable `s: U8[]`'s `s@` would become
         //< a `U8[]$@` writable through an output parameter. The recursion stops where a receiver is
         //< a pointer; stopping on the outermost type is place_is_readonly's job.
-        if node == null
+        sym: = r.root_binding_of(node).unwrap_or(null)
+        if sym == null
             return false
+        if const_only
+            switch sym.kind
+            case .constant
+                return true
+            default
+                return false
+        return !sym.flags.is_mut
+
+    fn root_binding_of(r: Self$@, node: Ast_node$@): Sema_symbol$@? //<
+        //< The binding at a place's root, reached through `.` and an array's `[` only
+        //< A pointer or a slice on the way ends the walk with none: what lies past it is separate
+        //< memory, which its type governs.
+        if node == null
+            return .none
         if node.kind_id == .k_identifier || node.kind_id == .k_expr_path
             name: = node.get_path_or_ident_name()
             root: = name.fqn_head()
             if root.len == 0
-                return false
-            sym: = r.symtab.resolve(root).unwrap_or(null)
-            if sym == null
-                return false
-            if const_only
-                switch sym.kind
-                case .constant
-                    return true
-                default
-                    return false
-            return !sym.flags.is_mut
+                return .none
+            return r.symtab.resolve(root)
         if node.kind_id != .k_expr_postfix || node.children.len < 2
-            return false
+            return .none
         op: = node.get_postfix_op()
         if op == null || (!op.text.equals(".") && !op.text.equals("["))
-            return false // `$` descends to the pointee, which the type decides
+            return .none // `$` descends to the pointee, which the type decides
         recv: = node.get_postfix_receiver()
         if recv == null || r.env.is_pointer(recv.type_id)
-            return false // a pointer was crossed
+            return .none // a pointer was crossed
         if op.text.equals("[")
             // A fixed-length array's elements are part of the value itself (a `const CS: H`'s
             // `cs.buf[0]` is in ROM), so it descends; a slice's elements are separate memory.
             if !r.env.is_array(r.env.get_real_type(recv.type_id))
-                return false
-        return r.root_binding_is_immutable(recv, const_only)
+                return .none
+        return r.root_binding_of(recv)
+
+    fn refuse_made_binding_write(r: Self$@, place: Ast_node$@): Bool //<
+        //< Reports a write to a place whose root is a binding the compiler made, if it is one
+        //< **No `$` can be written on such a binding**, so "make it mutable" would be no advice.
+        sym: = r.root_binding_of(place).unwrap_or(null)
+        if sym == null || !sym.flags.is_made_binding
+            return false
+        r.clear_scratch()
+            .s("cannot write to '\{sym.name\}'. A binding that a 'case', an 'if name: =', a 'for \
+                … in' or a 'catch' makes is read-only: it holds a copy. Copy it into a '$' name \
+                first ('$w: = \{sym.name\}') and write to that")
+        r.err(place, r.scratch.slice())
+        return true
 
     fn check_const_decl_storage(r: Self$@, type_id: I32, name: U8[], loc: Ast_node$@) //<
         //< Checks that a `const` declaration holds no "writable element"

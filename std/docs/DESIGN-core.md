@@ -11,7 +11,7 @@ When you add or change a file, check whether the table can gain a row. If it can
 
 ## Words used in this document
 
-**This table explains the words of `std` that appear across many sections.** The words every package shares (arena, ARC, trait, vtable, freestanding, Principle N) are in "Words used throughout" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout). *Gate* and the other terms of art are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art). The notation of the examples is "The notation the examples use" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#the-notation-the-examples-use).
+**This table explains the words of `std` that appear across many sections.** The words every package shares (arena, ARC, trait, vtable, freestanding) are in "Words used throughout" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#words-used-throughout). "Principle N" names one of the Development Principles in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#development-principles). *Gate* and the other terms of art are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art). The notation of the examples is "The notation the examples use" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#the-notation-the-examples-use).
 
 | Word | What it means here |
 | :-- | :-- |
@@ -395,6 +395,15 @@ Caution: **Do not turn it back into a function pointer.** `where` / `any` / `all
 * **Why no closure, as `distinct` takes**: the common question is "is this name in this list", and a closure would repeat `a.equals(b$)` at every call. A test of any other kind is `any`.
 * **Why no trait bound on the `impl`**: a bound on an `impl` is checked for every instance of the type. A `List` of structs would then fail to compile where nothing calls `contains`. Without it, a type with no `equals` is refused where it is called, with the type named.
 * **Why not `==`**: a slice has no `==`, so it would refuse a list of texts.
+
+### `push_all` grows once and reads a view of the list itself
+
+**`xs.push_all(items)` appends every element of a slice, in order.** It replaces the two-line loop that pushes each one. Each element is copied as `push` copies it, so a counted value gains one count.
+
+* **Why that name**: it is `push` for many elements, so the pair reads as one family. A second word, such as `extend` beside `push`, leaves the reader to learn which is which. KSPL has no overloading and no argument labels to tell one from many.
+* **Why a slice, not any sequence**: a slice carries its length, so the list grows at most once, to the size it needs. A `List` passes `xs.slice()`, and a literal passes as it stands.
+* **The slice can be a view of the list itself** (`xs.push_all(xs.slice())`). Growing replaces the block that the view points into. So the old block is freed only after the copy, as in "A builder can take a view of its own bytes" below. The copy reads only the live elements, and the new ones land past them, so the two ranges never overlap.
+* **It is not a loop moved out of sight**: "Where it is fine to move to `std/seq`" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) keeps hand-written loops in `std/`, `ksplc` and the inner loops. That rule is about closures and chains. `push_all` takes no closure and allocates nothing more than the loop would, so it is used there too.
 
 ### A test or comparison gets `T@`; `select` gets the element
 

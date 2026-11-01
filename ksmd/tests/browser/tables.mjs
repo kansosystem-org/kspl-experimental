@@ -1,6 +1,6 @@
 // A table as a whole, and its columns and rows by number: selecting, copying, pasting and removing a
 // whole table, the caret after a block is removed, a column's width and a row's height typed in,
-// the filter's tree of dates, and the edits that change what a filter matches. Each is driven
+// the filter's tree of dates, a filter on more values than its panel lists, and the edits that change what a filter matches. Each is driven
 // through the browser's own input events, as `main.mjs` drives the rest, and checked by the saved
 // source and its undo.
 // `tables(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
@@ -9,7 +9,7 @@ import { CTRL, SHIFT, verdict } from "./drive.mjs";
 const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
-export function tables({ page, js, settle, press, type, select, click, menu, load, saves }) {
+export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick, dragTo, openCell }) {
   const sel = () => js("JSON.stringify(ksmd.selection().f)");
   // Whether the caret's block stands inside the window, below the header.
   const caretInSight = () => js(`(() => {
@@ -314,6 +314,51 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await saves("nothing was saved", table(' filter="in:1.5,"'));
     },
 
+    // A column with more values than the panel lists: a value never listed is never hidden, and the
+    // search finds a value past the list's end.
+    async manyValues() {
+      const rows = Array.from({ length: 1201 }, (_, k) => `| "v${String(k + 1).padStart(4, "0")}" |\n`).join("");
+      const table = (attrs) => `${H}:::table name="t"${attrs}\n| "v" |\n${rows}:::\n`;
+      const hidden = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).flatMap((r, k) => r.hidden ? [k + 1] : []).join()");
+      const arrow = '#doc th.name[data-c="0"] .filter-arrow';
+      await load(table(""));
+      await click(arrow);
+      check(await js("document.querySelectorAll('.filter-values input').length") === 1001,
+        "the panel lists 1,000 values and (Select all)");
+      await click(".filter-panel .filter-ok");
+      await saves("OK with nothing changed keeps no filter", table(""));
+      check(await hidden() === "", "and every row shows", await hidden());
+      await click(arrow);
+      await click('.filter-panel input[value="v0005"]');
+      await click(".filter-panel .filter-ok");
+      await saves("unticking one value keeps it as left out", table(' filter="out:v0005"'));
+      check(await hidden() === "5", "and hides that value's row alone", await hidden());
+      await click(arrow);
+      await type("v1100");
+      const found = () => js("Array.from(document.querySelectorAll('.filter-values input')).slice(1).map((b) => b.value).join()");
+      check(await found() === "v1100", "the search finds a value past the 1,000th", await found());
+      await click('.filter-panel input[value="v1100"]');
+      await click(".filter-panel .filter-ok");
+      await saves("which can be unticked too", table(' filter="out:v0005|v1100"'));
+      check(await hidden() === "5,1100", "and only those two rows are hidden", await hidden());
+      await click(arrow);
+      check(!await js("document.querySelector('.filter-panel input[value=\"v0005\"]').checked"),
+        "the panel opened again shows the value left out unticked");
+      await click(".filter-values > label input");
+      check(await js("(() => { const b = document.querySelector('.filter-values > label input'); return b.checked && !b.indeterminate; })()"),
+        "(Select all) ticks the values left out");
+      await click(".filter-values > label input");
+      check(await js("document.querySelector('.filter-panel .filter-ok').disabled"),
+        "and unticks every value, listed or not, so OK waits for a tick");
+      await click('.filter-panel input[value="v0002"]');
+      await click(".filter-panel .filter-ok");
+      await saves("unticking all and ticking one keeps the one value ticked", table(' filter="in:v0002"'));
+      check(await hidden() === Array.from({ length: 1201 }, (_, k) => k + 1).filter((k) => k !== 2).join(),
+        "and shows its row alone");
+      await menu("undo");
+      await saves("one undo goes back a step", table(' filter="out:v0005|v1100"'));
+    },
+
     // A table's filter is kept in the file, as Excel keeps it, so the document opens as it was left.
     // The line above the table says how many rows show, and Show all rows takes the filter away.
     async keptFilter() {
@@ -354,6 +399,206 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await saves("for this viewer alone: the file keeps its own filter", table(' filter="in:fig,"'));
       await menu("read-only");
       check(await shown() === "010", "and editing again shows the file's filter", await shown());
+    },
+
+    // Cells cut stay where they are, marked, until a paste moves them, as in Excel. Rows chosen by
+    // their numbers, or columns by their letters, can also go in by Insert cut rows or Insert cut
+    // columns, which stand in place of Insert row above and Insert column left.
+    async cutLines() {
+      const start = `${H}:::table name="t"\n| "n" | "f" |\n| 1 | =A1*10 |\n| 2 | |\n| 3 | |\n| 4 | =sum(A1:A2) |\n:::\n`;
+      await load(start);
+      const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
+      const letter = (k) => `#doc thead tr:first-child th:nth-child(${k + 1})`;
+      const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
+      const labelOf = (cmd) => js(`(() => { const el = document.querySelector('.menu.context [data-cmd="${cmd}"]');
+        return el && el.getClientRects().length > 0 ? el.querySelector(".label").textContent : ""; })()`);
+      const marked = () => js("Array.from(document.querySelectorAll('#doc .cut')).map((el) => el.dataset.r + el.dataset.c).join()");
+      const ranged = () => js("Array.from(document.querySelectorAll('#doc td.in-range')).map((el) => el.dataset.r + el.dataset.c).join()");
+      // A cut keeps what it put on the clipboard, and a paste hands back what it is given.
+      const cut = () => js(`(() => { const data = new DataTransfer();
+        document.activeElement.dispatchEvent(new ClipboardEvent("cut", { clipboardData: data, bubbles: true, cancelable: true }));
+        window.__cut = data.getData("text/plain"); })()`);
+      const paste = (text) => js(`(() => { const data = new DataTransfer();
+        data.setData("text/plain", ${text === undefined ? "window.__cut" : JSON.stringify(text)});
+        document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })); })()`);
+      // The browser's clipboard as a page reads it: refused, or holding text.
+      const clipboard = (text) => js(`Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+        readText: async () => { if (${text === null}) throw new Error("refused"); return ${JSON.stringify(text)}; } } })`);
+      const said = () => js("document.getElementById('status').textContent");
+      const chooseRows = async (a, b) => {
+        await click(rowNumber(a));
+        await click(rowNumber(b), SHIFT);
+      };
+      await rightClick(rowNumber(1));
+      check(await labelOf("row-above") === "Insert row above" && await labelOf("column-left") === "Insert column left",
+        "with nothing cut, the menu holds Insert row above and Insert column left");
+      check(await js("Array.from(document.querySelectorAll('.menu.context > [data-cmd]')).slice(0, 3).map((el) => el.dataset.cmd).join()") === "cut,copy,paste",
+        "Cut, Copy and Paste stand first in the right-click menu, as in Excel");
+      await press("Escape");
+      await chooseRows(3, 4);
+      await cut();
+      check(await marked() === "20,21,30,31", "a cut of rows chosen by their numbers marks them", await marked());
+      await saves("and removes nothing", start);
+      await rightClick(rowNumber(1));
+      check(await labelOf("row-above") === "Insert cut rows" && await labelOf("column-left") === "Insert column left",
+        "Insert row above then reads Insert cut rows, in the same place, and Insert column left stays");
+      await click('.menu.context [data-cmd="row-above"]');
+      const moved = `${H}:::table name="t"\n| "n" | "f" |\n| 3 | |\n| 4 | =sum(A3:A4) |\n| 1 | =A3*10 |\n| 2 | |\n:::\n`;
+      await saves("Insert cut rows moves them above the row, and formulas follow their rows", moved);
+      check(await marked() === "", "the mark goes", await marked());
+      check(await js("Array.from(new Set(Array.from(document.querySelectorAll('#doc td.in-range')).map((el) => el.dataset.r))).join()") === "0,1",
+        "and the moved rows stay chosen at their new place");
+      await menu("undo");
+      await saves("one undo puts them back", start);
+      await chooseRows(1, 2);
+      await cut();
+      await rightClick(rowNumber(2));
+      await click('.menu.context [data-cmd="row-above"]');
+      await saves("rows inserted into themselves stay where they are", start);
+      check(await marked() === "00,01,10,11", "and stay cut", await marked());
+      await press("Escape");
+      check(await marked() === "", "Esc drops the cut", await marked());
+      await rightClick(rowNumber(4));
+      check(await labelOf("row-above") === "Insert row above", "and the item reads Insert row above again");
+      await press("Escape");
+      await chooseRows(1, 1);
+      await cut();
+      await click(cell(3, 0));
+      await type("9");
+      await press("Enter");
+      check(await marked() === "", "any other edit drops the cut too", await marked());
+      await rightClick(rowNumber(2));
+      check(await labelOf("row-above") === "Insert row above", "so the item inserts an empty row again");
+      await press("Escape");
+
+      // A paste while a cut waits moves the cut cells there, and references to them follow.
+      await load(start);
+      await click(cell(0, 0));
+      await click(cell(1, 0), SHIFT);
+      await cut();
+      check(await marked() === "00,10", "a cut of a range of cells marks it", await marked());
+      await saves("and clears nothing", start);
+      await click(cell(1, 1));
+      await paste();
+      const shifted = `${H}:::table name="t"\n| "n" | "f" |\n| | =B2*10 |\n| | 1 |\n| 3 | 2 |\n| 4 | =sum(B2:B3) |\n:::\n`;
+      await saves("a paste moves the cells there, and the references to them follow", shifted);
+      check(await marked() === "" && await ranged() === "11,21", "the cut ends, and the moved cells stay chosen", await ranged());
+      await menu("undo");
+      await saves("the move is one step of undo", start);
+      await click(cell(2, 1));
+      await paste("7");
+      await saves("after the paste the cut is gone, so a paste pastes again", start.replace("| 3 | |", "| 3 | 7 |"));
+      await load(start);
+      await click(cell(0, 0));
+      await cut();
+      await click(cell(2, 1));
+      await paste("9");
+      await saves("text copied since in another program pastes as usual", start.replace("| 3 | |", "| 3 | 9 |"));
+      check(await marked() === "", "and the cut drops", await marked());
+
+      // Paste in the menus reads the clipboard, and acts as Ctrl+V does there.
+      await load(start);
+      await click(cell(2, 1));
+      await clipboard(null);
+      await menu("paste");
+      check(await said() === "Press Ctrl+V to paste.", "where the browser refuses the clipboard, Paste asks for Ctrl+V", await said());
+      await saves("and changes nothing", start);
+      await clipboard("x\ty");
+      await click(cell(1, 0));
+      await menu("paste");
+      await saves("where it reads the clipboard, Paste fills the cells as Ctrl+V does",
+        start.replace("| 2 | |", '| "x" | "y" |'));
+      await load(start);
+      await clipboard(null);
+      await click(cell(1, 0));
+      await cut();
+      await click(cell(2, 1));
+      await menu("paste");
+      await saves("with the clipboard refused, Paste still moves the cells a cut left waiting",
+        start.replace("| 2 | |\n| 3 | |", "| | |\n| 3 | 2 |"));
+
+      // Whole rows cut and pasted on a row write over it, and leave their own rows empty.
+      await load(start);
+      await chooseRows(3, 4);
+      await cut();
+      await click(cell(0, 1));
+      await paste();
+      await saves("whole rows pasted on a row take its place; references to rows written over become #REF!",
+        `${H}:::table name="t"\n| "n" | "f" |\n| 3 | |\n| 4 | =sum(#REF!) |\n| | |\n| | |\n:::\n`);
+      check(await js("Array.from(new Set(Array.from(document.querySelectorAll('#doc td.in-range')).map((el) => el.dataset.r))).join()") === "0,1",
+        "and the rows stay chosen at their new place");
+
+      // Cut cells move only inside their own table.
+      const two = `${start}\n:::table name="s"\n| "x" |\n| 5 |\n:::\n`;
+      await load(two);
+      await click(cell(0, 0));
+      await cut();
+      await click('#doc .table ~ .table td[data-r="0"][data-c="0"]');
+      await paste();
+      check((await said()).startsWith("Cut cells move only inside their own table"), "a paste in another table is refused", await said());
+      await saves("and changes nothing", two);
+      await press("Escape");
+
+      // Columns, chosen by their letters, likewise.
+      const columns = `${H}:::table name="t" widths="1,3"\n| "a" | "b" |\n| 1 | =A1 |\n:::\n`;
+      await load(columns);
+      await click(letter(2));
+      await menu("cut");
+      check(await marked() === "-11,01", "Cut from the right-click menu on a column chosen by its letter marks it, name and all", await marked());
+      await saves("and removes nothing", columns);
+      await rightClick(letter(1));
+      check(await labelOf("column-left") === "Insert cut columns" && await labelOf("row-above") === "Insert row above",
+        "Insert column left then reads Insert cut columns, and Insert row above stays");
+      await click('.menu.context [data-cmd="column-left"]');
+      await saves("Insert cut columns moves it left of the column, with its name, width and references",
+        `${H}:::table name="t" widths="3,1"\n| "b" | "a" |\n| =B1 | 1 |\n:::\n`);
+      await menu("undo");
+      await saves("in one step of undo", columns);
+    },
+
+    // While a formula is typed, a press on a cell writes its reference at the caret, and a drag a
+    // range, as Excel's point mode does. Where no reference can go, a press ends the edit as before.
+    async pointing() {
+      const start = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | |\n| 2 | |\n| 3 | |\n:::\n`;
+      await load(start);
+      const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
+      const typed = () => js("(() => { const i = document.querySelector('#doc .cell-input'); return i ? i.value : null; })()");
+      const outlined = () => js("document.querySelectorAll('#doc .pointed').length");
+      const mouse = async (type, selector) => {
+        const [x, y] = await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+          return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+        await page("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+      };
+      await click(cell(0, 1));
+      await type("=sum(");
+      await mouse("mousePressed", cell(0, 0));
+      await mouse("mouseMoved", cell(1, 0));
+      check(await typed() === "=sum(A1:A2", "a drag after =sum( writes the range at the caret", await typed());
+      check(await outlined() === 2, "and outlines the cells while the button is down", String(await outlined()));
+      await mouse("mouseReleased", cell(1, 0));
+      check(await outlined() === 0, "the outline goes when the button comes up");
+      await type(")");
+      check(await typed() === "=sum(A1:A2)", "the cell stays open, the caret after the range", await typed());
+      await press("Enter");
+      const summed = start.replace("| 1 | |", "| 1 | =sum(A1:A2) |");
+      await saves("Enter takes the formula", summed);
+      check(await js(`document.querySelector('${cell(0, 1)}').textContent`) === "3", "which gives the sum");
+      await click(cell(1, 1));
+      await type("=");
+      await click(cell(0, 0));
+      check(await typed() === "=A1", "a press after = writes the cell's reference", await typed());
+      await click(cell(2, 0));
+      check(await typed() === "=A3", "a second press replaces the reference just written", await typed());
+      await type("*");
+      await click(cell(0, 0));
+      check(await typed() === "=A3*A1", "after typing, a press writes a new reference", await typed());
+      await press("Escape");
+      await saves("Esc drops the edit as before", summed);
+      await click(cell(2, 1));
+      await type("=1+2");
+      await click(cell(0, 0));
+      check(await typed() === null, "a press when the caret stands after a number ends the edit");
+      await saves("and takes the formula, as before", summed.replace("| 3 | |", "| 3 | =1+2 |"));
     },
 
     // Whatever removes a block, the caret takes its place: on the block after it, else on the one

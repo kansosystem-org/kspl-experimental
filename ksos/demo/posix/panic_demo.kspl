@@ -1,6 +1,7 @@
 //< The kernel's stops: each misuse panics instead of going on silently, one chosen per run
 //< `panic_demo <which>` runs one: `stack-overflow`, `mutex-relock`, `mutex-foreign-unlock`,
-//< `delete-holder`, `timeout-zero`, `event-no-bits` or `stop-outside`. **Success is the panic**, so
+//< `delete-holder`, `timeout-zero`, `event-no-bits`, `stop-outside`, `wait-masked`,
+//< `delay-before-start` or `create-again`. **Success is the panic**, so
 //< `ksos-<which>` greps the output for the kernel's own message (`ksos_posix_panic_needle_<which>`
 //< in `../../Makefile`). One run is one stop: a panic ends the process, so the scenarios cannot
 //< share a run.
@@ -106,11 +107,58 @@ fn stop_outside(): I32
     io.out().s("[stop] returned from stop_scheduler without a panic\n")
     return 1
 
+// ==========================================
+// wait-masked: a waiting call inside the caller's own critical section panics, on every port. The
+// switch away waits for interrupts to come on again, so on Cortex-M the call would go on as if
+// another task ran. The giver is ready, so a wait that went through would not hang.
+// ==========================================
+fn masked_waiter(_arg: Void$@): Void
+    io.out().s("=== Kanso OS (POSIX) Sem.take with interrupts off ===\n")
+    io.out().s("[masked] take between irq_save and irq_restore must stop here\n")
+    s: = task.irq_save()
+    g_sem.take()
+    task.irq_restore(s)
+    io.out().s("[masked] returned from take without a panic\n")
+
+fn masked_giver(_arg: Void$@): Void
+    g_sem.give()
+
+// ==========================================
+// delay-before-start: Task.delay from main, before start_scheduler, panics. There is no running
+// task to put to sleep, and the switch away would save main into no task.
+// ==========================================
+fn delay_before_start(): I32
+    io.out().s("=== Kanso OS (POSIX) Task.delay before start_scheduler ===\n")
+    Task.delay(1)
+    io.out().s("[delay] returned from delay without a panic\n")
+    return 1
+
+// ==========================================
+// create-again: Task.create on a task that is still in the task table panics. The task here has
+// ended but was not deleted. Allowed, each round would use one more slot and port context, and
+// the table would fill after a few rounds.
+// ==========================================
+fn ends_at_once(_arg: Void$@): Void
+    io.out().s("[again] the first run ended\n")
+
+fn create_again(): I32
+    io.out().s("=== Kanso OS (POSIX) Task.create again without Task.delete ===\n")
+    tcb.create(U8$[]::stack, ends_at_once, null, 1, "again")
+    task.start_scheduler()
+    io.out().s("[again] creating it again must stop here\n")
+    tcb.create(U8$[]::stack, ends_at_once, null, 1, "again")
+    io.out().s("[again] returned from the second create without a panic\n")
+    return 1
+
 fn main(): I32
     argv: = sys.args()
     which: = argv.get(1) if argv.len == 2 else ""
     if which.equals("stop-outside")
         return stop_outside() // no task: it stops before any scheduler
+    if which.equals("delay-before-start")
+        return delay_before_start()
+    if which.equals("create-again")
+        return create_again()
     if which.equals("stack-overflow")
         tcb.create(U8$[]::stack, overflow_task, null, 1, "overflow")
     else if which.equals("mutex-relock")
@@ -130,11 +178,15 @@ fn main(): I32
     else if which.equals("event-no-bits")
         g_event.init()
         tcb.create(U8$[]::stack, no_bits_waiter, null, 1, "no-bits")
+    else if which.equals("wait-masked")
+        g_sem.init(0)
+        tcb.create(U8$[]::stack, masked_waiter, null, 2, "masked")
+        tcb_other.create(U8$[]::stack_other, masked_giver, null, 1, "giver")
     else
         // **An unknown name must not pass**: it prints no needle, so its gate fails.
         io.err()
             .s("usage: panic_demo \
-                stack-overflow|mutex-relock|mutex-foreign-unlock|delete-holder|timeout-zero|event-no-bits|stop-outside\n")
+                stack-overflow|mutex-relock|mutex-foreign-unlock|delete-holder|timeout-zero|event-no-bits|stop-outside|wait-masked|delay-before-start|create-again\n")
         return 2
     task.start_scheduler()
     io.out().s("[panic_demo] UNEXPECTED: scheduler returned without a panic\n")

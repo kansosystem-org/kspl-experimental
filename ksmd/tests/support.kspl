@@ -1,0 +1,54 @@
+//< The helpers that several of ksmd's test files share: reading a test source, opening an editor
+//< on it, the source a document saves as, and the reader's refusal of a source
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor"
+import "ksmd/model/model" { Document }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+fn read(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        verdict.check("a test source is valid", false, e.message)
+        panic("a test source was refused")
+    return reader.read(src@, arena) catch e
+        verdict.check("a test document reads", false, e.message)
+        panic("a test document was refused")
+
+fn opened(bytes: U8[], arena: Arena$@): Editor //< an editor on the source
+    return editor.open(read(bytes, arena), "2026-10-23", arena)
+
+fn written(doc: Document@, arena: Arena$@): U8[] //< the source the writer saves
+    defer $out: = Str_builder()
+    writer.write(doc, out@)
+    return arena.dup_str(out.slice())
+
+fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
+    return arena.text().s(a).s(b).take()
+
+fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
+    //< The document saves as `expected`, and that source reads and saves again unchanged
+    got: = written(ed.doc@, arena)
+    verdict.check(what, got.equals(expected), got)
+    src: = Source("again.ksmd", got) catch e
+        verdict.check(what, false, e.message)
+        return
+    again: = reader.read(src@, arena) catch e
+        verdict.check(what, false, e.message)
+        return
+    defer $second: = Str_builder()
+    writer.write(again@, second@)
+    verdict.check(what, second.slice().equals(got), "a second save changed")
+
+fn refused(text: U8[], what: U8[]) //< the reader refuses the source
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", text) catch e
+        verdict.check(what, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch
+        verdict.check(arena.text().s("refused: \{what\}").take(), true, "")
+        return
+    verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")

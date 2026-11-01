@@ -34,21 +34,35 @@ priv fn alloc_zeroed(bytes: Sz, arena: Arena$@): Void$@ //<
     mem.zero(p, bytes)
     return p
 
-priv fn grow_slot(slot: Void$@$@, cap: Sz$@, len: Sz, initial: Sz, arena: Arena$@, elem_size: Sz) //<
-    //< Allocates, copies and zero-fills when a List grows
-    //< Caution: **Leave the `len >= cap` check to the caller**, so a push with room to spare makes
-    //< no call. Only the unused tail is zeroed (the reason is at `alloc_zeroed`); the copy fills
-    //< the front.
-    new_cap: Sz = grow_cap(cap$, initial)
+priv fn grow_slot( //<
+    //< Allocates and copies when a List grows to hold `need` elements, and returns the old block
+    //< Caution: **Free the returned block only after reading what you need from it.** A slice
+    //< being appended can be a view of it (`List.push_all`). The result is none where nothing is
+    //< to be freed: no old block, or one in an arena. **Leave the `need > cap` check to the
+    //< caller**, so a push with room to spare makes no call. Only the unused tail is zeroed (the
+    //< reason is at `alloc_zeroed`); the copy fills the front.
+    slot: Void$@$@, //< the list's `ptr`
+    cap: Sz$@, //< the list's `cap`
+    len: Sz, //< how many elements are live, and are copied over
+    need: Sz, //< how many elements must fit afterwards
+    initial: Sz, //< the capacity of an empty list's first block
+    arena: Arena$@, //< where the block goes; null means the global heap
+    elem_size: Sz, //< the size of one element
+): Void$@?
+    $new_cap: Sz = grow_cap(cap$, initial)
+    for new_cap < need
+        new_cap = grow_cap(new_cap, initial)
     new_ptr: = arena.alloc(checked_cap_bytes(new_cap, elem_size))
     used_bytes: = len * elem_size if cap$ > 0 else 0
+    $old: Void$@? = .none
     if cap$ > 0
         mem.copy(new_ptr, slot$, used_bytes)
         if arena == null
-            dealloc(slot$)
+            old = .some(slot$)
     mem.zero(Void$@::((U8$@::new_ptr) + used_bytes), new_cap * elem_size - used_bytes)
     slot$ = new_ptr
     cap$ = new_cap
+    return old
 // ==========================================
 // Hashable: what is required of a type that can be a Map's key
 // ==========================================
@@ -134,13 +148,35 @@ impl<|T|> List<|T|>
         if r.len >= r.cap
             // An initial capacity of 2: most lists hold zero to two items (an AST node's children).
             // A large list doubles, so the small start costs little.
-            grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, 2, r.arena, sizeof(T))
+            old: =
+                grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + 1, 2, r.arena, sizeof(T))
+            if block: = old
+                dealloc(block)
 
     #inline
     pub fn push(r: Self$@, item: T) //< adds one element at the end, growing if it must
         r.ensure_cap()
         mem.init_at(r.ptr + r.len, item)
         r.len += 1
+
+    pub fn push_all(r: Self$@, items: T[]) //<
+        //< adds every element of a slice at the end, growing once
+        //< Each element is copied as `push` copies it, so a counted value gains one count. `items`
+        //< can be a view of this list itself (`xs.push_all(xs.slice())`): the old block is freed
+        //< only after the copy. It takes no closure and allocates no more than a `for` of `push`
+        //< would, so the rule keeping hand-written loops in `std` and `ksplc` does not reach it.
+        if items.len <= 0
+            return
+        $old: Void$@? = .none
+        if r.len + items.len > r.cap
+            old =
+                grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + items.len, 2, r.arena,
+                sizeof(T))
+        for x in items
+            mem.init_at(r.ptr + r.len, x)
+            r.len += 1
+        if block: = old
+            dealloc(block)
 
     pub fn pop(r: Self$@): T? //< removes and returns the last element, or none if empty
         if r.len == 0

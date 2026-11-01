@@ -45,7 +45,7 @@ impl Ast_node
                 cg.s("declare ")
                 type_node: = child.get_decl_type_node()
                 if type_node != null
-                    cg.t(type_node.type_id)
+                    cg.t_ret(type_node.type_id)
                 else
                     cg.s("void")
                 cg.s(" @").s(name).s("(")
@@ -54,7 +54,7 @@ impl Ast_node
                 child.get_fn_params()
                     .emit_llvm_param_list(cg,
                     gen_llvm_ctx.Param_list_opts::{ .with_names = false, .emit_variadic = true,
-                    .kspl_abi = false, .emitted_before = false })
+                    .kspl_abi = false, .emitted_before = false, .is_fn_type = false })
                 cg.s(")\n")
             else if child.kind_id == .k_decl_var
                 name: = child.get_decl_id_text()
@@ -557,7 +557,7 @@ impl Ast_node
         if cg.current_ret_is_sret
             cg.s("void")
         else if type_node != null
-            cg.t(type_node.type_id)
+            cg.t_ret(type_node.type_id)
         else
             cg.s("void")
 
@@ -570,7 +570,8 @@ impl Ast_node
             cg.emit_agg_param_type().s(" ").s(gen_llvm_ctx.SRET_PARAM_NAME)
         params.emit_llvm_param_list(cg,
             gen_llvm_ctx.Param_list_opts::{ .with_names = true, .emit_variadic = false,
-            .kspl_abi = use_kspl_abi, .emitted_before = cg.current_ret_is_sret })
+            .kspl_abi = use_kspl_abi, .emitted_before = cg.current_ret_is_sret,
+            .is_fn_type = false })
         cg.s(") ")
         cg.emit_sanitize_attrs()
         r.emit_llvm_fn_attributes(cg)

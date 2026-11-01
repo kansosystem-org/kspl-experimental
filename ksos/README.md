@@ -139,7 +139,10 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/panic_demo.kspl timeout-zero` | `make ksos-timeout-zero` | A zero timeout panics instead of acting like `try_` |
 | `ksos/demo/posix/panic_demo.kspl event-no-bits` | `make ksos-event-no-bits` | Waiting for no event bits panics instead of waiting forever |
 | `ksos/demo/posix/panic_demo.kspl stop-outside` | `make ksos-stop-outside` | `stop_scheduler` with no running scheduler panics |
-| `ksos/demo/posix/tick_mid_switch_demo.kspl` | `make ksos-tick-mid-switch` | A tick delayed across a switch into a new task, and thousands of starts under a tick every 30 μs |
+| `ksos/demo/posix/panic_demo.kspl wait-masked` | `make ksos-wait-masked` | A `take` between `irq_save` and `irq_restore` panics instead of waiting |
+| `ksos/demo/posix/panic_demo.kspl delay-before-start` | `make ksos-delay-before-start` | `Task.delay` before `start_scheduler` panics instead of crashing |
+| `ksos/demo/posix/panic_demo.kspl create-again` | `make ksos-create-again` | `Task.create` again on a task not deleted panics instead of using one more slot |
+| `ksos/demo/posix/tick_mid_switch_demo.kspl` | `make ksos-tick-mid-switch` | A tick delayed across a switch into a new task (at the start, and at a `Task.resume`), and thousands of starts under a tick every 30 μs |
 | `ksos/demo/posix/dyn_race_demo.kspl` | `make ksos-dyn-race` | Three tasks create and delete heap-allocated tasks under a tick every 100 μs; each returns to the heap exactly once |
 
 For a `panic_demo` target, the expected panic is the pass.
@@ -157,6 +160,7 @@ Each runs on QEMU's `mps2-an385` (a Cortex-M3). Those that fit 16 KB of RAM and 
 | `ksos/demo/cortex_m/cortex_m_mq.kspl` | `make ksos-cm-mq` | `make ksos-cm0-mq` | a queue under preemption (the critical section) |
 | `ksos/demo/cortex_m/cortex_m_timeout.kspl` | `make ksos-cm-timeout` | `make ksos-cm0-timeout` | SysTick alone carrying `take_for`'s timeout while a spinner that never yields holds the CPU |
 | `ksos/demo/cortex_m/cortex_m_isr_block.kspl` | `make ksos-cm-isr-block` | `make ksos-cm0-isr-block` | `Sem.take` in an interrupt handler panics, even with a positive count (panic = pass) |
+| `ksos/demo/cortex_m/cortex_m_wait_masked.kspl` | `make ksos-cm-wait-masked` | `make ksos-cm0-wait-masked` | `Sem.take` between `irq_save` and `irq_restore` panics, as on POSIX (panic = pass) |
 | `ksos/demo/cortex_m/cortex_m_isr_unlock.kspl` | `make ksos-cm-isr-unlock` | `make ksos-cm0-isr-unlock` | `Mutex.unlock` in an interrupt handler panics (panic = pass) |
 | `ksos/demo/cortex_m/cortex_m_isr_give.kspl` | `make ksos-cm-isr-give` | `make ksos-cm0-isr-give` | Two gives in one handler: the woken tasks run as it returns, highest first, and PendSV saves the task really running |
 | `ksos/demo/cortex_m/cortex_m_stack_guard.kspl` | `make ksos-cm-stack-guard` | `make ksos-cm0-stack-guard` | A damaged canary panics at the next preempting switch (panic = pass) |
@@ -220,7 +224,7 @@ The images link different code: `board` and `net` use LED matrix I2C, RTC, ARP/I
 
 These components support embedded devices. They are optional for a first reading; [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) describes each.
 
-- `ksos/boards/` defines the wiring of a Freenove 4WD mecanum car with a Pico W, above the CPU ports and drivers. It supports Phase 3 of [What works, and how far](../README.md#-what-works-and-how-far). [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md) defines wiring, and [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) explains setup.
+- `ksos/boards/` defines the wiring of a Freenove 4WD mecanum car with a Pico W, above the CPU ports and drivers. It carries the Edge AI loop. [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md) defines wiring, and [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) explains how to connect and bring up the car.
 
 - `ksos/drivers/` accesses memory-mapped (MMIO) registers directly: GPIO, PWM, clocks, ADC, I2C, USB CDC, and others.
 

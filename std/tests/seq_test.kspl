@@ -1,11 +1,14 @@
 //< Tests of the collections: the combinators (`std/seq`) and the byte ring buffer (`std/ring`)
 import "std/ds" + { List, Map }
+import "std/io"
 import "std/json"
 import "std/mem" + { Arena }
 import "std/refcount" { Rc }
 import "std/ring"
 import "std/seq"
 import "std/str"
+import "std/subproc"
+import "std/sys"
 import "std/tests/mem_test" { back_to }
 import "std/tests/sys_test"
 import "std/verdict"
@@ -522,7 +525,7 @@ priv fn churn_counted_values() //< sets and removes ARC values past several in-p
     for $i: I32 = 100; i < 5000; i += 1
         m.set(i, Rc<|I32|>(i))
         _r: = m.remove(i)
-    $kept: = m.get(39).unwrap_or(Rc<|I32|>(-1))
+    kept: = m.get(39).unwrap_or(Rc<|I32|>(-1))
     assert(kept.get()$ == 39 && m.cap == 256, "a kept value survives the rehashes in place")
 
 fn test_map_odd_cap() //< a capacity that is not a power of two
@@ -564,8 +567,7 @@ fn test_list_pop_and_clear() //< removal keeps capacity and releases ARC ownersh
         assert(xs.pop().is_none(), "pop: an empty list has no last element")
         xs.clear()
         assert(xs.cap == 0, "clear: an unallocated list stays unallocated")
-        for n in I32[]::{ 10, 20, 30 }
-            xs.push(n)
+        xs.push_all(I32[]::{ 10, 20, 30 })
         capacity: = xs.cap
         buffer: = xs.ptr
         for n in I32[]::{ 30, 20, 10 }
@@ -583,6 +585,93 @@ fn test_list_pop_and_clear() //< removal keeps capacity and releases ARC ownersh
         list_counted_removal(storage)
         back_to(before, "pop, clear, reuse and free release every counted value exactly once")
     verdict.pass("pop returns the last value; clear releases elements and keeps their storage.")
+
+fn test_list_push_all() //< appending every element of a slice, growing once
+    verdict.start("[ds] List.push_all test...")
+    defer arena: = Arena(64 * 1024)
+    $xs: = List<|I32|>(arena)
+    xs.push_all(I32[]::{})
+    assert(xs.len == 0 && xs.cap == 0, "push_all: an empty slice allocates nothing")
+    xs.push(1)
+    xs.push_all(I32[]::{ 2, 3 })
+    assert(xs.len == 3 && xs[0] == 1 && xs[1] == 2 && xs[2] == 3,
+        "push_all: the elements follow the old ones, in order")
+    // A large append makes one block of the size it needs, not one per doubling.
+    $big: = List<|I32|>(null)
+    for i in Range.asc(1000)
+        big.push(I32::i)
+    $ys: = List<|I32|>(arena)
+    ys.push(-1)
+    used: = arena.get_total_used()
+    ys.push_all(big.slice())
+    grown: = arena.get_total_used() - used
+    big.free()
+    assert(ys.len == 1001 && ys.cap == 1024 && ys[1] == 0 && ys[1000] == 999,
+        "push_all: a large append keeps every element")
+    assert(grown <= 1024 * sizeof(I32) + 256, "push_all: a large append grows once")
+    for storage in Arena$@[2]::{ null, arena }
+        $zs: = List<|I32|>(storage)
+        zs.push_all(I32[]::{ 5, 6 })
+        zs.push_all(zs.slice())
+        assert(zs.len == 4 && zs[2] == 5 && zs[3] == 6, "push_all: the list appended to itself")
+        zs.push_all(zs.sub(1, 2))
+        assert(zs.len == 6 && zs[4] == 6 && zs[5] == 5, "push_all: a part of the list appended")
+        zs.free()
+    before: = mem.heap_used_bytes()
+    push_all_counted()
+    back_to(before, "push_all: every counted value is counted once more and released once")
+    verdict.pass("push_all appends a slice in order, grows once, and reads a view of the list.")
+
+priv fn push_all_counted() //< the counts of `Rc` elements copied from another list and from itself
+    $src: = List<|Rc<|I32|>|>(null)
+    for n in I32[]::{ 1, 2, 3 }
+        src.push(Rc<|I32|>(n))
+    $dst: = List<|Rc<|I32|>|>(null)
+    dst.push_all(src.slice())
+    src.free()
+    assert(dst[0].get()$ == 1 && dst[2].get()$ == 3,
+        "push_all: the copies outlive the list they came from")
+    dst.push_all(dst.slice())
+    assert(dst.len == 6 && dst[3].get()$ == 1 && dst[5].get()$ == 3,
+        "push_all: counted elements appended to their own list")
+    dst.free()
+
+priv const PUSH_ALL_SELF_SRC: U8[] = //< a child that appends a list of `Rc` to itself as it grows
+    //< 256 elements make a 2 KiB block: glibc scribbles over a freed block only above 1 KiB.
+    """import "std/ds" { List }
+import "std/io"
+import "std/refcount" { Rc }
+
+fn main()
+  $xs: = List<|Rc<|I64|>|>(null)
+  for i in Range.asc(256)
+    xs.push(Rc<|I64|>(I64::i))
+  xs.push_all(xs.slice())
+  $sum: I64 = 0
+  for x in xs
+    sum += x.get()$
+  assert(xs.len == 512 && sum == 2I64 * 255 * 256 / 2, "push_all: each element read before the free")
+  xs.free()
+  io.out().s("ok")
+"""
+
+fn test_list_push_all_reads_before_free(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< Caution: **Run it as a child with freed memory scribbled over** (`MALLOC_PERTURB_` on glibc,
+    //< `MallocScribble` on macOS). Read after the free, a block's elements are usually still
+    //< there, so a test in this process passes without the fix. Windows has no such switch.
+    verdict.start("[ds] List.push_all from a view of the list as it grows...")
+    sys.set_env("MALLOC_PERTURB_", "165") catch panic("set_env should succeed")
+    sys.set_env("MallocScribble", "1") catch panic("set_env should succeed")
+    r: =
+        subproc.run_capture(sys_test.child_argv(ksplc, "push_all_self", PUSH_ALL_SELF_SRC, arena),
+        "", 300000, 1 << 20, arena) catch panic("the child must start")
+    sys.unset_env("MALLOC_PERTURB_") catch panic("unset_env should succeed")
+    sys.unset_env("MallocScribble") catch panic("unset_env should succeed")
+    if !r.exited_with(0) || !r.stdout_data.equals("ok")
+        io.err().s(r.stderr_data)
+    assert(r.exited_with(0) && r.stdout_data.equals("ok"),
+        "push_all must read its source before the old block is freed")
+    verdict.pass("Appended to itself as it grows, a list keeps every element and its count.")
 
 fn test_list_contains(arena: Arena$@) //< membership by the element's own `equals`
     verdict.start("[ds] List.contains and a slice's contains test...")
@@ -609,7 +698,7 @@ priv fn list_counted_removal(storage: Arena$@)
     owned: = mem.heap_used_bytes()
     release_on_exit:
         if last: = xs.pop()
-            $kept: = last
+            kept: = last
             xs.clear()
             assert(kept.get()$ == 3, "pop: the returned owner survives clearing the list")
             assert(mem.heap_used_bytes() < owned, "clear: the other elements are released now")

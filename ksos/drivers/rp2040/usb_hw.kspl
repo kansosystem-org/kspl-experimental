@@ -96,17 +96,32 @@ fn send(ep: U32, buf: U32, data: U8@, len: U32, pid: U32) //<
     //< Arms one packet to send (device to host)
     //< len must be 64 or less.
     copy_to_dpram(buf, data, len)
-    $v: U32 = len | BUF_CTRL_AVAIL | BUF_CTRL_FULL | BUF_CTRL_LAST
-    if pid != 0
-        v = v | BUF_CTRL_DATA1_PID
-    addr: = buf_ctrl_addr(ep, true)
-    mmio.write32(addr, v)
+    arm_in(ep, len, pid)
+
+fn arm_in(ep: U32, len: U32, pid: U32) //< hands the packet already in ep's IN buffer to the host
+    //< For a sender that fills the buffer itself (the console's ring, a byte at a time).
+    hand_over(buf_ctrl_addr(ep, true), len | BUF_CTRL_FULL | BUF_CTRL_LAST, pid)
 
 fn arm_recv(ep: U32, pid: U32, len: U32) //< arms one packet to receive (host to device)
     //< len is the most that can be received. To wait for the status stage (a zero-length OUT),
     //< pass len = 0.
-    $v: U32 = len | BUF_CTRL_AVAIL
+    hand_over(buf_ctrl_addr(ep, false), len, pid)
+
+priv const SETTLE_READS: Sz = 6 //<
+    //< How many reads hand_over waits between its two writes: each takes 2 or more clk_sys cycles
+    //< on a Cortex-M0+, so 6 give at least 12. 125 MHz against 48 MHz needs 3; the rest is margin.
+
+priv fn hand_over(addr: U32, fields: U32, pid: U32) //<
+    //< Writes one buffer control word, then sets AVAILABLE in a second write
+    //< Caution: **Never set AVAILABLE in the same write as the length and the PID.** The controller
+    //< runs on clk_usb (48 MHz), slower than clk_sys (125 MHz). It can see AVAILABLE before the
+    //< other fields arrive, and send or take a packet with the old length or PID. The RP2040
+    //< datasheet ("Concurrent access" in the USB chapter) asks for the fields first, a wait of a
+    //< few clk_sys cycles, then AVAILABLE. Every buffer handed to the controller goes through here.
+    $v: U32 = fields
     if pid != 0
         v = v | BUF_CTRL_DATA1_PID
-    addr: = buf_ctrl_addr(ep, false)
     mmio.write32(addr, v)
+    for _i in Range.asc(SETTLE_READS)
+        _r: = mmio.read32(addr) // a volatile read the compiler cannot drop: the wait
+    mmio.write32(addr, v | BUF_CTRL_AVAIL)

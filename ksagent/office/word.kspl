@@ -93,7 +93,7 @@ priv struct Box //< one open paragraph, table cell or note, and the text it has 
     kind: Kind
     depth: Sz //< the reader's depth at its start tag; its end comes back one below it
     text: str.Arena_text$@
-    empty: Bool //< nothing is written into `text` yet
+    len: Sz //< the bytes written into `text` so far
     after: List<|U8[]|> //< a paragraph's text boxes' lines, which follow its own line
     style: U8[] //< a paragraph's style id
     num_id: U8[] //< its own list number; empty where its properties name none
@@ -121,22 +121,26 @@ priv struct Walk //< the boxes and tables open where the reader stands
 impl Kind
     fn new_box(r: Self, depth: Sz, arena: Arena$@): Box$@ //< an empty box of this kind
         return arena
-            .create(Box::{ .kind = r, .depth = depth, .text = arena.text(), .empty = true,
+            .create(Box::{ .kind = r, .depth = depth, .text = arena.text(), .len = 0,
             .after = List<|U8[]|>(arena), .style = "", .num_id = "", .level = -1, .outline = -1,
             .span = 1, .merge = 0, .id = "" })
 
 impl Box
-    fn put(r: Self$@, text: U8[]) //< appends text, a space between it and what is there
+    fn put(r: Self$@, text: U8[], view: View$@): Void!U8[] //<
+        //< appends text, a space between it and what is there
         if text.len == 0
             return
-        if !r.empty
+        added: = text.len + (1 if r.len > 0 else 0)
+        view.charge_text(r.len + added, added)!
+        if r.len > 0
             r.text.c(' ')
         r.text.s(text)
-        r.empty = false
+        r.len += added
 
-    fn put_raw(r: Self$@, text: U8[]) //< appends text as it stands
+    fn put_raw(r: Self$@, text: U8[], view: View$@): Void!U8[] //< appends text as it stands
+        view.charge_text(r.len + text.len, text.len)!
         r.text.s(text)
-        r.empty = r.empty && text.len == 0
+        r.len += text.len
 
 // ==========================================
 // Reading a part
@@ -160,7 +164,7 @@ priv fn walk(doc: Doc$@, src: U8[], part: Part): Walk!U8[] //<
             return w
         if ev == xml.Event.text
             if w.in_t && !w.hidden && w.boxes.len > 0
-                w.boxes.get(w.boxes.len - 1).put_raw(x.text_of(a)!)
+                w.boxes.get(w.boxes.len - 1).put_raw(x.text_of(a)!, doc.view@)!
         else if ev == xml.Event.end
             end_of(doc, x@, w@)!
         else if skipped(x.name)
@@ -230,9 +234,9 @@ priv fn in_box(doc: Doc$@, x: xml.Reader$@, top: Box$@, w: Walk$@): Void!U8[] //
         val: = x.attr_or("val", "true", a)!
         w.hidden = !val.equals("0") && !val.equals("false") && !val.equals("off")
     else if name.equals("tab") || name.equals("br") || name.equals("cr")
-        top.put_raw(" ")
+        top.put_raw(" ", doc.view@)!
     else if name.equals("noBreakHyphen")
-        top.put_raw("-")
+        top.put_raw("-", doc.view@)!
     else if name.equals("pStyle")
         top.style = x.attr_or("val", "", a)!
     else if name.equals("numId")
@@ -247,8 +251,9 @@ priv fn in_box(doc: Doc$@, x: xml.Reader$@, top: Box$@, w: Walk$@): Void!U8[] //
     else if name.equals("vMerge")
         top.merge = 1 if x.attr_or("val", "continue", a)!.equals("restart") else 2
     else if name.equals("footnoteReference") || name.equals("endnoteReference")
-        top
-            .put_raw(note_mark(doc, name.equals("endnoteReference"), x.attr_or("id", "", a)!)!)
+        mark: =
+            note_mark(doc, name.equals("endnoteReference"), x.attr_or("id", "", a)!)!
+        top.put_raw(mark, doc.view@)!
 
 priv fn count_of(text: U8[]): Sz //< a count of grid columns, 0 to 1000; 0 where the text is none
     v: = text.trim_spaces().to_i64() catch
@@ -299,8 +304,6 @@ priv fn end_of(doc: Doc$@, x: xml.Reader$@, w: Walk$@): Void!U8[] //< takes one 
             return
         tb: = w.tables.get(w.tables.len - 1)
         $text: = top.text.take()
-        for i in Range.asc(top.after.len)
-            text = doc.arena.text().s(text).c(' ').s(top.after.get(i)).take()
         if tb.col < MAX_GRID
             for tb.above.len <= tb.col
                 tb.above.push("")
@@ -347,7 +350,7 @@ priv fn row_done(doc: Doc$@, tb: Table$@, w: Walk$@): Void!U8[] //<
     for i in Range.asc(tb.cells.len)
         any = any || tb.cells.get(i).len > 0
     if any
-        send(doc, w, " | ".join(tb.cells.slice(), doc.arena), 0)!
+        send(doc, w, doc.view.row_of("", tb.cells.slice())!, 0)!
 
 priv fn send(doc: Doc$@, w: Walk$@, line: U8[], heading: I32): Void!U8[] //<
     //< Sends a finished line to the box it stands in, or to the view outside every box
@@ -359,7 +362,7 @@ priv fn send(doc: Doc$@, w: Walk$@, line: U8[], heading: I32): Void!U8[] //<
         if below.kind == Kind.para
             below.after.push(line)
         else
-            below.put(line)
+            below.put(line, doc.view@)!
         return
     if w.part == Part.notes
         return

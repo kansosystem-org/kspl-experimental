@@ -136,3 +136,36 @@ fn test_pilot_policy_refuses_a_deep_header() //<
     four: = with_header_entry(blob, "\"pad\":[[[1]]]", arena)
     assert(refusal(four, arena).equals("too_deep"), "four levels is one too many")
     verdict.pass("a header deeper than a policy's own is refused before the parser recurses.")
+
+priv fn with_maneuver_value(v: F32, arena: Arena$@): U8[] //<
+    //< A well-formed policy whose first manoeuvre's forward value is v
+    $w: = st.Safetensors_writer()
+    add(w@, "fc1.weight", Sz[]::W1, "", Sz[]::{}, arena)
+    add(w@, "fc1.bias", Sz[]::B1, "", Sz[]::{}, arena)
+    add(w@, "fc2.weight", Sz[]::W2, "", Sz[]::{}, arena)
+    add(w@, "fc2.bias", Sz[]::B2, "", Sz[]::{}, arena)
+    man: = Tensor<|F32|>(Sz[]::MAN, arena)
+    man[0] = v
+    w.add("maneuvers", man)
+    w.set_meta("kspl_pilot", encoding.FORMAT_VERSION)
+    w.set_meta("far_mm", "1000")
+    defer $out: = w.finish()
+    return arena.dup_str(out.slice())
+
+fn test_pilot_policy_refuses_a_manoeuvre_out_of_range() //<
+    //< A manoeuvre value larger than a drive takes is refused when the file is read
+    //< Caution: **The car multiplies each value by its cap in I32.** A value such as 2e8 wraps
+    //< there, and the wheels turn the other way.
+    verdict.start("[ksos/pilot_policy] refusing a manoeuvre value out of range test...")
+    defer arena: = Arena(1024 * 1024)
+    max: = F32::encoding.DRIVE_MAX
+    assert(refusal(with_maneuver_value(max, arena), arena).equals(""), "the largest value loads")
+    assert(refusal(with_maneuver_value(-max, arena), arena).equals(""),
+        "the largest negative value loads")
+    assert(refusal(with_maneuver_value(max + 1.0F32, arena), arena).equals("bad_value"),
+        "one over the largest value is refused")
+    assert(refusal(with_maneuver_value(2.0e8F32, arena), arena).equals("bad_value"),
+        "a value that would wrap in the car's arithmetic is refused")
+    assert(refusal(with_maneuver_value(0.0F32 / 0.0F32, arena), arena).equals("bad_value"),
+        "a NaN is refused")
+    verdict.pass("a manoeuvre value outside what a drive takes is refused when read.")

@@ -310,7 +310,7 @@ Each error has its own mark, since each is fixed differently.
 
 ### How references follow edits
 
-Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert, remove and move a row or a column, set a cell and copy a cell. `ksmd/edit/sort.kspl` sorts the rows.
+Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert and remove a row or a column, move a block of rows or columns, set a cell and copy a cell. `ksmd/edit/sort.kspl` sorts the rows.
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
@@ -467,6 +467,7 @@ The table's `widths` attribute, when present, is a quoted comma-separated list o
 | :-- | :-- |
 | Nothing | Every row |
 | `in:` and values separated by bars | Rows whose cell shows one of the values; an empty value stands for empty cells |
+| `out:` and values separated by bars | Rows whose cell shows none of the values |
 | `is:`, `not:`, `contains:` and a value | Rows whose cell shows that text, any other, or text holding it |
 | `above:`, `below:` and a value | Rows whose number is greater or less; text compares as text |
 | `empty`, `filled` | Rows whose cell is empty, or holds a value |

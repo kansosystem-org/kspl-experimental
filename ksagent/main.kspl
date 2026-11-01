@@ -89,9 +89,12 @@ fn main(): I32
     // **No command starts beside a chat file of the old form**: its answers would count as sources.
     old: = files.old_chat_file(root, arena)
     if old.len > 0
-        io.err()
+        // A walked file name can hold an escape sequence, so it goes out shown safely.
+        said: = arena.text()
             .s("\{NAME\}: \{old\} is a chat file of the old form, and the tools would read its \
                 answers as sources. Delete it, or ask its questions again on the chat page\n")
+            .take()
+        answer.write_shown(io.err(), said)
         return 1
     $server: =
         model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), arena) catch why
@@ -134,7 +137,7 @@ priv fn run_eval(job: agent.Ask, questions: U8[], out: U8[], arena: Arena$@): I3
             io.err().s("\{NAME\}: --out: ").s(why).c('\n')
             return 1
     rows: = evaluate.run_all(job, cases@, arena)
-    io.out().s(evaluate.markdown(rows@, arena))
+    evaluate.write_table(rows@, io.out(), arena)
     if target.len > 0
         body: =
             (evaluate.ksmd(rows@, arena) if out.ends_with(".ksmd")

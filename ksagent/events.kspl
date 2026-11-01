@@ -8,14 +8,17 @@ import "std/str" { Str_builder }
 
 struct Event_reader //< the bytes of a body not read yet, and the event they are building
     pending: Str_builder //< bytes that do not make a whole line yet
+    scanned: Sz //< how far the line at `pending`'s start has been searched for its end
+        //< **A long line is searched once**, however many pieces it comes in. Searched from its
+        //< start at each piece, an 8 MiB line would cost its length squared: about 40 s.
     data: Str_builder //< the data lines of the event being read, joined by line breaks
     has_data: Bool //< whether a `data` line came since the last event ended
     handed: Bool //< whether `data` holds the event handed out last; emptied at the next call
 
 impl Event_reader
     fn new(): Event_reader //< a reader with nothing read yet
-        return Event_reader::{ .pending = Str_builder(), .data = Str_builder(), .has_data = false,
-            .handed = false }
+        return Event_reader::{ .pending = Str_builder(), .scanned = 0, .data = Str_builder(),
+            .has_data = false, .handed = false }
 
     fn add(r: Self$@, bytes: U8[]) //< adds bytes of the body as they arrive
         r.pending.s(bytes)
@@ -31,11 +34,13 @@ impl Event_reader
             r.handed = false
         for
             text: = r.pending.slice()
-            $end: Sz = 0
+            $end: = r.scanned
             for end < text.len && text[end] != '\n' && text[end] != '\r'
                 end += 1
             if end == text.len || (text[end] == '\r' && end + 1 == text.len && !over)
+                r.scanned = end
                 return .none
+            r.scanned = 0
             $skip: Sz = 1
             if text[end] == '\r' && end + 1 < text.len && text[end + 1] == '\n'
                 skip = 2

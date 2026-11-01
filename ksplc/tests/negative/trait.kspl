@@ -676,7 +676,7 @@ pub struct Sq
   pub n: I32
 
 impl Sq: Shape
-  pub fn area(r: Self$@): I32
+  pub fn area(r: Self@): I32
     return r.n * r.n
 
 priv fn from_local(): Shape
@@ -696,6 +696,56 @@ fn main()
   c: = thrown() catch
     fallback 0
   _x: = a.area() + b.area() + c
+// ==== case trait_upcast_of_read_only_place
+//< A trait value is not made of a read-only place where the type's method writes through it
+//< A direct call, `@` and an upcast must agree ("Places, and the rules for when they may be
+//< written" in `../../../docs/SPEC-programming-language.md`). `q.scale(10)` is refused on an
+//< immutable `q`, so `grow(q)` is refused too: it would write `q`, or a `const` in ROM. A trait
+//< whose methods only read takes any place.
+// EXPECT: cannot make a 'trait_upcast_of_read_only_place.Shape' value of a read-only location. 'trait_upcast_of_read_only_place.Sq' implements 'scale' with a 'Self$@' receiver
+// EXPECT: cannot make a 'trait_upcast_of_read_only_place.Shape' value of a read-only location. 'trait_upcast_of_read_only_place.Sq' implements
+// EXPECT: cannot make a 'trait_upcast_of_read_only_place.Shape' value of a read-only location. 'trait_upcast_of_read_only_place.Sq@' implements
+// EXPECT: cannot write to 'item'. A binding
+// EXPECT: Finished with 4 error(s)
+pub trait Shape
+  fn area(r: Self): I32
+  fn scale(r: Self, k: I32)
+
+pub trait Size
+  fn size(r: Self): I32
+
+pub struct Sq
+  pub s: I32
+
+impl Sq: Shape
+  pub fn area(r: Self@): I32
+    return r.s * r.s
+  pub fn scale(r: Self$@, k: I32)
+    r.s = r.s * k
+
+impl Sq: Size
+  pub fn size(r: Self@): I32
+    return r.s
+
+priv fn grow(s: Shape)
+  s.scale(10)
+
+priv fn size_of(s: Size): I32
+  return s.size()
+
+const CQ: Sq = ::{ .s = 2 }
+
+fn main(): I32
+  q: = Sq::{ .s = 3 }
+  grow(q)
+  grow(CQ)
+  grow(q@)
+  for item in Sq[1]::{ ::{ .s = 4 } }
+    grow(item)
+  $w: = Sq::{ .s = 5 }
+  grow(w)
+  grow(w@)
+  return size_of(q) + size_of(CQ) + w.s
 // ==== case trait_value_default_body_call
 //< A method with a default body has no vtable slot, so it cannot be called from a trait value
 //< Let it through and the call names a field absent from the C. It fails at the C compiler with no

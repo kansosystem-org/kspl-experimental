@@ -78,14 +78,14 @@ priv fn refuse_inside_package(dir: U8[]) //< stops if the scratch directory is i
     //< walk up here: the walk is the compiler's rule, and a copy would drift from it.
     r: = run_in(U8[][]::{ under, "info", "package" }, dir)
     if !r.exited_with(0)
-        panic(U8$[]::suite_arena.text()
+        panic(suite_arena.text()
             .s("which package the scratch place \{dir\} stands in cannot be asked\n\{r.out\}")
             .take())
     lines: = r.out.lines(suite_arena)
     name: = lines.get(0).trim_spaces() if lines.len > 0 else ""
     if name.len > 0
-        panic(U8$[]::suite_arena.text().s("the scratch place \{dir\} stands inside the package '")
-            .s(name).s("'; hand one outside it (SCRATCH in ksplc/Makefile)").take())
+        panic(suite_arena.text().s("the scratch place \{dir\} stands inside the package '").s(name)
+            .s("'; hand one outside it (SCRATCH in ksplc/Makefile)").take())
 
 pub fn arena(): Arena$@ //< the suite's arena, for a helper that takes none
     return suite_arena
@@ -157,8 +157,7 @@ pub fn ksplc_argv(args: U8[][]): U8[][] //<
     $argv: = List<|U8[]|>(suite_arena)
     argv.push(under)
     argv.push(suite_arena.text().s("--std-dir=\{std_dir()\}").take())
-    for a in args
-        argv.push(a)
+    argv.push_all(args)
     return argv.slice()
 
 pub fn ksplc(args: U8[][]): verdict.Run_out //< runs the compiler under inspection once
@@ -169,8 +168,7 @@ pub fn ksplc_bare(args: U8[][]): verdict.Run_out //< runs it once without `--std
     //< library and so take no `--std-dir`, which they reject.
     $argv: = List<|U8[]|>(suite_arena)
     argv.push(under)
-    for a in args
-        argv.push(a)
+    argv.push_all(args)
     return run(argv.slice())
 
 pub fn read_generated(path: U8[]): U8[] //< the text a run wrote, its newlines made LF

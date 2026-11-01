@@ -7,7 +7,7 @@ import "ksbind/tls"
 import "ksbind/tls_server"
 import "std/fs"
 import "std/mem" { dealloc, Arena }
-import "std/str" // `to_cstr`
+import "std/str" { Str_builder } // and `to_cstr`
 import "std/sys"
 
 extern "C"
@@ -15,6 +15,7 @@ extern "C"
     struct EVP_MD
     struct EVP_CIPHER
     struct ASN1_INTEGER
+    struct X509_EXTENSION
 
 #link("ssl")
 #link("crypto")
@@ -36,6 +37,9 @@ extern "C"
         len: I32, loc: I32, set: I32): I32
     fn X509_set_issuer_name(x: tls.X509$@, name: tls.X509_NAME$@): I32
     fn X509_sign(x: tls.X509$@, pkey: tls.EVP_PKEY$@, md: EVP_MD@): I32
+    fn X509V3_EXT_conf_nid(conf: Void$@, ctx: Void$@, nid: I32, value: Void@): X509_EXTENSION$@
+    fn X509_add_ext(x: tls.X509$@, ex: X509_EXTENSION$@, loc: I32): I32
+    fn X509_EXTENSION_free(ex: X509_EXTENSION$@)
     fn BIO_new_file(filename: Void@, mode: Void@): tls.BIO$@
     fn PEM_write_bio_X509(bp: tls.BIO$@, x: tls.X509$@): I32
     fn PEM_write_bio_PrivateKey(bp: tls.BIO$@, x: tls.EVP_PKEY$@, enc: EVP_CIPHER@, kstr: Void@,
@@ -43,6 +47,7 @@ extern "C"
 
 priv const EVP_PKEY_ED25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
 priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
+priv const NID_SUBJECT_ALT_NAME: I32 = 85 //< NID_subject_alt_name
 priv const PASSPHRASE: U8[] = "kanso-test" //< what `Test_cert.locked_key_pem` is locked with
 
 fn new_key(): tls.EVP_PKEY$@ //< a fresh Ed25519 key, which the caller frees
@@ -61,7 +66,8 @@ pub const VALID_NOW: Validity = ::{ .from_day = -1, .to_day = 1 } //< valid from
 
 fn new_cert( //< a certificate for `key`, which the caller frees
     key: tls.EVP_PKEY$@, //< the key it certifies
-    cn: U8[], //< its subject's CN, the name a client checks
+    cn: U8[], //< its subject's CN, the name a client checks where no SAN names a host
+    ip: U8[], //< the IP address its SAN names, as text; "" for no SAN
     serial: Sz, //< its serial number, distinct under one issuer
     issuer: tls.X509$@, //< the certificate of the CA signing it; null for one signed by `key` itself
     signer: tls.EVP_PKEY$@, //< the key that signs it: the issuer's, or `key` itself
@@ -77,8 +83,18 @@ fn new_cert( //< a certificate for `key`, which the caller frees
         X509_time_adj_ex(X509_getm_notAfter(x), valid.to_day, 0, null) != null &&
         X509_set_pubkey(x, key) == 1 &&
         X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, Void@::cn.ptr, I32::cn.len, -1, 0) == 1
-        && X509_set_issuer_name(x, issuer_name) == 1 && X509_sign(x, signer, null) > 0
-    assert(ok, "the certificate should be filled in and signed")
+        && X509_set_issuer_name(x, issuer_name) == 1
+    assert(ok, "the certificate should be filled in")
+    if ip.len > 0
+        defer $text: = Str_builder()
+        text.s("IP:").s(ip)
+        value: U8$@ = text.slice().to_cstr() catch
+            panic("an address holds no NUL")
+        ex: = X509V3_EXT_conf_nid(null, null, NID_SUBJECT_ALT_NAME, Void@::value)
+        dealloc(Void$@::value)
+        assert(ex != null && X509_add_ext(x, ex, -1) == 1, "the address should go in the SAN")
+        X509_EXTENSION_free(ex)
+    assert(X509_sign(x, signer, null) > 0, "the certificate should be signed")
     return x
 
 fn server_ctx(cert: tls.X509$@, key: tls.EVP_PKEY$@): tls.SSL_CTX$@ //<
@@ -94,7 +110,7 @@ fn self_signed_ctx(): tls.SSL_CTX$@ //<
     //< A server context holding a fresh key and a certificate it signed itself, for "127.0.0.1"
     //< **No client trusts it**, since no CA in the default store signed it.
     key: = new_key()
-    x: = new_cert(key, "127.0.0.1", 1, null, key, VALID_NOW)
+    x: = new_cert(key, "127.0.0.1", "", 1, null, key, VALID_NOW)
     ctx: = server_ctx(x, key)
     tls_server.X509_free(x)
     tls_server.EVP_PKEY_free(key)
@@ -146,7 +162,7 @@ impl Test_ca
         //< variable. So the test runs the code a program runs.
         key: = new_key()
         cert: =
-            new_cert(key, "Kanso test CA", 1, null, key,
+            new_cert(key, "Kanso test CA", "", 1, null, key,
             Validity::{ .from_day = -1, .to_day = 30 })
         dir: = fs.mkdir_unique(CA_BASE, "ca_", arena)
             catch panic("the scratch folder should be made")
@@ -163,7 +179,17 @@ impl Test_ca
     fn issue_ctx(r: Self, host: U8[]): tls.SSL_CTX$@ //<
         //< A server context answering with a fresh key and a certificate this CA issued for `host`
         key: = new_key()
-        x: = new_cert(key, host, 2, r.cert, r.key, VALID_NOW)
+        x: = new_cert(key, host, "", 2, r.cert, r.key, VALID_NOW)
+        ctx: = server_ctx(x, key)
+        tls_server.X509_free(x)
+        tls_server.EVP_PKEY_free(key)
+        return ctx
+
+    fn issue_ip_ctx(r: Self, ip: U8[]): tls.SSL_CTX$@ //<
+        //< A server context answering with a certificate this CA issued for the address `ip`
+        //< **Only the SAN names the address**, as a public CA writes one: the CN is no host.
+        key: = new_key()
+        x: = new_cert(key, "Kanso test server", ip, 2, r.cert, r.key, VALID_NOW)
         ctx: = server_ctx(x, key)
         tls_server.X509_free(x)
         tls_server.EVP_PKEY_free(key)
@@ -180,7 +206,7 @@ impl Test_ca
         defer tls_server.EVP_PKEY_free(key)
         other: = new_key()
         defer tls_server.EVP_PKEY_free(other)
-        x: = new_cert(key, host, 3, r.cert, r.key, valid)
+        x: = new_cert(key, host, "", 3, r.cert, r.key, valid)
         defer tls_server.X509_free(x)
         $chain: = cert_pem(x, arena)
         if with_ca
@@ -193,7 +219,7 @@ impl Test_ca
         //< A chain in the wrong order: the CA's certificate first, then one it issued for `host`
         key: = new_key()
         defer tls_server.EVP_PKEY_free(key)
-        x: = new_cert(key, host, 4, r.cert, r.key, VALID_NOW)
+        x: = new_cert(key, host, "", 4, r.cert, r.key, VALID_NOW)
         defer tls_server.X509_free(x)
         return arena.text().s(cert_pem(r.cert, arena)).s(cert_pem(x, arena)).take()
 
@@ -210,7 +236,7 @@ pub fn self_signed(host: U8[], arena: Arena$@): Test_cert //<
     defer tls_server.EVP_PKEY_free(key)
     other: = new_key()
     defer tls_server.EVP_PKEY_free(other)
-    x: = new_cert(key, host, 1, null, key, VALID_NOW)
+    x: = new_cert(key, host, "", 1, null, key, VALID_NOW)
     defer tls_server.X509_free(x)
     return Test_cert::{ .cert_pem = cert_pem(x, arena), .key_pem = key_pem(key, false, arena),
         .locked_key_pem = key_pem(key, true, arena),

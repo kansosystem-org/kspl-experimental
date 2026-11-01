@@ -4,6 +4,7 @@
 //< `move_only_field_moved_out` in `negative/closure.kspl`; the syntax and basic types are in
 //< `lang_test.kspl`.
 import "std/ds" { List }
+import "std/refcount" { Rc }
 import "std/verdict"
 
 // ==========================================
@@ -141,6 +142,66 @@ fn test_for_in_reads_in_place()
         total += v
     assert(total == 6 && loop_made == 1, "a call's result is evaluated once")
     verdict.pass("`for x in` reads a place in place, copies an Iter, and evaluates a call once.")
+
+// ==========================================
+// A `for` step that needs a temporary before its own line: a read ordered before a call, a `!`,
+// a counted value made in place. Each pass and each `continue` runs the step once.
+// ==========================================
+priv $step_calls: I32 = 0 //< how many times `step_bump` ran
+
+priv fn step_bump(): I32 //< 1, counting each call
+    step_calls += 1
+    return 1
+
+priv fn step_may(n: I32): I32!Catch_probe_error //< 1, or `missing` past 100
+    if n > 100
+        throw .missing
+    return 1
+
+priv fn step_ordered(): I32 //< the sum of the values the loop visits, skipping 1
+    step_calls = 0
+    $total: I32 = 0
+    for $k: I32 = 0; k < 6; k += step_calls + step_bump()
+        if k == 1
+            continue
+        total += k
+    return total
+
+priv fn step_propagated(): I32!Catch_probe_error //< how many passes the loop makes, skipping 2
+    $passes: I32 = 0
+    for $k: I32 = 0; k < 6; k += step_may(k)!
+        if k == 2
+            continue
+        passes += 1
+    return passes
+
+priv struct Step_box //< a counted value, as its field is
+    keep: Rc<|I32|>
+    n: I32
+
+impl Step_box
+    fn val(r: Self@): I32
+        return r.n
+
+priv fn step_box(n: I32): Step_box
+    return ::{ .keep = Rc<|I32|>(n), .n = n }
+
+priv fn step_counted(): I32 //< the sum of the values the loop visits, skipping 2
+    $total: I32 = 0
+    for $k: I32 = 0; k < 6; k += step_box(2).val()
+        if k == 2
+            continue
+        total += k
+    return total
+
+fn test_for_step_with_temporaries()
+    verdict.start("[Lang] a for step that needs a temporary test...")
+    // k goes 0, 1, 3, 6: the step adds the count read before that pass's call.
+    assert(step_ordered() == 3 && step_calls == 3, "the read runs before the call")
+    passes: = step_propagated() catch -1
+    assert(passes == 5, "a step's `!` runs on each pass, `continue` included")
+    assert(step_counted() == 4, "a counted temporary in the step")
+    verdict.pass("A for step's temporaries reach the step, and `continue` runs it.")
 
 // ==========================================
 // `catch` on an Option takes its value or leaves ("Catching an optional" in

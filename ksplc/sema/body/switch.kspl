@@ -246,6 +246,7 @@ impl Ast_node
                 v_name_node.type_id = mctx.target_id
                 sema_body_expr.mark_variant_used(c, mctx.enum_name, variant_name)
 
+            r.check_payload_name_count(c, mctx, variant_def, p_start_idx)
             // In an OR pattern (.A(x), .B(y)) the first binds; the rest are checked against
             // mctx.bound_vars.
             if !new_bound
@@ -267,6 +268,29 @@ impl Ast_node
             mctx.success = false
         return new_bound
 
+    priv fn check_payload_name_count(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
+        variant_def: sema_type_def.Enum_variant$@, p_start_idx: Sz) //<
+            //< Refuses a pattern that names more bindings than the variant has payload fields
+            //< A name past the last field would read nothing: the C compiler then finds it
+            //< undeclared, and LLVM gets invalid IR. Fewer names bind the leading fields.
+        $named: Sz = 0
+        for $k_b: = p_start_idx; k_b < r.children.len; k_b += 1
+            if r.get_child(k_b).kind_id == .k_identifier
+                named += 1
+        has: = variant_def.payload_fields.len
+        if named <= has
+            return
+        if has == 0
+            c.clear_scratch()
+                .s("variant '\{variant_def.name\}' carries no payload, so its 'case' binds no \
+                    names. Write 'case .\{variant_def.name\}'")
+        else
+            c.clear_scratch()
+                .s("variant '\{variant_def.name\}' carries \{has\} payload field(s), but this \
+                    pattern names \{named\}. Remove the names past the last field")
+        c.err(r, c.scratch.slice())
+        mctx.success = false
+
     priv fn bind_variant_payload(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         variant_def: sema_type_def.Enum_variant$@, p_start_idx: Sz)
         $field_idx: Sz = 0
@@ -274,6 +298,10 @@ impl Ast_node
             bind_var: = r.get_child(k_b)
             if bind_var.kind_id == .k_identifier
                 sym: = Sema_symbol(.variable, bind_var.text, bind_var)
+                // **The binding only reads.** It holds a copy of the payload, so a write would
+                // change only the copy (7.1 in docs/SPEC-programming-language.md).
+                sym.flags.is_mut = false
+                sym.flags.is_made_binding = true
                 if field_idx < variant_def.payload_fields.len
                     field_def: = variant_def.payload_fields.get(field_idx)
                     sym.type_id = field_def.type_id

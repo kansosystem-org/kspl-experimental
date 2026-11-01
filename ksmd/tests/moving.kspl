@@ -1,0 +1,181 @@
+//< Moving a block of rows or columns, as Insert cut rows and Insert cut columns do, and moving
+//< cells, as a paste after a cut does
+//< Each check compares the saved source. A move of lines keeps each line's identity, so a
+//< reference, a height, a width, a filter and a column's other attributes go with their line. A
+//< move of cells rewrites each reference to a moved cell.
+import "ksmd/edit/edit"
+import "ksmd/edit/edit" { Edit_error }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor_tables"
+import "ksmd/tests/support" { opened, read, saves, written }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const ROWS: U8[] =
+    "%ksmd 1\n\n:::table name=\"t\" heights=\"10,,30,,\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 2 | \
+        =sum(A1:A2) |\n| 3 | =A3*2 |\n| 4 | =A4+A5 |\n| 5 | |\n:::\n"
+
+priv const CELLS: U8[] =
+    "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1 |\n| 3 | 4 | \
+        =sum(A1:B2) |\n| 5 | | =A3 |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.A1 |\n:::\n"
+
+priv const COLUMNS: U8[] =
+    "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2,3,4\" formats=\",,number:2,\" \
+        filter=\",,above:1,\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 2 | 3 | =A1+B1+C1 |\n:::\n"
+
+fn run()
+    rows()
+    columns()
+    nothing()
+    refusals()
+    cells()
+    cell_refusals()
+
+priv fn rows()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(ROWS, arena)
+    moved(ed@, true, 3, 2, 1)
+    saves("two rows moved up stand above the row chosen, with their references and heights", ed@,
+        arena,
+        "%ksmd 1\n\n:::table name=\"t\" heights=\"10,,,,30\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 4 | \
+            =A2+A3 |\n| 5 | |\n| 2 | =sum(A1:A4) |\n| 3 | =A5*2 |\n:::\n")
+    ed.undo()
+    saves("one undo puts them back", ed@, arena, ROWS)
+    ed.redo()
+    ed.undo()
+    moved(ed@, true, 0, 2, 4)
+    saves("two rows moved down stand above the row chosen", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" heights=\"30,,10,,\"\n| \"n\" | \"f\" |\n| 3 | =A1*2 |\n| 4 \
+            | =A2+A5 |\n| 1 | =A3 |\n| 2 | =sum(A3:A4) |\n| 5 | |\n:::\n")
+    ed.undo()
+    moved(ed@, true, 1, 2, 5)
+    saves("and rows moved after the last row end the table", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" heights=\"10,,,,30\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 4 | \
+            =A2+A3 |\n| 5 | |\n| 2 | =sum(A1:A4) |\n| 3 | =A5*2 |\n:::\n")
+
+priv fn columns()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(COLUMNS, arena)
+    moved(ed@, false, 2, 2, 0)
+    saves("two columns moved left take their names, widths, formats, filter and references", ed@,
+        arena,
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"3,4,1,2\" formats=\"number:2,,,\" \
+            filter=\"above:1,,,\"\n| \"c\" | \"d\" | \"a\" | \"b\" |\n| 3 | =C1+D1+A1 | 1 | 2 \
+            |\n:::\n")
+    ed.undo()
+    saves("one undo puts them back", ed@, arena, COLUMNS)
+    moved(ed@, false, 0, 1, 3)
+    saves("a column moved right stands left of the column chosen", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"2,3,1,4\" formats=\",number:2,,\" \
+            filter=\",above:1,,\"\n| \"b\" | \"c\" | \"a\" | \"d\" |\n| 2 | 3 | 1 | =C1+A1+B1 \
+            |\n:::\n")
+
+priv fn nothing() //< a place inside the lines moved, or just after them, changes nothing
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(ROWS, arena)
+    for at in Range(1, 4, 1)
+        moved(ed@, true, 1, 2, at)
+    saves("rows put inside themselves, or just after, stay as they were", ed@, arena, ROWS)
+    verdict.check("and record no step of undo", ed.history.done.len == 0, "")
+    $wide: = opened(COLUMNS, arena)
+    moved(wide@, false, 0, 2, 1)
+    saves("so do columns", wide@, arena, COLUMNS)
+
+priv fn refusals()
+    defer arena: = Arena(256 * 1024)
+    defer $long: = Str_builder()
+    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
+    for _ in Range.asc(8)
+        long.s("| | |\n")
+    long.s("| | =A9")
+    for _ in Range.asc(2047)
+        long.s("+1")
+    long.s(" |\n| | |\n:::\n")
+    $doc: = read(long.slice(), arena)
+    before: = written(doc@, arena)
+    $why: = Edit_error.outside
+    edit.move_rows(doc@, 0, 8, 1, 10) catch e
+        why = e
+    verdict.check("a move that would write a formula past 4,096 bytes is refused, and changes \
+        nothing", why == .too_long && written(doc@, arena).equals(before), "")
+    for wrong in Range.asc(3)
+        $refused: = false
+        first: Sz = (0 if wrong == 0 else 9 if wrong == 1 else 0)
+        count: Sz = (0 if wrong == 0 else 2 if wrong == 1 else 1)
+        at: Sz = (1 if wrong < 2 else 11)
+        edit.move_rows(doc@, 0, first, count, at) catch e
+            refused = e == .outside
+        verdict.check("no rows, rows past the end, and a place past the end are refused", refused,
+            "")
+    $columns: = false
+    edit.move_columns(doc@, 0, 1, 1, 3) catch e
+        columns = e == .outside
+    verdict.check("and so is a column place past the end", columns, "")
+
+priv fn moved(ed: Editor$@, rows: Bool, first: Sz, count: Sz, at: Sz)
+    ed.move_lines(0, rows, first, count, at) catch e
+        verdict.check("a move", false, e.message())
+
+priv fn cells()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(CELLS, arena)
+    shifted(ed@, 0, 0, 1, 2, 2, 0)
+    saves("cells moved onto others take their place; references to them follow, those to a cell \
+        written over become #REF!, and a range moved in part stays", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| | | =A3+B3 |\n| 3 | 4 | \
+            =sum(A1:B2) |\n| 1 | 2 | =#REF! |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.A3 \
+            |\n:::\n")
+    ed.undo()
+    saves("one undo puts them back", ed@, arena, CELLS)
+    shifted(ed@, 0, 2, 1, 1, 2, 1)
+    saves("a formula moved keeps pointing at the same cells", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | |\n| 3 | 4 | \
+            =sum(A1:B2) |\n| 5 | =A1+B1 | =A3 |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.A1 \
+            |\n:::\n")
+    ed.undo()
+    shifted(ed@, 0, 0, 2, 2, 2, 3)
+    saves("a range moved whole follows, and the table grows to hold the cells", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"\" | \"\" |\n| | | =D3+E3 | | \
+            |\n| | | =sum(D3:E4) | | |\n| 5 | | =A3 | 1 | 2 |\n| | | | 3 | 4 |\n:::\n\n:::table \
+            name=\"s\"\n| \"x\" |\n| =t.D3 |\n:::\n")
+    ed.undo()
+    saves("and one undo takes the new rows and columns away", ed@, arena, CELLS)
+    shifted(ed@, -1, 0, 2, 1, -1, 1)
+    saves("a name moves along the names row with its cells", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"a\" | \"c\" |\n| | 1 | =B1+#REF! |\n| 3 | 4 | \
+            =sum(A1:B2) |\n| 5 | | =A3 |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.B1 |\n:::\n")
+    ed.undo()
+    shifted(ed@, 1, 0, 1, 1, 1, 0)
+    saves("cells pasted where they stand stay", ed@, arena, CELLS)
+
+priv fn cell_refusals()
+    defer arena: = Arena(256 * 1024)
+    defer $long: = Str_builder()
+    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
+    for _ in Range.asc(8)
+        long.s("| | |\n")
+    long.s("| 1 | =A9")
+    for _ in Range.asc(2047)
+        long.s("+1")
+    long.s(" |\n| | |\n:::\n")
+    $doc: = read(long.slice(), arena)
+    before: = written(doc@, arena)
+    $why: = Edit_error.outside
+    edit.move_cells(doc@, 0, 8, 0, 1, 1, 9, 0) catch e
+        why = e
+    verdict.check("a move of cells that would write a formula past 4,096 bytes is refused, and \
+        changes nothing", why == .too_long && written(doc@, arena).equals(before), "")
+    for wrong in Range.asc(3)
+        $refused: = false
+        top: Sz = (-1 if wrong == 0 else 9 if wrong == 1 else 0)
+        to_row: Sz = (0 if wrong < 2 else 10)
+        height: Sz = (2 if wrong == 1 else 1)
+        edit.move_cells(doc@, 0, top, 0, height, 1, to_row, 0) catch e
+            refused = e == .outside
+        verdict.check("names moved into data cells, cells past the end and a place past the end are \
+            refused", refused && written(doc@, arena).equals(before), "")
+
+priv fn shifted(ed: Editor$@, top: Sz, left: Sz, height: Sz, width: Sz, to_row: Sz, to_column: Sz)
+    ed.move_cells(0, top, left, height, width, to_row, to_column) catch e
+        verdict.check("a move of cells", false, e.message())

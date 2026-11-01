@@ -12,6 +12,7 @@ import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
 import "std/json"
+import "std/mem" { Arena }
 import "std/str"
 
 const MAX_WALK_DEPTH: Sz = 2000 //<
@@ -122,8 +123,7 @@ impl Pick_walk
                     r.best_score = score
                     r.best_is_src = here_is_src
                     r.best_path.len = 0
-                    for path_node in r.current_path
-                        r.best_path.push(path_node)
+                    r.best_path.push_all(r.current_path.slice())
 
         for child in node.children
             r.visit(child, depth + 1)
@@ -188,9 +188,11 @@ fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, targ
         if target_node.loc.file().len > 0
             sema.set_current_file(target_node.loc.file())
 
-fn find_path_at_params(state: Doc_state$@, params: json.Value): List<|Ast_node$@|>$@ //<
-    //< The AST path to the position in an LSP request's params; the caller frees its buffer
-    path: = base_core.arena.create(List<|Ast_node$@|>(null))
+fn find_path_at_params(state: Doc_state$@, params: json.Value, arena: Arena$@):
+    List<|Ast_node$@|>$@ //<
+        //< The AST path to the position in an LSP request's params; the caller frees its buffer
+        //< The list itself is on `arena`, the request's, and its buffer on the heap.
+    path: = arena.create(List<|Ast_node$@|>(null))
     find_path_at_offset(state.root_file, state.sema,
-        lsp_msg.offset_at(state.src_perm, params), state.mod_name_perm, path)
+        lsp_msg.offset_at(state.src_perm, params, arena), state.mod_name_perm, path)
     return path

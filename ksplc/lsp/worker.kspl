@@ -95,7 +95,8 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Value): U8[] //<
     case .null_val
         return ""
     default {}
-    return word_at(src, lsp_msg.offset_at(src, params))
+    // The workspace state, and this table with it, goes at `drop_workspace_state`'s rewind.
+    return word_at(src, lsp_msg.offset_at(src, params, base_core.arena))
 
 priv fn word_at(src: U8[], at: Sz): U8[] //< the identifier at that position
     //< Caution: **Do not narrow what counts as a name.** Narrowed, a cursor on a name yields no
@@ -359,7 +360,7 @@ impl Server
         default
             lsp_complete.send_none(id_val, arena)
             return
-        swapped: = lsp_complete.swap_in_mark(text, lsp_msg.offset_at(text, params), arena)
+        swapped: = lsp_complete.swap_in_mark(text, lsp_msg.offset_at(text, params, arena), arena)
         // Caution: **Swap the state only through `reset_current_state`.** A hand-written
         // save/restore leaves the names added to the name pool (`base_core.pools`) during the build
         // past the rewind, and **a later request reads freed memory**.
@@ -406,8 +407,7 @@ impl Server
             // it is freed at the end of this function while the pool still holds the pointer.
             if laid_notes.len > 0
                 kept: = List<|parse_layout.Note|>.create(base_core.arena)
-                for nt in laid_notes.slice()
-                    kept.push(nt)
+                kept.push_all(laid_notes.slice())
                 parse_load.record_layout_notes(doc_name(uri).strip_kspl_ext(), kept)
             r.latest_state = build_document_state(r, src, uri, true)
 

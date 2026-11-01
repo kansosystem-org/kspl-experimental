@@ -10,6 +10,7 @@ const COMMANDS = [
   ["file-open", "Open…", "Ctrl+O"], ["file-save", "Save", "Ctrl+S"],
   ["file-save-as", "Save as…", "Ctrl+Shift+S"], ["print", "Print or save as PDF…", "Ctrl+P"],
   ["undo", "Undo", "Ctrl+Z"], ["redo", "Redo", "Ctrl+Y"],
+  ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["paste", "Paste", "Ctrl+V"],
   ["find", "Find…", "Ctrl+F"], ["replace", "Replace…", "Ctrl+H"],
   ["contents", "Contents"], ["width-full", "Full width"], ["width-reading", "Reading width"],
   ["read-only", "Read-only"], ["quick-choose", "Quick access bar…"],
@@ -53,13 +54,19 @@ const COMMANDS = [
 // The clipboard type that carries a whole table as ksmd's own source, so ksmd pastes it whole.
 const KSMD_TYPE = "application/x-ksmd";
 const COMMAND = new Map(COMMANDS.map(([name, label, key]) => [name, { label, key }]));
+// While rows of the table are cut, Insert row above inserts them instead, and Insert column left
+// likewise for columns, as Excel's Insert reads Insert Cut Cells in its place. Each gives the label
+// and the icon its item shows then, so the menu keeps its shape.
+const CUT_FORMS = { "row-above": ["Insert cut rows", "row-insert-cut"],
+  "column-left": ["Insert cut columns", "column-insert-cut"] };
 
 // The table's commands, in groups, as the Table menu and the right-click menu both show them. A
 // group marked `true` is a flyout, so the menu fits a laptop's screen; Excel's cell menu holds Sort
 // and Filter as flyouts too. Rows, Columns and Note stay open, as the most used; Size is a flyout, as Excel holds Row Height and Column Width under Format.
 const TABLE_GROUPS = [
   ["Rows", ["row-above", "row-below", "row-remove"]],
-  ["Columns", ["column-left", "column-right", "column-remove", "column-choices", "column-rule"]],
+  ["Columns", ["column-left", "column-right", "column-remove", "column-choices",
+    "column-rule"]],
   ["Size", ["column-fit", "column-width", "row-height"], true],
   ["Fill", ["fill-down", "fill-right"], true],
   ["Sort", ["sort-up", "sort-down"], true],
@@ -76,7 +83,7 @@ const TABLE_GROUPS = [
 // flyout. Every command stands in one of them, so the quick access bar's chooser lists them all.
 const MENUS = [
   ["File", ["file-open", "file-save", "file-save-as", "-", "print"]],
-  ["Edit", ["undo", "redo", "-", "find", "replace"]],
+  ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace"]],
   ["View", ["contents", "-", "width-full", "width-reading", "-", "read-only", "-", "quick-choose"]],
   ["Insert", ["table", "divider", "link", "-", "date", "time", "-", "note"]],
   ["Format", [["Kind of block", ["p", "h1", "h2", "h3", "h4", "h5", "h6", "c"]], "-",
@@ -113,6 +120,9 @@ const ICONS = {
   print: `<path d="M4.5 6V2.5h7V6 M4.5 11.5h-2v-5.5h11v5.5h-2 M4.5 9.5h7v4.5h-7z"/>`,
   undo: `<path d="M5 3.5L2 6.5l3 3 M2 6.5h7.5a3.5 3.5 0 0 1 0 7H6"/>`,
   redo: `<path d="M11 3.5l3 3-3 3 M14 6.5H6.5a3.5 3.5 0 0 0 0 7H10"/>`,
+  cut: `<circle cx="4.5" cy="12" r="2"/><circle cx="11.5" cy="12" r="2"/><path d="M6 10.5L11 2 M10 10.5L5 2"/>`,
+  copy: `<path d="M5.5 5.5h8v9h-8z M3 11V2.5h7.5"/>`,
+  paste: `<path d="M5 3H3v11.5h10V3h-2 M5.5 1.5h5v3h-5z M5.5 8h5 M5.5 11h3.5"/>`,
   find: `<circle cx="6.5" cy="6.5" r="4"/><path d="M9.5 9.5l4.5 4.5"/>`,
   replace: `<path d="M2 5h9l-2.5-2.5 M14 11H5l2.5 2.5"/>`,
   contents: `<path d="M2 3h1.5 M5.5 3h8.5 M2 6.5h1.5 M5.5 6.5h8.5 M3.5 10h1.5 M7 10h7 M3.5 13.5h1.5 M7 13.5h7"/>`,
@@ -149,6 +159,8 @@ const ICONS = {
   "row-above": `<path d="M2 8.5h12v5H2z M8 1.5v5 M5.5 4L8 1.5 10.5 4"/>`,
   "row-below": `<path d="M2 2.5h12v5H2z M8 9.5v5 M5.5 12L8 14.5 10.5 12"/>`,
   "row-remove": `<path d="M2 5.5h12v5H2z M5.5 6.5l5 3 M10.5 6.5l-5 3"/>`,
+  "row-insert-cut": `<path stroke-dasharray="2 1.5" d="M2 1.5h12v4H2z"/><path d="M2 9.5h12v5H2z M8 5.5v3 M6 7l2 1.5 2-1.5"/>`,
+  "column-insert-cut": `<path stroke-dasharray="2 1.5" d="M1.5 2h4v12h-4z"/><path d="M9.5 2h5v12h-5z M5.5 8h3 M7 6l1.5 2L7 10"/>`,
   "column-left": `<path d="M8.5 2h5v12h-5z M1.5 8h5 M4 5.5L1.5 8 4 10.5"/>`,
   "column-right": `<path d="M2.5 2h5v12h-5z M9.5 8h5 M12 5.5l2.5 2.5-2.5 2.5"/>`,
   "column-remove": `<path d="M5.5 2h5v12h-5z M6.5 5.5l3 5 M9.5 5.5l-3 5"/>`,

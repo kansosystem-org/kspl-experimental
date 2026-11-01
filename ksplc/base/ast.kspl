@@ -303,7 +303,7 @@ impl U8[]
         return res
 
 impl Ast_node
-    fn get_kind_str(r: Self$@): U8$[]
+    fn get_kind_str(r: Self$@): U8[]
         if r != null
             return base_core.pools.get_kind_str(I32::r.kind_id, "")
         return ""
@@ -506,8 +506,18 @@ impl Ast_node
         //< "var_synth", neither "var" nor "let".
         //< **`name` is the identifier itself.** So a name the user wrote (a `for … in`'s item)
         //< keeps the position it was written at. The editor and a diagnostic find it there.
+        return Ast_node.build_synth_decl(name, init_expr, "var", loc)
+
+    fn build_item_decl(name: Ast_node$@, init_expr: Ast_node$@, loc: Loc): Ast_node$@ //<
+        //< It synthesizes the read-only binding of a `for … in`'s item
+        //< As build_inferred_var_decl, but the keyword is "let". **The item only reads**: it is a
+        //< copy of the element, so a write would change only the copy.
+        return Ast_node.build_synth_decl(name, init_expr, "let", loc)
+
+    priv fn build_synth_decl(name: Ast_node$@, init_expr: Ast_node$@, kw: U8[], loc: Loc):
+        Ast_node$@
         return Ast_node(.k_decl_var, "var_synth", loc).add_child(Ast_node.build_empty(loc))
-            .add_child(Ast_node(.k_keyword, "var", loc)).add_child(name)
+            .add_child(Ast_node(.k_keyword, kw, loc)).add_child(name)
             .add_child(Ast_node.build_empty(loc)).add_child(init_expr)
     // --- Core Operations ---
 
@@ -588,7 +598,7 @@ impl Ast_node
     fn is_literal(r: Self$@, text: U8[]): Bool
         return r != null && r.kind_id == .k_literal && r.text.equals(text)
 
-    fn is_keyword(r: Self$@, text: U8$[]): Bool
+    fn is_keyword(r: Self$@, text: U8[]): Bool
         return r != null && r.kind_id == .k_keyword && r.text.equals(text)
 
     fn find_child(r: Self$@, target_id: base_ast_kinds.Ast_kind): Ast_node$@
@@ -658,7 +668,7 @@ impl Ast_node
             c.print_tree_to(depth + 1, out)
 
     #noreturn
-    fn ice_panic(r: Self$@, msg: U8$[])
+    fn ice_panic(r: Self$@, msg: U8[])
         if r != null
             _l: = base_diag.log()
             _l.s("\n=========================================\n[ICE] \{msg\}\nLocation: ")
@@ -668,7 +678,7 @@ impl Ast_node
             _l.s("=========================================\n")
         base_diag.ice_panic(msg)
 
-    fn ice_assert(r: Self$@, cond: Bool, msg: U8$[])
+    fn ice_assert(r: Self$@, cond: Bool, msg: U8[])
         if !cond
             r.ice_panic(msg)
 

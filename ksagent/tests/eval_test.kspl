@@ -4,6 +4,7 @@ import "ksagent/evaluate"
 import "ksagent/tests/agent_test"
 import "ksagent/tests/stub"
 import "std/chars"
+import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -66,6 +67,23 @@ priv fn cited(from: I64, to: I64, arena: Arena$@): Answer //< an answer citing t
     a.sources
         .push(Source::{ .path = "rules/leave.md", .from_line = from, .to_line = to, .quote = "x" })
     return a
+
+fn test_the_table_reaches_the_console_with_no_control_code()
+    verdict.start("[ksagent] eval's table reaches the console with no control code")
+    defer arena: = Arena(64 * 1024)
+    // A cited file's name can hold ESC and a C1 control (U+009B, CSI), which a terminal obeys.
+    csi: = arena.text().c(0xC2U8).c(0x9BU8).take()
+    result: = arena.text().s("fail: cites a").c(27U8).s("[2J").s(csi).s("31mb.md 1-2").take()
+    $rows: = List<|evaluate.Row|>(arena)
+    rows
+        .push(evaluate.Row::{ .question = "Q?", .expected = "rules/leave.md 3-4", .result = result,
+        .passed = false, .unverified = false, .seconds = 1.0 })
+    out: = arena.text()
+    evaluate.write_table(rows@, out, arena)
+    shown: = out.take()
+    verdict.check("each control character is replaced, and the rest of the row stays",
+        shown.find_str("| fail: cites a�[2J�31mb.md 1-2 |").is_some() &&
+        shown.find_char(27U8).is_none() && shown.find_str(csi).is_none(), shown)
 
 fn test_eval_runs_each_question(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] eval asks each question and totals the table")

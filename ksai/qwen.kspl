@@ -279,6 +279,10 @@ impl Qwen
         position: = 8 * cfg.n_kv_heads * cfg.head_dim
         if I64::position > MAX_CACHE_BYTES / I64::context / I64::cfg.attention_blocks()
             throw .bad_setting(l.key(cfg.arch, "context_length"))
+        // One block's keys are one tensor, which holds at most `MAX_TENSOR_ELEMS` numbers. A cache
+        // under the cap in all can still pass that in one block, which would stop the program.
+        if cfg.n_kv_heads * cfg.head_dim > tensor.MAX_TENSOR_ELEMS / context
+            throw .bad_setting(l.key(cfg.arch, "context_length"))
         embedding: = l.matrix("token_embd.weight", cfg.vocab, cfg.hidden)!
         blocks: = Block$@::arena.alloc(cfg.n_layers * sizeof(Block))
         for i in Range.asc(cfg.n_layers)

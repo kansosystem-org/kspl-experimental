@@ -147,10 +147,10 @@ priv fn named(name: U8[], arena: Arena$@): U8[] //< the set a name reads back as
 
 fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and nothing else
     verdict.start("[tools/ci_gates] how a set is named test...")
-    assert(named("ci-shard-core", arena).equals("ci_shard_core"), "a shard reads back")
+    assert(named("ci-shard-a", arena).equals("ci_shard_a"), "a shard reads back")
     assert(named("ci", arena).equals("ci"), "a name with no dash reads back")
     // The variant's own spelling is not a target's, so it must not run a set.
-    assert(named("ci_shard_core", arena).len == 0, "the variant's spelling is refused")
+    assert(named("ci_shard_a", arena).len == 0, "the variant's spelling is refused")
     assert(named("ci-shard-none", arena).len == 0, "a shard no job runs as a set is refused")
     for s in ci_gates.SET_ORDER
         back: = named(s.variant_name().replace("_", "-", arena), arena)
@@ -160,22 +160,21 @@ fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and not
 fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
     verdict.start("[tools/ci_gates] how the gates are dealt out test...")
     for g in ci_gates.GATES
-        core: = ci_gates.Set.ci_shard_core.runs(g)
-        rest: = ci_gates.Set.ci_shard_rest.runs(g)
+        a: = ci_gates.Set.ci_shard_a.runs(g)
+        b: = ci_gates.Set.ci_shard_b.runs(g)
         linux: = ci_gates.Set.ci_shard_linux.runs(g)
-        assert(ci_gates.Set.ci.runs(g) == (core || rest || linux),
+        assert(ci_gates.Set.ci.runs(g) == (a || b || linux),
             "Linux's ci runs the union of all three workflow sections")
-        assert(!(core && rest) && !(core && linux) && !(rest && linux),
-            "no gate is in more than one section")
+        assert(!(a && b) && !(a && linux) && !(b && linux), "no gate is in more than one section")
         for host in U8[][]::{ "win32", "darwin" }
             shared: =
-                ci_gates.Set.ci_shard_core.runs(g, host) ||
-                ci_gates.Set.ci_shard_rest.runs(g, host)
+                ci_gates.Set.ci_shard_a.runs(g, host) ||
+                ci_gates.Set.ci_shard_b.runs(g, host)
             assert(ci_gates.Set.ci.runs(g, host) == shared,
                 "Windows' and macOS's ci run exactly the two shared sections, with no container")
-            assert(!shared || core || rest, "a shared section runs nothing Linux's leaves out")
+            assert(!shared || a || b, "a shared section runs nothing Linux's leaves out")
         // A Linux-only gate in a shared job is left out of that job on Windows.
-        assert(!g.linux_only || ((core || rest) && !ci_gates.Set.ci.runs(g, "win32")),
+        assert(!g.linux_only || ((a || b) && !ci_gates.Set.ci.runs(g, "win32")),
             "a gate a shared job runs on Linux alone stands in a shared job, and Windows skips it")
     verdict.pass("ci selects what each host runs natively: three sections on Linux, two elsewhere.")
 
@@ -509,9 +508,9 @@ fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
     outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
     outs.push(sample("debug", LOG_FAIL, "1 7\n", arena))
     defer $md: = Str_builder()
-    ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)
+    ci_gates.digest_md(outs@, 4I64, "linux ci-shard-a", md@)
     m: = md.slice()
-    assert(m.starts_with("## linux ci-shard-core - 2 PASS / 1 FAIL   (42s, -j4)"),
+    assert(m.starts_with("## linux ci-shard-a - 2 PASS / 1 FAIL   (42s, -j4)"),
         "the heading counts them")
     assert(m.find_str("| debug | **FAIL** | 7 |").is_some(), "a fallen gate is in bold")
     assert(m.find_str("\nSKIP:\n\n* `link_abi`\n").is_some(), "a skipping gate is listed by name")
@@ -625,8 +624,8 @@ fn test_the_pair_starts_together_only_where_both_run(arena: Arena$@) //<
     for p in U8[][]::{ "win32", "darwin" }
         assert(pairs_in(.ci, p, false, arena).len == 0, "a host that runs neither has no pair")
     for p in U8[][]::{ "linux", "win32", "darwin" }
-        assert(pairs_in(.ci_shard_core, p, false, arena).len == 0, "the shared shards hold none")
-        assert(pairs_in(.ci_shard_rest, p, false, arena).len == 0, "the shared shards hold none")
+        assert(pairs_in(.ci_shard_a, p, false, arena).len == 0, "the shared shards hold none")
+        assert(pairs_in(.ci_shard_b, p, false, arena).len == 0, "the shared shards hold none")
         assert(pairs_in(.ci_macos, p, false, arena).len == 0, "macOS's set holds none")
     verdict.pass("the pair starts together where its set runs both, and the switch parts it.")
 

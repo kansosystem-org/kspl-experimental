@@ -139,12 +139,7 @@ Note: **`ksplc`'s own output does not depend on the terminal's setting.** It set
 
 ### 2. Install the packages
 
-**Install the tools with MSYS2's package manager, `pacman`.** The list mixes two kinds of package on purpose:
-
-| Name | Where it goes | What it does |
-| :-- | :-- | :-- |
-| No prefix (`git`, `make`, `diffutils`) | `/usr/bin`, MSYS2's POSIX tools | Drives the build |
-| Starting `mingw-w64-ucrt-x86_64-` | `/ucrt64/bin`, native UCRT64 tools | Builds what ships |
+**Install the tools with MSYS2's package manager, `pacman`.** The list mixes two kinds of package on purpose: a name with no prefix (`git`, `make`) goes into `/usr/bin`, and one starting `mingw-w64-ucrt-x86_64-` into `/ucrt64/bin`. Why the build needs both kinds is "The Windows executable is built on UCRT64" in [`DESIGN-repository.md`](DESIGN-repository.md#the-windows-executable-is-built-on-ucrt64).
 
 **Where a tool exists on both sides, the native one wins**: UCRT64's PATH puts `/ucrt64/bin` before `/usr/bin`.
 

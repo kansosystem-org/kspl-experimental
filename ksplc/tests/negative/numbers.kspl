@@ -59,6 +59,50 @@ fn main(): I32
   _from_bool: = E::true
   _tagged: = T::1
   return 0
+// ==== case enum_from_integer_needs_cast
+//< An integer or another enum becomes an enum only through the cast `E::n`
+//< The cast checks that the value is a tag. **Taken implicitly, `x: E = 5` would hold a value that
+//< is no variant**, unchecked, and an exhaustive `switch` would meet it. An enum still becomes
+//< its integer without a cast, and the same enum read from a `const` table is no conversion.
+// EXPECT: cannot convert 'I32' to the enum 'enum_from_integer_needs_cast.E' implicitly. Write the cast 'enum_from_integer_needs_cast.E::5'
+// EXPECT: cannot convert 'I32' to the enum 'enum_from_integer_needs_cast.E' implicitly. Write the cast 'enum_from_integer_needs_cast.E::1'
+// EXPECT: cannot convert 'I32' to the enum 'enum_from_integer_needs_cast.E' implicitly. Write the cast 'enum_from_integer_needs_cast.E::n'
+// EXPECT: cannot convert 'U8' to the enum 'enum_from_integer_needs_cast.E' implicitly. Write the cast 'enum_from_integer_needs_cast.E::byte'
+// EXPECT: cannot convert 'I32' to the enum 'enum_from_integer_needs_cast.E' implicitly. Write the cast 'enum_from_integer_needs_cast.E::0'
+// EXPECT: cannot convert 'enum_from_integer_needs_cast.Other' to the enum 'enum_from_integer_needs_cast.E' implicitly. Write the cast 'enum_from_integer_needs_cast.E::o'
+// EXPECT: cannot cast 5 to
+// EXPECT: Finished with 7 error(s)
+priv enum E: U8
+  a
+  b
+
+priv enum Other: U8
+  x
+  y
+
+priv const TABLE: E[2] = ::{ E.a, E.b }
+
+priv fn take(e: E): I32
+  return I32::e
+
+fn main(): I32
+  n: = 1
+  byte: U8 = 1
+  o: Other = .y
+  _no_tag: E = 5
+  _tag: E = 1
+  _from_value: E = n
+  _from_byte: E = byte
+  _arg: = take(0)
+  _from_other: E = o
+  _cast_no_tag: = E::5
+  // allowed: the cast, a variant's name, an enum to its integer, a const table's element
+  e1: = E::n
+  e2: E = .b
+  e3: = E::o
+  wide: I32 = E.b
+  e4: E = TABLE[1]
+  return take(e1) + take(e2) + take(e3) + wide + take(e4)
 // ==== case cast_float_constant_out_of_range
 //< A constant cast from floating point that the integer type cannot hold is refused
 //< At run time the cast saturates; a constant is a mistake written down, as an integer constant's

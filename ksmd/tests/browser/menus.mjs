@@ -26,7 +26,8 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     const missing = await js("Array.from(document.querySelectorAll('.menubar .menu [data-cmd], .menubar .sub-name'))" +
       ".filter((b) => !b.querySelector('svg.glyph path, svg.glyph text, svg.glyph circle')).map((b) => b.textContent)");
     check(missing.length === 0, "every item of every menu carries its icon", missing.join(", "));
-    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).map((b) => b.dataset.cmd).join(' ')");
+    // The right-click menu holds Cut, Copy and Paste first, then the Table menu's commands.
+    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(3).map((b) => b.dataset.cmd).join(' ')");
     const tableMenu = await js("Array.from(document.querySelectorAll('.top-menu:has([data-cmd=\"row-above\"]) [data-cmd]'))" +
       ".map((b) => b.dataset.cmd).join(' ')");
     check(table.length > 0 && table === tableMenu, "the Table menu holds the right-click menu's commands", tableMenu);

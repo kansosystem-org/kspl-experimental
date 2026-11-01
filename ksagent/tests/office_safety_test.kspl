@@ -451,3 +451,47 @@ fn test_work_past_the_budget_is_refused()
     r: = reading(true, docx_of(doc, "", arena), SMALL_CAP, arena)
     verdict.check(worked("20000 empty cells, read with a view of 4 KiB, are refused", r, arena),
         r.why.find_str("than are read").is_some() && r.used < SMALL_WORK, r.why)
+
+fn test_text_a_table_copies_is_charged()
+    verdict.start("[ksagent] text that a table copies into each row or level is charged first")
+    defer arena: = Arena(1024 * 1024)
+    text: = repeated("a", 2000, arena)
+    // Each inner row continues the merge above, so it copies the 2000 bytes into the outer cell.
+    merged: = arena.text().s("<document><body><tbl><tr><tc><tbl><tr><tc><p><r><t>").s(text)
+        .s("</t></r></p></tc></tr>")
+        .s(repeated("<tr><tc><tcPr><vMerge/></tcPr></tc></tr>", 900, arena))
+        .s("</tbl></tc></tr></tbl></body></document>").take()
+    r: = reading(true, docx_of(merged, "", arena), SMALL_CAP, arena)
+    verdict.check(worked("900 rows merged down inside a cell are refused", r, arena),
+        r.why.find_str("larger than").is_some() && r.used < SMALL_WORK, r.why)
+    // Each level of tables copies the text once more.
+    nested: = arena.text().s("<document><body>").s(repeated("<tbl><tr><tc>", 80, arena))
+        .s("<p><r><t>").s(repeated("a", 30000, arena)).s("</t></r></p>")
+        .s(repeated("</tc></tr></tbl>", 80, arena)).s("</body></document>").take()
+    n: = reading(true, docx_of(nested, "", arena), SMALL_CAP, arena)
+    verdict.check(worked("a text of 30000 bytes inside tables 80 deep is refused", n, arena),
+        n.why.find_str("larger than").is_some() && n.used < SMALL_WORK, n.why)
+
+fn test_a_long_shared_string_in_many_cells_is_refused()
+    verdict.start("[ksagent] a row of many cells that show one long shared string is refused")
+    defer arena: = Arena(1024 * 1024)
+    strings: = arena.text().s("<sst><si><t>").s(repeated("a", 2000, arena)).s("</t></si></sst>")
+        .take()
+    sheet: = arena.text().s("<worksheet><sheetData><row r=\"1\">")
+        .s(repeated("<c t=\"s\"><v>0</v></c>", 1000, arena)).s("</row></sheetData></worksheet>")
+        .take()
+    book: = "<workbook><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"xl/workbook.xml\"/></Relationships>"
+    book_rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/worksheet\" \
+            Target=\"sheet.xml\"/><Relationship Id=\"rId2\" Type=\"x/sharedStrings\" \
+            Target=\"strings.xml\"/></Relationships>"
+    data: =
+        zip_of(Entry_spec[]::{ stored("_rels/.rels", rels), stored("xl/workbook.xml", book),
+        stored("xl/_rels/workbook.xml.rels", book_rels), stored("xl/sheet.xml", sheet),
+        stored("xl/strings.xml", strings) }, arena)
+    r: = reading(false, data, SMALL_CAP, arena)
+    verdict.check(worked("1000 cells of one 2000-byte string are refused", r, arena),
+        r.why.find_str("larger than").is_some() && r.used < SMALL_WORK, r.why)

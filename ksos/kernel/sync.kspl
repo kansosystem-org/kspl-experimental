@@ -13,8 +13,8 @@ import "ksos/kernel/task" + { Task }
 // ============================ The counting semaphore ============================
 // Every primitive waits through one loop per direction, `*_until(…, deadline)`. The bare form
 // passes none (wait until woken), and `_for` passes a deadline. So a fix to the loop reaches
-// both. Each loop opens with `task.refuse_in_isr()`, so an ISR's call stops even where it would
-// not have waited.
+// both. Each loop opens its critical section with `task.open_wait()`, so a call from an ISR, or
+// with interrupts already off, stops even where it would not have waited.
 struct Sem
     priv count: I32
 
@@ -46,8 +46,7 @@ impl Sem
         assert(ticks > 0, "Sem.take_for: ticks must be greater than 0 (try_take waits for nothing)")
         return r.take_until(.some(task.deadline_after(ticks)))
     priv fn take_until(r: Self$@, deadline: U64?): Bool //< false once deadline passes
-        task.refuse_in_isr()
-        $st: = task.irq_save()
+        $st: = task.open_wait()
         defer task.irq_restore(st)
         for
             if r.count > 0
@@ -114,8 +113,7 @@ impl<|T|> Queue<|T|>
             "Queue.recv_for: ticks must be greater than 0 (try_recv waits for nothing)")
         return r.recv_until(.some(task.deadline_after(ticks)))
     priv fn send_until(r: Self$@, v: T, deadline: U64?): Bool //< false once deadline passes
-        task.refuse_in_isr()
-        $st: = task.irq_save()
+        $st: = task.open_wait()
         defer task.irq_restore(st)
         for r.count >= r.cap
             _cur: = task.require_current()
@@ -125,8 +123,7 @@ impl<|T|> Queue<|T|>
         r.push_locked(v)
         return true
     priv fn recv_until(r: Self$@, deadline: U64?): T? //< none once deadline passes
-        task.refuse_in_isr()
-        $st: = task.irq_save()
+        $st: = task.open_wait()
         defer task.irq_restore(st)
         for r.count == 0
             _cur: = task.require_current()
@@ -186,7 +183,7 @@ impl Mutex
     priv fn lock_until(r: Self$@, deadline: U64?): Bool //< false once deadline passes
         //< Caution: **When giving up, return the lent priority**, or the holder keeps running at
         //< the high priority with nobody left waiting.
-        $st: = task.irq_save()
+        $st: = task.open_wait()
         defer task.irq_restore(st)
         // Even the free path records the holder's priority, so the current task is checked first.
         me: = task.require_current()
@@ -263,8 +260,7 @@ impl Event
         // Caution: **Refuse no bits, in both modes.** With `.any` no bit of none is ever set, so it
         // waits forever; with `.all` it holds at once. Neither is a wait.
         assert(wanted != 0, "Event.wait / wait_for: wanted must name at least one bit")
-        task.refuse_in_isr()
-        $st: = task.irq_save()
+        $st: = task.open_wait()
         defer task.irq_restore(st)
         $w: = Event_wait::{ .wanted = wanted, .mode = mode, .clear = clear_on_exit, .got = .none }
         for

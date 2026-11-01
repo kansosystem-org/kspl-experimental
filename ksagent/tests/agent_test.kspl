@@ -322,6 +322,40 @@ fn test_plain_text_then_an_answer_call_is_checked(work: U8[], arena: Arena$@)
         s.bodies.get(1).find_str("Call the answer tool now").is_some(), "")
     stub.release(s)
 
+fn test_a_reply_with_too_many_calls_is_refused(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a reply that asks for more than 64 tool calls runs none of them")
+    root: = stub.folder(work, "many-calls", arena)
+    list: = stub.call("list", "{\"path\": \"\"}", arena)
+    $lists: = List<|U8[]|>(arena)
+    for lists.len < 65
+        lists.push(list)
+    // **A stream names a call far ahead in a few bytes**: before the cap, each such piece opened
+    // every call up to it.
+    far: = stub.delta("{\"tool_calls\": [{\"index\": 64, \"id\": \"call_far\", \"type\": \
+        \"function\", \"function\": {\"name\": \"list\", \"arguments\": \"{}\"}}]}", "", arena)
+    streamed: = stub.sse_reply(U8[][]::{ far, stub.delta("{}", "tool_calls", arena) }, arena)
+    cases: = U8[][]::{ stub.calls_reply(lists.slice(), arena), "65 calls in a whole reply",
+        streamed, "a streamed call at index 64" }
+    $i: Sz = 0
+    for i < cases.len
+        s: = stub.start(U8[][]::{ cases[i], cases[i] }, arena)
+        a: = ask(s, root, "Anything?", arena)
+        ended: = answer.ended_line(a@, arena)
+        verdict.check(arena.text().s(cases[i + 1]).s(": refused, saying why, and no tool runs")
+            .take(),
+            s.bodies.len == 1 && ended.find_str("more than 64 tool calls").is_some(), ended)
+        stub.release(s)
+        i += 2
+    quote: = "receives 10 days of paid leave after six months"
+    cites: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, quote, arena) }, arena)
+    lists.pop()
+    lists.pop()
+    lists.push(stub.answer_call("Ten days, after six months.", cites, arena))
+    s: = stub.start(U8[][]::{ stub.calls_reply(lists.slice(), arena) }, arena)
+    a: = ask(s, root, "How much paid leave?", arena)
+    verdict.check("64 calls in one reply all run, up to the answer", a.sources.len == 1, a.text)
+    stub.release(s)
+
 fn test_the_round_cap_stops_the_loop(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a model that never answers is stopped at the round cap")
     root: = stub.folder(work, "cap", arena)

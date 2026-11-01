@@ -18,10 +18,15 @@
 
 * **A menu opens on a press of its name, not on pointing.** While one menu is open, pointing at another name opens that one. A flyout opens on pointing, on a press, or with Right.
 * **Esc, a press outside and a chosen command close every menu**, and the focus goes back where it was. The arrow keys move through the menus and flyouts.
+* **Edit holds Cut and Copy, which run the browser's own cut and copy.** So each acts as its key does where the focus stands, and a touch screen without keys reaches them.
+* **Paste stands after them, and reads the clipboard through the browser, as Excel for the web does.** It hands what it read to the place the focus stands, as a paste with Ctrl+V would. So it acts as Ctrl+V does there, through the same code.
+  * **A browser may ask the person first, or refuse.** Without Paste, a person whose mouse is in hand, or who has no keys, has no way to paste.
+  * **Where the browser refuses, or cannot read the clipboard, the page says "Press Ctrl+V to paste." and changes nothing.** A cut that waits in the page still moves, since it needs nothing from the clipboard.
+  * **The browser hands a page only plain text and HTML.** So a whole table copied from ksmd pastes from the menu as tab-separated rows, and whole with Ctrl+V.
 
 **A table command that cannot act is disabled, not hidden**, so the menu does not change shape.
 
-**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, but keeps a chosen range it falls inside. Shift+F10 or the menu key in an open cell opens it too. It holds the Table menu's commands (`TABLE_GROUPS` in `ksmd/port/web/commands.js`). Rows, Columns and Note stand in the menu itself, and the other groups are flyouts, so the menu fits a window 600 pixels tall.
+**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, but keeps a chosen range it falls inside, and whole rows or columns chosen. Shift+F10 or the menu key in an open cell opens it too. Cut, Copy and Paste stand first, as in Excel's cell menu. The Table menu's commands follow (`TABLE_GROUPS` in `ksmd/port/web/commands.js`). Rows, Columns and Note stand in the menu itself, and the other groups are flyouts, so the menu fits a window 600 pixels tall.
 
 **A command's key stands beside its item, and the same list runs it from a cell**, so the two keys cannot differ.
 
@@ -37,6 +42,8 @@
 * A condition is folded away under the list: is, is not, contains, is greater than, is less than, is empty, is not empty.
 * Typing in the search box narrows the list shown, and never unticks a value.
 * The values are listed in the order the column sorts in. Values that differ only in case are one value, and empty cells one value listed last. The list stops at 1,000 values and says so.
+* **Past 1,000 values, the search looks through all of them**, and lists the first 1,000 it finds.
+* **A value the list never showed was never unticked, so it stays shown.** Past 1,000 values, OK keeps whichever is fewer: the values ticked (`in:`), or those left out (`out:`), which lets a value added later show. Up to 1,000, OK keeps the values ticked.
 * **A column's dates stand in a tree: years, then months, then days.** Each year and month starts folded, and its button or Right and Left open and fold it. A month is named in the browser's language. A day stands by its date, whatever format its cell shows it in, so a year stands once.
 * **A year's or a month's box ticks every day under it.** Where only some are ticked, it shows a mix, as (Select all) does.
 * **A search opens the years and months that hold a match**, and hides those that hold none. A day matches by its whole date, `2026-01-15`, or as its format shows it.
@@ -130,8 +137,55 @@
 * **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells.
 * **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. A typed character opens the chosen cell with that character in place of its value.
 * **An input method composes from the first key.** The focus stands in an invisible text box over the chosen cell, since Windows keeps an input method off where no text can be typed. What is typed or composed there opens the cell, and the box becomes its input, so a composition goes on unbroken.
-* **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. A paste of rows fills the table from the range's corner.
+* **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. A paste of rows fills the table from the range's corner. A cut clears nothing: its cells wait for a paste that moves them ("Moving cells" below).
 * **A look applies to every cell of the range in one step.**
+
+## Pointing at cells in a formula
+
+**While a formula is typed, a press on a cell writes its reference at the caret, and a drag writes a range.** Excel calls this point mode (`ksmd/port/web/point.js`). Typing `=sum(`, then a drag from A1 to A2, gives `=sum(A1:A2`.
+
+* **It acts only where a reference can go.** The cell's text starts with `=`, and the caret stands after `=`, `(`, `,`, `:`, an operator, or the word `and`, `or` or `not`. Inside quoted text it does not act.
+* **Only the data cells of the same table are pointed at.** A press on a name, on another table or outside the table ends the edit as before. So does a press where no reference can go, such as after a number.
+* **The cell stays open, with the caret after the reference.** Enter takes the formula, and Esc drops the edit, as in any open cell.
+* **Pointing again replaces the reference just written**, until the person types or moves the caret. Shift with a press reaches a range from the cell pointed at last.
+* **A frame shows the cells pointed at while the button is down.**
+* **A selection is replaced by the reference.** So AutoSum's selected range changes by a drag.
+* **The arrow keys do not point.** In Excel they point while a formula is being typed, and move the caret once F2 has opened the cell. People find the two modes hard to tell apart. In the page, the arrow keys act in a formula as in any open cell.
+
+## Moving rows and columns
+
+**Rows move by a cut and Insert cut rows, as Excel's Insert Cut Cells moves them.** Columns move the same way, by Insert cut columns. Excel users already move rows this way, so the page has no Move row up or Move row down.
+
+1. Choose whole rows by their row numbers, or whole columns by their letters. Shift with a press reaches across several.
+2. Cut them with Ctrl+X or Edit, Cut. Nothing is removed yet: a dashed frame marks the lines, as Excel's moving border does.
+3. Right-click a row number, or a column letter, and choose Insert cut rows or Insert cut columns. The lines move to stand above that row, or left of that column. The lines between close up.
+
+**Insert cut rows stands in place of Insert row above while rows of that table are cut**, as Excel's Insert reads Insert Cut Cells then. Insert cut columns likewise stands in place of Insert column left. So the menu keeps its shape, and the item stands where a person looks for Insert.
+
+* **The move is one step of undo, and the moved lines stay chosen at their new place.**
+* **Each line keeps its identity** (`move_lines` in `ksmd/edit/editor_tables.kspl`). A formula's reference follows its row or column, so no `#REF!` appears. A row takes its height and notes along. A column takes its name, width, number format, filter, choices and colour rule, and a chart still finds it by name.
+* **A group keeps its places, as after a sort**: it belongs to the table's layout ("Groups of rows" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+* **A move is refused whole when a formula would grow past 4,096 bytes**, or when a chart would no longer find its column. Nothing changes then, and the page says why.
+* **Esc, or any other change to the document, drops the cut**, as in Excel. A place inside the cut lines, or just after them, changes nothing, and the cut stays.
+* **The cut also puts the lines' values on the clipboard as tab-separated rows.** So a paste in another program takes them, and the lines stay, as in Excel.
+* **Ctrl+V or Paste on a row moves cut rows there, writing over the rows they land on**, as Excel's Paste does. Their own rows are left empty. Cut columns go to the chosen column the same way, names included. Insert cut rows and Insert cut columns still insert, and write over nothing. The paste works as a paste of cells ("Moving cells" below).
+* **Lines move only inside their own table.** Insert cut rows reads so only in the menu of the table they were cut from.
+* **A drag does not move rows.** Excel's drag with Shift held inserts, without Shift it writes over the cells it lands on, and its browser version swaps the two. A press that slips then overwrites data. A cut and an explicit Insert never write over a cell.
+
+## Moving cells
+
+**A cut of cells and a paste in the page move them, as in Excel.** The cut removes nothing: a dashed frame marks the cells until the paste.
+
+* **The cells there take the cut cells whole**: their values, formulas, looks, number formats and notes (`move_cells` in `ksmd/edit/editor_tables.kspl`). The cells the move leaves behind become empty.
+* **A reference to a moved cell follows it, wherever its formula stands**, as in Excel. A formula moved keeps pointing at the same cells.
+* **A range follows when it moves whole.** A range moved in part stays where it is. Excel moves each corner of a range on its own. So a range's end cell moved inside it drops cells from a sum, without a word.
+* **A reference to a cell written over becomes `#REF!`, as in Excel**, and so does a range whose two corners were written over. The value it named is gone.
+* **The move is one step of undo, and the moved cells stay chosen at their new place.** The table grows rows and columns where the cells reach past it, as a paste of rows grows it.
+* **A move is refused whole when a formula would grow past 4,096 bytes**, or when the table would pass its limits. Nothing changes then, and the page says why.
+* **A cut pastes once.** Esc, or any other change to the document, drops it, as in Excel.
+* **The cut puts the cells' values on the clipboard as tab-separated rows**, so another program takes them, and the cells stay. Text on the clipboard other than the cut's own was copied later, so a paste drops the cut and pastes that text.
+* **Cells move only inside their own table.** A paste in another table is refused, and the page says to copy instead. A reference across tables would need the same care, and a person rarely moves cells between two tables.
+* **The names move only along the names row**, since a name names a column, not a value.
 
 ## Filling cells
 
@@ -224,6 +278,15 @@
 * **A table fits the page.** A number or a date stays on one line, and a long word, such as a URL or a path, breaks where it must. The width left over goes by the columns' weights.
 * **The row numbers' column keeps its place with no width**, so no value moves under another column's name.
 
+**Each page has a header and a footer of the page's own**, drawn with the margin boxes of CSS (`@page` in `print.css`).
+
+* **The header holds the time of the print at the left and the document's name in the middle of the page.** The footer holds "page / pages" at the right.
+* **A document with no file yet is named "Untitled", as Excel names a new workbook Book1.** The menu bar, the window's title ("Untitled - ksmd") and the printed header show it, so each still says which document is open. Saving asks for a path as before.
+* **The browser's own line would put the title off the middle.** Chrome centres it in the room after the date, so a longer date moves it further right.
+* **A browser that draws margin boxes then draws no line of its own at that edge**, so the person changes no setting. Chrome 153 does so, as the checks here found.
+* **The browser's line would also print the page's address**, which only names the local server and tells the reader of the paper nothing.
+* **A browser without margin boxes still prints its own line**, and its print dialog turns that line off.
+
 **A table, chart, image or include can be left out of the output: `invisible="printing"` in its clause.** A table that only feeds a chart is the usual case. It still calculates, and the chart still draws from it.
 
 * **The attribute names the exception, so a new block is in the output until its author says otherwise.**
@@ -253,6 +316,16 @@
 
 * **The sum and average take the numbers alone. The count takes every cell that holds a value.** Rows a filter hides are left out.
 * **Otherwise it shows the words and characters of the selection, or of the whole document.** A word is a run of letters or digits. Japanese has no spaces between words, so the count of characters stands beside it.
+
+## A compact page
+
+**The page is compact, as a spreadsheet or a file manager's compact list is.** So more of a document stands in the window. The sizes are custom properties at the top of `page.css`, each set in that one place.
+
+* **Prose has a line height of 1.4 and half a line between blocks.** The text keeps its size of 16 pixels, so nothing becomes harder to read.
+* **A table's cells have a line height of 1.3 and a padding of 2 by 6 pixels.** A row of one line is 26 pixels tall, near a spreadsheet's 20 or 21.
+* **Anything a pointer presses is at least 24 pixels tall**, the least size that the web's accessibility guidelines ask for (WCAG 2.2, "Target Size (Minimum)"). This holds for the menus, the quick access bar, the column letters and the contents.
+* **A row height the person typed stays as typed.** It is a least height, and the compact padding only lowers the rows that have none.
+* **The page has no setting for a roomier look.** The browser's zoom makes everything larger, and a second size would double what the checks must look at.
 
 ## A dark scheme
 

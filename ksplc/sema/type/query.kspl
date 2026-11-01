@@ -422,6 +422,23 @@ impl sema_type_env.Env
             return !p.get_decl_type_node().spells_readonly_ptr()
         return true
 
+    fn trait_slot_writing_receiver(r: Self$@, target_id: I32, trait_id: I32): U8[]? //<
+        //< A trait method whose implementation for the target takes `Self$@`, if one does
+        //< That implementation writes through the trait value, so making the value needs a
+        //< writable place, as a direct call does.
+        target: = r.id_to_type.get(r.receiver_base_id(target_id))
+        if target == null
+            return .none
+        switch r.get_info(r.get_clean_real_type(trait_id))
+        case .trait_type(def)
+            for method in def.methods_list
+                if sym: = target.peek_method(method.name)
+                    if need: = r.method_receiver_permission(sym.node)
+                        if need.mut_ptr
+                            return .some(method.name)
+        default {}
+        return .none
+
     fn method_receiver_permission(r: Self$@, def_node: Ast_node$@): Receiver_permission? //<
         //< The permission the method declared at `def_node` demands of its receiver
         //< None where `def_node` has no signature with a first parameter. The call's check (`v.m()`

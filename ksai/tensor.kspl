@@ -344,8 +344,8 @@ impl<|T|> Tensor<|T|>
             throw .shape_mismatch
         // In the KV cache (Self_attention/Gqa_attention.forward) row_idx is the generation
         // position. It goes past the allocated rows once the sequence outgrows max_seq_len. This
-        // stops that.
-        if row_idx >= r.shape[0]
+        // stops that. The comparison is unsigned, so a negative row is refused by the same test.
+        if U64::row_idx >= U64::r.shape[0]
             throw .out_of_bounds
 
         offset: = row_idx * dim
@@ -356,7 +356,9 @@ impl<|T|> Tensor<|T|>
         //< It serves reading the KV cache so far, or a sequence's tail.
         if r.shape.len != 2
             throw .rank_mismatch
-        if first + num_rows > r.shape[0]
+        // Unsigned, so a negative `first` or `num_rows` is refused too; the subtraction cannot
+        // overflow, as `first` is at most the row count when it runs.
+        if U64::first > U64::r.shape[0] || U64::num_rows > U64::(r.shape[0] - first)
             throw .out_of_bounds
         dim: = r.shape[1]
 

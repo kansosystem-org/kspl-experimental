@@ -533,7 +533,13 @@ flowchart LR
 
 **Enforcing agreement is not open.** The declaration must be `Self` for `io.out().s(…)` to be writable, and the implementation `Self$@` to rewrite. So the choice is removed instead, as Go does.
 
-**What is given up**: a trait cannot state "this method requires an lvalue receiver", or that the receiver is not rewritten. No working protection is lost: a rewrite was always the implementation's choice.
+**The write permission is checked where the trait value is made.** The concrete type is known there, so its implementation says whether any slot writes (`Self$@`). If one does, the place must be writable, as for `place.m()` and for `place@` passed to a `T$@`. A binding without `$`, a `const`, a read-only pointer's target and a string literal are refused.
+
+* **The three place operations must agree** ("4.3 Places, and the rules for when they may be written" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A direct call `q.scale(10)` on an immutable `q` is refused. Without this check, `grow(q)` with `fn grow(s: Shape)` would do the same write through the trait value, and on a `const` it would write to ROM.
+* **The check stands at the upcast, not at the call through the trait value.** The callee sees only the trait value, which no longer tells where the object lives.
+* **A trait whose implementation only reads takes any place.** So `Writer` on a `Str_builder` needs `$b`, while a reading trait takes a `const`.
+
+**What is given up**: a trait cannot state "this method requires an lvalue receiver", or that the receiver is not rewritten. The implementation chooses whether it rewrites, and the upcast holds the caller to that choice.
 
 Omitting a parameter's type, and `Self` on a parameter **other than the receiver**, are separate rules (docs/SPEC-programming-language.md §5.1, §5.3). The second exists because a thunk would pass the fat pointer where a concrete type is expected (`ksplc/docs/DESIGN-sema.md` "The Sema layer: it knows the types").
 
@@ -964,6 +970,7 @@ A pointer *dangles* when what it points at is gone, such as a local after its fu
 | :-- | :-- | :-- |
 | `return` / `throw` | Refused | Refused |
 | A store into a global or behind a pointer | Refused | The writer's |
+| A store into a local of an outer block | Refused | The writer's |
 
 **A pointer the compiler makes has no `@` in the source.** Upcasting a value to a trait makes the compiler synthesize `&value`.
 
@@ -999,6 +1006,8 @@ Caution: **Do not reject a call's result, and do not widen the check to "do not 
 * a cast between pointers or slices.
 
 A store's place outlives the frame when it is a global, or when it lies behind a pointer (a field through a `T$@`, `p$`, a slice's element).
+
+**A local of an outer block outlives an inner block's storage too.** A local, and a temporary such as a closure's captured values or a run of elements, lives until its block ends. The C backend writes a block as a C block, and C ends that storage there. So a closure made in an inner block and stored into an outer local would point at a dead block. Keeping every local alive to the function's end would move every declaration in the C to the function's start. So the block's end stays the limit. The block that decides is the storage's, not the statement's: `s = U8[]::a` in an inner block passes when `a` is declared as far out as `s`. A parameter and a local of the function's own block both live until the function returns, so they count as one block. A loop's step counts as a block inside the loop's, since a step that needs temporaries runs at the end of the body.
 
 **What is not checked** needs real escape analysis, and stays the writer's:
 

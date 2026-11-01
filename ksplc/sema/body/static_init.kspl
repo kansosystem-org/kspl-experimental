@@ -235,10 +235,18 @@ impl Ast_node
             return .none
         target: = c.env.get_clean_real_type(r.type_id)
         if c.env.is_slice(target)
-            // A slice over an array: a run of elements, or a constant array by its name.
-            if c.env.is_array(c.env.get_clean_real_type(recv.type_id)) &&
-                (recv.kind_id == .k_struct_literal || recv.is_path_or_ident())
-                return recv.classify_static(c, walk)
+            // A slice over an array: a run of elements, a constant array by its name, or a global
+            // array by its name. The last takes the global's address, as `@` does, and reads
+            // no value.
+            if c.env.is_array(c.env.get_clean_real_type(recv.type_id))
+                if recv.kind_id == .k_struct_literal
+                    return recv.classify_static(c, walk)
+                if recv.is_path_or_ident()
+                    if recv.def_node != null &&
+                        (recv.def_node.kind_id == .k_decl_var ||
+                        recv.def_node.kind_id == .k_decl_var_item)
+                        return recv.classify_static_place(c, walk, r)
+                    return recv.classify_static(c, walk)
             return r.not_static_why(c, walk)
         // A pointer cast: of an integer (a device register's address), or of another pointer.
         if c.env.is_pointer(target) || c.env.is_fn_ptr(target)

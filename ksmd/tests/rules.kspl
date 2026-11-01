@@ -1,8 +1,6 @@
 //< Colour rules: how `rules` reads and saves, the refusals, and setting a rule with its undo
-import "ksmd/base/source" { Source }
 import "ksmd/edit/editor_tables"
-import "ksmd/syntax/reader"
-import "ksmd/tests/tables" { opened, saves }
+import "ksmd/tests/support" { opened, refused, saves }
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -54,13 +52,3 @@ priv fn setting()
 
 priv fn with(attributes: U8[], arena: Arena$@): U8[] //< table `t` with these attributes
     return arena.text().s(OPEN).s(attributes).s(ROWS).take()
-
-priv fn refused(text: U8[], what: U8[]) //< the reader refuses the source
-    defer arena: = Arena(64 * 1024)
-    src: = Source("bad.ksmd", text) catch e
-        verdict.check(what, false, e.message)
-        return
-    _doc: = reader.read(src@, arena) catch
-        verdict.check(arena.text().s("refused: \{what\}").take(), true, "")
-        return
-    verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")

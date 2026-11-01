@@ -224,12 +224,9 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### A name starting with a dot is not served
 
-**A path with a name starting with `.` at any level answers 404**, as if absent (`hides_name` in `kssrv/main.kspl`). A root that is a checkout or holds settings has `.git/` and `.env`. **`.well-known` is served** (RFC 8615): certificate issuance and other discovery protocols read under it.
+**A path with a name starting with `.` at any level answers 404**, as if absent (`fs.has_hidden_on_path`). A root that is a checkout or holds settings has `.git/` and `.env`. **`.well-known` is served** (RFC 8615): certificate issuance and other discovery protocols read under it.
 
-**Each segment's long name is checked too** (`hides_long_name`), because Windows opens `.git` by its short name `GIT~1`.
-
-* **An empty segment (`a//b`) is skipped.** Windows reads no long name for `a/`. A lookup for each extra `/` would also let one request keep the server's one thread busy.
-* **A long name that cannot be read hides what stands there.** Only where nothing stands is the path not hidden, and the walk ends there, since nothing deeper can stand.
+Each segment's long name is checked too, because Windows opens `.git` by its short name `GIT~1`. The rules are "A hidden name is found by its long name too" in `std/docs/DESIGN-system.md`.
 
 ### `read` returning 0 does not mean the connection is over
 

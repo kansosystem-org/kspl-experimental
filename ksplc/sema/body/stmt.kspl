@@ -294,6 +294,8 @@ impl Ast_node
         sym: = Sema_symbol(sym_kind, id_node.text, r)
         sym.type_id = final_id
         sym.flags.is_mut = is_mut
+        // A read-only "var_synth" is a `for … in`'s item (build_item_decl in base/ast.kspl).
+        sym.flags.is_made_binding = !is_mut && r.text.equals("var_synth")
         c.declare_symbol(id_node.text, sym, false)
         id_node.def_node = r
         if expr_node.kind_id != .k_empty
@@ -386,8 +388,14 @@ impl Ast_node
                 c.hint(cond_node, "[H0301] Unnecessary parentheses around 'for' condition.")
             sema_body_lint_stmt.lint_constant_condition(c, cond_node, true)
             cond_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.bool_type)!
-        if step_node.kind_id != .k_empty && step_node.infer_stmts_failed(c)
-            has_err = true
+        if step_node.kind_id != .k_empty
+            // A step that needs temporaries runs at the end of the body's own block
+            // (lower_stmt_for in lower/root.kspl). So it is checked one scope inside the loop's,
+            // as the body is: what it makes dies with each pass.
+            c.symtab.enter_scope()
+            if step_node.infer_stmts_failed(c)
+                has_err = true
+            c.symtab.exit_scope()
         if block_node.kind_id != .k_empty && block_node.infer_stmts_failed(c)
             has_err = true
 

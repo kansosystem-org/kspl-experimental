@@ -326,7 +326,7 @@ Caution: **Ask the ledger (`sema/session/import_table.kspl`) and nothing else.**
 
 The compiler's own terms, by the part of the compiler they belong to. **A term that C, LLVM or compiler textbooks define in the same sense is not entered here** (C99, undefined behaviour, GEP). The other glossaries:
 
-* "Words used throughout" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout) holds the words every package shares. Examples are generic, trait, vtable, ARC, arena, FQN, ABI, hosted and freestanding, libc, the C runtime and the seed.
+* "Words used throughout" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#words-used-throughout) holds the words every package shares. Examples are generic, trait, vtable, ARC, arena, FQN, ABI, hosted and freestanding, libc, the C runtime and the seed.
 * "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md) holds the words with one fixed meaning in every document. Examples are gate, fire, reject and pass silently.
 
 **The compiler as a whole**

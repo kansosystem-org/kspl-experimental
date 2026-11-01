@@ -143,8 +143,7 @@ priv fn emitted_libs(dir: U8[], entry: U8[], flags: U8[][], arena: Arena$@): U8[
     $argv: = List<|U8[]|>(arena)
     argv.push(harness.ksplc_exe())
     argv.push(std_flag())
-    for f in flags
-        argv.push(f)
+    argv.push_all(flags)
     argv.push(arena.text().s("--emit-libs=").s(libs).take())
     argv.push(fs.join(dir, entry, arena))
     argv.push(fs.join(dir, "out.c", arena))
@@ -218,3 +217,27 @@ fn main(): I32
     bad: = emitted_libs(dir, "bad.kspl", U8[][]::{}, arena)
     verdict.check("--emit-libs: a compile that fails writes no file",
         bad.starts_with("FAILED ") && !fs.exists(fs.join(dir, "out.libs", arena)), bad)
+
+fn case_output_is_input(arena: Arena$@) //<
+    //< A compile or a build refuses to write over its own input, in whatever spelling it is named
+    //< **The source must read the same after each refusal**: an exit code alone would also pass
+    //< after a write that replaced it.
+    dir: = harness.sandbox("cli_output_is_input")
+    src: = fs.join(dir, "a.kspl", arena)
+    text: U8[] = "fn main(): I32\n  return 0\n"
+    other: = fs.join(dir, "sub/../a.kspl", arena)
+    deps: = arena.text().s("--emit-deps=").s(src).take()
+    libs: = arena.text().s("--emit-libs=").s(other).take()
+    out_c: = fs.join(dir, "a.c", arena)
+    cases: = U8[][][]::{ U8[][]::{ std_flag(), src, src },
+        U8[][]::{ std_flag(), src, other }, U8[][]::{ "build", std_flag(), src, src },
+        U8[][]::{ std_flag(), deps, src, out_c },
+        U8[][]::{ std_flag(), libs, src, out_c } }
+    for i in Range.asc(cases.len)
+        // Written again, so a case that replaced it does not spoil the next.
+        io.write_file(src, text) catch {}
+        name: = arena.text().s("an output that is the input is refused (case \{i\})").take()
+        ng_case(name, cases[i], "is the input file")
+        kept: = io.read_file(src, null) catch ""
+        verdict.check(arena.text().s("the input is kept (case \{i\})").take(),
+            kept.equals(text), kept)

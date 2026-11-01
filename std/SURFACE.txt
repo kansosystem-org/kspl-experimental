@@ -219,6 +219,7 @@ std/ds	List<|T|>.new	pub fn new(arena: Arena$@): List<|T|>	an empty list, which 
 std/ds	List<|T|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@): List<|T|>	an empty list with room already allocated, so it need not grow
 std/ds	List<|T|>.pop	pub fn pop(r: Self$@): T?	removes and returns the last element, or none if empty
 std/ds	List<|T|>.push #inline	pub fn push(r: Self$@, item: T)	adds one element at the end, growing if it must
+std/ds	List<|T|>.push_all	pub fn push_all(r: Self$@, items: T[])	adds every element of a slice at the end, growing once. Each element is copied as `push` copies it, so a counted value gains one count. `items` can be a view of this list itself (`xs.push_all(xs.slice())`): the old block is freed only after the copy. It takes no closure and allocates no more than a `for` of `push` would, so the rule keeping hand-written loops in `std` and `ksplc` does not reach it.
 std/ds	List<|T|>.remove_at	pub fn remove_at(r: Self$@, index: Sz, file: U8[] = caller_file, line: Sz = caller_line)	removes one element, shifting the following elements back. The removed value is released before the following values move over its slot.
 std/ds	List<|T|>.set #inline	pub fn set(r: Self$@, index: Sz, item: T, file: U8[] = caller_file, line: Sz = caller_line)	writes one element; out of range stops the program, naming the caller
 std/ds	List<|T|>.slice	pub fn slice(r: Self$@): T$[]	a view of every element, for a function that takes a slice. Caution: It is borrowed: a push/insert that grows the capacity reallocates the memory and invalidates it (the same promise as Str_builder.slice's).
@@ -301,6 +302,7 @@ std/fs	copy_file	pub fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error
 std/fs	copy_tree	pub fn copy_tree(from: U8[], to: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): Void!Fs_error	copies every file under one directory to a path that does not exist yet. The relative layout and each file's permission bits are kept, **the bits from the copy's first byte**. So a private file is never readable by others on the way. A file is copied a piece at a time. **A link is not copied**, to a file or a directory alike. Followed, it would copy what lies outside. Anything but a directory or a regular file (a FIFO) fails it. Caution: **It fails if the destination already exists.** A copy mixed with files left by an earlier run is not a copy of the tree, and nothing in it would show that.
 std/fs	dir_trust	pub fn dir_trust(path: U8[]): Dir_trust	whether what a directory holds could have been put there by someone else. For a folder whose contents are run or built in. A file planted there by another user would run as the current one ("A cache folder that others can write is refused" in `std/docs/DESIGN-system.md`). A link is followed, so the folder it reaches is judged.
 std/fs	exists	pub fn exists(path: U8[]): Bool	whether anything exists at that path
+std/fs	has_hidden_on_path	pub fn has_hidden_on_path(root: U8[], rel: U8[], shown: U8[][]): Bool	whether a segment of a path under the root names a hidden file. A hidden name starts with a dot (`.git`, `.env`). A segment ends at `\` too, and its long name (`long_name`) is checked as well: Windows opens `.git` by its short name `GIT~1`. Caution: **A long name that cannot be read hides what stands there**; where nothing stands, the path is not hidden. The rules are "A hidden name is found by its long name too" in `std/docs/DESIGN-system.md`.
 std/fs	is_dir	pub fn is_dir(path: U8[]): Bool	whether it is a directory; a link to one counts
 std/fs	is_executable	pub fn is_executable(path: U8[]): Bool	whether the owner's execute bit is set; Windows: false. Close to Python's `os.access(p, os.X_OK)`. **Always false on Windows**, which has no execute bit. Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
 std/fs	is_link	pub fn is_link(path: U8[]): Bool	whether it is a link, without following it. **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it can follow the link**. A path that does not exist gives false (the functions that create paths call this).
@@ -595,7 +597,7 @@ std/lang	Ord.ge	fn ge(r: Self, other: Other): Bool	whether it is greater or equa
 std/lang	Ord.gt	fn gt(r: Self, other: Other): Bool	whether it is greater
 std/lang	Ord.le	fn le(r: Self, other: Other): Bool	whether it is less or equal
 std/lang	Ord.lt	fn lt(r: Self, other: Other): Bool	whether it is less
-std/lang	Panic_hook	pub typedef Panic_hook = fn(msg: U8$[]): Void	the callback for panic messages on a freestanding port. A port with a console sets this callback. `lang` cannot detect the console itself. The default, `null`, stops execution without printing a message.
+std/lang	Panic_hook	pub typedef Panic_hook = fn(msg: U8[]): Void	the callback for panic messages on a freestanding port. A port with a console sets this callback. `lang` cannot detect the console itself. The default, `null`, stops execution without printing a message.
 std/lang	Panic_info	pub struct Panic_info	information about a panic from the previous run. The stack fragment is separate because a fixed-length array cannot be returned by value. Read each word with `panic_stack_word()`, using `0 <= index < stack_len`.
 std/lang	Panic_info.msg	pub msg: U8$[]	the panic's message
 std/lang	Panic_info.sp	pub sp: Sz	the stack pointer when it happened
@@ -637,12 +639,12 @@ std/lang	Writer	pub trait Writer	a destination characters can be written to. Onl
 std/lang	Writer.c	fn c(r: Self, val: U8): Self	writes one byte and returns the destination
 std/lang	Writer.flush	fn flush(r: Self): Self	passes on what has accumulated, reporting no failure
 std/lang	Writer.s	fn s(r: Self, val: U8[]): Self	writes a string and returns the destination
-std/lang	assert	pub fn assert(cond: Bool, msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless the condition holds
-std/lang	bounds_panic #noinline	pub fn bounds_panic(func_name: U8$[], idx: Sz, len: Sz, file: U8[], line: Sz)	the one message every container stops with when an index is out of range. Every container uses this message, matching the built-in bounds check. See "Conditions that stop execution at run time" in `../docs/SPEC-programming-language.md`. Caution: **Pass the caller's location.** A default would report `std/lang`, making a caller's error appear to be a library bug.
+std/lang	assert	pub fn assert(cond: Bool, msg: U8[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless the condition holds
+std/lang	bounds_panic #noinline	pub fn bounds_panic(func_name: U8[], idx: Sz, len: Sz, file: U8[], line: Sz)	the one message every container stops with when an index is out of range. Every container uses this message, matching the built-in bounds check. See "Conditions that stop execution at run time" in `../docs/SPEC-programming-language.md`. Caution: **Pass the caller's location.** A default would report `std/lang`, making a caller's error appear to be a library bug.
 std/lang	kspl_error_trace_depth #cfg(!freestanding)	pub fn kspl_error_trace_depth(): I32	the number of frames in the error trace
 std/lang	kspl_get_trace_frame_info #cfg(!freestanding)	pub fn kspl_get_trace_frame_info(index: I32, file: U8@$@, func: U8@$@, line: I32$@)	the file, function, and line for the trace frame at `index`
-std/lang	panic #cfg(!freestanding) #noreturn	pub fn panic(msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program and reports the location and reason
-std/lang	panic #cfg(freestanding) #noreturn	pub fn panic(msg: U8$[], _file: U8[] = caller_file, _line: Sz = caller_line)	stops without libc and sends the message to the panic hook
+std/lang	panic #cfg(!freestanding) #noreturn	pub fn panic(msg: U8[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program and reports the location and reason
+std/lang	panic #cfg(freestanding) #noreturn	pub fn panic(msg: U8[], _file: U8[] = caller_file, _line: Sz = caller_line)	stops without libc and sends the message to the panic hook
 std/lang	panic_stack_word #cfg(freestanding)	pub fn panic_stack_word(index: Sz): Sz	one word from the saved stack
 std/lang	print_trace #cfg(!freestanding)	pub fn print_trace()	writes this thread's latest error trace to standard error. A failing `main` also calls this function. Caution: **Write with libc alone**, as `panic` does. Every program includes this file. Buffering lines reduces `fwrite` calls, making interleaved output less likely.
 std/lang	put	pub fn put<|W: Writer, T: Formattable|>(w: W, v: T): W	writes one value, keeping the destination's own type. Caution: **Keep the destination's concrete type.** Accepting `Writer` would also make the return type `Writer`. Interpolating into a `Str_builder` would then hide its `.slice()` method. This function ignores the return value from `Formattable.fmt`.
@@ -796,30 +798,30 @@ std/reactor	Ready.revents	pub revents: U8	what actually happened, which can diff
 std/reactor	Ready.token	pub token: Sz	the token the caller registered it under, to find the socket again
 std/reactor	WRITABLE	pub const WRITABLE: U8 = 0x2	a send would not block
 std/refcount	Arc	pub struct Arc<|T|>	a shared owner counted atomically, so threads can share it. The compiler counts it as it counts `Rc<|T|>`, but atomically. As with `Rc<|T|>`, the last release takes the value apart, at the line and **on the thread** where the last owner goes. Caution: **An `Rc` inside `T` is then released from that thread**; hold only `Arc` in a value threads share.
-std/refcount	Arc<|T|>.clone	pub fn clone(r: Self$@): Arc<|T|>	one more owner of the same value
-std/refcount	Arc<|T|>.downgrade	pub fn downgrade(r: Self$@): Weak_arc<|T|>	a handle that watches without owning
+std/refcount	Arc<|T|>.clone	pub fn clone(r: Self@): Arc<|T|>	one more owner of the same value
+std/refcount	Arc<|T|>.downgrade	pub fn downgrade(r: Self@): Weak_arc<|T|>	a handle that watches without owning
 std/refcount	Arc<|T|>.empty	pub fn empty(): Arc<|T|>	a handle owning nothing. Caution: As with `Rc<|T|>`, `get()` / `clone()` / `downgrade()` on an empty handle are undefined.
-std/refcount	Arc<|T|>.get	pub fn get(r: Self$@): T$@	the value itself, which stays alive while any owner does
-std/refcount	Arc<|T|>.is_empty	pub fn is_empty(r: Self$@): Bool	whether this handle owns nothing
+std/refcount	Arc<|T|>.get	pub fn get(r: Self@): T$@	the value itself, which stays alive while any owner does
+std/refcount	Arc<|T|>.is_empty	pub fn is_empty(r: Self@): Bool	whether this handle owns nothing
 std/refcount	Arc<|T|>.new	pub fn new(value: T): Arc<|T|>	moves a value onto the heap and returns the first owner
 std/refcount	Arc<|T|>:Ref_counted	impl<|T|> Arc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
 std/refcount	Rc	pub struct Rc<|T|>	a shared owner counted by the compiler, for one thread. **The last release takes the value apart.** ARC values inside `T` are released too, to any depth, as when `T` leaves a scope on the stack. Caution: **That release runs at the line where the last owner goes.** A long chain (`next: Rc<|Node|>` a million deep) recurses once per node there. Walk such a chain in a loop first ("Release takes the value apart" in `std/docs/DESIGN-core.md`). A resource using `Manual_free` (a `List`, a file) still needs its explicit `free()`.
-std/refcount	Rc<|T|>.clone	pub fn clone(r: Self$@): Rc<|T|>	one more owner of the same value
-std/refcount	Rc<|T|>.downgrade	pub fn downgrade(r: Self$@): Weak_rc<|T|>	a handle that watches without owning
+std/refcount	Rc<|T|>.clone	pub fn clone(r: Self@): Rc<|T|>	one more owner of the same value
+std/refcount	Rc<|T|>.downgrade	pub fn downgrade(r: Self@): Weak_rc<|T|>	a handle that watches without owning
 std/refcount	Rc<|T|>.empty	pub fn empty(): Rc<|T|>	a handle that owns nothing. Caution: `get()` / `clone()` / `downgrade()` on an empty handle are undefined, like a null dereference. It equals `::{}`, an empty slot.
-std/refcount	Rc<|T|>.get	pub fn get(r: Self$@): T$@	the value itself, which stays alive while any owner does
-std/refcount	Rc<|T|>.is_empty	pub fn is_empty(r: Self$@): Bool	whether this handle owns nothing
+std/refcount	Rc<|T|>.get	pub fn get(r: Self@): T$@	the value itself, which stays alive while any owner does
+std/refcount	Rc<|T|>.is_empty	pub fn is_empty(r: Self@): Bool	whether this handle owns nothing
 std/refcount	Rc<|T|>.new	pub fn new(value: T): Rc<|T|>	moves a value onto the heap and returns the first owner
 std/refcount	Rc<|T|>:Ref_counted	impl<|T|> Rc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand. priv, because only the compiler calls it. **The zero value (ctrl == null) is an empty handle that owns nothing, and retain/release do nothing on it.** A chained release walks zeroed memory (an array's empty slots), which would otherwise crash.
 std/refcount	Weak_arc	pub struct Weak_arc<|T|>	the `Arc` version of `Weak_rc`, which threads can share. As with `Weak_rc<|T|>`, making one side of a cycle a `Weak_arc` avoids the leak; the weak count changes atomically.
-std/refcount	Weak_arc<|T|>.clone	pub fn clone(r: Self$@): Weak_arc<|T|>	one more weak handle to the same value
-std/refcount	Weak_arc<|T|>.upgrade	pub fn upgrade(r: Self$@): Arc<|T|>!Weak_error	an owner again, if the value is still alive. A plain fetch-add could raise strong from 0 to 1. So a CAS increments only a non-zero value it read, and retries when another thread changed it first.
+std/refcount	Weak_arc<|T|>.clone	pub fn clone(r: Self@): Weak_arc<|T|>	one more weak handle to the same value
+std/refcount	Weak_arc<|T|>.upgrade	pub fn upgrade(r: Self@): Arc<|T|>!Weak_error	an owner again, if the value is still alive. A plain fetch-add could raise strong from 0 to 1. So a CAS increments only a non-zero value it read, and retries when another thread changed it first.
 std/refcount	Weak_arc<|T|>:Ref_counted	impl<|T|> Weak_arc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
 std/refcount	Weak_error	pub enum Weak_error	why a weak handle could not become an owner again
 std/refcount	Weak_error.value_dropped	value_dropped	every owner had already released the value
 std/refcount	Weak_rc	pub struct Weak_rc<|T|>	a handle that does not own the value, so a cycle does not leak. downgrade() returns it. Two `Rc<|T|>` pointing at each other never reach 0 (there is no cycle-detecting GC); making one side a `Weak_rc` avoids the leak. The compiler counts it as it counts `Rc<|T|>`, but changes the weak count.
-std/refcount	Weak_rc<|T|>.clone	pub fn clone(r: Self$@): Weak_rc<|T|>	one more weak handle to the same value
-std/refcount	Weak_rc<|T|>.upgrade	pub fn upgrade(r: Self$@): Rc<|T|>!Weak_error	an owner again, if the value is still alive
+std/refcount	Weak_rc<|T|>.clone	pub fn clone(r: Self@): Weak_rc<|T|>	one more weak handle to the same value
+std/refcount	Weak_rc<|T|>.upgrade	pub fn upgrade(r: Self@): Rc<|T|>!Weak_error	an owner again, if the value is still alive
 std/refcount	Weak_rc<|T|>:Ref_counted	impl<|T|> Weak_rc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
 std/reflect	Field_extra	pub struct Field_extra	what only some kinds carry; all 0 for every other kind. Caution: **Read it only for that kind.** **It is not `Field_kind`'s payload** (the reason is at `Field_info.nested`). Grouping it here keeps `Field_info` from growing one field per kind.
 std/reflect	Field_extra.elem	pub elem: Field_kind	a list's element kind, or an option's contents kind

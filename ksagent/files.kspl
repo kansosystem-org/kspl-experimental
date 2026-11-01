@@ -52,7 +52,7 @@ fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved //<
     //< Checks a path the model gave and joins it to the root
     //< It refuses an absolute path, a `..` step, a link anywhere on the path (`fs.stays_under`) and
     //< a name that starts with a dot. **Windows answers to a short name** (`GIT~1` for `.git`), so
-    //< each segment's long name is checked too (`fs.long_name`).
+    //< each segment's long name is checked too (`fs.has_hidden_on_path`).
     $rel: = given.trim_spaces()
     for rel.starts_with("./")
         rel = rel.sub_from(2)
@@ -63,7 +63,7 @@ fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved //<
     if !fs.stays_under(root, rel)
         return .refused("the path must stay inside the folder: give it relative to the folder, such \
             as rules/leave.md, with no `..` step and no link on the way")
-    if hides_name(rel) || hides_long_name(root, rel, arena)
+    if fs.has_hidden_on_path(root, rel, U8[][]::{})
         return .refused("names that start with a dot are hidden, and cannot be read")
     if is_conversation(sys.get_file_name(rel)) ||
         is_conversation(last_long_name(root, rel, arena))
@@ -107,35 +107,6 @@ fn old_chat_file(root: U8[], arena: Arena$@): U8[] //<
 
 fn is_hidden(name: U8[]): Bool //< whether a name is one the tools never show: it starts with a dot
     return name.len > 0 && name[0] == '.'
-
-priv fn hides_name(rel: U8[]): Bool //< whether a segment of `rel` starts with a dot
-    //< Caution: **Split at `\` too** (`sys.is_path_sep`): Windows opens `sub\.env` as `sub/.env`.
-    $start: Sz = 0
-    for start <= rel.len
-        end: = sys.segment_end(rel, start)
-        if is_hidden(rel.sub(start, end - start))
-            return true
-        start = end + 1
-    return false
-
-priv fn hides_long_name(root: U8[], rel: U8[], arena: Arena$@): Bool //<
-    //< Whether a segment of `rel`, by the name the file system keeps, starts with a dot
-    //< Caution: **Skip an empty segment** (`a//b`): Windows reads no long name for `a/`.
-    //< Caution: **A long name that cannot be read hides what stands there.** Only where nothing
-    //< stands is the path not hidden (a file `eval --out` makes), and nothing deeper can stand.
-    $start: Sz = 0
-    for start <= rel.len
-        end: = sys.segment_end(rel, start)
-        empty: = end == start
-        start = end + 1
-        if empty
-            continue
-        prefix: = fs.join(root, rel.sub(0, end), arena)
-        long: = fs.long_name(prefix, arena) catch
-            return fs.exists(prefix)
-        if is_hidden(long)
-            return true
-    return false
 
 priv fn last_long_name(root: U8[], rel: U8[], arena: Arena$@): U8[] //<
     //< The name the file system keeps for the last segment of `rel`; empty where nothing stands

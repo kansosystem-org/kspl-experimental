@@ -384,6 +384,38 @@ import "std/ds" { List }
 fn main(): I32
   _xs: = List<|I32|>::5
   return 0
+// ==== case struct_literal_array_index
+//< An array literal's index is a constant from 0 below the length, and its element has no name
+//< Each was once let through: a negative index stored before the array (C refuses it, LLVM writes
+//< out of bounds), a run-time index and a field name went to the next position in silence.
+// EXPECT: an array's index cannot be negative, but this one is -1
+// EXPECT: an array's index cannot be negative, but this one is -2
+// EXPECT: an array literal's index must be a compile-time constant
+// EXPECT: an array's element has no field name '.len'
+// EXPECT: too many initializers for an array of length 3. This initializer has index 3
+// EXPECT: Finished with 5 error(s)
+fn negative_sized(): I32
+  x: I32[_] = ::{ [-1] = 1 }
+  return x[0]
+
+fn negative(): I32
+  y: I32[3] = ::{ [-2] = 1 }
+  return y[0]
+
+fn run_time(n: Sz): I32
+  y: I32[3] = ::{ [n] = 7 }
+  return y[1]
+
+fn named(): I32
+  y: I32[2] = ::{ .len = 5 }
+  return y[0]
+
+fn past_end(): I32
+  y: I32[3] = ::{ [3] = 1 }
+  return y[0]
+
+fn main(): I32
+  return negative_sized() + negative() + run_time(1) + named() + past_end()
 // ==== case struct_literal_hidden_field
 //< A type with a field hidden from the caller cannot be built from outside with `::{}`
 //< A field not written is filled with zero. Without the refusal, code outside can make a "value

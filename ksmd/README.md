@@ -124,8 +124,14 @@ flowchart BT
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
 | [port/web/](port/web/) | The editing page: the wasm bridge (`bridge.kspl`, its actions on tables and charts in `bridge_tables.kspl`, `view.kspl`, and `moving.kspl` for paths after a Save As), and its scripts and style. Each script is named for what it holds, such as `range.js`, `outline.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
-| [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
+| [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
 | [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server, and `measure.mjs` times it |
+
+## Files near the limit and how they split
+
+How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).
+
+* [`ksmd/edit/edit.kspl`](edit/edit.kspl): **moving** goes to a new `moving.kspl` beside it. That is `move_rows`, `move_columns` and `move_cells`, with the helpers only they use (`shift_rows`, `shift_columns`, `rotate`, `Area`). Across the cut they call `fits`, `charts_found`, `chosen`, `restore` and `empty_cell`, which then become public. Inserting, removing, setting and copying stay.
 
 ## Further reading
 

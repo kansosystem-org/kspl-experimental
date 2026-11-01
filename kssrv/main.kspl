@@ -130,50 +130,11 @@ priv enum Rel_path //< makes a relative path under the root from a percent-decod
     // A path not accepted as a name under the root (`..` steps, a NUL, a Windows device name, a
     // link in an intermediate folder: everything `fs.stays_under` refuses).
     rejected
-    hidden //< a name in it starts with a dot (`hides_name`), so it is answered as absent
+    hidden //< a name in it starts with a dot (`fs.has_hidden_on_path`): answered as absent
 
-priv const WELL_KNOWN: U8[] = ".well-known" //< the one dot folder served (RFC 8615)
+priv const SHOWN_DOT_NAMES: U8[][_] = ::{ ".well-known" } //< the one dot folder served (RFC 8615)
     //< Certificate issuance (ACME) and other discovery read under it, so hiding it would break
     //< them.
-
-priv fn hides_name(rel: U8[]): Bool //<
-    //< whether a name in rel starts with a dot, `.well-known` aside
-    //< Caution: **Do not serve them.** A root that is a checkout or holds settings has `.git/`,
-    //< `.env` and the like, and anyone the server faces could read them (`/.git/config`).
-    //< Answered as absent (404), so a probe learns nothing of what is there.
-    //< Caution: **Split at `\` too** (`sys.is_path_sep`, as std/fs splits): Windows opens
-    //< `sub\.env` as `sub/.env`, and a `/` alone let `/sub%5c.env` through.
-    $start: Sz = 0
-    for $at: Sz = 0; at <= rel.len; at += 1
-        if at < rel.len && !sys.is_path_sep(rel[at])
-            continue
-        name: = rel.sub(start, at - start)
-        if name.starts_with(".") && !name.equals(WELL_KNOWN)
-            return true
-        start = at + 1
-    return false
-
-priv fn hides_long_name(root: U8[], rel: U8[], arena: Arena$@): Bool //<
-    //< Whether a segment of `rel`, by the name the file system keeps, starts with a dot
-    //< Caution: **Windows answers to a short name too**: `/GIT~1/config` opens `.git/config`, and
-    //< the name as asked for starts with no dot. So each segment's long name is checked as well.
-    //< Caution: **Skip an empty segment** (`a//b`). Windows reads no long name for `a/`, and each
-    //< extra `/` would cost one more lookup on the server's one thread.
-    //< Caution: **A long name that cannot be read hides what stands there.** Only where nothing
-    //< stands is the path not hidden, and nothing deeper can stand either, so the walk ends.
-    $start: Sz = 0
-    for start <= rel.len
-        end: = sys.segment_end(rel, start)
-        empty: = end == start
-        start = end + 1
-        if empty
-            continue
-        prefix: = fs.join(root, rel.sub(0, end), arena)
-        long: = fs.long_name(prefix, arena) catch
-            return fs.exists(prefix)
-        if long.starts_with(".") && !long.equals(WELL_KNOWN)
-            return true
-    return false
 
 priv fn asks_for_page(decoded: U8[]): Bool //<
     //< Whether a decoded path names the page: the root itself, or `index.html` in it
@@ -202,7 +163,10 @@ priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): R
             t = r
         case .none
             return .rejected
-    if hides_name(t) || hides_long_name(root, t, arena)
+    // Caution: **Do not serve a name starting with a dot.** A root that is a checkout or holds
+    // settings has `.git/` and `.env`, and anyone the server faces could read them. Answered as
+    // absent (404), so a probe learns nothing of what is there.
+    if fs.has_hidden_on_path(root, t, U8[][]::SHOWN_DOT_NAMES)
         return .hidden
     return .ok(t)
 

@@ -250,7 +250,7 @@ test-suites-text: $(addprefix test-,$(SUITES_TEXT))
 # --- The two halves CI runs on separate jobs, of what is left ---
 # **Each half holds one share of the compiler's copy and one of the other packages' two**, so no
 # half waits on two long serial suites. Half A is what B leaves. Caution: **The two CI jobs that
-# run the halves differ by platform**: Linux's rest job is the shorter, Windows's (with its LLVM
+# run the halves differ by platform**: Linux's job b is the shorter, Windows's (with its LLVM
 # gates) the longer. Before moving a suite, compare both platforms' job times in a run's job list.
 # How the rest of the work is dealt between the jobs is "How the gates are arranged" in
 # `docs/SPEC-gates.md`.
@@ -285,6 +285,9 @@ test-extract-ksplc: test-extract-ksplc-core test-extract-ksplc-rest
 # --- Checking the generated LLVM IR's signature agreement ---
 # Caution: **LLVM's verifier does not match a call against its `define`**: only a stack argument
 # (Win64's fifth on) breaks. **The checker is built by the seed**, or a mistake enters both sides.
+# **A narrow argument shows only in a run**: its C must be built by clang (`$(CC)`) at -O2, which
+# reads the whole register ("A narrow integer is widened at every call" in
+# ksplc/docs/DESIGN-backends.md).
 ## Gates|test-llvm-abi|See in the IR whether the direct caller's argument types agree with the `define` side
 test-llvm-abi: $(STAGE1_EXE) $(SEED_EXE)
 	@echo "# VERIFYING LLVM IR CALL SIGNATURES (caller vs callee)"
@@ -292,8 +295,17 @@ test-llvm-abi: $(STAGE1_EXE) $(SEED_EXE)
 	./$(STAGE1_EXE) --to=llvm tests/debug/main.kspl $(TMP_DIR)/abi_check_debug.ll
 	./$(STAGE1_EXE) --to=llvm ksplc/tests/runtime/main_result_without_sys.kspl \
 	  $(TMP_DIR)/abi_check_main_result.ll
+	./$(STAGE1_EXE) --to=llvm --emit-libs=$(TMP_DIR)/narrow_c_abi.libs \
+	  ksplc/tests/prog/narrow_c_abi.kspl $(TMP_DIR)/narrow_c_abi.ll
 	./$(SEED_EXE) run tests/tools/llvm_ir_abi_check.kspl $(TMP_DIR)/abi_check_ksplc.ll \
-	  $(TMP_DIR)/abi_check_debug.ll $(TMP_DIR)/abi_check_main_result.ll
+	  $(TMP_DIR)/abi_check_debug.ll $(TMP_DIR)/abi_check_main_result.ll $(TMP_DIR)/narrow_c_abi.ll
+	@echo "# NARROW INTEGERS ACROSS THE C BOUNDARY (the C built by clang at -O2)"
+	./$(STAGE1_EXE) emit-runtime $(TMP_DIR)/narrow_c_abi.runtime.c
+	$(CC) -std=c99 -O2 -Wall -Werror -c ksplc/tests/prog/narrow_c_abi.c -o $(TMP_DIR)/narrow_c_abi_c.o
+	@mkdir -p $(TEST_DIR)
+	$(CC) $(CFLAGS) -Wno-override-module $(TMP_DIR)/narrow_c_abi.ll $(TMP_DIR)/narrow_c_abi.runtime.c \
+	  $(TMP_DIR)/narrow_c_abi_c.o @$(TMP_DIR)/narrow_c_abi.libs $(LDLIBS) -o $(TEST_DIR)/narrow_c_abi.exe
+	./$(TEST_DIR)/narrow_c_abi.exe
 
 # --- Comparing std/math's freestanding version numerically against the real libm ---
 ## Gates|test-freestanding-math|Whether the math functions of the OS-less configuration give the same answers as hosted

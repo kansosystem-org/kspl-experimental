@@ -30,6 +30,7 @@ extern "C"
     struct X509_NAME
     struct EVP_PKEY
     struct ASN1_TIME
+    struct X509_VERIFY_PARAM
 
 // Caution: **Keep C's `long` as `Sz` going in and `I32` coming out** (the two `ctrl` functions and
 // `SSL_get_verify_result`). Written as `I64`, a result breaks on Windows ("What cannot be written
@@ -56,6 +57,8 @@ extern "C"
     fn BIO_write(b: BIO$@, data: Void@, dlen: I32): I32
     fn BIO_ctrl_pending(b: BIO$@): Sz
     fn SSL_set1_host(ssl: SSL$@, hostname: Void@): I32
+    fn SSL_get0_param(ssl: SSL$@): X509_VERIFY_PARAM$@
+    fn X509_VERIFY_PARAM_set1_ip_asc(param: X509_VERIFY_PARAM$@, ipasc: Void@): I32
     fn SSL_ctrl(ssl: SSL$@, cmd: I32, larg: Sz, parg: Void$@): I32
     fn SSL_connect(ssl: SSL$@): I32
     fn SSL_get_verify_result(ssl: SSL@): I32
@@ -117,7 +120,10 @@ fn client_ctx(): SSL_CTX$@!Tls_error //<
     return ctx
 
 fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
-    //< One connection's SSL, sending `host` as SNI and verifying against it
+    //< One connection's SSL, verifying against `host`, and sending it as SNI where it is a name
+    //< **An IP address is checked as an address**, against the certificate's IP entries, and is
+    //< not sent as SNI: TLS takes only a host name there (RFC 6066). OpenSSL before 3.0 checks
+    //< `SSL_set1_host` as a DNS name only, so an address would fail against its own certificate.
     //< Caution: **A host name holding a NUL, or longer than OpenSSL takes, fails rather than being
     //< cut**: cut, verification would pass for another host.
     c_host: U8$@ = host.to_cstr() catch
@@ -137,6 +143,9 @@ fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
         SSL_free(ssl)
         throw .ctx_failed
     SSL_set_bio(ssl, rbio, wbio)
+    // OpenSSL's own parser decides whether `host` is an address, so the check and it agree.
+    if X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), Void@::c_host) == 1
+        return ssl
     if SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_HOST_NAME, Void$@::c_host) != 1
         || SSL_set1_host(ssl, Void@::c_host) != 1
         SSL_free(ssl)

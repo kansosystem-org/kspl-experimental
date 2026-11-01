@@ -95,13 +95,16 @@ impl C_names
             C_claim::{ .name = sym.name, .node = sym.node, .type_id = type_id })
 
 priv fn global_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
-    //< The C names of the program's globals that a local can spell: verbatim ones and types'
+    //< The C names of the program's globals that a local can spell: verbatim ones, types', and
+    //< the C library's a body writes (`BODY_C_NAMES` in `../base/c_name.kspl`)
     //< A local of such a name takes a made one, as a local hiding a local does. C would read the
     //< local in place of the global from its declaration on: a local `Slice_U8` hides
     //< the slice type, and `libc.abs`'s `abs` is read as the local in its own initializer.
     //< Note: Every other global's C name opens with `kspl_` (`KSPL_PREFIX`), which
     //< `spells_global_c_name` tests without a list.
     $names: = Map<|U8[], Bool|>(null)
+    for name in base_c_name.BODY_C_NAMES
+        names.set(name, true)
     for e in c.symtab.by_fqn.items()
         sym: = e.value
         if !sym.flags.is_method && sym.uses_verbatim_c_name()

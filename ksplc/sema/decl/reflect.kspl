@@ -103,12 +103,37 @@ impl Sema_ctx
                 "only a struct can derive 'Reflectable'. Its field table requires fields at fixed \
                     offsets, which other type kinds do not provide")
             return .none
+        if r.has_under_aligned_field(real_id, def_fields, impl_node)
+            return .none
         defer $rows: = List<|Row_spec|>(null)
         if !r.collect_field_kinds(def_fields, rows@, impl_node, emitted, extra, depth)
             return .none
         prefix: = r.reflect_prefix(impl_node)
         table: = make_table_decl(impl_node, target, rows@, prefix)
         return .some(table)
+
+    priv fn has_under_aligned_field(r: Self$@, struct_id: I32,
+        def_fields: List<|sema_type_def.Struct_field$@|>$@, impl_node: Ast_node$@): Bool //<
+            //< Reports each field that `#packed` leaves under-aligned, true if there is one
+            //< `std/reflect` reads and writes a field through a pointer of the field's own type
+            //< (`load_int`, `store_float`). Such a pointer promises the type's alignment, so a
+            //< word access at an odd address faults on a Cortex-M0. This is the rule
+            //< `refuse_packed_address` keeps for `@`.
+        $found: = false
+        for f in def_fields
+            kept: = r.packed_field_align(struct_id, f)
+            if kept == 0
+                continue
+            shown: = r.env.display(f.type_id)
+            own: = r.type_layout(f.type_id).align
+            r.clear_scratch()
+                .s("'Reflectable' cannot read field '\{f.name\}'. '#packed' leaves it aligned to \
+                    \{kept\} byte(s), but the table reads it through a pointer to '\{shown\}', \
+                    which promises \{own\}. Keep the field in a struct without '#packed', or write \
+                    the 'fields()' body by hand")
+            r.err(f.node if f.node != null else impl_node, r.scratch.slice())
+            found = true
+        return found
 
     priv fn collect_field_kinds(r: Self$@,
         def_fields: List<|sema_type_def.Struct_field$@|>$@, rows: List<|Row_spec|>$@,

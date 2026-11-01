@@ -82,10 +82,8 @@ priv fn ok_step(name: U8[], argv: U8[][], dir: U8[]): Bool //<
 
 priv fn argv_of(head: U8[][], tail: U8[][], arena: Arena$@): U8[][] //< two runs of words as one
     $out: = List<|U8[]|>(arena)
-    for w in head
-        out.push(w)
-    for w in tail
-        out.push(w)
+    out.push_all(head)
+    out.push_all(tail)
     return out.slice()
 
 priv fn copy_in(names: U8[][], to: U8[], arena: Arena$@): Bool //< copies fixtures into a place
@@ -199,8 +197,7 @@ priv fn build_shared(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bo
             argv.push("-o")
             argv
                 .push(fs.join(dir, arena.text().s("lib\{lib\}.so").take(), arena))
-        for w in tc.link_libs
-            argv.push(w)
+        argv.push_all(tc.link_libs)
         all =
             all &&
             ok_step(arena.text().s("lib\{lib\} links as a shared library with \{tc.cc\}").take(),
@@ -220,8 +217,7 @@ priv fn link_main(tc: Toolchain, vendor: U8[], dir: U8[], shared: Bool, arena: A
     // A shared library is found beside the executable on Windows, elsewhere through the rpath.
     if shared && !tc.windows
         argv.push(arena.text().s("-Wl,-rpath,").s(dir).take())
-    for w in tc.link_libs
-        argv.push(w)
+    argv.push_all(tc.link_libs)
     argv.push("-o")
     argv.push(exe)
     form: = "shared" if shared else "static"
@@ -265,8 +261,7 @@ priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) 
     for w in U8[][]::{ tc.cc, "-std=c99", "main.c",
         arena.text().s("-L").s(dir).take(), "-lgreet", "-lcount" }
         argv.push(w)
-    for w in tc.link_libs
-        argv.push(w)
+    argv.push_all(tc.link_libs)
     argv.push("-o")
     argv.push(fs.join(dir, "main.exe", arena))
     r: = harness.run_in(argv.slice(), vendor)

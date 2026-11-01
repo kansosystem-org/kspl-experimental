@@ -78,7 +78,7 @@ Caution: **Do not put a helper that does not touch `Sema_ctx`'s state into `sema
 
 The parts are plain records. Every method keeps its one receiver `c`, and the concern's own file holds the methods that keep its part (`decl/layout` for `Layout_state`).
 
-**Only `decl/mono` and `decl/mono_queue` touch `Mono_state`**; other code asks through their methods (`put_off_constraint`, `build_entrusted_tables`), by convention.
+**Only `decl/mono` and `decl/mono_queue` touch `Mono_state`**; other code asks through their methods (`put_off_constraint`, `ensure_instance_methods`), by convention.
 
 **`decl` cannot be split further.** Resolving needs instantiating, instantiating needs the conformance check, and checking needs constant evaluation; there is no one-way order.
 
@@ -225,6 +225,7 @@ Four rules follow from the table:
    * **The flip side: `strip_X(t) != t` does not test "is `t` an X".** Seeing through drops the mark too, so `strip_ptr(t) != t` holds for `U8 immut`. Ask `is_X`. With the other test, `a[i].m()` on a `const` array element is judged "it crossed a pointer" and skips the permission check.
 3. **Resolving an alias and stripping a mark alternate** (`get_clean_real_type`). `get_real_type` resolves only the outermost alias, so doing one of each leaves `const_of(alias B)` as `B`. Every site that peels both goes through it, including `same_shape_ignoring_const` and genllvm's type output (`t_impl` in `gen/llvm/types.kspl`). Where pointers are peeled too, the entry point is `receiver_base_id`.
 4. **The C mangling places the mark by position.** *Mangling* is turning a KSPL type or name into a C identifier. A mark on the element (`slice(const_of(U8))`) becomes `Const_U8_Slice`, because `mangle_type_id_to_impl` recurses and emits `Const_` first from the inside. The C runtime preamble hard-codes `kspl_Const_U8_Slice`, so on a view type alone (`const_of(slice(U8))`) the mark becomes the suffix `_Const`. `const_of` gets no typedef of its own; `genc` writes it inline as `const <the base>` (`T * const` on a pointer).
+   * **Inside an instance's C name, an immutable instance is written `Const_` first.** There the arguments are text, and an instance's name is flat, so a mark after it could not say what it qualifies. `U8$[][]` is `Slice_Const_Slice_U8`, while `U8[]$[]` is `Slice_Slice_U8_Const`; as suffixes, both were `Slice_Slice_U8_Const`. After any other name the mark stays a suffix (`c_arg_text_to` in `sema/type/naming.kspl`).
 
 **Judge a slice descriptor literal's shape on its type before one slice level is stripped.** A literal such as `U8$[]::{ .ptr = …, .len = … }` is checked field by field, and the stripped type gives the wrong answer:
 

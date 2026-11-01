@@ -104,8 +104,7 @@ fn test_http_chunked_read(arena: Arena$@) //<
     for piece in Sz[]::{ 0, 1, 7 }
         got: = read_whole(chunked(body, arena), piece, 1024, arena)
         assert(got.equals("hello world"),
-            U8$[]::arena.text().s("written \{piece\} bytes at a time, the body reads as: ").s(got)
-            .take())
+            arena.text().s("written \{piece\} bytes at a time, the body reads as: ").s(got).take())
     upper: =
         read_whole("HTTP/1.1 200 OK\r\nTransfer-Encoding: \
             Chunked\r\n\r\nA\r\n0123456789\r\n0\r\n\r\n", 0, 1024, arena)
@@ -144,8 +143,7 @@ fn test_http_chunked_refused(arena: Arena$@) //<
         got: = read_whole(chunked(cases[i], arena), piece, 1024, arena)
         want: = arena.text().s("refused: ").s(cases[i + 1]).take()
         assert(got.equals(want),
-            U8$[]::arena.text().s("case \{i / 2\}: want '").s(want).s("', got '").s(got).s("'")
-            .take())
+            arena.text().s("case \{i / 2\}: want '").s(want).s("', got '").s(got).s("'").take())
     heads: = U8[][]::{ "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n",
@@ -155,7 +153,7 @@ fn test_http_chunked_refused(arena: Arena$@) //<
         got: =
             read_whole(arena.text().s(head).s("5\r\nhello\r\n0\r\n\r\n").take(), 0, 1024, arena)
         assert(got.equals("refused: unsupported_transfer_encoding"),
-            U8$[]::arena.text().s("a head the coding cannot be trusted from: ").s(head).take())
+            arena.text().s("a head the coding cannot be trusted from: ").s(head).take())
     // **The buffer form and a request read no chunked body**: a request's framing stays its length.
     _resp: =
         http.parse_response(chunked("5\r\nhello\r\n0\r\n\r\n", arena), arena) catch e
@@ -181,7 +179,7 @@ fn test_http_body_pieces(arena: Arena$@) //<
     s: = serve(bytes, 0, OK_HEAD.len + first.len, arena)
     defer head: = http_body.read_response_head(s.client, null, 1024, WAIT_MS) catch e
         finish(s)
-        panic(U8$[]::arena.text().s("the head reads: ").s(error_name(e)).take())
+        panic(arena.text().s("the head reads: ").s(error_name(e)).take())
     defer $got: = Str_builder()
     $pieces: Sz = 0
     $waits: Sz = 0
@@ -189,7 +187,7 @@ fn test_http_body_pieces(arena: Arena$@) //<
     for !ended
         switch head.body.next(50) catch e
             finish(s)
-            panic(U8$[]::arena.text().s("a piece reads: ").s(error_name(e)).take())
+            panic(arena.text().s("a piece reads: ").s(error_name(e)).take())
         case .data(piece)
             got.s(piece)
             pieces += 1
@@ -199,8 +197,7 @@ fn test_http_body_pieces(arena: Arena$@) //<
             ended = true
     finish(s)
     assert(head.status == 200 && got.slice().equals("hello world") && pieces >= 2 && waits >= 1,
-        U8$[]::arena.text().s("\{pieces\} pieces and \{waits\} waits gave '").s(got.slice()).s("'")
-        .take())
+        arena.text().s("\{pieces\} pieces and \{waits\} waits gave '").s(got.slice()).s("'").take())
     verdict.pass("the first chunk comes out before the second is sent, and a wait says so")
 
 fn test_http_chunked_written(arena: Arena$@) //<
@@ -215,7 +212,7 @@ fn test_http_chunked_written(arena: Arena$@) //<
     http.format_last_chunk(out@)
     got: = read_whole(arena.dup_str(out.slice()), 2, 1024, arena)
     assert(got.equals("data: one\n\ndata: two\n\n"),
-        U8$[]::arena.text().s("the chunks read back as: ").s(got).take())
+        arena.text().s("the chunks read back as: ").s(got).take())
     out.clear()
     http.format_chunk(out@, "")
     assert(out.len == 0, "an empty piece writes nothing: a size of 0 would end the body")
@@ -229,6 +226,33 @@ fn test_http_chunked_written(arena: Arena$@) //<
     assert(refused == 3 && out.len == 0,
         "a length, a coding of its own, or a status with no body is refused, nothing written")
     verdict.pass("head, chunks and end read back; an empty piece and a bad head write nothing")
+
+priv fn padded_line(head: U8[], len: Sz, arena: Arena$@): U8[] //<
+    //< `head`, then `a` up to `len` bytes with the CRLF that ends it
+    b: = arena.text().s(head)
+    for _i in Range.asc(len - head.len - 2)
+        b.c('a')
+    return b.s("\r\n").take()
+
+fn test_http_trailers_capped_whole(arena: Arena$@) //<
+    //< Trailers past the cap are refused when every line arrives whole, too
+    //< **Each write is one read's size (`READ_PIECE`, 4096) and starts on a line**, so no read
+    //< leaves a line half arrived. The cap was once checked only on such a line, so trailers that
+    //< passed it in the last read, the empty line with them, were read as a body.
+    verdict.start("[HTTP body] trailers past 64 KiB are refused though each line arrives whole")
+    piece: Sz = 4096
+    b: = arena.text().s(OK_HEAD)
+    // The head, the size line and the data fill the first write exactly.
+    data: = "hello\r\n0\r\n"
+    b.s(padded_line("5;e=", piece - OK_HEAD.len - data.len, arena)).s(data)
+    // Exactly the cap in whole lines, then one short line past it with the end in one read.
+    for _k in Range.asc(http.MAX_HEAD_BYTES / piece)
+        b.s(padded_line("X-Pad: ", piece, arena))
+    b.s("X-Last: past the cap\r\n\r\n")
+    got: = read_whole(b.take(), piece, 1024, arena)
+    assert(got.equals("refused: the trailers are larger than 64 KiB"),
+        arena.text().s("trailers past the cap read as: ").s(got).take())
+    verdict.pass("trailers past the cap are refused, whatever the line edges")
 
 priv const LONG_LINE: Sz = 60000 //< a trailer line near the trailers' cap (64 KiB)
 
@@ -251,7 +275,7 @@ fn test_http_line_scanned_once(arena: Arena$@) //<
         if text: = got
             whole = text.len
     assert(whole == LONG_LINE && from == 0 && looked <= 2 * full.len,
-        U8$[]::arena.text().s("\{looked\} bytes looked at for a line of \{full.len\}").take())
+        arena.text().s("\{looked\} bytes looked at for a line of \{full.len\}").take())
     // The bytes before the resume point are not looked at again: a bare LF there goes unseen.
     $past: Sz = 4
     unseen: = http_body.scan_line("ab\ncd", past@) catch

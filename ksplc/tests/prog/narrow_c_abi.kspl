@@ -1,0 +1,55 @@
+//< Narrow integers and `Bool` cross the C boundary as clang's C expects, built through LLVM
+//< `make test-llvm-abi` links it with `narrow_c_abi.c` built by clang at -O2. That C reads a
+//< `uint8_t` argument as the whole register, taking it as widened by the caller, and relies on
+//< a narrow result widened by the callee. Each value here has nonzero high bits above the narrow
+//< part, so a value passed or returned unwidened gives a wrong sum. It exits 1 on a wrong sum.
+import "std/io"
+import "std/strfmt" as _strfmt
+
+extern "C"
+    fn narrow_c_abi_src(i: I64): I64
+    fn narrow_c_abi_u8(c: U8): I32
+    fn narrow_c_abi_i8(c: I8): I32
+    fn narrow_c_abi_u16(c: U16): I32
+    fn narrow_c_abi_i16(c: I16): I64
+    fn narrow_c_abi_bool(b: Bool): I32
+    fn narrow_c_abi_call_back(v: I64): I64
+
+#export
+fn narrow_c_abi_back_u8(v: I64): U8 //< C calls it and reads the result as widened
+    return U8::v
+
+#export
+fn narrow_c_abi_back_i16(v: I64): I16
+    return I16::v
+
+#export
+fn narrow_c_abi_back_bool(v: I64): Bool
+    return (v & 1) != 0
+
+priv fn check(what: U8[], got: I64, want: I64): Bool //< prints a wrong sum; true where right
+    if got == want
+        return true
+    io.err().s("narrow_c_abi: \{what\}: got \{got\}, want \{want\}\n")
+    return false
+
+fn main(): I32
+    $direct: I64 = 0
+    $through_value: I64 = 0
+    $back: I64 = 0
+    by_value: = narrow_c_abi_u8
+    for $i: I64 = 0; i < 4; i += 1
+        big: = narrow_c_abi_src(i)
+        direct += I64::narrow_c_abi_u8(U8::big)
+        direct += I64::narrow_c_abi_i8(I8::big)
+        direct += I64::narrow_c_abi_u16(U16::big)
+        direct += narrow_c_abi_i16(I16::big)
+        direct += I64::narrow_c_abi_bool((big & 1) != 0)
+        through_value += I64::by_value(U8::big)
+        back += narrow_c_abi_call_back(big)
+    // The low bits are 0xF0 to 0xF3: U8 240..243, I8 and I16 -16..-13, U16 65520..65523, Bool
+    // 0 1 0 1. Back: U8 240..243, I16 -16..-13, Bool 0 1 0 1.
+    $ok: = check("direct calls", direct, 966 - 58 + 262086 - 58 + 2)
+    ok = check("a call through a function value", through_value, 966) && ok
+    ok = check("C calling #export", back, 966 - 58 + 2) && ok
+    return 0 if ok else 1

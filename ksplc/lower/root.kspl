@@ -182,8 +182,7 @@ impl Ast_node
         // It flushes the releases pushed for this scope. They are the arguments' for a function
         // body (the first block under decl_fn), and an arm's bindings for a switch arm.
         if lctx.arc_scope_pending.len > 0
-            for pending_stmt in lctx.arc_scope_pending
-                cleanup_scope.push(pending_stmt)
+            cleanup_scope.push_all(lctx.arc_scope_pending.slice())
             lctx.arc_scope_pending.len = 0
 
         old_children: = r.children
@@ -307,12 +306,10 @@ impl Ast_node
             body_block.lower(lctx)
 
             new_body_children: = base_ast.new_ast_node_list()
-            for cond_stmt in cond_stmts
-                new_body_children.push(cond_stmt)
+            new_body_children.push_all(cond_stmts.slice())
             new_body_children.push(node_if_brk)
 
-            for orig_child in body_block.children
-                new_body_children.push(orig_child)
+            new_body_children.push_all(body_block.children.slice())
 
             body_block.children = new_body_children
             r.set_child(2, Ast_node.build_empty(loc))
@@ -329,6 +326,14 @@ impl Ast_node
 
             for step_stmt in step_stmts
                 body_block.add_child(step_stmt)
+
+        if has_step_pre
+            // The step's pre_stmts declare its temporaries inside the body block, and C's step
+            // clause lies outside that block's scope. So the step itself moves to the body's end,
+            // after them, and C's step clause stays empty. A `continue` still reaches it: it jumps
+            // to cont_label, which stands before the step.
+            body_block.add_child(step_node)
+            r.set_child(3, Ast_node.build_empty(loc))
 
         r.wrap_stmt_with_break_label(.k_stmt_for, "for", loc, brk_label, is_brk_used || has_cond_pre)
 

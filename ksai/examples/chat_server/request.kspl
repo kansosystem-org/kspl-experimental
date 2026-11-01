@@ -3,6 +3,8 @@
 //< changes nothing. A refusal is a sentence the client shows.
 //< Caution: **A field in neither list is passed over unseen**: `std/json` does not list an object's
 //< members, so the reader can only ask for the names it knows.
+//< **A field set to `null` is read as absent**, every field through `given`: the protocol lets a
+//< client write an option it does not set as `null`.
 import "ksai/examples/chat_server/template" { Call, Conversation, Message }
 import "ksai/sampler"
 import "std/ds" { List }
@@ -42,50 +44,56 @@ fn read_chat(body: U8[], arena: Arena$@): Chat!U8[] //<
         throw "the body is not JSON"
     v: = doc.val
     $stream: = false
-    if found: = v.find("stream")
+    if found: = given(v, "stream")
         stream = found.as_bool() catch
             throw "stream must be true or false"
     $include_usage: = false
-    if options: = v.find("stream_options")
-        if !options.equals(.null_val)
-            // Options for an answer sent whole would change nothing, so they are refused.
-            if !stream
-                throw "stream_options is only for \"stream\": true"
-            if found: = options.find("include_usage")
-                include_usage = found.as_bool() catch
-                    throw "stream_options.include_usage must be true or false"
+    if options: = given(v, "stream_options")
+        // Options for an answer sent whole would change nothing, so they are refused.
+        if !stream
+            throw "stream_options is only for \"stream\": true"
+        if found: = given(options, "include_usage")
+            include_usage = found.as_bool() catch
+                throw "stream_options.include_usage must be true or false"
     for u in UNAPPLIED
-        if got: = v.find(u.name)
+        if got: = given(v, u.name)
             same: = json.parse(u.no_op, arena) catch panic("UNAPPLIED holds JSON")
-            if !got.equals(.null_val) && !same_value(got, same.val)
+            if !same_value(got, same.val)
                 throw arena.text().s("the field \"").s(u.name)
                     .s("\" is not supported by this server; leave it out").take()
     $chat: = Chat::{ .conv = Conversation::{ .messages =
         read_messages(v.get("messages"), arena)!, .tools = v.get("tools").arr_list(arena),
         .thinking = false }, .max_tokens = 0, .cfg = sampler.Sample_config.greedy(), .seed = .none,
         .thinking = .none, .stream = stream, .include_usage = include_usage }
-    if found: = v.get("chat_template_kwargs").find("enable_thinking")
+    if found: = given(v.get("chat_template_kwargs"), "enable_thinking")
         flag: = found.as_bool() catch
             throw "chat_template_kwargs.enable_thinking must be true or false"
         chat.thinking = .some(flag)
-    if found: = v.find("max_tokens")
+    if found: = given(v, "max_tokens")
         n: = found.as_int64().unwrap_or(0I64)
         if n < 1I64
             throw "max_tokens must be a whole number of at least 1"
         chat.max_tokens = Sz::n
     // Either one asks for sampling; the other then takes the protocol's default, 1.
-    if v.find("temperature").is_some() || v.find("top_p").is_some()
+    if given(v, "temperature").is_some() || given(v, "top_p").is_some()
         top_p: = read_number(v, "top_p", 1.0, arena)!
         if top_p == 0.0
             throw "top_p must be above 0"
         chat.cfg = sampler.Sample_config::{ .temperature =
             read_number(v, "temperature", 2.0, arena)!, .top_k = 0, .top_p = top_p }
-    if found: = v.find("seed")
+    if found: = given(v, "seed")
         if seed: = found.as_int64()
             chat.seed = .some(U64::seed)
         else
             throw "seed must be a whole number"
     return chat
+
+priv fn given(v: json.Value, name: U8[]): json.Value? //<
+    //< The member `name` of `v`, or none where it is absent or `null`
+    if found: = v.find(name)
+        if !found.equals(.null_val)
+            return .some(found)
+    return .none
 
 priv fn same_value(a: json.Value, b: json.Value): Bool //<
     //< Whether two values are the same, a number written `0` the same as `0.0`
@@ -96,7 +104,7 @@ priv fn same_value(a: json.Value, b: json.Value): Bool //<
 
 priv fn read_number(v: json.Value, name: U8[], high: F64, arena: Arena$@): F64!U8[] //<
     //< A number field from 0 to `high`, 1 where absent, or why it is refused
-    if found: = v.find(name)
+    if found: = given(v, name)
         n: = found.as_f64().unwrap_or(-1.0)
         if n < 0.0 || n > high
             throw arena.text().s(name).s(" must be a number from 0 to \{high\}").take()

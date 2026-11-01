@@ -91,10 +91,20 @@ function ksmdFiles(ks, api) {
     notice.hidden = true;
   };
 
-  // Shows which document is open: in the menu bar, the window's title and the address.
+  // Names the open document in the menu bar, the window's title and the header of a printed page
+  // (`@top-center` in `print.css`), which takes it as a CSS string. A document with no file yet is
+  // "Untitled", as Excel names a new workbook Book1, so each place still says which one is open.
+  function showName() {
+    const name = doc.path || "Untitled";
+    named.textContent = name;
+    document.title = `${name} - ksmd`;
+    page.style.setProperty("--print-name", `"${name.replace(/["\\]/g, "\\$&").replace(/\n/g, "\\a ")}"`);
+  }
+  showName();
+
+  // Shows which document is open: by its name, and in the address.
   function show() {
-    named.textContent = doc.path;
-    document.title = doc.path ? `${doc.path} - ksmd` : "ksmd";
+    showName();
     history.replaceState(null, "", location.pathname +
       (doc.path ? `?doc=${encodeURIComponent(doc.path)}` : ""));
   }
@@ -160,7 +170,7 @@ function ksmdFiles(ks, api) {
       askLeave(path);
       return false;
     }
-    if (!await take(path, got.bytes)) {
+    if (!await take(path, got.bytes, got.digest)) {
       show();
       return false;
     }
@@ -191,9 +201,10 @@ function ksmdFiles(ks, api) {
   // saying why and then `after`. The editor takes the path before the bytes, so the view it shows
   // at once reads includes from the new folder; a refusal gives it the old path back. Text in a
   // cell still open that the editor refuses opens nothing (`api.load`), and the view stays as it
-  // is, so the cell stays open with it.
-  async function take(path, bytes, after = "") {
-    const base = await local.digest(bytes);
+  // is, so the cell stays open with it. `base` is the bytes' digest, which the caller read with them.
+  // Caution: **Wait for nothing before `api.load`.** Each caller has just found that the page holds
+  // no unsaved edits. A key typed during a wait would be overwritten, and no draft would hold it.
+  async function take(path, bytes, base, after = "") {
     const cellTaken = ks.table.take("stay");
     if (cellTaken) placeEditor(path);
     const max = limit();
@@ -498,7 +509,7 @@ function ksmdFiles(ks, api) {
           ks.say("Nothing was loaded: your edits could not be held as a draft. Save them first.");
           return;
         }
-        await take(doc.path, bytes);
+        await take(doc.path, bytes, d);
       }],
       ["Keep editing", quiet],
     ]);
@@ -523,8 +534,8 @@ function ksmdFiles(ks, api) {
       } else if (now.status === 200 && now.digest !== doc.base) {
         if (unsaved()) {
           await askChanged(now.bytes, now.digest);
-        } else if (await take(doc.path, now.bytes, " It was changed on disk. The page shows " +
-          "the version it opened.")) {
+        } else if (await take(doc.path, now.bytes, now.digest, " It was changed on disk. The " +
+          "page shows the version it opened.")) {
           ks.say(`${doc.path} was changed on disk. The page shows it as it is now.`);
           return;
         }

@@ -9,6 +9,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
+import "std/json"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -249,14 +250,45 @@ priv fn pending_us(c: Conversation): I64 //< the fastest of three finds of the p
         best = took if k == 0 || took < best else best
     return best
 
-fn test_finding_the_pending_question_grows_in_step_with_the_files()
+priv fn parse_us(c: Conversation): I64 //< the fastest of three plain parses of the same lines [us]
+    //< Linear by construction: each line is read as JSON once and nothing more.
+    $best: I64 = 0I64
+    for k in Range.asc(3)
+        defer one: = Arena(1024 * 1024)
+        started: = sys.mono_us()
+        for text in U8[][]::{ c.asks, c.recorded }
+            for line in text.lines(one)
+                _v: = json.parse(line, one) catch
+                    panic("a line of the files is JSON")
+        took: = sys.mono_us() - started
+        best = took if k == 0 || took < best else best
+    return best
+
+fn test_finding_the_pending_question_grows_in_step_with_the_files() //< held to a plain parse
+    //< **Held to a plain parse of the same lines, timed the same way**, not to a fixed ratio. A
+    //< busy machine or a cold cache slows both alike as the files grow, while work that grows
+    //< with the square of the size still grows far faster than the parse.
+    //< Caution: **A sanitizer's build skips it.** ThreadSanitizer slows the search about three
+    //< times more than the parse as the files grow, so the ratio tells nothing there.
     verdict.start("[ksagent] finding the pending question takes time in step with the files")
+    if sys.get_env("KANSO_SANITIZED").is_some()
+        verdict.skip("a sanitizer's build does not keep time in step with the work")
+        return
     defer arena: = Arena(1024 * 1024)
-    small: = pending_us(asked_and_answered(3000, arena))
-    large: = pending_us(asked_and_answered(12000, arena))
-    name: = arena.text().s("four times the questions take less than eight times as long ")
-        .s("(\{small\} us, then \{large\} us)").take()
-    verdict.check(name, large < 8I64 * (small + 1000I64), "")
+    small: = asked_and_answered(3000, arena)
+    large: = asked_and_answered(12000, arena)
+    found_small: = pending_us(small)
+    found_large: = pending_us(large)
+    parse_small: = parse_us(small)
+    parse_large: = parse_us(large)
+    name: = arena.text()
+        .s("four times the questions take at most twice the growth of a plain parse ")
+        .s("(\{found_small\} to \{found_large\} us; the parse \{parse_small\} to \{parse_large\} \
+            us)").take()
+    // found_large / found_small <= 2 * parse_large / parse_small, cross-multiplied; the 1000 us
+    // keeps a tiny small run from making the ratio meaningless.
+    verdict.check(name,
+        found_large * (parse_small + 1000I64) <= 2I64 * parse_large * (found_small + 1000I64), "")
 
 fn test_an_ask_file_past_its_cap_is_refused(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] an ask file larger than its cap is not read, and the page is told why")

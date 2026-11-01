@@ -124,9 +124,7 @@ This checks only the decision. `harness.tracked_matching`, which picks the files
 
 ## Moving a tool out of Python
 
-**When a tool moves out of Python, check that it gives the Python version's verdict, broken input included.** For `llvm_ir_abi_check`, the extracted type list had to agree with real IR line for line. The output had to match byte for byte on four ways of breaking the IR. Two versions wrong in the same way still agree on counts.
-
-**A scan built on regular expressions need not keep them when it moves**: `llvm_ir_abi_check` counts separators instead (its header says why).
+**When a tool moves out of Python, check that it gives the old version's verdict, broken input included.**
 
 ## If it goes wrong
 

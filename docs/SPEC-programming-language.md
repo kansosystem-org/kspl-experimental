@@ -791,7 +791,7 @@ flowchart LR
 | Operation | Notation |
 | --- | --- |
 | Write | `place = value` |
-| Take as a mutable pointer | Pass `place@` to a `T$@` position |
+| Take as a mutable pointer | Pass `place@` to a `T$@` position, or make a trait value of `place` where the type implements one of the trait's methods with `Self$@` ([5.3](#53-checking-trait-conformance)) |
 | Call a method that rewrites the value | `place.m()` (where `m` takes `Self$@`) |
 
 | Rule | Content |
@@ -874,6 +874,8 @@ So a reader can tell whether a variable can change from its `$` alone. The lint 
 A cast to a mutable pointer, `T$@::(...)`, strips immutability and allows writing through that pointer, for a machine register or an external API. Writing `::` states the intent.
 
 Only the binding's immutability can be stripped. A mutable slice or pointer cannot be made from memory that is itself read-only (a `const` declaration, a string literal): `cannot cast a 'const' declaration to the mutable slice type`. A write there would hit `.rodata`, ROM on a freestanding target.
+
+**A string literal is not taken implicitly where `U8$[]` or `U8$@` is expected either**: as an argument, a field, a return value or a default value. Only `""` passes as a `U8$[]`. It has no element, so the bounds check refuses every write through it.
 
 **A mutable view is made only from an array that is a place.** `I32$[]::make_array()` and `I32$[]::make().arr` are refused, since a write would change only an unnamed copy. Bind the array to a `$` name first.
 
@@ -1102,6 +1104,8 @@ flowchart LR
 
 As a result, **a trait cannot declare that "this method does not rewrite the caller's object"**: `fn bump(r: Self)` in a trait can be implemented as `bump(r: Self$@)`. To guarantee by type that nothing is written, call the concrete type's method with the receiver `r: Self@`.
 
+**A trait value is made only of a place its implementation may write.** Where the type implements any of the trait's methods with `Self$@`, the place must be writable by the rules of [4.3](#43-places-and-the-rules-for-when-they-may-be-written). A binding without `$`, a `const`, a read-only pointer's target and a string literal are refused (`cannot make a 'Shape' value of a read-only location`). The direct call `q.scale(10)` is refused there, and `grow(q)` would make the same write through the trait value. A trait whose implementation only reads takes any place.
+
 On a generic trait (such as `Add<|Rhs, Output|>`), a type argument not yet fixed at this check is left out of the comparison.
 
 **Marker traits (a `trait` with no methods)** mark that a type "has a certain property". Conformance is declared with an empty body, `impl Type: Marker {}`. The generic constraint `<|T: Marker|>` then makes passing a type without the property a compile error, at no run-time cost.
@@ -1172,6 +1176,7 @@ impl Baseline: reflect.Reflectable {} // the compiler assembles the table and fi
 * **A key is the field's name itself.**
 * **The types covered are the integers (`I8` / `I16` / `I32` / `I64` / `U8` / `U16` / `U32` / `U64` / `Sz`), `F32` / `F64` / `Bool` / `U8[]`, and a nested `struct` built from them**, with their `List<|T|>` and `T?`. In JSON, a nested `struct` is a nested object and a `List<|T|>` an array. A `T?` at `.none` writes no key, an absent key reads as `.none`, and an explicit `null` is refused.
   * A type holding any other field **is a compile error naming that field**, nested and contained types included. That covers a container of containers (`List<|List<|T|>|>`), an option holding a container or an option, a non-`struct` type, and a generic type.
+  * **A field that `#packed` leaves under-aligned is a compile error naming that field** ([10](#10-compiler-directives-and-attributes)). The table's reader reaches each field through a pointer of its type, which promises that type's alignment.
 * **Nothing is synthesized on an `impl` with a body written.** Write `fields()` yourself to change the key mapping, or to hold a type not covered.
 * **Conformance is matched by fully qualified name** (the trait's full path, `std.reflect.Reflectable`). A `trait Reflectable` declared in your own file does not make derivation work.
 
@@ -1366,6 +1371,8 @@ Each width saturates at its own bounds; nothing goes through a wider integer fir
 
 **A cast to an enum gives the variant whose tag equals the value**, an integer or another enum's. The value is compared before any narrowing (`E::300` is not the tag `44` of an `enum E: U8`). A value that is no tag is refused: a constant at translation time (`cannot cast 300 to 'E'`), a run-time value by stopping the program ([13](#13-conditions-that-stop-execution-at-run-time)). A float or a `Bool` casts to an integer first (`E::(I32::f)`). Nothing casts to an enum whose variants carry data.
 
+**An integer or another enum becomes an enum only through this cast.** Where an enum `E` is expected, `x: E = n`, `x: E = 5` and `f(5)` for an `E` parameter are compile errors whose message gives the cast to write (`E::n`). The cast checks that the value is a tag; without it, `x: E = 5` would hold a value that is no variant. A variant is written by its name (`.green`, `Color.green`).
+
 **There is no cast to `Bool`**: `Bool::x` is a compile error unless `x` is a `Bool`. Write the comparison that is meant (`x != 0`, `p != null`). The other way is a cast: `I32::b` is `0` or `1`. **A struct, a slice, an array, a tagged union, a Result or a trait value does not cast to a number** either.
 
 **Casting to an aggregate, and `Cast`**: a cast to a struct or a fixed-length array is a compile error. So is a cast to an enum with a payload (`T?` included), a Result or a trait. It is accepted only between the same concrete type, the source's immutability aside (`P::ps[1]` for an immutable `ps: P[2]` copies a `P`). Build such values with a constructor, a compound literal (§6.6) or a variant (`.some(v)`). A value becomes a trait value with no `::` where the trait is the expected type ([5](#5-implementations-and-traits)).
@@ -1396,7 +1403,7 @@ Caution: Do not build the descriptor by hand. `T[]::{ .ptr = a@, .len = 4 }` fix
    * `I32` to `Sz` is a safe sign extension on the 32-bit and 64-bit environments KSPL presupposes.
    * **Conversion from unsigned or huge types is forbidden.** An implicit conversion to `Sz` from `U32`, `U64` or `I64` needs an explicit `::`, and so does a narrowing such as `I32` to `I8`.
    * **Between integers and floating point there is none**, either way and for a literal too (`2` is not an `F64`; [2.3.1](#231-the-rules-that-fix-a-literals-type)).
-2. **Generalizing a pointer**: from any pointer type (`T@`) to the generic pointer (`Void@`).
+2. **Generalizing a pointer**: from any pointer type to the read-only generic pointer (`Void@`), and from a writable one (`T$@`) to `Void$@` too. **A read-only `T@` does not become a `Void$@`**, or the callee could write memory that is read-only. Where the memory is writable, write the cast (`Void$@::p`).
 3. **From mutable to read-only**: from a mutable reference type carrying `$` (a pointer, a slice, and so on) to its read-only version. So an immutable type's method can be called on a mutable value (a `U8[]` method on a `U8$[]`).
 
    **Only the outermost step of what it points at, or of the elements, can be made immutable implicitly.** The conversion does not propagate inside a type constructor: `Box<|U8$@|>` to `Box<|U8@|>` is refused. Only the built-in type constructors (`@` / `$@` / `[]` / `$[]`) carry the weakening, and a position where the declaration named mutability (`struct Box<|$T|>`) takes the same single step ([3.3](#33-structs-struct)).
@@ -1409,6 +1416,7 @@ Caution: Do not build the descriptor by hand. `T[]::{ .ptr = a@, .len = 4 }` fix
    | `Box<\|U8$@\|>` → `Box<\|U8@\|>` (inside a user's generic) | No |
 
    Weakening an inner step is a compile error. Given a `U8$[]$[]` as a `U8[]$[]`, a callee could store a slice over a string literal into an element, which the caller would write through. To make an inner step read-only, declare the element type so from the start (`U8[]$[]`, the standard library's shape). Or lend at the descriptor step (`List<|T|>@`), or cast explicitly (`U8[][]::(x)`). Generic types are *invariant*: `List<|U8$[]|>` never converts to `List<|U8[]|>`.
+4. **An enum without data to an integer**: to its base type, or to a type that rule 1 reaches from it (`n: I32 = Color.green` for an `enum Color: U8`). Every tag is a value of the base type, so nothing is lost. The other way takes the cast (`Color::n`).
 
 **Two numeric operands of different types** (a binary operator, a ternary's two branches) **compute in the one that converts the other by rule 1**. The result is always one of the two operand types.
 
@@ -1492,6 +1500,8 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
 
 * **A field or element not written is filled with 0.** `::{}` can nest to initialize a nested array or struct.
 * **Each field or element is written at most once.** A second value for one already written is a compile error naming the line of the first. That holds by name twice (`::{ .x = 1, .x = 2 }`), by name after its place (`::{ 5, .x = 6 }`), or by index after its place (`I32[3]::{ 1, 2, [0] = 9 }`).
+* **An array's index is a compile-time constant from 0 up to below the length.** A negative index (`[-1] = 1`), an index at or past the length, and a run-time index (`[n] = 7`) are compile errors. To place a value at a run-time position, assign the element after the declaration (`a[n] = 7`).
+* **An array's element has no field name**: `I32[2]::{ .len = 5 }` is a compile error.
 * **An index and a field cannot be joined in one step**: `[0].x = 10` cannot be written; write it per step, `[0] = ::{ .x = 10 }`.
 * **A run passed to a slice type is a sequence of elements.** `T[]::{ v1, v2, … }` gives a slice over an array made from those elements (as `T[]::(T[_]::{ v1, v2, … })`). A slice's descriptor (`.ptr` / `.len`) built by hand needs the names written.
 
@@ -1502,7 +1512,7 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
     s: = U8[]::{ .ptr = buf[0]@, .len = 4 }      // OK: a descriptor is named
     ```
 
-    **The array that results is an unnamed temporary** in the function's frame, freed when the function returns. So the compiler refuses to let a slice over it leave the function by `return` or `throw`. It also refuses its store into a global, or into a place reached through a pointer (`g = U8[]::a`, `p.s = U8[]::a` with `p: Holder$@`). The refusal covers three sources, also inside the value returned or stored (`return Holder::{ .s = U8[]::a }`):
+    **The array that results is an unnamed temporary** of the block it is written in, freed when that block ends. So the compiler refuses to let a slice over it leave the function by `return` or `throw`. It also refuses its store into a global, or into a place reached through a pointer (`g = U8[]::a`, `p.s = U8[]::a` with `p: Holder$@`). It refuses its store into a local of an outer block too, since that local outlives the array's block ([8.4.5](#845-tracking-a-free-with-manual_free)). The refusal covers three sources, also inside the value returned or stored (`return Holder::{ .s = U8[]::a }`):
 
     * a run of elements, `T[]::{ v1, v2, … }`;
     * a local fixed-length array cast to a slice, `T[]::a`;
@@ -1669,6 +1679,8 @@ A condition is written without parentheses `()`, and a block is always written, 
   | An integer | A `default` |
 
 * **Attached data is extracted once**: variants lined up with commas can hold attached data of the same shape. Then `(variable_name)` written once after the first candidate reads the contents under that name, whichever candidate was entered.
+* **A case names no more bindings than the variant has payload fields.** With `click(x: I32, y: I32)`, `case .click(a, b, z)` is a compile error, as is `case .quit(z)` on a variant with no payload. Fewer names bind the leading fields (`case .click(a)` binds `x` as `a`).
+* **A payload's name only reads.** It holds a copy of the attached data, so a write to it, or a call of a method that takes `Self$@`, is a compile error. To change the value, copy it into a `$` name first (`$w: = v`).
 * **Write the payload only when it is needed.** Where the case does not use a variant's payload, omit the `(...)` and write `.variant`. The exhaustiveness check still takes effect. The linter reports a payload nothing reads (`ksplc explain I0313`).
   * **Do not line up discarding names such as `(_a, _b)`.** They look like an extraction, and must be rewritten the day a variant's attached data grows.
   * **Variants with differently shaped payloads can be folded together with commas too** (nothing is bound, so the shapes need not agree). "Do nothing for the rest" is written as one clause:
@@ -1738,6 +1750,8 @@ for v in Countdown::{ .n = 4 } // 3, 2, 1, 0
 ```
 
 There is no shape for driving the iteration yourself, such as `for it.has_next() { x: = it.next(); … }`.
+
+**The item only reads**, in both shapes. It holds a copy of the element, so a write to it is a compile error, as with a payload's name ([7.1](#71-branching)). To change the sequence, write to `xs[i]`.
 
 **On a type satisfying both shapes, `Iter` wins.**
 
@@ -1953,7 +1967,7 @@ sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
 * **A capture is read-only.** It cannot carry `$`, and rewriting it in the body is a compile error; receive what is to be rewritten as a pointer argument.
 * **A captured value is read as it stands at the call**: a capture is the entity the name refers to, not a copy. Rewrite the original variable after building the closure, and the call sees the new value. Copy the value yourself when needed (as with `defer`; [8.4.1](#841-the-defer-statement)).
 
-**A closure cannot leave its function**, since its captured values live on the function's frame. Returning it (`return` / `throw`) or storing it in a global or a place reached through a pointer, also inside the value stored (`g = .some(c)`), is a compile error. It can be kept in locals and passed down for a call. A call that stores it (`list.push(c)`) is not followed. Nor can it cross the C boundary ([11.1](#111-types-that-cannot-cross-the-c-boundary)).
+**A closure cannot leave its function**, since its captured values live on the function's frame. Returning it (`return` / `throw`) or storing it in a global or a place reached through a pointer, also inside the value stored (`g = .some(c)`), is a compile error. It can be passed down for a call, and kept in a local of its own block or of a block inside it. A local of an outer block outlives the closure's block, so a store there is a compile error too ([8.4.5](#845-tracking-a-free-with-manual_free)). A call that stores it (`list.push(c)`) is not followed. Nor can it cross the C boundary ([11.1](#111-types-that-cannot-cross-the-c-boundary)).
 
 ```kspl
 priv fn make(): Callable1<|I32, Bool|> // error: the place of the captured values vanishes with the function
@@ -2067,7 +2081,7 @@ It has two forms:
 
 | Form | Written | On failure |
 | :-- | :-- | :-- |
-| Block | `catch e { … }` | Runs the block with the failure value named `e` |
+| Block | `catch e { … }` | Runs the block with the failure value named `e`, which only reads |
 | Expression | `catch substitute` | Uses `substitute` as the value |
 
 * **The block form (`catch e { ... }`)** leaves with `throw` / `return` / `break` / `continue`, or passes on a substitute value with `fallback`.
@@ -2249,6 +2263,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
 
 * **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`) and through a local set from one (`p: = x@; return p`).
 * **A store of a written address into a global or behind a pointer is allowed** (`g = x@`), for a place cleared before the function returns. One the compiler makes is refused there as well.
+* **A local's storage ends with its block**, and so does a temporary's, such as a closure or a run of elements. So a pointer the compiler makes cannot be stored into a local of an outer block: in `inner:`, `c = fn(x: I32; n: I32): I32 { … }` is refused where `c` is declared outside `inner`. A written address stored so is the writer's, as above, and reading through it after the block ends is a dangling pointer.
 
 A pointer parameter's target (`p$@`, `p.f@`), a global's address and a call's result are not the frame's and pass. Beyond these, the writer is responsible for not touching such memory. A pointer handed to a call that keeps it, or set into a local struct's field afterwards, is not followed.
 
@@ -2411,6 +2426,8 @@ flowchart TD
 **The entry file's name follows the same rules**: `main.kspl`, `./main.kspl` and `.\main.kspl` are one logical name.
 
 **An import that writes no extension opens a `.kspl` file**: `import "lib"` opens `lib.kspl`. The extension is not part of a logical name, nor of the alias: `import "lib.kspl"` is `lib` too.
+
+**A file's name cannot hold `"` or a control character**, the entry file's included (a compile error). The compiled program records each file's name as text (`caller_file`, an error's trace, a bounds check's report). Such a character would end or break that text. Windows allows neither in a file name, so a portable project holds none.
 
 ### 9.2 Which names an import brings in
 
@@ -2587,6 +2604,7 @@ error: attribute '#inline' does nothing here; it applies to functions
 | `@` | `rs[i].n@` |
 | A method, an operator or a subscript whose receiver is a pointer (`Self@` / `Self$@`, `Index_place` / `Index_ref`) | `r.inner.bump()`, `r.inner + other`, `r.items[0]` on a slice field |
 | A slice cast of an array field | `I32[]::r.nums` |
+| Making a trait value, which keeps the field's address | `show(r.inner)` for `fn show(s: Show)` |
 
 The fix the message names is to copy the field into a local, use the local, and assign it back. **An ARC-managed field (`Rc`, `Arc`, or a struct holding one) left under-aligned is refused where the struct declares it**, since its count is kept through its address. A field that keeps its type's alignment passes. Such are a one-byte field, a field of a nested `#packed` struct's type, and one aligned within a struct both `#packed` and `#align(N)`.
 

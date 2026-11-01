@@ -29,6 +29,7 @@ Words used here: the *root* is the one folder whose files ksagent reads. A *sour
 | :-- | :-- | :-- |
 | Requests to the model per question | 12 | A small model that has not found the answer in a dozen calls rarely finds it later. Each round can take a minute |
 | Bytes of one request | 64 KiB | The whole conversation goes out on every round. This bounds what the model must read. It fits the context of 32k tokens the launcher starts llama-server with: Japanese takes about 3 bytes a token, and the rest holds the reply. A context twice as long would not fit a graphics card of 6 GB |
+| Tool calls in one reply | 64 | A model asks for one call at a time, or a few at once to read several files. A stream names each call by its number, so without a cap a reply of a few MiB could open millions of empty calls |
 | Lines or bytes of one read | 400 lines or 32 KiB | One read fills no context alone. The last line says where to read on |
 | Hits of one search | 50 | A longer list buries the right line. The last line says that the list was cut |
 | Names of one listing | 500 | The same reason |
@@ -80,7 +81,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 **Every path the model gives passes one check before anything opens it** (`files.resolve`). A refusal goes back to the model as the tool's result, so the loop goes on.
 
 * **The path must stay under the root.** `fs.stays_under` refuses an absolute path, a `..` step, a Windows device name and a link anywhere on the path. kssrv's static serving uses the same checks.
-* **A name that starts with a dot is hidden.** A root that is a checkout holds `.git/` and `.env`. Each segment's long name is checked too (`fs.long_name`), because Windows opens `.git` by its short name `GIT~1`. An empty segment (`a//b`) is skipped, since Windows reads no long name for `a/`. A long name that cannot be read counts as hidden wherever something stands there.
+* **A name that starts with a dot is hidden.** A root that is a checkout holds `.git/` and `.env`. `fs.has_hidden_on_path` checks each segment, by its long name too, because Windows opens `.git` by its short name `GIT~1`. kssrv's static serving uses the same check. The rules are "A hidden name is found by its long name too" in `std/docs/DESIGN-system.md`.
 * **Only text is read.** A file with a NUL byte, or one that is not valid UTF-8, is skipped by a search and refused by a read. A Word or Excel file is read as its text view ("Word and Excel files" below).
 * **The tools only read.** ksagent writes only chat files, live files, the lock `watch` holds (`.ksagent.lock`) and the table that `--out` names.
 
@@ -133,6 +134,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **The XML reader reads no DTD and expands no entity** but XML's five predefined ones and numeric references. A part that declares a DTD is refused, so no entity can grow a part, or reach a file outside it.
 * **Every damaged part is refused, never read wrong.** A part's checksum is checked after it unpacks. Elements must close in the order they open, and a part must be UTF-8 with no control character.
 * **Each item is charged to one work budget before it is made** (`package.Work`). The items are paragraphs, table rows and cells, sheets, a sheet's rows and cells, lists, and the bytes of labels. A file that asks for more is refused. So the memory and time of one file stay bounded by its caps, not by what its markup asks for.
+* **Each string a reader builds is charged its bytes before it is built** (`View.charge_text`): a paragraph's or cell's text, a row's line, a shared string. A table copies a cell's text into each row merged down, and into each table around it. So a few bytes can ask for many copies. A string longer than the view's room is refused at once, since it could never be shown.
 * **Nothing is made twice or for nothing.** A workbook that lists one sheet twice is refused. Cells skipped before a table row stop at the widest grid read, 4,096 columns. A numbered paragraph with no text counts in its list, and gets no label.
 * **The tests damage the fixtures at random**: the whole file, and each XML part. Each copy must be read within the cap, or refused with a reason. Files of a few KiB that ask for much work must be read or refused within 2 MiB of memory.
 
@@ -287,7 +289,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 **Stopping an answer:**
 
 * **Ctrl+C stops ksagent**, which closes its connection and so stops the model. KSPL's standard library catches no signal, so nothing is written on the way out; the files stand as above.
-* **The page's Stop button stops an answer within about 2 seconds.** It adds a stop record to the ask file ("Asking, stopping and a refused save" above). A page cannot stop it any other way, since a page may not start anything.
+* **The page's Stop button stops an answer within about 2 seconds.** It adds a stop record to the ask file ("Asking, stopping and a refused save" above). ksagent looks for it while the reply arrives and before each tool call. A page cannot stop it any other way, since a page may not start anything.
 
 Caution: **While `llama-server` reads a long prompt, nothing comes back, not even the reply's head.** So the console shows nothing new for that time, and a stopped question stops its answer only once the first piece arrives. ksai's `chat_server` sends its head at once.
 

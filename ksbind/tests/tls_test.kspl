@@ -20,6 +20,7 @@ import "std/verdict"
 extern "C"
     fn SSL_accept(ssl: tls.SSL$@): I32
     fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
+    fn SSL_get_servername(ssl: tls.SSL@, kind: I32): Void@
 
 priv enum Peer_act //< what the peer does once a client connects
     silent //< holds the TCP connection without a TLS response
@@ -37,6 +38,7 @@ priv struct Tls_peer //<
     act: Peer_act
     closed: Bool //< the deadline test peer saw EOF or a socket error, not its watchdog
     trickled_all: Bool //< the trickling peer sent every byte before the client closed
+    sni: Bool //< the client named a server (SNI) in its handshake
 
 priv const PEER_WATCH_MS: I32 = 30000 //<
     //< How long the deadline test peer waits for the client to close, which bounds a broken client
@@ -119,6 +121,7 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
             case .echo_then_close
                 tls.SSL_shutdown(ssl)
             default {} // `.echo_then_cut` sends no close_notify: the socket closes under it.
+        peer.sni = SSL_get_servername(ssl, 0) != null // 0 is TLSEXT_NAMETYPE_host_name
         tls.SSL_free(ssl)
     conn.free()
     return null
@@ -223,6 +226,33 @@ fn test_tls_other_host_is_refused()
         "a certificate for another host must fail as cert_verify_failed")
     verdict
         .pass("A certificate a trusted CA issued for another host is refused as the certificate.")
+
+fn test_tls_ip_address_is_checked_as_an_address()
+    verdict.start("[Tls] a host given as an IP address, checked as one and not sent as SNI...")
+    defer arena: = Arena(4 * 1024)
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    own: = ca.issue_ip_ctx("127.0.0.1")
+    defer listener: = listen_on()
+    port: = listener.port() catch panic("a bound socket knows its port")
+    $peer: = Tls_peer::{ .listener = listener, .ctx = own, .act = .gone }
+    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    s: = tls.Tls_stream.connect("127.0.0.1", port)
+        catch panic("a certificate whose SAN names the address asked for should connect")
+    // Caution: **Wait for the peer before closing.** At TLS 1.3 the client's handshake ends before
+    // the peer's, which still sends its session tickets. A close then resets the connection on
+    // Windows, and the peer's handshake fails.
+    t.join_and_free()
+    s.free()
+    tls.SSL_CTX_free(own)
+    // TLS allows only a host name as SNI, never an address (RFC 6066, section 3).
+    assert(!peer.sni, "an address must not be sent as the server's name")
+    other: = ca.issue_ip_ctx("127.0.0.2")
+    seen_other: = connect_to_peer(other, .refused, "127.0.0.1")
+    tls.SSL_CTX_free(other)
+    assert(seen_other == Tls_seen.cert_verify_failed,
+        "a certificate for another address must fail as cert_verify_failed")
+    verdict.pass("An address is checked against the SAN's address and sent as no SNI.")
 
 fn test_tls_round_trip_ends_at_close_notify()
     verdict.start("[Tls] a verified connection carrying bytes both ways, then ending test...")

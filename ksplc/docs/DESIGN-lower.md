@@ -166,7 +166,7 @@ import "std/refcount"
 
 fn main(): I32
     a: = refcount.Rc<|I32|>(7) // count 1
-    $b: = a // a copy: retain, count 2
+    b: = a // a copy: retain, count 2
     return b.get()$ - 7 // leaving: b and a released, count 0, freed
 ```
 

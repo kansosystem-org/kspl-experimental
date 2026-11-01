@@ -20,7 +20,7 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   test-ksmd-browser, test-ksmd-open, test-ksagent-chat, test-llvm-pkgs): libssl-dev
 #   test-ksmd-browser: nodejs
 #   test-pytools: python3-numpy (without it, the Linux round fails)
-#   test-ksmd-desktop: desktop-file-utils, shared-mime-info
+#   test-ksmd-desktop: desktop-file-utils, shared-mime-info, libglib2.0-bin (gio)
 #   the HTTPS download below (Chromium): ca-certificates
 # No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y \
     gcc-arm-none-eabi \
     desktop-file-utils \
     shared-mime-info \
+    libglib2.0-bin \
     gcc-mingw-w64-x86-64-win32 \
     && rm -rf /var/lib/apt/lists/*
 

@@ -1,9 +1,7 @@
 //< Choice lists: how `choices` reads and saves, what a typed value becomes, and the refusals
-import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_tables" { Table_edit }
-import "ksmd/syntax/reader"
-import "ksmd/tests/tables" { opened, saves }
+import "ksmd/tests/support" { opened, refused, saves }
 import "std/chars"
 import "std/mem" { Arena }
 import "std/str"
@@ -79,13 +77,3 @@ priv fn with_row(attributes: U8[], row: U8[], arena: Arena$@): U8[] //< and this
 priv fn set(ed: Editor$@, row: Sz, column: Sz, text: U8[])
     ed.set_cell(0, row, column, text) catch e
         verdict.check(text, false, e.message())
-
-priv fn refused(text: U8[], what: U8[]) //< the reader refuses the source
-    defer arena: = Arena(64 * 1024)
-    src: = Source("bad.ksmd", text) catch e
-        verdict.check(what, false, e.message)
-        return
-    _doc: = reader.read(src@, arena) catch
-        verdict.check(arena.text().s("refused: \{what\}").take(), true, "")
-        return
-    verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")

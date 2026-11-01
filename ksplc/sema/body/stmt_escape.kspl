@@ -1,10 +1,10 @@
 //< The check that stops a frame's memory escaping outward
 //< It rejects a pointer the compiler synthesizes into the frame. The forms are a slice cast from a
 //< frame's array and a trait upcast of a frame's value (a closure among them). Such a pointer must
-//< not leave by `return` or `throw`, or by a store into a global or behind a pointer. It also
-//< rejects a written `@` of the frame's storage leaving by `return` or `throw`. **This asks a
-//< different question from type inference**: not whether the types agree but whether the lifetime
-//< holds.
+//< not leave by `return` or `throw`, or by a store into a global, behind a pointer, or into a
+//< local of a block outside the one that holds its storage. It also rejects a written `@` of the
+//< frame's storage leaving by `return` or `throw`. **This asks a different question from type
+//< inference**: not whether the types agree but whether the lifetime holds.
 // ==========================================
 // Caution: **Where it cannot be decided, lean to the safe side (false).** Wrongly deciding "not
 // escaped" lets a use-after-free pass with zero diagnostics.
@@ -56,6 +56,33 @@ fn is_frame_storage(c: Sema_ctx$@, node: Ast_node$@): Bool //<
         return is_frame_storage(c, recv)
     return false
 
+priv fn frame_depth(c: Sema_ctx$@, depth: I32): I32 //<
+    //< A scope depth, where every depth up to the function's own block counts as that block
+    //< A parameter's scope and the function's block both live until the function returns
+    //< (Fn_ctx.body_depth).
+    return depth if depth > c.fn_ctx.body_depth else c.fn_ctx.body_depth
+
+priv fn storage_depth(c: Sema_ctx$@, node: Ast_node$@): I32 //<
+    //< The depth of the block whose end ends node's storage, where is_frame_storage holds
+    //< A name's is its declaration's. A field or an element follows its receiver, as in
+    //< is_frame_storage. Anything else, such as a struct literal or a closure, is a temporary
+    //< of the block the statement stands in.
+    $at: = node
+    for at != null
+        if at.is_path_or_ident()
+            sym: = c.read_written_name(at).sym
+            if sym == null || sym.flags.is_global
+                break
+            return frame_depth(c, sym.scope_depth)
+        if at.kind_id == .k_expr_primary && at.children.len > 0
+            at = at.get_primary_inner_expr()
+            continue
+        op: = at.postfix_op_text() if at.kind_id == .k_expr_postfix else ""
+        if at.kind_id != .k_method_access && !op.equals(".") && !op.starts_with("[")
+            break
+        at = at.get_postfix_receiver()
+    return frame_depth(c, I32::c.symtab.scope_stack.len)
+
 priv enum Frame_escape //< what a value leaving the frame carries of the frame's memory
     none
     slice(src: Ast_node$@) //< a slice cast from a frame's array, blamed on the array
@@ -64,24 +91,26 @@ priv enum Frame_escape //< what a value leaving the frame carries of the frame's
     address(at: Ast_node$@) //< a written `@` of the frame's storage
     local_address(name: Ast_node$@) //< a local binding set from one (holds_frame_address)
 
-priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node$@, with_address: Bool): Frame_escape //<
-    //< The first of find_frame_escape's finds among nodes' children, or none
+priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node$@, with_address: Bool, deeper_than: I32):
+    Frame_escape //< the first of find_frame_escape's finds among nodes' children, or none
     if nodes != null
         for child in nodes.children
-            found: = find_frame_escape(c, child, with_address)
+            found: = find_frame_escape(c, child, with_address, deeper_than)
             switch found
             case .none {}
             default
                 return found
     return .none
 
-priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bool): Frame_escape //<
-    //< What in expr_node points into the frame: a pointer the compiler synthesizes, or a `@`
-    //< Two forms synthesize one, with no `@` in the source. One is a slice cast from a frame's
-    //< array (`U8[]::a`, `U8[]::{ … }`). The other is a trait upcast of a frame's value (the pair
-    //< {obj, vtable}, emit_upcast_expr in gen/c/expr.kspl). A local set from a form carries it on.
-    //< A written `@` counts only with with_address, which `return` / `throw` pass
-    //< (docs/DESIGN-principles.md, the section named at is_frame_storage).
+priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bool,
+    deeper_than: I32): Frame_escape //<
+        //< What in expr_node points into a block deeper than deeper_than: a made pointer, or a `@`
+        //< `return`, `throw` and a store that outlives the frame pass 0, so every block counts.
+        //< Two forms synthesize one, with no `@` in the source. One is a slice cast from a frame's
+        //< array (`U8[]::a`, `U8[]::{ … }`). The other is a trait upcast of a frame's value (the
+        //< pair {obj, vtable}, emit_upcast_expr in gen/c/expr.kspl). A local set from a form
+        //< carries it on. A written `@` counts only with with_address, which `return` / `throw`
+        //< pass (docs/DESIGN-principles.md, the section named at is_frame_storage).
     if expr_node == null
         return .none
     $target: = expr_node
@@ -91,7 +120,7 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
         return .none
     if target.is_path_or_ident()
         sym: = c.read_written_name(target).sym
-        if sym != null && sym.flags.holds_frame_pointer
+        if sym != null && sym.flags.holds_frame_pointer && sym.frame_pointer_depth > deeper_than
             return .local(target)
         if sym != null && with_address && sym.flags.holds_frame_address
             return .local_address(target)
@@ -103,42 +132,46 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
     case .k_struct_literal
         for child in target.children
             if child.kind_id == .k_expr_field_init && child.children.len > 0
-                found: = find_frame_escape(c, child.last_child(), with_address)
+                found: =
+                    find_frame_escape(c, child.last_child(), with_address, deeper_than)
                 switch found
                 case .none {}
                 default
                     return found
         return .none
     case .k_enum_init_call
-        return find_in_each(c, target.find_child(.k_expr_args), with_address)
+        return find_in_each(c, target.find_child(.k_expr_args), with_address, deeper_than)
     case .k_result_wrap
-        return find_frame_escape(c, target.get_result_wrap_inner(), with_address)
+        return find_frame_escape(c, target.get_result_wrap_inner(), with_address, deeper_than)
     case .k_expr_ternary
-        found: = find_frame_escape(c, target.get_ternary_true(), with_address)
+        found: =
+            find_frame_escape(c, target.get_ternary_true(), with_address, deeper_than)
         switch found
         case .none
-            return find_frame_escape(c, target.get_ternary_false(), with_address)
+            return find_frame_escape(c, target.get_ternary_false(), with_address, deeper_than)
         default
             return found
     case .k_expr
         // A pointer stepped by an integer (`a[0]@ + 1`) still points where its operand did.
         if !c.env.is_pointer(target.type_id) || target.children.len != 3
             return .none
-        found: = find_frame_escape(c, target.get_binary_left(), with_address)
+        found: = find_frame_escape(c, target.get_binary_left(), with_address, deeper_than)
         switch found
         case .none
-            return find_frame_escape(c, target.get_binary_right(), with_address)
+            return find_frame_escape(c, target.get_binary_right(), with_address, deeper_than)
         default
             return found
     default {}
     if with_address && target.kind_id == .k_expr_postfix &&
         target.postfix_op_text().equals("@") &&
-        is_frame_storage(c, target.get_postfix_receiver())
+        is_frame_storage(c, target.get_postfix_receiver()) &&
+        storage_depth(c, target.get_postfix_receiver()) > deeper_than
         return .address(target)
     if target.kind_id == .k_expr_upcast
         inner: = target.get_upcast_inner()
         if inner == null || c.env.is_pointer(inner.type_id) ||
-            c.env.is_slice(inner.type_id) || !is_frame_storage(c, inner)
+            c.env.is_slice(inner.type_id) || !is_frame_storage(c, inner) ||
+            storage_depth(c, inner) <= deeper_than
             return .none
         return .upcast(inner)
     // Caution: Do not check a call's result (`b.slice()` / `arena.alloc()`). Where it points is
@@ -152,8 +185,8 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
     // Only an array makes a new pointer; a cast between pointers or slices carries the source's on.
     if !c.env.is_slice(target.type_id) ||
         !c.env.is_array(c.env.get_real_type(src.type_id))
-        return find_frame_escape(c, src, with_address)
-    if !is_frame_storage(c, src)
+        return find_frame_escape(c, src, with_address, deeper_than)
+    if !is_frame_storage(c, src) || storage_depth(c, src) <= deeper_than
         return .none
     return .slice(src)
 
@@ -162,14 +195,24 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
     //< A declaration's initializer and a plain `x = …` both set it, so `s: = I32[]::a; t: = s;
     //< return t` is refused. **The mark is never cleared**: `s = heap_slice` after it still refuses
     //< `return s`, the safe side of a check that follows names, not control flow.
+    //< The local also keeps the deepest block its pointers reach (frame_pointer_depth), for a
+    //< store of it into a local of an outer block.
     sym: = c.read_written_name(id_node).sym
     if sym == null || sym.flags.is_global
         return
-    switch find_frame_escape(c, expr_node, false)
-    case .none {}
-    default
+    // Each round finds a pointer into a deeper block than the last, so it ends at the deepest.
+    $depth: I32 = 0
+    for
+        found: = find_frame_escape(c, expr_node, false, depth)
+        switch found
+        case .none
+            break
+        default {}
         sym.flags.holds_frame_pointer = true
-    switch find_frame_escape(c, expr_node, true)
+        depth = escape_depth(c, found)
+        if depth > sym.frame_pointer_depth
+            sym.frame_pointer_depth = depth
+    switch find_frame_escape(c, expr_node, true, 0)
     case .none {}
     default
         sym.flags.holds_frame_address = true
@@ -178,13 +221,28 @@ fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
     //< Rejects a pointer into the frame leaving by return / throw, a written `@` among them
     //< **A store of a written `@` is not refused** (check_frame_store). Real code keeps a local's
     //< address in a longer-lived place and takes it back before the function returns.
-    report_frame_escape(c, find_frame_escape(c, expr_node, true), verb,
+    report_frame_escape(c, find_frame_escape(c, expr_node, true, 0), verb,
         "This function's frame dies here.",
         "Return storage that outlives the call (an arena or a heap allocation), or take the \
-            destination as a parameter.")
+            destination as a parameter.", "")
+
+priv fn escape_depth(c: Sema_ctx$@, found: Frame_escape): I32 //<
+    //< The depth of the block whose storage what find_frame_escape found points into
+    switch found
+    case .slice(src)
+        return storage_depth(c, src)
+    case .upcast(inner)
+        return storage_depth(c, inner)
+    case .address(at)
+        return storage_depth(c, at.get_postfix_receiver())
+    case .local(name)
+        return c.read_written_name(name).sym.frame_pointer_depth
+    default
+        return frame_depth(c, I32::c.symtab.scope_stack.len)
 
 priv enum Store_place //< where an assignment's target lies, seen from the frame's lifetime
     frame //< in this frame, or not known to lie outside it
+    local(name: Ast_node$@) //< in a local of this frame, or a field or element of one
     global(name: Ast_node$@) //< in a global, or a field or element of one
     behind_pointer //< behind a pointer or a slice: a parameter's pointee, `p$`, `s[i]`
 
@@ -201,7 +259,7 @@ priv fn store_place(c: Sema_ctx$@, left: Ast_node$@): Store_place //<
         sym: = c.read_written_name(left).sym
         if sym != null && sym.flags.is_global
             return .global(left)
-        return .frame
+        return .local(left) if sym != null else .frame
     $op: = ""
     if left.kind_id == .k_method_access
         op = "."
@@ -222,9 +280,10 @@ priv fn store_place(c: Sema_ctx$@, left: Ast_node$@): Store_place //<
 fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     //< Rejects a synthesized pointer into the frame stored where it outlives the frame
     //< The forms are find_frame_escape's synthesized ones, anywhere inside the stored value. A
-    //< written `@` is the writer's (check_frame_escape says why). The places are a global and what
-    //< lies behind a pointer or a slice (store_place). A store dangles there as a `return` does.
-    found: = find_frame_escape(c, right, false)
+    //< written `@` is the writer's (check_frame_escape says why). The places are a global, what
+    //< lies behind a pointer or a slice (store_place), and a local of a block outside the one
+    //< whose storage the pointer points into. A store dangles there as a `return` does.
+    $found: = find_frame_escape(c, right, false, 0)
     switch found
     case .none
         return
@@ -232,6 +291,25 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     $fate: = ""
     switch store_place(c, left)
     case .frame
+        return
+    case .local(name)
+        // A local of an outer block outlives the inner block, whose storage dies at its end.
+        sym: = c.read_written_name(name).sym
+        found = find_frame_escape(c, right, false, frame_depth(c, sym.scope_depth))
+        switch found
+        case .none
+            return
+        default {}
+        local_name: = name.get_path_or_ident_name()
+        c.clear_scratch()
+            .s("It would be stored into '\{local_name\}', a local of an outer block, and outlive \
+                the block whose end frees what it points at.")
+        fate = base_core.arena.dup_str(c.scratch.slice())
+        c.clear_scratch()
+            .s("Declare '\{local_name\}' in that block, or make the value in the block that \
+                declares '\{local_name\}'.")
+        fix: = base_core.arena.dup_str(c.scratch.slice())
+        report_frame_escape(c, found, "store", fate, fix, fix)
         return
     case .global(name)
         c.clear_scratch()
@@ -242,24 +320,32 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
         fate = "It would be stored behind a pointer, where it can outlive this function's frame."
     report_frame_escape(c, found, "store", fate,
         "Store a pointer to storage that outlives the call instead (an arena, a heap allocation or \
-            a global). Or keep the value in a local and pass it down as an argument.")
+            a global). Or keep the value in a local and pass it down as an argument.", "")
 
-priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate: U8[], fix: U8[]) //<
-    //< Reports what find_frame_escape found leaving the frame: by verb, and how (fate)
+priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate: U8[], fix: U8[],
+    upcast_fix: U8[]) //< reports what find_frame_escape found leaving: by verb, and how (fate)
+        //< An upcast (a closure among them) takes upcast_fix where it is not empty, and its own
+        //< advice otherwise; the other forms take fix.
     switch found
     case .none {}
     case .upcast(inner)
         c.clear_scratch()
+        $advice: = upcast_fix
         if is_anon_env_type(c.env.get_str(c.env.strip_const_deep(inner.type_id)))
+            if advice.len == 0
+                advice =
+                    "A closure can only be passed down as an argument. To keep the values longer, \
+                        put them in a struct and keep that."
             c.scratch
                 .s("cannot \{verb\} a closure: it keeps pointers to its captured variables, which \
-                    live in this function's frame. \{fate\} A closure can only be passed down as an \
-                    argument. To keep the values longer, put them in a struct and keep that.")
+                    live in this function's frame. \{fate\} \{advice\}")
         else
+            if advice.len == 0
+                advice = "Upcast a pointer to storage that outlives the call instead."
             c.scratch
                 .s("cannot \{verb\} an interface value built from local storage. The interface \
                     value keeps a pointer to it. The compiler makes that address, so no '@' \
-                    appears. \{fate\} Upcast a pointer to storage that outlives the call instead.")
+                    appears. \{fate\} \{advice\}")
         c.err(inner, c.scratch.slice())
     case .slice(src)
         c.clear_scratch()

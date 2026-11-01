@@ -101,6 +101,11 @@ pub fn sample<|T|>( //< one token chosen at random, weighted by the model's scor
         v: = ((logits.data + offset + i)$) / cfg.temperature
         if v > max_logit
             max_logit = v
+    // A temperature just above 0 can make a scaled score infinite. Softmax would then take
+    // inf - inf, a NaN, and no candidate would ever be picked by the walk below. Such a
+    // temperature is greedy in all but name, so it takes the limit softmax has as it nears 0.
+    if !(max_logit - max_logit == 0.0)
+        return argmax(logits)
     // 2. Turns it into a probability distribution by softmax
     $sum_exp: = 0.0
     for i in Range.asc(n)

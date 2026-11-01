@@ -22,7 +22,7 @@ enum Task_state //<
     suspended //< paused by Task.suspend (skipped by pick_next until Task.resume lets it run)
 
 impl Task_state
-    fn name(r: Self): U8$[] //< turns a task's state into a string for display
+    fn name(r: Self): U8[] //< turns a task's state into a string for display
         switch r
         case .ready
             return "ready"
@@ -114,8 +114,9 @@ priv fn find_task_slot(): Sz //<
 
 // When the task table or the port's contexts are full, it touches neither tcb nor the stack. It
 // then returns false (a caller can ignore that where the capacity is never reached). Task.delete
-// returns both the slot and the context, so repeated create/delete never runs out. Called from a
-// running task, a new task that outranks it runs before create returns (preempt_if_outranked).
+// returns both the slot and the context, so repeated create/delete never runs out. A task still in
+// the table, even one whose entry returned, panics (delete it first), or it would take one more
+// slot. Called from a running task, a new task that outranks it runs before create returns.
 impl Task
     fn create(r: Self$@, stack: U8$[], entry: Task_fn, arg: Void$@, prio: I32, name: U8[]): Bool
         // A stack too small to hold the canary is a configuration mistake. No run-time check can
@@ -126,6 +127,8 @@ impl Task
         // the two would take the same slot, or schedule a task half written.
         s: = ksos_port_irq_save()
         defer ksos_port_irq_restore(s)
+        if slot_of(r) < MAX_TASKS
+            panic("ksos: Task.create on a task still in the task table (Task.delete it first)")
         slot: = find_task_slot()
         if slot >= MAX_TASKS
             return false
@@ -160,9 +163,9 @@ impl Task
     fn yield() //< the current task gives up the CPU voluntarily (a cooperative yield)
         //< It acts on the running task and takes no Task@ (like Java's `Thread.yield()`). From an
         //< ISR it panics: there it would switch the interrupted task out behind its back.
-        refuse_in_isr()
-        s: = ksos_port_irq_save()
+        s: = open_wait()
         defer ksos_port_irq_restore(s) // restoring PRIMASK fires the pending PendSV and switches
+        _cur: = require_current()
         schedule()
 
     fn delay(ticks: U64) //<
@@ -170,24 +173,23 @@ impl Task
         //< **ticks are logical ticks, not real time.** It never wakes before the expiry, but when
         //< no other task is runnable it returns in zero real time. For a real-time period on
         //< hardware, use a hardware timer (`ksos/drivers/rp2040/timer.kspl` and the like).
-        refuse_in_isr()
-        s: = ksos_port_irq_save()
+        s: = open_wait()
         defer ksos_port_irq_restore(s)
-        if g_current != null
-            g_current.state = .delayed
-            g_current.delay_until = deadline_after(ticks)
+        cur: = require_current()
+        cur.state = .delayed
+        cur.delay_until = deadline_after(ticks)
         schedule()
 
     fn delay_until(wake_tick: U64) //<
         //< Unlike delay (a relative time), it sleeps until the absolute tick wake_tick
         //< A periodic task sleeping a relative time drifts by the length of its work; this does not
         //< (next += period; Task.delay_until(next);).
-        refuse_in_isr()
-        s: = ksos_port_irq_save()
+        s: = open_wait()
         defer ksos_port_irq_restore(s)
-        if g_current != null && wake_tick > g_tick
-            g_current.state = .delayed
-            g_current.delay_until = wake_tick
+        cur: = require_current()
+        if wake_tick > g_tick
+            cur.state = .delayed
+            cur.delay_until = wake_tick
         schedule()
 
     fn suspend(r: Self$@) //<
@@ -418,7 +420,11 @@ priv fn switch_to_main(from_ctx: Void$@) //< [Call it inside a critical section]
     g_current = null
     ksos_port_switch(from_ctx, g_main_ctx)
 
-fn current_tick(): U64
+fn current_tick(): U64 //< the clock, read in one piece
+    //< The read takes the critical section. On Armv6-M (RP2040, nRF51) a U64 load is two 32-bit
+    //< loads, and a tick between them at a 2^32 boundary would give a value 2^32 ticks off.
+    s: = ksos_port_irq_save()
+    defer ksos_port_irq_restore(s)
     return g_tick
 
 priv const LAST_TICK: U64 = 0xFFFFFFFFFFFFFFFFU64
@@ -426,8 +432,9 @@ priv const LAST_TICK: U64 = 0xFFFFFFFFFFFFFFFFU64
 fn deadline_after(ticks: U64): U64 //< the absolute tick ticks from now, for a delay or a timeout
     //< Caution: **It saturates at the last tick.** A plain `current_tick() + ticks` wraps for a
     //< huge ticks to a deadline already passed, and the wait meant to be long ends at once.
-    d: = g_tick + ticks
-    if d < g_tick
+    now: = current_tick()
+    d: = now + ticks
+    if d < now
         return LAST_TICK
     return d
 
@@ -444,8 +451,9 @@ fn irq_save(): U32 //< the port's interrupt disable, offered as a kernel API
     return ksos_port_irq_save()
 fn irq_restore(state: U32) //< ends the critical section the matching irq_save began
     //< Caution: **Between a give and this restore, do not act on the running task.** Do not call
-    //< Task.current, a delay, a yield, a lock or a take. A give that woke a higher-priority task
-    //< has already made it current, and on Cortex-M the switch to it waits for this restore.
+    //< Task.current. A delay, a yield, a lock or a take there panics (open_wait). A give that woke
+    //< a higher-priority task has already made it current, and on Cortex-M the switch to it waits
+    //< for this restore.
     ksos_port_irq_restore(state)
 // --- The blocking helpers shared by the synchronization primitives (sem and msgq use them) ---
 priv fn block_current(obj: Void$@) //<
@@ -469,6 +477,19 @@ fn refuse_in_isr() //<
     //< (building a Str_builder on a panic's path allocates).
     if ksos_port_in_isr() != 0
         panic("ksos: task-only call inside an ISR (an ISR cannot wait; use give / set / try_ there)")
+fn open_wait(): U32 //<
+    //< Opens the critical section a waiting call runs in, and returns the state to restore
+    //< Every call that can wait opens its section here. It refuses an ISR first, then a call made
+    //< with interrupts already off.
+    //< Caution: **A wait cannot run inside the caller's own critical section.** The switch away
+    //< waits for interrupts to come on, so on Cortex-M the call would go on as if another task
+    //< ran. Refused on every port, a program behaves alike on each. Keep the message fixed.
+    refuse_in_isr()
+    st: = ksos_port_irq_save()
+    if st != 0
+        panic("ksos: a waiting call with interrupts off (call it after irq_restore, not between \
+            irq_save and irq_restore)")
+    return st
 fn require_current(): Task$@ //<
     //< Precondition (2) for a task-only operation: a task is running
     //< Caution: **Do not start a wait without going through here.** block_current silently ignores
@@ -477,7 +498,7 @@ fn require_current(): Task$@ //<
     refuse_in_isr()
     cur: = g_current
     if cur == null
-        panic("blocking sync op without a running scheduler (before start_scheduler, or after all \
+        panic("ksos: task-only call with no running task (before start_scheduler, or after all \
             tasks ended)")
     return cur
 fn wake(obj: Void$@, all: Bool) //<

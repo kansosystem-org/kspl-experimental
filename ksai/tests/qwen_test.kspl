@@ -41,8 +41,7 @@ fn said_qwen(e: Qwen_error, arena: Arena$@): U8[] //< an error as `<variant> <wh
 
 priv fn loaded(g: Gguf@, arena: Arena$@): Qwen //< a tiny model, its cache empty
     return Qwen.load(g, CONTEXT, arena) catch e
-        panic(U8$[]::arena.text().s("qwen: the tiny model is refused: ").s(said_qwen(e, arena))
-            .take())
+        panic(arena.text().s("qwen: the tiny model is refused: ").s(said_qwen(e, arena)).take())
 
 priv fn copied(scores: Tensor<|F32|>, arena: Arena$@): List<|F32|> //< the scores, kept
     $out: = List<|F32|>(arena)
@@ -89,7 +88,7 @@ priv fn matches_reference(g: Gguf@, family: U8[], arena: Arena$@): U8[] //<
         last = copied(scores, arena)
         step.reset()
     assert(gap <= TOL,
-        U8$[]::arena.text().s("qwen: the \{family\} scores are \{gap\} from the reference").take())
+        arena.text().s("qwen: the \{family\} scores are \{gap\} from the reference").take())
     // The whole prompt in one call, and in two pieces, give the last scores bit for bit.
     $whole: = loaded(g, arena)
     one: = copied(whole.forward(tokens.slice(), 0, step), arena)
@@ -150,8 +149,7 @@ priv fn refused(file: U8[], context: Sz, arena: Arena$@): U8[] //< why a model i
 
 priv fn expect(got: U8[], want: U8[], what: U8[], arena: Arena$@)
     if !got.equals(want)
-        panic(U8$[]::arena.text().s(what).s(": got \"").s(got).s("\", want \"").s(want).s("\"")
-            .take())
+        panic(arena.text().s(what).s(": got \"").s(got).s("\", want \"").s(want).s("\"").take())
 
 fn test_qwen_refuses_other_models(arena: Arena$@) //<
     //< Another family, a setting that does not fit, and a tensor left unread are refused by name
@@ -316,7 +314,10 @@ fn test_qwen_refuses_memory_no_machine_holds(arena: Arena$@) //<
         "bad_setting qwen35.ssm.state_size", "a state of 16 GiB", arena)
     expect(refused(built35(64, 65536, 1048576, arena), 1048576, arena),
         "bad_setting qwen35.context_length", "a cache of 512 GiB", arena)
-    verdict.pass("a state past 1 GiB and a cache past 256 GiB")
+    // 32 GiB in all is under the cap, but one block's keys are 2^32 numbers, past one tensor.
+    expect(refused(built35(64, 4096, 1048576, arena), 1048576, arena),
+        "bad_setting qwen35.context_length", "a block's keys of 2^32 numbers", arena)
+    verdict.pass("a state past 1 GiB, a cache past 256 GiB, and a block's keys past one tensor")
 
 priv fn id_of(tokens: List<|U8[]|>@, text: U8[]): I32 //< a token's ID: its place in the list
     for i in Range.asc(tokens.len)

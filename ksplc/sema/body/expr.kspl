@@ -249,11 +249,27 @@ priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I3
     u8_slice_id: = c.slice_type_of(I32::sema_type_env.Builtin_type_id.u8_type)
     void_ptr_id: = c.env
         .make_ptr(c.env.make_const(I32::sema_type_env.Builtin_type_id.void_type))
-    if expected_id == u8_ptr_id || expected_id == u8_ptr_id2 || expected_id == u8_slice_id ||
-        expected_id == void_ptr_id
+    if expected_id == u8_ptr_id || expected_id == void_ptr_id
         return expected_id
-    return c
+    read_only_id: = c
         .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
+    // **A literal is never writable**: it is placed in `.rodata` (ROM on a freestanding target), so
+    // a write through a `U8$[]` or `U8$@` made from it faults. The explicit cast is refused the
+    // same way (check_slice_cast_writability in postfix.kspl).
+    // `""` as an empty `U8$[]` stays: it has no element, so every write through it is refused by
+    // the bounds check.
+    span: = node.text.literal_span()
+    if expected_id == u8_slice_id && span.end == span.start
+        return expected_id
+    if expected_id == u8_ptr_id2 || expected_id == u8_slice_id
+        shown: = c.env.display(expected_id)
+        c.clear_scratch()
+            .s("a string literal cannot be used as '\{shown\}'. It is placed in read-only memory, \
+                so a write through it faults. Copy it into storage you own, or take 'U8[]'")
+        c.err(node, c.scratch.slice())
+        // The expected type, so the mismatch is not reported a second time
+        return expected_id
+    return read_only_id
 
 priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     inner: = node.get_unary_target()
@@ -570,6 +586,8 @@ priv fn infer_catch_block(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_no
     if err_id_node != null
         err_sym: = Sema_symbol(.variable, err_id_node.text, err_id_node)
         err_sym.type_id = err_type_id
+        err_sym.flags.is_mut = false // a write would change only the handler's copy
+        err_sym.flags.is_made_binding = true
         ctx.declare_symbol(err_id_node.text, err_sym, false)
         err_id_node.def_node = err_id_node
         err_id_node.type_id = err_type_id

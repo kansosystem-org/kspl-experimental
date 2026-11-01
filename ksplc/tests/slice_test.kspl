@@ -228,3 +228,19 @@ fn test_slice_made_in_the_statement() //< a slice made in the indexing statement
     assert(from_literal == 20I16 && from_cast == 5U16,
         "the element at the index comes back from a literal and from a cast alike")
     verdict.pass("A slice made in the indexing statement is indexed as any slice.")
+
+fn test_slices_of_slices_differ_by_level() //< read-only at the outer or the inner level only
+    //< `U8$[][]` (read-only slices of writable views) and `U8[]$[]` (writable slices of read-only
+    //< views) are two types in one program. Their C names once met, so the program was refused
+    //< (`c_arg_text_to` in `sema/type/naming.kspl`).
+    verdict.start("[Slice] slices of slices read-only at one level only...")
+    $bytes: U8[2] = ::{ 'a', 'b' }
+    views: U8$[][1] = ::{ U8$[]::bytes }
+    outer_ro: = U8$[][]::views
+    $texts: U8[][2] = ::{ "xy", "z" }
+    inner_ro: = U8[]$[]::texts
+    inner_ro[1] = "w"
+    assert(outer_ro[0][1] == 'b' && outer_ro.len == 1, "a read-only outer slice reads its views")
+    assert(texts[1].equals("w") && inner_ro[0].equals("xy"),
+        "a read-only view is replaced through a writable outer slice")
+    verdict.pass("Both shapes stand in one program, each read and written as its type allows.")
