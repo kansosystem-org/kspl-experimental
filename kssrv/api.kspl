@@ -55,39 +55,33 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
         .set("heap_bytes", b.int_val(heap_used_bytes())).build()
     queue_json(c, 200, val, keep)
 
-fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): U8[]? //<
-    //< Takes the relative path under the root from `path=`; empty means none, or the root itself
-    //< Caution: **Run the value through static serving's check (`rel_checked`), after the decode**
-    //< ("The path is checked after the decode" in `kssrv/docs/DESIGN-server.md`). **But keep a
-    //< leading `/`.** Only a URL's path opens with one. So here `/etc/passwd` is an absolute path,
-    //< refused, never `etc/passwd` under the root.
+fn path_or_refuse(c: conn.Conn$@, query: U8[], root: U8[], need_name: Bool): U8[]? //<
+    //< The path that a query's `?path=` names under the root, the root joined in, or none
+    //< None means a 400 or a 403 is queued. An empty path is the root itself. A dot name is let
+    //< through, as `kssrv/docs/DESIGN-server.md` says at "`/api/` does not go through static
+    //< serving".
+    //< Caution: **Check the value after the decode, but keep a leading `/`.** Only a URL's path
+    //< opens with one. So here `/etc/passwd` is an absolute path, refused, never under the root.
     params: = url.parse_query(query, c.arena) catch _e
         queue_json_error(c, 400)
         return .none
-    got: = rel_checked(root, params.find("path").unwrap_or(""))
-    if !got.is_some()
+    rel: = params.find("path").unwrap_or("")
+    if need_name && rel.len == 0
+        // The root itself is not a file; this endpoint needs a name.
+        queue_json_error(c, 400)
+        return .none
+    path: = fs.join_under(root, rel, .allowed, c.arena) catch _why
         queue_json_error(c, 403)
-    return got
+        return .none
+    return .some(path)
 
-fn rel_under(root: U8[], path: U8[]): U8[]? //<
-    //< A URL's path with its leading `/`s dropped, if it stays under the root (`rel_checked`)
-    //< Empty means the root itself. Static serving asks this: a URL's path always opens with `/`.
+fn url_rel(path: U8[]): U8[] //< a URL's path as a path under the root
+    //< **Its leading `/`s are dropped, and one at its end**: `/docs/` names the folder `docs`, as
+    //< `/docs` does. A second `/` at the end stays, and `fs.join_under` refuses the empty step.
     $rel: = path
     for rel.len > 0 && rel[0] == '/'
         rel = rel.sub_from(1)
-    return rel_checked(root, rel)
-
-priv fn rel_checked(root: U8[], rel: U8[]): U8[]? //<
-    //< The path itself, if it stays under the root (`fs.stays_under`)
-    //< **Empty means the root itself.** An absolute path in any OS's spelling (`/x`, `\\x`, `C:x`)
-    //< is refused by `fs.stays_under`'s text check, on every OS.
-    //< Caution: **Refuse a `\` on POSIX.** There it is a byte of a name, which `fs.replace_file`
-    //< refuses, so a page could open such a file and never save it. On Windows it separates.
-    if rel.len > 0 && !fs.stays_under(root, rel)
-        return .none
-    if !sys.is_windows() && rel.find_char('\\').is_some()
-        return .none
-    return .some(rel)
+    return rel.sub(0, rel.len - 1) if rel.len > 0 && rel[rel.len - 1] == '/' else rel
 
 // ==========================================
 // The local-use endpoints (files, and whether something changed)
@@ -96,13 +90,8 @@ priv fn rel_checked(root: U8[], rel: U8[]): U8[]? //<
 // the body.
 // ==========================================
 fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[], keep: Bool)
-    rel: U8[] = rel_or_refuse(c, t.query, root) catch
+    path: U8[] = path_or_refuse(c, t.query, root, true) catch
         return
-    if rel.len == 0
-        // The root itself is not a file; this endpoint needs a name.
-        queue_json_error(c, 400)
-        return
-    path: = fs.join(root, rel, c.arena)
     // Only GET and PUT come here (`ROUTES`).
     if req.method.equals("GET")
         queue_get_file(c, path, keep)
@@ -175,9 +164,8 @@ fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< Caution: **Do not return the content**, or it arrives by two paths (the file endpoint reads
     //< it). **Nothing is missed**: it returns "how things are now", not "how many times it
     //< changed", so it catches up however many changes happen in between.
-    rel: U8[] = rel_or_refuse(c, query, root) catch
+    target: U8[] = path_or_refuse(c, query, root, false) catch
         return
-    target: = root if rel.len == 0 else fs.join(root, rel, c.arena)
     info: = fs.stat(target) catch _e
         queue_json_error(c, 404)
         return
@@ -195,10 +183,9 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< A link is left out, so the dialog never offers a way out of the root, and so is a hidden
     //< name (`.git`, `.ksmd-workspace`). So is anything neither a folder nor an ordinary file.
     //< At most `MAX_LISTED` names come back; `more` says that others stand there.
-    // **No link check here**: `rel_or_refuse` refused any below the root, and a root can be one.
-    rel: U8[] = rel_or_refuse(c, query, root) catch
+    // **No link check here**: `path_or_refuse` refused any below the root, and a root can be one.
+    folder: U8[] = path_or_refuse(c, query, root, false) catch
         return
-    folder: = root if rel.len == 0 else fs.join(root, rel, c.arena)
     if !fs.is_dir(folder)
         queue_json_error(c, 404)
         return
@@ -214,11 +201,10 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     $listed: Sz = 0
     $more: = false
     for name in sorted
-        // A name with a `\` is left out too: only POSIX allows one, and `rel_checked` refuses it.
-        if name.len == 0 || name[0] == '.' || name.find_char('\\').is_some()
-            continue
-        full: = fs.join(folder, name, c.arena)
-        if fs.is_link(full)
+        // **A name the file endpoint would refuse is left out**, by the same check: a dot name, a
+        // link, a `\` (only POSIX allows one), a short name's form and the rest.
+        full: =
+            fs.join_under(folder, name, .refused(U8[][]::{}), c.arena) catch _why
             continue
         is_folder: = fs.is_dir(full)
         if !is_folder && conn.regular_file_size(full).is_none()

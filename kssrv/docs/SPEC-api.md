@@ -37,7 +37,7 @@ A request for any path outside `/api/` gets a file from the root. The first tabl
 | Status | When the server answers it |
 |---|---|
 | 405 Method Not Allowed | anything but `GET` / `HEAD`; its `Allow` header names `GET, HEAD` |
-| 403 Forbidden | a path pointing outside the root |
+| 403 Forbidden | a path pointing outside the root, or written in a form refused on every OS ("Known limits" below) |
 | 404 Not Found | not found |
 | 400 Bad Request | a broken request, a broken `%XX`; plain HTTP on the HTTPS port ("HTTPS" below) |
 | 413 Content Too Large | a body over the cap (refused as soon as the head names it) |
@@ -166,5 +166,4 @@ These are the places where the server does less than a client can expect.
 * **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served. A folder is checked together with its `index.html`. The root itself can be a link (macOS's `/tmp` is one).
 * **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent, since its read can go on forever.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception (RFC 8615).
-* **An empty segment is skipped**: `/a//b` is `/a/b`.
-* **A `\` in a path is refused on POSIX** (403), both here and in `path=`. There it is part of a name, and a file so named could not be saved. On Windows it separates, as `/` does.
+* **A path in a form that Windows reads as another name is refused** (403) on every OS, both here and in `path=`. These are a `\`, an empty segment (`/a//b`), a `:`, a name ending in `.` or a space, a device name (`CON`), `~` before a digit (`GIT~1`) and a wildcard (`*`, `?`). One `/` at the end names a folder: `/sub/` is `/sub`. So a file whose name holds one of these forms is not served, and `GET /api/list` leaves it out.

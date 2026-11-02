@@ -1,7 +1,7 @@
 //< The page's actions on tables and charts, through the bridge in `bridge.kspl`
 //< Each starts and answers as the bridge's other actions do (`begin`, `result`); here stand those
 //< that add a table, change its rows, columns and cells, paste or copy a grid, or set a chart.
-//< `#export` names a symbol, not an import, so each action is in the page's wasm wherever it
+//< `extern` names a symbol, not an import, so each action is in the page's wasm wherever it
 //< stands.
 import "ksmd/calc/formula" { Positions }
 import "ksmd/edit/editor_charts" { Chart_settings }
@@ -20,24 +20,22 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strnum"
 
-#export
-fn ksmd_web_insert_table(columns: Sz, rows: Sz): Sz //< a new table in place of the selection
+extern fn ksmd_web_insert_table(columns: Sz, rows: Sz): Sz //<
+    //< a new table in place of the selection
     if !begin()
         return full()
     ed.insert_table(columns, rows) catch e
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_remove_table(block: Sz): Sz
+extern fn ksmd_web_remove_table(block: Sz): Sz
     if !begin()
         return full()
     ed.remove_table(block) catch e
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz): Sz //<
+extern fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz): Sz //<
     //< 0 inserts a row before row `at`, 1 removes it, 2 inserts a column, 3 removes one
     if !begin()
         return full()
@@ -48,8 +46,7 @@ fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_move_lines(block: Sz, rows: I32, first: Sz, count: Sz, at: Sz): Sz //<
+extern fn ksmd_web_move_lines(block: Sz, rows: I32, first: Sz, count: Sz, at: Sz): Sz //<
     //< Moves `count` data rows (`rows` 1) or columns (0) from `first` to stand before the one at
     //< `at`; at the count, after the last
     if !begin()
@@ -58,8 +55,7 @@ fn ksmd_web_move_lines(block: Sz, rows: I32, first: Sz, count: Sz, at: Sz): Sz /
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_move_cells(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, to_row: Sz,
+extern fn ksmd_web_move_cells(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, to_row: Sz,
     to_column: Sz): Sz //<
         //< Moves the `height` by `width` cells at `top`, `left` to stand from `to_row`,
         //< `to_column`, as a paste after a cut does; row -1 is the names
@@ -69,8 +65,7 @@ fn ksmd_web_move_cells(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, to_r
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_set_cell(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
+extern fn ksmd_web_set_cell(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
     //< Puts typed text in a cell; row -1 names a column
     if !begin()
         return full()
@@ -78,8 +73,7 @@ fn ksmd_web_set_cell(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
+extern fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
     part: I32, len: Sz): Sz //<
         //< Sets one part of the look of a rectangle of cells: 0 the text's colour, 1 the
         //< background's, 2 the font size in points, 3 the alignment, 4 every part, 5 the cell's own
@@ -93,8 +87,7 @@ fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_c
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_cell_places(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
+extern fn ksmd_web_cell_places(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
     more: I32): Sz //<
         //< One more (1), or one fewer (0), decimal place in each cell of a rectangle
     if !begin()
@@ -103,9 +96,8 @@ fn ksmd_web_cell_places(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_cell_currency(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
-    len: Sz): Sz //<
+extern fn ksmd_web_cell_currency(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz,
+    to_column: Sz, len: Sz): Sz //<
         //< Shows the cells' numbers as money in the currency written in, as `USD`
     if !begin()
         return full()
@@ -117,8 +109,7 @@ fn ksmd_web_cell_currency(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, 
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_paste_cells(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
+extern fn ksmd_web_paste_cells(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
     //< Pastes a grid, written in as a JSON array of rows of strings, into a table from a cell
     if !begin()
         return full()
@@ -128,8 +119,7 @@ fn ksmd_web_paste_cells(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_paste_table(len: Sz): Sz //<
+extern fn ksmd_web_paste_table(len: Sz): Sz //<
     //< Puts a new table made from a grid, written in as `ksmd_web_paste_cells` takes it
     if !begin()
         return full()
@@ -139,8 +129,7 @@ fn ksmd_web_paste_table(len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_paste_ksmd(len: Sz): Sz //<
+extern fn ksmd_web_paste_ksmd(len: Sz): Sz //<
     //< Puts the table of the ksmd source written in after the caret's paragraph, as a copy left it
     if !begin()
         return full()
@@ -148,8 +137,8 @@ fn ksmd_web_paste_ksmd(len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_block_source(block: Sz): Sz //< a source that holds that block alone, for a copy
+extern fn ksmd_web_block_source(block: Sz): Sz //<
+    //< a source that holds that block alone, for a copy
     ensure()
     out.clear()
     if block >= 0 && block < ed.doc.blocks.len
@@ -168,8 +157,7 @@ priv fn grid_in(len: Sz, scratch: Arena$@): List<|List<|U8[]|>|> //<
         grid.push(cells)
     return grid
 
-#export
-fn ksmd_web_sort(block: Sz, column: Sz, descending: I32): Sz //<
+extern fn ksmd_web_sort(block: Sz, column: Sz, descending: I32): Sz //<
     //< Orders a table's data rows by one column's values; 1 sorts descending
     if !begin()
         return full()
@@ -177,8 +165,7 @@ fn ksmd_web_sort(block: Sz, column: Sz, descending: I32): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_group(block: Sz, how: I32, first: Sz, last: Sz): Sz //<
+extern fn ksmd_web_group(block: Sz, how: I32, first: Sz, last: Sz): Sz //<
     //< Groups the data rows from `first` to `last` (how 0), takes away the smallest group that holds
     //< them (1), hides that group's rows (2) or shows them (3)
     if how < 0 || how > 3
@@ -191,8 +178,7 @@ fn ksmd_web_group(block: Sz, how: I32, first: Sz, last: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_choices(block: Sz, column: Sz, len: Sz): Sz //<
+extern fn ksmd_web_choices(block: Sz, column: Sz, len: Sz): Sz //<
     //< Gives a column the choices typed as `Open, Done` in the `len` bytes written in; none for empty
     if !begin()
         return full()
@@ -200,8 +186,7 @@ fn ksmd_web_choices(block: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_rule(block: Sz, column: Sz, len: Sz): Sz //<
+extern fn ksmd_web_rule(block: Sz, column: Sz, len: Sz): Sz //<
     //< Gives a column the colour rule an entry names, `<0;color:#9c0006`, in the `len` bytes
     //< written in; none for empty
     if !begin()
@@ -210,16 +195,14 @@ fn ksmd_web_rule(block: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_insert_chart(block: Sz): Sz //< a bar chart of a table, after the table
+extern fn ksmd_web_insert_chart(block: Sz): Sz //< a bar chart of a table, after the table
     if !begin()
         return full()
     ed.insert_chart(block) catch e
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
+extern fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
     //< New settings for a chart, written in as JSON: `{"t":table,"k":"bar","l":labels column,
     //< "v":[columns],"title":text}`, the columns by their places
     if !begin()
@@ -239,8 +222,7 @@ fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_cell_note(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
+extern fn ksmd_web_cell_note(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
     //< Gives a cell the note in the `len` bytes written in; resolves it with none
     if !begin()
         return full()
@@ -248,8 +230,7 @@ fn ksmd_web_cell_note(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz,
+extern fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz,
     series: I32): Sz //<
         //< Copies the `height` by `width` cells at `top`, `left` over the range up to `bottom`,
         //< `right`, repeating them, as fill down and fill right do; 1 in `series` goes on with a
@@ -260,8 +241,7 @@ fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_table_texts(block: Sz): Sz //<
+extern fn ksmd_web_table_texts(block: Sz): Sz //<
     //< Each cell's text as a person edits it, names first: `[[name,…],[cell,…],…]`, written to the
     //< output; empty outside a table. A search reads it.
     ensure()
@@ -285,8 +265,7 @@ fn ksmd_web_table_texts(block: Sz): Sz //<
     out.c(']')
     return out.slice().len
 
-#export
-fn ksmd_web_set_widths(block: Sz, len: Sz): Sz //<
+extern fn ksmd_web_set_widths(block: Sz, len: Sz): Sz //<
     //< Gives the table's columns the relative widths written in, as `widths` holds them: `1,2,1`
     if !begin()
         return full()
@@ -298,8 +277,7 @@ fn ksmd_web_set_widths(block: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_set_filter(block: Sz, column: Sz, len: Sz): Sz //<
+extern fn ksmd_web_set_filter(block: Sz, column: Sz, len: Sz): Sz //<
     //< Gives a column the filter entry written in, empty for none; column -1 clears every column's
     if !begin()
         return full()
@@ -307,8 +285,7 @@ fn ksmd_web_set_filter(block: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_set_heights(block: Sz, len: Sz, points: Sz): Sz //<
+extern fn ksmd_web_set_heights(block: Sz, len: Sz, points: Sz): Sz //<
     //< Gives the data rows written in, from 0, as `0,2,3`, a least height in points; 0 takes it away
     if !begin()
         return full()
@@ -327,8 +304,7 @@ fn ksmd_web_set_heights(block: Sz, len: Sz, points: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_column_format(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
+extern fn ksmd_web_column_format(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
     //< Gives columns `first` to `last` the number format written in, as `formats` writes one
     //< entry, as `grouped:2`; empty clears it
     if !begin()
@@ -339,8 +315,7 @@ fn ksmd_web_column_format(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_column_currency(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
+extern fn ksmd_web_column_currency(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
     //< Shows the columns' numbers as money in the currency written in, as `USD`
     if !begin()
         return full()
@@ -350,8 +325,7 @@ fn ksmd_web_column_currency(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_column_places(block: Sz, first: Sz, last: Sz, more: I32): Sz //<
+extern fn ksmd_web_column_places(block: Sz, first: Sz, last: Sz, more: I32): Sz //<
     //< Shows one more decimal place in the formatted columns, or one fewer for `more` 0
     if !begin()
         return full()
@@ -359,16 +333,14 @@ fn ksmd_web_column_places(block: Sz, first: Sz, last: Sz, more: I32): Sz //<
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_rename_table(block: Sz, len: Sz): Sz
+extern fn ksmd_web_rename_table(block: Sz, len: Sz): Sz
     if !begin()
         return full()
     ed.rename_table(block, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
-#export
-fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
+extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
     //< The text a cell shows to edit, written to the output; empty outside a table
     ensure()
     out.clear()

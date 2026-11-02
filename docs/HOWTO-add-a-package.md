@@ -42,4 +42,4 @@
 make test-conventions test-docref test-surface test-extract-rest
 ```
 
-Each prints `RESULT: ALL PASS` when the package is wired in. `make ci` runs every gate your machine runs natively; only Linux runs them all ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)).
+Each prints `RESULT: ALL PASS` when the package is wired in. `make ci` runs every gate your machine can answer, and lists last what it could not check ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)).

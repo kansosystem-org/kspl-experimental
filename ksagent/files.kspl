@@ -50,9 +50,10 @@ enum Resolved //< a path the model gave, checked against the root
 
 fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved //<
     //< Checks a path the model gave and joins it to the root
-    //< It refuses an absolute path, a `..` step, a link anywhere on the path (`fs.stays_under`) and
-    //< a name that starts with a dot. **Windows answers to a short name** (`GIT~1` for `.git`), so
-    //< each segment's long name is checked too (`fs.has_hidden_on_path`).
+    //< It refuses what `fs.join_under` refuses (an absolute path, a `..` step, a link anywhere on
+    //< the path, a form Windows reads as another name) and a name that starts with a dot.
+    //< A conversation's file is found by its name as written, ASCII case aside: `join_under`
+    //< refuses a short name's form (`TEAM~1.JSO` for `team.chat.jsonl`) before it is opened.
     $rel: = given.trim_spaces()
     for rel.starts_with("./")
         rel = rel.sub_from(2)
@@ -60,16 +61,14 @@ fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved //<
         rel = rel.sub(0, rel.len - 1)
     if rel.len == 0 || rel.equals(".")
         return .ok(root, "")
-    if !fs.stays_under(root, rel)
-        return .refused("the path must stay inside the folder: give it relative to the folder, such \
-            as rules/leave.md, with no `..` step and no link on the way")
-    if fs.has_hidden_on_path(root, rel, U8[][]::{})
-        return .refused("names that start with a dot are hidden, and cannot be read")
-    if is_conversation(sys.get_file_name(rel)) ||
-        is_conversation(last_long_name(root, rel, arena))
+    full: = fs.join_under(root, rel, .refused(U8[][]::{}), arena) catch why
+        return .refused(arena.text()
+            .s("the path must stay inside the folder, given relative to it as rules/leave.md: ")
+            .s(why.text()).take())
+    if is_conversation(sys.get_file_name(rel))
         return .refused("a conversation's file holds the model's own words or a person's questions, \
             which are no source")
-    return .ok(fs.join(root, rel, arena), rel)
+    return .ok(full, rel)
 
 fn is_ask(name: U8[]): Bool //< whether a name is an ask file's, whose questions `watch` answers
     return name.ends_with(ASK_SUFFIX)
@@ -107,12 +106,6 @@ fn old_chat_file(root: U8[], arena: Arena$@): U8[] //<
 
 fn is_hidden(name: U8[]): Bool //< whether a name is one the tools never show: it starts with a dot
     return name.len > 0 && name[0] == '.'
-
-priv fn last_long_name(root: U8[], rel: U8[], arena: Arena$@): U8[] //<
-    //< The name the file system keeps for the last segment of `rel`; empty where nothing stands
-    //< **Windows answers to a short name**, so `TEAM~1.JSO` can open `team.chat.jsonl`.
-    return fs.long_name(fs.join(root, rel, arena), arena) catch
-        fallback ""
 
 fn skip_dir(name: U8[]): Bool //< the folders a walk does not enter: hidden ones, and `out`
     //< **`out` is skipped at any depth**: a checkout keeps build output there, often in each
@@ -213,7 +206,7 @@ fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
 // ==========================================
 
 fn tool_list(root: U8[], given: U8[], arena: Arena$@): U8[] //< the entries of one folder
-    //< A folder ends with `/`. Hidden names and links are left out, as `read` would refuse them.
+    //< A folder ends with `/`. What `read` would refuse is left out (`taken_under`).
     $full: U8[] = ""
     switch resolve(root, given, arena)
     case .ok(f, _rel)
@@ -230,9 +223,9 @@ fn tool_list(root: U8[], given: U8[], arena: Arena$@): U8[] //< the entries of o
     out: = arena.text()
     $listed: Sz = 0
     for name in sorted
-        path: = fs.join(full, name, arena)
-        if is_hidden(name) || is_conversation(name) || fs.is_link(path)
+        if !taken_under(full, name, arena)
             continue
+        path: = fs.join(full, name, arena)
         if listed == MAX_LISTED
             out.s("(the list stops at \{MAX_LISTED\} names)\n")
             break
@@ -271,8 +264,7 @@ fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
     $whole: = List<|Hit|>(arena)
     $partial: = List<|Hit|>(arena)
     for path in files
-        name: = sys.get_file_name(path)
-        if is_hidden(name) || is_conversation(name) || fs.is_link(path)
+        if !path.equals(full) && !taken_under(full, path.sub_from(full.len + 1), arena)
             continue
         defer one: = Arena(64 * 1024)
         body: = read_text(path, one) catch
@@ -372,6 +364,14 @@ priv fn words_held(line: U8[], words: U8[][]): Sz //< how many of the words the 
         if holds_ignoring_case(line, w)
             n += 1
     return n
+
+priv fn taken_under(folder: U8[], rel: U8[], arena: Arena$@): Bool //<
+    //< Whether a name a listing or a search found under a folder is one `resolve` takes
+    //< **By the same check**, so the tools never offer a name that a read then refuses: a hidden
+    //< name, a link, a form Windows reads as another name, a conversation's file.
+    _path: = fs.join_under(folder, rel, .refused(U8[][]::{}), arena) catch
+        return false
+    return !is_conversation(sys.get_file_name(rel))
 
 priv fn shown_path(rel: U8[], full: U8[], path: U8[], arena: Arena$@): U8[] //<
     //< A walked file's path as the model gives it back: under the root, with `/` between levels

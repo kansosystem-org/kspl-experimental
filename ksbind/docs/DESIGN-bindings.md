@@ -29,7 +29,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 ### Each binding calls its library directly, holding no C
 
-**Each binding declares the C functions it calls in its own `.kspl` file, and each `extern` block names its libraries with `#link`** (`ssl` and `crypto`). So `ksplc run` links them and no build file carries the names. No header of the library is in any translation unit: the declarations in the `.kspl` are the only ones C sees.
+**Each binding declares the C functions it calls in its own `.kspl` file, with `extern` on each, and names their libraries with `##link`** (`ssl` and `crypto`). So `ksplc run` links them and no build file carries the names. No header of the library is in any translation unit: the declarations in the `.kspl` are the only ones C sees.
 
 **A macro is reached through what it expands to.** OpenSSL spells several settings as macros over `SSL_CTX_ctrl` and `SSL_ctrl`, each taking a command number:
 
@@ -47,7 +47,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 * **OpenSSL before 1.1.0 is not bound**: `TLS_client_method` and `SSL_set1_host` begin there.
 * **A future OpenSSL renumbering a command would go unnoticed until a run.** The tests drive both `ctrl` calls on every connection, and a refused one fails the connection as `ctx_failed`.
-* **The MSVC toolchain does not link `ksbind/tls`**: it names OpenSSL's libraries `libssl` and `libcrypto`. No `#cfg` names the toolchain ("The library an `extern` block needs is named on the block" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md)).
+* **The MSVC toolchain does not link `ksbind/tls`**: it names OpenSSL's libraries `libssl` and `libcrypto`. No `#cfg` names the toolchain ("The libraries a file needs are named in the file" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md)).
 
 ### What each binding guards against
 

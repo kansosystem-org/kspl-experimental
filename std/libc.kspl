@@ -9,66 +9,66 @@ pub typedef Signal_handler = fn(sig: I32): Void //< what `signal()` takes and re
     //< An unnamed function-pointer type in an extern declaration produces no valid C type name (the
     //< same holds for Thread_entry in std/thread.kspl).
 
-extern "C"
-    pub fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32 //<
-        //< C's snprintf: formats into str
-        //< **Take the format as a `Void@`, not a `U8@`.** C's format is a plain `char*`, and KSPL's
-        //< `U8` is unsigned ("Primitive types" in docs/SPEC-programming-language.md). A `U8@`
-        //< mismatches on hosted and freestanding targets and triggers -Wpointer-sign (Principle 2
-        //< in `docs/DESIGN-principles.md`).
-    fn get_stdin(): Void$@
-    fn get_stdout(): Void$@
-    fn get_stderr(): Void$@
-    // --- Memory ---
-    fn malloc(size: Sz): U8$@ //< C's malloc: size bytes from the heap, or null
-    fn free(ptr: Void$@) //< C's free: gives back what malloc handed out
-    fn memcpy(dest: Void$@, src: Void$@, n: Sz): Void$@
-    fn memmove(dest: Void$@, src: Void$@, n: Sz): Void$@
-    fn memset(dest: Void$@, c: I32, n: Sz): Void$@ //< C's memset: fills n bytes of dest with c
-    fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32 //<
-        //< C's memcmp: compares n bytes, 0 if equal
-    // --- Process & Args ---
-    argc: I32
-    argv: U8$@$@
-    #noreturn
-    fn exit(status: I32): Void //< C's exit: ends the program with status, flushing C's streams
-    #noreturn
-    fn abort(): Void //< C's abort: ends the program at once, abnormally
-    // --- File System ---
-    fn fopen(filename: Void$@, mode: Void$@): Void$@ //<
-        //< C's fopen: opens the file named filename, or returns null
-        //< Caution: **Do not use it to pass a path.** On Windows it is the narrow API, so a
-        //< non-ASCII path is read in the current code page. It stays only as the companion of
-        //< `fclose` / `fread`.
-    fn fclose(stream: Void$@): I32
-    fn fread(ptr: Void$@, size: Sz, nmemb: Sz, stream: Void$@): Sz
-    fn fwrite(ptr: Void$@, size: Sz, nmemb: Sz, stream: Void$@): Sz
-    fn fputc(ch: I32, stream: Void$@): I32 //<
-        //< C's fputc: writes one byte; negative (EOF) if refused
-    fn ferror(stream: Void$@): I32 //< nonzero after a read or write fails; not at end of file
-    fn rename(old_path: Void$@, new_path: Void$@): I32 //<
-        //< C's rename: moves old_path to new_path
-        //< Caution: **Do not use it** (same reason as `fopen`). To rename a file, use `std/fs`'s
-        //< `rename_path`.
+pub extern fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32 //<
+    //< C's snprintf: formats into str
+    //< **Take the format as a `Void@`, not a `U8@`.** C's format is a plain `char*`, and KSPL's
+    //< `U8` is unsigned ("Primitive types" in docs/SPEC-programming-language.md). A `U8@`
+    //< mismatches on hosted and freestanding targets and triggers -Wpointer-sign (Principle 2
+    //< in `docs/DESIGN-principles.md`).
+extern fn get_stdin(): Void$@
+extern fn get_stdout(): Void$@
+extern fn get_stderr(): Void$@
+// --- Memory ---
+extern fn malloc(size: Sz): U8$@ //< C's malloc: size bytes from the heap, or null
+extern fn free(ptr: Void$@) //< C's free: gives back what malloc handed out
+extern fn memcpy(dest: Void$@, src: Void$@, n: Sz): Void$@
+extern fn memmove(dest: Void$@, src: Void$@, n: Sz): Void$@
+extern fn memset(dest: Void$@, c: I32, n: Sz): Void$@ //< C's memset: fills n bytes of dest with c
+extern fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32 //<
+    //< C's memcmp: compares n bytes, 0 if equal
+// --- Process & Args ---
+extern argc: I32
+extern argv: U8$@$@
+#noreturn
+extern fn exit(status: I32): Void //< C's exit: ends the program with status, flushing C's streams
+#noreturn
+extern fn abort(): Void //< C's abort: ends the program at once, abnormally
+// --- File System ---
+extern fn fopen(filename: Void$@, mode: Void$@): Void$@ //<
+    //< C's fopen: opens the file named filename, or returns null
+    //< Caution: **Do not use it to pass a path.** On Windows it is the narrow API, so a
+    //< non-ASCII path is read in the current code page. It stays only as the companion of
+    //< `fclose` / `fread`.
+extern fn fclose(stream: Void$@): I32
+extern fn fread(ptr: Void$@, size: Sz, nmemb: Sz, stream: Void$@): Sz
+extern fn fwrite(ptr: Void$@, size: Sz, nmemb: Sz, stream: Void$@): Sz
+extern fn fputc(ch: I32, stream: Void$@): I32 //<
+    //< C's fputc: writes one byte; negative (EOF) if refused
+extern fn ferror(stream: Void$@): I32 //< nonzero after a read or write fails; not at end of file
+extern fn rename(old_path: Void$@, new_path: Void$@): I32 //<
+    //< C's rename: moves old_path to new_path
+    //< Caution: **Do not use it** (same reason as `fopen`). To rename a file, use `std/fs`'s
+    //< `rename_path`.
 
-    fn getchar(): I32 //< C's getchar: the next byte of standard input, or -1 at its end
-    fn fflush(stream: Void$@): I32
-    // --- Environment ---
-    fn getenv(name: Void$@): Void$@ //<
-        //< C's getenv: the value of the environment variable name, or null
-        //< Caution: **Do not use it to read characters on Windows** (same reason as `fopen`).
-        //< Use `std/sys`'s `get_env` instead.
-    // --- Signals ---
-    pub fn signal(sig: I32, handler: Signal_handler): Signal_handler //< C's signal: sets a handler
-    fn raise(sig: I32): I32
-    // --- Wall-clock time ---
-    fn time(dst: I64$@): I64
-    // --- Math ---
-    pub fn strtod(nptr: Void$@, endptr: Void$@): F64 //< C's strtod: the number a C string spells
-    fn sqrt(x: F64): F64 //< C's sqrt: the non-negative square root
-    fn exp(x: F64): F64 //< C's exp: e to the power x
-    fn log(x: F64): F64 //< C's log: the natural logarithm
-    fn pow(base: F64, exp: F64): F64 //< C's pow: base to the power exp
-    fn sin(x: F64): F64 //< C's sin: the sine of x in radians
-    fn cos(x: F64): F64 //< C's cos: the cosine of x in radians
-    fn tan(x: F64): F64 //< C's tan: the tangent of x in radians
+extern fn getchar(): I32 //< C's getchar: the next byte of standard input, or -1 at its end
+extern fn fflush(stream: Void$@): I32
+// --- Environment ---
+extern fn getenv(name: Void$@): Void$@ //<
+    //< C's getenv: the value of the environment variable name, or null
+    //< Caution: **Do not use it to read characters on Windows** (same reason as `fopen`).
+    //< Use `std/sys`'s `get_env` instead.
+// --- Signals ---
+pub extern fn signal(sig: I32, handler: Signal_handler): Signal_handler //<
+    //< C's signal: sets a handler
+extern fn raise(sig: I32): I32
+// --- Wall-clock time ---
+extern fn time(dst: I64$@): I64
+// --- Math ---
+pub extern fn strtod(nptr: Void$@, endptr: Void$@): F64 //< C's strtod: the number a C string spells
+extern fn sqrt(x: F64): F64 //< C's sqrt: the non-negative square root
+extern fn exp(x: F64): F64 //< C's exp: e to the power x
+extern fn log(x: F64): F64 //< C's log: the natural logarithm
+extern fn pow(base: F64, exp: F64): F64 //< C's pow: base to the power exp
+extern fn sin(x: F64): F64 //< C's sin: the sine of x in radians
+extern fn cos(x: F64): F64 //< C's cos: the cosine of x in radians
+extern fn tan(x: F64): F64 //< C's tan: the tangent of x in radians

@@ -1,0 +1,139 @@
+//< The thread pool's hand-over (`ksai/parallel.kspl`) run many thousand times, for the race gate
+//< **The race gate runs this under ThreadSanitizer** (`tests/suite/race_test.kspl`). A product in
+//< the other tests posts a few rounds, far apart, so the workers sleep between them. Here the
+//< rounds come back to back, so a worker is still spinning on the round's number when the next one
+//< is posted. Other rounds end with the caller asleep, to reach the signal that wakes it.
+//< **A lost wakeup fails with a message, not a hang**: a watchdog thread ends the program when no
+//< round ends for `STALL_MS`. Usage: `ksplc run tests/pool_stress_main.kspl`, from this folder.
+import "ksai/parallel"
+import "std/io"
+import "std/sys"
+import "std/thread" { Atomic_sz, Thread }
+
+priv const OUTPUTS: Sz = 64 //< a tiny round's outputs: a few pieces for each thread
+priv const TINY_ROUNDS: Sz = 20000 //< rounds of almost no work, back to back
+priv const SLOW_ROUNDS: Sz = 3000 //< rounds whose slow piece ends near the caller's sleep
+priv const PART_MS: I64 = 25000I64 //< the most time each part takes; it stops early past it
+    //< **A spinning pool slows many times on a machine busy with other runs**, as the race gate's
+    //< is. So the time is bounded, not only the count, and the output says how many ran.
+priv const POLL_US: I64 = 20I64 //< how often the second piece looks whether its end is set
+priv const SCATTER: Sz = 7919 //< a prime, to scatter the slow rounds' stretches
+priv const THREADS: Sz = 2 //< the pool's size: the caller and one worker
+    //< **Two, not every CPU**: a spinning thread that the OS puts aside holds up the round, and the
+    //< race gate runs other programs beside this one. Two threads reach every hand-over.
+priv const STALL_MS: I64 = 10000I64 //< no round ending for this long is a lost wakeup
+    //< **Far above a round's time** under the sanitizer, on a machine busy with other runs.
+
+priv struct Tiny_job //< one tiny round: every output gets the round's number
+    round: Sz
+    out: Sz[OUTPUTS]
+
+priv fn tiny_span(arg: Void$@, first: Sz, last: Sz) //< writes outputs [first, last)
+    j: = Tiny_job$@::arg
+    for i in Range(first, last, 1)
+        j.out[i] = j.round * OUTPUTS + i
+
+priv struct Slow_job //< one slow round: two pieces, the second one ending near the caller's sleep
+    stretch: Sz //< how long the second piece takes, in hundredths of the spin the first one timed
+    taken: Atomic_sz //< how many pieces have been taken
+    end_us: Atomic_sz //< when the second piece ends (a `mono_us` reading); 0 until it is set
+
+priv fn slow_span(arg: Void$@, first: Sz, last: Sz) //< times a spin, or waits that long stretched
+    //< **The first piece runs the caller's own spin** (`parallel.SPIN` loads, as `parallel.split`
+    //< does) and times it. Meanwhile the worker takes the second piece. The caller then spins as
+    //< long again, and goes to sleep, near the moment the second piece ends.
+    j: = Slow_job$@::arg
+    if first >= last
+        return
+    if j.taken.fetch_add(1) == 0
+        t0: = sys.mono_us()
+        $spins: Sz = 0
+        for j.end_us.load() == 0 && spins < parallel.SPIN
+            spins += 1
+        now: = sys.mono_us()
+        j.end_us.store(Sz::(now + (now - t0) * I64::j.stretch / 100I64))
+        return
+    // **Look at `end_us` seldom**: under the sanitizer, two threads loading one atomic at once
+    // slow each other, and the caller's timing with them.
+    $end: Sz = 0
+    for end == 0
+        busy_until(sys.mono_us() + POLL_US)
+        end = j.end_us.load()
+    busy_until(end)
+
+priv fn busy_until(end: I64) //< keeps the thread running, never asleep, until `mono_us` is end
+    $now: = sys.mono_us()
+    for now < end
+        now = sys.mono_us()
+
+priv struct Watch //< what the watchdog reads: rounds ended, and whether the stress has ended
+    rounds: Atomic_sz
+    finished: Atomic_sz
+
+extern fn ksai_pool_watchdog(w: Watch$@): Void$@ //<
+    //< ends the program when no round ends for `STALL_MS`
+    $seen: Sz = -1
+    $since: = sys.mono_us()
+    for w.finished.load() == 0
+        now: = w.rounds.load()
+        if now != seen
+            seen = now
+            since = sys.mono_us()
+        else if sys.mono_us() - since > STALL_MS * 1000I64
+            io.err().s("FAIL: pool stress: a round has not ended in \{STALL_MS / 1000I64\} s, ")
+                .s("after \{now\} rounds: the caller still sleeps, so a wakeup was lost\n")
+            sys.exit(1)
+        sys.sleep_ms(50)
+    return null
+
+priv fn tiny_rounds(w: Watch$@): Sz //< the tiny rounds; returns how many used more than one thread
+    $job: = Tiny_job::{ .round = 0 }
+    $shared: Sz = 0
+    end: = sys.mono_us() + PART_MS * 1000I64
+    for round in Range.asc(TINY_ROUNDS)
+        if sys.mono_us() > end
+            break
+        job.round = round
+        if parallel.split(tiny_span, Void$@::job@, OUTPUTS, 1, THREADS) > 1
+            shared += 1
+        for i in Range.asc(OUTPUTS)
+            if job.out[i] != round * OUTPUTS + i
+                io.err().s("FAIL: pool stress: round \{round\} left output \{i\} unwritten\n")
+                sys.exit(1)
+        w.rounds.fetch_add(1)
+    return shared
+
+priv fn slow_rounds(w: Watch$@) //< rounds whose second piece ends around the caller's sleep
+    //< From 70 to 130 hundredths of the spin, so the worker's signal comes on both sides of the
+    //< moment the caller goes to sleep. The stretches come in a scattered order, so rounds cut
+    //< short by `part_ms` still cover the whole span.
+    end: = sys.mono_us() + PART_MS * 1000I64
+    for round in Range.asc(SLOW_ROUNDS)
+        if sys.mono_us() > end
+            break
+        $job: = Slow_job::{ .stretch = 70 + round * SCATTER % 61, .taken = Atomic_sz(0),
+            .end_us = Atomic_sz(0) }
+        _used: = parallel.split(slow_span, Void$@::job@, 2, 1, THREADS)
+        w.rounds.fetch_add(1)
+
+fn main(): I32
+    parallel.set_threads(THREADS)
+    $w: = Watch::{ .rounds = Atomic_sz(0), .finished = Atomic_sz(0) }
+    $dog: = Thread.spawn<|Watch|>(ksai_pool_watchdog, w@) catch
+        io.err().s("FAIL: pool stress: the watchdog thread cannot start\n")
+        return 1
+    t0: = sys.mono_us()
+    shared: = tiny_rounds(w@)
+    tiny: = w.rounds.load()
+    t1: = sys.mono_us()
+    slow_rounds(w@)
+    t2: = sys.mono_us()
+    w.finished.store(1)
+    dog.free()
+    if shared == 0
+        io.err().s("FAIL: pool stress: no round used more than one thread\n")
+        return 1
+    io.out().s("pool stress: \{tiny\} tiny rounds in \{(t1 - t0) / 1000I64\} ms, \{shared\} on ")
+        .s("more than one thread; \{w.rounds.load() - tiny\} slow rounds in ")
+        .s("\{(t2 - t1) / 1000I64\} ms\n")
+    return 0

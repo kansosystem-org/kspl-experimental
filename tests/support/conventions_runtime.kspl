@@ -41,7 +41,7 @@ priv fn check_host_spellings(arena: Arena$@)
 
 // ==========================================
 // The LLVM side holds no body for a `kspl_*` Only the C runtime (`ksplc emit-runtime`) holds an
-// OS-touching `kspl_*`'s body; the IR `declare`s it from `std/`'s `extern "C"` (the start of
+// OS-touching `kspl_*`'s body; the IR `declare`s it from `std/`'s `extern` (the start of
 // "The backends (Genc / Genllvm) and the runtime ABI" in `../../ksplc/docs/DESIGN-backends.md`).
 // ==========================================
 priv const LLVM_MODULE: U8[] = "ksplc/gen/llvm/module.kspl"
@@ -59,43 +59,19 @@ priv fn is_inline_ok(name: U8[]): Bool
     return false
 
 priv fn collect_declared(out: List<|U8[]|>$@, arena: Arena$@) //<
-    //< The names of the `kspl_*` that an `extern "C"` in `std/` and the like declares
-    //< A block is read in either notation: to its `}` after an `extern "C" {`, and to the first
-    //< line indented no deeper than a bare `extern "C"` in `.kspl`. A block under a `#cfg(...)` is
-    //< read too, since either backend may build it.
+    //< The names of the `kspl_*` that an `extern fn` in `std/` and the like declares
+    //< One under a `#cfg(...)` is read too, since either backend may build it.
     specs: = scan.kspl_specs_with(U8[][]::{ ":!tests/" }, arena)
     for rel in harness.tracked_matching(specs)
-        collect_declared_in(harness.read_under_root(rel).lines(arena), out)
-
-priv fn collect_declared_in(lines: List<|U8[]|>, out: List<|U8[]|>$@) //<
-    //< The `kspl_*` names one file's `extern "C"` blocks declare
-    $in_block: = false
-    $braced: = false
-    $depth: Sz = 0
-    for i in Range.asc(lines.len)
-        raw: = lines.get(i)
-        line: = raw.trim_spaces()
-        if in_block
-            $ends: = line.starts_with("}")
-            if !braced
-                ends = line.len > 0 && raw.len - raw.trim_start().len <= depth
-            if !ends
-                push_kspl_fn(line, out)
-                continue
-            in_block = false
-            if braced
-                continue
-        if line.starts_with("extern \"C\"")
-            in_block = true
-            braced = line.ends_with("{")
-            depth = raw.len - raw.trim_start().len
+        for line in harness.read_under_root(rel).lines(arena)
+            push_kspl_fn(line.trim_spaces(), out)
 
 priv fn push_kspl_fn(line: U8[], out: List<|U8[]|>$@) //<
-    //< adds the name a `fn kspl_*(` line declares
-    sig: = line.strip_prefix("pub ")
-    if !sig.starts_with("fn kspl_")
+    //< adds the name an `extern fn kspl_*(` line declares
+    sig: = line.strip_prefix("pub ").strip_prefix("priv ")
+    if !sig.starts_with("extern fn kspl_")
         return
-    rest: = sig.sub_from(3)
+    rest: = sig.sub_from(10)
     at: = rest.find_char('(').unwrap_or(0)
     if at > 0
         scan.push_unique(out, rest.sub(0, at))
@@ -169,7 +145,7 @@ priv fn check_facade(arena: Arena$@)
                 .push(arena.text().s(n)
                 .s(": there is a body in the IR (the C runtime alone holds a body)").take())
     verdict.check_list("there is no kspl_* body on the LLVM side", defined.len, "symbols", bad@,
-        "put the body under ksplc/gen/runtime/ and leave the IR to std's extern \"C\" declare")
+        "put the body under ksplc/gen/runtime/ and leave the IR to std's extern declare")
 
     // (2) What `module.kspl` emits by hand under a name `std` also declares is in the table with
     // no `.ret`, so `decl.kspl` skips `std`'s declare; and each such entry is emitted there. One

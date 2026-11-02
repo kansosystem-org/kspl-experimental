@@ -17,7 +17,7 @@ flowchart TD
 
 **The kernel core (`ksos/kernel/`) depends on neither hardware nor libc** (the C standard library). The caller allocates the stacks, the `Task` and a queue's buffer statically, so the core runs unchanged on a microcontroller with no `malloc`.
 
-**The port layer is swapped at link time.** The kernel declares this C ABI with `extern "C"`, and each port implements it. A *context* is a saved set of CPU registers and a stack: enough to resume a task where it stopped.
+**The port layer is swapped at link time.** The kernel declares this C ABI with `extern`, and each port implements it. A *context* is a saved set of CPU registers and a stack: enough to resume a task where it stopped.
 
 | function | its role |
 |------|------|
@@ -205,7 +205,7 @@ Only Cortex-M has a handler mode (`IPSR`), so only it detects the misuse. The PO
 
 ### The heap
 
-* **ISR-safe heap allocation (`ksos/kernel/heap.kspl`)**: `std/mem.kspl`'s freestanding heap is a free list that joins neighbors, with a CAS lock for several cores. On one core it is not ISR-safe: an ISR that interrupts a task holding the lock spins on it forever. So `heap_alloc`/`heap_free` disable interrupts around the allocation and the free alone. **On ksos always use these for the heap from a task or an ISR, not `alloc`/`dealloc`.** `make ksos-cm-heap-probe` checks independence, reuse and joining, and `Arc<T>` on a chip with no OS heap.
+* **ISR-safe heap allocation (`ksos/kernel/heap.kspl`)**: `std/mem.kspl`'s freestanding heap is a free list that joins neighbors, with a CAS lock for several cores. On one core it is not ISR-safe. An ISR that interrupts a task holding the lock would wait for ever: the task cannot run to let it go. So the lock tries a bounded number of times, then panics with `heap locked; alloc from an interrupt handler?`. So `heap_alloc`/`heap_free` disable interrupts around the allocation and the free alone. **On ksos always use these for the heap from a task or an ISR, not `alloc`/`dealloc`.** `make ksos-cm-heap-probe` checks independence, reuse and joining, and `Arc<T>` on a chip with no OS heap.
 * **Dynamic creation using the heap (`ksos/kernel/dynamic.kspl`)**: an extension impl on each static type. This is the source for the list of names.
 
   | | the names |
@@ -243,7 +243,7 @@ Five ports sit under the kernel, and `ksos/kernel/` changes for none of them. `p
 
 It runs the kernel core in Linux user space. `ksos_port_posix.c` does a real context switch with `ucontext` (`makecontext`/`swapcontext`).
 
-**It stays in C.** `makecontext` is variadic, and how it passes control is hidden behind the header's macros. KSPL's `extern "C"` crosses only scalars and raw pointers, so it cannot declare that function ([`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) lists the types it cannot cross).
+**It stays in C.** `makecontext` is variadic, and how it passes control is hidden behind the header's macros. KSPL's `extern` crosses only scalars and raw pointers, so it cannot declare that function ([`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) lists the types it cannot cross).
 
 #### Preemption
 
@@ -875,7 +875,7 @@ Training on a microcontroller is checked apart from the car: `make ksos-cm-ai-tr
 
 **TLS is out of scope: a decision, not a queue position.** The PC's TLS goes through FFI to OpenSSL to avoid our own implementation. With no wireless, the only link is a USB cable to one PC, so there is nobody to guard against.
 
-**The place to connect one is ready**: `tcp_stream_send`/`tcp_stream_recv` in `net/tcp_conn.kspl` are `#export`ed with the signatures of mbedTLS's `mbedtls_ssl_send_t`/`mbedtls_ssl_recv_t`.
+**The place to connect one is ready**: `tcp_stream_send`/`tcp_stream_recv` in `net/tcp_conn.kspl` are published with `extern`, with the signatures of mbedTLS's `mbedtls_ssl_send_t`/`mbedtls_ssl_recv_t`.
 
 ### WiFi (CYW43439) — not implemented in this design
 

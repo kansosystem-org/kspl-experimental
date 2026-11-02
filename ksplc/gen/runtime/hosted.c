@@ -156,7 +156,9 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#if defined(__linux__)
+/* KSPL_TEST_MARK_AFTER_OPEN, a test's define alone, takes macOS's way on Linux: mark after the
+ * open, with starts taking turns (hosted_spawn.c). So the race gate races that lock on Linux. */
+#if defined(__linux__) && !defined(KSPL_TEST_MARK_AFTER_OPEN)
 #define KSPL_CLOEXEC_IN_CALL 1
 #if !defined(_GNU_SOURCE)
 /* Caution: **Declared here rather than by raising _GNU_SOURCE** (the reason is at
@@ -819,3 +821,46 @@ KSPL_LINK void* get_stdin(void) { return (void*)stdin; }
 KSPL_LINK void* get_stdout(void) { return (void*)stdout; }
 KSPL_LINK void* get_stderr(void) { return (void*)stderr; }
 
+
+/* Marks bytes a std Arena holds but has not handed out (std/mem.kspl's Arena), and unmarks them
+ * as it hands them out. Only the address sanitizer reads the mark: a read or write there is then
+ * reported as `use-after-poison`. kspl_mem_poisons says whether the sanitizer is there.
+ * **An arena reuses its bytes without the heap seeing it.** After `reset` or `restore`, an old
+ * slice reads what the next allocation wrote, and the sanitizer, which watches the heap alone,
+ * says nothing. With the mark it reports the old slice's read.
+ * Without the sanitizer the two do nothing. Clang names it by `__has_feature`, GCC by a macro. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define KSPL_ASAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(KSPL_ASAN)
+#define KSPL_ASAN 1
+#endif
+#if defined(KSPL_ASAN)
+/* The sanitizer's own interface (sanitizer/asan_interface.h), declared here so no header path is
+ * needed. */
+void __asan_poison_memory_region(void const volatile *addr, size_t size);
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+KSPL_LINK void kspl_mem_poison(void *ptr, Sz len) {
+    __asan_poison_memory_region(ptr, (size_t)len);
+}
+KSPL_LINK void kspl_mem_unpoison(void *ptr, Sz len) {
+    __asan_unpoison_memory_region(ptr, (size_t)len);
+}
+KSPL_LINK Bool kspl_mem_poisons(void) {
+    return true;
+}
+#else
+KSPL_LINK void kspl_mem_poison(void *ptr, Sz len) {
+    (void)ptr;
+    (void)len;
+}
+KSPL_LINK void kspl_mem_unpoison(void *ptr, Sz len) {
+    (void)ptr;
+    (void)len;
+}
+KSPL_LINK Bool kspl_mem_poisons(void) {
+    return false;
+}
+#endif

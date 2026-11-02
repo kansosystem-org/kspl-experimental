@@ -1,0 +1,307 @@
+//< [W0111] A view used after a call that may move or release the memory it points into
+//< **Which calls make a view and which end one is std's word, not a list here**: a method marked
+//< `#gives_view` returns a view into its receiver, and one marked `#ends_views` ends every view
+//< into it. A `free()` the use-after-free check reads (`Manual_free`) ends them too, and so does a
+//< new value given to a counted local (`Ref_counted`), whose old value the compiler releases.
+//< `Df_state.viewing` holds the statements whose view is possibly live, and `Df_state.stale` the
+//< views possibly ended, so a loop's back edge and a branch are followed as for other bindings.
+//< This is a lint (Principle 8). A view or an owner reached through a field, a view passed to
+//< another function and a container of views are not followed.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/flow/release" as sema_flow_release
+import "ksplc/sema/flow/track" as sema_flow_track
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/query" as sema_type_query
+import "std/ds" { List }
+import "std/str"
+
+priv const GIVES_VIEW: U8[] = "gives_view" //< the mark on a method returning a view of its receiver
+priv const ENDS_VIEWS: U8[] = "ends_views" //< the mark on a method ending its receiver's views
+
+struct View_mark //< one statement that makes a local a view of another local
+    site: Ast_node$@ //< the declaration, or the `v = …` statement, that made the view
+    view: Ast_node$@ //< the view's declaration
+    owner: Ast_node$@ //< the declaration of the local whose memory it points into
+
+struct View_end //< why a view was last ended, for the message
+    view: Ast_node$@ //< the view's declaration
+    owner: Ast_node$@ //< the local whose call ended it (for a view of a view, the first owner)
+    call: Ast_node$@ //< the call, or the assignment, that ended it
+    method: U8[] //<
+        //< What ended it, as the message names it (`'push'`), or empty for a new value given to a
+        //< counted local
+
+struct View_book //< what is known of one function's views whatever the path
+    marks: List<|View_mark|> //< each statement making a view
+    ends: List<|View_end|> //< the last end of each view
+    shared: List<|Ast_node$@|> //< the counted locals copied, so a new value may not free the old
+    reported: List<|Ast_node$@|> //< the views already reported, so each is once
+    comparing: Bool //<
+        //< Set while walking a comparison's bare names: comparing a pointer touches no memory
+    active: Bool //< whether the lint runs at all
+
+fn new_book(): View_book$@ //< an empty book
+    return base_core.arena
+        .create(View_book::{ .marks = List<|View_mark|>(base_core.arena),
+        .ends = List<|View_end|>(base_core.arena),
+        .shared = List<|Ast_node$@|>(base_core.arena),
+        .reported = List<|Ast_node$@|>(base_core.arena), .comparing = false,
+        .active = base_core.config.run_lint_checks })
+
+priv fn is_comparison(op: U8[]): Bool //< whether a binary operator compares its operands
+    return op.equals("==") || op.equals("!=") || op.equals("<") || op.equals("<=") ||
+        op.equals(">") || op.equals(">=")
+
+priv fn local_name(def: Ast_node$@): U8[] //< the name a local's declaration gives it
+    return def.get_decl_id_text() if def != null else ""
+
+impl Ast_node
+    priv fn called_method(r: Self$@): Ast_node$@? //< the method's declaration where r is `x.m(…)`
+        if r == null || r.kind_id != .k_expr_postfix || !r.postfix_op_text().equals("(")
+            return .none
+        callee: = r.get_postfix_receiver()
+        if callee == null || callee.kind_id != .k_method_access || callee.def_node == null ||
+            !callee.def_node.is_fn_decl()
+            return .none
+        return .some(callee.def_node)
+
+    priv fn call_receiver(r: Self$@): Ast_node$@ //< the x of a call `x.m(…)`
+        return r.get_postfix_receiver().get_postfix_receiver()
+
+    priv fn strip_view_wrappers(r: Self$@): Ast_node$@ //<
+        //< r without a cast (`U8[]::v`) or the `@` a receiver takes (`xs@`), which keep its memory
+        $e: = r
+        for e != null && e.kind_id == .k_expr_postfix
+            op: = e.postfix_op_text()
+            if !op.equals("::") && !op.equals("@")
+                break
+            // A cast's subject is the last child; `@`'s is the first.
+            e = e.last_child() if op.equals("::") else e.get_postfix_receiver()
+        return e
+
+    priv fn owner_root(r: Self$@, c: sema_flow_track.Df_ctx$@): Ast_node$@? //<
+        //< The local a receiver chain starts at, if it starts at one
+        //< **A call handing on its receiver's own type is passed through** (`b.s("a").s("b")`, a
+        //< builder's chain), and so is a `#gives_view` call (`arena.text().take()`): what it
+        //< returns lies in the same owner. A field, a global or another call ends the walk.
+        env: = c.sema.env
+        $e: = r.strip_view_wrappers()
+        for e != null
+            m: = e.called_method().unwrap_or(null)
+            if m == null
+                break
+            recv: = e.call_receiver()
+            if recv == null
+                return .none
+            same: =
+                env.strip_const(env.strip_ptr(e.type_id)) == env
+                .strip_const(env.strip_ptr(recv.type_id))
+            if !same && !m.has_attribute(GIVES_VIEW)
+                return .none
+            e = recv.strip_view_wrappers()
+        if e == null || !e.is_path_or_ident() || !e.def_node.is_tracked_local(c)
+            return .none
+        return .some(e.def_node)
+
+    priv fn view_owner(r: Self$@, c: sema_flow_track.Df_ctx$@): Ast_node$@? //<
+        //< The local whose memory the value r points into, where r is a view
+        //< That is a `#gives_view` call (`xs.slice()`), an element's address through a
+        //< `#gives_view` subscript (`xs[i]@`), or a copy of a view (`q: = p`).
+        e: = r.strip_view_wrappers()
+        if e == null
+            return .none
+        if e.is_path_or_ident()
+            d: = e.def_node
+            return .some(d) if d != null && c.views.is_view(d) else .none
+        if m: = e.called_method()
+            return e.call_receiver().owner_root(c) if m.has_attribute(GIVES_VIEW) else .none
+        // `xs[i]@` (strip_view_wrappers took the `@` off): a subscript alone is a copy.
+        if r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("@") &&
+            e.is_trait_index_access() && e.def_node.has_attribute(GIVES_VIEW)
+            return e.get_postfix_receiver().owner_root(c)
+        return .none
+
+    fn df_view_decl(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< A declaration: its local starts afresh, as a view where its value is one
+        book: = c.views
+        if !book.active
+            return
+        book.bind_view(c, state, r, r, r.get_var_decl_expr())
+
+    fn df_view_assign(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+        def: Ast_node$@) //<
+            //< `def = value` on a bare name, once the value is walked
+            //< A counted local's old value is released here, so the views into it end. A
+            //< parameter's has another owner, the caller.
+        book: = c.views
+        if !book.active
+            return
+        if def.kind_id != .k_fn_param && c.sema.env.is_arc_type(def.type_id) &&
+            !book.shares(def)
+            book.end_views(state, def, r, "")
+        book.bind_view(c, state, r, def, r.get_assign_right())
+
+    fn df_view_call(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< A call, once its arguments are walked: `#ends_views` or a `free()` ends its receiver's
+        //< views, and a counted local's copy is noted
+        book: = c.views
+        if !book.active
+            return
+        m: = r.called_method().unwrap_or(null)
+        if m == null
+            return
+        recv: = r.call_receiver()
+        // A call returning a counted local's own type can hand out another owner (`r.clone()`).
+        if c.sema.env.is_arc_type(r.type_id)
+            root: = recv.strip_view_wrappers()
+            if root != null && root.is_path_or_ident() && root.def_node.is_tracked_local(c)
+                book.note_shared(root.def_node)
+        if !m.has_attribute(ENDS_VIEWS) &&
+            r.get_postfix_receiver().get_free_call_receiver(c.sema).is_none()
+            return
+        if owner: = recv.owner_root(c)
+            name: = r.get_postfix_receiver().get_postfix_member().text
+            book.end_views(state, owner, r,
+                base_core.arena.text().s("'\{name\}'").take())
+
+    fn df_view_index_set(r: Self$@, c: sema_flow_track.Df_ctx$@,
+        state: sema_flow_track.Df_state$@) //<
+            //< `m[k] = v` through a `set` marked `#ends_views`, once every part is walked
+        book: = c.views
+        if !book.active
+            return
+        left: = r.get_assign_left()
+        if left == null || !left.is_trait_index_access() ||
+            !left.def_node.has_attribute(ENDS_VIEWS)
+            return
+        if owner: = left.get_postfix_receiver().owner_root(c)
+            book.end_views(state, owner, r,
+                base_core.arena.text().s("the write into '\{local_name(owner)\}[…]'").take())
+
+    fn df_view_expr(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< A binary operation: in a comparison, a bare name reads the pointer, not the memory
+        //< So `a.alloc(16) == first` after `a.restore(mark)` is no finding.
+        op: = r.safe_get_child(1)
+        if r.children.len != 3 || op == null || !is_comparison(op.text)
+            r.df_default_traverse(c, state)
+            return
+        book: = c.views
+        for child in r.children
+            saved: = book.comparing
+            book.comparing = child.is_path_or_ident()
+            child.analyze_df_node(c, state)
+            book.comparing = saved
+
+impl View_book
+    fn is_view(r: Self$@, def: Ast_node$@): Bool //< whether some statement made def a view
+        for m in r.marks
+            if m.view == def
+                return true
+        return false
+
+    fn note_shared(r: Self$@, def: Ast_node$@) //<
+        //< a counted local copied: it may not be the last owner
+        if !r.shares(def)
+            r.shared.push(def)
+
+    fn shares(r: Self$@, def: Ast_node$@): Bool //< whether a counted local was copied
+        for d in r.shared
+            if d == def
+                return true
+        return false
+
+    priv fn first_report(r: Self$@, view: Ast_node$@): Bool //< whether view is not yet reported
+        for n in r.reported
+            if n == view
+                return false
+        r.reported.push(view)
+        return true
+
+    priv fn note_mark(r: Self$@, site: Ast_node$@, view: Ast_node$@, owner: Ast_node$@) //<
+        //< Adds a mark once: a loop walks its body more than once
+        for m in r.marks
+            if m.site == site
+                return
+        r.marks.push(View_mark::{ .site = site, .view = view, .owner = owner })
+
+    priv fn note_end(r: Self$@, view: Ast_node$@, owner: Ast_node$@, call: Ast_node$@,
+        method: U8[]) //<
+            //< Keeps the end a message names for view
+        end: = View_end::{ .view = view, .owner = owner, .call = call, .method = method }
+        for i in Range.asc(r.ends.len)
+            if r.ends.get(i).view == view
+                r.ends.set(i, end)
+                return
+        r.ends.push(end)
+
+    priv fn bind_view(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+        site: Ast_node$@, view: Ast_node$@, value: Ast_node$@) //<
+            //< `view` now holds `value`; where that is a view, `site` starts one
+        for m in r.marks
+            if m.view == view
+                state.viewing.remove(m.site)
+        state.stale.remove(view)
+        if value == null
+            return
+        owner: = value.view_owner(c).unwrap_or(null)
+        if owner == null || owner == view
+            return
+        r.note_mark(site, view, owner)
+        state.viewing.add(site)
+        // A copy of a stale view is stale too.
+        if state.stale.contains(owner)
+            state.stale.add(view)
+
+    priv fn end_views(r: Self$@, state: sema_flow_track.Df_state$@, owner: Ast_node$@,
+        call: Ast_node$@, method: U8[]) //<
+            //< Ends every live view into owner, and every view of those, on this path
+        $ended: = List<|Ast_node$@|>(base_core.arena)
+        ended.push(owner)
+        $i: Sz = 0
+        for i < ended.len
+            from: = ended.get(i)
+            i += 1
+            for m in r.marks
+                if m.owner != from || !state.viewing.contains(m.site) ||
+                    state.stale.contains(m.view)
+                    continue
+                state.stale.add(m.view)
+                r.note_end(m.view, owner, call, method)
+                ended.push(m.view)
+
+impl sema_flow_track.Df_ctx
+    fn note_view_read(r: Self$@, def: Ast_node$@) //<
+        //< A counted local read as a value is copied, so a new value given to it frees nothing
+        if r.views.active && !r.suppress_move && r.sema.env.is_arc_type(def.type_id)
+            r.views.note_shared(def)
+
+    fn report_stale_view(r: Self$@, state: sema_flow_track.Df_state$@, def: Ast_node$@,
+        use: Ast_node$@) //<
+            //< [W0111] A read of a view that some path to it ended
+        book: = r.views
+        if !book.active || book.comparing || !state.stale.contains(def) ||
+            !book.first_report(def)
+            return
+        $end: = View_end::{ .view = def, .owner = null, .call = use, .method = "" }
+        for e in book.ends
+            if e.view == def
+                end = e
+        owner: = local_name(end.owner)
+        line: = r.sema.line_of(end.call.loc)
+        what: = r.sema.clear_scratch()
+        if def.is_for_in_subject()
+            what.s("[W0111] This 'for … in' walks '\{owner\}'")
+        else
+            what.s("[W0111] '\{local_name(def)\}' points into '\{owner\}'")
+        if end.method.len > 0
+            what.s(", which \{end.method\} on line \{line\} may have moved or released. ")
+        else
+            what.s(", whose old value the new one given on line \{line\} may have released. ")
+        what
+            .s("Reading or writing through it now touches memory that may belong to something else. \
+                Take the view again after that line, or keep an index or a copy instead.")
+        r.sema.warn(use, what.slice())

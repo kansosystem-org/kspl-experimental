@@ -1,0 +1,421 @@
+//< The known holes between threads: each program, and what happens to it today
+//< `tests/suite/holes_test.kspl` runs them, as `holes_mem.kspl` says. **A program that races
+//< waits for its partner first** (`ready`), so the two threads overlap on every run. Two threads
+//< that start and end one after the other would race on no run, and the verdict would hang on the
+//< machine's speed.
+import "tests/support/holes_mem" { Hole }
+
+priv const GLOBAL_INC: U8[] =
+    """
+import "std/io"
+import "std/thread" { Atomic_sz, Thread }
+
+priv $count: I64 = 0
+
+extern fn holes_bump(ready: Atomic_sz$@): Void$@
+    _n: = ready.fetch_add(1)
+    $spins: Sz = 0
+    for ready.load() < 2
+        spins += 1
+    for _i in Range.asc(10000)
+        count += 1
+    return null
+
+fn main()
+    $ready: = Atomic_sz(0)
+    $t1: = Thread.spawn<|Atomic_sz|>(holes_bump, ready@) catch panic("spawn")
+    $t2: = Thread.spawn<|Atomic_sz|>(holes_bump, ready@) catch panic("spawn")
+    t1.free()
+    t2.free()
+    io.out().s("count = \{count\}\n")
+"""
+
+priv const RC_SHARED: U8[] =
+    """
+import "std/refcount" { Rc }
+import "std/thread" { Atomic_sz, Thread }
+
+priv $shared: Rc<|I64|>
+
+extern fn holes_churn(ready: Atomic_sz$@): Void$@
+    _n: = ready.fetch_add(1)
+    $spins: Sz = 0
+    for ready.load() < 2
+        spins += 1
+    for _i in Range.asc(10000)
+        c: = shared.clone()
+        _v: = c.get()$
+    return null
+
+fn main()
+    shared = Rc<|I64|>(7)
+    $ready: = Atomic_sz(0)
+    $t1: = Thread.spawn<|Atomic_sz|>(holes_churn, ready@) catch panic("spawn")
+    $t2: = Thread.spawn<|Atomic_sz|>(holes_churn, ready@) catch panic("spawn")
+    t1.free()
+    t2.free()
+"""
+
+priv const LIST_PUSH: U8[] =
+    """
+import "std/ds" { List }
+import "std/thread" { Atomic_sz, Thread }
+
+struct Shared
+    ready: Atomic_sz
+    xs: List<|I64|>
+
+extern fn holes_pusher(s: Shared$@): Void$@
+    _n: = s.ready.fetch_add(1)
+    $spins: Sz = 0
+    for s.ready.load() < 2
+        spins += 1
+    for i in Range.asc(2000)
+        s.xs.push(I64::i)
+    return null
+
+fn main()
+    $s: = Shared::{ .ready = Atomic_sz(0), .xs = List<|I64|>(null) }
+    $t1: = Thread.spawn<|Shared|>(holes_pusher, s@) catch panic("spawn")
+    $t2: = Thread.spawn<|Shared|>(holes_pusher, s@) catch panic("spawn")
+    t1.free()
+    t2.free()
+"""
+
+priv const PTR_AFTER_UNLOCK: U8[] =
+    """
+import "std/thread" { Atomic_sz, Mutex, Thread }
+
+struct Shared
+    ready: Atomic_sz
+    mx: Mutex<|I64|>
+
+extern fn holes_worker(s: Shared$@): Void$@
+    _n: = s.ready.fetch_add(1)
+    $spins: Sz = 0
+    for s.ready.load() < 2
+        spins += 1
+    for _i in Range.asc(10000)
+        p: = s.mx.lock()
+        s.mx.unlock()
+        p$ += 1
+    return null
+
+fn main()
+    mx: = Mutex<|I64|>(0) catch panic("mutex")
+    $s: = Shared::{ .ready = Atomic_sz(0), .mx = mx }
+    $t1: = Thread.spawn<|Shared|>(holes_worker, s@) catch panic("spawn")
+    $t2: = Thread.spawn<|Shared|>(holes_worker, s@) catch panic("spawn")
+    t1.free()
+    t2.free()
+    s.mx.free()
+"""
+
+priv const PTR_KEPT_LOOP: U8[] =
+    """
+import "std/thread" { Atomic_sz, Mutex, Thread }
+
+struct Shared
+    ready: Atomic_sz
+    mx: Mutex<|I64|>
+
+extern fn holes_worker(s: Shared$@): Void$@
+    p: = s.mx.lock()
+    s.mx.unlock()
+    _n: = s.ready.fetch_add(1)
+    $spins: Sz = 0
+    for s.ready.load() < 2
+        spins += 1
+    for _i in Range.asc(10000)
+        if true
+            p$ += 1
+    return null
+
+fn main()
+    mx: = Mutex<|I64|>(0) catch panic("mutex")
+    $s: = Shared::{ .ready = Atomic_sz(0), .mx = mx }
+    $t1: = Thread.spawn<|Shared|>(holes_worker, s@) catch panic("spawn")
+    $t2: = Thread.spawn<|Shared|>(holes_worker, s@) catch panic("spawn")
+    t1.free()
+    t2.free()
+    s.mx.free()
+"""
+
+// **The two orders are taken one after the other**, so the run never deadlocks: the sanitizer
+// reports the order it saw, not a hang.
+priv const LOCK_ORDER: U8[] =
+    """
+import "std/thread" { Mutex, Thread }
+
+struct Pair
+    a: Mutex<|I64|>
+    b: Mutex<|I64|>
+
+extern fn holes_ab(p: Pair$@): Void$@
+    x: = p.a.lock()
+    y: = p.b.lock()
+    x$ += 1
+    y$ += 1
+    p.b.unlock()
+    p.a.unlock()
+    return null
+
+extern fn holes_ba(p: Pair$@): Void$@
+    y: = p.b.lock()
+    x: = p.a.lock()
+    x$ += 1
+    y$ += 1
+    p.a.unlock()
+    p.b.unlock()
+    return null
+
+fn main()
+    ma: = Mutex<|I64|>(0) catch panic("mutex")
+    mb: = Mutex<|I64|>(0) catch panic("mutex")
+    $p: = Pair::{ .a = ma, .b = mb }
+    $t1: = Thread.spawn<|Pair|>(holes_ab, p@) catch panic("spawn")
+    t1.free()
+    $t2: = Thread.spawn<|Pair|>(holes_ba, p@) catch panic("spawn")
+    t2.free()
+    p.a.free()
+    p.b.free()
+"""
+
+priv const NO_JOIN: U8[] =
+    """
+import "std/thread" { Thread }
+
+extern fn holes_idle(x: I64$@): Void$@
+    x$ += 1
+    return null
+
+fn main()
+    $x: I64 = 0
+    _t: = Thread.spawn<|I64|>(holes_idle, x@) catch panic("spawn")
+"""
+
+priv const CLOSURE_ENTRY: U8[] =
+    """
+import "std/thread" { Thread }
+
+fn main()
+    $x: I64 = 0
+    k: I64 = 5
+    $t: = Thread.spawn<|I64|>(fn(a: I64$@; k: I64): Void$@ { a$ += k; return null; }, x@)
+        catch panic("spawn")
+    t.free()
+"""
+
+priv const ARC_WRITE: U8[] =
+    """
+import "std/refcount" { Arc }
+import "std/thread" { Thread }
+
+extern fn holes_bump(a: Arc<|I64|>$@): Void$@
+    mine: = a.clone()
+    mine.get()$ += 1
+    return null
+
+fn main()
+    $a: = Arc<|I64|>(0)
+    $t: = Thread.spawn<|Arc<|I64|>|>(holes_bump, a@) catch panic("spawn")
+    t.free()
+"""
+
+priv const ARC_HOLDS_RC: U8[] =
+    """
+import "std/refcount" { Arc, Rc }
+import "std/thread" { Thread }
+
+struct Box
+    inner: Rc<|I64|>
+
+extern fn holes_worker(a: Arc<|Box|>$@): Void$@
+    _v: = a.get().inner.get()$
+    return null
+
+fn main()
+    $a: = Arc<|Box|>(Box::{ .inner = Rc<|I64|>(5) })
+    $t: = Thread.spawn<|Arc<|Box|>|>(holes_worker, a@) catch panic("spawn")
+    t.free()
+"""
+
+priv const RC_ARG: U8[] =
+    """
+import "std/refcount" { Rc }
+import "std/thread" { Thread }
+
+extern fn holes_churn(r: Rc<|I64|>$@): Void$@
+    _c: = r.clone()
+    return null
+
+fn main()
+    $r: = Rc<|I64|>(7)
+    $t: = Thread.spawn<|Rc<|I64|>|>(holes_churn, r@) catch panic("spawn")
+    t.free()
+"""
+
+priv const MUTEX_RC: U8[] =
+    """
+import "std/refcount" { Rc }
+import "std/thread" { Mutex, Thread }
+
+extern fn holes_worker(m: Mutex<|Rc<|I64|>|>$@): Void$@
+    p: = m.lock()
+    _c: = p$
+    m.unlock()
+    return null
+
+fn main()
+    defer $m: = Mutex<|Rc<|I64|>|>(Rc<|I64|>(7)) catch panic("mutex")
+    $t: = Thread.spawn<|Mutex<|Rc<|I64|>|>|>(holes_worker, m@) catch panic("spawn")
+    t.free()
+"""
+
+priv const RELOCK: U8[] =
+    """
+import "std/thread" { Mutex }
+
+fn main()
+    defer $m: = Mutex<|I64|>(0) catch panic("mutex")
+    p: = m.lock()
+    p$ += 1
+    _q: = m.lock()
+"""
+
+priv const DOUBLE_UNLOCK: U8[] =
+    """
+import "std/thread" { Mutex }
+
+fn main()
+    defer $m: = Mutex<|I32|>(0) catch panic("mutex")
+    p: = m.lock()
+    p$ += 1
+    m.unlock()
+    m.unlock()
+"""
+
+priv const UNLOCK_UNHELD: U8[] =
+    """
+import "std/thread" { Mutex }
+
+fn main()
+    defer $m: = Mutex<|I32|>(0) catch panic("mutex")
+    m.unlock()
+"""
+
+priv const EXIT_HOLDING: U8[] =
+    """
+import "std/thread" { Mutex, Thread }
+
+extern fn holes_forgetful(m: Mutex<|I32|>$@): Void$@
+    p: = m.lock()
+    p$ = 1
+    return null
+
+fn main()
+    defer $m: = Mutex<|I32|>(0) catch panic("mutex")
+    $t: = Thread.spawn<|Mutex<|I32|>|>(holes_forgetful, m@) catch panic("spawn")
+    t.free()
+"""
+
+priv const PANIC_HOLDING: U8[] =
+    """
+import "std/io"
+import "std/thread" { Mutex, Thread }
+
+extern fn holes_crasher(m: Mutex<|I32|>$@): Void$@
+    p: = m.lock()
+    p$ = 1
+    panic("the thread stops while it holds the lock")
+
+fn main()
+    defer $m: = Mutex<|I32|>(0) catch panic("mutex")
+    $t: = Thread.spawn<|Mutex<|I32|>|>(holes_crasher, m@) catch panic("spawn")
+    t.free()
+    io.out().s("the starter went on\n")
+"""
+
+priv const ENV_RACE: U8[] =
+    """
+import "std/io"
+import "std/sys"
+import "std/thread" { Atomic_sz, Thread }
+
+extern fn holes_set(ready: Atomic_sz$@): Void$@
+    _n: = ready.fetch_add(1)
+    $spins: Sz = 0
+    for ready.load() < 2
+        spins += 1
+    for _i in Range.asc(2000)
+        sys.set_env("KSPL_HOLES_ENV", "a value long enough to move the table") catch panic("set")
+        sys.unset_env("KSPL_HOLES_ENV") catch panic("unset")
+    return null
+
+extern fn holes_get(ready: Atomic_sz$@): Void$@
+    _n: = ready.fetch_add(1)
+    $spins: Sz = 0
+    for ready.load() < 2
+        spins += 1
+    $n: Sz = 0
+    for _i in Range.asc(2000)
+        if v: = sys.get_env("PATH")
+            n += v.len
+    return null
+
+fn main()
+    $ready: = Atomic_sz(0)
+    $t1: = Thread.spawn<|Atomic_sz|>(holes_set, ready@) catch panic("spawn")
+    $t2: = Thread.spawn<|Atomic_sz|>(holes_get, ready@) catch panic("spawn")
+    t1.free()
+    t2.free()
+    io.out().s("done\n")
+"""
+
+const SYNC: Hole[_] = ::{
+    Hole::{ .name = "p1_global_inc", .what = "two threads add to one global with no lock",
+        .source = GLOBAL_INC, .verdict = .reported, .says = "data race", .spec = "" },
+    Hole::{ .name = "p2_rc_shared", .what = "an `Rc` in a global, cloned from two threads",
+        .source = RC_SHARED, .verdict = .reported, .says = "data race", .spec = "" },
+    Hole::{ .name = "p4_list", .what = "one list pushed from two threads", .source = LIST_PUSH,
+        .verdict = .reported, .says = "data race", .spec = "" },
+    Hole::{ .name = "p8_ptr_after_unlock",
+        .what = "the pointer `lock` returned, written after `unlock` in a loop",
+        .source = PTR_AFTER_UNLOCK, .verdict = .reported, .says = "data race", .spec = "" },
+    Hole::{ .name = "p8b_ptr_kept_loop",
+        .what = "the pointer `lock` returned, kept past `unlock` and written in a loop",
+        .source = PTR_KEPT_LOOP, .verdict = .reported, .says = "data race", .spec = "" },
+    Hole::{ .name = "p10_abba", .what = "two locks taken in both orders", .source = LOCK_ORDER,
+        .verdict = .reported, .says = "lock-order-inversion", .spec = "" },
+    Hole::{ .name = "p16_no_join", .what = "a thread never waited for", .source = NO_JOIN,
+        .verdict = .reported, .says = "thread leak", .spec = "" },
+    Hole::{ .name = "p12_closure", .what = "a closure with captures handed to `spawn`",
+        .source = CLOSURE_ENTRY, .verdict = .refused, .says = "expected 'fn(I64$@):Void$@'",
+        .spec = "" },
+    Hole::{ .name = "p13_arc_mut", .what = "an `Arc`'s value written from a thread",
+        .source = ARC_WRITE, .verdict = .refused, .says = "cannot write here", .spec = "" },
+    Hole::{ .name = "p14_arc_holds_rc",
+        .what = "an `Arc` whose value holds an `Rc`, handed to `spawn`", .source = ARC_HOLDS_RC,
+        .verdict = .refused, .says = "cannot hand", .spec = "" },
+    Hole::{ .name = "p2b_rc_arg", .what = "an `Rc` handed to `spawn`", .source = RC_ARG,
+        .verdict = .refused, .says = "cannot hand", .spec = "" },
+    Hole::{ .name = "p7_mutex_rc_clone", .what = "a `Mutex` around an `Rc`, handed to `spawn`",
+        .source = MUTEX_RC, .verdict = .refused, .says = "cannot hand", .spec = "" },
+    Hole::{ .name = "l1_relock", .what = "a `Mutex` locked twice by one thread", .source = RELOCK,
+        .verdict = .stops, .says = "this thread already holds the lock", .spec = "" },
+    Hole::{ .name = "p5_double_unlock", .what = "a `Mutex` unlocked twice", .source = DOUBLE_UNLOCK,
+        .verdict = .stops, .says = "this thread does not hold the lock", .spec = "" },
+    Hole::{ .name = "p5b_unlock_unheld", .what = "a `Mutex` unlocked that was never locked",
+        .source = UNLOCK_UNHELD, .verdict = .stops, .says = "this thread does not hold the lock",
+        .spec = "" },
+    Hole::{ .name = "p9_exit_holding", .what = "a thread that ends while it holds a lock",
+        .source = EXIT_HOLDING, .verdict = .stops, .says = "ended while it holds a Mutex",
+        .spec = "" },
+    Hole::{ .name = "p6_panic_holding", .what = "a thread that stops while it holds a lock",
+        .source = PANIC_HOLDING, .verdict = .stops,
+        .says = "the thread stops while it holds the lock", .spec = "" },
+    Hole::{ .name = "p15_env", .what = "the environment set in one thread while another reads it",
+        .source = ENV_RACE, .verdict = .hole,
+        .says = "`sys.set_env` or `sys.unset_env` while another thread reads or changes the",
+        .spec = "### 14.2 Undefined - no answer is fixed" },
+}

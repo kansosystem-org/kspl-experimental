@@ -53,6 +53,17 @@ const DEFAULT_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0" } //<
     //< The default options for building the generated C
     //< Adding more keeps these two.
 
+// **Do not leave `-Wextra` out.** Without it -Wsign-compare is invisible, and it catches wrong
+// answers. `-Wmissing-field-initializers` is left out: genc's `{0}` / `{{0}}` is correct, the rest
+// zeroed. `-Wstrict-prototypes` is in neither: a `f()` declares no prototype, so a call goes
+// unchecked. `-pedantic` holds it to ISO C99, `-Woverlength-strings` aside ("The generated C is ISO
+// C99, not GNU C" in ksplc/docs/DESIGN-backends.md).
+pub const WARN_CFLAGS: U8[][_] = ::{ "-std=c99", "-pedantic", "-Wall", "-Wextra",
+    "-Wno-missing-field-initializers", "-Wno-overlength-strings", "-Wstrict-prototypes" } //<
+        //< The warnings the generated C is held free of, with no optimisation level
+        //< `make test-c-warnings` adds `-O2` (-Wstrict-aliasing works only with it); the random
+        //< equivalence suite adds each level it builds at.
+
 pub const LLVM_CFLAGS: U8[][_] = ::{ "-Wno-override-module", "-mllvm", "-fast-isel=false" } //<
     //< The options for building LLVM IR
     //< **Do not drop `-fast-isel=false`**: the fast selector folds some instructions itself and
@@ -107,6 +118,11 @@ priv fn run_job(j: Exe_job): verdict.Run_out //<
     if j.why.len > 0
         return verdict.Run_out::{ .code = .none, .out = j.why }
     return harness.run_in(j.job.argv, j.job.cwd)
+
+fn exe_job_with(cc: U8[], gen: U8[], exe: U8[], cflags: U8[][], llvm: Bool): Exe_job //<
+    //< The command that builds one generated file with the C compiler cc and the options cflags
+    //< For a suite that builds one program many ways at once (`harness.run_all`).
+    return build_job(cc, U8[][]::{ gen }, exe, cflags, llvm, true, "", harness.arena())
 
 fn exe_job(gen: U8[], exe: U8[], llvm: Bool): Exe_job //<
     //< The command that builds one generated file into an executable

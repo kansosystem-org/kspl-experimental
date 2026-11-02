@@ -25,7 +25,7 @@ typedef struct {
     void* sp;
 } ksos_ctx;
 
-extern void ksos_trampoline(void); // the task's starting point, #exported by the KSPL kernel
+extern void ksos_trampoline(void); // the task's starting point, the KSPL kernel's extern "C" one
 
 // The context of the thread running now, and the one PendSV switches to (external linkage is
 // needed: switch.S reads both).

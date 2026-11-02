@@ -42,7 +42,7 @@ ksplc info std-dir                          # names the std/ beside ksplc
 ./hello
 ```
 
-`build` writes the C, then compiles and links it with the libraries this platform needs and those the program names. A program names one with `#link("openblas")` ("11.5 Naming the library an `extern` block needs" in the [KSPL language specification](SPEC-programming-language.md)).
+`build` writes the C, then compiles and links it with the libraries this platform needs and those the program names. A program names one with `##link("openblas")` ("11.5 Naming the libraries a file needs (`##link`)" in the [KSPL language specification](SPEC-programming-language.md)).
 
 | You want | Do this |
 | :-- | :-- |
@@ -156,7 +156,7 @@ ie4uinit.exe -show
 
 ### Linux (a desktop environment)
 
-**On Linux, `make install` ties `.ksmd` to the launcher for your user**, given clang's wasm32 tools to build the page and OpenSSL for the local server. `make install-desktop` does that step alone.
+**On Linux, `make install` ties `.ksmd` to the launcher it installs for your user**, given clang's wasm32 tools to build the page and OpenSSL for the local server. `make install-desktop` alone ties it to this folder's `out/ksmd.exe` instead.
 
 1. **Build everything and tie it:**
 
@@ -179,7 +179,7 @@ ie4uinit.exe -show
 * **It then rebuilds the desktop's caches** with `update-mime-database` and `update-desktop-database`. Where one is missing, it prints a note; install `shared-mime-info` or `desktop-file-utils` and run it again.
 * **It makes ksmd the default program for `.ksmd` files** with `xdg-mime default`, in `~/.config/mimeapps.list`. Without `xdg-utils`, it prints a note, and "Open with" still offers ksmd.
 * **`make install PREFIX=<folder>` writes under `<folder>/share` instead**, and sets no default program: each user runs `xdg-mime default ksmd.desktop application/x-ksmd`. A system folder such as `/usr/local/share` needs `sudo`.
-* **The entry holds this folder's path.** After you move or clone the repository again, run `make install-desktop` again.
+* **The entry holds the launcher's path.** After `make install`, that is `$PREFIX/lib/kspl/ksmd`, which stays when you move or clean the repository. After `make install-desktop` alone, it is this folder's `out/`: run it again after you move or clone the repository.
 
 **Each `.ksmd` file shows its icon**, a white page with the vermilion K, perhaps only after you log in again.
 
@@ -191,7 +191,7 @@ ie4uinit.exe -show
 2. **Open one document by hand first**: `out/ksmd.exe ksmd/examples/overview.ksmd`. Check that the browser shows it.
    * Caution: **A double-click shows a refusal nowhere.** This run shows it in the terminal.
 3. **Right-click a `.ksmd` file**, and choose "Open with ▸ Choose another app ▸ Look for another app on this PC".
-4. **Pick `out\ksmd.exe`**, and tick "Always use this app". The `.ksmd` files then show the launcher's icon, the page with the K.
+4. **Pick `out\ksmd.exe`**, or the installed one, `lib\kspl\ksmd\ksmd.exe` under `make install`'s PREFIX, and tick "Always use this app". The `.ksmd` files then show the launcher's icon, the page with the K.
 
 **No gate runs these steps.** They were checked once by hand on a Windows PC.
 
@@ -206,6 +206,8 @@ ie4uinit.exe -show
 | `out/ksmd.exe --list` | Shows the servers running, with the workspace each serves |
 | `out/ksmd.exe --stop=<folder>` | Stops the server of that workspace |
 | `out/ksmd.exe --stop-all` | Stops every one |
+
+**Each launcher tends only the servers it started.** The one `make install` put in (`ksmd --list`) and `out/ksmd.exe` each keep their own record, beside their own server.
 
 ### Resetting the `.ksmd` association
 

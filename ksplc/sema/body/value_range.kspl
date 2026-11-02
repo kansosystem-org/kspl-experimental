@@ -1,0 +1,401 @@
+//< The values an integer expression can hold, worked out from its types and shape alone
+//< `fixed_answer.kspl` asks it whether a constant lies outside what a side can hold. **The
+//< range must cover every value the side can take, exactly where C's own check would see one**:
+//< gcc reads a narrow value through a widening cast (`(U32)u16`), through a sign extension
+//< (`(U32)i16`) and through `& | ^` of narrow operands. A range too wide only misses a fixed
+//< answer; one too narrow would write a wrong answer, so each step keeps every value.
+//< A value is held as a `Num`, since the values run from I64's bottom to U64's top.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+struct Num //< an integer from -2^63 to 2^64 - 1: its low 64 bits, and whether it is below 0
+    bits: U64
+    neg: Bool
+
+struct Span //< the values from lo to hi, both included
+    lo: Num
+    hi: Num
+
+struct Value_range //< the values a side can hold: one span, or two where a cast splits it
+    known: Bool //< false where no bound holds on every target (`Sz`)
+    first: Span
+    second: Span
+    two: Bool
+    type_id: I32 //< the type whose whole range this is; 0 where the shape narrowed it
+
+fn num_of(ctx: Sema_ctx$@, value: I64, type_id: I32): Num //<
+    //< A folded constant of the type as a Num: an unsigned one's bits are read as unsigned
+    return Num::{ .bits = U64::value, .neg = value < 0 && !ctx.env.is_unsigned(type_id) }
+
+fn num_text(n: Num): U8[] //< the number as decimal
+    if n.neg
+        return base_core.arena.text().s("\{I64::n.bits\}").take()
+    return base_core.arena.text().s("\{n.bits\}").take()
+
+priv fn lt(a: Num, b: Num): Bool //< whether a < b
+    if a.neg != b.neg
+        return a.neg
+    return a.bits < b.bits
+
+priv fn le(a: Num, b: Num): Bool
+    return !lt(b, a)
+
+priv fn small(v: I64): Num //< a number that fits I64
+    return Num::{ .bits = U64::v, .neg = v < 0 }
+
+priv fn pow2(w: I32): U64 //< 2^w as bits, 0 for 64 (it wraps)
+    return 0U64 if w >= 64 else 1U64 << U64::w
+
+priv fn one_span(lo: Num, hi: Num, type_id: I32): Value_range
+    s: = Span::{ .lo = lo, .hi = hi }
+    return Value_range::{ .known = true, .first = s, .second = s, .two = false,
+        .type_id = type_id }
+
+fn between(lo: I64, hi: I64): Value_range //< the values from lo to hi
+    return one_span(small(lo), small(hi), 0)
+
+fn unknown(): Value_range //< a range that decides nothing
+    s: = Span::{ .lo = small(0), .hi = small(0) }
+    return Value_range::{ .known = false, .first = s, .second = s, .two = false, .type_id = 0 }
+
+priv fn width_span(ctx: Sema_ctx$@, id: I32): Span //< every value of an integer type, here
+    w: = ctx.env.get_primitive_bit_size(id)
+    if ctx.env.is_unsigned(id)
+        return Span::{ .lo = small(0), .hi = Num::{ .bits = pow2(w) - 1U64, .neg = false } }
+    top: = pow2(w - 1)
+    return Span::{ .lo = Num::{ .bits = 0U64 - top, .neg = true },
+        .hi = Num::{ .bits = top - 1U64, .neg = false } }
+
+fn type_range(ctx: Sema_ctx$@, id: I32): Value_range //<
+    //< Every value of an integer type, or of a scalar enum's base; `Sz` is unknown
+    //< Caution: **Leave `Sz` unknown.** Its width differs per target, so a bound read here would
+    //< hold on this target alone.
+    real: = ctx.env.scalar_repr_id(id)
+    if !ctx.env.is_integer(real) ||
+        ctx.env.get_clean_real_type(real) == I32::sema_type_env.Builtin_type_id.size_type
+        return unknown()
+    s: = width_span(ctx, real)
+    return one_span(s.lo, s.hi, real)
+
+fn side_range(ctx: Sema_ctx$@, node: Ast_node$@): Value_range //<
+    //< What an integer side can hold, from its constants, casts and operators, else its type
+    at: = node.without_parens()
+    if k: = ctx.try_eval_constexpr_wide(at)
+        n: = num_of(ctx, k, at.type_id)
+        return one_span(n, n, 0)
+    if at.is_explicit_cast()
+        inner: = at.get_postfix_receiver().without_parens()
+        if inner != null &&
+            ctx.env.is_integer(ctx.env.scalar_repr_id(inner.type_id))
+            return convert(ctx, side_range(ctx, inner), at.type_id)
+    if at.kind_id == .k_expr && at.children.len == 3
+        op: = at.get_binary_op()
+        if op != null && ctx.env.is_integer(at.type_id)
+            if same: = same_operands(ctx, op.text, at)
+                return same
+        if op != null &&
+            (op.text.equals("&") || op.text.equals("|") || op.text.equals("^"))
+            got: =
+                bitwise(op.text, side_range(ctx, at.get_binary_left()),
+                side_range(ctx, at.get_binary_right()))
+            if got.known
+                return got
+        if op != null && op.text.equals("*")
+            got: = product(ctx, at)
+            if got.known
+                return got
+        if op != null && (op.text.equals("+") || op.text.equals("-"))
+            got: =
+                sum(ctx, op.text, side_range(ctx, at.get_binary_left()),
+                side_range(ctx, at.get_binary_right()), at.type_id)
+            if got.known
+                return got
+    if at.kind_id == .k_expr_unary && ctx.env.is_integer(at.type_id)
+        op: = at.get_unary_op().text
+        // `~x` is `-1 - x`, and `-x` is `0 - x`.
+        if op.equals("~") || op.equals("-")
+            start: = small(-1 if op.equals("~") else 0)
+            got: =
+                sum(ctx, "-", one_span(start, start, 0),
+                side_range(ctx, at.get_unary_target()), at.type_id)
+            if got.known
+                return got
+    return type_range(ctx, at.type_id)
+
+priv fn same_operands(ctx: Sema_ctx$@, op: U8[], at: Ast_node$@): Value_range? //<
+    //< What an operation of one value with itself holds, or with `-1` under `^`
+    //< `x - x` and `x ^ x` are 0, `x & x` and `x | x` are x, `x + ~x` has every bit set, and
+    //< `x ^ C` with every bit of C set is `~x`.
+    left: = at.get_binary_left()
+    right: = at.get_binary_right()
+    if op.equals("+") && (is_not_of(right, left) || is_not_of(left, right))
+        real: = ctx.env.scalar_repr_id(at.type_id)
+        all: =
+            small(-1) if !ctx.env.is_unsigned(real) else width_span(ctx, real).hi
+        return .some(one_span(all, all, 0))
+    if left.spells_same_value(right)
+        if op.equals("-") || op.equals("^")
+            return .some(one_span(small(0), small(0), 0))
+        if op.equals("&") || op.equals("|")
+            return .some(side_range(ctx, left))
+        return .none
+    if op.equals("^")
+        for pair in Range.asc(2)
+            k_side: = right if pair == 0 else left
+            x_side: = left if pair == 0 else right
+            if k: = ctx.try_eval_constexpr_wide(k_side)
+                // Every bit of the type set: `-1`, or `4294967295U32`.
+                real: = ctx.env.scalar_repr_id(at.type_id)
+                w: = ctx.env.get_primitive_bit_size(real)
+                all: = ~0U64 if w >= 64 else pow2(w) - 1U64
+                if (U64::k & all) == all
+                    return .some(sum(ctx, "-", one_span(small(-1), small(-1), 0),
+                        side_range(ctx, x_side), at.type_id))
+    return .none
+
+priv fn is_not_of(n: Ast_node$@, x: Ast_node$@): Bool //< whether n is `~x`
+    at: = n.without_parens()
+    return at.kind_id == .k_expr_unary && at.get_unary_op().text.equals("~") &&
+        at.get_unary_target().spells_same_value(x)
+
+priv fn sum(ctx: Sema_ctx$@, op: U8[], a: Value_range, b: Value_range, type_id: I32): Value_range //<
+    //< What `a + b` or `a - b` can hold, wrapped into the type as the program wraps it
+    //< The ends are worked out in I64, so each operand's must lie within 2^62 of 0.
+    if !a.known || !b.known
+        return unknown()
+    ha: = hull(a)
+    hb: = hull(b)
+    if !near(ha) || !near(hb)
+        return unknown()
+    alo: = I64::ha.lo.bits
+    ahi: = I64::ha.hi.bits
+    blo: = I64::hb.lo.bits
+    bhi: = I64::hb.hi.bits
+    lo: = small(alo + blo if op.equals("+") else alo - bhi)
+    hi: = small(ahi + bhi if op.equals("+") else ahi - blo)
+    real: = ctx.env.scalar_repr_id(type_id)
+    if !ctx.env.is_integer(real)
+        return unknown()
+    out: = one_span(lo, hi, 0)
+    if within(out, width_span(ctx, real))
+        return out
+    if ctx.env.get_primitive_bit_size(real) >= 63
+        return convert(ctx, out, real)
+    return wrapped(ctx, alo + blo if op.equals("+") else alo - bhi,
+        ahi + bhi if op.equals("+") else ahi - blo, real)
+
+priv fn product(ctx: Sema_ctx$@, at: Ast_node$@): Value_range //<
+    //< What `x * C` holds for a constant C, wrapped into the type; unknown for another shape
+    //< C is read mod 2^w at its nearest to 0, so `65535U16 * x` is `-x`, as C's own fold sees.
+    real: = ctx.env.scalar_repr_id(at.type_id)
+    w: = ctx.env.get_primitive_bit_size(real)
+    if w > 32
+        return unknown()
+    m: = 1I64 << I64::w
+    left: = at.get_binary_left()
+    right: = at.get_binary_right()
+    $k: = ctx.try_eval_constexpr_wide(right)
+    $x: = left
+    if k.is_none()
+        k = ctx.try_eval_constexpr_wide(left)
+        x = right
+    if c: = k
+        $near_c: = c % m
+        if near_c < 0
+            near_c += m
+        if near_c > m / 2
+            near_c -= m
+        r: = side_range(ctx, x)
+        if !r.known
+            return unknown()
+        h: = hull(r)
+        if !near(h) || I64::h.hi.bits >= m || I64::h.lo.bits <= -m
+            return unknown()
+        a: = near_c * I64::h.lo.bits
+        b: = near_c * I64::h.hi.bits
+        return wrapped(ctx, a if a < b else b, b if a < b else a, real)
+    return unknown()
+
+priv fn wrapped(ctx: Sema_ctx$@, lo: I64, hi: I64, type_id: I32): Value_range //<
+    //< The values lo to hi take once wrapped mod 2^w into the type: one span, two, or all
+    //< Only below 63 bits, where 2^w and the ends fit I64.
+    w: = ctx.env.get_primitive_bit_size(type_id)
+    if w >= 63 || hi - lo >= (1I64 << I64::w)
+        return type_range(ctx, type_id)
+    m: = 1I64 << I64::w
+    base: = 0I64 if ctx.env.is_unsigned(type_id) else -(m / 2)
+    $from: = (lo - base) % m
+    if from < 0
+        from += m
+    from += base
+    to: = from + (hi - lo)
+    if to < base + m
+        return one_span(small(from), small(to), 0)
+    return two_spans(small(base), small(to - m), small(from), small(base + m - 1))
+
+priv fn near(s: Span): Bool //< whether both ends lie within 2^62 of 0
+    edge: = small(1I64 << 62)
+    low: = small(-(1I64 << 62))
+    return le(low, s.lo) && le(s.hi, edge)
+
+priv fn hull(r: Value_range): Span //< the one span holding both of r's
+    if !r.two
+        return r.first
+    lo: = r.first.lo if lt(r.first.lo, r.second.lo) else r.second.lo
+    hi: = r.second.hi if lt(r.first.hi, r.second.hi) else r.first.hi
+    return Span::{ .lo = lo, .hi = hi }
+
+priv fn within(r: Value_range, s: Span): Bool //< whether every value of r lies in s
+    h: = hull(r)
+    return le(s.lo, h.lo) && le(h.hi, s.hi)
+
+priv fn convert(ctx: Sema_ctx$@, r: Value_range, to_id: I32): Value_range //<
+    //< What a cast to to_id makes of r: the same values where all fit, else each wrapped mod 2^w
+    //< A value one width away wraps by 2^w: a negative one into an unsigned type goes up, a
+    //< large one into a signed type goes down. A span across the turning point splits in two.
+    to: = ctx.env.scalar_repr_id(to_id)
+    if !r.known || !ctx.env.is_integer(to)
+        return type_range(ctx, to)
+    target: = width_span(ctx, to)
+    if within(r, target)
+        return r
+    if r.two
+        return type_range(ctx, to)
+    w: = ctx.env.get_primitive_bit_size(to)
+    // The values one wrap reaches: from -2^(w-1) to 2^w - 1.
+    reach: = Span::{ .lo = Num::{ .bits = 0U64 - pow2(w - 1), .neg = true },
+        .hi = Num::{ .bits = pow2(w) - 1U64, .neg = false } }
+    if !within(r, reach)
+        return type_range(ctx, to)
+    lo: = r.first.lo
+    hi: = r.first.hi
+    if ctx.env.is_unsigned(to)
+        // Below 0 goes up by 2^w.
+        if !lo.neg
+            return r
+        up_lo: = Num::{ .bits = lo.bits + pow2(w), .neg = false }
+        if hi.neg
+            return one_span(up_lo, Num::{ .bits = hi.bits + pow2(w), .neg = false }, 0)
+        return two_spans(small(0), hi, up_lo, target.hi)
+    // From 2^(w-1) up goes down by 2^w.
+    pivot: = Num::{ .bits = pow2(w - 1), .neg = false }
+    if lt(hi, pivot)
+        return r
+    down_hi: = Num::{ .bits = hi.bits - pow2(w), .neg = true }
+    if le(pivot, lo)
+        return one_span(Num::{ .bits = lo.bits - pow2(w), .neg = true }, down_hi, 0)
+    return two_spans(target.lo, down_hi, lo, target.hi)
+
+priv fn two_spans(a_lo: Num, a_hi: Num, b_lo: Num, b_hi: Num): Value_range
+    return Value_range::{ .known = true, .first = Span::{ .lo = a_lo, .hi = a_hi },
+        .second = Span::{ .lo = b_lo, .hi = b_hi }, .two = true, .type_id = 0 }
+
+priv fn bitwise(op: U8[], a: Value_range, b: Value_range): Value_range //<
+    //< What `a & b`, `a | b` or `a ^ b` can hold, worked out from the two ranges
+    //< `&` with a side of 0 or more stays between 0 and that side's top. Otherwise each bit past
+    //< the operands' common width copies their sign, so the result keeps that width.
+    if !a.known || !b.known
+        return unknown()
+    ha: = hull(a)
+    hb: = hull(b)
+    if op.equals("&") && (!ha.lo.neg || !hb.lo.neg)
+        $top: = ha.hi if !ha.lo.neg else hb.hi
+        if !ha.lo.neg && !hb.lo.neg && lt(hb.hi, ha.hi)
+            top = hb.hi
+        return one_span(small(0), top, 0)
+    w: = common_width(ha, hb)
+    if w == 0
+        return unknown()
+    if !ha.lo.neg && !hb.lo.neg
+        return one_span(small(0), Num::{ .bits = pow2(w) - 1U64, .neg = false }, 0)
+    top: = pow2(w - 1)
+    return one_span(Num::{ .bits = 0U64 - top, .neg = true },
+        Num::{ .bits = top - 1U64, .neg = false }, 0)
+
+priv fn common_width(a: Span, b: Span): I32 //<
+    //< The fewest bits holding both spans: unsigned where neither goes below 0, else signed
+    //< 0 where none below 64 does.
+    signed: = a.lo.neg || b.lo.neg
+    for $w: I32 = 1; w < 64; w += 1
+        lo: = Num::{ .bits = 0U64 - pow2(w - 1), .neg = true } if signed else small(0)
+        hi: = Num::{ .bits = (pow2(w - 1) if signed else pow2(w)) - 1U64, .neg = false }
+        s: = Span::{ .lo = lo, .hi = hi }
+        if le(s.lo, a.lo) && le(a.hi, s.hi) && le(s.lo, b.lo) && le(b.hi, s.hi)
+            return w
+    return 0
+
+fn ranges_decide(op: U8[], a: Value_range, b: Value_range): Bool? //<
+    //< The answer of `x op y` for every x in a and y in b, or none where it depends on them
+    //< An order is read at b's two ends: one answer at both holds between. Values are unequal
+    //< only where every x lies below every y, or above.
+    if !a.known || !b.known
+        return .none
+    if op.is_equality_op()
+        below: = ranges_decide("<", a, b).unwrap_or(false)
+        above: = ranges_decide(">", a, b).unwrap_or(false)
+        if below || above
+            return .some(op.equals("!="))
+        return .none
+    h: = hull(b)
+    if lo: = range_decides(op, a, h.lo)
+        if hi: = range_decides(op, a, h.hi)
+            if lo == hi
+                return .some(lo)
+    return .none
+
+fn range_decides(op: U8[], r: Value_range, k: Num): Bool? //<
+    //< The answer of `v op k` for every v in r, or none where it depends on v
+    if !r.known
+        return .none
+    first: = span_decides(op, r.first, k)
+    if !r.two
+        return first
+    second: = span_decides(op, r.second, k)
+    if a: = first
+        if b: = second
+            if a == b
+                return .some(a)
+    return .none
+
+fn holds(op: U8[], v: Num, k: Num): Bool //< the answer of `v op k`
+    return span_decides(op, Span::{ .lo = v, .hi = v }, k).unwrap_or(false)
+
+fn within_span(v: Num, s: Span): Bool //< whether v lies from s's low end to its high end
+    return le(s.lo, v) && le(v, s.hi)
+
+fn next(n: Num): Num? //< the number one above n, none past U64's top
+    if n.neg
+        return .some(Num::{ .bits = n.bits + 1U64, .neg = n.bits != ~0U64 })
+    if n.bits == ~0U64
+        return .none
+    return .some(Num::{ .bits = n.bits + 1U64, .neg = false })
+
+priv fn span_decides(op: U8[], s: Span, k: Num): Bool?
+    below: = lt(s.hi, k)
+    at_most: = le(s.hi, k)
+    above: = lt(k, s.lo)
+    at_least: = le(k, s.lo)
+    if op.equals("<")
+        return .some(true) if below else .some(false) if at_least else .none
+    if op.equals("<=")
+        return .some(true) if at_most else .some(false) if above else .none
+    if op.equals(">")
+        return .some(true) if above else .some(false) if at_most else .none
+    if op.equals(">=")
+        return .some(true) if at_least else .some(false) if below else .none
+    $equal: Bool? = .none
+    if at_most && at_least
+        equal = .some(true)
+    else if below || above
+        equal = .some(false)
+    if op.equals("!=")
+        if e: = equal
+            return .some(!e)
+    return equal

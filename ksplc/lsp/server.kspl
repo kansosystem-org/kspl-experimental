@@ -118,9 +118,12 @@ priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
     //< **A failed start is `none`, not 0.** The worker is restarted on the next round, and without
     //< "not there yet" in the type, a write to a missing worker would be accepted. This is the only
     //< place that holds the name `lsp-worker`.
+    // Caution: **Share standard error, the editor's log; do not pipe it.** Nothing here would read
+    // the pipe: once full it stops the worker, and holds why the worker died
+    // (`../docs/DESIGN-tools.md`).
     cmd_args: = sys.args()
     child: =
-        subproc.spawn_piped(U8[][]::{ cmd_args[0], "lsp-worker" }, "") catch
+        subproc.spawn_piped_shared_err(U8[][]::{ cmd_args[0], "lsp-worker" }, "") catch
         return .none
     return .some(child)
 
@@ -337,15 +340,14 @@ priv struct Inbox //< what the editor has sent and the supervisor has not taken 
 priv struct Editor_reader //< the thread reading the editor's messages, and what it hands over
     inbox: thread.Mutex<|Inbox|>
     arrived: thread.Cond_var //< signalled when a frame comes or the input ends
-    reading: thread.Thread$@
+    reading: thread.Thread
 
 priv enum Inbound //< what the editor has for the supervisor now
     message(body: U8[]) //< the next message, in the order they came
     idle //< nothing yet (asked without waiting)
     ended //< nothing more will come
 
-#export
-fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
+extern fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
     //< The reading thread: each message the editor sends, framed into the inbox
     //< Caution: **Stop at `exit`, not only at the end of input.** A client can keep the pipe open
     //< after `exit`. A thread left blocked in the C library's read holds standard input's lock. The
@@ -367,7 +369,7 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
         if got
             jsonrpc.frame_into(box.frames@, body.slice())
         box.ended = last
-        r.arrived.signal()
+        r.arrived.signal(r.inbox@)
         r.inbox.unlock()
         if last
             break
@@ -382,7 +384,7 @@ priv fn start_editor_reader(): Editor_reader$@? //<
         inbox.free()
         return .none
     r: = mem.alloc_as<|Editor_reader|>()
-    mem.init_at(r, Editor_reader::{ .inbox = inbox, .arrived = arrived, .reading = null })
+    mem.init_at(r, Editor_reader::{ .inbox = inbox, .arrived = arrived })
     r.reading = thread.Thread.spawn<|Editor_reader|>(ksplc_lsp_read_editor, r) catch
         r.let_go()
         return .none
@@ -422,7 +424,7 @@ impl Editor_reader
 
 impl Editor_reader: Manual_free
     priv fn free(r: Self$@) //< it waits for the thread to stop, at `exit` or the end of input
-        r.reading.join_and_free()
+        r.reading.free()
         r.let_go()
 
 fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void

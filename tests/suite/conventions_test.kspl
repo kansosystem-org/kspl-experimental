@@ -3,6 +3,7 @@
 //< The conventions are "Development Principles" in `docs/DESIGN-principles.md` and the rules in
 //< `docs/SPEC-documents.md`; `tests/suite/docref_test.kspl` checks reference directions and
 //< section numbers.
+//< Its failure case: `tests/suite/conventions_test.kspl#DESCRIPTOR_SAMPLES`, among others.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars" // judging a character's case
 import "std/ds" { List }
@@ -14,6 +15,7 @@ import "std/verdict"
 import "tests/support/conventions_arena" as carena
 import "tests/support/conventions_bound" as cbound
 import "tests/support/conventions_doc" as cdoc
+import "tests/support/conventions_gates" as cgates
 import "tests/support/conventions_iface" as ciface
 import "tests/support/conventions_line" as cline
 import "tests/support/conventions_match" as cmatch
@@ -35,8 +37,8 @@ import "tests/support/harness_text" as htext
 // Only a hand-built descriptor over a whole array at its declared length is reported (the form
 // stays for reinterpreting bytes).
 priv const DESCRIPTOR_EXEMPT: U8[][_] = ::{ "ksplc/tests/negative/deep_const_weakening.kspl",
-    "ksplc/tests/negative/pointer.kspl", "ksplc/tests/abi_win64_test.kspl",
-    "ksplc/tests/prog/equiv.kspl" }
+    "ksplc/tests/negative/escape.kspl", "ksplc/tests/negative/pointer.kspl",
+    "ksplc/tests/abi_win64_test.kspl", "ksplc/tests/prog/equiv.kspl" }
 
 priv fn array_sizes(src: U8[], names: List<|U8[]|>$@, sizes: List<|Sz|>$@, arena: Arena$@) //<
     //< From a `name: type[count]` declaration, collects the size per name
@@ -338,7 +340,8 @@ priv fn check_compiler_named_std(arena: Arena$@)
                     name: = rest.sub_from(cut + 1)
                     // Raw storage is a private compiler primitive; API names remain public.
                     private_storage: = fqn.equals("std.mem.Raw_value")
-                    if !declares_name(harness.read_under_root(file), name, arena, private_storage)
+                    if !declares_method_or_name(harness.read_under_root(file), name, arena,
+                        private_storage)
                         bad
                             .push(arena.text().s(rel).s(":\{i\}: ").s(fqn).s(" is not in ").s(file)
                             .take())
@@ -367,6 +370,16 @@ priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
                 found.push(arena.dup_str(word))
             at = end
     return found
+
+priv fn declares_method_or_name(src: U8[], name: U8[], arena: Arena$@, allow_private: Bool): Bool //<
+    //< declares_name, where a method (`Type.method`) needs its type and a `fn method`
+    //< It reads one line at a time, so which type's block holds that `fn` is not checked.
+    switch name.find_char('.')
+    case .none
+        return declares_name(src, name, arena, allow_private)
+    case .some(cut)
+        return declares_name(src, name.sub(0, cut), arena, allow_private) &&
+            declares_name(src, name.sub_from(cut + 1), arena, allow_private)
 
 priv fn declares_name(src: U8[], name: U8[], arena: Arena$@, allow_private: Bool = false): Bool //<
     //< Whether that file declares `name`
@@ -755,4 +768,5 @@ fn main(): I32
     cwin.run(arena)
     cskip.run(arena)
     cnotice.run_zip(arena)
+    cgates.run(arena)
     return ksplc_harness.finish()

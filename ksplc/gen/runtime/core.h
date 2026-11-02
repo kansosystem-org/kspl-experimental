@@ -19,8 +19,9 @@
 #endif
 
 /* The linkage of the runtime's own functions and data. Under `--library` the generated C defines
- * KSPL_LIBRARY before this file. They are then `static`, as is every symbol of the library but an
- * `#export`: each library in a program keeps its own runtime. Elsewhere the word is empty.
+ * KSPL_LIBRARY before this file. They are then `static`, as is every symbol of the library but
+ * those published with `extern "C"`: each library in a program keeps its own runtime. Elsewhere the
+ * word is empty.
  * Caution: **Put it on every declaration and definition of a runtime symbol.** C refuses a `static`
  * definition after a declaration without it (genc writes std's `extern` declarations with it). */
 #if defined(KSPL_LIBRARY)
@@ -29,8 +30,8 @@
 #define KSPL_LINK
 #endif
 
-/* The mark on a function carrying `#export`. On wasm it is `export_name`. In a library built for
- * Windows it is `dllexport`, which a DLL needs to export it. Elsewhere it is empty.
+/* The mark on a function published with `extern "C"`. On wasm it is `export_name`. In a library
+ * built for Windows it is `dllexport`, which a DLL needs to export it. Elsewhere it is empty.
  * Caution: **On wasm it is itself the list of functions exported to the host.** Without it,
  * wasm-ld's `--gc-sections` drops the function, and a forgotten `--export=` passes in silence. */
 #if defined(__wasm__)

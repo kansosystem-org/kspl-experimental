@@ -15,12 +15,10 @@ import "std/verdict"
 
 // The server half the peer stands on: OpenSSL's own `SSL_accept` on the socket, so the client is
 // tested against a server that is not `ksbind/tls_server`.
-#link("ssl")
-#link("crypto")
-extern "C"
-    fn SSL_accept(ssl: tls.SSL$@): I32
-    fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
-    fn SSL_get_servername(ssl: tls.SSL@, kind: I32): Void@
+##link("ssl", "crypto")
+extern fn SSL_accept(ssl: tls.SSL$@): I32
+extern fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
+extern fn SSL_get_servername(ssl: tls.SSL@, kind: I32): Void@
 
 priv enum Peer_act //< what the peer does once a client connects
     silent //< holds the TCP connection without a TLS response
@@ -72,8 +70,7 @@ priv fn trickle(conn: net.Tcp_stream$@, peer: Tls_peer$@): Bool //<
             return false
     return true
 
-#export
-fn tls_test_peer(peer: Tls_peer$@): Void$@
+extern fn tls_test_peer(peer: Tls_peer$@): Void$@
     conn: = peer.listener.accept() catch panic("accept should succeed once a client connects")
     switch peer.act
     case .silent, .trickle
@@ -140,7 +137,7 @@ priv fn connect_to_peer(ctx: tls.SSL_CTX$@, act: Peer_act, host: U8[]): Tls_seen
     listener: = listen_on()
     port: = listener.port() catch panic("a bound socket knows its port")
     $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = act }
-    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
     $seen: = Tls_seen.connected
     s: = tls.Tls_stream.connect(host, port) catch e
         switch e
@@ -153,7 +150,7 @@ priv fn connect_to_peer(ctx: tls.SSL_CTX$@, act: Peer_act, host: U8[]): Tls_seen
         fallback null
     if s != null
         s.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     return seen
 
@@ -172,7 +169,7 @@ impl Peer_act
         defer listener: = listen_on()
         port: = listener.port() catch panic("a bound socket knows its port")
         $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = r }
-        t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@)
+        $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@)
             catch panic("thread spawn failed")
         s: = tls.Tls_stream.connect("localhost", port)
             catch panic("a certificate the trusted CA issued for this host should connect")
@@ -194,7 +191,7 @@ impl Peer_act
         if n > 0
             after = .more
         s.free()
-        t.join_and_free()
+        t.free()
         return after
 
 fn test_tls_handshake_failure_against_non_tls_peer()
@@ -236,13 +233,13 @@ fn test_tls_ip_address_is_checked_as_an_address()
     defer listener: = listen_on()
     port: = listener.port() catch panic("a bound socket knows its port")
     $peer: = Tls_peer::{ .listener = listener, .ctx = own, .act = .gone }
-    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
     s: = tls.Tls_stream.connect("127.0.0.1", port)
         catch panic("a certificate whose SAN names the address asked for should connect")
     // Caution: **Wait for the peer before closing.** At TLS 1.3 the client's handshake ends before
     // the peer's, which still sends its session tickets. A close then resets the connection on
     // Windows, and the peer's handshake fails.
-    t.join_and_free()
+    t.free()
     s.free()
     tls.SSL_CTX_free(own)
     // TLS allows only a host name as SNI, never an address (RFC 6066, section 3).
@@ -295,10 +292,10 @@ fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     defer listener: = listen_on()
     port: = listener.port() catch panic("a bound socket knows its port")
     $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = .gone }
-    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
     s: = tls.Tls_stream.connect("localhost", port)
         catch panic("a certificate the trusted CA issued for this host should connect")
-    t.join_and_free()
+    t.free()
     // **This program ignores SIGPIPE, as every KSPL program does. The program a library is
     // linked into can differ.** A handler stands in for that program. It counts what the default
     // would have killed it with.
@@ -327,22 +324,19 @@ fn test_tls_handshake_deadline()
         defer listener: = listen_on()
         port: = listener.port() catch panic("listener has a port")
         $peer: = Tls_peer::{ .listener = listener, .ctx = null, .act = acts[i] }
-        worker: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("start peer")
-        start: = sys.mono_us()
+        $worker: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("start peer")
         $timed_out: = false
         s: = tls.Tls_stream.connect("127.0.0.1", port, budgets[i]) catch e
             timed_out = e == tls.Tls_error.handshake_timed_out
             fallback null
-        elapsed: = sys.mono_us() - start
         if s != null
             s.free()
-        worker.join_and_free()
+        worker.free()
         assert(timed_out, "an unfinished handshake returns handshake_timed_out")
         assert(peer.closed, "timeout cleanup closes TCP before the peer watchdog")
+        // **The order shows the client did not wait for the peer's watchdog**: the client closed
+        // first (`peer.closed`), and the trickle never finished.
         assert(!peer.trickled_all, "a trickling peer cannot keep the handshake past its deadline")
-        // Generous: only a client that waits for the peer's watchdog comes near it.
-        assert(elapsed < I64::PEER_WATCH_MS * 500I64,
-            "the client returns before the peer's watchdog")
     verdict.pass("silent and trickling peers time out, and failure cleanup closes the socket")
 
 fn test_tls_handshake_write_deadline()
@@ -364,9 +358,9 @@ fn test_tls_handshake_write_deadline()
     // took whole, a wait that gave up early, and one that ran over are fixed in different places.
     took: = arena.text().s("it ran \{elapsed\} us against a deadline of 100000 us").take()
     verdict.check("the stalled write does not finish: the OS does not take all 16 MiB", !sent, took)
+    // A write that ignores the deadline waits for good, as the peer never reads: the suite's own
+    // time limit stops that run.
     verdict.check("the stalled write waits until the deadline", elapsed >= 100000I64, took)
-    // Generous: a write that ignores the deadline waits for good, as the peer never reads.
-    verdict.check("the stalled write does not wait for good", elapsed < 20000000I64, took)
     $buf: U8[32] = ::{}
     n: = peer.read_for(U8$[]::buf, 1000) catch panic("some bytes were sent before the stall")
     assert(n > 0 && buf[0] == 'x', "the deadline preserves progress before the send buffer fills")

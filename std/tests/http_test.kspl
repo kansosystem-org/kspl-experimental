@@ -523,8 +523,7 @@ priv fn response_error(src: U8[], arena: Arena$@): U8[] //<
 // ==========================================
 // std/http: the round trip of reading and writing a request and a response over a real TCP socket.
 // ==========================================
-#export
-fn http_echo_server(listener: net.Tcp_listener$@): Void$@
+extern fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     defer server_arena: = Arena(64 * 1024)
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     // A server parses what has arrived so far, and reads more while the request is incomplete.
@@ -566,7 +565,8 @@ fn test_http_socket_roundtrip()
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: = thread.Thread.spawn<|net.Tcp_listener|>(http_echo_server, listener)
+    $t: =
+        thread.Thread.spawn<|net.Tcp_listener|>(http_echo_server, listener)
         catch panic("thread spawn failed")
 
     client: = net.Tcp_stream.connect("127.0.0.1", port)
@@ -619,7 +619,7 @@ fn test_http_socket_roundtrip()
         panic("Content-Type header should be found")
 
     client.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     verdict.pass("The HTTP request/response round trip over a real socket is confirmed.")
 

@@ -427,11 +427,10 @@ impl Ast_node
         return id.text if id != null && id.kind_id == .k_identifier else ""
 
     fn link_name(r: Self$@): U8[] //<
-        //< The library name a `#link("...")` node's argument names, without the quotes
-        //< **Empty unless the argument is one plain string holding a name** (not `"-lopenblas"`, a
-        //< path, a file, two arguments, an identifier); `check_link_attribute` in
-        //< `ksplc/sema/decl/attrs.kspl` rejects an empty one.
-        name: = r.sole_string_argument()
+        //< The library one argument of `##link(...)` names, without the quotes
+        //< **Empty unless it is one plain string holding a name** (not `"-lopenblas"`, a path, a
+        //< file, an identifier); `check_link_directive` in `ksplc/sema/decl/attrs.kspl` rejects it.
+        name: = r.string_value()
         return name if is_library_name(name) else ""
 
     fn section_name(r: Self$@): U8[] //<
@@ -444,10 +443,12 @@ impl Ast_node
 
     priv fn sole_string_argument(r: Self$@): U8[] //<
         //< An attribute's only argument without its quotes; empty unless it is one plain string
-        arg: = r.sole_argument()
-        if arg == null || arg.kind_id != .k_string || arg.text.len < 2 || arg.text[0] != '"'
+        return r.sole_argument().string_value()
+
+    priv fn string_value(r: Self$@): U8[] //< a plain string's text without its quotes, else empty
+        if r == null || r.kind_id != .k_string || r.text.len < 2 || r.text[0] != '"'
             return ""
-        return arg.text.sub(1, arg.text.len - 2)
+        return r.text.sub(1, r.text.len - 2)
 
     priv fn sole_argument(r: Self$@): Ast_node$@ //<
         //< An attribute's only argument; null where it has none, or two or more

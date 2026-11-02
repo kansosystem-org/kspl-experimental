@@ -152,14 +152,30 @@ fn test_an_escaping_path_is_refused(work: U8[], arena: Arena$@)
     stub.release(s)
 
 fn test_an_empty_segment_or_a_missing_name_is_no_hidden_name(work: U8[], arena: Arena$@)
-    verdict.start("[ksagent] an empty segment is skipped, and a name not there yet is not hidden")
+    verdict.start("[ksagent] an empty segment is refused, and a name not there yet is not hidden")
     // Caution: **A long name that cannot be read counts as hidden only where something stands.**
-    // `eval --out` names a file it is about to make, and Windows reads no long name for `rules/`.
+    // `eval --out` names a file it is about to make.
     root: = stub.folder(work, "segments", arena)
-    for p in U8[][]::{ "rules//leave.md", "rules/new.md", "new/report.md" }
+    for p in U8[][]::{ "rules/new.md", "new/report.md" }
         verdict.check(arena.text().s("the path is taken: ").s(p).take(), taken(root, p, arena), "")
-    verdict.check("a hidden name behind an empty segment is still refused",
-        !taken(root, ".hidden//notes.md", arena), "")
+    // Windows reads no long name for `rules/`, so an empty segment is refused before any lookup.
+    for p in U8[][]::{ "rules//leave.md", ".hidden//notes.md" }
+        verdict.check(arena.text().s("the path is refused: ").s(p).take(),
+            !taken(root, p, arena), "")
+
+fn test_a_form_windows_reads_as_another_name_is_refused(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a form Windows reads as another name is refused, with its reason")
+    // The model reads the reason, so it can give the path again in a form that is taken.
+    root: = stub.folder(work, "forms", arena)
+    for p in U8[][]::{ "TEAM~1.JSO", "rules\\leave.md", "rules/*.md", "CON", "leave.md.",
+        "leave.md::$DATA" }
+        switch files.resolve(root, p, arena)
+        case .ok
+            verdict.check(arena.text().s("the path is refused: ").s(p).take(), false, "")
+        case .refused(why)
+            verdict.check(arena.text().s("the path is refused with its reason: ").s(p).take(),
+                why.starts_with("the path must stay inside the folder") &&
+                why.find_char(':').is_some(), why)
 
 priv fn taken(root: U8[], given: U8[], arena: Arena$@): Bool //< whether `files.resolve` takes it
     switch files.resolve(root, given, arena)

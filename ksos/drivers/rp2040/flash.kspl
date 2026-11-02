@@ -61,10 +61,12 @@ priv $ready: Bool = false
 // tasks writing at once would otherwise program one task's bytes at the other's address.
 priv $stage: U8[256] = ::{}
 
+#raw_address
 priv fn rom_hword(at: U32): U32
     p: = U16@::at
     return p$
 
+#raw_address
 priv fn rom_func(c1: U8, c2: U8): U32 //< looks up a function in the ROM's function table
     //< 0 if it is not found.
     lookup_at: = rom_hword(ROM_LOOKUP_AT)
@@ -95,6 +97,7 @@ fn init(): Void!mmio.Driver_error //< looks up the ROM functions' addresses
 // writing. Split into two, a change to only one would go unnoticed.
 #noinline
 #section(".ram_text")
+#raw_address
 priv fn in_window(do_erase: Bool, at: U32, data: U8@)
     connect: = Rom_void::at_connect
     exit_xip: = Rom_void::at_exit_xip
@@ -124,6 +127,7 @@ priv fn run_in_window(do_erase: Bool, at: U32, in_page: Sz, part: U8[]) //<
     in_window(do_erase, at, stage[0]@)
     task.irq_restore(s)
 
+#raw_address
 fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
     //< at is the offset from the start of the region.
     //< A plain XIP read; the ROM's flush after a write drops the cache, so nothing is stale.

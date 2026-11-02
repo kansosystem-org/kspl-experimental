@@ -239,6 +239,15 @@ priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio agai
     return ("n/a" if base == 0I64
         else arena.text().s("x\{F64::cur / F64::base:.2\}").take())
 
+priv fn peak_limit(base_peak: I64): I64 //< the most peak memory a run may take against its baseline
+    return I64::(F64::base_peak * MEM_THRESHOLD)
+
+priv fn limit_fires(): Bool //<
+    //< Whether the limit shows it can fail: twice the baseline is refused, the baseline is not
+    //< **A guard that passes every peak would hide every regression.**
+    base: = 1000000I64
+    return 2I64 * base > peak_limit(base) && base <= peak_limit(base)
+
 priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //<
     //< Prints one measurement and returns whether the peak memory is within its limit
     //< Caution: **Do not write `RECORDED` on the time's line.** Beside the baseline it **reads as
@@ -247,7 +256,7 @@ priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //
     ratio: = ratio_text(base.compile_ms, cur.metrics.compile_ms, arena)
     io.out().s("[perf_guard] ").s(kind).s(" compile time: \{cur.metrics.compile_ms:,\} (baseline ")
         .s("\{base.compile_ms:,\}, ").s(ratio).s(") -> NOT GATED\n")
-    limit: = I64::(F64::base.peak_bytes * MEM_THRESHOLD)
+    limit: = peak_limit(base.peak_bytes)
     peak_ok: = cur.metrics.peak_bytes <= limit
     io.out().s("[perf_guard] ").s(kind).s(" peak memory: \{cur.metrics.peak_bytes:,\} (baseline ")
         .s("\{base.peak_bytes:,\}, limit \{limit:,\}) -> ").s("PASS" if peak_ok else "FAIL").s("\n")
@@ -299,6 +308,10 @@ fn main(): I32 //<
     //< (`ksplc/parse/ast_cache.kspl`) changes time and peak memory several-fold. So one
     //< baseline for both leaves one side unchecked.
     defer arena: = Arena(1024 * 1024)
+    if !limit_fires()
+        io.out().s("RESULT: SOME FAILED (1) -> the memory limit passes twice its baseline\n")
+        return 1
+    io.out().s("[perf_guard] the memory limit refuses twice its baseline -> PASS\n")
     $update: = false
     $cold_log: U8[] = ""
     $warm_log: U8[] = ""

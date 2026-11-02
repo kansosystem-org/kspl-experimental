@@ -229,6 +229,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
         ks.root.textContent = "";
         ks.cell = null;
         ks.cut.drop();
+        ks.filter.forget();
         ks.setPlace("text");
         // Showing a large document can use up the memory too; the page then says it stopped.
         if (!ks.act("ksmd_web_render")) {
@@ -636,13 +637,9 @@ function ksmdCommands(ks) {
       return ks.cut.insert(c.block, name === "row-above");
     }
     if (name in rows) {
-      // A new row is empty, so a filter would hide it at once: the editor takes the filter away in
-      // the same step (`edit_table` in `ksmd/edit/editor_tables.kspl`).
+      // A filter stays, and shows the new row until it is chosen again (`ksmd/port/web/filter.js`).
       const [what, after] = rows[name];
-      const filtered = name !== "row-remove" && ks.filter.on(c.block);
-      const r = ks.act("ksmd_web_table_edit", c.block, what, Math.max(c.row, 0) + after);
-      if (filtered && r && r.ok) ks.say("All rows are shown again, so the new row can be seen.");
-      return r;
+      return ks.act("ksmd_web_table_edit", c.block, what, Math.max(c.row, 0) + after);
     }
     const [what, after] = columns[name];
     return ks.act("ksmd_web_table_edit", c.block, what, c.column + after);

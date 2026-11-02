@@ -1,0 +1,327 @@
+#!/usr/bin/env -S ksplc run
+//< The random equivalence test: generated programs agree on every build
+//< Each seed writes one program (`tests/support/random_prog.kspl`), valid by construction. ksplc
+//< must accept it with no word. Its C must build under clang and gcc with the warnings `make
+//< test-c-warnings` holds the tree to, made errors, at `-O0` and `-O2`; one build of each family
+//< also traps on C's undefined arithmetic. Its LLVM IR must build at `-O0` and `-O2`. Every build
+//< must print the same and end the same; a program written to stop must stop on its stop.
+//< A failure names the seed and the build, and prints the program, so it reproduces by hand.
+//< Its failure case: `ksplc/tests/suite/random_equiv_test.kspl#PLANTED`, runs that disagree.
+
+// ==========================================
+//   make test-random-equiv                                   … the default seeds
+//   make test-random-equiv RANDOM_EQUIV_ARGS="--n=400 --seed=7"  … more, from another start
+//   … --open=1   also writes the shapes ksplc fails on today (`random_prog.OPEN_FINDINGS`)
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "ksplc/tests/support/random_prog" + { Program, Stop }
+import "std/argparse"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/math"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/verdict"
+
+priv const DEFAULT_SEED: I64 = 1I64
+priv const DEFAULT_N: I64 = 48I64 //< about a minute on four cores
+
+priv const TRAP_CFLAGS: U8[][_] = ::{ "-fsanitize=signed-integer-overflow,shift,integer-divide-by-zero,alignment",
+    "-fsanitize-trap=signed-integer-overflow,shift,integer-divide-by-zero,alignment" } //<
+        //< C's traps for what C leaves undefined and KSPL defines, which stop the program
+        //< A trap needs no sanitizer library. The arithmetic can answer right in C while it is
+        //< undefined, so only a trap shows it.
+
+priv struct Build //< one way a program is built
+    name: U8[]
+    cc: U8[]
+    llvm: Bool
+    flags: U8[][]
+
+priv struct Ran //< how one build of one program ended
+    built: Bool //< false: `out` is what the build said
+    code: I32? //< the exit code; none where it did not end by itself
+    out: U8[]
+
+priv struct Case //< one seed's program, and how each build of it went
+    seed: U64
+    program: Program
+    src: U8[]
+    said: U8[] //< what ksplc printed, empty where it said nothing
+    translated: Bool
+    runs: List<|Ran|>
+
+// ==========================================
+// The verdict on one program
+// ==========================================
+
+priv fn first_diff(a: U8[], b: U8[], arena: Arena$@): U8[] //< the first line that disagrees
+    al: = a.lines(arena)
+    bl: = b.lines(arena)
+    n: = math.min(al.len, bl.len)
+    for i in Range.asc(n)
+        if !al.get(i).equals(bl.get(i))
+            return arena.text().s("line \{i + 1\}: '").s(al.get(i)).s("' against '")
+                .s(bl.get(i)).s("'").take()
+    return arena.text().s("the line counts differ (\{al.len\} against \{bl.len\})").take()
+
+priv fn code_text(c: I32?, arena: Arena$@): U8[]
+    switch c
+    case .some(n)
+        return arena.text().s("\{n\}").take()
+    case .none
+        return "none"
+
+priv fn judge(stop: Stop, builds: Build[], runs: List<|Ran|>@, arena: Arena$@): U8[] //<
+    //< What is wrong with one program's runs, empty where nothing is
+    //< The first build is the reference. Each other must print the same and end the same. A
+    //< program written to stop must print the stop's words and end with a code other than 0.
+    $out: = List<|U8[]|>(arena)
+    for i in Range.asc(runs.len)
+        r: = runs.get(i)
+        if !r.built
+            out
+                .push(arena.text().s("the build '").s(builds[i].name).s("' failed:\n")
+                .s(r.out.trim_end()).take())
+    if out.len == 0
+        ref: = runs.get(0)
+        ref_code: = code_text(ref.code, arena)
+        for i in Range(1, runs.len, 1)
+            r: = runs.get(i)
+            code: = code_text(r.code, arena)
+            if !r.out.equals(ref.out) || !code.equals(ref_code)
+                out
+                    .push(arena.text().s("'").s(builds[i].name).s("' differs from '")
+                    .s(builds[0].name).s("': ").s(first_diff(ref.out, r.out, arena)).s(", exit ")
+                    .s(ref_code).s(" against ").s(code).take())
+        words: = stop.words()
+        ended_with_0: = ref_code.equals("0")
+        if words.len == 0 && !ended_with_0
+            out
+                .push(arena.text().s("it was written to end with 0, but ended with ").s(ref_code)
+                .take())
+        if words.len > 0 && (ended_with_0 || ref.out.find_str(words).is_none())
+            out
+                .push(arena.text().s("it was written to stop with '").s(words)
+                .s("', but did not: exit ").s(ref_code).take())
+    joined: = arena.text()
+    for line in out
+        joined.s("\n    ").s(line)
+    return joined.take()
+
+priv const PLANTED: U8[][_] = ::{ "r0=1\nchk=7\n", "r0=1\nchk=8\n", "r0=1\nchk=7\n" } //<
+    //< Runs that disagree, which `judge` must flag: the oracle's own failure case
+    //< The second differs in one line, and the third in its exit code alone.
+
+priv fn check_planted(builds: Build[], arena: Arena$@) //< judge flags each kind of disagreement
+    $runs: = List<|Ran|>(arena)
+    runs.push(Ran::{ .built = true, .code = .some(0), .out = PLANTED[0] })
+    runs.push(Ran::{ .built = true, .code = .some(0), .out = PLANTED[1] })
+    verdict.check("the verdict flags runs whose output differs",
+        judge(.none, builds, runs@, arena).find_str("line 2").is_some(), "")
+    runs.set(1, Ran::{ .built = true, .code = .some(134), .out = PLANTED[2] })
+    verdict.check("the verdict flags runs whose exit code alone differs",
+        judge(.none, builds, runs@, arena).find_str("exit 0 against 134").is_some(), "")
+    runs.set(1, Ran::{ .built = true, .code = .some(0), .out = PLANTED[0] })
+    verdict.check("the verdict flags a program that does not stop where it was written to",
+        judge(.divide, builds, runs@, arena).find_str("was written to stop").is_some(), "")
+    verdict.check("the verdict passes runs that agree",
+        judge(.none, builds, runs@, arena).len == 0, judge(.none, builds, runs@, arena))
+
+// ==========================================
+// The builds
+// ==========================================
+
+priv fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does not run
+    r: = harness.run(U8[][]::{ cc, "--version" })
+    if !r.exited_with(0)
+        return .none
+    return .some(r.out.find_str("clang").is_some())
+
+priv fn flags(level: U8[], traps: Bool, quiet_overflow: Bool, arena: Arena$@): U8[][] //<
+    //< The options for a C build: the warnings made errors, the level, and maybe the traps
+    //< quiet_overflow turns gcc's -Woverflow off: it warns about narrow values folded from
+    //< constants that fit (`random_prog.GCC_OVERFLOW`), a fault of gcc's.
+    $out: = List<|U8[]|>(arena)
+    out.push_all(U8[][]::harness_build.WARN_CFLAGS)
+    out.push("-Werror")
+    if quiet_overflow
+        out.push("-Wno-overflow")
+    out.push(level)
+    if traps
+        out.push_all(U8[][]::TRAP_CFLAGS)
+    return out.slice()
+
+priv fn llvm_flags(level: U8[], arena: Arena$@): U8[][] //< the options for building the IR
+    $out: = List<|U8[]|>(arena)
+    out.push_all(U8[][]::harness_build.LLVM_CFLAGS)
+    out.push(level)
+    return out.slice()
+
+priv fn builds(open: Bool, arena: Arena$@): List<|Build|> //<
+    //< Every build this machine can make: each C compiler family at two levels, and the IR at two
+    //< **Both families are mandatory where `KANSO_REQUIRE_BOTH_CC=1`**, as for `test-equiv`.
+    //< Caution: **Ask each compiler what it is.** macOS's `gcc` is clang.
+    $out: = List<|Build|>(arena)
+    $families: = List<|U8[]|>(arena)
+    $gcc: = List<|Bool|>(arena)
+    families.push(harness.cc())
+    if mine: = is_clang(harness.cc())
+        gcc.push(!mine)
+        other: = "gcc" if mine else "clang"
+        if theirs: = is_clang(other)
+            if theirs != mine
+                families.push(other)
+                gcc.push(!theirs)
+    else
+        gcc.push(false)
+    if families.len < 2
+        harness.require_or_skip("generated programs agree under gcc and clang",
+            "KANSO_REQUIRE_BOTH_CC", "only one of the two C compilers is installed")
+    for i in Range.asc(families.len)
+        cc: = families.get(i)
+        quiet: = gcc.get(i) && !open
+        // One family traps at `-O0`, the other at `-O2`, so each level is built with and without.
+        out
+            .push(Build::{ .name = arena.text().s(cc).s(" -O0").s(" traps" if i == 0 else "").take(),
+            .cc = cc, .llvm = false, .flags = flags("-O0", i == 0, quiet, arena) })
+        out
+            .push(Build::{ .name = arena.text().s(cc).s(" -O2").s(" traps" if i != 0 else "").take(),
+            .cc = cc, .llvm = false, .flags = flags("-O2", i != 0, quiet, arena) })
+    out
+        .push(Build::{ .name = "llvm -O0", .cc = harness.cc(), .llvm = true,
+        .flags = llvm_flags("-O0", arena) })
+    out
+        .push(Build::{ .name = "llvm -O2", .cc = harness.cc(), .llvm = true,
+        .flags = llvm_flags("-O2", arena) })
+    return out
+
+// ==========================================
+// The run
+// ==========================================
+
+priv fn gen_path(c: Case@, llvm: Bool, arena: Arena$@): U8[] //<
+    //< where ksplc writes a backend's output
+    return arena.text().s(c.src).s(".ll" if llvm else ".c").take()
+
+priv fn exe_path(c: Case@, b: Sz, arena: Arena$@): U8[]
+    return arena.text().s(c.src).s(".b\{b\}.exe").take()
+
+priv fn translate(cases: List<|Case|>$@, arena: Arena$@) //< both backends' output, side by side
+    $jobs: = List<|subproc.Job|>(arena)
+    for c in cases
+        for llvm in Bool[]::{ false, true }
+            $args: = List<|U8[]|>(arena)
+            if llvm
+                args.push("--to=llvm")
+            args.push(c.src)
+            args.push(gen_path(c@, llvm, arena))
+            jobs
+                .push(subproc.Job::{ .argv = harness.ksplc_argv(args.slice()), .cwd = "" })
+    outs: = harness.run_all(jobs.slice(), "translate")
+    for i in Range.asc(cases.len)
+        $c: = cases.get(i)
+        both: = arena.text().s(outs.get(2 * i).out).s(outs.get(2 * i + 1).out).take()
+        c.translated =
+            outs.get(2 * i).exited_with(0) && outs.get(2 * i + 1).exited_with(0)
+        c.said = both.trim_spaces()
+        cases.set(i, c)
+
+priv fn build_and_run(cases: List<|Case|>$@, bs: Build[], arena: Arena$@) //<
+    //< Every build of every translated program, then every run
+    $jobs: = List<|subproc.Job|>(arena)
+    $why: = List<|U8[]|>(arena)
+    for c in cases
+        if !c.translated || c.said.len > 0
+            continue
+        for b in Range.asc(bs.len)
+            j: = harness_build.exe_job_with(bs[b].cc, gen_path(c@, bs[b].llvm, arena),
+                exe_path(c@, b, arena), bs[b].flags, bs[b].llvm)
+            jobs.push(j.job)
+            why.push(j.why)
+    built: = harness.run_all(jobs.slice(), "build")
+    $runs: = List<|subproc.Job|>(arena)
+    $k: Sz = 0
+    for c in cases
+        if !c.translated || c.said.len > 0
+            continue
+        for b in Range.asc(bs.len)
+            if why.get(k).len == 0 && built.get(k).exited_with(0)
+                $argv: = List<|U8[]|>(arena)
+                argv.push(exe_path(c@, b, arena))
+                runs.push(subproc.Job::{ .argv = argv.slice(), .cwd = "" })
+            k += 1
+    ran: = harness.run_all(runs.slice(), "run")
+    $at: Sz = 0
+    k = 0
+    for i in Range.asc(cases.len)
+        $c: = cases.get(i)
+        if !c.translated || c.said.len > 0
+            continue
+        for _b in Range.asc(bs.len)
+            if why.get(k).len > 0
+                c.runs.push(Ran::{ .built = false, .code = .none, .out = why.get(k) })
+            else if !built.get(k).exited_with(0)
+                c.runs
+                    .push(Ran::{ .built = false, .code = .none, .out = built.get(k).out })
+            else
+                r: = ran.get(at)
+                c.runs.push(Ran::{ .built = true, .code = r.code, .out = r.out })
+                at += 1
+            k += 1
+        cases.set(i, c)
+
+fn main(): I32
+    arena: = harness.begin(512 * 1024 * 1024)
+    $n_arg: = DEFAULT_N
+    $seed_arg: = DEFAULT_SEED
+    $open_arg: I64 = 0I64
+    p: = argparse.Parser
+        .create("random_equiv_test", "generated programs agree on every build", arena)
+    p.int_opt("--n", n_arg@, "how many programs to write")
+    p.int_opt("--seed", seed_arg@, "the first seed; the others follow it")
+    p.int_opt("--open", open_arg@, "1 also writes the shapes ksplc fails on today")
+    $more: = List<|U8[]|>(arena)
+    more.push_all(harness.more_args())
+    p.parse_list(more@) catch e
+        return harness.fatal(arena.text().s("\{e\}").take())
+    dir: = harness.sandbox("random_equiv")
+    $bs: = builds(open_arg == 1I64, arena)
+    check_planted(bs.slice(), arena)
+    again: = random_prog.write(U64::seed_arg, open_arg == 1I64, arena)
+    verdict.check("the same seed writes the same program",
+        again.text.equals(random_prog.write(U64::seed_arg, open_arg == 1I64, arena).text), "")
+    io.out().s("# \{n_arg\} programs from the seed \{seed_arg\}, \{bs.len\} builds each\n")
+    $cases: = List<|Case|>(arena)
+    for i in Range.asc(Sz::n_arg)
+        seed: = U64::seed_arg + U64::i
+        prog: = random_prog.write(seed, open_arg == 1I64, arena)
+        src: = fs.join(dir, arena.text().s("p\{seed\}.kspl").take(), arena)
+        io.write_file(src, prog.text) catch
+            return harness.fatal("cannot write a generated program")
+        cases
+            .push(Case::{ .seed = seed, .program = prog, .src = src, .said = "",
+            .translated = false, .runs = List<|Ran|>(arena) })
+    translate(cases@, arena)
+    build_and_run(cases@, bs.slice(), arena)
+    $bad: = List<|U8[]|>(arena)
+    for c in cases
+        $why: U8[] = ""
+        if !c.translated
+            why = arena.text().s("\n    ksplc refused it:\n").s(c.said).take()
+        else if c.said.len > 0
+            why = arena.text().s("\n    ksplc said something about it:\n").s(c.said).take()
+        else
+            why = judge(c.program.stop, bs.slice(), c.runs@, arena)
+        if why.len > 0
+            bad
+                .push(arena.text().s("seed \{c.seed\} (").s(c.src).s("):").s(why).take())
+            io.out().s("# the program of seed \{c.seed\}:\n").s(c.program.text)
+                .s("# end of seed \{c.seed\}\n")
+    verdict.check_list("every generated program agrees on every build", cases.len, "programs", bad@,
+        "rerun one with --seed=<seed> --n=1; the program is printed above")
+    return harness.finish()

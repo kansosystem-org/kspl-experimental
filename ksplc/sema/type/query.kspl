@@ -370,6 +370,19 @@ impl sema_type_env.Env
         return r.is_unaddressable_value(node) ||
             (!r.is_slice(node.type_id) && !r.is_place_expr(node))
 
+    fn receiver_is_copy(r: Self$@, node: Ast_node$@, type_id: I32): Bool //<
+        //< Whether a receiver of type `type_id` taken by pointer is a copy nothing reads again
+        //< A `Self$@` method's write to it would be lost, so **the direct call and a trait value
+        //< both ask this** ("Places, and the rules for when they may be written" in
+        //< docs/SPEC-programming-language.md). It is a receiver that receiver_needs_hoist copies,
+        //< or a slice that is no place (`"ab"`, `(U8[]::a)`), whose descriptor is a copy too.
+        //< `type_id` is passed apart, since a trait value asks before its node is typed.
+        if node == null || r.is_pointer(type_id)
+            return false
+        if r.is_slice(type_id)
+            return !r.is_place_expr(node)
+        return r.receiver_needs_hoist(node)
+
     fn is_value_index_node(r: Self$@, node: Ast_node$@): Bool //<
         //< Whether a subscript resolved to `Index.get`, which returns a copy of the element
         //< The subscript is then a call's result: not a place, and its address cannot be taken. A

@@ -349,6 +349,25 @@ priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$
     // so a free before the copy reads freed memory at the report.
     text: U8[] = arena.dup_str(heap_text)
     dealloc(Void$@::heap_text.ptr)
+    check_text(text, stats, bad, arena)
+    return true
+
+// **The check shows it can fail**: a call that hands `i32` where the `define` takes `i64` is
+// reported. A reading that no longer finds a call would pass every file.
+priv const MISMATCHED_IR: U8[] =
+    """
+define void @f(i64 %n) {
+  ret void
+}
+
+define void @g() {
+  call void @f(i32 2)
+  ret void
+}
+"""
+
+priv fn check_text(text: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$@) //<
+    //< Adds one file's disagreements to bad
     lines: = text.lines(arena)
     $defines: = Map<|U8[], Def_params|>(arena)
     $calls: = List<|Call|>(arena)
@@ -434,7 +453,6 @@ priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$
         if want: = defines.get(c.name)
             if !is_varargs(c.raw)
                 check_call(c, want, bad, arena)
-    return true
 
 // ==========================================
 // The entry point
@@ -452,12 +470,24 @@ priv fn report(path: U8[], stats: File_stats, bad: List<|Bad|>$@)
     if bad.len > MAX_REPORTED
         io.out().s("  ... and \{bad.len - MAX_REPORTED\} more\n")
 
+priv fn fires(): Bool //< whether `MISMATCHED_IR` is reported, once; it says which
+    defer arena: = Arena(64 * 1024)
+    $stats: = File_stats::{ .defines = 0, .calls = 0, .rets = 0 }
+    $bad: = List<|Bad|>(arena)
+    check_text(MISMATCHED_IR, stats@, bad@, arena)
+    if bad.len == 1
+        io.out().s("# a call whose argument type disagrees with its define is reported\n")
+        return true
+    io.out().s("  a call whose argument type disagrees with its define gave \{bad.len\} reports, ")
+        .s("not 1\n")
+    return false
+
 fn main(): I32
     args: = sys.args()
     if args.len < 2
         io.out().s("usage: llvm_ir_abi_check.kspl <file.ll> [...]\n")
         return 2
-    $total_bad: Sz = 0
+    $total_bad: Sz = 0 if fires() else 1
     for i in Range.asc(args.len - 1)
         path: U8[] = args.get(i + 1)
         // Caution: Allocate a fresh arena per file. The body and its lines go here, so a reused

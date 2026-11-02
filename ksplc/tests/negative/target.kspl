@@ -116,21 +116,18 @@ pub struct Pod
 pub struct Wrapper
   pub inner: Pod
 
-#export
-pub fn takes_pod_by_value(p: Pod): I32
+pub extern fn takes_pod_by_value(p: Pod): I32
   return p.a + p.b
 
-#export
-pub fn returns_pod_by_value(): Pod
+pub extern fn returns_pod_by_value(): Pod
   return Pod::{ .a = 1, .b = 2 }
 
-#export
-pub fn takes_pod_by_ptr(p: Pod$@): I32
+pub extern fn takes_pod_by_ptr(p: Pod$@): I32
   return p.a + p.b
 
 fn main() {}
 // ==== case ffi_unsafe_types
-//< A type whose layout is Kanso's own cannot appear in an `#export`'s signature
+//< A type whose layout is Kanso's own cannot appear in an `extern` definition's signature
 //< Wrapping it in a struct is the same: the check walks inside. A check of the outermost layer
 //< alone could be escaped by wrapping (docs/DESIGN-programming-language.md "The FFI boundary check looks inside
 //< the type").
@@ -165,26 +162,46 @@ pub enum Plain
   a
   b
 
-#export
-pub fn takes_trait(s: S): I32
+pub extern fn takes_trait(s: S): I32
   return s.a()
 
-#export
-pub fn takes_tagged(t: Tagged): I32
+pub extern fn takes_tagged(t: Tagged): I32
   switch t case .some(v)
     return v
   default
     return 0
 
-#export
-pub fn takes_wrapped(w: Wrapped): Sz
+pub extern fn takes_wrapped(w: Wrapped): Sz
   return w.items.len
 
-#export
-pub fn takes_pod(p: Pod, e: Plain): I32
+pub extern fn takes_pod(p: Pod, e: Plain): I32
   return p.a + I32::e
 
 fn main() {}
+// ==== case ffi_variadic_layout
+//< A value whose layout is Kanso's own is refused inside a C function's `...` too
+//< C reads a `...` value as the type its format names. A slice there was read as a `char*` and
+//< crashed, and clang's format warning reached the user. The passing side shows what to write.
+// EXPECT: ffi_variadic_layout.kspl:18:51: error: a slice (T[]) cannot be passed into a C function's '...'
+// EXPECT: ffi_variadic_layout.kspl:19:51: error: a slice (T[]) cannot be passed into a C function's '...'
+// EXPECT: ffi_variadic_layout.kspl:20:51: error: slices (T[]) cannot cross C-FFI boundaries
+// EXPECT-NOT: :22:
+// EXPECT-NOT: :23:
+import "std/libc"
+
+pub struct Wrapped
+  pub items: U8[]
+
+fn main()
+  $buf: U8[32] = ::{}
+  name: U8[] = "kanso"
+  w: = Wrapped::{ .items = name }
+  _a: = libc.snprintf((U8$[]::buf).ptr, 32, "%s", name)
+  _b: = libc.snprintf((U8$[]::buf).ptr, 32, "%s", "literal")
+  _c: = libc.snprintf((U8$[]::buf).ptr, 32, "%p", w)
+  // The passing side: the length and the pointer for '%.*s', and a number.
+  _d: = libc.snprintf((U8$[]::buf).ptr, 32, "%.*s", I32::name.len, name.ptr)
+  _e: = libc.snprintf((U8$[]::buf).ptr, 32, "%d", 3)
 // ==== case frame_pointer_through_local
 //< A slice or an interface value pointing into the frame is refused through a local too
 //< **Let it through and it reads a dead frame**. `t: Shape = s; return t` printed 0 on C and
@@ -313,8 +330,7 @@ struct Holder
     words: Sz[2]
     tail: I32
 
-#export
-fn second(): I64
+extern fn second(): I64
     h: Holder = ::{ .words = ::{ 1, 2 }, .tail = 9 }
     wide: = I64[]::(h.words)
     return wide[1]

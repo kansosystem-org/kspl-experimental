@@ -104,25 +104,25 @@ impl Sema_ctx
         r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
             .error,
             "this program has no main(). Execution starts at 'fn main()', so there is no entry \
-                point. Add one, or build a library from '#export' functions with '--library'")
+                point. Add one, or build a library from 'extern' functions with '--library'")
 
     fn check_library_shape(r: Self$@, root: Ast_node$@) //<
         //< Under `--library`, refuses what a library cannot hold
         //<   - A `main`: the program that links the library has its own.
-        //<   - An `#export` variable or constant: a DLL's data needs a mark on its user's side that
-        //<     no header can choose.
+        //<   - An `extern` variable or constant: a DLL's data needs a mark on its user's side
+        //<     that no header can choose.
         //<   - An input exporting no function: the library would hold nothing a caller can reach.
         if r.suppress_errors || !base_core.is_library()
             return
         if main_sym: = r.env.find_main_symbol()
             r.err(main_sym.node,
                 "main() must not be in a library ('--library'). The linking program provides main() \
-                    and calls the library's '#export' functions. Remove main(), or build without \
+                    and calls the library's 'extern' functions. Remove main(), or build without \
                     '--library'")
         $exported: Sz = 0
         for raw in root.children
             n: = raw.unwrap_top_level()
-            if !n.has_attribute("export")
+            if !n.publishes_to_c()
                 continue
             if n.kind_id == .k_decl_fn
                 exported += 1
@@ -135,8 +135,9 @@ impl Sema_ctx
             return
         r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
             .error,
-            "'--library' builds a library from its '#export' functions. This program exports none, \
-                so callers could access nothing. Mark the functions its callers use '#export'")
+            "'--library' builds a library from its 'extern' functions. This program publishes none, \
+                so callers could access nothing. Write 'extern' before the functions its callers \
+                use")
 
     fn check_unused_symbols(r: Self$@) //<
         //< [W0206] checks **every file the compile read** for unused names
@@ -195,7 +196,7 @@ impl Sema_ctx
     priv fn check_unused_symbols_in(r: Self$@, file_env: sema_type_scope.File_env$@)
         for entry in file_env.symbols.items()
             sym: = entry.value
-            // Caution: **Do not reject a `#export` on a `priv` here** (`sema/decl/attrs.kspl`
+            // Caution: **Do not reject an `extern` on a `priv` here** (`sema/decl/attrs.kspl`
             // does). This runs only under lint, so a build would let it pass silently.
             if sym.vis != sema_type_scope.Visibility.file_private || sym.flags.is_used ||
                 sym.flags.is_required
@@ -499,6 +500,6 @@ priv fn null_is_their_word(file: U8[]): Bool //<
     //< Whether a file's raw `null` return is its contract, so [H0701] does not ask about it
     //< **Memory (`std/mem`) and C (`std/libc`) speak in raw pointers**: an allocation that fails is
     //< a null, and so is C's "none". Everywhere else, std included, absence is a `T?`. A function
-    //< carrying `#export` is the other C boundary, judged at the check.
+    //< published with `extern` is the other C boundary, judged at the check.
     name: = file.strip_kspl_ext()
     return name.equals("std/mem") || name.equals("std/libc")

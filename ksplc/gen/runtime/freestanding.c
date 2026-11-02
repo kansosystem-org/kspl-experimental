@@ -63,3 +63,17 @@ KSPL_LINK Sz kspl_stack_floor(void) { return (Sz)&__stack_low; }
 #else
 KSPL_LINK Sz kspl_stack_floor(void) { return 0; }
 #endif
+
+/* std/mem.kspl's Arena marks the bytes it has not handed out, for the address sanitizer
+ * (hosted.c). Bare metal has no sanitizer, so the marks do nothing. */
+KSPL_LINK void kspl_mem_poison(void *ptr, Sz len) {
+    (void)ptr;
+    (void)len;
+}
+KSPL_LINK void kspl_mem_unpoison(void *ptr, Sz len) {
+    (void)ptr;
+    (void)len;
+}
+KSPL_LINK Bool kspl_mem_poisons(void) {
+    return false;
+}

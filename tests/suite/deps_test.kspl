@@ -4,6 +4,7 @@
 //< answers "up to date". So **an executable without your edit** passes every gate with no sign of
 //< it. It is compared with the compiler itself: `--emit-deps` writes **the sources that
 //< compilation opened**.
+//< Its failure case: `tests/suite/deps_test.kspl#UNLISTED`, a source read but not listed.
 
 // ==========================================
 // Caution: **Do not copy the list out by hand**; it goes stale with the next import, and this
@@ -88,17 +89,35 @@ priv fn embedded_paths(srcs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
                     break
     return out
 
-priv fn all_listed(name: U8[], want: List<|U8[]|>@, srcs: List<|U8[]|>@, missed: U8[],
-    arena: Arena$@) //<
-        //< Every item of `want` is in `srcs`; `missed` says what a missing one costs
+priv fn missing(want: List<|U8[]|>@, srcs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
+    //< The items of `want` that `srcs` does not hold, each once
     $bad: = List<|U8[]|>(arena)
     for i in Range.asc(want.len)
         if !srcs.contains(want.get(i)) && !bad.contains(want.get(i))
             bad.push(want.get(i))
+    return bad
+
+priv fn all_listed(name: U8[], want: List<|U8[]|>@, srcs: List<|U8[]|>@, missed: U8[],
+    arena: Arena$@) //<
+        //< Every item of `want` is in `srcs`; `missed` says what a missing one costs
+    $bad: = missing(want, srcs, arena)
     verdict.check_list(name, want.len, "paths", bad@, missed)
+
+priv const UNLISTED: U8[] = "a source read but not listed" //< the failure case, read and not listed
+
+priv fn check_fires(arena: Arena$@) //< a source the compiler read and the list lacks is found
+    $read: = List<|U8[]|>(arena)
+    read.push("ksplc/main.kspl")
+    read.push(UNLISTED)
+    $listed: = List<|U8[]|>(arena)
+    listed.push("ksplc/main.kspl")
+    found: = missing(read@, listed@, arena)
+    verdict.check("a source read but not listed is found",
+        found.len == 1 && found.get(0).equals(UNLISTED), "")
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
+    check_fires(arena)
     work: = harness.sandbox("deps")
     srcs: = kspl_srcs(arena)
     if !verdict.check("KSPL_SRCS can be read from the Makefile", srcs.len > 0,

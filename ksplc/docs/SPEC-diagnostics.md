@@ -20,12 +20,12 @@ The terminal view omits parenthetical document references and Markdown link targ
 | a bit shift by the left side's type width or more, or by a negative amount | changes what runs |
 | an integer literal outside its range (`U8 = 300` and the like) | changes what runs |
 | a line in the indentation notation whose column matches no block | the reader and the compiler would disagree. `ksplc fmt` rebuilds the columns from the tree, so no formatted source meets it |
-| an `#export` on a `priv` | written but does nothing: `priv` makes the generated C `static`, so the exported name still links to nothing outside |
+| `extern` before a `priv` definition | written but does nothing: `priv` makes the generated C `static`, so the published name still links to nothing outside |
 | a `;` at the end of a statement's line in the indentation notation | a second way of writing the line's end, which already ends the statement. `ksplc fmt` drops it |
 | a `;` right after the `}` of a block written on one line, where that block ends its statement (`if c { f() }; g()`) | a second way of writing that end. A block inside a value (`x: = f() catch { 0 }; g(x)`) ends no statement, and its `;` stays |
 | a method a trait requires, written in another block of the type than `impl T: Trait` (`'Arena: Manual_free' requires 'free'. Move 'fn free' (line 650) into this block`) | the conformance block no longer shows what meets the trait. The error names the line the method stands on now |
 
-The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). For `#export` the rule is "11.3 Exposing a KSPL function to C (`#export`)", and for a trait's methods "5.3 Checking trait conformance", in the same document.
+The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). For `extern` the rule is "11.3 Publishing a KSPL definition to C (`extern` with a body)", and for a trait's methods "5.3 Checking trait conformance", in the same document.
 
 ## 2. The list of warnings (W)
 
@@ -52,15 +52,17 @@ A pointer from `arena.alloc()` / `arena.alloc_as<|T|>()` / `arena.create<|T|>()`
 
 ### [W0105] A borrow used outside the lock
 `thread.Mutex<|T|>.lock()` returns a mutable pointer (a borrow) to the protected value. The borrow is either:
-* (A) used after the matching `unlock()` (a data race: two threads can change the value at once), or
-* (B) `return`ed to the caller.
+* (A) used after the matching `unlock()` on some path to the use (a data race: two threads can change the value at once),
+* (B) `return`ed to the caller, or
+* (C) stored through a parameter or into a global (`out$ = p`), where it outlives the function.
 
-It walks one function's straight-line code, and stops at a branch, a loop or a nested block. A guard type of the same shape is caught too, and an alias (`q: = p;`) inherits the tracking.
-* **Fix**: for (A), use the borrow before the `unlock()`, or `lock()` again just before the use. For (B), copy out the value needed while holding the lock, and return the copy.
+It follows the dataflow of one function: branches, each way out, and a loop's back edge. So a borrow kept over a loop whose body unlocks is caught on the loop's second turn. A guard type of the same shape is caught too, and an alias (`q: = p`) inherits the tracking.
+* **It is a lint, not a guarantee.** A lock reached through a field, a borrow passed to another function, and two branches on the same condition are not followed.
+* **Fix**: for (A), use the borrow before the `unlock()`, or `lock()` again just before the use. For (B) and (C), copy out the value needed while holding the lock, and pass on the copy.
 
 ### [W0106] A lock taken and not released
-After `thread.Mutex<|T|>.lock()`, neither an `unlock()` nor a `defer` releasing it is found before the scope is left. Another thread waiting for the lock then waits forever. It uses [W0105]'s straight-line walk, with the same limits.
-* **Fix**: call `g.unlock()` when done, or `defer g.unlock()` right after locking, which releases on every exit.
+After `thread.Mutex<|T|>.lock()`, the lock is still held, on every path, where the function is left: at a `return`, a `throw`, a `!` or the body's end. A `defer` that unlocks counts as released at each of them. Another thread waiting for the lock then waits forever; a thread's entry function that returns holding it is the usual case. It follows the same dataflow as [W0105], with the same limits.
+* **Fix**: call `g.unlock()` before each way out, or `defer g.unlock()` right after locking, which releases on every exit.
 
 ### [W0107] A method that frees outside a release contract
 The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` and the method called is `free`. So a `pub` method that frees its receiver otherwise lets `x.close(); x.read();` compile silently. It is reported where the name differs (`close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`). It is also reported where the name is `free` but the type has no `impl X: Manual_free {}`.
@@ -90,6 +92,32 @@ A pointer to such a value (`Arena(…)`'s result) is read only up to a `defer` l
 * **Not seen**: a field or a value reached through a pointer, a generic body no instance uses, or an arena variable `null` at run time.
 * **Fix**: put `defer` in front of the declaration (`defer $b: = Str_builder()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.
 
+### [W0110] A container keeps a trait value of a local
+A local value becomes a trait value where the trait is expected, with no `@` written, and the trait value keeps the local's address. Here it is handed to a method that takes its receiver as `Self$@`, on a container that holds that trait as a type argument: `xs.push(sq)` with `xs: List<|Shape|>`. The container can keep the address after the local's block ends. It is reported where the container is behind a pointer, in a global, or in a local of an outer block.
+* **A container in a local of the same block or a deeper one is not reported.** It dies no later than the value. Returning it, or storing it where it outlives the frame, is a compile error instead ("8.4.5 Tracking a free with `Manual_free`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-manual_free)).
+* **It is a warning, not an error**: the signature does not say whether the method keeps what it is handed.
+* **Fix**: keep the value as long as the container. Make it in the container's arena (`arena.create(Sq::{ … })`) and pass that pointer, or let the container hold the concrete type (`List<|Sq|>`).
+
+### [W0111] A view used after its owner moved its memory
+A local holds a view: a slice or a pointer into memory that another local owns. A call on that owner then ends the view, and the view is used after it. The view's reads and writes then touch memory that may belong to something else. Which calls do this is "8.4.6 What invalidates a view" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#846-what-invalidates-a-view):
+* **A view is made** by a method marked `#gives_view` (`xs.slice()`, `xs[i]@`, `b.slice()`, `arena.dup_str(…)`, `arena.text()…take()`, `rc.get()`, `m.items()`), or by a copy of a view (`q: = p`).
+* **A view is ended** by a method marked `#ends_views` on its owner (`xs.push(…)`, `m[k] = v`, `b.s(…)`, `arena.reset()`), or by the owner's `free()`. A new value given to a local `Rc<|T|>` that nothing in the function copied ends it too.
+
+```kspl
+p: = xs[0]@
+xs.push(Point::{ .x = 3, .y = 4 }) // may move every element
+p.x = 9 // warning: 'p' points into 'xs', which 'push' on line 2 may have moved or released
+```
+
+It follows the dataflow of one function: branches, and a loop's back edge. So a view kept over a loop whose body grows the list is caught on the loop's second turn. A view of a view (`b: = arena.text()`, then `s: = b.take()`) ends with the first owner.
+* **Not reported**:
+  * a view taken again after the call, or a view of another owner;
+  * a copy of an element (`e: = xs[0]`);
+  * a view only compared (`p == q`), which reads no memory;
+  * an `Rc` the function copied, which may have another owner.
+* **It is a lint, not a guarantee.** It does not follow a view or an owner reached through a field. Nor does it follow a view passed to another function or stored in a container, or an owner changed by another function.
+* **Fix**: take the view again after the call, or keep an index (`i`) or a copy of the value instead of the view.
+
 ### [W0201] Unreachable code
 Code after a `return`, a `throw`, a `for` that never ends, a `#noreturn` call (`sys.exit`, `panic`) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable.
 * **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#72-loops)), nor after a `#noreturn` call. A `catch` block ending in one needs no `fallback` ("8.3.2 Catching an error (`catch`)" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#832-catching-an-error-catch)).
@@ -98,10 +126,19 @@ Code after a `return`, a `throw`, a `for` that never ends, a `#noreturn` call (`
 An expression's result is not stored, and it has no side effect (a call, an assignment), so it does nothing. Examples are `1 + 1;` and a bare variable reference.
 
 ### [W0203] A meaningless self-assignment
-A variable is assigned its own value, as in `a = a;`.
+A place is assigned its own value, as in `a = a`, `p.n = p.n`, or `b |= b` and `b &= b`, which give `b` back. It changes nothing, so it is usually a slip for another name.
+* **Fix**: delete it, or assign what was meant.
 
 ### [W0204] A meaningless comparison
-A variable is compared with itself, as in `a == a` or `b <= b`, so the result is fixed.
+A comparison whose answer its own text already fixes. There are five shapes:
+* **One expression on both sides**, written alike and calling nothing, as in `a == a`, `p.n < p.n` or `(a ^ b) != (a ^ b)`. A floating-point value is left out: `f != f` is how IEEE 754 asks whether `f` is a NaN.
+* **A number written beside a side that cannot reach it**, or at the edge of what that side holds: `u >= 0U32` and `u < 0U32` with `u: U32`, `x < -128I8`, `b <= 255U8`. The side's range is its type's, or what its casts and operators leave of it (`I32::(b) < 0` with `b: U8`; `(u & 15U32) > 20U32`). A number outside the type's range is an error instead ("6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#68-integer-arithmetic-folding-overflow-division-shifts)).
+* **A mask that rules the number out**: `(x & 1) == 2`, `(x | 4) == 1`.
+* **A `Bool` joined with its own negation**: `b || !b` is always true, and `b && !b` always false, in either order.
+* **Two tests of one value against written numbers, joined by `&&` or `||`, with a fixed answer**: no value passes both `3 <= x` and `1 > x`, and every value passes `x < 3` or `x > 1`. Where one test is fixed alone (`b >= 0U8 || b < 3U8`), that test is reported, not the pair. `Sz` is read at its widest, so such an answer holds on every target.
+
+**An answer fixed by something set elsewhere is not reported.** That is a generic's type argument (`x >= 0` in a body where `T` is `U32`), or a named constant a build sets (`n >= LIMIT` with `LIMIT` at `0`). Two constants are left out too, and `Sz`, whose width differs per target. The program computes the same answer whether or not the warning is followed.
+* **Fix**: delete the test, or compare with what was meant, such as another variable or a value the type can reach.
 
 ### [W0205] A constant condition
 An `if` or `for` condition is a boolean literal, as in `if true` / `if false` or `for true` / `for false`.
@@ -165,8 +202,13 @@ A function named `test_…` stands in a file that only files with no suite impor
 * **Fix**: import the test's file from the file that holds the suite, or move the test into a file that file imports.
 * **Not reported**: a compile with no `main`. A file compiled alone is not the program that runs its tests.
 
+### [W0215] A `^` between two numbers, likely meant as a power
+`^` is exclusive or in KSPL. Where its left side is `2` or `10` and both sides are numbers written in decimal (`10 ^ 2`, `2 ^ 8U32`), the writer likely meant a power: `10 ^ 2` is 8, not 100.
+* **Not reported**: a number in hexadecimal or binary on either side (`0x0A ^ 2`), a named constant, a variable, or another number on the left (`5 ^ 3`). Each says that exclusive or was meant.
+* **Fix**: for a power, write its value (`100`), or `1 << n` for 2 to the n. For exclusive or, write a side in hexadecimal.
+
 ### [W0501] Conformance to a look-alike of a known trait
-The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free`). The known traits are matched by FQN (`std.lang.Ref_counted` and so on). So the look-alike turns on none of ARC, the move checks, free tracking or `defer` in front of a declaration. **Nothing else reports this for these three.**
+The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Interior_mutable`). The known traits are matched by FQN (`std.lang.Ref_counted` and so on). So the look-alike turns on none of ARC, the move checks, free tracking or `defer` in front of a declaration. Nor does a `const` that holds a lock get refused. **Nothing else reports this for these four.**
 * **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or write `##lint(W0501 = off)` in that one file.
 
 ### [W0502] A local or parameter hiding an imported module
@@ -185,6 +227,23 @@ A top-level function stands in a file of tests, nothing calls it, and its name d
 ### [W0601] The use of an ARC-managed type
 Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). ARC (automatic reference counting) inserts `retain()`/`release()` calls that run invisibly, a risk where execution timing must stay visible. It is reported where a local's or parameter's type is ARC-managed (conforms to `Ref_counted`), or holds one as a value field at any depth.
 * **Fix**: consider explicit ownership through an arena or `defer`. A deliberate exception can stay. To exclude one file while it is enabled, write `##lint(W0601 = off);`.
+
+### [W0602] A place whose memory safety the compiler cannot check
+Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). It lists each place where the text shows a shape that "14.2 Undefined" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#142-undefined---no-answer-is-fixed) leaves undefined when it goes wrong. It is a list for a review, not a finding of a fault: most places it lists are correct. Each finding names the kind of place and what the compiler does not check there:
+
+* **Pointer arithmetic** (`p + i`, `p - i`, so also `(p + i)$`): that the address stays inside the memory it points into.
+* **A cast removes read-only** (`U8$@::p` from a `U8@`, `U8$[]::s` from a `U8[]`): that the memory can be written.
+* **A slice built by hand** (`U8[]::{ .ptr = …, .len = … }`): its length against the memory behind `.ptr`.
+* **A call into C with a pointer or a size**: the pointer or the size against the memory behind it.
+* **A byte range given as an address and a size**: the size against the memory at the address. It is a call of a function that takes a `Void` pointer and an `Sz`, such as `mem.copy`.
+* **An integer becomes a pointer** (only in a `#raw_address` function): that there is memory at that address.
+* **A pointer cast to another pointee type** (`I32$@::p`), and **a `Void$@` taken as a `T$@`** with no cast written: the memory's size or alignment for that type.
+* **A writable byte view of a typed value** (`U8$@::e@`): that the bytes written make a valid value of that type.
+
+* **Some unchecked places are not listed**, as their text looks like any other code. Examples are a view kept after its memory moves or is freed, a data race and a null pointer.
+* **Some safe shapes are not listed either.** These are a cast that keeps or adds read-only, and a cast to a read-only byte view (`U8@`) or a `Void` pointer. A bounds-checked index (`xs[i]`) and a write through `Index_place` are not listed.
+* **A generic's body is read in its instances.** A body that nothing instantiates is not read.
+* **Fix**: nothing is to be fixed. Read each place, and check what the compiler does not. To review one file, write `##lint(W0602 = on)` in it. `--lint=W0602=on` lists the places in every file the analysis reads, std's included.
 
 ## 3. The list of information diagnostics (I)
 
@@ -308,7 +367,7 @@ A top-level function takes, as its first parameter, an enum declared in the same
 * **Not reported**:
   * an enum of another file or package;
   * a pointer to the enum (`State@`), a slice of it, or the enum taken second;
-  * a generic function, a function C calls (`#export`), and a method already in an `impl`.
+  * a generic function, a function C calls (`extern`), and a method already in an `impl`.
 
 ### [I0601] An unnecessary mutability marker
 A variable or parameter declared with the mutability marker `$` is never reassigned within its scope (Rust's `unused_mut`). A declaration that cannot take a `$`, such as a for-in loop's variable, is out of scope.
@@ -329,8 +388,8 @@ A variable or parameter declared with the mutability marker `$` is never reassig
   | `s[i] = v`, `s` a slice | no | An element changes, not `s`; `s`'s type `T$[]` allows it |
   | `v.f = v2`, `v` a struct held **by value** (not through a pointer) | **yes** | The field is part of `v`'s own value |
   | `s.ptr = p`, `s` a slice | **yes** | A slice's own value is its pointer and length (its descriptor), so this rewrites `s` itself |
-  | `v.m()`, `v` held **by value** and `m` taking `Self$@` | **yes** | The method can rewrite `v`'s own value, as `v.f = v2` does |
-  | `p.m()`, `p` a pointer or a slice | no | The method rewrites what `p` points at |
+  | `v.m()`, `v` held **by value** (a slice too) and `m` taking `Self$@` | **yes** | The method can rewrite `v`'s own value, as `v.f = v2` does; a slice's is its descriptor |
+  | `p.m()`, `p` a pointer | no | The method rewrites what `p` points at |
   | `v.m()`, `m` taking `Self@` or `Self` | no | The method only reads `v` |
   | `p$` / `s[i]` / `s[i].m()` read or called, `p` a pointer and `s` a slice | no | Nothing of the name's own value is written |
   | `a[i] = v`, `a` a **fixed-length array** (`I32[4]`) | **yes** | The elements are part of the array's own value |
@@ -413,7 +472,7 @@ A function returning a raw pointer (`T@`) can hand back null, so a caller can fo
 
 The last is not followed through the flow. It is on by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Out of scope:
 * `std/mem` and `std/libc` (memory and C, whose contract is a raw null);
-* a function with `#export`, the FFI boundary, where C cannot read `T?`'s memory layout.
+* a function published with `extern`, the FFI boundary, where C cannot read `T?`'s memory layout.
 
 * **Not reported**:
   * a local whose address is lent (`fill(p@)`), since a write through the address goes unseen;

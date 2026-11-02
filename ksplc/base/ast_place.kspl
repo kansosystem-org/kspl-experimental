@@ -53,3 +53,54 @@ impl Ast_node
 
     fn is_callable_target(r: Self$@): Bool
         return r != null && r.is_path_or_ident()
+
+    fn spells_same_place(r: Self$@, other: Self$@): Bool //<
+        //< Whether both spell one place that reading runs no code for: a name, or its fields
+        //< `a`, `a.b.c` and `(a).b` qualify. An index, a call or a cast does not: `xs[i]` checks
+        //< its bound and may stop, so two of them are not one read. The two names stand in one
+        //< expression or statement, so they bind the same declaration.
+        a: = r.without_parens()
+        b: = other.without_parens()
+        if a == null || b == null
+            return false
+        if a.is_path_or_ident() && b.is_path_or_ident()
+            return a.text.len > 0 && a.text.equals(b.text)
+        if a.kind_id != .k_expr_postfix || b.kind_id != .k_expr_postfix ||
+            !a.postfix_op_text().equals(".") || !b.postfix_op_text().equals(".")
+            return false
+        am: = a.get_postfix_member()
+        bm: = b.get_postfix_member()
+        return am != null && bm != null && am.text.len > 0 && am.text.equals(bm.text) &&
+            a.get_postfix_receiver().spells_same_place(b.get_postfix_receiver())
+
+    fn spells_same_value(r: Self$@, other: Self$@): Bool //<
+        //< Whether both are one expression, written alike, that runs no call: it gives one value
+        //< `x`, `p.n`, `(a ^ b)` and `xs[i] + 1` qualify; `f()` does not. A check it holds (an
+        //< index's bound) gives the same answer both times.
+        a: = r.without_parens()
+        b: = other.without_parens()
+        if a == null || b == null || a.kind_id != b.kind_id || !a.text.equals(b.text) ||
+            a.children.len != b.children.len || a.has_side_effect()
+            return false
+        for i in Range.asc(a.children.len)
+            if !a.get_child(i).spells_same_value(b.get_child(i))
+                return false
+        return true
+
+    fn without_parens(r: Self$@): Self$@ //< the node inside any brackets around it
+        $at: = r
+        for at != null && at.kind_id == .k_expr_primary && at.has_parentheses()
+            at = at.get_primary_inner_expr()
+        return at
+
+    fn is_self_assignment(r: Self$@): Bool //<
+        //< Whether an assignment statement stores a place into itself, changing nothing
+        //< `x = x`, `p.n = p.n`, and `b &= b` / `b |= b`, which give `b` back.
+        if r == null || r.kind_id != .k_stmt_expr
+            return false
+        left: = r.get_assign_left()
+        op: = r.get_assign_op()
+        if left == null || op == null
+            return false
+        return (op.text.equals("=") || op.text.equals("&=") || op.text.equals("|=")) &&
+            left.spells_same_place(r.get_assign_right())

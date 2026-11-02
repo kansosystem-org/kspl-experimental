@@ -3,6 +3,7 @@
 //< in decl.kspl.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
@@ -192,6 +193,14 @@ impl Ast_node
             c.s(";\n")
             return
 
+        // Only `(void)(x)` stands for `x = x`, which keeps the variable read: clang warns about the
+        // assignment itself (-Wself-assign), a message the user must not get.
+        if r.is_self_assignment()
+            c.s("(void)(")
+            left_node.emit_expr(c)
+            c.s(");\n")
+            return
+
         op_node: = r.get_assign_op()
         op_text: = op_node.text if op_node != null else ""
 
@@ -328,10 +337,15 @@ impl Ast_node
         if step_node != null && step_node.kind_id != .k_empty
             if step_node.kind_id == .k_stmt_expr && step_node.get_assign_right() != null
                 step_left: = step_node.get_assign_left()
-                step_left.emit_expr(c)
-                op_node: = step_node.get_assign_op()
-                op_text: = op_node.text if op_node != null else ""
-                emit_assign_tail(c, step_left, "", op_text, step_node.get_assign_right())
+                if step_node.is_self_assignment()
+                    c.s("(void)(")
+                    step_left.emit_expr(c)
+                    c.s(")")
+                else
+                    op_node: = step_node.get_assign_op()
+                    op_text: = op_node.text if op_node != null else ""
+                    step_left.emit_expr(c)
+                    emit_assign_tail(c, step_left, "", op_text, step_node.get_assign_right())
             else
                 step_node.emit_expr(c)
         c.s(") ")

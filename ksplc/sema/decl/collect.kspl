@@ -123,6 +123,7 @@ priv fn collect_imports_and_lint(r: Ast_node$@, c: Sema_ctx$@) //<
             case .settings
                 child.collect_lint_decl(c)
             case .assertion { // an expression folds once the types are known (sema/body/infer.kspl).
+            } case .libraries { // read by the link (`append_program_libs` in tools/libs.kspl).
             } case .unknown {}
 
 priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
@@ -316,26 +317,26 @@ impl Sema_ctx
 impl Ast_node
     priv fn check_struct_decl_shape(r: Ast_node$@, c: Sema_ctx$@) //<
         //< Refuses a `struct S;`, which has a `;` in place of its fields
-        //< The grammar takes the form for an `extern` block's C type, which is held by pointer.
-        //< Outside one, nothing says what the type holds or how much space it takes.
+        //< The grammar takes the form for `extern struct S`, a C type held by pointer. Without
+        //< `extern`, nothing says what the type holds or how much space it takes.
         if r.find_child(.k_struct_field) != null
             return
         c.clear_scratch()
             .s("'\{r.get_decl_id_text()\}' has no fields. A struct declaration must include its \
-                fields. A type defined in C is declared inside an 'extern \"C\"' block ('struct \
+                fields. A type defined in C is declared with 'extern' ('extern struct \
                 \{r.get_decl_id_text()\}') and held by pointer")
         c.err(r, c.scratch.slice())
 
     priv fn refuse_missing_body(r: Ast_node$@, c: Sema_ctx$@, name: U8[]) //<
         //< Refuses a function written with `;` in place of its body
-        //< The grammar takes the form for a trait's requirement and an `extern` block's C function.
+        //< The grammar takes the form for a trait's requirement and for `extern fn`, a C function.
         //< Anywhere else nothing would define it.
         if r.find_child(.k_stmt_block) != null
             return
         c.clear_scratch()
             .s("'\{name\}' has no body. A function is defined where it is declared. A function \
-                defined in C, or in a library built from KSPL, is declared inside an 'extern \"C\"' \
-                block. For a KSPL library, generate the declaration with 'ksplc --library='")
+                defined in C, or in a library built from KSPL, is declared with 'extern' before it \
+                and no body. For a KSPL library, generate the declaration with 'ksplc --library='")
         c.err(r, c.scratch.slice())
 
     priv fn collect_fn_def(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility):

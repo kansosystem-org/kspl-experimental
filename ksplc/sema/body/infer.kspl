@@ -203,6 +203,8 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
 
     // From here a constant's folded value is kept (`Static_state.epoch` in ../session/state.kspl).
     c.statics.epoch = 1
+    // The top-level initializers whose check failed; their error is already reported.
+    $failed: = Map<|Sz, Bool|>(base_core.arena)
     for child_node in r.children
         // Report progress once per declaration (report_progress in base/core.kspl). Otherwise the
         // LSP's supervisor takes a silent but live worker for a hung one and kills it.
@@ -222,12 +224,19 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
                 child.infer_impl_decl(c) catch
                     has_err = true
         else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
-            child.infer_global(c)!
+            // Caution: **A failed initializer ends only its own declaration**, as a failed body
+            // does. Passed up, it ends the whole pass: every declaration after it goes unchecked,
+            // their errors unreported, and the editor's workspace walk (one pass over every file)
+            // answers "no callers" for each one that comes later in the walk.
+            child.infer_global(c) catch
+                has_err = true
+                failed.set(Sz::child, true)
     // Caution: **Check the top-level initializers once every one of them is typed.** A fold reads
     // the operands' types, and what the check records is what the backends write.
     for child_node in r.children
         child: = child_node.unwrap_top_level()
-        if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
+        if (child.kind_id == .k_decl_var || child.kind_id == .k_decl_const) &&
+            !failed.get(Sz::child).unwrap_or(false)
             init: = child.get_var_decl_expr()
             if init != null && init.kind_id != .k_empty
                 c.set_current_file(child.loc.file())
@@ -291,6 +300,9 @@ impl Ast_node
         if expr_node == null || expr_node.kind_id == .k_empty
             return
         expected_id: = r.type_id
+        saved_raw_address: = c.fn_ctx.raw_address
+        c.fn_ctx.raw_address = r.has_attribute("raw_address")
+        defer c.fn_ctx.raw_address = saved_raw_address
         expr_id: = expr_node.infer_expr(c, expected_id)!
         // A top-level declaration writes its type, so the initializer's is the one to go.
         sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
@@ -343,6 +355,9 @@ impl Ast_node
 
         if name_node != null
             c.fn_ctx.name = name_node.text
+        saved_raw_address: = c.fn_ctx.raw_address
+        c.fn_ctx.raw_address = r.has_attribute("raw_address")
+        defer c.fn_ctx.raw_address = saved_raw_address
         saved_errors_before: = c.fn_ctx.errors_before
         c.fn_ctx.errors_before = c.error_mark()
         defer c.fn_ctx.errors_before = saved_errors_before
@@ -435,8 +450,6 @@ impl Ast_node
             return false
         // A value that its `defer` frees, handed over all the same.
         sema_body_defer_decl.refuse_handover(c, block)
-        // [W0105] A lock's borrow used outside the lock (lint only).
-        sema_body_lint_stmt.lint_lock_escape(c, block)
         // [W0109] A value made here and left unfreed on some way out; [H0303] its two-line free.
         sema_body_lint_free.lint_unfreed(c, block)
         if r.has_attribute("naked") && !block.holds_only_asm(c)

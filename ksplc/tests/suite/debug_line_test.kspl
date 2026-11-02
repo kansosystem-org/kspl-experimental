@@ -51,6 +51,8 @@ priv fn is_ident(s: U8[]): Bool //< whether the text is a valid name
             return false
     return true
 
+priv const RUNTIME_DIR: U8[] = "ksplc/gen/runtime/" //< where `#line` names the runtime's C files
+
 priv fn mark_lines(body: U8[], arena: Arena$@): List<|Sz|> //<
     //< It collects the lines `// MARK:<name>` is actually on (only a line ending in a name)
     $out: = List<|Sz|>(arena)
@@ -106,7 +108,8 @@ priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
     $own: Sz = 0
     $lost: = ""
     for d in directives(text, arena)
-        if d.path.starts_with("std/")
+        // std's and the runtime's paths are named from their own trees, not from the package.
+        if d.path.starts_with("std/") || d.path.starts_with(RUNTIME_DIR)
             continue
         own += 1
         if lost.len == 0 && !fs.exists(fs.join(top, d.path, arena))
@@ -164,12 +167,13 @@ fn main(): I32
     verdict.check("#line comes out in the generated C", dirs.len > 0, "")
 
     // It must point at a KSPL source; pointing at the generated C makes the debugger show the
-    // generated lines.
+    // generated lines. **The runtime's own C is the exception**: it is written by hand, so its
+    // file is the source a debugger should show.
     $non_kspl: = ""
     $fixture_lines: = List<|Sz|>(arena)
     $saw_imported: = false
     for d in dirs
-        if !d.path.ends_with(".kspl") && !d.path.ends_with(".kspl") && non_kspl.len == 0
+        if !d.path.ends_with(".kspl") && !d.path.starts_with(RUNTIME_DIR) && non_kspl.len == 0
             non_kspl = d.path
         if d.path.equals(FIXTURE)
             fixture_lines.push(d.line)

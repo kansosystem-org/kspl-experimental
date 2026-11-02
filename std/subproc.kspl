@@ -21,21 +21,20 @@ import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/sys"
 
-extern "C"
-    // argv is passed as one buffer with NUL separators (`start`). `stdio` is the sum of the
-    // `stdio_*` bits below; when `out_path` / `err_path` is not empty, that stream goes to a file,
-    // and a stream with neither inherits the parent's.
-    fn kspl_proc_start(argv_buf: U8@, argv_buf_len: Sz, argc: I32, cwd: U8@, cwd_len: Sz,
-        stdio: I32, out_path: U8@, out_len: Sz, err_path: U8@, err_len: Sz): I64
-    fn kspl_proc_send(handle: I64, ptr: U8@, len: Sz, timeout_ms: I32): I32
-    fn kspl_proc_read(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
-    fn kspl_proc_read_err(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
-    fn kspl_proc_poll(handle: I64, timeout_ms: I32): I32
-    fn kspl_proc_close_stdin(handle: I64)
-    fn kspl_proc_kill(handle: I64)
-    fn kspl_proc_wait(handle: I64): I32
-    fn kspl_proc_alive(handle: I64): Bool
-    fn kspl_proc_ended(handle: I64, code: I32$@): Bool //< whether it ended; the code into `code`
+// argv is passed as one buffer with NUL separators (`start`). `stdio` is the sum of the
+// `stdio_*` bits below; when `out_path` / `err_path` is not empty, that stream goes to a file,
+// and a stream with neither inherits the parent's.
+extern fn kspl_proc_start(argv_buf: U8@, argv_buf_len: Sz, argc: I32, cwd: U8@, cwd_len: Sz,
+    stdio: I32, out_path: U8@, out_len: Sz, err_path: U8@, err_len: Sz): I64
+extern fn kspl_proc_send(handle: I64, ptr: U8@, len: Sz, timeout_ms: I32): I32
+extern fn kspl_proc_read(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
+extern fn kspl_proc_read_err(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
+extern fn kspl_proc_poll(handle: I64, timeout_ms: I32): I32
+extern fn kspl_proc_close_stdin(handle: I64)
+extern fn kspl_proc_kill(handle: I64)
+extern fn kspl_proc_wait(handle: I64): I32
+extern fn kspl_proc_alive(handle: I64): Bool
+extern fn kspl_proc_ended(handle: I64, code: I32$@): Bool //< whether it ended; the code into `code`
 
 priv const STDIO_IN: I32 = 1 //< `kspl_proc_start`'s `stdio`
     //< Caution: The values must match the C code (hosted_spawn.c).
@@ -594,7 +593,8 @@ impl Limited_child
 impl Limited_child: Move_only {} //< copying it would reap one child twice
 
 #cfg(!freestanding)
-pub struct Piped_child //< a child whose standard input, output and error are pipes
+pub struct Piped_child //< a child whose standard input and output are pipes, and its error too
+    //< Its standard error is the caller's own instead when `spawn_piped_shared_err` starts it.
     handle: I64 //< the runtime's handle; 0 once `kill` has given it back
 
 // Caution: **Do not use this just to collect the output.** Waiting without reading fills the pipe
@@ -605,6 +605,21 @@ pub fn spawn_piped( //< starts a child for two-way communication over pipes
     cwd: U8[], //< the working directory; empty inherits the caller's
 ): Piped_child!Spawn_error //< the running child and its three pipes; fails if it cannot start
     handle: = start(argv, cwd, STDIO_IN | STDIO_OUT | STDIO_ERR, "", "")
+    if handle == 0
+        throw .spawn_failed
+    return Piped_child::{ .handle = handle }
+
+#cfg(!freestanding)
+pub fn spawn_piped_shared_err( //< starts a child as `spawn_piped` does, but sharing standard error
+    //< **For a helper that lives as long as the caller and tells only on standard error why it
+    //< fails.** Its standard error is the caller's own, so what it writes reaches the caller's log
+    //< as it comes, with nothing to read in between. A pipe left unread would stop the child once
+    //< full, and would hold its last words when it dies. `read_err` on this child fails as
+    //< `failed`.
+    argv: U8[][], //< the executable and its arguments
+    cwd: U8[], //< the working directory; empty inherits the caller's
+): Piped_child!Spawn_error //< the running child with two pipes; fails if it cannot start
+    handle: = start(argv, cwd, STDIO_IN | STDIO_OUT, "", "")
     if handle == 0
         throw .spawn_failed
     return Piped_child::{ .handle = handle }

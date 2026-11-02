@@ -1,0 +1,28 @@
+//< Checks `extern` written before one declaration, in both directions
+//< Without a body (or an initializer) it brings a C symbol in; with one it publishes one. The
+//< symbols this file publishes are brought back in by `extern_decl/peer.kspl` under the same
+//< names, so a call through the peer crosses the C name both ways.
+import "ksplc/tests/extern_decl/peer"
+import "std/verdict"
+
+extern fn abs(n: I32): I32 //< C's, from the C library every program links
+
+extern struct Kspl_test_opaque //< never defined: only a pointer to it crosses
+
+extern fn extern_decl_doubled(n: I32): I32 //< published to C under its own name
+    return n * 2
+
+extern $extern_decl_seen: I32 = 3 //< published to C under its own name
+
+priv fn opaque_is_null(p: Kspl_test_opaque$@?): Bool //< takes the opaque type by pointer
+    return p.is_none()
+
+fn test_extern_decl(): Void
+    verdict.start("[extern_decl]")
+    assert(abs(-5) == 5, "a C function brought in with `extern fn` is called")
+    assert(opaque_is_null(.none), "an opaque C type brought in with `extern struct` is named")
+    assert(peer.doubled_through_c(4) == 8,
+        "a function published with `extern fn` is called by its C name")
+    extern_decl_seen = 7
+    assert(peer.seen_through_c() == 7, "a variable published with `extern $` is read by its C name")
+    verdict.pass("`extern` before one declaration brings a C symbol in and publishes one.")

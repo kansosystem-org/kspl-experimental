@@ -1,11 +1,17 @@
 //< The shapes the backend-equivalence program checks that C leaves open or lays out its own way
 //< The evaluation order, tagged unions in arrays and globals, nested `#align(N)` and `#packed`
-//< layout, 16-bit products, globals naming globals, locals named as a C symbol, and casts from
-//< floating point to an integer. Each is a function that `equiv.kspl`'s `main` calls with the
-//< builder, with the declarations it alone reads.
+//< layout, 16-bit products, globals naming globals, locals named as a C symbol, casts from
+//< floating point to an integer, comparisons whose answer is fixed, and `^` between two numbers.
+//< Each is a function that `equiv.kspl`'s `main` calls with the builder, with the declarations it
+//< alone reads.
 import "std/libc"
 import "std/mem"
 import "std/str" { Str_builder }
+// The comparisons, assignments and `^` that [W0203], [W0204] and [W0215] report are shapes under
+// test here.
+##lint(W0203 = off)
+##lint(W0204 = off)
+##lint(W0215 = off)
 
 priv enum Ev //< a tagged union whose variants differ in size, kept in arrays and globals
     none
@@ -270,6 +276,97 @@ fn wrap16_lines(b: Str_builder$@) //< 16-bit products past `int`'s range, which 
     b.s("\n")
 
 // ==========================================
+// Plain shapes whose C gcc warned about (`make test-c-warnings` builds this program under it). A
+// `~` on a `Bool` made a number: gcc read the cast comparison as still a truth value
+// (-Wbool-operation). A `!` before a `Bool` `|`: gcc read `!a | b` as a slip for `||`
+// (-Wparentheses). The random equivalence test found both.
+// ==========================================
+priv $warned_byte: U8 = 3
+
+fn warned_shape_lines(b: Str_builder$@) //< each shape, its value printed
+    flipped: I32 = ~(I32::(warned_byte == 3U8))
+    on: = warned_byte > 2U8
+    either: Bool = !(on) | (on & (warned_byte == 4U8))
+    b.s("warned=\{flipped\}/\{either\}\n")
+
+// ==========================================
+// Comparisons and an assignment whose answer is fixed before they run. genc writes the answer, not
+// the comparison: gcc and clang would work it out and warn about the program's own logic
+// (-Wtautological-compare, -Wtype-limits, -Wself-assign). A side that runs code still runs, so
+// `fixed_next` is called once.
+// ==========================================
+priv $fixed_u8: U8 = 200
+priv $fixed_u32: U32 = 7
+priv $fixed_i8: I8 = -3
+priv $fixed_calls: I32 = 0
+priv const FIXED_ZERO: U32 = 0
+
+priv struct Fixed_pt
+    n: U8
+    on: Bool
+
+priv fn fixed_next(): U32 //< a side that runs code: it counts its calls
+    fixed_calls += 1
+    return fixed_u32
+
+priv fn fixed_nonneg<|T|>(x: T): Bool //< fixed only where `T` is unsigned
+    return x >= 0
+
+fn fixed_answer_lines(b: Str_builder$@) //< each fixed answer, then what the program left
+    $p: Fixed_pt = ::{ .n = fixed_u8, .on = true }
+    same: = fixed_u8 == fixed_u8
+    field: = p.n < p.n
+    flag: = p.on != p.on
+    p.n = p.n
+    p.on |= p.on
+    fixed_u8 = fixed_u8
+    top: = fixed_u8 <= 255U8
+    low: = fixed_i8 < -128I8
+    counted: = fixed_next() >= 0U32
+    below: = fixed_u32 < 0U32
+    widened: = I32::fixed_u8 < 0
+    masked: = (fixed_u32 & 1U32) == 2U32
+    ored: = (fixed_u32 | 4U32) != 1U32
+    named: = 0U32 > FIXED_ZERO
+    either: = p.on || !p.on
+    neither: = !p.on && p.on
+    b.s("fixed=\{same\}/\{field\}/\{flag\}/\{top\}/\{low\}/\{counted\}/\{below\}/")
+        .s("\{widened\}/\{masked\}/\{ored\}/\{named\}/\{fixed_calls\}/\{p.n\}/\{p.on\}/")
+        .s("\{either\}/\{neither\}/")
+        .s("\{fixed_nonneg<|U32|>(fixed_u32)\}/\{fixed_nonneg<|I8|>(fixed_i8)\}\n")
+
+// ==========================================
+// Two tests of one value whose answer together is fixed, and `^` between two decimal numbers. genc
+// writes the answer and the value: clang would warn that the tests overlap
+// (-Wtautological-overlap-compare), and both compilers that `10 ^ 2` looks like a power
+// (-Wxor-used-as-pow). A call is not one value, so tests of `overlap_next()` run as written.
+// ==========================================
+priv $overlap_calls: I32 = 0
+
+priv fn overlap_next(): I32 //< a value two tests read: it counts its calls
+    overlap_calls += 1
+    return fixed_i8
+
+fn overlap_xor_lines(b: Str_builder$@) //< each fixed answer and each folded `^`
+    $x: = I32::fixed_i8
+    $n: Sz = 3
+    never: = 3 <= x && 1 > x
+    always: = x < 3 || x > 1
+    one: = x == 1 && x == 2
+    other: = x != 1 || x != 2
+    small: = fixed_u8 <= 200U8 || fixed_u8 > 100U8
+    size: = n < 3 || n > 1
+    called: = overlap_next() < 3 || overlap_next() > 1
+    x += 1
+    n += 1
+    ten: = 10U8 ^ 2U8
+    two: = 2 ^ 8
+    wide: = 2I64 ^ 3I64
+    neg: = 10 ^ -2
+    b.s("overlap=\{never\}/\{always\}/\{one\}/\{other\}/\{small\}/\{size\}/")
+        .s("\{called\}/\{overlap_calls\}/\{x\}/\{n\}/\{ten\}/\{two\}/\{wide\}/\{neg\}\n")
+
+// ==========================================
 // Globals naming other globals: an address taken of a `const` and of a variable, of a field and of
 // an element, and a `const` copying a tagged union. **The address names the global itself.**
 // Written out as its value instead, C takes the address of a cast and LLVM of nothing. A part's
@@ -316,14 +413,12 @@ fn global_ref_lines(b: Str_builder$@) //< globals that name other globals, one l
         .s("\{G_DEEP_AT$\}/\{G_DEEP_AT == G_LINKS[1].v@\}\n")
 
 // ==========================================
-// A local named as a global whose C name is written as it is (`#export`, an `extern` block's). C
+// A local named as a global whose C name is written as it is (`extern`, either way). C
 // sees the local from its own declarator on, so it would read itself in its initializer.
 // ==========================================
-#export
-$equiv_hidden: I32 = 5
+extern $equiv_hidden: I32 = 5
 
-#export
-fn equiv_hidden_fn(): I32
+extern fn equiv_hidden_fn(): I32
     return 9
 
 fn verbatim_hiding_lines(b: Str_builder$@) //< each initializer reads the global, not the local
@@ -420,6 +515,7 @@ priv const SI_OPT_PICK: Si_opt = SI_OPT if SI_AND else .none
 priv const SI_NAMED: Si_named = SI_PT
 priv const SI_OP: fn(a: I32): I32 = fn(a: I32): I32
     return a + SI_B
+#raw_address
 priv const SI_REG: U32@ = U32@::0x4000_0000
 priv $si_var: I32 = SI_B * 10
 priv $si_var_pt: Si_point = ::{ .x = SI_A if SI_B > 0 else 0 }

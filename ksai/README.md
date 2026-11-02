@@ -85,7 +85,7 @@ Start with `matmul`, `add_bias`, `softmax`, and `silu`. Then read `+`, `-`, `*`,
 
 By default, `matmul` uses only KSPL and has no library dependencies. The optional BLAS backend (Basic Linear Algebra Subprograms) calls OpenBLAS's general matrix product, gemm, through the foreign function interface. `make BLAS=1` requires `libopenblas-dev`.
 
-The gemm declaration names its library with `#cfg(blas) #link("openblas")`. So a build with `--define=blas` links OpenBLAS without a library entry in the build file, for example `ksplc run --define=blas main.kspl`.
+The gemm declarations name their library with `##link("openblas")`, inside their `#cfg(blas)` group. So a build with `--define=blas` links OpenBLAS without a library entry in the build file, for example `ksplc run --define=blas main.kspl`.
 
 The C compiler turns the kernels' loops into SIMD instructions (one instruction on several numbers), and `make test-simd` checks it. A large `matmul` splits its columns over the CPU's cores (`ksai/parallel.kspl`), with the same bits for any thread count. Why both work so is in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 

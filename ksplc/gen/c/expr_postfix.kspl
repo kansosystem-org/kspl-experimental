@@ -238,6 +238,14 @@ impl Ast_node
             // is the operand's own type, an immutability mark or an alias aside. So it goes as is.
             c.brace_init = as_init
             expr_node.emit_expr(c)
+        else if c.env.is_bool(c.env.strip_const_deep(expr_node.type_id)) &&
+            c.env.is_integer(c.env.scalar_repr_id(target_id))
+            // **A `Bool` becomes a number through `?:`.** gcc reads `(I32)(x == 3)` as still a
+            // truth value, and warns about a `~` on it (-Wbool-operation), although KSPL's
+            // `~I32::b` is plain integer arithmetic.
+            c.s("((").t(target_id).s(")((")
+            expr_node.emit_expr(c)
+            c.s(") ? 1 : 0))")
         else
             c.s("(").t(target_id).s(")")
 

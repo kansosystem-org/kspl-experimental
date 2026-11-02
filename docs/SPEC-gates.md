@@ -93,7 +93,7 @@ A gate that did not run is never shown as `PASS`, and the round returns failure.
 
 **Each gate of the pair is still judged alone**, with its own log, time cap, verdict and summary line. Its time counts from the common start. While the two run, their output goes only to their logs, shown in turn when both end.
 
-**The pair runs together only where the set runs both**: `make ci` on Linux, `make ci-shard-linux`, and `make ci-full` on every platform. **With `STOP=1`, a fall in the pair ends the round after both gates end**; the partner keeps its own verdict. **`make ci CI_SERIAL=1` runs each gate alone**, the pair included. If a fall goes away with it, the load is the cause. CI's jobs do not set it.
+**The pair runs together only where the set runs both**: `make ci` on every platform, and `make ci-shard-linux`. **With `STOP=1`, a fall in the pair ends the round after both gates end**; the partner keeps its own verdict. **`make ci CI_SERIAL=1` runs each gate alone**, the pair included. If a fall goes away with it, the load is the cause. CI's jobs do not set it.
 
 To add a pair of gates that share no file, put the two rows next to each other, and let each name the other in `beside`. The runner refuses a pair whose rows are apart, do not name each other, or differ in `stops` or `early`.
 
@@ -103,17 +103,16 @@ To add a pair of gates that share no file, put the two rows next to each other, 
 
 | Target | What it runs |
 | :-- | :-- |
-| `ci` | Every gate this host runs natively. Linux: `ci-shard-a`, `ci-shard-b` and `ci-shard-linux`; Windows and macOS: `ci-shard-a` and `ci-shard-b` |
+| `ci` | Every gate this host can answer, for a person checking all on one machine. Linux: `ci-shard-a`, `ci-shard-b` and `ci-shard-linux`; Windows and macOS: those too, but for the gates that cannot answer there |
 | `ci-shard-a`, `ci-shard-b` | The two shared sections the Linux and Windows jobs run. A gate marked `linux_only` runs only in the Linux job of its section |
 | `ci-shard-linux` | Most of the gates that only Linux runs; it refuses to run elsewhere |
 | `ci-macos` | The macOS job's set: what differs on macOS, kept small because its minutes cost the most |
-| `ci-full` | Every gate this host can answer, for a person checking all on one machine. Linux: the same as `ci`; Windows and macOS: `ci`'s gates and the Linux-only ones too |
 
 The workflow only calls the targets, so **to change which gates run, fix the table**, not ci.yml.
 
-**`make ci` needs no Docker anywhere.** The Linux-only section's tools (the sanitizers, QEMU, a browser and the rest) are in the dev container's image. To run that section off Linux, run `make ci` inside that container. macOS also needs GNU make 4 (`brew install make`); the runner selects `gmake` when available.
+**`make ci` needs no Docker anywhere.** The Linux-only section's tools (the sanitizers, QEMU, a browser and the rest) are in the dev container's image. Off Linux, `make ci` uses the ones the machine has. macOS also needs GNU make 4 (`brew install make`); the runner selects `gmake` when available.
 
-**`make ci-full` checks as much as one machine can, with no container.** CI runs a check that cannot differ by platform on Linux alone; `ci-full` runs it on your Windows or macOS machine too. It leaves out three gates where they cannot give a true answer (`Gate.not_on` in `tools/ci_gates.kspl`):
+**`make ci` checks as much as one machine can, with no container.** CI runs a check that cannot differ by platform on Linux alone; `make ci` runs it on your Windows or macOS machine too. It leaves out three gates where they cannot give a true answer (`Gate.not_on` in `tools/ci_gates.kspl`):
 
 * `test-ksos-posix` on Windows: the POSIX port switches tasks with ucontext, which Windows does not have.
 * `test-ksmd-desktop` on Windows and macOS: a `.desktop` entry is what Linux desktops read.
@@ -121,7 +120,7 @@ The workflow only calls the targets, so **to change which gates run, fix the tab
 
 It also leaves out macOS's stand-ins for the copied packages (`debug`, `run` and the rest), since `test-extract` tests the same packages from their copies.
 
-**In `ci-full`, a SKIP passes, and the round lists each one last** under `# not checked on this machine`, so you know what to install. Caution: **Some gates fail rather than skip when their tool is missing** (`test-blas` without OpenBLAS); read such a failure as "not checked here". On Windows, `tools/msys2-packages-full.txt` lists every tool these gates use ("The environment for each platform" in [`HOWTO-build.md`](HOWTO-build.md)).
+**In `make ci`, a SKIP passes, and the round lists each one last** under `# not checked on this machine`, so you know what to install. Caution: **Some gates fail rather than skip when their tool is missing** (`test-blas` without OpenBLAS); read such a failure as "not checked here". On Windows, `tools/msys2-packages-full.txt` lists every tool these gates use ("The environment for each platform" in [`HOWTO-build.md`](HOWTO-build.md)).
 
 **A running gate prints its name, elapsed time and log path every fifteen seconds.** Each gate's record carries its platform, so a Linux log read on Windows keeps Linux's expected skips.
 
@@ -206,6 +205,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-ast-cache (the parse cache does not change the result) | ✅ | ➖(note 2) | ✅(note 12) |
 | test-property (a random expression matches on both backends) | ✅ | ➖(note 2) | ✅ |
 | test-generic-matrix (each shape of a generic builds on both backends or is refused at the user's line, never with a C or LLVM error) | ✅ | ➖(note 2) | ✅ |
+| test-random-equiv (generated programs build with no warning, and run alike, under clang, gcc and LLVM) | ✅(note 35) | ➖(note 35) | ➖(note 35) |
 | Fuzzing: each package's own `test-fuzz`, a shallow run on a fixed seed, on its copy by `test-extract`. No run on corrupted input can die, and what std writes back must read the same. `make fuzz-long` goes deep by hand, with a fresh seed | ✅ | ➖(note 2) | ✅(note 21) |
 | test-notation (indentation-written source gives the same C, squiggles, hovers and jump targets) | ✅ | ➖(note 2) | ✅ |
 | test-fmt-tree (every tracked source is already formatted, and formatted at other widths it reads back) | ✅ | ➖(note 2) | ➖(note 26) |
@@ -220,8 +220,9 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-blas (ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 15) | ➖(note 15) |
 | ksbind's own tests (the OpenSSL binding, from a copy by `test-extract`) | ✅ | ➖(note 2) | ✅(note 18) |
 | perf-log (peak memory and the tree types' sizes, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
-| test-race (no data race under ThreadSanitizer) | ✅ | ➖(note 2) | ➖(note 17) |
+| test-race (no data race that the tests reach, under ThreadSanitizer) | ✅ | ➖(note 2) | ➖(note 17) |
 | test-sanitize (ksplc's, std's and ksmd's tests are clean under the memory and undefined-behaviour sanitizers) | ✅ | ➖(note 29) | ➖(note 29) |
+| test-holes (each known way to break memory or threads keeps its verdict today) | ✅ | ➖(note 34) | ➖(note 34) |
 
 **The compiler's own suites run from copies.** On Linux and ucrt64, the two compiler extraction shares copy ksplc's folder alone, rebuild the compiler there, and split `SUITES` in `ksplc/Makefile` between them. The core share also runs the copy's unit tests and fuzzing. It checks that the copy does not build without its `ksplc.cfg`. macOS runs the suites its column marks from the repository.
 
@@ -235,10 +236,10 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | :-- | :-- | :-- | :-- |
 | `test-ksos-link` (note 6) | The `arm-none-eabi` toolchain | `KSOS_REQUIRE_ARM` | That ksos's bare-metal demos link, and that each window function sits in RAM. It prints `SKIPPED (no ARM toolchain)`, as on ucrt64 |
 | `test-ksmd-browser` (note 31) and `test-ksagent-chat` (note 33) | A Chromium: the image's pinned amd64 build, or one on `PATH` that is not a snap. Windows takes Chrome from its usual folders. Both take the one `ksmd/Makefile` finds | `KSMD_REQUIRE_BROWSER`, for either gate run alone too | ksmd's editing page in a browser, served by `kssrv --local`, and ksagent's chat page. Each prints `SKIPPED (no browser - see docs/SPEC-gates.md)` |
-| `test-race` (note 17) | Clang's ThreadSanitizer runtime | `KANSO_REQUIRE_TSAN` | Data races in the programs that start threads. Windows has no ThreadSanitizer, so ucrt64 does not run it |
-| `test-sanitize` (note 29) | Clang's address, leak and undefined-behaviour sanitizer runtimes (`libclang-rt-<version>-dev`) | `KANSO_REQUIRE_ASAN` | Memory errors and undefined behaviour in ksplc's, std's and ksmd's tests. ucrt64's clang holds no address sanitizer |
+| `test-race` (note 17) and `test-holes` (note 34) | Clang's ThreadSanitizer runtime | `KANSO_REQUIRE_TSAN` | Data races that the tests of the programs that start threads reach. Windows has no ThreadSanitizer, so ucrt64 does not run it |
+| `test-sanitize` (note 29) and `test-holes` (note 34) | Clang's address, leak and undefined-behaviour sanitizer runtimes (`libclang-rt-<version>-dev`) | `KANSO_REQUIRE_ASAN` | Memory errors and undefined behaviour in ksplc's, std's and ksmd's tests. ucrt64's clang holds no address sanitizer |
 | The fuzzers of std and ksai, in `test-extract` (note 21) | Clang's address sanitizer runtime | `KANSO_REQUIRE_ASAN` | A read past the end, since the fuzzing runs on a plain build, as on ucrt64 |
-| `test-c-warnings` and `test-equiv` | Both gcc and clang: each warns about code the other passes, and fills in what C leaves open its own way | `KANSO_REQUIRE_BOTH_CC` | The generated C under the missing family: its warnings, and that it means the same. The windows-ucrt64 runner installs clang alone |
+| `test-c-warnings`, `test-equiv` and `test-random-equiv` | Both gcc and clang: each warns about code the other passes, and fills in what C leaves open its own way | `KANSO_REQUIRE_BOTH_CC` | The generated C under the missing family: its warnings, and that it means the same. The windows-ucrt64 runner installs clang alone |
 | ksbind's own tests, in `test-extract` and `test-race` (note 18) | OpenSSL (`libssl-dev`) | `KSBIND_REQUIRE_LIBS` | The binding, linked and run, as on macOS. kssrv does not build at all without it |
 | `cli`'s two cases on a cache folder (note 22) | Root, or `sudo` without a password, to hand a folder to another user | `KANSO_REQUIRE_CHOWN` | That ksplc refuses a cache folder another user owns. Windows runs neither case |
 | `test-ship`'s Windows half, in `test-extract` (note 19) | `x86_64-w64-mingw32-gcc` and its `ar` (`gcc-mingw-w64-x86-64-win32`), and Wine to run the result | `KANSO_REQUIRE_MINGW`, for the cross compiler alone. The image leaves Wine out for its size | That the shipped libraries build and link for Windows, static and DLL. A green Linux run has not run them |
@@ -257,7 +258,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 
 `KSMD_REQUIRE_DESKTOP` is not a switch of this kind: only the gate's row in `ci-shard-linux` sets it. `make ksmd` checks its desktop entry too, and needs none of these tools for it.
 
-A tool with no switch and no Linux row of `expected_skips` (`wasm-ld` and `node`, say) has no way off. A Linux round fails where it is missing, since only the image is promised to hold it. The devcontainer (`.devcontainer/`) gives every tool at once.
+A tool with no switch and no Linux row of `expected_skips` (`wasm-ld` and `node`, say) has no way off. CI's Linux job fails where it is missing, since only the image is promised to hold it; `make ci` lists the skip last. The devcontainer (`.devcontainer/`) gives every tool at once.
 
 ### The notes
 
@@ -278,7 +279,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **Check "changing only the contents rebuilds it" by rewriting the file at the same path.** A copy under another name changes the key's file name, so a key that ignores the contents would pass too.
 * **note 14**: `test-broken-pipe` checks POSIX's handling of SIGPIPE. **Windows has nothing to check**: a write to a closed named pipe merely fails. The suite reads the C compiler's target triple (`-dumpmachine`) and prints a `SKIP` line there. Only its check "a launched child holds SIGPIPE's default" reads `/proc/self/status`, so it runs only on Linux.
   * Note: The decision's canonical source is "Writing when nobody is left to read it" in `ksplc/gen/runtime/hosted.c`.
-* **note 15**: `make test-blas` runs ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`. It needs libopenblas, which the windows-ucrt64 and macOS runners lack. **`make lint` cannot replace it**, since only a real build shows whether the FFI is right: argument order, types, the library linked. So this is also where a library named by `#link` is seen linked.
+* **note 15**: `make test-blas` runs ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`. It needs libopenblas, which the windows-ucrt64 and macOS runners lack. **`make lint` cannot replace it**, since only a real build shows whether the FFI is right: argument order, types, the library linked. So this is also where a library named by `##link` is seen linked.
 * **note 16**: `tests/tools/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's hardware, which would mislead elsewhere.
   * The verdict rests on the peak memory and the exact sizes of `Ast_node` and its list of children. The build time is only recorded, as a ratio to the baseline (`tests/tools/perf_guard.kspl` says why).
 * **note 17**: `test-race` builds through the C backend with clang's `-fsanitize=thread`, and runs these programs (`tests/suite/race_test.kspl`):
@@ -291,6 +292,16 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **It shows that it can fire**: a program racing on purpose must be reported first. **Every tracked source that starts a thread is compiled into a program it runs**, or named with the reason in `LEFT_OUT`.
   * **No report is suppressed.** std, the runtime and the program are compiled from source into one unit, so nothing the sanitizer watches is uninstrumented.
   * **Only the C backend is built.** Through LLVM, `-fsanitize=thread` watches only the functions `--sanitize=thread` marks in the IR, as in note 29.
+  * **It runs each program's tests once, on the schedule that run happens to take.** What it finds and what it does not:
+
+    | It finds | It does not find |
+    | :-- | :-- |
+    | A data race between two accesses that the tests make, with no order between them | A race on a path the tests do not take, or one that this run's schedule happens to order. Apart from the two stress checks below, it does not stress a program or shuffle its schedule |
+    | Two `Mutex` locks taken in opposite orders, even where the two never overlapped in the run | A wait that never ends, such as a lost wakeup. It does not check liveness |
+    | A thread never joined | A race in a build through the LLVM backend, or on a platform other than Linux |
+  * **Two stress checks press on the hand-written protocols.** ksai's thread pool runs thousands of short rounds back to back. A watchdog fails with a message when no round ends for 10 s. The language server takes a burst of 40 edits with no wait between them. A lost wakeup in the pool is caught only in some runs: its window is a few microseconds.
+  * **Each raced program is stopped after 180 s**, and the failure names it. A hang no longer waits out the 10-minute default.
+  * **std's tests are built with `KSPL_TEST_MARK_AFTER_OPEN`.** Linux then starts a child the macOS way: pipes are marked close-on-exec after opening, and starts take turns under a lock. That lock is raced too.
 * **note 18**: ksbind's own `make test` links OpenSSL. kssrv links it too, for HTTPS, so the windows-ucrt64 job installs it with `tools/msys2-packages.txt`, and both packages' tests run there. The macOS runner lacks it, and runs neither package's tests (note 27).
 * **note 19**: `test-ship` builds both forms with the host's own toolchain, natively on ucrt64. **Elsewhere it also cross-builds them for Windows where `x86_64-w64-mingw32-gcc` is installed**, and runs them only under Wine.
   * **No CI job runs the check "the Windows programs run under Wine".** The Linux image leaves Wine out for its size. The Windows job builds natively, and macOS runs no `test-ship`.
@@ -302,24 +313,59 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 24**: `ksplc/tests/suite/layout_targets_test.kspl` needs only clang, which builds for every machine in `MACHINES` in `ksplc/base/target.kspl`. The wasm32 build also needs `wasm-ld`, `node` and clang's wasm32 builtins, for a 128-bit product that links only with them. A folded size decides through a static `if`, a constant chain, a `case` label and reflection; each must answer as wasm32 lays values out.
 * **note 25**: Linux and Windows run the same check through `test-extract`, where ksai's own `make test` trains `llama_engine` (`ksai/tests/examples_main.kspl`). macOS runs `make run` instead.
 * **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`); the suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.
-  * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF. `make ci-full` still runs both on every platform.
+  * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF. `make ci` still runs both on every platform.
 * **note 27**: `make debug` runs the tests of every package but kssrv and ksbind in one program; those two run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's and ksbind's tests unrun.
   * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux still runs both.
-* **note 28**: `make LLVM=1 debug` holds neither kssrv nor ksbind (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci-full` does.
+* **note 28**: `make LLVM=1 debug` holds neither kssrv nor ksbind (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
 * **note 29**: `test-sanitize` builds ksplc's, std's and ksmd's tests (`<package>/tests/main.kspl`) through both backends with clang's `-fsanitize=address,undefined`, the leak sanitizer included. It runs each as its package's own `make test` does, std's from a fresh folder per build, since they write fixed names. It fails on any report from any process, or on a non-zero exit.
-  * **It shows that it can fire.** Four faults are written on purpose: a use after free, a read past an allocation, a leak and a misaligned store. Each must be reported as what it is. **And that the LLVM build is watched through its marks**: the read past the end, built through LLVM without `--sanitize`, must go unreported.
+  * **It shows that it can fire.** Six faults are written on purpose. Four are a use after free, a read past an allocation, a leak and a misaligned store. Two are reads through a slice that an arena handed out again, after `reset` and after `restore` over a buffer. Each must be reported as what it is. **And that the LLVM build is watched through its marks**: the read past the end, built through LLVM without `--sanitize`, must go unreported.
   * **No report is suppressed**, a leak included.
   * **Through the LLVM backend, ksplc marks the IR** (`--sanitize=address`), since clang's `-fsanitize=address` instruments only a marked function. The undefined-behaviour checks belong to clang's front end, so through LLVM they watch only the runtime, compiled from C.
   * ucrt64's clang holds no address sanitizer. macOS's runtime has no leak sanitizer on Apple silicon, and refuses to start when asked for one. So the suite says `SKIP` on both.
 * **note 31**: `test-ksmd-browser` drives ksmd's editing page in a headless Chromium through the browser's input events (`ksmd/tests/browser/main.mjs`). It then serves the page with `kssrv --local` and compares the bytes on disk (`ksmd/tests/browser/served.mjs`). The browser looks up no outside name (`--host-resolver-rules` in `ksmd/tests/browser/cdp.mjs`).
   * **The page's link takes from outside only what `ksmd/port/web/imports.txt` names**, not `--allow-undefined`, so a C library routine slipping in fails the link. It takes clang's builtins library for wasm32, for what wasm32 has no instruction for.
   * **A real input method is not driven**, so a composition on a real keyboard remains a manual check. Paste is a synthetic event, since a headless browser has no clipboard.
-  * The macOS and Windows runners have no browser. On Windows, `make ci-full` takes Chrome from Program Files or the user's own folder.
+  * The macOS and Windows runners have no browser. On Windows, `make ci` takes Chrome from Program Files or the user's own folder.
 * **note 32**: `test-ksmd-open` runs the cases its driver's header lists (`tools/tests/ksmd_launch.kspl`), with `--show`, so no browser starts. The launcher's lock is `flock` on Linux and macOS, and `LockFileEx` on Windows (`open_or_start` in `tools/opener.kspl`). **Only Linux runs the gate**, so launching and that lock are unchecked on Windows and macOS. The file association is checked on no platform.
+* **note 34**: `test-holes` builds each program of `tests/support/holes_mem.kspl` and `holes_sync.kspl`, one way to break memory or threads each, and checks its verdict today. ksplc refuses it, a sanitizer reports it, it stops at run time when built without a sanitizer, or it runs on with no report.
+  * **A verdict that changes fails, either way.** A lost refusal is a regression. A hole that closes asks for its row and the language specification's text to change with it.
+  * **A hole that runs on stands there only where the specification names it.** Its row names the heading and the words there. The gate checks that both are still there.
+  * **The programs that race wait for each other first**, so the two threads overlap on every run.
+  * It needs the same sanitizers as `test-sanitize` and `test-race`, so only Linux runs it.
+* **note 35**: `test-random-equiv` writes programs from fixed seeds (`ksplc/tests/support/random_prog.kspl`), each valid by construction. Each is built six ways: clang and gcc at `-O0` and `-O2`, and the LLVM IR at both levels.
+  * **A build fails on any warning** that `test-c-warnings` holds the tree's C free of, and ksplc must say nothing about the program. gcc's -Woverflow alone is off: gcc 13 warns about narrow constants that fit. One C build of each family traps on C's undefined arithmetic.
+  * **Every build must print the same and end with the same code.** A program written to stop must stop with the stop's `panic:` line.
+  * **It shows that it can fail**: runs that differ in one line, or in the exit code alone, must be flagged (`PLANTED`).
+  * **CI runs it in the Linux job alone**, apart from ksplc's other suites. What it finds lies in ksplc's C and IR, the same on every system. A Windows or macOS minute costs more.
+  * **The default seeds take a little over a minute on four cores.** `make test-random-equiv RANDOM_EQUIV_ARGS="--n=400 --seed=1000"` runs more by hand. A failure prints the seed and the program.
+  * **The windows-ucrt64 runner has clang alone**, so there gcc's builds give a `SKIP` line, as in `test-equiv`.
 * **note 33**: `test-ksagent-chat` first checks the launcher's model server with no browser (`tools/tests/chat_launch.mjs`): a stand-in takes the place of `llama-server` and `chat_server`. It then drives ksagent's chat page in a headless Chromium (`tools/tests/chat_page.mjs`), through ksmd's browser driver. The launcher starts with `--show`, so no browser of the desktop starts. It starts kssrv and `ksagent watch`, which asks a stand-in model server in the same script. Without a browser, only the second half is skipped.
   * **It checks the page's Markdown reader alone, then asking.** The answer grows, the checked answer takes its place, and a stopped answer shows as stopped. Markup in an answer stays text, and Japanese shows as written. A write refused after another tab's (409) is made again, and a reload shows each turn.
   * **A real input method is not driven**, as in note 31: Enter during a Japanese composition is checked by review only.
   * **Only Linux runs the gate**: the macOS and Windows runners have no browser.
+
+## What every gate and test holds
+
+### Every gate shows that it can fail
+
+**A gate that cannot fail stays green while what it checks breaks**, so each gate runs a failure case: an input its check must reject. Examples are the race gate's race written on purpose, and a unit-test run's failed check, which `std/verdict` must count.
+
+* **Each row of `GATES` in `tools/ci_gates.kspl` names its failure case** as `.fails = "<file>#<name>"`.
+* **A row that runs a set of suites names none.** Each suite's header names its own instead, after `Its failure case: `.
+* `make test-conventions` checks that the file is there and holds the name, and that something runs it (`tests/support/conventions_gates.kspl`). A make file runs itself, a suite is listed, and another file must be named by a second file.
+* **The check sees names, not runs.** That the gate itself reaches its case is held by review.
+
+### No fixed time bound in a test
+
+**A test compares an elapsed time with a constant only as a lower bound**: the run waited at least as long as it asked. A busy machine makes a run slower, never faster, so a lower bound holds on any machine. An upper bound fails there while the code is right.
+
+* **An upper bound compares with a time measured in the same run**, as a ratio, so a busy machine slows both sides alike.
+* **Or the test checks an order instead of a time.** For example, a child that sleeps for 30 s is still running when the call returns, so the call did not wait for the child's end.
+* **A hang is the suite's time limit's to stop**, not a bound inside the test.
+* **A wait's own cap is no verdict**: a `for` that polls until a deadline may stop there, and the check is on what arrived.
+* **Time itself is the perf gate's** (`perf-log`), which records it and judges only memory.
+
+`make test-conventions` refuses a test source that compares an elapsed time with a constant (`tests/support/conventions_gates.kspl`). **It follows names**: a value read from `sys.mono_us()`, one subtracted from it, and a function that returns one. An `if` on such a time is refused either way, since either branch can fail the test. Its list of exceptions (`time_allowed`) holds three files, each with its reason; an exception that no longer bounds a time fails too. The check reads literal text, so an elapsed time it cannot follow is still under the rule.
 
 ## The shape of a per-item pass/fail line
 

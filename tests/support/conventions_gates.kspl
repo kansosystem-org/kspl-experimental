@@ -1,0 +1,398 @@
+//< Two rules for the gates themselves: each shows it can fail, and no test bounds time by a constant
+//< It is not a suite of its own; it is a part of conventions. The rules are "Every gate shows that
+//< it can fail" and "No fixed time bound in a test" in `docs/SPEC-gates.md`.
+//< **A gate that cannot fail stays green while what it checks breaks**, and a time bound fixed in
+//< a test fails on a busy machine while the code is right. Both kinds of fault reached CI many
+//< times, each found only after it had hidden something.
+import "std/chars" // `find_str`, `sub` and the character classes
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+// ==========================================
+// Every gate shows that it can fail **A row of `GATES` names its failure case**, as
+// `<file>#<name>`: an input the gate's check must reject. **A row that runs a set of suites names
+// none**: each suite names its own in its header, after `Its failure case: `.
+// ==========================================
+
+priv const GATES_SRC: U8[] = "tools/ci_gates.kspl"
+priv const ROW_MARK: U8[] = "Gate::{" //< what opens one row of `GATES`
+priv const FAILS_MARK: U8[] = ".fails = \"" //< what opens a row's failure case
+priv const ARGS_MARK: U8[] = ".args = \"" //< what opens what a row asks `make` for
+priv const SUITE_SET: U8[] = "test-suites" //< what a row that runs a set of suites asks for
+priv const SUITE_MARK: U8[] = "Its failure case: `" //< what names a suite's failure case
+
+priv const REACH_SPECS: U8[][_] = ::{ "*.kspl", "*.mk", "*Makefile", "*.mjs" } //<
+    //< The files that can run a failure case: they import, name or start it
+
+priv fn quoted_after(text: U8[], mark: U8[], close: U8): U8[] //< what follows mark, up to close
+    if at: = text.find_str(mark)
+        rest: = text.sub_from(at + mark.len)
+        return rest.sub(0, rest.find_char(close).unwrap_or(0))
+    return ""
+
+priv fn named_elsewhere(path: U8[]): Bool //<
+    //< Whether a file other than path names it: whole, as an import (no `.kspl`), or from its folder
+    //< **The name from the package's folder** is how its own `Makefile` names a file it runs.
+    stem: = path.strip_suffix(".kspl")
+    local: = path.sub_from(path.find_char('/').unwrap_or(0) + 1)
+    for rel in harness.tracked_matching(U8[][]::REACH_SPECS)
+        if rel.equals(path) || rel.equals(GATES_SRC)
+            continue
+        text: = harness.read_under_root(rel)
+        if text.find_str(stem).is_some() || text.find_str(local).is_some()
+            return true
+    return false
+
+priv fn case_fault(fc: U8[], arena: Arena$@): U8[] //<
+    //< Why a failure case `<file>#<name>` does not hold, or empty where it does
+    //< **It holds where the file is there, holds the name, and something runs it**: a make file is
+    //< included or called, a suite is listed (`mk/test.mk` refuses one that is not), and any other
+    //< file is named by another.
+    cut: = fc.find_char('#') catch
+        return "it is not written `<file>#<name>`"
+    path: = fc.sub(0, cut)
+    name: = fc.sub_from(cut + 1)
+    text: = harness.read_under_root(path)
+    if text.len == 0
+        return arena.text().s(path).s(" is not there").take()
+    if name.len == 0 || text.find_str(name).is_none()
+        return arena.text().s(path).s(" holds no `").s(name).s("`").take()
+    runs_itself: =
+        path.ends_with("Makefile") || path.ends_with(".mk") ||
+        ((path.starts_with("tests/suite/") || path.starts_with("ksplc/tests/suite/")) &&
+        path.ends_with("_test.kspl"))
+    if !runs_itself && !named_elsewhere(path)
+        return arena.text().s("nothing names ").s(path).s(", so nothing runs it").take()
+    return ""
+
+priv fn check_gates_fail(arena: Arena$@) //< every row of `GATES` names a failure case that holds
+    src: = harness.read_under_root(GATES_SRC)
+    $bad: = List<|U8[]|>(arena)
+    $seen: Sz = 0
+    $at: Sz = 0
+    for at < src.len
+        start: = src.sub_from(at).find_str(ROW_MARK) catch
+            break
+        row_at: = at + start + ROW_MARK.len
+        rest: = src.sub_from(row_at)
+        row: = rest.sub(0, rest.find_str(ROW_MARK).unwrap_or(rest.len))
+        at = row_at
+        seen += 1
+        args: = quoted_after(row, ARGS_MARK, '"')
+        fc: = quoted_after(row, FAILS_MARK, '"')
+        if args.starts_with(SUITE_SET)
+            if fc.len > 0
+                bad
+                    .push(arena.text().s(args).s(": a set of suites names none; its suites do")
+                    .take())
+            continue
+        why: = ("it names none" if fc.len == 0 else case_fault(fc, arena))
+        if why.len > 0
+            bad.push(arena.text().s(args).s(": ").s(why).take())
+    verdict.check_list("every gate names a failure case that holds", seen, "gates", bad@,
+        "name an input its check must reject, as `.fails` (\"Every gate shows that it can fail\" in \
+            docs/SPEC-gates.md)")
+
+priv fn check_suites_fail(arena: Arena$@) //< every suite's header names a failure case that holds
+    $bad: = List<|U8[]|>(arena)
+    files: = harness.tracked_matching(U8[][]::{ "tests/suite/*_test.kspl" })
+    for rel in files
+        text: = harness.read_under_root(rel)
+        head: = text.sub(0, text.find_str("\nimport ").unwrap_or(text.len))
+        fc: = quoted_after(head.replace("\n//< ", "", arena), SUITE_MARK, '`')
+        why: = ("its header names none" if fc.len == 0 else case_fault(fc, arena))
+        if why.len > 0
+            bad.push(arena.text().s(rel).s(": ").s(why).take())
+    verdict.check_list("every suite names a failure case that holds", files.len, "suites", bad@,
+        "say `Its failure case: `<file>#<name>`` in its header")
+
+// ==========================================
+// No fixed time bound in a test **A test compares an elapsed time with a constant only as a lower
+// bound**: a busy machine makes a run slower, never faster. An upper bound is a ratio to a time
+// of the same run. A wait's own cap (a `for` polling until a deadline) is no verdict. **It reads
+// literal text** (Principle 8): an elapsed time it cannot follow is still under the rule.
+// ==========================================
+
+priv const CLOCK: U8[] = "mono_us()" //< the clock a test reads (`sys.mono_us`)
+
+priv const TIMED_SPECS: U8[][_] = ::{ "tests/*.kspl", "*/tests/*.kspl", ":!tests/tools/*",
+    ":!tests/support/conventions_gates.kspl" } //<
+        //< The test sources: every package's tests, without the perf gate's tools and this file
+
+struct Allowed //< a test source that may bound a time by a constant, and why
+    path: U8[]
+    why: U8[]
+
+priv const TIME_ALLOWED: Allowed[_] = ::{
+    Allowed::{ .path = "tests/suite/lsp_tree_test.kspl",
+        .why =
+        "the language server stops a worker silent past a fixed window, so the product's own bound \
+            is what it checks, measured twice before it fails" },
+    Allowed::{ .path = "ksai/tests/pool_stress_main.kspl",
+        .why = "its watchdog turns a lost wakeup, which would hang, into a message" },
+    Allowed::{ .path = "std/tests/net_test.kspl",
+        .why =
+        "a connect must give up at its own wait, not at the OS's limit, and no event shows when the \
+            OS's limit passes" },
+}
+
+priv fn word_at(text: U8[], at: Sz, len: Sz): Bool //< whether text[at, at + len) stands as a word
+    before: = at == 0 || !(text[at - 1].is_alnum())
+    after: = at + len >= text.len || !(text[at + len].is_alnum())
+    return before && after
+
+priv fn holds_word(text: U8[], word: U8[]): Bool //< whether text holds word as a whole word
+    $from: Sz = 0
+    for from < text.len
+        at: = text.sub_from(from).find_str(word) catch
+            return false
+        if word_at(text, from + at, word.len)
+            return true
+        from += at + 1
+    return false
+
+priv fn holds_difference(text: U8[], stamps: List<|U8[]|>@, arena: Arena$@): Bool //<
+    //< Whether text subtracts from a clock reading: the clock itself, or a name it was read into
+    if text.find_str(arena.text().s(CLOCK).s(" - ").take()).is_some()
+        return true
+    for s in stamps
+        $from: Sz = 0
+        for from < text.len
+            at: =
+                text.sub_from(from).find_str(arena.text().s(s).s(" - ").take()) catch
+                break
+            if word_at(text, from + at, s.len)
+                return true
+            from += at + 1
+    return false
+
+priv fn names_elapsed(text: U8[], stamps: List<|U8[]|>@, elapsed: List<|U8[]|>@, arena: Arena$@):
+    Bool //< whether text holds an elapsed time
+    if holds_difference(text, stamps, arena)
+        return true
+    for e in elapsed
+        if holds_word(text, e)
+            return true
+    return false
+
+priv fn constant_only(side: U8[]): Bool //<
+    //< Whether a comparison's side holds numbers and constants alone, no value of the run
+    //< **A constant is written in capitals** (`READ_MS`, `client.DEFAULT_TIMEOUT_MS`); a type
+    //< (`I64::`) is passed over. A lower-case name is a value the run measured or computed.
+    $i: Sz = 0
+    $found: = false
+    for i < side.len
+        c: = side[i]
+        if c.is_digit()
+            found = true
+            for i < side.len && side[i].is_alnum()
+                i += 1
+            continue
+        if !c.is_alpha()
+            i += 1
+            continue
+        $start: = i
+        for i < side.len && (side[i].is_alnum() || side[i] == '.')
+            if side[i] == '.'
+                start = i + 1
+            i += 1
+        last: = side.sub(start, i - start)
+        if side.sub_from(i).starts_with("::")
+            continue
+        if last.len > 0 && last[0].is_lower()
+            return false
+        $caps: = true
+        for b in last
+            caps = caps && !b.is_lower()
+        found = found || (caps && last.len > 1)
+    return found
+
+priv fn operand_left(line: U8[], op: Sz): U8[] //< the operand before the operator at op
+    $depth: Sz = 0
+    $i: = op
+    for i > 0
+        c: = line[i - 1]
+        if c == ')'
+            depth += 1
+        else if c == '('
+            if depth == 0
+                break
+            depth -= 1
+        else if depth == 0 &&
+            (c == ',' || (c == '&' && i > 1 && line[i - 2] == '&') ||
+            (c == '|' && i > 1 && line[i - 2] == '|') ||
+            (c == '=' && i > 1 && line[i - 2] == ' '))
+            break
+        i -= 1
+    return line.sub(i, op - i)
+
+priv fn operand_right(line: U8[], from: Sz): U8[] //< the operand after an operator ending at from
+    $depth: Sz = 0
+    $i: = from
+    for i < line.len
+        c: = line[i]
+        if c == '('
+            depth += 1
+        else if c == ')'
+            if depth == 0
+                break
+            depth -= 1
+        else if depth == 0 &&
+            (c == ',' || line.sub_from(i).starts_with("&&") ||
+            line.sub_from(i).starts_with("||") || line.sub_from(i).starts_with(" if ") ||
+            line.sub_from(i).starts_with(" else "))
+            break
+        i += 1
+    return line.sub(from, i - from)
+
+priv fn compares_by_constant(line: U8[], stamps: List<|U8[]|>@, elapsed: List<|U8[]|>@,
+    arena: Arena$@): Bool //<
+        //< Whether one line bounds an elapsed time by a constant, as the rule refuses
+        //< **In a check, an upper bound is refused; in an `if`, either side**, since either branch
+        //< can be the one that fails. A `for` polls until a deadline, so it is a wait's cap.
+    t: = line.trim_spaces()
+    if t.starts_with("for ")
+        return false
+    branch: = t.starts_with("if ") || t.starts_with("else if ")
+    for i in Range.asc(line.len)
+        c: = line[i]
+        if c != '<' && c != '>'
+            continue
+        prev: = line[i - 1] if i > 0 else ' '
+        next: = line[i + 1] if i + 1 < line.len else ' '
+        if prev == '|' || prev == '-' || prev == c || next == '|' || next == c
+            continue
+        left: = operand_left(line, i)
+        right: = operand_right(line, i + (2 if next == '=' else 1))
+        l_time: = names_elapsed(left, stamps, elapsed, arena) && constant_only(right)
+        r_time: = names_elapsed(right, stamps, elapsed, arena) && constant_only(left)
+        upper: = (c == '<' && l_time) || (c == '>' && r_time)
+        if upper || (branch && (l_time || r_time))
+            return true
+    return false
+
+priv fn assigned_name(t: U8[]): U8[] //< the name a trimmed line binds or assigns, or empty
+    s: = t.strip_prefix("$")
+    $n: Sz = 0
+    for n < s.len && (s[n].is_alnum())
+        n += 1
+    if n == 0
+        return ""
+    rest: = s.sub_from(n)
+    if rest.starts_with(": = ") || rest.starts_with(" = ") ||
+        (rest.starts_with(": ") && rest.find_str(" = ").is_some())
+        return s.sub(0, n)
+    return ""
+
+priv fn fn_name(t: U8[]): U8[] //< the function a trimmed line declares, or empty
+    s: = t.strip_prefix("priv ").strip_prefix("pub ")
+    if !s.starts_with("fn ")
+        return ""
+    rest: = s.sub_from(3)
+    return rest.sub(0, rest.find_char('(').unwrap_or(0))
+
+fn time_bounds(src: U8[], arena: Arena$@): List<|Sz|> //<
+    //< The lines of a test source that bound an elapsed time by a constant
+    //< **It follows names**: one read from the clock is a stamp, one that subtracts from a stamp is
+    //< an elapsed time, and so is one computed from that, or a function returning one.
+    $stamps: = List<|U8[]|>(arena)
+    $elapsed: = List<|U8[]|>(arena)
+    $out: = List<|Sz|>(arena)
+    $in_fn: U8[] = ""
+    $raw: = false
+    $no: Sz = 0
+    for full in src.lines(arena)
+        no += 1
+        was_raw: = raw
+        raw = scan.flip_raw(full, raw)
+        if was_raw
+            continue
+        line: = scan.strip_code(full, arena)
+        t: = line.trim_spaces()
+        declared: = fn_name(t)
+        if declared.len > 0
+            in_fn = declared
+        name: = assigned_name(t)
+        if name.len > 0
+            expr: = t.sub_from(t.find_str("= ").unwrap_or(0) + 2).trim_spaces()
+            if expr.ends_with(CLOCK) || stamps.contains(expr)
+                stamps.push(name)
+            else if names_elapsed(expr, stamps@, elapsed@, arena)
+                elapsed.push(name)
+        if t.starts_with("return ") && holds_difference(t, stamps@, arena)
+            elapsed.push(in_fn)
+        if compares_by_constant(line, stamps@, elapsed@, arena)
+            out.push(no)
+    return out
+
+priv fn bounds_time(src: U8[], arena: Arena$@): Bool //< `time_bounds`'s answer as one, for samples
+    return time_bounds(src, arena).len > 0
+
+priv const TIME_SAMPLES: Sample[_] = ::{
+    Sample::{ .text =
+        "    t0: = sys.mono_us()\n    took_ms: = (sys.mono_us() - t0) / 1000I64\n    assert(took_ms \
+            < 15000I64, \"m\")\n", .hits = true },
+    Sample::{ .text =
+        "    e: = sys.mono_us() - s\n    verdict.check(\"n\", ok && e < I64::READ_MS, \"\")\n",
+        .hits = true },
+    Sample::{ .text = "    assert(sys.mono_us() - t2 < 20000000I64, \"x\")\n", .hits = true },
+    Sample::{ .text =
+        "    $last: = sys.mono_us()\n    now: = sys.mono_us()\n    gap: = now - last\n    if gap > \
+            LIMIT_US\n        fail()\n", .hits = true },
+    Sample::{ .text =
+        "priv fn took_us(): I64\n    t: = sys.mono_us()\n    return sys.mono_us() - t\nfn \
+            main()\n    x: = took_us()\n    assert(15000I64 > x, \"\")\n", .hits = true },
+    // A lower bound, a ratio, a deadline's poll, a wait's cap, and no clock at all.
+    Sample::{ .text = "    e: = sys.mono_us() - s\n    assert(e >= 100000I64, \"waits\")\n",
+        .hits = false },
+    Sample::{ .text =
+        "    a: = sys.mono_us() - s\n    b: = sys.mono_us() - s\n    assert(a < 10I64 * b, \"\")\n",
+        .hits = false },
+    Sample::{ .text =
+        "    deadline: = sys.mono_us() + 5000000I64\n    for sys.mono_us() < deadline\n        \
+            poll()\n", .hits = false },
+    Sample::{ .text =
+        "    start: = sys.mono_us()\n    for sys.mono_us() - start <= LIMIT_US\n        poll()\n",
+        .hits = false },
+    Sample::{ .text = "    n: = xs.len - 1\n    assert(n < 10, \"\")\n    x: = List<|I64|>(a)\n",
+        .hits = false },
+}
+
+priv const TIME_HINT: U8[] = //< what a failure asks for
+    "compare with a time of the same run, or check an order instead (docs/SPEC-gates.md)"
+
+priv fn check_time_bounds(arena: Arena$@) //< no test source bounds a time by a constant
+    scan.check_samples("the reading of a time bound can fire", Sample[]::TIME_SAMPLES,
+        "time_samples", bounds_time, arena)
+    $bad: = List<|U8[]|>(arena)
+    $hit: = List<|U8[]|>(arena)
+    files: = harness.tracked_matching(U8[][]::TIMED_SPECS)
+    for rel in files
+        lines: = time_bounds(harness.read_under_root(rel), arena)
+        if lines.len == 0
+            continue
+        hit.push(rel)
+        $allowed: = false
+        for a in TIME_ALLOWED
+            allowed = allowed || a.path.equals(rel)
+        if allowed
+            continue
+        for no in lines
+            bad.push(arena.text().s(rel).s(":\{no\}").take())
+    // **A row that no longer holds a bound is taken away**, or it would let the next one in.
+    for a in TIME_ALLOWED
+        if !hit.contains(a.path)
+            bad
+                .push(arena.text().s(a.path).s(": `time_allowed` holds it, and it bounds no time")
+                .take())
+    verdict.check_list("no test bounds an elapsed time by a constant", files.len, "test sources",
+        bad@, TIME_HINT)
+
+fn run(arena: Arena$@) //< this section's entry point
+    check_gates_fail(arena)
+    check_suites_fail(arena)
+    check_time_bounds(arena)

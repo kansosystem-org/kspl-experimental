@@ -96,12 +96,15 @@ It prints where the rule is written and each prerequisite with its state. Then c
 
 ```sh
 make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ into ~/.local/lib/kspl/std
+                                   # and ksmd into ~/.local/lib/kspl/ksmd, with ~/.local/bin/ksmd
 ```
 
 It ends with `# installed ->` lines, then says **which `ksplc` your PATH starts**. That is the one just installed (✅), another one found first, or none. For another one, it prints the line to add to your shell's configuration. That last part is `make install-check` (with the same `PREFIX=`), which you can run again after changing PATH. It searches PATH as a shebang does (through `env`), and compares files, not names. On Windows it reads the UCRT64 shell's PATH; in cmd and PowerShell, `where ksplc` names the one they start.
 
 * `make install PREFIX=/usr/local` installs elsewhere (writing there needs `sudo`). **Pass `PREFIX` as an absolute path**; a relative one is refused, since it would land inside the repository. Where MSYS2 gives `HOME` in Windows form (`C:\msys64\home\<user>`), `make` converts it to `/` separators.
-* **On Linux it then makes `.ksmd` files open on a double-click**, with their icon (`make install-desktop`), under `~/.local/share` or `$PREFIX/share`. Building ksmd's page needs clang's wasm32 tools, and its local server needs OpenSSL (`libssl-dev`). Without them it prints a note and installs `ksplc` anyway. The files it writes are in "Opening a `.ksmd` document on a double-click" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
+* **It installs ksmd too**: the launcher, its local server and its page, in `$PREFIX/lib/kspl/ksmd`. `ksmd <file>` then opens a document from any folder (on Linux and macOS through the link `$PREFIX/bin/ksmd`; on Windows, start `ksmd.exe` in that folder). Building ksmd's page needs clang's wasm32 tools, and its local server needs OpenSSL (`libssl-dev`). Without them it prints a note and installs `ksplc` anyway.
+  * Caution: **Install ksmd under a folder you can write to**, as the default `~/.local` is. It keeps its servers' notes and logs in `tmp/` beside its server, so under `/usr/local` only the user who installed it can open documents with it.
+* **On Linux it then makes `.ksmd` files open on a double-click** with the installed ksmd, with their icon (`make install-desktop`), under `~/.local/share` or `$PREFIX/share`. The files it writes are in "Opening a `.ksmd` document on a double-click" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
 * **It installs only a compiler that reproduces itself.** It runs `make self-host` and `make self-host-ship` first, and stops where either differs. It changes no file in the tree. After a change to how ksplc generates code, it stops until `make commit-seed` has run, and says so.
 * **Do not put `out/ksplc_seed.exe` on the PATH.** The seed lacks every feature since it was last re-taken, and is built with `-O0 -g`. `make install` installs Stage2, the compiler that reproduces itself, rebuilt with optimization. Why is "A shipped executable is optimized; the development cycle is not" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
@@ -146,7 +149,7 @@ Note: **`ksplc`'s own output does not depend on the terminal's setting.** It set
 * **Do not fix that by reordering the PATH.** With `/usr/bin` first, `cc`/`gcc` build a `ksplc.exe` that depends on `msys-2.0.dll` (the Makefile rejects it via `-dumpmachine`).
 * `type -a make` shows the collision, and `pacman -Qo <path>` names the package that installed a file.
 
-**The packages `make ci` needs are listed in [`tools/msys2-packages.txt`](../tools/msys2-packages.txt)**, which CI's Windows jobs install too. Install `git` first and clone the repository, then install the list from the clone's top folder:
+**The packages `make` and CI's Windows job need are listed in [`tools/msys2-packages.txt`](../tools/msys2-packages.txt)**, which CI's Windows jobs install too. Install `git` first and clone the repository, then install the list from the clone's top folder:
 
 ```sh
 pacman -Syu   # the first time updates the core, so follow the guidance to close the terminal once, reopen it, and re-run
@@ -155,7 +158,7 @@ pacman -S --needed git
 pacman -S --needed $(sed 's/#.*//' tools/msys2-packages.txt)
 ```
 
-**To check everything this PC can with `make ci-full`, add [`tools/msys2-packages-full.txt`](../tools/msys2-packages-full.txt) the same way.** Each of its lines says which gate needs it.
+**To check everything this PC can with `make ci`, add [`tools/msys2-packages-full.txt`](../tools/msys2-packages-full.txt) the same way.** Each of its lines says which gate needs it.
 
 ```sh
 pacman -S --needed $(sed 's/#.*//' tools/msys2-packages-full.txt)
@@ -174,7 +177,7 @@ pacman -S --needed mingw-w64-ucrt-x86_64-clang-tools-extra mingw-w64-ucrt-x86_64
 
 Caution: **Do not install `mingw-w64-ucrt-x86_64-make`.** UCRT64's PATH would pick it first. If it is installed, the Makefile rejects it at start-up and says how to reach MSYS2's `make`.
 
-**The full list also holds what three builds need beyond `make ci`:**
+**The full list also holds what three builds need beyond the gates:**
 
 | Build | What it needs from the full list |
 | :-- | :-- |
@@ -206,5 +209,5 @@ The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain 
 | What you see | Why | The fix |
 | :-- | :-- | :-- |
 | **A link fails with `Permission denied`** | A real-time scan (Windows Defender's) or a sync agent briefly locks an `.exe` just written | Re-run. Where it recurs, exclude `out/` from the scan, and keep the repository outside a synced folder |
-| `make ci` ends `ALL GREEN`, yet lists `SKIP` lines (`node`, Wine, the MinGW cross compiler, an ARM toolchain) | Those gates need a tool the package list leaves out. `EXPECTED_SKIPS` in `tools/ci_gates.kspl` names each for `win32` | Nothing to fix ("Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md)). The full list turns most into real runs |
+| `make ci` ends `ALL GREEN`, yet lists `SKIP` lines (`node`, Wine, the MinGW cross compiler, an ARM toolchain) | Those gates need a tool the package list leaves out. The round lists each last, under `# not checked on this machine` | Nothing to fix ("Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md)). The full list turns most into real runs |
 | Part of `std/tests/sys_test.kspl` skips itself | It needs POSIX paths such as `/bin/echo` | Nothing to fix: subprocesses themselves work, and CI's Windows job runs them |

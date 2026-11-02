@@ -2,6 +2,7 @@
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as ai_tokenizer
+import "std/chars" // `sub`
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -102,9 +103,12 @@ fn test_tokenizer_keeps_its_size() //<
     verdict.pass("")
 
 priv const LONG_WORD_BYTES: Sz = 256 * 1024 //< the long chunk's length: one word, one chunk
-priv const LONG_WORD_WAIT_US: I64 = 10000000I64 //< how long its merging may take, generously
-    //< A queue of pairs merges it in milliseconds, even under a sanitizer. Rescanning the chunk
-    //< for each merge takes minutes, as the work grows with the square of the length.
+priv const SHORT_SHARE: Sz = 8 //< the short chunk is this share of the long one
+priv const GROWTH_MAX: I64 = 24I64 //<
+    //< How many times the short chunk's time the long chunk may take
+    //< A queue of pairs merges in time near the length: about `SHORT_SHARE` times as long.
+    //< Rescanning the chunk for each merge grows with the square, 64 times. **Both are timed in
+    //< the same run**, so a busy machine or a sanitizer slows both alike.
 priv const LONG_WORDS: U8[][_] = ::{ "a", "b", "c", "d", "aa", "ab", "cd", "abcd", "bc",
     "abcdabcd" } //< the long-chunk test's vocabulary; a word's ID is its place from 1
 
@@ -113,6 +117,16 @@ priv fn word_id(w: U8[]): I32 //< the ID `LONG_WORDS` gives a word; 0 for none
         if LONG_WORDS[i].equals(w)
             return I32::i + 1
     return 0
+
+priv fn encode_us(tok: ai_tokenizer.Tokenizer$@, text: U8[], arena: Arena$@): I64 //<
+    //< The fastest of three encodings of text [us]
+    $best: I64 = 0I64
+    for k in Range.asc(3)
+        started: = sys.mono_us()
+        _ids: = tok.encode(text, arena)
+        took: = sys.mono_us() - started
+        best = took if k == 0 || took < best else best
+    return best
 
 priv fn merged_as(tok: ai_tokenizer.Tokenizer$@, text: U8[], want: U8[], arena: Arena$@): Bool //<
     //< Whether the text encodes to the words `want` lists, separated by spaces
@@ -144,10 +158,13 @@ fn test_tokenizer_long_chunk(arena: Arena$@) //<
     defer $long: = str.Str_builder()
     for _i in Range.asc(LONG_WORD_BYTES / 4)
         long.s("abcd")
-    started: = sys.mono_us()
+    short_us: =
+        encode_us(tok@, long.slice().sub(0, LONG_WORD_BYTES / SHORT_SHARE), arena)
+    long_us: = encode_us(tok@, long.slice(), arena)
+    // The 1000 us keeps a short run near zero from making the ratio meaningless.
+    assert(long_us <= GROWTH_MAX * (short_us + 1000I64),
+        "merging a long chunk grew faster than its length")
     ids: = tok.encode(long.slice(), arena)
-    took: = sys.mono_us() - started
-    assert(took < LONG_WORD_WAIT_US, "merging a long chunk took longer than its bound")
     assert(ids.len == LONG_WORD_BYTES / 8, "each abcdabcd merges to one word")
     assert(tok.decode(ids, arena).equals(long.slice()), "the long chunk decodes back")
     verdict.pass("")

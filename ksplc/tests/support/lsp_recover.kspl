@@ -378,14 +378,47 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
     verdict.check(name,
         told(c@, arena.text().s("quarantining '\{POISON_URI\}'").take(), arena),
         lsp_client.why(c@, "", arena))
+    verdict.check("the supervisor's log names why the worker crashed on the document",
+        told(c@, "panic: injected test crash while analysing a document", arena),
+        lsp_client.why(c@, "", arena))
     again: = lsp_client.hover_text(probe_hover(c@, KEPT_URIS[0], arena))
     verdict.check("after the quarantine the worker goes on answering",
         again.find_str("I64").is_some(),
         lsp_client.why(c@, arena.text().s("'").s(again).s("'").take(), arena))
 
+// ==========================================
+// A worker that writes much to standard error goes on answering
+// **Its standard error is the supervisor's.** A pipe nobody reads would stop the worker once full
+// (64 KiB on Linux, 4 KiB on Windows): the supervisor would see a hang and remake it.
+// ==========================================
+priv const NOISE_HOOK: U8[] = "$/ksplTestNoise" //<
+    //< The hook writing more than any pipe holds (`write_test_noise` in `../../lsp/worker.kspl`)
+priv const NOISE_END: U8[] = "end of the injected test noise" //< the noise's last line
+
+fn check_noise(exe: U8[], arena: Arena$@) //<
+    //< That a worker writing much to standard error is not taken for hung, and its text is logged
+    name: = "a worker that writes much to standard error goes on answering"
+    $c: =
+        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+        verdict.check(name, false, "the client cannot be started")
+        return
+    defer c.free()
+    _init: =
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
+    c.notify(NOISE_HOOK, lsp_client.empty_obj(arena), lsp_client.SEND_MS, arena) catch {}
+    // The watchdog's wait as well, so a stopped worker shows as a restart, not as a timeout here.
+    got: = lsp_client.answer(c@, "shutdown", lsp_client.empty_obj(arena),
+        I32::(WATCHDOG_MS + I64::lsp_client.READ_MS), arena)
+    why: = lsp_client.why(c@, lsp_client.dump(got, arena), arena)
+    verdict.check(name,
+        !told(c@, "Restarting the worker", arena) && got.get("id").as_int().is_some(), why)
+    verdict.check("the worker's standard error reaches the supervisor's log",
+        told(c@, NOISE_END, arena), why)
+
 fn run_restart(exe: U8[], arena: Arena$@)
     check_first_answer(exe, arena)
     check_quarantine(exe, arena)
+    check_noise(exe, arena)
 
 // ==========================================
 // A package that names itself, edited in an editor opened on its own folder

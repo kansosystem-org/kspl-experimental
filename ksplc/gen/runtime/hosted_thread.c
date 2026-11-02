@@ -9,8 +9,9 @@
  * **A mutex is not re-entrant, and misusing one stops the program** on every OS. Misuse is
  * locking it on the thread that holds it, or unlocking it or waiting on it from another thread
  * ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md). POSIX's error-checking
- * mutex reports each as an error number. Windows's SRWLOCK reports nothing, so the owner is kept
- * beside it.
+ * mutex reports a re-lock as an error number. **The owner is kept beside the lock on every OS**:
+ * Windows's SRWLOCK reports nothing, and a signal or a broadcast asks whether the caller holds the
+ * lock, which no POSIX call answers.
  * ============================================================ */
 
 /* On a thread's trampoline, which calls the entry std/thread hands over. **The entry's parameter is
@@ -35,6 +36,24 @@ static const char kspl_relock_msg[] =
     "Mutex.lock: this thread already holds the lock (a Mutex is not re-entrant)";
 static const char kspl_foreign_unlock_msg[] = "Mutex.unlock: this thread does not hold the lock";
 static const char kspl_foreign_wait_msg[] = "Cond_var.wait: this thread does not hold the lock";
+static const char kspl_foreign_signal_msg[] =
+    "Cond_var.signal: this thread does not hold the lock (a wakeup could be lost)";
+static const char kspl_foreign_broadcast_msg[] =
+    "Cond_var.broadcast: this thread does not hold the lock (a wakeup could be lost)";
+
+/* How many std Mutexes the calling thread holds now. A lock adds one and an unlock takes one away;
+ * a wait on a Cond_var gives the lock back before it returns, so it changes nothing.
+ * **A thread that ends while holding one stops the program** (kspl_thread_held_check). Otherwise
+ * the next thread to lock that Mutex waits for ever, and nothing says why: the holder is gone. */
+static KSPL_PER_THREAD Sz kspl_mutexes_held;
+
+/* Called as a thread's entry returns, on the thread itself. */
+static void kspl_thread_held_check(void) {
+    if (kspl_mutexes_held != 0) {
+        kspl_lock_misuse("Thread: the thread ended while it holds a Mutex (unlock it before the "
+            "thread's function returns; the next lock would wait for ever)");
+    }
+}
 
 #ifndef _WIN32
 #include <pthread.h>
@@ -55,6 +74,7 @@ KSPL_CALLS_THREAD_ENTRY static void *kspl_thread_trampoline(void *p) {
     free(p);
     alt = kspl_crash_thread_enter();
     ret = start.entry(start.arg);
+    kspl_thread_held_check();
     kspl_crash_thread_leave(alt);
     return ret;
 }
@@ -88,18 +108,36 @@ KSPL_LINK void *kspl_thread_join(I64 handle) {
     return ret;
 }
 
-/* Caution: **Keep it PTHREAD_MUTEX_ERRORCHECK.** The default type deadlocks a re-lock with nothing
- * said on Linux, and its unlock from another thread is undefined. */
+/* owner is the holding thread (pthread_self()), 0 while free. Only the holder writes it, so
+ * another thread reading it never sees its own thread there, whatever it reads. Atomic access keeps
+ * that read from being a data race.
+ * Caution: **Keep it PTHREAD_MUTEX_ERRORCHECK.** The default type deadlocks a re-lock with nothing
+ * said on Linux. */
+typedef struct { pthread_mutex_t lock; uintptr_t owner; } kspl_mutex_t;
+
+static uintptr_t kspl_thread_self(void) {
+    return (uintptr_t)pthread_self();
+}
+
+static int kspl_mutex_held(kspl_mutex_t *m) {
+    return __atomic_load_n(&m->owner, __ATOMIC_RELAXED) == kspl_thread_self();
+}
+
+static void kspl_mutex_set_owner(kspl_mutex_t *m, uintptr_t owner) {
+    __atomic_store_n(&m->owner, owner, __ATOMIC_RELAXED);
+}
+
 KSPL_LINK I64 kspl_mutex_create(void) {
-    pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+    kspl_mutex_t *m = (kspl_mutex_t *)malloc(sizeof(kspl_mutex_t));
     pthread_mutexattr_t attr;
     if (m == NULL) return 0;
+    m->owner = 0;
     if (pthread_mutexattr_init(&attr) != 0) {
         free(m);
         return 0;
     }
     int ok = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK) == 0 &&
-        pthread_mutex_init(m, &attr) == 0;
+        pthread_mutex_init(&m->lock, &attr) == 0;
     pthread_mutexattr_destroy(&attr);
     if (!ok) {
         free(m);
@@ -110,22 +148,27 @@ KSPL_LINK I64 kspl_mutex_create(void) {
 
 KSPL_LINK void kspl_mutex_lock(I64 handle) {
     if (handle == 0) return;
-    if (pthread_mutex_lock((pthread_mutex_t *)(intptr_t)handle) == EDEADLK) {
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
+    if (pthread_mutex_lock(&m->lock) == EDEADLK) {
         kspl_lock_misuse(kspl_relock_msg);
     }
+    kspl_mutex_set_owner(m, kspl_thread_self());
+    kspl_mutexes_held++;
 }
 
 KSPL_LINK void kspl_mutex_unlock(I64 handle) {
     if (handle == 0) return;
-    if (pthread_mutex_unlock((pthread_mutex_t *)(intptr_t)handle) == EPERM) {
-        kspl_lock_misuse(kspl_foreign_unlock_msg);
-    }
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
+    if (!kspl_mutex_held(m)) kspl_lock_misuse(kspl_foreign_unlock_msg);
+    kspl_mutex_set_owner(m, 0);
+    pthread_mutex_unlock(&m->lock);
+    kspl_mutexes_held--;
 }
 
 KSPL_LINK void kspl_mutex_destroy(I64 handle) {
     if (handle == 0) return;
-    pthread_mutex_t *m = (pthread_mutex_t *)(intptr_t)handle;
-    pthread_mutex_destroy(m);
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
+    pthread_mutex_destroy(&m->lock);
     free(m);
 }
 
@@ -155,28 +198,32 @@ KSPL_LINK I64 kspl_cond_create(void) {
 }
 
 /* mutex_handle must already be locked by the caller (pthread_cond_wait's premise).
- * While waiting it is unlocked inside, and relocked when a signal arrives. */
+ * While waiting it is unlocked inside, and relocked when a signal arrives, so the owner is cleared
+ * before and set again after. */
 KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
     if (cond_handle == 0 || mutex_handle == 0) return;
-    if (pthread_cond_wait((pthread_cond_t *)(intptr_t)cond_handle,
-            (pthread_mutex_t *)(intptr_t)mutex_handle) == EPERM) {
-        kspl_lock_misuse(kspl_foreign_wait_msg);
-    }
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
+    if (!kspl_mutex_held(m)) kspl_lock_misuse(kspl_foreign_wait_msg);
+    kspl_mutex_set_owner(m, 0);
+    pthread_cond_wait((pthread_cond_t *)(intptr_t)cond_handle, &m->lock);
+    kspl_mutex_set_owner(m, kspl_thread_self());
 }
 
 /* kspl_cond_wait for at most timeout_ms (read through kspl_wait_ms): 0 when woken, a spurious
  * wakeup included, and 1 when the time ran out. */
 KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_ms) {
     pthread_cond_t *c = (pthread_cond_t *)(intptr_t)cond_handle;
-    pthread_mutex_t *m = (pthread_mutex_t *)(intptr_t)mutex_handle;
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     struct timespec ts;
     int rc;
     if (cond_handle == 0 || mutex_handle == 0) return 1;
+    if (!kspl_mutex_held(m)) kspl_lock_misuse(kspl_foreign_wait_msg);
     timeout_ms = kspl_wait_ms(timeout_ms);
 #if defined(__APPLE__)
     ts.tv_sec = timeout_ms / 1000;
     ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
-    rc = pthread_cond_timedwait_relative_np(c, m, &ts);
+    kspl_mutex_set_owner(m, 0);
+    rc = pthread_cond_timedwait_relative_np(c, &m->lock, &ts);
 #else
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 1;
     ts.tv_sec += timeout_ms / 1000;
@@ -185,21 +232,31 @@ KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_
         ts.tv_sec += 1;
         ts.tv_nsec -= 1000000000L;
     }
-    rc = pthread_cond_timedwait(c, m, &ts);
+    kspl_mutex_set_owner(m, 0);
+    rc = pthread_cond_timedwait(c, &m->lock, &ts);
 #endif
-    if (rc == EPERM) kspl_lock_misuse(kspl_foreign_wait_msg);
+    kspl_mutex_set_owner(m, kspl_thread_self());
     return rc == ETIMEDOUT ? 1 : 0;
 }
 
-KSPL_LINK void kspl_cond_signal(I64 handle) {
-    if (handle == 0) return;
-    pthread_cond_signal((pthread_cond_t *)(intptr_t)handle);
+/* A wakeup is given under the lock the waiters take. Given without it, it can come between a
+ * waiter's check of its condition and its wait, and that waiter sleeps on. */
+KSPL_LINK void kspl_cond_wake_one(I64 cond_handle, I64 mutex_handle) {
+    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (!kspl_mutex_held((kspl_mutex_t *)(intptr_t)mutex_handle)) {
+        kspl_lock_misuse(kspl_foreign_signal_msg);
+    }
+    pthread_cond_signal((pthread_cond_t *)(intptr_t)cond_handle);
 }
 
-KSPL_LINK void kspl_cond_broadcast(I64 handle) {
-    if (handle == 0) return;
-    pthread_cond_broadcast((pthread_cond_t *)(intptr_t)handle);
+KSPL_LINK void kspl_cond_wake_all(I64 cond_handle, I64 mutex_handle) {
+    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (!kspl_mutex_held((kspl_mutex_t *)(intptr_t)mutex_handle)) {
+        kspl_lock_misuse(kspl_foreign_broadcast_msg);
+    }
+    pthread_cond_broadcast((pthread_cond_t *)(intptr_t)cond_handle);
 }
+
 
 KSPL_LINK void kspl_cond_destroy(I64 handle) {
     if (handle == 0) return;
@@ -217,6 +274,7 @@ KSPL_CALLS_THREAD_ENTRY static DWORD WINAPI kspl_thread_trampoline(LPVOID param)
     kspl_thread_t *t = (kspl_thread_t *)param;
     kspl_crash_thread_enter();
     t->result = t->entry(t->arg);
+    kspl_thread_held_check();
     return 0;
 }
 
@@ -268,6 +326,7 @@ KSPL_LINK void kspl_mutex_lock(I64 handle) {
     if (m->owner == kspl_thread_self()) kspl_lock_misuse(kspl_relock_msg);
     AcquireSRWLockExclusive(&m->lock);
     InterlockedExchange(&m->owner, kspl_thread_self());
+    kspl_mutexes_held++;
 }
 
 KSPL_LINK void kspl_mutex_unlock(I64 handle) {
@@ -276,6 +335,7 @@ KSPL_LINK void kspl_mutex_unlock(I64 handle) {
     if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_unlock_msg);
     InterlockedExchange(&m->owner, 0);
     ReleaseSRWLockExclusive(&m->lock);
+    kspl_mutexes_held--;
 }
 
 /* An SRWLOCK has no destroy function; free() is all. */
@@ -313,15 +373,21 @@ KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_
     return woke ? 0 : 1;
 }
 
-KSPL_LINK void kspl_cond_signal(I64 handle) {
-    if (handle == 0) return;
-    WakeConditionVariable((CONDITION_VARIABLE *)(intptr_t)handle);
+/* The POSIX side's contract: the caller holds the lock the waiters take. */
+KSPL_LINK void kspl_cond_wake_one(I64 cond_handle, I64 mutex_handle) {
+    if (cond_handle == 0 || mutex_handle == 0) return;
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
+    if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_signal_msg);
+    WakeConditionVariable((CONDITION_VARIABLE *)(intptr_t)cond_handle);
 }
 
-KSPL_LINK void kspl_cond_broadcast(I64 handle) {
-    if (handle == 0) return;
-    WakeAllConditionVariable((CONDITION_VARIABLE *)(intptr_t)handle);
+KSPL_LINK void kspl_cond_wake_all(I64 cond_handle, I64 mutex_handle) {
+    if (cond_handle == 0 || mutex_handle == 0) return;
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
+    if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_broadcast_msg);
+    WakeAllConditionVariable((CONDITION_VARIABLE *)(intptr_t)cond_handle);
 }
+
 
 /* A CONDITION_VARIABLE has no destroy function; free() is all. */
 KSPL_LINK void kspl_cond_destroy(I64 handle) {

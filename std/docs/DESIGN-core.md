@@ -99,7 +99,7 @@ Each row is a bug or attack that other libraries are known for. It says what `st
 
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
-| `thread` | **Nothing says which types can cross threads**, so a non-atomic count or a raw pointer gets handed over casually | POSIX threads | **Not handled.** A constraint on `spawn`'s arguments would miss sharing through a global. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#why-data-races-are-not-prevented-by-the-type-system). What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
+| `thread` | **Nothing says which types can cross threads**, so a non-atomic count or a raw pointer gets handed over casually | POSIX threads | **Not handled, but for one sure bug.** A constraint on `spawn`'s arguments would miss sharing through a global. `spawn` refuses only an argument type that reaches an `Rc` or a `Weak_rc`. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#why-data-races-are-not-prevented-by-the-type-system). What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
 
 ### Known holes, and what would fill them
 
@@ -147,9 +147,9 @@ The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory manageme
 
 ### An owner is freed where it is declared
 
-**Every type that owns something conforms to `Manual_free`, and its owner frees it.** In `std` these include `Str_builder`, `File_stream`, `File_lock`, `Mutex<|T|>`, `Cond_var`, `Reactor`, `regex`'s search state, `Scratch` and the containers on the heap. A local one is declared with `defer` in front, which frees it on every way out of its block, a propagated failure's included. No type frees itself, so a reader sees each free on the page ("Every cleanup stands in the source" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#every-cleanup-stands-in-the-source)).
+**Every type that owns something conforms to `Manual_free`, and its owner frees it.** In `std` these include `Str_builder`, `File_stream`, `File_lock`, `Mutex<|T|>`, `Cond_var`, `thread.Thread`, `Reactor`, `regex`'s search state, `Scratch` and the containers on the heap. A local one is declared with `defer` in front, which frees it on every way out of its block, a propagated failure's included. No type frees itself, so a reader sees each free on the page ("Every cleanup stands in the source" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#every-cleanup-stands-in-the-source)).
 
-* **A copy of a file, a lock or a thread primitive is refused.** `File_stream`, `File_lock`, `thread.Raw_mutex` and `Cond_var` conform to `Move_only` too, and `Mutex<|T|>` is move-only through its lock. A copy would close or destroy one resource twice.
+* **A copy of a file, a lock or a thread primitive is refused.** `File_stream`, `File_lock`, `thread.Raw_mutex`, `Cond_var` and `thread.Thread` conform to `Move_only` too, and `Mutex<|T|>` is move-only through its lock. A copy would close or destroy one resource twice.
 * **A slice borrows.** A builder's slice becomes invalid when the builder is freed. Returning the builder hands it to the caller; returning its slice does not.
 * **A free by hand releases early**, where later work needs the resource gone. Examples are a `File_stream` closed before the file is read back, and a `File_lock` let go for another process.
 * **An owner frees the owners in its fields** in its own `free()`.
@@ -212,6 +212,8 @@ Caution: **The arena of its own takes a whole chunk at its first allocation**, h
 `Rc<|T|>` shares a value between owners on one thread (`std/refcount.kspl`). `Arc<|T|>` shares it between threads, with an atomic count. A weak handle, which watches a value without owning it, is `Weak_` plus its owner's name (`Weak_arc<|T|>`). So the owner is what remains without the prefix. The names come from Rust and are short, since counted code repeats them constantly.
 
 Caution: **Do not confuse `Arc` with ARC in a document.** ARC is Automatic Reference Counting, by which the compiler inserts retain and release. `Arc<|T|>` is the type, as Rust's `Arc<T>`.
+
+**An `Arc`'s value is read-only** (`get()` returns `T@`), so threads change it only through a `Mutex` or an atomic inside. `get_mut()` reaches it writable while one owner alone holds it, to end what it owns. The reasons are "An `Arc` shares a read-only value" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#an-arc-shares-a-read-only-value). An `Rc` stays writable, since it lives on one thread.
 
 **The zero value is an empty handle that owns nothing**, and retain and release skip it. So a table of empty slots such as `Rc<|T|>[N] = ::{}` is written plainly, and survives the compiler's chained release over zeroed storage. `empty()` / `is_empty()` spell it out.
 
@@ -285,6 +287,15 @@ Rounding only the chunk header's size up to a multiple of 8 is not enough: every
 So `restore` first looks for the mark's chunk among its own. The mark also carries the arena's count of resets, since a later chunk can take a freed chunk's address, and `reset()` keeps one chunk.
 
 **What remains unchecked keeps the arena whole.** A mark that an earlier `restore()` rewound past, whose chunk now holds as much again, rewinds without a stop. Every chunk it keeps is this arena's, and every byte handed out afterwards is past it, so nothing overlaps. Testing for it would need a record of every mark ever saved, as marks are handed out by value.
+
+### The sanitizer sees a stale slice into an arena
+
+After `reset()` or `restore()`, an old slice reads what the next allocation wrote. The heap never saw those bytes freed, so the address sanitizer alone says nothing. Under the sanitizer, the arena marks every byte of its chunks that it has not handed out, and `alloc` unmarks what it hands out. A read through an old slice into marked bytes is reported as `use-after-poison`.
+
+* **A slice over bytes handed out again is still not seen**: the new allocation unmarked them. That is the usual case in a loop that refills the arena each round.
+* **So under the sanitizer, `reset()` of a growing arena moves to a new chunk** of the same size. It gives the old one back to the heap. The sanitizer holds a freed block back from reuse for a while, so the old slice's read is reported as a use after free. Without the sanitizer, `reset()` keeps the chunk.
+* **A buffer the caller owns (`from_buffer`) cannot move**, so only the marks catch a read there. `free()` unmarks the whole buffer, as the caller may use it again by hand.
+* **Without the sanitizer, and on bare metal, the marks cost a call that does nothing.** The runtime answers whether the sanitizer is there.
 
 ## Containers and iteration
 
@@ -703,6 +714,8 @@ A body that can match empty is wrapped in a step that opens a round and one that
 **The positions are indices into the original string.** The search moves its start (`search`'s `from`) rather than cutting the string, which would leave the groups' offsets for the caller to add back unnoticed. `make debug`'s `test_regex_find_all` reads the second entry's group from the original string.
 
 **Each search is linear in what it reads, but `find_all` searches again from each match's end.** A search can read past its match while it follows a preferred way that fails later. The next search reads those bytes again. `\w*x|\w` over a long word reads the rest of the word once per letter. So over a text built for it, `find_all` takes time quadratic in the text. Each entry also holds a whole `Slots`, heavier than the span alone.
+
+**No work budget stops it.** A budget would let `find` and `find_all` fail, against "Only `compile` can fail" above. So the limit is the caller's: `find_all`'s comment says not to run it with both the pattern and the text from outside. Today no package calls it on outside text.
 
 ### An unused group is none; a missing group panics
 

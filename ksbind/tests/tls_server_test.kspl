@@ -146,8 +146,7 @@ priv fn write_all(s: Tls_session$@, conn: net.Tcp_stream$@, bytes: U8[], deadlin
                 return false
     return true
 
-#export
-fn tls_server_test_peer(p: Srv$@): Void$@
+extern fn tls_server_test_peer(p: Srv$@): Void$@
     conn: = p.listener.accept() catch panic("accept should succeed once a client connects")
     conn.set_nonblocking() catch panic("the accepted socket should become non-blocking")
     s: = Tls_session.start(p.server) catch panic("a session should start")
@@ -170,7 +169,7 @@ priv fn read_second(p: Srv$@, s: Tls_session$@, conn: net.Tcp_stream$@) //<
     p.second = (U8[]::got).sub(0, n).equals(PING)
     p.drained = !s.buffered()
 
-priv fn spawn_srv(p: Srv$@): thread.Thread$@ //< starts the server's thread on `p`
+priv fn spawn_srv(p: Srv$@): thread.Thread //< starts the server's thread on `p`
     return thread.Thread.spawn<|Srv|>(tls_server_test_peer, p) catch panic("thread spawn failed")
 
 priv fn srv_on(server: Tls_server$@, act: Srv_act): Srv //< a listener on a free loopback port
@@ -186,7 +185,7 @@ fn test_tls_server_talks_to_the_client()
     $p: = srv_on(server, .echo)
     defer p.listener.free()
     port: = p.listener.port() catch panic("a bound socket knows its port")
-    t: = spawn_srv(p@)
+    $t: = spawn_srv(p@)
     s: = tls.Tls_stream.connect("localhost", port)
         catch panic("the client should verify the server half's certificate and connect")
     sent: = s.write(PING) catch panic("the client's write should succeed")
@@ -201,7 +200,7 @@ fn test_tls_server_talks_to_the_client()
     // **0 only after a close_notify**, by the client's rule: so this shows `close` sent one.
     end: = s.read(U8$[]::rest) catch panic("the server's close_notify should end the stream")
     s.free()
-    t.join_and_free()
+    t.free()
     verdict.check("the server read the ping and answered", p.echoed && !p.failed, "")
     verdict.check("the client read pong", (U8$[]::got).equals(PONG), "")
     verdict.check("the stream ended at the server's close_notify", end == 0, "")
@@ -216,7 +215,7 @@ fn test_tls_server_holds_records_that_came_together()
     $p: = srv_on(server, .two_records)
     defer p.listener.free()
     port: = p.listener.port() catch panic("a bound socket knows its port")
-    t: = spawn_srv(p@)
+    $t: = spawn_srv(p@)
     c: = Record_client.connect("localhost", port, SRV_WAIT_MS)
         catch panic("the client should verify the server half's certificate and connect")
     c.queue(PING) catch panic("the first record should be made")
@@ -224,7 +223,7 @@ fn test_tls_server_holds_records_that_came_together()
     c.send(SRV_WAIT_MS) catch panic("both records should go out in one write")
     answer: = c.read_to_end(SRV_WAIT_MS, arena).unwrap_or("(no close_notify)")
     c.free()
-    t.join_and_free()
+    t.free()
     // **One `read` gives one record**, and the socket has nothing more to report: only
     // `buffered` tells the caller to read again.
     verdict.check("after the first record, buffered says the second is held", p.held, "")
@@ -240,7 +239,7 @@ priv fn first_error_for(bytes: U8[], arena: Arena$@): Srv //<
     server: = loaded(c, arena)
     $p: = srv_on(server, .first_error)
     port: = p.listener.port() catch panic("a bound socket knows its port")
-    t: = spawn_srv(p@)
+    $t: = spawn_srv(p@)
     raw: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect locally")
     // **A pause before the bytes**: the server's reads must give way rather than wait.
     sys.sleep_ms(100)
@@ -253,7 +252,7 @@ priv fn first_error_for(bytes: U8[], arena: Arena$@): Srv //<
         if n == 0
             break
     raw.free()
-    t.join_and_free()
+    t.free()
     p.listener.free()
     server.free()
     return p

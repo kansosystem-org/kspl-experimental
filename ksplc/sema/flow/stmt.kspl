@@ -10,6 +10,7 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/flow/field" as sema_flow_field
+import "ksplc/sema/flow/lock" as sema_flow_lock
 import "ksplc/sema/flow/track" as sema_flow_track
 import "std/ds" { List }
 import "std/str"
@@ -218,7 +219,10 @@ impl Ast_node
 
         if expr != null
             expr.analyze_df_node(c, state)
-        c.record_jump(r, c.df_check_defers_on_exit(r, state, r.defers_left_behind(c)))
+        after: = c.df_check_defers_on_exit(r, state, r.defers_left_behind(c))
+        if k == .k_stmt_return || k == .k_stmt_throw
+            c.report_lock_exit(r, after)
+        c.record_jump(r, after)
         state.reachable = false
 
     priv fn defers_left_behind(r: Self$@, c: sema_flow_track.Df_ctx$@): Sz //<
@@ -301,12 +305,25 @@ impl sema_flow_track.Df_state
         for v in head.init_vars.items
             if !back.init_vars.contains(v)
                 return true
+        for v in head.held.items
+            if !back.held.contains(v)
+                return true
         return back.freed_vars.adds_known_to(head.freed_vars@, c, known) ||
             back.gone_vars.adds_known_to(head.gone_vars@, c, known) ||
             back.moved_vars.adds_known_to(head.moved_vars@, c, known) ||
-            back.moved_fields.adds_known_to(head.moved_fields@, c, known)
+            back.moved_fields.adds_known_to(head.moved_fields@, c, known) ||
+            back.unlocked.adds_known_to(head.unlocked@, c, known) ||
+            back.stale.adds_known_to(head.stale@, c, known) ||
+            back.viewing.adds_to_set(head.viewing@)
 
 impl sema_flow_track.Df_set
+    fn adds_to_set(r: Self$@, other: sema_flow_track.Df_set$@): Bool //<
+        //< whether r holds an item other lacks
+        for v in r.items
+            if !other.contains(v)
+                return true
+        return false
+
     fn adds_known_to(r: Self$@, other: sema_flow_track.Df_set$@, c: sema_flow_track.Df_ctx$@,
         known: Sz): Bool //<
             //< Whether r holds an item `other` lacks whose local is one of the first `known` locals

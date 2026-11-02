@@ -5,10 +5,14 @@
 //< refuses everything go green.
 //< A section number marks where a case was copied from; the check does not use it
 //< (`tests/suite/docref_test.kspl` checks that the section exists).
+//< Its failure case: `tests/suite/spec_claims_test.kspl#.reject = true`, claims of a refusal.
 import "ksplc/tests/support/harness" as ksplc_harness
+import "ksplc/tests/support/place_table"
+import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
+import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
@@ -47,13 +51,13 @@ priv const CASES: Case[_] = ::{
         .src = "priv struct S { inner: S; }\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "3.3", .claim = "a self-reference across a pointer is allowed", .reject = false,
         .src = "priv struct S { next: S@; }\nfn main(): I32 { return 0; }\n" },
-    Case::{ .sec = "3.3", .claim = "a struct with no fields is refused outside an extern block",
+    Case::{ .sec = "3.3", .claim = "a struct with no fields is refused without extern",
         .reject = true, .src = "pub struct Handle\nfn main(): I32 { return 0; }\n" },
-    Case::{ .sec = "3.3", .claim = "a struct with no fields declares a C type in an extern block",
+    Case::{ .sec = "3.3", .claim = "a struct with no fields declares a C type after extern",
         .reject = false,
         .src =
-        "extern \"C\" { struct Handle; }\nfn main(): I32 { h: Handle@ = null; return 0 if h == null \
-            else 1; }\n" },
+        "extern struct Handle\nfn main(): I32 { h: Handle@ = null; return 0 if h == null else 1; \
+            }\n" },
     Case::{ .sec = "8.1.4", .claim = "a function with no body is refused", .reject = true,
         .src = "pub fn twice(n: I32): I32\nfn main(): I32 { return twice(1); }\n" },
     Case::{ .sec = "8.1.4", .claim = "a trait's requirement stands with no body", .reject = false,
@@ -151,6 +155,15 @@ priv const CASES: Case[_] = ::{
         .src =
         "priv struct S\n  v: I32\nfn main(): I32\n  $s: S = S::{ .v = 1 }\n  s.v = 0\n  $a: I32[2] \
             = ::{ 1, 2 }\n  a[0] = 0\n  return s.v + a[0]\n" },
+    Case::{ .sec = "4.3.4", .claim = "a mutable slice cast of a 'const' declaration is refused",
+        .reject = true,
+        .src =
+        "const C: U8[4] = ::{ 1, 2, 3, 4 }\nfn main(): I32 { v: = U8$[]::C; return I32::v[0]; }\n" },
+    Case::{ .sec = "4.3.4", .claim = "the check does not follow a parameter that holds a literal",
+        .reject = false,
+        .src =
+        "priv fn f(s: U8[]): I32 { w: = U8$@::s.ptr; return I32::w$; }\nfn main(): I32 { return \
+            f(\"ab\") - 97; }\n" },
     Case::{ .sec = "5.2", .claim = "a 'Self$@' method cannot be called from a read-only receiver",
         .reject = true,
         .src =
@@ -402,18 +415,15 @@ priv const CASES: Case[_] = ::{
         .src =
         "priv $n: I32 = 4\n#align(n)\npriv struct S { v: I32; }\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "11.1", .claim = "a slice cannot be handed to an extern argument",
-        .reject = true,
-        .src = "extern \"C\" { fn ext(s: U8[]): I32; }\nfn main(): I32 { return 0; }\n" },
+        .reject = true, .src = "extern fn ext(s: U8[]): I32\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "11.1", .claim = "a fixed-length array cannot be handed to an extern argument",
-        .reject = true,
-        .src = "extern \"C\" { fn ext(a: I32[4]): I32; }\nfn main(): I32 { return 0; }\n" },
+        .reject = true, .src = "extern fn ext(a: I32[4]): I32\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "11.1", .claim = "a Result cannot be used as an extern return value",
         .reject = true,
-        .src =
-        "priv enum E { bad; }\nextern \"C\" { fn ext(): I32!E; }\nfn main(): I32 { return 0; }\n" },
+        .src = "priv enum E { bad; }\nextern fn ext(): I32!E\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "11.1", .claim = "a raw pointer and a length can be handed over",
         .reject = false,
-        .src = "extern \"C\" { fn ext(s: U8$@, n: Sz): I32; }\nfn main(): I32 { return 0; }\n" },
+        .src = "extern fn ext(s: U8$@, n: Sz): I32\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "11.4", .claim = "__kspl_asm_volatile wants a string literal first",
         .reject = true,
         .src =
@@ -442,8 +452,285 @@ priv const CASES: Case[_] = ::{
             return 0 if ok else 1; }\n" },
 }
 
+// ==========================================
+// The place table: the specification's table against the data ksplc's `make test-place` builds a
+// program from for each cell (`ksplc/tests/support/place_table.kspl`). A row, a column or a cell
+// changed on one side alone fails here.
+// ==========================================
+
+priv const PLACE_TABLE_HEADING: U8[] = "#### 4.3.5 " //< the section the table stands in
+
+priv fn table_cells(line: U8[], arena: Arena$@): List<|U8[]|> //< a table row's cells, trimmed
+    $out: = List<|U8[]|>(arena)
+    inner: = line.trim_spaces()
+    if inner.len < 2
+        return out
+    for cell in inner.sub(1, inner.len - 2).split('|', arena)
+        out.push(cell.trim_spaces())
+    return out
+
+priv fn spec_place_rows(arena: Arena$@): List<|List<|U8[]|>|> //< the table's rows, heading first
+    $rows: = List<|List<|U8[]|>|>(arena)
+    path: = fs.join(harness.root(), "docs/SPEC-programming-language.md", arena)
+    text: = io.read_file(path, arena) catch
+        return rows
+    $in_sec: = false
+    $in_table: = false
+    for line in text.lines(arena)
+        if line.starts_with(PLACE_TABLE_HEADING)
+            in_sec = true
+            continue
+        if !in_sec
+            continue
+        if line.starts_with("#")
+            break
+        if !line.starts_with("|")
+            if in_table
+                break
+            continue
+        cells: = table_cells(line, arena)
+        if !in_table
+            if cells.len == 0 || !cells.get(0).equals("Place")
+                continue
+            in_table = true
+        if cells.len > 0 && cells.get(0).starts_with(":--")
+            continue
+        rows.push(cells)
+    return rows
+
+priv fn check_place_table(arena: Arena$@) //< every heading and cell agrees with the data
+    rows: = spec_place_rows(arena)
+    if !verdict.check("[4.3.5] the specification holds the place table", rows.len > 0,
+        "no table whose first heading is 'Place' under '#### 4.3.5'")
+        return
+    $diffs: = List<|U8[]|>(arena)
+    head: = rows.get(0)
+    cols: = place_table.COLUMNS.len
+    if head.len != cols + 1
+        diffs
+            .push(arena.text()
+            .s("the specification has \{head.len - 1\} columns, the data \{cols\}").take())
+    for c in Range.asc(cols)
+        if c + 1 < head.len &&
+            !head.get(c + 1).equals(place_table.COLUMNS[c].head)
+            diffs
+                .push(arena.text().s("column \{c + 1\}: '").s(head.get(c + 1)).s("' / '")
+                .s(place_table.COLUMNS[c].head).s("'").take())
+    if rows.len != place_table.ROWS.len + 1
+        diffs
+            .push(arena.text()
+            .s("the specification has \{rows.len - 1\} rows, the data \{place_table.ROWS.len\}")
+            .take())
+    for r in Range.asc(place_table.ROWS.len)
+        if r + 1 >= rows.len
+            break
+        spec: = rows.get(r + 1)
+        row: = place_table.ROWS[r]@
+        if spec.len == 0 || !spec.get(0).equals(row.head)
+            diffs
+                .push(arena.text().s("row \{r + 1\}: '")
+                .s(spec.get(0) if spec.len > 0 else "").s("' / '").s(row.head).s("'").take())
+            continue
+        for c in Range.asc(cols)
+            want: = place_table.word(row.cells[c])
+            if c + 1 >= spec.len || !spec.get(c + 1).equals(want)
+                diffs
+                    .push(arena.text().s("'").s(row.head).s("' / '")
+                    .s(place_table.COLUMNS[c].head).s("': the specification writes '")
+                    .s(spec.get(c + 1) if c + 1 < spec.len else "").s("', the data '").s(want)
+                    .s("'").take())
+    verdict.check_list("[4.3.5] the place table agrees with ksplc/tests/support/place_table.kspl",
+        (rows.len - 1) * cols, "cells", diffs@, "change both, then run `make test-place`")
+
+// ==========================================
+// The view table of 8.4.6 against std's marks: each method its "What ends it" column names
+// carries `#ends_views` (a `free` ends them by `Manual_free`), each its "The view" column names
+// carries `#gives_view`, and each `#ends_views` of a type the table covers stands in it. The
+// lint [W0111] reads the marks, so a row changed on one side alone fails here.
+// ==========================================
+
+priv const VIEW_TABLE_HEADING: U8[] = "#### 8.4.6 " //< the section the view table stands in
+
+priv struct Marked //< one method std marks
+    owner: U8[] //< the type whose `impl` holds it
+    name: U8[] //< the method's name
+    attr: U8[] //< `ends_views` or `gives_view`
+
+priv fn impl_type(line: U8[]): U8[] //< the type an `impl` line is for (`impl<|T|> List<|T|>: …`)
+    $rest: = line.strip_prefix("impl").trim_start()
+    if rest.starts_with("<|")
+        $depth: Sz = 0
+        $i: Sz = 0
+        for i < rest.len
+            if rest.starts_with("<|", i)
+                depth += 1
+                i += 2
+            else if rest.starts_with("|>", i)
+                depth -= 1
+                i += 2
+                if depth == 0
+                    break
+            else
+                i += 1
+        rest = rest.sub_from(i).trim_start()
+    $n: Sz = 0
+    for n < rest.len && rest[n].is_alnum()
+        n += 1
+    return rest.sub(0, n)
+
+priv fn std_marks(arena: Arena$@): List<|Marked|> //< every method std marks for the views
+    $out: = List<|Marked|>(arena)
+    dir: = fs.join(harness.root(), "std", arena)
+    names: = fs.read_dir(dir, arena) catch
+        return out
+    for name in names
+        if !name.ends_with(".kspl")
+            continue
+        text: = io.read_file(fs.join(dir, name, arena), arena) catch
+            continue
+        $owner: U8[] = ""
+        $pending: U8[] = ""
+        for line in text.lines(arena)
+            if line.starts_with("impl")
+                owner = impl_type(line)
+                continue
+            t: = line.trim_spaces()
+            if t.equals("#ends_views") || t.equals("#gives_view")
+                pending = t.sub_from(1)
+                continue
+            if pending.len == 0 || !t.starts_with("pub fn ")
+                continue
+            fn_name: = t.sub_from(7)
+            $n: Sz = 0
+            for n < fn_name.len && fn_name[n].is_alnum()
+                n += 1
+            out
+                .push(Marked::{ .owner = owner, .name = fn_name.sub(0, n), .attr = pending })
+            pending = ""
+    return out
+
+priv fn escaped_cells(line: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< A table row's cells, where `\|` inside a cell is not a border
+    return table_cells(line.replace("\\|", "/", arena), arena)
+
+priv fn ticked(cell: U8[], called: Bool, arena: Arena$@): List<|U8[]|> //<
+    //< The names a cell writes in backticks, each the last `.` part before any `(`
+    //< Each side of a `…` counts apart: `xs.slice()` and `arena.text()…take()` give `slice`,
+    //< `text` and `take`. A type's name keeps its capital. `called` keeps only the tokens with a
+    //< `.` or a `(`, so a variable (`e`) is not read as a method.
+    $out: = List<|U8[]|>(arena)
+    parts: = cell.replace("…", "` `", arena).split('`', arena)
+    for $k: Sz = 1; k < parts.len; k += 2
+        $p: = parts.get(k)
+        if called && p.find_char('.').is_none() && p.find_char('(').is_none()
+            continue
+        if open: = p.find_char('(')
+            p = p.sub(0, open)
+        for $j: = p.len; j > 0; j -= 1
+            if p[j - 1] == '.'
+                p = p.sub_from(j)
+                break
+        out.push(p)
+    return out
+
+priv fn is_method_name(s: U8[]): Bool //< a lower-case name alone, with no operator in it
+    if s.len == 0 || !s[0].is_lower()
+        return false
+    for ch in s
+        if !ch.is_alnum()
+            return false
+    return true
+
+priv fn type_of_row(cell: U8[], arena: Arena$@): U8[] //< the type a row's first cell is about
+    for t in ticked(cell, false, arena)
+        if t.len > 0 && t[0].is_upper()
+            $n: Sz = 0
+            for n < t.len && t[n].is_alnum()
+                n += 1
+            return t.sub(0, n)
+    // `List.slice` is ticked whole: its type is the part before the `.`.
+    parts: = cell.split('`', arena)
+    if parts.len > 1
+        return parts.get(1).split('.', arena).get(0)
+    return ""
+
+priv fn has_mark(marks: List<|Marked|>@, owner: U8[], name: U8[], attr: U8[]): Bool //<
+    //< Whether std marks the method on the type, or on a helper type named after it
+    //< `arena.text()…take()` ends at `Arena_text.take`, and `for e in m.items()` at `Map_seq.next`.
+    for m in marks
+        helper: = m.owner.starts_with(owner) && m.owner.starts_with("_", owner.len)
+        if (m.owner.equals(owner) || helper) && m.name.equals(name) && m.attr.equals(attr)
+            return true
+    return false
+
+priv fn check_view_table(arena: Arena$@) //< the 8.4.6 table agrees with std's marks
+    marks: = std_marks(arena)
+    path: = fs.join(harness.root(), "docs/SPEC-programming-language.md", arena)
+    text: = io.read_file(path, arena) catch
+        verdict.check("[8.4.6] the specification can be read", false, path)
+        return
+    $diffs: = List<|U8[]|>(arena)
+    $covered: = List<|U8[]|>(arena)
+    $named: = List<|U8[]|>(arena) // "Type.name" of each ending the table names
+    $in_sec: = false
+    $rows: Sz = 0
+    $owner: U8[] = ""
+    for line in text.lines(arena)
+        if line.starts_with(VIEW_TABLE_HEADING)
+            in_sec = true
+            continue
+        if !in_sec || !line.starts_with("|")
+            if in_sec && line.starts_with("#")
+                break
+            continue
+        cells: = escaped_cells(line, arena)
+        if cells.len < 2 || cells.get(0).equals("The view") ||
+            cells.get(0).starts_with(":--")
+            continue
+        rows += 1
+        if !cells.get(0).equals("The same")
+            owner = type_of_row(cells.get(0), arena)
+        // A type std marks nothing on is another lint's row (`Mutex.lock`'s is [W0105]'s).
+        $marked: = false
+        for m in marks
+            if m.owner.equals(owner)
+                marked = true
+        if !marked
+            continue
+        covered.push(owner)
+        for name in ticked(cells.get(0), true, arena)
+            if is_method_name(name) && !has_mark(marks@, owner, name, "gives_view")
+                msg: = arena.text()
+                    .s("\{owner\}.\{name\}: the table names it a view; std does not mark it \
+                        '#gives_view'").take()
+                diffs.push(msg)
+        for name in ticked(cells.get(1), false, arena)
+            if !is_method_name(name) || name.equals("free")
+                continue
+            named.push(arena.text().s("\{owner\}.\{name\}").take())
+            if !has_mark(marks@, owner, name, "ends_views")
+                msg: = arena.text()
+                    .s("\{owner\}.\{name\}: the table says it ends a view; std does not mark it \
+                        '#ends_views'").take()
+                diffs.push(msg)
+    for m in marks
+        if !m.attr.equals("ends_views") || !covered.contains(m.owner)
+            continue
+        if !named.contains(arena.text().s("\{m.owner\}.\{m.name\}").take())
+            msg: = arena.text()
+                .s("\{m.owner\}.\{m.name\}: std marks it '#ends_views'; the table does not name it")
+                .take()
+            diffs.push(msg)
+    if !verdict.check("[8.4.6] the specification holds the view table", rows > 0,
+        "no table rows under '#### 8.4.6'")
+        return
+    verdict.check_list("[8.4.6] the view table agrees with std's '#gives_view' and '#ends_views'",
+        marks.len, "marks", diffs@, "change the table and std's marks together")
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
+    check_place_table(arena)
+    check_view_table(arena)
     dir: = harness.sandbox("spec_claims")
     work: = dir
     // Caution: **Write each case's input to its own file**, or children running side by side read

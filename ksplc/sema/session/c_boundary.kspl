@@ -4,9 +4,9 @@
 //< for LLVM (the accepted names would depend on the backend).
 
 // ==========================================
-//   1. a type appearing in an `#export` signature — a Kanso-specific layout cannot cross the C
-//      boundary. Such a layout is a Result, a slice, an array, a trait value or an enum with a
-//      payload.
+//   1. a type at the C boundary (a signature after `extern`, or a value passed into a C
+//      function's `...`) — a Kanso-specific layout cannot cross it. Such a layout is a Result, a
+//      slice, an array, a trait value or an enum with a payload.
 //   2. a name that is a C reserved word — when the name it is renamed to is already taken in the
 //      same scope
 // ==========================================
@@ -26,7 +26,7 @@ priv const MAX_FFI_NESTING_DEPTH: Sz = 32 //<
 
 impl Sema_ctx
     fn check_ffi_safety(r: Self$@, type_id: I32, err_node: Ast_node$@) //<
-        //< Checks whether a type in an `#export` function's signature can cross the C boundary
+        //< Checks whether a type in an `extern` function's signature can cross the C boundary
         //< The layouts listed in this file's header cannot; a plain struct, scalars and raw
         //< pointers can.
         //< Caution: Walk **inside** a struct too. Checking only the outermost level lets a wrapper
@@ -35,6 +35,19 @@ impl Sema_ctx
             return
         defer $seen: = List<|I32|>(null)
         r.check_ffi_safety_at(type_id, err_node, seen@, 0)
+
+    fn check_variadic_arg(r: Self$@, type_id: I32, arg_node: Ast_node$@) //<
+        //< Checks a value passed into a C function's `...`, as check_ffi_safety does a parameter
+        //< A slice gets its own message, since a string is the usual one and C wants a C string.
+        if type_id != 0 && !sema_type_env.is_unknown(type_id) &&
+            r.env.is_slice(r.env.get_real_type(type_id))
+            r.err(arg_node,
+                "a slice (T[]) cannot be passed into a C function's '...'. Its layout is \
+                    Kanso-specific, and C reads it as the type the format names. For a string, pass \
+                    a C string from 's.to_cstr()' (free it with 'dealloc'), or pass 'I32::s.len' \
+                    and 's.ptr' to a '%.*s'.")
+            return
+        r.check_ffi_safety(type_id, arg_node)
 
     fn check_ffi_safety_at(r: Self$@, type_id: I32, err_node: Ast_node$@, seen: List<|I32|>$@,
         depth: Sz)

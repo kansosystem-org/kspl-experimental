@@ -9,9 +9,11 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/flow/field" as sema_flow_field
+import "ksplc/sema/flow/lock" as sema_flow_lock
 import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/flow/report" as sema_flow_report
 import "ksplc/sema/flow/stmt" as sema_flow_stmt
+import "ksplc/sema/flow/view" as sema_flow_view
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
@@ -87,6 +89,10 @@ struct Df_state
         //< The field reads that possibly moved a `Move_only` field out of a local (`take(b.m)`)
         //< Each item is the `.` node of that read. Its path is worked out from the node when needed
         //< (field_path_root, field_path_text). That is rare, as few reads move a field.
+    unlocked: Df_set //< the locals from `g.lock()` whose lock is possibly released ([W0105])
+    held: Df_set //< the `g.lock()` statements whose lock is held on every path ([W0106])
+    viewing: Df_set //< the statements whose view is possibly live ([W0111], sema/flow/view.kspl)
+    stale: Df_set //< the views possibly ended by a call on their owner ([W0111])
     reachable: Bool
 
 impl Df_state
@@ -94,7 +100,9 @@ impl Df_state
         return base_core.arena
             .create(Df_state::{ .init_vars = Df_set(true), .freed_vars = Df_set(false),
             .gone_vars = Df_set(false), .moved_vars = Df_set(false),
-            .carried_vars = Df_set(false), .moved_fields = Df_set(false), .reachable = true })
+            .carried_vars = Df_set(false), .moved_fields = Df_set(false),
+            .unlocked = Df_set(false), .held = Df_set(true), .viewing = Df_set(false),
+            .stale = Df_set(false), .reachable = true })
 
     fn clone(r: Self$@): Df_state$@
         ns: = Df_state()
@@ -105,6 +113,10 @@ impl Df_state
         ns.moved_vars.copy_from(r.moved_vars@)
         ns.carried_vars.copy_from(r.carried_vars@)
         ns.moved_fields.copy_from(r.moved_fields@)
+        ns.unlocked.copy_from(r.unlocked@)
+        ns.held.copy_from(r.held@)
+        ns.viewing.copy_from(r.viewing@)
+        ns.stale.copy_from(r.stale@)
         return ns
 
     fn apply_merged_state(r: Self$@, merged: Df_state$@) //<
@@ -198,6 +210,8 @@ struct Df_ctx
         //< the statements a `break`, `continue` or `fallback` leaves
     exit_from: Ast_node$@ //< the early exit whose defer bodies are being analyzed, else null
     reported_in_defers: Df_set //< the reads in defer bodies already reported at an early exit
+    locks: sema_flow_lock.Lock_book$@ //< the locks [W0105] / [W0106] follow
+    views: sema_flow_view.View_book$@ //< the views [W0111] follows
     in_field_path: Bool //<
         //< Set while walking the receivers inside a field path (`b.m.x`)
         //< The moved-field check is made once, for the whole path, at its outermost `.`; a
@@ -310,6 +324,8 @@ impl Ast_node
             r.df_method_access(c, state)
         case .k_expr_postfix
             r.df_expr_postfix(c, state)
+        case .k_expr
+            r.df_view_expr(c, state)
         case .k_expr_upcast
             r.get_upcast_inner().analyze_as_borrow(c, state)
             r.mark_upcast_source_reassigned(c)
@@ -394,6 +410,8 @@ impl Ast_node
             else if has_value
                 expr_node.analyze_df_node(c, state)
             state.bind(r, has_value)
+            r.df_lock_decl(c, state)
+            r.df_view_decl(c, state)
 
     fn df_type_array_sizes(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Walks the array-size expression written in a type annotation (the `n` of `a: I32[n]`)
@@ -414,6 +432,7 @@ impl Ast_node
         left: = r.get_assign_left()
         right: = r.get_assign_right()
         op: = r.get_assign_op()
+        r.df_lock_stmt(c, state)
 
         if right != null
             right.analyze_df_node(c, state)
@@ -430,6 +449,7 @@ impl Ast_node
                     else
                         c.mark_reassigned(def)
                     if is_simple
+                        r.df_view_assign(c, state, def)
                         state.add(def)
                         state.remove_freed(def) // a reassignment makes it a new value, so clear released
                         state.remove_moved(def) // and moved
@@ -458,6 +478,8 @@ impl Ast_node
                 state.forget_moved_fields(root, left)
         // A place written to is not read as a value, so nothing moves out of it.
         left.analyze_as_borrow(c, state)
+        // `m[k] = v` through a `set` that ends the views into `m`, once every part is walked.
+        r.df_view_index_set(c, state)
 
     fn df_identifier(r: Self$@, c: Df_ctx$@, state: Df_state$@)
         def: = r.def_node
@@ -466,6 +488,9 @@ impl Ast_node
             sema_flow_report.report_uninit_if_needed(c, state, def, r)
             sema_flow_report.report_freed_if_needed(c, state, def, r)
             sema_flow_report.report_moved_if_needed(c, state, def, r)
+            c.report_unlocked_use(state, def, r)
+            c.report_stale_view(state, def, r)
+            c.note_view_read(def)
             // Read as a whole, the binding must still hold every field (inside a field path, the
             // path's outermost `.` checks only what it reads).
             if !c.in_field_path
@@ -522,16 +547,16 @@ impl Ast_node
 
     fn mark_value_receiver_reassigned(r: Self$@, c: Df_ctx$@) //<
         //< Sets the binding axis on a method call whose receiver is **a value**
-        //< A value is not a pointer or a slice, so a `Self$@` method amounts to writing the binding
-        //< itself, as `v.f = x` does. Otherwise [I0601] says "`$` is not needed". A pointer or
-        //< slice receiver, or one reached through them (`s[0].m()`, `p.f.m()`), writes the pointee.
-        //< A `Self@` or `Self` method writes nothing.
+        //< A value is not a pointer, so a `Self$@` method amounts to writing the binding itself, as
+        //< `v.f = x` does. Otherwise [I0601] says "`$` is not needed". **A slice is such a
+        //< value**: the method writes its descriptor. A pointer receiver, or one reached through a
+        //< pointer or a slice (`s[0].m()`, `p.f.m()`), writes the pointee. A `Self@` or `Self`
+        //< method writes nothing.
         receiver: = r.get_postfix_receiver()
         if receiver == null
             return
         env: = c.sema.env
-        if env.is_pointer(receiver.type_id) || env.is_slice(receiver.type_id) ||
-            receiver.write_crosses_indirection(c)
+        if env.is_pointer(receiver.type_id) || receiver.write_crosses_indirection(c)
             return
         // An unknown method (none resolved) is taken as writing, so no `$` is called spare.
         member: = r.get_postfix_member()
@@ -553,8 +578,7 @@ impl Ast_node
         if inner == null
             return
         env: = c.sema.env
-        if env.is_pointer(inner.type_id) || env.is_slice(inner.type_id) ||
-            inner.write_crosses_indirection(c)
+        if env.is_pointer(inner.type_id) || inner.write_crosses_indirection(c)
             return
         if env.trait_slot_writing_receiver(inner.type_id, r.type_id).is_none()
             return
@@ -758,12 +782,14 @@ impl Ast_node
                 r.release_kept_block_if_any(state)
             r.df_default_traverse(c, state)
             if op_text.equals("!")
-                c.df_check_defers_on_exit(r, state, 0) // the error leaves the function
+                // The error leaves the function.
+                c.report_lock_exit(r, c.df_check_defers_on_exit(r, state, 0))
             if op_text.equals("(")
                 // Registers `dealloc(x)` and an argument to a function wrapping a release (one
                 // level).
                 r.mark_free_call_if_any(c, state)
                 r.mark_call_freed_args(c, state)
+                r.df_view_call(c, state)
 
 fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     if !s1.reachable
@@ -778,6 +804,10 @@ fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     ns.moved_vars.fill_merged(s1.moved_vars@, s2.moved_vars@)
     ns.carried_vars.fill_merged(s1.carried_vars@, s2.carried_vars@)
     ns.moved_fields.fill_merged(s1.moved_fields@, s2.moved_fields@)
+    ns.unlocked.fill_merged(s1.unlocked@, s2.unlocked@)
+    ns.held.fill_merged(s1.held@, s2.held@)
+    ns.viewing.fill_merged(s1.viewing@, s2.viewing@)
+    ns.stale.fill_merged(s1.stale@, s2.stale@)
     return ns
 
 impl Df_ctx
@@ -848,7 +878,8 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
         .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
         .pending_defers = List<|Ast_node$@|>.create(base_core.arena),
         .exit_targets = List<|Df_exit_target|>.create(base_core.arena), .exit_from = null,
-        .reported_in_defers = Df_set(false), .in_field_path = false }
+        .reported_in_defers = Df_set(false), .in_field_path = false,
+        .locks = sema_flow_lock.new_book(), .views = sema_flow_view.new_book() }
     state: = Df_state()
 
     param_list: = fn_node.get_fn_params()
@@ -858,6 +889,7 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
             state.add(p)
 
     block.analyze_df_node(ctx@, state)
+    ctx.report_lock_end(state)
 
     if !c.suppress_errors
         for local in ctx.locals

@@ -192,6 +192,22 @@ fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
         .pass("on Windows a share and what follows `\\\\?\\` are roots; `\\\\` alone is not a \
             share.")
 
+fn test_exe_path() //< this program's own path, and a buffer too small for it
+    verdict.start("[Sys] the path of this program's executable...")
+    $buf: U8[4096] = ::{}
+    switch sys.exe_path(U8$[]::buf)
+    case .some(at)
+        assert(sys.is_absolute(at), "the executable's path starts from the root")
+        assert(fs.can_run(at), "the executable's path names a program that can be started")
+        // Caution: **A cut path names another file**, so one that does not fit gives nothing.
+        $small: U8[4] = ::{}
+        if _cut: = sys.exe_path(U8$[]::small)
+            panic("exe_path should give nothing where the path does not fit")
+    case .none
+        panic("Linux, macOS and Windows each say where the executable is")
+    verdict
+        .pass("exe_path names this program from the root, and gives nothing where it does not fit.")
+
 fn test_fs_absolute() //< a relative path joined onto the working directory, nothing collapsed
     verdict.start("[Fs] making a path absolute...")
     defer arena: = Arena(16 * 1024)
@@ -536,11 +552,9 @@ fn test_run_many(arena: Arena$@)
         Job::{ .argv = U8[][]::{ "/bin/sh", "-c", "echo begun; exec sleep 30" }, .cwd = "" },
         Job::{ .argv = U8[][]::{ "/bin/echo", "after" }, .cwd = "" },
     }
-    t2: = sys.mono_us()
     // Long enough for the shell to start and print on a slow runner; the job sleeps far longer.
+    // **No code shows it was stopped at its limit**: a job waited out ends with 0.
     cut: = subproc.run_many(stuck, 1, 3000, 4096, work, arena)
-    // Generous: waiting the job out takes 30 s, a stop at the limit 3 s on a quiet machine.
-    assert(sys.mono_us() - t2 < 20000000I64, "the stuck job is killed at its limit")
     stuck_run: = cut.get(0) catch panic("the stuck job must start")
     behind: = cut.get(1) catch panic("the job behind it must start")
     assert(stuck_run.exit_code.is_none(), "it comes back with no code, stopped at its limit")
@@ -655,7 +669,8 @@ fn test_relative_program_with_cwd(ksplc: U8[], arena: Arena$@) //< ksplc is the 
 // abort() also exits 3. Windows's exit(-1), once an "unfinished" sentinel, reads as finished.
 // ==========================================
 priv const CRASH_SRC: U8[] = //< a child that writes through a pointer to nothing it owns
-    """fn main()
+    """#raw_address
+fn main()
   p: I32$@ = I32$@::(Sz::16)
   p$ = 1
 """

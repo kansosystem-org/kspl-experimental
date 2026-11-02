@@ -43,11 +43,11 @@ priv $_panic_rec: _Panic_record = ::{}
 // Caution: Keep `#cfg(freestanding)`. Every program includes `lang`.
 // On a hosted target, this declaration would conflict with a runtime definition of the same name.
 #cfg(freestanding)
-extern "C"
-    fn kspl_get_sp(): Sz
-    fn kspl_panic_stack_words(sp: Sz, capacity: Sz): Sz
+    extern fn kspl_get_sp(): Sz
+    extern fn kspl_panic_stack_words(sp: Sz, capacity: Sz): Sz
 
 #cfg(freestanding)
+#raw_address
 priv fn record_panic(msg: U8[])
     _panic_rec.msg_len = msg.len if msg.len < PANIC_MSG_CAP else PANIC_MSG_CAP
     msg_dst: = _panic_rec.msg[0]@
@@ -196,9 +196,8 @@ impl Panic_msg
 // The runtime records the error trace at each `throw` and `!`.
 // It belongs here because a failing `main` prints it regardless of the program's imports.
 #cfg(!freestanding)
-extern "C"
-    pub fn kspl_error_trace_depth(): I32 //< the number of frames in the error trace
-    pub fn kspl_get_trace_frame_info(index: I32, file: U8@$@, func: U8@$@, line: I32$@) //<
+    pub extern fn kspl_error_trace_depth(): I32 //< the number of frames in the error trace
+    pub extern fn kspl_get_trace_frame_info(index: I32, file: U8@$@, func: U8@$@, line: I32$@) //<
         //< the file, function, and line for the trace frame at `index`
 
 #cfg(!freestanding)
@@ -549,6 +548,14 @@ pub trait Ref_counted //< the compiler counts copies and scope exits for this ty
 pub trait Move_only { //< a value that cannot be copied implicitly
     //< The compiler matches the fully qualified name `std.lang.Move_only` exactly.
     //< A structure containing a `Move_only` field by value is also `Move_only`.
+}
+
+pub trait Interior_mutable { //< a value that changes through a read-only pointer
+    //< A lock or an atomic: its methods take `Self@`, so threads can share it through an `Arc`.
+    //< The compiler matches the fully qualified name `std.lang.Interior_mutable` exactly. **A
+    //< `const` cannot hold one**, nor can a binding that holds a copy (a `for … in` item, a `case`
+    //< payload): a write would land in read-only memory or in a lost copy. A structure containing
+    //< one by value is also `Interior_mutable`.
 }
 
 pub trait Manual_free //< an explicit free ends this value's usable lifetime

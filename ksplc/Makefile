@@ -14,7 +14,7 @@ endif
 export CC
 CFLAGS ?= -std=c99 -Wall -g -O0
 
-.PHONY: test test-answers test-suites self-host translate build compare verdict
+.PHONY: test test-answers test-suites self-host translate build compare verdict compare-fires
 test: test-answers test-suites
 
 test-answers:
@@ -40,6 +40,12 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # `--n=N` / `--seed=N` replace the draw's count and its start (`make fuzz-long` hands a fresh seed).
 PROPERTY_ARGS ?=
 suite_args_property = --n=60 $(PROPERTY_ARGS)
+# **The random equivalence test is a suite run apart** (`make test-random-equiv`), as the scattering
+# is: it takes about a minute of four cores, and CI runs it in the Linux job alone.
+# `--n=N` / `--seed=N` replace how many programs the random equivalence test writes and its first
+# seed; `--open=1` also writes the shapes ksplc fails on today (`tests/support/random_prog.kspl`).
+RANDOM_EQUIV_ARGS ?=
+suite_args_random-equiv = $(RANDOM_EQUIV_ARGS)
 # **List them by how long they take, the longest first**: `make -j` starts them in this order.
 # Caution: **Keep `make test SUITES=` the whole rest of `make test`.** A check that runs each suite
 # apart, under a time limit of its own, runs that first and then `make test-<name>` per name here.
@@ -56,7 +62,7 @@ suite_args_fuzz = "$(FUZZ_SEEDS)" $(FUZZ_ARGS)
 # nothing would say so. **Only the list written here is held to it**: `make test SUITES=` names a
 # part on purpose.
 ifneq ($(origin SUITES),command line)
-suite_unlisted := $(filter-out $(SUITES) fuzz,$(suite_found))
+suite_unlisted := $(filter-out $(SUITES) fuzz random-equiv,$(suite_found))
 ifneq ($(suite_unlisted),)
 $(error there are suite files missing from SUITES: $(suite_unlisted))
 endif
@@ -130,6 +136,18 @@ compare:
 
 verdict:
 	@$(call verdict_cmd,$(DIFF),$(LABEL))
+
+# **The comparison and its verdict show they can fail**, in `FIRES` (a folder): two outputs one
+# space apart inside a string, which `diff -w` would pass, must be told apart. A self-host passes
+# on the same two commands, so one broken into "always the same" passes every stage unseen.
+compare-fires:
+	@cd "$(RUN_FROM)" && mkdir -p "$(FIRES)" && printf 'a = "x y";\n' > "$(FIRES)/one.c" && \
+	  printf 'a = "x  y";\n' > "$(FIRES)/other.c"
+	@$(call compare_cmd,$(FIRES)/one.c,$(FIRES)/other.c,$(FIRES)/diff.txt)
+	@if ( $(call verdict_cmd,$(FIRES)/diff.txt,two outputs one space apart) ) \
+	  > "$(RUN_FROM)/$(FIRES)/said.txt" 2>&1; then \
+	  echo "RESULT: SOME FAILED (1) -> the comparison passed two outputs one space apart"; exit 1; fi
+	@echo "# the comparison tells apart two outputs one space apart"
 
 host_ext := $(if $(filter llvm,$(TARGET)),ll,c)
 host_rt := $(if $(filter llvm,$(TARGET)),$(OUT)/gen/ksplc_stage1_runtime.c)

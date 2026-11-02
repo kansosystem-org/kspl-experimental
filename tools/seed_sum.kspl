@@ -20,9 +20,14 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
 
-priv fn sum_of(paths: U8[][], arena: Arena$@): U8[] //< the record: the digest in hex and a newline
+priv fn sum_of( //< the record: the digest in hex and a newline
+    paths: U8[][],
+    altered: Bool, //< with one byte added to the first file, for the check's own failure case
+    arena: Arena$@,
+): U8[]
     $h: = Sha256()
-    for p in paths
+    for k in Range.asc(paths.len)
+        p: = paths[k]
         raw: = io.read_file(p, null) catch e
             io.err().s("seed_sum: cannot read \{p\}: \{e\}\n")
             sys.exit(2)
@@ -31,6 +36,8 @@ priv fn sum_of(paths: U8[][], arena: Arena$@): U8[] //< the record: the digest i
         for i in Range.asc(raw.len)
             if !(raw[i] == '\r' && i + 1 < raw.len && raw[i + 1] == '\n')
                 body.c(raw[i])
+        if altered && k == 0
+            body.c('x')
         defer $head: = Str_builder()
         head.s("\{p\}\n\{body.slice().len\}\n")
         h.update(head.slice())
@@ -51,13 +58,21 @@ fn main(): I32
     $paths: = List<|U8[]|>(arena)
     for i in Range(3, a.len, 1)
         paths.push(a[i])
-    sum: = sum_of(paths.slice(), arena)
+    sum: = sum_of(paths.slice(), false, arena)
     record: = a[2]
     if a[1].equals("write")
         io.write_file(record, sum) catch e
             io.err().s("seed_sum: cannot write \{record\}: \{e\}\n")
             return 2
         return 0
+    // **The record shows it can fail**: one byte more in a source must give another record. A sum
+    // that read no source's bytes would match any tree.
+    if sum_of(paths.slice(), true, arena).equals(sum)
+        io.err()
+            .s("FAIL: a source changed by one byte gives the same record, so the record reads no \
+                source\n")
+        return 1
+    io.out().s("# a source changed by one byte gives another record\n")
     kept: = io.read_file(record, null) catch ""
     if kept.equals(sum)
         io.out().s("RESULT: ALL PASS (the seed was taken from the current compiler source)\n")

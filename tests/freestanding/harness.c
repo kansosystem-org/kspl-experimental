@@ -14,6 +14,7 @@
 #else
 #include <setjmp.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -32,6 +33,9 @@ size_t probe_exact_precision(void);
 void probe_install_hook(void);
 int probe_index(ptrdiff_t i);
 int probe_divide(int a, int b);
+// The freestanding heap's lock, met again by an interrupt handler.
+void probe_heap_churn(ptrdiff_t rounds);
+void probe_heap_once(void);
 
 static int fails = 0;
 // A relative error of 1e-9, well tighter than inference's F32 (~1e-7).
@@ -41,9 +45,11 @@ static double rel_err(double got, double want) {
     return fabs(want) > 1e-12 ? fabs(got - want) / fabs(want) : fabs(got - want);
 }
 
+static int misses(double got, double want) { return rel_err(got, want) > kTol; }
+
 static void check1(const char* name, double got, double want, double x) {
     double e = rel_err(got, want);
-    if (e > kTol) {
+    if (misses(got, want)) {
         printf("FAIL %s(%.10g) got=%.17g want=%.17g rel_err=%.3g\n", name, x, got, want, e);
         fails++;
     }
@@ -51,7 +57,7 @@ static void check1(const char* name, double got, double want, double x) {
 
 static void check2(const char* name, double got, double want, double a, double b) {
     double e = rel_err(got, want);
-    if (e > kTol) {
+    if (misses(got, want)) {
         printf("FAIL %s(%.10g,%.10g) got=%.17g want=%.17g rel_err=%.3g\n", name, a, b, got, want, e);
         fails++;
     }
@@ -59,10 +65,13 @@ static void check2(const char* name, double got, double want, double a, double b
 
 // Where libm's answer is NaN, an infinity or a zero, the answer must be exactly the same. That is a
 // NaN for a NaN, and an infinity or a zero with the same sign (`1/x` tells -0 from +0).
-static void check_same(const char* name, double got, double want, double a, double b) {
-    int same = isnan(want) ? isnan(got)
+static int same_edge(double got, double want) {
+    return isnan(want) ? isnan(got)
         : got == want && (want != 0.0 || (1.0 / got > 0.0) == (1.0 / want > 0.0));
-    if (!same) {
+}
+
+static void check_same(const char* name, double got, double want, double a, double b) {
+    if (!same_edge(got, want)) {
         printf("FAIL %s(%.17g,%.17g) got=%.17g want=%.17g (an edge answer differs)\n", name, a, b,
             got, want);
         fails++;
@@ -244,6 +253,62 @@ static void check_breaches(void) {
     check_breach("division by zero", 1, "division by zero");
 }
 
+// An interrupt handler that allocates while the code it interrupted holds the heap's lock. On one
+// core that code cannot let the lock go before the handler returns, so the handler must stop with
+// the reason rather than spin for ever. A CPU-time timer's signal stands in for the interrupt:
+// most of probe_heap_churn's time is spent holding the lock, so an early signal finds it taken.
+// **It runs last**: the jump out of the handler leaves the heap locked, half-way through a walk.
+// Before the spin had a limit, the handler spun until the 60 s limit of check_breaches.
+#ifndef _WIN32
+static volatile sig_atomic_t heap_interrupts = 0;
+
+static void heap_interrupt(int sig) {
+    (void)sig;
+    heap_interrupts++;
+    probe_heap_once();
+}
+
+static void heap_timer(long usec) {
+    struct itimerval every;
+    memset(&every, 0, sizeof(every));
+    every.it_interval.tv_usec = usec;
+    every.it_value.tv_usec = usec;
+    setitimer(ITIMER_PROF, &every, NULL);
+}
+
+static void check_heap_from_interrupt(void) {
+    const char* want = "mem: heap locked; alloc from an interrupt handler?";
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = heap_interrupt;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, NULL);
+    hook_calls = 0;
+    hook_msg[0] = 0;
+    if (JUMP_MARK(hook_exit) == 0) {
+        heap_timer(500);
+        probe_heap_churn(1 << 22);
+        heap_timer(0);
+        printf("FAIL heap from an interrupt: no interrupt found the lock taken (%d interrupts)\n",
+            (int)heap_interrupts);
+        fails++;
+        return;
+    }
+    heap_timer(0);
+    __asm__ __volatile__("" ::: "memory");
+    if (hook_calls != 1 || strcmp(hook_msg, want) != 0) {
+        printf("FAIL heap from an interrupt: the hook ran %d time(s) with '%s'; want once with "
+            "'%s'\n", hook_calls, hook_msg, want);
+        fails++;
+    }
+}
+#else
+// Windows has no signal that interrupts a thread where it runs.
+static void check_heap_from_interrupt(void) {
+    printf("SKIP heap from an interrupt: Windows has no timer signal to stand in for one\n");
+}
+#endif
+
 // The host libc's `%p` differs per implementation (glibc, MSVC UCRT), so what is checked is **its
 // own contract of "0x" plus lower-case hex**.
 static void check_ptr_format(void) {
@@ -279,7 +344,21 @@ static void check_ptr_format(void) {
     }
 }
 
+// **The two judgments show they can fail**: an answer 1e-6 off, and -0 for +0 or a number for
+// NaN, are refused; the exact answer is not. A judgment that passed all would pass any libm.
+static void check_fires(void) {
+    int ok = misses(1.0 + 1e-6, 1.0) && !misses(1.0, 1.0) && !same_edge(-0.0, 0.0)
+        && !same_edge(1.0, NAN) && same_edge(NAN, NAN) && same_edge(-0.0, -0.0);
+    if (!ok) {
+        printf("FAIL the judgments pass an answer that is off\n");
+        fails++;
+        return;
+    }
+    printf("# an answer 1e-6 off, and a wrong edge, are refused\n");
+}
+
 int main(void) {
+    check_fires();
     // sqrt/exp/log/sin/cos/tan: sampled over a wide range including the boundaries
     // (sqrt_reduce's base-4 boundary, log's base-2 boundary, and around sin/cos's quadrant
     // boundaries).
@@ -327,9 +406,10 @@ int main(void) {
     check_float_format();
     check_ptr_format();
     check_breaches();
+    check_heap_from_interrupt();
 
     if (fails == 0) {
-        printf("RESULT: ALL PASS (freestanding std/math vs libm, rel_err < %.0e; std/str fmt vs snprintf; check breaches reach the panic hook)\n",
+        printf("RESULT: ALL PASS (freestanding std/math vs libm, rel_err < %.0e; std/str fmt vs snprintf; check breaches reach the panic hook; the heap's lock met again stops)\n",
             kTol);
         return 0;
     }

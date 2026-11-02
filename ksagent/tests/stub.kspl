@@ -32,7 +32,7 @@ struct Stub //< one stand-in server and what it saw
     edit_body: U8[]
     drip_ms: I32 //< the wait between two pieces of a reply; 0 writes each reply at once
         //< **It stands for a model that writes slowly**, so ksagent can stop it midway.
-    worker: thread.Thread$@
+    worker: thread.Thread
     asked: thread.Atomic_sz //< 1 once the asker has returned, so no request is still to come
 
 fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that gives these replies
@@ -51,14 +51,13 @@ fn start_dripping(replies: U8[][], edit_path: U8[], edit_body: U8[], drip_ms: I3
     s: = arena
         .create(Stub::{ .listener = listener, .port = port, .replies = replies,
         .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = edit_path,
-        .edit_body = edit_body, .drip_ms = drip_ms, .worker = null,
-        .asked = thread.Atomic_sz(0) })
+        .edit_body = edit_body, .drip_ms = drip_ms, .asked = thread.Atomic_sz(0) })
     s.bodies = List<|U8[]|>(s.own)
     s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
     return s
 
 fn finish(s: Stub$@) //< waits for the stand-in to stop, then closes its socket
-    s.worker.join_and_free()
+    s.worker.free()
     s.listener.free()
 
 fn done_asking(s: Stub$@) //< stops it waiting, as the asker has returned, then finishes it
@@ -70,8 +69,8 @@ fn done_asking(s: Stub$@) //< stops it waiting, as the asker has returned, then 
 fn release(s: Stub$@) //< lets go the memory of the bodies it kept
     s.own.free()
 
-#export
-fn serve(s: Stub$@): Void$@ //< answers each request with its reply, until the replies run out
+extern fn serve(s: Stub$@): Void$@ //<
+    //< answers each request with its reply, until the replies run out
     for i in Range.asc(s.replies.len)
         conn: = accept_within(s) catch
             return null

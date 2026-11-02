@@ -51,6 +51,8 @@ function ksmdTable(ks) {
     wrap.dataset.name = b.name;
     // The table's place in the model, and its rows' and columns' identities, which a range keeps to.
     wrap.u = b.u;
+    // A table shown from an included file: its place is in that file's model, not this one's.
+    wrap.included = !!b.included;
     wrap.rowIds = b.ri;
     wrap.colIds = b.ci;
     wrap.values = b.rows;

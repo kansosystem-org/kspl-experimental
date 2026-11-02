@@ -273,7 +273,7 @@ priv fn check_no_pub_in_entries(arena: Arena$@)
         "no package imports a demo, so a pub widens no destination it reaches")
 
 // ==========================================
-// The wasm's boundary (the text's `#export` and the JS's calls)
+// The wasm's boundary (the text's `extern` and the JS's calls)
 // Caution: **Both directions break silently.** The link passes though the JS calls a name that is
 // not in the text, and "there is no such function" first shows up in the browser.
 // ==========================================
@@ -297,17 +297,35 @@ priv fn web_names_in(src: U8[], out: List<|U8[]|>$@) //<
         else
             return
 
+priv const WEB_PUBLISH: U8[] = "extern fn " //< how an entry point the page calls begins
+
+priv fn has_body(lines: List<|U8[]|>@, at: Sz): Bool //<
+    //< Whether the declaration on line `at` has a body: the first line after it that holds code
+    //< is indented
+    //< **`extern fn` without a body brings a name in** (a script's function the page calls), and
+    //< is no entry point. Its `//<` lines are passed over.
+    for k in Range(at + 1, lines.len, 1)
+        line: = lines.get(k)
+        code: = line.trim_start()
+        if code.len == 0 || code.starts_with("//")
+            continue
+        return code.len < line.len
+    return false
+
 priv fn web_exports(arena: Arena$@): List<|U8[]|> //< the exported entry points
     //< Caution: **Check only a `fn` at the start of a line** (count the places that mention a name
     //< mid-sentence and the entry points multiply).
     $out: = List<|U8[]|>(arena)
     $marks: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ WEB_KSPL })
-        for line in harness.read_under_root(rel).lines(arena)
-            if line.equals("#export")
-                marks += 1
-            if line.starts_with("fn ksmd_web_")
-                rest: = line.sub_from(3 + WEB_PREFIX.len)
+        lines: = harness.read_under_root(rel).lines(arena)
+        for k in Range.asc(lines.len)
+            line: = lines.get(k)
+            if !line.starts_with(WEB_PUBLISH) || !has_body(lines@, k)
+                continue
+            marks += 1
+            if line.sub_from(WEB_PUBLISH.len).starts_with(WEB_PREFIX)
+                rest: = line.sub_from(WEB_PUBLISH.len + WEB_PREFIX.len)
                 at: = rest.find_str("(").unwrap_or(0)
                 if at > 0
                     scan.push_unique(out@, rest.sub(0, at))
@@ -316,7 +334,7 @@ priv fn web_exports(arena: Arena$@): List<|U8[]|> //< the exported entry points
     // `verdict.check_list`'s floor refuses; this passes a verdict itself).
     verdict.check("every wasm entry point that goes out begins ksmd_web_",
         marks == out.len && out.len > 0,
-        arena.text().s("\{marks\} #export, \{out.len\} fn beginning ksmd_web_").take())
+        arena.text().s("\{marks\} published, \{out.len\} beginning ksmd_web_").take())
     return out
 
 priv fn check_wasm_boundary(arena: Arena$@)
@@ -325,8 +343,8 @@ priv fn check_wasm_boundary(arena: Arena$@)
     for rel in harness.tracked_matching(U8[][]::{ WEB_JS })
         web_names_in(harness.read_under_root(rel), used@)
     $bad: = List<|U8[]|>(arena)
-    scan.diff_into(out@, used@, "the text's #export", WEB_JS, bad@, arena)
-    scan.diff_into(used@, out@, WEB_JS, "the text's #export", bad@, arena)
+    scan.diff_into(out@, used@, "the text's extern definitions", WEB_JS, bad@, arena)
+    scan.diff_into(used@, out@, WEB_JS, "the text's extern definitions", bad@, arena)
     verdict.check_list("the wasm's boundary agrees on both sides", out.len, "entry points", bad@,
         "leave no entry point nobody calls (Principle 5). Calling an absent one fails in the \
             browser")

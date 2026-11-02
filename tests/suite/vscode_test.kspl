@@ -7,6 +7,7 @@
 //< the same. **The extension's client side is run too**, under node, against a recording fake
 //< server (`../support/vscode_host.js`). What it tells the server about open documents is seen
 //< nowhere else. A document it never closes makes every other file's answers stale.
+//< Its failure case: `tests/suite/vscode_test.kspl#UNTYPABLE`, a task naming no target.
 
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
@@ -153,9 +154,14 @@ priv fn command_line(task: json.Value, arena: Arena$@): U8[] //< `command` and i
         line.c(' ').s(arg_text(a))
     return line.take()
 
+priv const UNTYPABLE: U8[] = "make no-such-target V=1" //< a task naming no target: the failure case
+
 priv fn check_make_targets(tasks: json.Value, arena: Arena$@) //<
     //< Checks that each `make <target>` in `tasks.json` names a target that really exists
     names: = typable(arena)
+    wrong: = parse_make_cmd(UNTYPABLE, arena)
+    verdict.check("a task naming no target is refused",
+        wrong.found && names.len > 0 && !names.contains(wrong.target), wrong.target)
     for t in tasks.get("tasks").arr_list(arena)
         label: = t.get("label").as_str().unwrap_or("")
         cmd: = parse_make_cmd(command_line(t, arena), arena)

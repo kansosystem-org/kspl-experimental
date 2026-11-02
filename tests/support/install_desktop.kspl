@@ -1,6 +1,7 @@
-//< `make install`'s tying of `.ksmd` on Linux, against the real recipe, with stand-in checks
-//< **Where the launcher cannot be built, the tie is a note and the install goes on.** Stand-ins
-//< take the place of the two checks it asks, so each case lacks one piece on purpose.
+//< `make install`'s ksmd and its tying of `.ksmd` on Linux, against the real recipe, with stand-ins
+//< **Where ksmd cannot be built, ksmd and the tie are a note and the install goes on.** Stand-ins
+//< take the place of the two checks it asks and of the builds, so each case lacks one piece on
+//< purpose. **The tie names the installed folder**, not the repository's `out/`.
 import "std/chars" // `find_str`
 import "std/fs"
 import "std/io"
@@ -13,15 +14,21 @@ import "tests/support/harness"
 // make it starts reads the folder's `Makefile`, as at the root.
 priv const PROBE: U8[] =
     """
+GEN_DIR := gen
+KSSRV_EXE := kssrv.exe
+KSMD_EXE := ksmd.exe
 include $(RULES)
-.PHONY: probe kssrv-libs install-desktop
+.PHONY: probe kssrv-libs install-desktop ksmd-web
 probe:
+	$(install_ksmd_probe)
 	$(install_desktop_step)
+ksmd-web kssrv.exe ksmd.exe:
+	@touch built-$@
 kssrv-libs:
 	@if [ "$(FAIL)" = libs ]; then echo "kssrv links -lssl -lcrypto, which do not link here."; \
 	echo "Debian/Ubuntu: install libssl-dev"; exit 1; fi
 install-desktop:
-	@touch tied
+	@printf '%s\n' "$(KSMD_TIE_DIR)" > tied
 """
 
 priv const WEB_TOOLS: U8[] =
@@ -43,15 +50,20 @@ priv fn one(missing: U8[], names: U8[], arena: Arena$@) //<
     r: = harness
         .make(U8[][]::{ "--no-print-directory", "-C", dir, "probe",
         arena.text().s("RULES=").s(rules).take(),
-        arena.text().s("FAIL=").s(missing).take(), "PLATFORM=linux" })
+        arena.text().s("FAIL=").s(missing).take(), "PLATFORM=linux", "PREFIX=/p" })
     tied: = fs.exists(fs.join(dir, "tied", arena))
+    marked: = fs.exists(fs.join(dir, "gen/install_ksmd.ok", arena))
     if missing.len == 0
-        verdict.check("install: with every tool, .ksmd is tied to its launcher",
-            r.exited_with(0) && tied && !r.out.find_str("# note:").is_some(), r.out)
+        tied_to: = io.read_file(fs.join(dir, "tied", arena), arena) catch ""
+        verdict.check("install: with every tool, ksmd is built and installed, and .ksmd tied to it",
+            r.exited_with(0) && marked && tied_to.equals("/p/lib/kspl/ksmd\n") &&
+            fs.exists(fs.join(dir, "built-ksmd.exe", arena)) &&
+            !r.out.find_str("# note:").is_some(), r.out)
         return
     verdict.check(arena.text().s("install: without ").s(names)
-        .s(", the tie is a note naming it, and the install goes on").take(),
-        r.exited_with(0) && !tied &&
+        .s(", ksmd and the tie are a note naming it, and the install goes on").take(),
+        r.exited_with(0) && !tied && !marked &&
+        r.out.find_str("# note: ksmd is not installed").is_some() &&
         r.out.find_str("# note: .ksmd is not tied").is_some() &&
         r.out.find_str(names).is_some(), r.out)
 

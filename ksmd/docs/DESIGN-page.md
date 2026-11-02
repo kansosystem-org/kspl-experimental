@@ -57,7 +57,10 @@
 * **The next reader sees at once that rows are hidden.** The line above the table says how many of how many rows show, and its Show all rows takes the filter away.
 * **The file still holds every row**, and a formula counts every row, shown or not. Only the page hides them.
 * **Each change of a filter is one step of undo**, since it changes the file.
-* **A new row takes the filter away, in the same step of undo as the row.** The filter would hide the empty row at once. One undo brings back the filter and takes the row away.
+* **A new row keeps the filter, and shows until the filter is chosen again**, as in Excel. The filter would hide the empty row at once, and the person could not type in it. A value typed in the new row leaves it in sight.
+* **A row is new where the table did not hold it when its filter last changed.** A row inserted, a row a paste adds past the end, and a row an undo or a redo brings back are new. A row moved by Insert cut rows is not, and the filter shows it as before.
+* **Choosing the filter again applies it to every row**, as Excel's Reapply does. OK in its panel and Show all rows choose it again, and so does an undo that changes it. So does opening the document again: the file holds no mark of which row is new.
+* **The filter stays the same in the file**, and one undo takes away the new row alone.
 * **With no value ticked and no condition, OK cannot be pressed**, as in Excel: no row would show. A condition counts once its value is typed, or at once for is empty and is not empty.
 * **In Read-only, a filter is the viewer's alone.** It narrows the rows for them, and the file keeps its own. Editing again shows the file's.
 

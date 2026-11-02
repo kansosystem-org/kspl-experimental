@@ -47,7 +47,7 @@ Caution: **Do not put a foundation under a name other than `harness`.** Then nob
 |---|---|
 | `harness` | What knows the repository: finding the root, a suite's start on its paths, `make` from the root, a temporary folder under `out/tmp`, the files git knows |
 | `harness_text` | Looking at strings: one UTF-8 character, a word boundary and a text's words. Also a list written in a file, the line after a mark, and whether a list holds a string |
-| `harness_sanitizer` | Building a program through ksplc with a sanitizer, and running it with the package's environment (`race` and `sanitize` build through it) |
+| `harness_sanitizer` | Building a program through ksplc with a sanitizer, and running it with the package's environment (`race`, `sanitize` and `holes` build through it) |
 
 **ksplc's own `harness` is the layer beneath this one** ([ksplc](../ksplc/README.md)). A suite here imports it as `ksplc_harness` to end, start a process and run the compiler under test.
 

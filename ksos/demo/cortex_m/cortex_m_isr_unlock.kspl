@@ -25,10 +25,9 @@ fn on_panic(msg: U8[]) //< Check that the panic message is the kernel's refusal,
     con.print_summary("Cortex-M ISR unlock")
     con.exit()
 
-// IRQ0's handler (#export overrides the vector table's weak default). Unlocking here is the misuse;
-// returning from it is a failure.
-#export
-fn uart0_irq0_handler()
+// IRQ0's handler (its extern overrides the vector table's weak default). Unlocking here is the
+// misuse; returning from it is a failure.
+extern fn uart0_irq0_handler()
     g_mutex.unlock()
     con.check("unlock inside the ISR returned instead of stopping", false)
     con.print_summary("Cortex-M ISR unlock")
@@ -41,8 +40,7 @@ fn trigger(_arg: Void$@): Void
     scs.set_pending(IRQ0) // the core enters IRQ0 within a few instructions
     for {}
 
-#export
-fn ksos_main()
+extern fn ksos_main()
     panic_hook = on_panic
     g_mutex.init()
     tcb.create(U8$[]::stack, trigger, null, 1, "trig")

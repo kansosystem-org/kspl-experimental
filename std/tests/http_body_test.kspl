@@ -22,8 +22,7 @@ priv struct Feed //< what the stand-in writes on the one connection it accepts
 
 priv const PAUSE_MS: I32 = 400 //< the stand-in's wait at `pause_at`
 
-#export
-fn feed_bytes(f: Feed$@): Void$@ //< writes the bytes as the feed says, then closes
+extern fn feed_bytes(f: Feed$@): Void$@ //< writes the bytes as the feed says, then closes
     conn: = f.listener.accept() catch panic("the stand-in accepts the client")
     $at: Sz = 0
     for at < f.bytes.len
@@ -43,7 +42,7 @@ fn feed_bytes(f: Feed$@): Void$@ //< writes the bytes as the feed says, then clo
 
 priv struct Served //< a stand-in started, and the client's connection to it
     feed: Feed$@
-    worker: thread.Thread$@
+    worker: thread.Thread
     client: net.Tcp_stream$@
 
 priv fn serve(bytes: U8[], piece: Sz, pause_at: Sz, arena: Arena$@): Served //<
@@ -57,9 +56,9 @@ priv fn serve(bytes: U8[], piece: Sz, pause_at: Sz, arena: Arena$@): Served //<
     client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("the client connects")
     return Served::{ .feed = f, .worker = t, .client = client }
 
-priv fn finish(s: Served) //< closes the client, then waits for the stand-in
+priv fn finish($s: Served) //< closes the client, then waits for the stand-in
     s.client.free()
-    s.worker.join_and_free()
+    s.worker.free()
     s.feed.listener.free()
 
 priv fn read_whole(bytes: U8[], piece: Sz, max_body: Sz, arena: Arena$@): U8[] //<

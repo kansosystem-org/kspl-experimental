@@ -268,21 +268,99 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await press("Escape");
     },
 
-    // A filter and the edits that change what it matches: a new row, a change of number format,
-    // and a panel with nothing that OK could take.
+    // A row inserted in a filtered table keeps the filter, as in Excel. The new row shows, so it can
+    // be typed in, until the filter is chosen again or the document opens again. Each way of
+    // inserting a row does this, and one undo takes away the row alone.
+    async insertFiltered() {
+      const rows = '| 1 | "x" |\n| 2 | "y" |\n| 3 | "x" |\n';
+      const table = (attrs, body = rows) => `${H}:::table name="t"${attrs}\n| "n" | "s" |\n${body}:::\n`;
+      const shown = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
+      const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
+      const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
+      const said = () => js("document.getElementById('status').textContent");
+      const paste = (text) => js(`(() => { const data = new DataTransfer();
+        data.setData("text/plain", ${JSON.stringify(text)});
+        document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })); })()`);
+      const cut = () => js(`(() => { const data = new DataTransfer();
+        document.activeElement.dispatchEvent(new ClipboardEvent("cut", { clipboardData: data, bubbles: true, cancelable: true })); })()`);
+      // Each way: its name, what it does, the rows it saves, which rows show, and the steps to undo.
+      const empty = "| | |\n";
+      const ways = [
+        ["the Table menu's Insert row below", async () => {
+          await click(cell(0, 0));
+          await click('.top-menu:has([data-cmd="row-below"]) > .menu-name');
+          await click('.menubar [data-cmd="row-below"]');
+        }, '| 1 | "x" |\n' + empty + '| 2 | "y" |\n| 3 | "x" |\n', "1101", 1],
+        ["the right-click menu's Insert row above", async () => {
+          await click(cell(2, 0));
+          await rightClick(cell(2, 0));
+          await click('.menu.context [data-cmd="row-above"]');
+        }, '| 1 | "x" |\n| 2 | "y" |\n' + empty + '| 3 | "x" |\n', "1011", 1],
+        ["a row number's right-click menu", async () => {
+          await rightClick(rowNumber(3));
+          await click('.menu.context [data-cmd="row-below"]');
+        }, rows + empty, "1011", 1],
+        ["Repeat (F4) after Insert row below", async () => {
+          await click(cell(2, 0));
+          await menu("row-below");
+          await click(cell(2, 0));
+          await press("F4");
+        }, rows + empty + empty, "10111", 2],
+        // The paste writes over the last row, which the filter then hides, and adds one row, which shows.
+        ["a paste past the last row", async () => {
+          await click(cell(2, 0));
+          await paste('4\t"y"\n5\t"y"');
+        }, '| 1 | "x" |\n| 2 | "y" |\n| 4 | "y" |\n| 5 | "y" |\n', "1001", 1],
+      ];
+      for (const filter of [",in:x", ",out:y"]) {
+        const start = table(` filter="${filter}"`);
+        for (const [how, act, body, want, steps] of ways) {
+          await load(start);
+          await act();
+          await saves(`${how} on a table filtered by ${filter} keeps the filter in the file`,
+            table(` filter="${filter}"`, body));
+          check(await shown() === want, `and the rows it adds show, with the filter hiding the rest`, await shown());
+          for (let k = 0; k < steps; k++) await menu("undo");
+          await saves(`and undo gives back the table before it, filter and all`, start);
+          check(await shown() === "101", "with the rows it showed", await shown());
+        }
+      }
+      // The new row can be typed in, and stays in sight after its value goes in.
+      await load(table(' filter=",in:x"'));
+      await click(cell(0, 0));
+      await menu("row-below");
+      check(!(await said()).includes("shown again"), "the page no longer says the filter was taken away", await said());
+      await click(cell(1, 1));
+      await type("z");
+      await press("Enter");
+      await saves("a value typed in the new row goes in, and the filter stays",
+        table(' filter=",in:x"', '| 1 | "x" |\n| | "z" |\n| 2 | "y" |\n| 3 | "x" |\n'));
+      check(await shown() === "1101", "and the row stays in sight, though the filter would hide it", await shown());
+      // Choosing the filter again applies it to every row, as Excel's Reapply does.
+      await click('#doc th.name[data-c="1"] .filter-arrow');
+      await click(".filter-panel .filter-ok");
+      check(await shown() === "1001", "OK in the filter's panel applies the filter to the new row too", await shown());
+      await saves("and the filter is as it was", table(' filter=",in:x"', '| 1 | "x" |\n| | "z" |\n| 2 | "y" |\n| 3 | "x" |\n'));
+      await load(table(' filter=",in:x"', '| 1 | "x" |\n| | |\n| 2 | "y" |\n| 3 | "x" |\n'));
+      check(await shown() === "1001", "a document opened again applies its filter to every row", await shown());
+      // Insert cut rows moves rows that were there before, so the filter shows them as it did.
+      await load(table(' filter=",in:x"'));
+      await click(rowNumber(1));
+      await cut();
+      await rightClick(rowNumber(3));
+      await click('.menu.context [data-cmd="row-above"]');
+      await saves("Insert cut rows on a filtered table keeps the filter",
+        table(' filter=",in:x"', '| 2 | "y" |\n| 1 | "x" |\n| 3 | "x" |\n'));
+      check(await shown() === "011", "and the moved row shows as before, with the filter hiding the rest", await shown());
+      await menu("undo");
+      await saves("and one undo puts it back", table(' filter=",in:x"'));
+    },
+
+    // A filter and the edits that change what it matches: a change of number format, and a panel
+    // with nothing that OK could take.
     async filterSteps() {
       const table = (attrs, rows = "| 1.5 | \"x\" |\n| 2 | \"y\" |\n") =>
         `${H}:::table name="t"${attrs}\n| "n" | "s" |\n${rows}:::\n`;
-      const shown = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
-      await load(table(' filter=",in:x"'));
-      await click('#doc td[data-r="0"][data-c="0"]');
-      await menu("row-below");
-      await saves("a new row on a filtered table takes the filter away with the row",
-        table("", "| 1.5 | \"x\" |\n| | |\n| 2 | \"y\" |\n"));
-      check(await shown() === "111", "so the new row can be seen", await shown());
-      await menu("undo");
-      await saves("and one undo brings back the filter and takes the row away", table(' filter=",in:x"'));
-      check(await shown() === "10", "with the rows it showed", await shown());
       // A value filter matches the text a format shows, so a new format takes it away.
       await load(table(' filter="in:1.5,"'));
       await click('#doc td[data-r="0"][data-c="0"]');

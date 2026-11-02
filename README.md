@@ -38,7 +38,7 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
 
   ```sh
   make                               # builds ksplc from the seed written in C
-  make install                       # puts ksplc into ~/.local/bin, std/ into ~/.local/lib/kspl
+  make install                       # puts ksplc into ~/.local/bin, std/ and ksmd into ~/.local/lib/kspl
   ```
 
   Installation requirements and failures are in "Putting `ksplc` on the PATH" in [`docs/HOWTO-build.md`](docs/HOWTO-build.md).

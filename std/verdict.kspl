@@ -336,12 +336,12 @@ pub fn jobs(): Sz //< how many children `run_children` runs side by side
 #cfg(!freestanding)
 pub fn run_children( //< runs children side by side (`jobs`), and returns their runs in order
     //< **The results come in the input's order**, so the code that judges has one form, sequential
-    //< or parallel. **Each waits at most `DEFAULT_TIMEOUT_MS`**, as `run_child` does unless told
-    //< otherwise.
+    //< or parallel.
     //< Caution: **Give each run a `work_dir` of its own.** The outputs are collected there in files
     //< of fixed names (`j<number>.out`), so two runs sharing one at once read each other's.
     items: subproc.Job[], //< what to run
     work_dir: U8[], //< where the outputs are collected; made where missing
+    timeout_ms: I32, //< how long each can run before it is killed, as in `run_child`
     arena: Arena$@, //< where the list and the texts go; null means the heap, freed as below
 ): List<|Run_out|> //< one run per item, in the input's order
     //< With `null`, free each `out` with `dealloc`, then the list with `free()`.
@@ -355,7 +355,7 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
         return outs
     // The outputs and the folding are work, as in `run_child`.
     defer $work: = mem.scratch(null)
-    rs: = subproc.run_many(items, jobs(), DEFAULT_TIMEOUT_MS, RUN_OUTPUT_CAP, work_dir, work.arena)
+    rs: = subproc.run_many(items, jobs(), timeout_ms, RUN_OUTPUT_CAP, work_dir, work.arena)
     for i in Range.asc(rs.len)
         o: = folded(rs.get(i), work.arena)
         outs.push(Run_out::{ .code = o.code, .out = arena.dup_str(o.out) })

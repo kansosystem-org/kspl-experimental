@@ -1,5 +1,5 @@
 //< Exports the cfg(freestanding) half of std/math so that tests/freestanding/harness.c can call it
-//< That half is a software implementation with no dependencies, exported with `#export`.
+//< That half is a software implementation with no dependencies, published with `extern`.
 //< Compiling with --freestanding selects it, since --freestanding also sets the flag freestanding
 //< (in ksplc/main.kspl).
 import "std/math"
@@ -8,26 +8,19 @@ import "std/str" + { Str_builder }
 import "std/strfmt"
 import "std/strnum"
 
-#export
-fn probe_sqrt(x: F64): F64
+extern fn probe_sqrt(x: F64): F64
     return math.sqrt(x)
-#export
-fn probe_exp(x: F64): F64
+extern fn probe_exp(x: F64): F64
     return math.exp(x)
-#export
-fn probe_log(x: F64): F64
+extern fn probe_log(x: F64): F64
     return math.log(x)
-#export
-fn probe_sin(x: F64): F64
+extern fn probe_sin(x: F64): F64
     return math.sin(x)
-#export
-fn probe_cos(x: F64): F64
+extern fn probe_cos(x: F64): F64
     return math.cos(x)
-#export
-fn probe_tan(x: F64): F64
+extern fn probe_tan(x: F64): F64
     return math.tan(x)
-#export
-fn probe_pow(base: F64, exponent: F64): F64
+extern fn probe_pow(base: F64, exponent: F64): F64
     return math.pow(base, exponent)
 
 // ==========================================
@@ -55,16 +48,14 @@ priv fn copy_out(sl: U8[], out: U8$@, cap: Sz): Sz //<
         (out + i)$ = (sl.ptr + i)$
     return n
 
-#export
-fn probe_format_float(out: U8$@, cap: Sz, v: F64, precision: I32): Sz
+extern fn probe_format_float(out: U8$@, cap: Sz, v: F64, precision: I32): Sz
     ensure_heap()
     $b: = Str_builder()
     bw: Str_builder$@ = b@
     v.fmt_prec(0, false, false, precision).fmt(bw)
     return copy_out(b.slice(), out, cap)
 
-#export
-fn probe_format_ptr(out: U8$@, cap: Sz, val: Void$@): Sz
+extern fn probe_format_ptr(out: U8$@, cap: Sz, val: Void$@): Sz
     ensure_heap()
     $b: = Str_builder()
     bw: Str_builder$@ = b@
@@ -73,8 +64,7 @@ fn probe_format_ptr(out: U8$@, cap: Sz, val: Void$@): Sz
 
 // Tells the harness how many digits are guaranteed to match libc exactly. The digits are computed
 // exactly in multiple precision, so every digit up to `.N`'s cap matches.
-#export
-fn probe_exact_precision(): Sz
+extern fn probe_exact_precision(): Sz
     return strfmt.FLOAT_MAX_PRECISION
 
 // ==========================================
@@ -82,21 +72,42 @@ fn probe_exact_precision(): Sz
 // with the message hosted prints. harness.c's own function stands in for a port's hook (one that
 // stops the motors) and returns to the harness, so each breach is seen and the next can run.
 // ==========================================
-extern "C"
-    fn harness_panic_seen(msg_ptr: U8@, msg_len: Sz)
+extern fn harness_panic_seen(msg_ptr: U8@, msg_len: Sz)
 
 priv fn probe_hook(msg: U8[])
     harness_panic_seen(msg.ptr, msg.len)
 
-#export
-fn probe_install_hook()
+extern fn probe_install_hook()
     panic_hook = probe_hook
 
-#export
-fn probe_index(i: Sz): I32
+extern fn probe_index(i: Sz): I32
     xs: I32[4] = ::{ 1, 2, 3, 4 }
     return xs[i]
 
-#export
-fn probe_divide(a: I32, b: I32): I32
+extern fn probe_divide(a: I32, b: I32): I32
     return a / b
+
+// ==========================================
+// The freestanding heap's lock on one core: an interrupt handler that allocates while the code it
+// interrupted holds the lock. Spinning would never end, as that code cannot run until the handler
+// returns. So the spin is bounded, and it panics with the reason. harness.c's timer signal stands
+// in for the interrupt.
+// ==========================================
+priv const PIN_COUNT: Sz = 128 //< how many small blocks hold the free list apart
+priv $fh_pins: Void$@[PIN_COUNT] = ::{}
+
+extern fn probe_heap_churn(rounds: Sz) //<
+    //< allocates and frees again and again, for a timer to interrupt
+    //< **Most of its time is spent holding the lock.** Every other small block is freed, so each
+    //< large request walks a free list of `PIN_COUNT / 2` holes that it fits in none of.
+    ensure_heap()
+    for i in Range.asc(PIN_COUNT)
+        fh_pins[i] = mem.alloc(16)
+    for i in Range.asc(PIN_COUNT / 2)
+        mem.dealloc(fh_pins[i * 2])
+    for _r in Range.asc(rounds)
+        mem.dealloc(mem.alloc(64))
+
+extern fn probe_heap_once() //<
+    //< one allocation and its free, as an interrupt handler would make them
+    mem.dealloc(mem.alloc(16))

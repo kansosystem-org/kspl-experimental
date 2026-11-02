@@ -1,6 +1,6 @@
-//< Writes a library's interface from its `#export` functions (`--library=`)
+//< Writes a library's interface from its `extern` functions (`--library=`)
 //< **The library and its interface come out of one compilation**, so they cannot drift. The form
-//< follows the file's extension (`form_of`): a C header, or a KSPL file whose `extern "C"` block a
+//< follows the file's extension (`form_of`): a C header, or a KSPL file of `extern` declarations a
 //< KSPL caller imports. The types the signatures name are written beside the functions.
 //< **Call it before lower**: the ABI pass rewrites an identifier into its mangled name.
 //< Caution: **Do not drop a function that cannot be written**: a caller would read "there is no
@@ -33,7 +33,7 @@ priv const MAX_TYPE_WALK_DEPTH: Sz = 1000 //<
 enum Form //< the interface a file's extension asks for
     none //< an extension that names neither, which the option refuses
     c_header //< `.h`: C's declarations
-    kspl //< `.kspl`: an `extern "C"` block and the types its functions name
+    kspl //< `.kspl`: `extern` declarations and the types the functions name
 
 fn form_of(path: U8[]): Form //< the form `--library=<path>` writes
     if path.ends_with(".h")
@@ -141,7 +141,7 @@ impl Walk
         return true
 
     priv fn crosses(r: Self$@, raw: I32, depth: Sz): Bool //<
-        //< Whether a value of the type can be written in C (the `#export` check's set, by value)
+        //< Whether a value of the type can be written in C (the `extern` check's set, by value)
         if depth >= MAX_TYPE_WALK_DEPTH
             return false
         id: = r.strip(raw)
@@ -307,7 +307,7 @@ priv fn c_scalar(id: I32): U8[] //< a built-in type's C spelling; empty for any 
 // Writing the two forms
 // ==========================================
 
-priv struct Export //< one `#export` function, as the interface writes it
+priv struct Export //< one `extern` function, as the interface writes it
     node: Ast_node$@
     doc: U8[]
 
@@ -546,14 +546,17 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
     // The outside libraries the library itself names: a KSPL caller's `--emit-libs` takes them in.
     $libs: = List<|U8[]|>(base_core.arena)
     tools_libs.append_program_libs(root, libs@)
-    for lib in libs
-        out.s("#link(\"").s(lib).s("\") ")
-    out.s("extern \"C\" {\n")
+    if libs.len > 0
+        out.s("##link(")
+        for i in Range.asc(libs.len)
+            out.s(", " if i > 0 else "").c('"').s(libs.get(i)).c('"')
+        out.s(");\n")
     for t in walk.types
         if !t.body
-            out.s("  pub struct \{t.name\};").s(kspl_doc(summary_of(walk.c, t.node))).c('\n')
+            out.s("pub extern struct \{t.name\};")
+                .s(kspl_doc(summary_of(walk.c, t.node))).c('\n')
     for e in exports
-        out.s("  pub fn ").s(e.node.get_decl_id_text()).c('(')
+        out.s("pub extern fn ").s(e.node.get_decl_id_text()).c('(')
         ps: = params_of(e.node)
         for i in Range.asc(ps.len)
             p: = ps.get(i)
@@ -565,7 +568,6 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
             out.s(": ")
             walk.k_type(ret, out@, 0)
         out.c(';').s(kspl_doc(e.doc)).c('\n')
-    out.s("}\n")
     defer $formatter: =
         fmt_text.format_text(out.slice(), out_path, parser, Config.default_fmt(), false) catch
         base_diag.ice_panic("--library: the KSPL form does not parse")

@@ -174,6 +174,8 @@ impl Ast_node
             // flushing from `0` lets a nested block (a closure's body is one) take the outer
             // statement's temporaries.
             start: = ctx.hoisted.len
+            if stmt.desugar_counted_for(ctx, new_children)
+                continue
             stmt.desugar_node(ctx)
             // **Insert them before that statement**: binding inside the same statement does not put
             // an lvalue in the argument's place.
@@ -206,6 +208,39 @@ impl Ast_node
 
             new_children.push(stmt)
         r.children = new_children
+
+    priv fn desugar_counted_for(r: Ast_node$@, ctx: Desugar_ctx$@,
+        new_children: List<|Ast_node$@|>$@): Bool //<
+            //< Expands a C-style `for` whose init declares its counter into new_children
+            //< False for any other statement, which it leaves alone. A closure in the condition or
+            //< the step can capture the counter, but its temporary goes before the statement,
+            //< where the counter is not declared yet. So such a `for` moves into a block of its
+            //< own: the init, the temporaries, then the `for` with no init.
+        init: = r.get_for_init() if r.kind_id == .k_stmt_for else null
+        if init == null || init.kind_id != .k_decl_var
+            return false
+        start: = ctx.hoisted.len
+        // Each part is walked apart, as `desugar_node` would walk them in order (the label in
+        // child 0 holds nothing to expand).
+        init.desugar_node(ctx)
+        init_end: = ctx.hoisted.len
+        r.get_loop_cond().desugar_node(ctx)
+        r.get_for_step().desugar_node(ctx)
+        header_end: = ctx.hoisted.len
+        r.get_loop_block().desugar_node(ctx)
+        for $hi: = start; hi < init_end; hi += 1
+            new_children.push(ctx.hoisted.get(hi))
+        if header_end == init_end
+            new_children.push(r)
+        else
+            // The counter stays visible to the loop alone, and a label stays on the `for`.
+            own: = Ast_node.build_block(r.loc).add_child(init)
+            for $hi: = init_end; hi < header_end; hi += 1
+                own.add_child(ctx.hoisted.get(hi))
+            r.set_child(1, Ast_node.build_empty(r.loc))
+            new_children.push(own.add_child(r))
+        ctx.hoisted.len = start
+        return true
 
     priv fn build_deferred_free(r: Ast_node$@, decl: Ast_node$@): Ast_node$@ //<
         //< The `defer b.free()` that `defer $b: = X` stands for, marked as made by the compiler

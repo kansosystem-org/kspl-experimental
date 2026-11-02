@@ -52,15 +52,15 @@ impl Sema_ctx
         if writer.len == 0
             return false
         // The node has no type yet, so a pointer or a slice is told apart by type_id. **They follow
-        // the direct call**: a `T@` points at read-only memory, and a slice is refused only where
-        // it is no place (`"ab"`).
+        // the direct call**: a `T@` points at read-only memory, and a slice is refused where it is
+        // a copy (`"ab"`, receiver_is_copy) as well as where its binding is read-only.
         $read_only: = false
         if c.env.is_pointer(type_id)
             read_only = c.env.is_const(c.env.strip_ptr(type_id))
-        else if c.env.is_slice(type_id)
-            read_only = !c.env.is_place_expr(r)
         else
-            read_only = c.place_is_readonly(r)
+            read_only =
+                (c.env.is_slice(type_id) && c.env.receiver_is_copy(r, type_id)) ||
+                c.place_is_readonly(r)
         if !read_only
             return false
         if c.refuse_made_binding_write(r)

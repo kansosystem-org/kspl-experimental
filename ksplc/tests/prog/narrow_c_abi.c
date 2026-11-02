@@ -15,7 +15,7 @@ PROBE int32_t narrow_c_abi_u16(uint16_t c) { return c; }
 PROBE int64_t narrow_c_abi_i16(int16_t c) { return c; }
 PROBE int32_t narrow_c_abi_bool(bool b) { return b; }
 
-/* The other direction: KSPL defines these (`#export`) and C relies on the result widened. */
+/* The other direction: KSPL defines these (`extern "C"`) and C relies on the result widened. */
 uint8_t narrow_c_abi_back_u8(int64_t v);
 int16_t narrow_c_abi_back_i16(int64_t v);
 bool narrow_c_abi_back_bool(int64_t v);

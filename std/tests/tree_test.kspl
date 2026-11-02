@@ -244,8 +244,7 @@ struct Mode_watch //< what the thread watching a copy as it is written reads and
     stop: thread.Atomic_sz
     seen_bare: thread.Atomic_sz //< 1 once the copy stood without its source's execute bit
 
-#export
-fn tree_test_watch_mode(w: Mode_watch$@): Void$@ //< looks at the copy until told to stop
+extern fn tree_test_watch_mode(w: Mode_watch$@): Void$@ //< looks at the copy until told to stop
     for w.stop.load() == 0
         if fs.exists(w.path) && !fs.can_run(w.path)
             w.seen_bare.store(1)
@@ -269,11 +268,11 @@ priv fn check_mode_from_first_byte(dir: U8[], arena: Arena$@) //<
     w.path = fs.join(to, "key", arena)
     w.stop = thread.Atomic_sz(0)
     w.seen_bare = thread.Atomic_sz(0)
-    t: = thread.Thread.spawn<|Mode_watch|>(tree_test_watch_mode, w) catch
+    $t: = thread.Thread.spawn<|Mode_watch|>(tree_test_watch_mode, w) catch
         panic("the watching thread must start")
     fs.copy_tree(from, to, fs.skip_none, arena) catch panic("the private file must copy")
     w.stop.store(1)
-    t.join_and_free()
+    t.free()
     assert(w.seen_bare.load() == 0, "the copy never stands with a mode its source does not have")
     assert(runnable(w.path, arena), "the copy ends with its source's mode")
 

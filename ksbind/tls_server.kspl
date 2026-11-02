@@ -15,31 +15,29 @@ import "std/sys"
 typedef Pem_password_cb = fn(buf: U8$@, size: I32, rwflag: I32, u: Void$@): I32 //<
     //< what OpenSSL calls for a key's passphrase (`pem_password_cb`)
 
-#link("ssl")
-#link("crypto")
-extern "C"
-    fn TLS_server_method(): tls.SSL_METHOD@
-    fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, x: tls.X509$@): I32
-    fn SSL_CTX_use_PrivateKey(ctx: tls.SSL_CTX$@, pkey: tls.EVP_PKEY$@): I32
-    fn SSL_CTX_check_private_key(ctx: tls.SSL_CTX$@): I32
-    fn SSL_CTX_set_cipher_list(ctx: tls.SSL_CTX$@, list: Void@): I32
-    fn SSL_CTX_set_options(ctx: tls.SSL_CTX$@, op: Sz)
-    fn SSL_set_accept_state(ssl: tls.SSL$@)
-    fn SSL_is_init_finished(ssl: tls.SSL@): I32
-    fn SSL_pending(ssl: tls.SSL@): I32
-    fn BIO_new_mem_buf(buf: Void@, len: I32): tls.BIO$@
-    fn PEM_read_bio_X509(bp: tls.BIO$@, x: Void$@, cb: Void@, u: Void$@): tls.X509$@
-    fn PEM_read_bio_PrivateKey(bp: tls.BIO$@, x: Void$@, cb: Pem_password_cb, u: Void$@):
-        tls.EVP_PKEY$@
-    fn X509_free(x: tls.X509$@)
-    fn EVP_PKEY_free(pkey: tls.EVP_PKEY$@)
-    fn X509_check_issued(issuer: tls.X509$@, subject: tls.X509$@): I32
-    fn X509_get0_notBefore(x: tls.X509$@): tls.ASN1_TIME@
-    fn X509_get0_notAfter(x: tls.X509$@): tls.ASN1_TIME@
-    fn ASN1_TIME_diff(pday: I32$@, psec: I32$@, from: tls.ASN1_TIME@, to: tls.ASN1_TIME@): I32
-    fn ASN1_TIME_print(bp: tls.BIO$@, t: tls.ASN1_TIME@): I32
-    fn X509_get_subject_name(x: tls.X509$@): tls.X509_NAME$@
-    fn X509_NAME_oneline(name: tls.X509_NAME$@, buf: U8$@, size: I32): U8$@
+##link("ssl", "crypto")
+extern fn TLS_server_method(): tls.SSL_METHOD@
+extern fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, x: tls.X509$@): I32
+extern fn SSL_CTX_use_PrivateKey(ctx: tls.SSL_CTX$@, pkey: tls.EVP_PKEY$@): I32
+extern fn SSL_CTX_check_private_key(ctx: tls.SSL_CTX$@): I32
+extern fn SSL_CTX_set_cipher_list(ctx: tls.SSL_CTX$@, list: Void@): I32
+extern fn SSL_CTX_set_options(ctx: tls.SSL_CTX$@, op: Sz)
+extern fn SSL_set_accept_state(ssl: tls.SSL$@)
+extern fn SSL_is_init_finished(ssl: tls.SSL@): I32
+extern fn SSL_pending(ssl: tls.SSL@): I32
+extern fn BIO_new_mem_buf(buf: Void@, len: I32): tls.BIO$@
+extern fn PEM_read_bio_X509(bp: tls.BIO$@, x: Void$@, cb: Void@, u: Void$@): tls.X509$@
+extern fn PEM_read_bio_PrivateKey(bp: tls.BIO$@, x: Void$@, cb: Pem_password_cb, u: Void$@):
+    tls.EVP_PKEY$@
+extern fn X509_free(x: tls.X509$@)
+extern fn EVP_PKEY_free(pkey: tls.EVP_PKEY$@)
+extern fn X509_check_issued(issuer: tls.X509$@, subject: tls.X509$@): I32
+extern fn X509_get0_notBefore(x: tls.X509$@): tls.ASN1_TIME@
+extern fn X509_get0_notAfter(x: tls.X509$@): tls.ASN1_TIME@
+extern fn ASN1_TIME_diff(pday: I32$@, psec: I32$@, from: tls.ASN1_TIME@, to: tls.ASN1_TIME@): I32
+extern fn ASN1_TIME_print(bp: tls.BIO$@, t: tls.ASN1_TIME@): I32
+extern fn X509_get_subject_name(x: tls.X509$@): tls.X509_NAME$@
+extern fn X509_NAME_oneline(name: tls.X509_NAME$@, buf: U8$@, size: I32): U8$@
 
 priv const SSL_CTRL_CHAIN_CERT: I32 = 89 //< SSL_CTRL_CHAIN_CERT, behind SSL_CTX_add0_chain_cert
 priv const SSL_OP_NO_RENEGOTIATION: Sz = 0x40000000 //< SSL_OP_NO_RENEGOTIATION
@@ -77,8 +75,7 @@ pub struct Tls_server //< a certificate chain and its key, ready to answer hands
     pub subject: U8[] //< the first certificate's subject, as OpenSSL prints it on one line
     pub expiry: U8[] //< the first certificate's expiry, as OpenSSL prints a time
 
-#export
-fn ksbind_refuse_passphrase(_buf: U8$@, _size: I32, _rwflag: I32, u: Void$@): I32 //<
+extern fn ksbind_refuse_passphrase(_buf: U8$@, _size: I32, _rwflag: I32, u: Void$@): I32 //<
     //< Answers a passphrase request with none, and marks that one was asked for
     //< Caution: **Never leave the callback null.** OpenSSL's own then prompts on the terminal, and
     //< a server started unattended waits there for good.

@@ -218,6 +218,20 @@ priv fn f(): Shape!Err
 
 **There is no conversion that gives none instead.** A caller that must know a bound was reached compares the value with the range before the cast (Principle 1). Caution: **The right bounds are open one past the range** (`-128.9` truncates to `-128` and fits `I8`).
 
+### An integer becomes a pointer only where it is marked
+
+**`T@::n` with `n` an integer compiles only in a function marked `#raw_address`**, or in a top-level `const` or `var` so marked ("6.4 Type conversion (`::`) and implicit casts" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+
+* **Who needs the cast.** A driver reaches a register at an address the chip's manual gives, and a flash driver reads a ROM's table. Nothing else in the tree does.
+* **What it costs everyone else.** On a PC such a cast is nearly always a slip. `U8$@::buf.len` written for `.ptr` compiles silently and writes through a wild pointer.
+* **Why a mark, not a ban.** An operating system cannot be written without the cast. The mark lets it stay, and keeps the few places in sight for a reader.
+* **Why an error, not a warning.** A warning can be switched off for a whole file. The marked places are few, so marking them costs a line each.
+* **Why on a function.** The function is what a reader opens to review an address. A mark on each cast would repeat on every line of a register helper.
+* **Why a top-level `const` too.** A register's address held as a pointer constant stands in no function.
+* **Why not on a local.** The function holding it is the unit marked. Two places to mark would be two spellings of one thing (Principle 6).
+
+**Nothing else becomes a pointer, marked or not**: a `Bool`, a float, an enum or an aggregate. C compiles a `Bool` or an enum there silently, and refuses a float or an aggregate far from the KSPL source.
+
 ### A tag names another variant through its enum
 
 **`b = E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A bare `a` would open one place where the enum's names stand beside the file's own. A `const a` in the same file would then mean two things. Two variants sharing a tag are refused, so a bare alias cannot arise either.
@@ -578,7 +592,7 @@ Omitting a parameter's type, and `Self` on a parameter **other than the receiver
 
 ### Whether a marker is an attribute or a trait
 
-A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed.
+A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Interior_mutable`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed.
 
 #### The order of decision
 
@@ -600,7 +614,7 @@ flowchart TD
 
 **First, see whether a type can carry the property instead**, as `Rc<|T|>` does. That is stronger than a marker and adds no language machinery.
 
-**(1) Is the subject a type, or a declaration or a site?** A trait attaches only to a type. So `#naked` / `#interrupt` / `#noreturn` / `#inline` / `#export` / `#section` (a function), `#align` / `#packed` (a layout) and `#cfg` are attributes.
+**(1) Is the subject a type, or a declaration or a site?** A trait attaches only to a type. So `#naked` / `#interrupt` / `#noreturn` / `#inline` / `#section` (a function), `#align` / `#packed` (a layout) and `#cfg` are attributes. Publishing to C is no attribute ("`extern` is written on each declaration, in both directions").
 
 **(2) If something is required of the type, a trait.** A conformance check enforces the methods' existence, argument count and types; an attribute cannot. A library is no different: `Map<|K, V|>` requires the trait `ds.Hashable<|Key|>` of its key (`std/docs/DESIGN-core.md`, "A container's requirement on a type is a trait").
 
@@ -645,7 +659,7 @@ Three markers are deliberately absent: `#arc`, `#deterministic` and `Thread_shar
 
 #### Why compiler-known traits are confined to `std/lang`
 
-**The traits the compiler names by FQN (the operator traits, `Ref_counted` / `Move_only` / `Manual_free` / `Callable1` / `Callable2`) stand only in `std/lang`.** A name is the only tie, so placement shows which names bear the load.
+**The traits the compiler names by FQN (the operator traits, `Ref_counted` / `Move_only` / `Manual_free` / `Interior_mutable` / `Callable1` / `Callable2`) stand only in `std/lang`.** A name is the only tie, so placement shows which names bear the load.
 
 Caution: Mixed into a general-purpose file, a name whose renaming silently disables a feature cannot be told from one safe to rename.
 
@@ -788,7 +802,7 @@ A closure lists the outer variables it uses after a `;`, with their types. It ca
 
 **The notation does not collide with the function-pointer type.** They differ only in whether a body block follows, so one token of lookahead decides it.
 
-**The function-pointer type cannot be withdrawn.** It serves an `extern "C"` signature, a hook in a `struct` field or global, and a context with no allocator. None has anywhere to put an environment ("The FFI boundary check looks inside the type").
+**The function-pointer type cannot be withdrawn.** It serves an `extern` signature, a hook in a `struct` field or global, and a context with no allocator. None has anywhere to put an environment ("The FFI boundary check looks inside the type").
 
 ### Whether a callback arrives as a function pointer or a `Callable`
 
@@ -926,6 +940,23 @@ Conformance to `Move_only` forbids implicitly copying an owning handle, such as 
 
 **What is given up**: duplication through a pointer goes undetected, so the check is not sound (docs/SPEC-programming-language.md §5.4).
 
+### Why std marks the methods that make and end views
+
+A view is a slice or a pointer into memory another value owns. It ends when its owner moves or releases that memory ("8.4.6 What invalidates a view" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Lint [W0111] reports a view used after that. It must know which calls make a view and which end one.
+
+**The methods say it themselves**: `#gives_view` on a method whose result points into its receiver, `#ends_views` on one that can move or release what its receiver owns. The lint reads the marks and holds no list of names.
+
+* **Why not a list in the compiler**: it would be a second copy of what std's code does. A method added to `List`, or one renamed, would leave the list wrong with nothing to say so (Principle 6).
+* **Why an attribute, not a trait**: the subject is a method, not a type. That is step (1) of "Whether a marker is an attribute or a trait" above.
+* **Why the specification's table is checked against the marks**: the table is what a reader reads, and the marks are what the lint reads. `make test-spec-claims` fails when one names a method the other does not.
+* **Two rows need no mark.** A `free()` already ends its value by `Manual_free`. A new value given to a counted local ends the old one by `Ref_counted`, as the compiler releases it there.
+
+**The price**:
+
+* Two more attributes to learn, which do nothing but feed a lint.
+* A method that moves memory and lacks its mark weakens the lint without a word. The check covers only the types the table names; a type of another package is its writer's care.
+* The marks speak of the whole receiver. `pop` ends every view into the list, although only the last slot goes. `restore` ends every view into the arena, although only those made after the mark go. A view only compared (`p == q`) reads no memory and is not reported; any other use of one is.
+
 ### Why an assignment evaluates its value before its place
 
 **An assignment runs its value, then finds its place, then writes** ("Evaluation order" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Everything else runs left to right.
@@ -1009,15 +1040,16 @@ A store's place outlives the frame when it is a global, or when it lies behind a
 
 **A local of an outer block outlives an inner block's storage too.** A local, and a temporary such as a closure's captured values or a run of elements, lives until its block ends. The C backend writes a block as a C block, and C ends that storage there. So a closure made in an inner block and stored into an outer local would point at a dead block. Keeping every local alive to the function's end would move every declaration in the C to the function's start. So the block's end stays the limit. The block that decides is the storage's, not the statement's: `s = U8[]::a` in an inner block passes when `a` is declared as far out as `s`. A parameter and a local of the function's own block both live until the function returns, so they count as one block. A loop's step counts as a block inside the loop's, since a step that needs temporaries runs at the end of the body.
 
+**A container's method that takes a trait value is read as a store into the container.** The method takes `Self$@`, and the trait is one of the container's type arguments (`xs.push(sq)`, `xs: List<|Shape|>`). The upcast is as unseen there as in `return sq`. A container in a local of `sq`'s block or a deeper one takes the mark (below), so returning it is refused. A container that outlives the block gets a warning, `[W0110]`, not a refusal. The signature does not say which methods keep what they are handed, and refusing on a guess would stop correct code (Principle 8). The type argument makes the guess good. A `List<|Shape|>` exists to hold `Shape` values. A `Self$@` method of a type that holds no `Shape` mostly only reads one.
+
 **What is not checked** needs real escape analysis, and stays the writer's:
 
-* **A value handed to a call that stores it or returns it** (`list.push(c)`, `return id(x@)`).
-* **A local struct whose field is set afterwards**, then returned or stored (`h.s = U8[]::a; return h`).
+* **A value handed to any other call that stores it or returns it** (`return id(x@)`).
 * **A written `@` stored** (`g = x@`), for the reason above.
 
 **What is given up: a pointer into this very frame counts as outliving it.** `q: = h@; q.c = …` is refused, as is a callback installed through a pointer and removed before the function returns. A closure that has to reach a callee is passed to it as an argument.
 
-**A local variable carries the mark along names.** `t: Shape = s; return t` hides the upcast, and `p: = x@; return p` hides the `@`. So a local set from one of the forms is refused where that form is. The mark follows names, not control flow, and is never cleared. So a marked local later set to heap memory is still refused: the safe side of a check that cannot see which assignment ran last.
+**A local variable carries the mark along names.** `t: Shape = s; return t` hides the upcast, and `p: = x@; return p` hides the `@`. So a local set from one of the forms is refused where that form is. Setting a field or an element of the local sets the local (`h.s = U8[]::a; return h`). The mark follows names, not control flow, and is never cleared. So a marked local later set to heap memory is still refused: the safe side of a check that cannot see which assignment ran last.
 
 ### Why a field `#packed` leaves under-aligned has no address
 
@@ -1060,7 +1092,7 @@ A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload. So ARC co
 
 ### Why data races are not prevented by the type system
 
-KSPL's types do not stop two threads from touching the same data at once (a *data race*). `thread.Thread.spawn<|T|>` requires nothing of `T`, and there is no `Send` / `Sync`-like marker (`Thread_shareable`). Instead, a type's name says whether it can be shared (`Arc`, `Mutex`), and a gate runs the tests under ThreadSanitizer.
+KSPL's types do not stop two threads from touching the same data at once (a *data race*). `thread.Thread.spawn<|T|>` refuses one kind of `T` (below), and there is no `Send` / `Sync`-like marker (`Thread_shareable`). Instead, a type's name says whether it can be shared (`Arc`, `Mutex`), and a gate runs the tests under ThreadSanitizer.
 
 **The reason: only one of the two channels can be checked.** Threads share data through `spawn`'s arguments or through a global, and a marker binds only the first. A closure cannot leave its function, so it cannot reach `spawn`. A global becomes the natural way to share data, so the bypass is the main path.
 
@@ -1085,6 +1117,28 @@ flowchart LR
 * **The price is paid by the gate, not the language.** A sanitized run takes several times the time and memory, so it runs once, in the Linux job. A program left out of it is named with its reason.
 
 **`Move_only` escapes this criticism**: a global does not bypass the local data flow it follows.
+
+**`spawn` refuses a `T` that reaches an `Rc` or a `Weak_rc`.** This is not the marker refused above either. A marker says a type is safe to share, and a type that passes it gets trust it has not earned. This check says one thing: these two names promise a count kept by one thread. Handed to another thread, the promise breaks as soon as either thread copies or drops one. A `Mutex` around it does not help: a copy taken under the lock is dropped after the unlock. It walks what `T` holds as `Move_only` does. It also walks through pointers and slices, since a thread uses what it is pointed at as much as what it holds. An `Rc` in a global still slips past, and the refusal does not claim more. The compiler knows `spawn` and the two types by their full names (`std.thread.Thread.spawn`, `std.refcount.Rc`, `std.refcount.Weak_rc`), as it knows `Ref_counted`.
+
+**A thread waits for its end where the block ends.** `thread.Thread` is a value whose `free()` waits for the thread, so `defer` in front of its declaration makes a scoped thread. A local whose address the thread was handed then outlives it, and returning such a thread is refused. [W0109] reports a thread some path never waits for. Why it has the one `free()` is "A thread is a value that `free()` waits for" in [`../std/docs/DESIGN-system.md`](../std/docs/DESIGN-system.md#a-thread-is-a-value-that-free-waits-for).
+
+#### An `Arc` shares a read-only value
+
+**`Arc<|T|>.get()` returns `T@`.** With a writable pointer, `Arc<|I64|>` looked shareable while only its count was. Two threads adding through `get()` lost updates, and nothing reported it. Now that write is a compile error, and the value changes through a `Mutex<|T|>` or an `Atomic_sz` inside it. Their methods take `Self@`, so `Arc<|Mutex<|T|>|>` works.
+
+* **This is not the marker refused above.** It checks no type at the thread boundary. It only stops the type whose name says "shareable" from handing out an unguarded write.
+* **A correct program loses nothing.** Each of its writes already went through a lock or an atomic.
+* **`Rc<|T|>.get()` stays writable.** An `Rc` lives on one thread, where there is no race to stop.
+* **The last owner can still end what the value owns.** `get_mut()` gives `T$@` only while no other owner and no weak handle exist, so no other thread can reach the value. A `Mutex`'s `free()` goes through it, after the threads are joined.
+
+**A type that changes through `Self@` conforms to `Interior_mutable`** (`std/lang`). A type that holds one by value is derived to conform, as with `Move_only`. A trait carries it because it propagates through types ("The order of decision" (3)). Two places refuse such a value:
+
+| Place | Why it is refused |
+| :-- | :-- |
+| A `const` | A `const` promises its value never changes. At the top level it sits in read-only memory, where a lock's write faults. Inside a function, the C compiler may fold its fields as constants |
+| A binding that holds a copy (a `for … in` item, a `case` payload) | A change through it reaches only the copy, and is lost without a word |
+
+**The cast is written once, inside `std/thread`.** `Mutex.lock()` and the atomic operations cast the read-only receiver to `T$@` where the lock or the atomic instruction makes the write safe. No user code writes that cast.
 
 ## Visibility
 
@@ -1154,15 +1208,47 @@ Caution: **Mixing them makes a correct program fail to build only when the numbe
 
 ## The boundary with C
 
-**Everything Kanso passes to C or receives from it crosses one boundary.** This chapter says which types cross it, how C's types are received, and where a binding names its library. It also covers what standard output carries, how a KSPL library ships to C, and how folded sizes are tied to the C compiler's.
+**Everything Kanso passes to C or receives from it crosses one boundary.** This chapter says how a definition is published, which types cross, how C's types are received, and where a binding names its library. It also covers what standard output carries, how a KSPL library ships to C, and how folded sizes are tied to the C compiler's.
+
+### `extern` is written on each declaration, in both directions
+
+**One word says "C's calling convention and C's name", in both directions.** `extern` before a declaration without a body (or without a value) brings C's function, variable or opaque type in. `extern` before a definition publishes it under its own name ("11.3 Publishing a KSPL definition to C" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). **What follows tells the direction.** A body or a value is defined here, so it goes out. A declaration alone is defined elsewhere, so it comes in.
+
+```kspl
+extern fn TLS_server_method(): SSL_METHOD@       // brought in
+pub extern fn SSL_CTX_new(m: SSL_METHOD@): SSL_CTX$@  // brought in, importable by other packages
+extern struct llama_model                        // an opaque C type
+extern fn on_ready(status: I32)                  // published: it has a body
+    io.out().s("ready\n")
+```
+
+**Why per declaration, as `pub` is**: visibility is written on each declaration, so the C side is too. A block holding several declarations would be a second shape. It would put the word far from what it marks. Its attributes (a `#cfg`, a library name) would do other jobs. The `#cfg` group gathers declarations ("A `#cfg` group drops top-level declarations together"). `##link` names the libraries ("The libraries a file needs are named in the file").
+
+**Why no string**: every machine KSPL builds for has one C calling convention (the machine list in `ksplc/base/target.kspl`). A string would only repeat `"C"`, or name a convention that is not so (Principle 5). **Where a second convention would go**: on such a machine (32-bit Windows has `stdcall`), an attribute such as `#stdcall` would mark the few declarations that use it. No such attribute exists until such a machine does.
+
+**Why not an attribute**: deleting every `#` line leaves the program's logic unchanged ("10. Compiler directives and attributes" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Deleting the mark that publishes a function takes away the name C links to, so the program no longer links. That mark makes a symbol, as `import` makes a name, so it is not written with `#`.
+
+**Why not a word paired with `import`**: `import` and `pub` act on names, which KSPL files can write. `extern` acts on symbols, which the linker sees ("9. Files and import" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A word such as `export` beside `import` would read as the other end of naming. **So visibility stays a separate mark**: `pub extern fn` is importable by other KSPL packages, and an unmarked one is enough for C.
+
+**Where each form stands**:
+
+* **A definition publishes**: a function with its body, a variable with its value (`extern $count: I32 = 0`) or a `const`.
+* **A declaration brings in**: a function without a body, a variable without a value, `extern struct Name` without fields.
+* **Every other shape is refused**, each for its own reason:
+  * `extern` before a type with fields, a `typedef`, an `enum` or a `trait`, which makes no symbol;
+  * on a method, whose name is not unique without its type;
+  * on a `priv` definition, which C's `static` hides (a `priv` declaration that brings in is allowed);
+  * any string after `extern`.
+
+**What is given up**: a binding of many C functions repeats `extern` on each line. Each line then reads alone, as a line marked `pub` does.
 
 ### The FFI boundary check looks inside the type
 
-A function marked `#export` (callable from C) cannot use a type whose memory layout is KSPL's own (docs/SPEC-programming-language.md §11.1). An example is a slice, even one buried inside a struct.
+A function published with `extern` (callable from C) cannot use a type whose memory layout is KSPL's own (docs/SPEC-programming-language.md §11.1). An example is a slice, even one buried inside a struct.
 
 Caution: **Do not look at the outermost layer only.** `struct W { items: U8[] }` would slip past. A struct's fields are followed recursively.
 
-**Pointers are not followed.** A pointer is a pointer in C too. Following would fail nearly every `#export`, self-referential structs included. Cycles are cut by a visited set and a depth limit.
+**Pointers are not followed.** A pointer is a pointer in C too. Following would fail nearly every published function, self-referential structs included. Cycles are cut by a visited set and a depth limit.
 
 **The LLVM backend is stricter still**: it cannot pass even a plain struct by value across the C boundary. It does not implement each target's C ABI classification (Win64, SysV x86-64 and AAPCS differ). The C backend passes it, since the C compiler classifies ([`ksplc/docs/DESIGN-backends.md`](../ksplc/docs/DESIGN-backends.md), "Passing an aggregate is an explicit internal ABI").
 
@@ -1186,24 +1272,37 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 
 **No type for plain `char` is added.** `Void@` already receives a `char*`, and plain `char`'s sign varies per target (Principle 1).
 
-### The library an `extern` block needs is named on the block
+### The libraries a file needs are named in the file
 
-**`#link("openblas")` on an `extern` block names the library its declarations are found in.** So a program taking in a binding takes its library with it. No build file carries the name ("11.5 Naming the library an `extern` block needs (`#link`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+**`##link("ssl", "crypto")` names the libraries the file's `extern` declarations are found in.** So a program taking in a binding takes its libraries with it. No build file carries the names ("11.5 Naming the libraries a file needs (`##link`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
 
 | Decision | Why |
 | :-- | :-- |
 | 1. **A name, never a flag or a place** | A flag in the source forces one machine's link line on every machine, and can run code at build time. Where to look, and static or dynamic, belong to the building machine |
-| 2. **On the block, under the block's own `#cfg`** | The library follows the flag that keeps its declarations. On a line of its own, it would link into a build that dropped every declaration needing it |
-| 3. **The source is the one place the name is written** | The compile writes the names of the blocks it kept, and `ksplc run` and a hand-made link both take them from there |
-| 4. **The order is the one a linker reading once from the left needs** | A library comes before the ones it uses, which is the order of a file's imports. A repeat is dropped at its later place |
+| 2. **A directive of the file, under a `#cfg` group where the declarations have one** | The libraries go with the declarations they serve, and a group drops both together. Outside the group, it would link into a build that dropped every declaration needing it |
+| 3. **The source is the one place the name is written** | The compile writes the names of the directives it kept, and `ksplc run` and a hand-made link both take them from there |
+| 4. **The order is the one a linker reading once from the left needs** | A library comes before the ones it uses, which is the order of a file's imports and of a directive's arguments. A repeat is dropped at its later place |
 
-`#link` keeps the attribute rule of "The order of decision" (5): deleting it changes only whether the link finds the definitions.
+`##link` keeps the rule of the `#` notation ("The order of decision" (5)): deleting it changes only whether the link finds the definitions. It names the file's needs, not one declaration's, so it is a directive (`##`), as `##lint` is.
 
 **What is given up**:
 
-* **A library named differently per OS cannot be one `#link`.** OpenSSL is `ssl` and `crypto` on a Unix-like system, but `libssl` and `libcrypto` for MSVC. No `#cfg` names the OS, so `ksbind/tls` does not link there. A name that agrees works on both: clang's driver turns `-lopenblas` into `openblas.lib` on an MSVC target.
+* **A library named differently per OS cannot be one `##link`.** OpenSSL is `ssl` and `crypto` on a Unix-like system, but `libssl` and `libcrypto` for MSVC. No `#cfg` names the OS, so `ksbind/tls` does not link there. A name that agrees works on both: clang's driver turns `-lopenblas` into `openblas.lib` on an MSVC target.
 * **Nothing is searched for, and static or dynamic is not chosen.** The linker's own message names `-l<name>`.
-* **A kept block links its library whether or not a call reaches it**, so an edit elsewhere cannot drop a library the program names.
+* **A kept `##link` links its libraries whether or not a call reaches them**, so an edit elsewhere cannot drop a library the program names.
+
+### A `#cfg` group drops top-level declarations together
+
+**`#cfg(flag)` with declarations indented below it keeps or drops them whole**: imports, `extern` declarations, `##link`, functions, constants, types and `impl`s alike ("10.1 Dropping in bulk with `#cfg`" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). It is the same rule as everywhere else: a construct that gathers things drops whole, and no range of lines is cut.
+
+| Decision | Why |
+| :-- | :-- |
+| 1. **Each declaration keeps its own `pub` / `priv` and attributes** | The group adds only the flag, so a declaration reads the same inside and outside it |
+| 2. **A group can hold a group** | It is the nesting an `impl` under `#cfg` already has with a method under its own `#cfg`. Refusing it would need a rule of its own and remove nothing a declaration's own `#cfg` cannot write |
+| 3. **The body is indented, and the formatter keeps it so** | In the indentation notation the indentation is the block. Unindented, the `#cfg` holds the next declaration alone |
+| 4. **Only `#cfg`, only at the top level, never empty** | Another attribute on a group would do nothing (Principle 5). Inside an `impl` or a body, `#cfg` on each item, or on a labelled block, already gathers |
+
+**Normalization splices a kept group's declarations into the file** (`settle_top_level` in [`../ksplc/parse/normalize_decl.kspl`](../ksplc/parse/normalize_decl.kspl)), so nothing after the parse knows groups exist.
 
 ### Standard output carries the bytes a program writes
 
@@ -1215,12 +1314,12 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 
 ### A KSPL library crosses as C, holding its own runtime
 
-**A library shipped without its source is reached through its C interface alone**: its `#export` functions, and the plain types they name. **It holds its own copy of the runtime and of std**, invisible outside it: built with `--library`, every definition but an `#export` is C's `static`. KSPL code shares KSPL types with other KSPL code as source ("Outside parts are not fetched; only their location is stated" in [`DESIGN-repository.md`](DESIGN-repository.md)). How to build and use one is "Binaries crossing the boundary" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
+**A library shipped without its source is reached through its C interface alone**: its `extern` functions, and the plain types they name. **It holds its own copy of the runtime and of std**, invisible outside it: built with `--library`, every definition but an `extern` one is C's `static`. KSPL code shares KSPL types with other KSPL code as source ("Outside parts are not fetched; only their location is stated" in [`DESIGN-repository.md`](DESIGN-repository.md)). How to build and use one is "Binaries crossing the boundary" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 
 ```mermaid
 flowchart LR
-    P[a program in C or KSPL] -->|"C calls to the #35;export functions"| A
-    P -->|"C calls to the #35;export functions"| B
+    P[a program in C or KSPL] -->|"C calls to the extern functions"| A
+    P -->|"C calls to the extern functions"| B
     subgraph A ["library A"]
         RA[private runtime and std]
     end
@@ -1234,7 +1333,7 @@ flowchart LR
 * **A shared copy ties every artifact to one compiler and one std.** Folding the duplicates needs weak symbols, which silently pick one definition. Each object format would need its own proof.
 * **A private copy needs none of that.** Libraries from different vendors and compiler versions sit in one program.
 * **`static` hides a symbol on every toolchain, a static archive included**, because the compiler writes a library as one translation unit.
-* **C's interface is the one every caller already links.** The C header and the KSPL `extern "C"` block are both written by the compilation that writes the library (`--library=`).
+* **C's interface is the one every caller already links.** The C header and the KSPL `extern` declarations are both written by the compilation that writes the library (`--library=`).
 
 **What is given up**:
 

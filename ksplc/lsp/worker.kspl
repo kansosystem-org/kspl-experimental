@@ -492,6 +492,17 @@ priv fn answer_unknown(id_val: json.Value, arena: Arena$@) //<
     default
         lsp_msg.send_error_response(id_val, -32601, "Method not found", arena)
 
+priv const TEST_NOISE_BYTES: Sz = 256 * 1024 //<
+    //< How much `$/ksplTestNoise` writes to standard error at least, more than any OS's pipe holds
+    //< Linux's pipe holds 64 KiB, Windows's 4 KiB.
+
+priv fn write_test_noise() //< a test hook: much text on standard error, then a line ending it
+    //< **A worker that writes this much must go on answering**, whatever reads its standard error.
+    line: = "injected test noise on standard error\n"
+    for _k in Range.asc(TEST_NOISE_BYTES / line.len + 1)
+        io.err().s(line)
+    io.err().s("end of the injected test noise\n").flush()
+
 fn run_lsp_worker(base_parser: kspeg.Target$@): Void
     base_core.config.is_lsp = true
     // **The one place that turns the recovery branches on.** Turned on anywhere the compiler runs,
@@ -522,13 +533,16 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
             continue
 
         method: = doc.val.get("method").as_str().unwrap_or("")
-        // Test hooks for the supervisor's crash / hang recovery. A real client sends nothing in the
-        // $/ksplTest* namespace, so they are harmless in production.
+        // Test hooks for the supervisor's crash / hang recovery and for a worker that writes much
+        // to standard error. A real client sends nothing in the $/ksplTest* namespace, so they are
+        // harmless in production.
         if method.equals("$/ksplTestCrash")
             panic("injected test crash")
         if method.equals("$/ksplTestHang")
             for
                 sys.mono_us()
+        if method.equals("$/ksplTestNoise")
+            write_test_noise()
 
         if method.equals("shutdown")
             lsp_msg.send_null_response(doc.val.get("id"), msg_arena)

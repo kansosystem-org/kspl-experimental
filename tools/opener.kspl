@@ -75,7 +75,13 @@ struct Where //< every path this run needs, found once, and what it opens
 fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
     //< Finds the server and the paths next to it, for what `app` opens
     //< **Where it is not found, `server` is empty.**
-    for dir in U8[][]::{ aim.parent_of(argv0), SERVER_NEAR }
+    //< **The executable's own folder comes first**: started through PATH, argv[0] holds the bare
+    //< name, and through `make install`'s link in `bin/`, it names the link's folder.
+    $buf: U8[4096] = ::{}
+    exe_dir: = aim.parent_of(sys.exe_path(U8$[]::buf).unwrap_or(""))
+    for dir in U8[][]::{ exe_dir, aim.parent_of(argv0), SERVER_NEAR }
+        if dir.len == 0
+            continue
         for one in SERVER_NAMES
             at: = fs.join(dir, one, arena)
             if fs.can_run(at)

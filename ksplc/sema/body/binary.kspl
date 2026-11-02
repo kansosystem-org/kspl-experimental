@@ -13,6 +13,8 @@ import "ksplc/base/ast_spell" // get_full_path_str_to, get_path_or_ident_name
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/fixed_answer" as sema_body_fixed_answer
+import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
 import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/decl/eval" as sema_decl_eval
@@ -233,7 +235,7 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     if left_type_id == ctx.env.generic_fn_value_type_id()
         return infer_after_fn_name(node, ctx, left_node, right_node)!
 
-    lint_operand_pair(ctx, node, left_node, right_node, op_text, left_type_id, is_cmp)
+    lint_bare_bitwise(ctx, node, left_node, right_node, is_cmp)
 
     op_traits: = get_op_traits(op_text)
     method_name: = op_traits.method_name
@@ -303,6 +305,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         !pointer_arith_ok(ctx, op_text, left_type_id, right_type_id)
         report_bad_pointer_arith(ctx, node, op_text, left_type_id, right_type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
+    if !is_cmp && !is_logical
+        sema_body_lint_unchecked.note_pointer_arith(ctx, node, left_type_id, right_type_id)
 
     $type_id: = left_type_id
     if ctx.env.is_numeric(left_type_id) && ctx.env.is_numeric(right_type_id)
@@ -311,6 +315,10 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
             return type_id
         if is_cmp && !ctx.is_instantiating() && refuses_fixed_comparison(ctx, o, type_id)
             return I32::sema_type_env.Builtin_type_id.unknown
+    if is_cmp || is_logical
+        sema_body_fixed_answer.lint_fixed_comparison(ctx, node)
+    if op_text.equals("^")
+        lint_xor_as_power(ctx, o)
     if op_text.equals("-") && ctx.env.is_pointer(left_type_id) &&
         ctx.env.is_pointer(right_type_id)
         type_id = pointer_difference_type(ctx, node, left_type_id, right_type_id)
@@ -321,27 +329,11 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         type_id = I32::sema_type_env.Builtin_type_id.bool_type
     return type_id
 
-priv fn lint_operand_pair(ctx: Sema_ctx$@, node: Ast_node$@, left_node: Ast_node$@,
-    right_node: Ast_node$@, op_text: U8[], left_type_id: I32, is_cmp: Bool) //<
-        //< [W0204] a comparison of a name with itself, and [W0108] a bitwise operand compared bare
+priv fn lint_bare_bitwise(ctx: Sema_ctx$@, node: Ast_node$@, left_node: Ast_node$@,
+    right_node: Ast_node$@, is_cmp: Bool) //< [W0108] a bitwise operand compared bare
     if !base_core.config.run_lint_checks || !is_cmp
         return
-    // Detects a meaningless comparison `a == a`. A bare variable reference is a k_expr_path after
-    // normalization, so is_path_or_ident accepts both.
-    // Caution: **Check it after the left-hand side has its type.** Checked by name alone, a
-    // floating-point `f != f` (IEEE 754's only test for NaN) would get a warning.
-    if !ctx.env.is_float(left_type_id) && left_node.is_path_or_ident() &&
-        right_node.is_path_or_ident() && left_node.text.len > 0 &&
-        left_node.text.equals(right_node.text)
-        always_val: =
-            ("true."
-            if op_text.equals("==") || op_text.equals("<=") || op_text.equals(">=") else "false.")
-        ctx.clear_scratch()
-            .s("[W0204] Meaningless comparison: '\{left_node.text\} \{op_text\} \
-                \{right_node.text\}' is always \{always_val\}")
-        ctx.warn(node, ctx.scratch.slice())
-
-    // [W0108] KSPL ranks `&` `|` `^` with `*` ("The operator list and precedence" in
+    // KSPL ranks `&` `|` `^` with `*` ("The operator list and precedence" in
     // docs/SPEC-programming-language.md), C below comparison, so the same text parses differently.
     // **Neither types nor the run time catch it**: only the answer changes (`6 & 4 == 4` is true in
     // KSPL only).
@@ -581,6 +573,35 @@ priv fn lint_bool_literal_operand(ctx: Sema_ctx$@, o: Operands) //<
                 with '!'.")
     if o.op.equals("&&") || o.op.equals("||")
         ctx.information(o.node, "[I0303] Redundant logical operation with a boolean literal.")
+
+priv fn lint_xor_as_power(ctx: Sema_ctx$@, o: Operands) //<
+    //< [W0215] `^` between two written decimal numbers, the left one 2 or 10
+    //< Elsewhere `2 ^ 8` and `10 ^ 3` are powers, so the writer likely meant 256 or 1000; `^` is
+    //< exclusive or. A number in hexadecimal, a name or a variable says exclusive or was meant.
+    if !base_core.config.run_lint_checks || ctx.is_instantiating()
+        return
+    left: = written_decimal(ctx, o.left)
+    right: = written_decimal(ctx, o.right)
+    if left.is_none() || right.is_none()
+        return
+    base: = left.unwrap_or(0)
+    if base != 2 && base != 10
+        return
+    ctx.clear_scratch()
+        .s("[W0215] '^' is exclusive or, not a power: here it gives \{base ^ right.unwrap_or(0)\}. \
+            For a power, write its value, or '1 << n' for 2 to the n. For exclusive or, write a \
+            number in hexadecimal.")
+    ctx.warn(o.node, ctx.scratch.slice())
+
+priv fn written_decimal(ctx: Sema_ctx$@, n: Ast_node$@): I64? //<
+    //< The value of a number written in decimal (`10`, `2U8`, `-3`), none for another shape
+    $at: = n.without_parens()
+    if at != null && at.kind_id == .k_expr_unary && at.get_unary_op().text.equals("-")
+        at = at.get_unary_target().without_parens()
+    if at == null || at.kind_id != .k_integer || at.text.starts_with("0x") ||
+        at.text.starts_with("0X") || at.text.starts_with("0b") || at.text.starts_with("0B")
+        return .none
+    return ctx.try_eval_constexpr_wide(n)
 
 priv fn promote_operands(ctx: Sema_ctx$@, o: Operands): I32 //<
     //< The type two numbers are computed in, each operand converted to it

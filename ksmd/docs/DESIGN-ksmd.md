@@ -474,7 +474,7 @@ The table's `widths` attribute, when present, is a quoted comma-separated list o
 
 * **A value is the text the cell shows, in lower case**, since the page compares without regard to case. `%25`, `%2C` and `%7C` stand for `%`, `,` and `|`, which separate the entries.
 * **A change of number format takes the column's entry away, in the same step of undo.** The format of the column or of a cell in it changes the text the cell shows, so `in:1.5` would hide every row once 1.5 shows as 1.50.
-* **A row inserted takes every entry away, in the same step of undo**, since an entry would hide the empty row at once.
+* **A row inserted leaves every entry as it is.** The page shows the new row until the filter is chosen again ([`DESIGN-page.md`](DESIGN-page.md)), so the file keeps the filter the person chose.
 * **The model keeps each entry by the column's identity**, so it moves with its column, and an undo of a removed column brings it back.
 * **The file keeps every row; a filter only hides some on the page and on paper.** A reader that does not know the attribute refuses the file rather than show rows the writer hid ("Source boundaries" above).
 

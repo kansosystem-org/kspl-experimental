@@ -17,7 +17,7 @@ Markdown supplies familiar notation, but compatibility with `.md` is not a requi
 
 ## Open a document by double-clicking it
 
-From the repository root, `make ksmd` builds what a double-click needs: the page, the local server and a launcher. On Linux, `make install-desktop` then ties `.ksmd` files to the launcher for your user, with their icon; `make install` does this too. On Windows and macOS, `make ksmd` prints the steps that tie them by hand. "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../docs/HOWTO-set-up-a-project.md) gives the steps for each system, and how to reset them.
+From the repository root, `make ksmd` builds what a double-click needs: the page, the local server and a launcher. `make install` installs the three beside `ksplc`, and on Linux ties `.ksmd` files to the installed launcher for your user, with their icon; `make install-desktop` ties them to the one in `out/`. On Windows and macOS, `make ksmd` prints the steps that tie them by hand. "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../docs/HOWTO-set-up-a-project.md) gives the steps for each system, and how to reset them.
 
 * **The workspace is the document's own folder**, or the nearest folder above it that holds a file named `.ksmd-workspace`. Put that empty file in a folder to open its documents together, with includes that climb with `../`.
 * **Each workspace keeps its own port**, worked out from its path, so the drafts the browser holds for it come back.

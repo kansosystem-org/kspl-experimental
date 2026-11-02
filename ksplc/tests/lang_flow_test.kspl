@@ -204,6 +204,34 @@ fn test_for_step_with_temporaries()
     verdict.pass("A for step's temporaries reach the step, and `continue` runs it.")
 
 // ==========================================
+// A closure in a `for` header that captures the loop's own counter. Its environment is built
+// once, after the counter is declared, and reads the counter as it stands at each call.
+// ==========================================
+priv fn via(f: Callable1<|I32, I32|>, v: I32): I32 //< f called on v
+    return f.call(v)
+
+priv fn header_captures(): I32 //< the sum of the values two loops visit
+    $total: I32 = 0
+    // The step adds 1 while k is even and 2 while it is odd: 0, 1, 3, 5.
+    for $k: I32 = 0; k < 6; k += via(fn(x: I32; k: I32): I32 {
+        return x + (k & 1);
+    }, 1)
+        total += k
+    // The condition reads the counter through the closure; a label stays on the loop.
+    outer: for $j: I32 = 10; via(fn(x: I32; j: I32): I32 {
+        return x + j;
+    }, 0) < 13; j += 1
+        if j == 12
+            break outer
+        total += j
+    return total
+
+fn test_for_header_closure_captures_counter()
+    verdict.start("[Lang] a closure in a for header captures the counter test...")
+    assert(header_captures() == 9 + 21, "both loops read their counter through the closure")
+    verdict.pass("A closure in a `for` header captures the loop's own counter.")
+
+// ==========================================
 // `catch` on an Option takes its value or leaves ("Catching an optional" in
 // `../../docs/SPEC-programming-language.md`). Each way out is tried on both sides: with a value
 // the block is skipped, and without one the block leaves. The shapes refused are the cases

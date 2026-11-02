@@ -7,7 +7,7 @@
 //< work, but openssl.cnf does not decide which protocol version it connects with.
 
 // ==========================================
-// OpenSSL's own C API, called directly; `#link` names its libraries, so no build file does. No
+// OpenSSL's own C API, called directly; `##link` names its libraries, so no build file does. No
 // OpenSSL header is in any translation unit, so these declarations are the only ones C sees.
 // ==========================================
 import "std/chars"
@@ -19,54 +19,51 @@ import "std/str" // `to_cstr`
 import "std/sys"
 
 // The contents only OpenSSL reads. Unmarked, so the package's tests can reach them.
-extern "C"
-    struct SSL_METHOD
-    struct SSL_CTX
-    struct SSL
-    struct BIO
-    struct BIO_METHOD
-    // The certificate's types, which only the server half and the tests take apart.
-    struct X509
-    struct X509_NAME
-    struct EVP_PKEY
-    struct ASN1_TIME
-    struct X509_VERIFY_PARAM
+extern struct SSL_METHOD
+extern struct SSL_CTX
+extern struct SSL
+extern struct BIO
+extern struct BIO_METHOD
+// The certificate's types, which only the server half and the tests take apart.
+extern struct X509
+extern struct X509_NAME
+extern struct EVP_PKEY
+extern struct ASN1_TIME
+extern struct X509_VERIFY_PARAM
 
 // Caution: **Keep C's `long` as `Sz` going in and `I32` coming out** (the two `ctrl` functions and
 // `SSL_get_verify_result`). Written as `I64`, a result breaks on Windows ("What cannot be written
 // in C's types" in `../docs/DESIGN-programming-language.md`). The `ctrl` functions stand for the
 // macros `SSL_CTX_set_min_proto_version` and `SSL_set_tlsext_host_name`.
-#link("ssl")
-#link("crypto")
-extern "C"
-    fn TLS_client_method(): SSL_METHOD@
-    fn SSL_CTX_new(method: SSL_METHOD@): SSL_CTX$@
-    fn SSL_CTX_free(ctx: SSL_CTX$@)
-    fn SSL_CTX_set_verify(ctx: SSL_CTX$@, mode: I32, callback: Void@)
-    fn SSL_CTX_set_default_verify_paths(ctx: SSL_CTX$@): I32
-    fn SSL_CTX_ctrl(ctx: SSL_CTX$@, cmd: I32, larg: Sz, parg: Void$@): I32
-    fn SSL_new(ctx: SSL_CTX$@): SSL$@
-    fn SSL_free(ssl: SSL$@)
-    fn SSL_set_bio(ssl: SSL$@, rbio: BIO$@, wbio: BIO$@)
-    fn SSL_get_rbio(ssl: SSL@): BIO$@
-    fn SSL_get_wbio(ssl: SSL@): BIO$@
-    fn BIO_s_mem(): BIO_METHOD@
-    fn BIO_new(method: BIO_METHOD@): BIO$@
-    fn BIO_free(a: BIO$@): I32
-    fn BIO_read(b: BIO$@, data: Void$@, dlen: I32): I32
-    fn BIO_write(b: BIO$@, data: Void@, dlen: I32): I32
-    fn BIO_ctrl_pending(b: BIO$@): Sz
-    fn SSL_set1_host(ssl: SSL$@, hostname: Void@): I32
-    fn SSL_get0_param(ssl: SSL$@): X509_VERIFY_PARAM$@
-    fn X509_VERIFY_PARAM_set1_ip_asc(param: X509_VERIFY_PARAM$@, ipasc: Void@): I32
-    fn SSL_ctrl(ssl: SSL$@, cmd: I32, larg: Sz, parg: Void$@): I32
-    fn SSL_connect(ssl: SSL$@): I32
-    fn SSL_get_verify_result(ssl: SSL@): I32
-    fn SSL_read(ssl: SSL$@, buf: Void$@, num: I32): I32
-    fn SSL_get_error(ssl: SSL@, ret: I32): I32
-    fn ERR_clear_error()
-    fn SSL_write(ssl: SSL$@, buf: Void@, num: I32): I32
-    fn SSL_shutdown(ssl: SSL$@): I32
+##link("ssl", "crypto")
+extern fn TLS_client_method(): SSL_METHOD@
+extern fn SSL_CTX_new(method: SSL_METHOD@): SSL_CTX$@
+extern fn SSL_CTX_free(ctx: SSL_CTX$@)
+extern fn SSL_CTX_set_verify(ctx: SSL_CTX$@, mode: I32, callback: Void@)
+extern fn SSL_CTX_set_default_verify_paths(ctx: SSL_CTX$@): I32
+extern fn SSL_CTX_ctrl(ctx: SSL_CTX$@, cmd: I32, larg: Sz, parg: Void$@): I32
+extern fn SSL_new(ctx: SSL_CTX$@): SSL$@
+extern fn SSL_free(ssl: SSL$@)
+extern fn SSL_set_bio(ssl: SSL$@, rbio: BIO$@, wbio: BIO$@)
+extern fn SSL_get_rbio(ssl: SSL@): BIO$@
+extern fn SSL_get_wbio(ssl: SSL@): BIO$@
+extern fn BIO_s_mem(): BIO_METHOD@
+extern fn BIO_new(method: BIO_METHOD@): BIO$@
+extern fn BIO_free(a: BIO$@): I32
+extern fn BIO_read(b: BIO$@, data: Void$@, dlen: I32): I32
+extern fn BIO_write(b: BIO$@, data: Void@, dlen: I32): I32
+extern fn BIO_ctrl_pending(b: BIO$@): Sz
+extern fn SSL_set1_host(ssl: SSL$@, hostname: Void@): I32
+extern fn SSL_get0_param(ssl: SSL$@): X509_VERIFY_PARAM$@
+extern fn X509_VERIFY_PARAM_set1_ip_asc(param: X509_VERIFY_PARAM$@, ipasc: Void@): I32
+extern fn SSL_ctrl(ssl: SSL$@, cmd: I32, larg: Sz, parg: Void$@): I32
+extern fn SSL_connect(ssl: SSL$@): I32
+extern fn SSL_get_verify_result(ssl: SSL@): I32
+extern fn SSL_read(ssl: SSL$@, buf: Void$@, num: I32): I32
+extern fn SSL_get_error(ssl: SSL@, ret: I32): I32
+extern fn ERR_clear_error()
+extern fn SSL_write(ssl: SSL$@, buf: Void@, num: I32): I32
+extern fn SSL_shutdown(ssl: SSL$@): I32
 
 // The numbers behind the macros; each is the same in OpenSSL 1.1.0, 1.1.1 and 3.x. The ones
 // unmarked are shared with the server half (`ksbind/tls_server.kspl`).

@@ -1,0 +1,124 @@
+//< `extern` before one declaration, `##link` and the top-level `#cfg` group
+//< Without a body (or a value) `extern` brings a C symbol in; with one it publishes the definition
+//< to C under the name written. Each refusal below is a place where a form would be written and do
+//< nothing, or give C no name to call, or is a spelling another one replaced.
+// ==== case extern_decl_link_not_a_name
+//< `##link` takes library names as `-l` does: not a flag, a file, a path, or a bare word
+//< The name reaches the link line as the one word `-l<name>`, and a build script's shell as a word
+//< (`$(cat prog.libs)`). A flag or a search path in the source is a link line for one machine only.
+//< Each argument is judged alone, so the one good name between two bad ones passes. The rule is
+//< `is_library_name` in `ksplc/base/ast_ext.kspl`.
+// EXPECT: extern_decl_link_not_a_name.kspl:11:8: error: '##link' takes library names, each as a string
+// EXPECT: extern_decl_link_not_a_name.kspl:11:22: error: '##link' takes library names, each as a string
+// EXPECT: extern_decl_link_not_a_name.kspl:11:47: error: '##link' takes library names, each as a string
+// EXPECT: extern_decl_link_not_a_name.kspl:11:66: error: '##link' takes library names, each as a string
+// EXPECT: extern_decl_link_not_a_name.kspl:11:76: error: '##link' takes library names, each as a string
+##link("-lopenblas", "libopenblas.so", "ssl", "/opt/blas/lib/x", openblas, "open blas")
+
+extern fn flag_given(): I32
+
+fn main(): I32
+  return 0
+// ==== case extern_decl_group_other_attribute
+//< A group takes `#cfg` and nothing else: any other attribute would be written and do nothing
+// EXPECT: attribute '#inline' does nothing here. It applies to functions
+#cfg(!nope) #inline
+  fn grouped(): I32
+    return 0
+
+fn main(): I32
+  return grouped()
+// ==== case extern_decl_on_type
+//< `extern struct` names a C type with no fields; a type with fields, or a `typedef`, makes no
+//< symbol to bring in or publish
+// EXPECT: 'extern' does nothing here. With a body or a value it publishes a function
+// EXPECT: 'extern' does nothing here. With a body or a value it publishes a function
+extern struct Pair
+  a: I32
+
+extern typedef Meters = I32
+
+fn main(): I32
+  p: = Pair::{ .a = 0 }
+  m: Meters = 0
+  return p.a + m
+// ==== case extern_decl_on_method
+//< A method's name is not unique without its type, so C has no name to call, either way
+// EXPECT: 'extern' cannot be written on a method
+// EXPECT: 'extern' cannot be written on a method
+// EXPECT: 'extern' cannot be written on a method
+pub struct Thing
+  pub v: I32
+
+impl Thing
+  pub extern fn bump(r: Self@): I32
+    return r.v + 1
+  extern fn from_c(r: Self@): I32
+
+trait Counter
+  extern fn count(r: Self@): I32
+
+fn main(): I32
+  t: = Thing::{ .v = 1 }
+  return t.bump()
+// ==== case extern_decl_on_priv
+//< `priv` makes the C `static`, so the name kept for C links to nothing
+//< It does not appear among a wasm's exports either. To publish to C or wasm, unmarked is
+//< enough; `pub` publishes a name to KSPL's other packages.
+// EXPECT: 'extern' with a body has no effect on a 'priv' declaration
+priv extern fn hidden(): I32
+  return 1
+
+fn main(): I32
+  return hidden() - 1
+// ==== case extern_decl_library_variable
+//< A library publishes no variable: a DLL's data needs a mark on its user's side
+// ARGS: --library=extern_decl_library_variable.h
+// EXPECT: a library ('--library') must not export variables or constants
+pub extern fn library_count(): I32
+  return shared
+
+extern $shared: I32 = 2
+// ==== case extern_decl_string
+//< `extern` takes no string: every machine KSPL builds for has one C calling convention
+//< `"C"` would only repeat it, and another string would be read as C. The refusal stands with a
+//< body and without one.
+// EXPECT: 'extern' takes no string
+// EXPECT: 'extern' takes no string
+// EXPECT: 'extern' takes no string
+extern "C" fn published(): I32
+  return 1
+
+extern "Rust" fn rusty(): I32
+  return 1
+
+extern "C" fn from_c(): I32
+
+fn main(): I32
+  return published() + rusty() - 2
+// ==== case extern_decl_old_block
+//< An `extern "C"` block is a spelling `extern` before each declaration replaced
+//< The refusal names the new spelling, the group a `#cfg` on the block becomes, and `##link`.
+// EXPECT: an 'extern "C"' block is no longer written. Write 'extern' before each declaration
+extern "C"
+  fn from_c(): I32
+
+fn main(): I32
+  return from_c()
+// ==== case extern_decl_old_link
+//< `#link` is a spelling `##link` replaced: the libraries are named once in the file
+// EXPECT: the attribute '#link' is no longer written. Write '##link("name")' in the file
+#link("m")
+extern fn cos(x: F64): F64
+
+fn main(): I32
+  return I32::cos(0.0) - 1
+// ==== case extern_decl_old_export
+//< The attribute `#export` is gone, and its refusal names the spelling that took its place
+// EXPECT: the attribute '#export' is no longer written. Write 'extern fn
+#export
+pub fn api_init(): I32
+  return 0
+
+fn main(): I32
+  return api_init()

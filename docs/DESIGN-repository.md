@@ -212,7 +212,7 @@ flowchart LR
 
 | | The interface (`--library=`) | The record (`--emit-surface`) |
 | :-- | :-- | :-- |
-| What it holds | Only the `#export` functions, spelled in C | Every `pub` declaration as written |
+| What it holds | Only the `extern` functions, spelled in C | Every `pub` declaration as written |
 | Which build | One build | Every `#cfg` branch included |
 
 ### Outside parts are not fetched; only their location is stated
@@ -506,7 +506,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 
 ### Where CI's time goes, and what shrinks it
 
-**One local command, `make ci`, runs a round on any platform**; which sections it runs on each is "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md). **It runs only what the host runs natively, and starts no container**, so one command means one machine. Off Linux, the Linux-only section is run by opening the repository in its dev container. Each gate's log carries the platform it ran on, so a skip allowed on one OS cannot be accepted on another. A progress line names the active gate while its output is quiet.
+**One local command, `make ci`, runs a round on any platform**; which sections it runs on each is "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md). **It runs every gate the host can answer, and starts no container**, so one command means one machine. Off Linux it runs the Linux-only section too, but for the few gates that cannot give a true answer there. A SKIP for a missing tool passes and is listed last. Each gate's log carries the platform it ran on, so a skip allowed on one OS cannot be accepted on another. A progress line names the active gate while its output is quiet.
 
 **The shared jobs divide the compiler's extraction suites too**, so the heavy suites do not collect in one job ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). Each share repeats the bootstrap, since each job needs a compiler of its own. Every regression suite runs in exactly one job, and no job is added.
 

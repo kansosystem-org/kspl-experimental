@@ -1,0 +1,149 @@
+//< Threads: what may be shared, and what may hold a lock or an atomic
+//< Each case below is compiled alone, as the file its head names.
+// ==== case arc_get_is_read_only
+//< An `Arc`'s value cannot be written through `get()`
+//< Threads share it, so a plain write from two of them races and loses updates. The passing side
+//< changes it through a `Mutex` inside, whose `lock()` takes a read-only pointer.
+// EXPECT: cannot write here. The path to this location goes through a read-only pointer
+// EXPECT: Finished with 1 error(s)
+import "std/refcount" { Arc }
+import "std/thread" { Mutex }
+
+priv fn bump(a: Arc<|I64|>, m: Arc<|Mutex<|I64|>|>)
+  a.get()$ += 1
+  p: = m.get().lock()
+  p$ += 1
+  m.get().unlock()
+
+fn main(): I32
+  bump(Arc<|I64|>(0), Arc<|Mutex<|I64|>|>(Mutex<|I64|>(0) catch panic("mutex")))
+  return 0
+// ==== case const_holds_interior_mutable
+//< A `const` cannot hold a lock or an atomic, at any depth
+//< Their methods write through a read-only pointer, and a `const` sits in read-only memory (a C
+//< `const` object inside a function). The passing side declares a variable.
+// EXPECT: const 'ROW' holds 'std.thread.Atomic_sz[2]', which changes through a read-only pointer
+// EXPECT: const 'HELD' holds
+// EXPECT: const 'LOCAL' holds 'std.thread.Atomic_sz'
+// EXPECT: Finished with 3 error(s)
+// EXPECT-NOT: 'plain'
+import "std/thread" { Atomic_sz }
+
+struct Holder
+  count: Atomic_sz
+  n: I32
+
+const ROW: Atomic_sz[2] = ::{}
+const HELD: Holder = ::{ .n = 1 }
+$plain: Atomic_sz
+
+fn main(): I32
+  const LOCAL: Atomic_sz = Atomic_sz(3)
+  plain.fetch_add(1)
+  return I32::LOCAL.load()
+// ==== case copy_binding_of_interior_mutable
+//< A binding that holds a copy cannot be of a lock's or an atomic's type
+//< A change through it would reach only the copy. The passing side takes each element's address.
+// EXPECT: 'c' would hold a copy of 'std.thread.Atomic_sz'
+// EXPECT: 'h' would hold a copy of 'std.thread.Atomic_sz'
+// EXPECT: Finished with 2 error(s)
+import "std/thread" { Atomic_sz }
+
+priv enum Slot
+  empty
+  held(h: Atomic_sz)
+
+fn main(): I32
+  $counts: Atomic_sz[2] = ::{}
+  for c in counts
+    c.fetch_add(1)
+  for i in Range.asc(2)
+    p: = counts[i]@
+    p.fetch_add(1)
+  s: = Slot.held(Atomic_sz(1))
+  switch s
+  case .held(h)
+    h.fetch_add(1)
+  default {}
+  return 0
+// ==== case scoped_thread_cannot_leave
+//< A thread declared with `defer` in front cannot leave its block
+//< The block's end waits for it, so a local's address handed to it stays valid while it runs. The
+//< passing side keeps the thread inside the function that owns the local.
+// EXPECT: 't' is freed when its block ends, so it cannot be returned here
+// EXPECT: Finished with 1 error(s)
+import "std/thread" { Thread }
+
+extern fn reader(arg: I64$@): Void$@
+  arg$ += 1
+  return null
+
+priv fn start(): Thread
+  $local: I64 = 5
+  defer $t: = Thread.spawn<|I64|>(reader, local@) catch panic("spawn")
+  return t
+
+priv fn scoped(): I64
+  $local: I64 = 5
+  defer $_t: = Thread.spawn<|I64|>(reader, local@) catch panic("spawn")
+  return 0
+
+fn main(): I32
+  $t: = start()
+  t.free()
+  return I32::scoped()
+// ==== case spawn_refuses_one_thread_count
+//< `Thread.spawn<|T|>` refuses a `T` that reaches an `Rc` or a `Weak_rc`
+//< Two threads would change a count one thread keeps, and lose counts. The walk goes through
+//< fields, payloads, elements and what a pointer points at: an `Arc` holding an `Rc` is refused
+//< too. The message names the types on the way. An `Arc<|I64|>` and a plain `I64` pass.
+// EXPECT: cannot hand 'std.refcount.Rc<|I64|>' to another thread: an 'Rc' or a 'Weak_rc' has a count only one thread may change
+// EXPECT: cannot hand 'spawn_refuses_one_thread_count.Job' to another thread: it holds an 'Rc' or a 'Weak_rc' ('spawn_refuses_one_thread_count.Job' > 'std.ds.List<|std.refcount.Rc<|I64|>|>$@' > 'std.ds.List<|std.refcount.Rc<|I64|>|>' > 'std.refcount.Rc<|I64|>$@' > 'std.refcount.Rc<|I64|>')
+// EXPECT: cannot hand 'spawn_refuses_one_thread_count.Slot' to another thread: it holds an 'Rc' or a 'Weak_rc' ('spawn_refuses_one_thread_count.Slot' > 'std.refcount.Weak_rc<|I64|>')
+// EXPECT: cannot hand 'std.refcount.Arc<|std.refcount.Rc<|I64|>|>' to another thread
+// EXPECT: Use 'Arc' in place of 'Rc' and 'Weak_arc' in place of 'Weak_rc'
+// EXPECT: Finished with 4 error(s)
+import "std/ds" { List }
+import "std/refcount" { Arc, Rc, Weak_rc }
+import "std/thread" { Thread }
+
+priv struct Job
+  id: I32
+  names: List<|Rc<|I64|>|>$@
+
+priv enum Slot
+  empty
+  one(w: Weak_rc<|I64|>)
+
+extern fn count(_arg: Rc<|I64|>$@): Void$@
+  return null
+
+extern fn job(_arg: Job$@): Void$@
+  return null
+
+extern fn slot(_arg: Slot$@): Void$@
+  return null
+
+extern fn shared(_arg: Arc<|Rc<|I64|>|>$@): Void$@
+  return null
+
+extern fn ok_shared(_arg: Arc<|I64|>$@): Void$@
+  return null
+
+extern fn ok_plain(_arg: I64$@): Void$@
+  return null
+
+fn main()
+  $r: = Rc<|I64|>(7)
+  defer $_t1: = Thread.spawn(count, r@) catch panic("spawn")
+  defer $names: = List<|Rc<|I64|>|>(null)
+  $j: = Job::{ .id = 1, .names = names@ }
+  defer $_t2: = Thread.spawn<|Job|>(job, j@) catch panic("spawn")
+  $s: = Slot.empty
+  defer $_t3: = Thread.spawn<|Slot|>(slot, s@) catch panic("spawn")
+  $a: = Arc<|Rc<|I64|>|>(Rc<|I64|>(1))
+  defer $_t4: = Thread.spawn<|Arc<|Rc<|I64|>|>|>(shared, a@) catch panic("spawn")
+  $ok: = Arc<|I64|>(1)
+  defer $_t5: = Thread.spawn<|Arc<|I64|>|>(ok_shared, ok@) catch panic("spawn")
+  $n: I64 = 0
+  defer $_t6: = Thread.spawn<|I64|>(ok_plain, n@) catch panic("spawn")

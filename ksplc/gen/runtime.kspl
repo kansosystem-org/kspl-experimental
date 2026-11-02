@@ -191,13 +191,25 @@ const IMPL_HALF_MARK: U8[] = "/* ---- kspl runtime implementation half ---- */\n
 
 fn write_impl($w: Writer): Writer //< the runtime's body half (the `.c` side)
     //< It goes into only one translation unit.
-    w = w.s(IMPL_HALF_MARK).s(rt_core_impl)
+    w = from_file(w.s(IMPL_HALF_MARK), "core.c", rt_core_impl)
     if base_core.config.is_freestanding
-        w = w.s(rt_freestanding_impl)
+        w = from_file(w, "freestanding.c", rt_freestanding_impl)
     else
-        w = w.s(rt_hosted_impl).s(rt_hosted_proc).s(rt_hosted_thread).s(rt_hosted_fs)
-            .s(rt_hosted_spawn).s(rt_hosted_net)
+        w = from_file(w, "hosted.c", rt_hosted_impl)
+        w = from_file(w, "hosted_proc.c", rt_hosted_proc)
+        w = from_file(w, "hosted_thread.c", rt_hosted_thread)
+        w = from_file(w, "hosted_fs.c", rt_hosted_fs)
+        w = from_file(w, "hosted_spawn.c", rt_hosted_spawn)
+        w = from_file(w, "hosted_net.c", rt_hosted_net)
     return w
+
+priv fn from_file(w: Writer, name: U8[], text: U8[]): Writer //<
+    //< One runtime file's text, behind a `#line` that names the file
+    //< **The body half follows the program's last `#line`.** Without one of its own, a C compiler
+    //< error, a debugger and a sanitizer's report name a runtime function by the program's last
+    //< file, at a line past its end. The name is the file's place in this repository, the same on
+    //< every machine, so both stages of the bootstrap write the same text.
+    return w.s("#line 1 \"ksplc/gen/runtime/").s(name).s("\"\n").s(text)
 
 priv const ABI_HASH_LEN: Sz = 16 //< the length of the version in the version symbol
     //< The version is computed from **the runtime's whole source**.

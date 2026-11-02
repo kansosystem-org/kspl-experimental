@@ -6,6 +6,9 @@
 // the rows it was left with; each change is one step of undo. The file still holds every row, and
 // a formula counts every row, shown or not. Each column holds one condition, and a row shows when
 // it meets every column's. In Read-only a filter is the viewer's alone, and the file keeps its own.
+// A row the table did not hold before shows whatever the filter says, so a row just inserted or
+// pasted can be typed in, as in Excel. It shows until the filter is chosen again, changes, or the
+// document opens again; then the filter applies to it as to every row.
 // Typing in the search box narrows the list shown and never unticks a value. Values differing only
 // in case are one value, since the matching ignores case. The row being edited stays in sight until
 // the edit is taken.
@@ -22,6 +25,10 @@ function ksmdFilter(ks) {
   // { values: Set of lower-case texts }, { out: Set of them } or { op, arg }. They stand over the
   // file's own.
   const viewed = new Map();
+  // By the table's place in the model: { filter, ids, fresh }. `filter` is the table's conditions
+  // as last applied, `ids` the identities of its rows then, and `fresh` those of the rows added
+  // since the filter last changed, which show whatever it says.
+  const seen = new Map();
   // A value in an entry: `%`, `,` and `|` written as escapes, since they separate the entries.
   const enc = (t) => t.replace(/%/g, "%25").replace(/,/g, "%2C").replace(/\|/g, "%7C");
   const dec = (t) => t.replace(/%2C/g, ",").replace(/%7C/g, "|").replace(/%25/g, "%");
@@ -98,10 +105,12 @@ function ksmdFilter(ks) {
     const rows = Array.from(wrap.querySelector("tbody").rows);
     const block = ks.view.blocks().indexOf(wrap);
     const kept = ks.table.editing();
+    const fresh = freshRows(wrap, conds);
     let shown = 0;
     rows.forEach((tr, r) => {
       let ok = true;
       if (conds) for (const [c, cond] of conds) if (!meets(cond, wrap.values[r][c])) ok = false;
+      if (fresh.has(wrap.rowIds[r])) ok = true;
       // A hidden group's rows stay hidden whatever the filter shows.
       if (wrap.folded && wrap.folded[r]) ok = false;
       if (kept && kept.block === block && kept.row === r) ok = true;
@@ -129,9 +138,30 @@ function ksmdFilter(ks) {
     note.appendChild(all);
   }
 
+  // The identities of the rows a table holds that it did not hold when its filter last changed. A
+  // table seen for the first time since the document opened has none.
+  // A table shown from an included file takes no edit here, so none of its rows is new.
+  function freshRows(wrap, conds) {
+    if (wrap.included) return new Set();
+    const filter = conds ? Array.from(conds, ([c, cond]) => `${c}=${entryOf(cond)}`).join(",") : "";
+    const ids = new Set(wrap.rowIds);
+    const was = seen.get(wrap.u);
+    const fresh = was && was.filter === filter ? was.fresh : new Set();
+    if (was) for (const id of ids) if (!was.ids.has(id)) fresh.add(id);
+    seen.set(wrap.u, { filter, ids, fresh });
+    return fresh;
+  }
+
+  // Choosing a filter applies it to every row, the new ones too, as Excel's Reapply does.
+  function reapply(wrap) {
+    const was = seen.get(wrap.u);
+    if (was) was.fresh = new Set();
+  }
+
   // Sets one column's condition, or none: in the file as one step, or in Read-only for the viewer.
   function set(block, column, cond) {
     const wrap = ks.view.blocks()[block];
+    reapply(wrap);
     if (!ks.readOnly) return ks.act("ksmd_web_set_filter", block, column, ks.put(entryOf(cond)));
     const conds = new Map(condsOf(wrap) || []);
     if (cond) conds.set(column, cond);
@@ -143,6 +173,7 @@ function ksmdFilter(ks) {
 
   function clearAll(block) {
     const wrap = ks.view.blocks()[block];
+    reapply(wrap);
     if (!ks.readOnly) return ks.act("ksmd_web_set_filter", block, -1, ks.put(""));
     viewed.set(wrap.dataset.name, new Map());
     apply(wrap);
@@ -501,6 +532,8 @@ function ksmdFilter(ks) {
       const wrap = ks.view.blocks()[block];
       return !!wrap && !!condsOf(wrap);
     },
+    // Another document opened: no row of it is new.
+    forget: () => seen.clear(),
     // Read-only turned on or off: the viewer's filters go, and every table shows the file's.
     readOnly: () => {
       viewed.clear();

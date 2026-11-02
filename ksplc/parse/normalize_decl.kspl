@@ -14,8 +14,8 @@ priv enum Var_decl_phase
 
 impl Ast_node
     fn normalize_extern_decl(r: Ast_node$@)
-        // A block (`extern "C" { … }`, holding the ABI name's string) or a single `extern`
-        // declaration.
+        // A block (`extern "C" { … }`, refused by sema: `refuse_extern_block` in
+        // `sema/decl/attrs.kspl`) or a single `extern` declaration.
         // Caution: **Do not look children up by index.** Attributes come first among the children
         // ("The top-level declarations" in ksplc/docs/DESIGN-parse.md) and shift `get_child(1)`.
         // A block mistaken for a single declaration loses every declaration inside.
@@ -45,6 +45,105 @@ impl Ast_node
                     flat.push(extern_kw)
                 flat.push(decl_node)
         r.children = flat
+
+    fn settle_top_level(r: Ast_node$@) //<
+        //< Splices each kept `#cfg` group's items into `r` (the file, or the group around it), and
+        //< wraps each `extern` declaration without a body in a `decl_extern`
+        //< **No later stage sees a group**: one dropped is already `empty` (`should_drop_by_cfg` in
+        //< `normalize.kspl`). An inner group was settled first, so nesting needs no recursion.
+        //< Caution: **Do not look for the groups anywhere else.** A group is top-level syntax; an
+        //< `impl` or a function body holds none.
+        $found: = false
+        for c in r.children
+            if c.kind_id == .k_decl_group || c.brings_in_c()
+                found = true
+                break
+        if !found
+            return
+        out: = base_ast.new_ast_node_list()
+        for c in r.children
+            if c.kind_id == .k_decl_group
+                c.splice_group(out)
+            else if c.brings_in_c()
+                out.push(c.into_extern_decl())
+            else
+                out.push(c)
+        r.children = out
+
+    priv fn splice_group(r: Ast_node$@, out: List<|Ast_node$@|>$@) //<
+        //< Adds a kept group's items to `out`, and the group itself only where it has more to say
+        //< **The group stays, emptied, when it carries an attribute other than `#cfg`**, so that
+        //< sema's attribute check names it (`check_attributes` in `sema/decl/attrs.kspl`).
+        //< Dropped silently, `#inline` before a group would read as if it took effect.
+        $stray: = false
+        items: = base_ast.new_ast_node_list()
+        for c in r.children
+            if c.kind_id == .k_attribute_list
+                for a in c.children
+                    if a.kind_id == .k_attribute && !a.is_attribute_named("cfg")
+                        stray = true
+            else
+                items.push(c)
+        if stray
+            attrs: = r.find_child(.k_attribute_list)
+            r.children = base_ast.new_ast_node_list()
+            r.add_child(attrs)
+            out.push(r)
+        out.push_all(items.slice())
+
+    priv fn brings_in_c(r: Ast_node$@): Bool //<
+        //< Whether `r` is `extern` before a declaration with nothing for C to call: a function
+        //< without a body, a variable without an initializer, or a `struct` without fields
+        //< Caution: **A generic struct is left alone**: no C type takes a type argument, and the
+        //< check of a `struct` with no fields refuses it where it stands.
+        switch r.linkage_of()
+        case .some(l)
+            // A string (`extern "C"`) is refused where it stands (`check_linkage` in
+            // `sema/decl/attrs.kspl`); dropped here, the refusal would never see it.
+            if l.find_child(.k_string) != null
+                return false
+        case .none
+            return false
+        switch r.kind_id
+        case .k_decl_fn
+            return r.find_child(.k_stmt_block) == null
+        case .k_decl_var
+            // The normalized shape is `[mods, keyword, name, type, value]`.
+            return r.children.len >= 5 && r.get_child(4).kind_id == .k_empty
+        case .k_decl_struct
+            return r.find_child(.k_struct_field) == null &&
+                r.find_child(.k_type_gen_params) == null
+        default
+            return false
+
+    priv fn into_extern_decl(r: Ast_node$@): Ast_node$@ //<
+        //< The `decl_extern` that brings in the one C symbol `r` declares
+        //< The item takes the shape an `extern` block's item has, so every later stage reads both
+        //< alike. `extern` itself leaves it: kept, the item would read as published.
+        r.drop_linkage()
+        if r.kind_id == .k_decl_fn
+            r.set_kind(.k_decl_fn_proto)
+            r.text = "decl_fn_proto"
+        else if r.kind_id == .k_decl_struct
+            r.set_kind(.k_decl_extern_struct)
+        wrapper: = Ast_node(.k_decl_extern, "extern", r.loc)
+        wrapper.add_child(r)
+        return wrapper
+
+    priv fn drop_linkage(r: Ast_node$@) //<
+        //< Removes the `extern` written before `r`, where `linkage_of` in `../base/ast.kspl` finds it
+        $holder: = r
+        if r.find_child(.k_linkage) == null
+            holder = r.find_child(.k_attribute_list)
+        if holder == null
+            return
+        kept: = base_ast.new_ast_node_list()
+        for c in holder.children
+            if c.kind_id != .k_linkage
+                kept.push(c)
+        holder.children = kept
+        if holder != r && kept.len == 0
+            holder.morph(.k_empty, "")
 
     fn normalize_impl_decl(r: Ast_node$@)
         r.set_kind(.k_decl_impl)

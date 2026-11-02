@@ -1,0 +1,288 @@
+//< The place table: each operation that takes an address, against each kind of place
+//< It is the table of "4.3.5 Which operation takes which place" in
+//< `docs/SPEC-programming-language.md`, held as data. `place_test.kspl` builds a program for each
+//< cell and judges it. `tests/suite/spec_claims_test.kspl` compares the headings and the cells
+//< with the specification's table, so a row or a column added to one side alone fails.
+//< A cell's program is the column's statements, with the row's parts put in the braces: `{P}` a
+//< place of one value, `{A}` a place of an array, `{T}` / `{E}` their types, `{C}` a name a
+//< closure captures, `{L}` a place indexed by `x[i] = v` and `{V}` the value written there, `{F}`
+//< the field write. A row's `own` replaces a column's statements where the shape differs.
+import "std/mem" { Arena }
+import "std/str"
+
+pub struct Column //< one operation that takes an address or makes a writable view
+    pub head: U8[] //< its heading in the specification's table
+    body: U8[] //< the statements a cell runs
+
+pub struct Row //< one kind of place
+    pub head: U8[] //< its first cell in the specification's table
+    pub cells: U8[] //< one letter per column: a allowed, r refused, c copied, - none
+    why: U8[][] //< for each refused cell, in order, a part of the message that refuses it
+    setup: U8[] //< statements before the cell's own
+    wrap: U8[] //< a line the cell's statements stand inside (empty: none)
+    t: U8[]
+    p: U8[]
+    a: U8[]
+    e: U8[]
+    c: U8[]
+    l: U8[]
+    v: U8[]
+    f: U8[]
+    own: U8[][] //< per column, statements in place of the column's (empty: the column's)
+
+pub const COLUMNS: Column[_] = ::{
+    Column::{ .head = "`x@`", .body = "_w: {T}@ = {P}@" },
+    Column::{ .head = "`x@` as `T$@`", .body = "_w: {T}$@ = {P}@" },
+    Column::{ .head = "`Self@` receiver", .body = "_w: = {P}.peek()" },
+    Column::{ .head = "`Self$@` receiver", .body = "{P}.bump()" },
+    Column::{ .head = "Trait value, reading", .body = "_w: = look_it({P})" },
+    Column::{ .head = "Trait value, writing", .body = "grow_it({P})" },
+    Column::{ .head = "`T$[]::x`", .body = "_w: {E}$[] = {E}$[]::{A}" },
+    Column::{ .head = "Closure capture",
+        .body = "_w: = call_it(fn(a: I32; {C}: {T}): I32 { return a; })" },
+    Column::{ .head = "`for e in x`", .body = "for e in {A}\n    _w: = e" },
+    Column::{ .head = "`x[i] = v`", .body = "{L}[0] = {V}" },
+    Column::{ .head = "`x.f = v`", .body = "{F}" },
+}
+
+priv const NONE: U8[][] = U8[][]::{ "", "", "", "", "", "", "", "", "", "", "" } //<
+    //< no column replaced
+
+priv const ADDR_RO: U8[] = "$@', but got '" //< a read-only `x@` where a `T$@` is expected
+priv const RECV_RO: U8[] = "cannot call a method that takes a writable receiver"
+priv const TRAIT_RO: U8[] = "value of a read-only location"
+priv const MADE: U8[] =
+    "A binding that a 'case', an 'if name: =', a 'for … in' or a 'catch' makes"
+priv const NOT_PLACE: U8[] = "cannot take the address of a call result, literal"
+priv const PACKED: U8[] = "cannot take the address of a field that '#packed' leaves aligned"
+priv const CONST_CAST: U8[] = "cannot cast a 'const' declaration to the mutable slice type"
+priv const CONST_ELEM: U8[] = "cannot write to an element of the read-only array"
+
+// The kinds of place, in the specification's order.
+pub const ROWS: Row[_] = ::{
+    Row::{ .head = "A local with `$` (`$x`)", .cells = "aaaaaaaaaaa", .why = U8[][]::{},
+        .setup = "$x: P = ::{ .n = 1 }\n$xa: P[2] = make_a()\n$xl: = make_l()", .wrap = "",
+        .t = "P", .p = "x", .a = "xa", .e = "P", .c = "x", .l = "xl", .v = "5", .f = "x.n = 5",
+        .own = NONE },
+    Row::{ .head = "A local without `$`", .cells = "arararraarr",
+        .why = U8[][]::{ ADDR_RO, RECV_RO, TRAIT_RO, "cannot cast a read-only array",
+        "cannot assign through a read-only location", "cannot assign to an immutable variable" },
+        .setup = "x: P = ::{ .n = 1 }\nxa: P[2] = make_a()\nxl: = make_l()", .wrap = "", .t = "P",
+        .p = "x", .a = "xa", .e = "P", .c = "x", .l = "xl", .v = "5", .f = "x.n = 5", .own = NONE },
+    Row::{ .head = "A top-level `const`", .cells = "arararraarr",
+        .why = U8[][]::{ ADDR_RO, RECV_RO, TRAIT_RO, CONST_CAST, CONST_ELEM,
+        "cannot assign to an immutable variable" }, .setup = "", .wrap = "", .t = "P", .p = "CP",
+        .a = "CA", .e = "P", .c = "CP", .l = "CA", .v = "P::{ .n = 5 }", .f = "CP.n = 5",
+        .own = NONE },
+    Row::{ .head = "A local `const`", .cells = "arararraarr",
+        .why = U8[][]::{ ADDR_RO, RECV_RO, TRAIT_RO, CONST_CAST, CONST_ELEM,
+        "cannot assign to an immutable variable" },
+        .setup = "const cx: P = ::{ .n = 1 }\nconst cxa: P[2] = ::{ P::{ .n = 1 }, P::{ .n = 2 } }",
+        .wrap = "", .t = "P", .p = "cx", .a = "cxa", .e = "P", .c = "cx", .l = "cxa",
+        .v = "P::{ .n = 5 }", .f = "cx.n = 5", .own = NONE },
+    Row::{ .head = "A string literal", .cells = "rrcrcrr-crr",
+        .why = U8[][]::{ NOT_PLACE, NOT_PLACE, "cannot call a method that writes its receiver",
+        TRAIT_RO, "cannot cast a string literal to the mutable slice type",
+        "cannot write to an element of the read-only slice", "cannot assign to this expression" },
+        .setup = "", .wrap = "", .t = "U8[]", .p = "\"ab\"", .a = "\"ab\"", .e = "U8", .c = "",
+        .l = "\"ab\"", .v = "1", .f = "\"ab\".len = 1", .own = NONE },
+    Row::{ .head = "The target of a `T@` (`p$`)", .cells = "ararar--crr",
+        .why = U8[][]::{ ADDR_RO, RECV_RO, TRAIT_RO, "cannot assign through a read-only location",
+        "cannot write through a read-only pointer" },
+        .setup = "$x0: P = ::{ .n = 1 }\n$xl0: = make_l()\nq: P@ = x0@\nql: List<|I32|>@ = xl0@",
+        .wrap = "", .t = "P", .p = "q$", .a = "ql$", .e = "", .c = "", .l = "ql", .v = "5",
+        .f = "q$.n = 5", .own = NONE },
+    Row::{ .head = "The target of a `T$@` (`p$`)", .cells = "aaaaaa--caa", .why = U8[][]::{},
+        .setup = "$x0: P = ::{ .n = 1 }\n$xl0: = make_l()\nq: P$@ = x0@\nql: List<|I32|>$@ = xl0@",
+        .wrap = "", .t = "P", .p = "q$", .a = "ql$", .e = "", .c = "", .l = "ql", .v = "5",
+        .f = "q$.n = 5", .own = NONE },
+    Row::{ .head = "A binding the compiler makes (a `for` item, a `case` payload, a `catch` name)",
+        .cells = "arararraarr",
+        .why = U8[][]::{ ADDR_RO, MADE, MADE, "cannot cast a read-only array",
+        "cannot assign through a read-only location", MADE }, .setup = "",
+        .wrap = "for it in make_a()", .t = "P", .p = "it", .a = "", .e = "P", .c = "it", .l = "",
+        .v = "", .f = "it.n = 5",
+        .own = U8[][]::{ "", "", "", "", "", "", "for g in make_grid()\n    _w: P$[] = P$[]::g", "",
+        "for g in make_grid()\n    for e in g\n        _w: = e", "for l in make_ls()\n    l[0] = 5",
+        "" } },
+    Row::{ .head = "A field `#packed` leaves under-aligned", .cells = "rrrrrrr-cra",
+        .why = U8[][]::{ PACKED, PACKED, PACKED, PACKED, PACKED, PACKED, PACKED, PACKED },
+        .setup = "$k: K = ::{ .t = 1, .p = P::{ .n = 1 }, .l = make_l() }", .wrap = "", .t = "P",
+        .p = "k.p", .a = "k.a", .e = "P", .c = "", .l = "k.l", .v = "5", .f = "k.p.n = 5",
+        .own = NONE },
+    Row::{ .head = "A temporary (a call's result)", .cells = "rrcrrrr-crr",
+        .why = U8[][]::{ NOT_PLACE, NOT_PLACE, "cannot call a method that writes its receiver",
+        "cannot cast an rvalue", "cannot cast an rvalue", "cannot cast a temporary array",
+        "cannot write to an element of a temporary object", "cannot assign to this expression" },
+        .setup = "", .wrap = "", .t = "P", .p = "make_p()", .a = "make_a()", .e = "P", .c = "",
+        .l = "make_l()", .v = "5", .f = "make_p().n = 5", .own = NONE },
+    Row::{ .head = "A `$` local stored into a local of an outer block", .cells = "aa--rrrr---",
+        .why = U8[][]::{ "cannot store an interface value built from local storage",
+        "cannot store an interface value built from local storage",
+        "cannot store a slice built from local storage", "cannot store a closure" }, .setup = "",
+        .wrap = "", .t = "P", .p = "", .a = "", .e = "", .c = "", .l = "", .v = "", .f = "",
+        .own = U8[][]::{ "$o: P@ = null\nif true\n    $x: P = ::{ .n = 1 }\n    o = x@",
+        "$o: P$@ = null\nif true\n    $x: P = ::{ .n = 1 }\n    o = x@", "", "",
+        "$x0: P = ::{ .n = 1 }\n$o: Look = x0\nif true\n    $x: P = ::{ .n = 1 }\n    o = x",
+        "$x0: P = ::{ .n = 1 }\n$o: Grow = x0\nif true\n    $x: P = ::{ .n = 1 }\n    o = x",
+        "$xa0: P[2] = make_a()\n$o: P$[] = P$[]::xa0\nif true\n    $xa: P[2] = make_a()\n    o = \
+            P$[]::xa",
+        "x0: P = ::{ .n = 1 }\n$o: Callable1<|I32, I32|> = fn(a: I32; x0: P): I32 { return a + \
+            x0.n; }\nif true\n    x: P = ::{ .n = 1 }\n    o = fn(a: I32; x: P): I32 { return a + \
+            x.n; }", "", "", "" } },
+    Row::{ .head = "An element of a `const` array", .cells = "arararr-arr",
+        .why = U8[][]::{ ADDR_RO, RECV_RO, TRAIT_RO, CONST_CAST, CONST_ELEM, CONST_ELEM },
+        .setup = "", .wrap = "", .t = "P", .p = "CA[0]", .a = "CAA[0]", .e = "P", .c = "",
+        .l = "CAA[0]", .v = "P::{ .n = 5 }", .f = "CA[0].n = 5", .own = NONE },
+    Row::{ .head = "A local without `$` holding an `Interior_mutable` value",
+        .cells = "ararar-a--r",
+        .why = U8[][]::{ ADDR_RO, RECV_RO, TRAIT_RO, "cannot assign to an immutable variable" },
+        .setup = "m: M = ::{ .n = 1 }", .wrap = "", .t = "M", .p = "m", .a = "", .e = "", .c = "m",
+        .l = "", .v = "", .f = "m.n = 5", .own = NONE },
+}
+
+// The declarations every cell's program starts with.
+pub const PRELUDE: U8[] =
+    """import "std/ds" { List }
+import "std/thread" { Atomic_sz }
+
+priv struct P
+    n: I32
+
+impl P
+    fn bump(r: Self$@)
+        r.n += 1
+
+    fn peek(r: Self@): I32
+        return r.n
+
+priv struct M
+    n: I32
+    a: Atomic_sz
+
+impl M
+    fn bump(r: Self$@)
+        r.n += 1
+
+    fn peek(r: Self@): I32
+        r.a.store(1)
+        return r.n
+
+impl U8[]
+    fn bump(r: Self$@)
+        r.len -= 1
+
+    fn peek(r: Self@): I32
+        return I32::r.len
+
+priv trait Grow
+    fn grow(r: Self)
+
+impl P: Grow
+    fn grow(r: Self$@)
+        r.n += 1
+
+impl M: Grow
+    fn grow(r: Self$@)
+        r.n += 1
+
+impl U8[]: Grow
+    fn grow(r: Self$@)
+        r.len -= 1
+
+priv trait Look
+    fn look(r: Self): I32
+
+impl P: Look
+    fn look(r: Self@): I32
+        return r.n
+
+impl M: Look
+    fn look(r: Self@): I32
+        return r.n
+
+impl U8[]: Look
+    fn look(r: Self@): I32
+        return I32::r.len
+
+priv fn grow_it(g: Grow)
+    g.grow()
+
+priv fn look_it(g: Look): I32
+    return g.look()
+
+priv fn call_it(c: Callable1<|I32, I32|>): I32
+    return c.call(1)
+
+#packed
+priv struct K
+    t: U8
+    p: P
+    a: P[2]
+    l: List<|I32|>
+
+priv fn make_p(): P
+    return P::{ .n = 1 }
+
+priv fn make_a(): P[2]
+    return ::{ P::{ .n = 1 }, P::{ .n = 2 } }
+
+priv fn make_grid(): P[2][1]
+    return ::{ make_a() }
+
+priv fn make_l(): List<|I32|>
+    $l: = List<|I32|>(null)
+    l.push(1)
+    return l
+
+priv fn make_ls(): List<|I32|>[1]
+    return ::{ make_l() }
+
+priv const CP: P = ::{ .n = 1 }
+priv const CA: P[2] = ::{ P::{ .n = 1 }, P::{ .n = 2 } }
+priv const CAA: P[2][1] = ::{ ::{ P::{ .n = 1 }, P::{ .n = 2 } } }
+
+"""
+
+pub fn word(letter: U8): U8[] //< a cell's letter as the specification's table writes it
+    switch letter
+    case 'a'
+        return "Allowed"
+    case 'r'
+        return "Refused"
+    case 'c'
+        return "Copied"
+    default
+        return "–"
+
+fn applies(row: Row@, col: Sz): Bool //< whether the cell can be written at all
+    return row.cells[col] != '-'
+
+fn statements(row: Row@, col: Sz, arena: Arena$@): U8[] //< the cell's statements, unindented
+    if row.own[col].len > 0
+        return row.own[col]
+    body: = COLUMNS[col].body.replace("{T}", row.t, arena).replace("{P}", row.p, arena)
+        .replace("{A}", row.a, arena).replace("{E}", row.e, arena).replace("{C}", row.c, arena)
+        .replace("{L}", row.l, arena).replace("{V}", row.v, arena).replace("{F}", row.f, arena)
+    if row.wrap.len == 0
+        return body
+    b: = arena.text().s(row.wrap)
+    for line in body.lines(arena)
+        b.s("\n    ").s(line)
+    return b.take()
+
+fn cell_fn(row: Row@, ri: Sz, col: Sz, arena: Arena$@): U8[] //< the cell as one function
+    b: = arena.text().s("fn cell_\{ri\}_\{col\}(): I32\n")
+    for line in row.setup.lines(arena)
+        if line.len > 0
+            b.s("    ").s(line).c('\n')
+    for line in statements(row, col, arena).lines(arena)
+        b.s("    ").s(line).c('\n')
+    return b.s("    return 0\n\n").take()
+
+fn refusal(row: Row@, col: Sz): U8[] //< the part of the message that refuses the cell
+    $k: Sz = 0
+    for i in Range.asc(col)
+        if row.cells[i] == 'r'
+            k += 1
+    return row.why[k] if k < row.why.len else "(no message listed)"

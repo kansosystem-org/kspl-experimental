@@ -609,6 +609,28 @@ impl Ast_node
                 return c
         return null
 
+    fn linkage_of(r: Self$@): Ast_node$@? //<
+        //< The `extern` written before this one definition (a `linkage` node), if any
+        //< It sits where the modifiers go: first among a function's children, or in a variable's
+        //< or constant's `attribute_list` (`process_var_decl_group` in
+        //< `../parse/normalize_decl.kspl`). One before a declaration without a body or a value is
+        //< gone by then: that declaration is a `decl_extern` (`settle_top_level` there).
+        //< Caution: **Do not look into a child declaration** (as `get_attribute` does into a
+        //< `decl_fn_proto`): a trait holds its methods' prototypes, and would read as published.
+        if r == null || r.kind_id == .k_attribute_list
+            return .none
+        $l: = r.find_child(.k_linkage)
+        if l == null
+            attrs: = r.find_child(.k_attribute_list)
+            l = attrs.find_child(.k_linkage) if attrs != null else null
+        return .some(l) if l != null else .none
+
+    fn publishes_to_c(r: Self$@): Bool //<
+        //< Whether C calls this definition by its own name: `extern` written before it
+        //< **Every reader of "published to C" asks here**, never the tree: the C name,
+        //< `KSPL_EXPORT`, a library's interface and the checks at the C boundary follow from it.
+        return r.linkage_of().is_some()
+
     fn find_deep_child(r: Self$@, target_id: base_ast_kinds.Ast_kind): Ast_node$@?
         return r.find_deep_child_impl(target_id, 0)
 

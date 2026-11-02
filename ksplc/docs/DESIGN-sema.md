@@ -49,8 +49,8 @@ flowchart BT
 | `sema/type` | `def`, `env`, `query` | below: `scope` / above: `arc`, `display` |
 | `sema/session` | `c_boundary`, `ctx`, `import_table` | below: `state` / above: `imports`, `pointer` |
 | `sema/decl` | `access`, `eval`, `layout`, `mono`, `mono_name`, `mono_queue`, `mono_target`, `name`, `registry`, `resolve`, `trait_check`, `trait_default` | below: `declare`, `subst` / above: `attrs`, `collect`, `reflect`, `type_check` |
-| `sema/flow` | `field`, `report`, `stmt`, `track` | below: `release` |
-| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `postfix`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `lint_written`, `literal`, `resolve_path` / above: `infer` |
+| `sema/flow` | `field`, `lock`, `report`, `stmt`, `track`, `view` | below: `release` |
+| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `postfix`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `lint_unchecked`, `lint_written`, `literal`, `resolve_path` / above: `infer` |
 
 **To find the edge that breaks a mass, compute the strongly connected components**, not a count of edges against one chosen direction. An import with `_` (importing an extension method) is an edge too.
 
@@ -191,6 +191,8 @@ The record holds the type, what was measured, the number and the node that asked
 | `analyze.kspl` | right after each function's `infer_stmts`. It follows one body's paths as a control-flow graph would (defined variables, use-after-free), once per function. `check_unused_imports` / `check_unused_symbols` are the one global final check, at the end of `infer.run` |
 | `lint_stmt.kspl` / `literal.kspl` | the statement-level lints (`if`, `for`, an accumulating overflow and so on), fired inline during the dispatch in `stmt.kspl` / `infer.kspl` / `switch.kspl` |
 | `lint_written.kspl` | the lints on how declarations are written (`lang.`, a function of one enum, an arena's default). `infer.run` walks the written tree once, before a template's body is dropped |
+| `lint_unchecked.kspl` | [W0602], the places whose memory safety the compiler cannot check. `binary`, `postfix`, `struct_literal`, `call` and `coerce` call it where they have just typed such a shape, so it reads the types they chose |
+| `fixed_answer.kspl` / `value_range.kspl` | a comparison whose answer is fixed before it runs, and what an integer side can hold. `binary.kspl` calls it once both sides are typed, for [W0204]; genc asks the same function and writes the answer in place of the comparison |
 
 #### Immutability marks in a type, and the API that asks
 
@@ -578,6 +580,6 @@ Note: **Dead-code elimination (`lower/prune.kspl`) drops about half of the funct
 
 * `List.at` is inlined, because std's `bounds_panic` stays out of line ("Indexing costs one comparison; the stop is out of line" in [`../../std/docs/DESIGN-core.md`](../../std/docs/DESIGN-core.md)).
 * `is_file_imported` looks up an index (`build_import_reach` in `sema/session/import_table.kspl`) instead of walking every file's import lines.
-* W0601, off by default, asks its level (`Sema_ctx.is_code_off`) before walking each local's type.
+* W0601 and W0602, off by default, ask their level (`Sema_ctx.is_code_off`) before any work of their own.
 
 **Sema is not the only one paying**: what drops has been through Lower too. The reason is "A function or type nothing calls is not emitted" in [`DESIGN-lower.md`](DESIGN-lower.md).

@@ -1,0 +1,224 @@
+//< [W0105] and [W0106]: a lock's pointer used after unlock, and a lock held where a function ends
+//< The dataflow carries two sets for them. `Df_state.unlocked` holds the pointers whose lock is
+//< released on some path; `Df_state.held` holds the locks held on every path. So a loop's back
+//< edge, a branch and each way out are followed as for the other bindings.
+//< **A lock is known by its shape, not by a type name**: `g.lock()` returning a pointer and
+//< `g.unlock()`, with `g` a plain name. A guard type of the same shape counts too.
+//< These are lints (Principle 8). A lock reached through a field, a pointer passed to a call, and
+//< two branches on one condition are not followed.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/flow/track" as sema_flow_track
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/query" as sema_type_query
+import "std/ds" { List }
+import "std/str"
+
+struct Lock_mark //< a declaration or a statement, and the name of what it locks
+    node: Ast_node$@ //<
+        //< a local bound to `g.lock()` (or to a copy of one), or a `g.lock()` statement
+    guard: U8[] //< the g of g.lock()
+
+struct Lock_book //< what is known of one function's locks whatever the path
+    borrows: List<|Lock_mark|> //< each local holding a pointer from `g.lock()`
+    sites: List<|Lock_mark|> //< each statement calling `g.lock()`
+    reported: List<|Ast_node$@|> //< the borrows and sites already reported, so each is once
+    active: Bool //< whether the lints run at all
+
+fn new_book(): Lock_book$@ //< an empty book
+    return base_core.arena
+        .create(Lock_book::{ .borrows = List<|Lock_mark|>(base_core.arena),
+        .sites = List<|Lock_mark|>(base_core.arena),
+        .reported = List<|Ast_node$@|>(base_core.arena),
+        .active = base_core.config.run_lint_checks })
+
+priv fn guard_of(marks: List<|Lock_mark|>$@, node: Ast_node$@): U8[] //<
+    //< the guard a mark names for `node`, or empty
+    for m in marks
+        if m.node == node
+            return m.guard
+    return ""
+
+priv fn note(marks: List<|Lock_mark|>$@, node: Ast_node$@, guard: U8[]) //<
+    //< Adds a mark once: a loop walks its body more than once
+    if guard_of(marks, node).len == 0
+        marks.push(Lock_mark::{ .node = node, .guard = guard })
+
+priv fn names_borrow(c: sema_flow_track.Df_ctx$@, value: Ast_node$@): Ast_node$@? //<
+    //< value itself where it is `g.lock()`, or the declaration of the borrow it names
+    if lock_call_guard(c.sema, value, "lock", true).len > 0
+        return .some(value)
+    if value != null && value.is_path_or_ident() &&
+        guard_of(c.locks.borrows@, value.def_node).len > 0
+        return .some(value.def_node)
+    return .none
+
+impl Lock_book
+    priv fn first_report(r: Self$@, node: Ast_node$@): Bool //< whether node is not yet reported
+        for n in r.reported
+            if n == node
+                return false
+        r.reported.push(node)
+        return true
+
+    priv fn on_lock(r: Self$@, state: sema_flow_track.Df_state$@, guard: U8[], site: Ast_node$@) //<
+        //< `guard.lock()`: its pointers are usable again, and the lock is held
+        note(r.sites@, site, guard)
+        state.held.add(site)
+        for m in r.borrows
+            if m.guard.equals(guard)
+                state.unlocked.remove(m.node)
+
+    priv fn on_unlock(r: Self$@, state: sema_flow_track.Df_state$@, guard: U8[]) //<
+        //< `guard.unlock()`: its pointers are no longer covered, and the lock is not held
+        for m in r.borrows
+            if m.guard.equals(guard)
+                state.unlocked.add(m.node)
+        for m in r.sites
+            if m.guard.equals(guard)
+                state.held.remove(m.node)
+
+fn lock_call_guard(c: Sema_ctx$@, node: Ast_node$@, method_name: U8[], require_ptr: Bool): U8[] //<
+    //< The name of recv, where node is a method_name() call on a plain name recv (or `recv@`)
+    //< require_ptr also requires a pointer return, as `Mutex<|T|>.lock()` gives. It checks
+    //< that shape, not a type name, so a user-defined guard type counts too.
+    if node == null || node.kind_id != .k_expr_postfix
+        return ""
+    op: = node.get_postfix_op()
+    if op == null || !op.text.equals("(")
+        return ""
+    if require_ptr && !c.env.is_pointer(node.type_id)
+        return ""
+    // child[0] is `g.lock`, a method_access or an unmorphed expr_postfix; both getters accept
+    // either.
+    left: = node.get_postfix_receiver()
+    if left == null
+        return ""
+    member: = left.get_postfix_member()
+    if member == null || !member.text.equals(method_name)
+        return ""
+    $recv: = left.get_postfix_receiver()
+    if recv != null && recv.kind_id == .k_expr_postfix &&
+        recv.postfix_op_text().equals("@")
+        recv = recv.get_postfix_receiver()
+    if recv == null || !recv.is_path_or_ident()
+        return ""
+    return recv.get_path_or_ident_name()
+
+impl Ast_node
+    fn df_lock_decl(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< A declaration from `g.lock()` starts a borrow; one copying a borrow (`q: = p`) another
+        book: = c.locks
+        if !book.active
+            return
+        expr: = r.get_var_decl_expr()
+        g: = lock_call_guard(c.sema, expr, "lock", true)
+        if g.len > 0
+            note(book.borrows@, r, g)
+            book.on_lock(state, g, r)
+            return
+        if expr == null || !expr.is_path_or_ident() ||
+            !expr.text.equals(expr.get_path_or_ident_name())
+            return
+        from: = guard_of(book.borrows@, expr.def_node)
+        if from.len == 0
+            return
+        note(book.borrows@, r, from)
+        if state.unlocked.contains(expr.def_node)
+            state.unlocked.add(r)
+        else
+            state.unlocked.remove(r)
+
+    fn df_lock_stmt(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< A statement `g.lock()` or `g.unlock()`, or one storing a borrow beyond this function
+        book: = c.locks
+        if !book.active
+            return
+        left: = r.get_assign_left()
+        right: = r.get_assign_right()
+        op: = r.get_assign_op()
+        if right == null || op == null
+            g: = lock_call_guard(c.sema, left, "lock", true)
+            if g.len > 0
+                book.on_lock(state, g, r)
+            u: = lock_call_guard(c.sema, left, "unlock", false)
+            if u.len > 0
+                book.on_unlock(state, u)
+            return
+        if !op.text.equals("=") || left.is_bare_name_target() ||
+            names_borrow(c, right).is_none()
+            return
+        // A store into a parameter's or a global's memory outlives the function, and the lock.
+        root: = left.get_assign_target_def().unwrap_or(null)
+        if root == null || (root.kind_id != .k_fn_param && root.is_tracked_local(c))
+            return
+        if book.first_report(r)
+            c.sema
+                .warn(r,
+                "[W0105] This stores a pointer obtained from Mutex.lock() where it outlives this \
+                    function. Code that reads it later uses the data with the lock released (a data \
+                    race). Store a copy of the value, made while holding the lock.")
+
+impl sema_flow_track.Df_ctx
+    fn report_unlocked_use(r: Self$@, state: sema_flow_track.Df_state$@, def: Ast_node$@,
+        use: Ast_node$@) //<
+            //< [W0105] A read of a borrow whose lock is released on some path to it
+        book: = r.locks
+        if !book.active || !state.unlocked.contains(def) || !book.first_report(def)
+            return
+        id: = def.get_var_decl_id()
+        name: = id.text if id != null else ""
+        g: = guard_of(book.borrows@, def)
+        r.sema.clear_scratch()
+            .s("[W0105] Local '\{name\}' borrows into '\{g\}' via .lock(), but is used here after \
+                '\{g\}.unlock()'. The lock is no longer held, so another thread can access the data \
+                at the same time. Use it before unlock(), or lock again first.")
+        r.sema.warn(use, r.sema.scratch.slice())
+
+    fn report_lock_exit(r: Self$@, exit: Ast_node$@, after_defers: sema_flow_track.Df_state$@) //<
+        //< At a `return`, `throw` or `!`: [W0105] for a borrow returned, [W0106] for a lock held
+        //< `after_defers` is the state once the exit has run its defer bodies.
+        book: = r.locks
+        if !book.active
+            return
+        // A returned borrow already reported as used after unlock is not reported twice.
+        if exit.kind_id == .k_stmt_return
+            b: = names_borrow(r, exit.get_return_expr()).unwrap_or(null)
+            if b != null && book.first_report(b)
+                r.sema
+                    .warn(exit,
+                    "[W0105] Returning a pointer obtained from Mutex.lock() lets the caller use the \
+                        data with the lock released (a data race). Copy the needed value while \
+                        holding the lock. Return that copy.")
+        word: =
+            ("return" if exit.kind_id == .k_stmt_return
+            else ("throw" if exit.kind_id == .k_stmt_throw else "!"))
+        for site in after_defers.held.items
+            if !book.first_report(site)
+                continue
+            g: = guard_of(book.sites@, site)
+            r.sema.clear_scratch()
+                .s("[W0106] '\{g\}' is locked here but not unlocked before the '\{word\}' at line \
+                    \{r.sema.line_of(exit.loc)\} leaves the function. Every thread that later takes \
+                    the lock will block forever. Call '\{g\}.unlock()' before it, or register \
+                    'defer \{g\}.unlock()' right after locking to release it on every way out.")
+            r.sema.warn(site, r.sema.scratch.slice())
+
+    fn report_lock_end(r: Self$@, state: sema_flow_track.Df_state$@) //<
+        //< [W0106] A lock still held where the body's end is reached
+        book: = r.locks
+        if !book.active || !state.reachable
+            return
+        for site in state.held.items
+            if !book.first_report(site)
+                continue
+            g: = guard_of(book.sites@, site)
+            r.sema.clear_scratch()
+                .s("[W0106] '\{g\}' is locked here but not unlocked before the function ends. Every \
+                    thread that later takes the lock will block forever. Call '\{g\}.unlock()' when \
+                    done, or register 'defer \{g\}.unlock()' right after locking to release it on \
+                    every way out.")
+            r.sema.warn(site, r.sema.scratch.slice())

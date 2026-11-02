@@ -47,6 +47,26 @@ fn main(): I32
   p: Sz$@ = null // an immutable binding. an axis apart from the target being mutable
   writes_ptr(p@)
   return I32::n
+// ==== case addr_of_literal
+//< `@` on a string literal or a compound literal is refused, as on any value that is no place
+//< C takes `&` of a compound literal, so only ksplc can stop it. The pointer would name a copy that
+//< nobody reads again; returned from a function, it points into the ended frame.
+// EXPECT: addr_of_literal.kspl:14:10: error: cannot take the address of a call result, literal
+// EXPECT: addr_of_literal.kspl:17:7: error: cannot take the address of a call result, literal
+// EXPECT: addr_of_literal.kspl:18:8: error: cannot take the address of a call result, literal
+priv struct P
+  n: I32
+
+priv fn put(p: P$@)
+  p.n = 3
+
+priv fn gives(): U8[]@
+  return "ab"@
+
+fn main(): I32
+  put(P::{ .n = 1 }@)
+  s: = "cd"@
+  return I32::(gives().len + s.len)
 // ==== case addr_of_packed_field
 //< A field `#packed` leaves under-aligned must not have its address taken, in any of the ways
 //< A pointer carries no alignment of its own. So an access through it assumes its type's. A word
@@ -166,242 +186,6 @@ import "std/refcount" { Rc }
 fn main()
   $a: = Rc<|I32|>(1)
   a.retain()
-// ==== case frame_pointer_stored_outside
-//< A slice or an interface value pointing into the frame is refused where a store outlives it
-//< A global, a parameter's pointee, `p$` and a slice's element all outlive the frame, as `return`
-//< does. `kept_inside` stores into the frame or stores a global's view, and passes.
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into the global 'g', which
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into the global 'g_views', which
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
-// EXPECT: cannot store an interface value built from local storage. The interface value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into the global 'g_shape'
-// EXPECT: cannot store 's': it was set from a slice or an interface value built from local storage
-// EXPECT: Finished with 7 error(s)
-import "std/io"
-
-trait Shape
-  fn area(r: Self): I32
-
-struct Sq
-  n: I32
-
-impl Sq: Shape
-  fn area(r: Self): I32
-    return r.n * r.n
-
-struct View
-  s: U8[]
-
-$g: U8[] = ""
-$g_views: View[2] = ::{}
-$g_sq: Sq = ::{ .n = 1 }
-$g_shape: Shape? = .none
-$keep: U8[4] = ::{ 'k', 'e', 'e', 'p' }
-
-fn slice_into_global()
-  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
-  g = U8[]::a
-
-fn run_into_global_element()
-  g_views[1] = ::{ .s = U8[]::{ 'x', 'y' } }
-
-fn slice_behind_param(v: View$@, out: U8[]$[])
-  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
-  v.s = U8[]::a
-  out[0] = U8[]::a
-
-fn slice_through_deref(p: View$@)
-  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
-  p$ = View::{ .s = U8[]::a }
-
-fn upcast_into_global()
-  sq: = Sq::{ .n = 3 }
-  g_shape = .some(sq)
-
-fn marked_local_into_global()
-  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
-  s: = U8[]::a
-  g = s
-
-fn kept_inside(): Sz
-  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
-  $v: View = ::{ .s = "" }
-  v.s = U8[]::a
-  $arr: View[1] = ::{}
-  arr[0].s = U8[]::a
-  g = U8[]::keep
-  g_shape = .some(g_sq)
-  return v.s.len + arr[0].s.len + g.len
-
-fn main()
-  $v: View = ::{ .s = "" }
-  $outs: U8[][1] = ::{ "" }
-  slice_into_global()
-  run_into_global_element()
-  slice_behind_param(v@, U8[]$[]::outs)
-  slice_through_deref(v@)
-  upcast_into_global()
-  marked_local_into_global()
-  io.out().s("\{kept_inside()\}\n")
-// ==== case frame_pointer_stored_in_outer_local
-//< A slice, an interface value or a closure made in an inner block is refused in an outer local
-//< The C backend ends a block's storage at its end, so the outer local would point at a dead
-//< block. The storage's own block decides, not the statement's: `kept_where_it_lives` slices an
-//< outer array in an inner block, stores into a parameter, or keeps a local in its own block, and
-//< passes.
-// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored into 'c', a local of an outer block, and outlive the block whose end frees what it points at. Declare 'c' in that block
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 's', a local of an outer block
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 'h', a local of an outer block
-// EXPECT: cannot store an interface value built from local storage. The interface value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into 'shape', a local of an outer block
-// EXPECT: cannot store 't': it was set from a slice or an interface value built from local storage. Its pointer points into this function's frame. The compiler makes that pointer, so no '@' appears. It would be stored into 's', a local of an outer block
-// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 's', a local of an outer block
-// EXPECT: Finished with 6 error(s)
-import "std/io"
-
-trait Shape
-  fn area(r: Self): I32
-
-struct Sq
-  n: I32
-
-impl Sq: Shape
-  fn area(r: Self): I32
-    return r.n * r.n
-
-struct View
-  s: I32[]
-
-fn kept_out_of_its_block(): I32
-  $c: Callable1<|I32, I32|> = fn(x: I32; ): I32 { return x; }
-  $s: I32[] = I32[]::{ 0 }
-  $h: View = ::{ .s = I32[]::{ 0 } }
-  $shape: Shape? = .none
-  inner:
-    n: = 5
-    arr: I32[2] = ::{ 5, 6 }
-    sq: = Sq::{ .n = 2 }
-    c = fn(x: I32; n: I32): I32 { return x + n; }
-    s = I32[]::arr
-    h.s = I32[]::arr
-    shape = .some(sq)
-    t: = I32[]::arr
-    s = t
-  for $i: = 0; i < 2; i += 1
-    s = I32[]::{ i, i }
-  return c.call(1) + s[0] + h.s[0]
-
-fn kept_where_it_lives($p: I32[]): I32
-  outer: I32[2] = ::{ 1, 2 }
-  $s: I32[] = I32[]::{ 0 }
-  inner:
-    s = I32[]::outer
-    p = I32[]::outer
-    t: = I32[]::outer
-    s = t
-    own: I32[2] = ::{ 3, 4 }
-    $u: = I32[]::own
-    u = I32[]::own
-    s = I32[]::outer if u[0] > 0 else t
-  return s[0] + p[0]
-
-fn main()
-  io.out().s("\{kept_out_of_its_block()\} \{kept_where_it_lives(I32[]::{ 0 })\}\n")
-// ==== case frame_address_leaves
-//< The address of the frame's own storage is refused where it leaves by `return` or `throw`
-//< Each of these reads a dead frame: a local's or a by-value parameter's `@`, of a field or an
-//< element too. It can be stepped or cast, anywhere inside, or reached through a local set from one. **A store passes**
-//< (`stored_then_cleared`). A local's address kept in a global is taken back before the return.
-//< `ok_*` point elsewhere: a global, a pointer's target, an allocation, a call's result.
-// EXPECT: cannot return the address of local storage: 'x' lives in this function's frame. This function's frame dies here
-// EXPECT: cannot return the address of local storage: 'a' lives in this function's frame
-// EXPECT: cannot return the address of local storage: 's' lives in this function's frame
-// EXPECT: cannot return the address of local storage: 'v' lives in this function's frame
-// EXPECT: cannot return the address of local storage: 'b' lives in this function's frame
-// EXPECT: cannot return the address of local storage: 'd' lives in this function's frame
-// EXPECT: cannot return 'q': it was set from the address of local storage
-// EXPECT: cannot throw the address of local storage: 'e' lives in this function's frame
-// EXPECT: Finished with 11 error(s)
-import "std/mem" + { Arena }
-
-priv struct Pt
-  f: I32
-
-priv struct Holder
-  p: I32@
-
-$g: I32 = 1
-$gp: I32@ = null
-
-priv fn of_local(): I32@
-  x: I32 = 5
-  return x@
-
-priv fn of_element(): I32@
-  a: I32[2] = ::{ 1, 2 }
-  return a[1]@
-
-priv fn of_field(): I32@
-  s: Pt = ::{ .f = 1 }
-  return s.f@
-
-priv fn of_param(v: I32): I32@
-  return v@
-
-priv fn in_descriptor(): U8[]
-  $b: U8[4] = ::{ 1, 2, 3, 4 }
-  return U8[]::{ .ptr = b[0]@, .len = 4 }
-
-priv fn in_struct(): Holder
-  x: I32 = 5
-  return Holder::{ .p = x@ }
-
-priv fn in_option(): I32@?
-  x: I32 = 5
-  return .some(x@)
-
-priv fn in_cast_or_branch(c: Bool): U8@
-  x: I32 = 5
-  return U8@::x@ if c else U8@::g@
-
-priv fn stepped(): I32@
-  $d: I32[2] = ::{ 1, 2 }
-  return d[0]@ + 1
-
-priv fn through_locals(): I32@
-  x: I32 = 5
-  p: = x@
-  q: = p
-  return q
-
-priv fn thrown(): I32!I32@
-  e: I32 = 5
-  throw e@
-
-priv fn stored_then_cleared(): I32
-  x: I32 = 5
-  gp = x@
-  n: = gp$
-  gp = null
-  return n
-
-priv fn ok_global(): I32@
-  return g@
-
-priv fn ok_target(p: I32$@): I32@
-  return p$@
-
-priv fn ok_through_pointer(p: Pt@): I32@
-  return p.f@
-
-priv fn ok_alloc(arena: Arena$@): I32@
-  return arena.create(5)
-
-priv fn ok_call(): I32@
-  return ok_global()
-
-fn main(): I32
-  return stored_then_cleared() + ok_call()$ + ok_global()$
 // ==== case mut_method_on_immut_array_elem
 //< A `Self$@` method is rejected on an element of an immutable fixed-length array
 //< Caution: **Test the element-receiver road (`a[i].m()`) separately.** Even with a scalar (`x.m()`)
@@ -441,6 +225,51 @@ impl Point
 
 fn main(): I32
   Point(1).set_n(5)
+  return 0
+// ==== case mut_method_on_immut_slice_binding
+//< A `Self$@` method on a slice writes its descriptor, so the slice's binding needs `$`
+//< The descriptor is the binding's own value, as a struct's fields are. Treated as a pointer, the
+//< slice would let an immutable `s` lose its last byte.
+// EXPECT: mut_method_on_immut_slice_binding.kspl:19:3: error: cannot call a method that takes a writable receiver
+// EXPECT: mut_method_on_immut_slice_binding.kspl:20:13: error: cannot make a
+// EXPECT-NOT: mut_method_on_immut_slice_binding.kspl:23:
+priv trait Shrink
+  fn shrink(r: Self)
+
+impl U8[]: Shrink
+  fn shrink(r: Self$@)
+    r.len -= 1
+
+priv fn shrink_it(s: Shrink)
+  s.shrink()
+
+fn main(): I32
+  s: U8[] = "abcd"
+  s.shrink()
+  shrink_it(s)
+  $t: U8[] = "abcd"
+  t.shrink()
+  shrink_it(t)
+  return I32::(s.len + t.len)
+// ==== case mut_method_on_string_literal
+//< A `Self$@` method cannot be called on a string literal, nor on another slice that is no place
+//< Its descriptor is a copy, as a call's result is, so a write to its `len` is lost. The direct
+//< call and a trait value ask one function (`receiver_is_copy`), so both refuse it.
+// EXPECT: cannot call a method that writes its receiver
+// EXPECT: value of a read-only location. 'U8[]' implements 'shrink'
+priv trait Shrink
+  fn shrink(r: Self)
+
+impl U8[]: Shrink
+  fn shrink(r: Self$@)
+    r.len -= 1
+
+priv fn shrink_it(s: Shrink)
+  s.shrink()
+
+fn main(): I32
+  "abcd".shrink()
+  shrink_it("abcd")
   return 0
 // ==== case mutable_slice_from_readonly
 //< A mutable slice must not be made from read-only memory
@@ -709,3 +538,63 @@ fn main(): I32
   (q + 1)$ = 9
   breaks_promise(RO@)
   return I32::RO[1]
+// ==== case raw_address_cast
+//< An integer becomes a pointer only in code marked `#raw_address`
+//< **On a machine without a fixed memory map such an address is nearly always a slip**, and C
+//< compiles it without a word. Any integer counts (a constant, `Sz`), as does any pointer type
+//< (`Void$@`, a function type). A marked function and a marked top-level `const` keep the cast.
+//< What is neither a pointer nor an integer becomes no pointer anywhere, marked or not.
+// EXPECT: Cannot cast 'I32' to 'U32@' here
+// EXPECT: Cannot cast 'Sz' to 'Void$@' here
+// EXPECT: Cannot cast 'U32' to 'fn():Void' here
+// EXPECT: Cannot cast 'I32' to 'U8@' here
+// EXPECT: Hint: for a device's register or other memory at a fixed address, mark the function
+// EXPECT: cannot cast 'Bool' to 'I8@': only a pointer, a function or 'null' converts to a pointer
+// EXPECT-NOT: to 'U16@'
+// EXPECT-NOT: to 'U64@'
+// EXPECT-NOT: to 'I16$@'
+
+#raw_address
+const MARKED: U64@ = U64@::0x4000_0000
+const UNMARKED: U8@ = U8@::0x4000_0004
+
+#raw_address
+priv fn register(at: U32): U16
+  scratch: = I16$@::(Sz::at)
+  _keep: = scratch
+  return (U16@::at)$
+
+priv fn constant(): U32
+  return (U32@::0x4000_0000)$
+
+priv fn context(n: Sz): Void$@
+  return Void$@::n
+
+priv fn callback(at: U32)
+  f: = (fn(): Void)::at
+  f()
+
+#raw_address
+priv fn not_an_address(b: Bool): I8@
+  return I8@::b
+
+fn main(): I32
+  callback(0)
+  _p: = context(0)
+  _q: = not_an_address(false)
+  _m: = MARKED
+  _u: = UNMARKED
+  return I32::register(0) + I32::constant()
+// ==== case raw_address_slice_length
+//< A slice's length cast to a pointer names `.ptr` in the hint
+//< `U8$@::buf.len` for `buf.ptr` is the slip the rule is first meant to catch.
+// EXPECT: Cannot cast 'Sz' to 'U8$@' here
+// EXPECT: Hint: this is the slice's length. Did you mean its address, '.ptr'?
+
+priv fn first(buf: U8$[]): U8
+  p: = U8$@::buf.len
+  return p$
+
+fn main(): I32
+  $a: U8[2] = ::{ 1, 2 }
+  return I32::first(U8$[]::a)

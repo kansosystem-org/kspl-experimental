@@ -11,6 +11,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/dot" as sema_body_dot
 import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
 import "ksplc/sema/body/type_call" as sema_body_type_call
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
@@ -206,10 +207,12 @@ priv fn infer_cast_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, as_t
         !sema_type_env.is_unknown(target_id)
         refuse_aggregate_cast(c, node, as_target_id, target_id)
         refuse_fn_type_cast(c, node, as_target_id, target_id)
+        check_pointer_cast_source(c, node, as_target_id, target_id)
         check_slice_cast_source(c, node, as_target_id, target_id)
         check_scalar_cast_source(c, node, as_target_id, target_id)
         check_enum_cast(c, node, as_target_id, target_id)
         check_float_cast(c, node, as_target_id)
+        sema_body_lint_unchecked.note_cast(c, node, as_target_id, target_id)
     return as_target_id
 
 priv fn check_float_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32) //<
@@ -366,8 +369,10 @@ fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, targ
                 returns a copy, so '@' would yield the address of a temporary")
         throw .analysis_failed
     // The general form: `@` on a non-place (a return value, a literal, a computed result) becomes
-    // `&temporary` in C. The user then gets a **raw C compiler error** instead of KSPL's.
-    if c.env.is_unaddressable_value(left)
+    // `&temporary` in C. The user then gets a **raw C compiler error** instead of KSPL's. **A
+    // string or compound literal is no place either**, though C takes `&` of it: the pointer
+    // would name a copy the caller never reads again, gone when the block ends.
+    if c.env.is_unaddressable_value(left) || !c.env.is_place_expr(left)
         c.err(node,
             "cannot take the address of a call result, literal, or computed value; '@' would yield \
                 the address of a temporary. Bind it first (`x: = ...;`) and take the address of \
@@ -545,6 +550,56 @@ priv fn refuse_fn_type_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, 
             c.err(node, c.scratch.slice())
         case .none {}
     case .none {}
+
+priv fn check_pointer_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_id: I32) //<
+    //< Checks what a cast to a pointer or a function type makes the address from
+    //< A pointer, a function and `null` convert. **An integer converts only in code marked
+    //< `#raw_address`**: such an address is real only on a machine with a fixed memory map (a
+    //< device register, a memory-mapped flash). Elsewhere the cast is nearly always a slip that
+    //< compiles silently: `U8$@::buf.len` meant `buf.ptr`. Any integer counts, `Sz` and a
+    //< constant too. Nothing else holds an address: a `Bool` or an enum would pass C silently, and
+    //< a float or an aggregate fails there far from the KSPL source.
+    if sema_type_env.is_unknown(src_id) || sema_type_env.is_unknown(as_target_id)
+        return
+    if !c.env.is_pointer(as_target_id) && !c.env.is_fn_ptr(as_target_id)
+        return
+    if c.env.is_pointer(src_id) || c.env.is_fn_ptr(src_id)
+        return
+    src_shown: = c.env.display(src_id)
+    dst_shown: = c.env.display(as_target_id)
+    if !c.env.is_integer(src_id)
+        c.clear_scratch()
+            .s("cannot cast '\{src_shown\}' to '\{dst_shown\}': only a pointer, a function or \
+                'null' converts to a pointer, and an integer does in a function marked \
+                '#raw_address'")
+        c.err(node, c.scratch.slice())
+        return
+    if c.fn_ctx.raw_address
+        return
+    w: = c.clear_scratch()
+        .s("an integer becomes a pointer only in a function marked '#raw_address'. Cannot cast \
+            '\{src_shown\}' to '\{dst_shown\}' here")
+    if names_slice_length(c, node.get_postfix_receiver())
+        w.s("\n  Hint: this is the slice's length. Did you mean its address, '.ptr'?")
+    else
+        w
+            .s("\n  Hint: for a device's register or other memory at a fixed address, mark the \
+                function that makes the address '#raw_address', or a top-level 'const' or 'var' \
+                that holds it. Write 'null' for no address")
+    c.err(node, c.scratch.slice())
+
+priv fn names_slice_length(c: Sema_ctx$@, operand: Ast_node$@): Bool //<
+    //< Whether the operand reads a slice's or an array's `.len`
+    n: = operand
+    if n == null || n.kind_id != .k_expr_postfix || n.children.len < 3 ||
+        !n.postfix_op_text().equals(".")
+        return false
+    member: = n.get_child(2)
+    recv: = n.get_postfix_receiver()
+    if member == null || recv == null || !member.text.equals("len")
+        return false
+    holder: = c.env.receiver_base_id(recv.type_id)
+    return c.env.is_slice(holder) || c.env.is_array(holder)
 
 priv fn same_signature(c: Sema_ctx$@, a: Fn_sig$@, b: Fn_sig$@): Bool //<
     //< Whether two function types take and give the same types

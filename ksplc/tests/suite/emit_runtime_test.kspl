@@ -96,6 +96,33 @@ priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
         .s("byte mode at \{place(binary_at, arena)\}, kspl_main at \{place(call_at, arena)\}; ")
         .s("every one must be found, in that order").take())
 
+priv fn line_before(body: U8[], opens: U8[], arena: Arena$@): U8[] //<
+    //< The last `#line` before the definition that starts with `opens`, or ""
+    //< A definition opens its body on that line; the declaration half's line does not.
+    $last: U8[] = ""
+    for line in body.lines(arena)
+        if line.starts_with("#line ")
+            last = line
+        else if line.starts_with(opens) && line.find_char('{').is_some()
+            return last
+    return ""
+
+priv fn check_names_its_files(tag: U8[], gen: Text, arena: Arena$@) //<
+    //< A runtime function's place is named by the runtime file that holds it
+    //< **The runtime follows the program's last `#line`.** Without one of its own, a sanitizer's
+    //< report named a runtime function by the program's last file, at a line past its end.
+    if !gen.ok
+        return
+    floor_file: = "freestanding.c" if tag.equals("freestanding") else "hosted_thread.c"
+    for i in Range.asc(2)
+        opens: = "KSPL_LINK void kspl_trace_record(" if i == 0 else "KSPL_LINK Sz kspl_stack_floor("
+        file: = "core.c" if i == 0 else floor_file
+        named: = line_before(gen.body, opens, arena)
+        quoted: = arena.text().s("\"ksplc/gen/runtime/\{file\}\"").take()
+        verdict.check(arena.text().s("under \{tag\}, `\{opens\}` is placed in \{file\}").take(),
+            named.starts_with("#line ") && named.ends_with(quoted),
+            arena.text().s("the last #line before it: \{named\}").take())
+
 priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
     //< It reads the generated C made under the same settings
     src: = fs.join(dir, arena.text().s("rt_prog_\{tag\}.kspl").take(), arena)
@@ -262,6 +289,7 @@ fn main(): I32
         if !gen.ok
             continue
         check_startup_calls(tag, gen, arena)
+        check_names_its_files(tag, gen, arena)
         // Caution: Check **the position** rather than "it contains". Otherwise the declaration half
         // moving after the generated body, or the definition half slipping into the middle, goes
         // unnoticed. In the distributed runtime the halves are contiguous, the version symbol's

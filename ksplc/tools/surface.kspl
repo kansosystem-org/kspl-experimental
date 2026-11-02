@@ -85,11 +85,13 @@ priv fn flat(src: U8[], from: Sz, to: Sz): U8[] //< it folds the text onto one l
 
 priv fn vis_of(item: Ast_node$@, src: U8[]): U8[] //<
     //< It reads the visibility word from a `top_level_item`'s / `decl_impl`'s children
-    //< Empty where none is written ("visible only within the package", not API).
+    //< Empty where none is written ("visible only within the package", not API). **An
+    //< `extern` after it is kept with it** (`pub extern`): C's name is API too.
+    $vis: U8[] = ""
     for c in item.children
-        if c.kind_id == .k_visibility
-            return flat(src, c.loc.offset, end_of(c))
-    return ""
+        if c.kind_id == .k_visibility || c.kind_id == .k_linkage
+            vis = joined(vis, flat(src, c.loc.offset, end_of(c)))
+    return vis
 
 priv fn attrs_of(item: Ast_node$@, src: U8[]): U8[] //<
     //< The spelling of the attributes put on a `top_level_item`
@@ -103,13 +105,12 @@ priv fn decl_of(item: Ast_node$@): Ast_node$@ //<
     //< The declaration a `top_level_item` holds
     //< Not `unwrap_top_level`, which on a raw tree reads `visibility` as the declaration.
     $cur: = item
-    for cur != null &&
-        (cur.kind_id == .k_top_level_item || cur.kind_id == .k_decl_top ||
-        cur.kind_id == .k_decl_extern)
+    for cur != null && (cur.kind_id == .k_top_level_item || cur.kind_id == .k_decl_top)
         $next: Ast_node$@ = null
         for c in cur.children
             if c.kind_id != .k_keyword && c.kind_id != .k_literal && c.kind_id != .k_attribute &&
-                c.kind_id != .k_attribute_list && c.kind_id != .k_visibility
+                c.kind_id != .k_attribute_list && c.kind_id != .k_visibility &&
+                c.kind_id != .k_linkage
                 next = c
                 break
         cur = next
@@ -217,7 +218,7 @@ priv fn published(vis: U8[]): Bool //<
     //< [`../base/core.kspl`](../base/core.kspl)).
     //< Caution: **Ask it here and nowhere else.** The word is read in three places (a top-level
     //< declaration, a field, a method), and one missed would record a type but not its fields.
-    return base_core.config.surface_all || vis.equals("pub")
+    return base_core.config.surface_all || vis.equals("pub") || vis.starts_with("pub ")
 
 priv fn methods_into(lines: List<|Line|>$@, owner: U8[], n: Ast_node$@, src: U8[], pub_only: Bool,
     outer: U8[]) //<
@@ -290,36 +291,22 @@ priv fn add_impl(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //
             doc_of(src, n.loc.offset, body_brace(src, n)))
     methods_into(lines, owner, n, src, true, held.attrs)
 
-priv fn add_extern(lines: List<|Line|>$@, outer: U8[], n: Ast_node$@, src: U8[]) //<
-    //< The published items of an `extern "C"` block
-    //< **A `pub` C function reaches every package** like any other `pub`, so the record holds it.
-    //< The block's own attributes (outer) go into each key, as an `impl`'s do (`methods_into`).
-    for e in n.children
-        if e.kind_id != .k_decl_extern
-            continue
-        d: = decl_of(e)
-        vis: = vis_of(e, src)
-        if d == null || !published(vis)
-            continue
-        attrs: = joined(outer, attrs_of(e, src))
-        if d.kind_id == .k_decl_fn_proto
-            add_fn(lines, "", Held::{ .attrs = attrs, .vis = vis }, d, src)
-        else
-            add(lines, key_of("", name_of(d), attrs),
-                joined(vis, flat(src, d.loc.offset, end_of(d))),
-                doc_of(src, d.loc.offset, body_brace(src, d)))
-
-priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@) //<
+priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@, outer: U8[]) //<
     //< It adds one top-level entry to the record
+    //< **A `#cfg` group's attributes (outer) go into each item's key**, as an `impl`'s do
+    //< (`methods_into`): two groups can declare the same name under two flags.
     n: = decl_of(item)
     if n == null
         return
-    held: = Held::{ .attrs = attrs_of(item, src), .vis = vis_of(item, src) }
+    if n.kind_id == .k_decl_group
+        group_attrs: = joined(outer, attrs_of(n, src))
+        for inner in n.children
+            if inner.kind_id == .k_top_level_item
+                collect_item(inner, src, lines, group_attrs)
+        return
+    held: = Held::{ .attrs = joined(outer, attrs_of(item, src)), .vis = vis_of(item, src) }
     if n.kind_id == .k_decl_impl
         add_impl(lines, held, n, src)
-        return
-    if n.kind_id == .k_decl_extern_block
-        add_extern(lines, held.attrs, n, src)
         return
     if !published(held.vis)
         return
@@ -369,7 +356,7 @@ fn surface_lines(raw_root: Ast_node$@, src: U8[]): List<|Line|> //<
         if said.len > 0
             add(lines@, FILE_KEY, "file", said)
         for item in raw_root.children
-            collect_item(item, src, lines@)
+            collect_item(item, src, lines@, "")
     return lines.order_by(fn(a: Line@, b: Line@; ): I32 {
         return a.key.compare(b.key);
     }, base_core.arena)

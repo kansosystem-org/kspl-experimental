@@ -93,8 +93,8 @@ priv struct Fmt_worker_args
     worker_arena: Arena$@ //< this worker's own (no other thread touches it)
     results: Rec$@ //< shared, but written only at the indices assigned
 
-#export
-fn fmt_worker_entry(arg: Fmt_worker_args$@): Void$@ //< one worker's share of the formatting
+extern fn fmt_worker_entry(arg: Fmt_worker_args$@): Void$@ //<
+    //< one worker's share of the formatting
     n: = arg.files.len
     for $i: Sz = arg.worker_id; i < n; i += arg.num_workers
         rel: = arg.files[i]
@@ -118,7 +118,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
     results: = Rec$@::arena.alloc(n * sizeof(Rec))
 
     worker_arenas: = List<|Arena$@|>.create(arena)
-    threads: = List<|thread.Thread$@|>.create(arena)
+    threads: = List<|thread.Thread|>.create(arena)
     for w in Range.asc(num_workers)
         wa: = mem.alloc_as<|Fmt_worker_args|>()
         wa.files = files
@@ -132,8 +132,8 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
         t: = thread.Thread.spawn<|Fmt_worker_args|>(fmt_worker_entry, wa)
             catch panic("failed to spawn fmt worker thread")
         threads.push(t)
-    for t in threads
-        t.join_and_free()
+    for i in Range.asc(threads.len)
+        threads[i].free()
 
     // `code` lives in each worker's arena, so it is copied into the caller's arena before those are
     // freed (`path` already lives with `files`).

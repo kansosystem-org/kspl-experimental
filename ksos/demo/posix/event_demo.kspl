@@ -21,9 +21,10 @@ priv const LISTEN_WANTED: U32[3] = ::{ 0x8, 0x18, 0x8 } // bit3; bit3 or bit4; b
 $g_heard: U32[3]
 $tcb_listen: Task[3]
 $stack_listen: U8[196608] // 3 * 65536
+$listen_index: Sz[3] = ::{ 0, 1, 2 } // what each listener's argument points at
 
 fn listener(arg: Void$@): Void //< waits once on its bits with clear-on-exit, and keeps the flags
-    k: = Sz::arg
+    k: = (Sz@::arg)$
     if k == 2
         g_heard[k] = g_ev.wait(LISTEN_WANTED[k], .all, true)
     else
@@ -65,7 +66,7 @@ fn main(): I32
     tcb_set.create(U8$[]::stack_set, setter, null, 1, "setter")
     for k in Range.asc(3)
         stack: = U8$[]::{ .ptr = stack_listen[0]@ + k * 65536, .len = 65536 }
-        tcb_listen[k].create(stack, listener, Void$@::k, 3, "listen")
+        tcb_listen[k].create(stack, listener, listen_index[k]@, 3, "listen")
     task.start_scheduler()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
     verdict.start("[ksos] one set with clear-on-exit releases every waiter it satisfies")

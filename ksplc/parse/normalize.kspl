@@ -109,7 +109,9 @@ impl Ast_node
         // nothing.
         if r.kind_id == .k_attribute_list
             return true
-        if r.kind_id == .k_visibility
+        // `extern` before a definition goes with it, as `pub` does (`linkage_of` in
+        // base/ast.kspl reads it there).
+        if r.kind_id == .k_visibility || r.kind_id == .k_linkage
             return true
         return ((r.text.equals("pub") || r.text.equals("priv"))
             if r.kind_id == .k_keyword || r.kind_id == .k_literal else false)
@@ -199,7 +201,7 @@ impl Ast_node
             .k_stmt_switch, .k_expr_args, .k_identifier_list, .k_type_gen_params, .k_type_args,
             .k_expr_compound, .k_expr_field_init, .k_param_list, .k_fn_param, .k_type_constraint,
             .k_stmt_block, .k_struct_field, .k_enum_variant, .k_enum_field, .k_string,
-            .k_string_expr, .k_attribute_list, .k_attribute, .k_capture_list
+            .k_string_expr, .k_attribute_list, .k_attribute, .k_capture_list, .k_decl_group
             return true
         default
             return false
@@ -580,6 +582,10 @@ impl Ast_node
         r.flatten_var_decl_lists()
         if r.kind_id == .k_stmt_switch
             r.normalize_switch_stmt()
+        // **After the variables are split one per name**: a variable's initializer tells whether
+        // `extern` brings it in.
+        if r.kind_id == .k_program || r.kind_id == .k_decl_group
+            r.settle_top_level()
 
         return r
 

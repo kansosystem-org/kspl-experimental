@@ -8,7 +8,9 @@
 //< **Both families are mandatory where `KANSO_REQUIRE_BOTH_CC=1`** (`mk/test.mk` sets it on Linux,
 //< whose image holds gcc and clang). Elsewhere a missing one gives a `SKIP` line, never a silent
 //< pass.
+//< Its failure case: `tests/suite/c_warnings_test.kspl#WARNED_C`, C each compiler must warn about.
 import "ksplc/tests/support/harness" as ksplc_harness
+import "ksplc/tests/support/harness_build"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -27,15 +29,14 @@ priv const CANDIDATES: U8[][_] = ::{ "clang", "gcc", "cc" } //<
 
 priv const FAMILIES: U8[][_] = ::{ "clang", "gcc" } //< the families both of which must be found
 
-// **Do not leave `-Wextra` and `-O2` out.** Without them -Wsign-compare and
-// -Wstrict-aliasing (inactive without optimisation) are invisible, and both catch wrong answers.
-// `-Wmissing-field-initializers` is left out: genc's `{0}` / `{{0}}` is correct, the rest zeroed.
-// `-Wstrict-prototypes` is in neither: a `f()` declares no prototype, so a call goes unchecked.
-// `-pedantic` holds it to ISO C99, `-Woverlength-strings` aside ("The generated C is ISO C99, not
-// GNU C" in ksplc/docs/DESIGN-backends.md).
-priv const CFLAGS: U8[][_] = ::{ "-std=c99", "-pedantic", "-Wall", "-Wextra",
-    "-Wno-missing-field-initializers", "-Wno-overlength-strings", "-Wstrict-prototypes", "-O2",
-    "-fsyntax-only" }
+// **Do not leave `-O2` out.** -Wstrict-aliasing is inactive without optimisation, and it catches
+// wrong answers. The warnings themselves are `harness_build.WARN_CFLAGS`, which the random
+// equivalence suite builds with too.
+priv const LEVEL_CFLAGS: U8[][_] = ::{ "-O2", "-fsyntax-only" }
+
+priv const WARNED_C: U8[] = "int kspl_planted(void) { int unused; return 0; }\n" //<
+    //< C each compiler warns about under `WARN_CFLAGS` at `-O2`: the check's own failure case
+    //< **A warning that is never read would pass every generated file**, so this one must be.
 
 priv struct Target //< the inputs that produce the generated C
     //< Caution: **Compile freestanding with `-ffreestanding`.** Without it the compiler treats
@@ -169,6 +170,18 @@ fn main(): I32
     verdict.check("the search for a built-in slice type can fire",
         builtin_slice("a kspl_I32_Slice b").equals("kspl_I32_Slice") &&
         builtin_slice("kspl_U8_Slice Slice_I32 std_ds_List_Slice_I32 Const_U8_Slice").len == 0, "")
+    planted: = fs.join(dir, "planted.c", arena)
+    io.write_file(planted, WARNED_C) catch
+        verdict.check("C written to warn can be written", false, planted)
+    for cc in ccs
+        $argv: = List<|U8[]|>(arena)
+        argv.push(cc.name)
+        argv.push_all(U8[][]::harness_build.WARN_CFLAGS)
+        argv.push_all(U8[][]::LEVEL_CFLAGS)
+        argv.push(planted)
+        out: = ksplc_harness.run(argv.slice())
+        verdict.check(arena.text().s("\{cc.name\} warns about C written to warn").take(),
+            warning_lines(out.out, arena).len > 0, out.out)
     io.out().s("# warnings in the generated C\n")
     for t in targets(arena)
         gen: = fs.join(dir, arena.text().s("\{t.slot\}.c").take(), arena)
@@ -188,7 +201,8 @@ fn main(): I32
             // No `-I` is needed: ksplc embeds the runtime headers that the generated C `#include`s.
             $argv: = List<|U8[]|>(arena)
             argv.push(cc.name)
-            argv.push_all(U8[][]::CFLAGS)
+            argv.push_all(U8[][]::harness_build.WARN_CFLAGS)
+            argv.push_all(U8[][]::LEVEL_CFLAGS)
             argv.push_all(t.cc_flags)
             argv.push(gen)
             out: = ksplc_harness.run(argv.slice())

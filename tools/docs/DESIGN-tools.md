@@ -185,7 +185,9 @@ Why that one named page file gives the client no more reach is "Where it listens
 
 **How it is installed and checked:**
 
-* **The file association points at the built executable** (`out/ksmd.exe`, built by `make ksmd`), which finds kssrv beside itself. Started by a double-click, `ksplc run ...` would run in home or `/`, where neither `std/` nor `out/` can be found.
+* **The file association points at the built executable** (`out/ksmd.exe`, built by `make ksmd`, or the copy `make install` puts in), which finds kssrv beside itself. Started by a double-click, `ksplc run ...` would run in home or `/`, where neither `std/` nor `out/` can be found.
+* **It looks beside its own executable first, as the OS names it** (`sys.exe_path`), then beside argv[0], then in `out/`. Started through PATH, argv[0] holds the bare name, and through the link `make install` puts in `bin/`, it names the link's folder.
+* **`make install` copies the folder in the shape of `out/`**: the launcher, kssrv, and the page under `ksmd/web/`. So one search finds both, and no second layout is kept in step. It stops the installed servers first and replaces the folder whole, as `make` does before it rebuilds them.
 * **The opener exits once the URL is passed to a browser, and the server stays** for the next opening. Only with `--show` does it wait and pass the server's output through (`tools/tests/ksmd_launch.kspl` uses that).
 * **The document to double-click is an example the tree keeps**, [`ksmd/examples/overview.ksmd`](../../ksmd/examples/overview.ksmd), which `make ksmd` names. It holds a table that calculates and an include, so the opened page shows both working.
 
@@ -251,7 +253,7 @@ ksmd needs a workspace that holds the document's includes, and one port for it o
 | **Only `.ksmd-workspace` marks a workspace; a `.git` folder does not** | A repository at the home folder would then serve every file there to whoever holds the token |
 | **`--workspace` exists beside the mark** | A folder can be read-only, or shared with others |
 | **A path holding `..` is refused, not folded away.** `.` and doubled separators drop, and a Windows drive letter is upper-cased | The port follows from the path's text, so one folder needs one spelling. Windows ignores a drive letter's case. Behind a link, `a/link/..` is another folder than `a` |
-| **A document that is a link, or lies under a folder that is one, is refused before anything starts** | The server opens no link inside its root (`fs.stays_under`), and the opener asks the same function |
+| **A document that is a link, or lies under a folder that is one, is refused before anything starts** | The server opens no link inside its root (`fs.join_under`), and the opener asks the same link check (`fs.stays_under`) |
 | **A name not ending in `.ksmd` is refused, in any case** | Windows and the Linux MIME globs both hand `NOTES.KSMD` to the association |
 
 **Which port it gets:**

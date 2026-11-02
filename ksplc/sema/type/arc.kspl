@@ -6,6 +6,7 @@
 //< `ksplc/docs/DESIGN-lower.md`). **A caller of these methods must import this file** (importing
 //< `sema/type/env` alone does not add them to Env).
 import "ksplc/base/core" as _base_core // `fqn_head` / `fqn_last`
+import "ksplc/sema/type/display" as _sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List, Map }
@@ -17,8 +18,8 @@ import "std/sys"
 priv const MEMO_NO: I32 = 1 //< decided: it does not
 priv const MEMO_YES: I32 = 2 //< decided: it does
 
-priv const MAX_MOVE_ONLY_DEPTH: Sz = 1000 //<
-    //< The safety limit on the recursion depth of is_move_only's structural derivation
+priv const MAX_MARKER_DEPTH: Sz = 1000 //<
+    //< The safety limit on the recursion depth of a structural marker's derivation (derives_marker)
     //< Memoization collapses repeat visits, so the depth is the chain of *distinct* embedded types
     //< (struct S1{f:S2}, struct S2{f:S3}, ...). No node is available for a diagnostic, so, like
     //< max_mangle_depth, it stops with io.err() + sys.exit(1).
@@ -28,13 +29,25 @@ priv const ARC_TRAIT_FQN: U8[] = "std.lang.Ref_counted" //<
     //< Each means this declaration alone, not a same-named other (see is_arc_type).
 priv const MOVE_ONLY_TRAIT_FQN: U8[] = "std.lang.Move_only"
 priv const MANUAL_FREE_TRAIT_FQN: U8[] = "std.lang.Manual_free"
+priv const INTERIOR_MUTABLE_TRAIT_FQN: U8[] = "std.lang.Interior_mutable"
+priv const RC_FQN: U8[] = "std.refcount.Rc" //< the counts one thread keeps (is_one_thread_count)
+priv const WEAK_RC_FQN: U8[] = "std.refcount.Weak_rc"
+
+priv enum Part_test //< what derives_marker looks for in a type and in the parts it holds
+    marker(fqn: U8[]) //< an impl of this structural marker; a view borrows, so it is not walked
+    one_thread_count //< an `Rc` or a `Weak_rc`, behind a pointer or a slice too
 
 fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< The known trait (listed above) that trait_fqn only shares a name with, or empty
     //< Such a trait is a different declaration with the same name.
-    //< Returns empty if there are none. **Only these three are looked at**: a same-named operator
-    //< trait errors on its own, but these three, matched by FQN, would silently stop working.
-    known: U8[][3] = ::{ ARC_TRAIT_FQN, MOVE_ONLY_TRAIT_FQN, MANUAL_FREE_TRAIT_FQN }
+    //< Returns empty if there are none. **Only these four are looked at**: a same-named operator
+    //< trait errors on its own, but these four, matched by FQN, would silently stop working.
+    known: U8[][4] = ::{
+        ARC_TRAIT_FQN,
+        MOVE_ONLY_TRAIT_FQN,
+        MANUAL_FREE_TRAIT_FQN,
+        INTERIOR_MUTABLE_TRAIT_FQN,
+    }
     own_simple: = trait_fqn.fqn_last()
     for k in known
         if trait_fqn.equals(k)
@@ -157,33 +170,101 @@ impl sema_type_env.Env
     fn is_move_only(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is Move_only (implicit copying forbidden)
         //< True where there is an explicit impl for `std.lang.Move_only`. Where there is none it
-        //< is derived from what the type owns (derives_move_only below).
+        //< is derived from what the type owns (derives_marker below).
         defer $memo: = Map<|I32, I32|>(null)
         defer $resolving: = List<|I32|>(null)
-        return r.derives_move_only(target_id, memo@, resolving@, 0)
+        return r.derives_marker(target_id, .marker(MOVE_ONLY_TRAIT_FQN), memo@, resolving@, 0)
 
-    priv fn derives_move_only(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
-        resolving: List<|I32|>$@, depth: Sz): Bool //<
-            //< Whether target_id is Move_only by its own impl or by what it owns
+    fn is_interior_mutable(r: Self$@, target_id: I32): Bool //<
+        //< Whether target_id changes through a read-only pointer (a lock, an atomic)
+        //< True where there is an explicit impl for `std.lang.Interior_mutable`, or where the type
+        //< owns such a part, as for Move_only.
+        defer $memo: = Map<|I32, I32|>(null)
+        defer $resolving: = List<|I32|>(null)
+        return r.derives_marker(target_id, .marker(INTERIOR_MUTABLE_TRAIT_FQN), memo@, resolving@, 0)
+
+    fn one_thread_count_path(r: Self$@, target_id: I32, w: str.Str_builder$@): Sz //<
+        //< How many types lead from target_id to an `Rc` or a `Weak_rc`, written into w; 0 for none
+        //< The walk is derives_marker's, through pointers and slices too: what a thread is handed
+        //< behind a pointer is shared as much as what it holds. w gets each type from target_id
+        //< down to the count, joined by " > ".
+        defer $memo: = Map<|I32, I32|>(null)
+        defer $resolving: = List<|I32|>(null)
+        if !r.derives_marker(target_id, .one_thread_count, memo@, resolving@, 0)
+            return 0
+        // Down the parts the walk decided, skipping a type already named, which a cycle reaches.
+        defer $named: = List<|I32|>(null)
+        defer $parts: = List<|I32|>(null)
+        $cur: = target_id
+        for _step in Range.asc(MAX_MARKER_DEPTH)
+            if named.len > 0
+                w.s(" > ")
+            w.s("'").s(r.display(cur)).s("'")
+            if r.is_one_thread_count(cur)
+                break
+            named.push(cur)
+            parts.clear()
+            r.held_parts(cur, .one_thread_count, parts@)
+            $next: = 0
+            for part in parts
+                if !named.contains(part) &&
+                    (r.is_one_thread_count(part) ||
+                    memo.get(part).unwrap_or(0) == MEMO_YES)
+                    next = part
+                    break
+            if next == 0
+                break
+            cur = next
+        return named.len + 1
+
+    priv fn is_one_thread_count(r: Self$@, type_id: I32): Bool //<
+        //< Whether type_id is `std/refcount`'s `Rc` or `Weak_rc`, whose count only one thread keeps
+        base: = r.instance_base(r.get_clean_real_type(type_id))
+        return base.equals(RC_FQN) || base.equals(WEAK_RC_FQN)
+
+    priv fn held_parts(r: Self$@, target_id: I32, test: Part_test, out: List<|I32|>$@) //<
+        //< The parts derives_marker walks under target_id for test: owned_parts, and for
+        //< .one_thread_count what a pointer points at and a slice's element as well
+        switch test
+        case .marker
+            r.owned_parts(r.get_real_type(target_id), out)
+        case .one_thread_count
+            elem: = r.slice_struct_elem(target_id)
+            if r.is_pointer(target_id)
+                out.push(r.strip_ptr(target_id))
+            else if elem != 0
+                out.push(elem)
+            else
+                r.owned_parts(r.get_clean_real_type(target_id), out)
+
+    priv fn derives_marker(r: Self$@, target_id: I32, test: Part_test,
+        memo: Map<|I32, I32|>$@, resolving: List<|I32|>$@, depth: Sz): Bool //<
+            //< Whether target_id meets test by itself or by a part it holds (held_parts)
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
             //< `Move_only`" in docs/SPEC-programming-language.md). **Keep the memo and break cycles
-            //< with resolving**, as type_has_arc_content_impl does.
+            //< with resolving**, as type_has_arc_content_impl does. One memo serves one test.
         cached: = memo.get(target_id).unwrap_or(0)
         if cached == MEMO_NO
             return false
         if cached == MEMO_YES
             return true
-        // A pointer or a slice is a borrowed view; copying it adds no release duty.
-        if r.is_pointer(target_id) || r.is_slice(target_id)
-            memo.set(target_id, MEMO_NO)
-            return false
-        if r.has_implemented_trait_fqn(target_id, MOVE_ONLY_TRAIT_FQN)
+        $hit: = false
+        switch test
+        case .marker(fqn)
+            // A pointer or a slice is a borrowed view: it owns no part, so it carries no marker.
+            if r.is_pointer(target_id) || r.is_slice(target_id)
+                memo.set(target_id, MEMO_NO)
+                return false
+            hit = r.has_implemented_trait_fqn(target_id, fqn)
+        case .one_thread_count
+            hit = r.is_one_thread_count(target_id)
+        if hit
             memo.set(target_id, MEMO_YES)
             return true
         for seen_id in resolving
             if seen_id == target_id
                 return false
-        if depth >= MAX_MOVE_ONLY_DEPTH
+        if depth >= MAX_MARKER_DEPTH
             io.err()
                 .s("\nfatal: value nesting too deep while deriving a structural marker. A recursive \
                     chain of embedded values may be unbounded.\n")
@@ -192,9 +273,9 @@ impl sema_type_env.Env
 
         $derived: = false
         defer $parts: = List<|I32|>(null)
-        r.owned_parts(r.get_real_type(target_id), parts@)
+        r.held_parts(target_id, test, parts@)
         for part in parts
-            if r.derives_move_only(part, memo, resolving, depth + 1)
+            if r.derives_marker(part, test, memo, resolving, depth + 1)
                 derived = true
                 break
         resolving.len -= 1

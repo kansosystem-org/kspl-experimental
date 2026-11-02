@@ -21,7 +21,7 @@ flowchart LR
 
 **The LLVM backend is a mirror, not an exit**: shipping uses C99 alone (Principle 6).
 
-**Only the C runtime holds the bodies of `kspl_*` symbols.** The *runtime* is the C code every program needs besides its own (files, sockets, threads, the clock and the like), in `gen/runtime/`. The IR only emits `declare`s from `std/`'s `extern "C"` declarations, and is linked with the runtime `ksplc emit-runtime` writes (`STAGE1_RT` under `make LLVM=1`; `tests/support/harness_build.kspl` for the tests). The IR's own share is only the `main` entry point and what is `static inline` on the C side: the bounds, division and shift checks. `make test-conventions`'s "there is no `kspl_*` body on LLVM's side" holds this. Both backends spell the entry point's work from `gen/entry.kspl` ("What the two generators share: the decisions, not the spelling").
+**Only the C runtime holds the bodies of `kspl_*` symbols.** The *runtime* is the C code every program needs besides its own (files, sockets, threads, the clock and the like), in `gen/runtime/`. The IR only emits `declare`s from `std/`'s `extern` declarations, and is linked with the runtime `ksplc emit-runtime` writes (`STAGE1_RT` under `make LLVM=1`; `tests/support/harness_build.kspl` for the tests). The IR's own share is only the `main` entry point and what is `static inline` on the C side: the bounds, division and shift checks. `make test-conventions`'s "there is no `kspl_*` body on LLVM's side" holds this. Both backends spell the entry point's work from `gen/entry.kspl` ("What the two generators share: the decisions, not the spelling").
 
 **An LLVM artifact is not shipped, because it carries no debug information** ("Genllvm (LLVM IR): why the structure differs, and managing SSA"). Shipping one needs debug information first.
 
@@ -138,7 +138,7 @@ Caution: **Do not put the body half before the generated body.** It includes eve
 
 #### The names a declaration-only header `#define`s
 
-`std/` calls libc directly from the generated body, and genc emits no `extern "C"` prototypes for it (`write_decls` in `gen/runtime.kspl`; a build with `-Werror=implicit-function-declaration` confirms it). **So the headers' object-form macros collide with the same names written in KSPL** where those come out as plain C names. Such names are a local, a parameter, a struct field, an enum's payload, a trait's method and a closure's capture. (An object-form macro is a `#define NAME …` with no parameter list, so every later `NAME` is replaced.) The user gets a C compiler error far from the cause (`member reference base type 'int' is not a structure`).
+`std/` calls libc directly from the generated body, and genc emits no `extern` prototypes for it (`write_decls` in `gen/runtime.kspl`; a build with `-Werror=implicit-function-declaration` confirms it). **So the headers' object-form macros collide with the same names written in KSPL** where those come out as plain C names. Such names are a local, a parameter, a struct field, an enum's payload, a trait's method and a closure's capture. (An object-form macro is a `#define NAME …` with no parameter list, so every later `NAME` is replaced.) The user gets a C compiler error far from the cause (`member reference base type 'int' is not a structure`).
 
 **Each such name gets exactly one of three covers.**
 
@@ -160,14 +160,14 @@ Caution: **Do not keep the list by hand**: which names collide changes with the 
 
 **A program's symbols take the linkage their visibility gives**: `priv` is `static` and the rest external, so `--split`'s units reach each other (`has_file_local_c_symbol` in `gen/c/decl.kspl`). The runtime's `kspl_*` are external, since one program holds one runtime.
 
-**A library's are all `static` but its `#export`s** (`--library`; what can be relied on is [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). "A KSPL library crosses as C, holding its own runtime" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) says why a library takes a private copy. It also says why `static` beats a hidden visibility or an export list. This section holds how the generated C and the runtime make it so.
+**A library's are all `static` but its `extern` definitions** (`--library`; what can be relied on is [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). "A KSPL library crosses as C, holding its own runtime" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) says why a library takes a private copy. It also says why `static` beats a hidden visibility or an export list. This section holds how the generated C and the runtime make it so.
 
 | What | How it becomes `static` |
 | :-- | :-- |
-| genc's functions | `has_file_local_c_symbol` answers yes for everything but an `#export` |
+| genc's functions | `has_file_local_c_symbol` answers yes for everything but an `extern` definition |
 | genc's variables, constants and embeds | `global_word` in `gen/c/ctx.kspl`; the forward declaration is a `static` tentative definition, written once the types are complete (C refuses an incomplete type there) |
 | the runtime's functions and data | `KSPL_LINK` on each declaration and definition in `gen/runtime/`, which is `static` where the generated C defined `KSPL_LIBRARY` before the preamble (`run` in `gen/c/root.kspl`) |
-| std's `extern "C"` declarations of them | `KSPL_LINK` too (`extern_word` in `gen/c/decl.kspl`): C refuses a `static` definition after an `extern` declaration |
+| std's `extern` declarations of them | `KSPL_LINK` too (`extern_word` in `gen/c/decl.kspl`): C refuses a `static` definition after an `extern` declaration |
 
 Caution: **Put `KSPL_LINK` on every runtime definition with external linkage.** One left out stays visible, and two libraries collide on it or bind to each other's copy. `tests/suite/ship_test.kspl` lists what a library's object leaves visible.
 
@@ -215,11 +215,16 @@ Caution: **Do not drop `--freestanding`, `-Wextra` or `-O2`.** Each catches case
 
 Only `-Wmissing-field-initializers` and `-Woverlength-strings` are left out. The `{0}` genc writes is correct C, and 4095 bytes in one string literal is a floor a C99 compiler must take, not a rule. An `embed`'s text goes out as one literal, a line of it per line of the file.
 
-**Correct meaning is not enough**; Genc avoids two sources of warnings:
+**Correct meaning is not enough**; Genc avoids six sources of warnings:
 
 * **Parentheses** (`needs_warning_silencing_parens` in `ksplc/gen/c/expr.kspl`): C's precedence makes some optional, but compilers warn on pairs that "look confusing".
   * Caution: **Do not test on clang alone.** gcc also warns where clang stays quiet: an addition, subtraction or comparison as an operand of a bitwise operator.
 * **Braces in a zero initializer** (`emit_zero_init` in `ksplc/gen/c/ctx.kspl`): when the first element is an aggregate, the braces must nest once per level. Too few gives `-Wmissing-braces`, too many `-Wbraced-scalar-init`. An array is a `{ T data[N]; }` struct, so one array makes two levels.
+* **A `!` in front of `& | ^` or a comparison keeps its parentheses** (`emit_binary_body` in `ksplc/gen/c/expr.kspl`). gcc reads `!a | b` as a slip for `||` (-Wparentheses), and `!a == b` as one for `!(a == b)` (-Wlogical-not-parentheses).
+* **A `Bool` becomes a number through `?:`** (`emit_as_cast` in `ksplc/gen/c/expr_postfix.kspl`). gcc reads `(I32)(x == 3)` as still a truth value, and warns about a `~` on it (-Wbool-operation).
+* **A comparison whose answer is fixed is written as its answer** (`fixed_comparison` in `ksplc/sema/body/fixed_answer.kspl`, written by `emit_fixed_answer` in `ksplc/gen/c/expr.kspl`). The language accepts `x == x`, `u >= 0U32` or `(x & 1) == 2`, since a generic's body meets them innocently. What a side can hold is `value_range.kspl`'s: it follows casts and `& | ^ + - *` as gcc's own folding does, since gcc warns wherever it can tell. A range must keep every value the side can take, or genc would write a wrong answer; `make test-random-equiv` compares it against LLVM, which writes the comparison. Two tests of one value against constants under `&&` or `||` count too, where their answers together are fixed (`x < 3 || x > 1`). Seen by C, they draw -Wtautological-compare, -Wtype-limits or clang's -Wtautological-overlap-compare about the program's own logic. So genc writes `((void)(x), true)`: each side still runs and stays read, or C would warn that a variable is unused. A place assigned to itself (`x = x`, `b |= b`) is written as `(void)(x)`, against clang's -Wself-assign.
+  * Caution: **Ask the one function the lint asks** ([W0204] in [`SPEC-diagnostics.md`](SPEC-diagnostics.md)). Two lists of what is fixed would drift, and a shape on one alone reaches the user as C's warning.
+* **`^` between two constants is written as its value** (`emit_binary_expr` in `ksplc/gen/c/expr.kspl`). gcc and clang read `10 ^ 2` or `2 ^ 8` as a power written by mistake (-Wxor-used-as-pow). The lint reports the shape where the numbers are written in decimal ([W0215]). genc folds every `^` of two constants, which is exact, so no spelling reaches C.
 
 **Aliases become C `typedef`s.** Their forward declarations (`emit_fwd_aliases`) come before the array and compound-type definitions, and among themselves go in dependency order (the work-list scheme of `emit_top_level_vars`). Dependencies are compared by type id, since `emit_resolved_type` builds the name from the `type_id` (`type_mentions_waiting` sees through pointers, slices, arrays, marks and aliases). A function-pointer right-hand side (`fn(I32): I32`) puts the alias's name in the middle of the C declaration (`typedef void (*Name)(int32_t);`), so `emit_c_decl` detects a `type_fn_sig` and uses its own walk and format.
 
@@ -317,7 +322,7 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 | A `for … in` over a slice | The element read as `(coll.ptr + idx)$`; the loop condition already bounds the index | `build_index_loop` in `sema/body/for_in.kspl` | about 1% |
 
 * **genllvm keeps the expanded `&&` / `||`**: it has no short-circuit of its own.
-* **A string slice whose address is taken stays a compound literal** (`emit_address_of` in `gen/c/expr.kspl`). The constant is `static const`, so `&` on it would hand a `Self$@` receiver read-only memory. A method that changes the descriptor would then crash.
+* **A string slice whose address is taken stays a compound literal** (`emit_address_of` in `gen/c/expr.kspl`). The constant is `static const`, and a trait value's object is a `void*` that would drop the qualifier. Sema refuses each write through such an address, since a literal is no place. The fresh compound literal also keeps a missed write out of `.rodata`.
 * Names took 78% of the seed's bytes, yet shortening them saved no compile time: the C compiler reads a name once.
 
 ### Genllvm (LLVM IR): why the structure differs, and managing SSA
@@ -382,7 +387,7 @@ Bounds, division, shift and enum-tag checks keep their comparisons inline, so ea
 * Every `ret` goes through `Genllvm_ctx.emit_ret_value`. A path that writes a `ret` directly mixes a value-returning `ret` into an sret function and breaks the IR.
 * `is_llvm_aggregate`'s branches must match the type-string output one to one. Kept as two tables, the ABI would drift silently ("the type is i64, yet it is treated as an aggregate").
 
-**It stops at the C boundary**: with `#export` the C compiler classifies, so the LLVM backend cannot pass any struct across by value. The reason is "The FFI boundary check looks inside the type" in docs/DESIGN-programming-language.md.
+**It stops at the C boundary**: with `extern` the C compiler classifies, so the LLVM backend cannot pass any struct across by value. The reason is "The FFI boundary check looks inside the type" in docs/DESIGN-programming-language.md.
 
 **Do not give one option two meanings**: the thunks, vtable constants and ARC drop glue that `lower` synthesizes already carry their final names.
 
@@ -448,7 +453,7 @@ The regression test is `tests/prog/equiv.kspl`: a `const`, a mutable and a `null
    * Do not map `#inline` to `alwaysinline`: that forces inlining even at `-O0`, so debugging behaves differently from genc's output.
 2. **Declare it single-backend and make it a compile error**, only where there is no portable counterpart. `#interrupt` is a per-machine calling convention with no LLVM IR form. An `#align(N)` placed directly on a function or a variable reaches C as an expression genc copies, so no constant exists to pass to LLVM. On a struct, sema folds it into `Struct_def.align_attr`, and it works on both backends. `attr_rule` in `sema/decl/attrs.kspl` marks these two C-only, which makes them an error under `--to=llvm`.
 
-**Every new attribute takes one of the two ways.** `#cfg` and `#link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `extern` block names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`. The regression tests are the cases `attr_interrupt_llvm_backend` and `attr_fn_align_llvm_backend` in `tests/negative/attr.kspl` (both with `// ARGS: --to=llvm`).
+**Every new attribute takes one of the two ways.** `#cfg` and `##link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `##link` names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`. The regression tests are the cases `attr_interrupt_llvm_backend` and `attr_fn_align_llvm_backend` in `tests/negative/attr.kspl` (both with `// ARGS: --to=llvm`).
 
 **The LLVM backend's missing debug information is a gap of the same kind.** It stays open because `-g` is a build flag, not an attribute: there is nothing to refuse.
 
@@ -523,3 +528,15 @@ Caution: **Do not write a figure here.** It depends on the core count, `CFLAGS` 
 Caution: **After adding a backend, do not stop at "it can compile itself": run the whole run-time suite on that backend too.** `make LLVM=1 debug` (the run-time tests through LLVM) fails at once on such a defect.
 
 For example, genllvm's type mapping applies `strip_const` before judging, since LLVM IR has no const. A path that bypasses it names a type that is never declared, a hole genc's string type names do not have. **Each backend breaks differently, so one passing proves nothing.**
+
+### Generated programs hold the backends equal (`make test-random-equiv`)
+
+**A hand-written program checks only the shapes its writer thought of.** The largest group of ksplc's past faults were programs it accepted and a C compiler or LLVM then refused, warned about, or ran differently. So `tests/suite/random_equiv_test.kspl` writes programs from seeds and builds each one six ways: clang and gcc at `-O0` and `-O2`, and the LLVM IR at the same two levels.
+
+* **Each program is valid by construction** (`tests/support/random_prog.kspl`, its expressions in `random_prog_expr.kspl`). The generator tracks each value's type, so every operation is one the language accepts. A divisor is made odd, a shift amount masked into range, an index taken modulo its length, and a loop bounded. A loop counter sits near an edge of its type, and its step may need a call worked out first.
+* **The oracle is agreement, not a computed answer.** Every build must print the same and end with the same code. ksplc must say nothing about the program. The C builds use `harness_build.WARN_CFLAGS`, the warnings `make test-c-warnings` holds the tree to, with `-Werror`. One build of each family also traps on C's undefined arithmetic.
+* **About one program in three is written to stop.** It ends on a division by zero, a shift past the width, an index past the length or a cast to no tag. Every build must then stop with the same `panic:` line.
+* **A statement's condition goes through the prelude's `gid`, whose value ksplc cannot see.** A constant one (`if true` before `continue`) leaves code after it that never runs, which ksplc rightly reports. A comparison whose answer is fixed (`x == x`, `0U8 > x`) is written openly elsewhere: genc writes its answer, so C has nothing to warn about.
+* **A shape that a build fails on today is left out by default and named** (`random_prog.OPEN_FINDINGS`). The suite's `open` option writes it too, so a campaign can check whether it still fails. gcc's -Woverflow is one: it warns about narrow constants that fit, so gcc's builds turn it off unless `open` is set.
+
+**The default seeds take a little over a minute on four cores.** `RANDOM_EQUIV_ARGS` in `ksplc/Makefile` hands the suite another count and first seed, for a longer run by hand. Its failure case is `PLANTED` in the suite: runs that differ in one line or in the exit code alone, which the verdict must flag.

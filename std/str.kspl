@@ -29,6 +29,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn new(): Str_builder //< an empty builder, which has allocated no memory yet
         return Str_builder::{ .ptr = null, .len = 0, .cap = 0 }
 
+    #ends_views
     pub fn escape_and_append( //< writes a JSON string's contents; the caller writes the quotes
         //< Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC
         //< 8259); escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for
@@ -82,10 +83,12 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
             i += 1
         return r
 
+    #ends_views
     pub fn clear(r: Self$@): Self$@ //< empties it, keeping the memory already allocated
         r.len = 0
         return r
 
+    #ends_views
     pub fn drop_prefix( //< drops the leading bytes and moves the rest to the start
         //< For removing a message already read from a receive buffer, which can hold the start of
         //< the next one. It frees no memory: a long-lived buffer stays at the size of the longest
@@ -103,6 +106,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         r.len = rest
         return r
 
+    #ends_views
     #inline
     pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
         //< `s` can be a view of this builder's own bytes (`b.s(b.slice())`).
@@ -117,6 +121,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
             r.len += s.len
         return r
 
+    #ends_views
     #inline
     pub fn c(r: Self$@, c: U8): Self$@ //< writes one byte, growing if needed
         r.reserve(r.len + 1)
@@ -128,6 +133,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
         return r
 
+    #ends_views
     pub fn reserve( //< makes room in advance, so a long write does not grow step by step
         r: Self$@,
         new_cap: Sz, //< how many bytes must fit; a smaller value does nothing
@@ -166,7 +172,8 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         base: = Sz::r.ptr
         return r.cap > 0 && s.len > 0 && at < base + r.cap && base < at + s.len
 
-    pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until it grows
+    #gives_view
+    pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until the next change
         return U8$[]::{ .ptr = r.ptr, .len = r.len }
 
 impl Str_builder: Formattable //< so it can be used inside an interpolation
@@ -444,6 +451,7 @@ impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
         return r
 
 impl Arena_text
+    #gives_view
     pub fn take(r: Self$@): U8[] //< copies the text into the arena and frees the builder
         //< On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`.
         out: = U8[]::r.arena.dup_str(r.b.slice())
@@ -454,6 +462,7 @@ impl Arena_text
         return out
 
 impl Arena
+    #gives_view
     pub fn text(r: Self$@): Arena_text$@ //< a builder for one string in this arena
         //< The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a
         //< place). With a null arena both are on the heap, and `take` frees the builder.

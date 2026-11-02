@@ -1,0 +1,70 @@
+//< [W0602]: the places whose memory safety the compiler cannot check
+//< Each case below is compiled alone, as the file its head names.
+// ==== case unchecked_off_by_default
+//< With nothing turning it on, the code lists nothing, though the file holds every kind
+// EXPECT-NOT: [W0602]
+// EXPECT: 0 error(s), 0 warning(s)
+pub fn walk(p: U8$@, ro: U8@): U8
+  (p + 1)$ = 7
+  w: = U8$@::ro
+  s: = U8[]::{ .ptr = ro, .len = 4 }
+  return w$ + s[0]
+// ==== case unchecked_every_kind
+//< Turned on in the file, each kind is listed once, at its place
+//< One cast is one place: the cast that removes read-only is listed for that alone.
+// EXPECT: :22:10: warning: [W0602] An integer becomes a pointer: the compiler does not check that there is memory at that address
+// EXPECT: :25:4: warning: [W0602] Pointer arithmetic: the compiler does not check that the address stays inside the memory it points into
+// EXPECT: :26:8: warning: [W0602] Pointer arithmetic
+// EXPECT: :27:8: warning: [W0602] A cast removes read-only: the compiler does not check that the memory can be written
+// EXPECT: :28:9: warning: [W0602] A cast removes read-only
+// EXPECT: :29:11: warning: [W0602] A slice built by hand: the compiler does not check its length against the memory behind '.ptr'
+// EXPECT: :30:3: warning: [W0602] A call into C with a pointer or a size: the compiler does not check the pointer or the size against the memory behind it
+// EXPECT: :31:3: warning: [W0602] A byte range given as an address and a size: the compiler does not check the size against the memory at the address
+// EXPECT: :32:12: warning: [W0602] A pointer cast to another pointee type: the compiler does not check the memory's size or alignment for that type
+// EXPECT: :33:17: warning: [W0602] A 'Void$@' taken as another pointer type
+// EXPECT: :34:12: warning: [W0602] A writable byte view of a typed value: the compiler does not check that the bytes written make a valid value of that type
+// EXPECT: 0 error(s), 11 warning(s)
+##lint(W0602 = on)
+import "std/mem"
+
+extern fn fill_bytes(dst: Void$@, n: Sz)
+
+#raw_address
+pub fn device(): U32$@
+  return U32$@::0x4000_0000
+
+pub fn every_kind(p: U8$@, ro: U8@, s: U8[], wide: I32$@): U8
+  (p + 1)$ = 7
+  q: = p + 2
+  w: = U8$@::ro
+  ws: = U8$[]::s
+  hand: = U8[]::{ .ptr = ro, .len = 4 }
+  fill_bytes(p, 4)
+  mem.copy(p, q, 1)
+  words: = U32@::ro
+  heap: U32$@ = mem.alloc(8)
+  bytes: = U8$@::wide
+  bytes$ = 0
+  mem.dealloc(heap)
+  return q$ + w$ + ws[0] + hand[0] + U8::words$
+// ==== case unchecked_look_alikes
+//< The safe shapes that look like the listed ones stay silent
+//< A bounds-checked index, casts that keep or add read-only, a read-only byte view, a cast to a
+//< `Void` pointer, and a write through `Index_place` check what they touch, or touch nothing.
+// EXPECT-NOT: [W0602]
+// EXPECT: 0 error(s)
+##lint(W0602 = on)
+import "std/ds" { List }
+import "std/mem"
+
+pub fn look_alikes(buf: U8$[], i: Sz, words: U32$@, at: I32@): I32
+  buf[i] = 1
+  ro: = U32@::words
+  bytes: = U8@::at
+  raw: = Void$@::words
+  same: = U32$@::words
+  defer $l: = List<|I32|>(null)
+  l.push(1)
+  l[0] = 5
+  mem.dealloc(raw)
+  return I32::buf[i] + I32::ro$ + I32::bytes$ + I32::same$ + l[0]

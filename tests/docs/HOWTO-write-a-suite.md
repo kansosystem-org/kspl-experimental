@@ -39,9 +39,10 @@ Caution: **A new file of tests needs one import line in `<package>/tests/all.ksp
 
    `make` stops at start-up, saying which, when a suite file stands in no list, or a list names a suite with no file.
 3. **Name it in the platform table**, "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md), usually in a row's bracketed list. Until then `make test-conventions` fails with "the platform table names every gate and suite CI runs".
-4. **A new module of the conventions suite** (`tests/support/conventions_<x>.kspl`) is called from `main` in `tests/suite/conventions_test.kspl`, or from a module it already calls; one nothing calls checks nothing.
-5. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first** with `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
-6. **Run it**: `make test-<name>`, then `make test-conventions`. The run prints one line per check and a closing verdict:
+4. **Name its failure case in its header**, as `Its failure case: `<file>#<name>``. It is an input its checks must reject, which the suite runs ("Every gate shows that it can fail" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)). A suite of `tests/suite/` without one fails `make test-conventions`.
+5. **A new module of the conventions suite** (`tests/support/conventions_<x>.kspl`) is called from `main` in `tests/suite/conventions_test.kspl`, or from a module it already calls; one nothing calls checks nothing.
+6. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first** with `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
+7. **Run it**: `make test-<name>`, then `make test-conventions`. The run prints one line per check and a closing verdict:
 
    ```
    pass docref: SPEC files cite no DESIGN or PLAN and no specification below or beside them
@@ -132,4 +133,4 @@ This checks only the decision. `harness.tracked_matching`, which picks the files
 | :-- | :-- | :-- |
 | `make` stops at start-up, before any suite runs | The files under `tests/suite/` and the lists in `mk/test.mk` disagree | Step 2 of "Adding a suite, step by step" |
 | A new package test never runs, and everything stays green | Its file is not imported and called from `<package>/tests/all.kspl` | "Where a new test goes" |
-| The suite passes on the stage1 just built, but `make test-<name>` alone fails | The suite uses a notation the seed does not know yet | Re-bake the seed (step 5) |
+| The suite passes on the stage1 just built, but `make test-<name>` alone fails | The suite uses a notation the seed does not know yet | Re-bake the seed (step 6) |

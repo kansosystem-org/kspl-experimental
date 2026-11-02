@@ -44,8 +44,8 @@ struct Param_list_opts //<
         //< Whether to use the internal ABI
         //< True passes aggregates as a plain `ptr` (a pointer to the copy the caller made; see
         //< emit_agg_param_type in gen/llvm/types.kspl).
-        //< At the C boundary of an `#ext` / `#export` it is false and the plain type is emitted, to
-        //< agree with the C compiler's classification.
+        //< At the C boundary of an `#ext` / `extern` it is false and the plain type is emitted,
+        //< to agree with the C compiler's classification.
     emitted_before: Bool //<
         //< Whether something was already emitted before (an sret argument and the like)
         //< True puts a ", " in front.
@@ -76,7 +76,7 @@ struct Genllvm_ctx
         //< ret_needs_sret in gen/llvm/types.kspl decides it. Every place that emits a `ret`
         //< (stmt.kspl's return/throw, decl.kspl's implicit return) must read this flag. Calling
         //< ret_needs_sret again in each place makes the definition and the `ret` disagree on an
-        //< `#ext` / `#export` function that keeps the C ABI.
+        //< `#ext` / `extern` function that keeps the C ABI.
     is_terminated: Bool
     emit: Emit_state
     had_error: Bool //< whether code generation hit a fatal error, such as an unreadable embed
@@ -86,7 +86,7 @@ struct Genllvm_ctx
         //< gen/llvm/expr_call.kspl uses it. A linear walk of methods_list per method call would be
         //< O(calls × methods).
     extern_declared: Map<|U8[], I32|>$@ //<
-        //< The names already emitted as a `declare` from an `extern "C"`, or defined by the module
+        //< The names already declared from an `extern`, or defined by the module
         //< Even where two files declare the same function (`kspl_path_info` is in both std/io and
         //< std/fs), it can appear in the IR only once. C allows repeated prototypes. But LLVM
         //< rejects a second `declare` of the same name, or one beside a `define`, as a

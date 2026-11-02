@@ -2,7 +2,7 @@
 // Kanso OS — the POSIX host port. It does a real context switch in Linux user space, using
 // ucontext.
 // It implements the ksos_port_* ABI the kernel core (ksos/kernel/task.kspl) declares.
-// A new task enters the KSPL side's #export function ksos_trampoline by way of ksos_task_start.
+// A new task enters the KSPL side's extern "C" function ksos_trampoline by way of ksos_task_start.
 // ==========================================
 #define _GNU_SOURCE
 #include <signal.h>
@@ -20,7 +20,7 @@ typedef struct {
 // masks every interrupt. One left out runs its handler in the middle of the kernel's state.
 static const int ksos_irq_signals[2] = {SIGALRM, SIGUSR1};
 
-// The task-starting trampoline the KSPL kernel core #exports.
+// The task-starting trampoline the KSPL kernel core publishes with extern "C".
 extern void ksos_trampoline(void);
 
 // Takes a ksos_ctx and captures uc (the groundwork shared by ctx_create and ctx_create_main).
@@ -95,8 +95,8 @@ void ksos_port_switch(void* from_ctx, void* to_ctx) {
     sigprocmask(SIG_SETMASK, &old, NULL);
 }
 
-// The tick handling the KSPL kernel core #exports (a time-slice switch is swapcontext'd directly
-// from inside this handler, by way of schedule()).
+// The tick handling the KSPL kernel core publishes with extern "C" (a time-slice switch is
+// swapcontext'd directly from inside this handler, by way of schedule()).
 extern void ksos_tick(void);
 
 // Inside the SIGALRM handler, ksos_tick() -> schedule() -> ksos_port_switch swapcontexts to another

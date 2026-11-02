@@ -60,6 +60,7 @@ impl<|T|> Rc<|T|>
     pub fn clone(r: Self@): Rc<|T|> //< one more owner of the same value
         r.ctrl.strong += 1
         return ::{ .ctrl = r.ctrl }
+    #gives_view
     pub fn get(r: Self@): T$@ //< the value itself, which stays alive while any owner does
         return r.ctrl.value@
     pub fn downgrade(r: Self@): Weak_rc<|T|> //< a handle that watches without owning
@@ -117,11 +118,11 @@ impl<|T|> Weak_rc<|T|>: Ref_counted //< the compiler counts it, so no call is wr
 // is that strong/weak change by atomic operations built on kspl_atomic_add/kspl_atomic_cas. These
 // are the __atomic builtins in ksplc/gen/runtime/core.c on both backends (an LLVM artefact links
 // that runtime).
-extern "C"
-    fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
-    fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
+extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
+extern fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
 
 pub struct Arc<|T|> //< a shared owner counted atomically, so threads can share it
+    //< **Its value is read-only** (`get()`): change it through a `Mutex` or an atomic inside.
     //< The compiler counts it as it counts `Rc<|T|>`, but atomically. As with `Rc<|T|>`, the last
     //< release takes the value apart, at the line and **on the thread** where the last owner goes.
     //< Caution: **An `Rc` inside `T` is then released from that thread**; hold only `Arc` in a
@@ -155,8 +156,17 @@ impl<|T|> Arc<|T|>
     pub fn clone(r: Self@): Arc<|T|> //< one more owner of the same value
         kspl_atomic_add(r.ctrl.strong@, 1)
         return ::{ .ctrl = r.ctrl }
-    pub fn get(r: Self@): T$@ //< the value itself, which stays alive while any owner does
+    pub fn get(r: Self@): T@ //< the value itself, read-only, which stays alive while any owner does
+        //< **Threads share it, so it cannot be written through here.** Change it through a `Mutex`
+        //< or an `Atomic_sz` inside (`Arc<|Mutex<|T|>|>`), whose methods take a read-only pointer.
         return r.ctrl.value@
+    pub fn get_mut(r: Self@): T$@? //< the value, writable, while this handle is its only owner
+        //< Nothing is returned while another owner or a weak handle exists. A thread could then
+        //< reach the value too. The use is to end what it owns, such as a `Mutex`'s `free()`,
+        //< once the other threads are joined.
+        if kspl_atomic_add(r.ctrl.strong@, 0) != 1 || kspl_atomic_add(r.ctrl.weak@, 0) != 1
+            return .none
+        return .some(r.ctrl.value@)
     pub fn downgrade(r: Self@): Weak_arc<|T|> //< a handle that watches without owning
         kspl_atomic_add(r.ctrl.weak@, 1)
         return ::{ .ctrl = r.ctrl }

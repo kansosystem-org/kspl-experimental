@@ -157,8 +157,9 @@ fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and not
         assert(back.equals(s.variant_name()), "every set reads back from its own name")
     verdict.pass("a set is named as make names it, and only so.")
 
-fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
+fn test_the_shards_part_ci() //< `ci` takes every gate this host can answer
     verdict.start("[tools/ci_gates] how the gates are dealt out test...")
+    $win_extra: Sz = 0
     for g in ci_gates.GATES
         a: = ci_gates.Set.ci_shard_a.runs(g)
         b: = ci_gates.Set.ci_shard_b.runs(g)
@@ -170,38 +171,31 @@ fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
             shared: =
                 ci_gates.Set.ci_shard_a.runs(g, host) ||
                 ci_gates.Set.ci_shard_b.runs(g, host)
-            assert(ci_gates.Set.ci.runs(g, host) == shared,
-                "Windows' and macOS's ci run exactly the two shared sections, with no container")
+            if shared
+                assert(ci_gates.Set.ci.runs(g, host), "ci keeps every gate a shared job runs here")
             assert(!shared || a || b, "a shared section runs nothing Linux's leaves out")
         // A Linux-only gate in a shared job is left out of that job on Windows.
-        assert(!g.linux_only || ((a || b) && !ci_gates.Set.ci.runs(g, "win32")),
-            "a gate a shared job runs on Linux alone stands in a shared job, and Windows skips it")
-    verdict.pass("ci selects what each host runs natively: three sections on Linux, two elsewhere.")
-
-fn test_ci_full_takes_every_answer() //< `ci-full` adds the Linux-only gates a host can answer
-    verdict.start("[tools/ci_gates] what ci-full runs on each host test...")
-    $win_extra: Sz = 0
-    for g in ci_gates.GATES
-        full: = ci_gates.Set.ci_full
-        assert(full.runs(g, "linux") == ci_gates.Set.ci.runs(g, "linux"),
-            "on Linux ci-full is ci, which already runs every section")
-        for host in U8[][]::{ "win32", "darwin" }
-            if ci_gates.Set.ci.runs(g, host)
-                assert(full.runs(g, host), "ci-full keeps every gate ci runs")
+        assert(!g.linux_only ||
+            ((a || b) && !ci_gates.Set.ci_shard_a.runs(g, "win32") &&
+            !ci_gates.Set.ci_shard_b.runs(g, "win32")),
+            "a gate a shared job runs on Linux alone stands in a shared job, and Windows' skips it")
         if g.shard == ci_gates.Shard.linux && g.not_on.len == 0
-            assert(full.runs(g, "win32") && full.runs(g, "darwin"),
-                "ci-full runs a Linux-only gate on every host unless its row says it cannot")
-        if full.runs(g, "win32") && !ci_gates.Set.ci.runs(g, "win32")
+            assert(ci_gates.Set.ci.runs(g, "win32") && ci_gates.Set.ci.runs(g, "darwin"),
+                "ci runs a Linux-only gate on every host unless its row says it cannot")
+        if ci_gates.Set.ci.runs(g, "win32") &&
+            !(ci_gates.Set.ci_shard_a.runs(g, "win32") ||
+            ci_gates.Set.ci_shard_b.runs(g, "win32"))
             win_extra += 1
-        assert(g.shard != ci_gates.Shard.none || !full.runs(g, "darwin"),
-            "ci-full leaves out macOS's stand-ins for the copies it already tests")
+        assert(g.shard != ci_gates.Shard.none || !ci_gates.Set.ci.runs(g, "darwin"),
+            "ci leaves out macOS's stand-ins for the copies it already tests")
     for g in ci_gates.GATES
         if g.log.equals("perf") || g.log.equals("ksos_posix") || g.log.equals("ksmd_desktop")
-            assert(!ci_gates.Set.ci_full.runs(g, "win32"),
-                "a gate that cannot answer on Windows stays out of its ci-full")
-    assert(win_extra > 0, "ci-full on Windows adds gates that ci leaves to Linux")
+            assert(!ci_gates.Set.ci.runs(g, "win32"),
+                "a gate that cannot answer on Windows stays out of its ci")
+    assert(win_extra > 0, "ci on Windows adds gates the workflow leaves to Linux")
     verdict
-        .pass("ci-full is ci on Linux, and elsewhere adds each Linux-only gate the host can answer.")
+        .pass("ci runs every section on Linux, and elsewhere adds each Linux-only gate the host can \
+            answer.")
 
 // ==========================================
 // Sample gate logs, each cut to a real round's shape, and the summary read back from them
@@ -399,10 +393,6 @@ priv const CHILD_SLEEP: U8[] = "sleep 30" //<
     //< **Keep it far beyond the cap**, so a stop at the cap and a wait for the child's end differ
     //< by more than a busy machine adds.
 
-priv const CAP_STOP_MAX_MS: I64 = 15000 //<
-    //< The most a stop at a one-second cap may take, its half second of grace included
-    //< Generous: under the 30 s a fake gate runs, and far over what a busy machine adds to the cap.
-
 priv const BEATS: I32 = 300 //<
     //< How many marks the fake gate's own child leaves, a tenth of a second apart (30 s or more)
 
@@ -425,13 +415,10 @@ fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
     io.write_file(log, "the gate's own line\n") catch panic("the log must be writable")
     gate: = arena.text().s("sh -c 'i=0; while [ $i -lt \{BEATS\} ]; do echo >> \"\{beat\}\"; ")
         .s("i=$((i+1)); sleep 0.1; done'; true").take()
-    t0: = sys.mono_us()
-    rc: = ci_gates.run_capped(U8[][]::{ "/bin/sh", "-c", gate }, "fake", log, 1I64, t0)
-    took_ms: = (sys.mono_us() - t0) / 1000I64
+    rc: = ci_gates.run_capped(U8[][]::{ "/bin/sh", "-c", gate }, "fake", log, 1I64,
+        sys.mono_us())
     assert(rc != 0, "a gate stopped at its cap fails")
-    $m: = Panic_msg()
-    assert(took_ms < CAP_STOP_MAX_MS,
-        m.s("it is stopped at its cap, before its child's end (took ").n(took_ms).s(" ms)").slice())
+    assert(beats_now(beat, arena) < Sz::BEATS, "it is stopped at its cap, before its child's end")
     // **A stopped child leaves no mark, however long the wait.** A busy machine can only delay the
     // marks of one left running, so this check cannot fail on a correct stop.
     left: = beats_now(beat, arena)
@@ -615,14 +602,13 @@ fn test_the_pair_starts_together_only_where_both_run(arena: Arena$@) //<
     //< Race and the shipped build share a step where the set runs both, and nowhere else
     verdict.start("[tools/ci_gates] which gates start side by side test...")
     assert(ci_gates.pair_fault(arena).is_none(), "each partner is the row next to it, named back")
-    assert(pairs_in(.ci, "linux", false, arena).equals("race+selfhost_ship "),
-        "Linux's whole round starts the pair together")
+    for p in U8[][]::{ "linux", "win32", "darwin" }
+        assert(pairs_in(.ci, p, false, arena).equals("race+selfhost_ship "),
+            "a whole round starts the pair together on every host")
     assert(pairs_in(.ci_shard_linux, "linux", false, arena).equals("race+selfhost_ship "),
         "so does the Linux job's shard")
     for s in ci_gates.SET_ORDER
         assert(pairs_in(s, "linux", true, arena).len == 0, "the serial switch runs each gate alone")
-    for p in U8[][]::{ "win32", "darwin" }
-        assert(pairs_in(.ci, p, false, arena).len == 0, "a host that runs neither has no pair")
     for p in U8[][]::{ "linux", "win32", "darwin" }
         assert(pairs_in(.ci_shard_a, p, false, arena).len == 0, "the shared shards hold none")
         assert(pairs_in(.ci_shard_b, p, false, arena).len == 0, "the shared shards hold none")
@@ -700,13 +686,9 @@ fn test_a_partner_past_its_cap_is_stopped_alone(arena: Arena$@) //<
     $runs: = List<|ci_gates.Capped|>(arena)
     runs.push(fake_gate(dir, "race", CHILD_SLEEP, arena))
     runs.push(fake_gate(dir, "selfhost_ship", "echo 'RESULT: ALL PASS'", arena))
-    t0: = sys.mono_us()
-    ci_gates.run_capped_all(runs.slice(), 1I64, t0)
-    took_ms: = (sys.mono_us() - t0) / 1000I64
-    $m: = Panic_msg()
-    assert(took_ms < CAP_STOP_MAX_MS,
-        m.s("the one past its cap is stopped there (took ").n(took_ms).s(" ms)").slice())
-    assert(runs.get(0).rc == 1, "the gate past its cap fails")
+    // **A gate waited out would end with 0**, so its code shows it was stopped at the cap.
+    ci_gates.run_capped_all(runs.slice(), 1I64, sys.mono_us())
+    assert(runs.get(0).rc == 1, "the gate past its cap is stopped there, and fails")
     // **Its time is its own if it ended before the one stopped at the cap.** Given the pair's end,
     // it would be the later of the two.
     assert(runs.get(1).rc == 0 && runs.get(1).took_us < runs.get(0).took_us,

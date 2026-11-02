@@ -224,7 +224,7 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### A name starting with a dot is not served
 
-**A path with a name starting with `.` at any level answers 404**, as if absent (`fs.has_hidden_on_path`). A root that is a checkout or holds settings has `.git/` and `.env`. **`.well-known` is served** (RFC 8615): certificate issuance and other discovery protocols read under it.
+**A path with a name starting with `.` at any level answers 404**, as if absent (`fs.join_under`'s `hidden`). A root that is a checkout or holds settings has `.git/` and `.env`. **`.well-known` is served** (RFC 8615): certificate issuance and other discovery protocols read under it.
 
 Each segment's long name is checked too, because Windows opens `.git` by its short name `GIT~1`. The rules are "A hidden name is found by its long name too" in `std/docs/DESIGN-system.md`.
 
@@ -275,17 +275,19 @@ Kssrv serves files from under its root and answers JSON under `/api/`. Every pat
 
 ### The path is checked after the decode
 
-**The path part of the request target is *percent-decoded* (`%2e` becomes `.`) once, by `url.decode_component`.** **Only then does `fs.stays_under` check that it stays under the root. The order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`. So the regression in `kssrv/tests/main.kspl` sends encoded strings too.
+**The path part of the request target is *percent-decoded* (`%2e` becomes `.`) once, by `url.decode_component`.** **Only then does `fs.join_under` check that it stays under the root. The order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`. So the regression in `kssrv/tests/main.kspl` sends encoded strings too.
 
 Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only in a query or a form (`parse_query` reads it so). Mistaking one for the other makes a file with `+` in its name unreachable.
 
-**A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked. `sys.is_safe_relative` also refuses spellings the OS reads specially, Windows device names among them. A read of `COM1` never returns when nothing is attached, so one request would stop this single-loop server.
+**A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked. `fs.join_under` also refuses every spelling that Windows reads as another name, on every OS: a `\`, a short name's `~1`, a wildcard, a device name and the rest. A read of `COM1` never returns when nothing is attached, so one request would stop this single-loop server. The forms and their reasons are "A path from outside goes through one door" in `std/docs/DESIGN-system.md`.
+
+Caution: **Do not add a check of a path's parts here.** Each of the four Windows holes that kssrv once fixed alone was a form that one check missed. A form found later is added to `fs.join_under`, which ksagent shares.
 
 ### `/api/` does not go through static serving
 
 Everything under `/api/` is dispatched by the routing table alone, even over a directory named `api` under the root. **Every answer there is JSON, a refusal's included**, so a client of the API reads one form ("The JSON API" in [`SPEC-api.md`](SPEC-api.md)).
 
-Caution: **Check a path in the query too.** An API taking `?path=` goes through the same `sys.is_safe_relative` as static serving.
+Caution: **Check a path in the query too.** An API taking `?path=` goes through the same `fs.join_under` as static serving. **A dot name is let through there.** Only the holder of the token reaches it, and the page edits what the person keeps under the root. `GET /api/list` leaves out every name that `fs.join_under` would refuse with dot names kept back, so the dialog offers no name that the server then refuses.
 
 ### The counters are held in plain global variables
 

@@ -600,9 +600,9 @@ fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
 // ---------------------------------------------------------
 // An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI. By default cfg(blas)
 // discards these and matmul_kernel's BLAS version, so the generated C never mentions cblas. The
-// library is declared with the block, so no build file names it.
-// Caution: **`#cfg` holds only the one declaration after it.** Give each its own. Otherwise the
-// ones after the first are kept in every build, and the block's `#link` asks every link for BLAS.
+// library is named in the group (`##link`), so no build file names it.
+// Caution: **`#cfg` holds the one declaration after it, or the group indented below it.** What is
+// outside is kept in every build, and a `##link` there asks every link for BLAS.
 // ---------------------------------------------------------
 
 // CBLAS's enum values, as `cblas.h` numbers them.
@@ -614,12 +614,11 @@ const CBLAS_NO_TRANS: I32 = 111 //< CBLAS_TRANSPOSE: the matrix as it is
 const CBLAS_TRANS: I32 = 112 //< CBLAS_TRANSPOSE: the matrix transposed
 
 #cfg(blas)
-#link("openblas")
-extern "C"
-    fn cblas_sgemm(order: I32, ta: I32, tb: I32, m: I32, n: I32, k: I32, alpha: F32, a: F32$@,
-        lda: I32, b: F32$@, ldb: I32, beta: F32, c: F32$@, ldc: I32)
-    fn cblas_dgemm(order: I32, ta: I32, tb: I32, m: I32, n: I32, k: I32, alpha: F64, a: F64$@,
-        lda: I32, b: F64$@, ldb: I32, beta: F64, c: F64$@, ldc: I32)
+    ##link("openblas")
+    extern fn cblas_sgemm(order: I32, ta: I32, tb: I32, m: I32, n: I32, k: I32, alpha: F32,
+        a: F32$@, lda: I32, b: F32$@, ldb: I32, beta: F32, c: F32$@, ldc: I32)
+    extern fn cblas_dgemm(order: I32, ta: I32, tb: I32, m: I32, n: I32, k: I32, alpha: F64,
+        a: F64$@, lda: I32, b: F64$@, ldb: I32, beta: F64, c: F64$@, ldc: I32)
 
 #cfg(blas)
 fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@, ldb: Sz, c: T$@,

@@ -239,6 +239,117 @@ fn main()
   explicit_unlock()
   released_by_defer()
   io.out().s("done\n")
+// ==== case lock_across_flow
+//< [W0105] and [W0106] follow a loop's back edge, a branch and each way out of the function
+//< A pointer from lock() is used after unlock in a loop, returned, or stored through a
+//< parameter; a lock is held at a `return` or a `throw`.
+//< **The silent shapes must stay silent**: a lock taken again, a branch or a `break` that
+//< unlocks, and a `defer` in a nested block.
+// EXPECT: lock_across_flow.kspl:29:5: warning: [W0105]
+// EXPECT: lock_across_flow.kspl:36:7: warning: [W0105]
+// EXPECT: lock_across_flow.kspl:41:5: warning: [W0105]
+// EXPECT: lock_across_flow.kspl:48:3: warning: [W0105]
+// EXPECT: lock_across_flow.kspl:52:3: warning: [W0105]
+// EXPECT: lock_across_flow.kspl:56:3: warning: [W0106]
+// EXPECT: lock_across_flow.kspl:61:3: warning: [W0106]
+// EXPECT-NOT: lock_across_flow.kspl:71:
+// EXPECT-NOT: lock_across_flow.kspl:79:
+// EXPECT-NOT: lock_across_flow.kspl:83:
+// EXPECT-NOT: lock_across_flow.kspl:92:
+// EXPECT: 0 error(s), 7 warning(s)
+import "std/thread"
+
+priv enum Err
+  bad
+
+priv fn work() {}
+
+priv fn in_loop(m: thread.Mutex<|I64|>$@, n: I32) //< (A) unlocked, then used, in a loop body
+  for _i in Range.asc(n)
+    p: = m.lock()
+    m.unlock()
+    p$ += 1
+
+priv fn kept_over_loop(m: thread.Mutex<|I64|>$@, n: I32) //< (A) unlocked before the loop
+  p: = m.lock()
+  m.unlock()
+  for _i in Range.asc(n)
+    if n > 1
+      p$ += 1
+
+priv fn back_edge(m: thread.Mutex<|I64|>$@, n: I32) //< (A) on the second turn, over the back edge
+  p: = m.lock()
+  for _i in Range.asc(n)
+    p$ += 1
+    m.unlock()
+    work()
+
+priv fn returned_held(m: thread.Mutex<|I64|>$@): I64$@ //< (B) returned, with the defer to unlock
+  p: = m.lock()
+  defer m.unlock()
+  return p
+
+priv fn stored(m: thread.Mutex<|I64|>$@, out: I64$@$@) //< (C) stored where it outlives the call
+  p: = m.lock()
+  out$ = p
+  m.unlock()
+
+priv fn exit_holding(m: thread.Mutex<|I64|>$@): Void$@ //< [W0106] a thread's entry returns holding
+  p: = m.lock()
+  p$ = 1
+  return null
+
+priv fn throws_holding(m: thread.Mutex<|I64|>$@, c: Bool): Void!Err //< [W0106] by a throw
+  m.lock()
+  if c
+    throw .bad
+  m.unlock()
+
+priv fn relock_in_loop(m: thread.Mutex<|I64|>$@, n: I32) //< silent: locked again before each use
+  p: = m.lock()
+  m.unlock()
+  for _i in Range.asc(n)
+    m.lock()
+    p$ += 1
+    m.unlock()
+
+priv fn early_unlock(m: thread.Mutex<|I64|>$@, c: Bool) //< silent: the branch leaves unlocked
+  p: = m.lock()
+  if c
+    m.unlock()
+    return
+  p$ += 1
+  m.unlock()
+
+priv fn break_unlocks(m: thread.Mutex<|I64|>$@, n: I32) //< silent: each way out unlocks
+  m.lock()
+  for i in Range.asc(n)
+    if i == 3
+      m.unlock()
+      break
+  work()
+
+priv fn defer_in_branch(m: thread.Mutex<|I64|>$@, c: Bool) //< silent: the block's defer unlocks
+  if c
+    p: = m.lock()
+    defer m.unlock()
+    p$ = 1
+  work()
+
+fn main()
+  defer $mx: = thread.Mutex<|I64|>(0) catch panic("mutex")
+  in_loop(mx@, 2)
+  kept_over_loop(mx@, 2)
+  back_edge(mx@, 2)
+  _r: = returned_held(mx@)
+  $q: I64$@ = null
+  stored(mx@, q@)
+  _e: = exit_holding(mx@)
+  throws_holding(mx@, false) catch {}
+  relock_in_loop(mx@, 2)
+  early_unlock(mx@, true)
+  break_unlocks(mx@, 5)
+  defer_in_branch(mx@, true)
 // ==== case release_method_spelling
 //< Warns about a name or contract that releases but is not tracked
 // EXPECT: [W0107] 'close' releases the receiver
@@ -409,6 +520,28 @@ fn main()
   defer $rows: = List<|List<|I32|>|>(null)
   rows.push(List<|I32|>(a))
   _m: = in_arena(a, rows@, Str_builder())
+// ==== case thread_never_joined
+//< [W0109] A thread started and never waited for
+//< `free()` waits for it, so a thread no path frees can outlive what it was handed. **Two must stay
+//< silent**: `defer` in front, which waits at the block's end, and a thread freed by hand.
+// EXPECT: thread_never_joined.kspl:16:3: warning: [W0109] '_t' is never freed
+// EXPECT-NOT: 'scoped'
+// EXPECT-NOT: 'joined'
+// EXPECT: 0 error(s), 1 warning(s)
+import "std/thread" { Thread }
+
+extern fn idle(arg: I64$@): Void$@
+  arg$ += 1
+  return null
+
+fn main()
+  $x: I64 = 0
+  _t: = Thread.spawn<|I64|>(idle, x@) catch panic("spawn")
+  $y: I64 = 0
+  defer $_scoped: = Thread.spawn<|I64|>(idle, y@) catch panic("spawn")
+  $z: I64 = 0
+  $joined: = Thread.spawn<|I64|>(idle, z@) catch panic("spawn")
+  joined.free()
 // ==== case value_never_freed_in_generic
 //< [W0109] in a body that is checked only in its instances
 //< Those are a generic's method, a generic function and a slice's method. **Each finding is printed
@@ -501,3 +634,210 @@ priv fn once(): Sz
 fn main()
   _a: = twice()
   _b: = once()
+// ==== case trait_value_kept_by_container
+//< [W0110] A container's `Self$@` method keeps a trait value made from local storage
+//< `xs.push(sq)` makes the trait value from `sq` with no `@` written, and the list keeps its
+//< address. Behind a pointer, in a global, or in a local of an outer block, the list outlives
+//< `sq`. **Four must stay silent**: a list in the same block as `sq`, a pointer upcast, a call that
+//< only reads (`show(sq)`), and a `Self$@` method of a type that holds no `Shape`.
+// EXPECT: trait_value_kept_by_container.kspl:27:11: warning: [W0110]
+// EXPECT: trait_value_kept_by_container.kspl:31:17: warning: [W0110]
+// EXPECT: trait_value_kept_by_container.kspl:37:13: warning: [W0110]
+// EXPECT: 0 error(s), 3 warning(s)
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+trait Shape
+  fn area(r: Self): I32
+
+struct Sq
+  n: I32
+
+impl Sq: Shape
+  fn area(r: Self): I32
+    return r.n * r.n
+
+priv $g_shapes: List<|Shape|>$@ = null
+
+priv fn into_param(xs: List<|Shape|>$@)
+  sq: = Sq::{ .n = 2 }
+  xs.push(sq)
+
+priv fn into_global()
+  sq: = Sq::{ .n = 3 }
+  g_shapes.push(sq)
+
+priv fn into_outer_local(arena: Arena$@): Sz
+  $xs: = List<|Shape|>(arena)
+  inner:
+    sq: = Sq::{ .n = 4 }
+    xs.push(sq)
+  return xs.len
+
+priv struct Painter
+  total: I32
+
+impl Painter
+  fn paint(r: Self$@, s: Shape)
+    r.total += s.area()
+
+priv fn show(s: Shape): I32
+  return s.area()
+
+priv fn silent(arena: Arena$@): I32
+  sq: = Sq::{ .n = 5 }
+  $xs: = List<|Shape|>(arena)
+  xs.push(sq)
+  xs.push(arena.create(Sq::{ .n = 6 }))
+  $p: = Painter::{ .total = 0 }
+  p.paint(sq)
+  return xs[0].area() + show(sq) + p.total
+
+fn main()
+  defer arena: = Arena(4096)
+  g_shapes = arena.create(List<|Shape|>(arena))
+  $xs: = List<|Shape|>(arena)
+  into_param(xs@)
+  into_global()
+  _n: = into_outer_local(arena)
+  _m: = silent(arena)
+// ==== case view_after_change
+//< [W0111] A view used after a call that may move or release the memory it points into
+//< The example of "What invalidates a view" in the language specification: a list's element
+//< after a push, and an arena's text after a reset, are findings; a view taken after the push
+//< is not.
+// EXPECT: view_after_change.kspl:24:3: warning: [W0111] 'p' points into 'xs', which 'push' on line 23
+// EXPECT: view_after_change.kspl:30:14: warning: [W0111] 's' points into 'arena', which 'reset' on line 29
+// EXPECT-NOT: view_after_change.kspl:27:
+// EXPECT: 0 error(s), 2 warning(s)
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+
+priv struct Point
+  x: I32
+  y: I32
+
+fn main()
+  defer arena: = Arena(4096)
+  $xs: = List<|Point|>(arena)
+  xs.push(Point::{ .x = 1, .y = 2 })
+  p: = xs[0]@
+  xs.push(Point::{ .x = 3, .y = 4 }) // may move every element
+  p.x = 9 // MARK-p
+  e: = xs[0]@
+  e.x = 1
+  e.y = 2 // MARK-e
+  s: = arena.text().s("hi").take()
+  arena.reset()
+  io.out().s(s) // MARK-s
+// ==== case view_across_flow
+//< [W0111] follows a loop's back edge and a branch, and each kind of owner std marks
+//< **The silent shapes must stay silent**: the view taken again, a view of another list, a copy
+//< of an element, an `Rc` with another owner, and a pointer only compared.
+// EXPECT: view_across_flow.kspl:28:5: warning: [W0111] 'p' points into 'xs', which 'push' on line 29
+// EXPECT: view_across_flow.kspl:35:17: warning: [W0111] 'v' points into 'xs', which 'push' on line 34
+// EXPECT: view_across_flow.kspl:42:14: warning: [W0111] 'v' points into 'b', which 's' on line 41
+// EXPECT: view_across_flow.kspl:45:3: warning: [W0111] This 'for … in' walks 'm', which the write into 'm[…]' on line 46
+// EXPECT: view_across_flow.kspl:52:3: warning: [W0111] 'p' points into 'r', whose old value the new one given on line 51
+// EXPECT-NOT: view_across_flow.kspl:58:
+// EXPECT-NOT: view_across_flow.kspl:63:
+// EXPECT-NOT: view_across_flow.kspl:70:
+// EXPECT-NOT: view_across_flow.kspl:75:
+// EXPECT-NOT: view_across_flow.kspl:82:
+// EXPECT-NOT: view_across_flow.kspl:88:
+// EXPECT: 0 error(s), 5 warning(s)
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" { Arena }
+import "std/refcount" { Rc }
+import "std/str"
+
+priv struct Node
+  v: I32
+
+priv fn in_loop(xs: List<|I32|>$@, n: I32) //< a view kept over a loop whose body grows the list
+  p: = xs[0]@
+  for i in Range.asc(n)
+    p$ += 1 // MARK-loop
+    xs.push(I32::i)
+
+priv fn in_branch(xs: List<|I32|>$@, grow: Bool) //< one branch grows the list
+  v: = xs.slice()
+  if grow
+    xs.push(1)
+  io.out().s("\{v[0]\}\n") // MARK-branch
+
+priv fn builder_slice() //< a builder's view, then a write that grows the builder
+  defer $b: = str.Str_builder()
+  b.s("ab")
+  v: = b.slice()
+  b.s("cd")
+  io.out().s(v) // MARK-builder
+
+priv fn map_walk(m: Map<|I32, I32|>$@) //< a walk over a map that sets a pair
+  for e in m.items() // MARK-map
+    m[e.key + 1] = e.value
+
+priv fn rc_replaced() //< the last owner given a new value frees the old one
+  $r: = Rc<|Node|>(Node::{ .v = 1 })
+  p: = r.get()
+  r = Rc<|Node|>(Node::{ .v = 2 })
+  p.v = 9 // MARK-rc
+
+priv fn taken_again(xs: List<|I32|>$@) //< the view taken again after the push (silent)
+  $p: = xs[0]@
+  xs.push(2)
+  p = xs[0]@
+  p$ = 3 // SILENT-1
+
+priv fn other_list(xs: List<|I32|>$@, ys: List<|I32|>$@) //< a view of another list (silent)
+  p: = ys[0]@
+  xs.push(2)
+  p$ = 3 // SILENT-2
+
+priv fn each_branch_retakes(xs: List<|I32|>$@, grow: Bool) //< taken again where it grew (silent)
+  $v: = xs.slice()
+  if grow
+    xs.push(1)
+    v = xs.slice()
+  io.out().s("\{v[0]\}\n") // SILENT-3
+
+priv fn copied_value(xs: List<|I32|>$@) //< a copy of the element, not its address (silent)
+  e: = xs[0]
+  xs.push(2)
+  io.out().s("\{e\}\n") // SILENT-4
+
+priv fn rc_shared() //< another owner keeps the value alive (silent)
+  $r: = Rc<|Node|>(Node::{ .v = 1 })
+  keep: = r.clone()
+  p: = r.get()
+  r = Rc<|Node|>(Node::{ .v = 2 })
+  p.v = keep.get().v // SILENT-5
+
+priv fn compared(a: Arena$@) //< a pointer compared, not read through (silent)
+  mark: = a.save()
+  first: = a.alloc(16)
+  a.restore(mark)
+  assert(a.alloc(16) == first, "the same place") // SILENT-6
+
+fn main()
+  defer arena: = Arena(4096)
+  $xs: = List<|I32|>(arena)
+  xs.push(1)
+  $ys: = List<|I32|>(arena)
+  ys.push(1)
+  $m: = Map<|I32, I32|>(arena)
+  m[1] = 2
+  in_loop(xs@, 3)
+  in_branch(xs@, true)
+  builder_slice()
+  map_walk(m@)
+  rc_replaced()
+  taken_again(xs@)
+  other_list(xs@, ys@)
+  each_branch_retakes(xs@, true)
+  copied_value(xs@)
+  rc_shared()
+  compared(arena)

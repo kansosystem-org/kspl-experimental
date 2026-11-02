@@ -5,7 +5,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/json"
 import "std/mem" + { Arena, dealloc }
-import "std/refcount" { Rc }
+import "std/refcount" { Arc }
 import "std/regex" { Regex }
 import "std/stack_limit" { Stack_limit }
 import "std/str" { Str_builder }
@@ -17,72 +17,88 @@ import "std/thread"
 import "std/verdict"
 
 // ==========================================
-// std/thread: the argument and return value of spawn/join round-trip over real OS threads, and a
+// std/thread: an argument written by the thread is seen once free() waited for it, and a
 // Mutex gives mutual exclusion.
 // ==========================================
-#export
-fn thread_test_echo(arg: I32$@): Void$@
-    return Void$@::arg
+extern fn thread_test_double(arg: I32$@): Void$@ //< hands its result back through the argument
+    arg$ *= 2
+    return null
 
 // thread.Mutex<|I32|> makes lock()'s return value the only way to reach the content.
-#export
-fn thread_test_increment(arg: thread.Mutex<|I32|>$@): Void$@
+extern fn thread_test_increment(arg: thread.Mutex<|I32|>$@): Void$@
     for _i in Range.asc(1000)
         counter: = arg.lock()
         counter$ += 1
         arg.unlock()
     return null
 
-// Mutex<|T|> makes a T that cannot be shared safe to share. The type does not guarantee this ("Why
-// data races are not prevented by the type system" in docs/DESIGN-programming-language.md), so this
-// test checks it.
-#export
-fn thread_test_touch_mutex_rc(arg: thread.Mutex<|Rc<|I32|>|>$@): Void$@
-    rc: = arg.lock()
-    _v: = rc.get()$
-    arg.unlock()
-    return null
-
 fn test_thread_spawn_join()
-    verdict.start("[Thread] spawn/join argument round-trip + Mutex mutual exclusion test...")
+    verdict.start("[Thread] spawn/free argument round-trip + Mutex mutual exclusion test...")
 
-    // 1. entry's return value round-trips across the thread to join()
+    // 1. The argument reaches the thread, and what it writes there is seen once free() waited
     $marker: I32 = 42
-    t0: = thread.Thread.spawn<|I32|>(thread_test_echo, marker@) catch panic("thread spawn failed")
-    echoed: = t0.join_and_free()
-    assert(echoed == Void$@::marker@, "join() must return exactly what entry() returned")
+    $t0: = thread.Thread.spawn<|I32|>(thread_test_double, marker@)
+        catch panic("thread spawn failed")
+    t0.free()
+    assert(marker == 84, "free() must wait until the thread has written its result")
 
     // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
     defer $mx: = thread.Mutex<|I32|>(0) catch panic("mutex create failed")
-    t1: =
+    $t1: =
         thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@)
         catch panic("thread spawn failed")
-    t2: =
+    $t2: =
         thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@)
         catch panic("thread spawn failed")
-    t1.join_and_free()
-    t2.join_and_free()
+    t1.free()
+    t2.free()
 
     final_val: = mx.lock()
     assert(final_val$ == 2000,
         "mutex-protected counter must equal 2000 after 2 threads x 1000 increments")
     mx.unlock()
 
-    // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
-    defer $g_rc: = thread.Mutex<|Rc<|I32|>|>(Rc<|I32|>(7)) catch panic("mutex<rc> create failed")
-    t3: =
-        thread.Thread
-        .spawn<|thread.Mutex<|Rc<|I32|>|>|>(thread_test_touch_mutex_rc, g_rc@)
-        catch panic("thread spawn failed")
-    t3.join_and_free()
-    held: = g_rc.lock()
-    assert(held.get()$ == 7, "the Rc guarded by a mutex must survive the thread round-trip")
-    g_rc.unlock()
-
     verdict
-        .pass("The argument/return round trip, Mutex mutual exclusion under real parallelism \
-            (2000/2000), and Mutex<|T|> making a type that cannot be shared shareable are all \
-            confirmed.")
+        .pass("The argument round trip and Mutex mutual exclusion under real parallelism \
+            (2000/2000) are confirmed.")
+// ==========================================
+// std/thread with std/refcount: an `Arc`'s value is read-only, so threads change it through a
+// `Mutex` or an `Atomic_sz` inside, whose methods take a read-only pointer.
+// ==========================================
+struct Arc_shared //< what the threads share through one `Arc`
+    total: thread.Mutex<|I64|>
+    hits: thread.Atomic_sz
+
+extern fn arc_test_add(arg: Arc<|Arc_shared|>$@): Void$@
+    mine: = arg.clone()
+    for _i in Range.asc(1000)
+        s: = mine.get()
+        n: = s.total.lock()
+        n$ += 1
+        s.total.unlock()
+        s.hits.fetch_add(1)
+    return null
+
+fn test_arc_shares_through_mutex_and_atomic()
+    verdict.start("[Thread] an Arc shared by threads changes through a Mutex and an atomic...")
+    total: = thread.Mutex<|I64|>(0) catch panic("mutex create failed")
+    $shared: =
+        Arc<|Arc_shared|>(Arc_shared::{ .total = total, .hits = thread.Atomic_sz(0) })
+    $t1: = thread.Thread.spawn<|Arc<|Arc_shared|>|>(arc_test_add, shared@) catch panic("spawn")
+    $t2: = thread.Thread.spawn<|Arc<|Arc_shared|>|>(arc_test_add, shared@) catch panic("spawn")
+    t1.free()
+    t2.free()
+    s: = shared.get()
+    n: = s.total.lock()
+    counted: = n$
+    s.total.unlock()
+    assert(counted == 2000 && s.hits.load() == 2000, "no change through the Arc is lost")
+    // The threads are joined, so this is the only owner, and the lock can be ended.
+    whole: = shared.get_mut() catch
+        panic("the only owner reaches the value")
+    whole.total.free()
+    verdict.pass("Two threads added 2000 times through one Arc, by its Mutex and its atomic.")
+
 // ==========================================
 // std/thread: the operations of Atomic_sz; two threads without a lock lose no addition; and
 // Cond_var's wait wakes after a signal.
@@ -90,8 +106,7 @@ fn test_thread_spawn_join()
 struct Atomic_test_ctx
     counter: thread.Atomic_sz
 
-#export
-fn atomic_test_worker(arg: Atomic_test_ctx$@): Void$@
+extern fn atomic_test_worker(arg: Atomic_test_ctx$@): Void$@
     for _i in Range.asc(10000)
         arg.counter.fetch_add(1)
     return null
@@ -100,7 +115,7 @@ fn test_atomic_and_cond_var()
     verdict.start("[Thread] Atomic_sz (lock-free addition) + Cond_var (signal/wait) test...")
 
     // 1. Atomic_sz's basic operations
-    $a: = thread.Atomic_sz(5)
+    a: = thread.Atomic_sz(5)
     assert(a.load() == 5, "Atomic_sz.load() must return the initial value")
     old: = a.fetch_add(3)
     assert(old == 5 && a.load() == 8, "fetch_add must return the pre-add value")
@@ -115,12 +130,12 @@ fn test_atomic_and_cond_var()
     // 2. Two threads add 20000 times in total to the same counter, with no lock
     ctx: = mem.alloc_as<|Atomic_test_ctx|>()
     ctx.counter = thread.Atomic_sz(0)
-    t1: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx)
+    $t1: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx)
         catch panic("thread spawn failed")
-    t2: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx)
+    $t2: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx)
         catch panic("thread spawn failed")
-    t1.join_and_free()
-    t2.join_and_free()
+    t1.free()
+    t2.free()
     counter_total: = ctx.counter.load()
     assert(counter_total == 20000, "lock-free concurrent fetch_add must not lose any increments")
     dealloc(Void$@::ctx)
@@ -131,7 +146,7 @@ fn test_atomic_and_cond_var()
 
     ready: = mx.lock()
     ready$ = 1
-    cv.signal()
+    cv.signal(mx@)
     mx.unlock()
 
     flag: = mx.lock()
@@ -156,8 +171,7 @@ struct Gate_ctx
     mx: thread.Mutex<|Gate|>
     cv: thread.Cond_var
 
-#export
-fn gate_waiter(arg: Gate_ctx$@): Void$@
+extern fn gate_waiter(arg: Gate_ctx$@): Void$@
     g: = arg.mx.lock()
     g.waiting += 1
     // A limit long past the test's, so a broadcast that wakes one leaves the others late.
@@ -180,17 +194,25 @@ fn test_cond_var_broadcast_and_wait_for()
     defer ctx.mx.free()
     defer ctx.cv.free()
     // A wait with nobody to wake it comes back at its limit, holding the lock again.
+    // **`woken` can be spurious** (the contract at `wait_for`), so a wake is waited out again.
+    // **Windows ends a wait up to one clock tick early** (15.6 ms by default), so the floor allows
+    // one tick: 50 ms less 16 is 34.
     _held: = ctx.mx.lock()
-    t0: = sys.mono_us()
-    alone: = ctx.cv.wait_for(ctx.mx@, 50)
-    took_us: = sys.mono_us() - t0
+    $alone: = thread.Cond_wait.woken
+    $took_us: I64 = 0
+    $tries: Sz = 0
+    for alone == .woken && tries < 10
+        t0: = sys.mono_us()
+        alone = ctx.cv.wait_for(ctx.mx@, 50)
+        took_us = sys.mono_us() - t0
+        tries += 1
     at_once: = ctx.cv.wait_for(ctx.mx@, -1)
     ctx.mx.unlock()
-    assert(alone == .timed_out && took_us >= 40000I64,
-        "wait_for with nobody to wake it times out, after its limit")
+    assert(alone == .timed_out, "wait_for with nobody to wake it times out")
+    assert(took_us >= 34000I64, "wait_for with nobody to wake it waits its limit, less a clock tick")
     assert(at_once == .timed_out, "wait_for with a limit already up looks once")
     // Every waiter wakes on one broadcast.
-    defer $ts: = List<|thread.Thread$@|>(null)
+    defer $ts: = List<|thread.Thread|>(null)
     for _i in Range.asc(GATE_WAITERS)
         ts.push(thread.Thread.spawn<|Gate_ctx|>(gate_waiter, ctx@) catch panic("spawn failed"))
     for
@@ -198,13 +220,13 @@ fn test_cond_var_broadcast_and_wait_for()
         all_in: = w.waiting == GATE_WAITERS
         if all_in
             w.open = true
-            ctx.cv.broadcast()
+            ctx.cv.broadcast(ctx.mx@)
         ctx.mx.unlock()
         if all_in
             break
         sys.sleep_ms(1)
-    for t in ts.slice()
-        t.join_and_free()
+    for i in Range.asc(ts.len)
+        ts[i].free()
     done: = ctx.mx.lock()
     woken: = done.woken
     late: = done.late
@@ -226,8 +248,7 @@ struct Lingering_ctx //< what the thread starting long-lived children reads
     asked: thread.Atomic_sz //< how many starts the main thread has made or is making
     stop: thread.Atomic_sz
 
-#export
-fn concurrency_start_lingering(arg: Lingering_ctx$@): Void$@
+extern fn concurrency_start_lingering(arg: Lingering_ctx$@): Void$@
     // A start follows each of the main thread's at once, so the two overlap. `ksplc lsp` waits on
     // its standard input, so a child lives until it is killed, after the main thread's reads.
     $kids: subproc.Piped_child[PAIRED_STARTS] = ::{}
@@ -255,7 +276,7 @@ fn test_spawn_from_threads(ksplc: U8[]) //<
     ctx.ksplc = ksplc
     ctx.asked = thread.Atomic_sz(0)
     ctx.stop = thread.Atomic_sz(0)
-    t: =
+    $t: =
         thread.Thread.spawn<|Lingering_ctx|>(concurrency_start_lingering, ctx)
         catch panic("thread spawn failed")
     $held: = false
@@ -277,7 +298,7 @@ fn test_spawn_from_threads(ksplc: U8[]) //<
         if held
             break
     ctx.stop.store(1)
-    t.join_and_free()
+    t.free()
     dealloc(Void$@::ctx)
     assert(!held, "no short child's end of output is held by a child started on another thread")
     verdict
@@ -309,8 +330,8 @@ priv fn held_elsewhere(path: U8[]): Bool //< whether try_take is refused because
             return false
     return false
 
-#export
-fn lock_test_hold(h: Holder$@): Void$@ //< takes the lock, holds it a while, and releases it
+extern fn lock_test_hold(h: Holder$@): Void$@ //<
+    //< takes the lock, holds it a while, and releases it
     defer $_lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
     h.holding.store(1)
     sys.sleep_ms(HOLD_MS)
@@ -329,20 +350,21 @@ fn test_file_lock()
     again.free()
     $h: = Holder::{ .path = path, .holding = thread.Atomic_sz(0),
         .let_go = thread.Atomic_sz(0) }
-    t: = thread.Thread.spawn<|Holder|>(lock_test_hold, h@) catch panic("the holder must start")
+    $t: = thread.Thread.spawn<|Holder|>(lock_test_hold, h@) catch panic("the holder must start")
     for h.holding.load() == 0
         sys.sleep_ms(5)
     $waited: = fs.File_lock.take(path) catch panic("take must get the lock once it is let go")
     assert(h.let_go.load() == 1, "take must wait until the holder lets the lock go")
     waited.free()
-    t.join_and_free()
+    t.free()
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("a second holder is refused or waits, and the lock is free once let go")
 
 // ==========================================
 // std/thread: a Mutex locked again on the thread holding it stops the program with the reason. So
-// does one unlocked from a thread that does not hold it. Without the check POSIX deadlocked and
-// Windows let the second lock through, so each runs as a child.
+// does one unlocked from a thread that does not hold it, and a thread that ends holding one.
+// Without the check POSIX deadlocked and Windows let the second lock through, and the next lock
+// after such an end waited for ever. So each runs as a child.
 // ==========================================
 priv const RELOCK_SRC: U8[] = //< a child that locks one mutex twice on one thread
     """import "std/io"
@@ -358,33 +380,101 @@ fn main()
 priv const FOREIGN_UNLOCK_SRC: U8[] = //< a child whose second thread unlocks the main one's mutex
     """import "std/thread"
 
-#export
-fn foreign_unlock(m: thread.Mutex<|I32|>$@): Void$@
+extern fn foreign_unlock(m: thread.Mutex<|I32|>$@): Void$@
   m.unlock()
   return null
 
 fn main()
   $m: = thread.Mutex<|I32|>(0) catch panic("the mutex must be created")
   _v: = m.lock()
-  t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(foreign_unlock, m@) catch panic("must start")
-  t.join_and_free()
+  $t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(foreign_unlock, m@) catch panic("must start")
+  t.free()
   m.unlock()
 """
 
-fn expect_lock_misuse(relock: U8[][], foreign_unlock: U8[][], arena: Arena$@) //<
-    //< Runs the two children and checks that each stopped with its reason
+priv const EXIT_HOLDING_SRC: U8[] = //< a child whose second thread ends while it holds the lock
+    //< **Its main thread does not lock after the join**: without the check, that lock waits for
+    //< ever, and the test would wait with it.
+    """import "std/thread"
+
+extern fn forget_unlock(m: thread.Mutex<|I32|>$@): Void$@
+  _v: = m.lock()
+  return null
+
+fn main()
+  $m: = thread.Mutex<|I32|>(0) catch panic("the mutex must be created")
+  $t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(forget_unlock, m@) catch panic("must start")
+  t.free()
+"""
+
+fn expect_lock_misuse( //< runs the three children and checks that each stopped with its reason
     //< The argvs are given whole, so a run under Wine can pass children built beforehand.
+    relock: U8[][],
+    foreign_unlock: U8[][],
+    exit_holding: U8[][],
+    arena: Arena$@,
+)
     relocked: = sys_test.stops_with(relock, "Mutex.lock: this thread already holds the lock", arena)
     assert(relocked, "a second lock on the holding thread must stop the program with the reason")
     why: = "Mutex.unlock: this thread does not hold the lock"
     unlocked: = sys_test.stops_with(foreign_unlock, why, arena)
     assert(unlocked, "an unlock from a thread that does not hold the lock must stop the program")
+    ended: = sys_test.stops_with(exit_holding, "Thread: the thread ended while it holds a Mutex",
+        arena)
+    assert(ended, "a thread that ends while it holds a lock must stop the program")
 
 fn test_mutex_misuse(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
-    verdict.start("[Thread] a mutex locked twice on one thread, or unlocked by another, stops...")
+    verdict.start("[Thread] a mutex misused (re-lock, foreign unlock, held at the end) stops...")
     expect_lock_misuse(sys_test.child_argv(ksplc, "mutex_relock", RELOCK_SRC, arena),
-        sys_test.child_argv(ksplc, "mutex_foreign_unlock", FOREIGN_UNLOCK_SRC, arena), arena)
-    verdict.pass("a re-lock and a foreign unlock each stop the program and say why.")
+        sys_test.child_argv(ksplc, "mutex_foreign_unlock", FOREIGN_UNLOCK_SRC, arena),
+        sys_test.child_argv(ksplc, "mutex_exit_holding", EXIT_HOLDING_SRC, arena), arena)
+    verdict.pass("each misuse of a mutex stops the program and says why.")
+
+// ==========================================
+// std/thread: a signal or a broadcast from a thread that does not hold the lock stops the program
+// with the reason. Given so, it can come between a waiter's check and its wait, and be lost.
+// ==========================================
+priv const FOREIGN_SIGNAL_SRC: U8[] = //< a child whose second thread signals while main holds
+    """import "std/thread"
+
+struct Pair
+  m: thread.Mutex<|I32|>
+  cv: thread.Cond_var
+
+extern fn foreign_signal(p: Pair$@): Void$@
+  p.cv.signal(p.m@)
+  return null
+
+fn main()
+  m: = thread.Mutex<|I32|>(0) catch panic("the mutex must be created")
+  cv: = thread.Cond_var() catch panic("the condition variable must be created")
+  $p: = Pair::{ .m = m, .cv = cv }
+  _v: = p.m.lock()
+  $t: = thread.Thread.spawn<|Pair|>(foreign_signal, p@) catch panic("must start")
+  t.free()
+  p.m.unlock()
+"""
+priv const UNLOCKED_BROADCAST_SRC: U8[] = //< a child that broadcasts with the lock free
+    """import "std/thread"
+
+fn main()
+  m: = thread.Mutex<|I32|>(0) catch panic("the mutex must be created")
+  cv: = thread.Cond_var() catch panic("the condition variable must be created")
+  cv.broadcast(m@)
+"""
+
+fn test_wakeup_without_lock(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
+    verdict.start("[Thread] a signal or a broadcast without the lock stops the program...")
+    signal_argv: = sys_test.child_argv(ksplc, "cond_foreign_signal", FOREIGN_SIGNAL_SRC, arena)
+    signalled: = sys_test.stops_with(signal_argv,
+        "Cond_var.signal: this thread does not hold the lock", arena)
+    assert(signalled, "a signal while another thread holds the lock must stop the program")
+    broadcast_argv: = sys_test.child_argv(ksplc, "cond_unlocked_broadcast", UNLOCKED_BROADCAST_SRC,
+        arena)
+    broadcast: = sys_test.stops_with(broadcast_argv,
+        "Cond_var.broadcast: this thread does not hold the lock", arena)
+    assert(broadcast, "a broadcast with the lock free must stop the program")
+    verdict.pass("a signal and a broadcast without the lock each stop the program and say why.")
 
 // ==========================================
 // Tests that a walk guarded by `std/stack_limit` stops before its stack runs out
@@ -424,8 +514,7 @@ fn test_stack_limit_on_main()
     assert(levels > FLOOR_LEVELS, "the walk goes deeper than a thousand levels before it stops")
     verdict.pass("")
 
-#export
-fn stack_test_walk(arg: Sz$@): Void$@
+extern fn stack_test_walk(arg: Sz$@): Void$@
     $limit: = Stack_limit(TEST_MARGIN)
     $seed: U8[1] = ::{}
     arg$ = dig(limit@, 0, U8$[]::seed)
@@ -434,8 +523,8 @@ fn stack_test_walk(arg: Sz$@): Void$@
 fn test_stack_limit_on_a_thread()
     verdict.start("[Stack] a walk that looks stops before a thread's own stack runs out...")
     $levels: Sz = 0
-    t: = thread.Thread.spawn<|Sz|>(stack_test_walk, levels@) catch panic("thread spawn failed")
-    t.join_and_free()
+    $t: = thread.Thread.spawn<|Sz|>(stack_test_walk, levels@) catch panic("thread spawn failed")
+    t.free()
     assert(levels > FLOOR_LEVELS, "on a thread too the walk goes deeper than a thousand levels")
     verdict.pass("")
 

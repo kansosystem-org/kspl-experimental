@@ -111,7 +111,7 @@ priv struct Pool //< the worker threads, and what they share
 priv struct Pool_seat //< one worker's view: the pool and its number in it
     pool: Pool$@
     index: Sz
-    thread: Thread$@ //< kept so the handle stays reachable; the thread runs to the program's end
+    thread: Thread //< kept so the handle stays reachable; the thread runs to the program's end
 
 #cfg(!freestanding)
 priv fn take_pieces(p: Pool$@, f: Span_fn, job: Void$@, count: Sz, grain: Sz) //<
@@ -123,8 +123,8 @@ priv fn take_pieces(p: Pool$@, f: Span_fn, job: Void$@, count: Sz, grain: Sz) //
         f(job, first, math.min(first + grain, count))
 
 #cfg(!freestanding)
-#export
-fn ksai_pool_worker(seat: Pool_seat$@): Void$@ //< one worker: it waits for a round, takes part
+extern fn ksai_pool_worker(seat: Pool_seat$@): Void$@ //<
+    //< one worker: it waits for a round, takes part
     p: = seat.pool
     $seen: Sz = 0
     for
@@ -146,7 +146,7 @@ fn ksai_pool_worker(seat: Pool_seat$@): Void$@ //< one worker: it waits for a ro
             // The last helper wakes the caller, under the lock, in case it has gone to sleep.
             if p.left.fetch_add(-1) == 1
                 _e: = p.round.lock()
-                p.done.signal()
+                p.done.signal(p.round@)
                 p.round.unlock()
 
 #cfg(!freestanding)
@@ -227,7 +227,7 @@ fn split( //< computes outputs [0, count) of a job, on up to `threads` threads; 
     s.helpers = helpers
     s.number += 1
     p.posted.store(s.number)
-    p.wake.broadcast()
+    p.wake.broadcast(p.round@)
     p.round.unlock()
     take_pieces(p, f, job, count, grain)
     $spins: Sz = 0

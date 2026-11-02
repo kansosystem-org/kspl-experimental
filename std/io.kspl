@@ -15,6 +15,7 @@ pub enum Io_error //< why a read, a write or an open failed
         //< Empty from an open `File_stream`, as `read_failed`.
     close_failed //< buffered data could not be flushed on closing
     invalid_arg //< an argument is invalid, such as a path containing a NUL
+    too_large //< more came than the caller's limit (`read_stdin`'s `max`)
 
 pub struct File_stream //< one open file to write to, read from and close
     //< **Its owner closes it with `free()`**, usually by declaring it with `defer` in front.
@@ -262,22 +263,21 @@ pub fn getchar(): U8?!Io_error //< one byte from standard input, or none at the 
         throw .read_failed("")
     return .none
 
-extern "C"
-    fn kspl_fopen_cstr(path_cstr: U8@, mode_cstr: U8@): Void$@ //<
-        //< Opens a file by its NUL-terminated path and mode; `fopen_checked` is the one caller
-    fn kspl_io_broken_pipe(): Void //<
-        //< Ends the program quietly when a write failed because nothing is reading
-        //< The definition and the rule are in "Writing when nobody is left to read it" in
-        //< `ksplc/gen/runtime/hosted.c`.
-        //< Caution: **Always call it after a write.** The runtime ignores SIGPIPE, so without it
-        //< **nobody notices that the output's destination is gone** (`prog | head -1` keeps
-        //< running, its writes silently discarded).
-    fn kspl_file_size(stream: Void$@): I64 //< an open stream's size in bytes
-        //< -1 when the size cannot be read. After a seek that succeeded the position is back at the
-        //< start. A stream that cannot seek (a pipe) stays where it was, so reading on is still
-        //< right.
-    fn kspl_path_info(path_ptr: U8@, path_len: Sz, size_out: I64$@, kind_out: I32$@,
-        mtime_out: I64$@): Bool //< `kind_out` in `fs.File_kind`'s order, from 0
+extern fn kspl_fopen_cstr(path_cstr: U8@, mode_cstr: U8@): Void$@ //<
+    //< Opens a file by its NUL-terminated path and mode; `fopen_checked` is the one caller
+extern fn kspl_io_broken_pipe(): Void //<
+    //< Ends the program quietly when a write failed because nothing is reading
+    //< The definition and the rule are in "Writing when nobody is left to read it" in
+    //< `ksplc/gen/runtime/hosted.c`.
+    //< Caution: **Always call it after a write.** The runtime ignores SIGPIPE, so without it
+    //< **nobody notices that the output's destination is gone** (`prog | head -1` keeps
+    //< running, its writes silently discarded).
+extern fn kspl_file_size(stream: Void$@): I64 //< an open stream's size in bytes
+    //< -1 when the size cannot be read. After a seek that succeeded the position is back at the
+    //< start. A stream that cannot seek (a pipe) stays where it was, so reading on is still
+    //< right.
+extern fn kspl_path_info(path_ptr: U8@, path_len: Sz, size_out: I64$@, kind_out: I32$@,
+    mtime_out: I64$@): Bool //< `kind_out` in `fs.File_kind`'s order, from 0
 pub fn set_line_buffered(): Void //< flushes standard output at every newline from here on
     //< A piped standard output (`| tee`) is fully buffered, so a watched run prints nothing until
     //< it ends. It avoids setvbuf(_IOLBF): `_IOLBF`'s value differs per libc, so a constant in the
@@ -285,8 +285,12 @@ pub fn set_line_buffered(): Void //< flushes standard output at every newline fr
     line_buffered = true
 pub fn read_stdin( //< the whole of standard input, read to the end
     //< **A failed read is an error, not the end.** Read as the end, input cut off by a fault
-    //< would pass for the whole of it.
+    //< would pass for the whole of it. **More than `max` fails too**, never cut silently: a part
+    //< would pass for the whole as well. **The limit is finite by default**, 256 MiB: standard
+    //< input can be a pipe from anywhere, and a pipe never has to end. A program that expects
+    //< more names its own `max`.
     arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
+    max: Sz = 268435456, //< the most bytes taken, 256 MiB unless named; one more is `too_large`
 ): U8[]!Io_error //< the text read, empty if nothing came; `read_failed("")` if a read failed
     defer $b: = Str_builder()
     $chunk: U8[4096] = ::{}
@@ -294,5 +298,7 @@ pub fn read_stdin( //< the whole of standard input, read to the end
         got: = read_into(libc.get_stdin(), U8$[]::chunk)!
         if got == 0
             break
+        if got > max - b.len
+            throw .too_large
         b.s(U8[]::{ .ptr = chunk@, .len = got })
     return arena.dup_str(b.slice())

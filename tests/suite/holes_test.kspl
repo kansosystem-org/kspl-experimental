@@ -1,0 +1,160 @@
+#!/usr/bin/env -S ksplc run
+//< The known holes: each way to break memory or threads that a probe found, and its verdict today
+//< **This pins what KSPL does about each shape**: ksplc refuses it, a sanitizer reports it, the
+//< program stops at run time, or it runs on silently (a hole the specification names). The
+//< programs and their verdicts are `MEM`, `HEAP` and `SYNC` in `../support/holes_*.kspl`.
+//< **A verdict that changes fails, either way**: a lost refusal is a regression, and a closed hole
+//< asks for its row and the specification's text to change too.
+//< Its failure case: `tests/support/holes_mem.kspl#p04e_arena_from_buffer`, a hole that must stay
+//< unreported, so a run that reports everything fails. **Mandatory where `KANSO_REQUIRE_ASAN=1` and
+//< `KANSO_REQUIRE_TSAN=1`** (`mk/test.mk` sets them on Linux). Elsewhere a C compiler without the
+//< sanitizers gives a `SKIP` line.
+import "ksplc/tests/support/harness" as ksplc_harness
+import "std/chars" // `find_str`, `sub` and `sub_from`
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/subproc"
+import "std/verdict"
+import "tests/support/harness"
+import "tests/support/harness_sanitizer"
+import "tests/support/holes_heap"
+import "tests/support/holes_mem" + { Hole, Verdict }
+import "tests/support/holes_sync"
+
+// **`-O0`**: a local's address read after its frame ends is seen only where the frame is not
+// optimised away. The memory sanitizers stop at the first report (`-fno-sanitize-recover`).
+priv const MEM_CFLAGS: U8[][_] = ::{ "-O0", "-g", "-fno-omit-frame-pointer",
+    "-fsanitize=address,undefined", "-fno-sanitize-recover=all" }
+priv const SYNC_CFLAGS: U8[][_] = ::{ "-O0", "-g", "-fno-omit-frame-pointer", "-fsanitize=thread" }
+priv const PLAIN_CFLAGS: U8[][_] = ::{ "-O0", "-g" }
+
+// **A leak is not one of these holes**, so the leak check stays off: a program that stops part
+// way leaks by design. A local read after its function returned is seen only with the frames kept.
+priv const ASAN_OPTIONS: U8[] = "ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=1"
+
+priv const SPEC: U8[] = "docs/SPEC-programming-language.md"
+
+priv const REPORT_MARKS: U8[][_] = ::{ "ERROR: AddressSanitizer", "ERROR: LeakSanitizer",
+    "runtime error:", "WARNING: ThreadSanitizer" } //< what opens a sanitizer's report, of any kind
+
+priv fn reported(out: U8[]): Bool //< whether a run's output holds a sanitizer's report
+    for m in REPORT_MARKS
+        if out.find_str(m).is_some()
+            return true
+    return false
+
+struct Run //< one program built and waiting to run, and what judges it
+    hole: Hole
+    sync: Bool //< built with ThreadSanitizer, not the memory sanitizers
+    exe: U8[]
+
+priv fn check_spec_names(h: Hole, spec: U8[], arena: Arena$@) //<
+    //< A hole's row names the specification's heading, and the words there that name the shape
+    //< **The link cannot rot unseen**: a heading renamed, or the shape's words moved, fails here.
+    $ok: = false
+    if at: = spec.find_str(arena.text().c('\n').s(h.spec).c('\n').take())
+        rest: = spec.sub_from(at + h.spec.len + 2)
+        next: = rest.find_str("\n#").unwrap_or(rest.len)
+        ok = rest.sub(0, next).find_str(h.says).is_some()
+    verdict.check(arena.text().s(h.name).s(": the specification names the hole in \"").s(h.spec)
+        .s("\"").take(), ok,
+        arena.text().s("no heading, or its section does not hold: ").s(h.says).take())
+
+priv fn compile_or_refuse(work: U8[], h: Hole, sync: Bool, runs: List<|Run|>$@, arena: Arena$@) //<
+    //< Writes one program, and either checks its refusal or builds it for its run
+    src: = fs.join(work, arena.text().s(h.name).s(".kspl").take(), arena)
+    io.write_file(src, h.source) catch
+        verdict.check(h.name, false, "cannot write it")
+        return
+    if h.verdict == Verdict.refused
+        r: = ksplc_harness.run_in(harness
+            .ksplc_argv_anywhere(U8[][]::{ src,
+            fs.join(work, arena.text().s(h.name).s(".c").take(), arena) }), work)
+        verdict.check(arena.text().s(h.name).s(": ").s(h.what).s(", is refused").take(),
+            !r.exited_with(0) && r.out.find_str(h.says).is_some(), r.out)
+        return
+    flags: =
+        (U8[][]::PLAIN_CFLAGS if h.verdict == Verdict.stops else U8[][]::SYNC_CFLAGS if sync
+        else U8[][]::MEM_CFLAGS)
+    b: = harness_sanitizer.build(work, src, fs.join(work, h.name, arena), flags, false, "", arena)
+    if b.exe.len == 0
+        verdict.check(arena.text().s(h.name).s(": ").s(h.what).s(", builds").take(), false, b.why)
+        return
+    runs.push(Run::{ .hole = h, .sync = sync, .exe = b.exe })
+
+priv fn judge(r: Run, out: verdict.Run_out, arena: Arena$@) //< one run against its verdict
+    h: = r.hole
+    seen: = reported(out.out)
+    switch h.verdict
+    case .reported
+        verdict.check(arena.text().s(h.name).s(": ").s(h.what).s(", is reported as `").s(h.says)
+            .s("`").take(), seen && out.out.find_str(h.says).is_some(), out.out)
+    case .stops
+        verdict.check(arena.text().s(h.name).s(": ").s(h.what).s(", stops at run time").take(),
+            !out.exited_with(0) && out.code.is_some() &&
+            out.out.find_str(h.says).is_some(), out.out)
+    case .hole
+        verdict.check(arena.text().s(h.name).s(": ").s(h.what)
+            .s(", runs on with no report (a hole the specification names)").take(),
+            out.exited_with(0) && !seen,
+            arena.text().s("the hole has closed: change its row and the specification's text\n")
+            .s(out.out).take())
+    case .refused {}
+
+priv fn run_all(runs: List<|Run|>@, work: U8[], arena: Arena$@) //<
+    //< runs them side by side, then judges
+    $jobs: = List<|subproc.Job|>(arena)
+    for r in runs
+        $argv: = List<|U8[]|>(arena)
+        argv.push("env")
+        if !r.sync
+            argv.push(ASAN_OPTIONS)
+        argv.push(r.exe)
+        jobs.push(subproc.Job::{ .argv = argv.slice(), .cwd = work })
+    outs: = verdict.run_children(jobs.slice(), fs.join(work, "jobs", arena),
+        verdict.DEFAULT_TIMEOUT_MS, arena)
+    for i in Range.asc(runs.len)
+        judge(runs.get(i), outs.get(i), arena)
+
+priv fn builds_here(work: U8[], arena: Arena$@): Bool //<
+    //< Whether both kinds of sanitizer build and run here; where one does not, it says so
+    //< **Each is required by its own switch**, as `sanitize_test` and `race_test` require them.
+    m: = harness_sanitizer.runs_with(work, U8[][]::{ "-fsanitize=address,undefined" },
+        U8[][]::{ ASAN_OPTIONS }, arena)
+    if m.len > 0
+        lacks: = arena.text()
+            .s("the C compiler cannot build with the address and undefined-behaviour sanitizers \
+                here: ").s(m).take()
+        ksplc_harness.require_or_skip("the known holes", "KANSO_REQUIRE_ASAN", lacks)
+        return false
+    s: = harness_sanitizer.runs_with(work, U8[][]::{ "-fsanitize=thread" }, U8[][]::{}, arena)
+    if s.len > 0
+        ksplc_harness.require_or_skip("the known holes", "KANSO_REQUIRE_TSAN",
+            arena.text().s("the C compiler cannot build with ThreadSanitizer: ").s(s).take())
+        return false
+    return true
+
+fn main(): I32
+    arena: = harness.begin(16 * 1024 * 1024)
+    work: = harness.sandbox("holes")
+    if !builds_here(work, arena)
+        return ksplc_harness.finish()
+    spec: = harness.read_under_root(SPEC)
+    $runs: = List<|Run|>(arena)
+    for h in holes_mem.MEM
+        if h.verdict == Verdict.hole
+            check_spec_names(h, spec, arena)
+        compile_or_refuse(work, h, false, runs@, arena)
+    for h in holes_heap.HEAP
+        if h.verdict == Verdict.hole
+            check_spec_names(h, spec, arena)
+        compile_or_refuse(work, h, false, runs@, arena)
+    for h in holes_sync.SYNC
+        if h.verdict == Verdict.hole
+            check_spec_names(h, spec, arena)
+        compile_or_refuse(work, h, true, runs@, arena)
+    run_all(runs@, work, arena)
+    return ksplc_harness.finish()

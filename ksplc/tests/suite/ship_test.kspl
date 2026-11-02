@@ -24,7 +24,7 @@ priv const OUTPUT_CAP: Sz = 64 * 1024 //< how much of each of a customer's outpu
 priv const LIBS: U8[][2] = ::{ "greet", "count" } //< the two vendors' libraries
 
 priv const EXPORTS: U8[][6] = ::{ "count_parse", "count_words", "greet_gone_peer", "greet_hello",
-    "greet_norm", "greet_stop" } //< every `#export` of the two, which alone may stay visible outside them
+    "greet_norm", "greet_stop" } //< what the two publish, which alone may stay visible outside them
 
 priv const C_EXPECTED: U8[] =
     """host starts
@@ -113,10 +113,10 @@ priv fn vendor_builds(vendor: U8[], arena: Arena$@): Bool //<
     return all
 
 priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<
-    //< Only the `#export` functions are visible outside each library's object
+    //< Only the `extern` functions are visible outside each library's object
     //< **Every runtime and std function is in the object**, used or not, so this catches a
     //< definition that left out `KSPL_LINK` without listing names.
-    name: = "only the #export functions are visible outside a --library object"
+    name: = "only the functions published to C are visible outside a --library object"
     nm: = "nm"
     if !harness.has_tool(nm)
         verdict.skip_check(name, "nm is not installed")
@@ -142,7 +142,7 @@ priv fn last_word(line: U8[], arena: Arena$@): U8[] //< a line's last word (nm's
             last = w
     return last
 
-priv fn is_export(sym: U8[]): Bool //< whether it is one of the `#export` names
+priv fn is_export(sym: U8[]): Bool //< whether it is one of the `extern` names
     for e in EXPORTS
         if sym.equals(e)
             return true

@@ -33,7 +33,10 @@ fn sum(words: List<|U8[]|>$@, x: U8): I32
     defer more.free()
     _n: = sum(more@, x)
     y: = I32::x
-    return y * 2 + I32::words.len + I32::ns.len
+    return y * 2 + I32::words.len + I32::ns.len + on_ready()
+
+extern fn on_ready(): I32
+    return 1
 """
 
 priv const MARKS_URI: U8[] = "file:///marks_probe.kspl"
@@ -78,6 +81,9 @@ priv const NAMED_SPOTS: Spot[_] = ::{ //< the positions on a name, and a piece o
         .want = "free(" },
     Spot::{ .line = "    defer more.free", .needle = "()",
         .name = "the position just past a method's name", .want = "free(" },
+    // **A function C calls by its own name says so**, as it is written (`extern`).
+    Spot::{ .line = "    return y", .needle = "on_ready", .step = 1,
+        .name = "a function published to C", .want = "extern fn" },
 }
 
 priv fn hover_at(c: jsonrpc_client.Client$@, spot: Spot, arena: Arena$@):

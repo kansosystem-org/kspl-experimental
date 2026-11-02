@@ -171,8 +171,8 @@ priv struct Worker //< one thread's part of a batch: every `stride`th sequence f
     stride: Sz
     arena: Arena$@ //< this worker's alone, emptied after each step
 
-#export
-fn fim_worker(w: Worker$@): Void$@ //< a worker's sequences of the batch, on the thread it runs on
+extern fn fim_worker(w: Worker$@): Void$@ //<
+    //< a worker's sequences of the batch, on the thread it runs on
     b: = w.batch
     for $s: = w.first; s < b.inputs.len; s += w.stride
         b.out[s] = b.model.grads_seq(b.inputs[s]@, b.targets[s].slice(), w.arena)
@@ -234,7 +234,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
         batch.out = List<|ai_model.Seq_grads<|F32|>|>.new_with_cap(count, work)
         for _i in Range.asc(count)
             batch.out.push(ai_model.Seq_grads<|F32|>::{})
-        $running: = List<|thread.Thread$@|>(work)
+        $running: = List<|thread.Thread|>(work)
         for t in Range(1, threads, 1)
             started: =
                 thread.Thread.spawn<|Worker|>(fim_worker, workers[t]@) catch
@@ -242,7 +242,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
             running.push(started)
         fim_worker(workers[0]@) // this thread is the first worker
         for t in Range.asc(running.len)
-            running[t].join_and_free()
+            running[t].free()
         $loss: = 0.0
         for s in Range.asc(count)
             loss += batch.out[s].loss / F64::count

@@ -6,7 +6,7 @@ Install a C compiler and Make as described in [`HOWTO-build.md`](HOWTO-build.md)
 
 ```sh
 make help        # every target you can type, one line each
-make ci          # every gate this machine runs: run it before you propose a change
+make ci          # every gate this machine can run: run it before you propose a change
 ```
 
 **Use the table in [`README.md`](README.md) to find a document for your task.** These three starting points are outside it:
@@ -76,7 +76,7 @@ sequenceDiagram
 
 * **Open an issue first** for anything beyond a small fix, with the problem and the expected result. Maintainers then decide whether they want the change before work starts.
 * **Submit a pull request as a proposal.** Maintainers close an accepted one with a note crediting its author, since a snapshot commit does not name each contributor.
-* **Run the gates before proposing a change**: `make ci`. Outside Linux, also run it in the dev container to cover the Linux-only gates ([`SPEC-gates.md`](SPEC-gates.md)).
+* **Run the gates before proposing a change**: `make ci`. Outside Linux it runs the Linux-only gates too, where this machine has their tools; the round lists last what it could not check ([`SPEC-gates.md`](SPEC-gates.md)).
 
 ## How AI-written work is handled
 

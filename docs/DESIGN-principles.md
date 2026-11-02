@@ -217,7 +217,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **A built-in `Char` type** | "There is no `Char` type" below |
 | **A multi-byte character literal** | "There is no `Char` type" below |
 | **An octal literal**, and a decimal integer that starts with `0` | "A decimal integer does not start with 0" below |
-| **Link flags in the source** | A flag forces one machine's link line on every machine, and can run code at build time. See "The library an `extern` block needs is named on the block" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
+| **Link flags in the source** | A flag forces one machine's link line on every machine, and can run code at build time. See "The libraries a file needs are named in the file" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **A postfix `if` / a conditional `break`** | The action before its condition runs against reading top to bottom |
 | **A deprecation mark** | A feature that stops paying its way is removed outright (Principle 1). A period of warnings would keep two ways alive |
 
@@ -382,7 +382,7 @@ C, C++ and Java read `0755` as octal (493), while Rust and Swift read it as deci
 | Where it remains | Reason |
 | :-- | :-- |
 | `std/mem` and `std/libc` | Memory and C speak in raw pointers: a failed allocation and C's "none" are a null. The rest of `std` returns `T?` |
-| Functions carrying `#export` | At the C boundary, `T?` does not match C's null convention in memory |
+| Functions published with `extern` | At the C boundary, `T?` does not match C's null convention in memory |
 | Tree walking in `ksplc/base` (`find_child` / `unwrap_top_level` / generating notation) | The same reason, suppressed with its grounds in the file-opening `##lint(H0701 = off)` |
 
 ### A default argument is allowed only for a foldable constant
@@ -414,18 +414,18 @@ C, C++ and Java read `0755` as octal (493), while Rust and Swift read it as deci
 
 **What is given up**: a call's text does not show how many arguments it passes.
 
-### Why `import` and `#export` are not made a matched pair of words
+### Why `import` has no partner word for C
 
-**`import` and `#export` look like a pair, but act on different axes.**
+**Naming and linking are different axes, and each is written with its own words.**
 
 | Axis | One end | The other end |
 | :-- | :-- | :-- |
 | Naming: which names a file can see | Bringing a name in (`import`) | Hiding one (not writing `pub`) |
-| Linking: which symbols the compiled output shares with other code | Emitting a symbol (`#export`) | Using an outside one (`extern "C"`) |
+| Linking: which symbols the compiled output shares with other code | Emitting a symbol (`extern` before a definition) | Using an outside one (`extern` before a declaration without a body) |
 
 The list of axes is "9. Files and import" in [`SPEC-programming-language.md`](SPEC-programming-language.md). Where other languages pair the words (C++20 modules, Java's `module-info`), the pair reaches past naming.
 
-**The words do not change.** A keyword like `export fn` would look as if it decided linkage, which visibility decides. Nor is it renamed `#c_name`: on wasm32 it also makes a module export ("11.3 Exposing a KSPL function to C (`#export`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+**A keyword like `export fn` is not used**: beside `import` it would look as if it decided naming, which visibility decides. Linking keeps the one word `extern` for both directions, and the body tells which ("`extern` is written on each declaration, in both directions" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)).
 
 **A combination that becomes ineffective across the axes is rejected**, as that section lists. On a method the cause is the name's uniqueness: symbols share one namespace, so only a name unique on its own can go out bare.
 

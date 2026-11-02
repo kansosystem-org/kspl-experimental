@@ -123,7 +123,7 @@ The exit code is the verdict.
 
 **The names on the `RESULT:` line are copied into the tally's own room** (`Names` in `std/verdict.kspl`). A caller often builds a name for `check` in its scratch arena and frees it straight after. An allocation instead would make the tally the one part of a failing run that can itself fail.
 
-**A child's run is read here too** (`run_child` / `run_children`). Its stdout and stderr come back as one text, since a diagnostic appears on either. A run that could not start, or was killed, has no code, and says why in that text. `exited_with(code)` asks whether the run ended by itself with that code. `run_child` waits at most `default_timeout_ms`, unless the check passes its own limit. `run_children` runs `jobs()` children side by side, in the input's order, so the judging code is the same either way.
+**A child's run is read here too** (`run_child` / `run_children`). Its stdout and stderr come back as one text, since a diagnostic appears on either. A run that could not start, or was killed, has no code, and says why in that text. `exited_with(code)` asks whether the run ended by itself with that code. Each run waits at most the limit the check passes, `default_timeout_ms` where it has no reason for another. `run_children` runs `jobs()` children side by side, in the input's order, so the judging code is the same either way.
 
 **A finding is indented on the lines below its `FAIL` line**, since the gates read a line by its head (`FAIL `, `RESULT:`).
 
@@ -206,6 +206,7 @@ The implementation is "Writing when nobody is left to read it" in [`../../ksplc/
 | Hand it input and let it write where the parent does | `spawn_feed(argv, cwd, input, idle_ms)` | Inherited (the terminal) |
 | Let it write where the parent does, as it goes, and stop it with all it started at a time limit | `spawn_limited(argv, cwd, timeout_ms)` + `wait(wait_ms)` | Inherited (the terminal) |
 | Talk back and forth | `spawn_piped(argv, cwd)` + `read(buf, timeout_ms)` | A pipe (with a timeout) |
+| Talk back and forth with a helper that lives as long as the caller | `spawn_piped_shared_err(argv, cwd)` + `read(buf, timeout_ms)` | A pipe; standard error is inherited (the caller's log) |
 
 Python's `subprocess` and Java's `ProcessBuilder` take options on one function, which is easier to start writing. But **that shape cannot stop the combinations that deadlock**. A wait for the child to finish, while the parent is still attached to its pipe, stalls once the buffer fills:
 
@@ -222,6 +223,8 @@ sequenceDiagram
 ```
 
 **Why only the functions that use a pipe take a timeout**: only a pipe's buffer can fill. So the timeout is an argument of the read, and of `spawn_feed`, and its expiry comes back as a value. It also tells a slow child from a dead one, which returns 0. The time limit of `run_capture`, `run_many` and `spawn_limited` is another thing: it bounds the child's whole run.
+
+**A helper that lives as long as its caller shares the caller's standard error** (`spawn_piped_shared_err`). The caller waits on the answer, so nothing would read a third pipe in that time. Once full, it would stop the helper, and a helper that dies would leave its last words in it. Shared, they reach the caller's log as they come.
 
 **Inherited and file-directed children share `Child`**, with `wait`, `alive` and `kill`. Neither needs its outputs drained before a wait, so one type serves one lifetime. `Child` has no read method: inherited output goes to the terminal, and redirected output to files. `Piped_child` stays separate and has no blocking `wait`, because its pipes can fill.
 
@@ -430,7 +433,7 @@ With only the outbound calls wide, `sys.args()[0]` is invalid UTF-8 on a child's
 
 **The C standard's path functions are not used.** `fopen` and `rename` are narrow, so `std/fs`'s `rename_path` and `std/io`'s `open` go through `kspl_rename_cstr` / `kspl_fopen_cstr`. `std/libc`'s `fopen` / `rename` carry a mark that says not to use them; they stay as companions of `fclose` / `fread`.
 
-**An OS function is not declared directly with `extern "C"`, because its declaration differs per environment.** `shutdown` is `int shutdown(int, int)` on POSIX and `int shutdown(SOCKET, int)` on Windows, where `SOCKET` is 64-bit unsigned. A declaration that matches one fails to compile on the other (winsock2.h: `conflicting types for 'shutdown'`).
+**An OS function is not declared directly with `extern`, because its declaration differs per environment.** `shutdown` is `int shutdown(int, int)` on POSIX and `int shutdown(SOCKET, int)` on Windows, where `SOCKET` is 64-bit unsigned. A declaration that matches one fails to compile on the other (winsock2.h: `conflicting types for 'shutdown'`).
 
 Caution: **Nobody can notice it on POSIX.** What fails is the Windows job or a user's machine. `std/net`'s `shut_write` goes through `kspl_net_shutdown_write`, which keeps even the constant (`SHUT_WR` / `SD_SEND`) in one place in C.
 
@@ -452,9 +455,38 @@ Note: One difference remains. POSIX renames a directory over an empty one, while
 
 Note: **A child's working directory stays under 260**, since the OS keeps a process's current directory within MAX_PATH unless the program opts in. `kspl_proc_start` in `ksplc/gen/runtime/hosted_spawn.c` passes the directory as it is.
 
+### A path from outside goes through one door
+
+**`fs.join_under(root, rel, dots, arena)` is the one way a path from outside reaches the file system.** Such a path is a URL's path, a query's `?path=`, or a path that a model or a document names. It returns `root/rel`, or the reason it refuses (`sys.Path_refusal`). The text half is `sys.outside_path_refusal`; the link check is `stays_under`'s, below.
+
+**Every form is refused on every OS**, so a test on Linux holds for Windows as well. Each row is a way that Windows, or the file system, reads the text as another name:
+
+| Refused | Example | Why |
+| :-- | :-- | :-- |
+| A `..` or `.` step | `a/../../x` | It leaves the root, or names the folder it stands in |
+| A root or a drive | `/x`, `\x`, `C:x`, `\\server\x` | It starts outside the root |
+| A `\` | `sub\.env` | Windows separates at it, so a check on the steps sees one name where the OS opens two |
+| An empty step | `a//b`, `a/` | A check skips it, while the OS reads it; Windows also reads no long name for it |
+| A control byte, DEL included | `x\0.html` | A NUL ends the name early in C; the others break a log or a terminal |
+| A `:` | `key::$DATA` | It starts a drive, or an NTFS stream that gives the file's contents |
+| A name ending in `.` or a space | `secret.key.` | Windows drops them, so the name opens another file |
+| A Windows device name | `CON`, `nul.txt`, `COM1` | It is a device at any level, and a read on an empty port never returns |
+| `~` before a digit | `GIT~1` | It is the form of a short name, so `.git` opens with no dot written |
+| A wildcard | `*`, `?`, `<`, `>`, `"`, `\|` | Windows's lookups read it as a pattern, so `.g*` can find `.git` |
+| A link or a junction on a step | | It can lead out of the root (the section below) |
+| A name starting with a dot, if the caller asks | `.git/config` | The section "A hidden name is found by its long name too" below |
+
+**A form is refused, never rewritten.** The forms rewritten would be one more rule that must agree with the OS's. A name with `~1`, a `\` or a `*` is legal on Linux, so such a file cannot be reached through this door. That is the cost of one rule for every OS. A server that offers a listing leaves such names out by the same check.
+
+**An empty path is the root itself.** A web server and a model's tools both name the root that way.
+
+Caution: **Do not check the path's parts again in the caller.** A second check drifts from this one. Two programs here once each fixed the same Windows hole four times, one form at a time. A form found later is added here once.
+
+`stays_under` keeps the milder text rule (`sys.is_safe_relative`) for a path that the program's user writes, such as a file named on the command line. There a `\` separates on Windows, and an empty step is a slip.
+
 ### A path stays under the root by refusal, not comparison
 
-`fs.stays_under(root, rel)` is the one check that a relative path from outside stays inside a folder. It reads the path's text and refuses any *link* along the way: a symbolic link, or on Windows also a junction. It does not work out the final path and compare it with the folder. A text check for `..` alone cannot block a link, since `link.txt` is a legitimate name.
+`fs.stays_under(root, rel)` checks that a relative path stays inside a folder, and `join_under` calls the same link check. It reads the path's text and refuses any *link* along the way: a symbolic link, or on Windows also a junction. It does not work out the final path and compare it with the folder. A text check for `..` alone cannot block a link, since `link.txt` is a legitimate name.
 
 **Resolving the path and comparing prefixes is not taken, because the answer splits on Windows.** "Is it a link" is one call on each system (`lstat`, `GetFileAttributesW`). But POSIX resolves with `realpath`, while Windows's `_fullpath` does not resolve reparse points. `GetFinalPathNameByHandleW` needs an open handle, so it would open first in order to refuse.
 
@@ -474,12 +506,11 @@ The LLVM backend's degenerate case is -1 too. Made 0, it would land on the unsaf
 
 ### A hidden name is found by its long name too
 
-`fs.has_hidden_on_path(root, rel, shown)` is the one check that a path under a root names a hidden file: a segment whose name starts with a dot. A root that is a checkout or holds settings has `.git/` and `.env`, so a program that serves or reads a root for others keeps them back. The caller names the dot names it lets through in `shown`. A web server passes `.well-known` (RFC 8615), since certificate issuance reads under it.
+`fs.join_under` with `dots` set to `.refused(shown)` is the one check that a path under a root names a hidden file: a segment whose name starts with a dot. A root that is a checkout or holds settings has `.git/` and `.env`, so a program that serves or reads a root for others keeps them back. The caller names the dot names it lets through in `shown`. A web server passes `.well-known` (RFC 8615), since certificate issuance reads under it.
 
 **Each segment's long name is checked too** (`fs.long_name`), because Windows opens `.git` by its short name `GIT~1`. The name as written starts with no dot.
 
-* **A segment ends at `\` too.** Windows opens `sub\.env` as `sub/.env`.
-* **An empty segment (`a//b`) is skipped.** Windows reads no long name for `a/`. A lookup for each extra `/` would also let one request keep a server's one thread busy.
+* **A `\` and an empty segment never reach the check.** The text rule above refuses both first. Windows opens `sub\.env` as `sub/.env`, and reads no long name for `a/`.
 * **A long name that cannot be read hides what stands there.** Only where nothing stands is the path not hidden, and the walk ends there, since nothing deeper can stand. So a file that a program is about to write is not refused.
 
 ### A link test answers true when it cannot tell
@@ -605,11 +636,13 @@ The only public lock is `thread.Mutex<|T|>`, which holds the data it protects. `
 | `MutexGuard<'a, T>` (the RAII guard) | None |
 | The lock on its own (not in std) | `Raw_mutex` (priv) |
 
-**There is no guard type, because the release is already guaranteed.** A *guard* is an object that unlocks when it goes out of scope (RAII). `defer mx.unlock()` releases the lock on leaving the scope, and lint [W0106] catches a forgotten one. `Cond_var.wait` takes a `Mutex<|T|>`, since a condition variable must be given the lock while it waits. `Cond_var` is in the same file, so it can reach the handle inside.
+**`lock()` and `unlock()` take a read-only pointer (`Self@`)**, as do `Atomic_sz`'s methods. So threads share a lock through an `Arc`, whose `get()` gives a read-only pointer (`Arc<|Mutex<|T|>|>`). `lock()` casts its receiver to reach the data writable; the lock is what makes that write safe. Why an `Arc`'s value is read-only is "An `Arc` shares a read-only value" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#an-arc-shares-a-read-only-value).
+
+**There is no guard type, because the release is already guaranteed.** A *guard* is an object that unlocks when it goes out of scope (RAII). `defer mx.unlock()` releases the lock on leaving the scope, and lint [W0106] catches a forgotten one. `Cond_var.wait`, `signal` and `broadcast` take a `Mutex<|T|>`, since a condition variable must be given the lock it works under. `Cond_var` is in the same file, so it can reach the handle inside.
 
 ### A mutex is locked once, by one thread
 
-A second lock of a `Mutex<|T|>` on the thread that already holds it stops the program with a message, on every OS. So does an unlock, or a wait on a `Cond_var` with it, from a thread that does not hold it.
+A second lock of a `Mutex<|T|>` on the thread that already holds it stops the program with a message, on every OS. So does an unlock, or a wait, signal or broadcast on a `Cond_var` with it, from a thread that does not hold it.
 
 A second lock on the holding thread is a bug: the second would see the first holder's change half-done. The OS's plain locks answer it differently, which is worse than either answer:
 
@@ -621,7 +654,9 @@ A second lock on the holding thread is a bug: the second would see the first hol
 | Go | Stops a program whose goroutines all wait |
 | KSPL's `Mutex<\|T\|>` | Stops the program with a message, on every OS |
 
-**How**: POSIX gives the check itself, as a mutex of type `PTHREAD_MUTEX_ERRORCHECK`. It returns `EDEADLK` for the second lock and `EPERM` for an unlock by another thread. Windows has no such lock, so the mutex is an `SRWLOCK` with the holder's thread id beside it, checked before each lock and unlock. `SleepConditionVariableSRW` waits on it. The price is a comparison per call on Windows, and on POSIX a read of the owner that glibc already keeps.
+**How**: the runtime keeps the holding thread beside the lock, on every OS, and checks it before each unlock and wait. POSIX's `PTHREAD_MUTEX_ERRORCHECK` mutex reports the second lock as `EDEADLK`. Windows's `SRWLOCK` reports nothing, so the kept holder is checked before each lock too. **No POSIX call asks whether this thread holds a lock**, which a check on a signal needs ("A wakeup is given under the lock" below). The price is an atomic read and write of the holder per call.
+
+**A thread that ends while it holds a lock stops the program** with a message, on every OS. Otherwise the next lock waits for ever, and nothing says why: the thread that would unlock it is gone. The runtime counts the locks each thread holds. A lock adds one and an unlock takes one away. A wait on a `Cond_var` gives the lock back before it returns, so it leaves the count as it is. When the thread's function returns, a count above 0 stops the program. The price is one add per lock and unlock, in memory of the thread's own.
 
 **Not offered: a re-entrant mutex** (one that the holding thread can lock again). Its use is code that calls itself while it holds the lock: the half-done read above, made legal.
 
@@ -630,6 +665,29 @@ A second lock on the holding thread is a bug: the second would see the first hol
 `Raw_mutex` and `Cond_var` hold one number (`I64`) that names the OS-side object, so they need not stay at one address. `new()` returns a value with no heap allocation, and `Mutex<|T|>` holds it by value too (`Mutex<|I32|>()` adds 0 bytes to the heap). **Their owner destroys the OS-side object with `free()`.** A `Mutex<|T|>`'s `free()` destroys the lock; what its value owns is the owner's to free before. **As a value type, a copy could free twice**, so both conform to `Move_only`, and a `Mutex<|T|>` is move-only through its lock.
 
 A lock kept in memory that the program allocated by hand is freed by hand too, before the block is given back.
+
+### A thread is a value that `free()` waits for
+
+`Thread.spawn` returns a `Thread` by value, which conforms to `Manual_free` and `Move_only`. **Its `free()` waits for the thread to end**, and is the one way to end it. So `defer $t: = Thread.spawn<|T|>(work, x@) catch …` waits at the end of the block, and a local whose address the thread was handed outlives it. [W0109] reports a thread that some path never waits for.
+
+| Not taken | Taken | Why |
+| :-- | :-- | :-- |
+| `spawn` returns a pointer to a heap block | A value holding the OS handle | Nothing to allocate, as with the lock ("The lock and the condition variable are value types") |
+| A `join_and_free()` beside `free()` | `free()` alone waits for it | `defer` in front of a declaration and the free tracking call `free()` by the `Manual_free` contract. A second name for the same end would be two ways to do one thing (Principle 6) |
+| The wait hands back the thread's result | `free()` returns nothing | `Manual_free`'s `free` returns nothing. The argument already goes both ways: the thread writes its result there, and `free()` makes the write visible |
+
+* **A copy is refused** (`Move_only`): two copies would wait for one OS thread twice, which is undefined.
+* **A zero value, or a thread already waited for, frees as nothing.** So an array or a list slot of threads can be freed whole.
+* **Not offered: a thread that is never waited for** (a *detached* thread). A thread that runs to the program's end, as a pool's worker does, keeps its `Thread` in a field that nothing frees.
+* Caution: **The entry still returns `Void$@`**, because the OS's thread entry has that shape. Return `null`; the value is not read.
+
+### A wakeup is given under the lock
+
+`Cond_var.signal(m)` and `broadcast(m)` take the lock the waiters take, and stop the program with a message when the calling thread does not hold it.
+
+**Why**: a wakeup given without the lock can come between a waiter's check of its condition and its wait. That waiter misses it and sleeps on, with nothing said. A test finds this only when the timing falls just so. Holding the lock costs one lock per wakeup, and the code that changed the condition usually holds it already.
+
+**Why the lock is an argument, not stored in the `Cond_var`**: both are values that move. A pointer to the lock, kept inside, would dangle after a move. The argument also names, at each call, the lock it is under, as `wait(m)` does.
 
 ### A bounded condition wait names how it ended
 

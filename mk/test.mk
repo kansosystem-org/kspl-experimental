@@ -126,7 +126,7 @@ SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-st
 
 # Linux's image alone holds their tool (`race`: clang's ThreadSanitizer; `sanitize`: its address,
 # leak and undefined-behaviour sanitizers): out of `test-suites`, run by `ci-shard-linux`.
-LINUX_SUITES := race sanitize
+LINUX_SUITES := race sanitize holes
 
 ALL_SUITES := $(SUITES) $(LINUX_SUITES)
 
@@ -359,6 +359,14 @@ endef
 test-simd: $(STAGE1_EXE)
 	@echo "# VERIFYING ksai's hot loops auto-vectorize (-O3 loop vectorizer)"
 	$(call simd_check,ksai/examples/llama_engine/main.kspl,ksai/tensor.kspl,simd_check)
+	@# **The check shows it can fail**: the same C beside a record in which no loop vectorized.
+	@: > $(LOG_DIR)/simd_none.yaml
+	@if awk -v src=ksai/tensor.kspl -v gen=$(TMP_DIR)/simd_check.c -v rec=$(LOG_DIR)/simd_none.yaml \
+		'$(simd_prog)' ksai/tensor.kspl $(TMP_DIR)/simd_check.c $(LOG_DIR)/simd_none.yaml \
+		> $(LOG_DIR)/simd_none.out; then \
+		echo "RESULT: SOME FAILED (1) -> the check passed a record in which no loop vectorized"; \
+		exit 1; fi
+	@echo "# a record in which no loop vectorized is refused"
 	$(call simd_check,ksai/examples/qwen_infer/main.kspl,ksai/nn.kspl,simd_check_qwen)
 	$(call simd_check,ksai/benches/bench_quant.kspl,ksai/quant.kspl,simd_check_quant)
 	$(call simd_check,ksai/benches/bench_qwen.kspl,ksai/delta_net.kspl,simd_check_delta)

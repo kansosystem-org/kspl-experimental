@@ -120,6 +120,10 @@ fn test_null_arena_text_and_bytes() //< the functions that return one block of t
     freed(noise)
     path: = fs.join("a", "b", null)
     freed(path)
+    under: = fs.join_under("a", "b/c.txt", .refused(U8[][]::{}), null)
+        catch panic("a plain path joins")
+    freed(under)
+    _out: = fs.join_under("a", "../b", .allowed, null) catch "refused"
     full: = fs.absolute("x", null) catch panic("the working directory is readable")
     freed(full)
     here: = fs.absolute(".", null) catch panic("the working directory is readable")
@@ -371,12 +375,13 @@ fn test_null_arena_children(ksplc: U8[]) //< the functions that run a child
         freed(ran.stderr_data)
     assert(many.len == 2 && started == 1, "run_many with a null arena: the second fails to start")
     many.free()
-    $outs: = verdict.run_children(jobs, work, null)
+    $outs: = verdict.run_children(jobs, work, verdict.DEFAULT_TIMEOUT_MS, null)
     assert(outs.len == 2 && outs.get(0).exited_with(0), "run_children with a null arena")
     for ran in outs
         freed(ran.out)
     outs.free()
-    $lost: = verdict.run_children(jobs, "out/tmp/kspl_test_null_arena/f/w", null)
+    $lost: = verdict.run_children(jobs, "out/tmp/kspl_test_null_arena/f/w",
+        verdict.DEFAULT_TIMEOUT_MS, null)
     assert(lost.len == 2 && lost.get(1).code.is_none(), "a work folder that cannot be made is said")
     for ran in lost
         freed(ran.out)

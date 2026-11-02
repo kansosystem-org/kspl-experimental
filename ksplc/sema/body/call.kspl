@@ -13,6 +13,8 @@ import "ksplc/sema/body/call_args" { check_args_against_instance, infer_call_arg
     infer_value_call_args }
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/generic_infer" as sema_body_generic_infer
+import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
+import "ksplc/sema/body/stmt_escape" as sema_body_stmt_escape
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
@@ -21,6 +23,7 @@ import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" as _sema_session_ctx + { Sema_ctx, Sema_error }
+import "ksplc/sema/type/arc" as _sema_type_arc // `one_thread_count_path`
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
@@ -103,8 +106,8 @@ priv fn check_method_receiver_lvalue(c: Sema_ctx$@, left: Ast_node$@, def_node: 
             // Caution: **Writing (`Self$@`) is rejected**: the temporary is a copy, so the
             // caller never sees the write (`make_point().set_n(5)`: "called, nothing
             // happened").
-            needs_hoist: = c.env.receiver_needs_hoist(recv_node)
-            if needs_hoist && requires_mut_ptr
+            is_copy: = c.env.receiver_is_copy(recv_node, recv_node.type_id)
+            if is_copy && requires_mut_ptr
                 c.clear_scratch()
                     .s("cannot call a method that writes its receiver ('Self$@') on a temporary \
                         object. The write would affect a copy that is then discarded. Bind the \
@@ -114,7 +117,7 @@ priv fn check_method_receiver_lvalue(c: Sema_ctx$@, left: Ast_node$@, def_node: 
             // **A `Self$@` method must demand the same permission as an assignment**, or `v.n =
             // 9` is rejected while `v.bump()` passes (on `const` data, a write to ROM). A
             // temporary is rejected above; "a read-only location" does not describe it.
-            if requires_mut_ptr && !needs_hoist && c.place_is_readonly(recv_node) &&
+            if requires_mut_ptr && !is_copy && c.place_is_readonly(recv_node) &&
                 !c.refuse_made_binding_write(recv_node)
                 c.clear_scratch()
                     .s("cannot call a method that takes a writable receiver ('Self$@') on a \
@@ -177,6 +180,32 @@ priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_
         return true
     return false
 
+priv const SPAWN_FQN: U8[] = "std.thread.Thread.spawn" //< starts a thread, handing it `arg: T$@`
+
+priv fn refuses_one_thread_count(c: Sema_ctx$@, node: Ast_node$@,
+    fn_tmpl: sema_decl_mono.Fn_instance, inst_args: I32[]): Bool //<
+        //< Rejects `Thread.spawn<|T|>` where T reaches an `Rc` or a `Weak_rc`
+        //< Two threads would change a count kept for one: a lost update frees the value while in
+        //< use, or leaks it. **It sees only spawn's argument**, not a global the thread reads, so
+        //< it is a refusal of one sure bug, not a promise that what spawn takes is safe to share.
+    if !fn_tmpl.template.equals(SPAWN_FQN) || inst_args.len != 1
+        return false
+    defer $path: = Str_builder()
+    steps: = c.env.one_thread_count_path(inst_args[0], path@)
+    if steps == 0
+        return false
+    c.clear_scratch().s("cannot hand '\{c.env.display(inst_args[0])\}' to another thread: ")
+    if steps > 1
+        c.scratch.s("it holds an 'Rc' or a 'Weak_rc' (\{path.slice()\}), whose")
+    else
+        c.scratch.s("an 'Rc' or a 'Weak_rc' has a")
+    c.scratch
+        .s(" count only one thread may change. Two threads changing it lose counts, so the value is \
+            freed while in use or never freed. Use 'Arc' in place of 'Rc' and 'Weak_arc' in place \
+            of 'Weak_rc': threads can share their count.")
+    c.err(node, c.scratch.slice())
+    return true
+
 priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
     fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node$@, def_node: Ast_node$@):
     Ast_node$@?!Sema_error //<
@@ -214,6 +243,8 @@ priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
             args_node, is_method_access)
         if inst_args.len == 0 || refuses_fn_name_binding(c, left, args_node, inst_args)
             return I32::sema_type_env.Builtin_type_id.unknown
+    if refuses_one_thread_count(c, node, fn_tmpl, inst_args)
+        return I32::sema_type_env.Builtin_type_id.unknown
     // The call position is recorded during the instantiation. So a bound violation
     // (`f<|T: some.Trait|>`) is reported here rather than on the template's line
     // (check_type_constraint in sema/decl/resolve.kspl). Instantiations nest, so it is restored.
@@ -470,6 +501,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         arg_def: = inst_node.unwrap_or(def_node)
         args_generic: = is_generic_call && inst_node.is_none()
         infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic)!
+        sema_body_lint_unchecked.note_call(c, node, sym, args_node)
 
         // **Before the instance is made**: `put`'s body calls `fmt`, which an enum lacks.
         if is_generic_call
@@ -479,6 +511,10 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
             type_id =
                 infer_generic_call_result(c, node, left, fn_tmpl, written, is_method_access,
                 def_node, args_node, type_id)!
+        // The arguments are converted by now, so a trait value made from a local shows here.
+        if is_method_access && def_node != null
+            sema_body_stmt_escape.check_frame_kept_by_call(c, left.get_postfix_receiver(), def_node,
+                args_node)
     return type_id
 
 priv fn callee_symbol(left: Ast_node$@, named_sym: Sema_symbol$@, is_method_access: Bool):

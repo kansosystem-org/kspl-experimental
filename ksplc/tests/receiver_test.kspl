@@ -200,13 +200,17 @@ impl U8[]
         r.len -= 1
         return r.len
 
-fn test_string_literal_taken_by_address() //<
-    //< A string literal whose address is taken is a fresh value each time
-    //< A literal read as a value is a named `static const` in the C. `&` on that constant would
-    //< hand a writing receiver read-only memory, so the C warns and the write crashes.
-    verdict.start("[Receiver] a writing method and '@' on a string literal test...")
-    assert("abcd".rv_drop_last() == 3, "a method that changes the descriptor runs on a literal")
-    assert("abcd".rv_drop_last() == 3, "and the next use of the same literal starts from 4")
-    p: = "abcd"@
-    assert(p.len == 4 && "abcd".len == 4, "an address taken of a literal reads it whole")
-    verdict.pass("a literal whose address is taken is its own value, not the shared constant.")
+    priv fn rv_len(r: Self@): Sz //< reads the descriptor through a pointer
+        return r.len
+
+fn test_string_literal_as_a_receiver() //<
+    //< A string literal reads through a `Self@` receiver; a `Self$@` one takes a `$` copy
+    //< A literal read as a value is a named `static const` in the C. `&` on that constant hands
+    //< the receiver read-only memory, so a literal is no place: `"abcd"@` and `"abcd".m()` for a
+    //< `Self$@` method are refused (`tests/negative/pointer.kspl`).
+    verdict.start("[Receiver] a string literal as a receiver test...")
+    assert("abcd".rv_len() == 4, "a method that reads the descriptor runs on a literal")
+    $s: U8[] = "abcd"
+    assert(s.rv_drop_last() == 3, "a method that changes the descriptor runs on a '$' copy")
+    assert("abcd".rv_len() == 4, "and the literal keeps its length")
+    verdict.pass("a literal is read whole; a copy in a '$' name is written.")

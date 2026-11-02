@@ -80,24 +80,24 @@ priv $g_rr_start: Sz = 0 // where the search starts, for round-robin among equal
 priv $g_wait_seq: U64 = 0 // how many waits have begun (block_current stamps each wait with it)
 priv $g_main_ctx: Void$@ = null
 // --- The port ABI (each port implements it; POSIX: ksos/port/posix/ksos_port_posix.c) ---
-extern "C"
-    fn ksos_port_ctx_create(stack: U8$@, stack_size: Sz): Void$@ //< null when none is left
-    fn ksos_port_ctx_create_main(): Void$@
-    fn ksos_port_ctx_free(ctx: Void$@) //<
-        //< returns a deleted task's context; it may be the running one, which a switch then leaves
-    fn ksos_port_switch(from_ctx: Void$@, to_ctx: Void$@) //<
-        //< saves the running task and runs to; a null from (a deleted task) saves none
-        //< A port that records the running context itself (Cortex-M) does not read from.
-    fn ksos_port_tick_start(reload: U32) //<
-        //< starts the periodic timer (preemption); the port implements it
-    fn ksos_port_irq_save(): U32 //<
-        //< disables interrupts and returns the prior state (a critical section begins)
-    fn ksos_port_irq_restore(state: U32) //< restores the interrupt state (a critical section ends)
-    fn ksos_port_in_isr(): U32 //< non-zero inside an interrupt handler (0 with no handler mode)
-    fn ksos_port_wait_irq() //<
-        //< [Call it inside a critical section] sleeps until an interrupt, and lets its handler run
-        //< It returns inside the critical section again. Opening the section and sleeping are one
-        //< step, so an interrupt arriving after the caller's last look still wakes it.
+extern fn ksos_port_ctx_create(stack: U8$@, stack_size: Sz): Void$@ //< null when none is left
+extern fn ksos_port_ctx_create_main(): Void$@
+extern fn ksos_port_ctx_free(ctx: Void$@) //<
+    //< returns a deleted task's context; it may be the running one, which a switch then leaves
+extern fn ksos_port_switch(from_ctx: Void$@, to_ctx: Void$@) //<
+    //< saves the running task and runs to; a null from (a deleted task) saves none
+    //< A port that records the running context itself (Cortex-M) does not read from.
+extern fn ksos_port_tick_start(reload: U32) //<
+    //< starts the periodic timer (preemption); the port implements it
+extern fn ksos_port_irq_save(): U32 //<
+    //< disables interrupts and returns the prior state (a critical section begins)
+extern fn ksos_port_irq_restore(state: U32) //<
+    //< restores the interrupt state (a critical section ends)
+extern fn ksos_port_in_isr(): U32 //< non-zero inside an interrupt handler (0 with no handler mode)
+extern fn ksos_port_wait_irq() //<
+    //< [Call it inside a critical section] sleeps until an interrupt, and lets its handler run
+    //< It returns inside the critical section again. Opening the section and sleeping are one
+    //< step, so an interrupt arriving after the caller's last look still wakes it.
 
 priv fn find_task_slot(): Sz //<
     //< Reuses a free slot (a null slot released by Task.delete), or else adds one at the end
@@ -320,8 +320,7 @@ priv fn check_stack_guard(t: Task$@) //< checks that t's stack guard is still as
 // Caution: **Switch away inside the section that marks it done**, as Task.delete does. Outside it,
 // a tick can run schedule() after an outer one chose the next task but before it switched. That
 // saves this stack as the next task's context, so two tasks run on one stack.
-#export
-fn ksos_trampoline()
+extern fn ksos_trampoline()
     t: = g_current
     if t != null
         e: = t.entry
@@ -445,7 +444,7 @@ fn deadline_passed(deadline: U64?): Bool //<
     return false
 // --- The critical section (the synchronization primitives and the drivers use it) ---
 fn irq_save(): U32 //< the port's interrupt disable, offered as a kernel API
-    //< Caution: **Do not copy the port's names around**: an `extern "C"` declaration in each file
+    //< Caution: **Do not copy the port's names around**: an `extern` declaration in each file
     //< multiplies the places that know the ABI. task.kspl itself calls ksos_port_irq_save/restore
     //< directly.
     return ksos_port_irq_save()
@@ -711,8 +710,7 @@ fn enable_idle_task(stack: U8$[], hook: Idle_hook) //<
 // ksos_port_cm.c). The POSIX port blocks SIGALRM inside its own handler (see
 // ksos_port_posix.c). It still takes the critical section. An interrupt of higher priority than
 // SysTick can give, and that give's schedule must not run in the middle of this one.
-#export
-fn ksos_tick()
+extern fn ksos_tick()
     s: = ksos_port_irq_save()
     defer ksos_port_irq_restore(s)
     g_tick += 1

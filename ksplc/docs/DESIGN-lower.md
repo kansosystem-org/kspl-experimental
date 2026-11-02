@@ -62,7 +62,7 @@ The steps, one by one:
     | a method in an `impl` | `kspl_`, the mangled name of the `impl`'s type, then `_` and the method's name |
     | a generic function's or method's instance | `kspl_` and the instance's mangled name |
     | a type | the type's mangled name (`mangle_type_id_to`), which every use of the type also writes |
-    | an `extern` item, an `#export`, or what Lower synthesized | its name as written: it is already the C name (`uses_verbatim_c_name`) |
+    | an `extern` declaration or definition, or what Lower synthesized | its name as written: it is already the C name (`uses_verbatim_c_name`) |
   * A reference takes the same name from its declaration's symbol (`get_c_identifier_for_sym_to`).
   * **A local that hides another of its name takes a made name** (`name_hiding_local`, spelled by `hiding_local_name` in `base/c_name.kspl`). In C, `I32 x = x + 1;` reads the new `x`, and a local named like a parameter is a redefinition. In KSPL, the initializer reads the outer one. Sema counts how many names a local hides (`Sema_symbol.hidden_count`, set by `define_symbol`), and the made name comes from that count. So a node Lower cloned takes the same name.
   * **A local spelled as a global's C name takes a made name the same way** (`global_c_names` in `lower/abi.kspl`). A local `Slice_U8` would hide the core slice type of `std/lang`, and the C compiler would refuse the next use. The set holds every type's C name and the names written as they stand. Every other global's C name opens with `kspl_`, so that prefix is tested by spelling.
@@ -106,7 +106,7 @@ Read only one, and the other becomes C referring to an undefined symbol (`gentra
 | starting point | why the tree shows no call to it |
 | :-- | :-- |
 | `main` | the C runtime calls it (it is found with `find_main_symbol`) |
-| the `#export` functions | their callers are on C's side, invisible from the tree |
+| the `extern` definitions | their callers are on C's side, invisible from the tree |
 | references from the initializer of a non-function top-level declaration (`const` / `var`) | a trait's vtable naming a thunk as data is one, and it does not look like a call |
 
 Caution: **Walk the edges by `def_node`, never by name** ("The limits on building an AST, and linking `def_node`"). The backend decides a call target's name (`emit_generic_path` in `gen/c/expr.kspl`, from the `type_id`). Walking by name would copy that rule here, and the copies would drift.

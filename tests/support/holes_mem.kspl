@@ -1,0 +1,894 @@
+//< The known holes in memory safety: each program, and what happens to it today
+//< `tests/suite/holes_test.kspl` runs every program here and in `holes_sync.kspl`, and checks
+//< that its verdict holds. **A verdict that changes fails the suite, either way.** A refusal that
+//< no longer comes is a regression. A hole that closes means the table, and the text of
+//< `docs/SPEC-programming-language.md` that names it, must change with it.
+//< Each program is one way to break memory that a probe found. Its name is the probe's.
+
+enum Verdict //< what happens to one program today
+    refused //< ksplc refuses it; `says` is a piece of the error
+    reported //< it builds and runs, and the sanitizer reports it; `says` is a piece of the report
+    stops //<
+        //< Built without a sanitizer, it stops at run time; `says` is a piece of what it prints
+        //< **The program's own check stops it, or the OS's.** A sanitizer would see the bad access
+        //< that check makes first, so the plain build is what a user runs.
+    hole //<
+        //< It runs to its end, and the sanitizer reports nothing
+        //< **Only a hole the specification names stands here**: `spec` is its heading, and `says`
+        //< the words there that name the shape.
+
+struct Hole //< one program, and its verdict today
+    name: U8[] //< the probe's name
+    what: U8[] //< what it does wrong, in a check's words
+    source: U8[]
+    verdict: Verdict
+    says: U8[]
+    spec: U8[] //< for a hole, the heading in `docs/SPEC-programming-language.md`; else empty
+
+priv const P01_UAF_ALLOC: U8[] =
+    """
+import "std/io"
+import "std/mem"
+import "std/strfmt" as _strfmt
+fn main()
+    p: = I32$@::mem.alloc(16)
+    p$ = 41
+    mem.dealloc(Void$@::p)
+    q: = p
+    io.out().s("read after free: \{q$\}\n")
+"""
+
+priv const P01C_UAF_DIRECT: U8[] =
+    """
+import "std/io"
+import "std/mem"
+import "std/strfmt" as _strfmt
+fn main()
+    p: = I32$@::mem.alloc(16)
+    p$ = 41
+    mem.dealloc(Void$@::p)
+    io.out().s("read after free direct: \{p$\}\n")
+"""
+
+priv const P02B_DOUBLE_FREE_DIRECT: U8[] =
+    """
+import "std/mem"
+fn main()
+    p: = mem.alloc(16)
+    mem.dealloc(p)
+    mem.dealloc(p)
+"""
+
+priv const P06A_RETURN_ADDR: U8[] =
+    """
+priv fn f(): I32@
+    x: I32 = 5
+    return x@
+fn main()
+    _p: = f()
+"""
+
+priv const P06D_STRUCT_FIELD_LATER: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv struct H
+    s: U8[]
+priv fn f(): H
+    a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+    $h: H = ::{ .s = "" }
+    h.s = U8[]::a
+    return h
+fn main()
+    h: = f()
+    io.out().s("h.s = \{h.s\}\n")
+"""
+
+priv const P06F_SLICE_RETURN: U8[] =
+    """
+priv fn f(): U8[]
+    a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+    return U8[]::a
+fn main()
+    _s: = f()
+"""
+
+priv const P06G_SLICE_GLOBAL: U8[] =
+    """
+priv $g: U8[] = ""
+priv fn f()
+    a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+    g = U8[]::a
+fn main()
+    f()
+"""
+
+priv const P06J_PARAM_ADDR: U8[] =
+    """
+priv fn f(v: I32): I32@
+    return v@
+fn main()
+    _p: = f(3)
+"""
+
+priv const P08_UNINIT: U8[] =
+    """
+import "std/io"
+import "std/sys"
+import "std/strfmt" as _strfmt
+fn main()
+    args: = sys.args()
+    $x: I32
+    if args.len > 5
+        x = 1
+    io.out().s("x \{x\}\n")
+"""
+
+priv const P08C_UNINIT_ADDR: U8[] =
+    """
+import "std/io"
+import "std/sys"
+import "std/strfmt" as _strfmt
+priv fn fill(p: I32$@, ok: Bool)
+    if ok
+        p$ = 1
+fn main()
+    args: = sys.args()
+    $x: I32
+    fill(x@, args.len > 5)
+    io.out().s("x \{x\}\n")
+"""
+
+priv const P11B_INT_TO_PTR: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    p: = I32$@::0xdead_beef
+    p$ = 1
+    io.out().s("survived\n")
+"""
+
+priv const P15_FFI: U8[] =
+    """
+import "std/io"
+import "std/libc"
+import "std/strfmt" as _strfmt
+priv fn fill(dst: U8$[])
+    _n: = libc.snprintf(dst.ptr, 64, "%s", "a string much longer than four bytes, written by C")
+fn main()
+    $buf: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+    $guard: U8[4] = ::{ 'w', 'x', 'y', 'z' }
+    fill(U8$[]::buf)
+    io.out().s("guard: \{U8[]::guard\}\n")
+"""
+
+priv const P15B_FFI_VARIADIC_SLICE: U8[] =
+    """
+import "std/libc"
+fn main()
+    $buf: U8[32] = ::{}
+    name: U8[] = "kanso"
+    _n: = libc.snprintf((U8$[]::buf).ptr, 32, "%s", name)
+"""
+
+priv const P01B_UAF_COPY: U8[] =
+    """
+import "std/io"
+import "std/mem"
+import "std/strfmt" as _strfmt
+fn main()
+    p: = I32$@::mem.alloc(16)
+    q: = p
+    p$ = 41
+    mem.dealloc(Void$@::p)
+    q$ = 7
+    io.out().s("read after free via alias: \{q$\}\n")
+"""
+
+priv const P03_LIST_PTR_GROWTH: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    defer $xs: = List<|I32|>(null)
+    xs.push(1)
+    first: = xs[0]@
+    for i in Range.asc(100)
+        xs.push(I32::i)
+    first$ = 99
+    io.out().s("first: \{first$\}\n")
+"""
+
+priv const P03B_LIST_SLICE_GROWTH: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    defer $xs: = List<|I32|>(null)
+    xs.push(1)
+    view: = xs.slice()
+    for i in Range.asc(100)
+        xs.push(I32::i)
+    view[0] = 5
+    io.out().s("view[0]: \{view[0]\}\n")
+"""
+
+priv const P04_ARENA_RESET: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+fn main()
+    defer $a: = Arena(4096)
+    s: = a.dup_str("hello")
+    _big: = a.alloc(8192)
+    a.reset()
+    io.out().s("after reset: \{s\}\n")
+"""
+
+priv const P04B_ARENA_RESTORE: U8[] =
+    """
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+fn main()
+    defer $a: = Arena(64)
+    mark: = a.save()
+    s: = a.dup_str("hello, this string goes in a fresh chunk")
+    a.restore(mark)
+    io.out().s("after restore: \{s\}\n")
+"""
+
+priv const P04C_ARENA_FREE: U8[] =
+    """
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+fn main()
+    $a: = Arena(4096)
+    s: = a.dup_str("hello")
+    a.free()
+    io.out().s("after free: \{s\}\n")
+"""
+
+priv const P04D_ARENA_RESET_ONECHUNK: U8[] =
+    """
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+fn main()
+    defer $a: = Arena(4096)
+    s: = a.dup_str("hello")
+    a.reset()
+    t: = a.dup_str("WORLD")
+    io.out().s("s after reset: \{s\} (t: \{t\})\n")
+"""
+
+priv const P06B_GLOBAL_STORE: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv $g: I32@ = null
+priv fn f()
+    x: I32 = 5
+    g = x@
+priv fn clobber(): I32
+    a: I32[16] = ::{ 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7 }
+    return a[3]
+fn main()
+    f()
+    _c: = clobber()
+    io.out().s("g$ = \{g$\}\n")
+"""
+
+priv const P06C_OUT_PARAM: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv fn f(out: I32@$@)
+    x: I32 = 5
+    out$ = x@
+fn main()
+    $p: I32@ = null
+    f(p@)
+    io.out().s("p$ = \{p$\}\n")
+"""
+
+priv const P06E_VIA_CALL: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv fn id(p: I32@): I32@
+    return p
+priv fn f(): I32@
+    x: I32 = 5
+    return id(x@)
+fn main()
+    p: = f()
+    io.out().s("p$ = \{p$\}\n")
+"""
+
+priv const P06H_CLOSURE_LIST: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/strfmt" as _strfmt
+priv fn fill(xs: List<|Callable1<|I32, I32|>|>$@)
+    n: I32 = 1000
+    xs.push(fn(x: I32; n: I32): I32 { return x + n; })
+priv fn clobber(): I32
+    a: I32[32] = ::{}
+    return a[3]
+fn main()
+    defer $xs: = List<|Callable1<|I32, I32|>|>(null)
+    fill(xs@)
+    _c: = clobber()
+    io.out().s("call: \{xs[0].call(1)\}\n")
+"""
+
+priv const P06I_TRAIT_LIST: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/strfmt" as _strfmt
+trait Shape
+    fn area(r: Self): I32
+priv struct Sq
+    n: I32
+impl Sq: Shape
+    fn area(r: Self@): I32
+        return r.n * r.n
+priv fn fill(xs: List<|Shape|>$@)
+    s: = Sq::{ .n = 7 }
+    xs.push(s)
+priv fn clobber(): I32
+    a: I32[32] = ::{}
+    return a[3]
+fn main()
+    defer $xs: = List<|Shape|>(null)
+    fill(xs@)
+    _c: = clobber()
+    io.out().s("area: \{xs[0].area()\}\n")
+"""
+
+priv const P06K_PTR_LOCAL_OUTER: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    $p: I32@ = null
+    inner:
+        x: I32 = 5
+        p = x@
+    io.out().s("p$ = \{p$\}\n")
+"""
+
+priv const P07A_OVERFLOW_SIZE: U8[] =
+    """
+import "std/io"
+import "std/mem"
+import "std/strfmt" as _strfmt
+fn main()
+    count: U32 = 0x4000_0001
+    width: U32 = 4
+    bytes: = count * width
+    buf: = U8$@::mem.alloc(Sz::bytes)
+    s: = U8$[]::{ .ptr = buf, .len = Sz::count }
+    s[100] = 1
+    io.out().s("bytes \{bytes\}\n")
+"""
+
+priv const P10B_MEM_COPY_OVERLAP: U8[] =
+    """
+import "std/io"
+import "std/mem"
+import "std/strfmt" as _strfmt
+fn main()
+    $buf: U8[16] = ::{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+        'o', 'p' }
+    p: = U8$@::(U8$[]::buf).ptr
+    mem.copy(Void$@::(p + 1), Void$@::p, 12)   // overlap: documented as "must not"
+    io.out().s("\{U8[]::buf\}\n")
+"""
+
+priv const P11C_PTR_TYPE_PUN: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv struct Small
+    a: I32
+priv struct Large
+    a: I32
+    b: I64
+    c: I64
+fn main()
+    $s: = Small::{ .a = 1 }
+    l: = Large$@::s@
+    l.c = 7
+    io.out().s("survived \{s.a\}\n")
+"""
+
+priv const P11D_SLICE_BYHAND: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    $small: U8[4] = ::{ 1, 2, 3, 4 }
+    s: = U8$[]::{ .ptr = (U8$[]::small).ptr, .len = 64 }
+    s[40] = 9
+    io.out().s("survived\n")
+"""
+
+priv const P11E_PTR_ARITH: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    $a: I32[4] = ::{ 1, 2, 3, 4 }
+    p: = a@
+    (p + 10)$ = 9
+    io.out().s("survived\n")
+"""
+
+priv const P12B_ENUM_BAD_TAG: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv enum Color: U8
+    red
+    green
+fn main()
+    $c: = Color.red
+    (U8$@::c@)$ = 77
+    io.out().s("name: \{c\}\n")
+"""
+
+priv const P14_PACKED: U8[] =
+    """
+#packed
+priv struct Rec
+    tag: U8
+    n: I32
+fn main()
+    $r: = Rec::{ .tag = 1, .n = 2 }
+    p: = I32$@::(U8$@::r@ + 1)
+    p$ = 5
+"""
+
+priv const P16A_RC_GET_DANGLE: U8[] =
+    """
+import "std/io"
+import "std/refcount" { Rc }
+import "std/strfmt" as _strfmt
+priv struct Node
+    v: I32
+fn main()
+    $r: = Rc<|Node|>(Node::{ .v = 1 })
+    p: = r.get()
+    r = Rc<|Node|>(Node::{ .v = 2 })
+    p.v = 99
+    io.out().s("p.v \{p.v\}\n")
+"""
+
+priv const P16C_RC_SWITCH_ARM: U8[] =
+    """
+import "std/io"
+import "std/refcount" { Rc }
+import "std/strfmt" as _strfmt
+priv struct Node
+    v: I32
+priv fn swap_out(slot: Rc<|Node|>$@)
+    slot$ = Rc<|Node|>(Node::{ .v = 3 })
+fn main()
+    $r: = Rc<|Node|>(Node::{ .v = 1 })
+    p: = r.get()
+    swap_out(r@)
+    io.out().s("p.v \{p.v\}\n")
+"""
+
+priv const P17_THREAD_FRAME: U8[] =
+    """
+import "std/thread"
+extern fn p17_worker(arg: I32$@): Void$@
+    for i in Range.asc(1000000)
+        arg$ += 1
+    return null
+priv fn start(): thread.Thread
+    $counter: I32 = 0
+    $t: = thread.Thread.spawn<|I32|>(p17_worker, counter@) catch panic("spawn")
+    return t
+fn main()
+    $t: = start()
+    $junk: I32[64] = ::{}
+    junk[0] = 1
+    t.free()
+"""
+
+priv const P02_DOUBLE_FREE: U8[] =
+    """
+import "std/mem"
+fn main()
+    p: = mem.alloc(16)
+    q: = p
+    mem.dealloc(p)
+    mem.dealloc(q)
+"""
+
+priv const P05_MANUAL_FREE_ALIAS: U8[] =
+    """
+import "std/io"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+fn main()
+    $b: = Str_builder()
+    b.s("some text that is long enough to allocate")
+    view: = b.slice()
+    copy: = b
+    b.free()
+    io.out().s("view after free: \{view\}\n")
+    $c: = copy
+    c.free()
+"""
+
+priv const P07B_OVERFLOW_LIST_CAP: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    n: Sz = Sz::(U64::1 << 62) + 3
+    defer $xs: = List<|I64|>.new_with_cap(n, null)
+    io.out().s("cap \{xs.cap\}\n")
+"""
+
+priv const P07C_SIGNED_WRAP_INDEX: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+fn main()
+    $a: I32[4] = ::{ 1, 2, 3, 4 }
+    $i: I32 = 2147483647
+    i += 3
+    io.out().s("i \{i\}\n")
+    a[i] = 0
+"""
+
+priv const P09_NULL: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv struct N
+    v: I32
+fn main()
+    p: N@ = null
+    io.out().s("v \{p.v\}\n")
+"""
+
+priv const P09B_NULL_OFFSET: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv struct Big
+    pad: U8[1048576]
+    v: I32
+fn main()
+    p: Big$@ = null
+    p.v = 5
+    io.out().s("done\n")
+"""
+
+priv const P11A_CAST_RO_TO_MUT: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv fn poke(s: U8[])
+    w: = U8$@::s.ptr
+    w$ = 'X'
+fn main()
+    poke("hello")
+    io.out().s("survived\n")
+"""
+
+priv const P13A_LIST_COPY_DOUBLE_FREE: U8[] =
+    """
+import "std/ds" { List }
+fn main()
+    $a: = List<|I32|>(null)
+    a.push(1)
+    $b: = a
+    a.free()
+    b.free()
+"""
+
+priv const P13B_LIST_COPY_STALE: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/strfmt" as _strfmt
+priv fn add_many(xs: List<|I32|>)
+    $c: = xs
+    for i in Range.asc(100)
+        c.push(I32::i)
+fn main()
+    defer $a: = List<|I32|>(null)
+    a.push(1)
+    add_many(a)
+    io.out().s("a[0] = \{a[0]\}\n")
+"""
+
+priv const P13C_MOVEONLY_VIA_PTR: U8[] =
+    """
+import "std/subproc"
+fn main()
+    $child: = subproc.spawn_redirect(U8[][]::{ "true" }, "", "/dev/null", "/dev/null") catch
+        return
+    p: = child@
+    dup: = p$
+    _a: = child.wait()
+    $d: = dup
+    _b: = d.wait()
+"""
+
+priv const P16B_RC_EMPTY_GET: U8[] =
+    """
+import "std/io"
+import "std/refcount" { Rc }
+import "std/strfmt" as _strfmt
+priv struct Node
+    v: I32
+fn main()
+    r: = Rc<|Node|>.empty()
+    io.out().s("v \{r.get().v\}\n")
+"""
+
+priv const P04E_ARENA_FROM_BUFFER: U8[] =
+    """
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+fn main()
+    $store: U8[256] = ::{}
+    $a: = Arena.from_buffer(Void$@::(U8$[]::store).ptr, 256)
+    s: = a.dup_str("hello")
+    mark: = a.save()
+    a.restore(mark)
+    a.reset()
+    _t: = a.dup_str("WORLD")
+    io.out().s("s: \{s\}\n")
+"""
+
+priv const P12A_ENUM_FORGE: U8[] =
+    """
+import "std/io"
+import "std/strfmt" as _strfmt
+priv enum Ev
+    num(n: I64)
+    text(s: U8[])
+fn main()
+    $e: = Ev.num(0x4141_4141)
+    tag: = U8$@::e@
+    tag$ = 1
+    switch e
+    case .num(n)
+        io.out().s("num \{n\}\n")
+    case .text(s)
+        io.out().s("text \{s\}\n")
+"""
+
+const MEM: Hole[_] = ::{
+    Hole::{ .name = "p01_uaf_alloc", .what = "a copy of a pointer made after its free",
+        .source = P01_UAF_ALLOC, .verdict = .refused, .says = "may already be freed", .spec = "" },
+
+    Hole::{ .name = "p01c_uaf_direct", .what = "a read through a pointer after its free",
+        .source = P01C_UAF_DIRECT, .verdict = .refused, .says = "may already be freed",
+        .spec = "" },
+
+    Hole::{ .name = "p02b_double_free_direct", .what = "the same pointer freed twice",
+        .source = P02B_DOUBLE_FREE_DIRECT, .verdict = .refused, .says = "may already be freed",
+        .spec = "" },
+
+    Hole::{ .name = "p06a_return_addr", .what = "the address of a local returned",
+        .source = P06A_RETURN_ADDR, .verdict = .refused, .says = "cannot return the address of",
+        .spec = "" },
+
+    Hole::{ .name = "p06d_struct_field_later",
+        .what = "a struct returned whose field was later set to a local array's slice",
+        .source = P06D_STRUCT_FIELD_LATER, .verdict = .refused, .says = "cannot return",
+        .spec = "" },
+
+    Hole::{ .name = "p06f_slice_return", .what = "a slice of a local array returned",
+        .source = P06F_SLICE_RETURN, .verdict = .refused,
+        .says = "cannot return a slice built from", .spec = "" },
+
+    Hole::{ .name = "p06g_slice_global", .what = "a slice of a local array stored into a global",
+        .source = P06G_SLICE_GLOBAL, .verdict = .refused, .says = "cannot store a slice built from",
+        .spec = "" },
+
+    Hole::{ .name = "p06j_param_addr", .what = "the address of a parameter returned",
+        .source = P06J_PARAM_ADDR, .verdict = .refused, .says = "cannot return the address of",
+        .spec = "" },
+
+    Hole::{ .name = "p08_uninit", .what = "a variable read before it is set", .source = P08_UNINIT,
+        .verdict = .refused, .says = "may be used uninitialized", .spec = "" },
+
+    Hole::{ .name = "p08c_uninit_addr", .what = "the address of a variable taken before it is set",
+        .source = P08C_UNINIT_ADDR, .verdict = .refused, .says = "may be used uninitialized",
+        .spec = "" },
+
+    Hole::{ .name = "p11b_int_to_ptr", .what = "an integer cast to a pointer",
+        .source = P11B_INT_TO_PTR, .verdict = .refused, .says = "an integer becomes a pointer only",
+        .spec = "" },
+
+    Hole::{ .name = "p15_ffi", .what = "a slice passed to a C function", .source = P15_FFI,
+        .verdict = .refused, .says = "cannot be passed into a C", .spec = "" },
+
+    Hole::{ .name = "p15b_ffi_variadic_slice", .what = "a slice passed to a C function's `...`",
+        .source = P15B_FFI_VARIADIC_SLICE, .verdict = .refused, .says = "cannot be passed into a C",
+        .spec = "" },
+
+    Hole::{ .name = "p01b_uaf_copy", .what = "a write through a copy of a pointer after its free",
+        .source = P01B_UAF_COPY, .verdict = .reported, .says = "heap-use-after-free", .spec = "" },
+
+    Hole::{ .name = "p03_list_ptr_growth",
+        .what = "a pointer to a list's element kept across a push that grows it",
+        .source = P03_LIST_PTR_GROWTH, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p03b_list_slice_growth",
+        .what = "a list's slice kept across a push that grows it", .source = P03B_LIST_SLICE_GROWTH,
+        .verdict = .reported, .says = "heap-use-after-free", .spec = "" },
+
+    Hole::{ .name = "p04_arena_reset",
+        .what = "an arena's slice read after a reset that frees its chunk",
+        .source = P04_ARENA_RESET, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p04b_arena_restore",
+        .what = "an arena's slice read after a restore that frees its chunk",
+        .source = P04B_ARENA_RESTORE, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p04c_arena_free", .what = "an arena's slice read after the arena is freed",
+        .source = P04C_ARENA_FREE, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p04d_arena_reset_onechunk",
+        .what = "an arena's slice read after a reset that keeps its one chunk",
+        .source = P04D_ARENA_RESET_ONECHUNK, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p06b_global_store",
+        .what = "a local's address stored into a global and read after the return",
+        .source = P06B_GLOBAL_STORE, .verdict = .reported, .says = "stack-use-after-return",
+        .spec = "" },
+
+    Hole::{ .name = "p06c_out_param",
+        .what = "a local's address stored through a parameter and read after the return",
+        .source = P06C_OUT_PARAM, .verdict = .reported, .says = "stack-use-after-return",
+        .spec = "" },
+
+    Hole::{ .name = "p06e_via_call", .what = "a local's address returned through a call",
+        .source = P06E_VIA_CALL, .verdict = .reported, .says = "stack-use-after-return",
+        .spec = "" },
+
+    Hole::{ .name = "p06h_closure_list",
+        .what = "a closure over a local kept in a list past the return",
+        .source = P06H_CLOSURE_LIST, .verdict = .reported, .says = "stack-use-after-return",
+        .spec = "" },
+
+    Hole::{ .name = "p06i_trait_list",
+        .what = "a local turned into a trait object kept in a list past the return",
+        .source = P06I_TRAIT_LIST, .verdict = .reported, .says = "stack-use-after-return",
+        .spec = "" },
+
+    Hole::{ .name = "p06k_ptr_local_outer",
+        .what = "an inner block's local address kept in an outer variable",
+        .source = P06K_PTR_LOCAL_OUTER, .verdict = .reported, .says = "stack-use-after-scope",
+        .spec = "" },
+
+    Hole::{ .name = "p07a_overflow_size",
+        .what = "a slice built by hand with a length whose product wrapped",
+        .source = P07A_OVERFLOW_SIZE, .verdict = .reported, .says = "heap-buffer-overflow",
+        .spec = "" },
+
+    Hole::{ .name = "p10b_mem_copy_overlap", .what = "`mem.copy` over two ranges that overlap",
+        .source = P10B_MEM_COPY_OVERLAP, .verdict = .reported, .says = "memcpy-param-overlap",
+        .spec = "" },
+
+    Hole::{ .name = "p11c_ptr_type_pun",
+        .what = "a pointer cast to a type larger than the value behind it",
+        .source = P11C_PTR_TYPE_PUN, .verdict = .reported, .says = "stack-use-after-scope",
+        .spec = "" },
+
+    Hole::{ .name = "p11d_slice_byhand",
+        .what = "a slice built by hand whose length passes its memory", .source = P11D_SLICE_BYHAND,
+        .verdict = .reported, .says = "stack-buffer-overflow", .spec = "" },
+
+    Hole::{ .name = "p11e_ptr_arith", .what = "`(p + i)$` outside the memory `p` points into",
+        .source = P11E_PTR_ARITH, .verdict = .reported, .says = "stack-use-after-scope",
+        .spec = "" },
+
+    Hole::{ .name = "p12b_enum_bad_tag",
+        .what = "an enum given a tag that is none of its variants, through a pointer cast",
+        .source = P12B_ENUM_BAD_TAG, .verdict = .reported, .says = "unreachable", .spec = "" },
+
+    Hole::{ .name = "p14_packed",
+        .what = "a pointer cast to a type whose alignment the address does not meet",
+        .source = P14_PACKED, .verdict = .reported, .says = "misaligned", .spec = "" },
+
+    Hole::{ .name = "p16a_rc_get_dangle",
+        .what = "the pointer `Rc.get` returned, kept after the last owner goes",
+        .source = P16A_RC_GET_DANGLE, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p16c_rc_switch_arm",
+        .what = "an `Rc` released through a pointer while a `get` of it is kept",
+        .source = P16C_RC_SWITCH_ARM, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "p17_thread_frame",
+        .what = "a thread handed a local's address, still writing it after its starter returned",
+        .source = P17_THREAD_FRAME, .verdict = .reported, .says = "stack-use-after-return",
+        .spec = "" },
+
+    Hole::{ .name = "p02_double_free", .what = "a pointer freed twice through a copy",
+        .source = P02_DOUBLE_FREE, .verdict = .stops,
+        .says = "mem.dealloc: this pointer did not come from mem.alloc", .spec = "" },
+
+    Hole::{ .name = "p05_manual_free_alias", .what = "a builder copied, then both copies freed",
+        .source = P05_MANUAL_FREE_ALIAS, .verdict = .stops,
+        .says = "mem.dealloc: this pointer did not come from mem.alloc", .spec = "" },
+
+    Hole::{ .name = "p07b_overflow_list_cap", .what = "a list's capacity whose size overflows",
+        .source = P07B_OVERFLOW_LIST_CAP, .verdict = .stops, .says = "capacity too large",
+        .spec = "" },
+
+    Hole::{ .name = "p07c_signed_wrap_index",
+        .what = "an index that wrapped round to a negative number",
+        .source = P07C_SIGNED_WRAP_INDEX, .verdict = .stops, .says = "index out of bounds",
+        .spec = "" },
+
+    Hole::{ .name = "p09_null", .what = "a read through a null pointer", .source = P09_NULL,
+        .verdict = .stops, .says = "crash: null pointer dereference", .spec = "" },
+
+    Hole::{ .name = "p09b_null_offset", .what = "a read through a null pointer at an offset",
+        .source = P09B_NULL_OFFSET, .verdict = .stops, .says = "crash: invalid memory access",
+        .spec = "" },
+
+    Hole::{ .name = "p11a_cast_ro_to_mut", .what = "a write to a string literal through a cast",
+        .source = P11A_CAST_RO_TO_MUT, .verdict = .stops, .says = "crash: invalid memory access",
+        .spec = "" },
+
+    Hole::{ .name = "p13a_list_copy_double_free", .what = "a list copied, then both copies freed",
+        .source = P13A_LIST_COPY_DOUBLE_FREE, .verdict = .stops,
+        .says = "mem.dealloc: this pointer did not come from mem.alloc", .spec = "" },
+
+    Hole::{ .name = "p13b_list_copy_stale",
+        .what = "a list passed by value grows in the callee, then both are freed",
+        .source = P13B_LIST_COPY_STALE, .verdict = .stops,
+        .says = "mem.dealloc: this pointer did not come from mem.alloc", .spec = "" },
+
+    Hole::{ .name = "p13c_moveonly_via_ptr",
+        .what = "a `Move_only` value copied through a pointer, then both freed",
+        .source = P13C_MOVEONLY_VIA_PTR, .verdict = .stops, .says = "double free", .spec = "" },
+
+    Hole::{ .name = "p16b_rc_empty_get", .what = "`get` of an `Rc` that holds nothing",
+        .source = P16B_RC_EMPTY_GET, .verdict = .stops, .says = "crash: null pointer dereference",
+        .spec = "" },
+
+    Hole::{ .name = "p04e_arena_from_buffer",
+        .what = "an arena over a caller's buffer, reset, hands the same bytes out again",
+        .source = P04E_ARENA_FROM_BUFFER, .verdict = .hole,
+        .says = "`Arena.restore` to a mark saved before it, or `Arena.reset`",
+        .spec = "#### 8.4.6 What invalidates a view" },
+
+    Hole::{ .name = "p12a_enum_forge",
+        .what = "an enum's tag rewritten through a byte pointer to another variant's",
+        .source = P12A_ENUM_FORGE, .verdict = .hole,
+        .says = "An enum value that is none of its variants, made through raw memory",
+        .spec = "### 14.2 Undefined - no answer is fixed" },
+}

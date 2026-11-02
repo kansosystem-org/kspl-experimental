@@ -69,7 +69,7 @@ Reset_Handler:
     str     r3, [r0], #4
     b       3b
 4:
-    bl      ksos_main        /* the KSPL demo's #export entry */
+    bl      ksos_main        /* the KSPL demo's extern "C" entry */
 5:
     b       5b              /* halt where it returns */
     .size Reset_Handler, . - Reset_Handler

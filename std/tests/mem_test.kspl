@@ -181,8 +181,7 @@ priv const CHURN_THREADS: Sz = 4
 priv const CHURN_ROUNDS: I32 = 50000
 priv const CHURN_BYTES: Sz = 24
 
-#export
-fn heap_churn(rounds: I32$@): Void$@ //< allocates and frees one block, rounds times over
+extern fn heap_churn(rounds: I32$@): Void$@ //< allocates and frees one block, rounds times over
     for _i in Range.asc(rounds$)
         dealloc(alloc(CHURN_BYTES))
     return null
@@ -192,13 +191,13 @@ fn test_heap_counters_across_threads()
     used0: = mem.heap_used_bytes()
     total0: = mem.heap_requested_total_bytes()
     $rounds: = CHURN_ROUNDS
-    $ts: thread.Thread$@[CHURN_THREADS] = ::{}
+    $ts: thread.Thread[CHURN_THREADS] = ::{}
     for i in Range.asc(CHURN_THREADS)
         ts[i] = thread.Thread.spawn<|I32|>(heap_churn, rounds@) catch panic("thread spawn failed")
     for i in Range.asc(CHURN_THREADS)
-        ts[i].join_and_free()
-    // Each thread's handle is on the heap too, freed by its join.
-    want: = CHURN_THREADS * (Sz::CHURN_ROUNDS * CHURN_BYTES + sizeof(thread.Thread))
+        ts[i].free()
+    // A thread is a value, so only the blocks the threads asked for count.
+    want: = CHURN_THREADS * Sz::CHURN_ROUNDS * CHURN_BYTES
     back_to(used0, "Mem: the bytes in use return to where they started")
     assert(mem.heap_requested_total_bytes() - total0 == want,
         "Mem: the running total counts every byte each thread asked for")
@@ -236,26 +235,29 @@ fn test_rc_refcount()
 // std/refcount: Arc<T>'s count stays atomic under concurrent copying and destruction on real OS
 // threads. A clone inside the loop is released as each iteration ends.
 // ==========================================
-#export
-fn arc_test_clone_storm(arg: Arc<|I32|>$@): Void$@
+extern fn arc_test_clone_storm(arg: Arc<|I32|>$@): Void$@
     for _i in Range.asc(5000)
         _c: = arg.clone() // atomic +1; c is released automatically (-1) as this iteration ends
     return null
 
 priv fn arc_storm_body()
     $shared: = Arc<|I32|>(7)
-    t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
+    $t1: =
+        thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
         catch panic("thread spawn failed")
-    t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
+    $t2: =
+        thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
         catch panic("thread spawn failed")
-    t3: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
+    $t3: =
+        thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
         catch panic("thread spawn failed")
-    t4: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
+    $t4: =
+        thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
         catch panic("thread spawn failed")
-    t1.join_and_free()
-    t2.join_and_free()
-    t3.join_and_free()
-    t4.join_and_free()
+    t1.free()
+    t2.free()
+    t3.free()
+    t4.free()
     assert(shared.get()$ == 7, "value must survive the clone storm intact")
     // shared is released automatically as the scope ends -> 0 -> freed.
 
@@ -309,8 +311,7 @@ fn test_weak_upgrade()
 // std/refcount: Weak_arc<T> under concurrent downgrade/upgrade on real OS threads. upgrade's CAS
 // loop keeps a freed value from coming back to life.
 // ==========================================
-#export
-fn arc_test_weak_storm(arg: Arc<|I32|>$@): Void$@
+extern fn arc_test_weak_storm(arg: Arc<|I32|>$@): Void$@
     for _i in Range.asc(5000)
         w: = arg.downgrade() // weak atomic +1 (automatic -1 as the iteration ends)
         _up: = w.upgrade() catch // strong atomic +1 (CAS) (automatic -1 as the iteration ends)
@@ -319,18 +320,18 @@ fn arc_test_weak_storm(arg: Arc<|I32|>$@): Void$@
 
 priv fn weak_arc_storm_body()
     $shared: = Arc<|I32|>(7)
-    t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
+    $t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
         catch panic("thread spawn failed")
-    t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
+    $t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
         catch panic("thread spawn failed")
-    t3: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
+    $t3: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
         catch panic("thread spawn failed")
-    t4: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
+    $t4: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
         catch panic("thread spawn failed")
-    t1.join_and_free()
-    t2.join_and_free()
-    t3.join_and_free()
-    t4.join_and_free()
+    t1.free()
+    t2.free()
+    t3.free()
+    t4.free()
     assert(shared.get()$ == 7, "value must survive the downgrade/upgrade storm intact")
 
 priv fn make_dropped_weak_arc(): Weak_arc<|I32|>

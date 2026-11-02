@@ -284,14 +284,14 @@ fn test_fs_mkdir_all_race()
         c: = Race_ctx$@::arena.alloc(sizeof(Race_ctx))
         c$ = Race_ctx::{ .path = deep, .fails = fails@, .go = go@ }
         ctxs.push(c)
-    $threads: = List<|thread.Thread$@|>(arena)
+    $threads: = List<|thread.Thread|>(arena)
     for c in ctxs.slice()
         t: = thread.Thread.spawn<|Race_ctx|>(race_entry, c) catch
             break
         threads.push(t)
     go.store(1)
-    for t in threads.slice()
-        t.join_and_free()
+    for i in Range.asc(threads.len)
+        threads[i].free()
     assert(threads.len == RACE_DIRS, "all racers must start")
     assert(fs.is_dir(deep), "the tree must exist after the race")
     assert(fails.load() == 0, "losing the race must not be reported as a failure")
@@ -403,8 +403,8 @@ fn test_fs_path_guard()
 fn test_fs_hidden_on_path(arena: Arena$@) //<
     //< That a dot name hides a path at any level, by the name as written and by the name kept
     //< Only Windows keeps a second, short name (`GIT~1` for `.git`), so here the long name is the
-    //< name as written. What this checks is the walk: where it splits, what it skips, and that a
-    //< name not there yet is not hidden.
+    //< name as written. What this checks is the walk: where it splits, and that a name not there
+    //< yet is not hidden.
     verdict.start("[Fs] a dot name at any level hides the path, the names shown aside...")
     root: = "out/tmp/kspl_test_fs_hidden"
     fs.mkdir_all("out/tmp/kspl_test_fs_hidden/.git") catch panic("mkdir_all should succeed")
@@ -413,28 +413,94 @@ fn test_fs_hidden_on_path(arena: Arena$@) //<
     write_probe_file("out/tmp/kspl_test_fs_hidden/.git/config")
     write_probe_file("out/tmp/kspl_test_fs_hidden/.well-known/acme.txt")
     write_probe_file("out/tmp/kspl_test_fs_hidden/sub/page.txt")
-    none: = U8[][]::{}
-    shown: = U8[][]::{ ".well-known" }
-    hidden_git: = fs.has_hidden_on_path(root, ".git/config", none)
-    hidden_deep: = fs.has_hidden_on_path(root, "sub/.env", none)
-    hidden_back: = fs.has_hidden_on_path(root, "sub\\.env", none)
-    hidden_empty: = fs.has_hidden_on_path(root, ".git//config", none)
-    plain: = fs.has_hidden_on_path(root, "sub/page.txt", none)
-    plain_empty: = fs.has_hidden_on_path(root, "sub//page.txt", none)
-    not_yet: = fs.has_hidden_on_path(root, "sub/new/file.txt", none)
-    wk_shown: = fs.has_hidden_on_path(root, ".well-known/acme.txt", shown)
-    wk_none: = fs.has_hidden_on_path(root, ".well-known/acme.txt", none)
-    wk_case: = fs.has_hidden_on_path(root, ".WELL-KNOWN/acme.txt", shown)
-    git_shown: = fs.has_hidden_on_path(root, ".git/config", shown)
+    none: = fs.Dot_names.refused(U8[][]::{})
+    shown: = fs.Dot_names.refused(U8[][]::{ ".well-known" })
+    hidden_git: = refused_as(root, ".git/config", none, .hidden, arena)
+    hidden_deep: = refused_as(root, "sub/.env", none, .hidden, arena)
+    plain: = taken_under(root, "sub/page.txt", none, arena)
+    not_yet: = taken_under(root, "sub/new/file.txt", none, arena)
+    wk_shown: = taken_under(root, ".well-known/acme.txt", shown, arena)
+    wk_none: = refused_as(root, ".well-known/acme.txt", none, .hidden, arena)
+    wk_case: = refused_as(root, ".WELL-KNOWN/acme.txt", shown, .hidden, arena)
+    git_shown: = refused_as(root, ".git/config", shown, .hidden, arena)
+    allowed: = taken_under(root, ".git/config", .allowed, arena)
     clear_tree_best_effort(root, arena)
     assert(hidden_git && hidden_deep, "a dot name hides the path at the top and deeper")
-    assert(hidden_back, "a segment ends at `\\` too, as Windows opens it")
-    assert(hidden_empty && !plain_empty, "an empty segment is skipped, and hides nothing")
-    assert(!plain && !not_yet, "a path with no dot name is not hidden, there or not there yet")
-    assert(!wk_shown && wk_none, "a name shown is not hidden, and hidden when not shown")
+    assert(plain && not_yet, "a path with no dot name is not hidden, there or not there yet")
+    assert(wk_shown && wk_none, "a name shown is not hidden, and hidden when not shown")
     assert(wk_case && git_shown,
         "a name shown is compared byte for byte, and shows no other dot name")
+    assert(allowed, "a caller that allows dot names gets them")
     verdict.pass("A dot name hides the path at any level, and only the names shown pass.")
+
+fn test_fs_join_under_refusals(arena: Arena$@) //<
+    //< That `join_under` refuses each form a path from outside can take to reach what it should not
+    //< **Every form is refused on every OS**, so this Linux run holds for Windows too: the forms
+    //< Windows reads specially (`\`, `GIT~1`, `x.`, `CON`, `*`) are refused here as text.
+    verdict
+        .start("[Fs] join_under refuses every form that could leave the root or reach a hidden \
+            name...")
+    root: = "out/tmp/kspl_test_join_under"
+    fs.mkdir_all("out/tmp/kspl_test_join_under/sub") catch panic("mkdir_all should succeed")
+    keep: = fs.Dot_names.refused(U8[][]::{})
+    cases: = Refused_case[_]::{::{ .rel = "../x", .why = .climbs },
+        ::{ .rel = "a/../../x", .why = .climbs }, ::{ .rel = "a/..", .why = .climbs },
+        ::{ .rel = "a/./b", .why = .climbs }, ::{ .rel = ".", .why = .climbs },
+        ::{ .rel = "/etc/passwd", .why = .absolute },
+        ::{ .rel = "\\etc\\passwd", .why = .absolute }, ::{ .rel = "C:/x", .why = .absolute },
+        ::{ .rel = "c:x", .why = .absolute },
+        ::{ .rel = "\\\\server\\share\\x", .why = .absolute },
+        ::{ .rel = "sub\\.env", .why = .backslash },
+        ::{ .rel = "sub\\..\\..\\x", .why = .backslash },
+        ::{ .rel = "a//b", .why = .empty_segment }, ::{ .rel = "a/", .why = .empty_segment },
+        ::{ .rel = "x\0.html", .why = .control }, ::{ .rel = "a/x\ny", .why = .control },
+        ::{ .rel = "a\u007f", .why = .control }, ::{ .rel = "key::$DATA", .why = .colon },
+        ::{ .rel = "a/x:y", .why = .colon },
+        ::{ .rel = "secret.key.", .why = .trailing_dot_or_space },
+        ::{ .rel = "a/b /c", .why = .trailing_dot_or_space }, ::{ .rel = "CON", .why = .device },
+        ::{ .rel = "www/nul.txt", .why = .device }, ::{ .rel = "a/CoM1/b", .why = .device },
+        ::{ .rel = "GIT~1/config", .why = .short_name },
+        ::{ .rel = "sub/TEAM~12.JSO", .why = .short_name },
+        ::{ .rel = "*.txt", .why = .wildcard }, ::{ .rel = "sub/.g?t", .why = .wildcard },
+        ::{ .rel = "a<b", .why = .wildcard }, ::{ .rel = "a>b", .why = .wildcard },
+        ::{ .rel = "a\"b", .why = .wildcard }, ::{ .rel = "a|b", .why = .wildcard },
+        ::{ .rel = ".env", .why = .hidden } }
+    $wrong: U8[] = ""
+    for c in cases
+        if !refused_as(root, c.rel, keep, c.why, arena)
+            wrong = c.rel
+            break
+    ordinary: =
+        taken_under(root, "sub/page.txt", keep, arena) &&
+        taken_under(root, "a..b/x~y.txt", keep, arena) &&
+        taken_under(root, "console.js", keep, arena) &&
+        taken_under(root, "com12", keep, arena)
+    whole: = fs.join_under(root, "", keep, arena) catch "refused"
+    joined: = fs.join_under(root, "sub/page.txt", keep, arena) catch "refused"
+    clear_tree_best_effort(root, arena)
+    assert(wrong.len == 0,
+        arena.text().s("refused for its own reason: ").s(wrong).take())
+    assert(ordinary, "an ordinary name, and one that only looks like a refused form, is taken")
+    assert(whole.equals(root), "an empty path is the root itself")
+    assert(joined.equals("out/tmp/kspl_test_join_under/sub/page.txt"), "the path is the root's join")
+    verdict
+        .pass("Every refused form came back with its own reason, and ordinary names were joined.")
+
+priv struct Refused_case //< one path `join_under` must refuse, and the reason it must give
+    rel: U8[]
+    why: sys.Path_refusal
+
+priv fn refused_as(root: U8[], rel: U8[], dots: fs.Dot_names, want: sys.Path_refusal,
+    arena: Arena$@): Bool //< whether `join_under` refuses the path for that reason
+    _joined: = fs.join_under(root, rel, dots, arena) catch why
+        return why == want
+    return false
+
+priv fn taken_under(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@): Bool //<
+    //< whether `join_under` joins the path
+    _joined: = fs.join_under(root, rel, dots, arena) catch
+        return false
+    return true
 
 // ==========================================
 // std/fs: a path too long to pass to the OS is not treated as a success.

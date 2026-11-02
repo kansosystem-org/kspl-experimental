@@ -9,6 +9,7 @@ import "std/ds" { List, Map }
 import "std/mem" { Arena }
 import "std/str"
 import "std/strnum"
+import "std/sys"
 
 struct Var //< one variable as make's database records it
     name: U8[]
@@ -43,6 +44,17 @@ struct Db //< make's database: every variable and every file it recorded
 priv const ORIGINS: U8[][] = U8[][]::{ "default", "environment", "environment under -e",
     "automatic", "command line", "override", "makefile", "'override' directive" } //<
         //< The origins `make -p` writes on the line above a variable
+
+fn make_speaks_english() //<
+    //< Sets this process's environment so the makes it starts write their database in English
+    //< **make translates the database's comments** (`# Not a target:`, `(from '...', line N)`)
+    //< under a Japanese locale, and they are what this file reads. Only the messages are set:
+    //< under `LC_ALL=C` the character set is ASCII too, and the root make file warns of that.
+    if all: = sys.get_env("LC_ALL")
+        sys.set_env("LANG", all) catch {}
+    sys.unset_env("LC_ALL") catch {}
+    sys.set_env("LC_MESSAGES", "C") catch {}
+    sys.unset_env("LANGUAGE") catch {}
 
 fn last_db(out: U8[]): U8[] //< the main make's database, the last one printed
     //< **A recursive make prints its own database first**: with `-p` in `MAKEFLAGS`, every

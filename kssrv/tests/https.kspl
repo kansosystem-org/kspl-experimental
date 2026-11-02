@@ -198,19 +198,17 @@ priv fn big_case(port: I32, arena: Arena$@) //<
         body == BIG_BYTES, arena.text().s("\{body\} bytes of \{BIG_BYTES\}").take())
 
 priv fn plain_case(port: I32, arena: Arena$@) //<
-    //< Checks that plain HTTP on the HTTPS port gets a plain-text 400 at once, not silence
-    name: = "plain HTTP on the HTTPS port is answered 400 in plain text, at once"
-    start: = sys.mono_us()
+    //< Checks that plain HTTP on the HTTPS port gets a plain-text 400, not silence
+    //< **Silence fails the request itself**: the read gives up after `READ_MS` with no answer.
+    name: = "plain HTTP on the HTTPS port is answered 400 in plain text, not with silence"
     r: =
         client.request(port, closing("GET /", arena), 1, READ_MS, false, arena) catch e
         verdict.check(name, false, e.reason())
         return
-    elapsed_ms: = (sys.mono_us() - start) / 1000I64
     ok: =
         r.len == 1 && r.get(0).status == 400 &&
         r.get(0).body.find_str("https://").is_some()
-    verdict.check(name, ok && elapsed_ms < I64::READ_MS,
-        arena.text().s("\{elapsed_ms\} ms").take())
+    verdict.check(name, ok, "")
 
 priv fn stalled_case(port: I32, srv: Running$@, arena: Arena$@) //<
     //< Checks that a client stuck in its handshake neither stops others nor keeps its slot

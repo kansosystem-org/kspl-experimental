@@ -74,14 +74,15 @@ Words used here: the *root* is the one folder whose files ksagent reads. A *sour
 
 Caution: **The check shows that the words stand at those lines, not that they back the answer.** A model can quote a real line and still draw the wrong conclusion. So the answer shows the quote beside it, for the person to read, and the check is not presented as more.
 
-**A conversation's files are never a source.** The answers in them are the model's own words, so citing one would check a claim against itself. The questions are no evidence either. The tools leave all three files out of every listing and search, and refuse to read one. A name counts whatever its ASCII case, since Windows and macOS open `team.CHAT.jsonl` as `team.chat.jsonl`. The long name counts too, since Windows answers to a short name. The earlier turns the model needs reach it as the conversation so far ("The caps" above), not through a tool.
+**A conversation's files are never a source.** The answers in them are the model's own words, so citing one would check a claim against itself. The questions are no evidence either. The tools leave all three files out of every listing and search, and refuse to read one. A name counts whatever its ASCII case, since Windows and macOS open `team.CHAT.jsonl` as `team.chat.jsonl`. A short name such as `TEAM~1.JSO` is refused before it is opened (below). The earlier turns the model needs reach it as the conversation so far ("The caps" above), not through a tool.
 
 ## The guards on paths
 
 **Every path the model gives passes one check before anything opens it** (`files.resolve`). A refusal goes back to the model as the tool's result, so the loop goes on.
 
-* **The path must stay under the root.** `fs.stays_under` refuses an absolute path, a `..` step, a Windows device name and a link anywhere on the path. kssrv's static serving uses the same checks.
-* **A name that starts with a dot is hidden.** A root that is a checkout holds `.git/` and `.env`. `fs.has_hidden_on_path` checks each segment, by its long name too, because Windows opens `.git` by its short name `GIT~1`. kssrv's static serving uses the same check. The rules are "A hidden name is found by its long name too" in `std/docs/DESIGN-system.md`.
+* **The path must stay under the root, in a form every OS reads alike.** `fs.join_under` refuses an absolute path, a `..` step and a link anywhere on the path. It also refuses every form Windows reads as another name, such as a `\`, a short name's `~1` or a wildcard. The refusal names its reason, so the model can give the path again. kssrv's static serving uses the same check. The forms are "A path from outside goes through one door" in `std/docs/DESIGN-system.md`.
+* **A name that starts with a dot is hidden.** A root that is a checkout holds `.git/` and `.env`. `fs.join_under` checks each segment, by its long name too, because Windows opens `.git` by its short name `GIT~1`.
+* **A listing and a search offer only what a read takes.** They pass each name through the same check, so the model is never shown a name that a read then refuses.
 * **Only text is read.** A file with a NUL byte, or one that is not valid UTF-8, is skipped by a search and refused by a read. A Word or Excel file is read as its text view ("Word and Excel files" below).
 * **The tools only read.** ksagent writes only chat files, live files, the lock `watch` holds (`.ksagent.lock`) and the table that `--out` names.
 

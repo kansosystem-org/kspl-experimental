@@ -1,0 +1,297 @@
+//< A comparison whose answer is fixed before it runs, which the lint reports and genc writes out
+//< **The lint [W0204] and genc ask the one function here**, so what the lint calls fixed is what
+//< genc writes as its answer. The C compiler would otherwise work the answer out itself and warn
+//< about the program's logic (-Wtautological-compare, -Wtype-limits), a message that must not
+//< reach the user (docs/DESIGN-principles.md Principle 2). A constant outside its type's range is
+//< an error instead (refuses_fixed_comparison in `binary.kspl`).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/core" as base_core
+import "ksplc/sema/body/value_range" as sema_body_value_range + { Value_range }
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+enum Fixed_by //< what fixes a comparison's answer before it runs
+    place //< one expression on both sides, written alike and calling nothing
+    range //< a constant outside, or at the edge of, what the other side can hold
+    mask //< a constant with a bit that a `&` or `|` on the other side rules out
+    constants //< a constant on both sides
+    negation //< a `Bool` joined with its own negation: `x || !x`, `x && !x`
+    overlap //<
+        //< two tests of one value against constants, joined by `&&` or `||`, whose answers
+        //< together are fixed: `3 <= x && 1 > x`, `x < 3 || x > 1`
+
+struct Fixed_comparison //< a comparison whose answer is known before it runs, and why
+    answer: Bool
+    by: Fixed_by
+    type_id: I32 //< the place's type; 0 for the other shapes
+    range: Value_range //< for a range: what the side can hold
+    constant: Ast_node$@ //<
+        //< for a range or a mask: the side that is a constant; for an overlap: the first test's
+    second: Ast_node$@ //< for an overlap: the second test's constant
+    side: Ast_node$@ //< for an overlap: the value both tests read
+
+fn fixed_comparison(ctx: Sema_ctx$@, node: Ast_node$@): Fixed_comparison? //<
+    //< The answer of a comparison that its operands' places, types or values already fix
+    //< The four shapes are `Fixed_by`'s. A float never counts: `f != f` tests for NaN.
+    //< What a side can hold is `value_range.kspl`'s.
+    if node == null || node.kind_id != .k_expr || node.children.len != 3
+        return .none
+    op_node: = node.get_binary_op()
+    if op_node == null
+        return .none
+    op: = op_node.text
+    left: = node.get_binary_left()
+    right: = node.get_binary_right()
+    if left == null || right == null
+        return .none
+    if op.equals("&&") || op.equals("||")
+        if negates(left, right) || negates(right, left)
+            return .some(fixed(op.equals("||"), .negation, left.type_id))
+        return overlap(ctx, op, left, right)
+    if !op.is_comparison_op()
+        return .none
+    if left.spells_same_value(right) && compares_reflexively(ctx, left.type_id)
+        return .some(fixed(op.equals("==") || op.equals("<=") || op.equals(">="), .place,
+            left.type_id))
+    // A `Bool` is a one-bit number to a mask: `(b | true) != false` is fixed too.
+    if !is_bits(ctx, left.type_id) || !is_bits(ctx, right.type_id)
+        return .none
+    left_k: = ctx.try_eval_constexpr_wide(left)
+    right_k: = ctx.try_eval_constexpr_wide(right)
+    if left_k.is_some() && right_k.is_some() && ctx.env.is_integer(left.type_id)
+        if both: = ctx.try_eval_constexpr_wide(node)
+            return .some(fixed(both != 0, .constants, left.type_id))
+        return .none
+    if ctx.env.get_clean_real_type(left.type_id) != ctx.env.get_clean_real_type(right.type_id)
+        return .none
+    if left_k.is_none() && right_k.is_none()
+        // Two sides whose ranges do not overlap, or meet at one end (`(x & 0) > (y ^ 1)`).
+        lr: = sema_body_value_range.side_range(ctx, left)
+        rr: = sema_body_value_range.side_range(ctx, right)
+        if answer: = sema_body_value_range.ranges_decide(op, lr, rr)
+            return .some(Fixed_comparison::{ .answer = answer, .by = .range, .type_id = 0,
+                .range = lr, .constant = null })
+        return .none
+    var_on_left: = right_k.is_some()
+    k: = right_k.unwrap_or(0) if var_on_left else left_k.unwrap_or(0)
+    side: = left if var_on_left else right
+    constant: = right if var_on_left else left
+    if op.is_equality_op()
+        if rules_out: = mask_rules_out(ctx, side, k)
+            if rules_out
+                return .some(Fixed_comparison::{ .answer = op.equals("!="), .by = .mask,
+                    .type_id = 0, .range = sema_body_value_range.unknown(), .constant = constant,
+                    .second = null, .side = null })
+    r: = sema_body_value_range.side_range(ctx, side)
+    k_num: = sema_body_value_range.num_of(ctx, k, constant.type_id)
+    if answer: = sema_body_value_range.range_decides(turned(op, var_on_left), r, k_num)
+        return .some(Fixed_comparison::{ .answer = answer, .by = .range, .type_id = 0, .range = r,
+            .constant = constant, .second = null, .side = null })
+    return .none
+
+priv fn fixed(answer: Bool, by: Fixed_by, type_id: I32): Fixed_comparison
+    return Fixed_comparison::{ .answer = answer, .by = by, .type_id = type_id,
+        .range = sema_body_value_range.unknown(), .constant = null, .second = null, .side = null }
+
+priv fn turned(op: U8[], var_on_left: Bool): U8[] //<
+    //< The operator read as `side op k`: with the constant on the left, it turns round
+    if var_on_left
+        return op
+    return (">" if op.equals("<") else "<" if op.equals(">") else ">=" if op.equals("<=")
+        else "<=" if op.equals(">=") else op)
+
+priv struct Test //< a comparison read as `side op k`, k a constant
+    side: Ast_node$@
+    op: U8[]
+    k: sema_body_value_range.Num
+    constant: Ast_node$@
+
+priv fn against_constant(ctx: Sema_ctx$@, node: Ast_node$@): Test? //<
+    //< A comparison of a value with a constant, read as `side op k`; none for another shape
+    //< The value is an integer, a `Bool`, or an enum carried as an integer.
+    at: = node.without_parens()
+    if at == null || at.kind_id != .k_expr || at.children.len != 3
+        return .none
+    op_node: = at.get_binary_op()
+    if op_node == null || !op_node.text.is_comparison_op()
+        return .none
+    left: = at.get_binary_left()
+    right: = at.get_binary_right()
+    left_k: = ctx.try_eval_constexpr_wide(left)
+    right_k: = ctx.try_eval_constexpr_wide(right)
+    if left_k.is_some() == right_k.is_some()
+        return .none
+    var_on_left: = right_k.is_some()
+    side: = left if var_on_left else right
+    constant: = right if var_on_left else left
+    repr: = ctx.env.scalar_repr_id(side.type_id)
+    if !ctx.env.is_integer(repr) && !ctx.env.is_bool(repr)
+        return .none
+    k: = right_k.unwrap_or(0) if var_on_left else left_k.unwrap_or(0)
+    return .some(Test::{ .side = side, .op = turned(op_node.text, var_on_left),
+        .k = sema_body_value_range.num_of(ctx, k, ctx.env.scalar_repr_id(constant.type_id)),
+        .constant = constant })
+
+priv fn overlap(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$@): Fixed_comparison? //<
+    //< The answer of `a && b` or `a || b`, two tests of one value against constants, where
+    //< no value the side can hold changes it
+    //< A test whose answer is fixed alone is left to that test, so neither is. The values
+    //< tried are each span's low end and each constant and the number above it: between
+    //< two of them neither test changes its answer.
+    if a: = against_constant(ctx, left)
+        if b: = against_constant(ctx, right)
+            return overlap_of(ctx, op, left, right, a, b)
+    return .none
+
+priv fn overlap_of(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$@, a: Test, b: Test):
+    Fixed_comparison? //< overlap's answer, once both sides are tests
+    if !a.side.spells_same_value(b.side) || fixed_comparison(ctx, left).is_some() ||
+        fixed_comparison(ctx, right).is_some()
+        return .none
+    r: = tested_values(ctx, a.side)
+    if !r.known
+        return .none
+    both: = op.equals("&&")
+    $seen_true: = false
+    $seen_false: = false
+    for which in Range.asc(2 if r.two else 1)
+        span: = r.first if which == 0 else r.second
+        tries: sema_body_value_range.Num?[5] = ::{ .some(span.lo), .some(a.k),
+            sema_body_value_range.next(a.k), .some(b.k), sema_body_value_range.next(b.k) }
+        for t in tries
+            if v: = t
+                if sema_body_value_range.within_span(v, span)
+                    pa: = sema_body_value_range.holds(a.op, v, a.k)
+                    pb: = sema_body_value_range.holds(b.op, v, b.k)
+                    if (pa && pb) if both else (pa || pb)
+                        seen_true = true
+                    else
+                        seen_false = true
+    if seen_true == seen_false
+        return .none
+    return .some(Fixed_comparison::{ .answer = seen_true, .by = .overlap, .type_id = 0, .range = r,
+        .constant = a.constant, .second = b.constant, .side = a.side })
+
+priv fn tested_values(ctx: Sema_ctx$@, side: Ast_node$@): Value_range //<
+    //< The values a tested side can hold: a `Bool` 0 or 1, `Sz` every `I64`
+    //< `Sz` is read at its widest, so an answer fixed there holds on every target.
+    if ctx.env.is_bool(side.type_id)
+        return sema_body_value_range.between(0, 1)
+    r: = sema_body_value_range.side_range(ctx, side)
+    if r.known
+        return r
+    if ctx.env.is_integer(ctx.env.scalar_repr_id(side.type_id))
+        return sema_body_value_range.between(-9223372036854775807I64 - 1, 9223372036854775807I64)
+    return r
+
+priv fn negates(n: Ast_node$@, x: Ast_node$@): Bool //< whether n is `!x`
+    at: = n.without_parens()
+    return at.kind_id == .k_expr_unary && at.get_unary_op().text.equals("!") &&
+        at.get_unary_target().spells_same_value(x)
+
+priv fn is_bits(ctx: Sema_ctx$@, id: I32): Bool //< an integer or a `Bool`
+    return ctx.env.is_integer(id) || ctx.env.is_bool(id)
+
+priv fn compares_reflexively(ctx: Sema_ctx$@, id: I32): Bool //<
+    //< Whether every value of the type equals itself under the built-in comparison
+    return ctx.env.is_integer(id) || ctx.env.is_bool(id) || ctx.env.is_pointer(id) ||
+        ctx.env.is_fn_ptr(id) || ctx.env.is_scalar_enum(id)
+
+priv fn mask_rules_out(ctx: Sema_ctx$@, side: Ast_node$@, k: I64): Bool? //<
+    //< Whether `side` is `e & C` or `e | C` whose result can never equal k, none for another shape
+    //< `e & C` keeps no bit outside C, and `e | C` keeps every bit of C. The bits are compared at
+    //< the side's width, so a negative value keeps its two's-complement bits.
+    at: = side.without_parens()
+    if at.kind_id != .k_expr || at.children.len != 3
+        return .none
+    op: = at.get_binary_op()
+    if op == null || !(op.text.equals("&") || op.text.equals("|"))
+        return .none
+    $c: = ctx.try_eval_constexpr_wide(at.get_binary_right())
+    if c.is_none()
+        c = ctx.try_eval_constexpr_wide(at.get_binary_left())
+    if mask: = c
+        bits: = ctx.env.get_primitive_bit_size(side.type_id)
+        width: = ~0U64 if bits >= 64 else (1U64 << U64::bits) - 1U64
+        km: = U64::k & width
+        cm: = U64::mask & width
+        if op.text.equals("&")
+            return .some((km & ~cm) != 0U64)
+        return .some((cm & ~km) != 0U64)
+    return .none
+
+fn lint_fixed_comparison(ctx: Sema_ctx$@, node: Ast_node$@) //<
+    //< [W0204] a comparison whose answer its operands already fix
+    //< **Only what the comparison's own text fixes is reported.** An answer fixed by something set
+    //< elsewhere is innocent: a type argument (`x >= 0` with `T` as `U32`), or a named constant a
+    //< build sets (`n >= LIMIT` with `LIMIT` at 0). So a range or a mask is reported outside a
+    //< generic, against a written number; one expression wherever its type is no type argument.
+    //< Constants alone (`B && !B`, `(127I8 + 1I8) == -128I8`) are what the program states.
+    if !base_core.config.run_lint_checks
+        return
+    if f: = fixed_comparison(ctx, node)
+        switch f.by
+        case .place, .negation
+            if ctx.try_eval_constexpr_wide(node.get_binary_left()).is_none() &&
+                (!ctx.is_instantiating() || !ctx.is_type_argument(f.type_id))
+                report(ctx, node, f)
+        case .range, .mask
+            if !ctx.is_instantiating() && is_written_number(f.constant) &&
+                !is_one_value(f.range)
+                report(ctx, node, f)
+        case .overlap
+            if !ctx.is_instantiating() && is_written_number(f.constant) &&
+                is_written_number(f.second)
+                report(ctx, node, f)
+        case .constants {}
+
+priv fn is_one_value(r: Value_range): Bool //< whether a side holds a single value: constants
+    return r.known && !r.two && r.first.lo.bits == r.first.hi.bits &&
+        r.first.lo.neg == r.first.hi.neg
+
+priv fn is_written_number(n: Ast_node$@): Bool //<
+    //< Whether a constant side is a number written out (`255U8`, `-1`, `U32::0`), not a name
+    $at: = n.without_parens()
+    for at != null
+        if at.is_explicit_cast()
+            at = at.get_postfix_receiver().without_parens()
+        else if at.kind_id == .k_expr_unary
+            at = at.get_unary_target().without_parens()
+        else
+            break
+    return at != null && (at.kind_id == .k_integer || at.kind_id == .k_char)
+
+priv fn report(ctx: Sema_ctx$@, node: Ast_node$@, f: Fixed_comparison)
+    verdict: = "true" if f.answer else "false"
+    ctx.clear_scratch().s("[W0204] Meaningless comparison: ")
+    switch f.by
+    case .place
+        ctx.scratch.s("both sides are the same expression")
+    case .negation
+        ctx.scratch.s("one side is the other's negation")
+    case .mask
+        ctx.scratch.s("the '&' or '|' on one side rules out the constant on the other")
+    case .overlap
+        if f.answer
+            ctx.scratch.s("every value the tested side can hold passes one of the two tests")
+        else
+            ctx.scratch.s("no value the tested side can hold passes both tests")
+    default
+        r: = f.range
+        ctx.scratch.s("one side ")
+        if r.type_id != 0
+            ctx.scratch.s("is a '").s(ctx.env.display(r.type_id)).s("', which ")
+        ctx.scratch.s("holds only ").s(span_text(r.first))
+        if r.two
+            ctx.scratch.s(" or ").s(span_text(r.second))
+    ctx.scratch.s(", so it is always \{verdict\}.")
+    ctx.warn(node, ctx.scratch.slice())
+
+priv fn span_text(s: sema_body_value_range.Span): U8[] //< `lo to hi`
+    return base_core.arena.text().s(sema_body_value_range.num_text(s.lo)).s(" to ")
+        .s(sema_body_value_range.num_text(s.hi)).take()

@@ -153,12 +153,14 @@ impl<|T|> List<|T|>
             if block: = old
                 dealloc(block)
 
+    #ends_views
     #inline
     pub fn push(r: Self$@, item: T) //< adds one element at the end, growing if it must
         r.ensure_cap()
         mem.init_at(r.ptr + r.len, item)
         r.len += 1
 
+    #ends_views
     pub fn push_all(r: Self$@, items: T[]) //<
         //< adds every element of a slice at the end, growing once
         //< Each element is copied as `push` copies it, so a counted value gains one count. `items`
@@ -178,6 +180,7 @@ impl<|T|> List<|T|>
         if block: = old
             dealloc(block)
 
+    #ends_views
     pub fn pop(r: Self$@): T? //< removes and returns the last element, or none if empty
         if r.len == 0
             return .none
@@ -186,6 +189,7 @@ impl<|T|> List<|T|>
         r.len = last
         return .some(item)
 
+    #ends_views
     pub fn insert( //< inserts one element, shifting the following elements along
         r: Self$@,
         index: Sz, //< where it goes; an index out of range stops the program
@@ -201,6 +205,7 @@ impl<|T|> List<|T|>
         mem.init_at(r.ptr + index, item)
         r.len += 1
 
+    #ends_views
     pub fn remove_at( //< removes one element, shifting the following elements back
         //< The removed value is released before the following values move over its slot.
         r: Self$@,
@@ -216,17 +221,20 @@ impl<|T|> List<|T|>
         mem.zero(Void$@::(r.ptr + r.len - 1), sizeof(T))
         r.len -= 1
 
+    #ends_views
     pub fn clear(r: Self$@) //< releases every element, keeping the capacity for reuse; O(n)
         //< ARC values release their counts. Manual resources need their explicit free first.
         for $i: = r.len; i > 0; i -= 1
             mem.drop_at(r.ptr + i - 1)
         r.len = 0
 
+    #gives_view
     pub fn slice(r: Self$@): T$[] //< a view of every element, for a function that takes a slice
-        //< Caution: It is borrowed: a push/insert that grows the capacity reallocates the memory
-        //< and invalidates it (the same promise as Str_builder.slice's).
+        //< Caution: It is borrowed. What ends it is "What invalidates a view" in
+        //< `../docs/SPEC-programming-language.md`.
         return T$[]::{ .ptr = r.ptr, .len = r.len }
 
+    #gives_view
     pub fn sub( //< a view of part of it; out of range gives an empty view instead of stopping
         //< **Out of range it returns empty; it does not panic** (unlike `xs[i]`, see `Index`
         //< below).
@@ -241,6 +249,7 @@ impl<|T|> List<|T|>
         return (T$[]::{ .ptr = null, .len = 0 } if n == 0
             else T$[]::{ .ptr = r.ptr + start, .len = n })
 
+    #gives_view
     pub fn sub_from( //< a view from a position to the end
         r: Self$@,
         start: Sz, //< where the part begins
@@ -282,6 +291,7 @@ impl<|T|> List<|T|>
 impl<|T|> List<|T|>: Index_place<|Sz, T|> //< so `xs[i] += v` and `xs[i]@` can be written
     //< It makes `l[i]` an lvalue, as with a built-in slice; with only get/set a compound assignment
     //< cannot be built, and `@` would give a temporary's address.
+    #gives_view
     #inline
     pub fn at(r: Self$@, index: Sz, file: U8[], line: Sz): T$@ //<
         //< the element's address, not a copy
@@ -293,6 +303,7 @@ impl<|T|> List<|T|>: Index_ref<|Sz, T|> //< so `xs[i]` through a read-only point
     //< **`at` cannot be used through a read-only pointer (`xs: List<|T|>@`).** Without this impl,
     //< `xs[i]` there resolves to `get` and **copies the whole element**, even for `xs[i].f`, and
     //< `xs[i]@` is rejected.
+    #gives_view
     #inline
     pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@ //< the element, read-only
         if U64::index >= U64::r.len
@@ -377,6 +388,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
                 break
         return .none
 
+    #ends_views
     pub fn remove( //< removes a pair, leaving a tombstone; false if there was none
         r: Self$@,
         key: K, //< the key to look for
@@ -487,6 +499,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         slot.is_active = true
         slot.is_tombstone = false
 
+    #gives_view
     pub fn items(r: Self$@): Map_seq<|K, V|> //<
         //< a chain over the live pairs (`for e in m.items()`)
         //< Caution: **Do not return a list.** It would instantiate **all of `List` for the nested
@@ -500,6 +513,7 @@ pub struct Map_seq<|K: Hashable<|K|>, V|> //< walks a `Map` one live pair at a t
     priv i: Sz
 
 impl<|K: Hashable<|K|>, V|> Map_seq<|K, V|>: Iter<|Map_entry<|K, V|>$@|> //< so a `for` drives it
+    #gives_view
     pub fn next(r: Self$@): Map_entry<|K, V|>$@? //< the next live pair, or nothing
         //< Caution: **Skip the empty slots** (their content is undefined); a tombstone is not
         //< active.
@@ -513,6 +527,7 @@ impl<|K: Hashable<|K|>, V|> Map_seq<|K, V|>: Iter<|Map_entry<|K, V|>$@|> //< so 
         return out
 
 impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index_mut<|K, V|> //< so `m[k] = v` writes a pair
+    #ends_views
     pub fn set(r: Self$@, key: K, value: V) //< stores a pair, replacing any old value for the key
         r.set_with_hash(key, value, key.hash())
 

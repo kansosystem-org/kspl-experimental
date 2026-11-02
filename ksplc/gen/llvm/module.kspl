@@ -79,16 +79,18 @@ priv fn emit_globals(root: Ast_node$@, cg: Genllvm_ctx$@)
     cg.s("\n")
 
 priv fn mark_defined_c_names(root: Ast_node$@, cg: Genllvm_ctx$@) //<
-    //< Enters every function this module defines under its own C name (an `#export`) as declared
-    //< An `extern "C"` block can name a function the program itself defines, as a host stand-in
-    //< for a port's C does. Its `define` serves as the declaration; a `declare` beside it is a
-    //< redefinition to LLVM, though C allows a prototype next to the body.
+    //< Enters every function and variable this module defines under its own C name as declared
+    //< An `extern` declaration can name what the program itself defines, as a host stand-in for a
+    //< port's C does. Its `define` (or `global`) serves as the declaration; a `declare` (or an
+    //< `external global`) beside it is a redefinition to LLVM, though C allows both.
     for raw in root.children
         child: = raw.unwrap_top_level()
-        if !child.is_emittable() || child.kind_id != .k_decl_fn || child.sym_ptr == null
+        if !child.is_emittable() || child.sym_ptr == null
             continue
-        if child.find_child(.k_stmt_block) != null &&
-            (Sema_symbol$@::child.sym_ptr).uses_verbatim_c_name()
+        defines: =
+            (child.kind_id == .k_decl_fn && child.find_child(.k_stmt_block) != null) ||
+            child.kind_id == .k_decl_var
+        if defines && (Sema_symbol$@::child.sym_ptr).uses_verbatim_c_name()
             cg.extern_declared.set(child.get_decl_id_text(), 1)
 
 priv fn emit_fn_defs(root: Ast_node$@, cg: Genllvm_ctx$@)
@@ -106,7 +108,7 @@ priv fn emit_fn_defs(root: Ast_node$@, cg: Genllvm_ctx$@)
 priv fn emit_runtime_decls(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     //< The declarations the IR itself holds in hosted's preamble
     //< **No `kspl_*` bodies go here.** Everything that touches the OS is in the C runtime
-    //< (`ksplc emit-runtime`'s output). The `declare`s come from `std/`'s `extern "C"`
+    //< (`ksplc emit-runtime`'s output). The `declare`s come from `std/`'s `extern`
     //< (gen/llvm/decl.kspl), which skips what is emitted here (`is_preamble_fn` in `ctx.kspl`).
     for f in gen_llvm_ctx.PREAMBLE_FNS
         if f.ret.len > 0

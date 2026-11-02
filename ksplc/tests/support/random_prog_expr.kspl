@@ -1,0 +1,442 @@
+//< The expressions of the programs `random_prog.kspl` writes, and the state they are written from
+//< Each function returns the text of an expression of exactly the type it is asked for. Every
+//< operation is one the language accepts on that type, and a stop the language defines is never
+//< written by chance: a divisor is made odd, a shift amount masked, an index taken modulo its
+//< length.
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/prng" { Prng }
+import "std/str" { Str_builder }
+
+// ==========================================
+// Types: the eight integers, `Bool` and `Sz`, by their index into `NAMES`
+// ==========================================
+
+const NAMES: U8[][_] = ::{ "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Bool", "Sz" }
+const BITS: Sz[_] = ::{ 8, 16, 32, 64, 8, 16, 32, 64, 1, 64 }
+const INTS: Sz = 8 //< how many integer types come first in `NAMES`
+const BOOL: Sz = 8
+const SZ: Sz = 9
+const ENUM_TY: Sz = 100 //< a value of the k-th enum has the type `ENUM_TY + k`
+const NONE: Sz = 1000 //< no struct parameter
+
+const COST_CAP: Sz = 3000 //< about how many statements one function may run
+
+const ARITH: U8[][_] = ::{ "+", "-", "*" }
+const BITWISE: U8[][_] = ::{ "&", "|", "^" }
+const COMPARE: U8[][_] = ::{ "==", "!=", "<", "<=", ">", ">=" }
+const BOOL_OPS: U8[][_] = ::{ "==", "!=", "&", "|", "^" }
+
+// ==========================================
+// What a program holds so far
+// ==========================================
+
+struct Var //< a value a statement can read, and maybe write
+    text: U8[] //< how it is written: a name, a field (`s2.f1`) or a parameter
+    ty: Sz //< an index into `NAMES`, or `ENUM_TY` + an enum's index
+    place: Bool //< it can be written
+    bare: Bool //< a local's own name, which a closure can capture
+
+struct Arr //< an array or a slice a statement can index
+    text: U8[]
+    ty: Sz
+    len: Sz
+    place: Bool //< its elements can be written
+
+struct Svar //< a struct value a call can be handed
+    text: U8[]
+    shape: Sz
+    place: Bool //< it can be handed as a `$@` pointer
+    ptr: Bool //< it is a `$@` parameter already
+
+struct Func //< a function written so far, which a later one can call
+    name: U8[]
+    params: List<|Sz|>
+    st: Sz //< the struct its last parameter is, or `NONE`
+    by_ptr: Bool //< that parameter is a `$@` pointer
+    ret: Sz
+    cost: Sz //< about how many statements one call runs
+
+struct Shape //< a struct type: its integer fields `f0`…, then one array field `fa`
+    fields: List<|Sz|>
+    arr_ty: Sz
+    arr_len: Sz
+
+struct En //< an enum over an integer base, its tags written out
+    base: Sz
+    tags: List<|I64|>
+
+struct Gen //< the generator's whole state
+    rng: Prng
+    arena: Arena$@
+    out: Str_builder //< the function being written
+    indent: Sz
+    next: Sz //< the last number a fresh name took
+    vars: List<|Var|>
+    arrs: List<|Arr|>
+    svars: List<|Svar|>
+    fns: List<|Func|>
+    shapes: List<|Shape|>
+    ens: List<|En|>
+    mult: Sz //< how many passes the loops around the current statement make
+    cost: Sz //< the current function's cost so far
+    loops: Sz //< how many loops stand around the current statement
+    in_closure: Bool
+    open: Bool //< it also writes the shapes of `OPEN_FINDINGS`
+
+// ==========================================
+// Small helpers
+// ==========================================
+
+fn signed(t: Sz): Bool
+    return t < 4 || t == SZ
+
+fn widens(from: Sz, to: Sz): Bool //< whether a `from` converts to a `to` with no cast
+    if from >= INTS || to >= INTS || BITS[to] <= BITS[from]
+        return false
+    return signed(to) || !signed(from)
+
+fn mask(t: Sz): U64 //< every bit the type holds
+    if BITS[t] >= 64
+        return 0xFFFFFFFFFFFFFFFFU64
+    return (1U64 << U64::BITS[t]) - 1U64
+
+fn line(g: Gen$@, text: U8[]) //< one line of the function, at the current indent
+    for _i in Range.asc(g.indent)
+        g.out.s("    ")
+    g.out.s(text).c('\n')
+
+fn fresh(g: Gen$@, prefix: U8[]): U8[] //< a name no other declaration takes
+    g.next += 1
+    return g.arena.text().s(prefix).s("\{g.next\}").take()
+
+fn paren(g: Gen$@, a: U8[], op: U8[], b: U8[]): U8[] //< `(a op b)`
+    return g.arena.text().s("(").s(a).s(" ").s(op).s(" ").s(b).s(")").take()
+
+fn int_ty(g: Gen$@): Sz
+    return g.rng.below(INTS)
+
+fn narrow_or_same(g: Gen$@, t: Sz): Sz //< t, or now and then a type that widens to it
+    if t >= INTS || g.rng.chance(60)
+        return t
+    $c: = List<|Sz|>(g.arena)
+    for s in Range.asc(INTS)
+        if widens(s, t)
+            c.push(s)
+    if c.len == 0
+        return t
+    return c.get(g.rng.below(c.len))
+
+fn lowest(t: Sz): I64 //< the type's smallest value
+    if !signed(t)
+        return 0I64
+    return 0I64 - I64::(mask(t) >> 1U64) - 1I64
+
+fn highest(t: Sz): I64 //< the type's largest value, `I64`'s for `U64`
+    if signed(t) || BITS[t] >= 64
+        return I64::(mask(t) >> 1U64)
+    return I64::mask(t)
+
+// ==========================================
+// Literals
+// ==========================================
+
+fn raw_value(g: Gen$@, t: Sz): U64 //< a value's bits, an edge value now and then
+    m: = mask(t)
+    top: = (m >> 1U64) + 1U64
+    switch g.rng.below(9)
+    case 0
+        return 0U64
+    case 1
+        return 1U64
+    case 2
+        return m
+    case 3
+        return m >> 1U64
+    case 4
+        return top
+    case 5
+        return U64::g.rng.below(20)
+    case 6
+        return (top + 1U64) & m
+    default
+        return g.rng.next_u64() & m
+
+fn lit_text(g: Gen$@, t: Sz, v: U64): U8[] //< the bits v as a literal of t
+    if t == BOOL
+        return "true" if (v & 1U64) != 0U64 else "false"
+    m: = mask(t)
+    if signed(t) && (v & ((m >> 1U64) + 1U64)) != 0U64
+        mag: = (0U64 - v) & m
+        return g.arena.text().s("(-\{mag\}").s(NAMES[t]).s(")").take()
+    return g.arena.text().s("\{v & m\}").s(NAMES[t]).take()
+
+fn lit(g: Gen$@, t: Sz): U8[] //< a literal of t
+    if t == SZ
+        return g.arena.text().s("\{g.rng.below(50)\}Sz").take()
+    return lit_text(g, t, raw_value(g, t))
+
+fn i64_lit(g: Gen$@, t: Sz, v: I64): U8[] //< the number v as a literal of t
+    return lit_text(g, t, U64::v)
+
+// ==========================================
+// Expressions: each returns text of exactly the type asked for
+// ==========================================
+
+fn leaf(g: Gen$@, t: Sz): U8[] //< a variable of type t, or a literal
+    if !g.rng.chance(25)
+        $n: Sz = 0
+        for v in g.vars
+            if v.ty == t
+                n += 1
+        if n > 0
+            $k: = g.rng.below(n)
+            for v in g.vars
+                if v.ty == t
+                    if k == 0
+                        return v.text
+                    k -= 1
+    return lit(g, t)
+
+fn hidden(g: Gen$@, t: Sz, e: U8[]): U8[] //< e passed through `gid`, whose value C cannot see
+    return g.arena.text().s("gid<|").s(NAMES[t]).s("|>(").s(e).s(")").take()
+
+fn test(g: Gen$@, d: Sz): U8[] //<
+    //< A statement's condition, passed through `gid` so ksplc cannot work out its value
+    //< A constant one (`if true` before `continue`) leaves code after it that never runs, and
+    //< ksplc rightly reports that ([W0201]). A comparison inside it stays open to the C compiler.
+    return hidden(g, BOOL, expr(g, BOOL, d))
+
+fn expr(g: Gen$@, t: Sz, depth: Sz): U8[] //< an expression of type t
+    if t == BOOL
+        return cond(g, depth)
+    if t == SZ || depth == 0 || g.rng.chance(20)
+        return leaf(g, t)
+    d: = depth - 1
+    a: = g.arena
+    switch g.rng.below(17)
+    case 0, 1, 2
+        return binary(g, t, ARITH[g.rng.below(3)], d)
+    case 3, 4
+        return binary(g, t, BITWISE[g.rng.below(3)], d)
+    case 5
+        return divide(g, t, d)
+    case 6
+        return shift(g, t, d)
+    case 7
+        s: = g.rng.below(SZ + 1)
+        return a.text().s(NAMES[t]).s("::(").s(expr(g, s, d)).s(")").take()
+    case 8
+        e: = expr(g, t, d)
+        if signed(t) && g.rng.chance(50)
+            return a.text().s("-(").s(e).s(")").take()
+        return a.text().s("~(").s(e).s(")").take()
+    case 9
+        x: = expr(g, t, d)
+        c: = cond(g, d)
+        y: = expr(g, t, d)
+        return a.text().s("(").s(x).s(" if ").s(c).s(" else ").s(y).s(")").take()
+    case 10, 11
+        return call(g, t, d)
+    case 12, 13
+        return generic(g, t, d)
+    case 14
+        return element(g, t, d)
+    case 15
+        return from_enum(g, t)
+    default
+        return leaf(g, t)
+
+fn binary(g: Gen$@, t: Sz, op: U8[], d: Sz): U8[] //< `a op b`, b maybe of a narrower type
+    a: = expr(g, t, d)
+    b: = other_side(g, narrow_or_same(g, t), d, a, op)
+    if g.rng.chance(50)
+        return paren(g, b, op, a)
+    return paren(g, a, op, b)
+
+fn constant(e: U8[]): Bool //< whether an operand is a literal or a constant's name
+    if e.len == 0
+        return false
+    return e[0] == 'K' || (e[0] >= '0' && e[0] <= '9') ||
+        (e.len > 2 && e[0] == '(' && e[1] == '-' && e[2] >= '0' && e[2] <= '9')
+
+fn other_side(g: Gen$@, t: Sz, d: Sz, a: U8[], op: U8[]): U8[] //<
+    //< The second operand of `a op …`, written differently from the first
+    //< `x - x` or `x & x` is the program's own slip: a person writes 0 or x. Two constants are
+    //< kept apart but under `^`: their value can wrap, the open finding `WRAPPED_CONSTANT`.
+    $b: = expr(g, t, d)
+    if g.open
+        return b
+    for _try in Range.asc(3)
+        if !b.equals(a) && (op.equals("^") || !(constant(a) && constant(b)))
+            return b
+        b = expr(g, t, d)
+    return hidden(g, t, b)
+
+fn divide(g: Gen$@, t: Sz, d: Sz): U8[] //< `/` or `%`, the divisor made odd
+    a: = expr(g, t, d)
+    s: = narrow_or_same(g, t)
+    b: = paren(g, expr(g, s, d), "|", lit_text(g, s, 1U64))
+    return paren(g, a, "/" if g.rng.chance(50) else "%", b)
+
+fn shift(g: Gen$@, t: Sz, d: Sz): U8[] //< `<<` or `>>`, the amount masked into range
+    $a: = expr(g, t, d)
+    if !g.open && a[0] == 'K'
+        a = hidden(g, t, a)
+    s: = int_ty(g)
+    amt: = paren(g, expr(g, s, d), "&", lit_text(g, s, U64::(BITS[t] - 1)))
+    return paren(g, a, "<<" if g.rng.chance(50) else ">>", amt)
+
+fn cond(g: Gen$@, depth: Sz): U8[] //< an expression of type `Bool`
+    if depth == 0 || g.rng.chance(20)
+        return leaf(g, BOOL)
+    d: = depth - 1
+    a: = g.arena
+    switch g.rng.below(8)
+    case 0, 1, 2
+        t: = int_ty(g)
+        x: = expr(g, t, d)
+        return paren(g, x, COMPARE[g.rng.below(6)], expr(g, t, d))
+    case 3, 4
+        x: = cond(g, d)
+        return paren(g, x, "&&" if g.rng.chance(50) else "||", cond(g, d))
+    case 5
+        return a.text().s("!(").s(cond(g, d)).s(")").take()
+    case 6
+        x: = expr(g, BOOL, d)
+        return paren(g, x, BOOL_OPS[g.rng.below(5)], expr(g, BOOL, d))
+    default
+        return leaf(g, BOOL)
+
+fn call(g: Gen$@, t: Sz, d: Sz): U8[] //< a call of an earlier function that returns t
+    $cands: = List<|Sz|>(g.arena)
+    for i in Range.asc(g.fns.len)
+        f: = g.fns.get(i)
+        if f.ret == t && g.cost + g.mult * f.cost <= COST_CAP &&
+            struct_arg(g, f@, false).len > 0
+            cands.push(i)
+    if cands.len == 0
+        return leaf(g, t)
+    f: = g.fns.get(cands.get(g.rng.below(cands.len)))
+    g.cost += g.mult * f.cost
+    b: = g.arena.text().s(f.name).s("(")
+    for i in Range.asc(f.params.len)
+        p: = f.params.get(i)
+        b.s(", " if i > 0 else "").s(expr(g, narrow_or_same(g, p), d))
+    if f.st != NONE
+        b.s(", " if f.params.len > 0 else "").s(struct_arg(g, f@, true))
+    return b.s(")").take()
+
+fn struct_arg(g: Gen$@, f: Func@, draw: Bool): U8[] //<
+    //< What a call hands f's struct parameter, empty where nothing fits
+    //< Without draw it answers only whether something fits ("-" for a function with no such
+    //< parameter), and draws nothing.
+    if f.st == NONE
+        return "-"
+    $cands: = List<|Svar|>(g.arena)
+    for s in g.svars
+        if s.shape == f.st && (s.place || s.ptr || !f.by_ptr)
+            cands.push(s)
+    if cands.len == 0
+        return ""
+    if !draw
+        return "-"
+    s: = cands.get(g.rng.below(cands.len))
+    if f.by_ptr
+        return s.text if s.ptr else g.arena.text().s(s.text).s("@").take()
+    return g.arena.text().s(s.text).s("$").take() if s.ptr else s.text
+
+fn generic(g: Gen$@, t: Sz, d: Sz): U8[] //< a call of one of the prelude's generics at t
+    a: = g.arena
+    ty: = NAMES[t]
+    switch g.rng.below(7)
+    case 0
+        x: = expr(g, t, d)
+        return a.text().s("gmix<|").s(ty).s("|>(").s(x).s(", ").s(expr(g, t, d)).s(")").take()
+    case 1
+        x: = expr(g, t, d)
+        return a.text().s("gap<|").s(ty).s("|>(gmix<|").s(ty).s("|>, ").s(x).s(", ")
+            .s(expr(g, t, d)).s(")").take()
+    case 2
+        c: = cond(g, d)
+        x: = expr(g, t, d)
+        return a.text().s("gsel<|").s(ty).s("|>(").s(c).s(", ").s(x).s(", ").s(expr(g, t, d)).s(")")
+            .take()
+    case 3
+        x: = expr(g, t, d)
+        c: = cond(g, d)
+        return a.text().s("(gmay<|").s(ty).s("|>(").s(x).s(", ").s(c).s(") catch ").s(lit(g, t))
+            .s(")").take()
+    case 4
+        return closure(g, t, d)
+    case 5
+        x: = expr(g, t, d)
+        return a.text().s("gsh<|").s(ty).s("|>(").s(x).s(", ").s(expr(g, 4, d)).s(")").take()
+    default
+        for r in g.arrs
+            if r.ty == t && g.rng.chance(50)
+                return a.text().s("gsum<|").s(ty).s("|>(").s(ty).s("[]::").s(r.text).s(")").take()
+        return leaf(g, t)
+
+fn closure(g: Gen$@, t: Sz, d: Sz): U8[] //< a closure over up to two locals, called once
+    if g.in_closure
+        return leaf(g, t)
+    a: = g.arena
+    ty: = NAMES[t]
+    x: = fresh(g, "cx")
+    $caps: = List<|Var|>(a)
+    for v in g.vars
+        if v.bare && caps.len < 2 && v.ty <= SZ && g.rng.chance(40)
+            caps.push(v)
+    $inner: = List<|Var|>(a)
+    inner.push(Var::{ .text = x, .ty = t, .place = false, .bare = false })
+    for c in caps
+        inner.push(Var::{ .text = c.text, .ty = c.ty, .place = false, .bare = false })
+    outer_vars: = g.vars
+    outer_arrs: = g.arrs
+    outer_svars: = g.svars
+    g.vars = inner
+    g.arrs = List<|Arr|>(a)
+    g.svars = List<|Svar|>(a)
+    g.in_closure = true
+    $body: = expr(g, t, 2 if d > 2 else d)
+    // Every parameter and capture is read, so none goes unread.
+    for v in inner
+        body =
+            paren(g, body, "^",
+            a.text().s(ty).s("::(").s(v.text).s(")").take())
+    g.in_closure = false
+    g.vars = outer_vars
+    g.arrs = outer_arrs
+    g.svars = outer_svars
+    b: = a.text().s("gvia<|").s(ty).s("|>(fn(").s(x).s(": ").s(ty).s("; ")
+    for i in Range.asc(caps.len)
+        c: = caps.get(i)
+        b.s(", " if i > 0 else "").s(c.text).s(": ").s(NAMES[c.ty])
+    b.s("): ").s(ty).s(" { return ").s(body).s("; }, ").s(expr(g, t, d)).s(")")
+    return b.take()
+
+fn index(g: Gen$@, len: Sz, d: Sz): U8[] //< an index below len
+    if g.rng.chance(30)
+        return g.arena.text().s("\{g.rng.below(len)\}").take()
+    s: = int_ty(g)
+    return g.arena.text().s("Sz::(U32::(").s(expr(g, s, d)).s(") % \{len\}U32)").take()
+
+fn element(g: Gen$@, t: Sz, d: Sz): U8[] //< an element of an array or a slice of t
+    $cands: = List<|Arr|>(g.arena)
+    for r in g.arrs
+        if r.ty == t
+            cands.push(r)
+    if cands.len == 0
+        return leaf(g, t)
+    r: = cands.get(g.rng.below(cands.len))
+    return g.arena.text().s(r.text).s("[").s(index(g, r.len, d)).s("]").take()
+
+fn from_enum(g: Gen$@, t: Sz): U8[] //< an enum value cast to t
+    $cands: = List<|U8[]|>(g.arena)
+    for v in g.vars
+        if v.ty >= ENUM_TY
+            cands.push(v.text)
+    if cands.len == 0
+        return leaf(g, t)
+    return g.arena.text().s(NAMES[t]).s("::(").s(cands.get(g.rng.below(cands.len))).s(")").take()

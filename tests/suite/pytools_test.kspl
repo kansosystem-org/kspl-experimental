@@ -9,6 +9,7 @@
 //< same as tools are added, or this file comes to hold a branch per tool.
 //< Caution: **Print a `SKIP` line when a module a tool needs is absent.** Skipped with no line, it
 //< looks like a pass.
+//< Its failure case: `tests/suite/pytools_test.kspl#NOT_RUN`, output in which no self-test ran.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
@@ -73,6 +74,13 @@ priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with a s
             return true
     return false
 
+priv const NOT_RUN: U8[] = "usage: tool.py [self-test]\nthe word pass inside a line\n" //<
+    //< Output in which no self-test ran, though it holds both marks: the failure case
+
+priv fn check_fires() //< output with no self-test's line is told from output with one
+    verdict.check("output in which no self-test ran is told apart",
+        !ran_one(NOT_RUN) && ran_one(MARK_OK), NOT_RUN)
+
 priv fn check_listed() //< that every Python file under `TOOLS/` is a tool here or a library
     //< **A tool left off the list is never run**, and goes on passing while it rots.
     arena: = ksplc_harness.arena()
@@ -112,6 +120,7 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
 
 fn main(): I32
     harness.begin(1 << 20)
+    check_fires()
     check_listed()
     for i in Range.asc(TOOLS.len)
         check_tool(TOOLS[i]@)

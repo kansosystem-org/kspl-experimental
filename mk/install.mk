@@ -80,21 +80,31 @@ define install_ok_help
 #   ✅ the ksplc first on PATH is the one installed here, so a shebang starts it
 endef
 
-# Stage both copies before moving either installed path. Keep the old pair until both moves
-# succeed. These are separate paths, not an atomic pair; do not compile during installation.
-# A failed rollback keeps its backup folders and prints them rather than deleting the old files.
+# Stage every copy before moving any installed path. Keep the old ones until every move succeeds.
+# These are separate paths, not an atomic set; do not compile during installation. A failed
+# rollback keeps its backup folders and prints them rather than deleting the old files.
+# **ksmd's folder is the third piece where `$(KSMD_INSTALL_MARK)` stands** (`install_ksmd_probe`).
+# Its servers are stopped first, as `make` does before rebuilding them: the folder is replaced
+# whole, its `tmp/` with it, and Windows cannot remove a log a running server holds open.
 define install_compiler_and_std
 set -eu; \
 mkdir -p "$(PREFIX)/bin" "$(PREFIX)/lib/kspl"; \
 lock="$(PREFIX)/lib/kspl/.install-lock"; \
 mkdir "$$lock" || { echo "Another install or an interrupted install holds $$lock" >&2; exit 1; }; \
-bin_stage=; std_stage=; committed=0; \
+pieces="bin std"; [ ! -f "$(KSMD_INSTALL_MARK)" ] || pieces="bin std ksmd"; \
+bin_stage=; std_stage=; ksmd_stage=; committed=0; \
+place() { \
+    case "$$1" in \
+    bin) stage="$$bin_stage"; suffix="$(suffix $(INSTALL_NAME))"; dest="$(PREFIX)/bin/$(INSTALL_NAME)";; \
+    std) stage="$$std_stage"; suffix=; dest="$(PREFIX)/lib/kspl/std";; \
+    ksmd) stage="$$ksmd_stage"; suffix=; dest="$(KSMD_INSTALL_DIR)";; \
+    esac; \
+}; \
 finish() { \
     result=$$?; trap - 0 HUP INT TERM; failed=0; \
     if [ "$$committed" = 0 ]; then \
-        for pair in bin std; do \
-            if [ "$$pair" = bin ]; then stage="$$bin_stage"; suffix="$(suffix $(INSTALL_NAME))"; dest="$(PREFIX)/bin/$(INSTALL_NAME)"; \
-            else stage="$$std_stage"; suffix=; dest="$(PREFIX)/lib/kspl/std"; fi; \
+        for piece in $$pieces; do \
+            place "$$piece"; \
             [ -n "$$stage" ] || continue; \
             if [ -e "$$stage/old$$suffix" ] || [ -L "$$stage/old$$suffix" ]; then \
                 rm -rf "$$dest" && mv "$$stage/old$$suffix" "$$dest" || failed=1; \
@@ -104,11 +114,10 @@ finish() { \
         done; \
     fi; \
     if [ "$$failed" = 0 ]; then \
-        [ -z "$$bin_stage" ] || rm -rf "$$bin_stage"; \
-        [ -z "$$std_stage" ] || rm -rf "$$std_stage"; \
+        for left in "$$bin_stage" "$$std_stage" "$$ksmd_stage"; do [ -z "$$left" ] || rm -rf "$$left"; done; \
         rmdir "$$lock"; \
     else \
-        echo "Install rollback failed. Keep and recover backups: $$bin_stage $$std_stage" >&2; \
+        echo "Install rollback failed. Keep and recover backups: $$bin_stage $$std_stage $$ksmd_stage" >&2; \
         result=1; \
     fi; \
     exit "$$result"; \
@@ -118,9 +127,16 @@ bin_stage=$$(mktemp -d "$(PREFIX)/bin/.kspl-install.XXXXXX"); \
 std_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
 cp "$(SHIP_EXE)" "$$bin_stage/new$(suffix $(INSTALL_NAME))"; chmod +x "$$bin_stage/new$(suffix $(INSTALL_NAME))"; \
 cp -R std "$$std_stage/new"; \
-for pair in bin std; do \
-    if [ "$$pair" = bin ]; then stage="$$bin_stage"; suffix="$(suffix $(INSTALL_NAME))"; dest="$(PREFIX)/bin/$(INSTALL_NAME)"; \
-    else stage="$$std_stage"; suffix=; dest="$(PREFIX)/lib/kspl/std"; fi; \
+if [ -f "$(KSMD_INSTALL_MARK)" ]; then \
+    ksmd_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
+    page="$$ksmd_stage/new/$(patsubst $(OUT_DIR)/%,%,$(KSMD_PAGE))"; mkdir -p "$${page%/*}"; \
+    cp "$(KSMD_EXE)" "$(KSSRV_EXE)" "$(KSMD_ICON)" "$$ksmd_stage/new/"; \
+    cp "$(KSMD_PAGE)" "$$page"; \
+    old="$(KSMD_INSTALL_DIR)/$(notdir $(KSMD_EXE))"; \
+    if [ -x "$$old" ]; then "$$old" --stop-all >/dev/null 2>&1 || true; fi; \
+fi; \
+for piece in $$pieces; do \
+    place "$$piece"; \
     if [ -e "$$dest" ] || [ -L "$$dest" ]; then mv "$$dest" "$$stage/old$$suffix"; \
     else touch "$$stage/absent"; fi; \
     mv "$$stage/new$$suffix" "$$dest"; \
@@ -128,43 +144,84 @@ done; \
 committed=1
 endef
 
+# --- ksmd beside ksplc (make install) ---
+# **The folder has the shape of `out/`**: the launcher, kssrv beside it, and the page under
+# `ksmd/web/` (`KSMD` in `tools/opener_aim.kspl`). The launcher finds them from its own path, so a
+# second layout would need a second search. `tmp/` comes beside them when it first runs.
+KSMD_INSTALL_DIR = $(PREFIX)/lib/kspl/ksmd
+KSMD_PAGE := $(OUT_DIR)/ksmd/web/ksmd.html
+# The mark that the probe found ksmd buildable and built it; the steps after it read it.
+KSMD_INSTALL_MARK := $(GEN_DIR)/install_ksmd.ok
+
+# **Where ksmd cannot be built it is a note**, so `ksplc` still installs with a C compiler and Make
+# alone. The page needs clang's wasm32 tools, and kssrv needs OpenSSL; building ksplc needs
+# neither. `ksmd/Makefile`'s `web-tools` and the root's `kssrv-libs` each say what is missing.
+define install_ksmd_probe
+	@rm -f "$(KSMD_INSTALL_MARK)"; ok=1; \
+	tools=$$($(MAKE) --no-print-directory -C ksmd web-tools 2>&1) || ok=0; \
+	libs=$$($(MAKE) --no-print-directory kssrv-libs 2>&1) || ok=0; \
+	if [ "$$ok" = 1 ]; then \
+		$(MAKE) --no-print-directory ksmd-web $(KSSRV_EXE) $(KSMD_EXE) && \
+		mkdir -p "$(GEN_DIR)" && touch "$(KSMD_INSTALL_MARK)"; \
+	else \
+		echo "# note: ksmd is not installed: what it needs cannot be built here."; \
+		printf '%s\n' "$$tools" "$$libs" | sed -e '/^make/d' -e '/^$$/d' -e 's/^/#   /'; \
+		echo "#   Install what is named, then run make install again"; \
+	fi
+endef
+
+# **`bin/ksmd` is a link to the launcher**, so `ksmd` works from any folder; the launcher resolves
+# it to its own folder (`sys.exe_path`). **A file there that is not a link is left alone**: it is
+# another program. Windows makes no link without rights it may lack, so there the launcher is
+# started from its own folder, as a double-click does.
+ifeq ($(PLATFORM),win32)
+define install_ksmd_link
+	@if [ -f "$(KSMD_INSTALL_MARK)" ]; then \
+		echo "# installed -> $(KSMD_INSTALL_DIR)/$(notdir $(KSMD_EXE)) (tie .ksmd to it as the HOWTO says)"; fi
+endef
+else
+define install_ksmd_link
+	@if [ -f "$(KSMD_INSTALL_MARK)" ]; then \
+		echo "# installed -> $(KSMD_INSTALL_DIR)"; \
+		link="$(PREFIX)/bin/ksmd"; \
+		if [ -e "$$link" ] && [ ! -L "$$link" ]; then \
+			echo "# note: $$link is another program, so it stays; start $(KSMD_INSTALL_DIR)/$(notdir $(KSMD_EXE))"; \
+		else \
+			ln -sfn "../lib/kspl/ksmd/$(notdir $(KSMD_EXE))" "$$link" && echo "# installed -> $$link"; \
+		fi; \
+	fi
+endef
+endif
+
 install: export ABS_HELP := $(install_abs_help)
 # **What it installs is checked first**: stage2 reproduces itself (`self-host`) and the optimized
 # build emits stage2's notation to the byte (`self-host-ship`). It neither formats the tree nor
 # re-bakes the seed: each rewrites files, and the seed is re-baked when the seed's rules call for
 # it, by `make commit-seed` ("The bootstrap, and keeping the seed in step" in
 # `ksplc/docs/DESIGN-compiler.md`).
-## Build-and-install|install|Check that ksplc reproduces itself, then put it in as `ksplc` (the place is `PREFIX=`)
+## Build-and-install|install|Check that ksplc reproduces itself, then put it in as `ksplc`, with ksmd beside it (the place is `PREFIX=`)
 install: self-host self-host-ship install-lsp
 	@echo "# INSTALLING ksplc FOR $(PLATFORM)..."
 	@# Caution: **Do not proceed unless it is an absolute path.**
 	@# A relative one succeeds, inside the repository,
 	@# and shows only as PATH not working
 	@case '$(PREFIX)' in /*|[A-Za-z]:/*) ;; *) printf '%s\n' "$$ABS_HELP"; exit 1;; esac
+	$(install_ksmd_probe)
 	@# **Always quote the place**: a Windows home can hold whitespace (`C:/Users/First Last`).
 	@$(install_compiler_and_std)
 	@echo "# installed -> $(PREFIX)/bin/$(INSTALL_NAME)"
 	@echo "# installed -> $(PREFIX)/lib/kspl/std"
+	$(install_ksmd_link)
 	$(install_desktop_step)
 	@$(MAKE) --no-print-directory install-check
 
-# **On Linux, `make install` then ties `.ksmd` to its launcher** (`install-desktop` in
-# `mk/ksmd.mk`); elsewhere a person ties it by hand, as the HOWTO says. The page needs clang's
-# wasm32 tools, and the launcher's kssrv needs OpenSSL; building ksplc needs neither. **Where one is
-# missing it is a note**, so `ksplc` still installs with a C compiler and Make alone.
-# `ksmd/Makefile`'s `web-tools` and the root's `kssrv-libs` each say what is missing.
+# **On Linux, `make install` then ties `.ksmd` to the installed launcher** (`install-desktop` in
+# `mk/ksmd.mk`, with `KSMD_TIE_DIR`); elsewhere a person ties it by hand, as the HOWTO says.
 ifeq ($(PLATFORM),linux)
 define install_desktop_step
-	@ok=1; \
-	tools=$$($(MAKE) --no-print-directory -C ksmd web-tools 2>&1) || ok=0; \
-	libs=$$($(MAKE) --no-print-directory kssrv-libs 2>&1) || ok=0; \
-	if [ "$$ok" = 1 ]; then \
-		$(MAKE) --no-print-directory install-desktop; \
-	else \
-		echo "# note: .ksmd is not tied to its launcher: what the launcher needs cannot be built here."; \
-		printf '%s\n' "$$tools" "$$libs" | sed -e '/^make/d' -e '/^$$/d' -e 's/^/#   /'; \
-		echo "#   Install what is named, then run: make install-desktop"; \
-	fi
+	@if [ -f "$(KSMD_INSTALL_MARK)" ]; then \
+		$(MAKE) --no-print-directory install-desktop KSMD_TIE_DIR="$(KSMD_INSTALL_DIR)"; \
+	else echo "# note: .ksmd is not tied to a launcher, as ksmd is not installed"; fi
 endef
 endif
 

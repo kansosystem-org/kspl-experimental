@@ -84,7 +84,7 @@ Read from the bottom of the dependencies up, so each file's prerequisites come f
 - `Task.yield()`, `Task.delay(ticks)` and `Task.delay_until(wake_tick)` give way; ticks are logical time. `Task.suspend()`, `Task.resume()` and `Task.delete()` act on another task.
 - `irq_save()` and `irq_restore(state)` disable and restore interrupts around a critical section.
 - A *canary* at the lowest stack address, checked by every `schedule()`, turns an overflow into the panic `ksos: stack overflow detected`.
-- The nine `ksos_port_*` functions declared `extern "C"` are the kernel's entire interface to the port.
+- The nine `ksos_port_*` functions declared `extern` are the kernel's entire interface to the port.
 
 ### Synchronization: `ksos/kernel/sync.kspl`
 
@@ -101,7 +101,7 @@ Read from the bottom of the dependencies up, so each file's prerequisites come f
 
 ### Ports: `port/posix/`, `port/cortex_m/`, `port/cortex_m0/`, `port/rp2040/`, `port/nrf51/`
 
-Each port implements the nine `extern "C"` functions declared in `ksos/kernel/task.kspl`. Start with `ksos/port/posix/` (`make ksos`), which needs no special tools. What each port runs on, and how it is checked, is "🔌 The ports" in [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md). Only the RP2040 car has real-chip confirmation.
+Each port implements the nine `extern` functions declared in `ksos/kernel/task.kspl`. Start with `ksos/port/posix/` (`make ksos`), which needs no special tools. What each port runs on, and how it is checked, is "🔌 The ports" in [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md). Only the RP2040 car has real-chip confirmation.
 
 ### Worked examples: `demo/`
 

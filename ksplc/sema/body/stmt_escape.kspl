@@ -17,6 +17,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/display" as _sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
 import "std/str"
@@ -168,10 +169,16 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
         storage_depth(c, target.get_postfix_receiver()) > deeper_than
         return .address(target)
     if target.kind_id == .k_expr_upcast
+        // **A slice's trait value keeps the descriptor's address**, as any value's does, not the
+        // address its elements lie at. A descriptor that is no place (`"ab"`, a call's result) is
+        // a temporary of the block the statement stands in.
         inner: = target.get_upcast_inner()
-        if inner == null || c.env.is_pointer(inner.type_id) ||
-            c.env.is_slice(inner.type_id) || !is_frame_storage(c, inner) ||
-            storage_depth(c, inner) <= deeper_than
+        if inner == null || c.env.is_pointer(inner.type_id)
+            return .none
+        held: =
+            is_frame_storage(c, inner) ||
+            (c.env.is_slice(inner.type_id) && !c.env.is_place_expr(inner))
+        if !held || storage_depth(c, inner) <= deeper_than
             return .none
         return .upcast(inner)
     // Caution: Do not check a call's result (`b.slice()` / `arena.alloc()`). Where it points is
@@ -283,6 +290,12 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     //< written `@` is the writer's (check_frame_escape says why). The places are a global, what
     //< lies behind a pointer or a slice (store_place), and a local of a block outside the one
     //< whose storage the pointer points into. A store dangles there as a `return` does.
+    //< **A store into a local, or into its field or element, marks that local**
+    //< (note_frame_pointer), so `h.s = U8[]::a; return h` is refused as `h: = …; return h` is.
+    switch store_place(c, left)
+    case .local(name)
+        note_frame_pointer(c, name, right)
+    default {}
     $found: = find_frame_escape(c, right, false, 0)
     switch found
     case .none
@@ -321,6 +334,79 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     report_frame_escape(c, found, "store", fate,
         "Store a pointer to storage that outlives the call instead (an arena, a heap allocation or \
             a global). Or keep the value in a local and pass it down as an argument.", "")
+
+fn check_frame_kept_by_call(c: Sema_ctx$@, recv: Ast_node$@, def_node: Ast_node$@,
+    args_node: Ast_node$@) //<
+        //< A trait value into the frame handed to a container's method that may keep it ([W0110])
+        //< The method takes `Self$@`, and the argument's type is a trait the receiver's type holds
+        //< as a type argument (`xs.push(sq)`, `xs: List<|Shape|>`): a store into the container. A
+        //< container in a local of the storage's block or a deeper one marks that local, so
+        //< returning it is refused. Elsewhere it is a warning, not a refusal: the signature does
+        //< not say whether the method keeps what it is handed ("Which pointers into a frame are
+        //< stopped from leaving it" in docs/DESIGN-programming-language.md).
+    if recv == null || args_node == null
+        return
+    switch c.env.method_receiver_permission(def_node)
+    case .some(need)
+        if !need.mut_ptr
+            return
+    case .none
+        return
+    held: = c.env.instance_args(c.env.receiver_base_id(recv.type_id))
+    if held.len == 0
+        return
+    for arg in args_node.children
+        if arg.is_literal(",") || !holds_trait_type(c, held, arg.type_id)
+            continue
+        switch find_frame_escape(c, arg, false, 0)
+        case .none
+            continue
+        default {}
+        $place: = Store_place.behind_pointer
+        if !c.env.is_pointer(recv.type_id)
+            place = store_place(c, recv)
+        $fate: = ""
+        switch place
+        case .frame
+            continue
+        case .local(name)
+            sym: = c.read_written_name(name).sym
+            switch find_frame_escape(c, arg, false, frame_depth(c, sym.scope_depth))
+            case .none
+                note_frame_pointer(c, name, arg)
+                continue
+            default {}
+            c.clear_scratch()
+                .s("'\{name.get_path_or_ident_name()\}', a local of an outer block, which outlives \
+                    the block whose end frees it")
+            fate = base_core.arena.dup_str(c.scratch.slice())
+        case .global(name)
+            c.clear_scratch()
+                .s("the global '\{name.get_path_or_ident_name()\}', which outlives this function's \
+                    frame")
+            fate = base_core.arena.dup_str(c.scratch.slice())
+        case .behind_pointer
+            fate = "a container behind a pointer, which can outlive this function's frame"
+        if !base_core.config.run_lint_checks
+            continue
+        c.clear_scratch()
+            .s("[W0110] This call can keep a trait value made from local storage in \{fate\}. The \
+                trait value keeps the address of the local; the compiler makes that address, so no \
+                '@' appears. Keep the value as long as the container: make it in the container's \
+                arena (`arena.create(…)`) and pass that pointer, or make the container hold the \
+                concrete type in place of '\{c.env.display(arg.type_id)\}'.")
+        c.warn(arg, c.scratch.slice())
+
+priv fn holds_trait_type(c: Sema_ctx$@, held: I32[], type_id: I32): Bool //<
+    //< Whether type_id is a trait type found in held, the receiver type's type arguments
+    clean: = c.env.get_clean_real_type(type_id)
+    switch c.env.get_info(clean)
+    case .trait_type
+        for h in held
+            if c.env.get_clean_real_type(h) == clean
+                return true
+    default {}
+    return false
 
 priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate: U8[], fix: U8[],
     upcast_fix: U8[]) //< reports what find_frame_escape found leaving: by verb, and how (fate)

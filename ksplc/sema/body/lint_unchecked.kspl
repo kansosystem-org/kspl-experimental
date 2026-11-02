@@ -1,0 +1,146 @@
+//< [W0602] Each place whose memory safety the compiler cannot check, listed for a review
+//< It is off by default. Turned on, it lists the shapes that "14.2 Undefined" in
+//< `../../../docs/SPEC-programming-language.md` leaves undefined when they go wrong, where the
+//< text shows them: pointer arithmetic, a cast that removes read-only, a slice built by hand, a
+//< call into C with a pointer or a size, a byte range handed over as an address and a size, an
+//< integer made a pointer, and a pointer read as another type (a cast, a `Void$@` taken as a
+//< `T$@`, a writable byte view of a typed value). **It changes nothing about compiling**: each
+//< hook asks the level first, so with the code off it costs one lookup. The analysis calls the
+//< hooks where it has just typed the shape, so the types read are the ones the compiler chose. A
+//< finding names no type, so the instances of one generic body give one finding at its place.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as _sema_type_query // `strip_ptr`, `is_const`, `slice_elem`
+import "ksplc/sema/type/scope" { Sema_symbol }
+
+priv const CODE: U8[] = "W0602" //< the one code every kind reports under
+
+priv fn wanted(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+    //< Whether a finding at node would be printed
+    //< **Ask it first in every hook**: the code is off by default, and work done for a finding
+    //< nobody asked for is wasted on every build.
+    return base_core.config.run_lint_checks && node != null && !c.is_code_off(node, CODE)
+
+priv fn report(c: Sema_ctx$@, node: Ast_node$@, kind: U8[], unchecked: U8[]) //<
+    //< One finding: the kind of place, then what the compiler does not check there
+    c.warn(node,
+        c.clear_scratch().s("[W0602] \{kind\}: the compiler does not check \{unchecked\}").slice())
+
+fn note_pointer_arith(c: Sema_ctx$@, node: Ast_node$@, left_id: I32, right_id: I32) //<
+    //< Pointer arithmetic: `p + i` or `p - i` makes a pointer
+    //< `p - q` gives a count, not a pointer, so it is left out. A read or write through the result
+    //< (`(p + i)$`) is the same place, so the finding stands on the arithmetic.
+    if !wanted(c, node) || !c.env.is_pointer(left_id) || c.env.is_pointer(right_id)
+        return
+    report(c, node, "Pointer arithmetic", "that the address stays inside the memory it points into")
+
+fn note_cast(c: Sema_ctx$@, node: Ast_node$@, dst_id: I32, src_id: I32) //<
+    //< A written cast that removes read-only, makes an integer a pointer, or reads a pointer as
+    //< another pointee type
+    //< One cast is one place. **Where it removes read-only, that is its finding**, whatever else
+    //< it changes.
+    if !wanted(c, node) || sema_type_env.is_unknown(dst_id) || sema_type_env.is_unknown(src_id)
+        return
+    if removes_read_only(c, dst_id, src_id)
+        report(c, node, "A cast removes read-only", "that the memory can be written")
+    else if c.env.is_pointer(dst_id) && c.env.is_integer(src_id)
+        report(c, node, "An integer becomes a pointer", "that there is memory at that address")
+    else if c.env.is_pointer(dst_id) && c.env.is_pointer(src_id) &&
+        reads_another_pointee(c, dst_id, src_id)
+        report(c, node, "A pointer cast to another pointee type",
+            "the memory's size or alignment for that type")
+    else if c.env.is_pointer(dst_id) && c.env.is_pointer(src_id) &&
+        writes_bytes_of_another(c, dst_id, src_id)
+        report(c, node, "A writable byte view of a typed value",
+            "that the bytes written make a valid value of that type")
+
+fn note_void_taken(c: Sema_ctx$@, node: Ast_node$@, dst_id: I32) //<
+    //< A pointer read as another pointee type with no cast written: a `Void$@` taken as a `T$@`
+    //< The language converts it silently (`p: I32$@ = mem.alloc(4)`), so the place shows no `::`.
+    if !wanted(c, node) || !c.env.is_pointer(dst_id) || is_byte_view(c, dst_id)
+        return
+    report(c, node, "A 'Void$@' taken as another pointer type",
+        "the memory's size or alignment for that type")
+
+fn note_hand_slice(c: Sema_ctx$@, node: Ast_node$@) //<
+    //< A slice descriptor written field by field (`T[]::{ .ptr = …, .len = … }`)
+    if !wanted(c, node)
+        return
+    report(c, node, "A slice built by hand", "its length against the memory behind '.ptr'")
+
+fn note_call(c: Sema_ctx$@, node: Ast_node$@, sym: Sema_symbol$@, args_node: Ast_node$@) //<
+    //< A call into C with a pointer or a size, or a byte range handed over as an address and a
+    //< size
+    //< A C function's declaration says nothing the compiler can hold its body to. A KSPL function
+    //< taking a `Void` pointer and an `Sz` (`mem.copy`) trusts the size it is given. The
+    //< arguments' types are read after they are converted to the parameters'.
+    if sym == null || args_node == null || !wanted(c, node)
+        return
+    $has_pointer: = false
+    $has_void_pointer: = false
+    $has_size: = false
+    for arg in args_node.children
+        if arg.is_literal(",")
+            continue
+        if c.env.is_pointer(arg.type_id)
+            has_pointer = true
+            has_void_pointer = has_void_pointer || is_void_pointer(c, arg.type_id)
+        else if c.env.get_clean_real_type(arg.type_id) == (I32::sema_type_env.Builtin_type_id
+            .size_type)
+            has_size = true
+    if sym.flags.is_ext && (has_pointer || has_size)
+        report(c, node, "A call into C with a pointer or a size",
+            "the pointer or the size against the memory behind it")
+    else if !sym.flags.is_ext && has_void_pointer && has_size
+        report(c, node, "A byte range given as an address and a size",
+            "the size against the memory at the address")
+
+priv fn pointee(c: Sema_ctx$@, id: I32): I32 //<
+    //< What a pointer type points at, its read-only mark kept
+    //< `Void$@` is a built-in of its own, not a pointer node, so it is answered here.
+    if c.env.get_clean_real_type(id) == (I32::sema_type_env.Builtin_type_id.void_ptr)
+        return I32::sema_type_env.Builtin_type_id.void_type
+    return c.env.strip_ptr(id)
+
+priv fn is_void_pointer(c: Sema_ctx$@, id: I32): Bool //< `Void$@` or `Void@`
+    return c.env.get_clean_real_type(pointee(c, id)) == (I32::sema_type_env.Builtin_type_id
+        .void_type)
+
+priv fn is_byte_view(c: Sema_ctx$@, id: I32): Bool //<
+    //< Whether a pointer type points at `Void`, `U8` or `I8`
+    //< A byte fits anywhere and needs no alignment, so a cast to one cannot overrun the memory.
+    p: = c.env.get_clean_real_type(pointee(c, id))
+    return p == (I32::sema_type_env.Builtin_type_id.void_type) ||
+        p == (I32::sema_type_env.Builtin_type_id.u8_type) ||
+        p == (I32::sema_type_env.Builtin_type_id.i8_type)
+
+priv fn reads_another_pointee(c: Sema_ctx$@, dst_id: I32, src_id: I32): Bool //<
+    //< Whether a pointer cast reads the memory as another type that is not a byte view
+    //< A function type is left out: the compiler checks a cast between two signatures, and an
+    //< address from C becomes a function only through `Void@`.
+    if c.env.is_fn_ptr(dst_id) || c.env.is_fn_ptr(src_id) || is_byte_view(c, dst_id)
+        return false
+    return c.env.strip_const_deep(c.env.get_clean_real_type(pointee(c, dst_id))) != c.env
+        .strip_const_deep(c.env.get_clean_real_type(pointee(c, src_id)))
+
+priv fn writes_bytes_of_another(c: Sema_ctx$@, dst_id: I32, src_id: I32): Bool //<
+    //< Whether a cast makes a writable `U8$@` or `I8$@` over a value of another type
+    //< A write through it can make an enum's tag none of its variants, or a pointer or a slice
+    //< that points nowhere. A read-only view only reads, and a `Void$@` cannot be written through.
+    if c.env.is_fn_ptr(src_id) || is_void_pointer(c, dst_id) || !is_byte_view(c, dst_id) ||
+        is_byte_view(c, src_id)
+        return false
+    return !c.env.is_const(pointee(c, dst_id))
+
+priv fn removes_read_only(c: Sema_ctx$@, dst_id: I32, src_id: I32): Bool //<
+    //< Whether a cast makes writable a pointer or a slice whose source is read-only
+    //< An array source is left out: the compiler checks that its binding has a `$`
+    //< ("4.3.4 Stripping immutability with an explicit cast").
+    if c.env.is_pointer(dst_id) && c.env.is_pointer(src_id)
+        return !c.env.is_const(pointee(c, dst_id)) && c.env.is_const(pointee(c, src_id))
+    if c.env.is_slice(dst_id) && c.env.is_slice(src_id)
+        return !c.env.is_const(c.env.slice_elem(dst_id)) &&
+            c.env.is_const(c.env.slice_elem(src_id))
+    return false

@@ -44,8 +44,9 @@ impl Ast_node
         //<
         //< Caution: **Do not decide by `get_visibility() == file_private` alone.** Make a
         //< program-wide name (`Sema_symbol.has_program_unique_c_name`) local and a synthesized call
-        //< from another unit fails to link. **In a library everything but an `#export` is local**
-        //< (`--library`): it is one unit, and only its interface can be seen outside it.
+        //< from another unit fails to link. **In a library everything but an `extern`
+        //< definition is local** (`--library`): it is one unit, and only its interface can be seen
+        //< outside it.
         if r == null || r.kind_id == .k_decl_fn_proto
             return false
         if base_core.is_library()
@@ -272,7 +273,7 @@ impl Ast_node
         // **On wasm this mark is itself the list of exported functions.** Without it
         // `--gc-sections` drops the function, and a forgotten `--export=` passes silently.
         // Elsewhere it expands to nothing.
-        if verbatim_name && r.has_attribute("export")
+        if verbatim_name && r.publishes_to_c()
             cg.s("KSPL_EXPORT(").s(fn_name).s(") ")
 
         cg.t_ret(cg.current_ret_id)
@@ -484,7 +485,7 @@ impl Ast_node
             cg.s("static ")
         // Caution: **Mark the first declaration as the definition is** (emit_fn_def): clang refuses
         // `dllexport` added on a redeclaration (`-Wdll-attribute-on-redeclaration`).
-        if r.kind_id == .k_decl_fn && r.has_attribute("export")
+        if r.kind_id == .k_decl_fn && r.publishes_to_c()
             cg.s("KSPL_EXPORT(").s(r.get_decl_id_text()).s(") ")
         // **Mark `#noreturn` here too.** Under `--split`, a caller in another unit sees only this
         // prototype. Without the mark, a function that ends in the call warns it returns nothing.

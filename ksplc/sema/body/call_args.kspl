@@ -15,6 +15,7 @@ import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/def" { Fn_sig }
 import "ksplc/sema/type/env" as sema_type_env
@@ -85,6 +86,7 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
     is_method_access: Bool, op_text: U8[], is_generic_call: Bool): Void!Sema_error
     $fn_sig: Ast_node$@ = null
     $param_list: Ast_node$@ = null
+    $is_variadic: = false
     // What comes here is a named function's or method's declaration. A call through a function
     // value is matched against the value's type instead (infer_value_call_args).
     if def_node != null
@@ -94,7 +96,7 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
 
     if fn_sig != null && !op_text.equals("enum_init") && !op_text.equals("enum_init_call")
         p_count: = base_ast_ext.Param_cursor.count(param_list)
-        is_variadic: = param_list != null && param_list.has_literal_child("...")
+        is_variadic = param_list != null && param_list.has_literal_child("...")
         $a_count: Sz = 0
         if args_node != null
             for arg_child in args_node.children
@@ -137,14 +139,20 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
             continue
 
         $expected_arg_id: = I32::sema_type_env.Builtin_type_id.unknown
+        $in_tail: = false
         if param_node: = cursor.next()
             param_type_node: = param_node.find_child(.k_type_expr)
             // A generic call has no expected type yet (`T` / `U` are unbound); it is checked right
             // after the instantiation (check_args_against_instance).
             if param_type_node != null && !is_generic_call
                 expected_arg_id = param_type_node.resolve_type_in_own_file(c)!
+        else
+            in_tail = is_variadic
 
         eval_id: = arg_node.infer_expr(c, expected_arg_id)!
+        if in_tail
+            // C reads a `...` value as the type its format names, so 11.1 holds here too.
+            c.check_variadic_arg(eval_id, arg_node)
         sema_body_lint_stmt.lint_type_given(c, arg_node, expected_arg_id,
             "The parameter's type already gives it.")
 

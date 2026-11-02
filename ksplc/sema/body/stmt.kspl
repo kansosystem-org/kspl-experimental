@@ -296,6 +296,8 @@ impl Ast_node
         sym.flags.is_mut = is_mut
         // A read-only "var_synth" is a `for … in`'s item (build_item_decl in base/ast.kspl).
         sym.flags.is_made_binding = !is_mut && r.text.equals("var_synth")
+        if sym.flags.is_made_binding
+            c.refuse_interior_mutable_copy(final_id, id_node.text, id_node)
         c.declare_symbol(id_node.text, sym, false)
         id_node.def_node = r
         if expr_node.kind_id != .k_empty
@@ -497,12 +499,9 @@ impl Ast_node
 
         is_simple_assign: = op_node != null && op_node.text.equals("=")
 
-        // Self-assignment `a = a`; a bare variable is a k_expr_path after normalization, hence
-        // is_path_or_ident.
-        if base_core.config.run_lint_checks && is_simple_assign && left != null && right != null &&
-            left.is_path_or_ident() && right.is_path_or_ident() && left.text.len > 0 &&
-            left.text.equals(right.text)
-            c.warn(r, "[W0203] Meaningless self-assignment to the same variable.")
+        // genc writes no assignment for it, so the same question decides both.
+        if base_core.config.run_lint_checks && r.is_self_assignment()
+            c.warn(r, "[W0203] Meaningless self-assignment: both sides are the same place.")
 
         // Check an index write for **both** `=` and compound assignment, or `s[0] += 1` writes a
         // read-only slice's element. C's const applies only to the slice descriptor, so C misses
@@ -580,8 +579,6 @@ impl Ast_node
             sema_body_lint_stmt.lint_type_given(c, right, type_id,
                 "The assigned place's type already gives it.")
         if is_simple_assign && left != null
-            if left.is_path_or_ident()
-                note_frame_pointer(c, left, right)
             check_frame_store(c, left, right)
 
     priv fn infer_stmt_labeled_block(r: Self$@, c: Sema_ctx$@): Void!Sema_error

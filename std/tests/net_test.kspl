@@ -12,8 +12,7 @@ import "std/thread"
 import "std/verdict"
 
 // The TCP server accept()s on a separate thread and echoes what it receives.
-#export
-fn net_tcp_echo_server(listener: net.Tcp_listener$@): Void$@
+extern fn net_tcp_echo_server(listener: net.Tcp_listener$@): Void$@
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     // accept's peer is the client (the loopback, on an ephemeral port).
     $peer_host: U8[64] = ::{}
@@ -28,15 +27,13 @@ fn net_tcp_echo_server(listener: net.Tcp_listener$@): Void$@
     return null
 
 // Accepts one connection and closes it (test_tcp_echo checks the data sent back and forth).
-#export
-fn net_accept_once(listener: net.Tcp_listener$@): Void$@
+extern fn net_accept_once(listener: net.Tcp_listener$@): Void$@
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     conn.free()
     return null
 
 // Reads until the client's end, then answers with how much came (test_tcp_half_close).
-#export
-fn net_count_then_answer(listener: net.Tcp_listener$@): Void$@
+extern fn net_count_then_answer(listener: net.Tcp_listener$@): Void$@
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     $buf: U8[64] = ::{}
     $total: Sz = 0
@@ -66,7 +63,7 @@ fn test_net_names() //<
     listener: = net.Tcp_listener.bind("localhost", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener)
+    $t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener)
         catch panic("thread spawn failed")
     client: = net.Tcp_stream.connect("localhost", port)
         catch panic("connect by name should reach the loopback listener")
@@ -83,7 +80,7 @@ fn test_net_names() //<
         fallback net.Peer_addr::{ .host_len = 0, .port = 0 }
     assert(tight_refused, "peer refuses a holder short of addr_text_max rather than truncate")
     client.free()
-    t.join_and_free()
+    t.free()
     listener.free()
 
     $missing: = false
@@ -147,7 +144,7 @@ fn test_tcp_ipv6()
         verdict.skip(no_ipv6_loopback())
         return
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener)
+    $t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener)
         catch panic("thread spawn failed")
     client: = net.Tcp_stream.connect("::1", port)
         catch panic("connect should succeed on the IPv6 loopback")
@@ -156,7 +153,7 @@ fn test_tcp_ipv6()
     host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
     assert(host.equals("::1") && p.port == port, "an IPv6 address round-trips as text")
     client.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     verdict.pass("It connects over the IPv6 loopback, and peer() returns `::1`.")
 
@@ -193,20 +190,20 @@ fn test_tcp_overlapped()
     // 127.0.0.1 it never answers, which the next attempt overtakes. Either way 127.0.0.1 wins.
     v4: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
     port: = v4.port() catch panic("a bound socket knows its port")
-    t4: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4)
+    $t4: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4)
         catch panic("thread spawn failed")
     won4: =
         connect_peer(U8[][]::{ "127.0.0.2", "127.0.0.1" }, port, U8$[]::peer_host)
     expect_winner(won4, "127.0.0.1")
     assert(won4.equals("127.0.0.1"), "the accepting candidate wins over a refusing one before it")
-    t4.join_and_free()
+    t4.free()
     // The IPv6 loopback refuses, or cannot be opened where there is none: skipped, not a failure.
-    t4b: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4)
+    $t4b: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4)
         catch panic("thread spawn failed")
     won4b: = connect_peer(U8[][]::{ "::1", "127.0.0.1" }, port, U8$[]::peer_host)
     expect_winner(won4b, "127.0.0.1")
     assert(won4b.equals("127.0.0.1"), "the IPv4 candidate wins over an IPv6 one that refuses")
-    t4b.join_and_free()
+    t4b.free()
     v4.free()
 
     $nobody: = false
@@ -263,13 +260,13 @@ fn test_tcp_overlapped_ipv6()
         verdict.skip(no_ipv6_loopback())
         return
     port: = v6.port() catch panic("a bound socket knows its port")
-    t6: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v6)
+    $t6: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v6)
         catch panic("thread spawn failed")
     won6: = connect_peer(U8[][]::{ "127.0.0.1", "::1" }, port, U8$[]::peer_host)
     expect_winner(won6, "::1")
     assert(won6.equals("::1"),
         "the accepting IPv6 candidate wins over a refusing IPv4 one before it")
-    t6.join_and_free()
+    t6.free()
     v6.free()
     verdict.pass("The IPv6 candidate that accepts wins over an IPv4 one that refuses before it.")
 
@@ -279,7 +276,7 @@ fn test_tcp_echo()
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: =
+    $t: =
         thread.Thread.spawn<|net.Tcp_listener|>(net_tcp_echo_server, listener)
         catch panic("thread spawn failed")
 
@@ -300,7 +297,7 @@ fn test_tcp_echo()
     assert(got == 4 && echoed.equals("ping"), "server must echo back exactly what was sent")
 
     client.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     verdict
         .pass("The echo round trip over a TCP loopback connection, and peer()'s address on both \
@@ -385,7 +382,7 @@ fn test_tcp_half_close() //<
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: =
+    $t: =
         thread.Thread.spawn<|net.Tcp_listener|>(net_count_then_answer, listener)
         catch panic("thread spawn failed")
     client: = net.Tcp_stream.connect("127.0.0.1", port)
@@ -398,7 +395,7 @@ fn test_tcp_half_close() //<
     assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("5"),
         "the peer saw the end after five bytes, and its answer still arrives")
     client.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     verdict.pass("After shut_write the peer reads the end, and its answer still comes back.")
 
@@ -499,8 +496,7 @@ fn test_tcp_past_int() //<
 // std/reactor: watching several TCP connections for readiness, would_block on a nonblocking read,
 // and the writable notification of a connected stream.
 // ==========================================
-#export
-fn reactor_multi_echo_server(listener: net.Tcp_listener$@): Void$@
+extern fn reactor_multi_echo_server(listener: net.Tcp_listener$@): Void$@
     for _i in Range.asc(3)
         conn: = listener.accept() catch panic("accept should succeed once a client connects")
         $buf: U8[64] = ::{}
@@ -517,7 +513,7 @@ fn test_reactor_multi_connection()
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: =
+    $t: =
         thread.Thread.spawn<|net.Tcp_listener|>(reactor_multi_echo_server, listener)
         catch panic("thread spawn failed")
 
@@ -591,14 +587,13 @@ fn test_reactor_multi_connection()
     c0.free()
     c1.free()
     c2.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     verdict
         .pass("Watching several connections for readiness at once, telling would_block apart, and \
             rebuilding the registration set with clear are all confirmed.")
 
-#export
-fn reactor_accept_once(listener: net.Tcp_listener$@): Void$@
+extern fn reactor_accept_once(listener: net.Tcp_listener$@): Void$@
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     conn.write("hi") catch panic("server write should succeed")
     conn.free()
@@ -610,7 +605,7 @@ fn test_reactor_writable()
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: =
+    $t: =
         thread.Thread.spawn<|net.Tcp_listener|>(reactor_accept_once, listener)
         catch panic("thread spawn failed")
 
@@ -626,7 +621,7 @@ fn test_reactor_writable()
     ready.free()
 
     client.free()
-    t.join_and_free()
+    t.free()
     listener.free()
     verdict.pass("A connected stream is reported writable under the token it was registered with.")
 
@@ -634,8 +629,7 @@ fn test_reactor_writable()
 // std/net with std/reactor: a connection accepted from a non-blocking listener is blocking.
 // Windows, macOS and the BSDs would copy the listener's mode, and a read would return would_block.
 // ==========================================
-#export
-fn reactor_late_write(client: net.Tcp_stream$@): Void$@
+extern fn reactor_late_write(client: net.Tcp_stream$@): Void$@
     sys.sleep_ms(200)
     _n: = client.write("late") catch panic("the late write should succeed")
     return null
@@ -654,14 +648,14 @@ fn test_accept_returns_blocking()
     $ready: = r.wait(5000) catch panic("wait should succeed")
     ready.free()
     conn: = listener.accept() catch panic("accept should succeed once the listener is readable")
-    t: = thread.Thread.spawn<|net.Tcp_stream|>(reactor_late_write, client)
+    $t: = thread.Thread.spawn<|net.Tcp_stream|>(reactor_late_write, client)
         catch panic("thread spawn failed")
     $buf: U8[8] = ::{}
     $blocked: = true
     got: = conn.read(U8$[]::buf) catch
         blocked = false
         fallback 0
-    t.join_and_free()
+    t.free()
     assert(blocked && got == 4, "a read on an accepted connection waits for the data")
     conn.free()
     client.free()

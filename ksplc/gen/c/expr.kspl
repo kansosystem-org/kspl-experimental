@@ -10,6 +10,7 @@ import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/expr_postfix" as gen_c_expr_postfix
 import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/sema/body/binary" as sema_body_binary
+import "ksplc/sema/body/fixed_answer" as sema_body_fixed_answer
 import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/type/env" as sema_type_env
@@ -76,11 +77,12 @@ impl Ast_node
         r.emit_expr_prec(c, 14)
 
     fn emit_address_of(r: Self$@, c: Genc_ctx$@) //<
-        //< Writes `&` and r, for `x@`, a `Self$@` receiver lowered to it, and a trait's object
+        //< Writes `&` and r, for `x@`, a receiver taken by pointer, and a trait's object
         //< **A string slice gets a compound literal of its own here, not its named constant.** The
-        //< constant is `static const`: `&` on it gives a pointer to const, which C warns of where a
-        //< writable one is expected, and a `Self$@` method that changes the descriptor (its `len`)
-        //< then writes to `.rodata` and crashes. The compound literal is a fresh object each time.
+        //< constant is `static const`, and a trait's object is a `void*`, which would drop the
+        //< qualifier. Sema refuses every write through such an address, since a literal is no
+        //< place (`"ab"@`, a `Self$@` method on it); the compound literal is a fresh object each
+        //< time, so a write the checks missed could not reach `.rodata` either.
         c.s("&")
         if r.kind_id == .k_string && c.env.is_slice(r.type_id)
             r.emit_string_value(c, false)
@@ -384,6 +386,16 @@ impl Ast_node
         //< unsigned type, and the result is converted back to the declared type.
         r.ice_assert(r.children.len == 3, "Binary expression node must have exactly 3 children")
         op: = r.get_binary_op().text
+        if fixed: = sema_body_fixed_answer.fixed_comparison(c.sema, r)
+            r.emit_fixed_answer(c, fixed)
+            return
+        // `^` between two constants is written as its value. C reads `10 ^ 2` as a power written
+        // by mistake and warns (-Wxor-used-as-pow), a message the user must not get; the lint
+        // reports the shape instead ([W0215]). The value is exact.
+        if op.equals("^") && c.env.is_integer(r.type_id)
+            if v: = c.sema.try_eval_constexpr_wide(r)
+                r.emit_static_value(c, .whole(v))
+                return
         // Caution: **Do not wrap a subtraction between pointers.** The result's type is `Sz` but
         // the operands are pointers, and C's `p - q` returns **the number of elements**. Convert
         // the operands to `size_t` and it becomes a byte count, which differs from genllvm's
@@ -408,6 +420,25 @@ impl Ast_node
         r.emit_binary_wrapped(c, twin)
         c.s(")")
 
+    priv fn emit_fixed_answer(r: Ast_node$@, c: Genc_ctx$@,
+        fixed: sema_body_fixed_answer.Fixed_comparison) //<
+            //< It writes a comparison whose answer is fixed as that answer, which C must not see
+            //< C would work the answer out and warn about the program's logic, a message the user
+            //< must not get (sema_body_fixed_answer.fixed_comparison). The answer is exact.
+            //< Caution: **Keep each side, cast to `void`.** A call or an index's check in it still
+            //< runs, and a variable only the comparison read stays read: without it, C warns that
+            //< it is unused. One expression on both sides (`x == x`, `x || !x`) is read once, and
+            //< so is the value two tests read (`x < 3 || x > 1`): their constants run nothing.
+        c.s("((void)(")
+        if fixed.by == .overlap
+            fixed.side.emit_expr(c)
+        else
+            r.get_binary_left().emit_expr(c)
+        if fixed.by != .place && fixed.by != .negation && fixed.by != .overlap
+            c.s("), (void)(")
+            r.get_binary_right().emit_expr(c)
+        c.s("), \{"true" if fixed.answer else "false"\})")
+
     priv fn emit_binary_wrapped(r: Ast_node$@, c: Genc_ctx$@, twin: U8[]) //<
         //< It converts the operands to unsigned and emits them
         //< **Parenthesize the operands**: C's cast binds only to the next unary (`(U32)x * y`).
@@ -431,9 +462,15 @@ impl Ast_node
         right_node: = r.get_binary_right()
         my_prec: = get_c_precedence(op)
 
-        if left_node.kind_id == .k_expr &&
+        // gcc reads `!a | b` as a slip for `!(a | b)` or `||` (-Wparentheses), and `!a == b` as one
+        // for `!(a == b)` (-Wlogical-not-parentheses). So a `!` in front of a bitwise operator or a
+        // comparison keeps its parentheses.
+        if (left_node.kind_id == .k_expr &&
             (get_c_precedence(left_node.get_binary_op().text) < my_prec ||
-            needs_warning_silencing_parens(left_node.get_binary_op().text, op))
+            needs_warning_silencing_parens(left_node.get_binary_op().text, op))) ||
+            (left_node.kind_id == .k_expr_unary &&
+            (op.is_bitwise_op() || op.is_comparison_op()) &&
+            left_node.get_unary_op().text.equals("!"))
             c.s("(")
             left_node.emit_expr(c)
             c.s(")")

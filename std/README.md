@@ -32,7 +32,7 @@ fn main()
 
 Importing one file of `std` also compiles the files it imports.
 
-**`std/lang` and `std/libc` go into every program.** `std/lang` goes in as "9.2 Which names an import brings in" in [`../docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md#92-which-names-an-import-brings-in) says. `libc` goes in because `panic` writes its message and stops the program through it. `std/lang`'s names can be written bare in every file (`Option`, `Manual_free`). **`lang.` is needed only where the file declares or imports a name of its own that hides one of them.** The compiler treats some of `std/lang`'s traits specially, only under their `std/lang` names, so a missing `lang.` there loses that treatment. For `Ref_counted` / `Move_only` / `Manual_free` / `Drop`, the linter's [W0501] warns that the type conforms to a look-alike. For an operator trait (`Add`, `Eq` and the like), the compiler reports an error where the operator is used.
+**`std/lang` and `std/libc` go into every program.** `std/lang` goes in as "9.2 Which names an import brings in" in [`../docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md#92-which-names-an-import-brings-in) says. `libc` goes in because `panic` writes its message and stops the program through it. `std/lang`'s names can be written bare in every file (`Option`, `Manual_free`). **`lang.` is needed only where the file declares or imports a name of its own that hides one of them.** The compiler treats some of `std/lang`'s traits specially, only under their `std/lang` names, so a missing `lang.` there loses that treatment. For `Ref_counted` / `Move_only` / `Manual_free` / `Interior_mutable` / `Drop`, the linter's [W0501] warns that the type conforms to a look-alike. For an operator trait (`Add`, `Eq` and the like), the compiler reports an error where the operator is used.
 
 Above those two, the files form tiers by how many files one import compiles.
 
@@ -41,9 +41,9 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | What is used | How many come along |
 | --- | ---: |
 | `lang` + `libc` alone | 2 |
-| `bytes` `math` `checked_int` `mem` `reflect` `ring` `prng` `bignat` `log` `stack_limit` `suite` | 3 |
+| `bytes` `math` `checked_int` `mem` `reflect` `ring` `prng` `bignat` `log` `stack_limit` `suite` `thread` | 3 |
 | `chars` | 3 (4 on a freestanding build, one with no operating system under it, where `mem` supplies `memcmp`) |
-| `thread` `buf` | 4 |
+| `buf` | 4 |
 | `strfmt` `strnum` `sha256` | 5 (6 on a freestanding build, through `chars`) |
 | `ds` (`List` / `Map`), `base64` `rand` `net` `url` | 5 |
 | `seq` | 6 |

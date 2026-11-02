@@ -7,6 +7,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
+import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
@@ -249,6 +250,8 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
             actual_id = expected_id
         node.set_kind(.k_struct_literal)
 
+    if c.env.is_slice(actual_id) && has_named_field_init(node)
+        sema_body_lint_unchecked.note_hand_slice(c, node)
     $base_struct_id: = c.env.strip_result(c.env.strip_ptr(actual_id))
     clean_name: = c.env.base_type_name(base_struct_id)
 

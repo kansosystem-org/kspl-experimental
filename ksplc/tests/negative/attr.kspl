@@ -44,9 +44,8 @@ fn main(): I32
 //< The flag not standing, the names inside exist nowhere.
 // EXPECT: undefined path or identifier 'kspl_cfg_probe_a'
 #cfg(cfg_probe_flag)
-extern "C"
-  pub fn kspl_cfg_probe_a(): I32
-  pub fn kspl_cfg_probe_b(): I32
+  pub extern fn kspl_cfg_probe_a(): I32
+  pub extern fn kspl_cfg_probe_b(): I32
 
 fn main(): I32
   return kspl_cfg_probe_a()
@@ -57,8 +56,7 @@ fn main(): I32
 // ARGS: --define=cfg_probe_flag
 // EXPECT: argument count mismatch. Expected 0, but got 2
 #cfg(cfg_probe_flag)
-extern "C"
-  pub fn kspl_cfg_probe_a(): I32
+  pub extern fn kspl_cfg_probe_a(): I32
 
 fn main(): I32
   return kspl_cfg_probe_a(1, 2)
@@ -94,48 +92,6 @@ fn main(): I32
 // EXPECT: attribute '#interrupt' is only implemented by the C backend
 #interrupt
 fn on_tick() {}
-
-fn main(): I32
-  return 0
-// ==== case attr_link_not_a_name
-//< `#link` takes one library name as `-l` does: not a flag, a file, a path, or two names
-//< The name reaches the link line as the one word `-l<name>`, and a build script's shell as a word
-//< (`$(cat prog.libs)`). A flag or a search path in the source is a link line for one machine only.
-//< The rule is `is_library_name` in `ksplc/base/ast_ext.kspl`.
-// EXPECT: '#link' takes one library name, as a string
-// EXPECT: '#link' takes one library name, as a string
-// EXPECT: '#link' takes one library name, as a string
-// EXPECT: '#link' takes one library name, as a string
-// EXPECT: '#link' takes one library name, as a string
-// EXPECT: '#link' takes one library name, as a string
-// EXPECT: '#link' takes one library name, as a string
-#link("-lopenblas")
-extern "C"
-  fn flag_given(): I32
-
-#link("libopenblas.so")
-extern "C"
-  fn file_given(): I32
-
-#link("/opt/blas/lib/openblas")
-extern "C"
-  fn place_given(): I32
-
-#link(openblas)
-extern "C"
-  fn name_unquoted(): I32
-
-#link("ssl", "crypto")
-extern "C"
-  fn two_given(): I32
-
-#link
-extern "C"
-  fn none_given(): I32
-
-#link("open blas")
-extern "C"
-  fn split_in_two(): I32
 
 fn main(): I32
   return 0
@@ -195,11 +151,10 @@ fn main()
 // EXPECT: attribute '#align' cannot be written on an 'extern' struct
 // EXPECT: attribute '#packed' cannot be written on an 'extern' struct
 // EXPECT-NOT: [
-extern "C"
-  #align(8)
-  struct Aligned_c
-  #packed
-  struct Packed_c
+#align(8)
+extern struct Aligned_c
+#packed
+extern struct Packed_c
 
 fn main(): I32
   return 0
@@ -208,7 +163,6 @@ fn main(): I32
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: attributes '#inline' and '#noinline' contradict each other
-// EXPECT: attribute '#export' has no effect on a 'priv' declaration
 
 // `#inline` and `#noinline` say opposite things. Which wins where both can be written appears
 // nowhere in the code, so the loser is left believed to be in effect as well (Principle 5).
@@ -220,37 +174,29 @@ priv fn twice(a: U32): U32
 fn case_attr_inline_noinline_conflict(): I32
   return I32::twice(2)
 
-// `priv` is the setting that nobody outside this file can use it, and a free function becomes
-// `static` (internal linkage) in the generated C too. Put the name out plainly and it still
-// cannot be joined from outside (it does not appear at the exit on wasm either). It is a spelling
-// where nothing happens when written, so it is refused (Principle 5).
-// To put it out to C or
-// wasm, unspecified is enough; `pub` is for putting it out to KSPL's other packages.
-#export
-priv fn hidden_but_exported(): I32
-  return 1
-
-fn case_export_priv(): I32
-  return hidden_but_exported() - 1
-
 fn main()
   case_attr_inline_noinline_conflict()
-  case_export_priv()
 // ==== case attr_on_stmt_wrong
 //< The only attribute writable on a statement is `#cfg`
 //< Anything else has nobody to read it there, so it is an error as on a declaration.
 //< Caution: **The spelling check must take effect here too.** Normalisation eats `#cfg` and sema
 //< picks the rest up (elide_attributed_stmt in ksplc/parse/normalize.kspl), or they vanish.
 // EXPECT: attribute '#inline' does nothing here. It applies to functions
-// EXPECT: attribute '#export' does nothing here. It applies to functions, variables, and constants
+// EXPECT: attribute '#noinline' does nothing here. It applies to functions
 // EXPECT: unknown attribute '#inlne'
+// EXPECT: attribute '#raw_address' does nothing here. It applies to functions, and top-level
+// variables and constants
 import "std/io"
 
 fn main(): I32
   #inline
   io.out().s("unreachable\n")
 
-  #export
+  // A local is a statement: the function holding it is what `#raw_address` marks.
+  #raw_address
+  _local: = 1
+
+  #noinline
   #cfg(!never_defined)
   if true
     io.out().s("unreachable\n")
@@ -299,6 +245,32 @@ $g_fine: I32 = 1
 
 fn main(): I32
   return g_trigraph + g_semicolon + g_empty + g_unquoted + g_two + g_fine
+// ==== case attr_view_on_free_fn
+//< `#gives_view` and `#ends_views` speak of a method's receiver, so a free function is refused
+//< Accepted there, the mark would do nothing, and [W0111] would look as if it covered the calls.
+// EXPECT: attr_view_on_free_fn.kspl:7:1: error: attribute '#gives_view' does nothing here. It applies to methods
+// EXPECT: attr_view_on_free_fn.kspl:11:1: error: attribute '#ends_views' does nothing here. It applies to methods
+// EXPECT-NOT: attr_view_on_free_fn.kspl:19
+#gives_view
+fn first(xs: I32$[]): I32$@
+  return xs.ptr
+
+#ends_views
+fn grow(n: Sz): Sz
+  return n + 1
+
+priv struct Bag
+  n: Sz
+
+impl Bag
+  #ends_views
+  fn grow(r: Self$@)
+    r.n += 1
+
+fn main()
+  $b: = Bag::{ .n = 0 }
+  b.grow()
+  _n: = grow(1)
 // ==== case attr_wrong_target
 //< An attribute is accepted only at a position listed in its "target" field
 //< The table in chapter 10 of docs/SPEC-programming-language.md. An attribute at the wrong position has its
@@ -308,16 +280,21 @@ fn main(): I32
 // EXPECT: attribute '#inline' does nothing here. It applies to functions
 // EXPECT: attribute '#packed' does nothing here. It applies to structs
 // EXPECT: attribute '#interrupt' does nothing here. It applies to functions
-// EXPECT: attribute '#export' does nothing here. It applies to functions, variables, and constants
+// EXPECT: attribute '#section' does nothing here. It applies to functions, variables, and constants
 // EXPECT: attribute '#align' does nothing here. It applies to structs, functions, variables, and
 // constants
-// EXPECT: attribute '#link' does nothing here. It applies to 'extern' blocks
+// EXPECT: attribute '#raw_address' does nothing here. It applies to functions, and top-level
+// variables and constants
 // ==========================================
 import "std/io"
 
 #inline
 pub struct S
   pub a: I32
+
+#raw_address
+pub struct Reg
+  pub at: U32
 
 #packed
 pub fn takes(p: I32): I32
@@ -326,19 +303,14 @@ pub fn takes(p: I32): I32
 #interrupt
 pub const LIMIT: I32 = 4
 
-// A `typedef` makes no symbol, so there is no name for `#export` to keep.
-#export
+// A `typedef` makes no symbol, so there is nothing to put in a section.
+#section(".meters")
 pub typedef Meters = I32
 
 #align(8)
 pub enum Kind
   a
   b
-
-// The library a declaration is found in is named on the `extern` block holding it.
-#link("m")
-pub fn cosine(x: F64): F64
-  return x
 
 fn main(): I32
   io.out().s("unreachable\n")

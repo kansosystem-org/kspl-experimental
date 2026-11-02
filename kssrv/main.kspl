@@ -123,14 +123,12 @@ priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from th
         return "application/wasm"
     return "application/octet-stream"
 
-priv enum Rel_path //< makes a relative path under the root from a percent-decoded path
-    //< Caution: **Pass the root.** A check on the path string alone (`sys.is_safe_relative`) leaves
-    //< a way out through a link inside the root.
-    ok(rel: U8[]) //< the path under the root, on the arena
-    // A path not accepted as a name under the root (`..` steps, a NUL, a Windows device name, a
-    // link in an intermediate folder: everything `fs.stays_under` refuses).
+priv enum Rel_path //< what a percent-decoded path names under the root
+    ok(path: U8[]) //< the file to serve, the root joined in, on the arena
+    // A path not accepted as a name under the root (a `..` step, a NUL, a Windows device name or
+    // short name, a link in an intermediate folder: everything `fs.join_under` refuses).
     rejected
-    hidden //< a name in it starts with a dot (`fs.has_hidden_on_path`): answered as absent
+    hidden //< a name in it starts with a dot (`fs.join_under`'s `hidden`): answered as absent
 
 priv const SHOWN_DOT_NAMES: U8[][_] = ::{ ".well-known" } //< the one dot folder served (RFC 8615)
     //< Certificate issuance (ACME) and other discovery read under it, so hiding it would break
@@ -149,26 +147,28 @@ priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): R
     // **The page is the root's index file and nothing else** (`asks_for_page`). Otherwise a folder
     // standing at that name would have its own index served as the page, without the token.
     if is_page
-        return .ok(INDEX_NAME) if api.rel_under(root, INDEX_NAME).is_some() else .rejected
-    $t: U8[] = api.rel_under(root, decoded) catch
-        return .rejected
+        return under(root, INDEX_NAME, arena)
+    // The root itself is the page, so the path is never empty here.
+    t: = api.url_rel(decoded)
     // Caution: **Check the name that is served, not the one asked for.** A folder gives its index.
     // Checked before the index is added, a link at a folder's index would serve its target for the
     // folder's own path. Yet the server refuses the index asked for by name.
-    // The root itself is the page, so `t` is never empty here.
-    if fs.is_dir(fs.join(root, t, arena))
-        served: = arena.text().s(t).c('/').s(INDEX_NAME).take()
-        switch api.rel_under(root, served)
-        case .some(r)
-            t = r
-        case .none
-            return .rejected
+    got: = under(root, t, arena)
+    switch got
+    case .ok(path)
+        if fs.is_dir(path)
+            return under(root, arena.text().s(t).c('/').s(INDEX_NAME).take(), arena)
+    default {}
+    return got
+
+priv fn under(root: U8[], rel: U8[], arena: Arena$@): Rel_path //< `rel` checked and joined
     // Caution: **Do not serve a name starting with a dot.** A root that is a checkout or holds
     // settings has `.git/` and `.env`, and anyone the server faces could read them. Answered as
     // absent (404), so a probe learns nothing of what is there.
-    if fs.has_hidden_on_path(root, t, U8[][]::SHOWN_DOT_NAMES)
-        return .hidden
-    return .ok(t)
+    path: =
+        fs.join_under(root, rel, .refused(U8[][]::SHOWN_DOT_NAMES), arena) catch why
+        return .hidden if why == .hidden else .rejected
+    return .ok(path)
 
 priv fn names_this_server(req: http.Request$@): Bool //<
     //< Whether the `Host` header names this machine's loopback, as the token's URL does
@@ -213,13 +213,14 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     // `..` or an absolute path). The agreement is "Where it listens" in
     // `docs/SPEC-local-server.md`.
     is_page: = asks_for_page(decoded)
-    $rel: U8[] = ""
+    $served: U8[] = ""
     switch path_to_rel(decoded, ctx.root, is_page, c.arena)
-    case .ok(r)
-        rel = r
+    case .ok(path)
+        served = path
     case .rejected
-        // `fs.join` does not resolve `..`, so a path let through would return a file outside the
-        // root. A 403, not a 404: the form was refused, and whether the name exists is not checked.
+        // A path let through could return a file outside the root, or one Windows reads as
+        // another name. A 403, not a 404: the form was refused, and whether the name exists is not
+        // checked.
         conn.queue_error(c, 403)
         return
     case .hidden
@@ -227,8 +228,7 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         return
 
     // A directory has already become its index (`/docs` and `/docs/` alike) in `path_to_rel`.
-    target_path: =
-        ctx.page if ctx.page.len > 0 && is_page else fs.join(ctx.root, rel, c.arena)
+    target_path: = ctx.page if ctx.page.len > 0 && is_page else served
 
     $size: Sz = 0
     if found: = conn.regular_file_size(target_path)

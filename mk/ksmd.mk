@@ -95,9 +95,17 @@ KSMD_REQUIRE_DESKTOP ?=
 # to launch one. Caution: **No `%` in the name**: GLib looks for the program before it reads `%%`
 # as `%`, so no entry it launches can name a program with `%` in its path.
 KSMD_PROBE_ENTRY := $(TMP_DIR)/desktop_probe.desktop
+KSMD_BROKEN_ENTRY := $(TMP_DIR)/desktop_broken.desktop
 KSMD_PROBE_DIR := desktop probe $$x `y` "q" \z
 ## Gates|test-ksmd-desktop|Whether the entry `make ksmd` writes is a valid `.desktop` file that starts its program from a folder with a space, and installs as `make install-desktop` puts it in
 test-ksmd-desktop: | $(OUT_DIR)
+	@# **The validation shows it can fail**: an entry with no Name and an unknown Type is refused.
+	@printf '%s\n' '[Desktop Entry]' 'Type=Nonsense' > "$(KSMD_BROKEN_ENTRY)"; \
+	if command -v desktop-file-validate >/dev/null 2>&1; then \
+		if desktop-file-validate "$(KSMD_BROKEN_ENTRY)" > /dev/null 2>&1; then \
+			echo "RESULT: SOME FAILED (1) -> desktop-file-validate passed $(KSMD_BROKEN_ENTRY)"; \
+			exit 1; fi; \
+		echo "# an entry with no Name and an unknown Type is refused"; fi
 	$(call desktop_entry,$(KSMD_DESKTOP),ksmd,$(KSMD_EXE),$(KSMD_ICON),$(KSMD_MIME_TYPE);,$(KSMD_REQUIRE_DESKTOP))
 	@d="$$PWD/$(TMP_DIR)/"'$(KSMD_PROBE_DIR)'; rm -rf "$$d"; mkdir -p "$$d" && \
 	printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$$0" "$$@" > "$$(dirname "$$0")/given"' > "$$d/probe" && \
@@ -133,13 +141,18 @@ ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) test-ksmd-desktop
 # `DESKTOP_DATA` (`mk/install.mk`): the user's data folder, or
 # `$(PREFIX)/share` for a named PREFIX. **Nothing else is written**, but for `xdg-mime default`,
 # which records the user's choice in their `mimeapps.list`. A named PREFIX sets no default.
+# **`KSMD_TIE_DIR` ties it to an installed launcher** (`make install` passes its folder), so the
+# entry names that folder, not this one: the tie then outlives a moved or cleaned repository.
+KSMD_TIE_DIR ?=
+KSMD_TIED_ENTRY := $(if $(KSMD_TIE_DIR),$(GEN_DIR)/installed/$(notdir $(KSMD_DESKTOP)),$(KSMD_DESKTOP))
 ifeq ($(PLATFORM),linux)
 ## Build-and-install|install-desktop|Make `.ksmd` files open on a double-click, with their icon (Linux; `make install` does it too)
 install-desktop: export ABS_HELP := $(install_abs_help)
 install-desktop: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) test-ksmd-desktop
 	@echo "# TYING .ksmd TO ITS LAUNCHER under $(DESKTOP_DATA)"
 	@case '$(DESKTOP_DATA)' in /*) ;; *) printf '%s\n' "$$ABS_HELP"; exit 1;; esac
-	$(call desktop_install,$(DESKTOP_DATA),$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE))
+	$(if $(KSMD_TIE_DIR),$(call desktop_entry,$(KSMD_TIED_ENTRY),ksmd,$(notdir $(KSMD_EXE)),$(notdir $(KSMD_ICON)),$(KSMD_MIME_TYPE);,$(KSMD_REQUIRE_DESKTOP),"$(KSMD_TIE_DIR)"))
+	$(call desktop_install,$(DESKTOP_DATA),$(KSMD_TIED_ENTRY),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE))
 	$(call desktop_refresh,$(DESKTOP_DATA))
 	@if [ -z "$(DESKTOP_FOR_USER)" ]; then \
 		echo "# note: PREFIX is named, so no default program is set; each user sets their own:"; \

@@ -128,7 +128,7 @@ make test-emit-runtime   # the runtime handed out whole, and one entry point whi
 
 ### gen/c/ — the C99 backend
 
-**It turns the flattened AST into C99.** The `.c` file holds the C runtime too. Under `--library`, everything in it but the `#export` functions is `static`.
+**It turns the flattened AST into C99.** The `.c` file holds the C runtime too. Under `--library`, everything in it but the `extern` functions is `static`.
 
 * [`root.kspl`](gen/c/root.kspl) — `run`, the single entry.
 * [`ctx.kspl`](gen/c/ctx.kspl) — the context and its fluent output API (calls chained one after another).
@@ -219,11 +219,11 @@ What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ks
 | :-- | :-- | :-- |
 | [`keywords.kspl`](tools/keywords.kspl) | Derives the keyword list from the grammar | — |
 | [`surface.kspl`](tools/surface.kspl) | The record of the API a package offers | `ksplc doc --emit-surface=` |
-| [`interface.kspl`](tools/interface.kspl) | A library's interface, a C header or an `extern "C"` block, from its `#export` functions | `--library=` |
+| [`interface.kspl`](tools/interface.kspl) | A library's interface, a C header or a KSPL file of `extern` declarations, from its `extern` functions | `--library=` |
 | [`doc.kspl`](tools/doc.kspl) | What a file, an entry or a folder publishes, rendered from the source as the reference to read | `ksplc doc` |
 | [`explain.kspl`](tools/explain.kspl) | Prints a diagnostic code's section of the diagnostics specification (`ksplc/docs/SPEC-diagnostics.md`) | `ksplc explain` |
 | [`run.kspl`](tools/run.kspl) | Compiles, links and runs a program in one command | `ksplc run` |
-| [`libs.kspl`](tools/libs.kspl) | The libraries a program names with `#link`: written by a compile, read back for the link | `--emit-libs=`, `ksplc run`, `ksplc build` |
+| [`libs.kspl`](tools/libs.kspl) | The libraries a program names with `##link`: written by a compile, read back for the link | `--emit-libs=`, `ksplc run`, `ksplc build` |
 
 ```sh
 make lint   # the static analysis alone; zero down to hints is a pass

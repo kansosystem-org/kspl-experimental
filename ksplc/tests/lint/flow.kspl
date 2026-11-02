@@ -98,14 +98,135 @@ fn main()
 //< Under IEEE 754 a NaN is equal to no value at all. So `f != f` is the one spelling that asks "is
 //< f a NaN", and it is not always false. On the integer side it must come out as before (these two
 //< items are pinned down in one file).
-// EXPECT: [W0204] Meaningless comparison: 'n == n'
-// EXPECT-NOT: 'f != f'
+// EXPECT: meaningless_compare_float.kspl:12:
+// EXPECT: [W0204] Meaningless comparison: both sides are the same expression, so it is always true.
+// EXPECT-NOT: meaningless_compare_float.kspl:11:
 fn main(): I32
   f: F64 = 0.0 / 1.0
   n: I32 = 3
   is_nan: = f != f
   same: = n == n
   return 1 if is_nan && same else 0
+// ==== case fixed_by_place
+//< One place on both sides: a field, a pointer, a `Bool`, and an assignment back to it
+//< `b |= b` and `b &= b` give `b` back, as `b = b` does.
+// EXPECT: fixed_by_place.kspl:14:
+// EXPECT: fixed_by_place.kspl:15:
+// EXPECT: fixed_by_place.kspl:16:
+// EXPECT: [W0204] Meaningless comparison: both sides are the same expression, so it is always false.
+// EXPECT: fixed_by_place.kspl:17:3: warning: [W0203] Meaningless self-assignment
+// EXPECT: fixed_by_place.kspl:18:3: warning: [W0203] Meaningless self-assignment
+struct Pt
+  n: U8
+  on: Bool
+
+pub fn same(p: Pt$@, q: I32@): Bool
+  a: = p.n < p.n
+  b: = q != q
+  c: = p.on == p.on
+  p.n = p.n
+  p.on |= p.on
+  return a || b || c
+// ==== case fixed_by_negation
+//< A `Bool` joined with its own negation, in either order
+// EXPECT: [W0204] Meaningless comparison: one side is the other's negation, so it is always true.
+// EXPECT: [W0204] Meaningless comparison: one side is the other's negation, so it is always false.
+pub fn both(b: Bool): Bool
+  always: = b || !b
+  never: = !b && b
+  return always && !never
+// ==== case fixed_by_range
+//< A number outside, or at the edge of, what the other side can hold
+//< The range is the type's, the value's under a widening cast, or a mask's (`&` keeps 0 to 1).
+// EXPECT: fixed_by_range.kspl:11:8: warning: [W0204] Meaningless comparison: one side is a 'U32', which holds only 0 to 4294967295, so it is always true.
+// EXPECT: fixed_by_range.kspl:12:
+// EXPECT: fixed_by_range.kspl:13:8: warning: [W0204] Meaningless comparison: one side is a 'I8', which holds only -128 to 127, so it is always false.
+// EXPECT: fixed_by_range.kspl:14:
+// EXPECT: fixed_by_range.kspl:15:8: warning: [W0204] Meaningless comparison: one side is a 'U8', which holds only 0 to 255, so it is always false.
+// EXPECT: fixed_by_range.kspl:16:
+// EXPECT: [W0204] Meaningless comparison: the '&' or '|' on one side rules out the constant on the other, so it is always false.
+pub fn ranges(u: U32, x: I8, b: U8): I32
+  a: = u >= 0U32
+  c: = u < 0U32
+  d: = x < -128I8
+  e: = b <= 255U8
+  f: = I32::(b) < 0
+  g: = (u & 1U32) == 2U32
+  return I32::a + I32::c + I32::d + I32::e + I32::f + I32::g
+// ==== case fixed_elsewhere
+//< An answer fixed by what is set elsewhere is no slip, and is not reported
+//< A type argument (`T` as `U32`), a named constant a build sets, two constants, and `Sz`, whose
+//< width differs per target. A float compared with itself asks whether it is a NaN.
+// EXPECT-NOT: [W0204]
+const LIMIT: U32 = 0
+
+fn nonneg<|T|>(x: T): Bool
+  return x >= 0
+
+pub fn elsewhere(u: U32, n: Sz): Bool
+  a: = u >= LIMIT
+  b: = 0U32 > LIMIT
+  c: = n <= 2147483647
+  return a || b || c || nonneg<|U32|>(u) || nonneg<|I32|>(-1)
+// ==== case fixed_by_overlap
+//< Two tests of one value against numbers, joined by `&&` or `||`, whose answer together is fixed
+//< No value passes both `3 <= x` and `1 > x`, and every value passes `x < 3` or `x > 1`. `Sz` is
+//< read at its widest. A test whose answer is fixed alone is reported alone (`b >= 0U8`).
+// EXPECT: fixed_by_overlap.kspl:13:8: warning: [W0204] Meaningless comparison: no value the tested side can hold passes both tests, so it is always false.
+// EXPECT: fixed_by_overlap.kspl:14:8: warning: [W0204] Meaningless comparison: every value the tested side can hold passes one of the two tests, so it is always true.
+// EXPECT: fixed_by_overlap.kspl:15:8: warning: [W0204] Meaningless comparison: no value
+// EXPECT: fixed_by_overlap.kspl:16:8: warning: [W0204] Meaningless comparison: every value
+// EXPECT: fixed_by_overlap.kspl:17:8: warning: [W0204] Meaningless comparison: every value
+// EXPECT: fixed_by_overlap.kspl:18:8: warning: [W0204] Meaningless comparison: every value
+// EXPECT: fixed_by_overlap.kspl:19:8: warning: [W0204] Meaningless comparison: one side is a 'U8'
+// EXPECT-NOT: fixed_by_overlap.kspl:19:8: warning: [W0204] Meaningless comparison: every value
+pub fn overlap(x: I32, b: U8, n: Sz): Bool
+  a: = 3 <= x && 1 > x
+  c: = x < 3 || x > 1
+  d: = x == 1 && x == 2
+  e: = x != 1 || x != 2
+  f: = b <= 200U8 || b > 100U8
+  g: = n < 3 || n > 1
+  h: = b >= 0U8 || b < 3U8
+  return a || c || d || e || f || g || h
+// ==== case overlap_elsewhere
+//< Two tests of one value whose answer depends on the value, or is fixed by what is set elsewhere
+//< `x > 1 && x < 3` holds for 2 alone. A named constant and a type argument are set elsewhere,
+//< and two values are two tests.
+// EXPECT-NOT: [W0204]
+const LOW: I32 = 3
+
+fn either<|T|>(x: T): Bool
+  return x < 3 || x > 1
+
+pub fn depends(x: I32, y: I32): Bool
+  a: = x > 1 && x < 3
+  b: = x < 3 || x > 5
+  c: = x < LOW || x > 1
+  d: = x < 3 || y > 1
+  return a || b || c || d || either<|I32|>(x)
+// ==== case xor_of_numbers
+//< `^` between two numbers written in decimal, the left one 2 or 10: a power was likely meant
+//< `10 ^ 2` is 8, not 100. A number in hexadecimal, a name, a variable, or another number on the
+//< left says that exclusive or was meant, and is not reported.
+// EXPECT: xor_of_numbers.kspl:14:8: warning: [W0215] '^' is exclusive or, not a power: here it gives 8.
+// EXPECT: xor_of_numbers.kspl:15:8: warning: [W0215] '^' is exclusive or, not a power: here it gives 10.
+// EXPECT: xor_of_numbers.kspl:16:8: warning: [W0215] '^' is exclusive or, not a power: here it gives -12.
+// EXPECT-NOT: xor_of_numbers.kspl:17:
+// EXPECT-NOT: xor_of_numbers.kspl:18:
+// EXPECT-NOT: xor_of_numbers.kspl:19:
+// EXPECT-NOT: xor_of_numbers.kspl:20:
+const K: U8 = 10
+
+pub fn xors(x: U8): I32
+  a: = 10U8 ^ 2U8
+  b: = 2 ^ 8
+  c: = 10 ^ -2
+  d: = 0x0AU8 ^ 2U8
+  e: = K ^ 2U8
+  f: = 10U8 ^ x
+  g: = 5U8 ^ 3U8
+  return I32::(a ^ d ^ e ^ f ^ g) + b + c
 // ==== case redundant_parens_and_self_assign
 //< Unnecessary brackets around a condition, and an assignment to itself
 //< Both are spellings that carry no meaning.

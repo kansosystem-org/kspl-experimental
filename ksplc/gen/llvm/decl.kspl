@@ -58,6 +58,10 @@ impl Ast_node
                 cg.s(")\n")
             else if child.kind_id == .k_decl_var
                 name: = child.get_decl_id_text()
+                // One per name, as for a function above.
+                if cg.extern_declared.get(name).is_some()
+                    continue
+                cg.extern_declared.set(name, 1)
                 type_node: = child.get_decl_type_node()
                 cg.s("@").s(name).s(" = external global ")
                 if type_node != null
@@ -544,9 +548,9 @@ impl Ast_node
         $use_kspl_abi: = true
         if r.sym_ptr != null
             sym: = Sema_symbol$@::r.sym_ptr
-            // A function called from C (an `#export`) keeps the C ABI. Everything else uses the
-            // internal ABI, where an aggregate return value goes through a hidden sret pointer
-            // (ret_needs_sret in gen/llvm/types.kspl).
+            // A function called from C (an `extern` definition) keeps the C ABI. Everything
+            // else uses the internal ABI, where an aggregate return value goes through a hidden
+            // sret pointer (ret_needs_sret in gen/llvm/types.kspl).
             use_kspl_abi = !sym.uses_c_abi()
         cg.current_ret_is_sret = use_kspl_abi && cg.ret_needs_sret(cg.current_ret_id)
 

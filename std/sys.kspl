@@ -58,12 +58,12 @@ pub fn get_env(name: U8[]): U8[]? //< an environment variable, or nothing when u
     return .some(str.from_cstr(U8$@::val))
 
 #cfg(!freestanding)
-extern "C"
-    fn kspl_set_env(name: U8@, value: U8@): Bool
-    fn kspl_unset_env(name: U8@): Bool
-    fn kspl_cpu_count(): I32
-    fn kspl_cwd(buf: U8$@, cap: Sz): Sz
-    fn kspl_get_env(name: U8@): U8@
+    extern fn kspl_set_env(name: U8@, value: U8@): Bool
+    extern fn kspl_unset_env(name: U8@): Bool
+    extern fn kspl_cpu_count(): I32
+    extern fn kspl_cwd(buf: U8$@, cap: Sz): Sz
+    extern fn kspl_exe_path(buf: U8$@, cap: Sz): Sz
+    extern fn kspl_get_env(name: U8@): U8@
 
 // **The separator is the OS's own** (`\` on Windows). **No trailing separator is added** (except
 // for the root `/`). **When the path does not fit in buf, it fails**, rather than returning a
@@ -79,6 +79,19 @@ pub fn cwd( //< the working directory
 
 pub enum Cwd_error //< why the working directory could not be given
     unreadable //< the OS refused it, or it does not fit the buffer; the C side cannot tell which
+
+// **Its links are resolved, and the separator is the OS's own**, as `cwd`'s.
+// Caution: **Do not take it from argv[0] instead.** Started through PATH, argv[0] holds the bare
+// name. Started through a link, it names the link's folder, not the one the program stands in.
+#cfg(!freestanding)
+pub fn exe_path( //< the path of this program's executable, to find files installed beside it
+    buf: U8$[], //< where the path is written; the result is a view into it
+): U8[]? //< the path, as a view into `buf`; nothing where the OS does not say or it does not fit
+    //< Linux, macOS and Windows say it; another POSIX system gives nothing.
+    n: = kspl_exe_path(buf.ptr, buf.len)
+    if n == 0
+        return .none
+    return .some(U8[]::{ .ptr = buf.ptr, .len = n })
 
 // For "how many to run in parallel": more than this is no faster, only more overhead.
 #cfg(!freestanding)
@@ -107,6 +120,8 @@ pub enum Env_error //< why an environment variable was not set or deleted
 // the environment it meant to change. Its failure then shows somewhere else.
 #cfg(!freestanding)
 pub fn set_env( //< sets an environment variable, which children inherit
+    //< Caution: **Not while another thread reads the environment** or starts a child: the C
+    //< library does not order them ("Undefined - no answer is fixed" in the language spec).
     name: U8[], //< the variable's name
     value: U8[], //< the value; empty is refused, since `unset_env` is what deletes
 ): Void!Env_error
@@ -129,6 +144,7 @@ pub fn set_env( //< sets an environment variable, which children inherit
 #cfg(!freestanding)
 pub fn unset_env(name: U8[]): Void!Env_error //<
     //< deletes an environment variable, which children inherit
+    //< Caution: **Not while another thread reads the environment**, as for `set_env`.
     name_buf: = env_name_cstr(name)!
     defer dealloc(Void$@::name_buf)
     if !kspl_unset_env(name_buf)
@@ -299,10 +315,91 @@ pub fn last_ext(path: U8[]): U8[] //< the last extension with its dot, or empty 
 // Whether a path's text stays under a root
 // ==========================================
 
+pub enum Path_refusal //< why a path given from outside is refused (`fs.join_under`)
+    absolute //< it starts at a root: `/x`, `\x`, a drive (`C:x`) or a share (`\\server\x`)
+    climbs //< a `..` segment, or a `.` one, which names the folder it stands in
+    empty_segment //< `a//b`, or a `/` at either end
+    backslash //< a `\`: a separator on Windows, but a byte of a name on POSIX
+    control //< a NUL, another byte below a space, or DEL
+    colon //< a `:`, which starts a drive, or on Windows a stream (`x::$DATA` gives `x`)
+    trailing_dot_or_space //< a segment that ends in `.` or a space, which Windows drops
+    device //< a name Windows opens as a device at any level (`CON`, `NUL`, `COM1`, `LPT1.txt`)
+    short_name //< a `~` before a digit, the form of a Windows short name (`GIT~1` for `.git`)
+    wildcard //< `*`, `?`, `<`, `>`, `"` or `|`, which Windows reads as a pattern or refuses
+    link //< a link or a junction stands on the way, which could lead out of the root
+    hidden //< a name starts with a dot (`.git`, `.env`), and the caller keeps those back
+
+impl Path_refusal
+    pub fn text(r: Self): U8[] //<
+        //< the reason as a phrase, for a message that a person or a model reads
+        switch r
+        case .absolute
+            return "it starts at a root; give it relative to the folder"
+        case .climbs
+            return "a `..` or `.` step leaves or names the folder; give the path without one"
+        case .empty_segment
+            return "it has an empty step (`//`, or a `/` at an end)"
+        case .backslash
+            return "it holds a `\\`; separate the steps with `/`"
+        case .control
+            return "it holds a control character"
+        case .colon
+            return "it holds a `:`"
+        case .trailing_dot_or_space
+            return "a name ends in `.` or a space, which Windows drops"
+        case .device
+            return "a name is one Windows opens as a device (such as CON or COM1)"
+        case .short_name
+            return "a name has `~` before a digit, the form of a Windows short name"
+        case .wildcard
+            return "it holds a wildcard (`*`, `?`, `<`, `>`, `\"` or `|`)"
+        case .link
+            return "a link stands on the way, which could lead out of the folder"
+        case .hidden
+            return "a name starts with a dot, and such names are kept back"
+
+pub fn outside_path_refusal( //< why a relative path from outside is refused by its text alone
+    //< The text half of `fs.join_under`, **which is what a caller uses**: it adds the link check.
+    //< It refuses what `is_safe_relative` refuses, and also a `\`, an empty segment, a short
+    //< name's `~1` and a wildcard, **on every OS**: one test on Linux then holds for Windows. Why
+    //< each is refused is "A path from outside goes through one door" in
+    //< `std/docs/DESIGN-system.md`.
+    path: U8[], //< the path from outside, `/` between its steps
+): Path_refusal? //< none where the text may be joined under a root
+    if path.len == 0
+        return .some(.empty_segment)
+    if is_path_sep(path[0]) ||
+        path.len >= 2 && path[1] == ':' &&
+        (path[0].is_upper() || path[0].is_lower())
+        return .some(.absolute)
+    if path.find_char('\\').is_some()
+        return .some(.backslash)
+    $start: Sz = 0
+    for start <= path.len
+        end: = segment_end(path, start)
+        if why: = outside_segment_refusal(path.sub(start, end - start))
+            return .some(why)
+        start = end + 1
+    return .none
+
+priv fn outside_segment_refusal(seg: U8[]): Path_refusal? //< one segment's part of the above
+    if seg.len == 0
+        return .some(.empty_segment)
+    if why: = segment_refusal(seg)
+        return .some(why)
+    for i in Range.asc(seg.len)
+        c: = seg[i]
+        if c == '*' || c == '?' || c == '<' || c == '>' || c == '"' || c == '|'
+            return .some(.wildcard)
+        if c == '~' && i + 1 < seg.len && seg[i + 1].is_digit()
+            return .some(.short_name)
+    return .none
+
 pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cannot climb out
-    //< Caution: **This alone does not keep a path under the root.** It checks only the text, so
-    //< **it cannot stop a way out through a link inside the root**. It checks segment by segment
-    //< (matching `..` as a substring would also refuse `..foo`).
+    //< Caution: **This alone does not keep a path under the root**: a link inside it leads out.
+    //< It checks segment by segment (matching `..` as a substring would also refuse `..foo`). **A
+    //< path from outside goes through `fs.join_under`**, which refuses more forms; this rule is
+    //< for a path the program's user wrote, where a `\` may separate on Windows.
     //< **Do not make the answer depend on `is_windows()`**, or a path that is safe on Linux
     //< becomes a hole on Windows only.
     if path.len == 0
@@ -312,7 +409,8 @@ pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cann
     $start: Sz = 0
     for start <= path.len
         end: = segment_end(path, start)
-        if !is_safe_segment(path.sub(start, end - start))
+        // An empty segment is a repeated separator (`a//b`), which points at the same place.
+        if end > start && segment_refusal(path.sub(start, end - start)).is_some()
             return false
         start = end + 1
     return true
@@ -348,27 +446,29 @@ priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as
     return base.len == 5 && base[3] == 0xC2U8 &&
         (base[4] == 0xB9U8 || base[4] == 0xB2U8 || base[4] == 0xB3U8)
 
-priv fn is_safe_segment(seg: U8[]): Bool //<
-    //< Whether one segment of a path is safe as a name under the root
+priv fn segment_refusal(seg: U8[]): Path_refusal? //<
+    //< Why one segment, not empty, is unsafe as a name under the root; both rules above share it
     //< Caution: **Do not let through a path the OS reinterprets.** Windows drops a trailing `.` and
     //< space (`secret.key.` is `secret.key`), and a `:` starts an NTFS stream name
-    //< (`secret.key::$DATA` gives the contents). A lone `.` is also caught by this rule, as `..`
-    //< is.
-    if seg.len == 0
-        return true // a repeated separator (`a//b`)
-    if seg.equals("..") || seg[seg.len - 1] == '.' || seg[seg.len - 1] == ' '
-        return false
+    //< (`secret.key::$DATA` gives the contents).
+    if seg.equals("..") || seg.equals(".")
+        return .some(.climbs)
+    if seg[seg.len - 1] == '.' || seg[seg.len - 1] == ' '
+        return .some(.trailing_dot_or_space)
     for i in Range.asc(seg.len)
         // A control character breaks the display of a log or terminal; `:` marks a drive or a
         // stream.
-        if seg[i] == ':' || seg[i] < ' '
-            return false
-    return !is_dos_device(seg)
+        if seg[i] < ' ' || seg[i] == 0x7FU8
+            return .some(.control)
+        if seg[i] == ':'
+            return .some(.colon)
+    if is_dos_device(seg)
+        return .some(.device)
+    return .none
 
-extern "C"
-    fn kspl_mono_us(): I64
-    fn kspl_is_windows(): Bool
-    fn kspl_sleep_ms(ms: I32)
+extern fn kspl_mono_us(): I64
+extern fn kspl_is_windows(): Bool
+extern fn kspl_sleep_ms(ms: I32)
 
 pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
     //< **Only a difference has meaning**; the origin is not defined.

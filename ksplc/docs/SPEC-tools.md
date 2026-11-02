@@ -170,9 +170,9 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--pkg-src-dir=<DIR>` | where to look for the **source** of a package other than `std` ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)). |
 | `--split=<N>` | splits the generated C into N translation units to compile in parallel (the default 1 is no split) ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). |
 | `--program` | says the output becomes a program, so an input with no `main` is refused with a diagnostic rather than left to the linker. `ksplc run` and `ksplc build` pass it to the compile they start. It cannot be combined with `--library`. |
-| `--library=<FILE>` | builds a library, whose `#export` functions alone are visible outside it, and writes its interface to `<FILE>`; it can be repeated ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
+| `--library=<FILE>` | builds a library, whose `extern` functions alone are visible outside it, and writes its interface to `<FILE>`; it can be repeated ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
-| `--emit-libs=<FILE>` | on success, writes the libraries the program names with `#link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
+| `--emit-libs=<FILE>` | on success, writes the libraries the program names with `##link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
 | `--lint=<CODE>=<level>` | sets one diagnostic's level, `off`, `on` or `error`, on a compile as on `ksplc lint`; it can be repeated, and the later one wins ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)) |
 | `--diagnostic-format=<text\|json>` | how the diagnostics are written to standard error: `text` (the default), for a person, or `json`, one object per line, for a program ([§2.11](#211-diagnostics-a-program-reads---diagnostic-format)). |
 | `--help` | prints the usage on standard output and exits with 0. |
@@ -266,7 +266,7 @@ It is passed in the environment variable `KSPL_SCRIPT` (`SCRIPT_ENV_NAME` in `st
 
 **`ksplc run` takes no option that changes how it builds**, such as `--to` or `--machine` ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)).
 
-**The libraries linked** follow from the OS and the C compiler's target triple (`x86_64-linux-gnu`, say), as `ksplc info link-libs` answers. The libraries the program names (`#link` on an `extern` block) go before them, after the objects ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). Changing only those relinks without rebuilding any object.
+**The libraries linked** follow from the OS and the C compiler's target triple (`x86_64-linux-gnu`, say), as `ksplc info link-libs` answers. The libraries the program names (`##link`) go before them, after the objects ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). Changing only those relinks without rebuilding any object.
 
 **The executable's build options** are two: removing the unreferenced sections, and asking for a stack size on Windows. `ksplc info exe-flags` gives the same answer. Without the stack size, Windows's linker default of 1MB runs out before the depth that "12. Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) guarantees.
 
@@ -341,7 +341,7 @@ An *artifact* is one thing a build makes: a program or a library. The rest of th
 
 | | Source (a `.kspl`) | Binary (a `.a` / `.so` / `.dll` plus its interface) |
 | :-- | :-- | :-- |
-| **Receiver** | `--std-dir` / `--pkg-src-dir` (telling it a place, mainly through `KSPLC_STD_DIR` / `KSPLC_PKG_SRC_DIR`) | none: a C program includes the header, a KSPL program imports the `extern "C"` block |
+| **Receiver** | `--std-dir` / `--pkg-src-dir` (telling it a place, mainly through `KSPLC_STD_DIR` / `KSPLC_PKG_SRC_DIR`) | none: a C program includes the header, a KSPL program imports the `extern` declarations |
 | **Provider** | none (a folder is simply placed) | `--library=` (the library, its insides private, and its interfaces) |
 | **Record** (neither side) | `--emit-deps` (the sources read → the rebuild verdict, `run`'s cache), `ksplc doc --emit-surface` (the published API → comparing versions) | `--emit-libs` (the libraries the program names → the link line) |
 
@@ -448,7 +448,7 @@ The columns are separated by tabs, and the lines are sorted by key:
 
 * **The key is a declaration's identity**: `<the enclosing type>.<the name>`, or the name alone where nothing encloses it. An `impl`'s enclosing type is its target type as spelled (a `Box<|T|>` and a `Box<|I32|>` are different APIs), and a conformance to a trait is `<the target>:<the trait>`.
 * **The attributes are part of the key**: `#cfg` is the only way to write one name twice.
-* **A `pub` item of an `extern "C"` block is a row like any other.** Its key also carries the block's own attributes, as a method's carries its `impl`'s.
+* **A `pub extern` declaration is a row like any other.** An item of a `#cfg` group carries the group's attributes in its key too, as a method's carries its `impl`'s.
 * **The spelling is the source with its whitespace folded**: each run of whitespace becomes one, and line comments are dropped. **The inside of a string is not folded** (a default argument's literal is part of the spelling).
 * **The documentation holds the declaration's `//<` run**, its summary and the detail below it, joined by spaces. A parameter's `//<`, and the one on the return's line, each get a row of their own.
   * Note: **The column is here so that drift shows.** Change what a `pub` does and leave its description standing, and `make test-surface` shows the row as changed in the same round as the signature.
@@ -463,7 +463,7 @@ Note: **The parts' rows and the file's own row are for a reference to read, not 
 
 **The scope decides which declarations are written** (`--surface-scope`, [§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)). The record that versions are matched by is made at `pub`; `all` serves an application, whose files reach one another with visibility unset. Any other name is refused.
 
-**It is kept apart from a library's interface** (`--library=`), which writes one build's `#export` functions in C.
+**It is kept apart from a library's interface** (`--library=`), which writes one build's `extern` functions in C.
 
 **Only `pub` declarations come out**: unset visibility (inside the package alone) and `priv` are not API. A `trait`'s required methods come out even when `priv`, since a conforming type has to provide them. Of a `struct`'s fields only the `pub` ones come out. Of an `enum`, every variant comes out with its tag value, since a `switch` can take them apart.
 
@@ -473,19 +473,19 @@ Note: How a package's records are joined into its `SURFACE.txt`, and the gate th
 
 ### 2.10 Binaries crossing the boundary: a library behind its C interface
 
-**You can hand someone a library built from KSPL without its source, as C libraries are handed over.** You hand over its object or shared library, plus its interface. Its callers reach it through its `#export` functions alone. KSPL's own types (a slice, a `Result`, a trait value, a generic, a method) do not cross a binary, and travel as source ([§2.9](#29-source-crossing-the-boundary-its-place-and-what-is-recorded)).
+**You can hand someone a library built from KSPL without its source, as C libraries are handed over.** You hand over its object or shared library, plus its interface. Its callers reach it through its `extern` functions alone. KSPL's own types (a slice, a `Result`, a trait value, a generic, a method) do not cross a binary, and travel as source ([§2.9](#29-source-crossing-the-boundary-its-place-and-what-is-recorded)).
 
 #### 2.10.1 Building a library (`--library`)
 
-With `--library=`, **only the `#export` functions have external linkage** in the generated C: only they are visible to other files at link time. Every other definition is `static` (visible only inside its own file). That holds for the program's own, std's and the runtime's, data as well as functions. So any number of libraries built from KSPL link into one program, statically or as shared libraries, and none can see another's runtime or std.
+With `--library=`, **only the `extern` functions have external linkage** in the generated C: only they are visible to other files at link time. Every other definition is `static` (visible only inside its own file). That holds for the program's own, std's and the runtime's, data as well as functions. So any number of libraries built from KSPL link into one program, statically or as shared libraries, and none can see another's runtime or std.
 
 **The C compiler guarantees it**, not the linker: a `static` symbol is private on every toolchain, MSVC's included, with no version script or export list.
 
 | Under `--library=` | What happens | The reason |
 | :-- | :-- | :-- |
-| a `main` in the input | refused (a compile error) | the program that links the library has its own; the library is entered through its `#export` functions |
-| an `#export` variable or `const` | refused (a compile error) | a DLL's data needs a mark on the caller's side that no one header can choose for every build; export a function returning it |
-| no `#export` function at all | refused (a compile error) | the library would hold nothing a caller can reach |
+| a `main` in the input | refused (a compile error) | the program that links the library has its own; the library is entered through its `extern` functions |
+| an `extern` variable or `const` | refused (a compile error) | a DLL's data needs a mark on the caller's side that no one header can choose for every build; publish a function returning it |
+| no `extern` function at all | refused (a compile error) | the library would hold nothing a caller can reach |
 | `--split` | refused | the units reach each other's functions, which a library makes `static` |
 | `--to=llvm` | refused | the IR links its runtime from another file ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)), which cannot be one library's own |
 | `--freestanding` | refused | the C compiler calls the bare-metal runtime's helpers (`__aeabi_memcpy` and the like) by name from any object. So they cannot be private; a bare-metal image is built from source |
@@ -507,7 +507,7 @@ The rest behaves as in a program:
 * writing to standard output: the C runtime's `stdout`, the program's own where both link one C runtime;
 * a panic: standard output flushed, the message on standard error, then `abort`.
 
-**On Windows an `#export` is marked `__declspec(dllexport)`** in a library, which every toolchain needs to export it from a DLL. Linked statically, the functions are exported from the program's executable too.
+**On Windows an `extern` function is marked `__declspec(dllexport)`** in a library, which every toolchain needs to export it from a DLL. Linked statically, the functions are exported from the program's executable too.
 
 #### 2.10.2 Writing its interfaces (`--library=<FILE>`)
 
@@ -516,20 +516,20 @@ The rest behaves as in a program:
 | `<FILE>` | The form | Read by |
 | :-- | :-- | :-- |
 | `.h` | a C header: an include guard, `<stdbool.h>` / `<stddef.h>` / `<stdint.h>`, each `//<` summary as a `/** */` comment, and `extern "C"` for C++ | a C program (`#include`) |
-| `.kspl` | a KSPL file: the types, then an `extern "C"` block carrying the library's own `#link` names | a KSPL program (`import`); its `--emit-libs` then names the libraries the library needs ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)) |
+| `.kspl` | a KSPL file: the types, the library's own libraries as one `##link`, then an `extern` declaration per function | a KSPL program (`import`); its `--emit-libs` then names the libraries the library needs ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)) |
 
-**What it holds**: every `#export` function, in source order, and the types their signatures name. Each kind of type is written as C can take it:
+**What it holds**: every `extern` function, in source order, and the types their signatures name. Each kind of type is written as C can take it:
 
 | The type in KSPL | How the interface writes it |
 | :-- | :-- |
 | a `struct` passed by value | **with its fields**, under its own name; C needs its layout |
-| a `struct` reached only through a pointer | **as a handle** (C's incomplete `struct`, KSPL's `struct` in the `extern` block), unless every field is `pub` and can cross to C |
+| a `struct` reached only through a pointer | **as a handle** (C's incomplete `struct`, KSPL's `extern struct`), unless every field is `pub` and can cross to C |
 | an `enum` with no payload | **its base type** (`int32_t` where none is written), with one constant per variant, `<Enum>_<variant>`. A C enumerator is an `int`, so an enum with a tag past `I32` names its constants as macros of its own type instead |
 | a pointer to a type C cannot name (a slice, a generic's instance) | `void *` |
 
 **Refused, naming the function**:
 * a generic's instance or a `#packed` / `#align` struct passed by value (C99 cannot state its name or its layout);
-* two declarations of one C name (C names a function, a type and a constant in one space). A type that cannot cross to C at all never reaches it: `#export`'s own check refuses it ("Types that cannot cross the C boundary" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
+* two declarations of one C name (C names a function, a type and a constant in one space). A type that cannot cross to C at all never reaches it: the signature check refuses it ("Types that cannot cross the C boundary" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
 
 **A C header does not name the libraries the library needs**: C has no portable way to. The vendor ships that line, as `--emit-libs` writes it.
 
@@ -543,8 +543,7 @@ import "std/str" { Str_builder }
 pub struct Greet_point
     pub x: I32
     pub y: I32
-#export
-pub fn greet_hello(times: I32): I32 //< the length of the text `hello <i>` for each i below times
+pub extern fn greet_hello(times: I32): I32 //< the length of the text `hello <i>` for each i below times
     defer $b: = Str_builder()
     for i in Range.asc(Sz::times)
         b.s("hello \{i\}\n")
@@ -582,7 +581,7 @@ fn main()
 
 #### 2.10.4 Writing out the libraries the program names (`--emit-libs`)
 
-A program names the C library it needs with `#link` on an `extern` block ("11.5 Naming the library an `extern` block needs" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). On success, `--emit-libs=<FILE>` writes the libraries of the blocks kept to `<FILE>` as **one line of `-l<name>` words**, the shape `ksplc info link-libs` answers in. Where the program names none, the line is empty.
+A program names the C libraries it needs with `##link` ("11.5 Naming the libraries a file needs (`##link`)" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). On success, `--emit-libs=<FILE>` writes the libraries of the `##link`s kept to `<FILE>` as **one line of `-l<name>` words**, the shape `ksplc info link-libs` answers in. Where the program names none, the line is empty.
 
 ```sh
 ksplc --define=blas --emit-libs=prog.libs main.kspl prog.c
@@ -592,7 +591,7 @@ clang prog.c @prog.libs $(ksplc info link-libs) -o prog
 * **Hand the file to the C compiler as a response file (`@prog.libs`)**. The compiler reads its words as if typed on its command line, with no shell between. So the same line works in a Makefile, PowerShell and a VS Code task. A shell reads it as words too (`$(cat prog.libs)`).
 * **The program's libraries go before `info link-libs`'s**: a library the program names can itself need `-lm`, and GNU ld resolves only from the left.
 * **The libraries every program needs are not in the file**: they follow the C compiler's target, which the compile never asks about; `ksplc info link-libs` answers them.
-* **The order**: a file's libraries before those of the files it imports, and within a file as written. A library named twice is written once, at its first place; a block `#cfg` dropped names nothing.
+* **The order**: a file's libraries before those of the files it imports, and within a file as written. A library named twice is written once, at its first place; a `##link` in a group `#cfg` dropped names nothing.
 * **A failed compile writes no file, and a file that cannot be written fails the compile.** A build reading a stale or missing one would link the wrong libraries.
 
 `ksplc run` does the same internally ([§2.5](#25-running-as-a-script-ksplc-run)).
@@ -660,7 +659,7 @@ It does in one step what `ksplc <input> <output.c>`, `--emit-libs`, `info exe-fl
 | the caller's `--sanitize` ([§2.2.2](#222-watching-a-program-with-a-sanitizer---sanitize)), the one way to ask: `--cflags` does not take `-fsanitize=` | `-fsanitize=<names>` |
 | the caller, split at spaces; **after ksplc's, so the last one wins** (`--cflags=-O0`) | the words of `--cflags` |
 | the C just written | `<output's stem>.c` |
-| `#link` on an `extern` block ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)), then `info link-libs` | the libraries the program names, then the common ones |
+| `##link` ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)), then `info link-libs` | the libraries the program names, then the common ones |
 | `info exe-flags` | the executable's build options |
 
 **The C compiler is `CC`'s, or `clang`**, as `ksplc run`'s is. **The C and the libraries stay beside the executable** (`out/x.c` and `out/x.libs` for `out/x.exe`): the C is a failed compile's only clue. An output ending in `.c` or `.libs` would be overwritten by its own C, and is refused. The output's folder is made where it is missing.
@@ -749,7 +748,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 
 **The `import`s are sorted by name**, with no `--style` switch:
 
-* **Only the `import`s at the file's head** are sorted, up to the first other declaration.
+* **Only the `import`s at the file's head** are sorted, up to the first other declaration. A `#cfg` group is another declaration, and the `import`s inside it stay as written.
 * **A blank line separates groups**, and nothing moves across one; a comment at a group's head stays, as its heading.
 * Each `import` moves **with the comments and attributes (`#cfg` and so on) directly above it and the comment ending its line**.
 * Two lines importing the same path (an `as` and a `{ }` written together) stay adjacent in their written order (the sort is stable).
@@ -932,6 +931,7 @@ A code off by default is advice that matters only for one kind of system, and is
 | :-- | :-- | :-- |
 | [W0601] | points out where ARC's hidden `retain`/`release` makes timing invisible | a system putting determinism first — an OS, embedded, real-time control |
 | [I0402] | points out a `pub` used only inside its package | an artifact closed at that unit, such as an executable |
+| [W0602] | lists each place whose memory safety the compiler cannot check (pointer arithmetic, a hand-built slice, a call into C and the like) | a review of the code that works with raw memory |
 
 (ARC, automatic reference counting, is the compiler inserting `retain` and `release` calls that count a value's owners and free it when the last one lets go.)
 

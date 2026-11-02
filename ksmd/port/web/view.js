@@ -221,7 +221,7 @@ function ksmdView(ks) {
       open.title = "Opens the included file in a tab of its own";
       head.appendChild(open);
       const inside = unit("div", "inside");
-      for (const nb of b.inside) inside.appendChild(render(nb));
+      for (const nb of b.inside) inside.appendChild(render({ ...nb, included: true }));
       el.appendChild(inside);
     }
     return el;

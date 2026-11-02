@@ -8,6 +8,7 @@
 //< **Mandatory where `KANSO_REQUIRE_ASAN=1`** (`mk/test.mk` sets it on Linux, whose image holds the
 //< runtimes). Elsewhere a C compiler or a platform without them gives a `SKIP` line, never a silent
 //< pass.
+//< Its failure case: `tests/suite/sanitize_test.kspl#PLANTED`, faults written on purpose.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
@@ -125,7 +126,8 @@ priv fn run_all(runs: List<|Sanitized|>@, work: U8[], arena: Arena$@): List<|ver
     for r in runs
         fs.mkdir_all(r.log_dir) catch {}
         jobs.push(subproc.Job::{ .argv = sanitized_argv(r, arena), .cwd = r.dir })
-    return verdict.run_children(jobs.slice(), fs.join(work, "jobs", arena), arena)
+    return verdict.run_children(jobs.slice(), fs.join(work, "jobs", arena),
+        verdict.DEFAULT_TIMEOUT_MS, arena)
 
 // ==========================================
 // Proving it can fire: each fault written on purpose is reported as what it is
@@ -198,6 +200,36 @@ fn main(): I32
     return r
 """
 
+// **The arena hands the very same bytes out again**, so the old slice reads the new text. The heap
+// never saw them freed: the arena itself must give the chunk back for the read to be seen.
+priv const ARENA_RESET_SOURCE: U8[] =
+    """
+import "std/mem" { Arena }
+
+fn main(): I32
+    defer $a: = Arena(4096)
+    s: = a.dup_str("first")
+    a.reset()
+    _t: = a.dup_str("again")
+    return I32::s[0]
+"""
+
+// A buffer the caller owns is never given back, so here only the arena's marks can be seen: the
+// old slice reaches past what was handed out again.
+priv const ARENA_BUFFER_SOURCE: U8[] =
+    """
+import "std/mem" { Arena }
+
+fn main(): I32
+    $store: U8[256] = ::{}
+    $a: = Arena.from_buffer(Void$@::(U8$[]::store).ptr, 256)
+    mark: = a.save()
+    s: = a.dup_str("a slice before the restore")
+    a.restore(mark)
+    _t: = a.dup_str("new")
+    return I32::s[20]
+"""
+
 priv const PLANTED: Planted[_] = ::{
     Planted::{ .what = "a use after free", .source = USE_AFTER_FREE_SOURCE,
         .says = "heap-use-after-free", .llvm = true, .unmarked = false },
@@ -207,6 +239,12 @@ priv const PLANTED: Planted[_] = ::{
         .unmarked = false },
     Planted::{ .what = "a misaligned store", .source = MISALIGNED_SOURCE,
         .says = "undefined-behavior", .llvm = false, .unmarked = false },
+    Planted::{ .what = "a read through a slice kept across an arena's reset",
+        .source = ARENA_RESET_SOURCE, .says = "heap-use-after-free", .llvm = true,
+        .unmarked = false },
+    Planted::{ .what = "a read through a slice kept across a restore of an arena over a buffer",
+        .source = ARENA_BUFFER_SOURCE, .says = "use-after-poison", .llvm = true,
+        .unmarked = false },
 }
 
 priv fn backend_name(llvm: Bool): U8[] //< the backend, in a check's words

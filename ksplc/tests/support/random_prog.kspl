@@ -1,0 +1,722 @@
+//< Writes a small KSPL program from a seed, valid by construction
+//< The random equivalence suite (`suite/random_equiv_test.kspl`) builds each program through every
+//< backend and compares the runs. Each value's type is tracked, so every operation is one the
+//< language accepts. Each divisor is made odd and each shift amount is masked into range. Each
+//< index is taken modulo its length and each loop is bounded. A stop the language defines is
+//< written only on purpose, as the program's last statement, and `Program.stop` names it.
+//< The same seed always writes the same program, so a seed is enough to reproduce a failure.
+import "ksplc/tests/support/random_prog_expr" { Gen, Var, Arr, Svar, Func, Shape, En, NAMES, BITS,
+    INTS, BOOL, SZ, ENUM_TY, NONE, COST_CAP, ARITH, BITWISE, signed, mask, line, fresh, paren,
+    int_ty, narrow_or_same, lowest, highest, raw_value, lit_text, lit, i64_lit, expr, cond, test,
+    other_side, index }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/prng" { Prng }
+import "std/str" { Str_builder }
+
+enum Stop //< the stop a program is written to end on
+    none //< it ends with 0
+    divide //< an integer division by zero
+    shift //< a shift amount past the width
+    index //< an index past the length
+    tag //< a cast to an enum from a value that is no tag
+
+struct Program //< one program and how it must end
+    text: U8[]
+    stop: Stop
+
+impl Stop
+    fn words(r: Self): U8[] //< the start of the line the stop writes, empty for none
+        switch r
+        case .none
+            return ""
+        case .divide
+            return "panic: division by zero"
+        case .shift
+            return "panic: shift amount out of range"
+        case .index
+            return "panic: index out of bounds"
+        case .tag
+            return "panic: enum "
+
+priv const NEGATIVE_SHIFT: U8[] =
+    "a negative `I64` constant shifted left: gcc 13 at `-O2` warns `left shift of negative value` \
+        about C that shifts the value as a `U64`, which C defines" //<
+            //< an open finding of gcc's, with no fault in the C ksplc writes
+priv const GCC_OVERFLOW: U8[] =
+    "a narrow value folded from constants: gcc 13 warns `overflow in conversion … changes value \
+        from '255' to '255'` about C whose value fits (-Woverflow)" //<
+            //< an open finding of gcc's; the suite turns -Woverflow off for gcc unless `open` is set
+
+priv const WRAPPED_CONSTANT: U8[] =
+    "a test against two constants whose value wraps (`x < ((-21I8) << 7I8)`, `(10I64 & x) >= \
+        (-9223372036854775807I64 - 127I8)`): ksplc's fold reads the wrap as an overflow and cannot \
+        tell the answer is fixed; gcc folds the wrapped value and warns -Wtype-limits; written by \
+        `random_prog_expr.other_side`" //<
+            //< an open finding of the language's: ksplc accepts it, and the C compiler's word reaches
+            //< the user
+
+const OPEN_FINDINGS: U8[][_] = ::{ NEGATIVE_SHIFT, GCC_OVERFLOW, WRAPPED_CONSTANT } //<
+    //< What the generator leaves out by default, as a build of it fails today
+    //< Each is a program the language accepts. `write`'s `open` writes them too, for a campaign.
+
+priv const LOOP_CAP: Sz = 600 //< about how many passes the loops around a statement may make
+priv const SPECS: U8[][_] = ::{ "", "", ":x", ":X", ":08", ":,", ":5", ":012x" } //<
+    //< the format specifiers an integer result is printed with
+
+priv const PRELUDE: U8[] =
+    """import "std/io"
+import "std/strfmt"
+
+priv $chk: U64 = 0
+
+priv fn mix(v: U64)
+    chk = (chk ^ v) * 1099511628211U64 + 7U64
+
+priv enum Gen_err
+    no
+
+priv fn gmix<|T|>(a: T, b: T): T
+    return (a ^ b) + (a * b)
+
+priv fn gsel<|T|>(c: Bool, a: T, b: T): T
+    if c
+        return a
+    return b
+
+priv fn gsum<|T|>(xs: T[]): T
+    $acc: = T::0
+    for x in xs
+        acc += x
+    return acc
+
+priv fn gvia<|T|>(f: Callable1<|T, T|>, v: T): T
+    return f.call(v)
+
+priv fn gap<|T|>(f: fn(a: T, b: T): T, x: T, y: T): T
+    return f(x, y)
+
+priv fn gmay<|T|>(v: T, fail: Bool): T!Gen_err
+    if fail
+        throw .no
+    return v
+
+priv fn gid<|T|>(v: T): T
+    return v
+
+priv fn gsh<|T|>(a: T, n: U8): T
+    return (a << (n & 7U8)) ^ (a >> 1U8)
+
+""" //< what every program starts with: the checksum and the generic helpers
+
+// ==========================================
+// Statements
+// ==========================================
+
+priv fn block(g: Gen$@, n: Sz, depth: Sz, mix_from: Sz, ret: Sz = 1000) //<
+    //< n statements one level deeper, then each value declared from mix_from on mixed in
+    //< The mixing reads every local, so none is left unread, and folds it into the checksum. Where
+    //< ret is a type, the block ends by returning a value of it.
+    g.indent += 1
+    vars_at: = g.vars.len
+    arrs_at: = g.arrs.len
+    svars_at: = g.svars.len
+    for _i in Range.asc(n)
+        stmt(g, depth)
+    for i in Range(mix_from, g.vars.len, 1)
+        v: = g.vars.get(i)
+        if v.bare
+            line(g,
+                g.arena.text().s("mix(U64::(").s(v.text).s("))").take())
+    for i in Range(arrs_at, g.arrs.len, 1)
+        r: = g.arrs.get(i)
+        ty: = NAMES[r.ty]
+        line(g,
+            g.arena.text().s("mix(U64::(gsum<|").s(ty).s("|>(").s(ty).s("[]::").s(r.text).s(")))")
+            .take())
+    for i in Range(svars_at, g.svars.len, 1)
+        line(g,
+            g.arena.text().s("mix(U64::(").s(g.svars.get(i).text).s(".f0))").take())
+    if n == 0 && mix_from == g.vars.len && arrs_at == g.arrs.len && svars_at == g.svars.len
+        line(g, "mix(0U64)")
+    if ret != NONE
+        line(g, g.arena.text().s("return ").s(expr(g, ret, 3)).take())
+    for g.vars.len > vars_at
+        g.vars.pop()
+    for g.arrs.len > arrs_at
+        g.arrs.pop()
+    for g.svars.len > svars_at
+        g.svars.pop()
+    g.indent -= 1
+
+priv fn stmt(g: Gen$@, depth: Sz) //< one statement, maybe holding blocks while depth is left
+    g.cost += g.mult
+    nested: = depth > 0 && g.cost < COST_CAP
+    switch g.rng.below(21)
+    case 0, 1, 2, 3
+        decl(g)
+    case 4, 5
+        assign(g)
+    case 6, 7, 8
+        compound(g)
+    case 9
+        line(g,
+            g.arena.text().s("mix(U64::(").s(expr(g, g.rng.below(INTS + 1), 3)).s("))").take())
+    case 10, 11
+        if nested
+            branch(g, depth)
+        else
+            compound(g)
+    case 12
+        if nested
+            switch_int(g, depth)
+        else
+            decl(g)
+    case 13
+        if nested
+            switch_other(g, depth)
+        else
+            assign(g)
+    case 14
+        if nested
+            for_range(g, depth)
+        else
+            decl(g)
+    case 15, 16
+        if nested
+            for_counted(g, depth)
+        else
+            compound(g)
+    case 17
+        array_decl(g)
+    case 18
+        struct_decl(g)
+    case 19
+        enum_decl(g)
+    default
+        if g.loops > 0 && !g.in_closure
+            line(g, g.arena.text().s("if ").s(test(g, 2)).take())
+            g.indent += 1
+            line(g, "continue" if g.rng.chance(60) else "break")
+            g.indent -= 1
+        else
+            decl(g)
+
+priv fn decl(g: Gen$@) //< `$vN: T = …`, or one that only reads
+    t: = g.rng.below(INTS + 1)
+    name: = fresh(g, "v")
+    mutable: = g.rng.chance(70)
+    e: = expr(g, t, 3)
+    line(g,
+        g.arena.text().s("$" if mutable else "").s(name).s(": ").s(NAMES[t]).s(" = ").s(e).take())
+    g.vars.push(Var::{ .text = name, .ty = t, .place = mutable, .bare = true })
+
+priv struct Place //< somewhere a value can be written
+    text: U8[]
+    ty: Sz
+
+priv fn place(g: Gen$@): Place? //< a place to write, a variable or an element
+    $n: Sz = 0
+    for v in g.vars
+        if v.place
+            n += 1
+    $writable_arrs: Sz = 0
+    for r in g.arrs
+        if r.place
+            writable_arrs += 1
+    if writable_arrs > 0 && (n == 0 || g.rng.chance(30))
+        $k: = g.rng.below(writable_arrs)
+        for r in g.arrs
+            if r.place
+                if k == 0
+                    at: = g.arena.text().s(r.text).s("[").s(index(g, r.len, 2)).s("]").take()
+                    return .some(Place::{ .text = at, .ty = r.ty })
+                k -= 1
+    if n == 0
+        return .none
+    $k: = g.rng.below(n)
+    for v in g.vars
+        if v.place
+            if k == 0
+                return .some(Place::{ .text = v.text, .ty = v.ty })
+            k -= 1
+    return .none
+
+priv fn assign(g: Gen$@) //< `place = …`
+    switch place(g)
+    case .some(p)
+        e: = expr(g, p.ty, 3)
+        line(g, g.arena.text().s(p.text).s(" = ").s(e).take())
+    case .none
+        decl(g)
+
+priv fn compound(g: Gen$@) //< `place op= …`, with the divisor and the shift amount guarded
+    switch place(g)
+    case .some(p)
+        a: = g.arena
+        if p.ty == BOOL
+            ops: = U8[][]::{ "&=", "|=", "^=" }
+            op: = ops[g.rng.below(3)]
+            line(g,
+                a.text().s(p.text).s(" ").s(op).s(" ")
+                .s(other_side(g, BOOL, 3, p.text, op)).take())
+            return
+        switch g.rng.below(10)
+        case 0, 1, 2
+            op: = ARITH[g.rng.below(3)]
+            line(g,
+                a.text().s(p.text).s(" ").s(op).s("= ")
+                .s(expr(g, narrow_or_same(g, p.ty), 3)).take())
+        case 3, 4
+            op: = BITWISE[g.rng.below(3)]
+            line(g,
+                a.text().s(p.text).s(" ").s(op).s("= ")
+                .s(other_side(g, narrow_or_same(g, p.ty), 3, p.text, op)).take())
+        case 5, 6
+            s: = narrow_or_same(g, p.ty)
+            d: = paren(g, expr(g, s, 2), "|", lit_text(g, s, 1U64))
+            line(g,
+                a.text().s(p.text).s(" /= " if g.rng.chance(50) else " %= ").s(d).take())
+        default
+            s: = int_ty(g)
+            amt: =
+                paren(g, expr(g, s, 2), "&", lit_text(g, s, U64::(BITS[p.ty] - 1)))
+            line(g,
+                a.text().s(p.text).s(" <<= " if g.rng.chance(50) else " >>= ").s(amt).take())
+    case .none
+        decl(g)
+
+priv fn nested_block(g: Gen$@, depth: Sz) //< a block of one to three statements
+    block(g, 1 + g.rng.below(3), depth - 1, g.vars.len)
+
+priv fn branch(g: Gen$@, depth: Sz) //< `if`, maybe with `else if` and `else`
+    line(g, g.arena.text().s("if ").s(test(g, 3)).take())
+    nested_block(g, depth)
+    if g.rng.chance(30)
+        line(g, g.arena.text().s("else if ").s(test(g, 2)).take())
+        nested_block(g, depth)
+    if g.rng.chance(50)
+        line(g, "else")
+        nested_block(g, depth)
+
+priv fn case_values(g: Gen$@, t: Sz): List<|U8[]|> //< distinct case labels t can hold
+    $all: = List<|I64|>(g.arena)
+    for i in Range.asc(8)
+        all.push(i)
+    if BITS[t] <= 32
+        all.push(highest(t))
+        if signed(t)
+            all.push(lowest(t))
+            all.push(-1I64)
+    else if signed(t)
+        all.push(highest(t))
+        all.push(-1I64)
+    $out: = List<|U8[]|>(g.arena)
+    $taken: = List<|I64|>(g.arena)
+    n: = 1 + g.rng.below(3)
+    for out.len < n
+        v: = all.get(g.rng.below(all.len))
+        if !taken.contains(v)
+            taken.push(v)
+            out.push(g.arena.text().s("\{v\}").take())
+    return out
+
+priv fn switch_int(g: Gen$@, depth: Sz) //< `switch` on an integer, with a `default`
+    t: = int_ty(g)
+    line(g, g.arena.text().s("switch ").s(expr(g, t, 2)).take())
+    vals: = case_values(g, t)
+    $i: Sz = 0
+    for i < vals.len
+        labels: = g.arena.text().s("case ").s(vals.get(i))
+        i += 1
+        if i < vals.len && g.rng.chance(40)
+            labels.s(", ").s(vals.get(i))
+            i += 1
+        line(g, labels.take())
+        nested_block(g, depth)
+    line(g, "default")
+    nested_block(g, depth)
+
+priv fn switch_other(g: Gen$@, depth: Sz) //< `switch` on a `Bool` or on an enum value
+    $evs: = List<|Var|>(g.arena)
+    for v in g.vars
+        if v.ty >= ENUM_TY
+            evs.push(v)
+    if evs.len == 0 || g.rng.chance(40)
+        line(g, g.arena.text().s("switch ").s(cond(g, 2)).take())
+        first: = "true" if g.rng.chance(50) else "false"
+        line(g, g.arena.text().s("case ").s(first).take())
+        nested_block(g, depth)
+        line(g,
+            "default" if g.rng.chance(30) else "case false" if first.equals("true") else
+            "case true")
+        nested_block(g, depth)
+        return
+    v: = evs.get(g.rng.below(evs.len))
+    en: = g.ens.get(v.ty - ENUM_TY)
+    line(g, g.arena.text().s("switch ").s(v.text).take())
+    $k: Sz = 0
+    for k < en.tags.len
+        labels: = g.arena.text().s("case .v\{k\}")
+        k += 1
+        if k < en.tags.len && g.rng.chance(40)
+            labels.s(", .v\{k\}")
+            k += 1
+        if k < en.tags.len && g.rng.chance(25)
+            line(g, labels.take())
+            nested_block(g, depth)
+            line(g, "default")
+            k = en.tags.len
+        else
+            line(g, labels.take())
+        nested_block(g, depth)
+
+priv fn loop_body(g: Gen$@, depth: Sz, trip: Sz, var_at: Sz) //< a loop's body, run trip times
+    saved: = g.mult
+    g.mult = g.mult * (trip if trip > 0 else 1)
+    g.loops += 1
+    block(g, 1 + g.rng.below(4), depth - 1, var_at)
+    g.loops -= 1
+    g.mult = saved
+
+priv fn for_range(g: Gen$@, depth: Sz) //< `for … in` over a `Range`, an array or a slice
+    a: = g.arena
+    var_at: = g.vars.len
+    if g.arrs.len > 0 && g.rng.chance(30)
+        r: = g.arrs.get(g.rng.below(g.arrs.len))
+        if g.mult * r.len > LOOP_CAP
+            decl(g)
+            return
+        x: = fresh(g, "x")
+        line(g, a.text().s("for ").s(x).s(" in ").s(r.text).take())
+        g.vars.push(Var::{ .text = x, .ty = r.ty, .place = false, .bare = true })
+        loop_body(g, depth, r.len, var_at)
+        g.vars.pop()
+        return
+    i: = fresh(g, "i")
+    $trip: Sz = 0
+    $head: U8[] = ""
+    switch g.rng.below(3)
+    case 0
+        trip = 1 + g.rng.below(6)
+        head = a.text().s("Range.asc(\{trip\})").take()
+    case 1
+        trip = 1 + g.rng.below(6)
+        head = a.text().s("Range.desc(\{trip\})").take()
+    default
+        start: = I64::g.rng.below(30) - 10I64
+        step: = I64::(1 + g.rng.below(4))
+        span: = I64::g.rng.below(25)
+        if g.rng.chance(50)
+            head = a.text().s("Range(\{start\}, \{start + span\}, \{step\})").take()
+        else
+            head = a.text().s("Range(\{start + span\}, \{start\}, \{-step\})").take()
+        trip = Sz::((span + step - 1I64) / step)
+    if g.mult * (trip if trip > 0 else 1) > LOOP_CAP
+        decl(g)
+        return
+    line(g, a.text().s("for ").s(i).s(" in ").s(head).take())
+    g.vars.push(Var::{ .text = i, .ty = SZ, .place = false, .bare = true })
+    loop_body(g, depth, trip, var_at)
+    g.vars.pop()
+
+priv fn for_counted(g: Gen$@, depth: Sz) //<
+    //< A C-style `for` over a narrow counter near the edge of its type
+    //< The step may be a value worked out each pass, a call among it, which must be computed
+    //< before the step's own line. The counter is never written by the body, and the bounds leave
+    //< room for the largest step, so the loop ends.
+    a: = g.arena
+    t: = int_ty(g)
+    span: = I64::(1 + g.rng.below(30))
+    lo_min: = lowest(t) + 4I64
+    lo_max: = highest(t) - span - 4I64
+    $lo: I64 = 0I64
+    switch g.rng.below(3)
+    case 0
+        lo = lo_min + I64::g.rng.below(4)
+    case 1
+        lo = lo_max - I64::g.rng.below(4)
+    default
+        lo =
+            (I64::g.rng.below(8) - 4I64) if signed(t) else I64::g.rng.below(8) + 4I64
+    if lo < lo_min
+        lo = lo_min
+    if lo > lo_max
+        lo = lo_max
+    trip: = Sz::span
+    if g.mult * trip > LOOP_CAP
+        decl(g)
+        return
+    var_at: = g.vars.len
+    i: = fresh(g, "k")
+    ty: = NAMES[t]
+    g.vars.push(Var::{ .text = i, .ty = t, .place = false, .bare = true })
+    saved: = g.mult
+    g.mult = g.mult * trip
+    $step: U8[] = i64_lit(g, t, 1I64 + I64::g.rng.below(4))
+    if g.rng.chance(60)
+        step = a.text().s("(").s(i64_lit(g, t, 1I64)).s(" + (").s(expr(g, t, 2)).s(" & ")
+            .s(i64_lit(g, t, 3I64)).s("))").take()
+    g.mult = saved
+    up: = g.rng.chance(50)
+    head: = a.text().s("for $").s(i).s(": ").s(ty).s(" = ")
+    if up
+        head.s(i64_lit(g, t, lo)).s("; ").s(i).s(" < ").s(i64_lit(g, t, lo + span)).s("; ").s(i)
+            .s(" += ")
+    else
+        head.s(i64_lit(g, t, lo + span)).s("; ").s(i).s(" > ").s(i64_lit(g, t, lo)).s("; ").s(i)
+            .s(" -= ")
+    line(g, head.s(step).take())
+    loop_body(g, depth, trip, var_at)
+    g.vars.pop()
+
+priv fn array_decl(g: Gen$@) //< `$aN: T[L] = ::{ … }`, and now and then a slice over it
+    t: = int_ty(g)
+    ty: = NAMES[t]
+    len: = 2 + g.rng.below(4)
+    name: = fresh(g, "a")
+    b: = g.arena.text().s("$").s(name).s(": ").s(ty).s("[\{len\}] = ::{ ")
+    for i in Range.asc(len)
+        b.s(", " if i > 0 else "").s(expr(g, t, 2))
+    line(g, b.s(" }").take())
+    g.arrs.push(Arr::{ .text = name, .ty = t, .len = len, .place = true })
+    if g.rng.chance(40)
+        sl: = fresh(g, "sl")
+        line(g,
+            g.arena.text().s(sl).s(": = ").s(ty).s("[]::").s(name).take())
+        g.arrs.push(Arr::{ .text = sl, .ty = t, .len = len, .place = false })
+
+priv fn struct_decl(g: Gen$@) //< `$sN: StK = StK::{ … }`, its fields and its array readable
+    if g.shapes.len == 0
+        decl(g)
+        return
+    k: = g.rng.below(g.shapes.len)
+    sh: = g.shapes.get(k)
+    name: = fresh(g, "s")
+    b: = g.arena.text().s("$").s(name).s(": St\{k\} = St\{k\}::{ ")
+    for i in Range.asc(sh.fields.len)
+        b.s(".f\{i\} = ").s(expr(g, sh.fields.get(i), 2)).s(", ")
+    b.s(".fa = ::{ ")
+    for i in Range.asc(sh.arr_len)
+        b.s(", " if i > 0 else "").s(expr(g, sh.arr_ty, 1))
+    line(g, b.s(" } }").take())
+    for i in Range.asc(sh.fields.len)
+        f: = g.arena.text().s(name).s(".f\{i\}").take()
+        g.vars
+            .push(Var::{ .text = f, .ty = sh.fields.get(i), .place = true, .bare = false })
+    fa: = g.arena.text().s(name).s(".fa").take()
+    g.arrs.push(Arr::{ .text = fa, .ty = sh.arr_ty, .len = sh.arr_len, .place = true })
+    g.svars.push(Svar::{ .text = name, .shape = k, .place = true, .ptr = false })
+
+priv fn enum_decl(g: Gen$@) //< `eN: EnK = …`, a variant or a cast from a tag picked at run time
+    if g.ens.len == 0
+        decl(g)
+        return
+    k: = g.rng.below(g.ens.len)
+    en: = g.ens.get(k)
+    name: = fresh(g, "e")
+    $value: U8[] = ""
+    if g.rng.chance(40)
+        value = g.arena.text().s(".v\{g.rng.below(en.tags.len)\}").take()
+    else
+        x: = i64_lit(g, en.base, en.tags.get(g.rng.below(en.tags.len)))
+        y: = i64_lit(g, en.base, en.tags.get(g.rng.below(en.tags.len)))
+        value = g.arena.text().s("En\{k\}::(gsel<|").s(NAMES[en.base]).s("|>(").s(cond(g, 2))
+            .s(", ").s(x).s(", ").s(y).s("))").take()
+    line(g, g.arena.text().s(name).s(": En\{k\} = ").s(value).take())
+    g.vars.push(Var::{ .text = name, .ty = ENUM_TY + k, .place = false, .bare = true })
+
+// ==========================================
+// Declarations and the program
+// ==========================================
+
+priv fn new_gen(seed: U64, open: Bool, arena: Arena$@): Gen
+    return Gen::{ .rng = Prng(seed), .arena = arena, .out = Str_builder(), .indent = 0, .next = 0,
+        .vars = List<|Var|>(arena), .arrs = List<|Arr|>(arena), .svars = List<|Svar|>(arena),
+        .fns = List<|Func|>(arena), .shapes = List<|Shape|>(arena), .ens = List<|En|>(arena),
+        .mult = 1, .cost = 0, .loops = 0, .in_closure = false, .open = open }
+
+priv fn shapes_and_enums(g: Gen$@) //< the struct and enum types, written out
+    for k in Range.asc(1 + g.rng.below(2))
+        $fields: = List<|Sz|>(g.arena)
+        for _i in Range.asc(1 + g.rng.below(3))
+            fields.push(int_ty(g))
+        sh: = Shape::{ .fields = fields, .arr_ty = int_ty(g),
+            .arr_len = 2 + g.rng.below(3) }
+        line(g, g.arena.text().s("priv struct St\{k\}").take())
+        for i in Range.asc(fields.len)
+            line(g,
+                g.arena.text().s("    f\{i\}: ").s(NAMES[fields.get(i)]).take())
+        line(g,
+            g.arena.text().s("    fa: ").s(NAMES[sh.arr_ty]).s("[\{sh.arr_len\}]").take())
+        line(g, "")
+        g.shapes.push(sh)
+    bases: = Sz[]::{ 0, 1, 2, 3, 4, 5, 6 }
+    for k in Range.asc(1 + g.rng.below(2))
+        base: = bases[g.rng.below(bases.len)]
+        $tags: = List<|I64|>(g.arena)
+        n: = 2 + g.rng.below(3)
+        for tags.len < n
+            v: = I64::(raw_value(g, base) & (mask(base) >> 1U64))
+            if !tags.contains(v)
+                tags.push(v)
+        line(g, g.arena.text().s("priv enum En\{k\}: ").s(NAMES[base]).take())
+        for i in Range.asc(tags.len)
+            line(g, g.arena.text().s("    v\{i\} = \{tags.get(i)\}").take())
+        line(g, "")
+        g.ens.push(En::{ .base = base, .tags = tags })
+
+priv fn globals(g: Gen$@) //< mutable globals and constants, readable everywhere
+    for _i in Range.asc(2 + g.rng.below(3))
+        t: = g.rng.below(INTS + 1)
+        name: = fresh(g, "g")
+        line(g,
+            g.arena.text().s("priv $").s(name).s(": ").s(NAMES[t]).s(" = ").s(lit(g, t)).take())
+        g.vars.push(Var::{ .text = name, .ty = t, .place = true, .bare = false })
+    for _i in Range.asc(1 + g.rng.below(2))
+        t: = int_ty(g)
+        name: = fresh(g, "K")
+        line(g,
+            g.arena.text().s("priv const ").s(name).s(": ").s(NAMES[t]).s(" = ").s(lit(g, t)).take())
+        g.vars.push(Var::{ .text = name, .ty = t, .place = false, .bare = false })
+    line(g, "")
+
+priv fn function(g: Gen$@, k: Sz) //< `fK`: a few parameters, a body, a returned value
+    a: = g.arena
+    $params: = List<|Sz|>(a)
+    for _i in Range.asc(g.rng.below(5))
+        params.push(g.rng.below(INTS + 1))
+    st: =
+        g.rng.below(g.shapes.len) if g.shapes.len > 0 && g.rng.chance(40) else NONE
+    by_ptr: = g.rng.chance(50)
+    ret: = int_ty(g)
+    name: = a.text().s("f\{k\}").take()
+    globals_at: = g.vars.len
+    head: = a.text().s("priv fn ").s(name).s("(")
+    for i in Range.asc(params.len)
+        p: = a.text().s("p\{i\}").take()
+        head.s(", " if i > 0 else "").s(p).s(": ").s(NAMES[params.get(i)])
+        g.vars
+            .push(Var::{ .text = p, .ty = params.get(i), .place = false, .bare = true })
+    if st != NONE
+        head.s(", " if params.len > 0 else "").s("ps: St\{st\}").s("$@" if by_ptr else "")
+        sh: = g.shapes.get(st)
+        for i in Range.asc(sh.fields.len)
+            f: = a.text().s("ps.f\{i\}").take()
+            g.vars
+                .push(Var::{ .text = f, .ty = sh.fields.get(i), .place = by_ptr, .bare = false })
+        g.arrs
+            .push(Arr::{ .text = "ps.fa", .ty = sh.arr_ty, .len = sh.arr_len, .place = by_ptr })
+        g.svars.push(Svar::{ .text = "ps", .shape = st, .place = false, .ptr = by_ptr })
+    line(g, head.s("): ").s(NAMES[ret]).take())
+    if st != NONE
+        line(g, "    mix(U64::(ps.f0))")
+    g.cost = 0
+    g.mult = 1
+    // The parameters are mixed in at the end too, so none is left unread.
+    block(g, 4 + g.rng.below(8), 2, globals_at, ret)
+    line(g, "")
+    for g.vars.len > globals_at
+        g.vars.pop()
+    g.arrs.clear()
+    g.svars.clear()
+    g.fns
+        .push(Func::{ .name = name, .params = params, .st = st, .by_ptr = by_ptr, .ret = ret,
+        .cost = g.cost + 1 })
+
+priv fn main_fn(g: Gen$@, stop: Stop) //< `main`: each function called, its result printed
+    a: = g.arena
+    line(g, "fn main()")
+    g.indent = 1
+    g.cost = 0
+    g.mult = 1
+    globals_at: = g.vars.len
+    for k in Range.asc(g.fns.len)
+        f: = g.fns.get(k)
+        r: = a.text().s("r\{k\}").take()
+        args: = a.text()
+        for i in Range.asc(f.params.len)
+            args.s(", " if i > 0 else "").s(expr(g, f.params.get(i), 1))
+        if f.st != NONE
+            s: = a.text().s("m\{k\}").take()
+            sh: = g.shapes.get(f.st)
+            b: = a.text().s("$" if f.by_ptr else "").s(s).s(": St\{f.st\} = St\{f.st\}::{ ")
+            for i in Range.asc(sh.fields.len)
+                b.s(".f\{i\} = ").s(lit(g, sh.fields.get(i))).s(", ")
+            b.s(".fa = ::{ ")
+            for i in Range.asc(sh.arr_len)
+                b.s(", " if i > 0 else "").s(lit(g, sh.arr_ty))
+            line(g, b.s(" } }").take())
+            args.s(", " if f.params.len > 0 else "").s(s).s("@" if f.by_ptr else "")
+            line(g,
+                a.text().s(r).s(": = ").s(f.name).s("(").s(args.take()).s(")").take())
+            line(g, a.text().s("mix(U64::(").s(s).s(".f0))").take())
+        else
+            line(g,
+                a.text().s(r).s(": = ").s(f.name).s("(").s(args.take()).s(")").take())
+        spec: = SPECS[g.rng.below(SPECS.len)]
+        line(g,
+            a.text().s("io.out().s(\"").s(r).s("=\\{").s(r).s(spec).s("\\}\\n\")").take())
+        g.vars.push(Var::{ .text = r, .ty = f.ret, .place = false, .bare = false })
+    for i in Range.asc(globals_at)
+        v: = g.vars.get(i)
+        if v.ty <= SZ
+            line(g,
+                a.text().s("io.out().s(\"").s(v.text).s("=\\{").s(v.text).s("\\}\\n\")").take())
+    line(g, "io.out().s(\"chk=\\{chk\\}\\n\")")
+    planted(g, stop)
+
+priv fn planted(g: Gen$@, stop: Stop) //< the stop the program ends on, if any
+    //< The value that breaks the rule is worked out at run time from the checksum, so no
+    //< translation can see it coming.
+    a: = g.arena
+    if stop == .none
+        return
+    line(g, "zero: I32 = I32::(chk & 0U64)")
+    switch stop
+    case .divide
+        line(g, "io.out().s(\"\\{100I32 / zero\\}\\n\")")
+    case .shift
+        line(g, "io.out().s(\"\\{1U32 << U8::(zero + 40I32)\\}\\n\")")
+    case .index
+        line(g, "held: I32[3] = ::{ 1I32, 2I32, 3I32 }")
+        line(g, "io.out().s(\"\\{held[Sz::(zero) + 3]\\}\\n\")")
+    case .tag
+        k: = g.rng.below(g.ens.len)
+        en: = g.ens.get(k)
+        $v: I64 = 0I64
+        for en.tags.contains(v)
+            v += 1I64
+        line(g,
+            a.text().s("bad: = En\{k\}::(").s(NAMES[en.base]).s("::(zero) + ")
+            .s(i64_lit(g, en.base, v)).s(")").take())
+        line(g, "io.out().s(\"\\{I64::(bad)\\}\\n\")")
+    case .none {}
+
+fn write( //< the program the seed gives
+    seed: U64,
+    open: Bool, //< it also writes the shapes of `OPEN_FINDINGS`, which fail today
+    arena: Arena$@,
+): Program
+    $g: = new_gen(seed, open, arena)
+    $stop: Stop = .none
+    switch g.rng.below(12)
+    case 0
+        stop = .divide
+    case 1
+        stop = .shift
+    case 2
+        stop = .index
+    case 3
+        stop = .tag
+    default {}
+    g.out.s("//< Written by `ksplc/tests/support/random_prog.kspl` from the seed \{seed\}\n")
+    g.out.s(PRELUDE)
+    shapes_and_enums(g@)
+    globals(g@)
+    for k in Range.asc(4 + g.rng.below(6))
+        function(g@, k)
+    main_fn(g@, stop)
+    text: = arena.dup_str(g.out.slice())
+    g.out.free()
+    return Program::{ .text = text, .stop = stop }

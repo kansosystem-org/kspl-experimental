@@ -1,0 +1,28 @@
+//< Checks a top-level `#cfg(flag)` group: kept whole while its flag is on, dropped whole while off
+//< **The group under the flag that is off imports a file that does not exist**: dropped whole, its
+//< import is never read.
+import "std/verdict"
+
+#cfg(nope)
+    import "ksplc/tests/no/such/file"
+    extern fn group_missing(): I32
+    fn group_value(): I32
+        return group_missing()
+
+#cfg(!nope)
+    import "std/math" as group_math
+    fn group_value(): I32
+        return 1
+    #cfg(!nope_either)
+        fn nested_value(): I32
+            return 2
+    #cfg(nope_either)
+        fn nested_value(): I32
+            return 200
+
+fn test_top_level_group(): Void
+    verdict.start("[top_level_group]")
+    assert(group_value() == 1, "the group under a flag that is off drops whole, import included")
+    assert(nested_value() == 2, "a group inside a group follows both flags")
+    assert(group_math.sqrt(9.0) == 3.0, "an import inside a kept group keeps its alias")
+    verdict.pass("A top-level `#cfg` group keeps or drops its items whole.")

@@ -6,6 +6,7 @@
 //< green too. `tests/negative/` holds one case per syntax (`.f` / `[i]` / `$` / a capture /
 //< defer) for the paths; here are the rules themselves.
 import "ksplc/tests/support/harness"
+import "ksplc/tests/support/place_table"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -237,6 +238,7 @@ priv fn compile_only(dir: U8[], index: Sz, body: U8[], arena: Arena$@): Verdict
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
     run_write_perm(arena)
+    run_place_table(arena)
     dir: = harness.sandbox("place")
 
     for i in Range.asc(DENY.len)
@@ -251,6 +253,66 @@ fn main(): I32
         why: = arena.text().s("refused: \{v.first_error\}").take()
         verdict.check(name, v.compiled, why)
     return harness.finish()
+
+// ==========================================
+// The place table ("4.3.5 Which operation takes which place" in the specification), cell by
+// cell. Each cell is compiled alone, so a refusal is told apart from its neighbours'. The cells
+// that compile are then built into one program and run, so an allowed shape that C or the run
+// refuses fails too. A copied cell is judged as an allowed one: that it works on a copy is not
+// observed here.
+// ==========================================
+
+priv fn run_place_table(arena: Arena$@) //<
+    //< each cell is refused with its message, or builds and runs
+    dir: = harness.sandbox("place_table")
+    $cells: = List<|Sz|>(arena) // row * column count + column
+    $jobs: = List<|subproc.Job|>(arena)
+    cols: = place_table.COLUMNS.len
+    for ri in Range.asc(place_table.ROWS.len)
+        row: = place_table.ROWS[ri]@
+        for col in Range.asc(cols)
+            if !place_table.applies(row, col)
+                continue
+            stem: = arena.text().s("c_\{ri\}_\{col\}").take()
+            src: = fs.join(dir, arena.text().s("\{stem\}.kspl").take(), arena)
+            gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
+            text: = arena.text().s(place_table.PRELUDE)
+                .s(place_table.cell_fn(row, ri, col, arena))
+                .s("fn main(): I32\n    return cell_\{ri\}_\{col\}()\n").take()
+            io.write_file(src, text) catch
+                verdict.check("the place table's material is written", false, src)
+                return
+            cells.push(ri * cols + col)
+            jobs
+                .push(subproc.Job::{ .argv = harness.ksplc_argv(U8[][]::{ src, gen }), .cwd = dir })
+    io.out().s("# the place table: \{jobs.len\} cells\n")
+    outs: = harness.run_all(jobs.slice(), "place_table")
+    all: = arena.text().s(place_table.PRELUDE)
+    calls: = arena.text().s("fn main(): I32\n    $sum: I32 = 0\n")
+    for k in Range.asc(cells.len)
+        ri: = cells.get(k) / cols
+        col: = cells.get(k) % cols
+        row: = place_table.ROWS[ri]@
+        out: = outs.get(k)
+        name: = arena.text().s("[place table] ").s(row.head).s(" / ")
+            .s(place_table.COLUMNS[col].head).s(": ").s(place_table.word(row.cells[col])).take()
+        if row.cells[col] == 'r'
+            want: = place_table.refusal(row, col)
+            verdict.check(name,
+                !out.exited_with(0) && out.out.find_str(want).is_some(),
+                arena.text().s("expected a refusal saying '\{want\}'\n\{out.out\}").take())
+            continue
+        if verdict.check(name, out.exited_with(0), out.out)
+            all.s(place_table.cell_fn(row, ri, col, arena))
+            calls.s("    sum += cell_\{ri\}_\{col\}()\n")
+    // The cells that compile, built into one program and run.
+    whole: = fs.join(dir, "allowed.kspl", arena)
+    io.write_file(whole, all.s(calls.s("    return sum\n").take()).take()) catch
+        verdict.check("the place table's material is written", false, whole)
+        return
+    ran: = harness.ksplc(U8[][]::{ "run", whole })
+    verdict.check("[place table] the cells that compile build into one program, which runs",
+        ran.exited_with(0), ran.out)
 
 // ==========================================
 // That ksplc itself rejects a write to something read-only. Each read-only source is written

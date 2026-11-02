@@ -3,7 +3,7 @@
 // === Only these three marks change in the notation written by indentation (`.kspl`) ===
 // Indentation, outdentation and a newline say the `{` `}` `;`, mended to them before the
 // analyser (`parse/layout.kspl`). **A check reads the rosters** (`make test-notation`): mend them.
-// [opens] decl_extern_block decl_trait decl_struct decl_enum decl_impl stmt_block
+// [opens] decl_group decl_extern_block decl_trait decl_struct decl_enum decl_impl stmt_block
 // [value] decl_import_selector_list String_content
 // [uses] decl_fn stmt_defer stmt_if stmt_for stmt_switch stmt_labeled_block expr_catch
 // [uses] expr_fn_lit
@@ -24,12 +24,24 @@ visibility = 'pub' | 'priv'
 // Caution: **`item_broken` stands last and nowhere else**: alive only in the editor's lenient
 // run, it must follow every branch that failed.
 top_level_item =
-    attribute_list? ( decl_import
+    decl_group
+    | attribute_list? ( decl_import
     | decl_embed
     | decl_extern_block
-    | visibility? decl_top
+    | visibility? linkage? decl_top
     )
     | item_broken
+
+// `#cfg(flag)` before a block of top-level items keeps or drops them whole. Normalization splices
+// the kept items into the file (`settle_top_level` in `parse/normalize_decl.kspl`), so no later
+// stage sees a group. Sema refuses any attribute but `#cfg` on one. **No empty body**: a group of
+// nothing would be written and do nothing.
+decl_group = attribute_list Block_open top_level_item+ Block_close
+
+// `extern` before one declaration: without a body (or an initializer) it brings a C symbol in, with
+// one it publishes it to C under its own name (`settle_top_level` tells the two apart). Sema
+// refuses it before what is neither (`check_linkage` in `sema/decl/attrs.kspl`).
+linkage = 'extern' String?
 
 item_broken = ~";\n" Stmt_end?
 
@@ -89,7 +101,8 @@ decl_typedef = 'typedef' Identifier "=" type_expr Stmt_end
 // swapped, what looks for `decl_fn_proto` (the vtable's assembly) silently sees nothing.
 decl_trait =
     'trait' Identifier type_gen_params?
-    Block_open ( attribute_list? visibility? ( decl_fn_proto Stmt_end | decl_fn ) )* Block_close
+    Block_open ( attribute_list? visibility? linkage? ( decl_fn_proto Stmt_end | decl_fn ) )*
+    Block_close
 
 // A `struct S;` is a C type an `extern` block names, held by pointer; outside one it is refused
 // (check_struct_decl_shape in sema/decl/collect.kspl). **No empty body**: `struct S {}` would be
@@ -112,7 +125,7 @@ enum_variant =
 enum_field = Identifier ":" type_expr
 
 decl_impl = 'impl' type_gen_params? type_expr ( ":" type_path )?
-    Block_open ( attribute_list? visibility? decl_fn )* Block_close
+    Block_open ( attribute_list? visibility? linkage? decl_fn )* Block_close
 
 // Caution: **`stmt` does not draw this.** A lone `{ … }` reads as the previous statement's
 // continuation, so the parse stops at the `{` and names the label to put on.

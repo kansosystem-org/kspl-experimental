@@ -286,6 +286,7 @@ endef
 self-host: export SELF_HOST_HELP := $(self_host_help)
 ## Gates|self-host|See that the notation stage1 and stage2 emit does not differ by one byte
 self-host: $(DIFF_TXT)
+	@$(ksplc_step) compare-fires FIRES=$(TMP_DIR)/compare_fires SPLIT=1
 	@$(ksplc_step) verdict DIFF=$(DIFF_TXT) LABEL='self-hosting, $(BACKEND) backend' \
 		|| { printf '%s\n' "$$SELF_HOST_HELP"; exit 1; }
 
@@ -356,6 +357,7 @@ self-host-ship: $(SHIP_EXE)
 	@mkdir -p $(LOG_DIR)
 	@$(ksplc_step) translate WITH=$(SHIP_EXE) TO=$(SHIP_OUT) RT=$(SHIP_RT) SPLIT=1
 	@$(ksplc_step) compare FROM=$(STAGE2_WHOLE) TO=$(SHIP_OUT) DIFF=$(SHIP_DIFF) SPLIT=1
+	@$(ksplc_step) compare-fires FIRES=$(TMP_DIR)/compare_fires SPLIT=1
 	@$(ksplc_step) verdict DIFF=$(SHIP_DIFF) LABEL='the shipped executable, $(BACKEND) backend'
 
 # The old $(STAGE2_EXE) goes at the end: stale once stage2's C is remade, yet newer than stage1.exe.
