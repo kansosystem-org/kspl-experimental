@@ -1,0 +1,276 @@
+//< The table that lets a formula call the functions of `ksmd/calc/functions.kspl`
+//< Written by `ksmd/calc/glue.kspl` from their signatures: do not edit it by hand. `make
+//< ksmd-functions` writes it again after a signature changes.
+import "ksmd/calc/args" { First_error, Raw_args }
+import "ksmd/calc/functions" as fns
+import "ksmd/calc/value" { Value, empty, number, text }
+import "std/str" // `equals`
+
+fn call(name: U8[], a: Raw_args$@): Value? //<
+    //< The value of the function `name` on the arguments `a` reads; none for no such name
+    if name.equals("average")
+        return .some(call_average(a))
+    if name.equals("bin_to_dec")
+        return .some(call_bin_to_dec(a))
+    if name.equals("bin_to_hex")
+        return .some(call_bin_to_hex(a))
+    if name.equals("count")
+        return .some(call_count(a))
+    if name.equals("date")
+        return .some(call_date(a))
+    if name.equals("day")
+        return .some(call_day(a))
+    if name.equals("dec_to_bin")
+        return .some(call_dec_to_bin(a))
+    if name.equals("dec_to_hex")
+        return .some(call_dec_to_hex(a))
+    if name.equals("hex_to_bin")
+        return .some(call_hex_to_bin(a))
+    if name.equals("hex_to_dec")
+        return .some(call_hex_to_dec(a))
+    if name.equals("max")
+        return .some(call_max(a))
+    if name.equals("min")
+        return .some(call_min(a))
+    if name.equals("month")
+        return .some(call_month(a))
+    if name.equals("round")
+        return .some(call_round(a))
+    if name.equals("sum")
+        return .some(call_sum(a))
+    if name.equals("year")
+        return .some(call_year(a))
+    return .none
+
+const NAMES: U8[][_] = ::{ "average", "bin_to_dec", "bin_to_hex", "count", "date", "day",
+        "dec_to_bin", "dec_to_hex", "hex_to_bin", "hex_to_dec", "max", "min", "month", "round",
+        "sum", "year",
+} //< every function this table calls, by its name
+
+priv fn call_average(a: Raw_args$@): Value //< `average(…)`
+    p_xs: = a.rest()
+    if !a.calculating()
+        return empty()
+    r: = fns.average(p_xs) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_bin_to_dec(a: Raw_args$@): Value //< `bin_to_dec(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_digits: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    $p_width: I64? = .none
+    if a.more()
+        got: = a.whole() catch e
+            first.take(e)
+            fallback 0I64
+        p_width = .some(got)
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.bin_to_dec(p_digits, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return number(F64::r)
+
+priv fn call_bin_to_hex(a: Raw_args$@): Value //< `bin_to_hex(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_digits: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    $p_width: I64? = .none
+    if a.more()
+        got: = a.whole() catch e
+            first.take(e)
+            fallback 0I64
+        p_width = .some(got)
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.bin_to_hex(p_digits, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_count(a: Raw_args$@): Value //< `count(…)`
+    p_xs: = a.rest()
+    if !a.calculating()
+        return empty()
+    r: = fns.count(p_xs) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_date(a: Raw_args$@): Value //< `date(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_year: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    p_month: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    p_day: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.date(p_year, p_month, p_day) catch e
+        return Value.failed(e)
+    return r
+
+priv fn call_day(a: Raw_args$@): Value //< `day(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_d: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.day(p_d) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_dec_to_bin(a: Raw_args$@): Value //< `dec_to_bin(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_n: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    $p_width: I64? = .none
+    if a.more()
+        got: = a.whole() catch e
+            first.take(e)
+            fallback 0I64
+        p_width = .some(got)
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.dec_to_bin(p_n, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_dec_to_hex(a: Raw_args$@): Value //< `dec_to_hex(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_n: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    $p_width: I64? = .none
+    if a.more()
+        got: = a.whole() catch e
+            first.take(e)
+            fallback 0I64
+        p_width = .some(got)
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.dec_to_hex(p_n, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_hex_to_bin(a: Raw_args$@): Value //< `hex_to_bin(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_digits: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    $p_width: I64? = .none
+    if a.more()
+        got: = a.whole() catch e
+            first.take(e)
+            fallback 0I64
+        p_width = .some(got)
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.hex_to_bin(p_digits, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_hex_to_dec(a: Raw_args$@): Value //< `hex_to_dec(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_digits: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    $p_width: I64? = .none
+    if a.more()
+        got: = a.whole() catch e
+            first.take(e)
+            fallback 0I64
+        p_width = .some(got)
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.hex_to_dec(p_digits, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return number(F64::r)
+
+priv fn call_max(a: Raw_args$@): Value //< `max(…)`
+    p_xs: = a.rest()
+    if !a.calculating()
+        return empty()
+    r: = fns.max(p_xs) catch e
+        return Value.failed(e)
+    return r
+
+priv fn call_min(a: Raw_args$@): Value //< `min(…)`
+    p_xs: = a.rest()
+    if !a.calculating()
+        return empty()
+    r: = fns.min(p_xs) catch e
+        return Value.failed(e)
+    return r
+
+priv fn call_month(a: Raw_args$@): Value //< `month(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_d: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.month(p_d) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_round(a: Raw_args$@): Value //< `round(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_x: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    p_places: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.round(p_x, p_places) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_sum(a: Raw_args$@): Value //< `sum(…)`
+    p_xs: = a.rest()
+    if !a.calculating()
+        return empty()
+    r: = fns.sum(p_xs) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_year(a: Raw_args$@): Value //< `year(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_d: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.year(p_d) catch e
+        return Value.failed(e)
+    return number(r)

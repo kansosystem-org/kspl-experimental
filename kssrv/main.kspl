@@ -55,7 +55,7 @@ priv const MAX_LOCAL_BODY: Sz = 8 * 1024 * 1024 //< the cap on a body in local u
     //< a page writes back any file up to 8 MiB.
     //< Caution: **Keep it a bound.** A connection holds its body in memory until it is whole.
 
-priv fn body_limit(ctx: conn.Ctx$@): Sz //< the body cap for this mode
+priv fn body_limit(ctx: conn.Ctx@): Sz //< the body cap for this mode
     return MAX_LOCAL_BODY if ctx.is_local() else MAX_REQUEST_BODY
 
 priv const IO_CHUNK: Sz = 16 * 1024 //< how many bytes one read/write moves
@@ -170,7 +170,7 @@ priv fn under(root: U8[], rel: U8[], arena: Arena$@): Rel_path //< `rel` checked
         return .hidden if why == .hidden else .rejected
     return .ok(path)
 
-priv fn names_this_server(req: http.Request$@): Bool //<
+priv fn names_this_server(req: http.Request@): Bool //<
     //< Whether the `Host` header names this machine's loopback, as the token's URL does
     //< **The port is not compared**: a re-pointed page always sends its own name, so the name alone
     //< tells it apart. `http.parse_request` refuses a second `Host`, so the one found is the only
@@ -237,18 +237,17 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         conn.queue_error(c, 404)
         return
 
-    keep: = keep_alive
     ctype: = content_type_for(target_path)
     if is_head
         // A HEAD's Content-Length names the real length; 0 would read as "an empty file".
-        conn.queue_to_head(c, 200, ctype, size, keep)
+        conn.queue_to_head(c, 200, ctype, size, keep_alive)
         return
 
     // The stat found it, so an open that fails is the server's fault, not a missing name.
     file: = io.open(target_path, "rb") catch _e
         conn.queue_error(c, 500)
         return
-    conn.queue_file(c, ctype, file, size, keep)
+    conn.queue_file(c, ctype, file, size, keep_alive)
 
 // ==========================================
 // How one connection is driven
@@ -265,7 +264,7 @@ priv fn reject_parse(c: conn.Conn$@, error: http.Http_error) //<
     default
         conn.queue_error(c, 400)
 
-priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@): Bool //<
+priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool //<
     //< checks before buffering a body
     if !ctx.is_local()
         return true
@@ -583,11 +582,10 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         if h != null && !https.start(fresh, h, lg)
             conn.table_drop(t, slot, lg)
 
-priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
-    t: conn.Conn_table$@) //<
-        //< Rebuilds the watch set and the interests from the table, every time it is called
-        //< Caution: **Rebuild them from scratch.** Updated incrementally, a closed peer's
-        //< registration stays and an interest is not switched back from partly sent to partly read.
+priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener@, t: conn.Conn_table@) //<
+    //< Rebuilds the watch set and the interests from the table, every time it is called
+    //< Caution: **Rebuild them from scratch.** Updated incrementally, a closed peer's
+    //< registration stays and an interest is not switched back from partly sent to partly read.
     r.clear()
     r.register(listener.raw_handle(), reactor.READABLE, LISTENER_TOKEN)
     for i in Range.asc(conn.MAX_CONNS)
@@ -683,6 +681,7 @@ priv struct Options //< the command line, read and checked
     idle_s: I64 //< how long no page may hold it before it stops; 0 keeps it up
     cert: U8[] //< the PEM certificate chain for HTTPS, or empty for plain HTTP
     key: U8[] //< the PEM private key for HTTPS, or empty
+    builder: U8[] //< the program that builds a page's own functions, or empty
 
 priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     //< Reads the command line into `o` and checks it; the exit code of a failure, or 0
@@ -692,6 +691,7 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     $idle_s: I64 = 0I64
     $cert: U8[] = ""
     $key: U8[] = ""
+    $builder: U8[] = ""
     cli: = argparse.Parser
         .create("kssrv",
         "serves the files under <root>, and JSON under /api/; port 0 takes a free port", arena)
@@ -706,6 +706,8 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         "stop once no page has held it this many seconds (absent: stay up)")
     cli.str_opt("--cert", cert@, "answer HTTPS with this PEM certificate chain (needs --key)")
     cli.str_opt("--key", key@, "the PEM private key of --cert, unencrypted, readable by you alone")
+    cli.str_opt("--builder", builder@,
+        "build a page's own functions with this program, for /api/build (needs --local)")
     cli.parse_or_exit()
     if cli.rest.len != 2
         cli.print_usage(io.err())
@@ -747,8 +749,16 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
             "--local serves this machine alone, where HTTPS adds nothing: drop --cert and --key, or \
                 --local")
         return 1
+    // **A builder runs programs on the files under the root**, so only for the holder of the token.
+    if builder.len > 0 && !local
+        lg.say(.error, "--builder needs --local: building runs a program on files under the root")
+        return 1
+    if builder.len > 0 && !fs.can_run(builder)
+        if ln: = lg.at(.error)
+            ln.s("the builder cannot be started: \{builder\}")
+        return 1
     o$ = Options::{ .port = I32::port64, .root = root, .page = page, .local = local,
-        .idle_s = idle_s, .cert = cert, .key = key }
+        .idle_s = idle_s, .cert = cert, .key = key, .builder = builder }
     return 0
 
 priv fn listen(host: U8[], port: I32, lg: Log$@): net.Tcp_listener$@!net.Net_error //<
@@ -834,7 +844,8 @@ fn main(): I32
 
     // The "listening on" line `announce` prints names the port, which `kssrv/tests/start.kspl`
     // waits for. If you change the line, fix that file too.
-    $ctx: conn.Ctx = ::{ .root = o.root, .lg = lg@, .token = token, .page = o.page }
+    $ctx: conn.Ctx = ::{ .root = o.root, .lg = lg@, .token = token, .page = o.page,
+        .builder = o.builder }
 
     conn.stats.started_s = sys.wall_seconds()
     announce(o@, host, port, token, lg@)

@@ -69,7 +69,7 @@ priv struct Cmd //< a command selected by a positional argument's name (`fmt` / 
     is_default: Bool //< chosen when no command is named; its name is never typed
     form: U8[] //< what follows its name in its usage line (`<input.kspl>...`); empty: nothing
 
-priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argument_error //<
+priv fn store_value(o: Opt@, val: U8[], again: Bool): Void!Argument_error //<
     //< Interprets the value by o's kind and stores it in the destination
     //< Caution: **Refuse an item of one value given `again`.** Kept, the later value silently wins,
     //< so a word added to the end of a command line undoes one before it (`--out=a --out=b`).
@@ -318,7 +318,7 @@ impl Parser
         //< For a caller that walks the items (with `saw`).
         //< Caution: **Do not let the caller copy the list of names.** A copy silently drifts when a
         //< declaration is added.
-        r: Self$@,
+        r: Self@,
         out: List<|U8[]|>$@, //< where the names are pushed
     )
         for o in r.opts
@@ -395,9 +395,10 @@ impl Parser
         if o: = r.find(arg)
             return Opt_hit::{ .opt = o, .name = arg, .val = "", .has_val = false }
         if eq: = arg.find_char('=')
-            if o: = r.find(arg.sub(0, eq))
-                return Opt_hit::{ .opt = o, .name = arg.sub(0, eq),
-                    .val = arg.sub_from(eq + 1), .has_val = true }
+            name: = arg.sub(0, eq)
+            if o: = r.find(name)
+                return Opt_hit::{ .opt = o, .name = name, .val = arg.sub_from(eq + 1),
+                    .has_val = true }
         // Reports **the argument as given**, so the user finds what they typed.
         throw .unknown_option(arg)
 
@@ -422,7 +423,7 @@ impl Parser
     pub fn parse_list( //< reads an argument list into the declared destinations
         //< Also for arguments from elsewhere, such as a configuration file or a test.
         r: Self$@,
-        argv: List<|U8[]|>$@, //< the arguments, **without** the program's own name
+        argv: List<|U8[]|>@, //< the arguments, **without** the program's own name
     ): Void!Argument_error
         // subcommand_trailing's rest, pushed once its target has arrived.
         $trail: List<|U8[]|>$@ = null
@@ -530,7 +531,7 @@ impl Parser
                 out.s("          ").s(c.name).s(" (the default subcommand)")
             out.c('\n')
 
-    priv fn print_form(r: Self$@, c: Cmd$@, out: Writer) //< a command's line after `usage: `
+    priv fn print_form(r: Self@, c: Cmd@, out: Writer) //< a command's line after `usage: `
         out.s(r.prog)
         if !c.is_default
             out.c(' ').s(c.name)

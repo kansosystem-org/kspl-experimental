@@ -84,17 +84,12 @@ priv fn refuse_unwritten_type_args(c: Sema_ctx$@, at: Ast_node$@, what: U8[], na
 priv fn instantiate_written(node: Ast_node$@, c: Sema_ctx$@, fn_tmpl: sema_decl_mono.Fn_instance,
     tmpl: Ast_node$@, type_args: Ast_node$@): Sema_symbol$@?!Sema_error //<
         //< Builds the specialization of the template `tmpl` that `type_args` name
-        //< None once reported. As at a call, a bound violation is reported at node's line, not the
-        //< template's.
+        //< None once reported.
     args: = type_args.build_resolved_type_args(c, tmpl)!
     if !sema_decl_mono.written_generic_arity_matches(tmpl, args.len)
         sema_decl_mono.check_written_generic_arity(c, tmpl, args.len, node)
         return .none
-    prev_inst_site: = c.generics.inst_site
-    c.generics.inst_site = node
-    defer c.generics.inst_site = prev_inst_site
-    defer $inst_name: = c.instantiate_fn(sema_body_call.with_args(fn_tmpl, args), false)!
-    return c.symtab.resolve(inst_name.slice())
+    return sema_body_call.instance_of_written_args(c, node, fn_tmpl, args)!
 
 priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Written_name):
     Sema_symbol$@?!Sema_error //<
@@ -217,7 +212,7 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
     return value_of_fn(node, c, sym, expected_id, true)!
 
 fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_node$@,
-    member: Ast_node$@, owner_tmpl: Ast_node$@, is_call: Bool) //<
+    member: Ast_node@, owner_tmpl: Ast_node$@, is_call: Bool) //<
         //< Refuses a member of a generic type named with no type arguments, called or as a value
         //< `Holder.get`, `Holder.mk(1)`: each instance has its own copy of the method, and nothing
         //< here says which. A call's arguments do not choose it either: a generic type's are
@@ -292,9 +287,7 @@ fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_
     // `infer_namespace_access`) discards the result, so it costs nothing.
     else if sym.kind.is_type()
         return I32::sema_type_env.Builtin_type_id.unknown
-    if !sema_type_env.is_unknown(sym.type_id)
-        return sym.type_id
-    return I32::sema_type_env.Builtin_type_id.unknown
+    return sym.type_id
 
 priv fn report_unread_name(c: Sema_ctx$@, node: Ast_node$@, named: sema_decl_name.Written_name) //<
     //< Reports a value's name that names nothing this file can see
@@ -350,17 +343,17 @@ priv fn report_undefined_path(c: Sema_ctx$@, node: Ast_node$@, fqn_slice: U8[],
     is_file_access: Bool, prefix: U8[], target_name: U8[], certain: Bool)
     if c.has_error_in_fn() || (!certain && fqn_slice.find_str("<|").is_some())
         return
+    // What could not be resolved is the head segment on a path, and the name itself on a bare name.
+    // Advice pointing at `v` when `r.v`'s `r` is missing cannot be acted on.
+    unresolved_name: = prefix if prefix.len > 0 else target_name
     // A name another file this one imports declares, written without the alias reaching it.
     if !is_file_access
-        if reach: = c.alias_reaching(prefix if prefix.len > 0 else target_name)
-            c.report_without_alias(node, prefix if prefix.len > 0 else target_name, reach.path)
+        if reach: = c.alias_reaching(unresolved_name)
+            c.report_without_alias(node, unresolved_name, reach.path)
             return
     // Caution: Ask before writing the message. The type lookup reuses the scratch buffer.
     prefix_is_type: = prefix.len > 0 && c.is_type_name(prefix)
     c.clear_scratch().s("undefined path or identifier '\{fqn_slice\}'")
-    // What could not be resolved is the head segment on a path, and the name itself on a bare name.
-    // Advice pointing at `v` when `r.v`'s `r` is missing cannot be acted on.
-    unresolved_name: = prefix if prefix.len > 0 else target_name
     // A name missing inside an anonymous function is nearly always a capture attempt, and that
     // advice replaces the general one. A file access (a name the file does not export) is checked
     // first.

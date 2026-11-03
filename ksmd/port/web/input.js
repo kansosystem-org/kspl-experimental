@@ -42,8 +42,7 @@ function ksmdInput(ks) {
   // The spot of a unit's start, or the gap's spot.
   function startOf(el) {
     if (el.classList.contains("gap")) return el.spot.slice();
-    const at = ks.view.spotAt(el, 0);
-    return at;
+    return ks.view.spotAt(el, 0);
   }
 
   function collapsed() {
@@ -169,14 +168,20 @@ function ksmdInput(ks) {
     return s.rangeCount > 0 && !!ks.view.closest(s.focusNode, ".li");
   }
 
+  // Whether an image can go in here, saying why not where it cannot: Insert ▸ Image… asks this too.
+  ks.imagesHere = () => {
+    if (ks.addImage) return true;
+    ks.say("An image goes in only where the local server opened the document, to save it beside it.");
+    return false;
+  };
+
   // An image file pasted or dropped is written beside the document, where the local server serves
   // the page (`file.js`). It never goes into a cell.
   function image(files) {
     const file = Array.from(files || []).find((f) => f.type.startsWith("image/"));
     if (!file) return false;
     ks.sync();
-    if (ks.addImage) ks.addImage(file);
-    else ks.say("An image goes in only where the local server opened the document, to save it beside it.");
+    if (ks.imagesHere()) ks.addImage(file);
     return true;
   }
 

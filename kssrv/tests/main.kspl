@@ -350,7 +350,7 @@ priv fn stop_cases(token: U8[], srv: Running$@, arena: Arena$@): Void!client.Htt
 priv const HEAD_WAIT_MS: I32 = 10000 //< the cap on waiting for the head, which comes at once
     //< Generous: it ends as soon as the head is in, and only a slow runner comes near it.
 
-priv fn wait_gone(srv: subproc.Child$@): Bool //< whether it exited by itself within the cap
+priv fn wait_gone(srv: subproc.Child@): Bool //< whether it exited by itself within the cap
     //< **`alive` reaps the child on the call that returns false**, so no `kill` follows a true.
     deadline: = sys.mono_us() + I64::GONE_MS * 1000I64
     for sys.mono_us() < deadline
@@ -413,6 +413,19 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
     if c3: = folder.child
         $bad3: = c3
         bad3.kill()
+    // **A builder runs a program on files under the root**, so a server facing outward has none.
+    out_b: = fs.join(tmp, "kssrv-builder-outward.out", arena)
+    err_b: = fs.join(tmp, "kssrv-builder-outward.err", arena)
+    outward: =
+        start_server(exe, root, out_b, err_b,
+        U8[][]::{ arena.text().s("--builder=\{exe\}").take() }, arena)
+    said_outward: = read_log(out_b, err_b, arena)
+    verdict.check("a builder without --local does not come up",
+        !outward.child.is_some() &&
+        said_outward.find_str("--builder needs --local").is_some(), said_outward)
+    if c_b: = outward.child
+        $bad_b: = c_b
+        bad_b.kill()
     // **Nor a FIFO**: its read would wait for a writer that never comes.
     fifo: = fs.join(tmp, "ui/page.fifo", arena)
     if !make_fifo(fifo, arena)

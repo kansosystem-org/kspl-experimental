@@ -41,7 +41,6 @@ async function answer(body, replies, res) {
 // A model server as llama-server answers: `GET /v1/models` at once, `GET /health` with 503 until
 // it has loaded, and each chat request with one `answer` call.
 export function standIn({ port = 0, replies = [], loadMs = 0, never = false } = {}) {
-  const asked = [];
   const readyAt = Date.now() + loadMs;
   const loading = () => never || Date.now() < readyAt;
   const json = (res, status, o) => {
@@ -60,7 +59,6 @@ export function standIn({ port = 0, replies = [], loadMs = 0, never = false } = 
       } else if (req.method === "GET" && req.url === "/health") {
         json(res, 200, { status: "ok" });
       } else if (req.method === "POST" && req.url === "/v1/chat/completions") {
-        asked.push(body);
         answer(body, replies, res);
       } else {
         json(res, 404, { error: { code: 404, message: "no such endpoint" } });
@@ -68,7 +66,7 @@ export function standIn({ port = 0, replies = [], loadMs = 0, never = false } = 
     });
   });
   return new Promise((resolve) => server.listen(port, "127.0.0.1",
-    () => resolve({ server, asked, port: server.address().port })));
+    () => resolve({ server, port: server.address().port })));
 }
 
 // A port nothing listens on, as the system hands one out.

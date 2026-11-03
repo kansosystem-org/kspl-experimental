@@ -160,9 +160,9 @@ priv fn fault_of(run: Doc_run): Summary_fault
     return .none
 
 priv fn line_doc(src: U8[], at: Sz, limit: Sz): U8[] //<
-    //< A parameter's or the return type's run, its summary and detail joined into one line
-    //< **The signature's own line is the one place that shows it**, so the detail has nowhere else
-    //< to go.
+    //< The run at `at`, its summary and detail joined into one line
+    //< **One line is all the place has.** A parameter's or the return type's run shows on the
+    //< signature's own line; a file's or a declaration's goes into one record entry.
     run: = run_at(src, at, limit)
     return described(run.summary, run.detail, " ")
 
@@ -198,8 +198,7 @@ fn file_doc(src: U8[]): U8[] //< what a file says about itself (**empty where it
     at: = file_doc_at(src)
     if at >= src.len
         return ""
-    run: = run_at(src, at, src.len)
-    return described(run.summary, run.detail, " ")
+    return line_doc(src, at, src.len)
 
 fn is_unread_mark(comment: U8[]): Bool //<
     //< whether a line comment starts with a documentation mark that is not read, `///` or `//!`
@@ -230,8 +229,7 @@ fn decl_summary(src: U8[], n: Ast_node$@): U8[] //<
 fn doc_of(src: U8[], at: Sz, brace: Sz): U8[] //< the documentation one declaration carries
     //< **The summary and the detail are joined into one column**, as the record has one entry per
     //< line.
-    run: = run_at(src, mark_offset(src, at, brace), src.len)
-    return described(run.summary, run.detail, " ")
+    return line_doc(src, mark_offset(src, at, brace), src.len)
 
 fn doc_parted(src: U8[], at: Sz, brace: Sz): U8[] //<
     //< The same description, with the summary and the detail kept apart
@@ -315,9 +313,12 @@ fn param_docs(src: U8[], n: Ast_node$@, out: List<|Param_doc|>$@) //<
             continue
         id_n: = p.find_child(.k_identifier)
         name: = id_n.text if id_n != null else p.text
+        // The `//<` a parameter carries, with its continuations. The limit is where the next
+        // parameter starts. **A mark found only past it is not this one's**; the guard is in
+        // `run_at`, shared with the declaration's own summary.
         out
             .push(Param_doc::{ .name = name,
-            .doc = summary_within(src, p.loc.offset, next_param_at(params, i, end)) })
+            .doc = line_doc(src, p.loc.offset, next_param_at(params, i, end)) })
 
 fn return_doc(src: U8[], n: Ast_node$@): U8[] //<
     //< The `//<` on the line of the return type, empty where there is none
@@ -336,16 +337,10 @@ fn return_doc(src: U8[], n: Ast_node$@): U8[] //<
         return ""
     return line_doc(src, t.loc.offset, src.len)
 
-priv fn next_param_at(params: Ast_node$@, i: Sz, end: Sz): Sz //<
+priv fn next_param_at(params: Ast_node@, i: Sz, end: Sz): Sz //<
     //< Where the parameter after the one at `i` starts, or `end` where it is the last
-    for j in Range.asc(params.children.len)
+    for j in Range(i + 1, params.children.len, 1)
         p: = params.children[j]
-        if j > i && p.kind_id == .k_fn_param
+        if p.kind_id == .k_fn_param
             return p.loc.offset
     return end
-
-priv fn summary_within(src: U8[], at: Sz, limit: Sz): U8[] //<
-    //< The `//<` a parameter carries, with its continuations
-    //< `limit` is where the next parameter starts. **A mark found only past it is not this
-    //< one\'s**; the guard is in `run_at`, shared with the declaration\'s own summary.
-    return line_doc(src, at, limit)

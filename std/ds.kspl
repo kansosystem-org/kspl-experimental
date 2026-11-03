@@ -45,13 +45,14 @@ priv fn grow_slot( //<
     cap: Sz$@, //< the list's `cap`
     len: Sz, //< how many elements are live, and are copied over
     need: Sz, //< how many elements must fit afterwards
-    initial: Sz, //< the capacity of an empty list's first block
     arena: Arena$@, //< where the block goes; null means the global heap
     elem_size: Sz, //< the size of one element
 ): Void$@?
-    $new_cap: Sz = grow_cap(cap$, initial)
+    // An initial capacity of 2: most lists hold zero to two items (an AST node's children). A
+    // large list doubles, so the small start costs little.
+    $new_cap: Sz = grow_cap(cap$, 2)
     for new_cap < need
-        new_cap = grow_cap(new_cap, initial)
+        new_cap = grow_cap(new_cap, 2)
     new_ptr: = arena.alloc(checked_cap_bytes(new_cap, elem_size))
     used_bytes: = len * elem_size if cap$ > 0 else 0
     $old: Void$@? = .none
@@ -146,10 +147,8 @@ impl<|T|> List<|T|>
 
     priv fn ensure_cap(r: Self$@)
         if r.len >= r.cap
-            // An initial capacity of 2: most lists hold zero to two items (an AST node's children).
-            // A large list doubles, so the small start costs little.
             old: =
-                grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + 1, 2, r.arena, sizeof(T))
+                grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + 1, r.arena, sizeof(T))
             if block: = old
                 dealloc(block)
 
@@ -172,8 +171,7 @@ impl<|T|> List<|T|>
         $old: Void$@? = .none
         if r.len + items.len > r.cap
             old =
-                grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + items.len, 2, r.arena,
-                sizeof(T))
+                grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + items.len, r.arena, sizeof(T))
         for x in items
             mem.init_at(r.ptr + r.len, x)
             r.len += 1

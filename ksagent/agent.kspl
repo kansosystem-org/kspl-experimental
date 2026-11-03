@@ -36,7 +36,7 @@ Rules:
 4. Call read to read the lines around a hit before you answer.
 5. Answer in the language of the question.
 6. Finish by calling answer. Put the answer in text. In sources, give each place the answer comes from: the file's path, its first and last line, at most 50 lines apart, and a quote copied exactly from those lines.
-7. If the files do not hold the answer, call answer with the text NOT_FOUND and no sources.
+7. If the files do not hold the answer, call answer with the text NOT_FOUND and no sources. Decide that only after you have called search or list.
 8. Give every path relative to the folder, such as rules/leave.md.
 9. You can call the tools at most 12 times. Call answer before that.
 10. Word and Excel files are read as lines of text. A line of an Excel file starts with its sheet and row, such as Sheet1!12:. To see a column's heading, read the sheet's first lines.
@@ -45,6 +45,10 @@ Rules:
 const REMIND_ANSWER: U8[] = //< what the model is told when it answers in plain text
     "Call the answer tool now. Put the answer in text, and give each source as a path, a first and \
         a last line, and a quote copied exactly from those lines. Do not reply with plain text."
+
+const REMIND_LOOK: U8[] = //< what the model is told when it ends with no source before looking
+    "You have not looked at the files yet. Call list or search now, and read what they show. Then \
+        call answer, with each source as a path, a first and a last line, and a quote."
 
 const TOOLS_JSON: U8[] =
     """
@@ -84,6 +88,11 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
         msgs.push(message(b@, "assistant", t.answer))
     msgs.push(message(b@, "user", question))
     $reminded: = false
+    // **An end with no source, before any reading tool, is sent back once to look**
+    // (`REMIND_LOOK`). A small model copies an earlier turn's not-found answer, or greets back,
+    // without a search.
+    $looked: = false
+    $sent_to_look: = false
     for round in Range.asc(MAX_ROUNDS)
         shown.round_starts()
         reply: = one_reply(job, b@, msgs@, tools.val, shown, arena) catch why
@@ -96,9 +105,10 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
             // the answer and even its sources as text, which no check can read.
             if !reminded && round + 1 < MAX_ROUNDS
                 reminded = true
-                shown.note("(asked to call answer)")
+                sent_to_look = sent_to_look || !looked
+                shown.note("(asked to call answer)" if looked else "(asked to look at the files)")
                 msgs.push(message(b@, "assistant", reply.content))
-                msgs.push(message(b@, "user", REMIND_ANSWER))
+                msgs.push(message(b@, "user", REMIND_ANSWER if looked else REMIND_LOOK))
                 continue
             none: = List<|Source|>(arena)
             return answer.finish(job.root, reply.content, none@, lang, arena)
@@ -121,7 +131,15 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
                     .push(tool_message(b@, c.id, "refused: the arguments are not valid JSON"))
                 continue
             if c.name.equals("answer")
-                return finish_answer(job.root, args.val, lang, arena)
+                if looked || sent_to_look || round + 1 == MAX_ROUNDS ||
+                    args.val.get("sources").arr_list(arena).len > 0
+                    return finish_answer(job.root, args.val, lang, arena)
+                sent_to_look = true
+                shown.note("(asked to look at the files)")
+                refused: = arena.text().s("refused: ").s(REMIND_LOOK).take()
+                msgs.push(tool_message(b@, c.id, refused))
+                continue
+            looked = true
             // **A tool works in memory of its own**: only what it gives back stays (`tool_message`
             // copies it), so the files it read do not add up over the question's rounds.
             defer scratch: = Arena(64 * 1024)

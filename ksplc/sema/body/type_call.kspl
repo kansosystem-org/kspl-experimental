@@ -63,7 +63,7 @@ fn refuse_written_new(c: Sema_ctx$@, callee: Ast_node$@) //<
         .s("the call names a type's static 'new'. Write the type call '\{type_text\}(…)'")
     c.err(callee, c.scratch.slice())
 
-priv fn written_type_text(c: Sema_ctx$@, callee: Ast_node$@, name: Ast_node$@): U8[] //<
+priv fn written_type_text(c: Sema_ctx$@, callee: Ast_node@, name: Ast_node@): U8[] //<
     //< The type before `.new` as the source spells it, type arguments and all
     //< The tree's text drops part of some type arguments (`fn(a: I32): I32` reads `fn`).
     src: = base_core.source_of(c.source_map, callee.loc.file())
@@ -89,10 +89,11 @@ priv fn takes_instance(c: Sema_ctx$@, constructor: Ast_node$@): Bool //<
         else (named.sym.node if named.sym != null else null))
     $owner_id: = named.owner_id
     if owner_id <= 0
-        if owner: = c.written_type_symbol(c.read_written_type(constructor))
+        written_type: = c.read_written_type(constructor)
+        if owner: = c.written_type_symbol(written_type)
             owner_id = owner.type_id
-    if owner_id <= 0 && c.read_written_type(constructor).name.equals("Self")
-        owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name).unwrap_or(0)
+        if owner_id <= 0 && written_type.name.equals("Self")
+            owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name).unwrap_or(0)
     if decl == null || owner_id <= 0
         return false
     params: = decl.get_fn_params()

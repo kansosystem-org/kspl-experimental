@@ -29,7 +29,7 @@ priv const MAX_ALIAS_DEP_DEPTH: Sz = 64 //<
     //< The depth limit for walking an alias's dependencies
     //< The same idea as max_type_layout_depth in sema/decl/layout.kspl.
 
-priv fn extern_word(item: Ast_node$@): U8[] //< the storage word of an `extern` block's item
+priv fn extern_word(item: Ast_node@): U8[] //< the storage word of an `extern` block's item
     //< **std's blocks declare the runtime** (the reason a `kspl_*` function's body is in
     //< `gen/runtime/`). `KSPL_LINK` sets the runtime's linkage: in a library it is `static`. C
     //< refuses a `static` definition after an `extern` declaration. Any other block declares C's.
@@ -199,7 +199,7 @@ impl Ast_node
                         m.proto_belongs_here(cg, child.loc.file())
                         m.emit_single_func_proto(cg)
 
-    priv fn emit_fwd_extern_decls(r: Ast_node$@, cg: Genc_ctx$@)
+    priv fn emit_fwd_extern_decls(r: Ast_node@, cg: Genc_ctx$@)
         for raw in r.children
             child: = raw.unwrap_top_level()
             if (child.kind_id != .k_decl_extern && child.kind_id != .k_decl_extern_block) ||
@@ -239,14 +239,13 @@ impl Ast_node
 
     fn emit_fn_def(r: Self$@, cg: Genc_ctx$@)
         // Sema refuses a function without a body (collect_fn_def in sema/decl/collect.kspl).
-        r.ice_assert(r.find_child(.k_stmt_block) != null,
-            "emit_fn_def: a function without a body reached the backend")
+        block: = r.find_child(.k_stmt_block)
+        r.ice_assert(block != null, "emit_fn_def: a function without a body reached the backend")
         if cg.writes_bodies()
             r.name_string_literals(cg)
         cg.emit_line_directive(r)
         fn_name: = r.get_decl_id_text()
         type_node: = r.get_decl_type_node()
-        block: = r.find_child(.k_stmt_block)
         is_priv_fn: = r.has_file_local_c_symbol()
 
         r.ice_assert(fn_name.len > 0, "emit_node: fn_def missing identifier")
@@ -279,8 +278,7 @@ impl Ast_node
         cg.t_ret(cg.current_ret_id)
         r.emit_fn_head(cg)
         cg.s(" ")
-        if block != null
-            block.emit(cg)
+        block.emit(cg)
         cg.s("\n\n")
 
     fn emit_embed_decl(r: Self$@, cg: Genc_ctx$@)
@@ -367,7 +365,7 @@ impl Ast_node
         //< pointer, but emit_c_decl writes the typedef name, which has no inside to put it in.
         return r != null && r.kind_id != .k_empty && r.is_type_fn_ptr()
 
-    fn const_goes_before_type(r: Ast_node$@, cg: Genc_ctx$@, type_id: I32): Bool //<
+    fn const_goes_before_type(r: Ast_node$@, cg: Genc_ctx@, type_id: I32): Bool //<
         //< Whether, for a KSPL `const` declaration, C's `const` goes before the type name
         //< Where no type is written (`r == null`), the type ID alone decides it.
         if cg.type_name_carries_const(type_id)
@@ -394,7 +392,7 @@ impl Ast_node
             cg.s("typedef struct \{name\} \{name\};\n")
         default {}
 
-    fn emit_fwd_externs_and_embeds(r: Ast_node$@, cg: Genc_ctx$@) //<
+    fn emit_fwd_externs_and_embeds(r: Ast_node@, cg: Genc_ctx$@) //<
         //< It declares every top-level variable, constant and embed ahead of the definitions
         //< A definition's initializer can name one written after it (a cycle through addresses).
         //< Caution: **Call it after the types are complete.** In a library the declaration is a
@@ -431,7 +429,7 @@ impl Ast_node
                 cg.s(";\n")
             default {}
 
-    priv fn emit_fwd_aliases(r: Ast_node$@, cg: Genc_ctx$@) //<
+    priv fn emit_fwd_aliases(r: Ast_node@, cg: Genc_ctx$@) //<
         //< It emits every alias's `typedef`, each after the aliases it refers to
         //< Caution: **Emit the aliases that are referred to first.** C's `typedef` requires the
         //< right-hand side's type name to be defined earlier. Emitted in source order, a

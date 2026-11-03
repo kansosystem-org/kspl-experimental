@@ -113,7 +113,7 @@ impl Sema_ctx
         return .some(table)
 
     priv fn has_under_aligned_field(r: Self$@, struct_id: I32,
-        def_fields: List<|sema_type_def.Struct_field$@|>$@, impl_node: Ast_node$@): Bool //<
+        def_fields: List<|sema_type_def.Struct_field$@|>@, impl_node: Ast_node$@): Bool //<
             //< Reports each field that `#packed` leaves under-aligned, true if there is one
             //< `std/reflect` reads and writes a field through a pointer of the field's own type
             //< (`load_int`, `store_float`). Such a pointer promises the type's alignment, so a
@@ -136,7 +136,7 @@ impl Sema_ctx
         return found
 
     priv fn collect_field_kinds(r: Self$@,
-        def_fields: List<|sema_type_def.Struct_field$@|>$@, rows: List<|Row_spec|>$@,
+        def_fields: List<|sema_type_def.Struct_field$@|>@, rows: List<|Row_spec|>$@,
         impl_node: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
         Bool //<
             //< Collects each field's row, one per field in `def_fields`' order
@@ -183,10 +183,9 @@ impl Sema_ctx
             rows.push(spec)
         return ok
 
-    priv fn push_wrapper_row(r: Self$@, rows: List<|Row_spec|>$@,
-        f: sema_type_def.Struct_field$@, f_type: Ast_node$@, is_list: Bool, site: Ast_node$@,
-        impl_node: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
-        Bool //<
+    priv fn push_wrapper_row(r: Self$@, rows: List<|Row_spec|>$@, f: sema_type_def.Struct_field@,
+        f_type: Ast_node$@, is_list: Bool, site: Ast_node$@, impl_node: Ast_node$@,
+        emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz): Bool //<
             //< Adds the row of a `List<|T|>` (is_list) or `T?` field; false if it cannot
             //< Caution: **Recognize a wrapper of wrappers by name**, not by kind (a
             //< `struct_field`), for the same reason as the container check in collect_field_kinds.
@@ -482,7 +481,7 @@ priv fn int_text(v: Sz): U8[]
 
 priv fn make_slice_of(name: U8[], info_spelling: U8[], loc: Loc): Ast_node$@ //<
     //< `<info_spelling>[]::<name>` (the form dropping a constant array to a slice of the elements)
-    slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
+    slice_spelling: = join3(info_spelling, "[]", "")
     table_ref: = Ast_node(.k_expr_path, name, loc)
     table_ref.add_child(Ast_node(.k_identifier, name, loc))
     cast: = Ast_node(.k_expr_postfix, "::", loc)
@@ -529,7 +528,7 @@ priv fn make_fields_method(impl_node: Ast_node$@, table_name: U8[], prefix: U8[]
     //< `fn fields(_r: Self): <prefix>Field_info[] { return <prefix>Field_info[]::<table>; }`
     loc: = impl_node.loc
     info_spelling: = qualified(prefix, INFO_NAME)
-    slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
+    slice_spelling: = join3(info_spelling, "[]", "")
     param: = Ast_node(.k_fn_param, "fn_param", loc)
     param.add_child(Ast_node(.k_identifier, "_r", loc))
     param.add_child(make_type_expr("Self", loc))
@@ -585,8 +584,7 @@ priv fn make_type_expr(spelling: U8[], loc: Loc): Ast_node$@ //<
 
 priv fn qualified(prefix: U8[], name: U8[]): U8[] //<
     //< `prefix.name` (`name` as it is where prefix is empty)
-    return (name if prefix.len == 0
-        else base_core.arena.dup_str(join3(prefix, ".", name)))
+    return (name if prefix.len == 0 else join3(prefix, ".", name))
 
 priv fn join3(a: U8[], b: U8[], c: U8[]): U8[]
     return base_core.arena.text().s(a).s(b).s(c).take()

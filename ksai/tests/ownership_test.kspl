@@ -35,7 +35,7 @@ priv fn weights(arena: Arena$@)
     writer.add("w", input)
     defer $bytes: = writer.finish()
 
-    $file: = Safetensors.load_from_bytes(bytes.slice(), arena)
+    file: = Safetensors.load_from_bytes(bytes.slice(), arena)
         catch panic("the writer's file parses")
 
     view: = file.get_tensor<|F32|>("w", arena) catch panic("the written tensor exists")
@@ -45,7 +45,7 @@ priv fn weights(arena: Arena$@)
     // Shifting the whole file by one byte makes its aligned payload misaligned.
     defer $shifted: = Str_builder()
     shifted.c(0U8).s(bytes.slice())
-    $unaligned: =
+    unaligned: =
         Safetensors.load_from_bytes(shifted.slice().sub_from(1), arena)
         catch panic("the shifted file parses")
 
@@ -70,7 +70,7 @@ priv fn refused_header(header: U8[], arena: Arena$@)
     $prefix: U8[8] = ::{}
     (U8$[]::prefix).put_u64_le(0, U64::header.len)
     bytes.s(U8[]::prefix).s(header).s("012345678901234567890123")
-    $file: = Safetensors.load_from_bytes(bytes.slice(), arena)
+    file: = Safetensors.load_from_bytes(bytes.slice(), arena)
         catch panic("the bad header is valid JSON")
     $refused: = false
     file.get_tensor<|F32|>("w", arena) catch

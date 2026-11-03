@@ -2,9 +2,8 @@
 //< The page finds the matches itself, in the text it shows and in the cells' text as a person
 //< edits it, and names each one by its place. The model checks every place, and a refusal changes
 //< nothing, prose and cells alike.
-import "ksmd/edit/edit"
 import "ksmd/edit/editor" { Editor, Pos, Refused, Work }
-import "ksmd/edit/editor_tables" { value_of }
+import "ksmd/edit/editor_tables"
 import "ksmd/edit/history" { Change, Transaction, begin, capture, is_empty, record_tables, swap }
 import "ksmd/edit/region" { Unit, fit, gather, is_text_block }
 import "ksmd/edit/styled" { Seg, cut, length, plain, text_seg }
@@ -114,10 +113,5 @@ impl Editor
                 ed.doc.blocks.get(c.block).kind != .table
                 throw .stale
             u: = ed.doc.blocks.get(c.block).first
-            if c.row < 0
-                edit.set_name(ed.doc@, u, c.column, c.text, ed.arena) catch why
-                    throw .table(why)
-                continue
-            value: = value_of(c.text, scratch)
-            edit.set_cell(ed.doc@, u, c.row, c.column, value.kind, value.text, ed.arena) catch why
+            ed.put_typed(u, c.row, c.column, c.text, scratch) catch why
                 throw .table(why)

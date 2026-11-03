@@ -256,8 +256,7 @@ impl Ast_node
 
         if is_jumpable
             is_brk_used: = lctx.pop_jump_ctx().break_used
-            if is_brk_used
-                r.wrap_stmt_with_break_label(.k_stmt_if, "if", r.loc, brk_label, true)
+            r.wrap_stmt_with_break_label(.k_stmt_if, "if", r.loc, brk_label, is_brk_used)
 
     fn lower_stmt_for(r: Ast_node$@, lctx: Lowering_ctx$@)
         label_node: = r.get_loop_label()
@@ -320,12 +319,11 @@ impl Ast_node
         is_cont_used: = popped_jc.continue_used
         is_brk_used: = popped_jc.break_used
 
-        if has_step_pre || is_cont_used
-            if is_cont_used
-                body_block.add_child(Ast_node.build_label_stmt(cont_label, loc))
+        if is_cont_used
+            body_block.add_child(Ast_node.build_label_stmt(cont_label, loc))
 
-            for step_stmt in step_stmts
-                body_block.add_child(step_stmt)
+        for step_stmt in step_stmts
+            body_block.add_child(step_stmt)
 
         if has_step_pre
             // The step's pre_stmts declare its temporaries inside the body block, and C's step
@@ -343,7 +341,8 @@ impl Ast_node
         is_jumpable: = user_label.len > 0
         brk_label: = lctx.gen_label_name() if is_jumpable else ""
 
-        lctx.push_jump_ctx("", brk_label, user_label, false)
+        if is_jumpable
+            lctx.push_jump_ctx("", brk_label, user_label, false)
 
         cond: = r.get_switch_cond()
         // A subject built in place (`switch Wrap.filled(mk(9))`) is owned by its temporary.
@@ -375,10 +374,10 @@ impl Ast_node
                     expr_node.lower(lctx)
 
         r.group_switch_arms(lctx)
-        is_brk_used: = lctx.pop_jump_ctx().break_used
 
-        if is_jumpable && is_brk_used
-            r.wrap_stmt_with_break_label(.k_stmt_switch, "switch", r.loc, brk_label, true)
+        if is_jumpable
+            is_brk_used: = lctx.pop_jump_ctx().break_used
+            r.wrap_stmt_with_break_label(.k_stmt_switch, "switch", r.loc, brk_label, is_brk_used)
 
     fn group_switch_arms(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< Gathers a `switch`'s flat children into one `switch_arm` per `case` or `default`
@@ -462,6 +461,6 @@ impl Ast_node
                 at += 1
             field_idx += 1
 
-    fn lower_default(r: Ast_node$@, lctx: Lowering_ctx$@)
+    fn lower_default(r: Ast_node@, lctx: Lowering_ctx$@)
         for child in r.children
             child.lower(lctx)

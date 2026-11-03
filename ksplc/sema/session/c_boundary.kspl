@@ -39,7 +39,7 @@ impl Sema_ctx
     fn check_variadic_arg(r: Self$@, type_id: I32, arg_node: Ast_node$@) //<
         //< Checks a value passed into a C function's `...`, as check_ffi_safety does a parameter
         //< A slice gets its own message, since a string is the usual one and C wants a C string.
-        if type_id != 0 && !sema_type_env.is_unknown(type_id) &&
+        if !sema_type_env.is_unknown(type_id) &&
             r.env.is_slice(r.env.get_real_type(type_id))
             r.err(arg_node,
                 "a slice (T[]) cannot be passed into a C function's '...'. Its layout is \
@@ -51,7 +51,7 @@ impl Sema_ctx
 
     fn check_ffi_safety_at(r: Self$@, type_id: I32, err_node: Ast_node$@, seen: List<|I32|>$@,
         depth: Sz)
-        if type_id == 0 || sema_type_env.is_unknown(type_id) || depth >= MAX_FFI_NESTING_DEPTH
+        if sema_type_env.is_unknown(type_id) || depth >= MAX_FFI_NESTING_DEPTH
             return
         real_id: = r.env.get_real_type(type_id)
         for id in seen
@@ -110,25 +110,28 @@ impl Sema_ctx
         defer $partner: = c_name_partner(name)
         if partner.slice().len == 0 || !r.symtab.has_in_current_scope(partner.slice())
             return false
-        return r.report_c_name_pair(node, name, partner.slice())
+        r.report_c_name_pair(node, name, partner.slice())
+        return true
 
     fn check_c_keyword_collision_field(r: Self$@, name: U8[], node: Ast_node$@,
-        seen: Map<|U8[], Bool|>$@): Bool //<
+        seen: Map<|U8[], Bool|>@): Bool //<
             //< Whether a C reserved word and its suffixed form are both fields of the same struct.
             //< **Fields are not in the symbol table's scopes**, so check_c_keyword_collision does
             //< not reach them; the same pair is looked up in `seen`.
         defer $partner: = c_name_partner(name)
         if partner.slice().len == 0 || !seen.get(partner.slice()).unwrap_or(false)
             return false
-        return r.report_c_name_pair(node, name, partner.slice())
+        r.report_c_name_pair(node, name, partner.slice())
+        return true
 
-    priv fn report_c_name_pair(r: Self$@, node: Ast_node$@, name: U8[], partner: U8[]): Bool //<
+    priv fn report_c_name_pair(r: Self$@, node: Ast_node$@, name: U8[], partner: U8[]) //<
         //< Reports the clash of `name` and its partner, the reserved word named first
         if name.needs_c_escape()
-            return r.report_c_name_clash(node, name, partner)
-        return r.report_c_name_clash(node, partner, name)
+            r.report_c_name_clash(node, name, partner)
+            return
+        r.report_c_name_clash(node, partner, name)
 
-    fn report_c_name_clash(r: Self$@, node: Ast_node$@, kw: U8[], safe: U8[]): Bool //<
+    fn report_c_name_clash(r: Self$@, node: Ast_node$@, kw: U8[], safe: U8[]) //<
         //< Reports that a C reserved word and its suffixed form clash
         //< Caution: **Keep this diagnostic in this one place**, or one failure reads as two for a
         //< local (declare_symbol) and a field.
@@ -136,7 +139,6 @@ impl Sema_ctx
             .s("'\{kw\}' is a C keyword or macro on some target. The generated C uses '\{safe\}', \
                 but this scope already declares that name. Rename one of them.")
         r.err(node, r.scratch.slice())
-        return true
 
 priv fn c_name_partner(name: U8[]): Str_builder //< the other name of `name`'s C pair, or empty
     //< A reserved word's partner is its suffixed form; a suffixed name's is the word it renames.

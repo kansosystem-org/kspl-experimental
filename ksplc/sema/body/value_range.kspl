@@ -30,7 +30,7 @@ struct Value_range //< the values a side can hold: one span, or two where a cast
     two: Bool
     type_id: I32 //< the type whose whole range this is; 0 where the shape narrowed it
 
-fn num_of(ctx: Sema_ctx$@, value: I64, type_id: I32): Num //<
+fn num_of(ctx: Sema_ctx@, value: I64, type_id: I32): Num //<
     //< A folded constant of the type as a Num: an unsigned one's bits are read as unsigned
     return Num::{ .bits = U64::value, .neg = value < 0 && !ctx.env.is_unsigned(type_id) }
 
@@ -65,7 +65,7 @@ fn unknown(): Value_range //< a range that decides nothing
     s: = Span::{ .lo = small(0), .hi = small(0) }
     return Value_range::{ .known = false, .first = s, .second = s, .two = false, .type_id = 0 }
 
-priv fn width_span(ctx: Sema_ctx$@, id: I32): Span //< every value of an integer type, here
+priv fn width_span(ctx: Sema_ctx@, id: I32): Span //< every value of an integer type, here
     w: = ctx.env.get_primitive_bit_size(id)
     if ctx.env.is_unsigned(id)
         return Span::{ .lo = small(0), .hi = Num::{ .bits = pow2(w) - 1U64, .neg = false } }
@@ -178,8 +178,10 @@ priv fn sum(ctx: Sema_ctx$@, op: U8[], a: Value_range, b: Value_range, type_id: 
     ahi: = I64::ha.hi.bits
     blo: = I64::hb.lo.bits
     bhi: = I64::hb.hi.bits
-    lo: = small(alo + blo if op.equals("+") else alo - bhi)
-    hi: = small(ahi + bhi if op.equals("+") else ahi - blo)
+    lo_wide: = alo + blo if op.equals("+") else alo - bhi
+    hi_wide: = ahi + bhi if op.equals("+") else ahi - blo
+    lo: = small(lo_wide)
+    hi: = small(hi_wide)
     real: = ctx.env.scalar_repr_id(type_id)
     if !ctx.env.is_integer(real)
         return unknown()
@@ -188,8 +190,7 @@ priv fn sum(ctx: Sema_ctx$@, op: U8[], a: Value_range, b: Value_range, type_id: 
         return out
     if ctx.env.get_primitive_bit_size(real) >= 63
         return convert(ctx, out, real)
-    return wrapped(ctx, alo + blo if op.equals("+") else alo - bhi,
-        ahi + bhi if op.equals("+") else ahi - blo, real)
+    return wrapped(ctx, lo_wide, hi_wide, real)
 
 priv fn product(ctx: Sema_ctx$@, at: Ast_node$@): Value_range //<
     //< What `x * C` holds for a constant C, wrapped into the type; unknown for another shape

@@ -157,14 +157,10 @@ fn check_source(root: U8[], s: Source, out: Source$@, arena: Arena$@): U8[] //<
         return "the lines are not a range from a first line to a last one"
     if s.to_line - s.from_line + 1I64 > MAX_CITED_LINES
         return arena.text().s("the range is wider than \{MAX_CITED_LINES\} lines").take()
-    $full: U8[] = ""
-    switch files.resolve(root, s.path, arena)
-    case .ok(f, rel)
-        full = f
-        out.path = rel
-    case .refused(why)
+    at: = files.resolve(root, s.path, arena) catch why
         return why
-    body: = files.read_text(full, arena) catch why
+    out.path = at.rel
+    body: = files.read_text(at.full, arena) catch why
         return why
     lines: = files.split_lines(body, arena)
     if s.to_line > I64::lines.len

@@ -2533,6 +2533,7 @@ flowchart TD
    * **A package that names itself** has `name = <package>` in a `[package]` section of the `ksplc.cfg` (the compiler's settings file) at its top folder. It finds its own files in that folder, wherever it stands and whatever it is called. Its files are still named `<package>/…`.
    * **Any other package** is found in a folder of its name under the current directory, or where the compiler is told packages are.
    * **A package that names itself imports only itself, `std`, and what it lists under `uses`** in the same section (`uses = ksai ksdb`). Importing any other package is a compile error at that `import`.
+   * **A path never climbs out of a package read from a place of its own.** That is a package that names itself, or one found where packages are told to be. A `..` past its top folder is a compile error at that line, for an `import` and an `embed` alike: `"ksdb/../x"`, or `"../../x"` from its file one folder down. That place need not be at the package's name, so the folder above it holds none of its files.
 3. **Relative to the importing file**: every other path, one with no `/` (`"context"`) or beginning with `.` (`"./x"`, `"../x"`, `".lib/x"`), resolves against the importing file's directory.
 
 **An absolute path is none of the three, and a compile error** at that line, for an `import` and an `embed` alike. It begins with `/` or `\` (`"//host/share/x"` included) or with a drive (`"C:/x"`). It is refused before anything is opened, since on Windows opening another machine's path already offers it the user's credentials.

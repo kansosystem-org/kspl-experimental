@@ -71,6 +71,7 @@ struct Where //< every path this run needs, found once, and what it opens
     browser: U8[] //< the path of the browser's start-up output
         //< Caution: **Do not throw it away** (when it cannot start, it says what is missing).
     page: U8[] //< the page returned for `/`; without it nothing opens
+    builder: U8[] //< the program the server builds a page's own functions with, or empty
 
 fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
     //< Finds the server and the paths next to it, for what `app` opens
@@ -87,13 +88,20 @@ fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
             if fs.can_run(at)
                 home: = aim.parent_of(at)
                 tmp: = fs.join(home, TMP_REL, arena)
+                $builder: U8[] = ""
+                if app.builder.len > 0
+                    named_builder: = fs.join(home,
+                        arena.text().s(app.builder).s(sys.last_ext(one)).take(), arena)
+                    if fs.can_run(named_builder)
+                        builder = named_builder
                 return Where::{ .app = app, .server = at, .tmp = tmp,
                     .state = fs.join(tmp, named(app, ".state", arena), arena),
                     .lock = fs.join(tmp, named(app, ".lock", arena), arena),
                     .browser = fs.join(tmp, named(app, ".browser.log", arena), arena),
-                    .page = fs.join(fs.join(home, app.built, arena), app.page, arena) }
+                    .page = fs.join(fs.join(home, app.built, arena), app.page, arena),
+                    .builder = builder }
     return Where::{ .app = app, .server = "", .tmp = "", .state = "", .lock = "", .browser = "",
-        .page = "" }
+        .page = "", .builder = "" }
 
 priv fn named(app: aim.App, tail: U8[], arena: Arena$@): U8[] //< a file name in `tmp/`
     return arena.text().s(app.files).s(tail).take()
@@ -171,9 +179,15 @@ fn tend_alone( //< tends the servers as `tending_options` asked, or refuses what
     //< nothing, and its writer would believe it had. Returns the exit code.
     p: argparse.Parser$@,
     where: Where,
-    stop_root: U8[], //< the folder `--stop` names, spelt as the note holds it; empty for none
+    stop_said: U8[], //< the folder `--stop` names, as typed; empty for none
     arena: Arena$@,
 ): I32
+    // Caution: **Spell the folder as the note holds it** (the reason is at `aim.plain`), and
+    // **refuse a `..`**: `plain` gives nothing for one, and nothing would list the servers instead.
+    stop_root: = aim.plain(full(stop_said, arena), arena) if stop_said.len > 0 else ""
+    if stop_said.len > 0 && stop_root.len == 0
+        io.err().s("\{sys.program_name()\}: name the folder to stop without '..': \{stop_said\}\n")
+        return 1
     names: = List<|U8[]|>.create(arena)
     p.append_names(names)
     $other: =
@@ -330,7 +344,7 @@ fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, arena
             .s("\{sys.program_name()\}: could not start a browser. Open \{page\} in one yourself\n")
     tell_how(doc, false, page, where.browser, where.app.tip)
 
-priv fn wait_for_url(log: U8[], child: subproc.Child$@): U8[] //<
+priv fn wait_for_url(log: U8[], child: subproc.Child@): U8[] //<
     //< The URL the server writes to its log once it is up, or "" after `wait_steps` tries
     //< **"" at once where the server has exited**: the lock is held meanwhile, so every other open
     //< would wait out the rest of the tries too.
@@ -343,7 +357,7 @@ priv fn wait_for_url(log: U8[], child: subproc.Child$@): U8[] //<
         sys.sleep_ms(100)
     return ""
 
-priv fn relay_log(log: U8[], child: subproc.Child$@) //<
+priv fn relay_log(log: U8[], child: subproc.Child@) //<
     //< It passes the server's log on to the output as it grows, until the server exits
     //< **A `--show` run's output is watched** (`tools/tests/ksmd_launch.kspl` reads its URL), so
     //< the server's output is passed through unchanged; otherwise the lines about who connected
@@ -399,11 +413,17 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
     // Caution: **Name the page from outside the root** (the reason is at `aim.App.page`).
     // **The idle stop is passed only when this tool exits** (with `--show`, Ctrl+C is right there;
     // `--idle` in `kssrv/main.kspl`).
-    all: U8[][6] = ::{ where.server, serve_at, root, "--local",
-        arena.text().s("--page=\{where.page\}").take(),
-        arena.text().s("--idle=\{IDLE_HOLD\}").take() }
-    told: = U8[][]::all
-    argv: = told.sub(0, 5) if show_only else told
+    $told: = List<|U8[]|>(arena)
+    told
+        .push_all(U8[][]::{ where.server, serve_at, root, "--local",
+        arena.text().s("--page=\{where.page\}").take() })
+    // **A builder only where one stands beside the server**: without it the page builds nothing,
+    // and says so at the clause.
+    if where.builder.len > 0
+        told.push(arena.text().s("--builder=\{where.builder\}").take())
+    if !show_only
+        told.push(arena.text().s("--idle=\{IDLE_HOLD\}").take())
+    argv: = told.slice()
     $child: = spawn_server(argv, log, show_only) catch
         // **Say what to check.** Either the server or the log can be the cause. Naming one alone
         // leads to suspecting a file that is fine.

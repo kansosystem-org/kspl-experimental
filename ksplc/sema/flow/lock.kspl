@@ -35,7 +35,7 @@ fn new_book(): Lock_book$@ //< an empty book
         .reported = List<|Ast_node$@|>(base_core.arena),
         .active = base_core.config.run_lint_checks })
 
-priv fn guard_of(marks: List<|Lock_mark|>$@, node: Ast_node$@): U8[] //<
+priv fn guard_of(marks: List<|Lock_mark|>@, node: Ast_node@): U8[] //<
     //< the guard a mark names for `node`, or empty
     for m in marks
         if m.node == node
@@ -72,7 +72,7 @@ impl Lock_book
             if m.guard.equals(guard)
                 state.unlocked.remove(m.node)
 
-    priv fn on_unlock(r: Self$@, state: sema_flow_track.Df_state$@, guard: U8[]) //<
+    priv fn on_unlock(r: Self@, state: sema_flow_track.Df_state$@, guard: U8[]) //<
         //< `guard.unlock()`: its pointers are no longer covered, and the lock is not held
         for m in r.borrows
             if m.guard.equals(guard)
@@ -81,7 +81,7 @@ impl Lock_book
             if m.guard.equals(guard)
                 state.held.remove(m.node)
 
-fn lock_call_guard(c: Sema_ctx$@, node: Ast_node$@, method_name: U8[], require_ptr: Bool): U8[] //<
+fn lock_call_guard(c: Sema_ctx@, node: Ast_node$@, method_name: U8[], require_ptr: Bool): U8[] //<
     //< The name of recv, where node is a method_name() call on a plain name recv (or `recv@`)
     //< require_ptr also requires a pointer return, as `Mutex<|T|>.lock()` gives. It checks
     //< that shape, not a type name, so a user-defined guard type counts too.
@@ -163,7 +163,7 @@ impl Ast_node
                     race). Store a copy of the value, made while holding the lock.")
 
 impl sema_flow_track.Df_ctx
-    fn report_unlocked_use(r: Self$@, state: sema_flow_track.Df_state$@, def: Ast_node$@,
+    fn report_unlocked_use(r: Self$@, state: sema_flow_track.Df_state@, def: Ast_node$@,
         use: Ast_node$@) //<
             //< [W0105] A read of a borrow whose lock is released on some path to it
         book: = r.locks
@@ -178,7 +178,7 @@ impl sema_flow_track.Df_ctx
                 at the same time. Use it before unlock(), or lock again first.")
         r.sema.warn(use, r.sema.scratch.slice())
 
-    fn report_lock_exit(r: Self$@, exit: Ast_node$@, after_defers: sema_flow_track.Df_state$@) //<
+    fn report_lock_exit(r: Self$@, exit: Ast_node$@, after_defers: sema_flow_track.Df_state@) //<
         //< At a `return`, `throw` or `!`: [W0105] for a borrow returned, [W0106] for a lock held
         //< `after_defers` is the state once the exit has run its defer bodies.
         book: = r.locks
@@ -207,7 +207,7 @@ impl sema_flow_track.Df_ctx
                     'defer \{g\}.unlock()' right after locking to release it on every way out.")
             r.sema.warn(site, r.sema.scratch.slice())
 
-    fn report_lock_end(r: Self$@, state: sema_flow_track.Df_state$@) //<
+    fn report_lock_end(r: Self$@, state: sema_flow_track.Df_state@) //<
         //< [W0106] A lock still held where the body's end is reached
         book: = r.locks
         if !book.active || !state.reachable

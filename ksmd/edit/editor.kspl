@@ -7,6 +7,7 @@
 //< Caution: **Keep the arena as long as the editor.** The document, every edit and the history live
 //< in it, and nothing in it is freed before the editor goes.
 import "ksmd/base/source" { MAX_SOURCE_BYTES }
+import "ksmd/calc/calc" { Own_functions }
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
 import "ksmd/edit/history" { Change, History, Selection, Step_kind, Transaction, begin, capture,
@@ -17,6 +18,7 @@ import "ksmd/edit/styled" { Mark, Marks, Seg, cut, hard_break, has_mark, length,
     set_mark, text_seg, visible }
 import "ksmd/model/look" { is_note }
 import "ksmd/model/model" { Block, Block_kind, Document, Image, MAX_BLOCKS, MAX_NESTING }
+import "ksmd/syntax/clause" { names_kspl }
 import "ksmd/syntax/inline" { is_destination }
 import "ksmd/syntax/writer"
 import "ksmd/syntax/writer" { blocks_size }
@@ -85,6 +87,7 @@ struct Editor
     today: U8[] //< the date the document was opened, `2026-10-23`: what `today()` gives
         //< It stays while the editor is open, so a value does not change while a person works.
     written: Sz //< how many bytes the document's source takes, as the writer writes it
+    own: Own_functions@ //< a person's own functions, which the page sets; null where it has none
 
 struct Pos //< a place in a work's units
     unit: Sz
@@ -110,7 +113,7 @@ fn open(doc: Document, today: U8[], arena: Arena$@): Editor //<
     return Editor::{ .doc = doc, .arena = arena, .history = new_history(arena), .anchor = start,
         .focus = start, .gap = paragraph_style(), .typing = plain(), .marked = false,
         .joinable = false, .change = Change.none(doc@), .today = today,
-        .written = writer.size(doc@) }
+        .written = writer.size(doc@), .own = null }
 
 priv fn first_spot(doc: Document@): Spot //< the start of the first text, or the gap before all
     if doc.blocks.len > 0 && is_text_block(doc.blocks.get(0).kind)
@@ -151,7 +154,7 @@ impl Editor
         defer scratch: = Arena(64 * 1024)
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         unit: = w.units[w.start.unit]@
-        marks: = ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+        marks: = ed.typed_marks(w@)
         clean: = lines_of(text, scratch)
         $frag: = List<|Unit|>(scratch)
         $start: Sz = 0
@@ -306,9 +309,7 @@ impl Editor
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         if same_spot(s, e)
             if which != .link
-                unit: = w.units[w.start.unit]@
-                $m: =
-                    ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+                $m: = ed.typed_marks(w@)
                 switch which
                 case .emphasis
                     m.emphasis = !m.emphasis
@@ -387,6 +388,26 @@ impl Editor
             .invisible = false }
         ed.insert_whole(b)!
 
+    fn insert_functions(ed: Self$@, path: U8[]): Void!Refused //<
+        //< A `:::functions` clause in place of the selection, as a divider is put in; `path` is from
+        //< this source's folder. A path the reader would refuse is refused here.
+        if !names_kspl(path)
+            throw .no_read_back
+        ed.insert_clause(.functions, path)!
+
+    fn insert_include(ed: Self$@, path: U8[]): Void!Refused //<
+        //< An `:::include` clause in place of the selection, as a divider is put in; `path` is from
+        //< this source's folder, and not empty, as the reader wants
+        if path.len == 0
+            throw .no_read_back
+        ed.insert_clause(.include, path)!
+
+    priv fn insert_clause(ed: Self$@, kind: Block_kind, path: U8[]): Void!Refused //<
+        //< A clause that names a file by its path, and holds nothing else, in place of the selection
+        b: = Block::{ .kind = kind, .level = 0, .label = "", .text = ed.arena.dup_str(path),
+            .first = 0, .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
+        ed.insert_whole(b)!
+
     fn set_invisible(ed: Self$@, block: Sz, on: Bool): Void!Refused //<
         //< Leaves a table, a chart, an image or an include out of print and PDF, or puts it back
         if block < 0 || block >= ed.doc.blocks.len ||
@@ -450,6 +471,10 @@ impl Editor
 
     fn end_spot(ed: Self@): Spot
         return ed.focus if !later(ed.anchor, ed.focus) else ed.anchor
+
+    fn typed_marks(ed: Self@, w: Work@): Marks //< the marks text typed at the start of `w` takes
+        unit: = w.units[w.start.unit]@
+        return ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
 
     fn finish(ed: Self$@, $tx: Transaction, kind: Step_kind, join: Bool): Void!Refused //<
         //< Records a transaction, or joins it to the last when `join` says it continues that step

@@ -221,7 +221,7 @@ priv fn deps_are_fresh(deps_path: U8[], arena: Arena$@): Bool //<
         seen += 1
     return seen > 0
 
-fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
+fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>@) //<
     //< It writes the list of the files read into the deps file (`--emit-deps=`)
     //< The reader is deps_are_fresh above; change both when changing the format. A failure still
     //< leaves the compile a success: without the deps, the next run is just "stale" and rebuilds.
@@ -321,7 +321,7 @@ priv struct Unit //< one unit and its object
     obj: U8[] //< the object's path (a name derived from the contents)
     child: subproc.Child? //< the compiler child, absent for a cached object or a failed start
 
-priv fn has_obj(units: List<|Unit|>$@, obj: U8[]): Bool //<
+priv fn has_obj(units: List<|Unit|>@, obj: U8[]): Bool //<
     //< Whether that object is already in the list
     //< Caution: **Do not list the same object twice.** A small input split many ways gives units
     //< with the same (empty) contents. A name hashed from the contents makes them **one file**.
@@ -356,7 +356,7 @@ priv fn object_key(unit_src: U8[], header: U8[]): Hash_hex!io.Io_error //<
         h.s(hdr_data)
     return base_cache.hash_hex(h.slice())
 
-priv fn sweep_objects(obj_dir: U8[], units: List<|Unit|>$@, arena: Arena$@) //<
+priv fn sweep_objects(obj_dir: U8[], units: List<|Unit|>@, arena: Arena$@) //<
     //< It removes from the directory every object this build does not use
     //< Caution: **Call it before starting the compile.** Called afterwards, it can remove an object
     //< another process running the same script is about to link. It removes only names matching
@@ -678,14 +678,15 @@ priv fn plan_units(slot: Run_slot@, units_n: Sz, units: List<|Unit|>$@, arena: A
     obj_dir: = fs.join(slot.dir, "obj", arena)
     fs.mkdir_all(obj_dir) catch e
         exit_mkdir_failed("object directory", obj_dir, e)
+    stem: = sys.strip_last_ext(slot.new_c)
     defer $header_path: = Str_builder()
     if units_n > 1
-        header_path.s(sys.strip_last_ext(slot.new_c)).s(".h")
+        header_path.s(stem).s(".h")
     $all_cached: = true
     for i in Range.asc(units_n)
         defer $src: = Str_builder()
         if units_n > 1
-            append_unit_path(sys.strip_last_ext(slot.new_c), i, src@)
+            append_unit_path(stem, i, src@)
         else
             src.s(slot.new_c) // unsplit, there is just one
         key: = object_key(src.slice(), header_path.slice()) catch

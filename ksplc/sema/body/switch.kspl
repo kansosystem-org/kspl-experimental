@@ -30,7 +30,7 @@ priv struct Switch_ctx
     seen_values: Map<|I64, Ast_node$@|>$@ //< a non-enum switch's case values so far, by value
     success: Bool
 
-priv fn payload_type_at(variant_def: sema_type_def.Enum_variant$@, idx: Sz): I32 //<
+priv fn payload_type_at(variant_def: sema_type_def.Enum_variant@, idx: Sz): I32 //<
     //< The type of the variant's payload field at idx, `I32` past the last
     if idx < variant_def.payload_fields.len
         return variant_def.payload_fields.get(idx).type_id
@@ -152,7 +152,7 @@ impl Ast_node
             defer ctx.symtab.exit_scope()
             def_block.infer_stmts(ctx) catch
                 mctx.success = false
-    priv fn check_redundant_default(r: Ast_node$@, ctx: Sema_ctx$@, mctx: Switch_ctx$@)
+    priv fn check_redundant_default(r: Ast_node@, ctx: Sema_ctx$@, mctx: Switch_ctx@)
         if mctx.covered_variants.len == mctx.enum_def.variants_list.len
             for child in r.children
                 if child.is_keyword("default")
@@ -242,10 +242,9 @@ impl Ast_node
                 variant_def = d
 
         if variant_def != null
-            if v_name_node != null
-                v_name_node.def_node = variant_def.node
-                v_name_node.type_id = mctx.target_id
-                sema_body_expr.mark_variant_used(c, mctx.enum_name, variant_name)
+            v_name_node.def_node = variant_def.node
+            v_name_node.type_id = mctx.target_id
+            sema_body_expr.mark_variant_used(c, mctx.enum_name, variant_name)
 
             r.check_payload_name_count(c, mctx, variant_def, p_start_idx)
             // In an OR pattern (.A(x), .B(y)) the first binds; the rest are checked against
@@ -256,8 +255,7 @@ impl Ast_node
             else
                 r.verify_variant_payload(c, mctx, variant_def, p_start_idx)
 
-            if v_name_node != null
-                record_covered_variant(c, mctx, variant_name, v_name_node)
+            record_covered_variant(c, mctx, variant_name, v_name_node)
         else
             c.clear_scratch()
                 .s("enum '\{c.env.display(mctx.target_id)\}' has no variant named \
@@ -270,7 +268,7 @@ impl Ast_node
         return new_bound
 
     priv fn check_payload_name_count(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
-        variant_def: sema_type_def.Enum_variant$@, p_start_idx: Sz) //<
+        variant_def: sema_type_def.Enum_variant@, p_start_idx: Sz) //<
             //< Refuses a pattern that names more bindings than the variant has payload fields
             //< A name past the last field would read nothing: the C compiler then finds it
             //< undeclared, and LLVM gets invalid IR. Fewer names bind the leading fields.
@@ -293,7 +291,7 @@ impl Ast_node
         mctx.success = false
 
     priv fn bind_variant_payload(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
-        variant_def: sema_type_def.Enum_variant$@, p_start_idx: Sz)
+        variant_def: sema_type_def.Enum_variant@, p_start_idx: Sz)
         $field_idx: Sz = 0
         for $k_b: = p_start_idx; k_b < r.children.len; k_b += 1
             bind_var: = r.get_child(k_b)
@@ -420,8 +418,8 @@ impl Ast_node
         return seen_true && seen_false
 
     fn process_switch_exhaustiveness(r: Ast_node$@, c: Sema_ctx$@, target_id: I32,
-        enum_def: sema_type_def.Enum_def$@, covered_variants: List<|Ast_node$@|>$@,
-        has_default: Bool): Bool
+        enum_def: sema_type_def.Enum_def@, covered_variants: List<|Ast_node$@|>@, has_default: Bool):
+        Bool
         if has_default
             return true
         // A `Bool` has two values, so naming both covers it as naming every variant does.
@@ -459,7 +457,7 @@ impl Ast_node
             return false
         return true
 
-priv fn type_name_variant(n: Ast_node$@): U8[] //<
+priv fn type_name_variant(n: Ast_node@): U8[] //<
     //< The variant a pattern in the type-name form names (`quit` in `Event.quit`), or ""
     //< It is the last name written outside a call's arguments.
     $found: = ""

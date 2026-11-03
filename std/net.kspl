@@ -131,7 +131,7 @@ impl Tcp_listener
         //< Only for registering; send/recv/accept still go only through this type's methods.
         return r.handle
 
-    pub fn set_nonblocking(r: Self$@): Void!Net_error //<
+    pub fn set_nonblocking(r: Self@): Void!Net_error //<
         //< makes it non-blocking, for use with `std/reactor`
         handle_set_nonblocking(r.handle)!
 
@@ -272,7 +272,7 @@ impl Tcp_stream
     pub fn write( //< sends and returns how much was sent; a partial send is normal
         //< To send everything, use `write_all` (a separate name, as in Rust, because a missing loop
         //< silently truncates).
-        r: Self$@,
+        r: Self@,
         buf: U8[], //< the bytes to send
     ): Sz!Net_error
         return transferred(kspl_tcp_send(r.handle, buf.ptr, buf.len))
@@ -281,7 +281,7 @@ impl Tcp_stream
         //< On a non-blocking socket it throws would_block rather than spinning. The amount
         //< already sent is then lost. To resume a partial send, use write and track the progress
         //< yourself.
-        r: Self$@,
+        r: Self@,
         buf: U8[], //< the bytes sent
     ): Void!Net_error
         $sent: Sz = 0
@@ -296,7 +296,7 @@ impl Tcp_stream
         //< for good. Past the time it throws `timed_out`, and how much was sent is not known.
         //< Caution: **The stream is blocking when it returns**, as `connect` and `accept` make it.
         //< Do not use it on a stream that `std/reactor` drives.
-        r: Self$@,
+        r: Self@,
         buf: U8[], //< the bytes sent
         timeout_ms: I32, //< how long the whole send can take; a non-positive time is past at once
     ): Void!Net_error
@@ -307,7 +307,7 @@ impl Tcp_stream
             throw e
         r.set_blocking()!
 
-    priv fn send_until(r: Self$@, buf: U8[], deadline: I64): Void!Net_error //<
+    priv fn send_until(r: Self@, buf: U8[], deadline: I64): Void!Net_error //<
         //< Sends every byte of a non-blocking stream, waiting for room until the deadline
         $sent: Sz = 0
         for sent < buf.len
@@ -320,50 +320,46 @@ impl Tcp_stream
                 throw .io_failed // no progress is possible (the peer closed)
             sent += n
 
-    priv fn wait_for_room(r: Self$@, deadline: I64): Void!Net_error //<
+    priv fn wait_for_room(r: Self@, deadline: I64): Void!Net_error //<
         //< Waits until the stream can take more bytes; `timed_out` once the deadline has passed
         left_ms: = (deadline - kspl_mono_us()) / 1000I64
         if left_ms <= 0I64
             throw .timed_out
+        r.wait_until_ready(POLL_WRITABLE,
+            I32::(left_ms if left_ms < 0x7FFFFFFFI64 else 0x7FFFFFFFI64))!
+
+    priv fn wait_until_ready(r: Self@, want: U8, timeout_ms: I32): Void!Net_error //<
+        //< Waits until the stream is ready for `want`; `timed_out` past `timeout_ms`
         $h: I64[1] = ::{ r.handle }
-        $want: U8[1] = ::{ POLL_WRITABLE }
+        $wanted: U8[1] = ::{ want }
         $got: U8[1] = ::{}
         ready: =
-            kspl_net_poll((I64$[]::h).ptr, (U8$[]::want).ptr, 1,
-            I32::(left_ms if left_ms < 0x7FFFFFFFI64 else 0x7FFFFFFFI64), (U8$[]::got).ptr)
+            kspl_net_poll((I64$[]::h).ptr, (U8$[]::wanted).ptr, 1, timeout_ms,
+            (U8$[]::got).ptr)
         if ready < 0
             throw .io_failed
         if ready == 0
             throw .timed_out
 
     pub fn read( //< receives and returns how much arrived; 0 means the peer closed
-        r: Self$@,
+        r: Self@,
         buf: U8$[], //< where the bytes go
     ): Sz!Net_error
         return transferred(kspl_tcp_recv(r.handle, buf.ptr, buf.len))
 
     pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
         //< For a blocking stream whose peer can go quiet: `read` would wait for it for good.
-        r: Self$@,
+        r: Self@,
         buf: U8$[], //< where the bytes go
         timeout_ms: I32, //< how long to wait for something to read; `timed_out` past it
     ): Sz!Net_error
-        $h: I64[1] = ::{ r.handle }
-        $want: U8[1] = ::{ POLL_READABLE }
-        $got: U8[1] = ::{}
-        ready: =
-            kspl_net_poll((I64$[]::h).ptr, (U8$[]::want).ptr, 1, timeout_ms,
-            (U8$[]::got).ptr)
-        if ready < 0
-            throw .io_failed
-        if ready == 0
-            throw .timed_out
+        r.wait_until_ready(POLL_READABLE, timeout_ms)!
         return r.read(buf)!
 
     pub fn peer( //< the address of the peer
         //< For a stream that `accept` returned, it is the client; for one that connected, the
         //< server.
-        r: Self$@,
+        r: Self@,
         host_out: U8$[], //< where the address text goes; at least `ADDR_TEXT_MAX` long
     ): Peer_addr!Net_error
         if host_out.len < ADDR_TEXT_MAX
@@ -384,15 +380,15 @@ impl Tcp_stream
         //< with that library's. `free()` still closes the socket.
         return kspl_net_raw_fd(r.handle)
 
-    pub fn set_blocking(r: Self$@): Void!Net_error //< restores blocking reads and writes
+    pub fn set_blocking(r: Self@): Void!Net_error //< restores blocking reads and writes
         if !kspl_net_set_blocking(r.handle)
             throw .io_failed
 
-    pub fn set_nonblocking(r: Self$@): Void!Net_error //<
+    pub fn set_nonblocking(r: Self@): Void!Net_error //<
         //< makes it non-blocking, for use with `std/reactor`
         handle_set_nonblocking(r.handle)!
 
-    pub fn shut_write(r: Self$@): Void!Net_error //<
+    pub fn shut_write(r: Self@): Void!Net_error //<
         //< closes only the sending half, to signal the end
         //< **This is not a disconnection.** The peer's `read` returns 0, while this side **can
         //< still read and wait for a response**.

@@ -14,6 +14,7 @@
 | `ksmd` (the document editor) | Read or write a file outside its workspace, write unintentionally, or run a script in the page, depending on an opened document's contents |
 | `kssrv` (the server), on a crafted request | Serve or list a file outside its root, or read or write out of range |
 | `kssrv` under `--local` | Answer `/api/` without the token |
+| A document's own functions (`kssrv --builder`, and ksmd's worker) | Read a file outside the closed build, or run anything on the machine but the build. Or, from the worker, reach the page, the files or the network |
 
 **A compiler crash on corrupted input is not by itself a vulnerability.** It is an ordinary defect, so an Issue is fine.
 

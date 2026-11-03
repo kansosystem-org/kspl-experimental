@@ -89,6 +89,7 @@ async function refused() {
     [asMake("eighty"), 1, /--port takes a port number from 1 to 65535/, "a port that is not a number"],
     [["--model-only", `--dir=${folder}`], 1, /--dir and --show would do nothing/, "a folder with --model-only"],
     [[folder, "--", urlOf(8081)], 2, /unexpected/, "the old form, a folder and options after --"],
+    [["--stop=../x"], 1, /to stop without '\.\.'/, "a folder to stop that holds '..'"],
   ];
   for (const [args, code, said, what] of cases) {
     const c = start(args);

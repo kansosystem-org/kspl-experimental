@@ -11,6 +11,7 @@ import "ksmd/model/model" { Block_kind, Inline }
 import "ksmd/port/web/moving"
 import "ksmd/syntax/writer"
 import "ksmd/tests/support" { opened }
+import "ksmd/tests/support"
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -25,6 +26,9 @@ priv const BASE: U8[] = "out/tmp/ksmd_tests" //< where each check makes its work
 fn run()
     nested_and_repeated()
     chains()
+    functions_files()
+    functions_inserted()
+    include_inserted()
     cycles()
     path_refusals()
     links()
@@ -73,6 +77,65 @@ priv fn nested_and_repeated() //< a file included twice, `..` from a subfolder, 
     verdict.check("viewing an assembled document writes no file",
         snapshot(root, arena).equals(before), "")
     remove_tree(root, arena)
+
+priv fn functions_files() //< a functions clause's file is found as an image's is, and refused alike
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    make_file(root, "top.ksmd",
+        "%ksmd 1\n\n:::functions path=\"lib/mine.kspl\"\n:::\n\n:::functions \
+            path=\"gone.kspl\"\n:::\n\n:::functions path=\"/away.kspl\"\n:::\n", arena)
+    make_file(root, "lib/mine.kspl", "pub fn twice(x: F64): F64\n    return x * 2.0\n", arena)
+    a: = assembled(root, "top.ksmd", arena)
+    verdict.check("a functions file is found from its document's folder",
+        a.entries.get(0).target.equals("lib/mine.kspl"), a.entries.get(0).target)
+    gone: = problem_of(a@, 0, arena)
+    verdict.check("a missing functions file is a problem at its clause",
+        a.problems.len == 2 && gone.equals("top.ksmd:6:1") &&
+        a.problems.get(0).at.message.equals(Refusal.missing.message()), gone)
+    out: = problem_of(a@, 1, arena)
+    verdict.check("a functions file outside the workspace is refused at its clause",
+        out.equals("top.ksmd:9:1"), out)
+
+priv fn functions_inserted() //< Insert, Functions puts a clause at the caret, as one step
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nText.\n", arena)
+    ed.insert_functions("lib/mine.kspl") catch e
+        verdict.check("a functions clause goes in at the caret", false, e.message())
+        return
+    got: = support.written(ed.doc@, arena)
+    verdict.check("a functions clause goes in at the caret",
+        got.find_str(":::functions path=\"lib/mine.kspl\"\n:::\n").is_some(), got)
+    ed.undo()
+    verdict.check("and one undo takes it out",
+        support.written(ed.doc@, arena).find_str(":::functions").is_none(),
+        support.written(ed.doc@, arena))
+    for bad in U8[][]::{ "notes.txt", ".kspl" }
+        $refused: = false
+        ed.insert_functions(bad) catch
+            refused = true
+        verdict.check(arena.text().s("a path the reader would refuse does not go in: ").s(bad)
+            .take(),
+            refused &&
+            support.written(ed.doc@, arena).find_str(":::functions").is_none(),
+            support.written(ed.doc@, arena))
+
+priv fn include_inserted() //< Insert, Include puts a clause at the caret, as one step
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nText.\n", arena)
+    ed.insert_include("parts/notes.ksmd") catch e
+        verdict.check("an include clause goes in at the caret", false, e.message())
+        return
+    got: = support.written(ed.doc@, arena)
+    verdict.check("an include clause goes in at the caret",
+        got.find_str(":::include path=\"parts/notes.ksmd\"\n:::\n").is_some(), got)
+    ed.undo()
+    $refused: = false
+    ed.insert_include("") catch
+        refused = true
+    verdict.check("an empty path, which the reader refuses, does not go in",
+        refused &&
+        support.written(ed.doc@, arena).find_str(":::include").is_none(),
+        support.written(ed.doc@, arena))
 
 priv fn chains() //< a problem names its place and every include clause on the way to it
     defer arena: = Arena(64 * 1024)
@@ -627,16 +690,16 @@ priv fn moved_paths() //< a source saved in another folder writes its paths to n
             got.equals(p.get(3)), got)
     top: =
         "%ksmd 1\n\nText.\n\n:::include path=\"parts/notes.ksmd\"\n:::\n\n:::image \
-            src=\"pics/a.png\" alt=\"A\"\n:::\n"
+            src=\"pics/a.png\" alt=\"A\"\n:::\n\n:::functions path=\"parts/mine.kspl\"\n:::\n"
     $ed: = opened(top, arena)
     ed.move_paths("", "parts")
     defer $out: = Str_builder()
     writer.write(ed.doc@, out@)
     moved: =
         "%ksmd 1\n\nText.\n\n:::include path=\"notes.ksmd\"\n:::\n\n:::image src=\"../pics/a.png\" \
-            alt=\"A\"\n:::\n"
-    verdict.check("the editor writes every include's and image's path again, in one step",
-        out.slice().equals(moved), out.slice())
+            alt=\"A\"\n:::\n\n:::functions path=\"mine.kspl\"\n:::\n"
+    verdict.check("the editor writes every include's, image's and functions file's path again, in \
+        one step", out.slice().equals(moved), out.slice())
     ed.undo()
     out.clear()
     writer.write(ed.doc@, out@)

@@ -5,6 +5,7 @@
 //< this file first.
 #cfg(!blas)
 import "ksai/parallel"
+import "std/bignat"
 import "std/checked_int"
 import "std/math"
 import "std/mem" + { Arena }
@@ -24,7 +25,7 @@ pub const MAX_TENSOR_ELEMS: Sz = 2147483647 //< the most elements one tensor can
     //< are checked apart (`checked_mul`), so a 32-bit Sz still cannot overflow. It is pub so
     //< safetensors.get_tensor, which bypasses `new`, applies the same cap.
 
-fn require_arena(arena: Arena$@) //< every tensor and adapter allocation has an explicit owner
+fn require_arena(arena: Arena@) //< every tensor and adapter allocation has an explicit owner
     if arena == null
         panic("ksai: an explicit arena is required")
 
@@ -127,7 +128,7 @@ impl<|T|> Tensor<|T|>
         out: = Tensor<|T|>(Sz[]::out_shape, r.arena)
         r.matmul_into(rhs, out)!
         return out
-    priv fn check_matmul(r: Self$@, rhs: Tensor<|T|>): Void!Tensor_error //<
+    priv fn check_matmul(r: Self@, rhs: Tensor<|T|>): Void!Tensor_error //<
         //< Refuses operands whose product is not defined: not 2D, or inner dimensions that differ
         if r.shape.len != 2 || rhs.shape.len != 2
             throw .rank_mismatch
@@ -459,7 +460,7 @@ fn exp_f32(x: F32): F32 //< e to the `x`, within 2 units in the last place for -
     t: = v - hi
     lo: = n * 1.42860677e-06F32
     b: = t - lo
-    k: = f32_from_bits((f32_to_bits(z) << 23) + 0x3F800000U32)
+    k: = f32_from_bits((bignat.f32_to_bits(z) << 23) + 0x3F800000U32)
     u: = b * b
     c5: = 0.00824739039F32 * b
     p1: = c5 + 0.0418997668F32
@@ -472,12 +473,6 @@ fn exp_f32(x: F32): F32 //< e to the `x`, within 2 units in the last place for -
     j: = q3 + c1
     jk: = j * k
     return jk + k
-
-priv fn f32_to_bits(v: F32): U32 //< an F32's bits read as an integer; no numeric conversion
-    $x: = v
-    $b: U32 = 0
-    mem.copy(Void$@::b@, Void$@::x@, 4)
-    return b
 
 priv fn f32_from_bits(bits: U32): F32 //< the same bits read as an F32; no numeric conversion
     $b: = bits

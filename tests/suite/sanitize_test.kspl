@@ -253,7 +253,6 @@ priv fn backend_name(llvm: Bool): U8[] //< the backend, in a check's words
 priv fn check_fires(work: U8[], arena: Arena$@) //<
     //< Each fault written on purpose is reported, through the same build and run as the tests
     $runs: = List<|Sanitized|>(arena)
-    $names: = List<|U8[]|>(arena)
     $wants: = List<|U8[]|>(arena)
     for k in Range.asc(PLANTED.len)
         p: = PLANTED[k]
@@ -282,7 +281,6 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
                 .argv = harness_sanitizer.kept(U8[][]::{ b.exe }, arena),
                 .log_dir = fs.join(work, arena.text().s(stem).s("_log").take(), arena),
                 .env = U8[][]::{} })
-            names.push(name)
             wants.push("" if bare else p.says)
     outs: = run_all(runs@, work, arena)
     for i in Range.asc(runs.len)
@@ -297,7 +295,7 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
         ok: =
             (found.len == 0 if wants.get(i).len == 0
             else named && !outs.get(i).exited_with(0))
-        verdict.check(names.get(i), ok, why.take())
+        verdict.check(runs.get(i).name, ok, why.take())
 
 // ==========================================
 // The packages' own tests, through both backends

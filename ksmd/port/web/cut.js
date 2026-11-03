@@ -15,7 +15,6 @@ function ksmdCut(ks) {
   // The cells marked now, so marking again clears only them.
   let marked = [];
 
-  const tables = () => ks.view.blocks();
   // Where a run of identities stands in a table's list: its first place, or null where one went.
   const span = (ids, list) => {
     const first = ids[0] === -1 ? -1 : list.indexOf(ids[0]);
@@ -26,9 +25,9 @@ function ksmdCut(ks) {
   // Where the cut stands now: { block, r1, r2, c1, c2 }, or null when its table or a line went.
   function where() {
     if (!cut) return null;
-    const block = tables().findIndex((el) => el.classList.contains("table") && el.u === cut.u);
+    const block = ks.view.blocks().findIndex((el) => el.classList.contains("table") && el.u === cut.u);
     if (block < 0) return null;
-    const wrap = tables()[block];
+    const wrap = ks.view.blocks()[block];
     const r1 = cut.rowIds ? span(cut.rowIds, wrap.rowIds) : -1;
     const c1 = cut.colIds ? span(cut.colIds, wrap.colIds) : 0;
     if (r1 === null || c1 === null) return null;
@@ -45,7 +44,7 @@ function ksmdCut(ks) {
       cut = null;
       return;
     }
-    for (const el of tables()[w.block].querySelectorAll("[data-r]")) {
+    for (const el of ks.view.blocks()[w.block].querySelectorAll("[data-r]")) {
       const row = Number(el.dataset.r);
       const column = Number(el.dataset.c);
       if (row < w.r1 || row > w.r2 || column < w.c1 || column > w.c2) continue;
@@ -72,7 +71,7 @@ function ksmdCut(ks) {
   // Cuts cells: `r` is the range as `ks.range.rect` gives it, and `lines` whole lines as
   // `ks.range.lines` gives them, or null. `text` is what the cut put on the clipboard.
   function take(r, lines, text) {
-    const wrap = tables()[r.block];
+    const wrap = ks.view.blocks()[r.block];
     const ids = (list, from, to) => Array.from({ length: to - from + 1 }, (_, k) =>
       (from + k < 0 ? -1 : list[from + k]));
     // Whole columns take their names too, which move with them.

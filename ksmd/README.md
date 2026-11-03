@@ -9,9 +9,9 @@ The reader models every structure of the design, and the writer saves it in cano
 The editing page edits one document in a browser, with undo and redo. It holds:
 
 * **Prose**: formatting, lists and checklists, quotes, dividers, code, colours and alignment, and notes.
-* **Tables**: formulas, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. Columns resize, fit their values or take a typed share of the width, and rows take a typed height. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
+* **Tables**: formulas, a document's own functions written in KSPL, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. Columns resize, fit their values or take a typed share of the width, and rows take a typed height. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
 * **Tools**: a menu bar, a right-click table menu, a quick access bar, find and replace, a contents panel, Read-only, and Print or PDF. The status line shows a sum or a word count, and the page turns dark with the system.
-* **Files**: served by the local server on a workspace folder, the page opens and saves files, shows includes and images, and takes a pasted image. It notices a change on disk and holds unsaved edits as drafts. A `.ksmd` file double-clicked in a file manager opens in the browser.
+* **Files**: served by the local server on a workspace folder, the page opens and saves files, shows includes and images. An include goes in from Insert, and an image from Insert, a paste or a drop. It notices a change on disk and holds unsaved edits as drafts. A `.ksmd` file double-clicked in a file manager opens in the browser.
 
 Markdown supplies familiar notation, but compatibility with `.md` is not a requirement. Presentations are outside ksmd's scope.
 
@@ -42,6 +42,57 @@ Use the same port each time: the browser keeps drafts per address. Ctrl+C in the
 2. Open `out/ksmd/web/ksmd.html` in a browser. It is one file, and opens no other file.
 
 The page starts with an empty document. To open a source, run `ksmd.load(text)` in the browser's console, where `text` holds the source. `ksmd.source()` returns the canonical source to save. In this folder alone, `make web` writes the page to `out/web/ksmd.html`.
+
+## Write your own functions
+
+A document can call functions you write in KSPL, as it calls `sum`. They need the local server, so open the document through the launcher or a server started with `--builder` ("Your own functions" in the [design](docs/DESIGN-ksmd.md#your-own-functions)).
+
+1. Open the document, and put the caret where the clause goes.
+2. Choose Insert ▸ Functions…, then pick a `.kspl` file in the workspace, or type a new name. A new file starts with one function, `twice`, to call and to copy.
+3. The clause's box lists the functions the file gives, such as "A formula can call: twice." A cell can then hold `=twice(A1)`.
+4. Edit the file in any text editor. When you come back to the page, it builds the file again.
+
+Each `pub fn` in the file is a function a formula can call:
+
+```kspl
+//< My functions
+import "std/mem" { Arena }
+import "std/str"
+
+pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax; the rate is 10% when left out
+    return price * (1.0 + rate.unwrap_or(0.1))
+
+pub fn greet(name: U8[], arena: Arena$@): U8[] //< a greeting
+    return arena.text().s("hello, ").s(name).take()
+```
+
+The clause in the document's file reads `:::functions path="mine.kspl"`, then `:::` on the next line.
+
+**What a parameter takes from a formula:**
+
+| Parameter | Takes | Else the cell shows |
+| :-- | :-- | :-- |
+| `F64` | a number; an empty cell is 0 | `#VALUE!` |
+| `I64` | a whole number | `#NUM!` for a fraction, `#VALUE!` for text |
+| `Bool` | `true` or `false` | `#VALUE!` |
+| `U8[]` | text | `#VALUE!` |
+| `Value` | any value, as it is | nothing |
+| `Value[]`, last | every argument left; a range gives its cells | nothing |
+| `T?`, last | as `T`, or none where the formula leaves it out | as `T` |
+| `Arena$@` | no argument: the memory a text result goes in | nothing |
+
+A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc_error` (`!Calc_error`), which the cell shows as its mark. `Value` and `Calc_error` come from `import "ksmd/calc/value"`.
+
+**What you may see:**
+
+* **The box shows the compiler's message** where the file does not build. Fix the file and save it; the page builds it again when you come back to it.
+* **`…`** in a cell: its answer has not come yet.
+* **`#TIME!`**: the call ran past 2 seconds. **`#STOPPED!`**: it panicked.
+* **`#SYNTAX!`**: too many or too few arguments, as for ksmd's own functions.
+* **A name ksmd already has, such as `sum`, is refused**, and the box says so.
+* **A file may import only `std` and ksmd's files.** A path that climbs out of its folder, or names another package, fails the build.
+
+**What your functions cannot do**: change the document, read files or reach the network. They run in the browser, apart from the page.
 
 ## Test the model, the editor and the page
 
@@ -100,7 +151,13 @@ flowchart BT
 | [model/filter.kspl](model/filter.kspl) | A column's filter, as the file keeps it: which rows the column lets show |
 | [calc/formula.kspl](calc/formula.kspl) | A formula's tokens, how its references attach to rows and columns, and how it is written back |
 | [calc/value.kspl](calc/value.kspl) | A value a formula calculates, and the arithmetic and comparisons between values |
+| [calc/bases.kspl](calc/bases.kspl) | Whole numbers written in hexadecimal or binary, and read back |
 | [calc/calc.kspl](calc/calc.kspl) | Calculates every table cell, apart from the document |
+| [calc/functions.kspl](calc/functions.kspl) | The functions a formula calls by name, as ordinary KSPL functions: `sum`, `round`, `date`, the base conversions and the rest |
+| [calc/args.kspl](calc/args.kspl) | How a function receives its arguments: what each parameter type takes |
+| [calc/glue.kspl](calc/glue.kspl) | Writes the table that calls a file's functions, from their signatures |
+| [calc/wire.kspl](calc/wire.kspl) | A call to a person's own function, and its answer, as bytes between the page and its worker |
+| [calc/functions_table.kspl](calc/functions_table.kspl) | That table for `calc/functions.kspl`, written by `make ksmd-functions` |
 | [syntax/reader.kspl](syntax/reader.kspl) | Reads paragraphs, headings, code fences and lists into the model |
 | [syntax/inline.kspl](syntax/inline.kspl) | Reads the inline markup of a paragraph, a heading or a list item |
 | [syntax/clause.kspl](syntax/clause.kspl) | Reads a table, an include or an image clause |
@@ -123,7 +180,10 @@ flowchart BT
 | [edit/editor_looks.kspl](edit/editor_looks.kspl) | The editor's looks of text, Clear format, and what stands at the selection |
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
-| [port/web/](port/web/) | The editing page: the wasm bridge (`bridge.kspl`, its actions on tables and charts in `bridge_tables.kspl`, `view.kspl`, and `moving.kspl` for paths after a Save As), and its scripts and style. Each script is named for what it holds, such as `range.js`, `outline.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
+| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
+| [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions'. `wasm_build.kspl` runs it for `ksmd/Makefile` |
+| [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
+| [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |
 | [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
 | [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server, and `measure.mjs` times it |
 

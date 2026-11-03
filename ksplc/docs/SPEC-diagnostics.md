@@ -397,6 +397,21 @@ A variable or parameter declared with the mutability marker `$` is never reassig
   | `U8$[]::buf` (a writable slice made from the array `buf`) | **yes** | Without the `$`, `buf` becomes read-only memory in the generated C, and a write through the slice would hit it |
 * **Fix**: remove the `$` (`$x: = ...` → `x: = ...`). The type system then guarantees the variable is never reassigned.
 
+### [I0602] A `T$@` parameter nothing writes through
+A parameter written `T$@` (a pointer that may write) is never written through: no assignment, no `Self$@` call and no writable `@` reaches its target. It is never handed on whole either.
+* **Fix**: write its type with `@` (`r: Self$@` → `r: Self@`). The signature then tells the reader that the function only reads. A caller holding a read-only pointer can pass it too.
+* **What counts as a write through `p`**, so no report:
+
+  | The use | Why |
+  | :-- | :-- |
+  | `p.f = v`, `p$ = v`, `p[i] = v`, `(p + i)$ = v`, `p.ptr[i] = v` | The target is written. **A pointer field counts as part of it**: the rule cannot tell a buffer `p` owns (a `List`'s) from one it borrows |
+  | `p.m()`, or `p.list.push(x)`, with a `Self$@` method | The whole path must be writable, even past a pointer field |
+  | `p.ptr`, `p.items` or `p$` read as a value, where it is or holds a writable pointer or slice | The receiver can write what `p` owns through it |
+  | `p.f@`, `U8$[]::p.arr` | A writable pointer or view into the target is handed out |
+  | `p` passed, assigned, returned or made a trait value | The receiver may write through it. **Anything unclear counts as a write** |
+* **Not a write**: a read of a field or of the whole target (`p$`) that holds no writable pointer or slice, `p == null`, and a `Self@` call.
+* **Not reported**: a function whose type is fixed elsewhere. That is a trait's method, a function named as a value, or a test (its suite's field fixes the parameter). So is a function C calls, one the compiler made, or one under `#cfg`, whose other body this lint does not read. **So is a function that returns a writable pointer or slice**: through a read-only receiver it would hand out what the receiver owns, writable (`List.slice`). A parameter whose `$@` comes from a type argument, or whose name starts with `_`, is not reported either. A generic is reported only where no instance writes through the parameter.
+
 ### [I0701] Error propagation using '!' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
 * **Fix**: replace the whole `catch` block with the `!` operator, which hands the error to the caller.

@@ -27,6 +27,7 @@ import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/suite" as sema_decl_suite
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/decl/type_check" as sema_decl_type_check
+import "ksplc/sema/flow/pointee" as sema_flow_pointee
 import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
 import "ksplc/sema/session/import_table" as sema_session_import_table
@@ -163,7 +164,7 @@ priv fn infer_pending_bodies(c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@): Bool //
                 has_err = true
     return has_err
 
-priv fn infer_instance_body(c: Sema_ctx$@, pending: Pending_inst, sym: Sema_symbol$@, at: Sz): Bool //<
+priv fn infer_instance_body(c: Sema_ctx$@, pending: Pending_inst, sym: Sema_symbol@, at: Sz): Bool //<
     //< It checks one queued instantiation's body (`at` in the queue); false where it failed
     c.set_current_file(pending.node.loc.file())
     c.symtab.scope_stack.len = 0
@@ -268,6 +269,7 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
                 c.set_current_file(child.loc.file())
                 child.mark_template_symbols_used(c)
         sema_body_lint_written.lint_written(r, c)
+        sema_flow_pointee.report_pointee_params(r, c)
 
     r.keep_checked_children(c, checked@)
     // --- Final Pass: Post-Resolution for LSP and Linter ---
@@ -313,7 +315,7 @@ impl Ast_node
         // The initializer is typed now, so a value folded before it may differ.
         c.statics.epoch += 1
 
-    priv fn keep_checked_children(r: Self$@, c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@) //<
+    priv fn keep_checked_children(r: Self$@, c: Sema_ctx$@, checked: Map<|Sz, Bool|>@) //<
         //< It drops each template (except in the editor) and each instance whose body was unchecked
         clean_children: = base_ast.new_ast_node_list()
         for child in r.children
@@ -480,7 +482,7 @@ impl Ast_node
         implicit_ret.add_child(Ast_node(.k_keyword, "return", block.loc))
         block.add_child(implicit_ret)
 
-    priv fn holds_only_asm(r: Self$@, c: Sema_ctx$@): Bool //<
+    priv fn holds_only_asm(r: Self@, c: Sema_ctx$@): Bool //<
         //< Whether a `#naked` function's body is `__kspl_asm_volatile(...)` statements alone
         //< It reports the first other statement.
         //< With no prologue there is no frame, so any other statement would use stack the function
@@ -501,7 +503,7 @@ impl Ast_node
             return false
         return true
 
-    priv fn find_subtree_end_offset(r: Self$@): Sz //<
+    priv fn find_subtree_end_offset(r: Self@): Sz //<
         //< The rightmost offset in the subtree, in place of the end offset Ast_node does not store
         //< A dropped punctuation token can make it a few lines short, which is close enough for the
         //< line guideline.
@@ -532,7 +534,7 @@ impl Ast_node
                     Split it into smaller functions, each with one purpose.")
             c.hint(r, c.scratch.slice())
 
-    priv fn deepest_block(r: Self$@, depth: Sz): Sz //<
+    priv fn deepest_block(r: Self@, depth: Sz): Sz //<
         //< How many blocks deep the subtree's deepest block sits, r's own counted as `depth`
         $best: = depth
         for ch in r.children
@@ -541,7 +543,7 @@ impl Ast_node
                 best = d
         return best
 
-    priv fn lint_nesting(r: Self$@, body: Ast_node$@, c: Sema_ctx$@) //<
+    priv fn lint_nesting(r: Self$@, body: Ast_node@, c: Sema_ctx$@) //<
         //< [H0805] Reports a function whose blocks nest past the guideline of 8 levels
         //< The body's own block is level 0, so an `if` in it opens level 1. The guideline is
         //< Principle 3 of docs/DESIGN-principles.md; as a guideline, it is a Hint, as [H0803] is.
@@ -561,7 +563,7 @@ impl Ast_node
         target_node: = r.get_decl_type_node()
         trait_node: = r.get_impl_trait_node().unwrap_or(null)
 
-        if !r.is_generic_template() && target_node != null
+        if target_node != null
             t_id: = target_node.resolve_type(c)!
             target_type: = c.env.get_str(t_id)
 

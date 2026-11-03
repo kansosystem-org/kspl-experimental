@@ -130,8 +130,11 @@ cp -R std "$$std_stage/new"; \
 if [ -f "$(KSMD_INSTALL_MARK)" ]; then \
     ksmd_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
     page="$$ksmd_stage/new/$(patsubst $(OUT_DIR)/%,%,$(KSMD_PAGE))"; mkdir -p "$${page%/*}"; \
-    cp "$(KSMD_EXE)" "$(KSSRV_EXE)" "$(KSMD_ICON)" "$$ksmd_stage/new/"; \
+    cp "$(KSMD_EXE)" "$(KSSRV_EXE)" "$(KSMD_BUILDER_EXE)" "$(KSMD_ICON)" "$$ksmd_stage/new/"; \
     cp "$(KSMD_PAGE)" "$$page"; \
+    for f in $(KSMD_INSTALL_SRCS); do \
+        mkdir -p "$$ksmd_stage/new/src/$${f%/*}" && cp "$$f" "$$ksmd_stage/new/src/$$f" || exit 1; \
+    done; \
     old="$(KSMD_INSTALL_DIR)/$(notdir $(KSMD_EXE))"; \
     if [ -x "$$old" ]; then "$$old" --stop-all >/dev/null 2>&1 || true; fi; \
 fi; \
@@ -147,8 +150,14 @@ endef
 # --- ksmd beside ksplc (make install) ---
 # **The folder has the shape of `out/`**: the launcher, kssrv beside it, and the page under
 # `ksmd/web/` (`KSMD` in `tools/opener_aim.kspl`). The launcher finds them from its own path, so a
-# second layout would need a second search. `tmp/` comes beside them when it first runs.
+# second layout would need a second search. `tmp/` comes beside them when it first runs. The builder
+# of a page's own functions comes too, with ksmd's sources under `src/`, which it builds with the
+# `ksplc` in `$(PREFIX)/bin` (`tools_near` in `ksmd/port/own_build.kspl`).
 KSMD_INSTALL_DIR = $(PREFIX)/lib/kspl/ksmd
+# ksmd's sources a build reads: every `.kspl` but the tests, the package's settings and the list of
+# what the module may import.
+KSMD_INSTALL_SRCS = ksmd/ksplc.cfg ksmd/port/own/imports.txt \
+  $(filter-out ksmd/tests/% ksmd/out/%,$(wildcard ksmd/*/*.kspl ksmd/*/*/*.kspl))
 KSMD_PAGE := $(OUT_DIR)/ksmd/web/ksmd.html
 # The mark that the probe found ksmd buildable and built it; the steps after it read it.
 KSMD_INSTALL_MARK := $(GEN_DIR)/install_ksmd.ok
@@ -161,7 +170,7 @@ define install_ksmd_probe
 	tools=$$($(MAKE) --no-print-directory -C ksmd web-tools 2>&1) || ok=0; \
 	libs=$$($(MAKE) --no-print-directory kssrv-libs 2>&1) || ok=0; \
 	if [ "$$ok" = 1 ]; then \
-		$(MAKE) --no-print-directory ksmd-web $(KSSRV_EXE) $(KSMD_EXE) && \
+		$(MAKE) --no-print-directory ksmd-web $(KSSRV_EXE) $(KSMD_EXE) $(KSMD_BUILDER_EXE) && \
 		mkdir -p "$(GEN_DIR)" && touch "$(KSMD_INSTALL_MARK)"; \
 	else \
 		echo "# note: ksmd is not installed: what it needs cannot be built here."; \

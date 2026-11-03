@@ -79,7 +79,7 @@ function ksmdContents(ks) {
     // Above the first heading, the first one is marked, so the list always shows a place.
     const at = Math.max(lo - 1, 0);
     for (const a of list.querySelectorAll("a[aria-current]")) a.removeAttribute("aria-current");
-    const a = at >= 0 ? list.querySelector(`a[data-k="${at}"]`) : null;
+    const a = list.querySelector(`a[data-k="${at}"]`);
     if (!a) return;
     a.setAttribute("aria-current", "location");
     const li = a.parentElement;

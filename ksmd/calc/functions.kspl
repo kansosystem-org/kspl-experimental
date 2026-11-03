@@ -1,0 +1,175 @@
+//< The functions a formula calls by name, written as any KSPL function is
+//< **Each one is an ordinary function.** Its parameters' types say what it takes, and the table
+//< generated from this file (`ksmd/calc/functions_table.kspl`) converts a formula's arguments
+//< to them by the rules in `ksmd/calc/args.kspl`. A function a person writes is read the same
+//< way. **`if`, `sum_if`, `count_if`, `average_if`, `lookup` and `today` are not here**: the
+//< first five choose which arguments are calculated, and `today` reads the date the document
+//< opened. They stay in `ksmd/calc/calc.kspl`.
+//< Caution: **Change a signature here, then run `make ksmd-functions`**, which writes the table
+//< again; `make debug-ksmd` fails while the two differ.
+import "ksmd/base/dates" { day_of, ymd_of }
+import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
+import "ksmd/calc/value" { Calc_error, Value, date_value, number }
+import "ksmd/model/format" { round_places }
+import "std/mem" { Arena }
+import "std/str" // `text`
+import "std/strfmt" as _strfmt // `\{}` of a whole number
+
+// **What a person's own functions use is public, so [I0402] is off here.** Their file stands in
+// their own workspace, outside this package, and calls these; the lint sees only ksmd's own uses.
+##lint(I0402 = off)
+
+const MAX_ROUND: I64 = 15 //< the most places `round` takes, either way
+    //< An F64 holds at most 17 significant digits, so a carry past them cannot overflow.
+
+// ==========================================
+// Folding numbers: sum, min, max, count, average
+// ==========================================
+// Each takes its numbers in order and stops at the first that it cannot take: an error, or a
+// date where dates have no sum. A range alone gives its numbers, dates and errors, and leaves out
+// empty cells, text and `true`/`false` (`Value[]` in `ksmd/calc/args.kspl`).
+
+pub fn sum(xs: Value[]): F64!Calc_error //< the numbers added; of nothing, 0
+    $total: = 0.0
+    for v in xs
+        if v.kind == .error
+            throw v.error
+        // Dates have a least and a greatest, and a count; they have no sum.
+        if v.kind == .date
+            throw .wrong_kind
+        total += v.number
+    return total
+
+pub fn count(xs: Value[]): F64!Calc_error //< how many numbers and dates there are
+    $n: Sz = 0
+    for v in xs
+        if v.kind == .error
+            throw v.error
+        n += 1
+    return F64::n
+
+pub fn average(xs: Value[]): F64!Calc_error //< the numbers' mean; of nothing, `#EMPTY!`
+    s: = sum(xs)!
+    if xs.len == 0
+        throw .no_numbers
+    return s / F64::xs.len
+
+pub fn min(xs: Value[]): Value!Calc_error //< the least; of dates alone, the earliest date
+    return extreme(xs, true)!
+
+pub fn max(xs: Value[]): Value!Calc_error //< the greatest; of dates alone, the latest date
+    return extreme(xs, false)!
+
+priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
+    //< The least or the greatest. **Of dates and numbers together there is no answer**
+    //< (`#VALUE!`), and of nothing none either (`#EMPTY!`).
+    $best: = 0.0
+    $dates: Sz = 0
+    for i in Range.asc(xs.len)
+        v: = xs[i]
+        if v.kind == .error
+            throw v.error
+        if v.kind == .date
+            dates += 1
+        if i == 0 || (v.number < best if least else v.number > best)
+            best = v.number
+    if xs.len == 0
+        throw .no_numbers
+    if dates > 0
+        if dates != xs.len
+            throw .wrong_kind
+        return date_value(I64::best)
+    return number(best)
+
+// ==========================================
+// Rounding and dates
+// ==========================================
+
+pub fn round(x: F64, places: I64): F64!Calc_error //<
+    //< `x` rounded to `places` decimal places, half away from zero, as a number format rounds the
+    //< digits a person reads. `places` goes from -15 to 15; -2 rounds to hundreds.
+    if places < -MAX_ROUND || places > MAX_ROUND
+        throw .not_finite
+    return round_places(x, Sz::places) catch
+        throw .not_finite
+
+pub fn date(year: I64, month: I64, day: I64): Value!Calc_error //<
+    //< The day the three parts name, in the years 1 to 9999; any other is `#NUM!`
+    d: = day_of(year, month, day) catch
+        throw .not_finite
+    return date_value(d)
+
+pub fn year(d: Value): F64!Calc_error //< a date's year
+    return F64::ymd_of(day_in(d)!).year
+
+pub fn month(d: Value): F64!Calc_error //< a date's month, 1 to 12
+    return F64::ymd_of(day_in(d)!).month
+
+pub fn day(d: Value): F64!Calc_error //< a date's day of the month
+    return F64::ymd_of(day_in(d)!).day
+
+priv fn day_in(d: Value): I64!Calc_error //< the day a date names; anything else is `#VALUE!`
+    if d.kind != .date
+        throw .wrong_kind
+    return I64::d.number
+
+// ==========================================
+// Hexadecimal and binary ("Hexadecimal and binary" in `ksmd/docs/DESIGN-ksmd.md`)
+// ==========================================
+// The width is in bits, from 1 to 53. Left out, a negative number takes a minus sign; given, it
+// is written and read as its two's complement in that width (`ksmd/calc/bases.kspl`).
+
+pub fn dec_to_hex(n: I64, width: I64?, arena: Arena$@): U8[]!Calc_error //< `n` in hexadecimal
+    return written(n, .hex, width, arena)!
+
+pub fn dec_to_bin(n: I64, width: I64?, arena: Arena$@): U8[]!Calc_error //< `n` in binary
+    return written(n, .binary, width, arena)!
+
+pub fn hex_to_dec(digits: Value, width: I64?, arena: Arena$@): I64!Calc_error //<
+    //< the number they name
+    return read_in(digits, .hex, width, arena)!
+
+pub fn bin_to_dec(digits: Value, width: I64?, arena: Arena$@): I64!Calc_error //<
+    //< the number they name
+    return read_in(digits, .binary, width, arena)!
+
+pub fn hex_to_bin(digits: Value, width: I64?, arena: Arena$@): U8[]!Calc_error //<
+    //< the same, in binary
+    return written(read_in(digits, .hex, width, arena)!, .binary, width, arena)!
+
+pub fn bin_to_hex(digits: Value, width: I64?, arena: Arena$@): U8[]!Calc_error //< the same, in hex
+    return written(read_in(digits, .binary, width, arena)!, .hex, width, arena)!
+
+priv fn written(n: I64, base: Base, width: I64?, arena: Arena$@): U8[]!Calc_error //<
+    //< `n` in the base, in the width given
+    return write(n, base, bits_of(width)!, arena) catch e
+        throw failure(e)
+
+priv fn read_in(digits: Value, base: Base, width: I64?, arena: Arena$@): I64!Calc_error //<
+    //< The digits of text, or of a whole number's decimal digits (`bin_to_dec(101)`); an empty
+    //< cell is 0. A negative or a fractional number is no digit text: `#VALUE!`.
+    w: = bits_of(width)!
+    $s: U8[] = "0"
+    switch digits.kind
+    case .text
+        s = digits.text
+    case .number
+        at: = whole(digits.number).unwrap_or(-1)
+        if at < 0
+            throw .wrong_kind
+        s = arena.text().s("\{at\}").take()
+    case .empty {}
+    default
+        throw .wrong_kind
+    return read(s, base, w) catch e
+        throw failure(e)
+
+priv fn bits_of(width: I64?): I64!Calc_error //< 0 for no width; a width out of 1 to 53 is `#NUM!`
+    if w: = width
+        if !width_ok(w)
+            throw .not_finite
+        return w
+    return 0
+
+priv fn failure(e: Base_error): Calc_error //< the mark a base conversion's failure shows
+    return .wrong_kind if e == .not_digits else .not_finite

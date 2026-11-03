@@ -14,7 +14,7 @@ import "ksplc/sema/session/state" { Generic_arg, Alias_info, Import_symbol_info,
     Pending_constraint, Pending_methods, Trait_inst, Diagnostic_counts, Generic_state, Mono_state,
     Alias_state, Import_hit, Import_symbol_state, Lint_setting_entry, Type_layout, Folded_layout,
     Diag_state, Layout_state, Resolving_state, Static_state, Static_value, Const_fold,
-    Const_fold_float }
+    Const_fold_float, Pointee_param }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
@@ -139,6 +139,8 @@ struct Sema_ctx
         //< every loaded file's source by name, for a diagnostic's line
     jump_stack: List<|Jump_label|>$@ //< the loops and labelled blocks enclosing the statement
     scratch: Str_builder //< the one builder in which a diagnostic's message is assembled
+    pointees: Map<|U8[], Pointee_param|>$@ //<
+        //< [I0602] each `T$@` parameter by where it is written; null until lint meets one
     priv in_generic_instance: Bool //<
         //< Whether a monomorphized template body is being analysed
         //< That is while sema/body/infer.kspl's pending queue is drained. Read it only through
@@ -283,13 +285,13 @@ impl Sema_ctx
         //< A type's mangled name, written into scratch: valid until scratch is used again
         return r.env.mangled_into(type_id, r.scratch@)
 
-    fn has_error(r: Self$@): Bool
+    fn has_error(r: Self@): Bool
         return r.diags.counts.errors > 0
-    fn error_mark(r: Self$@): I32 //<
+    fn error_mark(r: Self@): I32 //<
         //< A mark to compare against later, to tell whether an error was met in between
         //< A repeat kept from printing counts as met (Diag_state.errors_met).
         return r.diags.errors_met
-    fn has_error_in_fn(r: Self$@): Bool //<
+    fn has_error_in_fn(r: Self@): Bool //<
         //< Whether an error was reported since the current function's body began
         //< Caution: **Use it, not `has_error`, to hold back a diagnostic that would only repeat an
         //< earlier one.** The cascade it guards against stays inside one body; counted over the
@@ -348,7 +350,7 @@ impl Sema_ctx
         //< and lint_empty_block in lint_stmt.kspl hold back for this reason.
         return r.in_generic_instance || r.generics.inst_site != null
 
-    fn is_type_argument(r: Self$@, type_id: I32): Bool //<
+    fn is_type_argument(r: Self@, type_id: I32): Bool //<
         //< Whether the type, or what it points at, is one a bound type argument stands for
         //< **A check of a value of that type varies with the instance** (`T` is `I32` in one and
         //< a `List` in another), so a check that must not do so (is_instantiating) leaves it out.
@@ -362,7 +364,7 @@ impl Sema_ctx
     fn set_in_generic_instance(r: Self$@, v: Bool)
         r.in_generic_instance = v
 
-    priv fn lint_level_for_file(r: Self$@, file: U8[], code: U8[]): base_lint_codes.Lint_level //<
+    priv fn lint_level_for_file(r: Self@, file: U8[], code: U8[]): base_lint_codes.Lint_level //<
         //< A code's level in `file`: its `##lint(...)` setting, else base_lint_codes.base_level_for
         //< **`##lint(...)` is keyed by the source's name**: the file the diagnostic's node belongs
         //< to, which during monomorphization is not the current file.
@@ -371,7 +373,7 @@ impl Sema_ctx
                 return entry.level
         return base_lint_codes.base_level_for(file, code)
 
-    fn is_code_off(r: Self$@, node: Ast_node$@, code: U8[]): Bool //<
+    fn is_code_off(r: Self@, node: Ast_node$@, code: U8[]): Bool //<
         //< Whether a diagnostic with that code at node would be dropped as switched off
         //< **Ask it before work done only for that diagnostic.** Otherwise a check off by default
         //< (W0601) would pay its whole cost on every declaration and print nothing.
@@ -393,7 +395,7 @@ impl Sema_ctx
         src: = base_core.source_of(r.source_map, node.loc.file())
         return src if src.len > 0 else r.source
 
-    priv fn file_for_node(r: Self$@, node: Ast_node$@): U8[]
+    priv fn file_for_node(r: Self@, node: Ast_node@): U8[]
         if node == null || node.loc.file().len == 0
             return r.file_name
         return node.loc.file()
@@ -538,7 +540,7 @@ impl Sema_ctx
         //< print.
         //< Caution: **Copy it.** The code is a view into the message, and a message is often built
         //< in the scratch buffer the next diagnostic overwrites.
-        if !code.is_one_of(r.diags.counts.codes.slice())
+        if !r.diags.counts.codes.contains(code)
             r.diags.counts.codes.push(base_core.arena.dup_str(code))
 
     fn report_type_mismatch(r: Self$@, node: Ast_node$@, expected_id: I32, actual_id: I32)
@@ -594,13 +596,13 @@ impl Sema_ctx
         r.offset_key(node, key@)
         r.diags.undefined_at.set(base_core.arena.dup_str(key.slice()), true)
 
-    fn undefined_reported_at(r: Self$@, node: Ast_node$@): Bool //<
+    fn undefined_reported_at(r: Self@, node: Ast_node$@): Bool //<
         //< whether one was reported where node starts
         defer $key: = Str_builder()
         r.offset_key(node, key@)
         return r.diags.undefined_at.get(key.slice()).unwrap_or(false)
 
-    priv fn offset_key(r: Self$@, node: Ast_node$@, out: Str_builder$@) //< "file:offset" of node
+    priv fn offset_key(r: Self@, node: Ast_node$@, out: Str_builder$@) //< "file:offset" of node
         info: = node.get_span_offset()
         out.s(r.file_for_node(node)).c(':').s("\{info.offset\}")
 
@@ -733,8 +735,6 @@ impl Sema_ctx
                 r.lint_declared_name(name, sym, target_node)
 
         r.symtab.define_symbol(name, sym, export_global)
-        if sym.node != null
-            sym.node.sym_ptr = Void$@::sym
         return true
 
     priv fn report_hidden_name(r: Self$@, name: U8[], target_node: Ast_node$@) //<
@@ -816,7 +816,7 @@ fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
     return base_core.pools.name_text(b.slice())
 
 impl Ast_node
-    fn collect_lint_decl(r: Ast_node$@, c: Sema_ctx$@) //<
+    fn collect_lint_decl(r: Ast_node@, c: Sema_ctx$@) //<
         //< `##lint(CODE = level, ...)`: sets the level of the codes listed, for this whole file
         //< Caution: The code and the level are both matched against their source in
         //< ksplc/base/lint_codes.kspl, and an unknown one is an error. Unmatched, a typo like

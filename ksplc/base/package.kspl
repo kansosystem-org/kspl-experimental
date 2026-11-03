@@ -175,10 +175,17 @@ fn refused_use(importer: U8[], target: U8[]): U8[] //<
     //< no list to keep to. **`std` is closed** ("import syntax and path resolution" in
     //< docs/SPEC-programming-language.md). A `..` is checked first, since `std/../x` starts like a
     //< std name.
+    //< Caution: **Refuse a kept `..` for every package**: `ksmd/../../x` reaches any file
+    //< (`placed_elsewhere` in `locate.kspl`).
     if base_locate.is_std_file(target) && climbs(target)
         return base_core.arena.text()
             .s("'\{target\}' climbs out of the standard library: a name under 'std/' is one of its ")
             .s("files, and holds no '..'").take()
+    if climbs(target) && !target.starts_with("../")
+        out: = base_locate.package_of(target)
+        return base_core.arena.text()
+            .s("'\{target\}' climbs out of the package '\{out\}': a name under '\{out\}/' is one of \
+                ").s("its files, and holds no '..'").take()
     if base_locate.is_std_file(importer) && !base_locate.is_std_file(target)
         return base_core.arena.text()
             .s("the standard library reaches only its own files, and '\{target\}' is not one of \
@@ -199,6 +206,13 @@ fn refused_use(importer: U8[], target: U8[]): U8[] //<
     for u in decl.uses
         if u.equals(to)
             return ""
+    // **A path that climbs out of the package's folder names no package**: its first segment is
+    // `..`, or nothing once folded. Saying that it is not listed would name a package that is not.
+    if to.len == 0 || to.equals("..")
+        return base_core.arena.text()
+            .s("'\{target\}' climbs out of the package '\{from\}': its files reach their own ")
+            .s("package, 'std', and the packages listed under 'uses' in ")
+            .s(base_locate.to_project_relative(decl.file)).take()
     why: = base_core.arena.text()
     why
         .s("the package '\{from\}' does not say it uses '\{to\}' (add it to 'uses' in the [package] \

@@ -1,0 +1,292 @@
+//< Writes the table that lets a formula call the functions of one KSPL file, from their signatures
+//< The signatures come from `ksplc doc --emit-surface=<file>`, one tab-separated line each. Every
+//< `pub fn` there is a function a formula can call by its name. Its parameters are read through
+//< `Raw_args` (`ksmd/calc/args.kspl`), whose table says what each type takes; its result becomes
+//< the cell's value. The same writer serves ksmd's own functions (`ksmd/calc/functions.kspl`) and a
+//< person's, so both follow one set of rules.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Param //< one parameter of a function a formula calls
+    name: U8[]
+    kind: Param_kind
+    optional: Bool //< written `T?`: none where the formula leaves it out
+
+enum Param_kind //< the parameter types a formula's argument converts to (`Raw_args`)
+    number //< `F64`
+    whole //< `I64`
+    truth //< `Bool`
+    text //< `U8[]`
+    value //< `Value`
+    rest //< `Value[]`, the last of the arguments
+    arena //< `Arena$@`: not an argument, the memory a text result goes in
+
+enum Result_kind //< what a function gives back, and the value it becomes
+    number //< `F64`
+    whole //< `I64`, a number
+    truth //< `Bool`
+    text //< `U8[]`
+    value //< `Value`, as it is
+
+struct Function //< one function a formula can call
+    name: U8[]
+    params: List<|Param|>
+    result: Result_kind
+    throws: Bool //< it returns `T!Calc_error`, and an error it throws is the cell's
+
+fn functions_of(tsv: U8[], arena: Arena$@): List<|Function|>!U8[] //<
+    //< Every `pub fn` the record holds, or why one cannot be called from a formula
+    //< A constant, a type or a method is left out: a formula calls a function alone.
+    $out: = List<|Function|>(arena)
+    for line in tsv.lines(arena)
+        cols: = line.split('\t', arena)
+        if cols.len < 3 || cols.get(1).find_char('.').is_some() ||
+            cols.get(1).find_char(' ').is_some()
+            continue
+        sig: = cols.get(2)
+        if !sig.starts_with("pub fn ")
+            continue
+        out.push(function_of(sig.sub_from(7), arena)!)
+    return out
+
+priv fn function_of(sig: U8[], arena: Arena$@): Function!U8[] //<
+    //< `name(params): result`, without `pub fn `, read into what the table needs
+    open: = sig.find_char('(') catch
+        throw arena.text().s("cannot read the signature: \{sig\}").take()
+    close: = sig.rfind_char(')') catch
+        throw arena.text().s("cannot read the signature: \{sig\}").take()
+    name: = sig.sub(0, open)
+    if name.find_str("<|").is_some()
+        throw arena.text().s("\{name\}: a function a formula calls takes no type parameters").take()
+    after: = sig.sub_from(close + 1)
+    if !after.starts_with(": ")
+        throw arena.text().s("\{name\}: a function a formula calls returns a value").take()
+    $ret: = after.sub_from(2)
+    throws: = ret.ends_with("!Calc_error")
+    if throws
+        ret = ret.sub(0, ret.len - 11)
+    else if ret.find_char('!').is_some()
+        throw arena.text()
+            .s("\{name\}: a function a formula calls throws Calc_error alone, so its error shows as \
+                the cell's mark").take()
+    result: = result_of(ret) catch
+        throw arena.text()
+            .s("\{name\}: it returns \{ret\}, which no cell holds; return F64, I64, Bool, U8[] or \
+                Value").take()
+    $params: = List<|Param|>(arena)
+    inside: = sig.sub(open + 1, close - open - 1)
+    if inside.len > 0
+        for part in inside.split(',', arena)
+            params.push(param_of(name, part.trim_spaces(), arena)!)
+    check_order(name, params@, arena)!
+    return Function::{ .name = name, .params = params, .result = result, .throws = throws }
+
+priv fn param_of(fn_name: U8[], part: U8[], arena: Arena$@): Param!U8[] //< `name: Type`
+    colon: = part.find_str(": ") catch
+        throw arena.text().s("\{fn_name\}: cannot read the parameter \{part\}").take()
+    name: = part.sub(0, colon)
+    $ty: = part.sub_from(colon + 2)
+    if ty.find_str(" = ").is_some()
+        throw arena.text()
+            .s("\{fn_name\}: \{name\} has a default; write its type with ? instead, and none stands \
+                for an argument left out").take()
+    optional: = ty.ends_with("?")
+    if optional
+        ty = ty.sub(0, ty.len - 1)
+    kind: = kind_of(ty) catch
+        throw arena.text()
+            .s("\{fn_name\}: \{name\} is \{ty\}, which a formula's argument does not become; take \
+                F64, I64, Bool, U8[], Value, Value[] or Arena$@").take()
+    if optional && (kind == .rest || kind == .arena)
+        throw arena.text().s("\{fn_name\}: \{name\} cannot be left out").take()
+    return Param::{ .name = name, .kind = kind, .optional = optional }
+
+priv fn check_order(name: U8[], params: List<|Param|>@, arena: Arena$@): Void!U8[] //<
+    //< `Value[]` takes the arguments left, so it comes last; one left out cannot have a required
+    //< one after it. `Arena$@` takes no argument, so it may stand anywhere.
+    $seen_optional: = false
+    $seen_rest: = false
+    for i in Range.asc(params.len)
+        p: = params.get(i)
+        if p.kind == .arena
+            continue
+        if seen_rest
+            throw arena.text().s("\{name\}: Value[] takes every argument left, so it comes last")
+                .take()
+        if p.kind == .rest
+            seen_rest = true
+        if p.optional
+            seen_optional = true
+        else if seen_optional
+            throw arena.text().s("\{name\}: \{p.name\} comes after one that can be left out").take()
+
+priv fn kind_of(ty: U8[]): Param_kind? //< the parameter kind a type names
+    if ty.equals("F64")
+        return .some(.number)
+    if ty.equals("I64")
+        return .some(.whole)
+    if ty.equals("Bool")
+        return .some(.truth)
+    if ty.equals("U8[]")
+        return .some(.text)
+    if ty.equals("Value")
+        return .some(.value)
+    if ty.equals("Value[]")
+        return .some(.rest)
+    if ty.equals("Arena$@")
+        return .some(.arena)
+    return .none
+
+priv fn result_of(ty: U8[]): Result_kind? //< the result kind a type names
+    if ty.equals("F64")
+        return .some(.number)
+    if ty.equals("I64")
+        return .some(.whole)
+    if ty.equals("Bool")
+        return .some(.truth)
+    if ty.equals("U8[]")
+        return .some(.text)
+    if ty.equals("Value")
+        return .some(.value)
+    return .none
+
+// ==========================================
+// The table's source
+// ==========================================
+
+fn table_source( //< the KSPL source of the table for these functions
+    fns: List<|Function|>@,
+    module: U8[], //< the functions' file as an import names it, such as `ksmd/calc/functions`
+    from: U8[], //< what to name as the source in the header, such as `ksmd/calc/functions.kspl`
+    arena: Arena$@,
+): U8[]
+    defer $out: = Str_builder()
+    out.s("//< The table that lets a formula call the functions of `\{from\}`\n")
+        .s("//< Written by `ksmd/calc/glue.kspl` from their signatures: do not edit it by hand. \
+            `make\n").s("//< ksmd-functions` writes it again after a signature changes.\n")
+    $values: = List<|U8[]|>(arena)
+    values.push("Value")
+    for name in U8[][]::{ "boolean", "empty", "number", "text" }
+        if uses(fns, name)
+            values.push(name)
+    out.s("import \"ksmd/calc/args\" { First_error, Raw_args }\n")
+        .s("import \"\{module\}\" as fns\n").s("import \"ksmd/calc/value\" { ")
+        .s(joined(values@, arena)).s(" }\n").s("import \"std/str\" // `equals`\n\n")
+    out.s("fn call(name: U8[], a: Raw_args$@): Value? //<\n")
+        .s("    //< The value of the function `name` on the arguments `a` reads; none for no such \
+            name\n")
+    for i in Range.asc(fns.len)
+        f: = fns.get(i)
+        out.s("    if name.equals(\"\{f.name\}\")\n        return .some(call_\{f.name\}(a))\n")
+    out.s("    return .none\n")
+    out.s("\nconst NAMES: U8[][_] = ::{\n")
+    for i in Range.asc(fns.len)
+        out.s("    \"").s(fns.get(i).name).s("\",\n")
+    out.s("} //< every function this table calls, by its name\n")
+    for i in Range.asc(fns.len)
+        f: = fns.get(i)
+        reader(f@, out@, arena)
+    return arena.dup_str(out.slice())
+
+priv fn uses(fns: List<|Function|>@, name: U8[]): Bool //< whether the table calls `name` of value
+    for i in Range.asc(fns.len)
+        f: = fns.get(i)
+        if name.equals("empty")
+            return true
+        if name.equals("number") && (f.result == .number || f.result == .whole)
+            return true
+        if name.equals("boolean") && f.result == .truth
+            return true
+        if name.equals("text") && f.result == .text
+            return true
+    return false
+
+priv fn joined(xs: List<|U8[]|>@, arena: Arena$@): U8[] //< the names, `, ` between them
+    t: = arena.text()
+    for i in Range.asc(xs.len)
+        t.s(", " if i > 0 else "").s(xs.get(i))
+    return t.take()
+
+priv fn reader(f: Function@, out: Str_builder$@, arena: Arena$@) //< the reader of one function
+    out.s("\npriv fn call_\{f.name\}(a: Raw_args$@): Value //< `\{f.name\}(…)`\n")
+    fallible: = can_fail(f)
+    if fallible
+        out.s("    $first: = First_error::{ .broken = false, .error = .syntax }\n")
+    for i in Range.asc(f.params.len)
+        p: = f.params.get(i)
+        read_param(p@, out, arena)
+    out.s("    if !a.calculating()\n        return empty()\n")
+    if fallible
+        out.s("    if first.broken\n        return Value.failed(first.error)\n")
+    t: = arena.text()
+    for i in Range.asc(f.params.len)
+        p: = f.params.get(i)
+        t.s(", " if i > 0 else "")
+            .s("a.arena()" if p.kind == .arena else local(p.name, arena))
+    call: = arena.text().s("fns.\{f.name\}(").s(t.take()).c(')').take()
+    if f.throws
+        out.s("    r: = ").s(call).s(" catch e\n        return Value.failed(e)\n")
+    else
+        out.s("    r: = ").s(call).c('\n')
+    switch f.result
+    case .number
+        out.s("    return number(r)\n")
+    case .whole
+        out.s("    return number(F64::r)\n")
+    case .truth
+        out.s("    return boolean(r)\n")
+    case .text
+        out.s("    return text(r)\n")
+    case .value
+        out.s("    return r\n")
+
+priv fn can_fail(f: Function@): Bool //< whether reading an argument can throw: any but `Value[]`
+    for i in Range.asc(f.params.len)
+        k: = f.params.get(i).kind
+        if k != .rest && k != .arena
+            return true
+    return false
+
+priv fn local(name: U8[], arena: Arena$@): U8[] //< a parameter's local, apart from the reader's own
+    return arena.text().s("p_").s(name).take()
+
+priv fn read_param(p: Param@, out: Str_builder$@, arena: Arena$@) //< reads one argument
+    if p.kind == .arena
+        return
+    name: = local(p.name, arena)
+    if p.kind == .rest
+        out.s("    \{name\}: = a.rest()\n")
+        return
+    $method: U8[] = ""
+    $zero: U8[] = ""
+    $ty: U8[] = ""
+    switch p.kind
+    case .number
+        method = "number"
+        zero = "0.0"
+        ty = "F64"
+    case .whole
+        method = "whole"
+        zero = "0I64"
+        ty = "I64"
+    case .truth
+        method = "truth"
+        zero = "false"
+        ty = "Bool"
+    case .text
+        method = "text"
+        zero = "\"\""
+        ty = "U8[]"
+    default
+        method = "value"
+        zero = "empty()"
+        ty = "Value"
+    if !p.optional
+        out.s("    \{name\}: = a.\{method\}() catch e\n        first.take(e)\n        fallback ")
+            .s(zero).c('\n')
+        return
+    out.s("    $\{name\}: \{ty\}? = .none\n    if a.more()\n")
+        .s("        got: = a.\{method\}() catch e\n            first.take(e)\n            fallback ")
+        .s(zero).s("\n        \{name\} = .some(got)\n")

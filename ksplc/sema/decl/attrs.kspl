@@ -75,7 +75,7 @@ priv struct Directive_args //<
     settings: Sz
     msg_is_string: Bool //< whether the second argument is a string (the assertion's message)
 
-priv fn scan_directive_args(r: Ast_node$@): Directive_args //<
+priv fn scan_directive_args(r: Ast_node@): Directive_args //<
     //< Scans a directive's arguments; **the name is not counted** (`Directive_prefix`'s child)
     $out: = Directive_args::{ .count = 0, .settings = 0, .msg_is_string = false }
     for ch in r.children
@@ -129,7 +129,7 @@ fn check_directive(r: Ast_node$@, c: Sema_ctx$@): Directive_shape //<
     case .libraries
         return check_link_directive(r, c)
 
-priv fn check_link_directive(r: Ast_node$@, c: Sema_ctx$@): Directive_shape //<
+priv fn check_link_directive(r: Ast_node@, c: Sema_ctx$@): Directive_shape //<
     //< Checks `##link("name", …)`: one or more library names, each as `-l` takes it
     //< **Each argument is checked on its own** (the rule is `is_library_name` in
     //< ksplc/base/ast_ext.kspl), so the message points at the one that is not a name. A flag or a
@@ -203,10 +203,6 @@ priv struct Attr_rule //< where one attribute takes effect, and which backend em
 impl Attr_owner
     priv fn bit(r: Self): U32 //< this position's bit in Attr_rule's masks
         return 1U32 << U32::r
-
-priv fn is_allowed_on(name: U8[], owner: Attr_owner): Bool //<
-    //< Whether the attribute name takes effect at that position (the positions are attr_rule's)
-    return (attr_rule(name).owners & owner.bit()) != 0
 
 priv fn attr_rule(name: U8[]): Attr_rule //<
     //< The positions, the diagnostic's text and the backends of a known attribute, in one place
@@ -328,7 +324,7 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
         c.err(id_node, c.scratch.slice())
         return
     rule: = attr_rule(name)
-    if !is_allowed_on(name, owner)
+    if (rule.owners & owner.bit()) == 0
         if owner == Attr_owner.extern_struct_decl
             report_attribute_on_extern_struct(name, id_node, c)
             return

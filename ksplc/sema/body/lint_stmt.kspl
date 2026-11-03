@@ -41,7 +41,7 @@ fn find_last_leaf(node: Ast_node$@): Ast_node$@ //<
     last_child: = node.get_child(node.children.len - 1)
     return find_last_leaf(last_child)
 
-fn spans_multiple_lines(c: Sema_ctx$@, node: Ast_node$@): Bool
+fn spans_multiple_lines(c: Sema_ctx@, node: Ast_node$@): Bool
     // Caution: **Do not measure a node with no children.** The `()` of `f()` holds the kind's name
     // as placeholder `text`, so its length covers **bytes at an unrelated position**, and a newline
     // there reads as "it wraps". A single token has nothing to wrap.
@@ -131,7 +131,7 @@ fn lint_if_stmt(c: Sema_ctx$@, r: Ast_node$@, then_block: Ast_node$@, else_block
     if then_block.children.len == 0
         if else_block == null || else_block.kind_id == .k_empty
             lint_empty_block(c, r, "if", "Consider removing it.")
-        else if else_block.kind_id != .k_empty && else_block.children.len > 0
+        else if else_block.children.len > 0
             lint_empty_block(c, r, "if",
                 "Consider inverting the condition with '!' and removing the 'else' block.")
     else if else_block != null && else_block.kind_id != .k_empty
@@ -259,7 +259,8 @@ priv fn resolved_real_type(c: Sema_ctx$@, name: U8[]): I32 //<
 priv fn is_signed_int_symbol(c: Sema_ctx$@, name: U8[]): Bool //<
     //< Whether the accumulating variable is a signed integer type
     //< An unsigned one is often a deliberate wraparound, as in an FNV hash.
-    real_id: = resolved_real_type(c, name)
+    return is_signed_int_id(resolved_real_type(c, name))
+priv fn is_signed_int_id(real_id: I32): Bool //< whether a real type id is a signed integer type
     return real_id == (I32::sema_type_env.Builtin_type_id.i8_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.i16_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.i32_type) ||
@@ -268,9 +269,9 @@ priv fn is_integer_symbol(c: Sema_ctx$@, name: U8[]): Bool //<
     //< Whether the variable of a multiplying compound assignment (`*=`) is any integer type
     //< Signed and unsigned both count: an unsigned product such as a shape's size can lead straight
     //< to an out-of-bounds write.
-    if is_signed_int_symbol(c, name)
-        return true
     real_id: = resolved_real_type(c, name)
+    if is_signed_int_id(real_id)
+        return true
     return real_id == (I32::sema_type_env.Builtin_type_id.u8_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.u16_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.u32_type) ||

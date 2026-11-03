@@ -6,7 +6,11 @@ import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/formula" { Token_kind }
 import "std/strnum"
 
-enum Calc_error //< why a cell has no value; each is fixed differently
+// **What a person's own functions use is public, so [I0402] is off here.** Their file stands in
+// their own workspace, outside this package, and calls these; the lint sees only ksmd's own uses.
+##lint(I0402 = off)
+
+pub enum Calc_error //< why a cell has no value; each is fixed differently
     wrong_kind //< text or true and false in arithmetic, or two kinds ordered: `#VALUE!`
     division //< a division by zero: `#DIV/0!`
     not_finite //< a result too large for a number: `#NUM!`
@@ -15,9 +19,12 @@ enum Calc_error //< why a cell has no value; each is fixed differently
     no_numbers //< `min`, `max` or `average` of no numbers: `#EMPTY!`
     shape //< a condition's range not as tall as its values, or a condition with no range: `#SHAPE!`
     syntax //< the formula does not read: `#SYNTAX!`
+    pending //< a person's own function whose answer has not come yet: `…`
+    time_limit //< a person's own function ran past its time: `#TIME!`
+    stopped //< a person's own function stopped, by a panic or a fault: `#STOPPED!`
 
 impl Calc_error
-    fn mark(e: Self): U8[] //< what the cell shows
+    pub fn mark(e: Self): U8[] //< what the cell shows
         switch e
         case .wrong_kind
             return "#VALUE!"
@@ -35,8 +42,14 @@ impl Calc_error
             return "#SHAPE!"
         case .syntax
             return "#SYNTAX!"
+        case .pending
+            return "…"
+        case .time_limit
+            return "#TIME!"
+        case .stopped
+            return "#STOPPED!"
 
-enum Value_kind //< a formula's value is never empty: an empty cell's value as a formula's is 0
+pub enum Value_kind //< a formula's value is never empty: an empty cell's value as a formula's is 0
     empty
     number
     text //< a text cell's text, or text a formula gives
@@ -44,15 +57,15 @@ enum Value_kind //< a formula's value is never empty: an empty cell's value as a
     boolean //< `true` or `false`
     error
 
-struct Value //< the small fields first, so they share one word
-    kind: Value_kind
-    boolean: Bool //< true for `true`; false for the other kinds
-    error: Calc_error //< an error's reason; `.syntax` for the other kinds
-    number: F64 //< a number's value, or a date's day; 0 for the other kinds
-    text: U8[] //< a text's bytes; empty for the other kinds
+pub struct Value //< the small fields first, so they share one word
+    pub kind: Value_kind
+    pub boolean: Bool //< true for `true`; false for the other kinds
+    pub error: Calc_error //< an error's reason; `.syntax` for the other kinds
+    pub number: F64 //< a number's value, or a date's day; 0 for the other kinds
+    pub text: U8[] //< a text's bytes; empty for the other kinds
 
 impl Value
-    fn failed(e: Calc_error): Value //< the value of a cell that has none, for this reason
+    pub fn failed(e: Calc_error): Value //< the value of a cell that has none, for this reason
         return Value::{ .kind = .error, .number = 0.0, .text = "", .boolean = false, .error = e }
 
 fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the key looked for
@@ -90,7 +103,7 @@ fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
         return Value.failed(.division)
     return number(a.number / b.number)
 
-fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
+pub fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
     //< an error
     switch v.kind
     case .empty
@@ -100,7 +113,7 @@ fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true 
     case .number, .error
         return v
 
-fn truth(v: Value): Value //< a value as a condition: empty is false, a number or text an error
+pub fn truth(v: Value): Value //< a value as a condition: empty is false, a number or text an error
     switch v.kind
     case .empty
         return boolean(false)
@@ -192,7 +205,7 @@ priv fn date_arithmetic(x: Value, y: Value, op: Token_kind): Value //<
         return Value.failed(.not_finite)
     return date_value(day)
 
-fn date_value(day: I64): Value //< a date; the caller keeps the day in the years 1 to 9999
+pub fn date_value(day: I64): Value //< a date; the caller keeps the day in the years 1 to 9999
     return Value::{ .kind = .date, .number = F64::day, .text = "", .boolean = false,
         .error = .syntax }
 
@@ -201,17 +214,17 @@ fn number_of(text: U8[]): Value //< a number written in decimal; one too large i
         return Value.failed(.not_finite)
     return number(n)
 
-fn number(n: F64): Value //< a number; an infinity or a NaN is an error
+pub fn number(n: F64): Value //< a number; an infinity or a NaN is an error
     if n - n != 0.0
         return Value.failed(.not_finite)
     return Value::{ .kind = .number, .number = n, .text = "", .boolean = false, .error = .syntax }
 
-fn text(s: U8[]): Value
+pub fn text(s: U8[]): Value
     return Value::{ .kind = .text, .number = 0.0, .text = s, .boolean = false, .error = .syntax }
 
-fn boolean(b: Bool): Value
+pub fn boolean(b: Bool): Value
     return Value::{ .kind = .boolean, .number = 0.0, .text = "", .boolean = b, .error = .syntax }
 
-fn empty(): Value
+pub fn empty(): Value
     return Value::{ .kind = .empty, .number = 0.0, .text = "", .boolean = false,
         .error = .syntax }

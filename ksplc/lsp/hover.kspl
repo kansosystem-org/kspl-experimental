@@ -38,7 +38,7 @@ fn handle(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Are
         return
     answer_at(state, path, path.get(path.len - 1), id_val, arena)
 
-priv fn send_cfg_inactive_hover(state: Doc_state$@, params: json.Value, id_val: json.Value,
+priv fn send_cfg_inactive_hover(state: Doc_state@, params: json.Value, id_val: json.Value,
     arena: Arena$@): Bool //<
         //< It sends, as the hover, the reason a `#cfg()` left the range unanalysed
         //< It returns true where it sent the reason; elsewhere it sends nothing and returns false.
@@ -98,7 +98,7 @@ priv fn find_owner_of_fn(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bo
         return from_instance
     return find_owner_in_tree(state.sema, state.root_file, def_node)
 
-priv fn find_owner_in_tree(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
+priv fn find_owner_in_tree(c: Sema_ctx$@, root: Ast_node@, def_node: Ast_node$@): U8[] //<
     //< The owner's full name read from the tree, for a generic trait or impl nothing instantiated
     //< Such a declaration has no entry among the types.
     //<
@@ -146,14 +146,14 @@ priv fn named_decl(type_node: Ast_node$@): Ast_node$@? //<
             return .some(path.def_node)
     return .none
 
-priv fn shown_type(c: Sema_ctx$@, type_node: Ast_node$@): U8[] //<
+priv fn shown_type(c: Sema_ctx$@, type_node: Ast_node@): U8[] //<
     //< The type a header names, as displayed, or "" where the analysis resolved none
     if c == null || type_node == null || type_node.type_id == 0
         return ""
     shown: = c.env.display(type_node.type_id)
     return base_core.arena.dup_str(shown)
 
-priv fn owns_fn(entry: sema_type_def.Entry$@, def_node: Ast_node$@): Bool //<
+priv fn owns_fn(entry: sema_type_def.Entry$@, def_node: Ast_node@): Bool //<
     //< Whether that entry's table (`Entry.methods` in `../sema/type/def`) holds the declaration
     //< **A trait's requirements are not here.** They belong to the trait's own definition
     //< (`add_trait_method` in `../sema/decl/trait_check.kspl`), so this answers false for them.
@@ -231,7 +231,7 @@ priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, s
         hover_text.s(")")
     hover_text.s(" = \{variant_def.tag_value\}")
 
-priv fn is_label_name(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Bool //<
+priv fn is_label_name(path: List<|Ast_node$@|>@, target_node: Ast_node$@): Bool //<
     //< Whether the hovered name is a label
     //< It is where one is written, or where a `break` / `continue` names it.
     if path.len < 2 || target_node.kind_id != .k_identifier
@@ -385,7 +385,7 @@ priv fn write_fn_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn:
     else
         out.s("()")
 
-priv fn send_literal_type(state: Doc_state$@, literal: Ast_node$@, id_val: json.Value,
+priv fn send_literal_type(state: Doc_state$@, literal: Ast_node@, id_val: json.Value,
     arena: Arena$@) //<
         //< It answers a hover on a literal with the type the analysis gave it, and nothing else
         //< **The type is the one that literal took in its place** (`4` in `x: Sz = 4` is `Sz`),
@@ -569,7 +569,7 @@ priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     else
         ctx.prefix = unresolved_prefix(path, target_node)
     ctx.fallback_str.s(target_node.text)
-priv fn unresolved_prefix(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): U8[] //<
+priv fn unresolved_prefix(path: List<|Ast_node$@|>@, target_node: Ast_node@): U8[] //<
     //< It guesses an unresolved identifier's prefix from the node that precedes it
     if path.len < 2
         return "(Unresolved) "
@@ -586,7 +586,7 @@ priv fn is_field_def(d: Ast_node$@): Bool //<
     //< Whether the definition found is a field (a struct's or an enum payload's)
     return d != null && (d.kind_id == .k_struct_field || d.kind_id == .k_enum_field)
 
-priv fn walk_path_for_type(path: List<|Ast_node$@|>$@, target_node: Ast_node$@, ctx: Hover_ctx$@) //<
+priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, ctx: Hover_ctx$@) //<
     //< From the path's tail, the type and prefix of the first node with a type ID or definition
     for $idx: = path.len; idx > 0; idx -= 1
         p: = path.get(idx - 1)
@@ -655,7 +655,7 @@ priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: 
     out.c('.')
     return true
 
-priv fn enclosing_impl_target(path: List<|Ast_node$@|>$@): U8[] //<
+priv fn enclosing_impl_target(path: List<|Ast_node$@|>@): U8[] //<
     //< The name of the type the innermost enclosing `impl` is for, or ""
     for $k: = path.len; k > 0; k -= 1
         n: = path.get(k - 1)
@@ -667,7 +667,7 @@ priv fn enclosing_impl_target(path: List<|Ast_node$@|>$@): U8[] //<
         return tp.get_path_name() if tp != null else ""
     return ""
 
-priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node$@,
+priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node@,
     fqn_name: Str_builder$@)
     $orig_name: = target_node.text
     $sym: Sema_symbol$@ = null

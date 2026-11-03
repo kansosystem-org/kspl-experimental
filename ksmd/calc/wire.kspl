@@ -1,0 +1,150 @@
+//< A call to a person's function, and its answer, as bytes between the page and its worker
+//< The page writes the call (`put_call`); the person's module reads it (`read_call`), runs the
+//< function, and writes its value back (`put_answer`), which the page reads (`read_answer`).
+//< **One module writes and reads both**, so the two sides cannot drift apart. Every number is
+//< little-endian, every text its length in four bytes, then its bytes:
+//<
+//< | Part | Bytes |
+//< | :-- | :-- |
+//< | A value | its kind's and its error's names as texts, its truth (one byte), its number (an F64's eight bytes), its text |
+//< | A call | the function's name as text, the count of arguments (four bytes), then each argument |
+//< | An argument | 0 then a value; or 1, the count of cells (four bytes), then each cell's value |
+//< | An answer | a value, then 1 where the arguments did not fit the function's parameters, else 0 |
+import "ksmd/calc/args" { Raw_arg }
+import "ksmd/calc/value" { Calc_error, Value, Value_kind, empty }
+import "std/bignat" { f64_from_bits, f64_to_bits }
+import "std/bytes" // `get_u32_le` and the rest
+import "std/chars" // `sub`
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+// **The person's module reads these, outside this package, so [I0402] is off here.**
+##lint(I0402 = off)
+
+pub struct Call //< a call read from its bytes
+    pub name: U8[]
+    pub args: Raw_arg[]
+
+pub struct Answer //< an answer read from its bytes
+    pub value: Value
+    pub misread: Bool //< the arguments did not fit the function's parameters
+
+pub enum Wire_error //< why bytes are no call or answer: one side is not the other's build
+    cut //< they end inside a part
+    unknown //< a kind or an error that no value has
+
+// ==========================================
+// Writing
+// ==========================================
+
+pub fn put_call(out: Writer, name: U8[], args: Raw_arg[]) //< a call to `name`
+    put_text(out, name)
+    put_u32(out, args.len)
+    for a in args
+        if !a.is_cells
+            out.c(0U8)
+            put_value(out, a.value)
+            continue
+        out.c(1U8)
+        put_u32(out, a.cells.len)
+        for v in a.cells
+            put_value(out, v)
+
+pub fn put_answer(out: Writer, v: Value, misread: Bool) //< a function's answer
+    put_value(out, v)
+    out.c(1U8 if misread else 0U8)
+
+priv fn put_value(out: Writer, v: Value)
+    put_text(out, v.kind.variant_name())
+    put_text(out, v.error.variant_name())
+    out.c(1U8 if v.boolean else 0U8)
+    $b: U8[8] = ::{}
+    (U8$[]::b).put_u64_le(0, f64_to_bits(v.number))
+    out.s(U8[]::b)
+    put_text(out, v.text)
+
+priv fn put_text(out: Writer, s: U8[])
+    put_u32(out, s.len)
+    out.s(s)
+
+priv fn put_u32(out: Writer, n: Sz)
+    $b: U8[4] = ::{}
+    (U8$[]::b).put_u32_le(0, U32::n)
+    out.s(U8[]::b)
+
+// ==========================================
+// Reading
+// ==========================================
+
+pub fn read_call(data: U8[], arena: Arena$@): Call!Wire_error //< the call the bytes hold
+    $r: = Reader::{ .data = data, .at = 0 }
+    name: = r.text()!
+    n: = r.count()!
+    $args: = List<|Raw_arg|>(arena)
+    for _ in Range.asc(n)
+        tag: = r.byte()!
+        if tag == 0U8
+            args
+                .push(Raw_arg::{ .value = r.value()!, .cells = Value[]::{}, .is_cells = false,
+                .range = false, .piece = -1 })
+            continue
+        if tag != 1U8
+            throw .unknown
+        cells: = r.count()!
+        $vs: = List<|Value|>(arena)
+        for _c in Range.asc(cells)
+            vs.push(r.value()!)
+        args
+            .push(Raw_arg::{ .value = empty(), .cells = vs.slice(), .is_cells = true,
+            .range = cells != 1, .piece = -1 })
+    return Call::{ .name = name, .args = args.slice() }
+
+pub fn read_answer(data: U8[]): Answer!Wire_error //< the answer the bytes hold
+    $r: = Reader::{ .data = data, .at = 0 }
+    v: = r.value()!
+    flag: = r.byte()!
+    misread: = flag == 1U8
+    return Answer::{ .value = v, .misread = misread }
+
+priv struct Reader //< bytes, and how far they are read
+    data: U8[]
+    at: Sz
+
+impl Reader
+    priv fn byte(r: Self$@): U8!Wire_error
+        if r.at >= r.data.len
+            throw .cut
+        b: = r.data[r.at]
+        r.at += 1
+        return b
+
+    priv fn count(r: Self$@): Sz!Wire_error //< a count or a length, in four bytes
+        if r.data.len - r.at < 4
+            throw .cut
+        n: = r.data.get_u32_le(r.at)
+        r.at += 4
+        return Sz::n
+
+    priv fn text(r: Self$@): U8[]!Wire_error //< a text, as a view into the bytes
+        n: = r.count()!
+        if r.data.len - r.at < n
+            throw .cut
+        s: = r.data.sub(r.at, n)
+        r.at += n
+        return s
+
+    priv fn value(r: Self$@): Value!Wire_error
+        kind_name: = r.text()!
+        error_name: = r.text()!
+        t: = r.byte()!
+        truth: = t == 1U8
+        if r.data.len - r.at < 8
+            throw .cut
+        bits: = r.data.get_u64_le(r.at)
+        r.at += 8
+        text: = r.text()!
+        if kind: = Value_kind.from_variant_name(kind_name)
+            if error: = Calc_error.from_variant_name(error_name)
+                return Value::{ .kind = kind, .error = error, .boolean = truth,
+                    .number = f64_from_bits(bits), .text = text }
+        throw .unknown

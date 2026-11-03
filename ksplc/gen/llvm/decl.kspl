@@ -28,7 +28,7 @@ priv const MAX_LAID_DEPTH: Sz = 1000 //< how deep holds_laid_value looks into fi
     //< A type holding itself by value is refused before codegen; this only stops a broken input.
 
 impl Ast_node
-    fn emit_llvm_extern_block(r: Ast_node$@, cg: Genllvm_ctx$@)
+    fn emit_llvm_extern_block(r: Ast_node@, cg: Genllvm_ctx$@)
         if r == null
             return
         for child in r.children
@@ -211,7 +211,7 @@ impl Ast_node
             return r.get_child(0).is_typed_null()
         return false
 
-    priv fn emit_llvm_const_float(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32)
+    priv fn emit_llvm_const_float(r: Ast_node@, cg: Genllvm_ctx$@, type_id: I32)
         val_type_id: = type_id if type_id != 0 else r.type_id
         // Strip the immutability qualifier. `const S: F32[_]`'s element is `const_of(F32)`, which
         // stays decimal if unstripped. LLVM rejects 0.85 as "floating point constant invalid for
@@ -226,7 +226,7 @@ impl Ast_node
         r.text.append_clean_number(clean_str@, "Ff")
         cg.s(clean_str.slice())
 
-    priv fn emit_llvm_const_string(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
+    priv fn emit_llvm_const_string(r: Ast_node@, cg: Genllvm_ctx$@, type_id: I32) //<
         //< It adds a string literal to the string pool and emits a constant pointing at its bytes
         //< For a pointer type it is the address itself. For a slice type it becomes the two-element
         //< struct {ptr, len} (the same shape as an embed's).
@@ -398,7 +398,7 @@ impl Ast_node
             slots.get(i).emit_llvm_const_init(cg, elem_id)
         cg.s(" ]")
 
-    priv fn const_struct_slots(r: Ast_node$@, s_def: sema_type_def.Struct_def$@):
+    priv fn const_struct_slots(r: Ast_node$@, s_def: sema_type_def.Struct_def@):
         List<|Ast_node$@|> //<
             //< A struct literal's field initializers in declaration order, null where none is given
             //< The caller frees the list.
@@ -492,7 +492,7 @@ impl Ast_node
             v_def = v
         case .none
             r.ice_panic("genllvm: a global initializer names a variant its enum lacks")
-        parts.tag(cg, cg.enum_tag_type(enum_id), v_def.tag_value)
+        parts.tag(cg.enum_tag_type(enum_id), v_def.tag_value)
         args: = r.find_child(.k_expr_args) if r.kind_id == .k_enum_init_call else null
         payload_at: = cg.sema.enum_payload_offset(enum_id)
         $k: Sz = 0
@@ -517,14 +517,11 @@ impl Ast_node
             cg.had_error = true
             return
         if file_data.ptr != null
-            global_name: = id
-
             $f_len: = file_data.len
             if f_len == 0
                 f_len = 1
 
-            cg.s("@.embed_data_").s(global_name)
-                .s(" = private unnamed_addr constant [\{f_len\} x i8] ")
+            cg.s("@.embed_data_").s(id).s(" = private unnamed_addr constant [\{f_len\} x i8] ")
             if file_data.len > 0
                 cg.s("c\"")
                 for bi in Range.asc(file_data.len)
@@ -534,8 +531,8 @@ impl Ast_node
             else
                 cg.s("zeroinitializer\n")
 
-            cg.s("@").s(global_name).s(" = global %Const_U8_Slice { ptr @.embed_data_")
-                .s(global_name).s(", i64 \{file_data.len\} }\n\n")
+            cg.s("@").s(id).s(" = global %Const_U8_Slice { ptr @.embed_data_").s(id)
+                .s(", i64 \{file_data.len\} }\n\n")
             dealloc(Void$@::file_data.ptr)
 
     fn emit_llvm_fn_def(r: Ast_node$@, cg: Genllvm_ctx$@)
@@ -622,9 +619,9 @@ impl Ast_node
         $src_reg: = cg.param_reg(p_name)
         if use_kspl_abi && cg.is_llvm_aggregate(p_type_id)
             load_reg: = cg.next_reg()
-            cg.s("    %\{load_reg\} = load ").t(p_type_id).s(", ptr ").s(src_reg).s("\n")
+            cg.op_load(load_reg, p_type_id, src_reg)
             src_reg = cg.reg_str(load_reg)
-        cg.s("    store ").t(p_type_id).s(" ").s(src_reg).s(", ptr ").s(slot).s("\n")
+        cg.op_store(p_type_id, src_reg, slot)
 
 fn emit_llvm_const_arrays(cg: Genllvm_ctx$@) //<
     //< Writes each array literal a global slice points at (`const_arrays` in gen/llvm/ctx.kspl)
@@ -675,13 +672,13 @@ impl Laid_parts
             r.cg.s(" zeroinitializer")
         r.pos = off
 
-    fn tag(r: Self$@, cg: Genllvm_ctx$@, tag_id: I32, v: I64) //<
+    fn tag(r: Self$@, tag_id: I32, v: I64) //<
         //< a tagged union's tag, its base type
         r.sep()
-        cg.t(tag_id)
+        r.cg.t(tag_id)
         if !r.as_type
-            cg.s(" \{v\}")
-        r.pos += cg.sema.type_layout(tag_id).size
+            r.cg.s(" \{v\}")
+        r.pos += r.cg.sema.type_layout(tag_id).size
 
     fn piece(r: Self$@, node: Ast_node$@, type_id: I32, size: Sz) //< one initializer at its type
         r.sep()

@@ -15,7 +15,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/http"
 import "std/io"
-import "std/json" + { Json_builder }
+import "std/json" { Json_builder }
 import "std/math"
 import "std/mem" { Arena }
 import "std/net"
@@ -118,7 +118,7 @@ priv fn refusal_of(e: http.Http_error, arena: Arena$@): Answer //< the answer to
     default
         return failure(400, "the request is not well-formed HTTP", arena)
 
-priv fn write_answer(conn: net.Tcp_stream$@, a: Answer, arena: Arena$@) //<
+priv fn write_answer(conn: net.Tcp_stream@, a: Answer, arena: Arena$@) //<
     //< Sends one answer with its length, then the connection closes
     $head: = http.headers(arena).add("Content-Type", "application/json").add("Connection", "close")
     if a.status == 405
@@ -134,12 +134,7 @@ priv fn failure(status: I32, message: U8[], arena: Arena$@): Answer //<
     kind: = "server_error" if status >= 500 else "invalid_request_error"
     err: = b.obj().set("message", b.str_val(message)).set("type", b.str_val(kind)).build()
     return Answer::{ .status = status,
-        .body = dumped(b.obj().set("error", err).build(), arena), .streamed = false }
-
-priv fn dumped(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text
-    defer $out: = Str_builder()
-    v.dump(out@)
-    return arena.dup_str(out.slice())
+        .body = reply.dumped(b.obj().set("error", err).build(), arena), .streamed = false }
 
 priv fn route(req: http.Request$@, s: Server$@, conn: net.Tcp_stream$@, arena: Arena$@): Answer //<
     //< The answer for a request's method and path
@@ -163,7 +158,7 @@ priv fn route(req: http.Request$@, s: Server$@, conn: net.Tcp_stream$@, arena: A
             .set("owned_by", b.str_val("ksai")).build()
         list: = b.obj().set("object", b.str_val("list"))
             .set("data", b.arr().push(one).build()).build()
-        return Answer::{ .status = 200, .body = dumped(list, arena), .streamed = false }
+        return Answer::{ .status = 200, .body = reply.dumped(list, arena), .streamed = false }
     return failure(404,
         arena.text().s("there is no endpoint at ").s(req.target)
         .s(": this server answers POST /v1/chat/completions and GET /v1/models").take(), arena)

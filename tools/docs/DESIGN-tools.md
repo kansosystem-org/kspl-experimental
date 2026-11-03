@@ -314,7 +314,7 @@ flowchart TD
 
 | Decision | Why |
 | :-- | :-- |
-| **The launcher starts the model server, though a page may start no program** | The person's own command starts it, once, before any page opens. No page request reaches it ("It starts no program" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
+| **The launcher starts the model server, though a page may start no program** | The person's own command starts it, once, before any page opens. No page request reaches it ("It starts one program at most" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
 | **It chooses the server itself: `llama-server` where it starts from PATH, otherwise `chat_server`** | The person makes no choice. `llama-server` uses the graphics card. `chat_server` needs nothing from outside, so the command works without llama.cpp, slowly, and says so |
 | **Starting `llama-server` is the test of whether it is on PATH** | The runtime looks a bare name up in PATH alone, on every OS. A second lookup could disagree with it |
 | **Where neither `llama-server` nor a built `chat_server` is there, the launcher stops and names `make chat-server NATIVE=1`** | Installing llama.cpp is the better way. A build that started by itself would commit the person to answers that take minutes. A program that make started would also need make's name and settings to build |

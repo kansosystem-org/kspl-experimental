@@ -11,6 +11,7 @@
 import "ksdb/store" { Store }
 import "std/bytes" as std_bytes
 import "std/chars" // classifying and extracting one character
+import "std/math"
 
 // Only one buffer is held, because `Store` carries no context pointer.
 priv $cell: U8$[] = ""
@@ -43,9 +44,7 @@ priv fn program_at(at: Sz, src: U8[]): Bool //<
         // **Disarm it after one cut.** A real device restarts after a power cut, so it never
         // happens twice in one run.
         cut_at = 0
-        $n: Sz = cut_bytes
-        if n > src.len
-            n = src.len
+        n: = math.min(cut_bytes, src.len)
         for i in Range.asc(n)
             cell[at + i] = cell[at + i] & src[i]
         // Caution: **Do not count it as a write.** Counted, it would throw off the tests that check
@@ -63,9 +62,7 @@ priv fn erase_sector_at(at: Sz): Bool
         // Disarmed after one cut, as in `program_at`. **Only the sector's first bytes are erased**;
         // the rest keeps what it held, as an erase stopped partway leaves it.
         erase_cut_at = 0
-        $n: Sz = erase_cut_bytes
-        if n > sector
-            n = sector
+        n: = math.min(erase_cut_bytes, sector)
         part: = cell.sub_mut(base, n)
         part.fill(0xff)
         return false

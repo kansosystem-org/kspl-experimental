@@ -8,7 +8,7 @@
 // Caution: **Do not discard a broken frame silently**, or the sender learns only that "nothing
 // comes back".
 // ==========================================
-import "std/chars" // `find_str` / `sub_from` / `trim_spaces`
+import "std/chars" // `find_str` / `find_char` / `sub_from` / `trim_spaces`
 import "std/json" + { Json_builder }
 import "std/mem" + { Arena }
 import "std/str" { Str_builder }
@@ -40,9 +40,7 @@ pub fn content_length( //< the length the header declares, or none if it declare
     $found: Sz? = .none
     $at: Sz = 0
     for at < head.len
-        $end: = at
-        for end < head.len && head[end] != '\n'
-            end += 1
+        end: = at + head.sub_from(at).find_char('\n').unwrap_or(head.len - at)
         line: = head.sub(at, end - at)
         at = end + 1
         if !line.sub(0, LENGTH_TAG.len).equals_ignore_case(LENGTH_TAG)

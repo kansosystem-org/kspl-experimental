@@ -57,7 +57,6 @@ function startOpener(exe, root, modelPort) {
       if (m && !child.url) {
         clearTimeout(timer);
         child.url = m[0];
-        child.token = m[3];
         child.base = m[1];
         resolve(child);
       }

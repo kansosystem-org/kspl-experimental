@@ -10,10 +10,6 @@
 // ==========================================
 import "std/mem" { alloc_as, dealloc, init_at, drop_at }
 
-priv fn release_value<|T|>(place: T$@) //<
-    //< Releases the initialized payload when its last shared owner disappears
-    drop_at(place)
-
 // ============================ Rc<T> ============================
 
 priv struct Control<|T|> //< the storage shared by the single-thread and atomic wrappers
@@ -84,7 +80,7 @@ impl<|T|> Rc<|T|>: Ref_counted //< the compiler counts it, so no call is written
         r.ctrl.strong -= 1
         if r.ctrl.strong > 0
             return
-        release_value<|T|>(r.ctrl.value@)
+        drop_at(r.ctrl.value@)
         r.ctrl.weak -= 1
         if r.ctrl.weak == 0
             dealloc(Void$@::r.ctrl)
@@ -185,7 +181,7 @@ impl<|T|> Arc<|T|>: Ref_counted //< the compiler counts it, so no call is writte
         prev_strong: = kspl_atomic_add(r.ctrl.strong@, -1)
         if prev_strong == 1
             // The implicit weak, still held, keeps the block alive while the value is released.
-            release_value<|T|>(r.ctrl.value@)
+            drop_at(r.ctrl.value@)
             _drop_implicit_weak<|T|>(r.ctrl)
 
 impl<|T|> Weak_arc<|T|>

@@ -8,6 +8,7 @@ import "ksai/tensor" + { Tensor } // `matmul_split`, which a BLAS build does not
 #cfg(blas)
 import "ksai/tensor" { Tensor }
 import "ksai/tests/quant_case" + { Case, Product_case }
+import "std/bignat"
 import "std/bytes" as std_bytes
 import "std/chars"
 import "std/io"
@@ -168,7 +169,7 @@ priv fn matrix_in(format: Quant_format, src: Tensor<|F32|>, arena: Arena$@): Qua
             (bytes + 2 * i)$ = U8::(h & 0xFF)
             (bytes + 2 * i + 1)$ = U8::(h >> 8)
         case .bf16
-            b: = quant.f32_bits(v)
+            b: = bignat.f32_to_bits(v)
             (bytes + 2 * i)$ = U8::((b >> 16) & 0xFF)
             (bytes + 2 * i + 1)$ = U8::(b >> 24)
         case .q5_0, .q8_0, .q3_k, .q4_k, .q5_k, .q6_k {}
@@ -265,7 +266,7 @@ fn test_quant_inputs_round_as_ggml(arena: Arena$@) //<
                 $at: Sz = 2
                 if block == quant.QK_K
                     at = 4
-                    assert(quant.f32_bits(d) == ref.get_u32_le(0), "quant: a Q8_K scale differs")
+                    assert(bignat.f32_to_bits(d) == ref.get_u32_le(0), "quant: a Q8_K scale differs")
                     for g in Range.asc(quant.QK_K / 32)
                         pair: =
                             I32::I16::ref.get_u16_le(4 + 256 + 4 * g) + I32::I16::ref
@@ -273,8 +274,8 @@ fn test_quant_inputs_round_as_ggml(arena: Arena$@) //<
                         assert((q8.sums + (t * c.cols + b * block) / 32 + g)$ == pair,
                             "quant: a Q8_K sum differs")
                 else
-                    assert(quant.f32_bits(d) == quant
-                        .f32_bits(quant.f16_to_f32(ref.get_u16_le(0))),
+                    assert(bignat.f32_to_bits(d) == bignat
+                        .f32_to_bits(quant.f16_to_f32(ref.get_u16_le(0))),
                         "quant: a Q8_0 scale differs")
                 for i in Range.asc(block)
                     got: = (q8.q + t * c.cols + b * block + i)$
@@ -389,11 +390,11 @@ fn test_quant_integer_products_are_exact(arena: Arena$@) //<
             for i in Range.asc(c.rows)
                 want: = plain_product(w@, i, q8@, t)
                 got: = (y.data + t * c.rows + i)$
-                if quant.f32_bits(want) != quant.f32_bits(got)
+                if bignat.f32_to_bits(want) != bignat.f32_to_bits(got)
                     io.err()
                         .s("blocks of \{c.format.block_bytes()\} bytes, input \{t\} row \{i\}: \
                             \{got\} for \{want\}\n")
-                assert(quant.f32_bits(want) == quant.f32_bits(got),
+                assert(bignat.f32_to_bits(want) == bignat.f32_to_bits(got),
                     "quant: an integer product differs from the plain sum")
                 checked += 1
         q8.free()
@@ -488,13 +489,14 @@ fn test_quant_threads_give_the_same_bits(arena: Arena$@) //<
     used: = w.mul_mat_on(x, many, 4) catch panic("quant: the product on threads was refused")
     assert(used > 1, "quant: the split ran on one thread only, so it was not checked")
     for i in Range.asc(one.size)
-        assert(quant.f32_bits((one.data + i)$) == quant.f32_bits((many.data + i)$),
+        assert(bignat.f32_to_bits((one.data + i)$) == bignat.f32_to_bits((many.data + i)$),
             "quant: the threads changed a product's bits")
     // The second input row alone: the order of additions does not depend on the batch.
     x1: = tensor_of(F32[]::{ .ptr = x.data + cols, .len = cols }, 1, cols, arena)
     alone: = w.mul_mat(x1) catch panic("quant: mul_mat refused one row")
     for i in Range.asc(rows)
-        assert(quant.f32_bits((alone.data + i)$) == quant.f32_bits((one.data + rows + i)$),
+        assert(bignat.f32_to_bits((alone.data + i)$) == bignat
+            .f32_to_bits((one.data + rows + i)$),
             "quant: one input row alone gave other bits than in a batch")
     check_matmul_threads(arena)
     verdict
@@ -515,9 +517,10 @@ fn check_matmul_threads(arena: Arena$@) //< ksai's F32 matmul: several threads w
     $a2: = a
     plain: = a2.matmul(b) catch panic("quant: matmul refused valid shapes")
     for i in Range.asc(one.size)
-        bits: = quant.f32_bits((one.data + i)$)
-        assert(bits == quant.f32_bits((many.data + i)$), "quant: threads changed matmul's bits")
-        assert(bits == quant.f32_bits((plain.data + i)$), "quant: matmul's split changed its bits")
+        bits: = bignat.f32_to_bits((one.data + i)$)
+        assert(bits == bignat.f32_to_bits((many.data + i)$), "quant: threads changed matmul's bits")
+        assert(bits == bignat.f32_to_bits((plain.data + i)$),
+            "quant: matmul's split changed its bits")
 
 #cfg(blas)
 fn check_matmul_threads(arena: Arena$@) //< nothing to check: BLAS's gemm runs its own threads

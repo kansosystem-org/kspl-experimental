@@ -1,0 +1,286 @@
+//< [I0602] A `T$@` parameter that nothing writes through: the marks, and the report
+//< The dataflow marks each pointer binding a body writes through, or hands on whole. At a body's
+//< end, each `T$@` parameter's mark joins the marks of the same parameter in the other bodies
+//< (`keep_pointee_marks`): a generic function gives one body per instance. Once every body is
+//< analysed, `report_pointee_params` reports those no body wrote through.
+//< **What is unclear counts as a write**, so the report never asks to drop a `$` the code needs.
+import "ksplc/base/ast" { Ast_node, Loc }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_path_or_ident`
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
+import "ksplc/base/core" as base_core
+import "ksplc/sema/flow/track" as sema_flow_track + { Df_ctx }
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/state" { Pointee_param }
+import "ksplc/sema/type/query" as _sema_type_query // `is_pointer`, `strip_ptr`, `is_const`
+import "std/chars" // `starts_with`
+import "std/ds" { Map }
+import "std/str"
+
+impl Ast_node
+    fn pointer_binding(r: Self$@, c: Df_ctx$@): Ast_node$@? //<
+        //< The pointer binding this expression names alone (`p`, `(p)`), if it does
+        if !r.is_bare_name_target()
+            return .none
+        if def: = r.get_assign_target_def()
+            if def != null && def.points(c)
+                return .some(def)
+        return .none
+
+    fn pointee_root(r: Self$@, c: Df_ctx$@): Ast_node$@? //<
+        //< The pointer binding a place's path starts from, whatever the path crosses
+        //< **A pointer field counts as part of the target**: `r.ptr[i] = v` writes what a `List`
+        //< owns, and the rule cannot tell an owned pointer from a borrowed one. `(p + i)$` starts
+        //< from `p`, as pointer arithmetic keeps the pointer it moves.
+        $curr: = r
+        for curr != null
+            if root: = curr.pointer_binding(c)
+                return .some(root)
+            if curr.kind_id == .k_expr_primary && curr.children.len > 0
+                curr = curr.get_primary_inner_expr()
+                continue
+            if moved: = curr.moved_operand(c)
+                curr = moved
+                continue
+            if curr.kind_id != .k_expr_postfix || curr.children.len < 2
+                return .none
+            op: = curr.postfix_op_text()
+            if !op.equals(".") && !op.equals("$") && !op.starts_with("[")
+                return .none
+            curr = curr.get_postfix_receiver()
+        return .none
+
+    fn mark_pointee_write(r: Self$@, c: Df_ctx$@) //<
+        //< marks a write to a place reached from a pointer
+        if root: = r.pointee_root(c)
+            c.mark_written_through(root)
+
+    fn mark_pointer_handed(r: Self$@, c: Df_ctx$@) //<
+        //< Marks the pointer a value comes from, where the value can write: all but a `T@` or `T[]`
+        env: = c.sema.env
+        tid: = env.get_clean_real_type(r.type_id)
+        if (env.is_pointer(tid) && env.is_const(env.strip_ptr(tid))) ||
+            (env.is_slice(tid) && env.const_elem_of(tid))
+            return
+        r.mark_pointee_write(c)
+
+    fn mark_view_read(r: Self$@, c: Df_ctx$@) //<
+        //< Marks a value read from a pointer's target that carries a writable pointer or slice
+        //< `r.ptr` handed to a call, or `r$` copied whole with its pointer fields, can write what
+        //< `r` owns. So either counts as handing `r` on. A value holding none reads alone.
+        if holds_writable_view(c, r.type_id, 0)
+            r.mark_pointee_write(c)
+
+    fn mark_receiver_pointee_write(r: Self$@, c: Df_ctx$@) //<
+        //< Marks the target a method call can write: a `Self$@` method's, or an unknown one's
+        //< **A `Self$@` call asks the whole path to be writable**: `r.list.push(x)` is refused
+        //< through a read-only `r`, though `list` is a pointer.
+        receiver: = r.get_postfix_receiver()
+        if receiver == null
+            return
+        member: = r.get_postfix_member()
+        if member != null
+            switch c.sema.env.method_receiver_permission(member.def_node)
+            case .some(need)
+                if !need.mut_ptr
+                    return
+            case .none {}
+        receiver.mark_pointee_write(c)
+
+    priv fn moved_operand(r: Self$@, c: Df_ctx$@): Ast_node$@? //<
+        //< The pointer operand `p + i` or `p - i` moves, if this is such a sum
+        if r.kind_id != .k_expr || r.children.len != 3
+            return .none
+        op: = r.get_binary_op().text
+        if !op.equals("+") && !op.equals("-")
+            return .none
+        env: = c.sema.env
+        left: = r.get_binary_left()
+        if env.is_pointer(env.get_clean_real_type(left.type_id))
+            return .some(left)
+        right: = r.get_binary_right()
+        if env.is_pointer(env.get_clean_real_type(right.type_id))
+            return .some(right)
+        return .none
+
+    fn compared_pointer(r: Self$@, c: Df_ctx$@): Ast_node$@? //<
+        //< The operand that names a pointer binding alone in a comparison (`p == null`), if one does
+        //< Comparing reads the address and writes nothing, so it is no handing on.
+        if r.kind_id != .k_expr || r.children.len != 3
+            return .none
+        op: = r.get_binary_op().text
+        if !op.equals("==") && !op.equals("!=")
+            return .none
+        left: = r.get_binary_left()
+        if left.pointer_binding(c).is_some()
+            return .some(left.bare_name())
+        right: = r.get_binary_right()
+        if right.pointer_binding(c).is_some()
+            return .some(right.bare_name())
+        return .none
+
+    fn points(r: Self@, c: Df_ctx@): Bool //<
+        //< whether this binding's type is a pointer, aliases seen through
+        return c.sema.env.is_pointer(c.sema.env.get_clean_real_type(r.type_id))
+
+    fn bare_name(r: Self$@): Ast_node$@ //< the name inside `(p)`, or the node itself
+        $curr: = r
+        for curr.kind_id == .k_expr_primary && curr.children.len > 0
+            curr = curr.get_primary_inner_expr()
+        return curr
+
+    priv fn spells_writable_pointer(r: Self@): Bool //<
+        //< Whether this type is written with `$@` at its end, not a type argument that is a pointer
+        if r == null
+            return false
+        $last: = ""
+        for tc in r.children
+            if tc.kind_id == .k_type_postfix
+                last = tc.text
+        return last.equals("$@")
+
+    priv fn returns_writable_view(r: Self$@, c: Sema_ctx$@): Bool //<
+        //< Whether a function returns a writable pointer or slice, in a result or not
+        //< An option is taken as one, unread. The resolved type is read, as an instance spells a
+        //< slice as `Slice<|…|>`.
+        sig: = r.find_child(.k_type_fn_sig)
+        if sig == null
+            return true
+        $ret: Ast_node$@ = null
+        for ch in sig.children
+            if ch.kind_id == .k_type_expr
+                ret = ch
+        if ret == null
+            return false
+        env: = c.env
+        tid: = env
+            .get_clean_real_type(env.strip_result(env.get_clean_real_type(ret.type_id)))
+        if env.is_option(tid)
+            return true
+        if env.is_pointer(tid)
+            return !env.is_const(env.strip_ptr(tid))
+        if env.is_slice(tid)
+            return !env.const_elem_of(tid)
+        return false
+
+    priv fn note_fixed_signatures(r: Self$@, fixed: Map<|U8[], Bool|>$@) //<
+        //< Notes the methods whose signature a trait fixes: a conformance's, and a trait's own
+        is_trait_impl: = r.kind_id == .k_decl_impl && r.get_impl_trait_node().is_some()
+        if !is_trait_impl && r.kind_id != .k_decl_trait
+            return
+        for ch in r.children
+            if ch.unwrap_top_level().kind_id == .k_decl_fn
+                fixed.set(loc_key(ch.unwrap_top_level().loc), true)
+
+    priv fn note_fn_values(r: Self$@, fixed: Map<|U8[], Bool|>$@, callee: Bool) //<
+        //< Notes each function named other than as a call's callee: its type is then fixed
+        if r == null
+            return
+        if !callee && r.is_path_or_ident()
+            d: = r.def_node
+            if d != null && d.kind_id == .k_decl_fn
+                fixed.set(loc_key(d.loc), true)
+        // A declaration's own name points at the declaration, and is no use of it.
+        is_decl: = r.kind_id == .k_decl_fn || r.kind_id == .k_fn_param
+        is_call: = r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("(")
+        passes: = callee && (r.kind_id == .k_expr_primary || r.is_path_or_ident())
+        for i in Range.asc(r.children.len)
+            ch: = r.get_child(i)
+            if is_decl && ch.kind_id == .k_identifier
+                continue
+            names_callee: =
+                (is_call && i == 0) || (r.kind_id == .k_method_access && i == 1) || passes
+            ch.note_fn_values(fixed, names_callee)
+
+impl Df_ctx
+    fn mark_written_through(r: Self$@, v: Ast_node$@) //< sets a binding's third axis (Local_state)
+        i: = r.find_local(v)
+        if i >= 0
+            $st: = r.locals.get(i)
+            st.writes_through = true
+            r.locals.set(i, st)
+
+    fn keep_pointee_marks(r: Self$@, fn_node: Ast_node$@) //<
+        //< Joins this body's mark on each `T$@` parameter to the marks other bodies gave it
+        //< A parameter is known by where it is written: each instance of a generic copies it.
+        if !base_core.config.run_lint_checks || fn_node.kind_id != .k_decl_fn
+            return
+        c: = r.sema
+        env: = c.env
+        for st in r.locals
+            p: = st.node
+            real: = env.get_clean_real_type(p.type_id)
+            if p.kind_id != .k_fn_param || !env.is_pointer(real) ||
+                env.is_const(env.strip_ptr(real))
+                continue
+            if c.pointees == null
+                c.pointees = base_core.arena
+                    .create(Map<|U8[], Pointee_param|>(base_core.arena))
+            key: = loc_key(p.loc)
+            $kept: = c.pointees.get(key)
+                .unwrap_or(Pointee_param::{ .node = p, .fn_node = fn_node, .written = false })
+            kept.written = kept.written || st.writes_through
+            c.pointees.set(key, kept)
+
+priv const MAX_HOLD_DEPTH: Sz = 8 //< how deep `holds_writable_view` looks before it says yes
+
+priv fn holds_writable_view(c: Df_ctx$@, type_id: I32, depth: Sz): Bool //<
+    //< Whether a value of this type carries a writable pointer or slice, in a field or element too
+    //< An enum's payload and a trait value are not looked into: they count as carrying one.
+    if depth >= MAX_HOLD_DEPTH
+        return true
+    env: = c.sema.env
+    tid: = env.get_clean_real_type(env.strip_const(env.get_clean_real_type(type_id)))
+    if env.is_pointer(tid)
+        return !env.is_const(env.strip_ptr(tid))
+    if env.is_slice(tid)
+        return !env.const_elem_of(tid)
+    switch env.get_info(tid)
+    case .array(elem, _size)
+        return holds_writable_view(c, elem, depth + 1)
+    case .struct_type(def)
+        for f in def.fields_list
+            if holds_writable_view(c, f.type_id, depth + 1)
+                return true
+        return false
+    case .enum_type, .trait_type
+        return true
+    default
+        return false
+
+priv fn loc_key(at: Loc): U8[] //< a position as a map's key: the file's number and the offset
+    return base_core.arena.text().s("\{at.file_id\}:\{at.offset\}").take()
+
+fn report_pointee_params(root: Ast_node@, c: Sema_ctx$@) //<
+    //< [I0602] Each `T$@` parameter no body wrote through, once every body is analysed
+    //< **A function whose type is fixed elsewhere is left out**: a trait's method, a function
+    //< taken as a value (a callback's type names its `$@`), a test (its suite's field fixes its
+    //< parameter), one C calls, and one the compiler made. **So is one that returns a writable
+    //< pointer or slice**: through a read-only receiver it would hand out what the receiver owns
+    //< writable (`List.slice`). **So is one under `#cfg`**: its other body is not read here.
+    if c.pointees == null
+        return
+    $fixed: = Map<|U8[], Bool|>(base_core.arena)
+    for child_node in root.children
+        child: = child_node.unwrap_top_level()
+        child.note_fixed_signatures(fixed@)
+        child.note_fn_values(fixed@, false)
+    for inst in c.env.instantiated_nodes_list
+        inst.note_fn_values(fixed@, false)
+    for entry in c.pointees.items()
+        kept: = entry.value
+        f: = kept.fn_node
+        if kept.written || fixed.get(loc_key(f.loc)).unwrap_or(false) || f.publishes_to_c() ||
+            f.made_by_compiler() || f.get_decl_id_text().starts_with("test_") ||
+            f.returns_writable_view(c) || f.has_attribute("cfg")
+            continue
+        p: = kept.node
+        name: = p.get_decl_id_text()
+        if name.starts_with("_") || !p.get_decl_type_node().spells_writable_pointer()
+            continue
+        c.set_current_file(p.loc.file())
+        c.clear_scratch()
+            .s("[I0602] Nothing is written through parameter '\{name\}'. Write its type with '@', \
+                not '$@': a caller holding only a read-only pointer can then pass it too.")
+        id: = p.find_child(.k_identifier)
+        c.information(id if id != null else p, c.scratch.slice())

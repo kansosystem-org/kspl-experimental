@@ -11,6 +11,8 @@ function ksmdLocal() {
   const TOKEN = /^[0-9a-f]{48}$/;
   // A request past this many milliseconds gives up and says so.
   const WAIT_MS = 15000;
+  // A build may take this long: the server's own limit (60 s), and the answer's way back.
+  const BUILD_MS = 70000;
 
   // Takes the token from the fragment's `t=` once, when the page starts. **Read it as name=value
   // pairs**: `#heart=1` holds no token. Text of another form never replaces the token kept.
@@ -76,7 +78,6 @@ function ksmdLocal() {
 
   return {
     token,
-    reason,
     digest,
     stat,
     // Whether a local server answers with file access: { root } or { why }.
@@ -106,6 +107,24 @@ function ksmdLocal() {
         return { status: 200, bytes: new Uint8Array(await got.arrayBuffer()) };
       } catch (e) {
         return { status: 0, why: lost(e) };
+      }
+    },
+    // Builds a file of a person's own functions: { status: 200, bytes } with the module, else
+    // { status, why }. A 422 is the file's own error, which the clause shows as it is.
+    async build(path) {
+      try {
+        const got = await fetch(`/api/build?path=${encodeURIComponent(path)}`,
+          { method: "POST", headers: head(), signal: AbortSignal.timeout(BUILD_MS) });
+        if (got.ok) return { status: 200, bytes: new Uint8Array(await got.arrayBuffer()) };
+        if (got.status === 422) return { status: 422, why: String((await got.json()).error) };
+        if (got.status === 404) {
+          return { status: 404, why: "This local server builds no functions. Open the document " +
+            "with ksmd, whose server builds them, or with a kssrv started with --builder." };
+        }
+        return { status: got.status, why: reason(got.status) };
+      } catch (e) {
+        return { status: 0, why: e && e.name === "TimeoutError" ?
+          `The build did not end within ${BUILD_MS / 1000} seconds.` : lost(e) };
       }
     },
     // Whether anything stands at a path: true, false, or null where it could not be asked.

@@ -11,6 +11,7 @@ import path from "path";
 import { CTRL, driver, verdict } from "./drive.mjs";
 import { drafts } from "./drafts.mjs";
 import { losses } from "./losses.mjs";
+import { own } from "./own.mjs";
 
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
@@ -38,7 +39,7 @@ const IMAGES = ':::image src="pics/dot.png" alt="A dot"\n:::\n\n' +
 const TOP = `${H}# Top\n\nFirst paragraph.\n\n:::include path="parts/notes.ksmd"\n:::\n\n${IMAGES}`;
 const NOTES = `${H}Note text.\n\n## Notes heading\n\n:::table name="t"\n| "a" | "b" |\n| 2 | =A1*3 |\n:::\n`;
 
-export async function served(browser, pageFile, work, kssrv) {
+export async function served(browser, pageFile, work, kssrv, builder) {
   verdict.part = "served";
   if (!kssrv) {
     verdict.skip("no kssrv was given, so opening and saving files is not checked");
@@ -55,12 +56,15 @@ export async function served(browser, pageFile, work, kssrv) {
   fs.writeFileSync(path.join(root, "pics/fake.png"), "GIF89a, not a PNG though named one");
   let server;
   try {
-    server = await start(kssrv, root, pageFile, path.join(work, "kssrv.log"));
+    // **The builder is named where it is given**, as the launcher names it.
+    server = await start(kssrv, root, pageFile, path.join(work, "kssrv.log"),
+      builder ? [`--builder=${path.resolve(builder)}`] : []);
   } catch (e) {
     check(false, "the local server starts", e.message);
     return;
   }
-  const ctx = { browser, root, server, kssrv, pageFile, work, disk: (rel) => read(root, rel) };
+  const ctx = { browser, root, server, kssrv, builder, pageFile, work,
+    disk: (rel) => read(root, rel) };
   try {
     for (const [name, run] of Object.entries(SECTIONS)) {
       verdict.part = `served ${name}`;
@@ -577,7 +581,7 @@ const SECTIONS = {
       await d.js("document.querySelector('.menubar .doc-name').textContent") === "parts/copy.ksmd",
     "Save as writes in the chosen folder, adds .ksmd, and the page goes on there", await said(d));
     check(copy.includes(':::include path="notes.ksmd"') && copy.includes('src="../pics/dot.png"') &&
-      !copy.includes('"pics/') && ctx.disk("top.ksmd").includes('path="parts/notes.ksmd"'),
+      !copy.includes('"pics/') && top.includes('path="parts/notes.ksmd"'),
     "and the paths of its includes and images name the same files from the new folder", copy);
     check(await d.until("(document.querySelector('#doc .include') || {}).textContent.includes('Note text.')"),
       "so the include still shows its file there");
@@ -685,6 +689,39 @@ const SECTIONS = {
     }
   },
 
+  // Insert ▸ Image… opens the system's chooser; the file chosen goes in as a pasted one does, and a
+  // chooser cancelled writes nothing.
+  async insertImage(ctx) {
+    fs.writeFileSync(path.join(ctx.root, "pick.ksmd"), `${H}Text.\n`);
+    // **The browser reads the file chosen, so its path is absolute**: the work folder is relative.
+    const picked = path.resolve(ctx.work, "picked.png");
+    fs.writeFileSync(picked, DOT);
+    const d = await tab(ctx, "?doc=pick.ksmd");
+    await d.select(0, 0, 5);
+    const before = snapshot(ctx.root);
+    ctx.browser.chooseFiles(null);
+    await d.menu("image");
+    await idle(d);
+    check(d.page.choosers === 1 && snapshot(ctx.root) === before,
+      "Insert, Image opens a file chooser, and a chooser cancelled writes nothing", `${d.page.choosers} chooser(s)`);
+    ctx.browser.answerPrompts("A chosen dot");
+    ctx.browser.chooseFiles([picked]);
+    await d.menu("image");
+    const file = path.join(ctx.root, "pick-image-1.png");
+    check(await d.until("ksmd.source().includes('pick-image-1.png')") && fs.existsSync(file) &&
+      fs.readFileSync(file).equals(DOT), "the image chosen is written beside the document",
+    await said(d));
+    ctx.browser.answerPrompts(null);
+    ctx.browser.chooseFiles(null);
+    const source = await d.js("ksmd.source()");
+    check(source === `${H}Text.\n\n:::image src="pick-image-1.png" alt="A chosen dot"\n:::\n`,
+      "its clause goes in after the caret's paragraph, with the description asked for", JSON.stringify(source));
+    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"pick-image-1.png\"] img'); " +
+      "return !!i && i.complete && i.naturalWidth === 1; })()"), "and the image shows at once");
+    await ctx.browser.closeTab(d.page);
+    for (const name of ["pick.ksmd", "pick-image-1.png"]) fs.rmSync(path.join(ctx.root, name), { force: true });
+  },
+
   // The editor's limit and the server's ceiling are two numbers; this ties them together.
   async largest(ctx) {
     const d = await tab(ctx);
@@ -702,4 +739,4 @@ const SECTIONS = {
 };
 
 const helpers = { tab, idle, said, noticed, choose, typeAtEnd, start, openInDialog };
-Object.assign(SECTIONS, drafts(helpers), losses(helpers));
+Object.assign(SECTIONS, drafts(helpers), losses(helpers), own(helpers));

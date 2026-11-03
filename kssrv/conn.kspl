@@ -65,6 +65,9 @@ struct Ctx
     // Only whoever starts the server names it (`--page` in `kssrv/main.kspl`; the agreement is
     // "Where it listens" in `docs/SPEC-local-server.md`).
     page: U8[]
+    // The program that builds a page's own functions (`--builder` in `kssrv/main.kspl`). **Empty
+    // means `/api/build` is a 404.**
+    builder: U8[]
 
 // ==========================================
 // One connection's state.
@@ -144,7 +147,7 @@ struct Conn_table //< the connection table
     slots: Rc<|Conn|>[MAX_CONNS]
 
 impl Ctx
-    fn is_local(r: Self$@): Bool //< whether it serves one user on this machine (`--local`)
+    fn is_local(r: Self@): Bool //< whether it serves one user on this machine (`--local`)
         return r.token.len > 0
 
 fn regular_file_size(path: U8[]): Sz? //<
@@ -180,7 +183,7 @@ fn conn_close(c: Conn$@) //< frees a connection's resources
     c.outbuf.free()
     c.file.free()
 
-fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server open
+fn any_holding(t: Conn_table@): Bool //< whether a page is holding the server open
     //< **This is what "someone is using me" means.** Stopping when nobody is depends on it alone
     //< ("Keeping the server alive while a page is open" in `../docs/SPEC-local-server.md`).
     for i in Range.asc(MAX_CONNS)
@@ -188,7 +191,7 @@ fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server o
             return true
     return false
 
-fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection is still open
+fn open_serial(t: Conn_table@, serial: I64): Bool //< whether that connection is still open
     //< **A connection is dropped only once its answer is sent or it broke** (`conn_send` in
     //< `kssrv/main.kspl`), so false means nothing is left to send on it. **One lingering after its
     //< last answer counts as closed**: everything has been sent on it.
@@ -197,7 +200,7 @@ fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection i
             return t.slots[i].get().lingering_since_us == 0I64
     return false
 
-fn table_find_free(t: Conn_table$@): Sz //< looks for a free slot
+fn table_find_free(t: Conn_table@): Sz //< looks for a free slot
     //< -1 if there is none.
     for i in Range.asc(MAX_CONNS)
         if t.slots[i].is_empty()
@@ -257,7 +260,7 @@ fn queue_file(c: Conn$@, ctype: U8[], file: io.File_stream, length: Sz, keep: Bo
     c.file = owned
     c.file_left = length
 
-fn peer_count(t: Conn_table$@, peer: U8[]): Sz //<
+fn peer_count(t: Conn_table@, peer: U8[]): Sz //<
     //< how many open connections come from that address
     $n: Sz = 0
     for i in Range.asc(MAX_CONNS)

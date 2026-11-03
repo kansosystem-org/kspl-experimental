@@ -108,7 +108,9 @@ impl Assembly
             if block.kind == .include
                 r.include(files, entry, folder, block.text, depth, arena)
             else if block.kind == .image
-                r.image(files, entry, folder, src.doc.images.get(block.first).src, arena)
+                r.named_file(files, entry, folder, src.doc.images.get(block.first).src, arena)
+            else if block.kind == .functions
+                r.named_file(files, entry, folder, block.text, arena)
         inst: = r.instances.get(instance)
         r.instances
             .set(instance,
@@ -150,8 +152,10 @@ impl Assembly
         r.aim(entry, path, child)
         r.expand(files, child, depth + 1, arena)
 
-    priv fn image(r: Self$@, files: Files, entry: Sz, folder: U8[], written: U8[], arena: Arena$@) //<
-        //< Resolves an image's path from its own source's folder; its pixels are read later
+    priv fn named_file(r: Self$@, files: Files, entry: Sz, folder: U8[], written: U8[],
+        arena: Arena$@) //<
+            //< Resolves an image's or a functions file's path from its own source's folder, and checks
+            //< that a regular file stands there; what it holds is read later
         path: = files.resolve(folder, written, arena) catch why
             r.fail(entry, .load(.refused(why)), arena)
             return

@@ -23,6 +23,7 @@ import "ksmd/files/assemble" { assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
 import "ksmd/files/files" { Refusal, parse, resolve_text }
 import "ksmd/files/image" { measure }
+import "ksmd/port/web/bridge_own" { own_functions } // a person's own functions, and their actions
 import "ksmd/port/web/bridge_tables" as _tables // the table actions; this brings them into the wasm
 import "ksmd/port/web/moving"
 import "ksmd/port/web/view" { Inside }
@@ -119,6 +120,8 @@ extern fn ksmd_web_load(len: Sz, year: I32, month: I32, day: I32): I32 //<
     loading = null
     ed = session
         .create(editor.open(doc, date_text(year, month, day, session), session))
+    // **The page's own functions stay**: the script changes them once it sees the new clauses.
+    ed.own = own_functions()
     release_input()
     out.s("{\"ok\":true}")
     return 1
@@ -174,10 +177,12 @@ extern fn ksmd_web_forget() //<
     ensure()
     if fetched == null
         return
-    files.free()
+    // Caution: **Copy the path before the old arena goes**: it lives there.
+    was: = files
     files = Arena(64 * 1024)
     doc_path = files.dup_str(doc_path)
     fetched = files.create(Fetched(files))
+    was.free()
 
 extern fn ksmd_web_hold(path_len: Sz, len: Sz, status: I32) //<
     //< Keeps the local server's answer for one path: the path, then `len` bytes, are written in.
@@ -235,7 +240,7 @@ priv fn assembled(scratch: Arena$@): Inside$@ //<
         panic("the editor's document reads back")
     fetched.ask(scratch)
     a: = assemble_loaded(fetched, top, scratch)
-    return scratch.create(Inside(a, fetched.asked, ed.today, scratch))
+    return scratch.create(Inside(a, fetched.asked, ed.today, ed.own, scratch))
 
 priv fn refuse_source(d: Diagnostic): I32 //< `{"ok":false,"why":…,"line":…,"column":…}`
     out.s("{\"ok\":false,\"why\":\"").escape_and_append(d.message)
@@ -349,6 +354,24 @@ extern fn ksmd_web_insert_image(src_len: Sz, alt_len: Sz): Sz //<
         return full()
     both: = text_in(src_len + alt_len)
     ed.insert_image(both.sub(0, src_len), both.sub_from(src_len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_insert_include(len: Sz): Sz //<
+    //< An `:::include` clause in place of the selection: the included file's path from the
+    //< document's folder is written in
+    if !begin()
+        return full()
+    ed.insert_include(text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_insert_functions(len: Sz): Sz //<
+    //< A `:::functions` clause in place of the selection: its file's path from the document's
+    //< folder is written in
+    if !begin()
+        return full()
+    ed.insert_functions(text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -525,16 +548,16 @@ priv fn values_for(from: Sz, to: Sz, scratch: Arena$@): Results //<
         kind: = ed.doc.blocks.get(b).kind
         shows = shows || kind == .table || kind == .chart
     if shows
-        return calc.calculate(ed.doc@, ed.today, scratch)
+        return calc.calculate(ed.doc@, ed.today, scratch, ed.own)
     return Results::{ .values = List<|Value|>(scratch), .starts = List<|Sz|>(scratch),
         .columns = List<|Sz|>(scratch) }
 
-priv fn shows_files(from: Sz, to: Sz): Bool //< whether an include or an image is in the range
+priv fn shows_files(from: Sz, to: Sz): Bool //< whether an include, image or functions file is there
     if fetched == null
         return false
     for b in Range(from, to, 1)
         kind: = ed.doc.blocks.get(b).kind
-        if kind == .include || kind == .image
+        if kind == .include || kind == .image || kind == .functions
             return true
     return false
 

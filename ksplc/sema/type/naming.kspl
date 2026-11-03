@@ -6,7 +6,7 @@
 import "ksplc/base/ast" as base_ast
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
-import "ksplc/sema/type/env" { Env, Instance, is_unknown }
+import "ksplc/sema/type/env" { Env, Instance }
 import "std/ds" { Map }
 import "std/io"
 import "std/str" { Str_builder }
@@ -42,7 +42,7 @@ impl Env
                 .s("\nfatal: type expression nesting too deep. The chain of pointer, array or slice \
                     types may be unbounded.\n")
             sys.exit(1)
-        if type_id <= 0 || is_unknown(type_id)
+        if type_id <= 0
             return w.s(base_core.UNKNOWN_TYPE_NAME)
         info: = r.get_info(type_id)
         $res: = w
@@ -219,9 +219,7 @@ impl Mangle_seen
         //< not emitted makes the type of the same name that **should be emitted** go missing.
         //< Noting a length-less array first in `gen/c/root.kspl` made
         //< `std_lang_Slice_U8_Array_24`'s typedef vanish, and the self-host failed.
-        r.buf.len = 0
-        r.env.mangle_type_id_to(type_id, r.buf@)
-        name: = r.buf.slice()
+        name: = r.env.mangled_into(type_id, r.buf@)
         if r.seen.get(name).unwrap_or(0) != 0
             return false
         r.seen.set(base_core.arena.dup_str(name), 1)

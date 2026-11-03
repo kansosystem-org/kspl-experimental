@@ -219,7 +219,7 @@ fn test_safetensors_roundtrip(arena: Arena$@)
     ai_file.save_safetensors(writer@, path)
         catch panic("save_safetensors should succeed for a writable out/ path")
 
-    $loaded: = ai_file.load_safetensors(path, arena)
+    loaded: = ai_file.load_safetensors(path, arena)
         catch panic("load_safetensors should read back the file just written")
     got: = loaded.get_tensor<|F32|>("w", arena)
         catch panic("get_tensor should find the tensor that was added before save")
@@ -249,7 +249,7 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
     heap_before: = mem.heap_used_bytes()
     asked_before: = mem.heap_requested_total_bytes()
     model: = Arena(64 * 1024)
-    $loaded: = ai_file.load_safetensors(big_path, model)
+    loaded: = ai_file.load_safetensors(big_path, model)
         catch panic("load_safetensors should read back the file just written")
     asked: = mem.heap_requested_total_bytes() - asked_before
     read: = loaded.get_tensor<|F32|>("w", model) catch panic("the tensor written is found")
@@ -340,7 +340,7 @@ priv fn refuses(what: U8[], header: U8[], payload_len: Sz, arena: Arena$@) //<
     //< That the declared range is rejected
     //< **Rejecting up front and rejecting later both count as rejected** (neither returns a view).
     data: = blob_of(header, payload_len, arena)
-    $st: = ai_st.Safetensors.load_from_bytes(data, arena) catch
+    st: = ai_st.Safetensors.load_from_bytes(data, arena) catch
         return
     $refused: = false
     st.get_tensor<|F32|>("w", arena) catch
@@ -353,7 +353,7 @@ fn test_safetensors_refuses_a_bad_range(arena: Arena$@)
     // would pass on "it always rejects" and prove nothing.
     good: = "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[0,24]}}"
     ok_data: = blob_of(good, 24, arena)
-    $ok: = ai_st.Safetensors.load_from_bytes(ok_data, arena) catch
+    ok: = ai_st.Safetensors.load_from_bytes(ok_data, arena) catch
         panic("a correctly named weight has to be readable")
     got: = ok.get_tensor<|F32|>("w", arena) catch
         panic("a correctly named weight has to get through")
@@ -404,7 +404,7 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     writer.add("w", src)
     ai_file.save_safetensors(writer@, path)
         catch panic("save_safetensors should succeed for a writable out/ path")
-    $loaded: = ai_file.load_safetensors(path, arena)
+    loaded: = ai_file.load_safetensors(path, arena)
         catch panic("load_safetensors should read back the file just written")
 
     // A shape other than the expected one is rejected. **Do not modify `dst` when rejecting**
@@ -430,7 +430,7 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     // not fail. Safetensors_writer writes F32 only, so this one is built by hand.
     blob: =
         blob_of("{\"w\":{\"dtype\":\"F64\",\"shape\":[2],\"data_offsets\":[0,16]}}", 16, arena)
-    $f64_file: = ai_st.Safetensors.load_from_bytes(blob, arena)
+    f64_file: = ai_st.Safetensors.load_from_bytes(blob, arena)
         catch panic("the hand-built safetensors blob must parse")
     $narrow: = false
     f64_file.get_tensor<|F32|>("w", arena) catch
@@ -445,7 +445,7 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     bad_blob: =
         blob_of("{\"a\":{\"dtype\":\"F32\",\"shape\":[4],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[8,16]}}",
         0, arena, neighbor_bytes)
-    $inconsistent: = ai_st.Safetensors.load_from_bytes(bad_blob, arena)
+    inconsistent: = ai_st.Safetensors.load_from_bytes(bad_blob, arena)
         catch panic("the hand-built safetensors blob must parse")
     $refused_span: = false
     inconsistent.get_tensor<|F32|>("a", arena) catch
@@ -470,7 +470,7 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
     bytes.s(odd)
     held: = U8$[]::{ .ptr = bytes.ptr, .len = bytes.len }
     held.put_u32_le(held.len - 4, 0x3F800000U32) // 1.0 in the last four bytes, at data offset 1
-    $st: = ai_st.Safetensors.load_from_bytes(held, arena) catch
+    st: = ai_st.Safetensors.load_from_bytes(held, arena) catch
         panic("a file with a misaligned weight has to be readable")
     got: = st.get_tensor<|F32|>("w", arena) catch
         panic("a misaligned weight has to be readable")

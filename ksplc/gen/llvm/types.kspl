@@ -105,8 +105,7 @@ impl Genllvm_ctx
         //< it writes through the hidden pointer and does `ret void`. Use this rather than writing a
         //< `ret` directly.
         if r.current_ret_is_sret
-            r.s("    store ").t(r.current_ret_id).s(" ").s(val_str).s(", ptr ")
-                .s(gen_llvm_ctx.SRET_PARAM_NAME).s("\n")
+            r.op_store(r.current_ret_id, val_str, gen_llvm_ctx.SRET_PARAM_NAME)
             r.s("    ret void\n")
             return
         r.s("    ret ").t(r.current_ret_id).s(" ").s(val_str).s("\n")
@@ -190,7 +189,7 @@ impl Genllvm_ctx
         //< It maps a Kanso type ID to its LLVM IR type
         return r.t_impl(type_id, 0)
 
-    fn ext_attr(r: Self$@, type_id: I32): U8[] //<
+    fn ext_attr(r: Self@, type_id: I32): U8[] //<
         //< `zeroext` or `signext` for a value narrower than 32 bits, empty for any other
         //< **The one place that decides it.** clang's C reads a narrow argument or result as the
         //< whole register, widened by the other side; LLVM widens only where this says so. A scalar
@@ -333,8 +332,7 @@ impl Genllvm_ctx
     fn enum_tag_init(r: Self$@, key: Void$@, real_type_id: I32, tag_value: I64): U8$[] //<
         //< It zero-fills a tagged union's slot for key, writes the tag and returns the slot
         tmp_ptr: = r.get_or_alloc_tmp_slot(key, real_type_id)
-        r.s("    store ")
-        r.t(real_type_id).s(" zeroinitializer, ptr ").s(tmp_ptr).s("\n")
+        r.op_store(real_type_id, "zeroinitializer", tmp_ptr)
 
         tag_ptr: = r.next_reg()
         r.s("    %\{tag_ptr\} = getelementptr inbounds ")
@@ -361,7 +359,7 @@ impl Genllvm_ctx
         tmp_ptr: = r.enum_tag_init(key, real_id, v_def.tag_value)
         if v_def.payload_fields.len > 0 && val.len > 0
             field_ptr: = r.payload_field_ptr(tmp_ptr, real_id, v_def, 0)
-            r.s("    store ").t(val_type_id).s(" ").s(val).s(", ptr ").s(field_ptr).s("\n")
+            r.op_store(val_type_id, val, field_ptr)
         res_reg: = r.next_reg()
         r.op_load(res_reg, real_id, tmp_ptr)
         return r.reg_str(res_reg)
@@ -462,7 +460,7 @@ impl Ast_node
         case .k_decl_trait
             r.emit_llvm_trait(cg)
         default {}
-    fn emit_llvm_param_list(r: Ast_node$@, cg: Genllvm_ctx$@, opts: gen_llvm_ctx.Param_list_opts):
+    fn emit_llvm_param_list(r: Ast_node@, cg: Genllvm_ctx$@, opts: gen_llvm_ctx.Param_list_opts):
         Bool //<
             //< The shared code that emits LLVM's argument list separated by ", "
             //< Declarations, definitions and variadic calls share it. It returns true where it
@@ -494,7 +492,7 @@ impl Ast_node
                 cg.s("...")
                 is_first = false
         return !is_first
-    priv fn mangled_type_name(r: Ast_node$@, cg: Genllvm_ctx$@): U8[] //<
+    priv fn mangled_type_name(r: Ast_node@, cg: Genllvm_ctx$@): U8[] //<
         //< It returns the mangled name of a type ID ("" where the type is unresolved)
         //< The caller skips a type that returns "".
         if r.type_id == 0
@@ -527,7 +525,7 @@ impl Ast_node
         cg.s(" }>\n" if is_packed else " }\n")
 
     priv fn emit_llvm_laid_struct(r: Ast_node$@, cg: Genllvm_ctx$@, m_name: U8[],
-        def: sema_type_def.Struct_def$@) //<
+        def: sema_type_def.Struct_def@) //<
             //< A laid struct's type: packed, each field at sema's offset, `i8` padding around
             //< Caution: **Keep the pieces in step with `field_index`**, which counts them to find
             //< one.
@@ -547,7 +545,7 @@ impl Ast_node
             cg.s("" if first else ", ").s("[\{size - pos\} x i8]")
         cg.s(" }>\n")
 
-    priv fn emit_llvm_enum(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_enum(r: Ast_node@, cg: Genllvm_ctx$@)
         m_name: = r.mangled_type_name(cg)
         if m_name.len == 0
             return
@@ -569,7 +567,7 @@ impl Ast_node
                 cg.s(", [\{n\} x i\{word * 8\}]")
             cg.s(" }\n")
 
-    priv fn emit_llvm_trait(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_trait(r: Ast_node@, cg: Genllvm_ctx$@)
         m_name: = r.mangled_type_name(cg)
         if m_name.len == 0
             return

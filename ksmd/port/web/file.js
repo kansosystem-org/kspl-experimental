@@ -241,13 +241,18 @@ function ksmdFiles(ks, api) {
     images = new Map();
   }
 
-  // Fetches what the view lacks, a round per level of includes, then shows the whole document.
-  async function fill() {
+  // Fetches what the view lacks, a round per level of includes, at most 20 rounds.
+  async function fetchWanted() {
     for (let round = 0; round < 20; round++) {
       const wanted = json("ksmd_web_wanted");
       if (!wanted || wanted.length === 0) break;
       for (const w of wanted) await fetchOne(w.p, w.i === 1);
     }
+  }
+
+  // Fetches what the view lacks, then shows the whole document.
+  async function fill() {
+    await fetchWanted();
     ks.act("ksmd_web_render");
   }
 
@@ -278,11 +283,7 @@ function ksmdFiles(ks, api) {
     sources = new Map();
     images = new Map();
     ks.call("ksmd_web_forget");
-    for (let round = 0; round < 20; round++) {
-      const wanted = json("ksmd_web_wanted");
-      if (!wanted || wanted.length === 0) break;
-      for (const w of wanted) await fetchOne(w.p, w.i === 1);
-    }
+    await fetchWanted();
     let changed = before.size !== sources.size;
     for (const [path, d] of sources) changed = changed || before.get(path) !== d;
     for (const [path, bytes] of images) {
@@ -313,6 +314,62 @@ function ksmdFiles(ks, api) {
       return { url: URL.createObjectURL(new Blob([bytes], { type: r.t })) };
     }
     return { why: "this image's header is too long to read. Save the image again" };
+  }
+
+  // ---- Insert, Functions ----
+
+  // What a new functions file starts with: one function to call, and how to write more.
+  const STARTER = "//< Functions this document's formulas call. Each `pub fn` is one, by its name:\n" +
+    "//< =twice(A1) calls the one below. ksmd's README, \"Write your own functions\", says more.\n\n" +
+    "pub fn twice(x: F64): F64 //< the number doubled\n    return x * 2.0\n";
+
+  // A path from the root, written from the folder `from` (no slash at either end).
+  function relative(from, path) {
+    const a = from === "" ? [] : from.split("/");
+    const b = path.split("/");
+    let same = 0;
+    while (same < a.length && same < b.length - 1 && a[same] === b[same]) same++;
+    return [...a.slice(same).map(() => ".."), ...b.slice(same)].join("/");
+  }
+
+  // What Insert, Functions and Insert, Include each pick, the name the dialog offers, the text a
+  // new file starts with, and the action that puts the clause in.
+  const CLAUSES = {
+    functions: { name: "functions.kspl", starter: STARTER, act: "ksmd_web_insert_functions",
+      what: "functions file" },
+    include: { name: "part.ksmd", starter: "%ksmd 1\n", act: "ksmd_web_insert_include",
+      what: "included document" },
+  };
+
+  // Chooses a file in the workspace for a clause, or starts one, and puts the clause at the caret.
+  async function addClause(kind) {
+    const c = CLAUSES[kind];
+    if (doc.path === "") return ks.say(`Save the document first, so its ${c.what} has a folder to go in.`);
+    if (choosing) return null;
+    choosing = true;
+    const got = await browse.pick(kind, folderOf(doc.path) + c.name);
+    choosing = false;
+    if (got === null) return null;
+    return one(async () => {
+      const path = resolve(got.path, "used");
+      if (path === null) return;
+      // **A document never includes itself**: the view would show only the cycle.
+      if (path === doc.path) {
+        ks.say("A document cannot include itself. Choose another document.");
+        return;
+      }
+      if (!got.exists) {
+        const made = await local.write(path, ks.enc.encode(c.starter), null);
+        // Made since the dialog listed the folder: the file there is used as it stands.
+        if (made.status !== 200 && made.status !== 409) {
+          ks.say(`${path} was not written. ${made.why}`);
+          return;
+        }
+      }
+      ks.sync();
+      const r = ks.act(c.act, ks.put(relative(folderOf(doc.path).replace(/\/$/, ""), path)));
+      if (r && r.ok) await fill();
+    });
   }
 
   // ---- An image pasted or dropped ----
@@ -649,6 +706,10 @@ function ksmdFiles(ks, api) {
   // ---- Start ----
 
   ks.rendered.push(showImages);
+  // What `functions.js` reads: the server, and a functions file's bytes as last fetched. A
+  // functions clause asks only whether its file stands, as an image does, so its bytes are here.
+  ks.local = local;
+  ks.fetchedBytes = (path) => images.get(path) || null;
   // An edit, in the document or in a cell still open, is unsaved until a save.
   const edited = () => {
     heldNow = false;
@@ -690,6 +751,7 @@ function ksmdFiles(ks, api) {
     placeEditor("");
     doc = { path: "", base: null, clean: model(), id: newId() };
     ks.addImage = (file) => one(() => addImage(file));
+    ks.addClause = addClause;
     ks.fileCommand = (name) => {
       if (name === "file-open") openChosen();
       else if (name === "file-save-as") saveAs();

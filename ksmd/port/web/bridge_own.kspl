@@ -1,0 +1,127 @@
+//< A person's own functions on the page, through the bridge in `bridge.kspl`
+//< The script builds each functions file the view names and runs it in a worker (`functions.js`).
+//< **A calculation cannot wait for the worker**, so it asks here. An answer already come is the
+//< value; a call with none goes into the queue, and its cell shows `…`. The script takes the
+//< queue (`ksmd_web_own_take`, `ksmd_web_own_call`), has the worker answer each call, and hands
+//< the answers back (`ksmd_web_own_answer`, `ksmd_web_own_failed`). Then it shows the tables again.
+//< A call and its answer travel as `ksmd/calc/wire.kspl` writes them; the key of an answer is
+//< its call's bytes, so a call asked again with the same arguments is answered at once.
+import "ksmd/base/keyed" { Keyed }
+import "ksmd/calc/args" { Raw_args }
+import "ksmd/calc/calc" { Own_functions }
+import "ksmd/calc/value" { Value }
+import "ksmd/calc/wire"
+import "ksmd/port/web/bridge" { ed, ensure, out, text_in }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+
+const MAX_ANSWERS: Sz = 4096 //< the answers kept; past that, the next round forgets them all
+const MAX_QUEUE: Sz = 1024 //< the calls one round asks the worker; the rest wait for the next
+priv const TIME_LIMIT: I32 = 1 //< `ksmd_web_own_failed`'s reason for a call past the time limit
+
+$memory: Arena$@ = null //< holds the names, the answers and the queue; freed when names change
+$own: Own_functions$@ = null //< what the editor's calculations ask; null where there are no names
+$answers: Keyed<|U8[]|>$@ = null //< each answer's bytes, by its call's bytes
+$answered: Sz = 0 //< how many `answers` holds
+$waiting: Keyed<|Bool|>$@ = null //< the calls in the queue or taken, not answered yet
+$queue: List<|U8[]|>$@ = null //< the calls to send in the next round
+$taken: List<|U8[]|>$@ = null //< the calls the script took this round, by their index
+
+fn own_functions(): Own_functions@ //< what a new editor's calculations ask; null for none
+    return own
+
+priv fn start_over(names: U8[][], calls: U8[][]) //<
+    //< Forgets every answer, and keeps `names` and the queued `calls`
+    //< **Both are copied before the old memory is freed**: they may stand in it.
+    fresh: = Arena(64 * 1024)
+    $kept: = List<|U8[]|>(fresh)
+    for name in names
+        kept.push(fresh.dup_str(name))
+    $carried: = List<|U8[]|>(fresh)
+    for call in calls
+        carried.push(fresh.dup_str(call))
+    if memory != null
+        memory.free()
+    memory = fresh
+    own = memory.create(Own_functions::{ .names = kept.slice(), .ask = ask, .ctx = null })
+    ed.own = own
+    answers = memory.create(Keyed<|U8[]|>(memory))
+    answered = 0
+    waiting = memory.create(Keyed<|Bool|>(memory))
+    queue = memory.create(carried)
+    for call in carried
+        waiting.set(call, true)
+    taken = memory.create(List<|U8[]|>(memory))
+
+priv fn ask(_ctx: Void$@, name: U8[], args: Raw_args$@): Value //<
+    //< The answer come for this call; else `…`, with the call put in the queue once
+    key: = args.memory.text()
+    wire.put_call(key, name, args.args)
+    call: = key.take()
+    if got: = answers.get(call)
+        answer: = wire.read_answer(got) catch
+            return Value.failed(.stopped)
+        args.misread = answer.misread
+        return answer.value
+    if waiting.get(call).is_none() && queue.len < MAX_QUEUE
+        kept: = memory.dup_str(call)
+        waiting.set(kept, true)
+        queue.push(kept)
+    return Value.failed(.pending)
+
+extern fn ksmd_web_own_names(len: Sz): Sz //<
+    //< Sets the functions a formula may call, one name per line in the input, and forgets every
+    //< answer; no names turns them off. Each document opened needs them again. The count kept.
+    ensure()
+    defer scratch: = Arena(4 * 1024)
+    $names: = List<|U8[]|>(scratch)
+    for line in text_in(len).lines(scratch)
+        if line.len > 0
+            names.push(line)
+    if names.len == 0
+        if memory != null
+            memory.free()
+        memory = null
+        own = null
+        ed.own = null
+        return 0
+    start_over(names.slice(), U8[][]::{})
+    return names.len
+
+extern fn ksmd_web_own_take(): Sz //< takes the queue for one round; how many calls it holds
+    ensure()
+    if memory == null
+        return 0
+    // **Forget the answers between rounds**, not during one: the script still reads the calls.
+    if answered >= MAX_ANSWERS
+        start_over(own.names, queue.slice())
+    taken = queue
+    queue = memory.create(List<|U8[]|>(memory))
+    return taken.len
+
+extern fn ksmd_web_own_call(i: Sz): Sz //< writes the `i`th call taken to the output; its length
+    out.clear()
+    out.s(taken.get(i))
+    return out.slice().len
+
+extern fn ksmd_web_own_answer(i: Sz, len: Sz): Sz //<
+    //< Keeps the answer in the input's first `len` bytes for the `i`th call taken; 1 if kept
+    if memory == null || i >= taken.len
+        return 0
+    keep(taken.get(i), memory.dup_str(text_in(len)))
+    return 1
+
+extern fn ksmd_web_own_failed(i: Sz, why: I32): Sz //<
+    //< Keeps for the `i`th call taken that it has no answer: 1 past the time limit, 2 stopped
+    if memory == null || i >= taken.len
+        return 0
+    v: = Value.failed(.time_limit if why == TIME_LIMIT else .stopped)
+    text: = memory.text()
+    wire.put_answer(text, v, false)
+    keep(taken.get(i), text.take())
+    return 1
+
+priv fn keep(call: U8[], answer: U8[]) //< an answer for a call taken
+    answers.set(call, answer)
+    answered += 1

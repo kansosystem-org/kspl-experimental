@@ -6,6 +6,7 @@
 //< are "Weights stay in GGUF's formats" in `ksai/docs/DESIGN-learning.md`.
 import "ksai/parallel"
 import "ksai/tensor" { Tensor }
+import "std/bignat"
 import "std/checked_int"
 import "std/math"
 import "std/mem"
@@ -408,7 +409,7 @@ priv fn round_q8_0(x: F32@, q: I16$@, d: F32$@) //< 32 numbers as llama.cpp's Q8
 fn nearest_int(f: F32): I32 //< ggml's `nearest_int`: the nearest whole number, halves to even
     //< It adds 1.5 × 2^23, so the float's own rounding does the work; it holds for |f| < 2^22.
     v: = f + 12582912.0F32
-    return I32::(f32_bits(v) & 0x7FFFFF) - 0x400000
+    return I32::(bignat.f32_to_bits(v) & 0x7FFFFF) - 0x400000
 
 priv struct Int_job //< one integer product, as each of its threads reads it
     w: Quant_matrix@
@@ -745,12 +746,6 @@ fn f32_from_bits(bits: U32): F32 //< the same bits read as an F32; no numeric co
     mem.copy(Void$@::v@, Void$@::b@, 4)
     return v
 
-fn f32_bits(v: F32): U32 //< an F32's bits read as an integer; no numeric conversion
-    $x: = v
-    $b: U32 = 0
-    mem.copy(Void$@::b@, Void$@::x@, 4)
-    return b
-
 fn f16_to_f32(h: U16): F32 //< an IEEE half's value, exactly; F32 holds every half
     sign: = (U32::h & 0x8000) << 16
     exp: = (U32::h >> 10) & 0x1F
@@ -765,7 +760,7 @@ fn f16_to_f32(h: U16): F32 //< an IEEE half's value, exactly; F32 holds every ha
 
 fn f16_from_f32(v: F32): U16 //< the nearest half, ties to even, as ggml writes a block's scale
     //< Too large gives infinity, too small gives zero, and a NaN gives the quiet NaN 0x7E00.
-    f: = f32_bits(v)
+    f: = bignat.f32_to_bits(v)
     sign: = (f >> 16) & 0x8000
     e: = (f >> 23) & 0xFF
     mant: = f & 0x7FFFFF

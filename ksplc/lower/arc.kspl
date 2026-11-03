@@ -232,7 +232,7 @@ priv fn build_arc_helper_call(lctx: Lowering_ctx$@, helper: Ast_node$@, recv: As
     return Ast_node(.k_stmt_expr, "expr", loc).add_child(call)
 
 priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
-    def: sema_type_def.Enum_def$@, method_name: U8[], out: List<|Ast_node$@|>$@, depth: Sz) //<
+    def: sema_type_def.Enum_def@, method_name: U8[], out: List<|Ast_node$@|>$@, depth: Sz) //<
         //< An enum's chain retain/release, which operates on the live variant's payload only
         //< Each variant has its own payload, and only one is live at run time. So a switch on the
         //< tag is synthesized, and each case binds the payload before recursing into each element.
@@ -519,7 +519,7 @@ impl Ast_node
         r.lower_default(lctx)
         return true
 
-    priv fn arc_reads_part(r: Self$@, lctx: Lowering_ctx$@): Bool //<
+    priv fn arc_reads_part(r: Self$@, lctx: Lowering_ctx@): Bool //<
         //< Whether it is `.` on a value, or a built-in `[` on an array value: no pointer between
         if r == null || r.kind_id != .k_expr_postfix || r.get_postfix_op() == null ||
             r.def_node.is_fn_decl()
@@ -652,7 +652,7 @@ impl Ast_node
             return r.get_postfix_receiver().is_arc_place_expr(depth + 1)
         return false
 
-    fn lower_arc_aggregate_literal(r: Ast_node$@, lctx: Lowering_ctx$@) //<
+    fn lower_arc_aggregate_literal(r: Ast_node@, lctx: Lowering_ctx$@) //<
         //< Each element of a compound literal `S::{ .f = x }` / `::{ x, y }`
         //< A struct and an array are both represented as a list of k_expr_field_init (see
         //< gen/llvm/expr_agg.kspl). Each managed element is taken with a count of its own.
@@ -713,7 +713,7 @@ impl Ast_node
         //< The right side is held in a temporary before the old value goes. So neither its retain
         //< nor its reads come after the release: `retain; tmp = src; release(dst); dst = tmp`, the
         //< order Swift uses.
-        if owed.type_id == 0 || owed.dst == null
+        if owed.dst == null
             return
         r.set_child(2, r.get_assign_right().hoist_to_tmp(lctx, r.loc))
         emit_managed_op(lctx, owed.dst, owed.type_id, "release", lctx.pre_stmts, 0)

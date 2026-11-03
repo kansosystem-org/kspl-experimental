@@ -77,7 +77,7 @@ fn run(r: Ast_node$@, c: Sema_ctx$@, parser: kspeg.Target$@): Void!Sema_error //
     check_const_storage(r, c)
     check_visibility_widths(r, c)!
 
-priv fn check_all_attributes(r: Ast_node$@, c: Sema_ctx$@) //<
+priv fn check_all_attributes(r: Ast_node@, c: Sema_ctx$@) //<
     //< The attributes' check: after `##lint` is collected, before any other diagnostic
     //< Caution: **Walk from the wrapper (`top_level_item`).** unwrap_top_level skips past the
     //< attributes. So one not moved onto the declaration (apply_modifiers_to_targets in
@@ -109,7 +109,7 @@ priv fn check_visibility_widths(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error /
     // sema/decl/layout.kspl).
     c.report_registry_cycle()
 
-priv fn collect_imports_and_lint(r: Ast_node$@, c: Sema_ctx$@) //<
+priv fn collect_imports_and_lint(r: Ast_node@, c: Sema_ctx$@) //<
     //< Pass 0: each file's imports and `##lint` settings
     //< A `##lint` must take effect before any diagnostic, so this pass reports nothing.
     for top_node in r.children
@@ -126,7 +126,7 @@ priv fn collect_imports_and_lint(r: Ast_node$@, c: Sema_ctx$@) //<
             } case .libraries { // read by the link (`append_program_libs` in tools/libs.kspl).
             } case .unknown {}
 
-priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
+priv fn register_type_symbols(r: Ast_node@, c: Sema_ctx$@) //<
     //< Pass 1: a symbol, and an empty definition, for each struct, enum, trait and typedef
     for top_node in r.children
         child: = top_node.unwrap_top_level()
@@ -163,13 +163,12 @@ priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
         case .k_decl_typedef
             name: = child.get_decl_id_text()
             if name.len > 0
-                fqn: = c.make_fqn(name)
                 sym: = Sema_symbol(.alias_def, name, child)
                 sym.vis = top_vis
-                c.declare_symbol_with_fqn(name, fqn, sym)
+                c.declare_global_symbol(name, sym)
         default {}
 
-priv fn collect_early_values(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn collect_early_values(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
     //< Pass 2a: the registrations that resolve no type, before any type is resolved
     //< Caution: Keep it apart from Pass 2b, which resolves types and so triggers instantiations.
     //< One run before all the names and generic impls exist misses a later `const` or `impl`.
@@ -188,7 +187,7 @@ priv fn collect_early_values(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
             continue
         child.declare_var_syms(c, child.get_visibility())
 
-priv fn register_value_symbols(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn register_value_symbols(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
     //< Pass 2b: the functions, impls, externs, embeds and variables, and each typedef's target
     for top_node in r.children
         child: = top_node.unwrap_top_level()
@@ -236,7 +235,7 @@ priv fn register_value_symbols(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //
             child.collect_var_decl(c, top_vis)!
         default {}
 
-priv fn build_registries(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn build_registries(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
     //< Pass 3: each type's fields, variants and methods, and every written type checked
     // The instantiations queued up to 2b are created here.
     // Caution: **Finish this before the registries are built**: a struct field of an instantiated
@@ -261,7 +260,7 @@ priv fn build_registries(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
         child.check_spelled_out_sugar(c)
     c.drain_pending_instances()!
 
-priv fn check_const_storage(r: Ast_node$@, c: Sema_ctx$@) //<
+priv fn check_const_storage(r: Ast_node@, c: Sema_ctx$@) //<
     //< Pass 4: the storage check on `const` declarations
     // Caution: It must come after Pass 3. The field list is complete only after
     // build_struct_registry; earlier, it misses a `const D: D` whose field is an array of mutable
@@ -287,7 +286,7 @@ priv fn impl_needs_early_collect(node: Ast_node$@): Bool //<
     defer $name: = target.extract_type_name()
     return name.slice().find_str("<|").is_some()
 
-priv fn is_own_param(raw_target: U8[], gen_params_node: Ast_node$@): Bool //<
+priv fn is_own_param(raw_target: U8[], gen_params_node: Ast_node@): Bool //<
     //< Whether an impl block's target type is one of the block's own type parameters
     //< For example impl<|T: Trait|> T.
     //< That form (a blanket impl) is **not supported**; collect_impl_decl rejects it.
@@ -431,7 +430,6 @@ impl Ast_node
         for m in r.children
             if m.kind_id == .k_decl_fn
                 m.collect_impl_method(c, gen_params_node, base_slice, target_fqn)!
-        c.fn_ctx.impl_name = ""
 
     priv fn check_impl_gen_params(r: Ast_node$@, c: Sema_ctx$@, gen_params_node: Ast_node$@,
         target: U8[], base_name: U8[]): Bool //<
@@ -529,7 +527,7 @@ impl Ast_node
         case .none
             t_entry.add_method(m_name, sym)
 
-    priv fn collect_extern_decl(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn collect_extern_decl(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error
         for item in r.children
             switch item.kind_id
             case .k_decl_fn_proto
@@ -592,8 +590,7 @@ impl Ast_node
         sym.flags.is_ext = true
         sym.type_id = t_id
         sym.apply_attributes()
-        fqn: = c.make_fqn(id_node.text)
-        c.declare_symbol_with_fqn(id_node.text, fqn, sym)
+        c.declare_global_symbol(id_node.text, sym)
 
     priv fn collect_extern_struct(item: Ast_node$@, c: Sema_ctx$@) //<
         //< Declares a C type of an `extern` block, held by pointer and known by its name

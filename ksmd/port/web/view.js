@@ -112,15 +112,9 @@ function ksmdView(ks) {
 
   function shape(b) {
     switch (b.k) {
-      case "p": {
-        const el = unit("p", "b u");
-        if (b.a) el.style.textAlign = b.a;
-        ks.notes.markBlock(el, b.no);
-        segsInto(el, b.s);
-        return el;
-      }
+      case "p":
       case "h": {
-        const el = unit(`h${b.n}`, "b u");
+        const el = unit(b.k === "h" ? `h${b.n}` : "p", "b u");
         if (b.a) el.style.textAlign = b.a;
         ks.notes.markBlock(el, b.no);
         segsInto(el, b.s);
@@ -186,9 +180,35 @@ function ksmdView(ks) {
         }
         return el;
       }
+      case "f":
+        return functionsBox(b);
       default:
         return include(b);
     }
+  }
+
+  // A `:::functions` clause: the file of a person's own functions it names. Where files are
+  // fetched, `functions.js` builds the file and says in `.functions-state` what it holds.
+  function functionsBox(b) {
+    const el = unit("div", "b functions");
+    el.contentEditable = "false";
+    el.dataset.path = b.path;
+    el.setAttribute("role", "note");
+    const head = unit("div", "functions-head");
+    head.textContent = `Functions from ${b.path}.`;
+    head.appendChild(removeButton("Remove this clause from the document; the functions file stays"));
+    el.appendChild(head);
+    const state = unit("p", "functions-state");
+    if (b.to === undefined) {
+      state.textContent = "Functions run only where the local server opens the document.";
+    } else if (b.why !== undefined) {
+      state.textContent = `These functions cannot be used: ${problem(b)}`;
+      state.classList.add("problem");
+    } else if (!b.wait) {
+      el.dataset.to = b.to;
+    }
+    el.appendChild(state);
+    return el;
   }
 
   // A refusal at a clause, and where it stands when that is inside another file.
@@ -390,7 +410,6 @@ function ksmdView(ks) {
 
   // The element that shows a gap: an empty line of the kind a block typed there takes.
   function makeGap(spot, style) {
-    removeGap();
     let el;
     if (style.k === "h") el = unit(`h${style.n}`, "gap u");
     else if (style.k === "c") el = unit("pre", "gap u code");
@@ -460,5 +479,5 @@ function ksmdView(ks) {
   }
 
   ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,
-    removeGap, removeButton, removeBlock };
+    removeButton, removeBlock };
 }

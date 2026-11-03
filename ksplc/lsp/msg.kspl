@@ -111,7 +111,9 @@ const SYNC_FULL: I32 = 1I32
 // The error codes a refusal is answered with. `InvalidParams`: a parameter is missing or of the
 // wrong kind. `RequestFailed`: well formed, refused for a reason the message gives the person.
 const INVALID_PARAMS: I32 = -32602I32
-const REQUEST_FAILED: I32 = -32803I32
+const REQUEST_FAILED: I32 = -32803I32 //<
+    //< The LSP's "the request was understood and could not be carried out" (3.17's RequestFailed)
+    //< Not -32601: that says the method is unknown, and the editor stops offering it.
 
 const MAX_CONTENT_LENGTH: I32 = 128 * 1024 * 1024 //<
     //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
@@ -162,13 +164,7 @@ fn read_content_length(): I32!Lsp_error
     throw .format_error
 
 priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Value): json.Object_builder
-    $obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.VERSION))
-    switch id_val
-    case .null_val
-        obj = obj.set("id", b.null_val())
-    default
-        obj = obj.set("id", id_val)
-    return obj
+    return b.obj().set("jsonrpc", b.str_val(jsonrpc.VERSION)).set("id", id_val)
 
 priv fn dump_and_send_val(val: json.Value)
     defer $body: = Str_builder()
@@ -193,43 +189,40 @@ fn send_error_response(id_val: json.Value, code: I32, msg: U8[], arena: Arena$@)
     obj: = build_jsonrpc_envelope(b, id_val).set("error", err_obj)
     dump_and_send(obj)
 
-fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
+fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>@)
     defer arena: = Arena(2 * 1024 * 1024)
     $b: = Json_builder(arena)
 
     defer $final_uri: = Str_builder()
-    if !uri.has_kspl_ext()
-        final_uri.s(uri).s(base_core.SOURCE_EXT)
-    else
-        final_uri.s(uri)
+    final_uri.s(uri)
+    final_uri.ensure_kspl_ext()
 
     $arr: = b.arr()
     local_uri: = final_uri.slice().strip_file_uri()
 
-    if diags != null
-        for d in diags
-            // Caution: **Leave the same-file check to `base_locate`.** A diagnostic uses the file's
-            // logical name and the LSP names a file by URI, so matching the names is not enough.
-            if !base_locate.is_same_file(local_uri, d.file)
-                continue
+    for d in diags
+        // Caution: **Leave the same-file check to `base_locate`.** A diagnostic uses the file's
+        // logical name and the LSP names a file by URI, so matching the names is not enough.
+        if !base_locate.is_same_file(local_uri, d.file)
+            continue
 
-            sev: = d.severity.to_lsp_severity()
-            $d_obj: = b.obj()
-                .set("range", b.range(d.line, d.col, d.line, d.col + d.len))
-                .set("severity", b.int_val(sev)).set("source", b.str_val("kspl"))
-                .set("message", b.str_val(d.msg))
+        sev: = d.severity.to_lsp_severity()
+        $d_obj: = b.obj()
+            .set("range", b.range(d.line, d.col, d.line, d.col + d.len))
+            .set("severity", b.int_val(sev)).set("source", b.str_val("kspl"))
+            .set("message", b.str_val(d.msg))
 
-            is_unnecessary: =
-                (d.severity == .hint &&
-                (d.msg.starts_with("[H") || d.msg.starts_with("Unused "))) ||
-                (d.severity == .warning &&
-                (d.msg.starts_with("[W0207]") || d.msg.starts_with("[W0208]")))
+        is_unnecessary: =
+            (d.severity == .hint &&
+            (d.msg.starts_with("[H") || d.msg.starts_with("Unused "))) ||
+            (d.severity == .warning &&
+            (d.msg.starts_with("[W0207]") || d.msg.starts_with("[W0208]")))
 
-            if is_unnecessary
-                d_obj = d_obj.set("tags",
-                    b.arr().push(b.int_val(TAG_UNNECESSARY)).build())
+        if is_unnecessary
+            d_obj = d_obj.set("tags",
+                b.arr().push(b.int_val(TAG_UNNECESSARY)).build())
 
-            arr = arr.push(d_obj.build())
+        arr = arr.push(d_obj.build())
 
     defer $safe_uri: = final_uri.slice().with_forward_slashes()
 

@@ -101,7 +101,7 @@ impl Ast_node
             cg.s("    unreachable\n")
         cg.terminate()
 
-    priv fn emit_llvm_trace_frame(r: Ast_node$@, cg: Genllvm_ctx$@) //<
+    priv fn emit_llvm_trace_frame(r: Ast_node@, cg: Genllvm_ctx$@) //<
         //< Records the frame a failure leaves through, as genc's KSPL_START_TRACE / RECORD_TRACE do
         //< A new error starts the route again; a `!`'s propagation extends it.
         //< The file is the one a `#line` names and the function its C symbol, so the route the
@@ -180,9 +180,6 @@ impl Ast_node
         if has_else
             cg.emit_b_label(else_lbl)
             else_block.emit_llvm_stmt(cg)
-            if !cg.is_terminated
-                cg.s("    br label %b\{merge_lbl\}\n")
-            cg.terminate()
 
         cg.emit_b_label(merge_lbl)
 
@@ -194,10 +191,6 @@ impl Ast_node
         loop_cond_lbl: = cg.next_label()
         loop_body_lbl: = cg.next_label()
         loop_end_lbl: = cg.next_label()
-
-        if !cg.is_terminated
-            cg.s("    br label %b\{loop_cond_lbl\}\n")
-        cg.terminate()
 
         cg.emit_b_label(loop_cond_lbl)
 
@@ -242,8 +235,7 @@ impl Ast_node
 
         if !is_scalar
             tmp_cond_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, cond_node.type_id)
-            cg.s("    store ").t(cond_node.type_id).s(" ").s(cond_reg).s(", ptr ").s(tmp_cond_ptr)
-                .s("\n")
+            cg.op_store(cond_node.type_id, cond_reg, tmp_cond_ptr)
 
             tag_ptr: = cg.next_reg()
             cg.s("    %\{tag_ptr\} = getelementptr inbounds ")
@@ -290,9 +282,6 @@ impl Ast_node
         if default_block != null
             cg.emit_b_label(default_lbl)
             default_block.emit_llvm_stmt(cg)
-            if !cg.is_terminated
-                cg.s("    br label %b\{merge_lbl\}\n")
-            cg.terminate()
         else if default_lbl != merge_lbl
             cg.emit_b_label(default_lbl)
             cg.s("    unreachable\n")

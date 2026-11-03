@@ -16,6 +16,7 @@ import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars" // testing single characters
+import "std/ds" as _ds // `contains`
 import "std/str" { Str_builder }
 
 enum Pointed //< what a name in backticks resolved to
@@ -178,10 +179,6 @@ priv enum Step //< the result of reading one more part
     absent //< the owner holds no such member
     unsure //< the owner's members are not listed here
 
-priv fn fqn_of(c: Sema_ctx$@, module: U8[], name: U8[]): U8[] //<
-    //< a qualified name, built as the analysis builds it (build_mod_fqn)
-    return c.build_mod_fqn(module, name)
-
 priv fn declared_in(c: Sema_ctx$@, file: U8[], name: U8[]): Sema_symbol$@? //<
     //< The top-level declaration `name` in `file`, whatever its visibility
     env: = c.env.files.get(file).unwrap_or(null)
@@ -200,7 +197,7 @@ priv fn head_of(c: Sema_ctx$@, file: U8[], head: U8[], out: At$@): Bool //<
     //< **The file's own declaration is checked first**: a name the prelude brings in yields to one
     //< the file declares, as in the code.
     if own: = declared_in(c, file, head)
-        out$ = on_symbol(own, fqn_of(c, file, head))
+        out$ = on_symbol(own, c.build_mod_fqn(file, head))
         return true
     named: = c.peek_file_alias(file, head)
     if named != null
@@ -210,7 +207,7 @@ priv fn head_of(c: Sema_ctx$@, file: U8[], head: U8[], out: At$@): Bool //<
     if info == null
         return false
     if sym: = declared_in(c, info.target_path, info.name)
-        out$ = on_symbol(sym, fqn_of(c, info.target_path, info.name))
+        out$ = on_symbol(sym, c.build_mod_fqn(info.target_path, info.name))
         return true
     return false
 
@@ -315,7 +312,7 @@ priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
         if c.env.files.get(cur.module).is_none()
             return .unsure
         if sym: = declared_in(c, cur.module, part)
-            next$ = on_symbol(sym, fqn_of(c, cur.module, part))
+            next$ = on_symbol(sym, c.build_mod_fqn(cur.module, part))
             return .on
         return .unsure if left_out_by_cfg(c, cur.module, part) else .absent
     sym: = cur.sym
@@ -335,7 +332,7 @@ priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
     return .unsure
 
 priv fn names_a_file(part: U8[]): Bool //< whether the last part is a file's tail (`edit.kspl`)
-    return part.is_one_of(U8[][]::FILE_EXTS)
+    return (U8[][]::FILE_EXTS).contains(part)
 
 fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): Pointed //<
     //< What `name`, written in a comment at position `at` of `file`, stands for

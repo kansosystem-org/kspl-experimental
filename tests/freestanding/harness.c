@@ -172,15 +172,19 @@ static void check_float_format(void) {
 // frames between (RtlUnwindEx), and the probe's frames have no unwind data, as bare-metal code has
 // none (clang leaves it out under `-ffreestanding`). The unwind then fails and the process dies
 // with nothing printed. The builtin puts the stack and frame back without unwinding. **Elsewhere,
-// `setjmp`**: clang has no builtin for AArch64, such as macOS on Apple's chips.
+// `sigsetjmp`**: clang has no builtin for AArch64, such as macOS on Apple's chips.
+// Caution: **Keep the signal mask out of the jump (`sigsetjmp(buf, 0)`).** A hook reached from the
+// timer's handler jumps out with the timer's signal blocked. macOS's `setjmp` unblocks it again, so
+// a signal already waiting runs the handler at once, which panics and jumps back, before the timer
+// can be stopped: the round hung there. Linux's `setjmp` keeps the mask, so only macOS showed it.
 #ifdef _WIN32
 static void* hook_exit[5];
 #define JUMP_MARK(buf) __builtin_setjmp(buf)
 #define JUMP_BACK(buf) __builtin_longjmp(buf, 1)
 #else
-static jmp_buf hook_exit;
-#define JUMP_MARK(buf) setjmp(buf)
-#define JUMP_BACK(buf) longjmp(buf, 1)
+static sigjmp_buf hook_exit;
+#define JUMP_MARK(buf) sigsetjmp(buf, 0)
+#define JUMP_BACK(buf) siglongjmp(buf, 1)
 #endif
 static int hook_calls = 0;
 static char hook_msg[160];

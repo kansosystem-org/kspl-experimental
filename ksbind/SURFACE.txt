@@ -25,13 +25,13 @@ ksbind/tls_server	Tls_server.starts_at	pub starts_at: I64	when the first certifi
 ksbind/tls_server	Tls_server.subject	pub subject: U8[]	the first certificate's subject, as OpenSSL prints it on one line
 ksbind/tls_server	Tls_server:Manual_free	impl Tls_server: Manual_free	it owns its OpenSSL context and frees it with `free()`
 ksbind/tls_server	Tls_session	pub struct Tls_session	one connection's TLS, server side, on a non-blocking `std/net` socket. Caution: **It does not own the socket.** The caller closes the socket after `free()`.
-ksbind/tls_server	Tls_session.buffered	pub fn buffered(r: Self$@): Bool	whether bytes already received wait inside OpenSSL. While true, call `read` again: **no socket wait reports these bytes**, since they have left the socket. A `read` that gives `would_block` leaves none behind.
+ksbind/tls_server	Tls_session.buffered	pub fn buffered(r: Self@): Bool	whether bytes already received wait inside OpenSSL. While true, call `read` again: **no socket wait reports these bytes**, since they have left the socket. A `read` that gives `would_block` leaves none behind.
 ksbind/tls_server	Tls_session.close	pub fn close(r: Self$@, tcp: net.Tcp_stream$@)	Queues the close_notify and sends what the socket takes at once; it never waits. A peer that does not read loses the close_notify, and needs none to see the end.
-ksbind/tls_server	Tls_session.flush	pub fn flush(r: Self$@, tcp: net.Tcp_stream$@): Void!Tls_session_error	Sends what waits for the socket; `would_block` where the socket took only part
+ksbind/tls_server	Tls_session.flush	pub fn flush(r: Self$@, tcp: net.Tcp_stream@): Void!Tls_session_error	Sends what waits for the socket; `would_block` where the socket took only part
 ksbind/tls_server	Tls_session.free	pub fn free(r: Self$@)	frees the TLS state, sending nothing; the socket stays the caller's
-ksbind/tls_server	Tls_session.pending	pub fn pending(r: Self$@): Bool	whether bytes wait for the socket to take them. While true, watch the socket for writable and call `flush`.
+ksbind/tls_server	Tls_session.pending	pub fn pending(r: Self@): Bool	whether bytes wait for the socket to take them. While true, watch the socket for writable and call `flush`.
 ksbind/tls_server	Tls_session.read	pub fn read(r: Self$@, tcp: net.Tcp_stream$@, buf: U8$[]): Sz!Tls_session_error	receives and returns how much arrived; 0 once the peer has ended. It runs the handshake first, and gives one record at most: **call it again while `buffered` is true**. 0 comes for a close_notify and for a TCP close alike: the request's own length shows a cut request ("The server half never waits" in `ksbind/docs/DESIGN-bindings.md`).
-ksbind/tls_server	Tls_session.ready	pub fn ready(r: Self$@): Bool	whether the handshake has finished
+ksbind/tls_server	Tls_session.ready	pub fn ready(r: Self@): Bool	whether the handshake has finished
 ksbind/tls_server	Tls_session.start	pub fn start(server: Tls_server$@): Tls_session$@!tls.Tls_error	Starts the TLS of one accepted connection; the handshake runs inside `read`
 ksbind/tls_server	Tls_session.write	pub fn write(r: Self$@, tcp: net.Tcp_stream$@, buf: U8[]): Sz!Tls_session_error	encrypts some of `buf` and returns how much it took; a partial take is normal. **It takes nothing while bytes still wait for the socket** (`would_block`), so a slow reader holds at most one record per connection.
 ksbind/tls_server	Tls_session:Manual_free	impl Tls_session: Manual_free	it owns its OpenSSL state and frees it with `free()`

@@ -31,7 +31,7 @@ priv struct Bindings //< what a call binds each of the callee's own type paramet
     callee: U8[] //< the called function's name, for a conflict's report
     is_refused: Bool //< whether two arguments fixed one `const` parameter to different values
 
-priv fn bindings_of(gen_params: Ast_node$@, callee: U8[]): Bindings //<
+priv fn bindings_of(gen_params: Ast_node@, callee: U8[]): Bindings //<
     //< One unbound slot per type parameter
     b: = Bindings::{ .callee = callee, .names = List<|U8[]|>.create(base_core.arena),
         .is_value = List<|Bool|>.create(base_core.arena),
@@ -111,7 +111,7 @@ priv fn bind_type(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, arg_id: I32
         bind_name(b, written.text, arg_id)
     default {}
 
-priv fn bind_type_expr(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, arg_id: I32) //<
+priv fn bind_type_expr(c: Sema_ctx$@, b: Bindings$@, written: Ast_node@, arg_id: I32) //<
     //< A type and its postfixes: each postfix, outermost first, peels one level off the argument
     $base: Ast_node$@ = null
     $posts: = List<|Ast_node$@|>(base_core.arena)
@@ -250,7 +250,7 @@ priv fn arithmetic_on(written: Ast_node$@, name: U8[]): Ast_node$@? //<
             return .some(found)
     return .none
 
-priv fn spell_value(c: Sema_ctx$@, node: Ast_node$@) //<
+priv fn spell_value(c: Sema_ctx$@, node: Ast_node@) //<
     //< Appends a value written in a type (`N + 1`) to scratch, from its tokens
     //< An operator stands between spaces, a parenthesis against what it holds.
     for ch in node.children
@@ -262,7 +262,7 @@ priv fn spell_value(c: Sema_ctx$@, node: Ast_node$@) //<
         c.scratch.c(' ')
     c.scratch.s(node.text)
 
-fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node$@) //<
+fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node@) //<
     //< Appends the type parameters' names to scratch, quoted and joined by commas (`'A', 'B'`)
     if gen_params == null
         return
@@ -277,7 +277,7 @@ fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node$@) //<
         is_first = false
 
 priv fn refuse_unbound(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params: Ast_node$@,
-    b: Bindings@, pairs: List<|Pairing|>$@, at: Sz) //<
+    b: Bindings@, pairs: List<|Pairing|>@, at: Sz) //<
         //< Reports the type parameter at `at` that no argument bound, with the form to write
         //< A parameter's type can mention it (a `const` one: where a value stands). Then its
         //< argument did not have that type's shape, and the error stands on it. Otherwise nothing
@@ -335,8 +335,17 @@ priv fn refuse_unbound(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params
     write_gen_param_names(c, gen_params)
     c.err(where, c.scratch.slice())
 
+priv fn as_received(c: Sema_ctx$@, written: Ast_node$@, arg_id: I32): I32 //<
+    //< The type a parameter written as a bare name (`x: T`) receives: a copy of the argument
+    //< **A copy drops the outermost immutability**, as `$a: = p$` does (`copy_value_type`). So
+    //< `box(p$)` through a read-only `p` binds `T` to the writable type, and `box(p.f)` alike.
+    //< What a pointer or a type argument carries is kept (`bind_name`).
+    if written != null && written.bare_written_name().len > 0
+        return c.env.copy_value_type(arg_id)
+    return arg_id
+
 fn inferred_type_args(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: Ast_node$@,
-    args_node: Ast_node$@, is_method: Bool): I32[] //<
+    args_node: Ast_node@, is_method: Bool): I32[] //<
         //< The type arguments a generic call binds from its arguments, one per type parameter
         //< Empty where it is refused. That is a type parameter no argument binds (reported here),
         //< or an argument whose type is unknown (an error already reported for it). A method's
@@ -370,7 +379,8 @@ fn inferred_type_args(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: A
     for pair in pairs
         if pair.arg.type_id != name_mark
             b.pair = pair
-            bind_type(c, b@, pair.param.get_decl_type_node(), pair.arg_id)
+            written: = pair.param.get_decl_type_node()
+            bind_type(c, b@, written, as_received(c, written, pair.arg_id))
     for pair in pairs
         if pair.arg.type_id == name_mark
             b.pair = pair

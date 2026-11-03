@@ -4,6 +4,7 @@ import "ksmd/base/source" { Source }
 import "ksmd/model/model" { Block_kind, Cell_kind, Document, Inline, Inline_kind, Piece_kind }
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
+import "ksmd/tests/support" { read, written }
 import "std/chars"
 import "std/io"
 import "std/mem" { Arena }
@@ -29,7 +30,7 @@ fn run()
 priv fn models()
     defer arena: = Arena(64 * 1024)
     doc: =
-        read_ok("%ksmd 1\n\n# Title\n\nOne\ntwo.\\\nThree.\n\n```text\n:::include\n```\n", arena)
+        read("%ksmd 1\n\n# Title\n\nOne\ntwo.\\\nThree.\n\n```text\n:::include\n```\n", arena)
     verdict.check("three blocks in order", doc.blocks.len == 3, "")
     h: = doc.blocks.get(0)
     verdict.check("heading level and text",
@@ -42,13 +43,13 @@ priv fn models()
     c: = doc.blocks.get(2)
     verdict.check("a fence keeps its label and literal lines",
         c.kind == Block_kind.code && c.label.equals("text") && c.text.equals(":::include\n"), "")
-    empty: = read_ok("%ksmd 1", arena)
+    empty: = read("%ksmd 1", arena)
     verdict.check("a header alone has no blocks", empty.blocks.len == 0, "")
-    escaped: = read_ok("%ksmd 1\n\n\\# Not a heading\n", arena)
+    escaped: = read("%ksmd 1\n\n\\# Not a heading\n", arena)
     verdict.check("an escaped marker starts a paragraph",
         escaped.blocks.get(0).kind == Block_kind.paragraph &&
         first_shape(escaped, arena).equals("# Not a heading"), "")
-    literal: = read_ok("%ksmd 1\n\nends in \\\\\nnext\n", arena)
+    literal: = read("%ksmd 1\n\nends in \\\\\nnext\n", arena)
     verdict.check("an even run of backslashes is literal, not a hard break",
         first_shape(literal, arena).equals("ends in \\ next"), "")
 
@@ -66,7 +67,7 @@ priv fn canonical_saves()
 priv fn small_diff() //< changing one word of the model changes one line of the save
     defer arena: = Arena(64 * 1024)
     doc: =
-        read_ok("%ksmd 1\n\nFirst\nparagraph.\n\nSecond paragraph.\n\nThird paragraph.\n", arena)
+        read("%ksmd 1\n\nFirst\nparagraph.\n\nSecond paragraph.\n\nThird paragraph.\n", arena)
     defer $before: = Str_builder()
     writer.write(doc@, before@)
     $edited: = doc
@@ -114,8 +115,7 @@ priv fn fences()
 
 priv fn lists()
     defer arena: = Arena(64 * 1024)
-    doc: =
-        read_ok("%ksmd 1\n\n- one\n  3. two\n  1. three\n    - four\n- five\n\nAfter\n", arena)
+    doc: = read("%ksmd 1\n\n- one\n  3. two\n  1. three\n    - four\n- five\n\nAfter\n", arena)
     verdict.check("a list is one block, and the paragraph after it another",
         doc.blocks.len == 2 && doc.blocks.get(0).kind == Block_kind.list &&
         doc.blocks.get(0).first == 0 && doc.blocks.get(0).count == 5 && doc.items.len == 5, "")
@@ -173,7 +173,7 @@ priv fn inline_models()
     inline("text joins across a source newline", "a\n*b*\nc", "a <e>b</e> c")
     inline("a code span keeps '*' and '\\' literal", "`*a\\`", "{*a\\}")
     defer arena: = Arena(64 * 1024)
-    doc: = read_ok("%ksmd 1\n\nx *y*\n", arena)
+    doc: = read("%ksmd 1\n\nx *y*\n", arena)
     verdict.check("a mark's node keeps its place in the source",
         doc.inlines.get(1).kind == Inline_kind.emphasis_start &&
         doc.inlines.get(1).offset == 11, "")
@@ -241,13 +241,20 @@ priv fn inline_refusals()
 priv fn clause_models()
     defer arena: = Arena(64 * 1024)
     doc: =
-        read_ok("%ksmd 1\n\n:::table name=\"budget\" widths=\"2,1\"\n| \"Item\" | \"Cost\" |\n| \
+        read("%ksmd 1\n\n:::table name=\"budget\" widths=\"2,1\"\n| \"Item\" | \"Cost\" |\n| \
             \"Pens\" | =B1*2 |\n| \"a|b\\n\" | |\n:::\n\n:::include \
             path=\"notes.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"\"\n:::\n", arena)
     verdict.check("a table, an include and an image are three blocks",
         doc.blocks.len == 3 && doc.blocks.get(0).kind == Block_kind.table &&
         doc.blocks.get(1).kind == Block_kind.include &&
         doc.blocks.get(2).kind == Block_kind.image, "")
+    own: = read("%ksmd 1\n\n:::functions path=\"mine.kspl\"\n:::\n", arena)
+    verdict.check("a functions clause is a block naming its KSPL file",
+        own.blocks.len == 1 && own.blocks.get(0).kind == Block_kind.functions &&
+        own.blocks.get(0).text.equals("mine.kspl"), "")
+    back: = written(own@, arena)
+    verdict.check("and is written back as it was read",
+        back.equals("%ksmd 1\n\n:::functions path=\"mine.kspl\"\n:::\n"), back)
     t: = doc.tables[0]@
     verdict.check("a table keeps its name, its size and its weights",
         t.name.equals("budget") && t.columns.len == 2 && t.rows.len == 2 && t.weights.len == 2 &&
@@ -342,7 +349,7 @@ priv fn text_looks() //< text takes alignment alone, on a line of braces
 
 priv fn clause_refusals()
     refused("%ksmd 1\n\n:::graph\n:::\n",
-        "a clause is ':::table', ':::include', ':::image' or ':::chart'", 3, 4)
+        "a clause is ':::table', ':::include', ':::image', ':::chart' or ':::functions'", 3, 4)
     refused("%ksmd 1\n\n:::table\n| \"a\" |\n:::\n",
         "':::table' needs a name, as in name=\"budget\"", 3, 1)
     refused("%ksmd 1\n\n:::table name=\"a\\tb\"\n| \"a\" |\n:::\n",
@@ -403,6 +410,14 @@ priv fn clause_refusals()
         3, 1)
     refused("%ksmd 1\n\n:::include path=\"\"\n:::\n", "this attribute is not empty", 3, 12)
     refused("%ksmd 1\n\n:::image src=\"a.png\"\n:::\n", "':::image' needs src and alt", 3, 1)
+    refused("%ksmd 1\n\n:::functions\n:::\n",
+        "':::functions' needs a path, as in path=\"mine.kspl\"", 3, 1)
+    refused("%ksmd 1\n\n:::functions path=\"mine.py\"\n:::\n",
+        "':::functions' names a KSPL file, ending in .kspl", 3, 1)
+    refused("%ksmd 1\n\n:::functions path=\"mine.kspl\" invisible=\"printing\"\n:::\n",
+        "':::functions' takes only path", 3, 31)
+    refused("%ksmd 1\n\n:::functions path=\"mine.kspl\"\nx\n:::\n",
+        "':::functions' has no body. Close it on the next line", 4, 1)
     refused("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" caption=\"\"\n:::\n",
         "leave out an empty caption", 3, 29)
     defer $wide: = Str_builder()
@@ -446,19 +461,11 @@ priv fn refusals()
     verdict.check("prose that only looks like a marker stays prose",
         read_count("%ksmd 1\n\n-5 degrees\n\n1.5 metres\n") == 2, "")
 
-priv fn read_ok(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
-    src: = Source("t.ksmd", bytes) catch e
-        verdict.check("a valid source was refused", false, e.message)
-        panic("a valid source was refused")
-    return reader.read(src@, arena) catch e
-        verdict.check("a valid document was refused", false, e.message)
-        panic("a valid document was refused")
-
 priv fn inline(what: U8[], text: U8[], expected: U8[]) //<
     //< The paragraph `text` reads as the nodes `expected` describes (`shape`)
     defer arena: = Arena(64 * 1024)
     bytes: = arena.text().s("%ksmd 1\n\n").s(text).c('\n').take()
-    doc: = read_ok(bytes, arena)
+    doc: = read(bytes, arena)
     got: = first_shape(doc, arena)
     verdict.check(what, got.equals(expected), got)
 
@@ -496,16 +503,16 @@ priv fn shape(doc: Document, first: Sz, count: Sz, arena: Arena$@): U8[] //<
 
 priv fn read_count(bytes: U8[]): Sz
     defer arena: = Arena(64 * 1024)
-    return read_ok(bytes, arena).blocks.len
+    return read(bytes, arena).blocks.len
 
 priv fn canonical(what: U8[], bytes: U8[], expected: U8[]) //<
     //< The first save gives `expected`, and reading and saving that again changes nothing
     defer arena: = Arena(64 * 1024)
     defer $first: = Str_builder()
-    doc: = read_ok(bytes, arena)
+    doc: = read(bytes, arena)
     writer.write(doc@, first@)
     defer $second: = Str_builder()
-    again: = read_ok(first.slice(), arena)
+    again: = read(first.slice(), arena)
     writer.write(again@, second@)
     verdict.check(what, first.slice().equals(expected), first.slice())
     verdict.check(what, second.slice().equals(first.slice()), "a second save changed")

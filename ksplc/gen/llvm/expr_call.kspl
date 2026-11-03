@@ -106,7 +106,7 @@ priv fn callee_param_type_ids(cg: Genllvm_ctx$@, recv: Ast_node$@, is_trait: Boo
         out.push(p_type.type_id if p_type != null else 0)
     return out
 
-priv fn variadic_value_id(cg: Genllvm_ctx$@, arg_id: I32): I32 //<
+priv fn variadic_value_id(cg: Genllvm_ctx@, arg_id: I32): I32 //<
     //< The value's type as used to decide the promotion
     //< An enum is decided by its base integer.
     //< Caution: **Do not keep the enum's type id.** Its width reads as the default 32, so no
@@ -119,7 +119,7 @@ priv fn variadic_value_id(cg: Genllvm_ctx$@, arg_id: I32): I32 //<
     default {}
     return id
 
-priv fn variadic_promoted_id(cg: Genllvm_ctx$@, id: I32): I32 //<
+priv fn variadic_promoted_id(cg: Genllvm_ctx@, id: I32): I32 //<
     //< The "default argument promotion" for an argument passed to C's variadic part (`...`)
     //< **Without it, the width disagrees with what the callee reads.** A `Bool` and an enum both
     //< promote to `int` in C. Checked by width, they take the same branch.
@@ -148,7 +148,7 @@ impl Ast_node
                 trait_method_idx = cg.get_or_build_trait_method_idx(d, member_node.text)
             default {}
 
-        if !is_method && recv.kind_id == .k_identifier
+        if recv.kind_id == .k_identifier
             intr: = sema_body_call.intrinsic_of(recv.text)
             if intr != .not_intrinsic
                 return emit_llvm_intrinsic_call(cg, intr, args_node)
@@ -272,7 +272,7 @@ impl Ast_node
             return base_core.arena.dup_str("0")
         if use_sret
             load_reg: = cg.next_reg()
-            cg.s("    %\{load_reg\} = load ").t(r.type_id).s(", ptr ").s(sret_slot).s("\n")
+            cg.op_load(load_reg, r.type_id, sret_slot)
             return cg.reg_str(load_reg)
         return cg.reg_str(res_reg)
 
@@ -324,7 +324,7 @@ priv fn emit_trait_fn_ptr(cg: Genllvm_ctx$@, obj: Ast_node$@, method_idx: I32, o
     cg.s("    %\{fn_ptr\} = load ptr, ptr %\{fn_ptr_addr\}\n")
     return cg.reg_str(fn_ptr)
 
-priv fn emit_call_args(cg: Genllvm_ctx$@, args_node: Ast_node$@, param_type_ids: List<|I32|>$@,
+priv fn emit_call_args(cg: Genllvm_ctx$@, args_node: Ast_node@, param_type_ids: List<|I32|>@,
     first_param: Sz, is_variadic: Bool, arg_regs: List<|U8[]|>$@, arg_types: List<|I32|>$@) //<
         //< It evaluates a call's arguments, each converted to the type its parameter takes
         //< The callee's parameter types: an argument is always passed in this type (the reason is
@@ -373,7 +373,7 @@ priv fn pass_aggregates_by_ptr(cg: Genllvm_ctx$@, arg_regs: List<|U8[]|>$@,
         arg_by_ptr.push(needs_ptr)
         if needs_ptr
             slot: = cg.alloc_tmp_slot(a_type_id)
-            cg.s("    store ").t(a_type_id).s(" ").s(arg_regs.get(i)).s(", ptr ").s(slot).s("\n")
+            cg.op_store(a_type_id, arg_regs.get(i), slot)
             arg_regs.set(i, slot)
     return arg_by_ptr
 

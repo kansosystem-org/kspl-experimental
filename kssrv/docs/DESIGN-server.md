@@ -293,9 +293,9 @@ Caution: **Check a path in the query too.** An API taking `?path=` goes through 
 
 The counters `/api/status` returns sit in one `priv $stats`. On a one-thread server, handling a connection and reading the counters happen in the same loop, so no locking is needed.
 
-### No process is started
+### No process is started, but the builder
 
-**kssrv starts no program on a request.** The rule is "Only four things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "No program is started", inside "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
+**kssrv starts no program on a request, except the builder that `--builder` names.** Only whoever starts kssrv names it, and only with `--local`; a request names only the file. The rule is "Only five things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "No program is started, except one closed build", inside "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 ## The log
 

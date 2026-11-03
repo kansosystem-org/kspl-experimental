@@ -1,0 +1,71 @@
+//< Writes ksmd's own function table from `calc/functions.kspl`, or checks that it is current
+//< `make ksmd-functions` writes it; `make debug-ksmd` checks it first, so a signature changed
+//< without the table fails there, not in a formula. Run from `ksmd/`:
+//<
+//<     ksplc run port/table_writer.kspl <ksplc> write|check <work folder>
+import "ksmd/calc/glue"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const MODULE: U8[] = "ksmd/calc/functions" //< the functions, as an import names them
+priv const SOURCE: U8[] = "ksmd/calc/functions.kspl" //< the same, as the table's header names it
+priv const DOC_TARGET: U8[] = "calc/functions" //< the same, as `ksplc doc` names it from `ksmd/`
+    //< Caution: **Name it from the package's folder, not as an import does.** A copy of ksmd alone
+    //< (`make test-extract-rest`) has no `ksmd/` folder for `ksplc doc` to look in.
+priv const TABLE: U8[] = "calc/functions_table.kspl" //< the table, from `ksmd/`
+priv const WAIT_MS: I32 = 120000 //< how long `ksplc doc` may take
+
+fn main(): I32
+    defer arena: = Arena(4 * 1024 * 1024)
+    a: = sys.args()
+    if a.len != 4 || !(a.get(2).equals("write") || a.get(2).equals("check"))
+        io.err().s("usage: table_writer <ksplc> write|check <work folder>\n")
+        return 2
+    ksplc: = a.get(1)
+    fs.mkdir_all(a.get(3)) catch {}
+    tsv: = fs.join(a.get(3), "functions.tsv", arena)
+    got: =
+        subproc.run_capture(U8[][]::{ ksplc, "doc",
+        arena.text().s("--emit-surface=").s(tsv).take(), DOC_TARGET }, "", WAIT_MS, 1 << 16, arena)
+        catch
+        io.err().s("table_writer: \{ksplc\} did not start\n")
+        return 1
+    if !got.exited_with(0)
+        io.err().s("table_writer: ksplc doc failed:\n").s(got.text(arena))
+        return 1
+    rows: = io.read_file(tsv, arena) catch
+        io.err().s("table_writer: ksplc doc wrote no \{tsv\}\n")
+        return 1
+    fns: = glue.functions_of(rows, arena) catch why
+        io.err().s("table_writer: \{SOURCE\}: \{why\}\n")
+        return 1
+    // **The table is written as `ksplc fmt` lays it out**, so the tree's format check passes it.
+    draft: = fs.join(a.get(3), "functions_table.kspl", arena)
+    io.write_file(draft, glue.table_source(fns@, MODULE, SOURCE, arena)) catch
+        io.err().s("table_writer: cannot write \{draft\}\n")
+        return 1
+    laid: =
+        subproc.run_capture(U8[][]::{ ksplc, "fmt", "--in-place", draft }, "", WAIT_MS, 1 << 16,
+        arena) catch
+        io.err().s("table_writer: \{ksplc\} did not start\n")
+        return 1
+    if !laid.exited_with(0)
+        io.err().s("table_writer: ksplc fmt failed on the table:\n").s(laid.text(arena))
+        return 1
+    source: = io.read_file(draft, arena) catch ""
+    if a.get(2).equals("write")
+        io.write_file(TABLE, source) catch
+            io.err().s("table_writer: cannot write \{TABLE\}\n")
+            return 1
+        io.out().s("wrote ksmd/\{TABLE\} (\{fns.len\} functions)\n")
+        return 0
+    have: = io.read_file(TABLE, arena) catch ""
+    verdict.begin("ksmd functions")
+    verdict.check(arena.text().s("ksmd/\{TABLE\} is the table of \{SOURCE\}").take(),
+        have.equals(source), "run `make ksmd-functions`")
+    return verdict.finish()

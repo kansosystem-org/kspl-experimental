@@ -169,9 +169,8 @@ priv fn consts_of(code: U8[], lits: List<|Lit|>@, arena: Arena$@): List<|U8[]|> 
         head: = code.sub(0, l.at).trim_end()
         if !head.ends_with(": U8[] =")
             continue
-        decl: = head
-            .sub(line_start(code, head.len), head.len - line_start(code, head.len)).trim_start()
-            .strip_prefix("priv ").strip_prefix("pub ")
+        ls: = line_start(code, head.len)
+        decl: = head.sub(ls, head.len - ls).trim_start().strip_prefix("priv ").strip_prefix("pub ")
         if decl.starts_with("const ")
             out.push(decl.sub(6, decl.find_char(':').unwrap_or(6) - 6))
             out.push(l.parts.get(0))
@@ -414,6 +413,24 @@ fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
                     break
     return out
 
+fn c_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
+    //< The SKIP lines a C harness prints: each from its mark, which opens a string, to the line's end
+    //< **Only a mark right after `"` counts**, so a comment that names a SKIP prints nothing.
+    $out: = List<|Reason|>(arena)
+    lines: = src.lines(arena)
+    for i in Range.asc(lines.len)
+        t: = lines.get(i)
+        for m in MAKE_MARKS
+            if at: = t.find_str(m)
+                if at > 0 && t[at - 1] == '"'
+                    $p: = List<|U8[]|>(arena)
+                    p.push(t.sub_from(at))
+                    out
+                        .push(Reason::{ .line = i + 1, .fn_name = "", .pieces = p,
+                        .relayed = false })
+                    break
+    return out
+
 // ==========================================
 // The judgment, and the rows it holds the reasons against
 // ==========================================
@@ -517,6 +534,17 @@ priv const MAKE_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "\t\"KSBIND_REQUIRE_LIBS=0 makes this a SKIP;\" \\\n", .hits = false },
 }
 
+priv const C_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "    printf(\"SKIP x: a reason no row names\\n\");\n", .hits = true },
+    Sample::{ .text = "    printf(\"SKIP x: so Windows has no FIFO a path names\\n\");\n",
+        .hits = false },
+    Sample::{ .text = "// prints SKIP x: a reason no row names\n", .hits = false },
+}
+
+priv fn misses_c(text: U8[], arena: Arena$@): Bool
+    reasons: = c_reasons(text, arena)
+    return unheld("harness.c", reasons@, U8[][]::SAMPLE_ROWS, arena).len > 0
+
 priv fn misses_kspl(text: U8[], arena: Arena$@): Bool
     reasons: = reasons_in("sample.kspl", text, arena)
     return unheld("sample.kspl", reasons@, U8[][]::SAMPLE_ROWS, arena).len > 0
@@ -532,13 +560,15 @@ priv fn check_reasons_held(arena: Arena$@) //<
     $seen: Sz = 0
     $used: = List<|U8[]|>(arena)
     $files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-    for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile" })
+    for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile", "*.c" })
         files.push(rel)
     for rel in files
         src: = harness.read_under_root(rel)
         $reasons: = List<|Reason|>(arena)
         if rel.ends_with("Makefile") || rel.ends_with(".mk")
             reasons = make_reasons(src, arena)
+        else if rel.ends_with(".c")
+            reasons = c_reasons(src, arena)
         else
             reasons = reasons_in(rel, src, arena)
         seen += reasons.len
@@ -576,4 +606,6 @@ fn run(arena: Arena$@) //< this section's entry point
         Sample[]::REASON_SAMPLES, "reason_samples", misses_kspl, arena)
     scan.check_samples("the reading of a make file's SKIP lines fires on its samples",
         Sample[]::MAKE_SAMPLES, "make_samples", misses_make, arena)
+    scan.check_samples("the reading of a C harness's SKIP lines fires on its samples",
+        Sample[]::C_SAMPLES, "c_samples", misses_c, arena)
     check_reasons_held(arena)

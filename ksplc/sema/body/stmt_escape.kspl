@@ -57,7 +57,7 @@ fn is_frame_storage(c: Sema_ctx$@, node: Ast_node$@): Bool //<
         return is_frame_storage(c, recv)
     return false
 
-priv fn frame_depth(c: Sema_ctx$@, depth: I32): I32 //<
+priv fn frame_depth(c: Sema_ctx@, depth: I32): I32 //<
     //< A scope depth, where every depth up to the function's own block counts as that block
     //< A parameter's scope and the function's block both live until the function returns
     //< (Fn_ctx.body_depth).
@@ -92,7 +92,7 @@ priv enum Frame_escape //< what a value leaving the frame carries of the frame's
     address(at: Ast_node$@) //< a written `@` of the frame's storage
     local_address(name: Ast_node$@) //< a local binding set from one (holds_frame_address)
 
-priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node$@, with_address: Bool, deeper_than: I32):
+priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node@, with_address: Bool, deeper_than: I32):
     Frame_escape //< the first of find_frame_escape's finds among nodes' children, or none
     if nodes != null
         for child in nodes.children
@@ -292,7 +292,8 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     //< whose storage the pointer points into. A store dangles there as a `return` does.
     //< **A store into a local, or into its field or element, marks that local**
     //< (note_frame_pointer), so `h.s = U8[]::a; return h` is refused as `h: = …; return h` is.
-    switch store_place(c, left)
+    place: = store_place(c, left)
+    switch place
     case .local(name)
         note_frame_pointer(c, name, right)
     default {}
@@ -302,7 +303,7 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
         return
     default {}
     $fate: = ""
-    switch store_place(c, left)
+    switch place
     case .frame
         return
     case .local(name)
@@ -336,7 +337,7 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
             a global). Or keep the value in a local and pass it down as an argument.", "")
 
 fn check_frame_kept_by_call(c: Sema_ctx$@, recv: Ast_node$@, def_node: Ast_node$@,
-    args_node: Ast_node$@) //<
+    args_node: Ast_node@) //<
         //< A trait value into the frame handed to a container's method that may keep it ([W0110])
         //< The method takes `Self$@`, and the argument's type is a trait the receiver's type holds
         //< as a type argument (`xs.push(sq)`, `xs: List<|Shape|>`): a store into the container. A
@@ -397,7 +398,7 @@ fn check_frame_kept_by_call(c: Sema_ctx$@, recv: Ast_node$@, def_node: Ast_node$
                 concrete type in place of '\{c.env.display(arg.type_id)\}'.")
         c.warn(arg, c.scratch.slice())
 
-priv fn holds_trait_type(c: Sema_ctx$@, held: I32[], type_id: I32): Bool //<
+priv fn holds_trait_type(c: Sema_ctx@, held: I32[], type_id: I32): Bool //<
     //< Whether type_id is a trait type found in held, the receiver type's type arguments
     clean: = c.env.get_clean_real_type(type_id)
     switch c.env.get_info(clean)

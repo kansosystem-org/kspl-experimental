@@ -146,7 +146,7 @@ Text cells need quotes, so numeric-looking identifiers and a leading `=` are una
 
 Addresses start at `A1`, the first data cell. `$A$1`, `$A1` and `A$1` fix axes when copying formulas. Within one source, `budget.D1` names a cell in another table. Cross-file formulas are excluded, including references into an include.
 
-A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `sum_if`, `count_if`, `average_if`, `lookup`, `today`, `date`, `year`, `month` and `day`. Function names are lowercase. Multiplication and division bind before addition and subtraction, and both before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. There are no user functions.
+A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `sum_if`, `count_if`, `average_if`, `lookup`, `today`, `date`, `year`, `month` and `day`. It also holds the six base functions of "Hexadecimal and binary" below. Function names are lowercase. Multiplication and division bind before addition and subtraction, and both before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. A document can add functions of its own, written in KSPL ("Your own functions").
 
 An empty cell is zero in arithmetic. The rules for values and errors are "Values and errors" below, and for dates "Dates" below.
 
@@ -162,6 +162,58 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 * **A comparison takes one step: `1 < A1 < 9` does not read.** Write `1 < A1 and A1 < 9`.
 * Spaces and tabs can stand between tokens. A function takes one or more arguments, separated by `,`.
 * A formula nests at most 64 levels. The formula itself is one level, and each bracket, function, unary minus and `not` adds one.
+
+### How a function is written
+
+**Every function a formula calls by name is an ordinary KSPL function**, in `ksmd/calc/functions.kspl`. Its parameters' types say what it takes, and its result becomes the cell's value:
+
+```kspl
+pub fn round(x: F64, places: I64): F64!Calc_error
+```
+
+* **One set of rules converts every argument** (`ksmd/calc/args.kspl`). An `F64` takes a number, and an empty cell is 0; text there is `#VALUE!`. An `I64` takes a whole number, and a fraction is `#NUM!`. A `Value[]`, last, takes the arguments left, a range alone giving its numbers. A `T?`, last, may be left out.
+* **An argument holding an error is the result**, the leftmost first, and the function is not called. An error the function throws (`!Calc_error`) is the cell's mark.
+* **The table that calls them is written from their signatures** (`ksmd/calc/glue.kspl`, `make ksmd-functions`). So a function is added by writing it, and nothing else names it.
+* **Six forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, and `today` reads the date the document opened. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
+
+**Why ordinary functions**: a person reads how `sum` works in the language they write, and its rules for arguments are the ones any function follows.
+
+### Your own functions
+
+**A document adds its own functions with a `:::functions` clause** that names a `.kspl` file. Each `pub fn` in it is a function a formula calls by its name, with the rules above for its arguments:
+
+```kspl
+pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax
+    return price * (1.0 + rate.unwrap_or(0.1))
+```
+
+```text
+:::functions path="mine.kspl"
+:::
+
+| 100 | =tax(A1) |
+```
+
+* **The clause's box says what the file gives**: the names a formula can call. Or it says why the file cannot be used, in the compiler's own words.
+* **Insert ▸ Functions… puts the clause at the caret.** It picks a `.kspl` file in the workspace, or starts a new one holding one function to copy.
+* **A name ksmd has is refused**, so `sum` always means ksmd's `sum`. Where two files give one name, the first clause's is called.
+* **The file is built again when it changes on disk**, once the page looks again (on focus, as for an include).
+* **A function returns a value only.** It cannot change the document, as a procedure in a spreadsheet's macros can. That was left for later.
+* **Inside a `sum_if` condition, a range reaches a person's function whole**, never one row's cell. ksmd's own functions read the row's cell there.
+
+**The page cannot wait for an answer**, so a cell whose answer has not come shows `…`, and the tables show again once it has. An answer comes back at once for the same call with the same arguments.
+
+**Where it runs, and its limits:**
+
+| What | Holds |
+| :-- | :-- |
+| Building | The local server's builder, named when the server starts. The build is closed: the file may use `std` and ksmd's calculation files, and a path to anything else fails it |
+| Running | A worker apart from the page, with its own memory and no way to the files, the network or the page |
+| Time | 2 seconds per call; past it the cell shows `#TIME!`, and the worker starts afresh |
+| A panic or a fault | The cell shows `#STOPPED!`, and the worker starts afresh |
+| Opened from a file | Nothing runs; the box says that functions need the local server |
+
+**Why KSPL and a build**: a person writes their functions as ksmd writes its own, with the same types and rules for arguments. A build checks the types before anything runs, so a wrong call fails at the clause, not in a cell.
 
 ### Values and errors
 
@@ -225,6 +277,18 @@ Each error has its own mark, since each is fixed differently.
 * **A match is exact.** Text equals text without regard to case, as the sort and the filter compare it. A number equals the same number. No nearest match is guessed.
 * **`otherwise` is required, and calculated only where no key matches.** A missing key then shows what the writer chose, never an error nobody planned for.
 * **An error in `key` is the result.** A key cell holding an error is passed over, but a key on a cycle before the match makes the lookup `#CYCLE!`. Passed over, it would hide the cycle.
+
+### Hexadecimal and binary
+
+**`dec_to_hex(n)` writes a whole number in hexadecimal, and `hex_to_dec(text)` reads it back**; `dec_to_bin` and `bin_to_dec` do the same in binary, and `hex_to_bin` and `bin_to_hex` go between the two. `=dec_to_hex(255)` is `"FF"`, and `=bin_to_dec("101")` is 5.
+
+* **Every whole number up to 2^53 either way converts exactly**, the largest a cell's number holds exactly. A larger one, or a fraction, is `#NUM!`.
+* **Without a width, a negative number takes a minus sign**: `=dec_to_bin(-5)` is `"-101"`, and `=hex_to_dec("-ff")` is -255.
+* **A width in bits, from 1 to 53, writes two's complement**: `=dec_to_bin(-5, 8)` is `"11111011"`, and `=bin_to_dec("11111011", 8)` reads it back as -5. A number is written in the digits the width needs, zeros first (`=dec_to_hex(10, 16)` is `"000A"`). A number outside the width, or another width, is `#NUM!`.
+* **Hexadecimal is written in capitals and read in either case.** A text holding anything but the base's digits is `#VALUE!`.
+* **A whole number stands for its decimal digits** where text is read, so `=bin_to_dec(1010)` is 10. An empty cell is 0.
+
+**Why a sign by default:** a negative number written as a fixed run of digits surprises a reader who wanted a sign. A fixed width also limits which numbers convert. So the width is the reader's choice, up to 53 bits.
 
 ### Number formats
 
@@ -362,6 +426,7 @@ These were weighed and left out, so one way to write each thing stays:
 * Methods after a dot, as `B1.round(2)`. They would be a second way to write `round(B1, 2)`, and `.` already joins a table's name to a cell.
 * A condition written as text, as `">5"`, and a second set of functions for several conditions. `sum_if` takes an expression and joins conditions with `and` and `or`.
 * A `today()` that moves while the document is open, and a time of day as a value.
+* A person's procedure that changes the document, as a spreadsheet's macros can. A person's own function returns a value only ("Your own functions").
 
 ### Charts
 
@@ -384,7 +449,7 @@ These were weighed and left out, so one way to write each thing stays:
 
 ## Includes and images
 
-An include clause has only `path="notes.ksmd"` and an empty body. An image clause requires `src` and `alt`, and permits `caption`; its body is empty. Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption`; its body is empty. Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
 
 Links may use `https`, `http`, `mailto`, or a document fragment; other schemes are refused. Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -531,7 +596,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 ## The file lifecycle
 
-**ksmd reaches files through the repository's local server, `kssrv --local`, started on one workspace folder.** A page in a browser cannot read a folder, so it asks the server for each file by its path from the root ([`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). The server reaches files and nothing else, and knows nothing of the document. ksmd adds no server and no request of its own.
+**ksmd reaches files through the repository's local server, `kssrv --local`, started on one workspace folder.** A page in a browser cannot read a folder, so it asks the server for each file by its path from the root ([`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). The server reaches files, and knows nothing of the document. Its one other request builds a document's own functions ("Your own functions"). ksmd adds no server of its own.
 
 | Guarantee | What holds it |
 | :-- | :-- |

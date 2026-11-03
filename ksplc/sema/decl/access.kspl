@@ -39,7 +39,7 @@ fn narrower_vis(outer: sema_type_scope.Visibility, inner: sema_type_scope.Visibi
         //< An outer declaration (an impl's target type, a struct) caps its members' reach.
     return outer if vis_rank(outer) < vis_rank(inner) else inner
 
-fn contains_node(list: List<|Ast_node$@|>$@, node: Ast_node$@): Bool
+fn contains_node(list: List<|Ast_node$@|>@, node: Ast_node$@): Bool
     for item in list
         if item == node
             return true
@@ -205,11 +205,9 @@ impl Sema_ctx
         //< That is so where the route a read-only receiver takes ends at a method that declares
         //< `Self$@`. That method is an `at(r: Self$@, …)` with no other trait to fall back on, or
         //< an `at_ref` or a `get` declared with `Self$@`.
-        r.ensure_instance_methods(recv_id) catch {}
-        base_id: = r.env.strip_ptr(recv_id)
-        if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
-            !r.env.index_owns_elements(base_id)
+        if r.index_stops_permission_walk(recv_id)
             return false // an `at(r: Self@, …)` serves any receiver
+        base_id: = r.env.strip_ptr(recv_id)
         $method: U8[] = "get"
         if r.env.has_implemented_operator_trait(base_id, "Index_ref")
             method = "at_ref"
@@ -233,12 +231,7 @@ impl Sema_ctx
         //< Whether the subscript returns only a read-only place (`Index_ref` without `Index_mut`)
         //< Only the assignment's diagnostics use it; with `Index_mut` the error is "assigned into a
         //< read-only receiver".
-        $is_ref: = false
-        switch route
-        case .ref_place
-            is_ref = true
-        default {}
-        if !is_ref
+        if route != .ref_place
             return false
         return !r.env.has_implemented_operator_trait(r.env.strip_ptr(recv_id), "Index_mut")
 
@@ -441,7 +434,7 @@ impl Sema_ctx
         defer $seen: = List<|Ast_node$@|>(null)
         r.check_type_node_vis(node, owner_rank, position, owner, seen@)
 
-    fn is_bound_generic_type(r: Self$@, sym: Sema_symbol$@): Bool //<
+    fn is_bound_generic_type(r: Self@, sym: Sema_symbol$@): Bool //<
         //< Whether sym is itself the generic type argument currently bound
         //< check_visibility_and_mark_used and check_type_node_vis both stop here, for one reason.
         //< Fix only one, and a generic trait such as `std.lang.Index<|Idx, Output|>` reads as a
@@ -507,7 +500,7 @@ impl Sema_ctx
                         return true
         return false
 
-    priv fn vis_allows_here(r: Self$@, vis: sema_type_scope.Visibility, defined_in: U8[]): Bool //<
+    priv fn vis_allows_here(r: Self@, vis: sema_type_scope.Visibility, defined_in: U8[]): Bool //<
         //< Whether the visibility level makes that declaration visible in the file being analysed
         //< **This is the one place that defines the three levels' meaning** (see "Structs
         //< (`struct`)" in docs/SPEC-programming-language.md). A stale copy would let an invisible
@@ -676,7 +669,7 @@ fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Sema_symbol$@? //<
         return .none
     return .some(sym)
 
-fn check_member_visibility_width(root: Ast_node$@, c: Sema_ctx$@) //< checks every member's width
+fn check_member_visibility_width(root: Ast_node@, c: Sema_ctx$@) //< checks every member's width
     //< Caution: **Call it after all types are registered** (an `impl`'s target is looked up by
     //< name).
     for top_node in root.children

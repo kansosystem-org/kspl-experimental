@@ -1,0 +1,167 @@
+//< Builds a person's own functions into the wasm the page's worker runs
+//<     own_build <file> <shown> [<ksplc> <sources>]
+//< `<file>` is the person's `.kspl` file; `<shown>` is how messages name it, its path from the
+//< workspace. The wasm goes to standard output and exit 0; a failure is a message on standard
+//< error and exit 1, for the page to show at the `:::functions` clause. The local server runs it
+//< with two arguments, and it finds `ksplc` and ksmd's sources from its own place (`tools_near`).
+//<
+//< The steps, in a scratch folder removed at the end:
+//<
+//< 1. The person's file is copied in as `own/functions.kspl`, in a package that names itself
+//<    (`own/ksplc.cfg`) and uses only ksmd. **This closes the build**: a path that climbs out of
+//<    the folder, or names any other package, is a compile error, for an `embed` too. The server
+//<    starts this program on a page's request, so the build must read nothing else.
+//< 2. `ksplc doc` lists its `pub fn`s; `ksmd/calc/glue.kspl` writes their table as
+//<    `own/table.kspl`, and refuses a name ksmd already has.
+//< 3. `own/main.kspl`, the entry (`ENTRY`), hands the table to `ksmd/port/own/serve.kspl`.
+//< 4. `ksmd/port/wasm.kspl` builds the entry, with ksmd's sources as the place packages are found.
+import "ksmd/calc/calc" { known }
+import "ksmd/calc/glue"
+import "ksmd/port/wasm" { Wasm_build, build }
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/sys"
+
+priv const PERSON: U8[] = "own/functions.kspl" //< the person's file in the scratch folder
+priv const WAIT_MS: I32 = 120000 //< how long `ksplc doc` may take
+
+priv const ENTRY: U8[][_] = ::{ "//< A person's own functions, as the page's worker calls them",
+        "import \"ksmd/port/own/serve\"", "import \"own/table\"", "",
+        "extern fn ksmd_own_call(len: Sz): Sz //< answers the call in the input; the answer's \
+            length", "    return serve.answer(len, table.call)", "",
+        "extern fn ksmd_own_names(): Sz //< the functions' names, one per line, in the output",
+        "    return serve.names(U8[][]::table.NAMES)",
+} //< the entry's lines, the same for every person
+
+priv const PACKAGE: U8[] = "[package]\nname = own\nuses = ksmd\n" //< `own/ksplc.cfg`
+
+priv const SCRATCH: U8[][_] = ::{ "own/ksplc.cfg", "own/functions.kspl", "own/table.kspl",
+    "own/main.kspl", "functions.tsv", "c/module.c", "c/module.o", "own.wasm", "own", "c" } //<
+        //< Every file and folder a build makes, removed in this order
+
+struct Tools //< what a build runs
+    ksplc: U8[]
+    sources: U8[] //< the folder that holds `ksmd/`, where the entry's imports are found
+    std: U8[] //< the standard library's folder, or empty where ksplc finds its own
+
+fn main(): I32
+    defer arena: = Arena(4 * 1024 * 1024)
+    a: = sys.args()
+    if a.len != 3 && a.len != 5
+        io.err().s("usage: own_build <file> <shown> [<ksplc> <sources>]\n")
+        return 2
+    $t: = Tools::{ .ksplc = "", .sources = "", .std = "" }
+    if a.len == 5
+        t = Tools::{ .ksplc = a.get(3), .sources = a.get(4), .std = "" }
+    else if found: = tools_near(arena)
+        t = found
+    else
+        io.err()
+            .s("ksmd cannot build functions here: ksplc or ksmd's sources are not installed beside \
+                \{sys.program_name()\}. Run `make install` again\n")
+        return 1
+    wasm: = own_wasm(a.get(1), a.get(2), t, arena) catch why
+        io.err().s(why)
+        if why.len == 0 || why[why.len - 1] != '\n'
+            io.err().c('\n')
+        return 1
+    io.out().s(wasm).flush()
+    return 0
+
+fn tools_near(arena: Arena$@): Tools? //<
+    //< `ksplc` and ksmd's sources, from where this program stands
+    //< **Two places, each as `make` lays it out**: installed, it is in `<prefix>/lib/kspl/ksmd/`
+    //< with the sources in `src/` and `ksplc` in `<prefix>/bin/`; built in the repository, it is in
+    //< `out/` beside the compiler, under the sources' root. `make install` names the compiler
+    //< `ksplc.exe` on Windows and `ksplc` elsewhere.
+    $buf: U8[4096] = ::{}
+    exe: = sys.exe_path(U8$[]::buf) catch
+        return .none
+    // **Copied out of `buf`**, which ends with this function while the paths are used after it.
+    here: = arena.dup_str(sys.get_dir_name(exe))
+    up: = sys.get_dir_name(sys.get_dir_name(sys.get_dir_name(here)))
+    installed: = Tools::{ .ksplc = fs.join(fs.join(up, "bin", arena),
+        "ksplc.exe" if sys.is_windows() else "ksplc", arena),
+        .sources = fs.join(here, "src", arena), .std = "" }
+    // **The repository's compiler has no `std/` beside it**: make names it each time.
+    root: = sys.get_dir_name(here)
+    built: = Tools::{ .ksplc = fs.join(here, "ksplc_stage1.exe", arena), .sources = root,
+        .std = fs.join(root, "std", arena) }
+    for t in Tools[]::{ installed, built }
+        if fs.can_run(t.ksplc) &&
+            fs.exists(fs.join(t.sources, "ksmd/port/own/serve.kspl", arena))
+            return .some(t)
+    return .none
+
+fn own_wasm(file: U8[], shown: U8[], t: Tools, arena: Arena$@): U8[]!U8[] //<
+    //< The wasm of the functions in `file`, or why there is none, naming the file as `shown`
+    $buf: U8[4096] = ::{}
+    exe: = sys.exe_path(U8$[]::buf).unwrap_or("")
+    base: = fs.join(sys.get_dir_name(exe), "tmp", arena)
+    work: = fs.mkdir_unique(base, "own-build-", arena) catch
+        throw arena.text().s("cannot make a scratch folder in \{base\}\n").take()
+    defer clean(work, arena)
+    got: = steps(file, shown, t, work, arena) catch why
+        throw why.replace(PERSON, shown, arena)
+    return got
+
+priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], arena: Arena$@): U8[]!U8[] //<
+    //< The build's steps in `work`; a message names the person's file as it stands there
+    source: = io.read_file(file, arena) catch
+        throw arena.text().s("cannot read \{shown\}\n").take()
+    fs.mkdir_all(fs.join(work, "own", arena)) catch
+        throw arena.text().s("cannot write in \{work\}\n").take()
+    put(work, "own/ksplc.cfg", PACKAGE, arena)!
+    put(work, PERSON, source, arena)!
+    $options: = List<|U8[]|>(arena)
+    options.push(arena.text().s("--pkg-src-dir=").s(t.sources).take())
+    if t.std.len > 0
+        options.push(arena.text().s("--std-dir=").s(t.std).take())
+    tsv: = fs.join(work, "functions.tsv", arena)
+    $doc: = List<|U8[]|>(arena)
+    doc.push_all(U8[][]::{ t.ksplc, "doc" })
+    doc.push_all(options.slice())
+    doc
+        .push_all(U8[][]::{ arena.text().s("--emit-surface=").s(tsv).take(), "own/functions" })
+    listed: =
+        subproc.run_capture(doc.slice(), work, WAIT_MS, 1 << 20, arena) catch
+        throw arena.text().s("\{t.ksplc\} did not start\n").take()
+    if !listed.exited_with(0)
+        throw listed.text(arena)
+    rows: = io.read_file(tsv, arena) catch
+        throw "ksplc doc listed no functions\n"
+    fns: = glue.functions_of(rows, arena) catch why
+        throw arena.text().s(PERSON).s(": ").s(why).c('\n').take()
+    if fns.len == 0
+        throw arena.text().s(PERSON).s(": no `pub fn` a formula can call\n").take()
+    for i in Range.asc(fns.len)
+        name: = fns.get(i).name
+        if known(name)
+            throw arena.text().s(PERSON)
+                .s(": ksmd has a function `\{name\}` of its own. Name yours otherwise\n").take()
+    put(work, "own/table.kspl", glue.table_source(fns@, "own/functions", shown, arena), arena)!
+    entry: = arena.text()
+    for line in ENTRY
+        entry.s(line).c('\n')
+    put(work, "own/main.kspl", entry.take(), arena)!
+    out: = fs.join(work, "own.wasm", arena)
+    b: = Wasm_build::{ .ksplc = t.ksplc, .entry = "own/main.kspl", .out = out,
+        .imports = fs.join(t.sources, "ksmd/port/own/imports.txt", arena),
+        .work = fs.join(work, "c", arena), .cwd = work, .deps = "",
+        .options = options.slice() }
+    build(b@, arena)!
+    return io.read_file(out, arena) catch
+        throw "the build wrote no wasm\n"
+
+priv fn put(work: U8[], name: U8[], text: U8[], arena: Arena$@): Void!U8[] //< writes one file
+    io.write_file(fs.join(work, name, arena), text) catch
+        throw arena.text().s("cannot write \{name\} in \{work\}\n").take()
+
+priv fn clean(work: U8[], arena: Arena$@) //< removes the scratch folder and what a build made
+    for name in SCRATCH
+        fs.remove_path(fs.join(work, name, arena)) catch {}
+    fs.remove_path(work) catch {}

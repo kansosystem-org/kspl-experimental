@@ -1,7 +1,9 @@
 // ksmd page: the dialog that chooses where a document is saved, or which one opens. It shows one
 // folder of the workspace at a time, as the local server lists it (`/api/list`), and the path
 // from the workspace root down to it; a folder opens on a press.
-// It shows only ksmd documents, as a word processor's Save As shows only its own kind of file.
+// It shows only ksmd documents, as a word processor's Save As shows only its own kind of file. For
+// Insert, Functions it shows KSPL files instead. Insert, Include and Insert, Functions each take a
+// file chosen, or a new name typed.
 // Caution: **The listing is a help, never the check.** A name typed here goes through the same
 // resolving and the same refusals as one typed in the file bar.
 "use strict";
@@ -14,13 +16,17 @@ function ksmdBrowse(local) {
   const note = box.querySelector(".browse-note");
   const name = box.querySelector(".browse-name");
   const ok = box.querySelector('[data-browse="ok"]');
-  const EXT = ".ksmd";
   let mode = "save";
+  // The kind of file the mode shows: KSPL files for a functions clause, else documents.
+  const ext = () => (mode === "functions" ? ".kspl" : ".ksmd");
   let folder = "";
   let files = [];
   // The file a second press of Save replaces: { path, digest } of its bytes when it was chosen.
   let replacing = null;
   let done = null;
+  // The first folder's listing. **A choice waits for it**: the name shows at once, and pressed
+  // before the folder shows, it would land in the folder shown before.
+  let shown = Promise.resolve();
 
   const join = (a, b) => (a === "" ? b : `${a}/${b}`);
   const parentOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
@@ -63,7 +69,7 @@ function ksmdBrowse(local) {
     }
     folder = to;
     replacing = null;
-    files = got.files.filter((f) => f.endsWith(EXT));
+    files = got.files.filter((f) => f.endsWith(ext()));
     showWhere();
     list.textContent = "";
     if (folder !== "") item("..", "folder", () => go(parentOf(folder)));
@@ -78,9 +84,12 @@ function ksmdBrowse(local) {
         choose();
       });
     }
-    note.textContent = got.more ? "This folder holds more names than can be shown. Type the name " +
-      "of the document." : folder === "" && got.folders.length + files.length === 0 ?
-      "The workspace holds no documents yet." : "";
+    const what = mode === "functions" ? "functions file" : "document";
+    const starts = mode === "functions" || mode === "include";
+    note.textContent = got.more ? `This folder holds more names than can be shown. Type the name ` +
+      `of the ${what}.` : folder === "" && got.folders.length + files.length === 0 ?
+      (starts ? `The workspace holds no ${mode === "functions" ? "KSPL files" : "documents"} yet. ` +
+        "Type a name to start one." : "The workspace holds no documents yet.") : "";
     return true;
   }
 
@@ -88,15 +97,26 @@ function ksmdBrowse(local) {
   // decided. `expected` is null, or the digest of a file chosen to be replaced. **The file is read
   // when the person chooses it**, so the second press replaces only the bytes that stood then.
   async function choose() {
+    await shown;
     let n = name.value.trim();
     if (n === "") {
-      note.textContent = "Type a name for the document, such as notes.ksmd.";
+      note.textContent = mode === "functions" ? "Type a name for the functions file, such as " +
+        "mine.kspl." : "Type a name for the document, such as notes.ksmd.";
       name.focus();
       return;
     }
-    if (mode === "save" && !n.slice(n.lastIndexOf("/") + 1).includes(".")) n += EXT;
+    if (mode !== "open" && !n.slice(n.lastIndexOf("/") + 1).includes(".")) n += ext();
     const path = join(folder, n);
     const there = files.includes(n);
+    // A file to include or a functions file is used as it stands, or started where none stands.
+    if (mode === "functions" || mode === "include") {
+      if (!n.endsWith(ext())) {
+        note.textContent = `A ${mode === "functions" ? "functions file" : "document"}'s name ends in ${ext()}.`;
+        return;
+      }
+      finish({ path, expected: null, exists: there });
+      return;
+    }
     if (mode === "open" || !there) {
       finish({ path, expected: null });
       return;
@@ -142,12 +162,13 @@ function ksmdBrowse(local) {
   });
 
   return {
-    // Opens the dialog on the folder of `start`: { path, expected } once chosen, or null.
+    // Opens the dialog on the folder of `start`: { path, expected } once chosen, or null. In the
+    // modes "functions" and "include", `exists` says whether the file chosen stands already.
     async pick(how, start) {
       mode = how;
-      title.textContent = how === "save" ? "Save as" : "Open";
-      ok.textContent = how === "save" ? "Save" : "Open";
-      name.value = how === "save" ? start.slice(start.lastIndexOf("/") + 1) : "";
+      title.textContent = { save: "Save as", open: "Open", functions: "Functions", include: "Include" }[how];
+      ok.textContent = { save: "Save", open: "Open", functions: "Insert", include: "Insert" }[how];
+      name.value = how === "open" ? "" : start.slice(start.lastIndexOf("/") + 1);
       note.textContent = "";
       list.textContent = "";
       const answer = new Promise((give) => {
@@ -156,7 +177,10 @@ function ksmdBrowse(local) {
       box.showModal();
       name.focus();
       // A folder that has gone since the document was opened shows the workspace instead.
-      if (!(await go(parentOf(start)))) await go("");
+      shown = (async () => {
+        if (!(await go(parentOf(start)))) await go("");
+      })();
+      await shown;
       return answer;
     },
   };

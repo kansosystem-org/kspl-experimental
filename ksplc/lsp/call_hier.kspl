@@ -22,9 +22,6 @@ import "std/seq"
 import "std/str" { Str_builder }
 import "std/sys"
 
-priv const REQUEST_FAILED: I32 = -32803 //<
-    //< The LSP's "the request was understood and could not be carried out" (3.17's RequestFailed)
-    //< Not -32601: that says the method is unknown, and the editor stops offering it.
 priv fn is_fn_or_impl_decl(n: Ast_node$@): Bool //<
     //< Whether it is a function's or an impl's declaration node
     //< Such a node can be either end of a call hierarchy's edge.
@@ -61,7 +58,7 @@ priv fn add_call_entry(idx: Fqn_lookup_idx$@, caller: Ast_node$@, callee: Ast_no
         entry.has_call = true
     entry.ranges.push(range_node)
 
-priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], fqn_slice: U8[],
+priv fn build_call_hier_item(target: Ast_node@, id_n: Ast_node@, name: U8[], fqn_slice: U8[],
     src_res: U8[], starts: List<|Sz|>$@, is_ref_only: Bool, style: base_locate.Uri_style,
     $b: Json_builder): json.Value
     t_off: = id_n.loc.offset if id_n != null else target.loc.offset
@@ -141,7 +138,7 @@ priv struct Fqn_lookup_idx //< the indexes compute_def_fqn uses, built once per 
         //< an instance's name -> the original template's registration key
     template_locs: Map<|U8[], U8[]|>$@ //< a template's file#offset -> its registration key
 
-priv fn node_loc_key(node: Ast_node$@): U8[] //<
+priv fn node_loc_key(node: Ast_node@): U8[] //<
     //< A position key from a node's file and offset, kept in the request's arena
     //< No two declarations share a position, so the key (NUL-separated from the file name) is
     //< unique.
@@ -163,7 +160,7 @@ priv fn build_fqn_lookup_idx(sema: Sema_ctx$@): Fqn_lookup_idx$@
     return base_core.arena
         .create(Fqn_lookup_idx::{ .inst_names = inst_names, .template_locs = template_locs })
 
-priv fn find_template_fqn_indexed(idx: Fqn_lookup_idx$@, node: Ast_node$@): U8[]
+priv fn find_template_fqn_indexed(idx: Fqn_lookup_idx@, node: Ast_node$@): U8[]
     return idx.template_locs.get(node_loc_key(node)).unwrap_or("")
 
 priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
@@ -218,7 +215,7 @@ priv fn mark_fn_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz) //<
     for child in node.children
         mark_fn_ids(child, set, depth + 1)
 
-priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>$@): Bool //<
+priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>@): Bool //<
     //< Whether this identifier passes a function as a function pointer
     //< The declaration's own name is excluded: its def_node points at itself, so otherwise **every
     //< function would be listed as its own caller**.
@@ -365,7 +362,7 @@ priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Value, arena: 
     //< on, and a wrong one costs more than hearing the question could not be answered.
     if ws_state != null && ws_state.sema != null && ws_state.root_file != null
         return false
-    lsp_msg.send_error_response(id_val, REQUEST_FAILED,
+    lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED,
         "the workspace could not be analysed, so the callers cannot be listed", arena)
     return true
 

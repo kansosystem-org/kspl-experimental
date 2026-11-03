@@ -140,11 +140,11 @@ impl Ast_node
         msg.s("emit_stmt: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
         r.ice_panic(msg.slice())
 
-    priv fn emit_block_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_block_stmt(r: Ast_node@, c: Genc_ctx$@)
         c.s("{\n")
         r.emit_block_inline(c)
         c.s("}\n")
-    priv fn emit_block_inline(r: Ast_node$@, c: Genc_ctx$@) //<
+    priv fn emit_block_inline(r: Ast_node@, c: Genc_ctx$@) //<
         //< It emits only the block's contents (its statements)
         //< The caller owns the enclosing {} (a switch's case uses it to avoid an extra nested
         //< block).
@@ -365,17 +365,16 @@ impl Ast_node
         // temporary.
         if !cond_node.is_plain_name()
             r.ice_panic("genc: a switch's subject reached the backend as other than a plain name")
-        $cond_slice: = cond_node.get_path_or_ident_name()
+        cond_slice: = cond_node.get_path_or_ident_name()
         // Caution: **Emit the name as its declaration is emitted**, escaped or made
         // (`../../base/c_name.kspl`). The plain name here makes **the C compiler say
         // "undeclared"**. That is no KSPL diagnostic, and it does not say what is wrong. A local
         // named `near` is declared as `near_kw`, and a `switch (near)` then fails.
         defer $safe: = cond_slice.c_safe_name()
-        cond_slice = base_core.arena.dup_str(safe.slice())
         // A `Bool` subject is switched on as an `int`: clang warns on a boolean one
         // (-Wswitch-bool).
         is_bool: = c.env.is_bool(cond_node.type_id)
-        c.s("    switch (").s("(int)" if is_bool else "").s(cond_slice)
+        c.s("    switch (").s("(int)" if is_bool else "").s(safe.slice())
 
         // The immutability mark stripped: `r$` of an `r: Self@` carries it (as in sema).
         enum_id: = c.env.get_clean_real_type(cond_node.type_id)

@@ -29,7 +29,7 @@ priv fn product_of(shape: Sz$[]): Sz //< the callee
             panic("win64 arg abi: a dimension came back far out of range (corrupted argument?)")
     return size
 
-priv fn build_with_f64(a: Sz, b: Sz, c: Sz, alpha: F64, x: Void$@, y: Void$@): Two_sizes //<
+priv fn build_with_f64(a: Sz, b: Sz, c: Sz, alpha: F64, x: Void@, y: Void$@): Two_sizes //<
     //< The shape where alpha (F64) takes the stack's first argument slot
     $shape_ac: Sz[2] = ::{ a, c }
     $shape_cb: Sz[2] = ::{ c, b }
@@ -49,7 +49,7 @@ struct Sized_pair<|T|> //< the shape where c (Sz) takes "the same slot alpha too
     seed: T
 
 impl<|T|> Sized_pair<|T|>
-    fn probe(p0: Void$@, a: Sz, b: Sz, c: Sz, seed: T$@): Sized_pair<|T|> //<
+    fn probe(p0: Void@, a: Sz, b: Sz, c: Sz, seed: T@): Sized_pair<|T|> //<
         //< The same run as Lora<|T|>.load_raw (a leading pointer + three Sz + a pointer)
         //< The hidden return pointer goes first, so `c` takes Win64's first stack slot.
         $shape_ac: Sz[2] = ::{ a, c }
@@ -79,12 +79,12 @@ fn test_win64_arg_abi()
     check("seed-f64-slot", build_with_f64(4, 6, 2, 4.0, null, null), 8, 12)
 
     // Then an integer literal goes to that slot through a generic call: the subject.
-    p1: = Sized_pair<|F32|>.probe(null, 4, 6, 2, F32$@::seed@)
+    p1: = Sized_pair<|F32|>.probe(null, 4, 6, 2, seed@)
     check("literal-into-slot", Two_sizes::{ .a = p1.a, .b = p1.b }, 8, 12)
 
     // Repeated, whatever the slot held before.
     check("seed-again", build_with_f64(4, 6, 2, 4.0, null, null), 8, 12)
-    p2: = Sized_pair<|F32|>.probe(null, 4, 6, 2, F32$@::seed@)
+    p2: = Sized_pair<|F32|>.probe(null, 4, 6, 2, seed@)
     check("literal-again", Two_sizes::{ .a = p2.a, .b = p2.b }, 8, 12)
 
     // The same with the caller's frame over 32KB, so that a stack probe is inserted in between.
@@ -94,7 +94,7 @@ fn test_win64_arg_abi()
         sum += big[i]
     assert(sum == 0, "win64 arg abi: large local array must start zeroed")
     check("big-frame", build_with_f64(4, 6, 2, 4.0, null, null), 8, 12)
-    p3: = Sized_pair<|F32|>.probe(null, 4, 6, 2, F32$@::seed@)
+    p3: = Sized_pair<|F32|>.probe(null, 4, 6, 2, seed@)
     check("big-frame-literal", Two_sizes::{ .a = p3.a, .b = p3.b }, 8, 12)
 
     verdict

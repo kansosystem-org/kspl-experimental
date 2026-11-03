@@ -352,5 +352,5 @@ function ksmdMenus(ks) {
   window.addEventListener("blur", () => shut(false));
   window.addEventListener("resize", () => shut(false));
 
-  ks.menus = { openContext, shut, context };
+  ks.menus = { openContext, shut };
 }

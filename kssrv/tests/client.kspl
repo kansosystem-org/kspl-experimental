@@ -91,7 +91,7 @@ impl Conn
         c$ = Conn.open(port)!
         return c
 
-    fn send(r: Self$@, raw: U8[]): Void!Http_end //< sends raw bytes completely
+    fn send(r: Self@, raw: U8[]): Void!Http_end //< sends raw bytes completely
         deadline: = sys.mono_us() + I64::SEND_TIMEOUT_MS * 1000I64
         $sent: Sz = 0
         for sent < raw.len
@@ -137,7 +137,7 @@ priv const FAIL_STEP: I32 = -2 //< a result of one transport step
     //< Caution: **Keep "not yet possible" apart from "it failed"**, or a routine would_block fails.
 priv const AGAIN_STEP: I32 = -1
 
-priv fn write_step(sock: net.Tcp_stream$@, buf: U8[]): I32
+priv fn write_step(sock: net.Tcp_stream@, buf: U8[]): I32
     n: = sock.write(buf) catch e
         switch e
         case .would_block
@@ -146,7 +146,7 @@ priv fn write_step(sock: net.Tcp_stream$@, buf: U8[]): I32
             return FAIL_STEP
     return I32::n
 
-priv fn recv_step(sock: net.Tcp_stream$@, buf: U8$[]): I32
+priv fn recv_step(sock: net.Tcp_stream@, buf: U8$[]): I32
     n: = sock.read(buf) catch e
         switch e
         case .would_block
@@ -263,7 +263,7 @@ fn head_stream(port: I32, target: U8[], arena: Arena$@): Stream!Http_end //<
     return Stream::{ .conn = conn }
 
 impl Stream
-    fn shut_write(r: Self$@): Bool //<
+    fn shut_write(r: Self@): Bool //<
         //< Closes only the sending half, keeping the receiving half open for the response
         //< **This is not a disconnect** (see `peer_done` in `kssrv/conn.kspl`).
         //< Caution: **Do not declare `shutdown` here** (`std/net`'s `shut_write` is used instead).
@@ -326,10 +326,6 @@ fn get(port: I32, target: U8[], extra: U8[], arena: Arena$@): Resp!Http_end //<
     return got.get(0)
 
 priv const JSON_TYPE: U8[] = "Content-Type: application/json\r\n" //< a JSON body's header line
-
-fn post_bytes(target: U8[], body: U8[], arena: Arena$@): U8[] //<
-    //< Builds the request bytes for POSTing one JSON body
-    return raw("POST", target, JSON_TYPE, body, arena)
 
 fn post_json(port: I32, target: U8[], extra: U8[], body: U8[], timeout_ms: I32, arena: Arena$@):
     Resp!Http_end //<

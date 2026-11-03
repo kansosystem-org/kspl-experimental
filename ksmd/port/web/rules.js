@@ -116,5 +116,5 @@ function ksmdRules(ks) {
     if (panel && !panel.contains(e.target)) close();
   }, true);
 
-  ks.rules = { paint, ask, close };
+  ks.rules = { paint, ask };
 }

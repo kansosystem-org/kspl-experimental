@@ -254,7 +254,7 @@ impl Ast_node
             .add_child(some_block).add_child(Ast_node(.k_keyword, "case", loc)).add_child(none_pat)
             .add_child(none_block)
 
-    fn synthesized_option_spelling(r: Ast_node$@): U8[] //<
+    fn synthesized_option_spelling(r: Ast_node@): U8[] //<
         //< The construct the user wrote, from a synthesized `switch`'s mark
         //< Empty where it is not synthesized.
         //< **A diagnostic's wording is decided here.** Add each new mark here too, or that
@@ -298,21 +298,21 @@ impl Ast_node
         return .none
     fn has_attribute(r: Ast_node$@, attr_name: U8[]): Bool
         return r.get_attribute(attr_name).is_some()
-    fn has_keyword(r: Ast_node$@, kw: U8[]): Bool
+    fn has_keyword(r: Ast_node@, kw: U8[]): Bool
         if r == null
             return false
         for c in r.children
             if c.kind_id == .k_keyword && c.text.equals(kw)
                 return true
         return false
-    fn has_literal_child(r: Ast_node$@, text: U8[]): Bool
+    fn has_literal_child(r: Ast_node@, text: U8[]): Bool
         if r == null
             return false
         for c in r.children
             if c.is_literal(text)
                 return true
         return false
-    fn has_mut_binding_marker(r: Ast_node$@): Bool //< whether a binding is mutable
+    fn has_mut_binding_marker(r: Ast_node@): Bool //< whether a binding is mutable
         //< Unmarked is immutable ("The two axes of mutability" in
         //< docs/SPEC-programming-language.md). So it looks for a `$` before the identifier: one
         //< level down on a local variable (`k_decl_var_item`), directly on a parameter.
@@ -521,17 +521,16 @@ impl Ast_node
         return c if c != null && c.kind_id == .k_identifier else null
 
     fn get_primary_inner_expr(r: Self$@): Ast_node$@
-        return (r.safe_get_child(1)
-            if r.children.len >= 3 && r.get_child(0).is_literal("(") else r.safe_get_child(0))
+        return r.safe_get_child(1) if r.has_parentheses() else r.safe_get_child(0)
 
     fn has_parentheses(r: Self$@): Bool
         return r.children.len >= 3 && r.get_child(0).is_literal("(")
-    fn was_parenthesized(r: Self$@): Bool //<
+    fn was_parenthesized(r: Self@): Bool //<
         //< Whether normalization (elide_node) removed parentheses around it
         //< The mark it leaves is the inner node's ival (-1, -2, ... per layer).
         //< The k_expr_primary is gone by then, so this is the lint's only clue. True for any count.
         return r != null && r.ival < 0
-    fn has_redundant_extra_parens(r: Self$@): Bool //<
+    fn has_redundant_extra_parens(r: Self@): Bool //<
         //< Whether it is wrapped in two or more layers of parentheses
         //< The outer layer is always unwanted, even where precedence needs the inner one: it
         //< changes neither the meaning nor the safety.
@@ -588,7 +587,7 @@ impl Ast_node
         return false
     fn get_switch_cond(r: Self$@): Ast_node$@
         return r.safe_get_child(1)
-    fn is_default_arm(r: Self$@): Bool //< whether a lowered `switch` arm is its `default`
+    fn is_default_arm(r: Self@): Bool //< whether a lowered `switch` arm is its `default`
         return r.text.equals("default")
     fn get_arm_block(r: Self$@): Ast_node$@ //< a lowered `switch` arm's block, its last child
         return r.last_child()
@@ -676,7 +675,7 @@ impl Ast_node
             if c.is_literal("=")
                 has_eq = true
                 break
-        if has_eq && r.children.len > 0
+        if has_eq
             first: = r.get_child(0)
             if !first.is_literal(".") && first.kind_id != .k_identifier
                 return .some(first)
@@ -700,7 +699,7 @@ impl Ast_node
             if !found
                 break
         return current
-    fn is_generic_template(r: Self$@): Bool
+    fn is_generic_template(r: Self@): Bool
         if r == null
             return false
         for c in r.children
@@ -855,20 +854,16 @@ impl Ast_node
                 sig = atom.find_child(.k_type_fn_sig)
                 if sig != null
                     return .some(sig)
-                if atom.children.len > 1 && atom.get_child(1).kind_id == .k_type_fn_sig
-                    return .some(atom.get_child(1))
-                if atom.children.len > 0 && atom.get_child(0).kind_id == .k_type_fn_sig
-                    return .some(atom.get_child(0))
         return .none
-    fn push_or_default(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@,
+    fn push_or_default(r: Self@, list: List<|Ast_node$@|>$@, node: Ast_node$@,
         def_kind: base_ast_kinds.Ast_kind, def_text: U8[])
         list.push(node if node != null else Ast_node(def_kind, def_text, r.loc))
 
-    fn push_or_empty(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@)
+    fn push_or_empty(r: Self@, list: List<|Ast_node$@|>$@, node: Ast_node$@)
         r.push_or_default(list, node, .k_empty, "")
 
     fn get_arg_at(r: Self$@, index: Sz): Ast_node$@?
-        if r == null || r.children.len == 0
+        if r == null
             return .none
         $count: Sz = 0
         for ch in r.children

@@ -3,7 +3,7 @@
 //< part of what the text says, so `toggle_mark` in `editor.kspl` holds them, and Clear leaves them.
 import "ksmd/edit/editor" { Editor, Refused, Work, end_block }
 import "ksmd/edit/region" { Style, same_spot }
-import "ksmd/edit/styled" { Mark, has_mark, length, marks_before, set_color }
+import "ksmd/edit/styled" { Mark, has_mark, length, set_color }
 import "ksmd/model/look" { plain_look, with_part }
 import "std/mem" { Arena }
 
@@ -20,9 +20,7 @@ impl Editor
         defer scratch: = Arena(16 * 1024)
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         if same_spot(s, e)
-            unit: = w.units[w.start.unit]@
-            $m: =
-                ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+            $m: = ed.typed_marks(w@)
             m.color = kept
             ed.typing = m
             ed.marked = true
@@ -77,9 +75,7 @@ impl Editor
                 set_color(u.segs@, from, to, "", scratch)
             u.edited = true
         if collapsed
-            unit: = w.units[w.start.unit]@
-            $m: =
-                ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+            $m: = ed.typed_marks(w@)
             m.color = ""
             ed.typing = m
             ed.marked = true
@@ -99,8 +95,7 @@ impl Editor
         if first.whole || first.style.kind == .code
             return h
         if same_spot(s, e)
-            m: =
-                ed.typing if ed.marked else marks_before(first.segs@, w.start.offset)
+            m: = ed.typed_marks(w@)
             h.emphasis = m.emphasis
             h.strong = m.strong
             h.code =

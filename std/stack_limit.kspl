@@ -10,16 +10,10 @@
 // knows its stack's end from the linker, bare metal answers "not known" (0).
 // ==========================================
 
-extern fn kspl_stack_floor(): Sz
-extern fn kspl_stack_here(): Sz
-
-priv fn stack_floor(): Sz //< where the calling thread's stack ends; 0 where nothing tells
-    return kspl_stack_floor()
-
-priv fn stack_here(): Sz //< where the calling thread's stack is now
+extern fn kspl_stack_floor(): Sz //< where the calling thread's stack ends; 0 where nothing tells
+extern fn kspl_stack_here(): Sz //< where the calling thread's stack is now
     //< Caution: **Not a local's address** (`Sz::here@`). The address sanitizer moves an
     //< address-taken local onto a stack of its own on the heap. So it reads as past any floor.
-    return kspl_stack_here()
 
 priv const UNASKED_ROOM: Sz = 32 * 1024 //<
     //< How far below where a `later` limit was made its walk goes before it asks the OS
@@ -41,7 +35,7 @@ impl Stack_limit
         //< read from a file). Create it once per walk and keep it.
         margin: Sz, //< how many bytes to keep free below the point where the walk stops
     ): Stack_limit
-        low: = stack_floor()
+        low: = kspl_stack_floor()
         return Stack_limit::{ .floor = 0 if low == 0 else low + margin, .margin = margin,
             .start = 0 }
 
@@ -51,14 +45,14 @@ impl Stack_limit
         //< the walk has gone a few tens of KB of stack below where it was made.
         margin: Sz, //< how many bytes to keep free below the point where the walk stops
     ): Stack_limit
-        return Stack_limit::{ .floor = 0, .margin = margin, .start = stack_here() }
+        return Stack_limit::{ .floor = 0, .margin = margin, .start = kspl_stack_here() }
 
     pub fn near( //< whether the caller is within the margin of the stack's end
         //< **Always false where the OS does not tell** (bare metal), so a walk also keeps
         //< its own depth count. A limit made by `later` asks the OS here, once its walk is deep.
         limit: Self$@,
     ): Bool
-        here: = stack_here()
+        here: = kspl_stack_here()
         // **Compare differences**, not two addresses. When the stack crosses the middle of the
         // address space, the signed `Sz` changes sign between the two. The difference does not.
         if limit.start != 0

@@ -1,0 +1,83 @@
+//< The fixed part of a person's own functions, built as wasm32 for the page's worker
+//< ksmd's builder (`ksmd/port/own_build.kspl`) writes a short entry beside the person's file. The
+//< entry hands this module the table of their functions. The worker's script writes a call into
+//< the input (`ksmd_own_in`), asks the entry's `ksmd_own_call`, and reads the answer from the
+//< output (`ksmd_own_out_ptr`, `ksmd_own_out_len`). Both are in the format of
+//< `ksmd/calc/wire.kspl`. **The module's one import is `ksmd_own_stopped`**: a panic goes to the
+//< script through it, and the cell shows `#STOPPED!`. Without it a panic would loop until the time
+//< limit.
+import "ksmd/calc/args" { Raw_args }
+import "ksmd/calc/value" { Value }
+import "ksmd/calc/wire"
+import "std/mem" + { Arena, dealloc }
+import "std/str" { Str_builder }
+
+// **The generated entry calls these from outside this package, so [I0402] is off here.**
+##lint(I0402 = off)
+
+extern fn ksmd_own_stopped(msg: U8@, msg_len: Sz) //<
+    //< Throws in the worker's script with the reason the function stopped; it does not return
+
+pub typedef Table_fn = fn(name: U8[], a: Raw_args$@): Value? //< the generated table's `call`
+
+const HEAP_BYTES: Sz = 64 * 1024 * 1024 //< the fixed buffer that stands in for a heap
+$heap: U8[64*1024*1024] = ::{}
+$ready: Bool = false
+$out: Str_builder$@ = null //< where an answer is written
+$input: U8$@ = null //< where the script writes a call
+$input_cap: Sz = 0
+
+priv fn stopped(msg: U8[]) //< the panic hook
+    ksmd_own_stopped(msg.ptr, msg.len)
+
+priv fn ensure() //< sets up the heap and the output, once
+    if ready
+        return
+    mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
+    out = mem.alloc_as<|Str_builder|>()
+    mem.init_at(out, Str_builder())
+    panic_hook = stopped
+    ready = true
+
+extern fn ksmd_own_in(n: Sz): U8$@ //< a buffer of at least `n` bytes for the script to write into
+    ensure()
+    if n > input_cap
+        // Caution: **Forget the old buffer before asking for a new one**, as the page's bridge
+        // does: a request that fails stops the module, and a freed buffer would be written again.
+        if input != null
+            dealloc(Void$@::input)
+        input = null
+        input_cap = 0
+        input = U8$@::mem.alloc(n)
+        input_cap = n
+    return input
+
+extern fn ksmd_own_out_ptr(): U8@ //< the last answer's bytes; ask after the call
+    return out.slice().ptr
+
+extern fn ksmd_own_out_len(): Sz
+    return out.slice().len
+
+pub fn answer(len: Sz, table: Table_fn): Sz //<
+    //< Answers the call in the input's first `len` bytes through `table`; the answer's length
+    ensure()
+    out.clear()
+    defer arena: = Arena(64 * 1024)
+    // **Bytes that are no call come from a page of another build**: the formula does not read.
+    call: = wire.read_call(U8[]::{ .ptr = input, .len = len }, arena) catch
+        wire.put_answer(out, Value.failed(.syntax), true)
+        return out.slice().len
+    $a: = Raw_args::{ .args = call.args, .used = 0, .misread = false, .row = null, .ctx = null,
+        .live = true, .memory = arena }
+    if v: = table(call.name, a@)
+        wire.put_answer(out, v, a.misread || a.used < a.args.len)
+    else
+        wire.put_answer(out, Value.failed(.syntax), true)
+    return out.slice().len
+
+pub fn names(all: U8[][]): Sz //< writes the functions' names, one per line; their length
+    ensure()
+    out.clear()
+    for name in all
+        out.s(name).c('\n')
+    return out.slice().len

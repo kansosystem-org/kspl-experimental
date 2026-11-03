@@ -76,6 +76,9 @@ impl Ast_node
                 return
 
             trait_vis: = r.get_visibility()
+            // **Put the name back in a `defer`**, as `build_struct_registry` does.
+            outer_impl: = c.fn_ctx.impl_name
+            defer c.fn_ctx.impl_name = outer_impl
             c.fn_ctx.impl_name = target_fqn
 
             for m_node in r.children
@@ -92,7 +95,6 @@ impl Ast_node
                         local_full_name: = join_dotted_name(target_name, m_name)
                         fqn_full_name: = join_dotted_name(target_fqn, m_name)
                         c.declare_symbol_with_fqn(local_full_name, fqn_full_name, m_sym)
-            c.fn_ctx.impl_name = ""
         default {}
 
     fn build_type_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
@@ -191,7 +193,7 @@ impl Ast_node
                 seen_fields.set(f_name, true)
                 struct_def.fields_list.push(field_def)
 
-    priv fn scan_payload_fields(r: Ast_node$@, c: Sema_ctx$@,
+    priv fn scan_payload_fields(r: Ast_node@, c: Sema_ctx$@,
         variant_def: sema_type_def.Enum_variant$@, enum_vis: sema_type_scope.Visibility):
         Void!Sema_error //<
             //< Resolves an enum variant's (self's) payload fields, registering them in variant_def.

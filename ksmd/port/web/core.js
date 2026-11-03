@@ -98,8 +98,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
       ks.canUndo = r.undo === 1;
       ks.canRedo = r.redo === 1;
       for (const el of document.querySelectorAll('[data-cmd="undo"]')) el.disabled = !ks.canUndo;
-      if (r.changed === 1 && ks.changedBy) ks.changedBy(name);
-      if (ks.showRedo) ks.showRedo();
+      if (r.changed === 1) ks.changedBy();
+      ks.showRedo();
       if (r.changed === 1) {
         for (const f of ks.changed) f();
         if (api.onchange) api.onchange();
@@ -268,7 +268,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
         return 0;
       }
     };
-    ks.files = ksmdFiles(ks, api);
+    ksmdFiles(ks, api);
+    ksmdFunctions(ks);
     return api;
   });
 }
@@ -417,6 +418,34 @@ function ksmdCommands(ks) {
     if (name in marks) return ks.act("ksmd_web_mark", marks[name], 0);
     if (name === "indent" || name === "outdent") return ks.act("ksmd_web_indent", name === "indent" ? 1 : 0);
     if (name === "divider") return ks.act("ksmd_web_divider");
+    // Insert ▸ Image… chooses a file, which then goes in as a pasted image does (`addImage` in
+    // `file.js`): written beside the document, its clause at the caret.
+    if (name === "image") {
+      if (!ks.imagesHere()) return null;
+      const pick = document.createElement("input");
+      pick.type = "file";
+      pick.accept = "image/png,image/jpeg";
+      pick.addEventListener("change", () => {
+        if (!pick.files || !pick.files[0]) return;
+        ks.sync();
+        ks.addImage(pick.files[0]);
+      });
+      pick.click();
+      return null;
+    }
+    // Insert ▸ Functions… and Insert ▸ Include… choose a file in the workspace, or start one
+    // (`addClause` in `file.js`), and put its clause at the caret.
+    if (name === "functions" || name === "include") {
+      if (!ks.addClause) {
+        ks.say(name === "functions" ?
+          "Functions go in only where the local server opened the document, to build them." :
+          "An include goes in only where the local server opened the document, to read its file.");
+        return null;
+      }
+      ks.sync();
+      ks.addClause(name);
+      return null;
+    }
     if (name === "date" || name === "time") return ks.act("ksmd_web_type", ks.put(ks.now(name === "time")), 0);
     if (name === "link") {
       const to = window.prompt("Link to an https:, http: or mailto: address, or a #place", "https://");

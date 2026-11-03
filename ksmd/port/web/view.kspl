@@ -10,7 +10,7 @@
 //< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
 import "ksmd/base/dates" { write_date, write_date_with }
 import "ksmd/base/keyed" { Keyed }
-import "ksmd/calc/calc" { Results }
+import "ksmd/calc/calc" { Own_functions, Results }
 import "ksmd/calc/calc"
 import "ksmd/calc/value" { Value }
 import "ksmd/edit/editor" { Editor }
@@ -34,11 +34,13 @@ struct Inside //< what includes and images show: the view assembled from the fil
     values: List<|Results?|> //< each source's values by its index, calculated when first shown
     waiting: Keyed<|Bool|> //< the paths not fetched yet; their clauses show no problem
     today: U8[] //< the date the open document was opened, which its included sources take too
+    own: Own_functions@ //< the page's own functions, which its included sources call too; or null
     arena: Arena$@
 
 impl Inside
-    fn new(a: Assembly, waiting: Keyed<|Bool|>, today: U8[], arena: Arena$@): Inside //<
-        //< The open document is the view's first source
+    fn new(a: Assembly, waiting: Keyed<|Bool|>, today: U8[], own: Own_functions@, arena: Arena$@):
+        Inside //<
+            //< The open document is the view's first source
         $top: = List<|Sz|>(arena)
         for e in Range.asc(a.entries.len)
             if a.entries.get(e).instance == 0
@@ -47,13 +49,13 @@ impl Inside
         for _ in Range.asc(a.sources.len)
             values.push(.none)
         return Inside::{ .a = a, .top = top, .values = values, .waiting = waiting, .today = today,
-            .arena = arena }
+            .own = own, .arena = arena }
 
     priv fn values_of(r: Self$@, source: Sz): Results
         if found: = r.values.get(source)
             return found
         src: = r.a.sources.get(source)
-        got: = calc.calculate(src.doc@, r.today, r.arena)
+        got: = calc.calculate(src.doc@, r.today, r.arena, r.own)
         r.values.set(source, .some(got))
         return got
 
@@ -125,6 +127,8 @@ priv fn kind_letter(kind: Block_kind): U8[]
         return "q"
     case .divider
         return "d"
+    case .functions
+        return "f"
 
 priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
     inside: Inside$@, entry: Sz) //<
@@ -188,9 +192,14 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         if entry != NONE
             aim(inside, entry, out)
             included(inside, entry, out, scratch)
+    case .functions
+        out.s(",\"path\":")
+        text(x.text, out)
+        if entry != NONE
+            aim(inside, entry, out)
     out.c('}')
 
-priv fn aim(inside: Inside$@, entry: Sz, out: Str_builder$@) //<
+priv fn aim(inside: Inside@, entry: Sz, out: Str_builder$@) //<
     //< `"to"`, where a clause's path leads, and `"why"` with its place where it is refused. The
     //< place is named only inside another file than the clause's. A file not fetched yet waits.
     target: = inside.a.entries.get(entry).target

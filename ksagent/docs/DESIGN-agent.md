@@ -19,6 +19,8 @@ Words used here: the *root* is the one folder whose files ksagent reads. A *sour
 
 **Plain text with no `answer` call is asked once to become one** (`REMIND_ANSWER`). A small model often ends that way, with even its sources written as text, which no check can read. One reminder turns most of these into a checked answer, and a second would only cost time. **If the model answers in plain text again, that text counts as an answer with no sources.** It is marked unverified, since it can still help the person.
 
+**An end with no source, before any reading tool, is sent back once to look** (`REMIND_LOOK`). A small model often skips the files: it greets back, or copies the not-found answer of an earlier turn. An `answer` call with no sources is then refused as the call's result, and plain text gets this reminder in place of `REMIND_ANSWER`. **An answer with sources is checked at once**, since its quotes are checked against the files anyway. A second end without looking stands, so the loop never circles.
+
 **English and Japanese are the two languages of the lines ksagent adds.** A question holding kana or kanji is Japanese, and the chat file records the language with the question.
 
 ## The caps

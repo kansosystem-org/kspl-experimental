@@ -651,7 +651,7 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
     //< It refuses what `format_request` refuses, before anything is written. **The whole request
     //< goes out within `timeout_ms`**, so a server that stops reading cannot hold the caller for
     //< good (`net.Tcp_stream.write_all_for`).
-    stream: net.Tcp_stream$@, //< the connection to write to, which blocks
+    stream: net.Tcp_stream@, //< the connection to write to, which blocks
     method: U8[], //< the method, such as `GET`
     target: U8[], //< the target, including the query string
     head: Headers, //< the headers, `Host` among them once
@@ -786,12 +786,7 @@ pub fn format_response_head( //< builds only a response's head, for a body sent 
         throw .length_mismatch
     if !connection_lists(head, "close")
         throw .invalid_header
-    start: = b.len
-    write_status_line(b, status)!
-    write_header_lines(b, head) catch e
-        b.len = start // as in `write_response_head`
-        throw e
-    b.s("\r\n")
+    write_unframed_head(b, status, head, "\r\n")!
 
 pub fn format_chunked_head( //< builds a response's head for a body sent in chunks
     //< It names `Transfer-Encoding: chunked` itself; send each piece through `format_chunk`, then
@@ -805,12 +800,18 @@ pub fn format_chunked_head( //< builds a response's head for a body sent in chun
         throw .unsupported_transfer_encoding
     if !may_carry_body(status) || head.has("Content-Length")
         throw .length_mismatch
+    write_unframed_head(b, status, head, "Transfer-Encoding: chunked\r\n\r\n")!
+
+priv fn write_unframed_head(b: Str_builder$@, status: I32, head: Headers, ending: U8[]):
+    Void!Http_error //<
+        //< Writes the status line, the headers and then `ending`, for a head with no
+        //< `Content-Length`; on failure b is left as it was
     start: = b.len
     write_status_line(b, status)!
     write_header_lines(b, head) catch e
         b.len = start // as in `write_response_head`
         throw e
-    b.s("Transfer-Encoding: chunked\r\n\r\n")
+    b.s(ending)
 
 pub fn format_chunk( //< builds one chunk of a chunked body: its size in hexadecimal, then the piece
     //< **An empty piece writes nothing**: a chunk of size 0 would end the body.
@@ -819,12 +820,11 @@ pub fn format_chunk( //< builds one chunk of a chunked body: its size in hexadec
 )
     if piece.len == 0
         return
-    hex: = "0123456789abcdef"
     $digits: U8[16] = ::{}
     $n: Sz = 0
     $left: = piece.len
     for left > 0
-        digits[n] = hex[left % 16]
+        digits[n] = chars.hex_digit(U8::(left % 16), 'a')
         left /= 16
         n += 1
     for n > 0

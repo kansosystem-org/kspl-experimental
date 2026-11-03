@@ -198,10 +198,7 @@ export function driver(page) {
   // A press at the middle of an element, a move to the right by `dx` pixels in two steps, and a
   // release there, as a person's drag.
   async function drag(selector, dx) {
-    const [x, y] = await js(`(() => {
-      const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
-      return [r.left + r.width / 2, r.top + r.height / 2];
-    })()`);
+    const [x, y] = await middle(selector);
     await page("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
     for (const part of [0.5, 1]) {
       await page("Input.dispatchMouseEvent",
@@ -234,6 +231,6 @@ export function driver(page) {
     await clickAt(at[0], at[1]);
   }
 
-  return { page, js, settle, until, reload, press, type, select, click, clickAt, clickBelow, drag, menu, point,
+  return { page, js, settle, until, reload, press, type, select, click, clickBelow, drag, menu, point,
     doubleClickAt, rightClick, dragTo, openCell };
 }

@@ -57,7 +57,7 @@ priv fn emit_saturating_casts(cg: Genllvm_ctx$@) //<
                 cg.s("declare i\{bits\} @llvm.fpto\{letter\}i.sat.i\{bits\}.\{src_word\}(")
                 cg.s("float" if f == 0 else "double").s(")\n")
 
-priv fn emit_type_decls(root: Ast_node$@, cg: Genllvm_ctx$@)
+priv fn emit_type_decls(root: Ast_node@, cg: Genllvm_ctx$@)
     for raw in root.children
         child: = raw.unwrap_top_level()
         if child.is_emittable()
@@ -78,7 +78,7 @@ priv fn emit_globals(root: Ast_node$@, cg: Genllvm_ctx$@)
             child.emit_llvm_embed_decl(cg)
     cg.s("\n")
 
-priv fn mark_defined_c_names(root: Ast_node$@, cg: Genllvm_ctx$@) //<
+priv fn mark_defined_c_names(root: Ast_node@, cg: Genllvm_ctx$@) //<
     //< Enters every function and variable this module defines under its own C name as declared
     //< An `extern` declaration can name what the program itself defines, as a host stand-in for a
     //< port's C does. Its `define` (or `global`) serves as the declaration; a `declare` (or an
@@ -93,7 +93,7 @@ priv fn mark_defined_c_names(root: Ast_node$@, cg: Genllvm_ctx$@) //<
         if defines && (Sema_symbol$@::child.sym_ptr).uses_verbatim_c_name()
             cg.extern_declared.set(child.get_decl_id_text(), 1)
 
-priv fn emit_fn_defs(root: Ast_node$@, cg: Genllvm_ctx$@)
+priv fn emit_fn_defs(root: Ast_node@, cg: Genllvm_ctx$@)
     for raw in root.children
         child: = raw.unwrap_top_level()
         if !child.is_emittable()
@@ -273,12 +273,11 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     // The plan, the startup calls and the messages are shared with the C backend
     // (`gen/entry.kspl`).
     plan: = gen_entry.plan_of(cg.env, main_sym.type_id)
-    if plan.returns_result()
-        if plan.err_variants != null
-            emit_private_name(cg, "main_err_name_none", "")
-            for i in Range.asc(plan.err_variants.len)
-                name: = base_core.arena.text().s("main_err_name_\{i\}").take()
-                emit_private_name(cg, name, plan.err_variants.get(i).name)
+    if plan.err_variants != null
+        emit_private_name(cg, "main_err_name_none", "")
+        for i in Range.asc(plan.err_variants.len)
+            name: = base_core.arena.text().s("main_err_name_\{i\}").take()
+            emit_private_name(cg, name, plan.err_variants.get(i).name)
     // `argc` / `argv` live in the C runtime (hosted.c).
     cg.s("define i32 @main(i32 %argc, ptr %argv) ")
     cg.emit_sanitize_attrs()

@@ -205,7 +205,7 @@ impl Loader
                 (out.data + j * rows + i)$ = (src.data + i * cols + j)$
         return out
 
-    priv fn setting(r: Self$@, key: U8[], low: I64): Sz!Qwen_error //< a whole number from `low`
+    priv fn setting(r: Self@, key: U8[], low: I64): Sz!Qwen_error //< a whole number from `low`
         v: = r.g.integer(key) catch e
             throw .gguf(e)
         if v < low || v > MAX_WIDTH
@@ -355,7 +355,7 @@ impl Qwen
         h: = one.rmsnorm(r.out_norm, r.cfg.eps) catch panic("Qwen.forward: the final norm")
         return product(r.output@, h)
 
-    priv fn block(r: Self$@, b: Block$@, $x: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
+    priv fn block(r: Self@, b: Block$@, $x: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
         //< One decoder block over every row of `x`
         eps: = r.cfg.eps
         $h: = x.rmsnorm(b.attn_norm, eps) catch panic("Qwen.block: the attention norm")
@@ -370,13 +370,13 @@ impl Qwen
         gu: = g.silu() * u
         return x + product(b.down@, gu)
 
-    priv fn attend(r: Self$@, a: Attention$@, h: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
+    priv fn attend(r: Self@, a: Attention$@, h: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
         //< An attention block's output for every row of the normalized `h`
         eps: = r.cfg.eps
         $q: = product(a.wq@, h)
         $gate: = empty(h.arena)
         if r.cfg.gated
-            gate = split_gate(q, r.cfg.n_heads, r.cfg.head_dim)
+            gate = gate_side(q, r.cfg.n_heads, r.cfg.head_dim, 1)
             q = gate_side(q, r.cfg.n_heads, r.cfg.head_dim, 0)
         $k: = product(a.wk@, h)
         $v: = product(a.wv@, h)
@@ -403,17 +403,19 @@ impl Qwen
     pub fn state_tokens(r: Self@): Sz //< how many tokens the running state follows now
         return r.state_at
 
+    priv fn state_count(r: Self@): Sz //< how many numbers a copy of the running state holds
+        return r.cfg.delta.state_len() * (r.cfg.n_layers - r.cfg.attention_blocks())
+
     pub fn new_state( //< room for a copy of the running state, following no token yet
         r: Self@,
         arena: Arena$@, //< where the copy goes; `Delta_shape.state_len()` numbers per delta net
     ): Qwen_state
-        n: =
-            r.cfg.delta.state_len() * (r.cfg.n_layers - r.cfg.attention_blocks())
+        n: = r.state_count()
         return Qwen_state::{ .tokens = 0, .data = F32$@::arena.alloc(n * 4 + 4), .len = n }
 
     pub fn save_state(r: Self@, into: Qwen_state$@) //< copies the running state into `into`
         //< `into` must come from this model's `new_state`.
-        if into.len != r.cfg.delta.state_len() * (r.cfg.n_layers - r.cfg.attention_blocks())
+        if into.len != r.state_count()
             panic("Qwen.save_state: the copy is another model's")
         $at: Sz = 0
         for i in Range.asc(r.cfg.n_layers)
@@ -427,7 +429,7 @@ impl Qwen
         //< the running state as `save_state` copied it
         //< Caution: **The cache must still hold the rows of the copy's tokens.** Rows written over
         //< since then give the scores of another conversation, with no error.
-        if from.len != r.cfg.delta.state_len() * (r.cfg.n_layers - r.cfg.attention_blocks())
+        if from.len != r.state_count()
             panic("Qwen.restore_state: the copy is another model's")
         $at: Sz = 0
         for i in Range.asc(r.cfg.n_layers)
@@ -462,9 +464,6 @@ priv fn gate_side(t: Tensor<|F32|>, heads: Sz, width: Sz, side: Sz): Tensor<|F32
             src: = t.data + (s * heads + h) * 2 * width + side * width
             mem.copy(Void$@::(out.data + (s * heads + h) * width), Void$@::src, width * 4)
     return out
-
-priv fn split_gate(t: Tensor<|F32|>, heads: Sz, width: Sz): Tensor<|F32|> //< the gates' side
-    return gate_side(t, heads, width, 1)
 
 priv fn sigmoid(t: Tensor<|F32|>): Tensor<|F32|> //< `1 / (1 + e^-x)` of each number
     out: = Tensor<|F32|>(t.shape, t.arena)

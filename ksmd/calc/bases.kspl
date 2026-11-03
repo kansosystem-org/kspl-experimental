@@ -1,0 +1,109 @@
+//< Whole numbers written in hexadecimal or binary, and read back: the six base functions' work
+//< `dec_to_hex`, `hex_to_dec` and the rest in `ksmd/calc/calc.kspl` call these. A number is
+//< written with a minus sign. Given a width in bits, a negative number is written as its two's
+//< complement in that width, and a digit text is read back the same way.
+import "std/chars" // `sub_from`
+import "std/mem" { Arena }
+import "std/str" // `text`
+
+const MAX_BITS: I64 = 53 //< the widest width, and the bits of the largest number converted
+    //< **An F64 holds every whole number up to 2^53 exactly**, and a cell's number is an F64. A
+    //< wider width would write digits that no cell can hold back.
+
+priv const LIMIT: I64 = 1I64 << 53 //< the largest magnitude converted, 2^53
+
+enum Base //< a base the functions write or read
+    hex //< four bits a digit, `0`-`9` and `A`-`F`
+    binary //< one bit a digit, `0` and `1`
+
+impl Base
+    fn bits(b: Self): I64 //< the bits one digit holds
+        return 4 if b == .hex else 1
+
+enum Base_error //< why a conversion has no answer
+    not_digits //< the text holds a character that is no digit of the base, or nothing: `#VALUE!`
+    too_large //< past 2^53, outside the width, or a width not from 1 to 53: `#NUM!`
+
+fn whole(n: F64): I64? //< a number as a whole number within 2^53, or none
+    if n != n || n > F64::LIMIT || n < -F64::LIMIT
+        return .none
+    w: = I64::n
+    if F64::w != n
+        return .none
+    return .some(w)
+
+fn width_ok(width: I64): Bool //< whether a width in bits is one the functions take
+    return width >= 1 && width <= MAX_BITS
+
+fn write(n: I64, base: Base, width: I64, arena: Arena$@): U8[]!Base_error //<
+    //< `n` in the base. **Width 0 means none**: a negative number takes a minus sign. Otherwise
+    //< `n` must fit the width as a signed or an unsigned number, and is written in exactly the
+    //< digits the width needs, a negative one as its two's complement.
+    if n > LIMIT || n < -LIMIT
+        throw .too_large
+    $v: = n
+    $digits: I64 = 0
+    if width != 0
+        if !width_ok(width)
+            throw .too_large
+        span: = 1I64 << width
+        if n >= span || n < -(span >> 1)
+            throw .too_large
+        if n < 0
+            v = n + span
+        digits = (width + base.bits() - 1) / base.bits()
+    negative: = width == 0 && v < 0
+    if negative
+        v = -v
+    $out: U8[64] = ::{}
+    $at: Sz = 64
+    mask: = (1I64 << base.bits()) - 1
+    for v > 0 || at == 64 || I64::(64 - at) < digits
+        d: = v & mask
+        at -= 1
+        out[at] = U8::(d + (48 if d < 10 else 55))
+        v = v >> base.bits()
+    t: = arena.text()
+    if negative
+        t.c('-')
+    for i in Range.asc(64 - at)
+        t.c(out[at + i])
+    return t.take()
+
+fn read(s: U8[], base: Base, width: I64): I64!Base_error //<
+    //< The whole number a digit text names. Digits are read in either case. **Width 0 means
+    //< none**: a leading `-` makes the number negative. Otherwise the text takes no sign, must fit
+    //< the width, and a top bit set makes it negative, as two's complement reads it.
+    $at: Sz = 0
+    negative: = width == 0 && s.len > 0 && s[0] == '-'
+    if negative
+        at = 1
+    if at == s.len
+        throw .not_digits
+    if width != 0 && !width_ok(width)
+        throw .too_large
+    $v: I64 = 0
+    for c in s.sub_from(at)
+        d: = digit(c, base) catch
+            throw .not_digits
+        v = (v << base.bits()) | d
+        if v > LIMIT
+            throw .too_large
+    if width == 0
+        return -v if negative else v
+    span: = 1I64 << width
+    if v >= span
+        throw .too_large
+    return v - span if v >= (span >> 1) else v
+
+priv fn digit(c: U8, base: Base): I64!Base_error //< one digit's value in the base
+    if c >= '0' && c <= '9'
+        d: = I64::(c - '0')
+        if base == .binary && d > 1
+            throw .not_digits
+        return d
+    if base == .hex && c >= 'a' && c <= 'f'
+        return I64::(c - 'a') + 10
+    if base == .hex && c >= 'A' && c <= 'F'
+        return I64::(c - 'A') + 10
+    throw .not_digits

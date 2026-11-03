@@ -254,9 +254,7 @@ priv fn ended_by(handle: I64, until_us: I64): I32?
 // deadline the job is killed and has no code, with what it wrote by then.
 #cfg(!freestanding)
 priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_dir: U8[],
-    work: Arena$@, arena: Arena$@): Run_result!Spawn_error
-    if handle == 0
-        throw .spawn_failed
+    work: Arena$@, arena: Arena$@): Run_result
     code: = wait_until(handle, deadline_us)
     out: = read_capped(job_path(work_dir, index, "out", work), output_cap, arena)
     err: = read_capped(job_path(work_dir, index, "err", work), output_cap, arena)
@@ -326,8 +324,9 @@ priv fn collect_one(live: List<|Running_job|>$@, results: List<|Run_result!Spawn
                 continue
             $code: I32 = 0
             if kspl_proc_ended(job.handle, code@) || now >= job.deadline_us
-                results.set(k,
-                    reap_job(job.handle, job.deadline_us, k, output_cap, work_dir, work, arena))
+                got: =
+                    reap_job(job.handle, job.deadline_us, k, output_cap, work_dir, work, arena)
+                results.set(k, .ok(got))
                 job.handle = 0
                 return
         sys.sleep_ms(pause)
@@ -657,7 +656,7 @@ impl Piped_child
     ): Sz!Read_end
         return read_one(kspl_proc_read_err(r.handle, buf.ptr, buf.len, timeout_ms))!
 
-    pub fn close_stdin(r: Self$@) //< closes standard input, to signal the end of input
+    pub fn close_stdin(r: Self@) //< closes standard input, to signal the end of input
         //< A child that answers only after reading all its input is waiting for this.
         kspl_proc_close_stdin(r.handle)
 

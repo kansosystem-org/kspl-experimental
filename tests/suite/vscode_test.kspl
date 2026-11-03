@@ -171,7 +171,7 @@ priv fn check_make_targets(tasks: json.Value, arena: Arena$@) //<
         verdict.check(name, names.contains(cmd.target),
             "neither `make help` lists it nor is it a suite's `test-<name>`")
 
-priv fn check_launch(launch: json.Value, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
+priv fn check_launch(launch: json.Value, labels: List<|U8[]|>@, root: U8[], arena: Arena$@) //<
     //< `launch.json`'s preLaunchTask and initCommands
     for c in launch.get("configurations").arr_list(arena)
         name: = c.get("name").as_str().unwrap_or("")
@@ -335,7 +335,8 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
                 if e.as_str().unwrap_or("").equals(".kspl")
                     opens_source = true
         note_missing(missing@, dir, one.get("configuration").as_str().unwrap_or(""), arena)
-    for one in pkg.get("contributes").get("grammars").arr_list(arena)
+    grammars: = pkg.get("contributes").get("grammars").arr_list(arena)
+    for one in grammars
         note_missing(missing@, dir, one.get("path").as_str().unwrap_or(""), arena)
     verdict.check_list("extension: the files package.json points at really exist", langs.len,
         "files", missing@, "package.json names a file that is not there: add it, or mend the path")
@@ -346,7 +347,6 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
         "package.json must define one language, kspl, taking the extension .kspl")
 
     // **The colouring rules stand in one file**, the one grammar the language names.
-    grammars: = pkg.get("contributes").get("grammars").arr_list(arena)
     verdict.check("extension: the .kspl colouring is the one grammar, source.kspl",
         grammars.len == 1 &&
         grammars.get(0).get("scopeName").as_str().unwrap_or("").equals("source.kspl") &&

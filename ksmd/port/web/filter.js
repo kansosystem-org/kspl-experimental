@@ -166,7 +166,7 @@ function ksmdFilter(ks) {
     const conds = new Map(condsOf(wrap) || []);
     if (cond) conds.set(column, cond);
     else conds.delete(column);
-    viewed.set(wrap.dataset.name, conds.size > 0 ? conds : new Map());
+    viewed.set(wrap.dataset.name, conds);
     apply(wrap);
     return null;
   }
@@ -521,7 +521,6 @@ function ksmdFilter(ks) {
     apply,
     shown: shownText,
     open,
-    close,
     clearAll,
     // Shows only the rows whose value in the column is the value of that cell.
     only: (block, row, column) => {

@@ -16,28 +16,25 @@ OUT ?= out
 # Where the page is written: `ksmd.html` with its scripts, its style and its wasm beside it.
 WEB ?= $(OUT)/web
 
-.PHONY: test web web-tools test-browser measure browser-path
+.PHONY: test functions web web-tools test-browser measure browser-path
 
+# **The function table is checked first**: a signature changed in `calc/functions.kspl` without
+# `make ksmd-functions` would otherwise show only as a formula reading its arguments wrongly.
 test:
+	"$(KSPLC)" run port/table_writer.kspl "$(KSPLC)" check "$(OUT)/functions"
 	"$(KSPLC)" run tests/main.kspl
+
+# Writes `calc/functions_table.kspl` again from the signatures in `calc/functions.kspl`.
+functions:
+	"$(KSPLC)" run port/table_writer.kspl "$(KSPLC)" write "$(OUT)/functions"
 
 # ==========================================
 # The page, for the browser (wasm32)
 # ==========================================
-# It wants a clang that targets wasm32, `wasm-ld`, and clang's builtins for wasm32. **wasm holds
-# neither libc nor malloc**: the C is made with `--freestanding`, and `-mbulk-memory` lets clang
-# copy and fill memory with wasm's own instructions, so no C library routine is linked.
+# **The steps stand in `port/wasm.kspl`**, which a person's own functions are built through too
+# (`port/wasm_build.kspl` runs them here). It wants a clang that targets wasm32, `wasm-ld`, and
+# clang's builtins for wasm32, which `web-tools` checks.
 WEB_SRC := port/web
-WASM_MACHINE := wasm32-unknown-unknown
-WASM_CC := clang --target=$(WASM_MACHINE) -std=c99 -O2 -ffreestanding -nostdlib -Wall \
-    -mbulk-memory -ffunction-sections -fdata-sections
-# Caution: **Do not use `--allow-undefined`**: only what `port/web/imports.txt` names comes from the
-# script, so anything else fails the link rather than the page.
-# **Put the stack first**: after the data, a deep call runs past its end into the heap without a trap.
-WASM_LD := wasm-ld --no-entry --gc-sections --stack-first -z stack-size=1048576 \
-    --allow-undefined-file=$(WEB_SRC)/imports.txt
-# clang lowers what wasm32 has no instruction for, such as a 128-bit product, to calls that only
-# this library defines. clang files it under the `wasi` machine's folder.
 WASM_BUILTINS := $(shell clang --target=wasm32-wasi -rtlib=compiler-rt -print-libgcc-file-name 2>/dev/null)
 
 # Whether the tools the page needs are installed. `make install` at the root asks this before it
@@ -72,10 +69,8 @@ $(WEB_WASM): $(KSPLC_FILE) $(WEB_SRC)/bridge.kspl $(WEB_SRC)/imports.txt \
 		$(if $(wildcard $(BRIDGE).d),,FORCE) | web-tools
 	@echo "# BUILDING the ksmd page's wasm (wasm32, freestanding)"
 	@mkdir -p "$(OUT)/gen" "$(WEB)"
-	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) --emit-deps="$(BRIDGE).deps" \
-		$(WEB_SRC)/bridge.kspl "$(BRIDGE).c"
-	$(WASM_CC) -c "$(BRIDGE).c" -o "$(BRIDGE).o"
-	$(WASM_LD) "$(BRIDGE).o" "$(WASM_BUILTINS)" -o "$(WEB_WASM)"
+	"$(KSPLC)" run port/wasm_build.kspl "$(KSPLC)" $(WEB_SRC)/bridge.kspl "$(WEB_WASM)" \
+		$(WEB_SRC)/imports.txt "$(BRIDGE)" "$(BRIDGE).deps"
 	awk '$$1 !~ /^-/ && $$2 !~ /^(\/|[A-Za-z]:)/ { print "$@: " $$2; print $$2 ":" }' \
 		"$(BRIDGE).deps" > "$(BRIDGE).d"
 -include $(BRIDGE).d
@@ -129,7 +124,7 @@ test-browser: web
 	      "On a machine without one, KSMD_REQUIRE_BROWSER=0 makes this a SKIP;" \
 	      "such a round is not CI's verdict"; exit 1; fi; \
 	  echo "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"; fi
-	$(if $(KSMD_BROWSER),node tests/browser/main.mjs "$(KSMD_BROWSER)" "$(WEB_PAGE)" "$(OUT)/browser" $(if $(KSSRV),"$(KSSRV)"))
+	$(if $(KSMD_BROWSER),node tests/browser/main.mjs "$(KSMD_BROWSER)" "$(WEB_PAGE)" "$(OUT)/browser" $(if $(KSSRV),"$(KSSRV)" $(if $(BUILDER),"$(BUILDER)")))
 
 # ==========================================
 # What a document costs

@@ -289,8 +289,8 @@ if __name__ == "__main__":
 
                 # kanso: delta = x @ A_k @ B_k ; A_k:[in,rank] (=A^T), B_k:[rank,out] (=B^T*scale)
                 kprefix = f"blocks.{layer}.attn.{'q' if proj == 'q_proj' else 'v'}"
-                (a_shape, a_flat) = out[kprefix + ".lora_a"]
-                (b_shape, b_flat) = out[kprefix + ".lora_b"]
+                _, a_flat = out[kprefix + ".lora_a"]
+                _, b_flat = out[kprefix + ".lora_b"]
                 a_k = [a_flat[i * rank:(i + 1) * rank] for i in range(in_dim)]  # [in][rank]
                 b_k = [b_flat[r * out_dim:(r + 1) * out_dim] for r in range(rank)]  # [rank][out]
                 xa_k = [sum(x[i] * a_k[i][r] for i in range(in_dim)) for r in range(rank)]

@@ -1,0 +1,146 @@
+//< How a function a formula calls receives its arguments, whoever wrote the function
+//< The generated table (`ksmd/calc/functions_table.kspl`) reads each parameter through `Raw_args`,
+//< by its type. So every function, built in or a person's own, gets its arguments converted by one
+//< set of rules:
+//<
+//< | A parameter of type | Takes | Is refused, and the cell shows |
+//< | :-- | :-- | :-- |
+//< | `F64` | a number; an empty cell is 0 | text, `true`/`false` or a date: `#VALUE!` |
+//< | `I64` | a whole number up to 2^53 either way | a fraction or a larger number: `#NUM!` |
+//< | `Bool` | `true` or `false`; an empty cell is `false` | a number, text or a date: `#VALUE!` |
+//< | `U8[]` | text; an empty cell is empty text | a number, `true`/`false` or a date: `#VALUE!` |
+//< | `Value` | any value as it is | nothing |
+//< | `Value[]`, last | the rest: a range alone gives its numbers, dates and errors, any other argument a number | nothing; the function judges each |
+//< | `T?`, last ones | as `T`, or none where it is left out | as `T` |
+//< | `Arena$@` | no argument: the memory a text result goes in | nothing |
+//<
+//< **An argument holding an error is the result**, the leftmost first, and the function is not
+//< called; `Value[]` alone passes errors on, so the function keeps its own order.
+import "ksmd/calc/value" { Calc_error, Value, empty, operand, truth }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+// **A person's functions read their arguments through `Raw_args` too, so [I0402] is off here.**
+// Their table is built outside this package, in the page's worker (`ksmd/port/own`).
+##lint(I0402 = off)
+
+pub struct First_error //< the first error among a function's arguments, from the left
+    pub broken: Bool
+    pub error: Calc_error
+
+impl First_error
+    pub fn take(f: Self$@, e: Calc_error) //< keeps `e` unless an earlier error was kept
+        if f.broken
+            return
+        f.broken = true
+        f.error = e
+
+// ==========================================
+// The arguments as a formula wrote them
+// ==========================================
+
+pub typedef Row_fn = fn(ctx: Void$@, piece: Sz): Value //<
+    //< A range's cell on the row a condition reads now (`sum_if`), by the range's piece
+
+pub struct Raw_arg //< one argument as the formula wrote it, before a parameter's type converts it
+    pub value: Value //< its value; for a reference alone, unused
+    pub cells: Value[] //< a reference alone: every cell it names, row by row
+    pub is_cells: Bool //< the argument is a reference alone, which `Value[]` reads as its cells
+    pub range: Bool //< that reference is a range, not one cell
+    pub piece: Sz //< that reference's piece, for `Raw_args.row`
+
+pub struct Raw_args //< a function's arguments, calculated, read in order by the rules above
+    //< **The one place the rules stand.** The calculator collects a call's arguments into it,
+    //< and a person's function receives the same in the page's worker.
+    pub args: Raw_arg[]
+    pub used: Sz //< how many were read
+    pub misread: Bool //< an argument did not fit its parameter: the formula does not read
+        //< Too few arguments, or a range where one value is meant outside a condition.
+    pub row: Row_fn //<
+        //< inside a condition, a range read as one value: its cell on the row; else null
+    pub ctx: Void$@ //< what `row` is handed back
+    pub live: Bool //< false where the formula is read but not calculated
+        //< The function is then not called: a branch `if` does not take calls nothing.
+    pub memory: Arena$@ //< where a text result goes
+
+impl Raw_args
+    pub fn number(a: Self$@): F64!Calc_error //< a number; an empty cell is 0
+        v: = operand(a.next()!)
+        if v.kind == .error
+            throw v.error
+        return v.number
+
+    pub fn whole(a: Self$@): I64!Calc_error //< a whole number up to 2^53 either way
+        n: = a.number()!
+        if n != n || n > 9007199254740992.0 || n < -9007199254740992.0 || F64::(I64::n) != n
+            throw .not_finite
+        return I64::n
+
+    pub fn truth(a: Self$@): Bool!Calc_error //< `true` or `false`; an empty cell is `false`
+        v: = truth(a.next()!)
+        if v.kind == .error
+            throw v.error
+        return v.boolean
+
+    pub fn text(a: Self$@): U8[]!Calc_error //< text; an empty cell is empty text
+        v: = a.next()!
+        switch v.kind
+        case .text
+            return v.text
+        case .empty
+            return ""
+        case .error
+            throw v.error
+        default
+            throw .wrong_kind
+
+    pub fn value(a: Self$@): Value!Calc_error //< any value
+        v: = a.next()!
+        if v.kind == .error
+            throw v.error
+        return v
+
+    pub fn rest(a: Self$@): Value[] //<
+        //< One argument or more: a reference alone gives its numbers, dates and errors, and leaves
+        //< out empty cells, text and `true`/`false`; any other argument is a number
+        $xs: = List<|Value|>(a.memory)
+        if a.used == a.args.len
+            a.misread = true
+        for a.used < a.args.len
+            one: = a.args[a.used]
+            a.used += 1
+            if !one.is_cells
+                xs.push(operand(one.value))
+                continue
+            for v in one.cells
+                if v.kind == .number || v.kind == .date || v.kind == .error
+                    xs.push(v)
+        return xs.slice()
+
+    pub fn more(a: Self@): Bool //< whether another argument follows
+        return a.used < a.args.len
+
+    pub fn calculating(a: Self@): Bool //< false in a part read but not calculated
+        return a.live
+
+    pub fn arena(a: Self@): Arena$@ //< where the results of this calculation live
+        return a.memory
+
+    priv fn next(a: Self$@): Value!Calc_error //<
+        //< The next argument as one value. A range is one only inside a condition, read row by row,
+        //< as anywhere else a formula reads one; a cell not calculated is empty.
+        if a.used == a.args.len
+            a.misread = true
+            throw .syntax
+        one: = a.args[a.used]
+        a.used += 1
+        if !one.is_cells
+            return one.value
+        if one.range
+            if a.row == null
+                a.misread = true
+                throw .syntax
+            return a.row(a.ctx, one.piece)
+        if !a.live || one.cells.len == 0
+            return empty()
+        return one.cells[0]

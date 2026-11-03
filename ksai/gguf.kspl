@@ -134,21 +134,23 @@ impl Cursor
         r.at += 4
         return v
 
-    priv fn size(r: Self$@, what: U8[]): Sz!Gguf_error //< a U64 count or length, checked
-        //< Caution: **Compare while still U64.** Converted first, a value past `Sz` wraps into
-        //< range and slips past the check.
+    priv fn u64(r: Self$@, what: U8[]): U64!Gguf_error
         r.need(8, what)!
         v: = r.raw.get_u64_le(r.at)
         r.at += 8
+        return v
+
+    priv fn size(r: Self$@, what: U8[]): Sz!Gguf_error //< a U64 count or length, checked
+        //< Caution: **Compare while still U64.** Converted first, a value past `Sz` wraps into
+        //< range and slips past the check.
+        v: = r.u64(what)!
         if v > U64::(r.raw.len - r.at)
             throw .truncated(what)
         return Sz::v
 
     priv fn count(r: Self$@, what: U8[], least: Sz): Sz!Gguf_error //<
         //< A U64 count of items that take at least `least` bytes each, checked against the rest
-        r.need(8, "the header")!
-        v: = r.raw.get_u64_le(r.at)
-        r.at += 8
+        v: = r.u64("the header")!
         if v > U64::((r.raw.len - r.at) / least)
             throw .too_many(what)
         return Sz::v
@@ -299,9 +301,7 @@ impl Gguf
             throw .bad_tensor(name)
         $t: = Gguf_tensor::{ .name = name, .dims = ::{ 1, 1, 1, 1 }, .n_dims = n_dims }
         for d in Range.asc(n_dims)
-            c.need(8, name)!
-            v: = c.raw.get_u64_le(c.at)
-            c.at += 8
+            v: = c.u64(name)!
             // A dimension past the file's size cannot fit in it, whatever the format.
             if v > U64::c.raw.len
                 throw .bad_tensor(name)
@@ -309,9 +309,7 @@ impl Gguf
         t.type_id = c.u32(name)!
         t.format = format_of(t.type_id) catch
             throw .unsupported_format(name)
-        c.need(8, name)!
-        off: = c.raw.get_u64_le(c.at)
-        c.at += 8
+        off: = c.u64(name)!
         if off > U64::c.raw.len
             throw .bad_offset(name)
         t.offset = Sz::off

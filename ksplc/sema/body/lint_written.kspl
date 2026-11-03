@@ -8,6 +8,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
+import "ksplc/sema/body/lint_free" as sema_body_lint_free
 import "ksplc/sema/decl/name" as _sema_decl_name // `impl_target_fqn`
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as _sema_session_import_table // `peek_file_alias`
@@ -17,9 +18,8 @@ import "std/ds" { List, Map }
 import "std/str"
 
 priv const LANG_ALIAS: U8[] = "lang" //< the alias `std/lang` enters every file under
-priv const ARENA_FQN: U8[] = "std.mem.Arena" //< the arena's type, as the analysis names it
 
-fn lint_written(root: Ast_node$@, c: Sema_ctx$@) //<
+fn lint_written(root: Ast_node@, c: Sema_ctx$@) //<
     //< Runs the four lints over every file's written declarations
     $enums: = Map<|U8[], Bool|>(base_core.arena)
     $plain_impls: = Map<|U8[], Ast_node$@|>(base_core.arena)
@@ -40,7 +40,7 @@ fn lint_written(root: Ast_node$@, c: Sema_ctx$@) //<
 priv fn enum_key(file: U8[], name: U8[]): U8[] //< the key of an enum in `enums`: its file and name
     return base_core.arena.text().s(file).s("::").s(name).take()
 
-priv fn lint_enum_function(c: Sema_ctx$@, f: Ast_node$@, enums: Map<|U8[], Bool|>$@) //<
+priv fn lint_enum_function(c: Sema_ctx$@, f: Ast_node$@, enums: Map<|U8[], Bool|>@) //<
     //< [I0503] A top-level function whose first parameter is an enum of its own file, by value
     //< The rule is "A function of one enum is its method" in `docs/DESIGN-notation.md`. **An enum
     //< of another file is left out**: its `impl` would hold another package's reading of it. A
@@ -155,7 +155,7 @@ impl Ast_node
                 return true
         return false
 
-priv fn lint_lang_prefix(c: Sema_ctx$@, at: Ast_node$@, member: Ast_node$@,
+priv fn lint_lang_prefix(c: Sema_ctx$@, at: Ast_node$@, member: Ast_node@,
     shadows: List<|U8[]|>@) //<
         //< [I0312] A name after `lang.` that, written alone, names the same declaration
         //< The rule is "Write `lang.` only when the unqualified name is blocked" in
@@ -193,5 +193,5 @@ priv fn lint_arena_defaults(c: Sema_ctx$@, f: Ast_node$@) //<
 priv fn takes_arena(c: Sema_ctx$@, p: Ast_node$@): Bool //< whether a parameter's type is an arena
     id: = p.param_type_id()
     if id != 0 && !sema_type_env.is_unknown(id)
-        return c.env.get_str(c.env.get_clean_real_type(c.env.strip_ptr_full(id))).equals(ARENA_FQN)
+        return sema_body_lint_free.is_arena(c, id)
     return p.get_decl_type_node().names_arena()

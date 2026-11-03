@@ -33,7 +33,7 @@ import "std/chars"
 import "std/str" { Str_builder }
 
 fn check_variant_call_arity(c: Sema_ctx$@, node: Ast_node$@, args_node: Ast_node$@,
-    variant_def: sema_type_def.Enum_variant$@, has_call_syntax: Bool) //<
+    variant_def: sema_type_def.Enum_variant@, has_call_syntax: Bool) //<
         //< Checks the argument count of a call to an enum variant, `()` on a payload-free one too
         //< `Enum.variant(...)`, `.variant(...)` and a bare `.variant` / `Enum.variant` all use it.
     if variant_def == null
@@ -132,10 +132,20 @@ priv fn owner_was_refused(c: Sema_ctx$@, parts: sema_decl_name.Named_fn): Bool /
         return false
     return c.has_failed_constraint(c.env.base_type_name(parts.owner.type_id))
 
-fn with_args(fn_tmpl: sema_decl_mono.Fn_instance, args: I32[]): sema_decl_mono.Fn_instance //<
+priv fn with_args(fn_tmpl: sema_decl_mono.Fn_instance, args: I32[]): sema_decl_mono.Fn_instance //<
     //< The instance of fn_tmpl's template binding args
     return sema_decl_mono.Fn_instance::{ .template = fn_tmpl.template, .owner = fn_tmpl.owner,
         .args = args }
+
+fn instance_of_written_args(c: Sema_ctx$@, node: Ast_node$@, fn_tmpl: sema_decl_mono.Fn_instance,
+    args: I32[]): Sema_symbol$@?!Sema_error //<
+        //< The symbol of the instance that the type arguments written at node bind, made once
+        //< As at a call, a bound violation is reported at node's line, not the template's.
+    prev_inst_site: = c.generics.inst_site
+    c.generics.inst_site = node
+    defer c.generics.inst_site = prev_inst_site
+    defer $inst_name: = c.instantiate_fn(with_args(fn_tmpl, args), false)!
+    return c.symtab.resolve(inst_name.slice())
 
 fn refuse_type_args_on_plain_fn(c: Sema_ctx$@, fn_name: U8[], type_args: Ast_node$@) //<
     //< Reports type arguments written after a function that declares none
@@ -148,7 +158,7 @@ priv fn callee_name(left: Ast_node$@): U8[] //< the name a generic call's callee
     return (left.get_postfix_member().text if left.kind_id == .k_method_access
         else left.get_path_or_ident_name())
 
-priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_node$@,
+priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_node@,
     inferred: I32[]): Bool //<
         //< Rejects a type argument bound to a function's name that gives no function type
         //< A function's name gives a type parameter the function type of the one function it names
@@ -218,15 +228,11 @@ priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
     args: = written.build_resolved_type_args(c, def_node)!
     if args.len == 0 || !sema_decl_mono.written_generic_arity_matches(def_node, args.len)
         return .none
-    prev_inst_site: = c.generics.inst_site
-    c.generics.inst_site = node
-    defer c.generics.inst_site = prev_inst_site
-    defer $inst_name: = c.instantiate_fn(with_args(fn_tmpl, args), false)!
-    inst_sym: = c.symtab.resolve(inst_name.slice()).unwrap_or(null)
+    inst_sym: = instance_of_written_args(c, node, fn_tmpl, args)!.unwrap_or(null)
     return .some(inst_sym.node) if inst_sym != null && inst_sym.node != null else .none
 
 priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
-    fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node$@, is_method_access: Bool,
+    fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node@, is_method_access: Bool,
     def_node: Ast_node$@, args_node: Ast_node$@, cur_type_id: I32): I32!Sema_error //<
         //< Instantiates a generic call from its type arguments and returns the return type
         //< written is the `<|…|>` that names them at the call, or null where they are inferred from
@@ -387,7 +393,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         base_fn_name.s(clean_type).s(".").s(parts.name.text)
         written = parts.own
     else if !is_fn_ptr
-        if left.is_callable_target()
+        if left.is_path_or_ident()
             named = c.read_written_name(left)
             base_fn_name.s(named.spelled)
         else
@@ -486,7 +492,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         type_id = of_instance.type_id
     else if !sema_type_env.is_unknown(target_id)
         type_id = target_id
-    else if !sema_type_env.is_unknown(expected_id)
+    else
         type_id = expected_id
 
     if args_node != null
@@ -525,7 +531,7 @@ priv fn callee_symbol(left: Ast_node$@, named_sym: Sema_symbol$@, is_method_acce
         if m_node != null && m_node.def_node != null && m_node.def_node.sym_ptr != null
             return .some(Sema_symbol$@::m_node.def_node.sym_ptr)
         return .none
-    if named_sym == null && !left.is_callable_target() && left.def_node != null &&
+    if named_sym == null && !left.is_path_or_ident() && left.def_node != null &&
         left.def_node.sym_ptr != null
         return .some(Sema_symbol$@::left.def_node.sym_ptr)
     return .some(named_sym) if named_sym != null else .none

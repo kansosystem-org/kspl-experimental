@@ -18,8 +18,7 @@ function distinct(log) {
   for (const line of log.split(/\r?\n/)) {
     if (line.trim() === "") continue;
     const message = line.replace(/^\[\d+:\d+:[\d\/.]+:/, "[");
-    seen.set(message, (seen.get(message) || 0) + 1);
-    const count = seen.get(message);
+    const count = (seen.get(message) || 0) + 1;
     seen.delete(message);
     seen.set(message, count);
   }
@@ -83,6 +82,8 @@ export async function launch(binary, work) {
 
   // The text the next prompt is answered with; null dismisses it.
   let answer = null;
+  // The files the next file chooser is given; null cancels it, as Esc in the system's dialog does.
+  let chosen = null;
   // Each tab the browser made, and the tabs this driver made or took already.
   const created = [];
   const known = new Set();
@@ -106,6 +107,15 @@ export async function launch(binary, work) {
         const d = m.params.exceptionDetails;
         page.errors.push(d.exception && d.exception.description ? d.exception.description : d.text);
       }
+      // **A chooser never opens a window here**: the browser hands it over (`Page.fileChooserOpened`),
+      // and the files given go into the input that asked, as a person's choice would.
+      if (m.sessionId === sessionId && m.method === "Page.fileChooserOpened") {
+        page.choosers = (page.choosers || 0) + 1;
+        if (chosen !== null) {
+          page("DOM.setFileInputFiles", { files: chosen, backendNodeId: m.params.backendNodeId })
+            .catch((e) => page.errors.push(`the chooser took no files: ${e.message}`));
+        }
+      }
       if (m.sessionId === sessionId && m.method === "Page.javascriptDialogOpening") {
         page.dialogs.push(m.params.type);
         page("Page.handleJavaScriptDialog", answer === null ? { accept: false } :
@@ -114,6 +124,7 @@ export async function launch(binary, work) {
     });
     await page("Page.enable");
     await page("Runtime.enable");
+    await page("Page.setInterceptFileChooserDialog", { enabled: true });
     page.targetId = targetId;
     return page;
   }
@@ -139,6 +150,10 @@ export async function launch(binary, work) {
     page,
     answerPrompts(text) {
       answer = text;
+    },
+    // The files, by absolute path, that each file chooser from now on is given; null cancels.
+    chooseFiles(paths) {
+      chosen = paths;
     },
     // Opens a new tab on `url`.
     async open(url) {

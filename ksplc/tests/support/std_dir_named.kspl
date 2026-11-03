@@ -316,6 +316,17 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
         !stray.exited_with(0) &&
         stray.out.find_str("probe/stray.kspl:1:1: error: the package 'mylib' does ").is_some() &&
         stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
+    // **A climb out of the package names no package**, so it is not called an unlisted one.
+    fs.write_tree(top, U8[][]::{ "probe/climb.kspl" },
+        U8[][]::{ "embed \"../../outside.txt\" as o\n\nfn main(): I32\n    return 0\n" }, arena)
+        catch
+        verdict.check(name, false, "cannot place the climbing file")
+        return
+    climb: = ksplc_env(U8[][]::{ "probe/climb.kspl", "climb.c" }, top, std, "", arena)
+    verdict.check("a path that climbs out of a package is refused as a climb, not as a package",
+        !climb.exited_with(0) &&
+        climb.out.find_str("climbs out of the package 'mylib'").is_some() &&
+        climb.out.find_str("uses ''").is_none(), climb.out)
     fs.write_tree(dir,
         U8[][]::{ "lib_here/ksplc.cfg", "lib_here/probe/used.kspl", "deps/otherlib/x.kspl" },
         U8[][]::{ USED_CFG, USED_MAIN, USED_X }, arena) catch
@@ -325,6 +336,18 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
     used: = ksplc_env(U8[][]::{ "run", "probe/used.kspl" }, top, std, deps, arena)
     verdict.check("a package listed in uses is found under the place told",
         used.out.equals("used\n"), used.out)
+    // **A listed package is no way out**: a `..` past its top reaches no file beside it.
+    fs.write_tree(dir, U8[][]::{ "outside.txt", "lib_here/probe/reach.kspl" },
+        U8[][]::{ "outside\n",
+        "embed \"otherlib/../../outside.txt\" as o\n\nfn main(): I32\n    return 0\n" }, arena)
+        catch
+        verdict.check(name, false, "cannot place the reaching file")
+        return
+    reach: =
+        ksplc_env(U8[][]::{ "probe/reach.kspl", "reach.c" }, top, std, deps, arena)
+    verdict.check("a path that climbs out of a listed package is refused, though its file stands",
+        !reach.exited_with(0) &&
+        reach.out.find_str("climbs out of the package 'otherlib'").is_some(), reach.out)
 
 fn case_named_embed(std: U8[], arena: Arena$@) //<
     //< An embed finds its file the way an import does, wherever the package stands

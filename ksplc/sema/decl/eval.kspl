@@ -48,7 +48,7 @@ impl U8[]
         return I64::(0U64 - lit.value) if is_neg else I64::lit.value
 
 impl Sema_ctx
-    fn promoted_fold_type(r: Self$@, a: I32, b: I32): I32 //<
+    fn promoted_fold_type(r: Self@, a: I32, b: I32): I32 //<
         //< The type two operands fold at: the wider, an unsuffixed literal taking the other's
         if a == 0 || sema_type_env.is_unknown(a)
             return b
@@ -361,10 +361,10 @@ impl Ast_node
             c.err(r, "shift amount is out of range in compile-time constant expression")
         throw .invalid_argument
 
-    fn eval_bool(r: Self$@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
+    fn eval_bool(r: Self@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
         return 1 if r.text.equals("true") else 0
 
-    fn eval_char(r: Self$@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
+    fn eval_char(r: Self@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
         if r.text.len < 3
             throw .invalid_argument
         return I64::base_literal.char_literal_byte(r.text)
@@ -568,6 +568,9 @@ impl Ast_node
             if type_id == 0
                 prev_sup: = c.suppress_errors
                 c.suppress_errors = true
+                // **Put it back in a `defer`**: a `!` below leaves before the line after it, and
+                // the diagnostics after it would be hidden.
+                defer c.suppress_errors = prev_sup
                 // A type is resolved here. An expression needs type inference (infer_expr_fn in
                 // sema/session/ctx.kspl), and so does a value's name read as a type.
                 value: = target.sizeof_named_value(c).unwrap_or(null)
@@ -579,7 +582,6 @@ impl Ast_node
                 else if c.infer_expr_fn != null
                     type_id = c.infer_expr_fn(target, c,
                         I32::sema_type_env.Builtin_type_id.unknown)!
-                c.suppress_errors = prev_sup
             if type_id == 0
                 throw .not_constant
             // Caution: Request the declaration's layout first. The field list is complete only

@@ -259,7 +259,7 @@ function ksmdQuick(ks) {
   function offer(name, x, y) {
     shutOffer();
     if (!placed.has(name)) return;
-    if (ks.menus) ks.menus.shut(false);
+    ks.menus.shut(false);
     const choices = !chosen.includes(name) ? [["Add to quick access bar", () => set([...chosen, name])]] :
       [["Remove from quick access bar", () => set(chosen.filter((n) => n !== name))]];
     choices.push(["Choose tools…", choose]);

@@ -10,6 +10,11 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/parse/desugar" { Desugar_ctx, CLOSURE_EMPTY_FIELD, next_anon_serial, build_temp_name,
     serial_str, build_path_ref }
+// Caution: **Spell a type for the synthesized source with `spell_as_written`, not
+// `extract_type_name()`.** That drops the mutability marker `$` (`U8$[]` -> `U8[]`, `P$@` -> `P@`).
+// The impl then implements a `Callable` with another type argument, and the caller gets "does not
+// explicitly implement interface". **Nor the folded text** (`type_expr.text` reads `Slice<|U8|>`
+// once `U8[]` is folded), which is refused as a type.
 import "ksplc/parse/desugar_slice" { spell_as_written }
 import "ksplc/parse/load" as parse_load
 import "std/ds" { List }
@@ -87,7 +92,7 @@ impl Ast_node
             if id_node: = p.gen_param_id_node()
                 ctx.gen_params.push(id_node.text)
 
-    fn has_capture_marker(r: Ast_node$@): Bool //< whether a `;` is written
+    fn has_capture_marker(r: Ast_node@): Bool //< whether a `;` is written
         for c in r.children
             if c.kind_id == .k_literal && c.text.equals(";")
                 return true
@@ -123,7 +128,8 @@ impl Ast_node
         fwd_params: = forwarded_gen_params(ctx, sig, params, captures)
 
         defer $src: = Str_builder()
-        if !r.build_closure_src(ctx, sig, captures, serial, gen_args_text(fwd_params), src@)
+        if !r.build_closure_src(ctx, sig, params, arity, captures, serial,
+            gen_args_text(fwd_params), src@)
             return
 
         // Caution: **Do not copy the ordinary path (parse -> normalize -> validate) here**; it
@@ -158,7 +164,7 @@ impl Ast_node
         r.morph(.k_expr_path, val_name)
         r.add_child(Ast_node.build_ident(val_name, 0, loc))
 
-    fn reject_param_defaults(r: Ast_node$@, ctx: Desugar_ctx$@) //<
+    fn reject_param_defaults(r: Ast_node@, ctx: Desugar_ctx$@) //<
         //< It rejects a default value in a closure's signature
         //< Parameters and captures are both `fn_param`, so both lists are checked.
         for list in r.children
@@ -173,12 +179,10 @@ impl Ast_node
 
     // It builds the KSPL source of the declarations to synthesize (false: a diagnostic was
     // reported).
-    fn build_closure_src(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, captures: Ast_node$@,
-        serial: Sz, gen_args: U8[], src: Str_builder$@): Bool //<
+    fn build_closure_src(r: Ast_node@, ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
+        arity: Sz, captures: Ast_node$@, serial: Sz, gen_args: U8[], src: Str_builder$@): Bool //<
             //< Writes the closure's struct, constructor and impl as KSPL source into src
             //< False when it refused the closure (the diagnostic is already reported).
-        params: = sig.find_child(.k_param_list)
-        arity: = base_ast_ext.Param_cursor.count(params)
         env_name: = build_anon_env_name(serial)
         ctor_name: = build_anon_env_ctor_name(serial)
         // The environment struct. The captures are held by pointer.
@@ -199,7 +203,7 @@ impl Ast_node
         $first: = true
         for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
-            c_ty: = written_type_text(cap.get_decl_type_node())
+            c_ty: = spell_as_written(cap.get_decl_type_node())
             if !first
                 src.s(", ")
             src.s("\{c_name\}: \{c_ty\}@")
@@ -218,10 +222,10 @@ impl Ast_node
 
         // The impl of Callable; the written argument and return types become its type arguments.
         ret_node: = sig.find_child(.k_type_expr)
-        ret_ty: = "Void" if ret_node == null else written_type_text(ret_node)
+        ret_ty: = "Void" if ret_node == null else spell_as_written(ret_node)
         src.s("impl\{gen_args\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
         for p in base_ast_ext.Param_cursor(params, false)
-            p_ty: = written_type_text(p.get_decl_type_node())
+            p_ty: = spell_as_written(p.get_decl_type_node())
             if p_ty.equals(base_core.UNKNOWN_TYPE_NAME)
                 r.desugar_err(ctx, "a closure parameter must have a type annotation")
                 return false
@@ -233,7 +237,7 @@ impl Ast_node
         src.s("\{ret_ty\}|> {\n  fn call(r: Self@")
         for p in base_ast_ext.Param_cursor(params, false)
             p_name: = p.find_text(.k_identifier)
-            src.s(", \{p_name\}: \{written_type_text(p.get_decl_type_node())\}")
+            src.s(", \{p_name\}: \{spell_as_written(p.get_decl_type_node())\}")
         src.s("): \{ret_ty\} {\n")
         // It rebinds the captured names, so **the body needs no rewriting**. `n` resolves as an
         // ordinary local. Since it is immutable, the mutability check stops a write to it.
@@ -244,8 +248,8 @@ impl Ast_node
         return true
 
     // One field of the environment struct. A capture is "a name and a type", nothing else.
-    fn append_capture_field(r: Ast_node$@, ctx: Desugar_ctx$@, cap: Ast_node$@,
-        src: Str_builder$@): Bool
+    fn append_capture_field(r: Ast_node@, ctx: Desugar_ctx$@, cap: Ast_node$@, src: Str_builder$@):
+        Bool
         // No `$`: captures are read-only, or the enclosing function's local could be written
         // through the closure, hiding the dependence on call order from the reader.
         for c in cap.children
@@ -258,7 +262,7 @@ impl Ast_node
         if c_name.len == 0
             r.desugar_err(ctx, "a capture must be a name with a type ('n: I32')")
             return false
-        c_ty: = written_type_text(cap.get_decl_type_node())
+        c_ty: = spell_as_written(cap.get_decl_type_node())
         if c_ty.len == 0 || c_ty.equals(base_core.UNKNOWN_TYPE_NAME)
             defer $m: = Str_builder()
             m
@@ -296,7 +300,7 @@ impl Ast_node
                 if seg.kind_id == .k_identifier
                     seg.text = recv_name
 
-    fn graft_closure_body(r: Ast_node$@, body: Ast_node$@) //<
+    fn graft_closure_body(r: Ast_node$@, body: Ast_node@) //<
         //< It moves the original closure body's statements into the synthesized `call`'s body
         call_fn: = r.find_child(.k_decl_fn)
         if call_fn == null
@@ -306,16 +310,6 @@ impl Ast_node
             base_diag.ice_panic("graft_closure_body: synthesized 'call' has no body")
         for stmt in body.children
             dest.add_child(stmt)
-
-fn written_type_text(r: Ast_node$@): U8[] //<
-    //< It returns the type node's spelling as written
-    //< Caution: **Do not use `extract_type_name()`.** It drops the mutability marker `$` (`U8$[]`
-    //< -> `U8[]`, `P$@` -> `P@`). The impl then implements a `Callable` with another type argument,
-    //< and the caller gets "does not explicitly implement interface". **Nor the folded text**
-    //< (`type_expr.text` reads `Slice<|U8|>` once `U8[]` is folded), which is refused as a type.
-    if r == null
-        return ""
-    return spell_as_written(r)
 
 fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
     //< Caution: Start every one with `_`, or [W0206] fires where one goes unused.
@@ -341,7 +335,7 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
             out.push(name)
     return out
 
-fn gen_args_text(names: List<|U8[]|>$@): U8[] //<
+fn gen_args_text(names: List<|U8[]|>@): U8[] //<
     //< The `<|T, U|>` names of the type arguments copied over
     //< Empty where there are none, leaving the synthesized declarations non-generic.
     if names.len == 0
@@ -387,11 +381,11 @@ fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@
         //< The choice of which type arguments to copy over reads this text.
     ret_node: = sig.find_child(.k_type_expr)
     if ret_node != null
-        out.s(written_type_text(ret_node)).s(" ")
+        out.s(spell_as_written(ret_node)).s(" ")
     append_param_type_text(params, out)
     append_param_type_text(captures, out)
 
 fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
     //< It adds the parameter type names in a `param_list` / `capture_list`, separated by spaces
     for p in base_ast_ext.Param_cursor(list, false)
-        out.s(written_type_text(p.get_decl_type_node())).s(" ")
+        out.s(spell_as_written(p.get_decl_type_node())).s(" ")

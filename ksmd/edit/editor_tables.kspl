@@ -215,14 +215,18 @@ impl Editor
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
-        if row < 0
-            edit.set_name(ed.doc@, u, column, text, ed.arena) catch why
-                throw .table(why)
-        else
-            value: = value_of(text, scratch)
-            edit.set_cell(ed.doc@, u, row, column, value.kind, value.text, ed.arena) catch why
-                throw .table(why)
+        ed.put_typed(u, row, column, text, scratch) catch why
+            throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn put_typed(ed: Self$@, u: Sz, row: Sz, column: Sz, text: U8[], scratch: Arena$@):
+        Void!Edit_error //<
+            //< Puts text in a cell of table `u` as `value_of` reads it; row -1 is the names
+        if row < 0
+            edit.set_name(ed.doc@, u, column, text, ed.arena)!
+            return
+        value: = value_of(text, scratch)
+        edit.set_cell(ed.doc@, u, row, column, value.kind, value.text, ed.arena)!
 
     fn sort_table(ed: Self$@, block: Sz, column: Sz, descending: Bool): Void!Refused //<
         //< Orders the data rows of the table a block shows by one column's values, as one step
@@ -232,7 +236,7 @@ impl Editor
         if column < 0 || column >= t.columns.len
             throw .table(.outside)
         defer scratch: = Arena(64 * 1024)
-        values: = calculate(ed.doc@, ed.today, scratch)
+        values: = calculate(ed.doc@, ed.today, scratch, ed.own)
         $keys: = List<|Sort_key|>(scratch)
         for row in Range.asc(t.rows.len)
             v: = values.at(u, row, column)
@@ -314,11 +318,8 @@ impl Editor
             line: = grid[r]
             for c in Range.asc(line.len)
                 at_row: = row + r
-                if at_row < 0
-                    edit.set_name(ed.doc@, u, column + c, line[c], ed.arena)!
-                    continue
-                value: = value_of(pasted(line[c], scratch), scratch)
-                edit.set_cell(ed.doc@, u, at_row, column + c, value.kind, value.text, ed.arena)!
+                text: = line[c] if at_row < 0 else pasted(line[c], scratch)
+                ed.put_typed(u, at_row, column + c, text, scratch)!
 
     fn fill_cells(ed: Self$@, block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz,
         right: Sz, series: Bool): Void!Refused //<

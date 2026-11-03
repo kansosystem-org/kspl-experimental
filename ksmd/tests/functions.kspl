@@ -1,0 +1,158 @@
+//< The function table's writer: which signatures a formula can call, and why the others cannot
+import "ksmd/calc/args" { Raw_arg, Raw_args }
+import "ksmd/calc/calc" + { Own_functions, Results }
+import "ksmd/calc/glue"
+import "ksmd/calc/value" { Value, empty, number, text }
+import "ksmd/calc/wire" + { Wire_error }
+import "ksmd/tests/support" { read }
+import "std/chars" // `find_str`
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+fn run()
+    taken()
+    refused()
+    asked()
+    wired()
+
+priv fn row(sig: U8[], arena: Arena$@): U8[] //< one line of the record `--emit-surface` writes
+    open: = sig.find_char('(').unwrap_or(0)
+    return arena.text().s("mine\t").s(sig.sub(7, open - 7)).c('\t').s(sig).s("\tdoes it\n").take()
+
+priv fn taken() //< every parameter and result type, an optional one and the arena
+    defer arena: = Arena(64 * 1024)
+    t: = arena.text()
+    t.s(row("pub fn tax(price: F64, rate: F64?): F64", arena))
+    label: = "pub fn label(n: I64, short: Bool, prefix: U8[], arena: Arena$@): U8[]!Calc_error"
+    t.s(row(label, arena))
+    t.s(row("pub fn spread(first: Value, rest: Value[]): Value", arena))
+    t.s("mine\tLIMIT\tpub const LIMIT: F64 = 1.0\tnot a function\n")
+    t.s("mine\tBox.size\tpub fn size(r: Self@): F64\ta method\n")
+    tsv: = t.take()
+    fns: = glue.functions_of(tsv, arena) catch why
+        verdict.check("a record of callable signatures reads", false, why)
+        return
+    verdict.check("each pub fn is a function a formula calls; a constant and a method are not",
+        fns.len == 3, "")
+    src: = glue.table_source(fns@, "mine", "mine.kspl", arena)
+    verdict.check("an optional parameter is read only where another argument follows",
+        src.find_str("$p_rate: F64? = .none\n    if a.more()").is_some(), src)
+    verdict.check("the arena is handed in, never read from the formula",
+        src.find_str("fns.label(p_n, p_short, p_prefix, a.arena())").is_some(), src)
+    thrown: = "fns.label(p_n, p_short, p_prefix, a.arena()) catch e\n        return Value.failed(e)"
+    verdict.check("an error a function throws is the cell's mark",
+        src.find_str(thrown).is_some(), src)
+    verdict.check("a function no argument of which can fail keeps no first error",
+        src.find_str("call_spread(a: Raw_args$@): Value //< `spread(…)`\n    $first").is_some(),
+        src)
+
+priv struct Case //< a signature a formula cannot call, and a piece of the reason given
+    sig: U8[]
+    says: U8[]
+
+priv const REFUSED: Case[_] = ::{
+    Case::{ .sig = "pub fn f(x: I32): F64", .says = "x is I32, which a formula's argument" },
+    Case::{ .sig = "pub fn f(x: F64 = 1.0): F64",
+        .says = "x has a default; write its type with ?" },
+    Case::{ .sig = "pub fn f(xs: Value[], y: F64): F64", .says = "Value[] takes every argument" },
+    Case::{ .sig = "pub fn f(x: F64?, y: F64): F64", .says = "y comes after one that can be left" },
+    Case::{ .sig = "pub fn f(x: F64): I32", .says = "it returns I32, which no cell holds" },
+    Case::{ .sig = "pub fn f(x: F64): F64!Io_error", .says = "throws Calc_error alone" },
+    Case::{ .sig = "pub fn f<|T|>(x: T): T", .says = "takes no type parameters" },
+    Case::{ .sig = "pub fn f(xs: Value[]?): F64", .says = "xs cannot be left out" },
+} //< one of each refusal `functions_of` gives
+
+priv fn refused() //< each signature a formula cannot call, with the reason it gives
+    defer arena: = Arena(64 * 1024)
+    for c in REFUSED
+        what: = arena.text().s("refused, saying why: ").s(c.sig).take()
+        _fns: = glue.functions_of(row(c.sig, arena), arena) catch why
+            verdict.check(what, why.find_str(c.says).is_some(), why)
+            continue
+        verdict.check(what, false, "it was taken")
+
+// ==========================================
+// A person's own functions, as the page answers them
+// ==========================================
+
+priv struct Stand_in //< what the stand-in page counted
+    asked: Sz //< how many times a function was asked for
+
+priv fn answer(ctx: Void$@, name: U8[], args: Raw_args$@): Value //<
+    //< The stand-in page: `twice(x)` doubles, `later(x)` has no answer yet, and `picky(x)` says
+    //< its arguments did not fit
+    seen: = Stand_in$@::ctx
+    seen.asked += 1
+    if name.equals("later")
+        return Value.failed(.pending)
+    if name.equals("picky")
+        args.misread = true
+        return number(1.0)
+    x: = args.number() catch e
+        return Value.failed(e)
+    return number(x * 2.0)
+
+priv const OWN_HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n" //< table `t`
+
+priv fn own_results(rows: U8[], seen: Stand_in$@, arena: Arena$@): Results //<
+    //< The values of table `t` with these rows, the stand-in page answering `twice` and `later`
+    doc: =
+        read(arena.text().s(OWN_HEAD).s(rows).s(":::\n").take(), arena)
+    own: = Own_functions::{ .names = U8[][]::{ "twice", "later", "picky", "sum" }, .ask = answer,
+        .ctx = Void$@::seen }
+    return calc.calculate(doc@, "2026-10-23", arena, own@)
+
+priv fn asked() //< a formula calls a person's function by its name, and the page answers it
+    defer arena: = Arena(64 * 1024)
+    $seen: = Stand_in::{ .asked = 0 }
+    r: =
+        own_results("| 4 | =twice(A1) |\n| \"x\" | =twice(A2) |\n| 1 | =later(A1) + 1 |\n| 2 | \
+            =if(false, twice(A1), 7) |\n| 3 | =sum(A1:A4) |\n| 5 | =unknown(1) |\n| 6 | =picky(A1) \
+            |\n", seen@, arena)
+    verdict.check("a person's function gives the cell its answer",
+        r.at(0, 0, 1).kind == .number && r.at(0, 0, 1).number == 8.0, "")
+    verdict.check("its arguments are converted by the rules every function follows",
+        r.at(0, 1, 1).error == .wrong_kind, r.at(0, 1, 1).error.mark())
+    verdict.check("an answer not come yet shows as pending, and carries into what uses it",
+        r.at(0, 2, 1).kind == .error && r.at(0, 2, 1).error == .pending, "")
+    verdict.check("ksmd's own sum comes first: a person's name cannot hide it",
+        r.at(0, 4, 1).kind == .number && r.at(0, 4, 1).number == 7.0, "")
+    verdict.check("a name nobody defined is a formula that does not read",
+        r.at(0, 5, 1).error == .syntax, r.at(0, 5, 1).error.mark())
+    verdict.check("an answer whose arguments did not fit is a formula that does not read",
+        r.at(0, 6, 1).error == .syntax, r.at(0, 6, 1).error.mark())
+    verdict.check("a branch not taken does not ask the page", seen.asked == 4,
+        arena.text().s("asked \{seen.asked\} times").take())
+
+priv fn wired() //< a call and an answer come back from their bytes as they were written
+    defer arena: = Arena(64 * 1024)
+    one: = Raw_arg::{ .value = text("x"), .cells = Value[]::{}, .is_cells = false, .range = false,
+        .piece = -1 }
+    cells: = Raw_arg::{ .value = empty(),
+        .cells = Value[]::{ number(1.5), Value.failed(.division) }, .is_cells = true, .range = true,
+        .piece = 0 }
+    out: = arena.text()
+    wire.put_call(out, "twice", Raw_arg[]::{ one, cells })
+    data: = out.take()
+    call: = wire.read_call(data, arena) catch
+        verdict.check("a call reads back from its bytes", false, "")
+        return
+    verdict.check("a call reads back with its name and each argument",
+        call.name.equals("twice") && call.args.len == 2 &&
+        call.args[0].value.text.equals("x") && call.args[1].is_cells &&
+        call.args[1].cells.len == 2 && call.args[1].cells[0].number == 1.5 &&
+        call.args[1].cells[1].error == .division, "")
+    $why: = Wire_error.unknown
+    $whole: = true
+    _cut: = wire.read_call(data.sub(0, data.len - 1), arena) catch e
+        why = e
+        whole = false
+    verdict.check("bytes cut short are no call", !whole && why == .cut, "")
+    answer: = arena.text()
+    wire.put_answer(answer, number(-2.25), true)
+    got: = wire.read_answer(answer.take()) catch
+        verdict.check("an answer reads back from its bytes", false, "")
+        return
+    verdict.check("an answer reads back with its value and whether the arguments fit",
+        got.value.number == -2.25 && got.misread, "")

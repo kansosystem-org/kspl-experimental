@@ -54,7 +54,7 @@ impl Ast_node
                 case .none {}
         return base_core.arena.dup_str("zeroinitializer")
 
-    priv fn emit_llvm_enum_payload(r: Ast_node$@, cg: Genllvm_ctx$@, real_type_id: I32,
+    priv fn emit_llvm_enum_payload(r: Ast_node@, cg: Genllvm_ctx$@, real_type_id: I32,
         tmp_ptr: U8[], v_def: sema_type_def.Enum_variant$@) //<
             //< It writes an enum's payload fields one at a time into `tmp_ptr`'s payload area.
             //< `r` is a k_expr_args. Each field is reached at ksplc's offset (payload_field_ptr).
@@ -64,8 +64,7 @@ impl Ast_node
                 continue
             val_reg: = arg_node.emit_llvm_expr(cg)
             field_ptr: = cg.payload_field_ptr(tmp_ptr, real_type_id, v_def, arg_idx)
-            cg.s("    store ").t(arg_node.type_id).s(" ").s(val_reg).s(", ptr ").s(field_ptr)
-                .s("\n")
+            cg.op_store(arg_node.type_id, val_reg, field_ptr)
             arg_idx += 1
 
     fn emit_llvm_upcast(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
@@ -78,13 +77,7 @@ impl Ast_node
         clean_base_id: = cg.env.receiver_base_id(base_id)
 
         is_ptr: = cg.env.is_pointer(base_id)
-        $obj_ptr_reg: = ""
-        if is_ptr
-            inner_val: = inner.emit_llvm_expr(cg)
-            obj_ptr_reg = base_core.arena.dup_str(inner_val)
-        else
-            inner_lval: = inner.emit_llvm_lvalue(cg)
-            obj_ptr_reg = base_core.arena.dup_str(inner_lval)
+        obj_ptr_reg: = inner.emit_llvm_expr(cg) if is_ptr else inner.emit_llvm_lvalue(cg)
 
         tmp1: = cg.next_reg()
         cg.s("    %\{tmp1\} = insertvalue ")
@@ -108,7 +101,7 @@ impl Ast_node
         cg.op_load(res_reg, r.type_id, tmp_ptr)
         return cg.reg_str(res_reg)
 
-    priv fn covers_whole_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@): Bool //<
+    priv fn covers_whole_aggregate(r: Ast_node@, cg: Genllvm_ctx$@): Bool //<
         //< Whether this literal fills every byte of the memory (so the leading zero-fill can go)
         //< It requires not "the value is the same anyway" but "not one uninitialized byte remains".
         //< Dropping the fill is for robustness, not speed. With a zero-fill right before, the
@@ -136,7 +129,7 @@ impl Ast_node
         default {}
         return false
 
-    fn emit_llvm_struct_literal_into(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[]) //<
+    fn emit_llvm_struct_literal_into(r: Ast_node@, cg: Genllvm_ctx$@, tmp_ptr: U8[]) //<
         //< It builds a compound literal directly in the memory dest_ptr points at (with no copy)
         //< Where the literal does not fill all the memory, dest_ptr is first overwritten with a
         //< zeroinitializer. So it cannot be used where a field's initializer reads dest_ptr itself.
@@ -175,7 +168,7 @@ impl Ast_node
                 cg.s(", align \{slot.align\}")
             cg.s("\n")
 
-    priv fn array_slot(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[], child: Ast_node$@, at: I32,
+    priv fn array_slot(r: Ast_node@, cg: Genllvm_ctx$@, tmp_ptr: U8[], child: Ast_node$@, at: I32,
         fallback_type_id: I32): Field_slot //<
             //< The element an array literal's initializer fills: the index written, else `at`
         $type_id: = fallback_type_id
@@ -198,7 +191,7 @@ impl Ast_node
         cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 \{at\}\n")
         return Field_slot::{ .reg = reg, .type_id = type_id }
 
-    priv fn struct_slot(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[], field_idx: I32,
+    priv fn struct_slot(r: Ast_node@, cg: Genllvm_ctx$@, tmp_ptr: U8[], field_idx: I32,
         fallback_type_id: I32): Field_slot //<
             //< The field a struct literal's initializer fills
         $type_id: = fallback_type_id

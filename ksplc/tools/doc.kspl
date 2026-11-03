@@ -197,8 +197,7 @@ priv fn write_parts(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], key: 
         //< parts.
     $listing: = false
     for r in rows
-        if tools_surface.is_file_row(r.key) ||
-            !tools_surface.owner_of(r.key).equals(key)
+        if !tools_surface.owner_of(r.key).equals(key)
             continue
         if !listing
             out.c('\n')
@@ -282,13 +281,13 @@ priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$
     //< **A member is an entry whose key starts with the name and a `.`** (`Arena.alloc` under
     //< `Arena`). So asking for a type shows what can be called on it.
     links: = anchors(rows)
+    member: = base_core.arena.text().s(name).c('.').take()
     $n: Sz = 0
     for i in Range.asc(rows.len)
         r: = rows.get(i)
         if !shown(r)
             continue
-        if names_entry(r.key, name) ||
-            r.key.starts_with(base_core.arena.text().s(name).c('.').take())
+        if names_entry(r.key, name) || r.key.starts_with(member)
             if n == 0
                 out.s("# ").s(file).c('.').s(name).s("\n")
             write_entry(rows, links@, tail_of(file), i, out)
@@ -328,9 +327,10 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
             else base_core.arena.text().s(name).c('/').s(rest.strip_kspl_ext()).take())
         switch read_lines(path, logical, parser)
         case .some(rows)
-            if entries_in(rows@) == 0
+            n: = entries_in(rows@)
+            if n == 0
                 continue
-            out.s("* `").s(logical).s("` — \{entries_in(rows@)\} entries")
+            out.s("* `").s(logical).s("` — \{n\} entries")
             first: = summary_of(said_of_file(rows@))
             if first.len > 0
                 out.s(". ").s(first)

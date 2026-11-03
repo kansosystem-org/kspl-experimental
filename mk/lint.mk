@@ -76,10 +76,11 @@ LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
 LINT_TARGETS_OWN := ksplc/tests/main.kspl ksos/tests/main.kspl ksagent/tests/main.kspl \
 	tools/tests/main.kspl tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
 
-# The bare-metal demos and the page's wasm bridge, linted with `--freestanding`. They hold no `main`.
+# The bare-metal demos, the page's wasm bridge and the fixed part of a person's own functions,
+# linted with `--freestanding`. They hold no `main`.
 LINT_TARGETS_FREE := $(wildcard ksos/demo/cortex_m/*.kspl) \
 	$(wildcard ksos/demo/rp2040/*.kspl) $(wildcard ksos/demo/nrf51/*.kspl) \
-	ksmd/port/web/bridge.kspl
+	ksmd/port/web/bridge.kspl ksmd/port/own/serve.kspl
 
 # The entries named by hand hold no `main`: libraries also linted on their own (`ksos/net/` and the
 # opener's two files), and every file of `ksplc/tests/prog/`, its helpers too. **`ksplc/main.kspl`

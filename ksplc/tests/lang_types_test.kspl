@@ -732,6 +732,27 @@ fn test_generic_args_infer_from_composites()
             a composite type.")
 
 // ==========================================
+// A parameter written as a bare name (`x: T`) receives a copy, so a read-only argument binds the
+// writable type, as `$v: = p$` does (`as_received` in `ksplc/sema/body/generic_infer.kspl`).
+// ==========================================
+
+priv fn kept<|T|>(x: T): T //< hands the copy back
+    return x
+
+fn test_a_copy_binds_the_writable_type()
+    verdict.start("[Types] a value through a read-only pointer binds a writable copy test...")
+    defer arena: = Arena(1024)
+    h: = Hold<|I32|>::{ .v = 1 }
+    p: Hold<|I32|>@ = h@
+    made: = arena.create(p$)
+    made.v = 2
+    $back: = kept(p$)
+    back.v = 3
+    assert(made.v == 2 && back.v == 3 && h.v == 1,
+        "the whole target read through a `T@` binds `T`, writable; the original is untouched")
+    verdict.pass("a copy's type drops the outermost immutability, a generic's binding too.")
+
+// ==========================================
 // A `const` parameter written as an array's length or as a generic's value argument is read off
 // the argument (`bind_value` in `ksplc/sema/body/generic_infer.kspl`). Two values that disagree,
 // a slice and a call where nothing fixes it are refused (the cases `generic_const_length_conflict`

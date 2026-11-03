@@ -20,7 +20,7 @@ import { menus } from "./menus.mjs";
 import { tools } from "./tools.mjs";
 import { tables } from "./tables.mjs";
 
-const [binary, pageFile, work, kssrv] = process.argv.slice(2);
+const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 const browser = await launch(binary, work);
@@ -674,8 +674,8 @@ Object.assign(sections, menus({ browser, js, until, press, type, select, click, 
   point, rightClick, doubleClickAt, dragTo, load, saves, source, openCell }));
 Object.assign(sections, tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
   saves, dragTo, rightClick, openCell, drag, doubleClickAt }));
-Object.assign(sections, tables({ browser, page, js, settle, until, press, type, select, click, menu, load,
-  saves, dragTo, rightClick, openCell }));
+Object.assign(sections, tables({ page, js, settle, press, type, select, click, menu, load, saves,
+  rightClick }));
 
 try {
   const opened = await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });
@@ -698,7 +698,7 @@ try {
       }
     }
   }
-  await served(browser, pageFile, path.join(work, "served"), kssrv);
+  await served(browser, pageFile, path.join(work, "served"), kssrv, builder);
 } finally {
   await browser.close();
 }

@@ -214,5 +214,5 @@ function ksmdChart(ks) {
     if (panel && !panel.contains(e.target)) close();
   }, true);
 
-  ks.chart = { render, ask, close };
+  ks.chart = { render };
 }

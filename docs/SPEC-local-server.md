@@ -1,6 +1,6 @@
 # The local server's protocol
 
-**This document sets the protocol between a page in a browser and a small program on the same machine, the *local server*.** The page asks it to read and write files, which a browser lets a page open only through a window a person chooses. The server also serves the page, so the same-origin rule does not block the requests. **It starts no program**: on a server that did, every request a page can make would be running code.
+**This document sets the protocol between a page in a browser and a small program on the same machine, the *local server*.** The page asks it to read and write files, which a browser lets a page open only through a window a person chooses. The server also serves the page, so the same-origin rule does not block the requests. **It starts one program at most**: the builder named when it starts, closed to the one file it builds ("Building a page's own functions"). On a server that started others, every request a page can make would be running code.
 
 **It describes no single implementation**: the server is meant to be replaceable, so only the rules live here.
 
@@ -75,11 +75,11 @@ The token goes nowhere else either:
 * **Do not take the token from the command line**; the server makes it from the OS's random source.
 * **Compare every byte**: stopping at the first differing byte lets the response time reveal the token byte by byte.
 
-## Only four things can be asked for
+## Only five things can be asked for
 
-A page can read and write files, watch whether a file changed, list a folder, and keep the server running or stop it.
+A page can read and write files, watch whether a file changed, and list a folder. It can also keep the server running or stop it, and build its own functions.
 
-**Do not add an endpoint that starts a program**, for building, debugging, completion or a plugin. Every one turns a request a page can make into running code.
+**Do not add another endpoint that starts a program**, for debugging, completion or a plugin. Every one turns a request a page can make into running code. The build is the one exception, and only within the limits of "Building a page's own functions".
 
 ### Files
 
@@ -164,6 +164,20 @@ A page, or any program holding the token, can stop the server at once.
 
 **A server is stopped by this request, not by a signal to its process.**
 
+### Building a page's own functions
+
+A page whose document names a file of functions in KSPL asks the server to build it. The page then runs the result in the browser's sandbox, with no access to anything outside the page.
+
+| Request | Response |
+| :-- | :-- |
+| `POST /api/build?path=<p>` | The built module, typed `application/wasm`. 422 with `{"error":<message>}` when the file does not build. 404 when the server has no builder, or no such file |
+
+**The server builds only through a builder named when it starts**, by whoever starts it, never by a request. With no builder named, the endpoint does not exist (404). A server facing outward has none.
+
+**The build is closed**: it reads the one file named, the standard library, and the sources the builder ships. A path in that file that climbs out of its folder, or names anything else, fails the build. So a request reads nothing the token does not already reach, and the result is code for the page's sandbox, not for the machine.
+
+**The server answers once the build ends**, at most 60 seconds later. It handles no other request in that time.
+
 ## How it refuses
 
 Each refusal comes back as one of the HTTP status codes below. **A refusal must not be silent**: every refusal says what happened.
@@ -173,10 +187,11 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | 400 | A malformed request (a `Host` given twice included), or a malformed `%XX` |
 | 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike). So a request without the token learns nothing of the names under the root |
 | 403 | It pointed outside the root, or named a `Host` other than the loopback |
-| 404 | A name that does not exist, or an unknown endpoint |
+| 404 | A name that does not exist, an unknown endpoint, or a build with no builder named |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
 | 409 | The conditional write no longer matches the file, or its target is not a regular file |
 | 413 | The body exceeded the ceiling |
+| 422 | The file named for a build does not build; `error` holds the builder's message |
 | 500 | It could not be written or replaced |
 
 ## When it is not connected

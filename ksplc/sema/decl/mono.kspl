@@ -70,7 +70,7 @@ fn written_generic_arity_matches(tmpl_node: Ast_node$@, arg_count: Sz): Bool //<
         return true
     return count_generic_params(params_node) == arg_count
 
-priv fn count_generic_params(params_node: Ast_node$@): Sz //<
+priv fn count_generic_params(params_node: Ast_node@): Sz //<
     //< The number of type parameters the template declared
     $n: Sz = 0
     for p in params_node.children
@@ -267,14 +267,14 @@ impl Sema_ctx
         r.restore_mono_state(backup@)
         return inst_name
 
-    fn backup_mono_state(r: Self$@): Mono_state_backup
+    fn backup_mono_state(r: Self@): Mono_state_backup
         return Mono_state_backup::{
             .generic_args_depth = r.generics.args.len,
             .file_name = r.file_name,
             .current_impl = r.fn_ctx.impl_name,
         }
 
-    fn restore_mono_state(r: Self$@, b: Mono_state_backup$@)
+    fn restore_mono_state(r: Self$@, b: Mono_state_backup@)
         r.set_current_file(b.file_name)
         r.fn_ctx.impl_name = b.current_impl
         r.generics.args.len = b.generic_args_depth
@@ -294,7 +294,7 @@ impl Sema_ctx
         if emit
             r.env.instantiated_nodes_list.push(node)
 
-    fn bind_generic_args(r: Self$@, params_node: Ast_node$@, args: I32[], check_constraints: Bool) //<
+    fn bind_generic_args(r: Self$@, params_node: Ast_node@, args: I32[], check_constraints: Bool) //<
         //< Binds the type arguments.
         //< check_constraints says whether this is **the instantiation's first binding**.
         //< Caution: **Pass false on a path that only rebinds**: the check's resolve_type caches
@@ -609,8 +609,10 @@ impl Sema_ctx
         // **which the body and every caller read** (`fn make(): Self` returned a type named
         // `Self`).
         old_impl_name: = r.fn_ctx.impl_name
+        $impl_name_val: U8$[] = ""
         if is_method
-            r.fn_ctx.impl_name = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
+            impl_name_val = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
+            r.fn_ctx.impl_name = impl_name_val
         $ret_type_node: = inst_node.find_child(.k_type_expr)
         if ret_type_node == null
             sig_node: = inst_node.find_child(.k_type_fn_sig)
@@ -633,9 +635,6 @@ impl Sema_ctx
         r.fn_ctx.impl_name = old_impl_name
 
         if !skip_infer
-            $impl_name_val: U8$[] = ""
-            if is_method
-                impl_name_val = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
             // Only queued on pending: inferring under the caller's symtab scopes and fn_ctx would
             // break. So infer.kspl's worklist loop infers it after resetting the scopes.
             r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name_val), chain_depth,

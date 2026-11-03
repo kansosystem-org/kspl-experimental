@@ -266,11 +266,8 @@ impl Ast_node
         coll_expr: = r.get_loop_cond()
 
         for_in_counter += 1
-        defer $suffix: = Str_builder()
-        suffix.s("\{for_in_counter\}")
-        // Caution: build_temp_name's copy into the arena is required: `suffix.slice()` points into
-        // the builder's buffer, which is gone after `defer suffix.free()`.
-        coll_name: = base_c_name.made_name(build_temp_name("for_coll", suffix.slice()))
+        coll_name: = base_c_name
+            .made_name(build_temp_name("for_coll", serial_str(for_in_counter)))
 
         // Caution: **Declare the temporary here**, or an expression with side effects runs again
         // every iteration; only this layer, which rebuilds the statement list, can insert it.
@@ -329,15 +326,11 @@ impl Ast_node
 
     priv fn desugar_string_call(r: Ast_node$@, string_node: Ast_node$@, ctx: Desugar_ctx$@)
         loc: = r.loc
+        // The caller checked that the receiver is a `.` access (a .k_expr_postfix: desugar runs
+        // before sema).
         m_access: = r.get_postfix_receiver()
-        // Desugar runs before Sema, so the receiver has been parsed as a .k_expr_postfix.
-        op_node: =
-            (m_access.get_postfix_op() if m_access != null && m_access.kind_id == .k_expr_postfix
-            else null)
-        $current_recv: =
-            (m_access.get_postfix_receiver()
-            if op_node != null && op_node.text.equals(".") &&
-            m_access.get_postfix_receiver() != null else m_access)
+        inner: = m_access.get_postfix_receiver()
+        $current_recv: = inner if inner != null else m_access
 
         // The chain starts with a `.s(…)` on the receiver, an empty one where the text opens
         // `\{…\}`.
@@ -390,7 +383,7 @@ impl Ast_node
         r.morph(current_recv.kind_id, current_recv.text)
         r.children = current_recv.children
 
-    fn desugar_err(r: Ast_node$@, ctx: Desugar_ctx$@, msg: U8[]) //<
+    fn desugar_err(r: Ast_node@, ctx: Desugar_ctx$@, msg: U8[]) //<
         //< It reports an error the desugaring found at the position the user wrote
         //< **It is the only function here that reports.**
         //< Caution: **Set `ctx.ok` to false.** The desugaring rewrites the tree rather than
@@ -401,7 +394,7 @@ impl Ast_node
         base_diag.print_diagnostic(r.loc.file(), src, r.loc.offset, 1, msg, .error, starts)
         ctx.ok = false
 
-    fn check_format_spec(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[]) //<
+    fn check_format_spec(r: Ast_node@, ctx: Desugar_ctx$@, spec: U8[]) //<
         //< It reports the first thing wrong with a format specification, once
         //< **One report for one spec**: `:,.2xq` read as both unreadable and misordered gave two
         //< errors at one position.
@@ -425,7 +418,7 @@ impl Ast_node
                     (at ").s("most \{strfmt.FLOAT_MAX_PRECISION\}); write that many or fewer")
             r.desugar_err(ctx, m.slice())
 
-    fn format_spec_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], rest: U8[]) //<
+    fn format_spec_err(r: Ast_node@, ctx: Desugar_ctx$@, spec: U8[], rest: U8[]) //<
         //< It reports text left over that cannot be read as a format specification
         defer $m: = Str_builder()
         m
@@ -433,9 +426,8 @@ impl Ast_node
                 fixed: zero-pad, width, ',', then '.precision' (for example '08.2')")
         r.desugar_err(ctx, m.slice())
 
-    fn format_spec_combo_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], bad: U8[],
-        owner: U8[]) //<
-            //< It reports a format specification whose items cannot be combined
+    fn format_spec_combo_err(r: Ast_node@, ctx: Desugar_ctx$@, spec: U8[], bad: U8[], owner: U8[]) //<
+        //< It reports a format specification whose items cannot be combined
         defer $m: = Str_builder()
         if owner.equals("width")
             m

@@ -339,7 +339,7 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
         type_id = hit.type_id
         reject_slotless_trait_call(c, recv_id, member_name_raw, target_id, member_node)
         node.set_kind(.k_method_access)
-        member_node.type_id = c.env.get_or_add(current_search_type)
+        member_node.type_id = s_id
         break
 
     if !found
@@ -347,8 +347,7 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
             report_missing_member(c, member_node, recv_id, target_id, c.fn_ctx.callee == node)
         reject_slotless_trait_call(c, recv_id, member_name_raw, target_id, member_node)
         node.set_kind(.k_method_access)
-        if !sema_type_env.is_unknown(expected_id)
-            type_id = expected_id
+        type_id = expected_id
 
     if node.kind_id == .k_method_access
         new_children: = base_ast.new_ast_node_list()
@@ -539,7 +538,7 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
 
 priv const MAX_NEAR_NAME: Sz = 64 //< the longest name nearest_field compares, in bytes
 
-priv fn nearest_field(c: Sema_ctx$@, recv_id: I32, name: U8[]): U8[] //<
+priv fn nearest_field(c: Sema_ctx@, recv_id: I32, name: U8[]): U8[] //<
     //< The receiver's field whose name is nearest to `name`, or empty where none is near enough
     //< **Near is at most one edit per three characters** (`edit_distance`), so a short name
     //< allows one: more would offer an unrelated field as the meaning. On a tie the field
@@ -605,7 +604,7 @@ priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, rec
             the receiver as its first argument")
     c.err(member_node, c.scratch.slice())
 
-priv fn is_declared_type(c: Sema_ctx$@, type_id: I32): Bool //<
+priv fn is_declared_type(c: Sema_ctx@, type_id: I32): Bool //<
     //< Whether a declaration names the type (struct, enum or trait), aliases and marks stripped
     switch c.env.get_info(c.env.get_clean_real_type(type_id))
     case .struct_type

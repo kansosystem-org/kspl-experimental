@@ -9,7 +9,7 @@ import { CTRL, SHIFT, verdict } from "./drive.mjs";
 const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
-export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick, dragTo, openCell }) {
+export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick }) {
   const sel = () => js("JSON.stringify(ksmd.selection().f)");
   // Whether the caret's block stands inside the window, below the header.
   const caretInSight = () => js(`(() => {

@@ -148,7 +148,7 @@ impl Ast_node
         r.emit_functions_and_impls(cg)
         r.emit_main_function(cg)
 
-    priv fn collect_pending_nodes(r: Ast_node$@, cg: Genc_ctx$@,
+    priv fn collect_pending_nodes(r: Ast_node@, cg: Genc_ctx$@,
         pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@)
         for child_node in r.children
             child: = child_node.unwrap_top_level()
@@ -203,7 +203,7 @@ impl Ast_node
             if !q.done.get(i)
                 q.emit(cg, i)
 
-    priv fn emit_top_level_vars(r: Ast_node$@, cg: Genc_ctx$@) //<
+    priv fn emit_top_level_vars(r: Ast_node@, cg: Genc_ctx$@) //<
         //< The **definitions** of globals, constants and embed data
         //< emit_fwd_externs_and_embeds writes the shared header's `extern`s; this writes the
         //< definitions into the owning unit.
@@ -252,12 +252,11 @@ impl Ast_node
         // reports it).
         for i in Range.asc(pending.len)
             if !emitted.get(i)
-                emitted.set(i, true)
                 cg.top_level_var = true
                 pending.get(i).emit(cg)
                 cg.top_level_var = false
 
-    priv fn emit_functions_and_impls(r: Ast_node$@, cg: Genc_ctx$@)
+    priv fn emit_functions_and_impls(r: Ast_node@, cg: Genc_ctx$@)
         if !cg.writes_bodies()
             return
         for child_node in r.children
@@ -297,7 +296,7 @@ int main(int _argc, char **_argv) {
                 else
                     cg.s("    kspl_main();\n    return 0;\n}\n")
 
-    priv fn first_waiting_name(r: Ast_node$@, waiting: Map<|U8[], I32|>$@): U8[] //<
+    priv fn first_waiting_name(r: Ast_node$@, waiting: Map<|U8[], I32|>@): U8[] //<
         //< A name the initializer refers to that is not emitted yet, or empty
         //< Caution: Do not look at the type annotation. Sema has already folded the `n` of an array
         //< length (`U8[n]`), and it is emitted to C as a number.
@@ -366,7 +365,6 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
         case .pointer
             is_value_dep = false
         case .array(base_id, _size_str)
-            is_value_dep = true
             dep_ids[0] = base_id
             dep_ids[1] = t_id
             dep_ids_len = 2
@@ -438,11 +436,11 @@ impl Decl_queue
             .wait_next = List<|Sz|>(null), .wait_id = Map<|I32, Sz|>(null),
             .wait_name = Map<|U8[], Sz|>(null), .ready = List<|Sz|>(null) }
         for p_node in pending_ast
-            if p_node != null && p_node.type_id > 0
+            if p_node.type_id > 0
                 real_id: = c_order_id(cg, p_node.type_id)
                 q.type_pending
                     .set(real_id, q.type_pending.get(real_id).unwrap_or(0) + 1)
-            name_node: = p_node.find_child(.k_identifier) if p_node != null else null
+            name_node: = p_node.find_child(.k_identifier)
             if name_node != null && name_node.text.len > 0
                 q.name_pending
                     .set(name_node.text,
@@ -460,20 +458,17 @@ impl Decl_queue
         if i >= r.n_ast
             gen_c_decl.emit_single_complex_type(cg, r.pending_complex.get(i - r.n_ast))
             return
-        node: = r.pending_ast.get(i)
-        if node != null
-            node.emit(cg)
+        r.pending_ast.get(i).emit(cg)
 
     fn park(r: Self$@, cg: Genc_ctx$@, i: Sz) //<
         //< It puts item i on ready, or on the wait queue of the key it is blocked on
         $blk: = no_block()
         if i < r.n_ast
             node: = r.pending_ast.get(i)
-            if node != null
-                self_real: = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
-                self_name_node: = node.find_child(.k_identifier)
-                self_name: = self_name_node.text if self_name_node != null else ""
-                blk = node.decl_block(cg, r.type_pending@, r.name_pending@, self_real, self_name)
+            self_real: = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
+            self_name_node: = node.find_child(.k_identifier)
+            self_name: = self_name_node.text if self_name_node != null else ""
+            blk = node.decl_block(cg, r.type_pending@, r.name_pending@, self_real, self_name)
         else
             t_id: = r.pending_complex.get(i - r.n_ast)
             blk = complex_block(cg, t_id, r.type_pending@, c_order_id(cg, t_id))
@@ -494,10 +489,9 @@ impl Decl_queue
         $own_name: U8[] = ""
         if i < r.n_ast
             node: = r.pending_ast.get(i)
-            if node != null
-                own_id = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
-                name_node: = node.find_child(.k_identifier)
-                own_name = name_node.text if name_node != null else ""
+            own_id = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
+            name_node: = node.find_child(.k_identifier)
+            own_name = name_node.text if name_node != null else ""
         else
             own_id = c_order_id(cg, r.pending_complex.get(i - r.n_ast))
         if own_id > 0
@@ -536,7 +530,7 @@ priv struct Dep_block //< the key an item is blocked on
 priv fn no_block(): Dep_block
     return Dep_block::{ .id = 0, .name = "" }
 
-priv fn is_real_type_pending(type_pending: Map<|I32, I32|>$@, real_target: I32, self_real_type: I32):
+priv fn is_real_type_pending(type_pending: Map<|I32, I32|>@, real_target: I32, self_real_type: I32):
     Bool //<
         //< Whether a body of the real type real_target, other than self's own, is still pending
         //< It reads, in O(1), the pending set's counts per real type ID (pending_ast plus
@@ -547,18 +541,15 @@ priv fn is_real_type_pending(type_pending: Map<|I32, I32|>$@, real_target: I32, 
     adjusted: = count - (1 if real_target == self_real_type else 0)
     return adjusted > 0
 
-priv fn collect_decl_name_counts(decl: Ast_node$@, out: Map<|U8[], I32|>$@) //<
+priv fn collect_decl_name_counts(decl: Ast_node@, out: Map<|U8[], I32|>$@) //<
     //< It counts the names one declaration introduces
     //< There can be several, as in `const a, b: I32 = ...`.
-    if decl == null
-        return
     for child in decl.children
         if child.kind_id == .k_identifier && child.text.len > 0
             out.set(child.text, out.get(child.text).unwrap_or(0) + 1)
 
-priv fn park_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
-    waiting: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@,
-    ready: List<|Sz|>$@) //<
+priv fn park_top_level_var(i: Sz, pending: List<|Ast_node$@|>@, waiting: Map<|U8[], I32|>$@,
+    wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@) //<
         //< It puts item i on ready, or on the wait queue of the name it is blocked on
         //< Caution: The indices are 1-based, as in resolve_pending_queues.
     name: = pending.get(i).first_waiting_name(waiting)
@@ -570,13 +561,11 @@ priv fn park_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
 
 priv fn release_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
     waiting: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@,
-    ready: List<|Sz|>$@, emitted: List<|Bool|>$@) //<
+    ready: List<|Sz|>$@, emitted: List<|Bool|>@) //<
         //< The cleanup after top-level variable i is emitted
         //< It removes the names it introduced from the waiting list and retries what was waiting on
         //< a name whose count reached 0.
     decl: = pending.get(i)
-    if decl == null
-        return
     for child in decl.children
         if child.kind_id != .k_identifier || child.text.len == 0
             continue
@@ -594,7 +583,7 @@ priv fn release_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
             if !emitted.get(j)
                 park_top_level_var(j, pending, waiting, wait_next, wait_head, ready)
 
-priv fn is_name_pending(name_pending: Map<|U8[], I32|>$@, target_name: U8[], self_name: U8[]): Bool
+priv fn is_name_pending(name_pending: Map<|U8[], I32|>@, target_name: U8[], self_name: U8[]): Bool
     if target_name.len == 0
         return false
     count: = name_pending.get(target_name).unwrap_or(0)
@@ -630,7 +619,7 @@ priv fn complex_block(cg: Genc_ctx$@, type_id: I32, type_pending: Map<|I32, I32|
     default {}
     return no_block()
 
-priv fn fn_typedef_named_by(cg: Genc_ctx$@, type_id: I32): I32 //<
+priv fn fn_typedef_named_by(cg: Genc_ctx@, type_id: I32): I32 //<
     //< The function type whose typedef the C spelling of type_id names; 0 for none
     //< It looks through pointers and immutability marks (`fn_I32*`). A pointer to a struct needs
     //< only the struct's forward declaration. But a pointer to a function type needs its typedef,

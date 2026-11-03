@@ -169,20 +169,17 @@ fn test_a_form_windows_reads_as_another_name_is_refused(work: U8[], arena: Arena
     root: = stub.folder(work, "forms", arena)
     for p in U8[][]::{ "TEAM~1.JSO", "rules\\leave.md", "rules/*.md", "CON", "leave.md.",
         "leave.md::$DATA" }
-        switch files.resolve(root, p, arena)
-        case .ok
-            verdict.check(arena.text().s("the path is refused: ").s(p).take(), false, "")
-        case .refused(why)
+        files.resolve(root, p, arena) catch why
             verdict.check(arena.text().s("the path is refused with its reason: ").s(p).take(),
                 why.starts_with("the path must stay inside the folder") &&
                 why.find_char(':').is_some(), why)
+            continue
+        verdict.check(arena.text().s("the path is refused: ").s(p).take(), false, "")
 
 priv fn taken(root: U8[], given: U8[], arena: Arena$@): Bool //< whether `files.resolve` takes it
-    switch files.resolve(root, given, arena)
-    case .ok
-        return true
-    case .refused
+    files.resolve(root, given, arena) catch
         return false
+    return true
 
 fn test_a_conversation_file_in_any_case_is_no_source(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a conversation's file named in any ASCII case is no source")
@@ -316,9 +313,9 @@ fn test_plain_text_is_an_unverified_answer(work: U8[], arena: Arena$@)
     verdict.check("it is marked unverified, in its state and in a note",
         a.is_unverified() && block.find_str("\"state\":\"unverified\"").is_some() &&
         block.find_str("Unverified: no cited source passed the check.").is_some(), block)
-    verdict.check("the model was asked once to call answer, and only once",
+    verdict.check("the model was sent once to look at the files, and only once",
         s.bodies.len == 2 &&
-        s.bodies.get(1).find_str("Call the answer tool now").is_some(), "")
+        s.bodies.get(1).find_str("You have not looked at the files yet").is_some(), "")
     stub.release(s)
 
 fn test_plain_text_then_an_answer_call_is_checked(work: U8[], arena: Arena$@)
@@ -332,10 +329,57 @@ fn test_plain_text_then_an_answer_call_is_checked(work: U8[], arena: Arena$@)
     a: = ask(s, root, "How much paid leave?", arena)
     verdict.check("the answer keeps its checked source",
         a.sources.len == 1 && !a.is_unverified(), a.text)
-    verdict.check("the model's text goes back to it, then the request to call answer",
+    verdict.check("the model's text goes back to it, then the request to look and call answer",
         s.bodies.len == 2 &&
         s.bodies.get(1).find_str("Ten days. sources:").is_some() &&
-        s.bodies.get(1).find_str("Call the answer tool now").is_some(), "")
+        s.bodies.get(1).find_str("You have not looked at the files yet").is_some(), "")
+    stub.release(s)
+
+fn test_plain_text_after_looking_is_asked_to_call_answer(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] plain text after a reading tool is asked to call answer")
+    root: = stub.folder(work, "remind-read", arena)
+    listed: = stub.one_call(stub.call("list", "{\"path\": \"\"}", arena), arena)
+    text: = stub.text_reply("Ten days, I think.", arena)
+    s: = stub.start(U8[][]::{ listed, text, text }, arena)
+    a: = ask(s, root, "How much paid leave?", arena)
+    verdict.check("the second text is an answer with no source", a.is_unverified(), a.text)
+    verdict.check("the model was asked once to call answer",
+        s.bodies.len == 3 &&
+        s.bodies.get(2).find_str("Call the answer tool now").is_some() &&
+        s.bodies.get(2).find_str("You have not looked").is_none(), "")
+    stub.release(s)
+
+fn test_not_found_before_looking_is_sent_back_once(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a not-found answer before any reading tool is sent back once")
+    root: = stub.folder(work, "look-first", arena)
+    early: = stub.one_call(stub.answer_call("NOT_FOUND", "[]", arena), arena)
+    s: = stub.start(U8[][]::{ early, stub.not_found(arena) }, arena)
+    a: = ask(s, root, "What folder is this?", arena)
+    verdict.check("it is refused as the call's result, and the model is told to look",
+        s.bodies.len == 2 &&
+        s.bodies.get(1).find_str("refused: You have not looked at the files yet").is_some(), "")
+    verdict.check("after a listing, the not-found answer stands", said_not_found(a@), "")
+    stub.release(s)
+
+fn test_not_found_twice_without_looking_stands(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a second not-found answer without looking stands: no loop")
+    root: = stub.folder(work, "look-once", arena)
+    early: = stub.one_call(stub.answer_call("NOT_FOUND", "[]", arena), arena)
+    s: = stub.start(U8[][]::{ early, early }, arena)
+    a: = ask(s, root, "Hello", arena)
+    verdict.check("the model is sent back once, then its answer stands",
+        s.bodies.len == 2 && said_not_found(a@), "")
+    stub.release(s)
+
+fn test_an_answer_with_sources_needs_no_look_first(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an answer with sources is checked at once, even before looking")
+    root: = stub.folder(work, "cited-first", arena)
+    quote: = "receives 10 days of paid leave after six months"
+    cites: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, quote, arena) }, arena)
+    s: = stub.start(U8[][]::{ stub.one_call(stub.answer_call("Ten days.", cites, arena), arena) },
+        arena)
+    a: = ask(s, root, "How much paid leave?", arena)
+    verdict.check("it is checked in one request", s.bodies.len == 1 && a.sources.len == 1, a.text)
     stub.release(s)
 
 fn test_a_reply_with_too_many_calls_is_refused(work: U8[], arena: Arena$@)

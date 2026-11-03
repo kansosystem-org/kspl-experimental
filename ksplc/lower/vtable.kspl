@@ -197,7 +197,7 @@ priv fn generate_thunks_for_impl(impl_node: Ast_node$@, c: Sema_ctx$@,
 // A thunk body's own `expr_upcast` (`build_thunk_body`) names the pair being built, so nothing
 // needs adding to needed.
 priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc,
-    out_decls: List<|Ast_node$@|>$@, needed: Map<|U8[], Bool|>$@)
+    out_decls: List<|Ast_node$@|>$@, needed: Map<|U8[], Bool|>@)
     // The base type used for the vtable's name. It must be stripped the same way as in vtable_key.
     clean_t_id: = c.env.receiver_base_id(t_id)
     if t_id == 0 || i_id == 0
@@ -214,7 +214,9 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     i_mangled: = base_core.arena.dup_str(c.mangled_in_scratch(i_id))
 
     vtable_init: = Ast_node(.k_struct_literal, "struct_literal", loc)
-    vtable_type_name: = c.clear_scratch().s("kspl_vtable_").s(i_mangled).slice()
+    // The name is copied off scratch: the thunks' and the constant's names below reuse it.
+    vtable_type_name: = base_core.arena
+        .dup_str(c.clear_scratch().s("kspl_vtable_").s(i_mangled).slice())
     vtable_type_id: = c.env.get_or_add(vtable_type_name)
     vtable_init.type_id = vtable_type_id
     // Per method it does "build the signature -> resolve the implementation -> build the body ->

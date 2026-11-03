@@ -128,7 +128,7 @@ impl Ast_node
             c.s(" }")
         c.s(" }")
 
-    priv fn emit_init_designator(r: Ast_node$@, c: Genc_ctx$@, child_node: Ast_node$@,
+    priv fn emit_init_designator(r: Ast_node@, c: Genc_ctx$@, child_node: Ast_node$@,
         is_array: Bool): Bool //<
             //< It writes an initializer's `.name = ` or `[i] = `; true for a const slice's `.ptr`
             //< Only a slice of const elements needs its `.ptr` cast; on a mutable slice the cast
@@ -150,14 +150,13 @@ impl Ast_node
     priv fn emit_struct_literal(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         is_array: = c.env.is_array(r.type_id)
         has_fields: = r.find_child(.k_expr_field_init) != null
+        c.open_compound_t(r.type_id, as_init)
         if !has_fields
             // An array is a struct `{ T data[N]; }` too, filled with braces nested as the type says
             // (emit_zero_init counts the levels) rather than `.data =`.
-            c.open_compound_t(r.type_id, as_init)
             c.emit_zero_init(r.type_id, r)
             return
 
-        c.open_compound_t(r.type_id, as_init)
         if is_array
             c.s("{ .data = { ")
         else
@@ -195,7 +194,7 @@ impl Ast_node
         c.s("}")
     // --- Expression implementations ---
 
-    priv fn emit_generic_path(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_generic_path(r: Ast_node@, c: Genc_ctx$@)
         inst_name: = c.env.get_str(r.type_id)
         defer $mangled_name: = inst_name.mangle_c_identifier()
 
@@ -519,7 +518,7 @@ impl Ast_node
         msg.s("emit_expr: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
         r.ice_panic(msg.slice())
 
-    fn emit_comma_separated_args(r: Self$@, c: Genc_ctx$@, as_init: Bool) //<
+    fn emit_comma_separated_args(r: Self@, c: Genc_ctx$@, as_init: Bool) //<
         //< It writes the arguments, comma-separated; as_init when they fill an initializer's braces
         $is_first: = true
         for arg_node in r.children
@@ -545,7 +544,7 @@ fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
     c.s("(").t(c.env.strip_const_deep(type_id)).s(")\{helper\}")
         .s("32((I32)(" if signed_div_is_narrow(c, type_id) else "((I64)(")
 
-fn signed_div_is_narrow(c: Genc_ctx$@, type_id: I32): Bool //<
+fn signed_div_is_narrow(c: Genc_ctx@, type_id: I32): Bool //<
     //< Whether a signed `/` `%` on the type goes to the 32-bit helper (`kspl_sdiv32`)
     //< Asked at the machine's width: a 32-bit target's `Sz` divides there too.
     return c.env.get_primitive_bit_size(type_id) <= 32
@@ -554,7 +553,7 @@ priv fn can_exceed_width(op: U8[]): Bool //< whether an operation's result can e
     //< For `& | ^ / % >>`, if the operands fit the width, the result fits too.
     return op.is_additive_op() || op.equals("*") || op.equals("<<")
 
-priv fn narrow_unsigned(c: Genc_ctx$@, type_id: I32): Bool //<
+priv fn narrow_unsigned(c: Genc_ctx@, type_id: I32): Bool //<
     //< Whether `~`'s result on this type must be converted back to the declared type
     //< **C's integer promotions widen `U8` / `U16` to `int`**, so `~` sets the bits above the
     //< width. `U32` and up need none (`Sz` counts as 32, the portable minimum).
@@ -563,7 +562,7 @@ priv fn narrow_unsigned(c: Genc_ctx$@, type_id: I32): Bool //<
 
 fn compound_wrap_twin(c: Genc_ctx$@, op: U8[], type_id: I32): U8[] //<
     //< The unsigned type a compound assignment's `op` (`+` of `+=`) computes in; empty if none
-    if op.len == 0 || !can_exceed_width(op)
+    if !can_exceed_width(op)
         return ""
     return wrap_twin(c, type_id)
 

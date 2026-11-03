@@ -5,7 +5,6 @@
 //< **Only blocks and terminators disappear.** What remains is `T::{ … }`, `import … { … }`, a
 //< string's interpolation, and a block's braces where it fits on one line. The `;` of a C-style
 //< loop heading, of a closure's captures, and between two statements on one line remains too.
-import "ksplc/base/core" as _base_core // `is_one_of`
 import "ksplc/base/lines" as base_lines
 import "ksplc/parse/line_cont" { ends_in_catch, is_label_only, joins_next }
 import "ksplc/parse/source_fix" as parse_source_fix
@@ -253,7 +252,6 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
             .push(Phys::{ .line = no, .indent = indent, .code_start = code_start,
             .code_end = code_end, .line_end = line_end, .blank = blank, .joins = joins,
             .seg_from = seg_from if seg_from < code_end else seg_before })
-        _unused: = line_start
     return out
 
 priv struct Line_opens //< the brackets held open on the physical line being walked
@@ -287,8 +285,7 @@ impl Line_opens
                     supply_block_end(src, r.items[r.n], i, semis)
                     from: =
                         (r.items[r.n - 1].stmt_from
-                        if r.n > 0 && r.n <= MAX_LINE_OPENS && r.items[r.n - 1].kind == '{'
-                        else r.seg_from)
+                        if r.n > 0 && r.items[r.n - 1].kind == '{' else r.seg_from)
                     r.has_closed = true
                     r.closed_at = i
                     r.closed_ends =
@@ -531,10 +528,10 @@ priv fn next_word(src: U8[], from: Sz, to: Sz): U8[]
     return src.sub(s, e - s)
 
 priv fn is_labelled_head(word: U8[]): Bool
-    return word.is_one_of(U8[][]::LABELLED_HEADS)
+    return (U8[][]::LABELLED_HEADS).contains(word)
 
 priv fn is_block_head(word: U8[]): Bool
-    return word.is_one_of(U8[][]::BLOCK_HEADS)
+    return (U8[][]::BLOCK_HEADS).contains(word)
 
 fn heads_a_block(code: U8[]): Bool //<
     //< Whether a line's leading word, after `pub` / `priv`, opens a block, or the line is a label

@@ -6,13 +6,22 @@
 # Caution: **Relative paths only**: the repository's place may hold what Windows's linker garbles.
 ksmd_make = $(call pkg_make,ksmd) OUT=../$(OUT_DIR)/ksmd
 
+# **The builder of a person's own functions stands beside the server**, which runs it for the page
+# (`--builder`); it finds `ksplc` and ksmd's sources from there (`ksmd/port/own_build.kspl`).
+KSMD_BUILDER_EXE := $(OUT_DIR)/ksmd_own_build.exe
+KSMD_BUILDER_SRCS := $(wildcard ksmd/*/*.kspl ksmd/*/*/*.kspl)
+
 ## Run|ksmd-web|Build the ksmd editing page (out/ksmd/web/ksmd.html) and its wasm
 ksmd-web: $(STAGE1_EXE)
 	@$(ksmd_make) web
 
+## Run|ksmd-functions|Write ksmd's function table again from the signatures in ksmd/calc/functions.kspl
+ksmd-functions: $(STAGE1_EXE)
+	@$(call pkg_make,ksmd) functions OUT=../$(OUT_DIR)/ksmd
+
 ## Gates|test-ksmd-browser|Edit ksmd documents in a headless Chromium through real input events, and open and save files through kssrv --local
-test-ksmd-browser: $(STAGE1_EXE) $(KSSRV_EXE)
-	@$(ksmd_make) test-browser KSSRV=../$(KSSRV_EXE)
+test-ksmd-browser: $(STAGE1_EXE) $(KSSRV_EXE) $(KSMD_BUILDER_EXE)
+	@$(ksmd_make) test-browser KSSRV=../$(KSSRV_EXE) BUILDER=../$(KSMD_BUILDER_EXE)
 
 ## Run|measure-ksmd|Time opening, editing and saving ksmd documents from a typical one to a large one, in KSPL and in a headless Chromium
 measure-ksmd: $(STAGE1_EXE) $(KSSRV_EXE)
@@ -43,8 +52,13 @@ $(KSMD_EXE): $(STAGE1_EXE) $(KSMD_RES) tools/ksmd.kspl $(OPENER_SRC)
 	$(call kspl_build,tools/ksmd.kspl,ksmd,,$(GUI_LDFLAGS) $(KSMD_RES))
 	@echo "# built -> $(KSMD_EXE)"
 
+$(KSMD_BUILDER_EXE): $(STAGE1_EXE) $(KSMD_BUILDER_SRCS)
+	@echo "# BUILDING the builder of a page's own functions ($(KSMD_BUILDER_EXE))"
+	$(call kspl_build,ksmd/port/own_build.kspl,ksmd_own_build,,)
+	@echo "# built -> $(KSMD_BUILDER_EXE)"
+
 ## Run|ksmd-open|Open one `.ksmd` document in a browser (`FILE=` is wanted)
-ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_EXE)
+ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) $(KSMD_BUILDER_EXE)
 	@test -n $(call shq,$(FILE)) || { echo "usage: make ksmd-open FILE=<path to a .ksmd document>"; exit 1; }
 	./$(KSMD_EXE) $(call shq,$(FILE))
 
@@ -53,9 +67,9 @@ ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_EXE)
 KSMD_LAUNCH_WORK := $(TMP_DIR)/ksmd_launch_test
 
 ## Gates|test-ksmd-open|Start the ksmd launcher on scratch workspaces: the workspace, its port, reuse, a taken port, two opens at once and the refusals
-test-ksmd-open: $(KSSRV_EXE) $(KSMD_EXE)
+test-ksmd-open: $(KSSRV_EXE) $(KSMD_EXE) $(KSMD_BUILDER_EXE)
 	rm -rf "$(KSMD_LAUNCH_WORK)"
-	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_EXE) $(KSSRV_EXE) \
+	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_EXE) $(KSSRV_EXE) $(KSMD_BUILDER_EXE) \
 		"$(KSMD_LAUNCH_WORK)"
 
 KSMD_DESKTOP := $(GEN_DIR)/ksmd.desktop
@@ -126,7 +140,7 @@ test-ksmd-desktop: | $(OUT_DIR)
 	$(call desktop_check,$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE),ksmd,$(KSMD_REQUIRE_DESKTOP))
 
 ## Run|ksmd|Build the page, the server and the launcher, and make a `.ksmd` open on a double-click
-ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) test-ksmd-desktop
+ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) $(KSMD_BUILDER_EXE) test-ksmd-desktop
 	@echo "# built -> $(KSMD_DESKTOP)"
 	@echo "# built -> $(KSMD_MIME)"
 	@echo "# $(KSMD_ASSOC_LEAD)"
@@ -168,5 +182,5 @@ install-desktop:
 	@exit 1
 endif
 
-.PHONY: ksmd ksmd-web ksmd-open test-ksmd-browser measure-ksmd test-ksmd-open test-ksmd-desktop \
+.PHONY: ksmd ksmd-functions ksmd-web ksmd-open test-ksmd-browser measure-ksmd test-ksmd-open test-ksmd-desktop \
 	install-desktop

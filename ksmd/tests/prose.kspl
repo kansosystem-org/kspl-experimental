@@ -3,14 +3,12 @@
 //< canonical source with the expected one. That source must read and save again unchanged.
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_looks"
-import "ksmd/edit/region" { Spot, Style, gap_spot, paragraph_style, text_spot }
+import "ksmd/edit/region" { Style, gap_spot, paragraph_style, text_spot }
 import "ksmd/edit/styled" { Mark }
 import "ksmd/tests/support" { opened, saves }
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
-
-priv const H: U8[] = "%ksmd 1\n\n"
 
 fn run()
     typing()
@@ -90,7 +88,7 @@ priv fn deleting()
     saves("Delete at a block's end joins the next block to it", fwd@, arena, "%ksmd 1\n\nAbCd\n")
     $wide: =
         opened("%ksmd 1\n\nKeep this\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\nand that\n", arena)
-    span(wide@, text_spot(0, 0, 4), text_spot(2, 0, 3))
+    wide.select(text_spot(0, 0, 4), text_spot(2, 0, 3))
     removed(wide@, true)
     saves("a selection across a table removes the table and joins the text", wide@, arena,
         "%ksmd 1\n\nKeep that\n")
@@ -102,7 +100,7 @@ priv fn deleting()
     removed(item@, true)
     saves("and at the top it leaves the list as a paragraph", item@, arena, "%ksmd 1\n\n- a\n\nb\n")
     $all: = opened("%ksmd 1\n\n# Title\n\nText\n", arena)
-    span(all@, text_spot(0, 0, 0), text_spot(0, 0, 5))
+    all.select(text_spot(0, 0, 0), text_spot(0, 0, 5))
     removed(all@, true)
     saves("a block left with no text goes", all@, arena, "%ksmd 1\n\nText\n")
     typed(all@, "New")
@@ -166,7 +164,7 @@ priv fn kinds()
     at(ed@, 0, 0, 0)
     kind(ed@, heading(2))
     saves("a paragraph becomes a heading", ed@, arena, "%ksmd 1\n\n## A\n\nB with\\\nbreak\n\nC\n")
-    span(ed@, text_spot(1, 0, 0), text_spot(2, 0, 1))
+    ed.select(text_spot(1, 0, 0), text_spot(2, 0, 1))
     kind(ed@, item(false))
     saves("paragraphs become one list; a hard break becomes a space", ed@, arena,
         "%ksmd 1\n\n## A\n\n- B with break\n- C\n")
@@ -195,22 +193,22 @@ priv fn kinds()
 priv fn marks()
     defer arena: = Arena(64 * 1024)
     $ed: = opened("%ksmd 1\n\nabcdef\n", arena)
-    span(ed@, text_spot(0, 0, 1), text_spot(0, 0, 4))
+    ed.select(text_spot(0, 0, 1), text_spot(0, 0, 4))
     marked(ed@, .emphasis, "")
     saves("emphasis over a range", ed@, arena, "%ksmd 1\n\na*bcd*ef\n")
-    span(ed@, text_spot(0, 0, 3), text_spot(0, 0, 5))
+    ed.select(text_spot(0, 0, 3), text_spot(0, 0, 5))
     marked(ed@, .strong, "")
     saves("strong emphasis over a range that overlaps it", ed@, arena,
         "%ksmd 1\n\na*bc**d*****e**f\n")
-    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 6))
+    ed.select(text_spot(0, 0, 0), text_spot(0, 0, 6))
     marked(ed@, .emphasis, "")
     saves("emphasis over all of it, where part had it", ed@, arena, "%ksmd 1\n\n*abc**de**f*\n")
     marked(ed@, .emphasis, "")
     saves("and off again where all had it", ed@, arena, "%ksmd 1\n\nabc**de**f\n")
-    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 2))
+    ed.select(text_spot(0, 0, 0), text_spot(0, 0, 2))
     marked(ed@, .code, "")
     saves("inline code over a range", ed@, arena, "%ksmd 1\n\n`ab`c**de**f\n")
-    span(ed@, text_spot(0, 0, 2), text_spot(0, 0, 6))
+    ed.select(text_spot(0, 0, 2), text_spot(0, 0, 6))
     marked(ed@, .link, "https://kanso.example/a")
     saves("a link over a range holds its marks", ed@, arena,
         "%ksmd 1\n\n`ab`[c**de**f](https://kanso.example/a)\n")
@@ -221,7 +219,7 @@ priv fn marks()
 priv fn looks() //< alignment and colour, the looks text takes
     defer arena: = Arena(64 * 1024)
     $aligned: = opened("%ksmd 1\n\nOne\n\n# Two\n\n- three\n", arena)
-    span(aligned@, text_spot(0, 0, 0), text_spot(2, 0, 2))
+    aligned.select(text_spot(0, 0, 0), text_spot(2, 0, 2))
     aligned.set_align("center") catch e
         verdict.check("aligning", false, e.message())
     saves("paragraphs and headings take the alignment, list items do not", aligned@, arena,
@@ -238,12 +236,12 @@ priv fn looks() //< alignment and colour, the looks text takes
         "%ksmd 1\n\n{align=\"center\"}\nOne\n\n{align=\"center\"}\nNext\n\n{align=\"center\"}\n## \
             Two\n\n- three\n")
     $coloured: = opened("%ksmd 1\n\nStop **now** please\n", arena)
-    span(coloured@, text_spot(0, 0, 0), text_spot(0, 0, 8))
+    coloured.select(text_spot(0, 0, 0), text_spot(0, 0, 8))
     coloured.set_text_color("#C00000") catch e
         verdict.check("colouring", false, e.message())
     saves("a colour over a range is text in brackets, with marks kept inside", coloured@, arena,
         "%ksmd 1\n\n[Stop **now**]{color=\"#c00000\"} please\n")
-    span(coloured@, text_spot(0, 0, 5), text_spot(0, 0, 15))
+    coloured.select(text_spot(0, 0, 5), text_spot(0, 0, 15))
     coloured.set_text_color("") catch e
         verdict.check("taking the colour away", false, e.message())
     saves("an empty colour takes it away over the range only", coloured@, arena,
@@ -337,9 +335,6 @@ priv fn at(ed: Editor$@, block: Sz, item: Sz, offset: Sz) //< puts the caret in 
 priv fn gap(ed: Editor$@, block: Sz) //< puts the caret in the gap before a block
     p: = gap_spot(block)
     ed.select(p, p)
-
-priv fn span(ed: Editor$@, a: Spot, f: Spot)
-    ed.select(a, f)
 
 priv fn typed(ed: Editor$@, text: U8[])
     ed.type_text(text, .typing) catch e

@@ -83,8 +83,22 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
         return empty_body(src, first, "':::image' has no body. Close it on the next line")
     if kind.equals("chart")
         return read_chart(src, first, attributes, doc, arena)
+    if kind.equals("functions")
+        allow(src, attributes, U8[][]::{ "path" }, "':::functions' takes only path")!
+        path: =
+            required(src, first, attributes, "path",
+            "':::functions' needs a path, as in path=\"mine.kspl\"")!
+        if !names_kspl(path)
+            throw src.diagnostic(first.offset, "':::functions' names a KSPL file, ending in .kspl")
+        doc.blocks
+            .push(Block::{ .kind = .functions, .level = 0, .label = "", .text = path, .first = 0,
+            .count = 0, .offset = first.offset, .align = .none, .note = "", .invisible = false })
+        return empty_body(src, first, "':::functions' has no body. Close it on the next line")
     throw src.diagnostic(first.offset + 3,
-        "a clause is ':::table', ':::include', ':::image' or ':::chart'")
+        "a clause is ':::table', ':::include', ':::image', ':::chart' or ':::functions'")
+
+fn names_kspl(path: U8[]): Bool //< whether a `:::functions` clause's path names a KSPL file
+    return path.len > ".kspl".len && path.ends_with(".kspl")
 
 priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
     arena: Arena$@): Sz!Diagnostic //<

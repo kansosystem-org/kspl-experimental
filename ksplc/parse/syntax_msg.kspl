@@ -11,6 +11,7 @@ import "ksplc/base/literal" { interpolation_open_at, literal_end }
 import "ksplc/parse/layout" { heads_a_block }
 import "ksplc/parse/line_cont" { takes_value_on_its_line }
 import "std/chars"
+import "std/ds" as _ds // `contains`
 import "std/math"
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt // the `:x` of a hint
@@ -102,10 +103,9 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
     if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
         return "\n  Note: KSPL has no range syntax ('a..b'). Count with 'for i in Range(a, b, 1)' \
             ('Range.asc(b)' from 0). Use 'x.sub(start, len)' for a sub-slice."
-    prev: = skip_space_back(src, pos)
     // A trailing closure (`count_over(xs) fn(x: I32; ): Bool`, Swift's and Kotlin's shape). Nothing
     // in KSPL puts a `fn` right after a call's `)`, so the failure lands on the `fn`.
-    if prev >= 0 && src[prev] == ')' && src.starts_with("fn", pos) &&
+    if before >= 0 && src[before] == ')' && src.starts_with("fn", pos) &&
         word_end(src, pos) == pos + 2
         return "\n  Note: KSPL has no trailing closure. Pass the closure inside the call's \
             parentheses ('f(xs, fn(x: I32; ): Bool { return x > 0 })'). Alternatively, bind it to a \
@@ -213,9 +213,6 @@ priv fn block_head_without_body(src: U8[], pos: Sz): Bool //<
     head: = code_line(src, s)
     if pos < s + head.indent + head.code.len
         return false
-    $head_indent: Sz = 0
-    for s + head_indent < src.len && src[s + head_indent] == ' '
-        head_indent += 1
     $i: = line_end(src, s)
     // It looks for the next line with contents, skipping blank lines and comment-only lines.
     for i < src.len
@@ -229,7 +226,7 @@ priv fn block_head_without_body(src: U8[], pos: Sz): Bool //<
         if src[at] == '\n' || src.starts_with("//", at)
             i = line_end(src, at)
             continue
-        return n <= head_indent
+        return n <= head.indent
     return true
 
 priv struct Code_line //< one line's code, without the comment or surrounding blanks
@@ -655,7 +652,7 @@ priv fn starts_item(src: U8[], at: Sz): Bool //<
     if !(c.is_alnum() || c == '"' || c == '\'' || c == '(' || c == '.' || c == '$')
         return false
     w: = src.sub(at, word_end(src, at) - at)
-    return !w.is_one_of(U8[][]::CARRYING_WORDS)
+    return !(U8[][]::CARRYING_WORDS).contains(w)
 
 priv const CARRYING_WORDS: U8[][5] = ::{ "as", "in", "catch", "if", "else" } //<
     //< The words that stand between two values and continue the first, rather than starting an item

@@ -209,8 +209,7 @@ impl Log
         //< full log. A device is erased when it leaves the factory, not after it has been written.
         $at: Sz = 0
         for at < r.store.capacity
-            if !r.store.erase_sector(at)
-                throw .write_failed
+            erase_or_throw(r.store, at)!
             at += r.store.sector_size
         r.tail = 0
 
@@ -286,16 +285,16 @@ impl Log
         erase_or_throw(r.store, spare)!
         r.tail = room
 
-    pub fn used(r: Self$@): Sz //< the number of bytes in use, which is where the next record goes
+    pub fn used(r: Self@): Sz //< the number of bytes in use, which is where the next record goes
         return r.tail
 
-    pub fn iter(r: Self$@): Cursor //< a walk over the records, oldest first
+    pub fn iter(r: Self@): Cursor //< a walk over the records, oldest first
         //< It is separate from `Log`, so appending during a scan breaks neither.
         // It stops at `tail`: going to `capacity` would walk the erased sectors to the end for the
         // same answer, which costs too much in a loop.
         return cursor(r.store, r.tail)
 
-    priv fn find_last(r: Self$@, kind: U16): Cursor!Ksdb_error //<
+    priv fn find_last(r: Self@, kind: U16): Cursor!Ksdb_error //<
         //< The cursor on the newest record of `kind`, or `not_found`
         //< Copying and comparing use the same search; reading stays in `Cursor.read`.
         $found: Cursor? = .none
@@ -311,23 +310,22 @@ impl Log
         //< This is how a device keeps a policy it was sent. The same kind is appended again and
         //< again and **the newest one wins**. So a power cut mid-write leaves the old policy in
         //< force. A caller that is fine with 0 when there is none can write `catch 0`.
-        r: Self$@,
+        r: Self@,
         kind: U16,
         dst: U8$[], //< the destination; if it is shorter than the content, it throws `too_small`
     ): Sz!Ksdb_error
-        $it: = r.find_last(kind)!
-        return it.read(dst)!
+        return r.find_last(kind)!.read(dst)!
 
     pub fn last_equals( //< whether the newest record of that kind already holds this data
         //< false if there is none. **It lets the caller skip writing what has not changed.** Each
         //< append uses up space: a policy of a few KB fills the medium in a few dozen writes.
         //< It needs no output buffer. It reads in chunks, since a second record-sized buffer costs
         //< too much of a device's RAM.
-        r: Self$@,
+        r: Self@,
         kind: U16,
         data: U8[], //< the bytes to compare against, read one chunk at a time
     ): Bool
-        $it: = r.find_last(kind) catch
+        it: = r.find_last(kind) catch
             return false
         if Sz::it.len != data.len
             return false
@@ -385,7 +383,7 @@ impl Cursor
             r.at = r.store.next_sector(r.at)
         return false
 
-    pub fn payload_at(r: Self$@): Sz //< where the current record's content begins
+    pub fn payload_at(r: Self@): Sz //< where the current record's content begins
         return r.at + HEADER_SIZE
 
     pub fn read( //< copies the current record's content out and returns its length
@@ -393,7 +391,7 @@ impl Cursor
         //< shorter
         //< one, and nothing shows that its end is missing. `len` says beforehand how much room it
         //< needs.
-        r: Self$@,
+        r: Self@,
         dst: U8$[], //< the destination; if it is shorter than the content, it throws `too_small`
     ): Sz!Ksdb_error
         n: = Sz::r.len

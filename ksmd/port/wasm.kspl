@@ -1,0 +1,76 @@
+//< Builds a KSPL entry file into a wasm32 module with no C library: the page's, and a person's own
+//< functions'. **The one place the steps stand**: `ksmd/Makefile` builds the page through
+//< `wasm_build.kspl`, and `own_build.kspl` builds a person's functions through this module.
+//<
+//< It wants a clang that targets wasm32, `wasm-ld`, and clang's builtins for wasm32. **wasm holds
+//< neither libc nor malloc**: the C is made with `--freestanding`, and `-mbulk-memory` lets clang
+//< copy and fill memory with wasm's own instructions, so no C library routine is linked.
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+
+priv const MACHINE: U8[] = "wasm32-unknown-unknown"
+priv const WAIT_MS: I32 = 300000 //< how long one step may take
+priv const OUTPUT_CAP: Sz = 1 << 20
+
+struct Wasm_build //< what one build reads and where it writes
+    ksplc: U8[] //< the compiler
+    entry: U8[] //< the KSPL file whose `extern fn`s the module exports
+    out: U8[] //< the module to write
+    imports: U8[] //< the file naming what the script may supply; nothing else may stay undefined
+    work: U8[] //< a folder for the C and the object file
+    cwd: U8[] //< where ksplc runs, where imports are looked for first; empty for the caller's
+    deps: U8[] //< where ksplc records the files it read (`--emit-deps`), or empty
+    options: U8[][] //< more of ksplc's options, such as where packages are found
+
+fn builtins(arena: Arena$@): U8[] //< clang's wasm32 builtins, or empty where none are installed
+    //< clang lowers what wasm32 has no instruction for, such as a 128-bit product, to calls only
+    //< this library defines. clang files it under the `wasi` machine's folder.
+    got: =
+        subproc.run_capture(U8[][]::{ "clang", "--target=wasm32-wasi", "-rtlib=compiler-rt",
+        "-print-libgcc-file-name" }, "", WAIT_MS, OUTPUT_CAP, arena) catch
+        return ""
+    // **Standard output alone**: a newer clang warns on standard error that the machine's name is
+    // old.
+    path: = arena.dup_str(got.stdout_data).trim_spaces()
+    return path if got.exited_with(0) && fs.exists(path) else ""
+
+fn build(b: Wasm_build@, arena: Arena$@): Void!U8[] //<
+    //< Compiles, then links; the failure is the step's own output, for the person to read
+    rt: = builtins(arena)
+    if rt.len == 0
+        throw "clang's wasm32 builtins are not installed. Debian/Ubuntu: install \
+            libclang-rt-<version>-dev-wasm32 for your clang version"
+    fs.mkdir_all(b.work) catch
+        throw arena.text().s("cannot make \{b.work\}").take()
+    c: = fs.join(b.work, "module.c", arena)
+    o: = fs.join(b.work, "module.o", arena)
+    $kspl: = List<|U8[]|>(arena)
+    kspl
+        .push_all(U8[][]::{ b.ksplc, "--freestanding",
+        arena.text().s("--machine=").s(MACHINE).take() })
+    if b.deps.len > 0
+        kspl.push(arena.text().s("--emit-deps=").s(b.deps).take())
+    kspl.push_all(b.options)
+    kspl.push_all(U8[][]::{ b.entry, c })
+    step(kspl.slice(), b.cwd, arena)!
+    // **Put the stack first**: after the data, a deep call runs past its end into the heap without
+    // a trap.
+    step(U8[][]::{ "clang", arena.text().s("--target=").s(MACHINE).take(), "-std=c99", "-O2",
+        "-ffreestanding", "-nostdlib", "-Wall", "-mbulk-memory", "-ffunction-sections",
+        "-fdata-sections", "-c", c, "-o", o }, "", arena)!
+    // Caution: **Do not use `--allow-undefined`**: only what `imports` names comes from the
+    // script, so anything else fails the link rather than the page.
+    step(U8[][]::{ "wasm-ld", "--no-entry", "--gc-sections", "--stack-first", "-z",
+        "stack-size=1048576",
+        arena.text().s("--allow-undefined-file=").s(b.imports).take(), o, rt, "-o", b.out }, "",
+        arena)!
+
+priv fn step(argv: U8[][], cwd: U8[], arena: Arena$@): Void!U8[] //< runs one step to its end
+    got: = subproc.run_capture(argv, cwd, WAIT_MS, OUTPUT_CAP, arena) catch
+        throw arena.text().s(argv[0]).s(" did not start").take()
+    if !got.exited_with(0)
+        throw got.text(arena)

@@ -306,7 +306,7 @@ impl Ast_node
         if r == null
             return
         if r.kind_id == .k_type_expr || r.kind_id == .k_type_fn_sig
-            r.type_id = r.resolve_type(c) catch r.type_id
+            r.resolve_type(c) catch 0
         else if r.kind_id == .k_decl_impl
             target_node: = r.get_decl_type_node()
             if target_node != null
@@ -361,7 +361,6 @@ impl Ast_node
 
     fn resolve_and_apply_type(r: Self$@, c: Sema_ctx$@): I32!Sema_error
         tid: = r.resolve_type(c)!
-        r.type_id = tid
         r.resolve_all_types(c)!
         return tid
 
@@ -450,13 +449,12 @@ impl Ast_node
         r.type_id = final_tid
         return final_tid
 
-    fn build_resolved_type_args(r: Ast_node$@, c: Sema_ctx$@, decl: Ast_node$@):
-        I32[]!Sema_error //<
-            //< Resolves a generic's list of actual arguments, one type id per argument
-            //< An argument that does not resolve is the unknown type's id.
-            //< Caution: **Pass `decl`.** Where it declares a `$` (`struct Slice<|$T|>`), **an
-            //< unmarked actual argument is wrapped as immutable** (`Slice<|U8|>` vs
-            //< `Slice<|$U8|>`).
+    fn build_resolved_type_args(r: Ast_node@, c: Sema_ctx$@, decl: Ast_node$@): I32[]!Sema_error //<
+        //< Resolves a generic's list of actual arguments, one type id per argument
+        //< An argument that does not resolve is the unknown type's id.
+        //< Caution: **Pass `decl`.** Where it declares a `$` (`struct Slice<|$T|>`), **an
+        //< unmarked actual argument is wrapped as immutable** (`Slice<|U8|>` vs
+        //< `Slice<|$U8|>`).
         $args: = List<|I32|>(base_core.arena)
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
         params: = decl.find_child(.k_type_gen_params) if decl != null else null
@@ -580,7 +578,7 @@ fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: A
                 declare it without 'const' to pass a type through it")
     c.err(arg, c.scratch.slice())
 
-priv fn write_param_type(c: Sema_ctx$@, type_node: Ast_node$@) //<
+priv fn write_param_type(c: Sema_ctx$@, type_node: Ast_node@) //<
     //< `: T` of `const N: T`, if written
     if type_node != null
         c.scratch.s(": \{type_node.text\}")
@@ -714,7 +712,7 @@ fn own_fn_type_id(decl: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
     c.set_current_file(old_file)
     return type_id
 
-priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32!Sema_error
+priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node@): I32!Sema_error
     $current_tid: = base_tid
     for p in r.children
         if p.kind_id == .k_type_postfix

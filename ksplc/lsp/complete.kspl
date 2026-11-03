@@ -128,7 +128,7 @@ priv fn add_pick(out: List<|Pick|>$@, name: U8[], kind: I32, prefix: U8[], node:
 // Caution: **Do not list every name of a module.** An imported name is called qualified
 // (`io.out()`). So the unqualified names are only **the enclosing scopes' names, the file's
 // top-level declarations, and the import aliases**. Otherwise thousands of uncallable names mix in.
-priv fn picks_in_scope(state: Doc_state$@, path: List<|Ast_node$@|>$@, mark: Ast_node$@,
+priv fn picks_in_scope(state: Doc_state@, path: List<|Ast_node$@|>@, mark: Ast_node@,
     prefix: U8[], out: List<|Pick|>$@)
     // What the enclosing scopes declared before the synthesized name (parameters come in here too).
     for i in Range.asc(path.len)
@@ -150,8 +150,6 @@ priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
     //< **A function's is its signature**, a field's, a constant's and a variable's its type, as
     //< rust-analyzer, gopls and clangd show it.
     //< **A struct, an enum, an interface and a module get none**: the icon for `kind` shows it.
-    if c == null
-        return
     if p.node.is_fn_decl()
         defer $sig: = lsp_spell.format_fn_sig_flat(c, p.node)
         out.s(sig.slice())
@@ -160,7 +158,7 @@ priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
         t: = c.env.display(p.type_id)
         out.s(t)
 
-priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, arena: Arena$@) //<
+priv fn send_picks(state: Doc_state$@, out: List<|Pick|>@, id_val: json.Value, arena: Arena$@) //<
     //< It sends the candidates as the answer, **an empty array where there is none** (not `null`)
     //< **Each carries its declaration's description** (`documentation`), read as the hover reads
     //< it: the list is where the user looks first, before choosing.
@@ -185,7 +183,7 @@ priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, 
         arr = arr.push(item.build())
     lsp_msg.send_response(id_val, arr.build(), arena)
 
-priv fn qualifier_of(path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
+priv fn qualifier_of(path: List<|Ast_node$@|>@, mark: Ast_node$@): U8[] //<
     //< The head name of a `<head>.<name>`, or empty
     //< **A module alias and a type's name do not become a postfix node.** Normalization folds
     //< `io.out` or `P.new` into one path node, which `dot_receiver_of` in `nav.kspl` does not
@@ -200,7 +198,7 @@ priv fn qualifier_of(path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
             return parent.text.sub(0, cut)
     return ""
 
-priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //<
+priv fn alias_module_of(state: Doc_state@, head: U8[], arena: Arena$@): U8[] //<
     //< From an import's alias, it works out the module name its symbols are registered under
     //< For `import "std/io" as io;` that name is `std.io`.
     //<
@@ -313,7 +311,7 @@ priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$
     // A method with its own type arguments is not in the table; it is found by the template's name.
     add_by_dot_prefix(c.generics.templates, base_only, prefix, out, KIND_METHOD)
 
-priv fn add_fields(sd: sema_type_def.Struct_def$@, prefix: U8[], out: List<|Pick|>$@)
+priv fn add_fields(sd: sema_type_def.Struct_def@, prefix: U8[], out: List<|Pick|>$@)
     for f in sd.fields_list
         add_pick(out, f.name, KIND_FIELD, prefix, f.node, f.type_id)
 

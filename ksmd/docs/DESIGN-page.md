@@ -125,6 +125,8 @@
 
 **An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
+**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** Each takes a PNG or a JPEG, asks for its alternate text, and writes the file beside the document under the first free name (`<name>-image-<n>.png`). Its clause goes in at the caret. The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one.
+
 **A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
 
 **The page is built as wasm32 with no C library**, using clang's bulk-memory instructions to copy and fill memory. **It is one file**: `ksmd/port/web/bundle.kspl` puts its style, its scripts and its wasm, as base64, inside `ksmd.html`. So the page opens from a file, and the local server hands it out alone.
@@ -373,8 +375,36 @@ Served by the local server, the page opens and saves files itself ("The file lif
 * **Leaving the page asks first while no draft holds the latest edits**: in the second after typing, and where no draft can be held. A draft written as the page goes may not land before the page closes.
 * **A document named in the address that does not open leaves the address.** The new document is then open, and its draft is offered.
 * **Text typed in a cell that the editor refuses stays in its cell, and the draft holds it.** A save writes nothing, another document does not open, and a menu command does nothing until the text is put right or Esc drops it. A press in the menu bar or in a dialog leaves the cell open.
-* **Save As into another folder writes each include's and image's path again, so it names the same file from there** (`ksmd/port/web/moving.kspl`). A save that fails takes the rewrite back.
+* **Save As into another folder writes each include's, image's and functions file's path again, so it names the same file from there** (`ksmd/port/web/moving.kspl`). A save that fails takes the rewrite back.
 * **Pasted text larger than a document can hold is refused before it reaches the editor's fixed memory.**
+
+## A document's own functions on the page
+
+What a person's own functions are, and their limits, is "Your own functions" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md). This section gives how the page runs them (`ksmd/port/web/functions.js`, `ksmd/port/web/bridge_own.kspl`).
+
+```mermaid
+sequenceDiagram
+    participant E as editor (wasm)
+    participant P as page script
+    participant S as local server
+    participant W as worker
+    P->>S: build the clause's file
+    S-->>P: the module, or the build's message
+    P->>W: start the module
+    W-->>P: its names
+    P->>E: the names
+    E-->>P: cells show …, calls wait in a queue
+    P->>W: each call, one at a time
+    W-->>P: its answer
+    P->>E: the answers, then show again
+```
+
+* **The editor never waits.** A calculation answers from the answers already come; a call with none goes into a queue once and shows `…`. Then the page takes the queue, and shows the document again after each round of answers, at most eight rounds after one showing.
+* **One call at a time, each with its own time limit.** So a function that never ends is named by its own cell, and the others still answer.
+* **A worker that ran past its time, or stopped, is ended and started afresh.** A module stopped part-way may hold half-changed memory.
+* **The worker gets the module and nothing else.** Its one import throws, so a panic reaches the page as `#STOPPED!`; it cannot reach the document, the files or the network.
+* **An answer is kept by its call's bytes**, the name and every argument. So the same call is answered at once, and an argument changed asks again. After 4,096 answers, all are forgotten between two rounds.
+* **A functions file is fetched as an image is**: the page asks whether it stands, and keeps its bytes. When those bytes change, it is built again.
 
 ## What the editing page does not do yet
 

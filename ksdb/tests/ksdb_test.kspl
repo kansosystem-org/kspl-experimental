@@ -33,7 +33,7 @@ fn test_append_and_replay() //< that it appends, reads back, and keeps the order
 
     // Caution: Check by opening again; reusing the same `Log` passes even when the scan reads its
     // own state instead of the medium.
-    $reopened: = ksdblog.Log.open(store)
+    reopened: = ksdblog.Log.open(store)
     assert(reopened.used() == lg.used(), "opening again points at the same position")
 
     $seen: Sz = 0
@@ -152,7 +152,7 @@ fn test_last_after_a_big_record() //<
         lg.append(KIND_SAMPLE, U8[]::sample) catch panic("append sample")
 
     // Caution: Check by opening again (as after a power cut).
-    $reopened: = ksdblog.Log.open(store)
+    reopened: = ksdblog.Log.open(store)
     $got: U8[8] = ::{}
     n: = reopened.last(KIND_SAMPLE, U8$[]::got) catch panic("last(sample) should not fail")
     assert(n == 8, "the 8-byte observation is taken at its own length")
@@ -174,7 +174,7 @@ fn test_torn_write_truncates() //< a power cut in the middle of a write
     // Makes the next record half-written (half of its header damaged).
     ram.tear(good_used, 6)
 
-    $reopened: = ksdblog.Log.open(store)
+    reopened: = ksdblog.Log.open(store)
     $seen: Sz = 0
     $buf: U8[32] = ::{}
     $it: = reopened.iter()
@@ -236,7 +236,7 @@ fn test_corruption_is_detected() //< a record with garbled content is rejected
     // Clears one bit of the second record's content (flash can only garble 1 into 0).
     ram.tear(ksdblog.HEADER_SIZE + ksdblog.HEADER_SIZE + 8, 1)
 
-    $reopened: = ksdblog.Log.open(store)
+    reopened: = ksdblog.Log.open(store)
     $seen: Sz = 0
     $it: = reopened.iter()
     for it.next()
@@ -262,7 +262,7 @@ fn test_a_corrupt_header_is_detected() //<
         lg.append(KIND_POLICY, "second") catch panic("append second")
         store.program_at(second_at + offset, U8[]::zero)
 
-        $reopened: = ksdblog.Log.open(store)
+        reopened: = ksdblog.Log.open(store)
         $seen: Sz = 0
         $it: = reopened.iter()
         for it.next()
@@ -297,7 +297,7 @@ fn test_full_is_reported_not_overwritten() //< a full log is reported, not silen
     assert(wrote == 32, "32 fit without straddling a sector")
 
     // Once it is full, every record written so far still reads.
-    $reopened: = ksdblog.Log.open(store)
+    reopened: = ksdblog.Log.open(store)
     $seen: Sz = 0
     $it: = reopened.iter()
     for it.next()
@@ -306,7 +306,7 @@ fn test_full_is_reported_not_overwritten() //< a full log is reported, not silen
 
     // reset empties it again.
     lg.reset() catch panic("reset should succeed")
-    $after: = ksdblog.Log.open(store)
+    after: = ksdblog.Log.open(store)
     assert(after.used() == 0, "after a reset it can write from the head")
     verdict
         .pass("Full comes back as full, and reset puts it back while everything finished is kept.")
@@ -418,7 +418,7 @@ fn test_keeps_appending_after_a_power_loss() //<
 
     // Caution: **Records from before and after the cut must both read**; a scan that stops at a
     // garbled record never reads the later ones.
-    $reopened: = ksdblog.Log.open(store)
+    reopened: = ksdblog.Log.open(store)
     $seen: Sz = 0
     $buf: U8[32] = ::{}
     $it: = reopened.iter()
@@ -560,7 +560,7 @@ fn test_a_scrambled_store_is_survivable()
             noise[i] = U8::(rng.next_u64() % 256U64)
         store.program_at(at, U8[]::{ .ptr = noise[0]@, .len = width })
 
-        $again: = ksdblog.Log.open(store)
+        again: = ksdblog.Log.open(store)
         $it: = again.iter()
         for it.next()
             assert(Sz::it.len <= buf.len, "no record longer than any written may come out")
@@ -615,7 +615,7 @@ priv fn fill_for_keeping(): ksdblog.Log //< a medium laid out as the car's, in 6
         lg.append(KIND_SAMPLE, "sample-8") catch panic("append sample")
     return lg
 
-priv fn kept_ones_read(lg: ksdblog.Log$@): Bool //< whether the marker and the newest policy read
+priv fn kept_ones_read(lg: ksdblog.Log@): Bool //< whether the marker and the newest policy read
     $buf: U8[48] = ::{}
     mn: = lg.last(KEEP_MARKER, U8$[]::buf) catch
         return false

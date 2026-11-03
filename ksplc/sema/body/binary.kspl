@@ -107,7 +107,7 @@ fn takes_signed_div(ctx: Sema_ctx$@, op: U8[], type_id: I32, divisor: Ast_node$@
     return op.is_div_op() && ctx.env.is_integer(type_id) && !ctx.env.is_unsigned(type_id) &&
         !divisor_cannot_overflow(ctx, divisor)
 
-priv fn shift_amount_in_range(ctx: Sema_ctx$@, amount: I32, left_type_id: I32): Bool //<
+priv fn shift_amount_in_range(ctx: Sema_ctx@, amount: I32, left_type_id: I32): Bool //<
     //< Whether the value is a valid shift amount
     //< Caution: **Keep this test in this one place.** The diagnostic (check_const_shift_amount) and
     //< the omission of the run-time check (shift_amount_is_static) must agree. With a copy, one
@@ -167,7 +167,7 @@ fn reject_float_remainder(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_te
     ctx.err(node, ctx.scratch.slice())
     return true
 
-priv fn is_bool_arith_operand(ctx: Sema_ctx$@, left_id: I32, right_id: I32, op_text: U8[],
+priv fn is_bool_arith_operand(ctx: Sema_ctx@, left_id: I32, right_id: I32, op_text: U8[],
     is_shift: Bool): Bool //<
         //< Whether arithmetic or a shift is about to be applied to a `Bool` operand.
         //< Caution: **List the operators explicitly.** Written as "not a comparison, logical or
@@ -179,7 +179,7 @@ priv fn is_bool_arith_operand(ctx: Sema_ctx$@, left_id: I32, right_id: I32, op_t
         return false
     return ctx.env.is_bool(left_id) || ctx.env.is_bool(right_id)
 
-priv fn is_numeric_expected(ctx: Sema_ctx$@, expected_id: I32): Bool //<
+priv fn is_numeric_expected(ctx: Sema_ctx@, expected_id: I32): Bool //<
     //< Whether the outer expected type is a number, the case the operands' width governs
     //< Any other expected type still reaches the left (a struct literal before a user's `+`).
     return !sema_type_env.is_unknown(expected_id) && ctx.env.is_numeric(expected_id)
@@ -655,11 +655,7 @@ priv fn refuses_fixed_comparison(ctx: Sema_ctx$@, o: Operands, calc_id: I32): Bo
     if k < calc.lo || k > calc.hi || (k >= own.lo && k <= own.hi)
         return false
     // Read as `x op k`: a constant above the range is greater than every value, below it less.
-    $op: = o.op
-    if !var_on_left
-        op =
-            (">" if o.op.equals("<") else "<" if o.op.equals(">")
-            else ">=" if o.op.equals("<=") else "<=" if o.op.equals(">=") else o.op)
+    op: = sema_body_fixed_answer.turned(o.op, var_on_left)
     above: = k > own.hi
     always: =
         (op.equals("!=") || ((op.equals("<") || op.equals("<=")) && above) ||
@@ -767,7 +763,7 @@ priv fn report_no_common_type(ctx: Sema_ctx$@, o: Operands) //<
         ctx.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
     ctx.err(o.node, ctx.scratch.slice())
 
-priv fn pointer_arith_ok(ctx: Sema_ctx$@, op_text: U8[], left_id: I32, right_id: I32): Bool //<
+priv fn pointer_arith_ok(ctx: Sema_ctx@, op_text: U8[], left_id: I32, right_id: I32): Bool //<
     //< Whether pointer arithmetic is in an allowed form
     //< **A form whose left side is not a pointer is not allowed**: C's `i + p` is a second spelling
     //< of one meaning (Principle 6).
@@ -791,7 +787,7 @@ priv fn report_bad_pointer_arith(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[
     ctx.scratch.s("them")
     ctx.err(node, ctx.scratch.slice())
 
-priv fn points_to_same(ctx: Sema_ctx$@, left_id: I32, right_id: I32): Bool //<
+priv fn points_to_same(ctx: Sema_ctx@, left_id: I32, right_id: I32): Bool //<
     //< Whether two pointers point at the same type
     //< Caution: **Compare with the immutable mark dropped.** Of two pointers into the same array,
     //< one alone can be a read-only view (`U8 immut@`).

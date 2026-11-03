@@ -5,11 +5,13 @@
 //< gives. It reads no clock, so the same model and date always give the same values.
 //< Caution: **Calculate again after every edit.** `Results` holds the values of one moment, and
 //< places that an edit has moved point at other cells.
-import "ksmd/base/dates" { date_of, day_of, ymd_of }
+import "ksmd/base/dates" { date_of }
+import "ksmd/calc/args" { Raw_arg, Raw_args }
 import "ksmd/calc/formula" { Cursor, Positions, Token, Token_kind, next, unquoted }
+import "ksmd/calc/functions" as fns
+import "ksmd/calc/functions_table" as table
 import "ksmd/calc/value" { Calc_error, Value, arithmetic, boolean, compare, date_value, empty,
-    equal_keys, is_comparison, number, number_of, operand, text, truth }
-import "ksmd/model/format" { round_places }
+    equal_keys, is_comparison, number, number_of, text, truth }
 import "ksmd/model/model" { Cell, Document, Table }
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -18,15 +20,24 @@ import "std/str"
 const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions, unary minus and
     //< `not`
 
-const MAX_ROUND: Sz = 15 //< the most places `round` takes, either way
-    //< An F64 holds at most 17 significant digits, so a carry past them cannot overflow.
-
 priv const MAX_DEPTH: Sz = 256 //< the cells and levels one calculation passes through at a time
     //< A deeper chain is set aside and its deepest cell calculated first (`settle`), so a running
     //< total down 10,000 rows calculates without running out of stack.
 priv const UNVISITED: U8 = 0U8
 priv const WORKING: U8 = 1U8 //< being calculated; reaching it again is a cycle
 priv const SETTLED: U8 = 2U8
+
+priv const FORMS: U8[][_] = ::{ "today", "if", "sum_if", "count_if", "average_if", "lookup" } //<
+    //< The functions `Parser.function` takes before the table, in its order
+
+fn known(name: U8[]): Bool //< whether ksmd has a function of this name, so a person's cannot
+    for form in FORMS
+        if form.equals(name)
+            return true
+    for one in table.NAMES
+        if one.equals(name)
+            return true
+    return false
 
 struct Results //< the value of every data cell of every table, at one moment
     values: List<|Value|> //< each table's data cells from `starts`, row by row
@@ -38,14 +49,18 @@ impl Results
         index: = r.starts[u] + row * r.columns[u] + column
         return r.values[index]
 
-fn calculate(doc: Document@, today: U8[], arena: Arena$@): Results //<
-    //< Calculates every data cell; the results live in `arena`
-    //< `today` is the date the document was opened, written `2026-10-23`.
+fn calculate( //< calculates every data cell; the results live in `arena`
     //< The lists are made at their full size at once, so no cell's value is copied as they grow.
+    doc: Document@,
+    today: U8[], //< the date the document was opened, written `2026-10-23`
+    arena: Arena$@,
+    own: Own_functions@ = null, //< a person's own functions; none where the page has none
+): Results
     $cells: Sz = 0
     for u in Range.asc(doc.tables.len)
         cells += doc.tables[u].rows.len * doc.tables[u].columns.len
-    $c: = Calc::{ .doc = doc, .today = today, .arena = arena, .at = Positions(doc, arena),
+    $c: = Calc::{ .doc = doc, .today = today, .own = own, .arena = arena,
+        .at = Positions(doc, arena),
         .results = Results::{ .values = List<|Value|>.new_with_cap(cells, arena),
         .starts = List<|Sz|>(arena), .columns = List<|Sz|>(arena) },
         .states = List<|U8|>.new_with_cap(cells, arena), .depth = 0, .deferring = false,
@@ -64,6 +79,25 @@ fn calculate(doc: Document@, today: U8[], arena: Arena$@): Results //<
                 settle(c@, Spot::{ .table = u, .row = row, .column = column })
     return c.results
 
+typedef Ask_fn = fn(ctx: Void$@, name: U8[], args: Raw_args$@): Value //<
+    //< The value of a person's function on its arguments, as the page answers it
+    //< It sets `args.misread` where the arguments did not fit the function's parameters.
+    //< **The page answers from what its worker has already worked out.** Where the answer has not
+    //< come yet, the value is `…` (`Calc_error.pending`), and the page calculates again once it
+    //< has.
+
+struct Own_functions //< a person's own functions, which a calculation asks the page for
+    names: U8[][] //< their names, as a formula calls them
+    ask: Ask_fn
+    ctx: Void$@ //< what `ask` is handed back
+
+impl Own_functions
+    fn has(r: Self@, name: U8[]): Bool //< whether a formula's `name` is one of them
+        for one in r.names
+            if one.equals(name)
+                return true
+        return false
+
 priv struct Spot //< a data cell, by its table and place
     table: Sz
     row: Sz
@@ -72,6 +106,7 @@ priv struct Spot //< a data cell, by its table and place
 priv struct Calc //< the state of one calculation
     doc: Document@
     today: U8[] //< what `today()` gives
+    own: Own_functions@ //< a person's own functions, or null
     arena: Arena$@ //< holds the results, and text a formula's quotes hold with an escape
     at: Positions
     results: Results
@@ -102,8 +137,6 @@ priv fn settle(c: Calc$@, spot: Spot) //<
             c.states[index] = SETTLED
             continue
         c.todo.push(d)
-    c.deferring = false
-    c.depth = 0
 
 priv fn waits(todo: List<|Spot|>@, d: Spot): Bool //< whether a cell is already set aside
     for s in todo
@@ -182,20 +215,20 @@ priv struct Row_reading //< a condition of `sum_if`, read once for each row of i
     ranged: Bool //< a range was read in the condition
     shaped: Bool //< every range read was one column wide and `count` rows tall
 
-enum Fold_kind //< what a function makes of its numbers
+priv fn parser_row(ctx: Void$@, piece: Sz): Value //< `Row_fn` for the parser reading a condition
+    p: = Parser$@::ctx
+    return p.row_of(piece)
+
+priv fn has_error(xs: List<|Value|>@): Bool //< whether an error was taken
+    for i in Range.asc(xs.len)
+        if xs.get(i).kind == .error
+            return true
+    return false
+
+enum Fold_kind //< what `sum_if`, `count_if` or `average_if` makes of its values
     sum
-    min
-    max
     count
     average
-
-priv struct Fold //< a function's numbers so far
-    kind: Fold_kind
-    total: F64 //< the sum, or the least or greatest number
-    numbers: Sz
-    dates: Sz //< how many of the numbers were dates
-    error: Calc_error
-    broken: Bool //< an error was taken; the first one is the result
 
 impl Parser
     priv fn advance(p: Self$@)
@@ -354,48 +387,39 @@ impl Parser
         if !p.enter()
             return Value.failed(.syntax)
         $v: = Value.failed(.syntax)
-        if name.equals("today")
+        // **Six forms stay here** (`FORMS`): `today` reads the date the document opened, and the
+        // other five choose which arguments are calculated. Every other function is an ordinary
+        // one, called through its table (`ksmd/calc/functions.kspl`).
+        if name.equals(FORMS[0])
             v = date_value(date_of(p.c.today).unwrap_or(0I64))
-        else if name.equals("date")
-            v = p.date_from_parts()
-        else if name.equals("year") || name.equals("month") || name.equals("day")
-            v = part_of(p.expression(), name)
-        else if name.equals("if")
+        else if name.equals(FORMS[1])
             v = p.choice()
-        else if name.equals("round")
-            v = p.rounding()
-        else if name.equals("sum_if")
+        else if name.equals(FORMS[2])
             v = p.conditional(.sum)
-        else if name.equals("count_if")
+        else if name.equals(FORMS[3])
             v = p.conditional(.count)
-        else if name.equals("average_if")
+        else if name.equals(FORMS[4])
             v = p.conditional(.average)
-        else if name.equals("lookup")
+        else if name.equals(FORMS[5])
             v = p.lookup()
         else
-            v = p.fold(name)
+            $args: = p.raw_arguments()
+            if got: = table.call(name, args@)
+                v = got
+                // **An argument too many or too few is the formula's error**, not the value's.
+                if args.misread || args.used < args.args.len
+                    p.wrong = true
+            else if p.c.own != null && p.c.own.has(name)
+                if p.skipping == 0
+                    v = p.c.own.ask(p.c.own.ctx, name, args@)
+                    p.wrong = p.wrong || args.misread
+                else
+                    v = empty()
+            else
+                p.wrong = true
         p.leave()
         p.expect(.close)
         return v
-
-    priv fn date_from_parts(p: Self$@): Value //< `date(year, month, day)` after its `(`
-        //< Each part is a whole number, and together they name a day of the years 1 to 9999; any
-        //< other is `#NUM!`.
-        $parts: Value[3] = ::{}
-        for i in Range.asc(3)
-            if i > 0
-                p.expect(.comma)
-            parts[i] = operand(p.expression())
-        for v in parts
-            if v.kind == .error
-                return v
-        for v in parts
-            if v.number != F64::(I64::v.number)
-                return Value.failed(.not_finite)
-        day: =
-            day_of(I64::parts[0].number, I64::parts[1].number, I64::parts[2].number) catch
-            return Value.failed(.not_finite)
-        return date_value(day)
 
     priv fn choice(p: Self$@): Value //< `if(condition, then, else)`, after its `(`
         //< Only the branch taken is calculated, so an error or a cycle in the other never shows.
@@ -416,23 +440,6 @@ impl Parser
         _skipped: = p.expression()
         p.skipping -= 1
         return empty()
-
-    priv fn rounding(p: Self$@): Value //< `round(x, places)` after its `(`
-        //< `places` is a whole number from -15 to 15. The digits a person reads are rounded, half
-        //< away from zero, as a number format rounds them.
-        x: = operand(p.expression())
-        p.expect(.comma)
-        places: = operand(p.expression())
-        if x.kind == .error
-            return x
-        if places.kind == .error
-            return places
-        n: = places.number
-        if n < -F64::MAX_ROUND || n > F64::MAX_ROUND || F64::(Sz::n) != n
-            return Value.failed(.not_finite)
-        rounded: = round_places(x.number, Sz::n) catch
-            return Value.failed(.not_finite)
-        return number(rounded)
 
     priv fn lookup(p: Self$@): Value //<
         //< `lookup(key, keys, values, otherwise)` after its `(`: the value beside the first key
@@ -497,21 +504,20 @@ impl Parser
         //< `sum_if(values, condition)` after its `(`, or `count_if` or `average_if`
         //< The values are a cell or a range. The condition is calculated once for each of their
         //< rows, with each range in it read as its cell on that row. The values on a row are read
-        //< only where the condition is `true`, as `if` reads only the branch it takes.
+        //< only where the condition is `true`, as `if` reads only the branch it takes. The values
+        //< taken go to `sum`, `count` or `average`, which a formula calls by name too.
         if p.tok.kind != .reference && p.tok.kind != .broken
             p.wrong = true
             return Value.failed(.syntax)
         values: = p.tok.piece
         p.advance()
         p.expect(.comma)
-        $fold: = Fold::{ .kind = kind, .total = 0.0, .numbers = 0, .dates = 0, .error = .syntax,
-            .broken = false }
-        $area: = Area::{ .table = 0, .rows = Span::{ .low = 0, .high = 0 },
-            .columns = Span::{ .low = 0, .high = 0 } }
+        $xs: = List<|Value|>(p.c.arena)
+        $area: = empty_area()
         if found: = p.area_of(values)
             area = found
         else
-            fold.take(Value.failed(.reference))
+            xs.push(Value.failed(.reference))
         outer: = p.rows
         p.rows = Row_reading::{ .count = area.rows.high - area.rows.low + 1, .row = 0,
             .ranged = false, .shaped = true }
@@ -521,22 +527,26 @@ impl Parser
         p.skipping += 1
         _shape: = p.expression()
         p.skipping -= 1
-        if !fold.broken && !(p.rows.ranged && p.rows.shaped)
-            fold.take(Value.failed(.shape))
+        if !has_error(xs@) && !(p.rows.ranged && p.rows.shaped)
+            xs.push(Value.failed(.shape))
         if p.skipping == 0
             for row in Range.asc(p.rows.count)
-                if fold.broken || p.wrong || p.c.deferring
+                // **The first error ends it**: the rows below are not read, as their values
+                // could not change the result.
+                if has_error(xs@) || p.wrong || p.c.deferring
                     break
                 p.cur = cur
                 p.tok = tok
                 p.rows.row = row
                 holds: = truth(p.expression())
                 if holds.kind == .error
-                    fold.take(holds)
+                    xs.push(holds)
                 else if holds.boolean
-                    p.take_row(fold@, area, area.rows.low + row)
+                    p.take_row(xs@, area, area.rows.low + row)
         p.rows = outer
-        return fold.result()
+        r: = kind.fold(xs.slice()) catch e
+            return Value.failed(e)
+        return number(r)
 
     priv fn area_of(p: Self@, index: Sz): Area? //<
         //< The cells a reference's piece names; none for -1, a reference to no cell or `#REF!`
@@ -551,13 +561,13 @@ impl Parser
             .columns =
             ordered(at.of(u, piece.from.column), at.of(u, piece.to.column)) })
 
-    priv fn take_row(p: Self$@, fold: Fold$@, area: Area, row: Sz) //<
-        //< The numbers and errors of the area's cells on one row, from the left
+    priv fn take_row(p: Self$@, xs: List<|Value|>$@, area: Area, row: Sz) //<
+        //< The numbers, dates and errors of the area's cells on one row, from the left
         for column in Range(area.columns.low, area.columns.high + 1, 1)
             v: =
                 value_at(p.c, Spot::{ .table = area.table, .row = row, .column = column })
             if v.kind == .number || v.kind == .date || v.kind == .error
-                fold.take(v)
+                xs.push(v)
 
     priv fn row_of(p: Self$@, piece: Sz): Value //<
         //< A range in a condition, by its piece: its cell on the row read now
@@ -575,42 +585,47 @@ impl Parser
             Spot::{ .table = area.table, .row = area.rows.low + p.rows.row,
             .column = area.columns.low })
 
-    priv fn fold(p: Self$@, name: U8[]): Value //< `sum(...)` after its `(`: one or more arguments
-        $fold: = Fold::{ .kind = .sum, .total = 0.0, .numbers = 0, .dates = 0, .error = .syntax,
-            .broken = false }
-        if kind: = Fold_kind.from_variant_name(name)
-            fold.kind = kind
-        else
-            p.wrong = true
-        for
-            p.argument(fold@)
-            if p.tok.kind != .comma
-                break
-            p.advance()
-        return fold.result()
+    priv fn raw_arguments(p: Self$@): Raw_args //<
+        //< A function's arguments up to its `)`, each calculated, for its table to convert
+        //< **A reference alone is kept as its cells**, so `Value[]` can leave out the text in a
+        //< range while a lone argument of text is an error.
+        $args: = List<|Raw_arg|>(p.c.arena)
+        if p.tok.kind != .close
+            for
+                args.push(p.raw_argument())
+                if p.tok.kind != .comma
+                    break
+                p.advance()
+        return Raw_args::{ .args = args.slice(), .used = 0, .misread = false,
+            .row = parser_row if p.rows.count > 0 else null, .ctx = Void$@::p,
+            .live = p.skipping == 0, .memory = p.c.arena }
 
-    priv fn argument(p: Self$@, fold: Fold$@) //<
-        //< A reference alone is a set of cells, whose empty cells, text, and true and false are
-        //< left out. Any other argument is a number, as arithmetic takes one.
+    priv fn raw_argument(p: Self$@): Raw_arg //< one argument: a reference alone, or a value
         if p.tok.kind == .reference || p.tok.kind == .broken
             cur: = p.cur
             tok: = p.tok
             p.advance()
             if p.tok.kind == .comma || p.tok.kind == .close
-                p.take_cells(fold, tok.piece)
-                return
+                $cells: = List<|Value|>(p.c.arena)
+                p.take_cells(cells@, tok.piece)
+                return Raw_arg::{ .value = empty(), .cells = cells.slice(), .is_cells = true,
+                    .range = tok.kind == .reference && tok.range, .piece = tok.piece }
             p.cur = cur
             p.tok = tok
-        fold.take(operand(p.expression()))
+        return Raw_arg::{ .value = p.expression(), .cells = Value[]::{}, .is_cells = false,
+            .range = false, .piece = -1 }
 
-    priv fn take_cells(p: Self$@, fold: Fold$@, piece: Sz) //< every cell a reference's piece names
+    priv fn take_cells(p: Self$@, xs: List<|Value|>$@, piece: Sz) //<
+        //< Every cell a reference's piece names, row by row; nothing while not calculating
         if p.skipping > 0
             return
         area: = p.area_of(piece) catch
-            fold.take(Value.failed(.reference))
+            xs.push(Value.failed(.reference))
             return
         for row in Range(area.rows.low, area.rows.high + 1, 1)
-            p.take_row(fold, area, row)
+            for column in Range(area.columns.low, area.columns.high + 1, 1)
+                at: = Spot::{ .table = area.table, .row = row, .column = column }
+                xs.push(value_at(p.c, at))
 
     priv fn cell_of(p: Self$@, index: Sz): Value //< the value of the one cell a piece names
         if index < 0
@@ -627,62 +642,15 @@ impl Parser
             return
         p.advance()
 
-impl Fold
-    priv fn take(f: Self$@, v: Value) //< one number or error; the first error is kept
-        if f.broken
-            return
-        if v.kind == .error
-            f.broken = true
-            f.error = v.error
-            return
-        // Dates have a least and a greatest, and a count; they have no sum.
-        if v.kind == .date
-            if f.kind == .sum || f.kind == .average
-                f.broken = true
-                f.error = .wrong_kind
-                return
-            f.dates += 1
-        f.numbers += 1
-        switch f.kind
-        case .sum, .average
-            f.total += v.number
-        case .min
-            if f.numbers == 1 || v.number < f.total
-                f.total = v.number
-        case .max
-            if f.numbers == 1 || v.number > f.total
-                f.total = v.number
-        case .count {}
-
-    priv fn result(f: Self@): Value //< `sum` and `count` of nothing are 0; the others are errors
-        if f.broken
-            return Value.failed(f.error)
-        switch f.kind
-        case .count
-            return number(F64::f.numbers)
+impl Fold_kind
+    priv fn fold(k: Self, xs: Value[]): F64!Calc_error //< the function this kind names, on `xs`
+        switch k
         case .sum
-            return number(f.total)
-        case .min, .max, .average
-            if f.numbers == 0
-                return Value.failed(.no_numbers)
-        if f.kind == .average
-            return number(f.total / F64::f.numbers)
-        // `min` or `max` of dates alone is a date; of dates and numbers together, no value.
-        if f.dates > 0
-            if f.dates != f.numbers
-                return Value.failed(.wrong_kind)
-            return date_value(I64::f.total)
-        return number(f.total)
-
-priv fn part_of(v: Value, name: U8[]): Value //< `year(d)`, `month(d)` or `day(d)` of a date
-    if v.kind == .error
-        return v
-    if v.kind != .date
-        return Value.failed(.wrong_kind)
-    d: = ymd_of(I64::v.number)
-    if name.equals("year")
-        return number(F64::d.year)
-    return number(F64::d.month if name.equals("month") else F64::d.day)
+            return fns.sum(xs)!
+        case .count
+            return fns.count(xs)!
+        case .average
+            return fns.average(xs)!
 
 priv struct Span //< two places in order
     low: Sz

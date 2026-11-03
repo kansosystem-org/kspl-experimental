@@ -178,6 +178,63 @@ pub fn value_method(): I32
   $tally: = Tally::{ .n = 1 }
   tally.bump()
   return tally.n
+// ==== case spare_writable_pointer
+//< A `T$@` parameter is spare where nothing writes through it, nor is it handed on ([I0602])
+//< Reported: a read of a field, a `Self@` call, a comparison. Kept: a write, a `Self$@` call even
+//< on a pointer field, `@`, a read of the whole target, and the pointer handed on. Not reported:
+//< a trait's method, a function taken as a value, and a test.
+// EXPECT: spare_writable_pointer.kspl:23:14: information: [I0602] Nothing is written through parameter 'r'
+// EXPECT: spare_writable_pointer.kspl:25:19: information: [I0602] Nothing is written through parameter 'r'
+// EXPECT: spare_writable_pointer.kspl:27:18: information: [I0602] Nothing is written through parameter 'r'
+// EXPECT: spare_writable_pointer.kspl:46:14: information: [I0602] Nothing is written through parameter 't'
+// EXPECT-NOT: through parameter 'kept'
+// EXPECT-NOT: through parameter 'hooked'
+// EXPECT-NOT: through parameter 'shown'
+import "std/ds" { List }
+
+pub trait Show
+  fn show(r: Self): I32
+
+pub struct Tally
+  pub n: I32
+  pub seen: I32[2]
+  pub log: List<|I32|>$@
+
+impl Tally
+  pub fn get(r: Self$@): I32 //< reads a field
+    return r.n
+  pub fn via_peek(r: Self$@): I32 //< calls a reading method
+    return r.peek()
+  pub fn is_none(r: Self$@): Bool //< compares the pointer
+    return r == null
+  pub fn peek(r: Self@): I32 //< already read-only
+    return r.n
+  pub fn bump(r: Self$@) //< writes a field
+    r.n += 1
+  pub fn note(r: Self$@) //< a `Self$@` call on a pointer field needs a writable path
+    r.log.push(r.n)
+  pub fn spot(r: Self$@): I32$@ //< hands out a writable pointer into the target
+    return r.n@
+  pub fn elem(r: Self$@) //< writes an array element
+    r.seen[0] = 1
+  pub fn copy(r: Self$@): Tally //< reads the whole target
+    return r$
+
+impl Tally: Show
+  fn show(kept: Self$@): I32 //< a trait fixes the signature
+    return kept.n
+
+pub fn total(t: Tally$@): I32 //< only reads fields
+  return t.n + t.seen[1]
+
+pub typedef Hook = fn(t: Tally$@): I32
+
+pub fn hooked(t: Tally$@): I32 //< taken as a value below, so its type is fixed
+  return t.n
+
+pub fn pass_on(shown: Tally$@): I32 //< hands the pointer on
+  h: Hook = hooked
+  return h(shown)
 // ==== case unit_internal_pub
 //< The case where [I0402] finds a `pub` used only from inside the package
 //< It is off by default, so it is enabled with ARGS. `main` and names opening with `_` are out of

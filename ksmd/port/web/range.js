@@ -149,7 +149,7 @@ function ksmdRange(ks) {
 
   // Marks the range's cells and the chosen one, and puts the fill handle at the range's corner.
   function mark() {
-    if (ks.figures) ks.figures.update();
+    ks.figures.update();
     for (const el of ks.root.querySelectorAll(".whole-table")) el.classList.remove("whole-table");
     for (const el of marked) {
       if (el.classList.contains("fill-handle")) el.remove();
@@ -278,9 +278,7 @@ function ksmdRange(ks) {
     if (!el || ks.view.blocks().indexOf(el.closest(".table")) !== dragFrom.block) return;
     const row = Number(el.dataset.r);
     const column = Number(el.dataset.c);
-    const e0 = end || { row: dragFrom.row, column: dragFrom.column };
-    if (row === e0.row && column === e0.column && end === null &&
-      row === dragFrom.row && column === dragFrom.column) return;
+    if (end === null && row === dragFrom.row && column === dragFrom.column) return;
     e.preventDefault();
     if (ks.table.editing()) ks.table.take();
     set(dragFrom.block, dragFrom.row, dragFrom.column, { row, column });
@@ -605,7 +603,7 @@ function ksmdRange(ks) {
     if (!ks.tooLarge(text)) pasteGrid(text, true);
   });
 
-  ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, mark, selectTable,
+  ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, selectTable,
     lines, chooseLines,
     // Puts the focus on the chosen cell, so the keys act on it.
     focus: focusChosen,

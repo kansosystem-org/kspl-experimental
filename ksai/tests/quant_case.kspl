@@ -2,7 +2,8 @@
 //< `make_quant_fixtures.py` and `gguf_quant_check.py` in `tools/ai_assist/` write these files;
 //< the first one's docstring gives the layout. The unit test and `ksai/benches/bench_quant.kspl`
 //< both read them here, so the two cannot read one layout two ways.
-import "ksai/quant" + { Quant_format, Quant_matrix }
+import "ksai/quant" { Quant_format, Quant_matrix }
+import "std/bignat"
 import "std/bytes" as std_bytes
 import "std/chars"
 import "std/io"
@@ -80,8 +81,8 @@ fn decode_mismatches(c: Case@, arena: Arena$@): Sz //<
     for i in Range.asc(c.rows)
         m.dequantize_row(i, out) catch panic("quant_case: dequantize_row refused a valid row")
         for k in Range.asc(c.cols)
-            want: = quant.f32_bits(c.decoded[i * c.cols + k])
-            got: = quant.f32_bits(out[k])
+            want: = bignat.f32_to_bits(c.decoded[i * c.cols + k])
+            got: = bignat.f32_to_bits(out[k])
             if want != got
                 if bad < 5
                     io.err().s("row \{i\} number \{k\}: bits \{got:x\} for \{want:x\}\n")

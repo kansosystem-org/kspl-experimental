@@ -13,6 +13,7 @@ import "std/mem" { heap_used_bytes }
 import "std/seq"
 import "std/sha256" + { Sha256 }
 import "std/str" { Str_builder }
+import "std/subproc"
 import "std/sys"
 import "std/url"
 
@@ -35,7 +36,7 @@ fn queue_json_error(c: conn.Conn$@, status: I32, allow: U8[] = "") //<
     // An error response closes (the same reason as `queue_error` on the static side).
     queue_json(c, status, val, false, allow)
 
-fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
+fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
     //< `GET /api/status`: returns that it is running, and how much it has handled
     $b: = Json_builder(c.arena)
     // Caution: **Say whether it is for local use.** Otherwise the page shows the local tools even
@@ -89,7 +90,7 @@ fn url_rel(path: U8[]): U8[] //< a URL's path as a path under the root
 // with a 404. `GET /api/file?path=<p>` returns that file's bytes; `PUT /api/file?path=<p>` writes
 // the body.
 // ==========================================
-fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[], keep: Bool)
+fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request@, root: U8[], keep: Bool)
     path: U8[] = path_or_refuse(c, t.query, root, true) catch
         return
     // Only GET and PUT come here (`ROUTES`).
@@ -236,9 +237,8 @@ fn token_matches(given: U8[], want: U8[]): Bool //<
         diff |= given[i] ^ want[i]
     return diff == 0U8
 
-fn authorized(req: http.Request$@, token: U8[]): Bool
-    if v: = req.headers.find("Authorization")
-        given: = v
+fn authorized(req: http.Request@, token: U8[]): Bool
+    if given: = req.headers.find("Authorization")
         if !given.starts_with(BEARER)
             return false
         return token_matches(given.sub_from(BEARER.len), token)
@@ -250,7 +250,7 @@ priv enum Reach //< in which mode an endpoint exists
         //< **Facing outward it does not**: with no token, anyone could read and write under the
         //< root.
 
-priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
+priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx@, r: Reach): Bool //<
     //< Whether the endpoint exists in this mode
     //< Where it does not, the 404 is already queued.
     local: = ctx.is_local()
@@ -284,6 +284,41 @@ fn queue_api_stop(c: conn.Conn$@) //<
     conn.stop_asked_by = c.serial
     queue_ok(c, false)
 
+priv const BUILD_MS: I32 = 60000 //< how long one build may take
+priv const MAX_BUILT: Sz = 16 * 1024 * 1024 //< the most bytes of wasm, or of a message, kept
+
+fn queue_api_build(c: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
+    //< `POST /api/build?path=<file>`: the wasm of a person's own functions in that file
+    //< `--builder` builds it (`kssrv/main.kspl`); the answer is the wasm, or a 422 whose JSON
+    //< `error` is the builder's message. With no builder it is a 404, as with no such endpoint.
+    //< **The server waits for the build**, since it holds no request open while a child runs.
+    //< Only this page waits; `BUILD_MS` bounds it.
+    if ctx.builder.len == 0
+        queue_json_error(c, 404)
+        return
+    path: U8[] = path_or_refuse(c, query, ctx.root, true) catch
+        return
+    if conn.regular_file_size(path).is_none()
+        queue_json_error(c, 404)
+        return
+    // **Messages name the file as the page does**, by its path from the root.
+    shown: = url.parse_query(query, c.arena) catch
+        queue_json_error(c, 400)
+        return
+    got: =
+        subproc.run_capture(U8[][]::{ ctx.builder, path,
+        shown.find("path").unwrap_or("") }, "", BUILD_MS, MAX_BUILT, c.arena) catch
+        queue_json_error(c, 500)
+        return
+    if got.exited_with(0)
+        conn.queue_response(c, 200, "application/wasm", got.stdout_data, keep)
+        return
+    why: =
+        got.text(c.arena) if got.exit_code.is_some() else "the build took longer than 60 s"
+    $b: = Json_builder(c.arena)
+    val: = b.obj().set("error", b.str_val(why)).set("status", b.int_val(422)).build()
+    queue_json(c, 422, val, false)
+
 // ==========================================
 // The dispatch under `/api/`, checked before static serving (a file named `api` under the root
 // loses)
@@ -295,6 +330,7 @@ priv enum Api //< the endpoint a route reaches
     list
     here
     stop
+    build
     status
 
 priv struct Route //< one entry point under `/api/`
@@ -303,7 +339,7 @@ priv struct Route //< one entry point under `/api/`
     methods: U8[] //< the methods it takes, as a 405's `Allow` names them; another one is a 405
     api: Api //< the endpoint it reaches
 
-priv const ROUTES: Route[6] = ::{ //<
+priv const ROUTES: Route[7] = ::{ //<
     //< Every entry point, with who may reach it and by which methods
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
@@ -312,6 +348,7 @@ priv const ROUTES: Route[6] = ::{ //<
     Route::{ .path = "/api/list", .reach = .local, .methods = "GET", .api = .list },
     Route::{ .path = "/api/here", .reach = .local, .methods = "GET", .api = .here },
     Route::{ .path = "/api/stop", .reach = .local, .methods = "POST", .api = .stop },
+    Route::{ .path = "/api/build", .reach = .local, .methods = "POST", .api = .build },
     Route::{ .path = "/api/status", .reach = .both, .methods = "GET", .api = .status },
 }
 
@@ -353,5 +390,7 @@ impl Api
             queue_api_here(c)
         case .stop
             queue_api_stop(c)
+        case .build
+            queue_api_build(c, t.query, ctx, keep)
         case .status
             queue_api_status(c, ctx, keep)

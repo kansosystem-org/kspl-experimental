@@ -161,7 +161,7 @@ function ksmdFind(ks) {
   // The first match at or after the caret, so a search goes on from where the person reads.
   function fromCaret() {
     const s = ks.sel;
-    if (!s || found.length === 0) return found.length > 0 ? 0 : -1;
+    if (!s) return 0;
     const [, block, item, offset] = s.a;
     const k = found.findIndex((m) => m.block > block || (m.block === block &&
       (m.kind === "c" || m.item > item || (m.item === item && m.from >= offset))));
@@ -313,5 +313,5 @@ function ksmdFind(ks) {
     }
   }, true);
 
-  ks.find = { open, close };
+  ks.find = { open };
 }

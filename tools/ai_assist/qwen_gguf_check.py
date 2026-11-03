@@ -97,19 +97,17 @@ def llama_self_gap(llm, ids):
 
 
 def ksai_greedy(bench, model, ids, n, threads, scores_path):
-    """ksai's greedy tokens after `ids`, as `bench_qwen` prints them, and its speed lines."""
+    """ksai's greedy tokens after `ids`, as `bench_qwen` prints them, and the scores after `ids`."""
     r = subprocess.run([bench, model, f"--generate={n}", f"--threads={threads}",
                         f"--scores={scores_path}"], input=" ".join(map(str, ids)),
                        capture_output=True, text=True, check=True)
-    toks, speed = [], {}
+    toks = []
     for line in r.stdout.splitlines():
         part = line.split()
         if part[0] == "TOKEN":
             toks.append((int(part[1]), float(part[2]), int(part[3]), float(part[4])))
-        elif part[0] in ("PROMPT", "GENERATE"):
-            speed[part[0]] = float(part[-2])
     scores = np.fromfile(scores_path, dtype="<f4").astype(np.float64)
-    return toks, scores, speed
+    return toks, scores
 
 
 def compare_tokens(name, mine, ref, tie):
@@ -257,7 +255,7 @@ def main():
         for i, (name, text) in enumerate(prompts):
             ids = llm.tokenize(text.encode("utf-8"), add_bos=False, special=True)
             ref, ref_scores = llama_greedy(llm, ids, a.generate)
-            mine, scores, _ = ksai_greedy(a.bench, a.model, ids, a.generate, a.threads,
+            mine, scores = ksai_greedy(a.bench, a.model, ids, a.generate, a.threads,
                                           scores_path)
             agree, line = compare_tokens(f"{name} ({len(ids)} prompt tokens)", mine, ref,
                                          a.tolerance)

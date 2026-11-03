@@ -30,10 +30,10 @@ impl Editor
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         for i in Range.asc(w.units.len)
             u: = w.units[i]@
-            if !u.whole || (u.block.kind != .include && u.block.kind != .image)
+            if !u.whole || path_of(ed.doc@, u.block).len == 0
                 continue
             moved: = ed.arena.dup_str(ed.moves(u.block, from, to, scratch))
-            if u.block.kind == .include
+            if u.block.kind != .image
                 u.block.text = moved
             else
                 // The old image stays in the list, so an undo finds it, as `insert_image` keeps
@@ -48,15 +48,15 @@ impl Editor
             return
 
     priv fn moves(ed: Self@, block: Block, from: U8[], to: U8[], scratch: Arena$@): U8[] //<
-        //< The path an include or an image block writes from folder `to`; empty for another block
+        //< The path an include, image or functions block writes from folder `to`; else empty
         written: = path_of(ed.doc@, block)
         if written.len == 0
             return ""
         return moved_path(from, to, written, scratch) catch
             return written
 
-priv fn path_of(doc: Document@, block: Block): U8[] //< an include's or an image's path; else empty
-    if block.kind == .include
+priv fn path_of(doc: Document@, block: Block): U8[] //< the path a clause names; else empty
+    if block.kind == .include || block.kind == .functions
         return block.text
     if block.kind == .image
         return doc.images.get(block.first).src

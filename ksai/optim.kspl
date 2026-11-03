@@ -17,18 +17,16 @@ pub struct Adam<|T|> //< one parameter's optimizer, tracking the direction of it
     pub timestep: I64 //< how many steps have been taken, which the early bias correction needs
 
 impl<|T|> Adam<|T|>
-    priv fn new_like(param: Tensor<|T|>, beta1: F64, beta2: F64, eps: F64): Adam<|T|> //<
-        //< Makes m and v, the same shape as `param`, initialized to 0 on `param.arena`
+    pub fn new_default( //< an optimizer with the usual settings, 0.9/0.999/1e-8
+        param: Tensor<|T|>, //< the parameter it will update; `m` and `v` take its shape and its arena
+    ): Adam<|T|>
+        // m and v start at 0.
         m: = Tensor<|T|>(param.shape, param.arena)
         v: = Tensor<|T|>(param.shape, param.arena)
         m.fill(T::0.0)
         v.fill(T::0.0)
-        return Adam<|T|>::{ .m = m, .v = v, .beta1 = beta1, .beta2 = beta2, .eps = eps,
+        return Adam<|T|>::{ .m = m, .v = v, .beta1 = 0.9, .beta2 = 0.999, .eps = 1.0e-8,
             .timestep = 0 }
-    pub fn new_default( //< an optimizer with the usual settings, 0.9/0.999/1e-8
-        param: Tensor<|T|>, //< the parameter it will update; `m` and `v` take its shape and its arena
-    ): Adam<|T|>
-        return Adam<|T|>.new_like(param, 0.9, 0.999, 1.0e-8)
     pub fn step( //< one step, moving the parameter the way the gradient has been pointing
         //< **The learning rate is given per step, not kept**, as `sgd_step` takes it. A schedule
         //< that changes it then reaches the next step. A copy kept here would go on unchanged.
@@ -38,8 +36,8 @@ impl<|T|> Adam<|T|>
         lr: F64, //< the learning rate for this step
     )
         // As for `sgd_step` in `grad.kspl`: a `grad` smaller than `param` (and than `r.m`/`r.v`,
-        // made at its shape by `new_like`) would read past `grad.data`, as when `param` came from a
-        // corrupted or tampered adapter.
+        // made at its shape by `new_default`) would read past `grad.data`, as when `param` came
+        // from a corrupted or tampered adapter.
         assert(param.size == grad.size, "Adam.step size mismatch")
         r.timestep += 1
         bc1: = 1.0 - math.pow(r.beta1, F64::r.timestep) // the first-moment bias correction

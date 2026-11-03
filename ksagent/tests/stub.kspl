@@ -82,7 +82,7 @@ extern fn serve(s: Stub$@): Void$@ //<
         conn.free()
     return null
 
-priv fn drip(conn: net.Tcp_stream$@, reply: U8[], drip_ms: I32) //<
+priv fn drip(conn: net.Tcp_stream@, reply: U8[], drip_ms: I32) //<
     //< Writes a reply whole, or in pieces `drip_ms` apart until the client stops reading it
     if drip_ms == 0
         conn.write_all(reply) catch {}
@@ -110,7 +110,7 @@ priv fn accept_within(s: Stub$@): net.Tcp_stream$@? //<
         return .some(conn)
     return .none
 
-priv fn read_body(conn: net.Tcp_stream$@, arena: Arena$@): U8[] //<
+priv fn read_body(conn: net.Tcp_stream@, arena: Arena$@): U8[] //<
     //< The body of the one request on the connection, or empty where it never arrives whole
     defer $got: = Str_builder()
     for
@@ -231,6 +231,11 @@ priv fn pieces(text: U8[], arena: Arena$@): List<|U8[]|> //<
 
 fn one_call(c: U8[], arena: Arena$@): U8[] //< a reply that asks for one tool call
     return calls_reply(U8[][]::{ c }, arena)
+
+fn not_found(arena: Arena$@): U8[] //< a reply that lists the root, then finds nothing
+    //< **The listing comes first**: a not-found answer before any reading tool is sent back.
+    return calls_reply(U8[][]::{ call("list", "{\"path\": \"\"}", arena),
+        answer_call("NOT_FOUND", "[]", arena) }, arena)
 
 fn text_reply(text: U8[], arena: Arena$@): U8[] //< a reply with plain text and no tool call
     $b: = Json_builder(arena)

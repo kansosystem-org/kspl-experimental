@@ -184,14 +184,19 @@ function ksmdTable(ks) {
     return ks.act("ksmd_web_set_widths", block, ks.put(weights.join(",")));
   }
 
+  // A table with one column has no width to share: a change of a column's width says so and does
+  // nothing. True for such a table.
+  function soleColumn(columns) {
+    if (columns >= 2) return false;
+    ks.say("A table with one column takes the whole width.");
+    return true;
+  }
+
   // Alt+Right makes a cell's column wider and Alt+Left narrower, by a twentieth of the table. The
   // width comes from the column on its right, or from the one on its left for the last column.
   function widen(block, column, wider) {
     const columns = size(block).columns;
-    if (columns < 2) {
-      ks.say("A table with one column takes the whole width.");
-      return;
-    }
+    if (soleColumn(columns)) return;
     const last = column === columns - 1;
     const step = ks.view.blocks()[block].querySelector("table").getBoundingClientRect().width / 20;
     resize(block, last ? column - 1 : column, wider !== last ? step : -step);
@@ -469,8 +474,7 @@ function ksmdTable(ks) {
     const was = ks.view.blocks()[block].dataset.name;
     const name = window.prompt("Table name", was);
     if (name === null || name === was) return null;
-    const r = ks.act("ksmd_web_rename_table", block, ks.put(name));
-    return r;
+    return ks.act("ksmd_web_rename_table", block, ks.put(name));
   }
 
   // Sets the number format of the chosen cells as one step, as Excel does; a currency asks for its
@@ -504,10 +508,7 @@ function ksmdTable(ks) {
   function fit(block, column) {
     const wrap = ks.view.blocks()[block];
     const px = pixels(wrap);
-    if (px.length < 2) {
-      ks.say("A table with one column takes the whole width.");
-      return null;
-    }
+    if (soleColumn(px.length)) return null;
     const total = px.reduce((a, x) => a + x, 0);
     const cells = Array.from(wrap.querySelectorAll(`[data-c="${column}"]`));
     let widest = 0;
@@ -536,10 +537,7 @@ function ksmdTable(ks) {
   function askWidth(block) {
     const wrap = ks.view.blocks()[block];
     const px = pixels(wrap);
-    if (px.length < 2) {
-      ks.say("A table with one column takes the whole width.");
-      return null;
-    }
+    if (soleColumn(px.length)) return null;
     const r = ks.range.rect();
     const total = px.reduce((a, x) => a + x, 0);
     const now = Math.round((100 * px[r.c1]) / total);
