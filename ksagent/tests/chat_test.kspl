@@ -238,31 +238,29 @@ priv fn asked_and_answered(n: Sz, arena: Arena$@): Conversation //<
                 .s("{\"type\":\"answer\",\"id\":\"q\{k\}\",\"state\":\"failed\"}\n")
     return Conversation::{ .asks = asks.take(), .recorded = recorded.take() }
 
-priv fn pending_us(c: Conversation): I64 //< the fastest of three finds of the pending question [us]
-    $best: I64 = 0I64
-    for k in Range.asc(3)
-        defer one: = Arena(1024 * 1024)
-        started: = sys.mono_us()
-        asks: = chat.read_asks(c.asks, one)
-        rec: = chat.read_chat(c.recorded, one) catch panic("the chat file reads")
-        _p: = chat.find_pending(asks@, rec@, one)
-        took: = sys.mono_us() - started
-        best = took if k == 0 || took < best else best
-    return best
+priv const TIMING_ROUNDS: Sz = 5 //< rounds of the four timings, each kept at its fastest
 
-priv fn parse_us(c: Conversation): I64 //< the fastest of three plain parses of the same lines [us]
+priv fn pending_us(c: Conversation): I64 //< one find of the pending question [us]
+    defer one: = Arena(1024 * 1024)
+    started: = sys.mono_us()
+    asks: = chat.read_asks(c.asks, one)
+    rec: = chat.read_chat(c.recorded, one) catch panic("the chat file reads")
+    _p: = chat.find_pending(asks@, rec@, one)
+    return sys.mono_us() - started
+
+priv fn parse_us(c: Conversation): I64 //< one plain parse of the same lines [us]
     //< Linear by construction: each line is read as JSON once and nothing more.
-    $best: I64 = 0I64
-    for k in Range.asc(3)
-        defer one: = Arena(1024 * 1024)
-        started: = sys.mono_us()
-        for text in U8[][]::{ c.asks, c.recorded }
-            for line in text.lines(one)
-                _v: = json.parse(line, one) catch
-                    panic("a line of the files is JSON")
-        took: = sys.mono_us() - started
-        best = took if k == 0 || took < best else best
-    return best
+    defer one: = Arena(1024 * 1024)
+    started: = sys.mono_us()
+    for text in U8[][]::{ c.asks, c.recorded }
+        for line in text.lines(one)
+            _v: = json.parse(line, one) catch
+                panic("a line of the files is JSON")
+    return sys.mono_us() - started
+
+priv fn fastest(best: I64, took: I64, round: Sz): I64 //<
+    //< the faster of the two; the first round sets it
+    return took if round == 0 || took < best else best
 
 fn test_finding_the_pending_question_grows_in_step_with_the_files() //< held to a plain parse
     //< **Held to a plain parse of the same lines, timed the same way**, not to a fixed ratio. A
@@ -277,10 +275,18 @@ fn test_finding_the_pending_question_grows_in_step_with_the_files() //< held to 
     defer arena: = Arena(1024 * 1024)
     small: = asked_and_answered(3000, arena)
     large: = asked_and_answered(12000, arena)
-    found_small: = pending_us(small)
-    found_large: = pending_us(large)
-    parse_small: = parse_us(small)
-    parse_large: = parse_us(large)
+    // **The four timings take turns, each round**: a busy spell on a shared machine then slows
+    // both sides of the comparison, not the parse of the small files alone. Timed apart, one such
+    // spell made the parse look to grow 2.8 times for 4 times the lines.
+    $found_small: I64 = 0I64
+    $found_large: I64 = 0I64
+    $parse_small: I64 = 0I64
+    $parse_large: I64 = 0I64
+    for round in Range.asc(TIMING_ROUNDS)
+        found_small = fastest(found_small, pending_us(small), round)
+        parse_small = fastest(parse_small, parse_us(small), round)
+        found_large = fastest(found_large, pending_us(large), round)
+        parse_large = fastest(parse_large, parse_us(large), round)
     name: = arena.text()
         .s("four times the questions take at most twice the growth of a plain parse ")
         .s("(\{found_small\} to \{found_large\} us; the parse \{parse_small\} to \{parse_large\} \
