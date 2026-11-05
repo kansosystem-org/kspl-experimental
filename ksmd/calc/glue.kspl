@@ -3,7 +3,9 @@
 //< `pub fn` there is a function a formula can call by its name. Its parameters are read through
 //< `Raw_args` (`ksmd/calc/args.kspl`), whose table says what each type takes; its result becomes
 //< the cell's value. The same writer serves ksmd's own functions (`ksmd/calc/functions.kspl`) and a
-//< person's, so both follow one set of rules.
+//< person's, so both follow one set of rules. **The same record gives what a person reads of each**
+//< (`ksmd/calc/help.kspl`): the doc comment's first line, each parameter's, and its example.
+import "ksmd/calc/help" { Arg, Help }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -13,6 +15,7 @@ struct Param //< one parameter of a function a formula calls
     name: U8[]
     kind: Param_kind
     optional: Bool //< written `T?`: none where the formula leaves it out
+    meaning: U8[] //< its `//<`; empty where it has none
 
 enum Param_kind //< the parameter types a formula's argument converts to (`Raw_args`)
     number //< `F64`
@@ -35,24 +38,127 @@ struct Function //< one function a formula can call
     params: List<|Param|>
     result: Result_kind
     throws: Bool //< it returns `T!Calc_error`, and an error it throws is the cell's
-    summary: U8[] //< the first line of its doc comment, as the record holds it
+    summary: U8[] //< the first line of its doc comment
+    detail: U8[] //< the rest of its doc comment, the example taken out
+    example: U8[] //< the call its sentence "For example, `…` is `…`." names; empty for none
+    gives: U8[] //< what that sentence says the call is
+    group: U8[] //< the divider it stands under (`grouped`); empty for a person's file
 
 fn functions_of(tsv: U8[], arena: Arena$@): List<|Function|>!U8[] //<
     //< Every `pub fn` the record holds, or why one cannot be called from a formula
     //< A constant, a type or a method is left out: a formula calls a function alone.
     $out: = List<|Function|>(arena)
+    $parts: = List<|U8[][]|>(arena)
     for line in tsv.lines(arena)
-        cols: = line.split('\t', arena)
-        if cols.len < 3 || cols.get(1).find_char('.').is_some() ||
+        $cols: = line.split('\t', arena)
+        if cols.len < 3
+            continue
+        if cols.get(1).find_char('~').is_some()
+            if cols.len > 3
+                parts.push(cols.slice())
+            continue
+        if cols.get(1).find_char('.').is_some() ||
             cols.get(1).find_char(' ').is_some()
             continue
         sig: = cols.get(2)
         if !sig.starts_with("pub fn ")
             continue
         $f: = function_of(sig.sub_from(7), arena)!
-        f.summary = cols.get(3) if cols.len > 3 else ""
+        described(f@, cols.get(3) if cols.len > 3 else "", arena)
         out.push(f)
+    // **A parameter's row need not follow its function's**: `~` sorts after `_` (`ksplc doc`).
+    for cols in parts
+        key: = cols[1]
+        tilde: = key.find_char('~').unwrap_or(0)
+        dot: = key.find_char('.') catch
+            continue
+        for i in Range.asc(out.len)
+            if out.get(i).name.equals(key.sub(0, tilde))
+                $f: = out.get(i)
+                for k in Range.asc(f.params.len)
+                    if f.params.get(k).name.equals(key.sub_from(dot + 1))
+                        $p: = f.params.get(k)
+                        p.meaning = cols[3]
+                        f.params.set(k, p)
+                out.set(i, f)
     return out
+
+priv const EXAMPLE: U8[] = "For example, `" //< how the sentence that gives the example begins
+priv const EXAMPLE_IS: U8[] = "` is `" //< what stands between its call and what the call is
+
+priv fn described(f: Function$@, doc: U8[], arena: Arena$@) //<
+    //< Splits a doc comment as the record joins it into the summary, the detail and the example
+    //< The record closes the first line with a full stop, so the summary ends at the first `. `.
+    $text: = doc
+    if at: = doc.find_str(EXAMPLE)
+        sentence: = doc.sub_from(at)
+        code: = sentence.sub_from(EXAMPLE.len)
+        close: = code.find_char('`').unwrap_or(code.len)
+        f.example = code.sub(0, close)
+        said: = code.sub_from(close)
+        if said.starts_with(EXAMPLE_IS)
+            given: = said.sub_from(EXAMPLE_IS.len)
+            f.gives = given.sub(0, given.find_char('`').unwrap_or(given.len))
+        $after: U8[] = ""
+        if stop: = sentence.find_str(". ")
+            after = sentence.sub_from(stop + 2)
+        text = arena.text().s(doc.sub(0, at)).s(after).take().trim_spaces()
+    if end: = text.find_str(". ")
+        f.summary = text.sub(0, end)
+        f.detail = text.sub_from(end + 2)
+    else
+        f.summary = text.sub(0, text.len - 1) if text.ends_with(".") else text
+
+fn grouped(fns: List<|Function|>$@, source: U8[], arena: Arena$@): Void!U8[] //<
+    //< Gives each function the group its divider names: the line between two `// ====` lines
+    //< above it in `source`, the file the record was made from. One under no divider is refused.
+    lines: = source.lines(arena)
+    $group: U8[] = ""
+    for i in Range.asc(lines.len)
+        line: = lines.get(i)
+        if i + 2 < lines.len && line.starts_with(DIVIDER) &&
+            lines.get(i + 2).starts_with(DIVIDER) && lines.get(i + 1).starts_with("// ")
+            group = lines.get(i + 1).sub_from(3)
+        if !line.starts_with("pub fn ")
+            continue
+        open: = line.find_char('(').unwrap_or(line.len)
+        for k in Range.asc(fns.len)
+            if fns.get(k).name.equals(line.sub(7, open - 7))
+                $f: = fns.get(k)
+                f.group = group
+                fns.set(k, f)
+    for f in fns
+        if f.group.len == 0
+            throw arena.text().s("\{f.name\}: no divider above it names its group").take()
+
+priv const DIVIDER: U8[] = "// ====" //< how the lines around a group's name begin
+
+fn undocumented(fns: List<|Function|>@, arena: Arena$@): U8[]? //<
+    //< What a person would miss of the first function that lacks it; none where all have it
+    //< ksmd's own functions need it all. A person's own may leave any of it out.
+    for f in fns
+        for p in f.params
+            if p.kind != .arena && p.meaning.len == 0
+                return .some(arena.text()
+                    .s("\{f.name\}: \{p.name\} has no `//<` that says what it takes").take())
+        if f.example.len == 0 || f.gives.len == 0
+            return .some(arena.text()
+                .s("\{f.name\}: its doc comment has no sentence \"For example, `\{f.name\}(…)` is \
+                    `…`.\"").take())
+        if !f.example.starts_with(arena.text().s(f.name).c('(').take()) ||
+            !f.example.ends_with(")")
+            return .some(arena.text().s("\{f.name\}: its example calls another function").take())
+    return .none
+
+fn help_of(f: Function@, arena: Arena$@): Help //< what a person reads of one function
+    $args: = List<|Arg|>(arena)
+    for p in f.params
+        if p.kind != .arena
+            args
+                .push(Arg::{ .name = p.name, .meaning = p.meaning, .optional = p.optional,
+                .rest = p.kind == .rest })
+    return Help::{ .name = f.name, .group = f.group, .args = args.slice(), .summary = f.summary,
+        .detail = f.detail, .example = f.example, .gives = f.gives }
 
 priv fn function_of(sig: U8[], arena: Arena$@): Function!U8[] //<
     //< `name(params): result`, without `pub fn `, read into what the table needs
@@ -104,7 +210,7 @@ priv fn param_of(fn_name: U8[], part: U8[], arena: Arena$@): Param!U8[] //< `nam
                 F64, I64, Bool, U8[], Value, Value[] or Arena$@").take()
     if optional && (kind == .rest || kind == .arena)
         throw arena.text().s("\{fn_name\}: \{name\} cannot be left out").take()
-    return Param::{ .name = name, .kind = kind, .optional = optional }
+    return Param::{ .name = name, .kind = kind, .optional = optional, .meaning = "" }
 
 priv fn check_order(name: U8[], params: List<|Param|>@, arena: Arena$@): Void!U8[] //<
     //< `Value[]` takes the arguments left, so it comes last; one left out cannot have a required
@@ -175,8 +281,9 @@ fn table_source( //< the KSPL source of the table for these functions
         if uses(fns, name)
             values.push(name)
     out.s("import \"ksmd/calc/args\" { First_error, Raw_args }\n")
-        .s("import \"\{module\}\" as fns\n").s("import \"ksmd/calc/value\" { ")
-        .s(joined(values@, arena)).s(" }\n").s("import \"std/str\" // `equals`\n\n")
+        .s("import \"ksmd/calc/help\" { Arg, Help }\n").s("import \"\{module\}\" as fns\n")
+        .s("import \"ksmd/calc/value\" { ").s(joined(values@, arena)).s(" }\n")
+        .s("import \"std/str\" // `equals`\n\n")
     out.s("fn call(name: U8[], a: Raw_args$@): Value? //<\n")
         .s("    //< The value of the function `name` on the arguments `a` reads; none for no such \
             name\n")
@@ -188,6 +295,12 @@ fn table_source( //< the KSPL source of the table for these functions
     for i in Range.asc(fns.len)
         out.s("    \"").s(fns.get(i).name).s("\",\n")
     out.s("} //< every function this table calls, by its name\n")
+    out.s("\nconst HELP: Help[_] = ::{\n")
+    for i in Range.asc(fns.len)
+        f: = fns.get(i)
+        h: = help_of(f@, arena)
+        help_source(h@, out@)
+    out.s("} //< what a person reads of each, from its doc comments\n")
     for i in Range.asc(fns.len)
         f: = fns.get(i)
         reader(f@, out@, arena)
@@ -293,3 +406,35 @@ priv fn read_param(p: Param@, out: Str_builder$@, arena: Arena$@) //< reads one 
     out.s("    $\{name\}: \{ty\}? = .none\n    if a.more()\n")
         .s("        got: = a.\{method\}() catch e\n            first.take(e)\n            fallback ")
         .s(zero).s("\n        \{name\} = .some(got)\n")
+
+priv fn help_source(h: Help@, out: Str_builder$@) //< one entry of `HELP`, as KSPL source
+    out.s("    Help::{ .name = ")
+    literal(h.name, out)
+    out.s(", .group = ")
+    literal(h.group, out)
+    out.s(", .args = Arg[]::{ ")
+    for i in Range.asc(h.args.len)
+        a: = h.args[i]
+        out.s(", " if i > 0 else "").s("Arg::{ .name = ")
+        literal(a.name, out)
+        out.s(", .meaning = ")
+        literal(a.meaning, out)
+        out.s(", .optional = ").s("true" if a.optional else "false").s(", .rest = ")
+            .s("true" if a.rest else "false").s(" }")
+    out.s(" }, .summary = ")
+    literal(h.summary, out)
+    out.s(", .detail = ")
+    literal(h.detail, out)
+    out.s(", .example = ")
+    literal(h.example, out)
+    out.s(", .gives = ")
+    literal(h.gives, out)
+    out.s(" },\n")
+
+priv fn literal(text: U8[], out: Str_builder$@) //< `text` as a KSPL string literal
+    out.c('"')
+    for c in text
+        if c == '"' || c == '\\'
+            out.c('\\')
+        out.c(c)
+    out.c('"')

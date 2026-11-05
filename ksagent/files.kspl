@@ -13,13 +13,13 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/seq"
-import "std/str"
+import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/sys"
 
 const MAX_HITS: Sz = 50 //< the most lines one search returns
 const MAX_READ_LINES: Sz = 400 //< the most lines one read returns
-const MAX_READ_BYTES: Sz = 32 * 1024 //< the most bytes one read returns
+const MAX_READ_BYTES: Sz = 32 * 1024 //< the most bytes of lines one read returns
 const MAX_LISTED: Sz = 500 //< the most names one listing returns
 priv const MAX_TEXT_BYTES: I64 = 8I64 * 1024I64 * 1024I64 //<
     //< a larger file, or text view, is not read
@@ -28,6 +28,8 @@ priv const MAX_OFFICE_BYTES: I64 = 32I64 * 1024I64 * 1024I64 //<
     //< a larger Word or Excel file is not read
     //< Pictures make most of such a file's size, and only its text is unpacked
     //< (`ksagent/office/zip.kspl` caps that).
+priv const NOTE_BYTES: Sz = 256 //< the room a tool keeps for the line that says where it stopped
+    //< Every such line is shorter. It counts against the tool's `room`, so the note always fits.
 priv const HIT_TEXT_BYTES: Sz = 200 //< how much of a matching line a search hit shows
     //< The model reads the lines around a hit with `read`, so a hit only has to place them.
 
@@ -206,7 +208,8 @@ fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
 // The tools: list, search and read. Each returns the text the model reads, a refusal included.
 // ==========================================
 
-fn tool_list(root: U8[], given: U8[], arena: Arena$@): U8[] //< the entries of one folder
+fn tool_list(root: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
+    //< The entries of one folder, in at most `room` bytes of the request (`sent_len`)
     //< A folder ends with `/`. What `read` would refuse is left out (`taken_under`).
     at: = resolve(root, given, arena) catch why
         return arena.text().s("refused: ").s(why).take()
@@ -220,22 +223,25 @@ fn tool_list(root: U8[], given: U8[], arena: Arena$@): U8[] //< the entries of o
     }, arena)
     out: = arena.text()
     $listed: Sz = 0
+    $sent: Sz = 0
     for name in sorted
         if !taken_under(full, name, arena)
             continue
         path: = fs.join(full, name, arena)
-        if listed == MAX_LISTED
-            out.s("(the list stops at \{MAX_LISTED\} names)\n")
+        entry: = arena.text().s(name).s("/\n" if fs.is_dir(path) else "\n").take()
+        if listed == MAX_LISTED || !fits(sent + sent_len(entry), room)
+            out.s("(the list stops at \{listed\} names)\n")
             break
         listed += 1
-        out.s(name).s("/\n" if fs.is_dir(path) else "\n")
+        sent += sent_len(entry)
+        out.s(entry)
     if listed == 0
         return "(the folder is empty)"
     return out.take()
 
-fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
+fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
     //< The lines that hold the words of `text`, as `path:line: text`, over every text file under
-    //< `given`
+    //< `given`, in at most `room` bytes of the request (`sent_len`)
     //< **A line matches when it holds every word, in any order**, ASCII case ignored. A word is
     //< found inside a longer one, so `quote` finds `quoted`. Japanese has no spaces, so a Japanese
     //< text is one word, found as it is written. With no line holding every word, the lines that
@@ -258,7 +264,7 @@ fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
     $whole: = List<|Hit|>(arena)
     $partial: = List<|Hit|>(arena)
     for path in files
-        if !path.equals(full) && !taken_under(full, path.sub_from(full.len + 1), arena)
+        if !path.equals(full) && !taken_under(full, under(full, path), arena)
             continue
         defer one: = Arena(64 * 1024)
         body: = read_text(path, one) catch
@@ -279,20 +285,19 @@ fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
             else
                 partial.push(hit)
     if whole.len > 0
-        return hit_lines(whole.slice(), arena)
+        return hit_lines("", whole.slice(), room, arena)
     if partial.len == 0
         return "(no line holds any of those words)"
-    out: = arena.text()
-    out.s("(no line holds every word; these lines hold the most of them)\n")
-    $shown_hits: Sz = 0
+    // **The lines that hold the most words come first**, so a cut list keeps the best of them.
+    $ranked: = List<|Hit|>(arena)
     $level: = words.len - 1
-    for level > 0 && shown_hits < MAX_HITS
+    for level > 0 && ranked.len <= MAX_HITS
         for h in partial
-            if h.held == level && shown_hits < MAX_HITS
-                hit_line(h, out)
-                shown_hits += 1
+            if h.held == level
+                ranked.push(h)
         level -= 1
-    return out.take()
+    return hit_lines("(no line holds every word; these lines hold the most of them)\n",
+        ranked.slice(), room, arena)
 
 priv struct Hit //< one line a search found
     path: U8[] //< the file, as the model gives it back
@@ -303,18 +308,21 @@ priv struct Hit //< one line a search found
 priv const MAX_PARTIAL: Sz = 10000 //< the most lines kept that hold only some of the words
     //< It bounds the memory a search of common words takes over a large folder.
 
-priv fn hit_lines(hits: Hit[], arena: Arena$@): U8[] //<
-    //< The lines that hold every word, at most `MAX_HITS`, and a last line where the list was cut
+priv fn hit_lines(head: U8[], hits: Hit[], room: Sz, arena: Arena$@): U8[] //<
+    //< `head`, then each hit as `path:line: text`, and a last line where the list was cut
+    //< **The list stops at `MAX_HITS`, or at the hit that would pass `room`.**
     out: = arena.text()
+    out.s(head)
+    $sent: = sent_len(head)
     for k in Range.asc(hits.len)
-        if k == MAX_HITS
-            out.s("(the list stops at \{MAX_HITS\} hits: add a word, or give a path)\n")
+        h: = hits[k]
+        line: = arena.text().s(h.path).s(":\{h.line\}: ").s(h.text).c('\n').take()
+        if k == MAX_HITS || !fits(sent + sent_len(line), room)
+            out.s("(the list stops at \{k\} hits: add a word, or give a path)\n")
             break
-        hit_line(hits[k], out)
+        sent += sent_len(line)
+        out.s(line)
     return out.take()
-
-priv fn hit_line(h: Hit, out: str.Arena_text$@) //< writes one hit as `path:line: text`
-    out.s(h.path).s(":\{h.line\}: ").s(h.text).c('\n')
 
 fn words_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The words of a search, lower case, each once
@@ -371,14 +379,24 @@ priv fn shown_path(rel: U8[], full: U8[], path: U8[], arena: Arena$@): U8[] //<
     //< A walked file's path as the model gives it back: under the root, with `/` between levels
     if path.equals(full)
         return rel
-    tail: = path.sub_from(full.len + 1)
+    tail: = under(full, path)
     return (tail if rel.len == 0
         else arena.text().s(rel).c('/').s(tail).take())
 
-fn tool_read(root: U8[], given: U8[], from_line: I64, to_line: I64, arena: Arena$@): U8[] //<
-    //< Lines `from_line`..`to_line` of one text file, each opening with its number
-    //< At most `MAX_READ_LINES` lines or `MAX_READ_BYTES` bytes; the last line says where it
-    //< stopped, so the model can read on.
+priv fn under(folder: U8[], path: U8[]): U8[] //< a path a walk of `folder` found, `folder` cut off
+    //< **The separator after the folder is cut only where one stands.** A folder given as `docs/`,
+    //< the form a shell's completion writes, or the bare root `/` ends with its own, and the walk
+    //< does not double it (`fs.join`).
+    tail: = path.sub_from(folder.len)
+    return (tail.sub_from(1) if tail.len > 0 && sys.is_path_sep(tail[0]) else tail)
+
+fn tool_read(root: U8[], given: U8[], from_line: I64, to_line: I64, room: Sz, arena: Arena$@):
+    U8[] //<
+        //< Lines `from_line`..`to_line` of one text file, each opening with its number
+        //< At most `MAX_READ_LINES` lines, `MAX_READ_BYTES` bytes of lines, and `room` bytes of
+        //< the request (`sent_len`); the last line says where it stopped, so the model can read on.
+        //< **A first line too long for one read comes cut at a character's start**, with a line
+        //< that says so. Otherwise no read could ever show it.
     at: = resolve(root, given, arena) catch why
         return arena.text().s("refused: ").s(why).take()
     full: = at.full
@@ -391,21 +409,71 @@ fn tool_read(root: U8[], given: U8[], from_line: I64, to_line: I64, arena: Arena
     if first > n
         return arena.text().s("refused: \{rel\} has \{n\} lines").take()
     last: = n if to_line < first || to_line > n else to_line
+    head: = arena.text().s(rel).s(" (lines \{first\}-\{last\} of \{n\})\n").take()
     out: = arena.text()
-    out.s(rel).s(" (lines \{first\}-\{last\} of \{n\})\n")
+    out.s(head)
     $bytes: Sz = 0
+    $sent: = sent_len(head)
     $k: = first
     for k <= last
         line: = lines.get(Sz::(k - 1I64))
-        if k - first == I64::MAX_READ_LINES || bytes + line.len > MAX_READ_BYTES
+        number: = arena.text().s("\{k\}: ").take()
+        // The line break after the line takes two bytes in the request: `\n`.
+        cost: = number.len + sent_len(line) + 2
+        if k - first == I64::MAX_READ_LINES
+            out.s(stop_note(k, true, arena))
+            break
+        over_cap: = bytes + line.len > MAX_READ_BYTES
+        if over_cap || !fits(sent + cost, room)
+            if k > first
+                out.s(stop_note(k, over_cap, arena))
+                break
+            // The first line alone is too long: it comes cut, or no read could ever show it.
+            used: = sent + number.len + 2 + NOTE_BYTES
+            left: = room - used if used < room else 0
+            kept: = cut_sent(line, MAX_READ_BYTES if left > MAX_READ_BYTES else left)
+            out.s(number).s(kept).c('\n')
+            out.s("(line \{k\} is cut after \{kept.len\} of its \{line.len\} bytes: ")
             out
-                .s("(stopped before line \{k\}: one read returns at most \{MAX_READ_LINES\} lines \
-                    or 32 KiB; read again from line \{k\})\n")
+                .s(("one read returns at most 32 KiB" if left >= MAX_READ_BYTES
+                else "the conversation has room for no more"))
+            out
+                .s((arena.text().s("; read on from line \{k + 1I64\})\n").take() if k < n else ")\n"))
             break
         bytes += line.len
-        out.s("\{k\}: ").s(line).c('\n')
+        sent += cost
+        out.s(number).s(line).c('\n')
         k += 1I64
     return out.take()
+
+priv fn stop_note(k: I64, at_cap: Bool, arena: Arena$@): U8[] //<
+    //< The line a read ends with before line `k`: at one read's cap, or at the conversation's room
+    if at_cap
+        return arena.text()
+            .s("(stopped before line \{k\}: one read returns at most \{MAX_READ_LINES\} lines or 32 \
+                KiB; read again from line \{k\})\n").take()
+    return arena.text()
+        .s("(stopped before line \{k\}: the conversation has room for no more lines, and a read \
+            again from line \{k\} gives fewer still. Answer from what you have read)\n").take()
+
+fn sent_len(text: U8[]): Sz //< the bytes a text takes in a request, once written in a JSON string
+    //< **Escaping makes it longer**: a quote or a line break takes two bytes, a control character
+    //< six. A tool's `room` is counted in these bytes, so its result fits where it goes.
+    defer $b: = Str_builder()
+    b.escape_and_append(text)
+    return b.slice().len
+
+priv fn fits(sent: Sz, room: Sz): Bool //< whether `sent` bytes fit in `room`, beside a note
+    return sent + NOTE_BYTES <= room
+
+priv fn cut_sent(text: U8[], max: Sz): U8[] //<
+    //< At most `max` bytes of the text, cut at a character's start, that take at most `max` bytes
+    //< in a request
+    $kept: = cut(text, max)
+    for sent_len(kept) > max
+        over: = sent_len(kept) - max
+        kept = cut(kept, kept.len - over if over < kept.len else 0)
+    return kept
 
 // ==========================================
 // Text helpers

@@ -90,7 +90,7 @@ Guards gain little: a lookahead cuts the calls and the time by a few percent at 
 
 **Giving `::` to paths would not buy this back.** The cost is the attempt at an operand's head, not the separator. A cast moved elsewhere still needs a mark, and every mark costs somewhere.
 
-**The parse time is saved in the memo table instead**, where the parser remembers each rule's result at each position. One table serves every file of a run, emptied by a generation stamp and sized from one slot per byte ([`../kspeg/memo.kspl`](../kspeg/memo.kspl)). That saves more than taking the cast out would, with no change to the language. Parsing dominates a cold self-compile, and takes milliseconds once the syntax-tree cache is warm.
+**The parse time is saved in the memo table instead**, where the parser remembers each rule's result at each position. One table serves every file of a run, emptied by a generation stamp and sized from one slot per byte ([`../lib/kspeg/memo.kspl`](../lib/kspeg/memo.kspl)). That saves more than taking the cast out would, with no change to the language. Parsing dominates a cold self-compile, and takes milliseconds once the syntax-tree cache is warm.
 
 **What keeping `::` costs the writer, and the answer**: a Rust writer's `Arena::new(1024)` would give three errors, none naming the fix. So where `T` is a module or a type, and `name` is nothing in scope, `T::name` is reported as one error naming the fix. For a type's `new`, that is the type call `Arena(1024)`; otherwise, the `.` spelling. A cast of a value in scope (`I32::count`) is left alone.
 
@@ -834,7 +834,7 @@ A closure lists the outer variables it uses after a `;`, with their types. It ca
 
 A chain such as `xs.where(…).select(…)` from `std/seq` can replace a hand-written loop over a `List` in ordinary code. **A chain adds no allocation** ("Iteration" in [`DESIGN-principles.md`](DESIGN-principles.md)); only `to_list` allocates, and `order_by` / `distinct` stay eager.
 
-Keep hand-written loops in `ksplc`'s inner loops (tens of thousands of runs per compilation), and in `std/`, `ksos/` and `ksai/`. `ksai/`, with `ksai/examples/qwen_infer` and `ksai/examples/llama_engine`, works per layer, token and element throughout.
+Keep hand-written loops in `ksplc`'s inner loops (tens of thousands of runs per compilation), and in `std/`, `ksos/` and `lib/ksai/`. `lib/ksai/`, with `lib/ksai/examples/qwen_infer` and `lib/ksai/examples/llama_engine`, works per layer, token and element throughout.
 
 **Only a loop that filters, maps or counts a `List` is replaced.** A loop over a slice stays, since `std/seq` extends `List<|T|>`. So does one that uses the index itself, since `std/seq` has no variant passing a position.
 
@@ -1036,6 +1036,7 @@ It lowers to `return (Shape){ .obj = (void*)&s, … };`, with no `@` written. **
 | `x@`, `a[0]@` or `s.f@` of a local, `v@` of a parameter passed by value | Yes | The address is of storage folded at the return |
 | `U8[]::{ .ptr = a[0]@, .len = 4 }`, `.some(x@)`, `a[0]@ + 1`, `U8@::x@` | Yes | The value carries such an address inside it |
 | A local set from any of those forms | Yes | The mark follows the name (below) |
+| `pp$`, `hp.p` or `s[0]`, read through a pointer or a slice to such a local | Yes | The value read is that local's, so it carries the local's mark |
 | `builder.slice()`, `arena.alloc()` | No | The compiler does not know where a call's result points |
 | A global or its address, an upcast pointer, `p$@`, `p.f@` through a pointer `p` | No | None of them points into the frame |
 
@@ -1276,7 +1277,7 @@ Three kinds of C type have no KSPL spelling. In an `extern` declaration, the tab
 
 Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit return value is read as 64 bits, so `-1L` (failure) becomes `4294967295`. It slips past a "negative means failure" check.
 
-**A `long` whose every value fits in 32 bits crosses with no C between.** A parameter is `Sz`, which fills `long`'s register or stack slot on every target. A result is `I32`, the low 32 bits of the register. OpenSSL's `SSL_ctrl` crosses this way (`ksbind/tls.kspl`). A `long` that can pass 32 bits (`ftell`'s offset) stays with the third row's C.
+**A `long` whose every value fits in 32 bits crosses with no C between.** A parameter is `Sz`, which fills `long`'s register or stack slot on every target. A result is `I32`, the low 32 bits of the register. OpenSSL's `SSL_ctrl` crosses this way (`lib/kstls/tls.kspl`). A `long` that can pass 32 bits (`ftell`'s offset) stays with the third row's C.
 
 `kspl_file_size` / `kspl_mono_us` (`ksplc/gen/runtime/hosted.c`) and `kspl_path_info` / `kspl_remove_path` (`ksplc/gen/runtime/hosted_fs.c`) take that way out. Adding one needs its LLVM counterpart too (`ksplc/gen/llvm/module.kspl`; `make test-conventions` watches the pair).
 
@@ -1299,7 +1300,7 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 
 **What is given up**:
 
-* **A library named differently per OS cannot be one `##link`.** OpenSSL is `ssl` and `crypto` on a Unix-like system, but `libssl` and `libcrypto` for MSVC. No `#cfg` names the OS, so `ksbind/tls` does not link there. A name that agrees works on both: clang's driver turns `-lopenblas` into `openblas.lib` on an MSVC target.
+* **A library named differently per OS cannot be one `##link`.** OpenSSL is `ssl` and `crypto` on a Unix-like system, but `libssl` and `libcrypto` for MSVC. No `#cfg` names the OS, so `kstls/tls` does not link there. A name that agrees works on both: clang's driver turns `-lopenblas` into `openblas.lib` on an MSVC target.
 * **Nothing is searched for, and static or dynamic is not chosen.** The linker's own message names `-l<name>`.
 * **A kept `##link` links its libraries whether or not a call reaches them**, so an edit elsewhere cannot drop a library the program names.
 

@@ -78,7 +78,7 @@ export function freePort() {
 }
 
 // The launcher and what it needs, copied beside it into `<work>/bin`, so its note and logs stay
-// out of the repository's `out/tmp`, and its `models/` is `<work>/models`.
+// out of the repository's `out/tmp`, and its `data/` is `<work>/data`.
 export function place(launcher, work) {
   const from = path.dirname(launcher);
   const bin = path.join(work, "bin");

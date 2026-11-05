@@ -43,11 +43,16 @@ debug-file: $(STAGE1_EXE)
 # A package with its own `Makefile` runs its `make test` (below). `tools/` is the one folder of
 # tests with none, so its rule is written here; the $(error) catches a second such folder, which
 # would otherwise only say "no such target".
-OWN_MAKE_PKGS := $(sort $(patsubst %/Makefile,%,$(wildcard */Makefile)))
+# **A package is named by its name, wherever its folder stands**: a library's is under `lib/`, a
+# program's at the root ("Programs stand at the top, libraries under `lib/`" in `docs/DESIGN-repository.md`).
+LIB_PKGS := $(sort $(patsubst lib/%/Makefile,%,$(wildcard lib/*/Makefile)))
+pkg_dir = $(if $(filter $(1),$(LIB_PKGS)),lib/$(1),$(1))
+OWN_MAKE_PKGS := $(sort $(patsubst %/Makefile,%,$(wildcard */Makefile)) $(LIB_PKGS))
 NO_MAKE_TESTED := $(filter-out $(OWN_MAKE_PKGS), \
-                    $(sort $(patsubst %/tests/all.kspl,%,$(wildcard */tests/all.kspl))))
+                    $(sort $(patsubst %/tests/all.kspl,%,$(wildcard */tests/all.kspl)) \
+                    $(patsubst lib/%/tests/all.kspl,%,$(wildcard lib/*/tests/all.kspl))))
 ifneq ($(NO_MAKE_TESTED),tools)
-$(error a folder holding tests/all has no Makefile: $(filter-out tools,$(NO_MAKE_TESTED)) (give it one, as ksdb/Makefile does))
+$(error a folder holding tests/all has no Makefile: $(filter-out tools,$(NO_MAKE_TESTED)) (give it one, as lib/ksdb/Makefile does))
 endif
 
 # Nobody reads this target's C, so it is not tidied: **`C_FMT=:`**, as an empty one would run the C.
@@ -68,33 +73,34 @@ debug-tools: $(STAGE1_EXE)
 		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
 	./$(TEST_DIR)/debug_tools.exe
 
-# --- kssrv and ksbind through the LLVM backend ---
+# --- kssrv and kstls through the LLVM backend ---
 # **`make LLVM=1 debug` holds neither** (they run only as their own `make test`), so genllvm broken
 # on code only they reach would go unseen. The server is built through LLVM and kssrv's tests drive
-# it; ksbind's tests are built through LLVM and run. **Linux alone**: its image holds ksbind's
-# libraries, where elsewhere ksbind's own tests skip.
+# it; kstls's tests are built through LLVM and run. **Linux alone**: its image holds kstls's
+# libraries, where elsewhere kstls's own tests skip.
 # **The compiler built in C translates them** (`STAGE1_EXE` passed down): the nested `LLVM=1`
 # would otherwise build a second compiler through LLVM first, which `selfhost_llvm` already checks.
-## Gates|test-llvm-pkgs|Build kssrv and ksbind's tests through the LLVM backend, and run kssrv's and ksbind's tests on them
+## Gates|test-llvm-pkgs|Build kssrv and kstls's tests through the LLVM backend, and run kssrv's and kstls's tests on them
 test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
 		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm DEBUG_EXE_DIR=$(TEST_DIR)
 	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
-	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
+	cd kssrv && KSPLC_STD_DIR="$(abspath std)" \
 		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspl)" \
 		"$(abspath $(TEST_DIR))/kssrv_llvm.exe" \
 		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=ksbind/tests/main.kspl OUT_STEM=ksbind_llvm DEBUG_EXE_DIR=$(TEST_DIR)
-	./$(TEST_DIR)/ksbind_llvm.exe
+		SRC_KSPL=lib/kstls/tests/main.kspl OUT_STEM=kstls_llvm DEBUG_EXE_DIR=$(TEST_DIR)
+	./$(TEST_DIR)/kstls_llvm.exe
 
 .PHONY: test-llvm-pkgs
 
 # **The one way to call a package's `Makefile`**: $(call pkg_make,<package>) <target> [<var>=<val>]
 # Caution: **Keep the leading `+`**: make passes its job slots only to a line it sees as a sub-make,
 # and a `$(MAKE)` reached through a variable is not seen, so the child warns and runs at `-j1`.
-pkg_make = +KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
-  $(MAKE) --no-print-directory -C $(1) KSPLC="$(abspath $(STAGE1_EXE))" \
+# The libraries a package uses are found in the `lib/` beside the `std` named here.
+pkg_make = +KSPLC_STD_DIR="$(abspath std)" \
+  $(MAKE) --no-print-directory -C $(call pkg_dir,$(1)) KSPLC="$(abspath $(STAGE1_EXE))" \
   RUNNER="$(abspath $(SEED_EXE))" UNDER="$(abspath $(STAGE1_EXE))" \
   SCRATCH="$(abspath $(TMP_DIR))/$(1)-suites" FUZZ_SEEDS="$(abspath .)"
 
@@ -162,7 +168,8 @@ $(foreach s,$(ALL_SUITES),$(eval $(call suite_rule,$(s))))
 test-%: $(STAGE1_EXE) $(SEED_EXE)
 	@$(call pkg_make,ksplc) test-$*
 
-FUZZ_PKGS := $(patsubst %/Makefile,%,$(shell grep -l '^test-fuzz:' $(wildcard */Makefile)))
+FUZZ_PKGS := $(foreach m,$(shell grep -l '^test-fuzz:' $(wildcard */Makefile lib/*/Makefile)), \
+  $(notdir $(patsubst %/Makefile,%,$(m))))
 $(addprefix test-,$(addsuffix -fuzz,$(FUZZ_PKGS))): test-%-fuzz: $(STAGE1_EXE) $(SEED_EXE)
 	@$(call pkg_make,$*) test-fuzz
 .PHONY: $(addprefix test-,$(addsuffix -fuzz,$(FUZZ_PKGS)))
@@ -198,7 +205,7 @@ fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 # such a round is not CI's verdict. Each reads 0 or 1 alone. What each requires, and what turning
 # it off gives up, is "The switches that require a tool" in `docs/SPEC-gates.md`.
 REQUIRE_SWITCHES := KANSO_REQUIRE_ASAN KANSO_REQUIRE_TSAN KANSO_REQUIRE_BOTH_CC \
-  KANSO_REQUIRE_CHOWN KANSO_REQUIRE_MINGW KSBIND_REQUIRE_LIBS KSOS_REQUIRE_ARM KSMD_REQUIRE_BROWSER
+  KANSO_REQUIRE_CHOWN KANSO_REQUIRE_MINGW KSTLS_REQUIRE_LIBS KSOS_REQUIRE_ARM KSMD_REQUIRE_BROWSER
 require_default := $(if $(filter linux,$(PLATFORM)),1,0)
 $(foreach v,$(REQUIRE_SWITCHES),$(eval $(v) ?= $(require_default)))
 $(foreach v,$(REQUIRE_SWITCHES),$(if $(filter 0 1,$($(v))),,\
@@ -358,18 +365,18 @@ endef
 ## Gates|test-simd|Whether the loops that should vectorize appear vectorized in the optimization record
 test-simd: $(STAGE1_EXE)
 	@echo "# VERIFYING ksai's hot loops auto-vectorize (-O3 loop vectorizer)"
-	$(call simd_check,ksai/examples/llama_engine/main.kspl,ksai/tensor.kspl,simd_check)
+	$(call simd_check,lib/ksai/examples/llama_engine/main.kspl,lib/ksai/tensor.kspl,simd_check)
 	@# **The check shows it can fail**: the same C beside a record in which no loop vectorized.
 	@: > $(LOG_DIR)/simd_none.yaml
-	@if awk -v src=ksai/tensor.kspl -v gen=$(TMP_DIR)/simd_check.c -v rec=$(LOG_DIR)/simd_none.yaml \
-		'$(simd_prog)' ksai/tensor.kspl $(TMP_DIR)/simd_check.c $(LOG_DIR)/simd_none.yaml \
+	@if awk -v src=lib/ksai/tensor.kspl -v gen=$(TMP_DIR)/simd_check.c -v rec=$(LOG_DIR)/simd_none.yaml \
+		'$(simd_prog)' lib/ksai/tensor.kspl $(TMP_DIR)/simd_check.c $(LOG_DIR)/simd_none.yaml \
 		> $(LOG_DIR)/simd_none.out; then \
 		echo "RESULT: SOME FAILED (1) -> the check passed a record in which no loop vectorized"; \
 		exit 1; fi
 	@echo "# a record in which no loop vectorized is refused"
-	$(call simd_check,ksai/examples/qwen_infer/main.kspl,ksai/nn.kspl,simd_check_qwen)
-	$(call simd_check,ksai/benches/bench_quant.kspl,ksai/quant.kspl,simd_check_quant)
-	$(call simd_check,ksai/benches/bench_qwen.kspl,ksai/delta_net.kspl,simd_check_delta)
+	$(call simd_check,lib/ksai/examples/qwen_infer/main.kspl,lib/ksai/nn.kspl,simd_check_qwen)
+	$(call simd_check,lib/ksai/benches/bench_quant.kspl,lib/ksai/quant.kspl,simd_check_quant)
+	$(call simd_check,lib/ksai/benches/bench_qwen.kspl,lib/ksai/delta_net.kspl,simd_check_delta)
 	@# Caution: **Do not remove this line.** It is the gate's verdict (`Gate.verdict`).
 	@echo "RESULT: ALL PASS (every loop naming make test-simd auto-vectorizes at -O3)"
 
@@ -378,7 +385,7 @@ test-simd: $(STAGE1_EXE)
 # `make surface`. The reference is `ksplc doc`'s answer, written out only to be browsed.
 # **A package publishes an API when it holds a `SURFACE.txt`**, so the file enrolls it: an empty
 # one is enough for `make surface` to write the first record.
-SURFACE_PKGS := $(patsubst %/SURFACE.txt,%,$(wildcard */SURFACE.txt))
+SURFACE_PKGS := $(patsubst %/SURFACE.txt,%,$(wildcard */SURFACE.txt lib/*/SURFACE.txt))
 
 ## Measure-and-inspect|surface|Rewrite each package's API record (`SURFACE.txt`), and write its reference to browse under `out/docs/`
 surface: $(STAGE1_EXE)

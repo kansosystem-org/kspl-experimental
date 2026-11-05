@@ -168,9 +168,9 @@ Caution: **Keep the characters of every line another program reads.** The guard 
 
 KSPEG is a *PEG* parser: for each rule it tries the alternatives in order and takes the first that matches. It also *memoizes* (a *packrat* parser): a second try of a rule at the same position is a lookup, a *memo hit*.
 
-`--stats` prints four numbers per rule: **calls / memo hits / read and succeeded / read and failed** (`Rule_prof` in `kspeg/engine.kspl`). They are counts, not times, so a grammar change can be compared before and after under any load.
+`--stats` prints four numbers per rule: **calls / memo hits / read and succeeded / read and failed** (`Rule_prof` in `lib/kspeg/engine.kspl`). They are counts, not times, so a grammar change can be compared before and after under any load.
 
-**"Read and failed" is derived, not counted**: it is `calls - memo hits - succeeded`. A counted one could lie while every column adds up. `kspeg/tests/engine_test.kspl` matches all four on a small grammar with a known answer.
+**"Read and failed" is derived, not counted**: it is `calls - memo hits - succeeded`. A counted one could lie while every column adds up. `lib/kspeg/tests/engine_test.kspl` matches all four on a small grammar with a known answer.
 
 | what you see | what it means |
 | :-- | :-- |
@@ -181,7 +181,7 @@ KSPEG is a *PEG* parser: for each rule it tries the alternatives in order and ta
 
 Caution: **Do not avoid it by moving `expr_cast` behind `expr_postfix`.** The reason is written above that rule in `ksplc/kspl.kspeg`.
 
-**Two of kspeg's devices pay off on this grammar** (both in [`../../kspeg/docs/DESIGN-engine.md`](../../kspeg/docs/DESIGN-engine.md)):
+**Two of kspeg's devices pay off on this grammar** (both in [`../../lib/kspeg/docs/DESIGN-engine.md`](../../lib/kspeg/docs/DESIGN-engine.md)):
 
 * **Folding a run of keywords into one lookup** takes `Primitive_type`'s thirteen names, otherwise tried millions of times in a cold compile of `ksplc/main.kspl`.
 * **Skipping a rule that cannot begin with the next byte** catches most failures before they are entered.

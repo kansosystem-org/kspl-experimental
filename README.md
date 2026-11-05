@@ -85,7 +85,7 @@ Next, [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md) covers 
 | **Offered as parts, not imposed** | Networking, scheduling and the like belong to the standard library, not the language, and only imported features add cost. |
 | **One means to one purpose** | Each purpose has one form. Command-line options have no aliases. Three fixed rules resolve each `import` path, with no search by relative path. |
 | **A compiler a tool can read** | `--diagnostic-format=json` gives error messages as JSON, and `ksplc explain <code>` explains each message code, for editors, scripts and AI models. |
-| **AI runs in it** | KSPL runs and trains AI models (`ksai/`) with no second implementation language, on microcontrollers and servers alike. |
+| **AI runs in it** | KSPL runs and trains AI models (`lib/ksai/`) with no second implementation language, on microcontrollers and servers alike. |
 
 The reasons are in [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md); its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) defines imports in "The three strict rules of path resolution", and memory management in "8.4 Memory management".
 
@@ -98,8 +98,8 @@ A row counts only what actually ran.
 | **The compiler** (`ksplc/`) | Writes C99, with generics, `T!E` and `defer`. Includes a formatter, a linter, and a Language Server for editors. | **Self-hosting produces identical output** from the compiler the seed builds and the one it builds. CI builds on Linux, macOS and Windows ([below](#where-it-is-supported)). Language Server tests cover VS Code only. |
 | **The LLVM IR backend** (LLVM’s intermediate representation, an output format besides C) | The language features pass | **Not shipped.** Why it exists is "The backends (Genc / Genllvm) and the runtime ABI" in [`ksplc/docs/DESIGN-backends.md`](ksplc/docs/DESIGN-backends.md). |
 | **The standard library** (`std/`) | Files, time, environment variables, signals, hashing and randomness, thread synchronization, TCP, HTTP/1.1, asynchronous I/O, JSON, URLs, regular expressions, collection operations | No dependencies: it builds wherever the toolchain does |
-| **The bindings** (`ksbind/`) | TLS over OpenSSL: a client, and the server half kssrv uses | **Run on Linux** in CI. The Windows job runs the tests too; no run there has confirmed them yet |
-| **The AI engine** (`ksai/`) | Tensor operations, inference, training by backpropagation, fine-tuning with low-rank adaptation (LoRA), tokenization and safetensors weight files | KSPL alone, with no external library, including continued training on the device |
+| **The bindings** (`lib/kstls/`) | TLS over OpenSSL: a client, and the server half kssrv uses | **Run on Linux** in CI. The Windows job runs the tests too; no run there has confirmed them yet |
+| **The AI engine** (`lib/ksai/`) | Tensor operations, inference, training by backpropagation, fine-tuning with low-rank adaptation (LoRA), tokenization and safetensors weight files | KSPL alone, with no external library, including continued training on the device |
 | **Kanso OS** (`ksos/`) | Cooperative and preemptive scheduling, mutual exclusion, waiting, a heap, memory-mapped I/O drivers, and a minimal ARP/IPv4/UDP/TCP stack | Ports for Cortex-M, Armv6-M, RP2040 and POSIX. **Runs on real RP2040 hardware** and in QEMU. Wireless is out of scope: its license does not fit this repository’s attribution. |
 | **Kanso Server** (`kssrv/`) | Serving static files (the car's policy file among them) over HTTP or HTTPS, and the file endpoints a local page uses | Many connections on one thread, in constant resident memory. HTTPS is checked on Linux alone |
 | **Edge AI** (AI on the device) | A policy trained on a PC runs on a microcontroller alone | **A closed loop on a palm-sized four-wheeled car** (a Freenove kit with a Raspberry Pi Pico W), deciding with the PC disconnected. Measured timings are under "What has been checked on real hardware" in [ksos](ksos/README.md). |
@@ -124,24 +124,25 @@ A row counts only what actually ran.
 
 ## 📁 Repository layout
 
-A package is a top-level folder built and shipped as one unit, and its row links to its `README.md`.
+A package is a folder built and shipped as one unit, and its row links to its `README.md`. **A program stands at the top, as does `std`, which ships with the compiler. Every other library stands under `lib/`.**
 
 | Directory / file | Description |
 | :--- | :--- |
 | **`ksplc/`** | The self-hosting compiler, the bootstrap seed (`seed.c`) and the canonical grammar `kspl.kspeg` ([entry point](ksplc/README.md) / [internal design](ksplc/docs/DESIGN-compiler.md)). |
 | **`std/`** | The standard library, which the compiler itself depends on; flat, with no folders ([file list](std/README.md) / [design policy](std/docs/DESIGN-core.md)). |
-| **`ksai/`** | The KSPL-native AI engine: matrix computation, training, a tokenizer and weight files. Its `examples/` train and run models, including a server for ksagent, and `benches/` compares speed and energy with Python and C ([introduction](ksai/README.md) / [design](ksai/docs/DESIGN-learning.md)). |
-| **`kspeg/`** | A parser that directly executes a parsing expression grammar (PEG), KSPL’s grammar `ksplc/kspl.kspeg` included ([introduction](kspeg/README.md) / [notation](kspeg/docs/SPEC-notation.md)). |
 | **`ksos/`** | Kanso OS, a lightweight real-time OS: one kernel on bare-metal microcontrollers and on Linux hosts ([introduction](ksos/README.md) / [design](ksos/docs/DESIGN-rtos.md) / [remaining work](docs/PLAN.md)). |
-| **`kssrv/`** | Kanso Server, which uses `std/net` and `std/http` ([introduction](kssrv/README.md) / [design](kssrv/docs/DESIGN-server.md) / [what is left](docs/PLAN.md)). |
-| **`ksdb/`** | Kanso DataBase, a device database with no dependencies: an append-only record on flash that survives power loss ([introduction](ksdb/README.md) / [design](ksdb/docs/DESIGN-storage.md)). |
-| **`ksbind/`** | Bindings to external C libraries: TLS over OpenSSL, kept outside `std` so that `std` needs no other installation ([introduction](ksbind/README.md) / [design](ksbind/docs/DESIGN-bindings.md)). |
+| **`kssrv/`** | Kanso Server, which uses `std/net` and `std/http` ([introduction](kssrv/README.md) / [design](kssrv/docs/DESIGN-server.md)). |
 | **`ksmd/`** | The document editor: prose, calculating tables and included documents in its own `.ksmd` language, edited and saved through `kssrv --local` ([ksmd](ksmd/README.md)). |
 | **`ksagent/`** | Answers questions about the files in one folder through a model server on your machine, citing and checking its lines ([introduction](ksagent/README.md) / [design](ksagent/docs/DESIGN-agent.md)). |
-| **`models/`** | The model files downloaded to run on this machine, which Git ignores; which models and how to start them is its [entry point](models/README.md). |
+| **`lib/`** | The libraries: packages a program imports, one folder each. The compiler finds a library here with no setting ("The source of a package other than `std`" in [`ksplc/docs/SPEC-tools.md`](ksplc/docs/SPEC-tools.md)). |
+| **`lib/ksai/`** | The KSPL-native AI engine: matrix computation, training, a tokenizer and weight files. Its `examples/` train and run models, including a server for ksagent, and `benches/` compares speed and energy with Python and C ([introduction](lib/ksai/README.md) / [design](lib/ksai/docs/DESIGN-learning.md)). |
+| **`lib/kspeg/`** | A parser that directly executes a parsing expression grammar (PEG), KSPL’s grammar `ksplc/kspl.kspeg` included ([introduction](lib/kspeg/README.md) / [notation](lib/kspeg/docs/SPEC-notation.md)). |
+| **`lib/ksdb/`** | Kanso DataBase, a device database with no dependencies: an append-only record on flash that survives power loss ([introduction](lib/ksdb/README.md) / [design](lib/ksdb/docs/DESIGN-storage.md)). |
+| **`lib/kstls/`** | TLS over OpenSSL, a binding to an external C library, kept outside `std` so that `std` needs no other installation ([introduction](lib/kstls/README.md) / [design](lib/kstls/docs/DESIGN-bindings.md)). |
+| **`data/`** | The large files that Git ignores and `make clean` keeps: the downloaded models, and the weights made here that take long to make again ([entry point](data/README.md)). |
 | **`docs/`** | Documents that cover the whole project, such as the [design rationale](docs/DESIGN-principles.md), [document rules](docs/SPEC-documents.md) and [remaining work](docs/PLAN.md). [`docs/README.md`](docs/README.md) lists their readers. |
 | **`tests/`** | The test suites for the language, the toolchain and the OS ([entry point](tests/README.md)). |
-| **`tools/`** | Tools for developing Kanso itself, in KSPL where possible, including `ai_assist/` (training the code-completion AI) ([entry point](tools/README.md) / [what is left](docs/PLAN.md)). |
+| **`tools/`** | Tools for developing Kanso itself, in KSPL where possible ([entry point](tools/README.md)). |
 | **`.vscode/`** | Editor settings, syntax highlighting for `.kspl` and `.kspeg`, and the Language Server Protocol (LSP) extension. |
 | **`.github/`** | GitHub Actions: `ci.yml` and `release.yml` (per-OS binaries on a tag push). |
 | **`.devcontainer/`** | The same environment for Dev Containers and Codespaces. |
@@ -152,7 +153,7 @@ A package is a top-level folder built and shipped as one unit, and its row links
 
 Kanso is published under the [MIT License](LICENSE.md).
 
-Note: **Some files under `ksos/`, `ksai/` and `ksagent/` owe a notice to the work they follow.** Among them are the Raspberry Pi pico-sdk (BSD-3-Clause), llama.cpp (MIT) and zlib's puff (zlib License). [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) lists each file with its notice. It also covers third-party artifacts that are not bundled, including Qwen weights and vendor materials.
+Note: **Some files under `ksos/`, `lib/ksai/` and `ksagent/` owe a notice to the work they follow.** Among them are the Raspberry Pi pico-sdk (BSD-3-Clause), llama.cpp (MIT) and zlib's puff (zlib License). [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) lists each file with its notice. It also covers third-party artifacts that are not bundled, including Qwen weights and vendor materials.
 
 ## 📖 Further reading
 

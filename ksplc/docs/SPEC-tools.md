@@ -363,7 +363,7 @@ flowchart LR
     subgraph IN["what is read: telling it a place"]
         SRC["one's own .kspl"]
         STD["std/'s body<br/>--std-dir > KSPLC_STD_DIR > the default std"]
-        PKG["the source of a package other than std<br/>a local folder > --pkg-src-dir / KSPLC_PKG_SRC_DIR"]
+        PKG["the source of a package other than std<br/>a local folder > --pkg-src-dir / KSPLC_PKG_SRC_DIR > the lib/ beside std"]
     end
     SRC --> K["ksplc"]
     STD --> K
@@ -403,19 +403,29 @@ ksplc info std-dir                     # => /home/me/kspl/std
 
 #### 2.9.2 The source of a package other than `std` (`--pkg-src-dir=`)
 
-Any other import (`import "mylib/thing"`) is looked for **relative to the current folder**. `--pkg-src-dir=<DIR>` or the environment variable `KSPLC_PKG_SRC_DIR` adds **one more place** to look. The precedence is `--pkg-src-dir=` > `KSPLC_PKG_SRC_DIR` > empty (the current folder alone). The name says `src` because it points at a package's source, not at anything built.
+Any other import (`import "mylib/thing"`) names a package by its first segment. **The package is read from the first of these places that holds a folder of its name**:
+
+| # | The place | The use assumed |
+| :-- | :-- | :-- |
+| 1 | the current folder | a copy the writer put there (a vendored copy), or a project's own folder |
+| 2 | `--pkg-src-dir=<DIR>`, else the environment variable `KSPLC_PKG_SRC_DIR` | packages the writer keeps in one place of their own |
+| 3 | the `lib/` folder beside the standard library's folder ([§2.9.1](#291-locating-the-standard-library---std-dir)) | the libraries that come with that `std`: the repository's `lib/`, or an installation's `<prefix>/lib/kspl/lib`. The release zip carries no `lib/` |
+
+**Where no place holds a folder of its name, the package is looked for in the current folder.** The diagnostic names the path tried there. The name says `src` because the option points at a package's source, not at anything built.
 
 ```sh
-export KSPLC_STD_DIR=/home/me/kspl/std
-export KSPLC_PKG_SRC_DIR=/home/me/kspl        # the parent of ksdb/ ksai/ …
+export KSPLC_PKG_SRC_DIR=/home/me/kspl        # the parent of mylib/ and other packages
 ksplc run main.kspl                        # one's own project can be placed anywhere
+ksplc run uses_ksai.kspl                   # ksai comes from the lib/ beside the std taken
 ```
 
-**The place is decided once per package, and a local copy wins.** Where the current folder holds a folder with the package's name (a vendored copy), every file of the package is read from there. Otherwise every file is read from the named place. So one package never comes half from one place and half from another.
+**The place is decided once per package, and a local copy wins.** Every file of the package is read from the place taken. So one package never comes half from one place and half from another.
+
+**A diagnostic and the generated C's `#line` name the file where it was read.** A file of `ksai` taken from the third place is named `lib/ksai/tensor.kspl` from the repository's root, so the place taken can always be read. Its settings are the `ksplc.cfg` files above that file ([§6.2](#62-the-search-and-the-range-it-applies-to)).
 
 **Putting a copy in place also remakes `ksplc run`'s cache entry.** The file at the named place is unchanged, so ksplc also checks whether a copy in the current folder now hides it ([§2.5](#25-running-as-a-script-ksplc-run)).
 
-**This setting does not go in `ksplc.cfg` either**, since a place belongs to the environment and the way of installing. A package's name does go there. A package that names itself ([§6.4](#64-a-package-that-names-itself-package)) finds its own files in its own folder, not in either place above.
+**This setting does not go in `ksplc.cfg` either**, since a place belongs to the environment and the way of installing. A package's name does go there. A package that names itself ([§6.4](#64-a-package-that-names-itself-package)) finds its own files in its own folder, not in any place above.
 
 **Paths in diagnostics**: inside the standard library, a diagnostic names the file by its logical name (`std/io.kspl`), not its actual place. A file that was not found, in `std` or in a package, is named by the path ksplc actually tried to open.
 
@@ -721,7 +731,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 | **`AllowShortBlocks`** | `false` | `true` lets a short block go on one line (`if cond { break; }`; in `.kspl`, `if cond { break }` with no `;`), except one with a comment inside its braces, which is never folded (below). |
 | **`AllowShortFunctions`** | `false` | `true` lets an `fn` whose body is a single statement go on one line (a method in an `impl` too; in `.kspl` without the statement's `;`). As with `AllowShortBlocks`, one with a comment inside, one too wide for the column limit, and one of two or more statements stay on three lines. |
 
-**A key not in the table is an error**, so a typo such as `IndentWith` cannot succeed while the default stays in effect unnoticed. No setting switches the trailing comma: the formatter follows the source.
+**A key not in the table is an error**, so a typo such as `IndentWith` cannot succeed while the default stays in effect unnoticed. **A value the key does not take is an error too.** `IndentWidth` and `ColumnLimit` take a whole number of 1 or more, written in digits alone. The other two take `true` or `false` in lower case. So `IndentWidth: two` and `AllowShortFunctions: True` are refused. No setting switches the trailing comma: the formatter follows the source.
 
 **A comment inside braces stays inside the block, at its level**, a comment right before the `}` included. A block holding a comment is never folded onto one line.
 
@@ -1086,7 +1096,7 @@ break
 
 ### 7.4 How reserved words are gathered automatically
 
-**The list of reserved words is written nowhere**: it is read from the grammar each time. A single-quoted string in the grammar file `ksplc/kspl.kspeg` (`'if'`) is a reserved word, unlike an ordinary double-quoted string (`"0x"`). kspeg gathers them into the rule `_Keyword` it synthesizes (the notation is kspeg's specification, reached from [`kspeg/README.md`](../../kspeg/README.md)). The list is read from each rule's own keywords, not from the shape of `_Keyword`. A keyword that several rules use is listed once. So adding or removing a keyword in the grammar needs no separate list to maintain.
+**The list of reserved words is written nowhere**: it is read from the grammar each time. A single-quoted string in the grammar file `ksplc/kspl.kspeg` (`'if'`) is a reserved word, unlike an ordinary double-quoted string (`"0x"`). kspeg gathers them into the rule `_Keyword` it synthesizes (the notation is kspeg's specification, reached from [`lib/kspeg/README.md`](../../lib/kspeg/README.md)). The list is read from each rule's own keywords, not from the shape of `_Keyword`. A keyword that several rules use is listed once. So adding or removing a keyword in the grammar needs no separate list to maintain.
 
 ### 7.5 ksplc doc: what a file publishes, as a reference
 
@@ -1107,7 +1117,7 @@ It prints, as Markdown on standard output, each declaration a file publishes as 
 | a folder (`std`, `ksai`) | every file under it that publishes something, one line each with how many entries it holds and its summary; `tests/` and build output are not read |
 
 * **A name resolves as an `import` resolves it**: a `std/` name against `--std-dir` / `KSPLC_STD_DIR`, any other against `--pkg-src-dir` / `KSPLC_PKG_SRC_DIR` or the current folder ([§2.9](#29-source-crossing-the-boundary-its-place-and-what-is-recorded)).
-* **A name is made logical first**, as a compile makes its input's name: a `./` in front, a `/` at the end and each `.` part are dropped. So `kspeg/`, `./kspeg` and `kspeg` list one folder, and its files are named `kspeg/engine` in each.
+* **A name is made logical first**, as a compile makes its input's name: a `./` in front, a `/` at the end and each `.` part are dropped. So `lib/kspeg/`, `./lib/kspeg` and `lib/kspeg` list one folder, and its files are named `kspeg/engine` in each.
 * **The entry begins at the first `.` after the last `/`**, since a logical name holds no `.`. A name written with its extension (`std/io.kspl`) is therefore read as the file `std/io` asked for an entry `kspl`. A last part of `.` or `..` is a folder, not an entry: `ksplc doc .` lists the current folder, its files named from it.
 * **It reads what the record reads** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)): the source alone, with no analysis. So it answers in a fraction of a second and cannot disagree with `SURFACE.txt`. `--surface-scope=all` shows what is not `pub` as well.
 * **A name that resolves to nothing is an error** (exit 1), naming what was looked for, and so is an entry the file does not publish. A file in a folder that cannot be read is named in the listing, not dropped.

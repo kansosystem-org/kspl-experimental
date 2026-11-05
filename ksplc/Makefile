@@ -1,6 +1,6 @@
 # ksplc -- testing this package, and rebuilding the compiler it holds, on its own
 # From a `ksplc`, the `std` it carries and kspeg: where the `std` is comes from the ksplc itself,
-# or from `KSPLC_STD_DIR`; where kspeg is, from `KSPLC_PKG_SRC_DIR`.
+# or from `KSPLC_STD_DIR`; where kspeg is, from the `lib/` beside that `std` or `KSPLC_PKG_SRC_DIR`.
 # Caution: **Keep this file standing alone.** A copy of this folder alone is tested by it.
 
 KSPLC ?= ksplc

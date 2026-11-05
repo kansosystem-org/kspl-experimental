@@ -303,7 +303,7 @@ The repository has three layers. From the top:
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `ksbind/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `ksbind→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→ksbind`, `ksos→ksdb`) |
+| implementation | `ksplc/` / `std/` / `lib/ksai/` / `lib/kspeg/` / `ksos/` / `kssrv/` / `lib/ksdb/` / `lib/kstls/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kstls→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→kstls`, `ksos→ksdb`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
 The chart shows the shape with a few of the packages; the table above is the full list of directions.
@@ -325,7 +325,7 @@ flowchart BT
 
 Caution: **Do not create sideways references between packages.** A pointer from `std/` to `ksplc/` or `ksos/` has no dependency behind it, so moving either end goes unnoticed.
 
-**No edge goes from implementation to leaf, data included.** A package's examples and benchmarks stand inside it. The `ksos` Cortex-M demo embeds the weights in `ksai/examples/` through `ksos→ksai`. Do not copy the weights into `ksos/`: only the retrained set would be current.
+**No edge goes from implementation to leaf, data included.** A package's examples and benchmarks stand inside it. The `ksos` Cortex-M demo embeds the weights in `lib/ksai/examples/` through `ksos→ksai`. Do not copy the weights into `ksos/`: only the retrained set would be current.
 
 **Do not build a documentation signpost from implementation toward leaf.** "Which tool is built on these parts" and "which suite runs them" belong to the leaf and to the index.
 
@@ -340,7 +340,7 @@ Note: **The code is read against the same table.** `embed` (baking a file's cont
 | May be named | Example | What happens if it is not written |
 | :-- | :-- | :-- |
 | **One half of an implementation** | The bodies behind `std`'s `extern` are in `ksplc/gen/runtime/`, and the region holding the panic record is defined by `ksos/port/*/link.ld` | If a name drifts, it breaks silently. Whoever fixes one half cannot fix the other |
-| **A premise behind a rule** | `Map`'s hashing is not randomized because `kssrv/` and `ksdb/` do not use `Map` | When the premise changes, the rule stays with nothing to show why |
+| **A premise behind a rule** | `Map`'s hashing is not randomized because `kssrv/` and `lib/ksdb/` do not use `Map` | When the premise changes, the rule stays with nothing to show why |
 
 **Anything whose name one package alone cannot fix is also "one half of an implementation".** `ksplc/` matches names written in `std` (trait and operator names). It turns syntax into calls on `std` (string interpolation, `for..in`, `retain`/`release`), and rejects certain forms on sight (use-after-free).
 
@@ -433,6 +433,6 @@ A quoted name is still looser than a link: a wrong name survives as long as its 
 
 A member that the document's own KSPL blocks declare counts too. A name tied to its file is checked against that file instead. The check leaves alone another product's name, a file's name (`edit.kspl`) and a code fragment (`io.out().s("x")`).
 
-**A `make` command in a document names a target make has**, in a code span or a fence; `make test-docref` asks make itself. A document inside a package with its own `Makefile` can name its targets, as can a sentence naming the package (``ksbind's own `make test` ``).
+**A `make` command in a document names a target make has**, in a code span or a fence; `make test-docref` asks make itself. A document inside a package with its own `Makefile` can name its targets, as can a sentence naming the package (``kstls's own `make test` ``).
 
 **A description written in a source is read where it is written.** `ksplc doc` prints it as it stands, so a relative link in it resolves from the source's folder.

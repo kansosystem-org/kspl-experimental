@@ -16,7 +16,7 @@ echo '<h1>Hello</h1>' > public/index.html
 ./out/kssrv.exe 8443 ./public --cert=cert.pem --key=key.pem   # HTTPS on 0.0.0.0:8443
 ```
 
-**Building it needs OpenSSL 1.1.1 or later**, which kssrv links for HTTPS: `libssl-dev` on Debian and Ubuntu, `mingw-w64-ucrt-x86_64-openssl` on MSYS2. On macOS, install Homebrew's `openssl@3` and point `LIBRARY_PATH` at its `lib` folder ("Pitfalls" in [ksbind](../ksbind/README.md)).
+**Building it needs OpenSSL 1.1.1 or later**, which kssrv links for HTTPS: `libssl-dev` on Debian and Ubuntu, `mingw-w64-ucrt-x86_64-openssl` on MSYS2. On macOS, install Homebrew's `openssl@3` and point `LIBRARY_PATH` at its `lib` folder ("Pitfalls" in [kstls](../lib/kstls/README.md)).
 
 The port and the root are **positional**; no environment variable fills either in. The port is a whole number from 0 to 65535, and options follow in any order.
 
@@ -90,7 +90,7 @@ Idle, it uses no CPU. **What it holds on its heap comes back to the same figure*
 
 ## The tests
 
-**`make test` runs them from this folder** ([`kssrv/Makefile`](Makefile)). It needs a `ksplc`, a C compiler and OpenSSL 1.1.1 or later, which kssrv links for HTTPS through [ksbind](../ksbind/README.md) (`libssl-dev` on Debian and Ubuntu). It builds the server, starts it again and again, and checks from outside what it answers ([`kssrv/tests/main.kspl`](tests/main.kspl)). kssrv names itself in [`kssrv/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs them the same way. `make` alone builds the server into this folder's `out/`.
+**`make test` runs them from this folder** ([`kssrv/Makefile`](Makefile)). It needs a `ksplc`, a C compiler and OpenSSL 1.1.1 or later, which kssrv links for HTTPS through [kstls](../lib/kstls/README.md) (`libssl-dev` on Debian and Ubuntu). It builds the server, starts it again and again, and checks from outside what it answers ([`kssrv/tests/main.kspl`](tests/main.kspl)). kssrv names itself in [`kssrv/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs them the same way. `make` alone builds the server into this folder's `out/`.
 
 **A failing check does not stop the run.** The closing `RESULT:` line is printed after every server the run started has stopped, so none is left on its port for the next run ([`std/verdict.kspl`](../std/verdict.kspl)).
 
@@ -106,5 +106,4 @@ How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-
 | :-- | :-- | :-- |
 | [`kssrv/docs/SPEC-api.md`](docs/SPEC-api.md) | What each request returns, the JSON API under `/api/`, and the limits a caller writes against. | Whoever calls the server from their own code |
 | [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md) | Why it is shaped this way: one thread for every connection, a fixed-size connection table, and an arena per connection. | Whoever changes kssrv |
-| The "kssrv" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left, and what marks each stage as done. | Whoever changes kssrv |
 | [std](../std/README.md) | The `net` / `reactor` / `http` / `json` it is built on; `ksplc doc std` lists every file std publishes. | Whoever changes kssrv |

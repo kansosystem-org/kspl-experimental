@@ -159,7 +159,25 @@ flowchart LR
 
 ## What crosses a package boundary
 
-**A package's promise to whoever is outside it is exactly its `pub` names.** (A *package* is one top-level folder such as `std/` or `ksdb/`.) This chapter covers where tests go, how the published API is recorded, how outside code is brought in, and how a package is found.
+**A package's promise to whoever is outside it is exactly its `pub` names.** (A *package* is one folder such as `std/` or `lib/ksdb/`.) This chapter covers where the folders stand and where tests go. It also covers how the published API is recorded, how outside code is brought in, and how a package is found.
+
+### Programs stand at the top, libraries under `lib/`
+
+**A package that builds a program stands at the repository's top. A library, a package that only other packages import, stands under `lib/`.** `std` is the one library at the top: it ships with the compiler, and `--std-dir` finds it by its own rule ("Locating the standard library" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+
+| Where | What stands there |
+| :-- | :-- |
+| The top | The programs (`ksplc/`, `kssrv/`, `ksos/`, `ksmd/`, `ksagent/`), `std/`, and the folders that serve the whole repository (`docs/`, `tests/`, `tools/`, `mk/`, `data/`) |
+| `lib/` | The libraries other packages import (`lib/ksai/`, `lib/ksdb/`, `lib/kspeg/`, `lib/kstls/`) |
+
+**The folder does not change a name.** A library's files are still imported as `ksai/…`, since a package names itself ("A package names itself, and names what it uses" below). The compiler finds a library in the `lib/` beside `std`'s folder with nothing set. `make install` puts the same `lib/` beside the installed `std/`, so a program outside the repository imports `ksai/…` the same way. The release zip carries `std/` alone. A file in `lib/ksai/` owes a notice, and the zip holds no such file ("What recipients are owed: one table, held by a gate" below).
+
+**The motive**: with ten packages beside the folders that serve the repository, a reader could not tell which ones a program can import. The split shows it, and the compiler takes the same split as the place a library is found. So the layout and the lookup cannot drift apart.
+
+**What it gives up**:
+
+* **A path is one step longer** (`lib/ksai/tensor.kspl`), and a link from a library's document to the top climbs one more `..`.
+* **A tool that lists the packages reads two folders**: `*/` and `lib/*/` (`OWN_MAKE_PKGS` in `mk/test.mk`, `group_of` in `tests/suite/docref_test.kspl`).
 
 ### A test of a unit's inside goes inside that unit
 
@@ -172,7 +190,7 @@ flowchart LR
 | Inspects the compiler's answers | `ksplc/tests/`, importing nothing from `ksplc/` | It drives the built compiler as a child process |
 | Stands on what walks the repository or builds a child process | The root `tests/` | It uses things from outside every unit |
 
-**A test looking at two packages goes to the one that imports the other.** A test of both `std/prng` and `ksai/sampler` in `std/tests/` would make std depend on ksai. So it sits in `ksai/tests/token_test.kspl`.
+**A test looking at two packages goes to the one that imports the other.** A test of both `std/prng` and `ksai/sampler` in `std/tests/` would make std depend on ksai. So it sits in `lib/ksai/tests/token_test.kspl`.
 
 **`ksplc/tests/` imports nothing from `ksplc/`.** Its suites run the compiler this folder builds as a child process. A test of an internal function would bring the whole compiler into that executable, so measure `make debug`'s translation time before adding one.
 
@@ -186,7 +204,7 @@ flowchart LR
 
 * **One package or all.** `make debug-<name>` runs one package where `make debug` runs all. That shortens the wait for a first answer; what to run before pushing is `make ci`.
 * **Each package has a second door**, its `<package>/tests/main.kspl`, run by its own `Makefile`. `tools/` has none, so the root's `debug-tools` runs it; the `$(error)` in `mk/test.mk` stops make for a second folder like it. Each door passes its own compiler where a run takes one (`run_std(ksplc, arena)`), and both are compiled on every round.
-* **`ksbind` has the second door alone**: its tests link libraries from outside the toolchain, which `make debug` must not need.
+* **`kstls` has the second door alone**: its tests link libraries from outside the toolchain, which `make debug` must not need.
 
 **Each package's entry point is `<package>/tests/all.kspl`, and its opening comment says what the package's tests inspect.** Its suite runs every function named `test_…` in the files it imports ("8.5 Tests: functions named `test_`, run by a suite" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Adding a test touches no list; adding a file of tests adds one import line.
 
@@ -194,9 +212,9 @@ flowchart LR
 
 #### Where an unneeded `pub` is reported
 
-**[I0402] can be enabled for `ksmd/`, `ksos/`, `ksagent/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `ksdb/`, `ksai/`, `ksbind/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. Read the header of `all.kspl` before adding.
+**[I0402] can be enabled for `ksmd/`, `ksos/`, `ksagent/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `lib/ksdb/`, `lib/ksai/`, `lib/kstls/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. Read the header of `all.kspl` before adding.
 
-**The diagnostic is turned off in two files, each with its reason beside the switch.** In `tools/ai_assist/ksplc_oracle.kspl`, `compiles` is a `pub` that the tools' tests use (`tools/ai_assist/tests/ai_assist_test.kspl`). In `ksplc/tests/prog/equiv.kspl`, `main`'s error type is seen from outside as the entry point's.
+**The diagnostic is turned off in one file, with its reason beside the switch.** In `ksplc/tests/prog/equiv.kspl`, `main`'s error type is seen from outside as the entry point's.
 
 **Inside `tests/` itself it is the reverse.** No package imports that leaf, so a `pub` there has no user outside the unit, and the diagnostic is enabled (`tests/ksplc.cfg`). A `pub` inside the materials (`negative/`, `lint/`, and forms held in `"""…"""`) is not reported, since they are written to make a visibility diagnostic fire.
 
@@ -217,7 +235,7 @@ flowchart LR
 
 ### Outside parts are not fetched; only their location is stated
 
-**KSPL has no package manager: to use someone else's code, you copy it onto your machine and state where it is** (`--pkg-src-dir=` and the environment variable `KSPLC_PKG_SRC_DIR`). The resolution order, and the rule that a local copy wins, are "The source of a package other than `std`" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md). Nothing is fetched, no versions are solved, and nothing runs at import time.
+**KSPL has no package manager: to use someone else's code, you copy it onto your machine and state where it is** (`--pkg-src-dir=` and the environment variable `KSPLC_PKG_SRC_DIR`). The libraries that ship with `std` are found with nothing stated, in the `lib/` beside it. The resolution order, and the rule that a local copy wins, are "The source of a package other than `std`" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md). Nothing is fetched, no versions are solved, and nothing runs at import time.
 
 **The motive**: a part requested by name becomes someone else's code that nobody has read. Fetching brings four questions that whoever requested it cannot see. Where did it come from, which version is it, what comes with it, and what runs at import time? Kanso holds no hidden work at build time, any more than at run time. Where a manifest is language code, solving dependencies means running it.
 
@@ -240,7 +258,7 @@ flowchart LR
 **What it gives up**:
 
 * A new dependency is written twice, in the `import` and in `uses`.
-* **A used package is still found as a folder of its name**, locally or under `--pkg-src-dir`.
+* **A used package is still found as a folder of its name**: locally, under `--pkg-src-dir`, or in the `lib/` beside `std`.
 
 ### The standard library reaches only itself
 
@@ -250,7 +268,7 @@ flowchart LR
 
 **Why a rule and not a name**: naming `std` would state a second time what its place states, and its list would always be empty. A settings file can be widened by editing it, where a rule of the language cannot.
 
-**Nor does `std` bind a C library from outside the toolchain.** It is plain KSPL over the runtime every program carries, so it builds anywhere. A binding to an outside library, such as OpenSSL, stands in `ksbind` (why is [`../ksbind/docs/DESIGN-bindings.md`](../ksbind/docs/DESIGN-bindings.md)).
+**Nor does `std` bind a C library from outside the toolchain.** It is plain KSPL over the runtime every program carries, so it builds anywhere. A binding to an outside library, such as OpenSSL, stands in `kstls` (why is [`../lib/kstls/docs/DESIGN-bindings.md`](../lib/kstls/docs/DESIGN-bindings.md)).
 
 **What it gives up**: a `std` passed with `--std-dir` cannot import the user's packages.
 
@@ -288,13 +306,13 @@ flowchart LR
 
 **By spelling, not by asking the filesystem.** The filesystem's way needs the file to exist. The fold by spelling has one documented caveat, a symbolic link followed by `..`, the price Python's `normpath` and Go's `filepath.Abs` also take.
 
-**A `..` that climbs out of a package read from a place of its own stays**: `std`'s, a package that names itself, and one under `--pkg-src-dir`. That folder need not stand at its name, so `ksdb/../x` folded to `x` would name the wrong file.
+**A `..` that climbs out of a package read from a place of its own stays.** Such a package is `std`, one that names itself, or one found under `--pkg-src-dir` or `lib/`. That folder need not stand at its name, so `ksdb/../x` folded to `x` would name the wrong file.
 
 **What it gives up**: a file reached through a symbolic link followed by `..` is read at the spelling's place, not where the link points.
 
 ### A package's examples and benchmarks stand inside it
 
-**An example program or a benchmark that uses only one package lives inside that package** (`ksai/examples/`, `ksai/benches/`). The package's own `make test` builds the examples and holds them to what they print. A program that needs more than one package and `std` stays a tool (`tools/ai_assist/`).
+**An example program or a benchmark that uses only one package lives inside that package** (`lib/ksai/examples/`, `lib/ksai/benches/`). The package's own `make test` builds the examples and holds them to what they print. A program that needs more than one package and `std` stays a tool (`tools/`).
 
 **The motive**: kept in a leaf of their own, `ksai`'s examples would travel apart from the engine. A copy of `ksai` would carry none of them. And `ksos`, which embeds the weights one of them trains, would need an arrow from implementation to leaf; here it uses `ksos→ksai`, one the direction table has. Examples outside the library's build are found broken only by whoever runs them.
 
@@ -391,7 +409,7 @@ Where else the token must not travel, and why, is "How the token gets across" in
 
 ## Why one repository
 
-Kanso holds ten packages (`ksagent` / `ksai` / `ksbind` / `ksdb` / `ksmd` / `ksos` / `kspeg` / `ksplc` / `kssrv` / `std`) in one repository. **This is the decision not to split.** Most changes touch more than one package, and the compiler cannot be built without the standard library.
+Kanso holds ten packages (`ksagent` / `ksai` / `ksdb` / `ksmd` / `ksos` / `kspeg` / `ksplc` / `kssrv` / `kstls` / `std`) in one repository. **This is the decision not to split.** Most changes touch more than one package, and the compiler cannot be built without the standard library.
 
 ### What happens if it is split
 
@@ -448,7 +466,7 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 | `out/test/` | A program built only for a gate, such as `test_debug.exe`, `debug_tools.exe` and `kssrv_llvm.exe` |
 | `out/log/` | Logs and reports: `make.log`, each gate's log under `ci/`, the comparisons `stage_diff_c.txt` and `ship_diff.txt`, and the repository's size `repo_stat.txt` |
 | `out/tmp/` | Scratch that a gate or a tool writes during its run |
-| A folder named for a package or a tool | That package's build as its own `Makefile` lays it out (`ksmd/`, `ksos_posix/`), or one tool's output (`surface/`, `docs/`, `ai_assist/` for the models and tokenizers `tools/ai_assist` makes, `benches/` for ksai's benchmarks) |
+| A folder named for a package or a tool | That package's build as its own `Makefile` lays it out (`ksmd/`, `ksos_posix/`). Or one tool's output: `surface/`, `docs/`, `code_complete/` for the coding example's corpus and tokenizer, `ksai/` for what ksai's tools convert, `benches/` for ksai's benchmarks |
 
 **A new output goes into one of these folders.** It goes at the top only when a person runs it, since its path then becomes part of what the documents promise. `make debug-file` (VS Code's F5) is such a case: its program stands at the top, where the debugger looks. A benchmark goes into `out/benches/`, although a person runs it: `ksplc build` leaves a program's C and libraries beside it, and they would fill the top. `make clean` removes `out/` whole, so a folder needs no cleaning rule of its own.
 

@@ -55,9 +55,9 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
         //< `to_column` of the same table, as a paste after a cut moves them
         //< Each cell there takes a moved cell whole: its value or formula, look and note. A cell
         //< left behind becomes empty. Row -1 is the names, which move only along the names row.
-        //< A reference to a moved cell follows it, and a range follows when it moves whole. A
-        //< reference to a cell written over becomes `#REF!`, and so does a range whose two corners
-        //< were written over. A range moved in part stays where it is.
+        //< A reference to a moved cell, or a range moved whole, follows it; one written over
+        //< becomes `#REF!`. A range moved in part stays. Whole columns, as `t.A`, follow the same
+        //< rule, but only when every data row moves.
     t: = table_at(doc, u)!
     if height < 1 || width < 1 || top < -1 || left < 0 || to_row < -1 || to_column < 0 ||
         (top < 0 && to_row >= 0) || (top >= 0 && to_row < 0) || top + height > t.rows.len ||
@@ -78,6 +78,8 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
     $saved: = List<|Saved|>(scratch)
     from: = Area::{ .top = top, .left = left, .height = height, .width = width }
     to: = Area::{ .top = to_row, .left = to_column, .height = height, .width = width }
+    // Whole columns name every row, so only a block of every data row moves them.
+    every_row: = top <= 0 && top + height == t.rows.len
     for v in Range.asc(doc.tables.len)
         for i in Range.asc(doc.tables[v].cells.len)
             cell: = doc.tables[v].cells[i]
@@ -85,16 +87,18 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
                 continue
             for k in Range(cell.first, cell.first + cell.count, 1)
                 $p: = doc.tables[v].pieces[k]
-                // Whole columns name no cell, so cells moving in or out leave them as they are.
-                if p.kind == .text || p.kind == .columns || p.table != u
+                columns: = p.kind == .columns
+                if p.kind == .text || p.table != u || columns && !every_row
                     continue
-                a_moves: = from.holds(at@, u, p.from)
-                b_moves: = from.holds(at@, u, p.to)
+                a_moves: = from.holds(at@, u, p.from, columns)
+                b_moves: = from.holds(at@, u, p.to, columns)
                 if a_moves && b_moves
-                    p.from = moved(t, at@, u, p.from, to_row - top, to_column - left)
-                    p.to = moved(t, at@, u, p.to, to_row - top, to_column - left)
-                else if !a_moves && !b_moves && to.holds(at@, u, p.from) &&
-                    to.holds(at@, u, p.to)
+                    p.from =
+                        moved(t, at@, u, p.from, to_row - top, to_column - left, columns)
+                    p.to =
+                        moved(t, at@, u, p.to, to_row - top, to_column - left, columns)
+                else if !a_moves && !b_moves && to.holds(at@, u, p.from, columns) &&
+                    to.holds(at@, u, p.to, columns)
                     p = text_piece(BROKEN)
                 else
                     continue
@@ -144,15 +148,22 @@ priv struct Area //< a rectangle of a table's cells, by places
     width: Sz
 
 impl Area
-    fn holds(a: Self@, at: Positions@, u: Sz, c: Corner): Bool //< whether a corner stands in it
-        row: = at.of(u, c.row)
+    fn holds(a: Self@, at: Positions@, u: Sz, c: Corner, whole: Bool): Bool //<
+        //< Whether a corner stands in it; a whole column's corner, by its column alone
         column: = at.of(u, c.column)
-        return row >= 0 && column >= 0 && row >= a.top && row < a.top + a.height &&
-            column >= a.left && column < a.left + a.width
+        if column < 0 || column < a.left || column >= a.left + a.width
+            return false
+        if whole
+            return true
+        row: = at.of(u, c.row)
+        return row >= 0 && row >= a.top && row < a.top + a.height
 
-priv fn moved(t: Table@, at: Positions@, u: Sz, $c: Corner, rows: Sz, columns: Sz): Corner //<
-    //< The corner `rows` lower and `columns` further right, keeping its `$` marks
-    c.row = t.rows[at.of(u, c.row) + rows]
+priv fn moved(t: Table@, at: Positions@, u: Sz, $c: Corner, rows: Sz, columns: Sz, whole: Bool):
+    Corner //<
+        //< The corner `rows` lower and `columns` further right, keeping its `$` marks; a whole
+        //< column's corner only further right, as its row is unused
+    if !whole
+        c.row = t.rows[at.of(u, c.row) + rows]
     c.column = t.columns[at.of(u, c.column) + columns]
     return c
 

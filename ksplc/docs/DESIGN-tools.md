@@ -132,7 +132,7 @@ Caution: **Do not ask the client for the narrowing's clue.** The server holds th
 **A rename answers an error naming the reason, and writes nothing, where its edits would break the program or change what it means** (`ksplc/lsp/rename.kspl`). An edit applied across files is hard to take back by hand, and it lands in files nobody has open.
 
 * **The new name is checked against the grammar itself** (`reads_whole` in `ksplc/parse/load.kspl`). A list of reserved words kept here would miss the next one.
-* **A declaration outside the workspace is read only.** An edit to an installed standard library or a package read from `--pkg-src-dir` rewrites a copy other projects share. `holds` in `ksplc/lsp/workspace.kspl` asks the walk's own rules of each place. A repository that holds `std/` itself renames in it as in any other folder.
+* **A declaration outside the workspace is read only.** An edit to an installed standard library or a package read from another place (`--pkg-src-dir`, an installed `lib/`) rewrites a copy other projects share. `holds` in `ksplc/lsp/workspace.kspl` asks the walk's own rules of each place. A repository that holds `std/` itself renames in it as in any other folder.
 * **`prepareRename` asks the second question of the declaration alone**, from the document's own analysis. So the editor refuses before a name is typed, without the workspace's analysis. The capability is declared only to a client that says it sends the request.
 * **A new name already declared where it would land is refused**, at each place the name is written bare. A method is also compared with the methods of the type's other `impl`s.
 * **The search is conservative.** A declaration counts for its whole scope, before the place as well as after it, and a `switch` counts the bindings of all its arms together. A rename that could have gone through is sometimes refused, and the message names the declaration in the way. The opposite error, an edit that silently changes which declaration a name means, is what the check exists to stop.
@@ -238,13 +238,13 @@ Caution: **Do not give a recovered tree `has_load_error`.** That flag means "the
 
 ### One operator in kspeg: skip up to the stopping character (`~"…"`)
 
-**Kspeg has one operator for the lenient run, "swallow text up to a stopping byte", and it doubles as the mark of the lenient run.** The notation has no negated character class, and `( !";" !"}" . )+` makes a node per byte. It is spelt `~"…"`, and the bytes between the quotes end the swallow (`kspeg/docs/SPEC-notation.md`).
+**Kspeg has one operator for the lenient run, "swallow text up to a stopping byte", and it doubles as the mark of the lenient run.** The notation has no negated character class, and `( !";" !"}" . )+` makes a node per byte. It is spelt `~"…"`, and the bytes between the quotes end the swallow (`lib/kspeg/docs/SPEC-notation.md`).
 
 Caution: **Do not split it into two.** A swallowing operator held apart from the mark that enables it allows a run where the mark alone is raised. As one, the operator is always off in the compiler's run, so the compiler's grammar is unchanged.
 
 | Piece | File |
 | :-- | :-- |
-| the `Rule` kind, its engine arm, the lenient option and the notation | `kspeg/rule.kspl`, `kspeg/engine.kspl`, `kspeg/notation.kspl` |
+| the `Rule` kind, its engine arm, the lenient option and the notation | `lib/kspeg/rule.kspl`, `lib/kspeg/engine.kspl`, `lib/kspeg/notation.kspl` |
 | two branches, the last of `stmt` and of `top_level_item` | `ksplc/kspl.kspeg` |
 | two node kinds | `ksplc/base/ast_kinds.kspl` |
 | the 2nd run's entry point (**not the compiler's**) | `ksplc/parse/load.kspl` |
@@ -369,7 +369,7 @@ flowchart LR
 
 **An answer goes back in the spelling the request used.** `Uri_style` in `base/locate.kspl` holds the two bits a client shows: whether `file://` was written, and whether the path was written from the root. Both spellings are in use: an editor sends `file:///home/me/proj/std/lang.kspl`, while the VS Code extension sends the workspace-relative `std/lang.kspl`. Rendering one fixed way would break one of them.
 
-**A document in std's folder is std's file both ways.** Inbound, a path under the folder std is read from becomes `std/…`, whatever the workspace (`name_entry` in `base/package.kspl`). Named by its path, an installed std would be taken in a second time and judged as a project's file. Outbound, a logical name is spelt as the file it is read from (`append_file_path` in `base/locate.kspl`). So a jump to `std/io` lands where std stands, and a package found under `--pkg-src-dir` lands where it was found.
+**A document in std's folder is std's file both ways.** Inbound, a path under the folder std is read from becomes `std/…`, whatever the workspace (`name_entry` in `base/package.kspl`). Named by its path, an installed std would be taken in a second time and judged as a project's file. Outbound, a logical name is spelt as the file it is read from (`append_file_path` in `base/locate.kspl`). So a jump to `std/io` lands where std stands, and a package found in another place lands where it was found.
 
 Caution: **`base_locate.is_same_file` is not the pattern to copy.** It matches a URI against a logical name by tail-with-boundary, which keeps diagnostics working while all else is dark. A tolerant comparison downstream hides a boundary that is not converting.
 
@@ -556,22 +556,25 @@ Caution: **Pass it as a relative path.** `--std-dir=$(CURDIR)/std` breaks the Wi
 
 ### A package other than `std` is located once per package
 
-**`--pkg-src-dir=` and `KSPLC_PKG_SRC_DIR` tell ksplc one folder to find a package other than `std` in, and the whole package then comes from one place** (SPEC-tools.md §2.9.2). By default such an import resolves only from the current folder, so a package outside `std` would be unusable from outside the repository.
+**A package other than `std` is read from the first of three places that holds a folder of its name** (SPEC-tools.md §2.9.2). They are the current folder, the place `--pkg-src-dir=` or `KSPLC_PKG_SRC_DIR` names, and the `lib/` beside std's folder. The whole package then comes from that one place.
 
 **It tells a place and nothing more.** The decision is "Outside parts are not fetched; only their location is stated" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
-**Fixing the place once per package keeps one package from coming half from one place and half from another**, which the writer could not see. Fixed once, the lookup costs one `stat` per package, and none when no place is named.
+**Fixing the place once per package keeps one package from coming half from one place and half from another**, which the writer could not see. Fixed once, the lookup costs at most three `stat`s per package (`package_root` in `base/locate.kspl`).
 
 | | `std` | another package |
 | :-- | :-- | :-- |
 | the place an option or a variable names | wins over every other place | used where the current folder holds no copy |
 | a folder of that name in the current folder | used only where nothing else is found (the default) | wins, since the writer put the copy there |
+| the `lib/` beside std's folder | not searched | used where neither place above holds the package |
 
 **A copy in the current folder wins because the writer named the package.** That is the reverse of `std`: every program consults `std` silently, so a same-named folder hiding it breaks everything.
 
-**One place, not a list**, since with several tried in order nobody can read which won.
+**The libraries beside std come last, and are found with no setting.** They are tested with that `std`, and come with it: the repository holds `std/` and `lib/` side by side, as `make install` lays them out. A place the writer names comes before them, as `--std-dir=` comes before the std beside the compiler.
 
-**The cache cannot match on contents alone.** A copy put in the current folder leaves the named place's files unchanged, so whether one now hides the package is checked separately (`shadowed_now` in `tools/run.kspl`). A removed copy shows in the contents match, because a named file disappears.
+**Which place won can always be read.** A diagnostic, the generated C's `#line` and `--emit-deps` name the path each file was read from (`disk_name` in `base/locate.kspl`). With the logical name alone, three places tried in order would leave the reader to guess.
+
+**The cache cannot match on contents alone.** A copy put in the current folder leaves the other place's files unchanged, so whether one now hides the package is checked separately (`shadowed_now` in `tools/run.kspl`). A removed copy shows in the contents match, because a named file disappears.
 
 #### The option that tells it where a package is
 
@@ -592,11 +595,11 @@ Note: **Inside, what is located is a package, so the name there stays `package_r
 | Used for | Which name |
 | :-- | :-- |
 | name mangling, default visibility | the logical name (`mypkg/lib`) |
-| a diagnostic's file, the `ksplc.cfg` lookup | where the file opens (`disk_name`) |
+| a diagnostic's file, the `ksplc.cfg` lookup | where the file opens (`disk_name`), for a package found in another place too |
 | the generated C's `#line` | where the file opens, relative to the current folder |
 | `std`'s files everywhere | the logical name ("The standard library is found beside the compiler") |
 
-**A diagnostic prints where the file opens** (`disk_name` in `base/locate.kspl`), and the settings are looked up by that path too. Looked up by the logical name, a package worked on from its own folder finds no `ksplc.cfg`, and its settings silently stop taking effect.
+**A diagnostic prints where the file opens** (`disk_name` in `base/locate.kspl`), and the settings are looked up by that path too. Looked up by the logical name, a package worked on from its own folder or found under `lib/` finds no `ksplc.cfg`. Its settings then silently stop taking effect.
 
 **So does the generated C's `#line`** (`emit_line_directive` in `gen/c/ctx.kspl`). A debugger joins it with the compilation directory, so a logical name there (`mypkg/lib.kspl`) leads to a file that does not exist. The path is relative to the current folder, which keeps the C the same on every machine run from the same place. Only a package whose top lies outside that folder gets its absolute path.
 

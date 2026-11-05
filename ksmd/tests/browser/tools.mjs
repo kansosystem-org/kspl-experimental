@@ -129,11 +129,11 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await saves("a paste of one value fills every cell of the range",
         table("| 1 | 0 | 0 |\n| 4 | 0 | 0 |\n| 7 | 0 | 0 |\n"));
       await menu("undo");
-      // The range keeps to its rows: a row added above moves it down with them.
+      // The range keeps to its rows: the two rows added above it move it down with them.
       await click('#doc td[data-r="0"][data-c="0"]');
       await press("ArrowDown", SHIFT);
       await menu("row-above");
-      check(await inRange() === "1:0 2:0", "a range stays on its rows when a row goes in above them",
+      check(await inRange() === "2:0 3:0", "a range stays on its rows when as many rows go in above them",
         await inRange());
       await menu("undo");
       check(await inRange() === "0:0 1:0", "and follows them back on undo", await inRange());
@@ -536,17 +536,17 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await saves("its Remove button takes it away", `${H}- [x] Buy pens\n\n> Call Sam\n`);
     },
 
-    // The status line's figures: a range's sum, average and count, or the document's words.
+    // The status bar's figures: a range's average, count and sum, or the document's lines.
     async figures() {
       await load(`${H}Two words.\n\n:::table name="t"\n| "a" | "b" |\n| 1 | "x" |\n| 4 | 2.5 |\n:::\n`);
       const shown = () => js("document.querySelector('.figures').textContent");
-      check(await until("document.querySelector('.figures').textContent === '2 words · 9 characters'"),
-        "with no range, the status line counts the document's words and characters", await shown());
+      check(await until("document.querySelector('.figures').textContent === '1 line · 9 characters'"),
+        "with no range, the status bar counts the document's lines and characters", await shown());
       await click('#doc td[data-r="0"][data-c="0"]');
       await press("ArrowDown", SHIFT);
       await press("ArrowRight", SHIFT);
-      check(await until("document.querySelector('.figures').textContent === 'Sum 7.5 · Average 2.5 · Count 4'"),
-        "with a range, it shows the sum and average of its numbers and the count of its values", await shown());
+      check(await until("document.querySelector('.figures').textContent === 'Average 2.5 · Count 4 · Sum 7.5'"),
+        "with a range, it shows the average and sum of its numbers and the count of its values", await shown());
       await press("Escape");
     },
 

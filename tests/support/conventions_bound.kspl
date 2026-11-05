@@ -179,8 +179,9 @@ priv fn units_of(md: U8[], row: U8[], arena: Arena$@): List<|U8[]|> //<
     for line in md.lines(arena)
         if !line.starts_with(row)
             continue
+        // A library's folder (`lib/ksai/`) is in the table by its package's name (`ksai`).
         for w in scan.find_all(line, "`", "/`", arena)
-            scan.push_unique(out@, w)
+            scan.push_unique(out@, w.sub_from(4) if w.starts_with("lib/") else w)
         if out.len > 0
             return out
     return out
@@ -364,8 +365,8 @@ priv fn check_wasm_boundary(arena: Arena$@)
 
 // An entry is the list's heading, the file holding it, the files it must name, and a folder to
 // skip. **The holder itself is not required to be listed**: a README would have to name itself.
-// The folder to skip leaves out one whose own guide holds its list (`tools/ai_assist/`), since a
-// `*` crosses a `/`.
+// The folder to skip leaves out one whose own guide holds its list, since
+// a `*` crosses a `/`.
 priv const SKIP_NONE: U8[] = ""
 priv const HAND_LISTS: U8[][_] = ::{ "the parse layer's guide", "ksplc/README.md",
     "ksplc/parse/*.kspl", SKIP_NONE, "the lower layer's guide", "ksplc/README.md",
@@ -376,21 +377,23 @@ priv const HAND_LISTS: U8[][_] = ::{ "the parse layer's guide", "ksplc/README.md
     "ksplc/lsp/*.kspl", SKIP_NONE, "the formatter's guide", "ksplc/README.md", "ksplc/fmt/*.kspl",
     SKIP_NONE, "the tools layer's guide", "ksplc/README.md", "ksplc/tools/*.kspl", SKIP_NONE,
     "the base layer's guide", "ksplc/README.md", "ksplc/base/*.kspl", SKIP_NONE, "the tools' guide",
-    "tools/README.md", "tools/*.kspl", "tools/ai_assist/", "ksos's table of documents",
-    "ksos/README.md", "ksos/docs/*.md", SKIP_NONE, "std's table of documents", "std/README.md",
-    "std/docs/*.md", SKIP_NONE, "ksplc's table of documents", "ksplc/README.md", "ksplc/docs/*.md",
-    SKIP_NONE, "kspeg's table of documents", "kspeg/README.md", "kspeg/docs/*.md", SKIP_NONE,
-    "ksai's table of documents", "ksai/README.md", "ksai/docs/*.md", SKIP_NONE,
-    "ksdb's table of documents", "ksdb/README.md", "ksdb/docs/*.md", SKIP_NONE,
-    "ksbind's table of documents", "ksbind/README.md", "ksbind/docs/*.md", SKIP_NONE,
+    "tools/README.md", "tools/*.kspl", SKIP_NONE, "ksos's table of documents", "ksos/README.md",
+    "ksos/docs/*.md", SKIP_NONE, "std's table of documents", "std/README.md", "std/docs/*.md",
+    SKIP_NONE, "ksplc's table of documents", "ksplc/README.md", "ksplc/docs/*.md", SKIP_NONE,
+    "kspeg's table of documents", "lib/kspeg/README.md", "lib/kspeg/docs/*.md", SKIP_NONE,
+    "ksai's table of documents", "lib/ksai/README.md", "lib/ksai/docs/*.md", SKIP_NONE,
+    "ksdb's table of documents", "lib/ksdb/README.md", "lib/ksdb/docs/*.md", SKIP_NONE,
+    "kstls's table of documents", "lib/kstls/README.md", "lib/kstls/docs/*.md", SKIP_NONE,
     "kssrv's table of documents", "kssrv/README.md", "kssrv/docs/*.md", SKIP_NONE,
     "ksmd's table of documents", "ksmd/README.md", "ksmd/docs/*.md", SKIP_NONE,
     "tools's table of documents", "tools/README.md", "tools/*.md", SKIP_NONE,
     "tests's table of documents", "tests/README.md", "tests/*.md", SKIP_NONE,
     "tests/docs's table of documents", "tests/README.md", "tests/docs/*.md", SKIP_NONE,
-    "ai_assist's guide", "tools/ai_assist/README.md", "tools/ai_assist/*.kspl", SKIP_NONE,
-    "docs's table of documents", "docs/README.md", "docs/*.md", SKIP_NONE,
-    "tools/docs's table of documents", "tools/README.md", "tools/docs/*.md", SKIP_NONE }
+    "code_complete's guide", "lib/ksai/examples/code_complete/README.md",
+    "lib/ksai/examples/code_complete/*.kspl", SKIP_NONE, "ksai's tools guide",
+    "lib/ksai/tools/README.md", "lib/ksai/tools/*.py", SKIP_NONE, "docs's table of documents",
+    "docs/README.md", "docs/*.md", SKIP_NONE, "tools/docs's table of documents", "tools/README.md",
+    "tools/docs/*.md", SKIP_NONE }
 
 priv fn check_hand_lists(arena: Arena$@) //<
     //< Whether the body of the file holding the list names that folder's real files one by one

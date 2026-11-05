@@ -9,8 +9,8 @@ The reader models every structure of the design, and the writer saves it in cano
 The editing page edits one document in a browser, with undo and redo. It holds:
 
 * **Prose**: formatting, lists and checklists, quotes, dividers, code, colours and alignment, and notes.
-* **Tables**: formulas, a document's own functions written in KSPL, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. Columns take a width in characters and rows a height in points, by a drag, a double-click that fits them, or a number typed. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
-* **Tools**: a menu bar, a right-click table menu, a quick access bar, find and replace, a contents panel, Read-only, and Print or PDF. The status line shows a sum or a word count, and the page turns dark with the system.
+* **Tables**: formulas, a document's own functions written in KSPL, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. While a formula is typed, a list offers the functions that fit, and Insert ▸ Function… lists them all. Columns take a width in characters and rows a height in points, by a drag, a double-click that fits them, or a number typed. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
+* **Tools**: a menu bar, a right-click table menu, a quick access bar, find and replace, a contents panel, Read-only, and Print or PDF. The status bar shows the chosen cell and its mode, and the section and printed page. It shows figures for chosen cells or a line count, and the document's zoom. The page turns dark with the system.
 * **Files**: served by the local server on a workspace folder, the page opens and saves files, shows includes and images. An include goes in from Insert, and an image from Insert, a paste or a drop. It notices a change on disk and holds unsaved edits as drafts. A `.ksmd` file double-clicked in a file manager opens in the browser.
 
 Markdown supplies familiar notation, but compatibility with `.md` is not a requirement. Presentations are outside ksmd's scope.
@@ -157,7 +157,8 @@ flowchart BT
 | [calc/calc.kspl](calc/calc.kspl) | Calculates every table cell, apart from the document |
 | [calc/functions.kspl](calc/functions.kspl) | The functions a formula calls by name, as ordinary KSPL functions: `sum`, `round`, `date`, the base conversions, the text functions and the rest |
 | [calc/args.kspl](calc/args.kspl) | How a function receives its arguments: what each parameter type takes |
-| [calc/glue.kspl](calc/glue.kspl) | Writes the table that calls a file's functions, from their signatures |
+| [calc/glue.kspl](calc/glue.kspl) | Writes the table that calls a file's functions, from their signatures, and what a person reads of each from their doc comments |
+| [calc/help.kspl](calc/help.kspl) | What a person reads of a function: its arguments, what it gives and an example. The entries of the forms the calculator reads itself, such as `if`, stand here |
 | [calc/wire.kspl](calc/wire.kspl) | A call to a person's own function, and its answer, as bytes between the page and its worker |
 | [calc/functions_table.kspl](calc/functions_table.kspl) | That table for `calc/functions.kspl`, written by `make ksmd-functions` |
 | [syntax/reader.kspl](syntax/reader.kspl) | Reads paragraphs, headings, code fences and lists into the model |
@@ -187,7 +188,7 @@ flowchart BT
 | [edit/editor_looks.kspl](edit/editor_looks.kspl) | The editor's looks of text, Clear format, and what stands at the selection |
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
-| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. What they all share, the memory, the open document and the result, is `bridge_session.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `drawings.js`, `settings.js`, `sizes.js`, `merge.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
+| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. What they all share, the memory, the open document and the result, is `bridge_session.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `drawings.js`, `settings.js`, `sizes.js`, `merge.js`, `find.js`, `file.js` and `touch.js`; `suggest.js`, `catalog.js` and `refs.js` help while a formula is typed. `bundle.kspl` makes the page one file |
 | [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions'. `wasm_build.kspl` runs it for `ksmd/Makefile` |
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
 | [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |

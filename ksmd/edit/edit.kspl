@@ -34,6 +34,7 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     too_many_cells //< a table holds at most 100,000 cells, the header's included
     last_column //< a table keeps at least one column
     too_long //< a formula would be written longer than 4,096 bytes
+    empty_formula //< a formula must hold something after its `=`
     not_a_value //< the text is not a value of that kind, or would not read back as one cell
     not_a_name //< a table name is 1 to 255 bytes of text, with no control character
     name_taken //< another table of this source has the name
@@ -73,6 +74,8 @@ impl Edit_error
             return "A table keeps at least one column. Remove the table instead."
         case .too_long
             return "A formula would be longer than 4,096 bytes. Shorten the formula."
+        case .empty_formula
+            return "This formula is empty. Type the formula after '=', or remove the '='."
         case .not_a_value
             return "This value cannot be saved in one cell. Put each '|' and '{' inside quotes, and \
                 write a line break as \\n inside quotes."
@@ -316,7 +319,9 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
         formula: = text.trim_spaces()
         if formula.len > MAX_FORMULA
             throw .too_long
-        if formula.len == 0 || !reads_as_formula(formula)
+        if formula.len == 0
+            throw .empty_formula
+        if !reads_as_formula(formula)
             throw .not_a_value
         cell.first = t.pieces.len
         cell.count = bind(doc, u, arena.dup_str(formula), t.pieces@)

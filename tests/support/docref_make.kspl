@@ -38,7 +38,7 @@ priv struct Mention //< one `make` line of a document
     dir: U8[] //< `-C`'s folder, or empty
     target: U8[]
     family: Bool //< written `<prefix>*` or `<prefix><…>`: any target of that prefix
-    owned: Bool //< the prose names it a package's (`ksbind's own`), so any package's targets count
+    owned: Bool //< the prose names it a package's (`kstls's own`), so any package's targets count
 
 fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` (empty: the root)
     out: = Rules::{ .targets = List<|U8[]|>.create(arena),
@@ -206,7 +206,10 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     tracked: = harness.tracked()
     $dirs: = List<|U8[]|>(arena)
     for rel in tracked
-        if rel.ends_with("/Makefile") && rel.count_str("/") == 1
+        // A package's folder: one at the top, or a library's under `lib/`.
+        depth: = rel.count_str("/")
+        if rel.ends_with("/Makefile") &&
+            (depth == 1 || depth == 2 && rel.starts_with("lib/"))
             dirs.push(rel.sub(0, rel.len - 9))
     root: = rules_of("", arena)
     $bad: = List<|U8[]|>(arena)

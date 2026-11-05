@@ -469,11 +469,11 @@ struct Point {
 
 ### AI runs in it
 
-* **The engine is KSPL alone** ([`ksai/`](../ksai/README.md)): tensors, inference, training, LoRA fine-tuning, the tokenizer and safetensors weights.
+* **The engine is KSPL alone** ([`lib/ksai/`](../lib/ksai/README.md)): tensors, inference, training, LoRA fine-tuning, the tokenizer and safetensors weights.
 * **The same code runs from a microcontroller to a server.** On bare metal it takes its weights through `embed` and needs no heap. On a server, one flag sends the matrix product to OpenBLAS.
 * **The model, its tooling and the checking are one language**, with one debugger and one set of rules.
 
 ### What it costs
 
 * **KSPL is in no model's training**, so every session pays context to read what KSPL leaves out ("The reader can be a model" in [`DESIGN-repository.md`](DESIGN-repository.md)).
-* **The engine runs on the CPU alone.** Each layer's backward pass is written by hand ([`ksai/docs/DESIGN-learning.md`](../ksai/docs/DESIGN-learning.md)). That is the training step that computes how to change the weights.
+* **The engine runs on the CPU alone.** Each layer's backward pass is written by hand ([`lib/ksai/docs/DESIGN-learning.md`](../lib/ksai/docs/DESIGN-learning.md)). That is the training step that computes how to change the weights.

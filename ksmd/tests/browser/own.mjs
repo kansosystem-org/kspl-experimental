@@ -6,7 +6,7 @@
 // `own(t)` takes `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
 import path from "path";
-import { verdict } from "./drive.mjs";
+import { SHIFT, verdict } from "./drive.mjs";
 
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const H = "%ksmd 1\n\n";
@@ -78,6 +78,15 @@ export function own({ tab, idle, said }) {
       fs.rmSync(young, { recursive: true, force: true });
       check(await d.until(`document.querySelector('#doc td[data-r="0"][data-c="1"]').textContent === "110"`),
         "a cell shows a person's function's answer", await cell(d, 0));
+      // Insert ▸ Function… lists them too, with what their doc comments say, marked as the
+      // document's own.
+      await d.press("F3", SHIFT);
+      await d.type("tax");
+      const about = await d.js("document.querySelector('.fx-about').textContent");
+      check(about.includes("tax(price, [rate])") && about.includes("the price with its tax") &&
+        about.includes("This document's own"),
+      "Insert function shows a person's function from its own doc comment", about);
+      await d.press("Escape");
       check(await cell(d, 1) === "hello, kanso", "a function's text shows in its cell", await cell(d, 1));
       check(await cell(d, 2) === "#SYNTAX!",
         "too many arguments is a formula that does not read, as for ksmd's own", await cell(d, 2));

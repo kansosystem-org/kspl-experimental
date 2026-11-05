@@ -1,0 +1,208 @@
+//< Copying cells and pasting them in ksmd, as a spreadsheet does: what a copy carries, a paste
+//< that shifts each formula's references by the distance moved, Paste values, and F4's `$`
+//< Each paste is checked by the saved source, and one undo gives back the source before it.
+import "ksmd/calc/formula" { cycle_fixed }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor_tables" { Copied_at }
+import "ksmd/tests/support" { join, opened, saves }
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n"
+
+fn run()
+    carried()
+    shifted()
+    elsewhere()
+    repeated()
+    values_only()
+    leaving_rows()
+    turned()
+
+priv fn carried() //< a copy carries each cell's typed text and its value as calculated
+    defer arena: = Arena(64 * 1024)
+    ed: = opened(join(HEAD, "| \"1F\" | =hex_to_dec(A1) | \"12\" |\n:::\n", arena), arena)
+    defer $out: = Str_builder()
+    ed.copied_cells(0, -1, 0, 0, 2, Sz[]::{}, out@) catch e
+        verdict.check("a copy of cells", false, e.message())
+    want: =
+        join("{\"cells\":[[\"a\",\"b\",\"c\"],[\"1F\",\"=hex_to_dec(A1)\",\"\\\"12\\\"\"]],",
+        "\"values\":[[\"a\",\"b\",\"c\"],[\"\\\"1F\\\"\",\"31\",\"\\\"12\\\"\"]],\"rows\":[-1,0]}",
+        arena)
+    verdict.check("a copy carries each formula as written and each value as calculated",
+        out.slice().equals(want), out.slice())
+    _parsed: = json.parse(out.slice(), arena) catch
+        verdict.check("and it is JSON", false, out.slice())
+        return
+    $outside: = false
+    out.clear()
+    ed.copied_cells(0, 0, 0, 1, 0, Sz[]::{}, out@) catch
+        outside = true
+    verdict.check("a copy past the last row is refused", outside, out.slice())
+
+priv fn shifted() //< in the same table: relative parts shift, `$` parts stay, outside is #REF!
+    defer arena: = Arena(64 * 1024)
+    first: = "| \"1F\" | =hex_to_dec(A1) | =$A$1&$A1&A$1 |\n"
+    rest: = "| \"2E\" | | |\n| \"3D\" | | |\n:::\n"
+    before: = join(join(HEAD, first, arena), rest, arena)
+    $ed: = opened(before, arena)
+    pasted(ed@, 1, 1, 1, 2, "[[\"=hex_to_dec(A1)\",\"=$A$1&$A1&A$1\"]]", 0, 1)
+    after(ed@, "a pasted formula's references shift as far as the paste moved; $ parts stay", HEAD,
+        "| \"1F\" | =hex_to_dec(A1) | =$A$1&$A1&A$1 |\n| \"2E\" | =hex_to_dec(A2) | =$A$1&$A2&A$1 \
+            |\n| \"3D\" | | |\n:::\n")
+    ed.undo()
+    saves("one undo takes the whole paste back", ed@, arena, before)
+    pasted(ed@, 2, 0, 2, 1, "[[\"=hex_to_dec(A1)\",\"=sum(B1:C1)\"]]", 0, 1)
+    top: = join(HEAD, first, arena)
+    after(ed@, "a reference shifted left of the table is #REF!; a range shifts both corners", top,
+        "| \"2E\" | | |\n| =hex_to_dec(#REF!) | =sum(A3:B3) | |\n:::\n")
+    ed.undo()
+    pasted(ed@, 0, 1, 0, 1, "[[\"=A2+t.A3\"]]", 1, 1)
+    after(ed@, "a paste upward shifts up; a reference with the table's name keeps it", HEAD,
+        "| \"1F\" | =A1+t.A2 | =$A$1&$A1&A$1 |\n| \"2E\" | | |\n| \"3D\" | | |\n:::\n")
+    ed.undo()
+    pasted(ed@, 0, 2, 0, 2, "[[\"=A1+1\"]]", 2, 2)
+    pasted(ed@, 2, 1, 2, 1, "[[\"=A3\"]]", 1, 1)
+    after(ed@, "a reference shifted above the first row is #REF!, as one past the last", HEAD,
+        "| \"1F\" | =hex_to_dec(A1) | =#REF!+1 |\n| \"2E\" | | |\n| \"3D\" | =#REF! | |\n:::\n")
+
+priv fn elsewhere() //< another table, a whole column, and a table this document lacks
+    defer arena: = Arena(64 * 1024)
+    top: = join(HEAD, "| 1 | 2 | 3 |\n:::\n\n", arena)
+    before: =
+        join(top, ":::table name=\"u\"\n| \"x\" | \"y\" |\n| 5 | |\n| 6 | |\n:::\n", arena)
+    $ed: = opened(before, arena)
+    pasted_in(ed@, 1, 0, 1, "[[\"=A1*2+t.A1\"]]", 0, 2)
+    after(ed@, "in another table, a reference without a name names a cell of that table", top,
+        ":::table name=\"u\"\n| \"x\" | \"y\" |\n| 5 | =#REF!*2+#REF! |\n| 6 | |\n:::\n")
+    ed.undo()
+    pasted_in(ed@, 1, 1, 1, "[[\"=A1*2+t.$A$1\"]]", 0, 1)
+    after(ed@, "and one inside it shifts there, while a $ reference to the first table stays", top,
+        ":::table name=\"u\"\n| \"x\" | \"y\" |\n| 5 | |\n| 6 | =A2*2+t.$A$1 |\n:::\n")
+    ed.undo()
+    pasted_in(ed@, 1, 0, 1, "[[\"=sum(t.A:B)+sum(t.$A)+other.A1\"]]", 0, 0)
+    after(ed@, "whole columns shift across alone; a table this document lacks stays as written",
+        top,
+        ":::table name=\"u\"\n| \"x\" | \"y\" |\n| 5 | =sum(t.B:C)+sum(t.$A)+other.A1 |\n| 6 | \
+            |\n:::\n")
+    ed.undo()
+    saves("one undo takes it back", ed@, arena, before)
+
+priv fn repeated() //< a range that holds the copy a whole number of times takes it each time
+    defer arena: = Arena(64 * 1024)
+    before: = join(HEAD, "| 1 | =A1*2 | |\n| 2 | | |\n| 3 | | |\n| 4 | | |\n:::\n", arena)
+    $ed: = opened(before, arena)
+    pasted(ed@, 1, 1, 3, 1, "[[\"=A1*2\"]]", 0, 1)
+    after(ed@, "one cell pasted on a range goes in each cell, shifted from its own place", HEAD,
+        "| 1 | =A1*2 | |\n| 2 | =A2*2 | |\n| 3 | =A3*2 | |\n| 4 | =A4*2 | |\n:::\n")
+    ed.undo()
+    saves("and one undo takes every copy back", ed@, arena, before)
+    pasted(ed@, 1, 1, 3, 2, "[[\"=A1\",\"x\"],[\"=A2\",\"y\"]]", 0, 1)
+    after(ed@, "a range that does not hold the copy a whole number of times takes it once", HEAD,
+        "| 1 | =A1*2 | |\n| 2 | =A2 | \"x\" |\n| 3 | =A3 | \"y\" |\n| 4 | | |\n:::\n")
+
+priv fn values_only() //< Paste values puts each value as calculated, and no formula
+    defer arena: = Arena(64 * 1024)
+    source: = join(HEAD, "| \"1F\" | =hex_to_dec(A1) | =A1&\"!\" |\n| | | |\n:::\n", arena)
+    $ed: = opened(source, arena)
+    defer $out: = Str_builder()
+    ed.copied_cells(0, 0, 1, 0, 2, Sz[]::{}, out@) catch e
+        verdict.check("a copy of cells", false, e.message())
+    doc: = json.parse(out.slice(), arena) catch
+        verdict.check("a copy is JSON", false, out.slice())
+        return
+    $grid: = List<|List<|U8[]|>|>(arena)
+    for line in doc.val.get("values").arr_list(arena)
+        $cells: = List<|U8[]|>(arena)
+        for cell in line.arr_list(arena)
+            cells.push(cell.as_str().unwrap_or(""))
+        grid.push(cells)
+    ed.paste_copied(0, 1, 1, 1, 1, grid@, .none) catch e
+        verdict.check("Paste values", false, e.message())
+    after(ed@, "Paste values puts the number and the text each formula shows", HEAD,
+        "| \"1F\" | =hex_to_dec(A1) | =A1&\"!\" |\n| | 31 | \"1F!\" |\n:::\n")
+
+priv fn leaving_rows() //< a copy that leaves rows out, as hidden ones, pastes them together
+    defer arena: = Arena(64 * 1024)
+    rows: = "| 1 | =A1*2 | |\n| 2 | =A2*2 | |\n| 3 | =A3*2 | |\n| | | |\n| | | |\n:::\n"
+    $ed: = opened(join(HEAD, rows, arena), arena)
+    defer $out: = Str_builder()
+    ed.copied_cells(0, 0, 1, 2, 1, Sz[]::{ 1 }, out@) catch e
+        verdict.check("a copy that leaves a row out", false, e.message())
+    want: = "{\"cells\":[[\"=A1*2\"],[\"=A3*2\"]],\"values\":[[\"2\"],[\"6\"]],\"rows\":[0,2]}"
+    verdict.check("a copy leaves the row out, and says where each line was copied from",
+        out.slice().equals(want), out.slice())
+    grid: = grid_of("[[\"=A1*2\"],[\"=A3*2\"]]", arena)
+    ed.paste_copied(0, 3, 2, 3, 2, grid@,
+        .some(Copied_at::{ .row = 0, .column = 1, .rows = Sz[]::{ 0, 2 } })) catch e
+        verdict.check("a paste of those lines", false, e.message())
+    after(ed@, "the lines paste together, each formula shifted from its own row", HEAD,
+        "| 1 | =A1*2 | |\n| 2 | =A2*2 | |\n| 3 | =A3*2 | |\n| | | =B4*2 |\n| | | =B5*2 |\n:::\n")
+    $mismatched: = false
+    ed.paste_copied(0, 3, 2, 3, 2, grid@,
+        .some(Copied_at::{ .row = 0, .column = 1, .rows = Sz[]::{ 0 } })) catch
+        mismatched = true
+    verdict.check("rows that do not match the lines are refused", mismatched, "")
+
+priv fn after(ed: Editor@, what: U8[], head: U8[], rest: U8[]) //<
+    //< The document saves as `head` followed by `rest`
+    defer arena: = Arena(16 * 1024)
+    saves(what, ed, arena, join(head, rest, arena))
+
+priv fn turned() //< F4 in an open cell turns `$` in the reference at the caret
+    turns("=A1+B2", 1, 1, "=$A$1+B2", 5)
+    turns("=$A$1+B2", 5, 5, "=A$1+B2", 4)
+    turns("=A$1+B2", 1, 4, "=$A1+B2", 4)
+    turns("=$A1+B2", 2, 2, "=A1+B2", 3)
+    turns("=A1+B2", 6, 6, "=A1+$B$2", 8)
+    turns("=sum(A1:B2)", 7, 7, "=sum($A$1:$B$2)", 14)
+    turns("=sum($A1:B$2)", 7, 7, "=sum(A1:B2)", -1)
+    turns("=A1+B2", 0, 6, "=$A$1+$B$2", 10)
+    turns("=sum(t.D)+\"A1\"", 7, 7, "=sum(t.$D)+\"A1\"", 9)
+    turns("=1+2", 2, 2, "", -1)
+
+priv fn turns(text: U8[], from: Sz, to: Sz, want: U8[], at: Sz) //<
+    //< F4 at bytes `from` to `to` of a cell's text, its `=` included, gives `want`, the caret at
+    //< `at`; -1 for `at` checks the text alone
+    defer $out: = Str_builder()
+    out.c('=')
+    end: = cycle_fixed(text.sub_from(1), from - 1, to - 1, out@)
+    defer arena: = Arena(4096)
+    what: = arena.text().s("F4 turns \{text\} at \{from\}").take()
+    if want.len == 0
+        verdict.check(what, end < 0, out.slice())
+        return
+    verdict.check(what, out.slice().equals(want) && (at < 0 || end == at), out.slice())
+
+priv fn pasted(ed: Editor$@, row: Sz, column: Sz, bottom: Sz, right: Sz, cells: U8[], from_row: Sz,
+    from_column: Sz) //<
+        //< Pastes cells copied from `from_row`, `from_column` into block 0's table
+    defer arena: = Arena(16 * 1024)
+    grid: = grid_of(cells, arena)
+    ed.paste_copied(0, row, column, bottom, right, grid@,
+        .some(Copied_at::{ .row = from_row, .column = from_column, .rows = Sz[]::{} })) catch e
+        verdict.check("a paste of copied cells", false, e.message())
+
+priv fn pasted_in(ed: Editor$@, block: Sz, row: Sz, column: Sz, cells: U8[], from_row: Sz,
+    from_column: Sz) //<
+        //< Pastes cells copied from `from_row`, `from_column` into one cell of a block's table
+    defer arena: = Arena(16 * 1024)
+    grid: = grid_of(cells, arena)
+    ed.paste_copied(block, row, column, row, column, grid@,
+        .some(Copied_at::{ .row = from_row, .column = from_column, .rows = Sz[]::{} })) catch e
+        verdict.check("a paste of copied cells", false, e.message())
+
+priv fn grid_of(cells: U8[], arena: Arena$@): List<|List<|U8[]|>|> //< a grid written as JSON
+    $grid: = List<|List<|U8[]|>|>(arena)
+    doc: = json.parse(cells, arena) catch
+        panic("a test grid is JSON")
+    for line in doc.val.arr_list(arena)
+        $row: = List<|U8[]|>(arena)
+        for cell in line.arr_list(arena)
+            row.push(cell.as_str().unwrap_or(""))
+        grid.push(row)
+    return grid

@@ -314,6 +314,47 @@ fn test_regex_escapes()
     back_to(heap_before, "Regex.free() with escapes does not leak the tree")
     verdict.pass("Control characters are undone, and a word boundary works without holding width.")
 
+// ==========================================
+// std/regex: a character outside ASCII, which takes several bytes in UTF-8.
+// Caution: **Test each refusal by its reason.** Before the refusal, `é+` matched `[0,2)` in "éé"
+// and `[é]` matched "è", with no error.
+// ==========================================
+fn test_regex_non_ascii()
+    verdict.start("[Regex] characters outside ASCII test...")
+    heap_before: = mem.heap_used_bytes()
+    arena: = Arena(16 * 1024)
+
+    // A class tests one byte, so a byte outside ASCII in it is refused, escaped or not.
+    assert(rejected_with("[é]", .unsupported_non_ascii), "a class with `é` is refused")
+    assert(rejected_with("[^αβ]", .unsupported_non_ascii), "a negated class with `α` is refused")
+    assert(rejected_with("[a-é]", .unsupported_non_ascii), "a range that ends in `é` is refused")
+    assert(rejected_with("[\\é]", .unsupported_non_ascii), "an escaped `é` in a class is refused")
+    // A quantifier repeats one byte, so it is refused after a character outside ASCII.
+    assert(rejected_with("é+", .unsupported_non_ascii), "`é+` is refused")
+    assert(rejected_with("é*", .unsupported_non_ascii), "`é*` is refused")
+    assert(rejected_with("é?", .unsupported_non_ascii), "`é?` is refused")
+    assert(rejected_with("é{2}", .unsupported_non_ascii), "`é{2}` is refused")
+
+    // A literal run matches whole, and a group repeats the whole character.
+    assert(match_end("café", "un café") == 8, "a literal run outside ASCII matches whole")
+    assert(match_end("(é)+", "ééx") == 4, "a group repeats every byte of `é`")
+    assert(match_end("caf.*!", "café!") == 6, "`.*` spans a character outside ASCII")
+    // `.` reads one byte, as the documents say: one `.` cannot cover the two bytes of `é`.
+    assert(!matches("^.$", "é"), "`.` matches one byte, not one character")
+    assert(matches("^..$", "é"), "two `.` cover the two bytes of `é`")
+
+    // An empty match steps one character, so no start falls inside `é` (2 bytes) or `あ` (3).
+    wide: = spans_of("x*", "éあ", arena)
+    assert(wide.equals("0,0 2,2 5,5 "), "an empty match steps over a whole character")
+    // A byte that starts no character steps one byte.
+    stray: U8[2] = ::{ 0xa9U8, 'a' }
+    broken: = spans_of("x*", U8[]::stray, arena)
+    assert(broken.equals("0,0 1,1 2,2 "), "an empty match steps one byte where text is not UTF-8")
+
+    arena.free()
+    back_to(heap_before, "a refused or matched pattern outside ASCII leaks nothing")
+    verdict.pass("A class or quantifier that would split a character is refused.")
+
 priv fn late_match_start(): Sz //< whether a match further back can be found
     //< **The test checks the answer, not the speed.** A repetition that matches empty, not cut off,
     //< loops at each start, and the real match further back is never reached. The regex is freed

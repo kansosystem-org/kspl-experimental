@@ -84,7 +84,7 @@ sequenceDiagram
 
 Caution: **Read it yourself before submitting.** Generated code can closely resemble another author's code. Do not rely on someone reviewing it after the merge.
 
-The conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md) apply to AI-written work too. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
+The conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md) apply to AI-written work too. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`lib/ksai/tools/README.md`](../lib/ksai/tools/README.md)).
 
 ## Further reading
 

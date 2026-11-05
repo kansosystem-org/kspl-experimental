@@ -1,6 +1,6 @@
 # kssrv — the design
 
-kssrv (Kanso Server) is an HTTP server written in KSPL on `std`: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), what a client can ask for in [`SPEC-api.md`](SPEC-api.md), and what is left in the "kssrv" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+kssrv (Kanso Server) is an HTTP server written in KSPL on `std`: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), and what a client can ask for in [`SPEC-api.md`](SPEC-api.md).
 
 ## The command line and the two modes
 
@@ -35,7 +35,7 @@ How the token is made, passed on and compared is "How the token gets across" in 
 
 ## HTTPS
 
-With `--cert` and `--key`, kssrv answers HTTPS on its port. TLS itself is OpenSSL's, through `ksbind/tls_server` ([ksbind](../../ksbind/README.md)); this chapter holds what kssrv decides around it.
+With `--cert` and `--key`, kssrv answers HTTPS on its port. TLS itself is OpenSSL's, through `kstls/tls_server` ([kstls](../../lib/kstls/README.md)); this chapter holds what kssrv decides around it.
 
 ### kssrv answers HTTPS itself, rather than behind a proxy
 
@@ -78,13 +78,13 @@ With `--cert` and `--key`, kssrv answers HTTPS on its port. TLS itself is OpenSS
 
 ### Plain HTTP on the HTTPS port gets a plain answer
 
-**A plain HTTP request on the HTTPS port gets a 400 whose body says to use `https://`**, and the connection closes. Closed without an answer, the connection shows the person an empty failure, and they cannot tell what to change. `ksbind/tls_server` tells it apart before OpenSSL reads the first byte.
+**A plain HTTP request on the HTTPS port gets a 400 whose body says to use `https://`**, and the connection closes. Closed without an answer, the connection shows the person an empty failure, and they cannot tell what to change. `kstls/tls_server` tells it apart before OpenSSL reads the first byte.
 
 ### A handshake must finish within `HANDSHAKE_TIME_US`
 
 **A connection whose TLS handshake has not finished `HANDSHAKE_TIME_US` after accept is closed** (`handshake_late` in `kssrv/https.kspl`). A handshake takes two round trips. Without the cap, a client sending part of a handshake holds a slot until the idle timer, three times as long.
 
-**A handshake never stops the loop.** `ksbind/tls_server` returns at once where the socket is not ready, so a client that never finishes its handshake holds only its own slot.
+**A handshake never stops the loop.** `kstls/tls_server` returns at once where the socket is not ready, so a client that never finishes its handshake holds only its own slot.
 
 ### Every byte goes through one pair of functions
 

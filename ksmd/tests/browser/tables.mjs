@@ -223,11 +223,12 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
           await click(cell(2, 0));
           await press("F4");
         }, rows + empty + empty, "10111", 2],
-        // The paste writes over the last row, which the filter then hides, and adds one row, which shows.
+        // The paste writes over the last row, which stays in sight as a changed row does, and adds one
+        // row, which shows.
         ["a paste past the last row", async () => {
           await click(cell(2, 0));
           await paste('4\t"y"\n5\t"y"');
-        }, '| 1 | "x" |\n| 2 | "y" |\n| 4 | "y" |\n| 5 | "y" |\n', "1001", 1],
+        }, '| 1 | "x" |\n| 2 | "y" |\n| 4 | "y" |\n| 5 | "y" |\n', "1011", 1],
       ];
       for (const filter of [",in:x", ",out:y"]) {
         const start = table(` filter="${filter}"`);
@@ -427,8 +428,8 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await rightClick(rowNumber(1));
       check(await labelOf("row-above") === "Insert row above" && await labelOf("column-left") === "Insert column left",
         "with nothing cut, the menu holds Insert row above and Insert column left");
-      check(await js("Array.from(document.querySelectorAll('.menu.context > [data-cmd]')).slice(0, 3).map((el) => el.dataset.cmd).join()") === "cut,copy,paste",
-        "Cut, Copy and Paste stand first in the right-click menu, as in Excel");
+      check(await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(0, 4).map((el) => el.dataset.cmd).join()") ===
+        "cut,copy,paste,paste-values", "Cut, Copy, Paste and Paste values stand first in the right-click menu, as in Excel");
       await press("Escape");
       await chooseRows(3, 4);
       await cut();
@@ -558,7 +559,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await load(start);
       const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
       const typed = () => js("(() => { const i = document.querySelector('#doc .cell-input'); return i ? i.value : null; })()");
-      const outlined = () => js("document.querySelectorAll('#doc .pointed').length");
+      const framed = () => js("Array.from(document.querySelectorAll('#doc .ref-frame')).map((f) => f.dataset.cells).join()");
       const mouse = async (type, selector) => {
         const [x, y] = await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
           return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
@@ -569,9 +570,9 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await mouse("mousePressed", cell(0, 0));
       await mouse("mouseMoved", cell(1, 0));
       check(await typed() === "=sum(A1:A2", "a drag after =sum( writes the range at the caret", await typed());
-      check(await outlined() === 2, "and outlines the cells while the button is down", String(await outlined()));
+      check(await framed() === "0 0 0 1 0", "and frames the cells it names, as a reference typed", await framed());
       await mouse("mouseReleased", cell(1, 0));
-      check(await outlined() === 0, "the outline goes when the button comes up");
+      check(await framed() === "0 0 0 1 0", "the frame stays when the button comes up, as the reference does", await framed());
       await type(")");
       check(await typed() === "=sum(A1:A2)", "the cell stays open, the caret after the range", await typed());
       await press("Enter");
@@ -642,6 +643,52 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await removes("a chart's Remove",
         `${H}${filler}\n\n${table}\n:::chart table="t" kind="bar" labels="a" values="a"\n:::\n\nAfter\n`,
         button("chart"), "[0,61,0,0]", `${H}${filler}\n\n${table}\nXAfter\n`);
+    },
+    // An arrow key past a table's last or first row leaves it for the text beside it, in sight: the
+    // window does not jump to the document's top, with the contents open or shut.
+    async leavingTable() {
+      const rows = Array.from({ length: 80 }, (_, k) => `| ${k + 1} |`).join("\n");
+      const long = `:::table name="t"\n| "a" |\n${rows}\n:::\n`;
+      const scrolled = () => js("window.scrollY");
+      const leaves = async (what, start, row, key, at) => {
+        await load(start);
+        const cell = `#doc [data-r="${row}"][data-c="0"]`;
+        await js(`document.querySelector('${cell}').scrollIntoView({ block: "center" })`);
+        await click(cell);
+        const before = await scrolled();
+        await press(key);
+        await settle();
+        check(await sel() === at, `${what}: the caret goes to the text beside the table`, await sel());
+        if (at.startsWith("[0")) check(await js("!document.querySelector('#doc .gap')"), `${what}: and no gap stands there`);
+        check(await caretInSight(), `${what}: the caret stands in sight`, String(await scrolled()));
+        check(await scrolled() > before / 2, `${what}: and the window did not jump to the top`,
+          `${before} to ${await scrolled()}`);
+      };
+      for (const panel of [false, true]) {
+        const side = panel ? ", the contents open" : "";
+        if (panel !== await js("!!document.querySelector('.contents') && !document.querySelector('.contents').hidden")) {
+          await menu("contents");
+        }
+        await leaves(`Down from the last row, a heading after${side}`, `${H}${filler}\n\n${long}\n# End\n`,
+          79, "ArrowDown", "[0,61,0,0]");
+        await type("X");
+        await saves(`typing then goes into the heading${side}`, `${H}${filler}\n\n${long}\n# XEnd\n`);
+        await leaves(`Down from the last row, a paragraph after${side}`, `${H}${filler}\n\n${long}\nAfter\n`,
+          79, "ArrowDown", "[0,61,0,0]");
+        await leaves(`Up from the names, text above${side}`, `${H}${filler}\n\n${long}\nAfter\n`,
+          -1, "ArrowUp", "[0,59,0,7]");
+      }
+      await menu("contents");
+      await load(`${H}${filler}\n\n${long}\nAfter\n`);
+      await js(`document.querySelector('#doc td[data-r="40"]').scrollIntoView({ block: "center" })`);
+      await click('#doc td[data-r="40"][data-c="0"]');
+      const before = await scrolled();
+      await press("Escape");
+      await settle();
+      check(await js("document.activeElement === document.getElementById('doc')") && await scrolled() === before,
+        "Esc on a chosen cell leaves the table, and the window stays where it was", `${before} to ${await scrolled()}`);
+      await leaves("Down from the last row of a table that ends the document", `${H}${filler}\n\n${long}`,
+        79, "ArrowDown", "[1,61,0,0]");
     },
 
     // Groups of columns hide and show from the outline above the column letters, and are saved.

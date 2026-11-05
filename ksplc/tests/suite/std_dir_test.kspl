@@ -196,6 +196,30 @@ priv fn case_lib_here_wins(arena: Arena$@) //< a local copy wins
         arena.text().s("the copy was placed yet the previous answer came back: \{again.out\}")
         .take())
 
+priv fn case_libs_beside_std(arena: Arena$@) //<
+    //< It checks that a package is found in the `lib` beside std's folder, after a named place
+    //< That is how the repository and an installation carry their libraries, with no setting.
+    name: = "a package is found in the lib folder beside std's"
+    dir: =
+        case_dir(name, "libs_beside",
+        U8[][]::{ "proj/a.kspl", "kit/lib/mylib/thing.kspl", "named/mylib/thing.kspl" },
+        U8[][]::{ UNIT_USE_SRC, UNIT_THING_SHARED, UNIT_THING_HERE })
+    if dir.len == 0
+        return
+    std: = fs.join(dir, "kit/std", arena)
+    fs.copy_tree(harness.std_dir(), std, fs.skip_none, arena) catch
+        verdict.check(name, false, "std/ cannot be copied")
+        return
+    proj: = fs.join(dir, "proj", arena)
+    std_flag: = arena.text().s("--std-dir=\{std\}").take()
+    r: = ksplc_env(U8[][]::{ "run", std_flag, "a.kspl" }, proj, "", "", arena)
+    verdict.check(name, r.out.equals("shared\n"), r.out)
+    named_dir: = fs.join(dir, "named", arena)
+    named: = arena.text().s("--pkg-src-dir=\{named_dir\}").take()
+    n: = ksplc_env(U8[][]::{ "run", std_flag, named, "a.kspl" }, proj, "", "", arena)
+    verdict.check("a named place wins over the lib folder beside std's",
+        n.out.equals("here\n"), n.out)
+
 priv fn case_space_in_path(arena: Arena$@) //<
     //< It checks the resolution works with a path containing a space
     //< This shape breaks under a real Windows configuration ("...\OneDrive - かんそシステム\...").
@@ -528,6 +552,7 @@ fn main(): I32
     case_only_std_prefix(arena)
     case_pkg_src_dir(arena)
     case_lib_here_wins(arena)
+    case_libs_beside_std(arena)
     case_space_in_path(arena)
     case_dot_folder_in_path(arena)
     case_drive_named_folder(arena)

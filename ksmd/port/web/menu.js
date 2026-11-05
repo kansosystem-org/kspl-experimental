@@ -3,10 +3,12 @@
 // opens that one. Inside a menu, a flyout opens on pointing and on focus. A press elsewhere, Esc
 // and a chosen command close every menu, through `shut`.
 // The arrow keys move through a menu: Up and Down between items, Right into a flyout or on to the
-// next menu, Left back out. Enter and Space press the item that has the focus.
+// next menu, Left back out, and Left and Right along a row of items. Enter and Space press the item
+// that has the focus.
 // The menu bar holds every command, each with its icon (`MENUS` in `commands.js`). The table's
 // commands stand in its Table menu and in the right-click menu alike, from one list,
-// `TABLE_GROUPS`; the right-click menu holds Cut, Copy and Paste above them. Shift+F10 or the menu key opens the right-click menu from a cell. A command's
+// `TABLE_GROUPS`; the right-click menu holds Cut, Copy, Paste and Paste values above them.
+// Shift+F10 or the menu key opens the right-click menu from a cell. A command's
 // key, which its item shows, runs it from a cell through the same list. A right-click on an item
 // offers to add it to the quick access bar, or to take it off (`quick.js`).
 "use strict";
@@ -81,12 +83,27 @@ function ksmdMenus(ks) {
     return sub;
   }
 
-  // Fills a menu from its list: commands, lines between groups, and flyouts.
+  // Fills a menu from its list: commands, lines between groups, flyouts, and rows of commands
+  // side by side, `{ row: [names] }`. A row's items show their keys as their tips.
   function fill(menu, entries) {
     for (const entry of entries) {
       if (entry === "-") menu.appendChild(document.createElement("hr"));
       else if (Array.isArray(entry)) menu.appendChild(flyout(entry[0], entry[1]));
-      else menu.appendChild(item(entry));
+      else if (entry.row) {
+        const row = document.createElement("div");
+        row.className = "menu-row";
+        for (const cmd of entry.row) {
+          const b = item(cmd);
+          const kbd = b.querySelector("kbd");
+          if (kbd) {
+            b.title = `${COMMAND.get(cmd).label} (${kbd.textContent})`;
+            b.setAttribute("aria-keyshortcuts", kbd.textContent);
+            kbd.remove();
+          }
+          row.appendChild(b);
+        }
+        menu.appendChild(row);
+      } else menu.appendChild(item(entry));
     }
   }
 
@@ -125,9 +142,10 @@ function ksmdMenus(ks) {
   context.setAttribute("role", "menu");
   context.setAttribute("aria-label", "Table");
   context.hidden = true;
-  // Cut, Copy and Paste stand first, as in Excel's cell menu. Flyouts side by side share one line
-  // above and below them, as one group of names.
-  fill(context, ["cut", "copy", "paste", "-", ...MENUS.find(([name]) => name === "Table")[1]]);
+  // Cut, Copy, Paste and Paste values stand first, as in Excel's cell menu; the two pastes share a
+  // row, so the menu still fits a laptop's screen. Flyouts side by side share one line above and
+  // below them, as one group of names.
+  fill(context, ["cut", "copy", { row: ["paste", "paste-values"] }, "-", ...MENUS.find(([name]) => name === "Table")[1]]);
   document.body.appendChild(context);
 
   // The open top menu's name, or null; and where the focus was before a menu took it.
@@ -135,7 +153,8 @@ function ksmdMenus(ks) {
   let back = null;
 
   const items = (menu) => Array.from(menu.children)
-    .map((el) => (el.classList.contains("sub") ? el.firstElementChild : el))
+    .flatMap((el) => (el.classList.contains("sub") ? [el.firstElementChild] :
+      el.classList.contains("menu-row") ? Array.from(el.children) : [el]))
     .filter((el) => el.tagName === "BUTTON" && !el.disabled && !el.hidden);
 
   function showFlyout(sub, on) {
@@ -312,6 +331,11 @@ function ksmdMenus(ks) {
       const k = e.key === "ArrowDown" ? 1 : -1;
       const next = list[(at + k + list.length) % list.length];
       if (next) next.focus();
+    } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && el.parentElement.classList.contains("menu-row")) {
+      // Left and Right move along a row of items, as Up and Down do.
+      e.preventDefault();
+      const next = list[at + (e.key === "ArrowRight" ? 1 : -1)];
+      if (next && next.parentElement === el.parentElement) next.focus();
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
       if (el.classList.contains("sub-name")) {

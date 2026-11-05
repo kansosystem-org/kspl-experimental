@@ -114,6 +114,8 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
         recv_id: = c.env.receiver_base_id(target_id)
         return infer_postfix_array(c, node, target_id, recv_id, expected_id)!
     if op.equals("::")
+        if target_id == c.env.generic_fn_value_type_id()
+            target_id = c.own_type_of_name(left)
         return infer_cast_postfix(c, node, target_id, as_target_id)
     if op.equals("@")
         return infer_address_postfix(c, node, left, target_id)!
@@ -193,6 +195,9 @@ priv fn infer_dot_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, tar
 
 priv fn infer_cast_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, as_target_id: I32): I32 //<
     //< `T::value`: the cast, checked against what may be cast to what
+    //< **A function's name gives its own type here** (own_type_of_name in sema/decl/name.kspl), as
+    //< it does to `f: = twice`. Nothing is expected of the operand, so it carries only the mark "a
+    //< function", and a cast to another signature passed unchecked.
     if c.env.is_result(target_id)
         c.err(node, "cannot directly cast a Result type. Unwrap it using '!' or 'catch' first.")
     if node.children.len < 3

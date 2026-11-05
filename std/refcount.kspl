@@ -117,6 +117,9 @@ impl<|T|> Weak_rc<|T|>: Ref_counted //< the compiler counts it, so no call is wr
 extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
 extern fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
 
+const WEAK_LOCKED: Sz = -1 //< the weak count while `get_mut` checks the strong count
+    //< No count reaches it. It is package-wide, so `std/tests` can check that a downgrade waits.
+
 pub struct Arc<|T|> //< a shared owner counted atomically, so threads can share it
     //< **Its value is read-only** (`get()`): change it through a `Mutex` or an atomic inside.
     //< The compiler counts it as it counts `Rc<|T|>`, but atomically. As with `Rc<|T|>`, the last
@@ -160,12 +163,31 @@ impl<|T|> Arc<|T|>
         //< Nothing is returned while another owner or a weak handle exists. A thread could then
         //< reach the value too. The use is to end what it owns, such as a `Mutex`'s `free()`,
         //< once the other threads are joined.
-        if kspl_atomic_add(r.ctrl.strong@, 0) != 1 || kspl_atomic_add(r.ctrl.weak@, 0) != 1
+        // Caution: **Lock the weak count before reading the strong count.** Two separate reads
+        // race: between them, a weak handle can upgrade and then go, so both counts read 1.
+        // Locked at 1, no weak handle exists to upgrade, and `downgrade` waits.
+        if !r.lock_weak()
+            return .none
+        unique: = kspl_atomic_add(r.ctrl.strong@, 0) == 1
+        r.unlock_weak()
+        if !unique
             return .none
         return .some(r.ctrl.value@)
     pub fn downgrade(r: Self@): Weak_arc<|T|> //< a handle that watches without owning
-        kspl_atomic_add(r.ctrl.weak@, 1)
+        //< **It waits while `get_mut` holds the weak count locked**, which lasts two atomic steps.
+        for
+            current: = kspl_atomic_add(r.ctrl.weak@, 0) // an atomic read
+            if current != WEAK_LOCKED &&
+                kspl_atomic_cas(r.ctrl.weak@, current, current + 1) == current
+                break
         return ::{ .ctrl = r.ctrl }
+    fn lock_weak(r: Self@): Bool //< locks the weak count if it is 1: no weak handle exists
+        //< Package-wide, so `std/tests` can hold it locked.
+        return kspl_atomic_cas(r.ctrl.weak@, 1, WEAK_LOCKED) == 1
+    fn unlock_weak(r: Self@) //< puts back the 1 that `lock_weak` took
+        kspl_atomic_cas(r.ctrl.weak@, WEAK_LOCKED, 1)
+    fn weak_count(r: Self@): Sz //< the weak count, read atomically; package-wide, for `std/tests`
+        return kspl_atomic_add(r.ctrl.weak@, 0)
 
 impl<|T|> Arc<|T|>: Ref_counted //< the compiler counts it, so no call is written by hand
     priv fn retain(r: Self@) //<
@@ -191,6 +213,8 @@ impl<|T|> Weak_arc<|T|>
     pub fn upgrade(r: Self@): Arc<|T|>!Weak_error //< an owner again, if the value is still alive
         //< A plain fetch-add could raise strong from 0 to 1. So a CAS increments only a non-zero
         //< value it read, and retries when another thread changed it first.
+        // **It needs no wait on `WEAK_LOCKED`.** This handle keeps the weak count above 1, so
+        // `get_mut` cannot lock it while an upgrade can run.
         for
             current: = kspl_atomic_add(r.ctrl.strong@, 0) // an atomic read
             if current == 0

@@ -13,6 +13,7 @@ import "kspeg/engine" as kspeg
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
+import "ksplc/base/package" as base_package
 import "ksplc/parse/layout" as parse_layout
 import "ksplc/parse/load" as parse_load
 import "ksplc/parse/source_fix" as parse_source_fix
@@ -42,11 +43,26 @@ priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is 
     return base_core.arena.dup_str(out.slice())
 
 priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or `ksai` stands for
-    //< **`std` alone is std's folder.** The logical names under it start `std/`, so the bare name
-    //< is asked here rather than through `embed_disk_path`. That would look for it locally.
+    //< **`std` alone is std's folder, and a bare name is a package's.** The logical names under it
+    //< start `<name>/`, so the bare name is asked here rather than through `embed_disk_path`. That
+    //< would look for it locally, where a library under `lib/` does not stand.
     if name.equals("std")
         return base_locate.std_dir()
+    if name.find_char('/').is_none()
+        return base_locate.package_dir(name)
     return base_locate.embed_disk_path(name)
+
+priv fn logical_of(name: U8[]): U8[] //< a path named as a compile names its entry file
+    //< **A path inside a package that names itself takes the package's name** (`lib/ksai/tensor`
+    //< is `ksai/tensor`). A folder is named as a file in it would be, less the file's name. A name
+    //< that is no path here stays as it is: it is a logical name already.
+    if fs.is_dir(name)
+        return sys
+            .get_dir_name(base_package.name_entry(fs.join(name, "_", base_core.arena)))
+    if fs
+        .exists(base_core.arena.text().s(name).s(base_core.SOURCE_EXT).take())
+        return base_package.name_entry(name)
+    return name
 
 priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Line|>? //<
     //< One file's entries, or none where it cannot be read or parsed (the reason is printed)
@@ -361,9 +377,9 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     if !last.equals(".") && !last.equals("..")
         if dot_rel: = last.find_char('.')
             cut = after_slash + dot_rel
-    // **The name is made logical first**, as a compile makes its input's: `kspeg/`, `./kspeg`
-    // and `kspeg` are one folder, and its files are listed under one name.
-    $name: = base_locate.to_project_relative(target.sub(0, cut))
+    // **The name is made logical first**, as a compile makes its input's: `lib/kspeg/`,
+    // `./lib/kspeg` and `lib/kspeg` are one folder, and its files are listed under one name.
+    $name: = logical_of(base_locate.to_project_relative(target.sub(0, cut)))
     if name.len == 0
         name = "."
     key: = "" if cut >= target.len else target.sub_from(cut + 1)

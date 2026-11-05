@@ -24,12 +24,17 @@ priv const COLUMNS: U8[] =
     "%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,2,3,4\" formats=\",,number:2,\" \
         filter=\",,above:1,\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 2 | 3 | =A1+B1+C1 |\n:::\n"
 
+priv const WHOLE: U8[] =
+    "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | | 5 | =sum(t.A) |\n| \
+        2 | | 6 | =sum(t.C) |\n:::\n"
+
 fn run()
     rows()
     columns()
     nothing()
     refusals()
     cells()
+    whole_columns()
     cell_refusals()
 
 priv fn rows()
@@ -148,6 +153,26 @@ priv fn cells()
     ed.undo()
     shifted(ed@, 1, 0, 1, 1, 1, 0)
     saves("cells pasted where they stand stay", ed@, arena, CELLS)
+
+priv fn whole_columns() //< a block of every data row moves a whole column's reference
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(WHOLE, arena)
+    shifted(ed@, -1, 0, 3, 1, -1, 2)
+    saves("a whole column cut by its letter takes its reference along, and one written over becomes \
+        #REF!", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"a\" | \"d\" |\n| | | 1 | =sum(t.C) |\n| \
+            | | 2 | =sum(#REF!) |\n:::\n")
+    ed.undo()
+    saves("one undo puts it back", ed@, arena, WHOLE)
+    shifted(ed@, 0, 0, 2, 1, 0, 1)
+    saves("every data row without the name moves it too", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | 1 | 5 | =sum(t.B) \
+            |\n| | 2 | 6 | =sum(t.C) |\n:::\n")
+    ed.undo()
+    shifted(ed@, 0, 0, 1, 1, 0, 2)
+    saves("a block of some rows leaves whole columns alone", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | | 1 | =sum(t.A) \
+            |\n| 2 | | 6 | =sum(t.C) |\n:::\n")
 
 priv fn cell_refusals()
     defer arena: = Arena(256 * 1024)

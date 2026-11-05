@@ -253,7 +253,7 @@ priv struct Window //< a rectangle on the screen
     height: I32 //< how tall it is
 ```
 
-**One marker, `//<`, describes the thing on its own line, and the first line of its run is the summary.** Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md). `Rule_prof` in `kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, the description below).
+**One marker, `//<`, describes the thing on its own line, and the first line of its run is the summary.** Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md). `Rule_prof` in `lib/kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, the description below).
 
 **The description sits behind the thing it describes.** So no name is written twice, and a renamed parameter takes its description along. Prose in front would push the signature down, which is why Python puts its docstring after the `def` line.
 

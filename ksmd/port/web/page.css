@@ -16,6 +16,17 @@
   /* A cell given a colour or a fill shows on white with dark text in both schemes, as printed. */
   --look-paper: #ffffff;
   --look-ink: #1d1d1f;
+  /* The colours of a formula's references while it is typed, in order (`refs.js`). Each stands
+     out against the open cell's ground at 4.5 to 1 or more, in both schemes. */
+  --ref-1: #1a5fb4;
+  --ref-2: #c01c28;
+  --ref-3: #813d9c;
+  --ref-4: #26802e;
+  --ref-5: #a85000;
+  --ref-6: #00737d;
+  --ref-7: #b0217a;
+  --ref-8: #7a5530;
+  --ref-pick: rgb(26 95 180 / 28%);
   color-scheme: light dark;
   /* The page's sizes: compact, as a list or a sheet is in a spreadsheet or a file manager. Each is
      set here alone. The reasons are "A compact page" in `ksmd/docs/DESIGN-page.md`. */
@@ -44,6 +55,15 @@
     --range: rgb(138 180 248 / 22%);
     --found: #6b5a00;
     --found-now: #9a5a00;
+    --ref-1: #8ab4f8;
+    --ref-2: #f28b82;
+    --ref-3: #d7aefb;
+    --ref-4: #81c995;
+    --ref-5: #fcad70;
+    --ref-6: #78d9ec;
+    --ref-7: #ff8bcb;
+    --ref-8: #e6c08f;
+    --ref-pick: rgb(138 180 248 / 35%);
   }
 }
 
@@ -230,6 +250,16 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   color: var(--muted);
 }
 
+/* Items side by side in one row, each taking an equal part of it (`menu.js`). */
+.menu-row {
+  display: flex;
+}
+
+.menu-row > button {
+  flex: 1;
+  padding-right: 8px;
+}
+
 .menu hr {
   width: 100%;
   margin: 4px 0;
@@ -393,17 +423,141 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   font-family: ui-monospace, monospace;
 }
 
-.status {
+/* The status bar: one line at the window's foot (`status.js`). From the left: the chosen cell, a
+   message, the filter's count and the printed page; at the right the figures and the zoom. A long
+   text is cut with an ellipsis, and its tooltip holds it whole. */
+.status-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   box-sizing: border-box;
-  min-height: var(--status-height);
-  margin: 0;
-  padding: 2px 16px;
+  height: var(--status-height);
+  padding: 0 4px 0 16px;
   background: var(--soft);
   border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.status-bar > * {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-bar [hidden] {
+  display: none;
+}
+
+.status-cell {
+  max-width: 40%;
+  color: var(--ink);
+}
+
+.status-address {
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.status-content {
+  font-family: ui-monospace, monospace;
+}
+
+/* The message takes the room left, and grows first. */
+.status {
+  flex: 1 1 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.status-page {
+  flex-shrink: 0;
+}
+
+.status-bar button {
+  flex-shrink: 0;
+  min-height: var(--target);
+  padding: 0 6px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+.status-bar button:hover,
+.status-bar button[aria-expanded="true"] {
+  background: var(--line);
+}
+
+.status-bar button:disabled {
+  opacity: 0.4;
+}
+
+.status-zoom {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.status-zoom .zoom-level {
+  min-width: 4.5em;
+}
+
+/* A message pushes aside the page and the filter's count, which come back after. */
+.status-bar.saying :is(.status-page, .status-filter) {
+  display: none;
+}
+
+/* A narrow window drops items in this order: the zoom and the page first; then the filter's count
+   and the chosen cell. The message and the figures stay. */
+@media (max-width: 48rem) {
+  .status-bar :is(.status-zoom, .status-page) {
+    display: none;
+  }
+}
+
+@media (max-width: 32rem) {
+  .status-bar :is(.status-filter, .status-cell) {
+    display: none;
+  }
+}
+
+/* The menus that open from the status bar stand above it. */
+.status-menu {
+  position: fixed;
+  z-index: 40;
+}
+
+.status-value {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--muted);
+}
+
+/* The frame in which `pages.js` lays the document out as the print does: out of sight. */
+.page-measure {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  border: 0;
+  visibility: hidden;
+}
+
+/* The document's zoom (`zoom.js`), on the screen alone: the print keeps the document's sizes. */
+@media screen {
+  .doc {
+    zoom: var(--doc-zoom, 1);
+  }
 }
 
 /* View, Reading width: lines kept short, as a printed page keeps them. */

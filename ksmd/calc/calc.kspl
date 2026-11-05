@@ -10,6 +10,7 @@ import "ksmd/calc/args" { Raw_arg, Raw_args }
 import "ksmd/calc/formula" { Cursor, Positions, Token, Token_kind, next, unquoted }
 import "ksmd/calc/functions" as fns
 import "ksmd/calc/functions_table" as table
+import "ksmd/calc/help" { FORMS }
 import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, arithmetic, boolean, compare, date_value,
     empty, equal_keys, is_comparison, joined, number, number_of, text, truth }
 import "ksmd/model/model" { Cell, Document, Table }
@@ -27,13 +28,9 @@ priv const UNVISITED: U8 = 0U8
 priv const WORKING: U8 = 1U8 //< being calculated; reaching it again is a cycle
 priv const SETTLED: U8 = 2U8
 
-priv const FORMS: U8[][_] = ::{ "today", "if", "sum_if", "count_if", "average_if", "lookup",
-    "sum_product" } //<
-        //< The functions `Parser.function` takes before the table, in its order
-
 fn known(name: U8[]): Bool //< whether ksmd has a function of this name, so a person's cannot
     for form in FORMS
-        if form.equals(name)
+        if form.name.equals(name)
             return true
     for one in table.NAMES
         if one.equals(name)
@@ -405,22 +402,23 @@ impl Parser
         if !p.enter()
             return Value.failed(.syntax)
         $v: = Value.failed(.syntax)
-        // **Seven forms stay here** (`FORMS`): `today` reads the date the document opened, five
-        // choose which arguments are calculated, and `sum_product` pairs two ranges' cells. Every
-        // other function is an ordinary one, called through its table (`ksmd/calc/functions.kspl`).
-        if name.equals(FORMS[0])
+        // **Seven forms stay here** (`FORMS` in `ksmd/calc/help.kspl`, in this order): `today`
+        // reads the date the document opened, five choose which arguments are calculated, and
+        // `sum_product` pairs two ranges' cells. Every other function is an ordinary one, called
+        // through its table (`ksmd/calc/functions.kspl`).
+        if name.equals(FORMS[0].name)
             v = date_value(date_of(p.c.today).unwrap_or(0I64))
-        else if name.equals(FORMS[1])
+        else if name.equals(FORMS[1].name)
             v = p.choice()
-        else if name.equals(FORMS[2])
+        else if name.equals(FORMS[2].name)
             v = p.conditional(.sum)
-        else if name.equals(FORMS[3])
+        else if name.equals(FORMS[3].name)
             v = p.conditional(.count)
-        else if name.equals(FORMS[4])
+        else if name.equals(FORMS[4].name)
             v = p.conditional(.average)
-        else if name.equals(FORMS[5])
+        else if name.equals(FORMS[5].name)
             v = p.lookup()
-        else if name.equals(FORMS[6])
+        else if name.equals(FORMS[6].name)
             v = p.sum_product()
         else
             mark: = p.c.scratch.save()

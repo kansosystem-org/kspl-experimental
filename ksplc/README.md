@@ -69,7 +69,7 @@ Directly in this folder:
 * [`desugar.kspl`](parse/desugar.kspl), with [`desugar_slice.kspl`](parse/desugar_slice.kspl) and [`desugar_closure.kspl`](parse/desugar_closure.kspl) — the sugar that needs no types; [`format_spec.kspl`](parse/format_spec.kspl) reads a string interpolation's format specifier (the `6` in `\{x:6\}`).
 * [`ast_cache.kspl`](parse/ast_cache.kspl) — keeps the normalized AST on disk so the next parse is skipped; [`syntax_msg.kspl`](parse/syntax_msg.kspl) writes a syntax error's message.
 
-It drives the grammar [`kspl.kspeg`](kspl.kspeg) through the engine in [kspeg](../kspeg/README.md).
+It drives the grammar [`kspl.kspeg`](kspl.kspeg) through the engine in [kspeg](../lib/kspeg/README.md).
 
 ```sh
 make test-notation   # a .kspl file reads the same saved with LF or CRLF, and the editor finds its lines
@@ -235,7 +235,7 @@ The CLI options, and the formatter, the language server and the linter as seen f
 
 ### kspl.kspeg / seed.c — the grammar and the seed
 
-**`ksplc/kspl.kspeg` is the canonical text of KSPL's own grammar**, a build input that `ksplc/main.kspl` embeds. Its notation is specified in [`kspeg/docs/SPEC-notation.md`](../kspeg/docs/SPEC-notation.md), and the engine that interprets it is in `kspeg/`.
+**`ksplc/kspl.kspeg` is the canonical text of KSPL's own grammar**, a build input that `ksplc/main.kspl` embeds. Its notation is specified in [`lib/kspeg/docs/SPEC-notation.md`](../lib/kspeg/docs/SPEC-notation.md), and the engine that interprets it is in `lib/kspeg/`.
 
 **`ksplc/seed.c` is the bootstrap's seed compiler**: the compiler at one moment, translated to C and checked in, so the first build needs only a C compiler.
 
@@ -303,4 +303,4 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 | [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) | The build procedure and the two-stage bootstrap. | Whoever changes ksplc. Needs a C compiler |
 | [`docs/SPEC-gates.md`](../docs/SPEC-gates.md) | What every gate checks, per platform. | Whoever changes ksplc |
 | [std](../std/README.md) | The standard library the compiler is itself written on; every file it publishes is listed by `ksplc doc std`. | Whoever changes ksplc |
-| [kspeg](../kspeg/README.md) | The engine that drives `kspl.kspeg`, the grammar. | Whoever changes how the language is read |
+| [kspeg](../lib/kspeg/README.md) | The engine that drives `kspl.kspeg`, the grammar. | Whoever changes how the language is read |

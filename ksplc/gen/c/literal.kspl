@@ -189,6 +189,11 @@ impl Ast_node
     fn emit_string_value(r: Ast_node@, c: Genc_ctx$@, as_init: Bool) //<
         //< Writes a string literal in full, as a C string or a slice's compound literal
         is_slice: = !c.env.is_pointer(r.type_id)
+        // **A byte pointer takes a cast.** A C string is `char`, and `U8` is `unsigned char`, so
+        // `const U8* a = "A"` differs in sign (-Wpointer-sign). A `Void@` needs none.
+        pointee: = c.env.get_clean_real_type(c.env.strip_ptr(r.type_id))
+        if !is_slice && pointee == (I32::sema_type_env.Builtin_type_id.u8_type)
+            c.s("(").t(r.type_id).s(")")
         if is_slice
             if as_init
                 c.s("KSPL_STR_INIT(")

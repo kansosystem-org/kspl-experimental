@@ -72,7 +72,7 @@ LSP_EXE     := ksplc_server.exe
 # nothing, and the old compiler passes the tests (`make test-deps` holds this list to ksplc's).
 # The `tests` folders are left out: ksplc reads none of them, and listed, a new test case rebuilt
 # the compiler twice over. So are the `out` folders, where a package's runs leave scratch sources.
-KSPL_SRCS    := $(shell find ksplc std kspeg -type d \( -name tests -o -name out \) -prune -o \
+KSPL_SRCS    := $(shell find ksplc std lib/kspeg -type d \( -name tests -o -name out \) -prune -o \
                \( -name "*.kspl" -o -name ksplc.cfg \) -print) \
                ksplc/kspl.kspeg ksplc/docs/SPEC-diagnostics.md \
                $(wildcard ksplc/gen/runtime/*.c) $(wildcard ksplc/gen/runtime/*.h)
@@ -234,7 +234,7 @@ endif
 # --- Linking Winsock (for std/net.kspl) --- Windows's TCP/UDP go through winsock2.
 # --- Linking shell32 (for taking the generated main's argv again) --- CommandLineToArgvW is in it;
 # mingw resolves it unasked, and it stays because ksplc names it (`make test-link-rules`).
-# --- The main thread's stack size (for max_parse_depth in kspeg/rule.kspl) ---
+# --- The main thread's stack size (for max_parse_depth in lib/kspeg/rule.kspl) ---
 # The KSPEG parser recurses on the C stack, its depth assuming Linux's 8MB; Windows reserves 1MB.
 # The windowing subsystem for the artifact a person opens by a double-click: none but on win32.
 # **Only UCRT64's own compiler builds here** (its triple holds `-w64-`): the MSYS layer's makes a
@@ -385,6 +385,9 @@ commit-seed: export SEED_FMT_HELP := $(seed_fmt_help)
 ## Build-and-install|commit-seed|Re-bake stage2's generated C into `ksplc/seed.c` (needed once a runtime `.c` is touched)
 commit-seed: $(STAGE2_WHOLE) $(STAGE1_EXE) | $(OUT_DIR)
 	@echo "# UPDATING SEED COMPILER SOURCE..."
+# **A file git does not hold is refused before the seed changes**: the record would count it, and
+# CI's checkout, which lacks it, would fail `test-seed-sum`.
+	@./$(STAGE1_EXE) run tools/seed_sum.kspl untracked $(SEED_SUM_SRCS)
 ifeq ($(BACKEND),c)
 # **Tidy first, then strip**: stripped first, `clang-format` joins `else` and `if` into `else if`.
 # Caution: **Exactly one pass, on a copy**: `clang-format` is not idempotent on this C.
@@ -458,75 +461,77 @@ kspl_dep_rules = awk '$$1 !~ /^-/ && $$2 !~ /^(\/|[A-Za-z]:)/ \
 kspl_unrecorded = $(if $(wildcard $(1).d),,FORCE)
 FORCE:
 
-# --- The AI engine (ksai/examples/llama_engine) ---
-## Run|run|Build the AI engine (`ksai/examples/llama_engine`) and run it
+# --- The AI engine (lib/ksai/examples/llama_engine) ---
+## Run|run|Build the AI engine (`lib/ksai/examples/llama_engine`) and run it
 run: $(STAGE1_EXE)
 	@echo "# RUNNING AI ENGINE (Release Build, BLAS=$(BLAS))"
-	$(call kspl_build,ksai/examples/llama_engine/main.kspl,llama_engine,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
+	$(call kspl_build,lib/ksai/examples/llama_engine/main.kspl,llama_engine,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	./$(OUT_DIR)/llama_engine.exe
 
-# --- Generating the corpus for KSPL FIM (tools/ai_assist/build_corpus.kspl -> make_fim.kspl) ---
-## Run|fim-corpus|Make the material for teaching completion
+# --- The coding example: a KSPL-native model that completes KSPL, scored by the compiler ---
+# The example, its pipeline and its model stand in `FIM_AI`. What it makes quickly (the corpus and
+# the tokenizer) goes to `FIM_OUT`; the trained weights, slow to make again, go to `data/`.
+FIM_AI := lib/ksai/examples/code_complete
+FIM_OUT := $(OUT_DIR)/code_complete
+FIM_WEIGHTS := data/code_complete.safetensors
+# The compiler the pipeline asks: the one this build made, not one on PATH.
+FIM_KSPLC := --ksplc=$(STAGE1_EXE)
+## Run|fim-corpus|Make the material for teaching completion, from this repository's sources
 fim-corpus: $(STAGE1_EXE)
-	@echo "# BUILDING FIM TRAINING CORPUS (tools/ai_assist, KSPL native)"
-	$(call kspl_build,tools/ai_assist/build_corpus.kspl,build_corpus,)
-	./$(OUT_DIR)/build_corpus.exe
-	$(call kspl_build,tools/ai_assist/make_fim.kspl,make_fim,)
+	@echo "# BUILDING FIM TRAINING CORPUS ($(FIM_AI), KSPL native)"
+	$(call kspl_build,$(FIM_AI)/build_corpus.kspl,build_corpus,)
+	./$(OUT_DIR)/build_corpus.exe $(FIM_KSPLC)
+	$(call kspl_build,$(FIM_AI)/make_fim.kspl,make_fim,)
 	./$(OUT_DIR)/make_fim.exe
 
-# --- The KSPL-native coding model (ksai/examples/fim_coder), scored by the compiler ---
-# The tokenizer and the corpus are tools/ai_assist's; the model takes them by path.
-# **Four sequences a step**, on every CPU (`fim_coder --threads`): on four CPUs it reaches a lower
-# held-out loss than one sequence a step for three times the steps, in less time. The weights come
-# out the same on any number of CPUs.
+# **Four sequences a step**, on every CPU (`code_complete --threads`): on four CPUs it reaches a
+# lower held-out loss than one sequence a step for three times the steps, in less time. The weights
+# come out the same on any number of CPUs.
 FIM_STEPS ?= 10000
 FIM_BATCH ?= 4
-# `sgd` or `adam`; empty, fim_coder's own default (Adam) holds, so it is settled in one place.
+# `sgd` or `adam`; empty, code_complete's own default (Adam) holds, so it is settled in one place.
 FIM_OPTIMIZER ?=
-FIM_AI := tools/ai_assist
-# The trained weights, in the folder for what tools/ai_assist makes.
-FIM_WEIGHTS := $(OUT_DIR)/ai_assist/fim_coder.safetensors
 # **One BLAS thread** (under `BLAS=1`): its matrices are a few hundred rows, where the threads cost
 # more than they share out; the cores go to the batch's sequences instead. Without BLAS it is not
 # read.
 FIM_ENV := OPENBLAS_NUM_THREADS=1
-## Run|fim-model|Train the KSPL-native coding model on the FIM corpus (`FIM_STEPS=`, `FIM_BATCH=`, `FIM_OPTIMIZER=`, `BLAS=1`)
+## Run|fim-model|Train the coding example's model on the FIM corpus (`FIM_STEPS=`, `FIM_BATCH=`, `FIM_OPTIMIZER=`, `BLAS=1`)
 fim-model: fim-corpus
 	$(call kspl_build,$(FIM_AI)/train_bpe.kspl,train_bpe,)
 	./$(OUT_DIR)/train_bpe.exe --vocab=2000
-	$(call kspl_build,ksai/examples/fim_coder/main.kspl,fim_coder,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
+	$(call kspl_build,$(FIM_AI)/main.kspl,code_complete,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	@mkdir -p $(dir $(FIM_WEIGHTS))
-	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe train --corpus=$(FIM_AI)/corpus/fim_train.jsonl \
-		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
+	$(FIM_ENV) ./$(OUT_DIR)/code_complete.exe train --corpus=$(FIM_OUT)/corpus/fim_train.jsonl \
+		--vocab=$(FIM_OUT)/tokenizer/vocab.txt --merges=$(FIM_OUT)/tokenizer/merges.txt \
 		--out=$(FIM_WEIGHTS) --steps=$(FIM_STEPS) --batch=$(FIM_BATCH) \
 		$(if $(FIM_OPTIMIZER),--optimizer=$(FIM_OPTIMIZER))
 
-## Run|fim-eval|Score the coding model: its held-out loss, then the rate at which ksplc accepts its completions
+## Run|fim-eval|Score the coding example's model: its held-out loss, then the rate at which ksplc accepts its completions
 fim-eval: $(STAGE1_EXE)
 	$(call kspl_build,$(FIM_AI)/eval_fim.kspl,eval_fim,)
-	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe loss --corpus=$(FIM_AI)/corpus/fim_val.jsonl \
-		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
+	$(FIM_ENV) ./$(OUT_DIR)/code_complete.exe loss --corpus=$(FIM_OUT)/corpus/fim_val.jsonl \
+		--vocab=$(FIM_OUT)/tokenizer/vocab.txt --merges=$(FIM_OUT)/tokenizer/merges.txt \
 		--weights=$(FIM_WEIGHTS)
-	$(FIM_ENV) ./$(OUT_DIR)/eval_fim.exe --model=native --weights=$(FIM_WEIGHTS)
+	$(FIM_ENV) ./$(OUT_DIR)/eval_fim.exe --model=native --weights=$(FIM_WEIGHTS) $(FIM_KSPLC)
 
-# --- Native inference for the Qwen family (ksai/examples/qwen_infer) --- Build only.
-## Run|qwen|Build native inference for the Qwen family (`ksai/examples/qwen_infer`)
+# --- Native inference for the Qwen family (lib/ksai/examples/qwen_infer) --- Build only.
+## Run|qwen|Build native inference for the Qwen family (`lib/ksai/examples/qwen_infer`)
 qwen: $(STAGE1_EXE)
 	@echo "# BUILDING QWEN NATIVE INFERENCE (BLAS=$(BLAS))"
-	$(call kspl_build,ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
+	$(call kspl_build,lib/ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	@echo "# built -> $(OUT_DIR)/qwen_infer.exe"
 
-# --- The chat server for a Qwen model (ksai/examples/chat_server) --- Build only.
+# --- The chat server for a Qwen model (lib/ksai/examples/chat_server) --- Build only.
 # **A file with the sources and the switches it was built from.** So `make chat-server` builds it
 # again after a source changed, and `make chat-server NATIVE=1` builds it again after a build
 # without. `make chat` does not build it: its launcher names this target where it is missing.
 CHAT_SERVER_EXE := $(OUT_DIR)/chat_server.exe
 CHAT_SERVER_SWITCHES := $(GEN_DIR)/chat_server.switches
-## Run|chat-server|Build the chat server a client with tools asks (`ksai/examples/chat_server`; `NATIVE=1` for this machine's CPU)
+## Run|chat-server|Build the chat server a client with tools asks (`lib/ksai/examples/chat_server`; `NATIVE=1` for this machine's CPU)
 chat-server: $(CHAT_SERVER_EXE)
 $(CHAT_SERVER_EXE): $(STAGE1_EXE) $(CHAT_SERVER_SWITCHES) $(call kspl_unrecorded,$(GEN_DIR)/chat_server)
 	@echo "# BUILDING THE CHAT SERVER (BLAS=$(BLAS) NATIVE=$(NATIVE))"
-	$(call kspl_build,ksai/examples/chat_server/main.kspl,chat_server,$(AI_KSPL_FLAGS) \
+	$(call kspl_build,lib/ksai/examples/chat_server/main.kspl,chat_server,$(AI_KSPL_FLAGS) \
 	  --emit-deps=$(GEN_DIR)/chat_server.deps,$(AI_CFLAGS))
 	$(call kspl_dep_rules,$@,$(GEN_DIR)/chat_server)
 	@echo "# built -> $(CHAT_SERVER_EXE)"
@@ -565,7 +570,7 @@ $(KSSRV_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/kssrv)
 # Whether the libraries kssrv links are installed: OpenSSL's libssl and libcrypto, for HTTPS.
 # `make install` asks it before it ties `.ksmd` to its launcher, which starts kssrv. **The libraries
 # are asked of ksplc** (`--emit-libs`, from the sources' `#link`), and an empty program is linked
-# against them, as `ksbind/Makefile`'s `test` does. So a fault in kssrv's own code is not reported
+# against them, as `lib/kstls/Makefile`'s `test` does. So a fault in kssrv's own code is not reported
 # as a missing library.
 KSSRV_PROBE := $(GEN_DIR)/kssrv_probe
 ## Build-and-install|kssrv-libs|Say whether the libraries kssrv links (OpenSSL's) are installed here

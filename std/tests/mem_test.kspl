@@ -5,8 +5,9 @@ import "std/http"
 import "std/json"
 import "std/jsonrpc"
 import "std/mem" + { Arena, alloc, dealloc }
-import "std/refcount" { Rc, Arc, Weak_rc, Weak_arc }
+import "std/refcount" { Rc, Arc, Weak_rc, Weak_arc, WEAK_LOCKED }
 import "std/str"
+import "std/sys"
 import "std/tests/sys_test"
 import "std/thread"
 import "std/verdict"
@@ -359,3 +360,56 @@ fn test_weak_arc_concurrent()
     verdict
         .pass("The value survives simultaneous downgrade/upgrade on 4 threads and is freed \
             automatically in the end, with no leak.")
+// ==========================================
+// std/refcount: `Arc.get_mut` locks the weak count before it reads the strong count, so a weak
+// handle cannot upgrade and go between the two reads.
+// ==========================================
+priv fn get_mut_answers_body()
+    a: = Arc<|I32|>(7)
+    assert(a.get_mut().is_some(), "the only owner gets the value writable")
+    assert(a.weak_count() == 1, "get_mut puts the weak count back")
+    w: = a.downgrade()
+    assert(a.get_mut().is_none(), "a weak handle keeps the value read-only")
+    b: = w.upgrade() catch panic("upgrade() must succeed while the Arc is alive")
+    assert(a.get_mut().is_none(), "a second owner keeps the value read-only")
+    assert(b.weak_count() == 2, "a refused get_mut leaves the weak count as it was")
+
+struct Downgrade_wait //< what the test and the thread that downgrades share
+    arc: Arc<|I32|>
+    done: thread.Atomic_sz //< 1 once the thread's downgrade returned
+    go: thread.Atomic_sz //< 1 once the test lets the thread drop its weak handle and end
+
+extern fn arc_test_downgrade_waits(arg: Downgrade_wait$@): Void$@
+    _w: = arg.arc.downgrade()
+    arg.done.store(1)
+    for arg.go.load() == 0
+        sys.sleep_ms(1)
+    return null
+
+priv fn downgrade_waits_body()
+    $shared: = Downgrade_wait::{ .arc = Arc<|I32|>(7), .done = thread.Atomic_sz(0),
+        .go = thread.Atomic_sz(0) }
+    assert(shared.arc.lock_weak(), "the only owner locks the weak count")
+    assert(shared.arc.get_mut().is_none(), "get_mut answers none while the count is locked")
+    $t: =
+        thread.Thread.spawn<|Downgrade_wait|>(arc_test_downgrade_waits, shared@)
+        catch panic("thread spawn failed")
+    // Without the wait, the downgrade adds 1 to the lock and returns at once.
+    sys.sleep_ms(50)
+    assert(shared.done.load() == 0, "downgrade waits while the weak count is locked")
+    assert(shared.arc.weak_count() == WEAK_LOCKED, "the waiting downgrade leaves the lock alone")
+    shared.arc.unlock_weak()
+    for shared.done.load() == 0
+        sys.sleep_ms(1)
+    assert(shared.arc.weak_count() == 2, "the downgrade counts once the lock is gone")
+    shared.go.store(1)
+    t.free()
+    assert(shared.arc.weak_count() == 1, "the thread's weak handle is gone")
+
+fn test_arc_get_mut_locks_weak()
+    verdict.start("[Arc] get_mut locks the weak count, and downgrade waits for it...")
+    heap_before: = mem.heap_used_bytes()
+    get_mut_answers_body()
+    downgrade_waits_body()
+    back_to(heap_before, "get_mut and a waiting downgrade leak nothing")
+    verdict.pass("get_mut reads the strong count under the lock, and a downgrade waits for it.")

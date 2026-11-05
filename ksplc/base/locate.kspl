@@ -1,5 +1,6 @@
 //< Where a source comes from, and the logical name it is known by
-//< It covers std's folder, the folder given for packages, and the packages that named themselves.
+//< It covers std's folder, the folders other packages are found in, and the packages that named
+//< themselves.
 //< It also holds the path helpers, and maps a logical name back to the file it is read from.
 //< **The dependency goes one way**: this file imports `core.kspl`, never the reverse.
 //< std's folder is found beside the executable unless set. Environment variables are the main way
@@ -135,9 +136,8 @@ priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty w
         return ""
     return base_core.arena.dup_str(sys.get_dir_name(exe.slice()))
 
-fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked for
-    //< **Empty is a valid answer** (the current folder only); `pkg_src_dir_known` says whether it
-    //< is resolved.
+fn pkg_src_dir(): U8[] //< the folder `--pkg-src-dir=` or `KSPLC_PKG_SRC_DIR` names; empty if none
+    //< **Empty is a valid answer**; `pkg_src_dir_known` says whether it is resolved.
     if base_core.config.pkg_src_dir_known
         return base_core.config.pkg_src_dir
     base_core.config.pkg_src_dir_known = true
@@ -151,6 +151,13 @@ fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked
             base_core.config.pkg_src_dir = base_core.perm_arena.dup_str(v)
     return base_core.config.pkg_src_dir
 
+priv const LIBS_BESIDE_STD: U8[] = "lib" //< the folder beside std's that holds the libraries
+    //< The repository holds `std/` and `lib/` side by side. `make install` puts the same pair
+    //< under the prefix (`<prefix>/lib/kspl/std` and `<prefix>/lib/kspl/lib`).
+
+fn libs_dir(): U8[] //< the `lib` folder beside std's folder: the libraries shipped with that std
+    return fs.join(sys.get_dir_name(fold_dots(std_dir())), LIBS_BESIDE_STD, base_core.arena)
+
 priv struct Package_folder //< one package's name and the folder its lookup recorded
     name: U8[]
     root: U8[]
@@ -162,15 +169,21 @@ priv $package_bases: Package_folder$@ = null
 
 priv fn package_root(unit: U8[]): U8[] //<
     //< The path to put before that package's files; empty for the current folder
-    //< It says whether that package comes from the current folder or from `pkg_src_dir`.
-    //< **It is decided once per package.** The not-found diagnostic names the path really opened.
-    //< An empty `pkg_src_dir` costs no stat.
-    base: = pkg_src_dir()
-    if base.len == 0 || unit.len == 0
+    //< **It is decided once per package**, as the first place that holds a folder of its name:
+    //< the current folder, `pkg_src_dir`, then `libs_dir` ("The source of a package other than
+    //< `std`" in `ksplc/docs/SPEC-tools.md`). Where none holds one, the current folder, so the
+    //< not-found diagnostic names the path the writer most likely meant.
+    if unit.len == 0
         return ""
     if root: = recorded_root(package_bases, unit)
         return root
-    root: = "" if fs.is_dir(unit) else base
+    $root: = ""
+    // **A local copy wins**: the writer put it there.
+    if !fs.is_dir(unit)
+        for place in U8[][]::{ pkg_src_dir(), libs_dir() }
+            if place.len > 0 && fs.is_dir(fs.join(place, unit, base_core.arena))
+                root = base_core.perm_arena.dup_str(place)
+                break
     package_bases = base_core.perm_arena
         .create(Package_folder::{ .name = base_core.perm_arena.dup_str(unit), .root = root,
         .next = package_bases })
@@ -208,26 +221,28 @@ fn recorded_name_to(logical: U8[], out: Str_builder$@) //<
         out.c('/' if ch == '\\' else ch)
 
 fn disk_name(logical: U8[]): U8[] //<
-    //< The path a declared package's file is read from; any other logical name as it is
-    //< **A diagnostic and a `#line` use this name**, so a package worked on from its own folder
-    //< names the path that opens there.
+    //< The path a package's file is read from; std's and any other logical name as it is
+    //< **A diagnostic and a `#line` use this name**, so they name the path that opens, from a
+    //< package's own folder or one under `pkg_src_dir` or `libs_dir`.
     unit: = package_of(logical)
-    root: = recorded_root(declared_roots, unit).unwrap_or(unit)
+    if unit.len == 0 || is_std_file(logical)
+        return logical
+    folder: = package_dir(unit)
     // In a folder with its own name (the repository's root) the path is the logical name, and
     // `#line` calls this once per line.
-    if root.equals(unit)
+    if folder.equals(unit)
         return logical
     rest: = logical.sub_from(unit.len + 1)
-    if root.len == 0
+    if folder.len == 0
         return rest
     out: = base_core.arena.text()
-    out.s(root).c('/').s(rest)
+    out.s(folder).c('/').s(rest)
     return out.take()
 
 fn package_dir(unit: U8[]): U8[] //<
     //< The folder a package's files are read from
-    //< Its own folder if declared, else the current folder or one under `--pkg-src-dir`
-    //< (`package_root` above).
+    //< Its own folder if declared, else the current folder, or one under `pkg_src_dir` or
+    //< `libs_dir` (`package_root` above).
     if root: = recorded_root(declared_roots, unit)
         return root
     root: = package_root(unit)
@@ -303,8 +318,8 @@ priv fn first_part(path: U8[]): U8[] //< the first part of a relative path, skip
 
 priv fn placed_elsewhere(unit: U8[]): Bool //<
     //< Whether a name's first part is a package read from a folder of its own
-    //< That is std's folder, a package that named itself, or one under `--pkg-src-dir`, rather than
-    //< a local folder with that name.
+    //< That is std's folder, a package that named itself, or one under `pkg_src_dir` or
+    //< `libs_dir`, rather than a local folder with that name.
     //<
     //< A `..` that climbs out of such a package stays in the name (`one_name` above). The
     //< package's folder need not be at its name, so `ksdb/../x` folded to `x` would name another
@@ -471,7 +486,7 @@ fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read fr
 
 fn link_on_the_way( //< the first step below a package's top folder that is a link; empty if none
     //< Only a package read from a place of its own is checked: std's, one that names itself, and
-    //< one under `pkg_src_dir`. A link there can lead out of the package.
+    //< one under `pkg_src_dir` or `libs_dir`. A link there can lead out of the package.
     //< Caution: **Do not check the top folder itself**, or the steps above it. A top that is a
     //< link is normal: macOS's `/tmp`, or a checkout linked into place. **Check the prefixes of
     //< the path that is opened**, as std's `fs.stays_under` does, so the check and the read
@@ -527,9 +542,8 @@ priv fn append_disk_path(import_path: U8[], out: Str_builder$@): Sz? //<
         out.s(disk)
         rest: = import_path.len - unit.len - 1
         return .some(0 if disk.len == rest else disk.len - rest - 1)
-    // **A folder can be given for packages other than `std` too** (`--pkg-src-dir=`;
-    // `package_root` above).
-    // With none given, it returns empty: relative to the current folder.
+    // **Another package is read from the current folder, the folder given (`--pkg-src-dir=`), or
+    // the `lib` beside std's folder** (`package_root` above). Empty is the current folder.
     root: = package_root(unit)
     if root.len == 0
         out.s(import_path)

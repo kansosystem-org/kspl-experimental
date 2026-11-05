@@ -1,0 +1,136 @@
+//< The compiler oracle (shared)
+//< The smallest checker behind the main measure, "how often ksplc accepts the source with the
+//< completion inserted". ksplc runs under `--diagnostic-format=json`: each diagnostic is one JSON
+//< object on a line of stderr, and the closing object, the last line, gives the counts.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+
+const CORPUS_DIR: U8[] = "out/code_complete/corpus" //< the corpus, and the temporary sources
+    //< Quick to make again, so it stands under `out/`, where `make clean` removes it.
+const TOKENIZER_DIR: U8[] = "out/code_complete/tokenizer" //< the vocabulary `train_bpe` writes
+
+priv $ksplc_path: U8[] = "ksplc" //< the compiler every measure here asks
+    //< **The installed one, found on PATH**, unless a tool's `--ksplc=` names another
+    //< (`use_ksplc`). The example assumes no repository around it.
+
+fn use_ksplc(path: U8[]) //< names the compiler the measures ask; empty keeps the one on PATH
+    if path.len > 0
+        ksplc_path = path
+
+fn ksplc(): U8[] //< the compiler the measures ask
+    return ksplc_path
+
+fn ksplc_option(): U8[] //< the help text of every tool's `--ksplc=`
+    return "the compiler the measures ask (default: ksplc on PATH)"
+
+fn close_or_die(f: io.File_stream$@, path: U8[]) //< closes a file, or stops the run if it cannot
+    //< Caution: **Do not swallow a close failure.** Writer's `s()` ignores fwrite's return value
+    //< (so that writes can chain), so **a write failure shows only at the close**. For a tool run
+    //< once, stopping and running it again is cheaper.
+    f.sync() catch
+        io.err().s("error: could not finish writing '\{path\}' (the file is incomplete)\n")
+        sys.exit(1)
+    f.free()
+const UNCOMPILABLE: I32 = 999 //< no verdict: the run never started, timed out or ended early
+
+priv const COMPILE_TIMEOUT_MS: I32 = 60000
+priv const OUTPUT_CAP: Sz = 1024 * 1024
+
+struct Compile_result //< what one run of the compiler said
+    error_count: I32 //< the closing object's `errors`, or `UNCOMPILABLE` where there is none
+    stderr_data: U8$[] //< what the compiler wrote, a JSON object a line; empty if it never started
+        //< Not `stderr`, which is a macro in the Windows (MSVC UCRT) headers (see
+        //< std/sys.Run_result).
+
+fn load_jsonl(path: U8[], arena: Arena$@): json.Value$[]!io.Io_error //< one JSON record per line
+    //< Shared by the corpus tools. A blank line is skipped, but broken JSON panics, so a broken
+    //< corpus is noticed at once.
+    data: = io.read_file(path, null)!
+    defer dealloc(Void$@::data.ptr)
+
+    $list: = List<|json.Value|>(arena)
+    for raw_line in data.lines(arena)
+        line: = U8$[]::raw_line.trim_spaces()
+        if line.len == 0
+            continue
+        val: = json.parse(line, arena) catch panic("load_jsonl: invalid JSON line")
+        list.push(val.val)
+    return list.slice()
+
+fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
+    //< The `errors` of the closing object that ends the stream; `.none` where it does not end so
+    //< **No closing object means the run ended before its verdict** (a crash, a cut-off, a line of
+    //< text saying why). So the diagnostics above it are not all there were, and give no count.
+    //< Nor does a verdict that disagrees with its count: `failed` with no error, or `succeeded`
+    //< with one.
+    lines: = stderr_data.trim_end().lines(arena)
+    if lines.len == 0
+        return .none
+    doc: = json.parse(lines.get(lines.len - 1), arena) catch
+        return .none
+    result: = doc.val.get("result").as_str().unwrap_or("")
+    n: = doc.val.get("errors").as_int().unwrap_or(-1)
+    failed: = result.equals("failed")
+    if !(failed || result.equals("succeeded")) || n < 0 || failed != (n > 0)
+        return .none
+    return .some(n)
+
+fn compile_errors( //< runs one source through ksplc and counts the errors it reports
+    //< The temporary source is `CORPUS_DIR/{stem}.kspl`, and it is deleted before this returns.
+    source: U8[], //< the program to compile; it is written to a file unchanged
+    stem: U8[], //< names the temporary file, so two callers running at once do not collide
+    arena: Arena$@, //< where the captured output is allocated
+): Compile_result //< the error count and the messages; `UNCOMPILABLE` if it gave no verdict
+    defer $src_path: = Str_builder()
+    src_path.s(CORPUS_DIR).c('/').s(stem).s(".kspl")
+    defer $out_path: = Str_builder()
+    out_path.s(CORPUS_DIR).c('/').s(stem).s(".c")
+
+    fs.mkdir_all(CORPUS_DIR) catch {} // fails harmlessly if it already exists
+
+    io.write_file(src_path.slice(), source) catch
+        return Compile_result::{ .error_count = UNCOMPILABLE, .stderr_data = "" }
+
+    argv: = U8[][]::{ ksplc_path, "--diagnostic-format=json", src_path.slice(),
+        out_path.slice() }
+    // Caution: **Do not replace this with `subproc.run`.** A nonzero exit is what is counted here;
+    // thrown as an error, every input meant to be counted would end up in the catch.
+    got: = subproc.run_capture(argv, "", COMPILE_TIMEOUT_MS, OUTPUT_CAP, arena)
+
+    // Deleting a file that was never made (the compile failed) fails harmlessly.
+    fs.remove_path(src_path.slice()) catch {}
+    fs.remove_path(out_path.slice()) catch {}
+
+    r: = got catch
+        return Compile_result::{ .error_count = UNCOMPILABLE, .stderr_data = "" }
+    if r.exit_code.is_none()
+        return Compile_result::{ .error_count = UNCOMPILABLE, .stderr_data = "" }
+    n: = closing_errors(r.stderr_data, arena).unwrap_or(UNCOMPILABLE)
+    return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
+
+fn compiles(source: U8[], stem: U8[], arena: Arena$@): Bool //< whether it compiles cleanly
+    return compile_errors(source, stem, arena).error_count == 0
+
+fn first_error(stderr_data: U8[], arena: Arena$@): U8[] //<
+    //< the first error as `file:line:column: message`, empty where there is none
+    //< A line that is no JSON object (the text a run that ended early leaves) is passed over.
+    for line in stderr_data.lines(arena)
+        doc: = json.parse(line, arena) catch
+            continue
+        d: = doc.val
+        if !d.get("severity").as_str().unwrap_or("").equals("error")
+            continue
+        file: = d.get("file").as_str().unwrap_or("")
+        ln: = d.get("line").as_int().unwrap_or(0)
+        col: = d.get("column").as_int().unwrap_or(0)
+        return arena.text().s("\{file\}:\{ln\}:\{col\}: ")
+            .s(d.get("message").as_str().unwrap_or("")).take()
+    return ""

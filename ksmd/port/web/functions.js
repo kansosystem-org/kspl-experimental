@@ -27,7 +27,8 @@ onmessage = (e) => {
       x = new WebAssembly.Instance(m.module, { env: { ksmd_own_stopped(p, n) {
         throw new Error(dec.decode(new Uint8Array(x.memory.buffer, p, n)));
       } } }).exports;
-      postMessage({ names: dec.decode(read(x.ksmd_own_names())) });
+      const names = dec.decode(read(x.ksmd_own_names()));
+      postMessage({ names, help: dec.decode(read(x.ksmd_own_help())) });
       return;
     }
     const at = x.ksmd_own_in(m.call.length);
@@ -39,7 +40,8 @@ onmessage = (e) => {
 };`;
   let workerUrl = null;
 
-  // Each functions file by its path from the root: { bytes, state, why, module, worker, names }.
+  // Each functions file by its path from the root: { bytes, state, why, module, worker, names,
+  // help }, `help` being what a person reads of each function (`ksmd/calc/help.kspl`).
   // `state` is "building", "ready" or "broken"; `bytes` are those the build was asked for.
   const files = new Map();
   let sent = ""; // the names the editor holds, one per line
@@ -49,14 +51,14 @@ onmessage = (e) => {
 
   const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
 
-  // Starts a worker on a file's module; resolves to its names, or null where it cannot start.
+  // Starts a worker on a file's module; resolves to { names, help }, or null where it cannot start.
   function start(f) {
     if (!workerUrl) workerUrl = URL.createObjectURL(new Blob([WORKER], { type: "text/javascript" }));
     const worker = new Worker(workerUrl);
     f.worker = worker;
     return new Promise((done) => {
-      worker.onmessage = (e) => done(e.data.names === undefined ? null :
-        e.data.names.split("\n").filter((n) => n.length > 0));
+      worker.onmessage = (e) => done(e.data.names === undefined ? null : {
+        names: e.data.names.split("\n").filter((n) => n.length > 0), help: JSON.parse(e.data.help) });
       worker.onerror = (e) => {
         e.preventDefault();
         done(null);
@@ -105,9 +107,10 @@ onmessage = (e) => {
     }
     try {
       f.module = await WebAssembly.compile(got.bytes);
-      const names = await start(f);
-      if (names === null) throw new Error("the module did not start");
-      f.names = names;
+      const started = await start(f);
+      if (started === null) throw new Error("the module did not start");
+      f.names = started.names;
+      f.help = started.help;
       f.state = "ready";
     } catch (e) {
       f.state = "broken";
@@ -133,7 +136,7 @@ onmessage = (e) => {
       let f = files.get(path);
       if (f && same(f.bytes, bytes)) continue;
       if (!f) {
-        f = { state: "building", why: "", names: [], module: null, worker: null };
+        f = { state: "building", why: "", names: [], help: [], module: null, worker: null };
         files.set(path, f);
       }
       f.bytes = bytes;
@@ -221,6 +224,11 @@ onmessage = (e) => {
       busy = false;
     }
   }
+
+  // What a person reads of each of the document's own functions a formula calls, marked `own`, in
+  // the shape `ksmd_web_functions` gives ksmd's own (`suggest.js`).
+  ks.ownFunctions = () => [...owner].flatMap(([name, path]) =>
+    files.get(path).help.filter((h) => h.name === name).map((h) => ({ ...h, own: true })));
 
   ks.rendered.push(() => {
     show();

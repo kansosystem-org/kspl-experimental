@@ -65,55 +65,6 @@ The answer has five parts, in this order:
 * **A sub-make's own target is not followed.** The answer names the sub-make, and `T=<folder>:<target>` explains that target.
 * **It asks make several times**, each a parse of the whole build. That takes a few seconds, and runs any `$(shell)` the make files run at parse time.
 
-## The coding assistant
-
-`tools/ai_assist/` builds an AI that fills in missing KSPL code, and the KSPL compiler decides whether each answer is good. What each file does is in [`tools/ai_assist/README.md`](../ai_assist/README.md); what is left is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
-
-The task is *fill-in-the-middle* (FIM): the model sees the code before and after a gap (a *hole*) and writes what goes in the gap.
-
-### The approach: borrow for training, KSPL for checking and serving
-
-| Part | What it uses |
-| :-- | :-- |
-| **Training** | It can borrow an existing model: a large LLM, or LoRA fine-tuning of a small coding model (training only a few added parameters) |
-| **Checking** | KSPL's own tools: `ksplc` (compiling), `lint` and `fmt` |
-| **Serving** (running the model) | KSPL: inference runs on `ksai` with safetensors weights (`ksai/examples/fim_coder` and `ksai/examples/qwen_infer`) |
-
-**The compiler is the judge** (the *compiler oracle*). What is generated and trained on is checked by a program, not by a person. The main measure is the rate at which `ksplc` accepts a file once the completion is inserted.
-
-**It lives in `tools/`, not in `ksai/`, because it runs only inside the whole tree**: it starts the compiler and reads this repository as its corpus. It runs the engine's examples as processes, and imports only the tokenizer, which is trained on the same chunks that it encodes.
-
-### Implementation language: KSPL for data, evaluation and the gate
-
-**Whatever reduces to the compiler oracle is KSPL.** Calling `ksplc` as a child process and judging the result needs no machine-learning library; it uses `run_capture` in [`std/subproc.kspl`](../../std/subproc.kspl).
-
-**What depends on the outside ML ecosystem stays in Python on purpose** (`transformers`, `peft`, `torch` and the like): it is an outside reference that checks the KSPL code. Those helpers import the libraries inside a function, so a file loads without them.
-
-### How a completion is scored
-
-**A hole counts only where removing its line breaks compilation** (`eval_fim.kspl`). So the original line scores 100% and an empty completion 0%, by construction. A comment or a blank line compiles when empty, and counting it would let "nothing" pass.
-
-**`fim_coder complete` returns several candidates, and the compiler chooses among them.** This scores clearly higher than the single most likely (*greedy*) candidate. So `eval_fim --model=native` reports both:
-
-| Score | What it counts |
-| :-- | :-- |
-| pass@1 | the greedy candidate compiles |
-| pass@K | any one of K candidates compiles |
-
-**A line the compiler accepts is not always the line meant.** Far fewer completions match the original line exactly. So the rate measures valid KSPL, not right KSPL.
-
-**Settings are compared by the held-out loss, not by the compiler's rate.** The *held-out loss* is the model's error on code it was not trained on. At this model size, a new random seed moves the compiler's rate more than a change of optimizer or batch does. The held-out loss hardly moves. So `make fim-eval` prints the held-out loss (`fim_coder loss`) before the rates. The loss `train` prints is on its training data, so it cannot stand in.
-
-**The held-out loss is printed over every position, and over the middle alone** (the hole's tokens and its end marker), which is the task itself.
-
-**Adam is the default optimizer** (`FIM_OPTIMIZER=sgd` selects SGD). At the default batch and step count it reaches a lower held-out loss than SGD, by more than two seeds of one setting differ. Its steps take longer.
-
-### Why the assistant runs outside the language server
-
-**The AI runs as its own process, not inside the language server.** Inside, it would cost memory and delay on every keystroke, and its crash would take the server down. Kept apart, the compiler and the seed are untouched.
-
-`fim_coder complete` fills a file of holes. **An editor bridge is not built until the completions are worth its cost**, since it adds work to every keystroke.
-
 ## The desktop opener
 
 Double-clicking a `.ksmd` document runs ksmd's opener, [`../ksmd.kspl`](../ksmd.kspl). It makes sure a local kssrv server is running for the document's workspace, then makes the browser open the document's page. It chooses only the folder to serve and the port to start from; the rest is [`../opener.kspl`](../opener.kspl). ksagent's chat opener shares it ("Opening the chat page" below). The steps that tie the file type to it are "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md#opening-a-ksmd-document-on-a-double-click).
@@ -299,7 +250,7 @@ flowchart TD
     B -->|200, or no /health| R[use it, and leave it running at the end]
     B -->|503| W[wait until it is ready]
     A -->|another answer| X[refuse: the port belongs to another program]
-    A -->|nothing listens| F{model file in models/?}
+    A -->|nothing listens| F{model file in data/?}
     F -->|no| D[print the curl command, and stop]
     F -->|yes| L{llama-server starts from PATH?}
     L -->|yes| S[start it]

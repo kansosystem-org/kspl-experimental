@@ -6,7 +6,8 @@ import "ksmd/base/dates" { is_date, typed_date, write_date }
 import "ksmd/base/marker" { is_decimal }
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { calculate }
-import "ksmd/calc/formula" { Positions, bind, find_table, write_formula }
+import "ksmd/calc/formula" { Positions, bind, find_table, shift_formula, write_formula }
+import "ksmd/calc/value" as calculated
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
 import "ksmd/edit/editor" { Editor, Pos, Refused, end_block, replace }
@@ -17,7 +18,7 @@ import "ksmd/edit/series" { Series, series_of, value_at }
 import "ksmd/edit/sort" { Sort_key, sort_rows }
 import "ksmd/model/choice" { entry_of }
 import "ksmd/model/filter" { is_filter_entry }
-import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers }
+import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, show_plain, shows_numbers }
 import "ksmd/model/look" { Look_part, plain_look, with_part }
 import "ksmd/model/model" { Block, Cell, Cell_kind, Column_filter, Document, MAX_NAME, Piece,
     Table }
@@ -28,12 +29,18 @@ import "std/ds" { List }
 import "std/json"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
+import "std/strnum"
 
 enum Table_edit //< a row or column edit a page asks for, at a row or column of the table
     insert_row //< an empty row before row `at`; at the count of rows, after the last
     remove_row
     insert_column //< an empty column before column `at`; at the count, after the last
     remove_column
+
+struct Copied_at //< where copied cells stood: the row and column of their upper left cell
+    row: Sz //< -1 for the names
+    column: Sz
+    rows: Sz[] //< the row each line was copied from; empty where they stood one after another
 
 enum Group_edit //< what a page asks of the rows, or columns, from one to another
     group //< makes them a group
@@ -78,7 +85,7 @@ impl Editor
         u: = edit.new_table(ed.doc@, columns, rows, ed.arena) catch why
             throw .table(why)
         if grid.len > 0
-            ed.fill(u, -1, 0, grid) catch why
+            ed.fill(u, -1, 0, grid, false, .none) catch why
                 ed.put_tables_back(before@)
                 throw .table(why)
         $tx: = begin(ed.selection(), ed.arena)
@@ -146,25 +153,34 @@ impl Editor
         _u: = ed.table_of(block)!
         ed.remove_whole(block)!
 
-    fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz): Void!Refused //<
-        //< Inserts or removes a row or a column of the table a block shows
-        //< A filter stays as it is: the page shows a new row until the filter is chosen again.
+    fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz, count: Sz): Void!Refused //<
+        //< Inserts `count` rows or columns of the table a block shows before the one at `at`, or
+        //< removes `count` from it, as one step
+        //< A filter stays as it is: the page shows a new row until the filter is chosen again. A
+        //< refusal changes nothing.
         u: = ed.table_of(block)!
+        if count < 1
+            throw .table(.outside)
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
         switch what
         case .insert_row
-            edit.insert_rows(ed.doc@, u, at, 1, ed.arena) catch why
-                throw .table(why)
-        case .remove_row
-            edit.remove_row(ed.doc@, u, at) catch why
+            edit.insert_rows(ed.doc@, u, at, count, ed.arena) catch why
                 throw .table(why)
         case .insert_column
-            edit.insert_columns(ed.doc@, u, at, 1, ed.arena) catch why
+            edit.insert_columns(ed.doc@, u, at, count, ed.arena) catch why
                 throw .table(why)
-        case .remove_column
-            edit.remove_column(ed.doc@, u, at) catch why
-                throw .table(why)
+        case .remove_row, .remove_column
+            // Each line goes in turn from the same place; one refused puts every table back.
+            for _ in Range.asc(count)
+                if what == .remove_row
+                    edit.remove_row(ed.doc@, u, at) catch why
+                        ed.put_tables_back(before@)
+                        throw .table(why)
+                else
+                    edit.remove_column(ed.doc@, u, at) catch why
+                        ed.put_tables_back(before@)
+                        throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn move_lines(ed: Self$@, block: Sz, rows: Bool, first: Sz, count: Sz, at: Sz): Void!Refused //<
@@ -304,14 +320,72 @@ impl Editor
             throw .table(.outside)
         defer scratch: = Arena(64 * 1024)
         before: = capture(ed.doc@, scratch)
-        ed.fill(u, row, column, grid) catch why
+        ed.fill(u, row, column, grid, false, .none) catch why
             ed.put_tables_back(before@)
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
-    priv fn fill(ed: Self$@, u: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@):
-        Void!Edit_error //<
+    fn clear_cells(ed: Self$@, block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz,
+        left_out: Sz[]): Void!Refused //<
+            //< Empties every cell of a rectangle but those on the rows `left_out`, as one step
+            //< Each cell keeps its look. Row -1 is the names. A refusal changes nothing.
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if top < -1 || left < 0 || bottom >= t.rows.len || right >= t.columns.len || top > bottom ||
+            left > right
+            throw .table(.outside)
+        defer scratch: = Arena(64 * 1024)
+        out: = marks_of(left_out, t.rows.len, scratch)!
+        before: = capture(ed.doc@, scratch)
+        for row in Range(top, bottom + 1, 1)
+            if row >= 0 && out[row]
+                continue
+            for column in Range(left, right + 1, 1)
+                ed.put_typed(u, row, column, "", scratch) catch why
+                    ed.put_tables_back(before@)
+                    throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn paste_copied(ed: Self$@, block: Sz, row: Sz, column: Sz, bottom: Sz, right: Sz,
+        grid: List<|List<|U8[]|>|>@, from: Copied_at?): Void!Refused //<
+            //< Puts cells copied in ksmd into a table from one cell, as one step
+            //< Each text reads as typed text does (`value_of`), with no thousands separators taken
+            //< out. With `from`, each formula's references shift by the distance from the line's
+            //< own place there (`shift_formula`), as a fill shifts them. A range from `row`,
+            //< `column` to `bottom`, `right` that holds the grid a whole number of times takes it
+            //< that many times, each copy shifted from its own place. The table grows where the
+            //< grid reaches past it. A refusal changes nothing.
+        u: = ed.table_of(block)!
+        if row < -1 || column < 0 || grid.len == 0
+            throw .table(.outside)
+        if f: = from
+            if f.rows.len != 0 && f.rows.len != grid.len
+                throw .table(.outside)
+        $width: Sz = 0
+        for line in grid
+            width = line.len if line.len > width else width
+        height: = grid.len
+        $down: Sz = 1
+        $across: Sz = 1
+        if width > 0 && bottom >= row && right >= column && (bottom - row + 1) % height == 0 &&
+            (right - column + 1) % width == 0
+            down = (bottom - row + 1) / height
+            across = (right - column + 1) / width
+        defer scratch: = Arena(64 * 1024)
+        before: = capture(ed.doc@, scratch)
+        for i in Range.asc(down)
+            for j in Range.asc(across)
+                ed.fill(u, row + i * height, column + j * width, grid, true, from) catch why
+                    ed.put_tables_back(before@)
+                    throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    priv fn fill(ed: Self$@, u: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@, typed: Bool,
+        from: Copied_at?): Void!Edit_error //<
             //< Grows table `u` to hold the grid from a cell, then sets each cell; row -1 is the names
+            //< A text `typed` reads as typed; one that is not may hold thousands separators
+            //< (`pasted`). With `from`, a formula's references shift by the distance from where
+            //< its line was copied (`shift_formula`).
         $width: Sz = 0
         for line in grid
             width = line.len if line.len > width else width
@@ -326,44 +400,66 @@ impl Editor
             line: = grid[r]
             for c in Range.asc(line.len)
                 at_row: = row + r
-                text: = line[c] if at_row < 0 else pasted(line[c], scratch)
+                $text: = line[c]
+                if at_row >= 0 && !typed
+                    text = pasted(text, scratch)
+                if f: = from
+                    if at_row >= 0 && text.starts_with("=")
+                        copied_row: = f.rows[r] if f.rows.len > 0 else f.row + r
+                        defer $out: = Str_builder()
+                        out.c('=')
+                        shift_formula(ed.doc@, u, text.sub_from(1), at_row - copied_row,
+                            column - f.column, out@)
+                        text = scratch.dup_str(out.slice())
                 ed.put_typed(u, at_row, column + c, text, scratch)!
 
     fn fill_cells(ed: Self$@, block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz,
-        right: Sz, series: Bool): Void!Refused //<
+        right: Sz, series: Bool, left_out: Sz[]): Void!Refused //<
             //< Copies a range's first cells over the rest of it, as one step
             //< The `height` by `width` cells at `top`, `left` repeat down to `bottom` and across to
             //< `right`. Each copy is `edit.copy_cell`'s, so a reference without `$` shifts. With
             //< `series`, a line of those cells that goes on (`ksmd/edit/series.kspl`) goes on
-            //< instead: each column when the range reaches down, each row when it reaches right. A
-            //< refusal changes nothing.
+            //< instead: each column when the range reaches down, each row when it reaches right.
+            //< The rows `left_out` neither give nor take a cell, and a fill down counts only the
+            //< others, so a series goes on from row to row taken. A refusal changes nothing.
         u: = ed.table_of(block)!
         t: = ed.doc.tables[u]@
         if top < 0 || left < 0 || height < 1 || width < 1 || bottom < top + height - 1 ||
             right < left + width - 1 || bottom >= t.rows.len || right >= t.columns.len
             throw .table(.outside)
         defer scratch: = Arena(64 * 1024)
+        out: = marks_of(left_out, t.rows.len, scratch)!
+        // The rows that take part, and how many of them give the cells copied.
+        $taking: = List<|Sz|>(scratch)
+        $given: Sz = 0
+        for row in Range(top, bottom + 1, 1)
+            if !out[row]
+                taking.push(row)
+                given = given + 1 if row < top + height else given
+        if given == 0
+            throw .table(.outside)
         before: = capture(ed.doc@, scratch)
         down: = bottom > top + height - 1
         $lines: = List<|Series|>(scratch)
         for i in Range.asc(width if down else height)
             $line: = List<|Cell|>(scratch)
-            for j in Range.asc(height if down else width)
+            for j in Range.asc(given if down else width)
                 line
                     .push(t
-                    .cells[t.at(top + j, left + i) if down else t.at(top + i, left + j)])
+                    .cells[t.at(taking[j], left + i) if down else t.at(top + i, left + j)])
             // Without `series`, an empty line makes a line that repeats.
             if !series
                 line.clear()
             lines.push(series_of(line@, scratch))
-        for row in Range(top, bottom + 1, 1)
+        for k in Range.asc(taking.len)
+            row: = taking[k]
             for column in Range(left, right + 1, 1)
-                from_row: = top + (row - top) % height
+                from_row: = taking[k % given]
                 from_column: = left + (column - left) % width
                 if from_row == row && from_column == column
                     continue
                 line: = lines[column - left if down else row - top]@
-                if value: = value_at(line, row - top if down else column - left, scratch)
+                if value: = value_at(line, k if down else column - left, scratch)
                     look: = t.cells[t.at(from_row, from_column)].look
                     kind: Cell_kind =
                         (.number if line.kind == .number else .date if line.kind == .date
@@ -618,6 +714,49 @@ impl Editor
             write_formula(ed.doc@, t, cell, at, 0, 0, out@)
             return arena.dup_str(out.slice())
 
+    fn copied_cells(ed: Self@, block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz,
+        left_out: Sz[], out: Str_builder$@): Void!Refused //<
+            //< Writes what a copy of a rectangle of cells carries for a paste in ksmd:
+            //< `{"cells":[[…]],"values":[[…]],"rows":[…]}`, row -1 the names
+            //< `cells` holds each cell's text as a person edits it, a formula with its `=`.
+            //< `values` holds each value as calculated, written as typed text that `value_of`
+            //< reads back as that value: what Paste values puts. The rows `left_out` are left
+            //< out, and `rows` holds the row each line was copied from (`Copied_at.rows`).
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if top < -1 || left < 0 || bottom >= t.rows.len || right >= t.columns.len || top > bottom ||
+            left > right
+            throw .table(.outside)
+        defer scratch: = Arena(64 * 1024)
+        skip: = marks_of(left_out, t.rows.len, scratch)!
+        $rows: = List<|Sz|>(scratch)
+        for row in Range(top, bottom + 1, 1)
+            if row < 0 || !skip[row]
+                rows.push(row)
+        if rows.len == 0
+            throw .table(.outside)
+        at: = Positions(ed.doc@, scratch)
+        values: = calculate(ed.doc@, ed.today, scratch, ed.own)
+        for part in Range.asc(2)
+            out.s("{\"cells\":[" if part == 0 else "],\"values\":[")
+            for row in rows
+                out.s("[" if row == rows[0] else ",[")
+                for column in Range(left, right + 1, 1)
+                    if column > left
+                        out.c(',')
+                    defer cell: = Arena(1024)
+                    defer $typed: = Str_builder()
+                    if part == 0 || row < 0
+                        typed.s(ed.cell_text_at(u, row, column, at@, cell))
+                    else
+                        write_typed(values.at(u, row, column), typed@)
+                    out.c('"').escape_and_append(typed.slice()).c('"')
+                out.c(']')
+        out.s("],\"rows\":[")
+        for row in rows
+            out.s("" if row == rows[0] else ",").s("\{row\}")
+        out.s("]}")
+
     priv fn table_of(ed: Self@, block: Sz): Sz!Refused //< the table a block shows
         if block < 0 || block >= ed.doc.blocks.len ||
             ed.doc.blocks.get(block).kind != .table
@@ -630,6 +769,17 @@ impl Editor
         ed.change.tables = true
         ed.change.any = ed.change.any || !is_empty(tx@)
         ed.finish(tx, .other, false)!
+
+priv fn marks_of(rows: Sz[], count: Sz, arena: Arena$@): List<|Bool|>!Refused //<
+    //< For each of `count` rows, whether `rows` names it; a row outside them is refused
+    $marks: = List<|Bool|>(arena)
+    for _ in Range.asc(count)
+        marks.push(false)
+    for row in rows
+        if row < 0 || row >= count
+            throw .table(.outside)
+        marks[row] = true
+    return marks
 
 priv fn free_name(doc: Document@, name: U8[], arena: Arena$@): U8[] //<
     //< The name, or where another table has it the first of `name_2`, `name_3` and on that none has
@@ -676,6 +826,24 @@ priv fn pasted(text: U8[], arena: Arena$@): U8[] //<
     joined: = arena.dup_str(b.slice())
     return joined if is_decimal(joined) else t
 
+priv fn write_typed(v: calculated.Value, out: Str_builder$@) //<
+    //< A calculated value as text typed into a cell puts it: a number as it shows without a
+    //< format, a date as `2026-10-23`, and any other value as quoted text, so `"12"` stays text
+    //< A true or false value and an error become the text they show.
+    switch v.kind
+    case .empty
+        return
+    case .number
+        show_plain(v.number, out)
+    case .date
+        write_date(I64::v.number, out)
+    case .text
+        out.c('"').escape_and_append(v.text).c('"')
+    case .boolean
+        out.s("\"true\"" if v.boolean else "\"false\"")
+    case .error
+        out.c('"').s(v.error.mark()).c('"')
+
 fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed text
     if typed.len == 0
         return Value::{ .kind = .empty, .text = "" }
@@ -684,7 +852,8 @@ fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed t
     if typed[0] == '"'
         if text: = quoted(typed, arena)
             return Value::{ .kind = .text, .text = text }
-    if is_decimal(typed)
+    // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`.
+    if is_decimal(typed) && is_finite(typed)
         return Value::{ .kind = .number, .text = typed }
     if is_date(typed)
         return Value::{ .kind = .date, .text = typed }
@@ -694,6 +863,11 @@ fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed t
         write_date(day, text@)
         return Value::{ .kind = .date, .text = arena.dup_str(text.slice()) }
     return Value::{ .kind = .text, .text = typed }
+
+priv fn is_finite(number: U8[]): Bool //< whether a number as JSON writes one is below infinity
+    value: = number.to_f64() catch
+        return false
+    return value - value == 0.0
 
 priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one
     parsed: = json.parse(typed, arena) catch

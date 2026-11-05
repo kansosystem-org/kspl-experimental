@@ -8,7 +8,7 @@ This page is for whoever runs ksagent, writes questions for it, or chooses a mod
 
 **`make chat DIR=<folder>` asks about a folder in one command**: it starts the model server, opens the chat page, and answers its questions until Ctrl+C. The steps, from installing llama.cpp to the first answer, are [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](docs/TUTORIAL-ask-about-your-files.md).
 
-ksagent asks a model server that answers `POST /v1/chat/completions` with tool calls, such as llama.cpp's `llama-server`, vLLM or ksai's `chat_server`. **It asks for the reply as a stream, and shows it as it is written.** A server that does not stream works too: ksagent then asks it for whole replies. Which model to use, and where to download it, are in [`models/README.md`](../models/README.md).
+ksagent asks a model server that answers `POST /v1/chat/completions` with tool calls, such as llama.cpp's `llama-server`, vLLM or ksai's `chat_server`. **It asks for the reply as a stream, and shows it as it is written.** A server that does not stream works too: ksagent then asks it for whole replies. Which model to use, and where to download it, are in [`data/README.md`](../data/README.md).
 
 ## Run it
 
@@ -24,7 +24,7 @@ make ksagent                                   # -> out/ksagent.exe
 
 | Option | What it does |
 | :-- | :-- |
-| `--model-url=<url>` | The model server. The default is `http://127.0.0.1:8081`. Only `http://` works |
+| `--model-url=<url>` | The model server. The default is `http://127.0.0.1:8081`. Only `http://` works. Leave out `/v1`: ksagent adds `/v1/chat/completions` itself |
 | `--model=<name>` | The model name each request carries. The default is `local`; a server that holds one model needs no other |
 | `--timeout=<seconds>` | How long one reply from the model may take, from the request to its last piece. The default is 600 |
 | `--out=<file>` | `eval` only: also writes the table to this file under the folder, as `.md` or `.ksmd` |
@@ -75,7 +75,7 @@ A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neithe
 | Option | What it does | Empty, or not given |
 | :-- | :-- | :-- |
 | `--dir=<folder>` | The folder to ask about; `make chat DIR=<folder>` gives it | Stops, and says how to name one |
-| `--model-file=<file>` | The model file in `models/` to start; `make chat MODEL=<file>` gives it | The first model in [`models/README.md`](../models/README.md) |
+| `--model-file=<file>` | The model file in `data/` to start; `make chat MODEL=<file>` gives it | The first model in [`data/README.md`](../data/README.md) |
 | `--port=<n>` | The model server's port on this machine, used where one answers, otherwise started; `make chat PORT=<n>` gives it | 8081, where ksagent asks by default |
 | `--model-wait=<seconds>` | How long a model server can take to load its model | 600 |
 | `--model-only` | Starts the model server alone, until Ctrl+C; `make model-server` gives it | |

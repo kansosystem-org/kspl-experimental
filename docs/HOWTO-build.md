@@ -92,10 +92,10 @@ It prints where the rule is written and each prerequisite with its state. Then c
 
 ### Putting `ksplc` on the PATH (`make install`, optional)
 
-**`make install` copies the compiler and its standard library to where your shell finds them, so `ksplc` works from any folder.** The development scripts (`tools/repo_stat.kspl` and others) then run directly, through their `#!/usr/bin/env -S ksplc run` line. In Windows's native shell, that *shebang* does nothing ("Running a program" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md)).
+**`make install` copies the compiler, its standard library and the libraries under `lib/` to where your shell finds them, so `ksplc` works from any folder.** The development scripts (`tools/repo_stat.kspl` and others) then run directly, through their `#!/usr/bin/env -S ksplc run` line. In Windows's native shell, that *shebang* does nothing ("Running a program" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md)).
 
 ```sh
-make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ into ~/.local/lib/kspl/std
+make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ and lib/ into ~/.local/lib/kspl/
                                    # and ksmd into ~/.local/lib/kspl/ksmd, with ~/.local/bin/ksmd
 ```
 

@@ -46,7 +46,7 @@ Each *stage* builds a small test program, copies it onto the car, and watches fo
 | kssrv | Kanso's web server, run on the PC in stages 7 and 9 |
 | policy | The small neural network and its tables that turn the car's sensor readings into the next manoeuvre |
 | manoeuvre | One of the car's moves: `forward`, `back`, `strafe_left` / `strafe_right` (sideways), turning, `stop`, `emergency_back` |
-| the record | An append-only log kept in the flash's last 64KB by [ksdb](../../ksdb/README.md) |
+| the record | An append-only log kept in the flash's last 64KB by [ksdb](../../lib/ksdb/README.md) |
 | lap | One turn of a firmware's main loop: about 20 seconds for the board firmware, 100ms for a car firmware |
 | WS2812 | An RGB LED with its own controller; several are chained and set by one timed signal |
 
@@ -517,7 +517,7 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 
 ## Stage 8 — leaving a record inside the device
 
-**The sensors' time series and the received policy are kept in an append-only record** ([ksdb](../../ksdb/README.md)) in the QSPI flash's last 64KB. This stage checks that the record survives a power cut.
+**The sensors' time series and the received policy are kept in an append-only record** ([ksdb](../../lib/ksdb/README.md)) in the QSPI flash's last 64KB. This stage checks that the record survives a power cut.
 
 1. Write the board firmware and open the Serial Monitor:
 
@@ -711,7 +711,7 @@ With neither a link nor a PC, **holding a remote key prints the whole record to 
 | The region's marker | Written back (left erased, the next start would erase again) |
 | The policy | Written back: without it, a start with nothing upstream cannot move |
 | The observations (`kind=2`) | Dropped, and recording starts again: `rec=` counts from 0, and a `(stopped: full)` goes |
-| A power cut while it erases (a second or more) | **The marker and the stored policy survive.** They are copied aside before anything is erased ("Keeping a few records through an erase" in [`ksdb/docs/DESIGN-storage.md`](../../ksdb/docs/DESIGN-storage.md)). Some observations can remain; erase again to drop them |
+| A power cut while it erases (a second or more) | **The marker and the stored policy survive.** They are copied aside before anything is erased ("Keeping a few records through an erase" in [`lib/ksdb/docs/DESIGN-storage.md`](../../lib/ksdb/docs/DESIGN-storage.md)). Some observations can remain; erase again to drop them |
 
 **Rewriting the firmware does not erase the record**; only a changed marker (`record_marker`) does. So erase before measuring again, or generations mix.
 
@@ -896,7 +896,7 @@ The tutorial drives at 50 to 80%. `motor.CAP` is the only cap, held to **a speed
 
 ### The car's own behaviour when following a line
 
-Which manoeuvre each line reading gives is set by `MANEUVERS` and `rule_action` in [`ksai/examples/car_pilot/policy.kspl`](../../ksai/examples/car_pilot/policy.kspl), which write the policy file ("The car's policy file" in [`ksai/README.md`](../../ksai/README.md)). This section holds only what the car itself does.
+Which manoeuvre each line reading gives is set by `MANEUVERS` and `rule_action` in [`lib/ksai/examples/car_pilot/policy.kspl`](../../lib/ksai/examples/car_pilot/policy.kspl), which write the policy file ("The car's policy file" in [`lib/ksai/README.md`](../../lib/ksai/README.md)). This section holds only what the car itself does.
 
 **If it turns away from the side it came off, separate the two possible causes before fixing.** With both reversed they cancel out: the driving looks right, but `line=` and obstacle avoidance stay reversed.
 
@@ -948,7 +948,7 @@ Caution: **Picking the car up fills the record with dodges** (a hand reads tens 
 | In the record | What it is | What helps |
 | :-- | :-- | :-- |
 | `line` swinging between 4 and 1 | Overshoot | Ease `motor.CAP`, or tighten `line_interval_ms` |
-| `line` staying on one side | Undercorrection: the `track_*` manoeuvres turn too little for how far they move forward | Lower the forward part (`lon`) of the `track_*` manoeuvres in `MANEUVERS` (`ksai/examples/car_pilot/policy.kspl`), write the policy file again with `car_pilot`, and receive it again. Raising `motor.CAP` scales all three parts, so it does not help |
+| `line` staying on one side | Undercorrection: the `track_*` manoeuvres turn too little for how far they move forward | Lower the forward part (`lon`) of the `track_*` manoeuvres in `MANEUVERS` (`lib/ksai/examples/car_pilot/policy.kspl`), write the policy file again with `car_pilot`, and receive it again. Raising `motor.CAP` scales all three parts, so it does not help |
 | It bulges out once before correcting | The centre-black instruction has no turn | Only a shorter forward part and a tighter `line_interval_ms`, not a stronger correction |
 
 ### The crossing time while turning sets the line-reading interval

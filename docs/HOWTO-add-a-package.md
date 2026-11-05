@@ -13,7 +13,7 @@
    ```
 
    `uses` lists every package it imports besides itself and `std`; a package that imports `ksfoo` adds it to its own `uses`. An import the file does not list stops the compiler with `the package 'ksfoo' does not say it uses 'ksai'`. Without `name`, `make test-extract-rest` fails with "carries a Makefile but names no package in its ksplc.cfg".
-2. **`ksfoo/Makefile` runs the package's own tests from its folder alone**, as `ksdb/Makefile` does (`test:` running `ksfoo/tests/main.kspl` with `$(KSPLC)`). The tools find it by its place, so no list needs an edit. The `debug-` target of the package's name (`make debug-ksdb` for ksdb) picks it up. So do the fuzzing pass and `make test-extract-rest`, which runs the package from a copy holding nothing else. `make lint` finds `ksfoo/tests/main.kspl` by its `fn main`.
+2. **`ksfoo/Makefile` runs the package's own tests from its folder alone**, as `lib/ksdb/Makefile` does (`test:` running `ksfoo/tests/main.kspl` with `$(KSPLC)`). The tools find it by its place, so no list needs an edit. The `debug-` target of the package's name (`make debug-ksdb` for ksdb) picks it up. So do the fuzzing pass and `make test-extract-rest`, which runs the package from a copy holding nothing else. `make lint` finds `ksfoo/tests/main.kspl` by its `fn main`.
 3. **`ksfoo/README.md` is the package's entry point**, and its other documents go under `ksfoo/docs/` ("Where documents sit" in [`SPEC-documents.md`](SPEC-documents.md)). Nothing checks that they exist.
 
 ## The checks that must learn the name

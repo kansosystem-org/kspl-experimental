@@ -20,7 +20,7 @@ export const verdict = {
 const KEYS = {
   Enter: [13, "\r"], Backspace: [8, ""], Delete: [46, ""], Tab: [9, ""], Escape: [27, ""],
   ArrowUp: [38, ""], ArrowDown: [40, ""], ArrowLeft: [37, ""], ArrowRight: [39, ""], End: [35, ""],
-  Home: [36, ""], F2: [113, ""], F4: [115, ""], F10: [121, ""],
+  Home: [36, ""], F2: [113, ""], F3: [114, ""], F4: [115, ""], F10: [121, ""],
 };
 export const CTRL = 2;
 export const SHIFT = 8;
@@ -130,6 +130,9 @@ export function driver(page) {
   }
 
   // An element's middle, once it stands in sight.
+  // Caution: **A column's name cell is pressed in the middle of the part left of its filter
+  // arrow.** In a narrow column the cell's middle stands a few pixels from the arrow, and another
+  // system's fonts move it onto the arrow, which opens the filter instead of choosing the cell.
   async function sighted(selector) {
     return js(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
@@ -139,7 +142,9 @@ export function driver(page) {
         el.scrollIntoView({ block: "center" });
         r = el.getBoundingClientRect();
       }
-      return [r.left + r.width / 2, r.top + r.height / 2];
+      const arrow = el.matches('th.name') && el.querySelector('.filter-arrow');
+      const right = arrow ? Math.min(r.right, arrow.getBoundingClientRect().left) : r.right;
+      return [(r.left + right) / 2, r.top + r.height / 2];
     })()`);
   }
 

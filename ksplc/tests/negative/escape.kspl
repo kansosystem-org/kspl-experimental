@@ -394,3 +394,68 @@ fn main(): I32
   _p: = ptr_of_slice()
   _e: = element_address()
   return I32::ok_len()
+// ==== case frame_pointer_read_through_a_pointer
+//< A value read through a pointer to a local carries what that local holds
+//< `pp$` after `pp: = p@` reads `p`, which holds `x@`. A field read through a pointer (`hp.p`)
+//< and an element read through a slice over a local array (`s[0]`) are the same. An element
+//< written as `::{ x@ }` marks the whole array, so `arr[0]` is refused too. A number read through
+//< the same pointer holds no pointer (`ok_number`), and a field no frame pointer set passes
+//< (`ok_other_field`).
+// EXPECT: frame_pointer_read_through_a_pointer.kspl:21:10: error: cannot return this value: it is read through a pointer to 'p', which was set from the address of local storage
+// EXPECT: frame_pointer_read_through_a_pointer.kspl:27:10: error: cannot return this value: it is read through a pointer to 'h', which was set from the address of local storage
+// EXPECT: frame_pointer_read_through_a_pointer.kspl:33:10: error: cannot return this value: it is read through a pointer to 'arr', which was set from the address of local storage
+// EXPECT: frame_pointer_read_through_a_pointer.kspl:38:10: error: cannot return 'arr': it was set from the address of local storage
+// EXPECT: frame_pointer_read_through_a_pointer.kspl:44:10: error: cannot return this value: it is read through a pointer to 's', which was set from a slice or an interface value built from local storage
+// EXPECT: Finished with 5 error(s)
+priv struct H
+  p: I32@
+  n: I32
+
+priv fn through_deref(): I32@
+  x: I32 = 1
+  p: = x@
+  pp: = p@
+  return pp$
+
+priv fn through_field(): I32@
+  x: I32 = 1
+  h: = H::{ .p = x@, .n = 2 }
+  hp: = h@
+  return hp.p
+
+priv fn through_slice(): I32@
+  x: I32 = 1
+  arr: I32@[1] = ::{ x@ }
+  s: = I32@[]::arr
+  return s[0]
+
+priv fn element_of_array(): I32@
+  x: I32 = 1
+  arr: I32@[1] = ::{ x@ }
+  return arr[0]
+
+priv fn slice_through_pointer(): U8[]
+  a: U8[2] = ::{ 'o', 'k' }
+  s: = U8[]::a
+  sp: = s@
+  return sp$
+
+priv fn ok_number(): I32
+  x: I32 = 1
+  p: = x@
+  pp: = p@
+  return pp$$
+
+priv fn ok_other_field(): I32
+  x: I32 = 1
+  h: = H::{ .p = x@, .n = 2 }
+  hp: = h@
+  return hp.n
+
+fn main(): I32
+  _d: = through_deref()
+  _f: = through_field()
+  _s: = through_slice()
+  _e: = element_of_array()
+  _t: = slice_through_pointer()
+  return ok_number() + ok_other_field()

@@ -269,7 +269,8 @@ function ksmdView(ks) {
   ks.root.addEventListener("mousedown", (e) => {
     const li = e.target.closest && e.target.closest(".li[data-check]");
     if (!li || li.closest(".include .inside")) return;
-    const text = parseFloat(getComputedStyle(li).paddingLeft);
+    // The padding is the document's pixels, and the pointer's the window's, after the zoom.
+    const text = parseFloat(getComputedStyle(li).paddingLeft) * ks.zoom.factor();
     if (e.clientX - li.getBoundingClientRect().left > text) return;
     e.preventDefault();
     const list = li.parentElement;
@@ -494,5 +495,5 @@ function ksmdView(ks) {
   }
 
   ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,
-    removeButton, removeBlock };
+    removeButton, removeBlock, caretIntoSight };
 }

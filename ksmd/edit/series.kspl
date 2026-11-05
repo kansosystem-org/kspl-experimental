@@ -3,7 +3,8 @@
 //< `10, 7.5` gives `5, 2.5`. Text that ends in a number goes on by its step too, or by one from a
 //< single cell: `Item 1` gives `Item 2`, and `Q1, Q3` gives `Q5`. Anything else repeats, as a copy
 //< does: one number alone, numbers whose steps differ, a formula, a mix of kinds, and a date or a
-//< time written as text. A date goes on by a day, as Excel's does, or by the step between two.
+//< time written as text, as `2026-10-23` or `14:05`; `INV-001` and `v1.9` go on. A date goes on
+//< by a day, as Excel's does, or by the step between two.
 //< The arithmetic is in decimal digits, so `0.1, 0.2` gives `0.3`, never `0.30000000000000004`.
 import "ksmd/base/dates" { date_of, in_range, write_date }
 import "ksmd/base/marker" { is_decimal }
@@ -186,10 +187,7 @@ priv fn text_of(text: U8[]): Parsed //< text ending in a number: `Item 1`, `Q01`
     run: = text.len - from
     if run == 0 || run > MAX_DIGITS
         return p
-    // A date or a time written as text, `2026-10-23` or `14:05`, is not a count that goes on.
-    if from > 0 &&
-        (text[from - 1] == '-' || text[from - 1] == '/' || text[from - 1] == ':' ||
-        text[from - 1] == '.')
+    if is_date_or_time(text)
         return p
     for c in text.sub_from(from)
         p.value = p.value * 10I64 + I64::(c - '0')
@@ -197,3 +195,37 @@ priv fn text_of(text: U8[]): Parsed //< text ending in a number: `Item 1`, `Q01`
     p.width = run if text[from] == '0' else 0
     p.ok = true
     return p
+
+priv fn is_date_or_time(text: U8[]): Bool //<
+    //< Whether text reads as a date, a time, or a date and a time after a space, which is not a
+    //< count that goes on: `2026-10-23`, `10/23`, `23.10.2026`, `14:05`, `2026-10-23 14:05:30`
+    //< `INV-001`, `Room A-12` and `v1.9` hold a letter, so they go on.
+    if at: = text.find_char(' ')
+        return reads_as_date(text.sub(0, at)) && reads_as_time(text.sub_from(at + 1))
+    return reads_as_date(text) || reads_as_time(text)
+
+priv fn reads_as_date(text: U8[]): Bool //<
+    //< Two or three runs of digits between `-` or between `/`, or three between `.`
+    return groups(text, '-') >= 2 || groups(text, '/') >= 2 || groups(text, '.') == 3
+
+priv fn reads_as_time(text: U8[]): Bool //< two or three runs of digits between `:`
+    return groups(text, ':') >= 2
+
+priv fn groups(text: U8[], between: U8): Sz //<
+    //< How many runs of one to four digits the text holds, each two apart by `between` alone: 0
+    //< where it holds anything else, or more than three runs
+    $count: Sz = 0
+    $run: Sz = 0
+    for c in text
+        if c == between
+            if run == 0
+                return 0
+            count += 1
+            run = 0
+        else if c.is_digit() && run < 4
+            run += 1
+        else
+            return 0
+    if run == 0 || count + 1 > 3
+        return 0
+    return count + 1

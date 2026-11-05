@@ -18,7 +18,7 @@
 | Print, or save a PDF | File ▸ Print or save as PDF… (`Ctrl`+`P`) |
 | Set the paper, the header and the footer | File ▸ Page setup… ("Page setup, numbers and references" below) |
 
-**Unsaved edits are kept as a draft in this browser.** The status line then reads "Not saved. A draft is held in this browser."
+**Unsaved edits are kept as a draft in this browser.** The menu bar then reads "Not saved. A draft is held in this browser."
 
 * **A draft never changes the file.** Opening the document again offers to bring the draft back, or to discard it.
 * **A draft goes when you save, discard it, or undo back to the file's text.** Drafts older than 30 days go when the page starts.
@@ -33,15 +33,31 @@
 | :-- | :-- |
 | Menu bar | Every command: File, Edit, View, Insert, Format and Table |
 | Quick access bar | One row of the tools you chose. View ▸ Quick access bar… chooses them; a right-click on a command adds it or takes it off |
-| Status line | The words and characters of the selection or the document. With cells chosen, their sum, average and count |
+| Status bar | One line at the foot, which says where you work (The status bar below) |
 | View ▸ Contents | The headings at the window's left; a press on one scrolls to it |
 | View ▸ Full width, Reading width | The document fills the window, or keeps lines about 50 characters long |
 | View ▸ One line per cell | Every table row shows one line; a cell shows whole while it is edited |
 | View ▸ Read-only | The page takes no edit. Finding, filters, printing and links still work |
 
+### The status bar
+
+| Part | What it shows or does |
+| :-- | :-- |
+| The chosen cell | Its address and what was typed in it, as `C2  =hex_to_dec(B2)`; a range shows `C2:D5`. Its tooltip holds a long formula whole |
+| Message | What the last action said, until the next one |
+| Filter | `5 of 120 rows shown` while a filter hides rows of the chosen table |
+| Page | The printed page the caret or the chosen cell stands on, as `Page 3 of 12` |
+| Figures | With two or more cells chosen, the figures you picked: Average, Count, Numerical count, Min, Max, Sum. Otherwise the lines and characters of the selection or the document |
+| Zoom | `−`, the level and `+` scale the document alone, from 50% to 200% |
+
+* **A right-click on the bar, or a press on the figures, chooses the figures.** Each item shows its value for the chosen cells. Average, Count and Sum show until you choose, and this browser keeps your choice.
+* **A line is a line as written**: each paragraph, heading, list item, quote and code line, and each line break typed in one. A character is one you see; spaces are not counted. Table cells are not counted.
+* **The page is counted on the paper Page setup names, A4 where it names none.** The print dialog's own paper, margins or scale can change it. A document of more than 15,000 page elements shows no page.
+* **The zoom leaves the menus, the bars, the file and the print as they are.** View ▸ Zoom in (`Ctrl`+`Alt`+`=`), Zoom out (`Ctrl`+`Alt`+`-`) and Zoom 100% do the same. This browser keeps the level.
+
 **The page follows the system's light or dark scheme.** Your own colours in a document print as you chose them.
 
-**Undo is `Ctrl`+`Z`, and Redo `Ctrl`+`Y`.** With nothing left to redo, `Ctrl`+`Y` or `F4` repeats the last command where you work now.
+**Undo is `Ctrl`+`Z`, and Redo `Ctrl`+`Y`.** With nothing left to redo, `Ctrl`+`Y` or `F4` repeats the last command where you work now. In a cell open on a formula, `F4` turns a reference's `$` instead (Formulas below).
 
 ## Writing text
 
@@ -84,7 +100,7 @@
 | Edit a cell | Press twice, or press `F2`: the arrow keys then move the caret inside the cell. Typing on a chosen cell replaces its value, and an arrow key then moves to the next cell |
 | Take the edit | `Enter`, `Tab`, or a press elsewhere. `Esc` drops it |
 | Type a line break in a cell | `Alt`+`Enter` |
-| Leave the table | `Esc`, a press in the text, or an arrow key past the first or last row |
+| Leave the table | `Esc`, a press in the text, or an arrow key past the first or last row. An arrow key puts the caret on the text after the table, or before it |
 | Choose a range | `Shift`+press, `Shift`+an arrow key, or a drag across cells |
 | Choose whole rows or columns | Press on their row numbers or column letters |
 | Choose the whole table | `Ctrl`+`A` twice, the corner left of the letters, or Table ▸ Table ▸ Select table |
@@ -103,18 +119,23 @@
 
 ### Copying, moving and filling
 
-* **`Ctrl`+`C` copies the chosen cells as tab-separated rows**, which a spreadsheet takes. A paste of rows fills the table from the chosen cell, and grows it as needed.
+* **`Ctrl`+`C` copies the chosen cells.** Another program, such as a spreadsheet or a text editor, takes their shown values as tab-separated rows. A paste of rows from another program fills the table from the chosen cell, and grows it as needed.
+* **A paste in ksmd (`Ctrl`+`V`) brings the copied cells' formulas**, in any table and in another ksmd window. Each reference moves as far as the paste moved from the copy. A part with `$` stays, and a reference moved outside its table becomes `#REF!`.
+* **Paste values (`Ctrl`+`Shift`+`V`) puts the values the copied cells showed**, with no formula. Edit ▸ Paste values and the right-click menu do the same.
+* **After a paste of copied cells, the Paste options button stands below their right corner.** Choose Keep formulas or Values only there to change that paste; one undo still takes it away. `Ctrl` alone opens the button's menu, and `F` or `V` chooses. The next key or press takes the button away.
+* **A range that holds the copy a whole number of times takes it in each place.** So one cell pasted on ten rows fills all ten.
 * **A whole table copied and pasted into text makes a second table**, with its formulas and looks. A name already taken gains `_2`.
 * **`Ctrl`+`X` then a paste moves cells within their table.** Formulas that named them follow them.
 * **To move rows, cut them by their row numbers, then right-click a row number and choose Insert cut rows.** Columns move the same way.
 * **Fill down (`Ctrl`+`D`) and Fill right (`Ctrl`+`R`) copy the first cells across the range.**
 * **A drag of the square at a range's corner goes on with a series**: `1, 2` gives `3, 4`, and `Item 1` gives `Item 2`. Anything else repeats.
+* **Delete, a copy and a fill act on the rows in sight alone.** Rows a filter or a closed group hides keep their cells. A cut over a hidden row is refused: show all rows first, or copy instead.
 
 ### Rows and columns
 
 | To | Do |
 | :-- | :-- |
-| Insert or remove a row or a column | Table ▸ Insert row above, Insert row below, Remove row, and the same for columns |
+| Insert or remove rows or columns | Table ▸ Insert row above, Insert row below, Remove row, and the same for columns. Each acts on every row or column the range spans |
 | Sort by a column | Table ▸ Sort ▸ Sort ascending or Sort descending. Empty cells stand last |
 | Show only some rows | The arrow on a column's name, or Table ▸ Filter ("Filters" below) |
 | Group rows or columns | Table ▸ Group ▸ Group rows (`Alt`+`Shift`+`→`), Group columns. The −/+ button beside them hides and shows them |
@@ -142,6 +163,7 @@
 * **A line above the table says how many rows show**, and its Show all rows takes every filter away.
 * **The file keeps the filter**, so the document opens with the same rows shown. Formulas still count every row.
 * **In Read-only, a filter is yours alone**, and the file keeps its own.
+* **A row you edit stays in sight**, even when its new value does not match. OK in the panel applies the filter to every row again.
 
 ### Looks and formats
 
@@ -188,7 +210,19 @@
 | `and`, `or`, `not` | Conditions joined |
 | `"Pens"` | Text, in quotes |
 
-**While a formula is typed, a press on a cell writes its reference**, and a drag writes a range. AutoSum (`Alt`+`=`) writes `=sum(…)` over the column above the chosen cell, or the row left of it.
+**While a formula is typed, each reference shows in a colour of its own, with a frame of that colour round the cells it names.** The first is blue and the second red, then purple, green, orange, teal, magenta and brown. The same cells written twice keep one colour. A reference to another table is framed in that table; one that names no cell stays plain. The colours go when the cell closes.
+
+**While a formula is typed, a press on a cell writes its reference**, and a drag writes a range. `F4` turns the reference at the caret from `D1` to `$D$1`, `D$1`, `$D1`, then `D1` again. AutoSum (`Alt`+`=`) writes `=sum(…)` over the column above the chosen cell, or the row left of it.
+
+| To | Do |
+| :-- | :-- |
+| See the functions whose names fit the letters typed | Type lowercase letters after `=`, `(` or `,`; a list opens under the cell |
+| See every function at the caret | `Ctrl`+`Space` |
+| Choose in the list | `↑` and `↓` |
+| Write the chosen function's name and `(` | `Tab`, `Enter`, or a press on it |
+| Shut the list and keep the cell open | `Esc` |
+| See a function's arguments | Type inside its brackets; a tip shows them, the current one in bold |
+| Find a function by what it does, and read about it | Insert ▸ Function…, or `Shift`+`F3`; Insert writes `=name(` in the chosen cell |
 
 **Kinds never turn into each other.** Text in arithmetic is `#VALUE!`, even text that looks like a number. An empty cell is 0, empty text or `false`, as the other side needs.
 
@@ -205,50 +239,52 @@
 
 ### Functions that decide what they calculate
 
-| Function | What it gives |
-| :-- | :-- |
-| `if(condition, then, else)` | `then` where the condition holds, else `else`; all three are needed |
-| `sum_if(values, condition)` | The numbers of `values` on the rows where the condition holds: `sum_if(D1:D9, B1:B9 = "Pens")` |
-| `count_if(values, condition)` | How many numbers of `values` stand on those rows |
-| `average_if(values, condition)` | Their average |
-| `sum_product(a, b)` | Each cell of `a` times the cell of `b` beside it, added |
-| `lookup(key, keys, values, otherwise)` | The value beside the first key equal to `key`, else `otherwise` |
-| `today()` | Today's date, as the page opened the document |
+**These functions choose which arguments are calculated**, so the calculator reads them itself. Their list is written from `ksmd/calc/help.kspl`.
+
+| Function | What it gives | For example |
+| :-- | :-- | :-- |
+| `today()` | today's date, as the page opened the document | `today()` |
+| `if(condition, then, else)` | `then` where the condition holds, else `else` | `if(3 > 2, "yes", "no")` is `yes` |
+| `sum_if(values, condition)` | the numbers of `values` on the rows where the condition holds | `sum_if(D1:D9, B1:B9 = "Pens")` |
+| `count_if(values, condition)` | how many numbers of `values` stand on the rows where the condition holds | `count_if(D1:D9, B1:B9 = "Pens")` |
+| `average_if(values, condition)` | the average of the numbers of `values` on the rows where the condition holds | `average_if(D1:D9, B1:B9 = "Pens")` |
+| `lookup(key, keys, values, otherwise)` | the value beside the first key that equals `key`, else `otherwise` | `lookup("Pens", B1:B9, D1:D9, 0)` |
+| `sum_product(a, b)` | each cell of `a` times the cell of `b` beside it, added | `sum_product(C1:C9, D1:D9)` |
 
 ### Functions by name
 
-**This list is written from the functions' own signatures** (`make ksmd-functions`). An argument in brackets can be left out, and `…` takes any number of them.
+**This list is written from the functions' own signatures and doc comments** (`make ksmd-functions`). An argument in brackets can be left out, and `…` takes any number of them.
 
-| Function | What it gives |
-| :-- | :-- |
-| `average(xs…)` | the numbers' mean; of nothing, `#EMPTY!` |
-| `bin_to_dec(digits, [width])` | the number they name |
-| `bin_to_hex(digits, [width])` | the same, in hex |
-| `count(xs…)` | how many numbers and dates there are |
-| `date(year, month, day)` | the day the three parts name, in the years 1 to 9999; any other is `#NUM!` |
-| `day(d)` | a date's day of the month |
-| `dec_to_bin(n, [width])` | `n` in binary |
-| `dec_to_hex(n, [width])` | `n` in hexadecimal |
-| `find(part, t)` | where `part` first stands in `t`, in characters from 1; 0 where it does not |
-| `hex_to_bin(digits, [width])` | the same, in binary |
-| `hex_to_dec(digits, [width])` | the number they name |
-| `left(t, count)` | the first `count` characters |
-| `len(t)` | how many characters the text holds |
-| `max(xs…)` | the greatest; of dates alone, the latest date |
-| `mid(t, start, count)` | `count` characters from the `start`th, the first being 1 |
-| `min(xs…)` | the least; of dates alone, the earliest date |
-| `mod(x, y)` | what is left of `x` after dividing by `y`, with the sign of `y`: `mod(-1, 72)` is 71 |
-| `month(d)` | a date's month, 1 to 12 |
-| `power(x, y)` | `x` to the power `y`; no real answer is `#NUM!` |
-| `right(t, count)` | the last `count` characters |
-| `round(x, places)` | `x` rounded to `places` decimal places, half away from zero; -2 rounds to hundreds |
-| `round_down(x, places)` | `x` cut to `places` decimal places, toward zero, as `round` takes its places |
-| `round_up(x, places)` | `x` taken to `places` decimal places, away from zero, as `round` takes its places |
-| `substitute(t, old, new)` | `t` with every `old` in it replaced by `new`, from the left and without overlaps |
-| `sum(xs…)` | the numbers added; of nothing, 0 |
-| `text(v, format)` | a number or a date written as text, as a column's number format would show it |
-| `value(v)` | the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is |
-| `year(d)` | a date's year |
+| Function | What it gives | For example |
+| :-- | :-- | :-- |
+| `average(xs…)` | the numbers' mean | `average(2, 4, 9)` is `5` |
+| `bin_to_dec(digits, [width])` | the number binary digits name | `bin_to_dec("101")` is `5` |
+| `bin_to_hex(digits, [width])` | binary digits written in hexadecimal | `bin_to_hex("11111")` is `1F` |
+| `count(xs…)` | how many numbers and dates there are | `count(4, 8, 15)` is `3` |
+| `date(year, month, day)` | the day the three parts name, in the years 1 to 9999 | `date(2026, 3, 1)` is `2026-03-01` |
+| `day(d)` | a date's day of the month | `day(date(2026, 3, 1))` is `1` |
+| `dec_to_bin(n, [width])` | `n` in binary | `dec_to_bin(5)` is `101` |
+| `dec_to_hex(n, [width])` | `n` in hexadecimal | `dec_to_hex(255)` is `FF` |
+| `find(part, t)` | where `part` first stands in `t`, in characters from 1; 0 where it does not | `find("c", "pencil")` is `4` |
+| `hex_to_bin(digits, [width])` | hexadecimal digits written in binary | `hex_to_bin("1F")` is `11111` |
+| `hex_to_dec(digits, [width])` | the number hexadecimal digits name | `hex_to_dec("FF")` is `255` |
+| `left(t, count)` | the first `count` characters | `left("pencil", 3)` is `pen` |
+| `len(t)` | how many characters the text holds | `len("pencil")` is `6` |
+| `max(xs…)` | the greatest; of dates alone, the latest date | `max(3, -1, 7)` is `7` |
+| `mid(t, start, count)` | `count` characters from the `start`th, the first being 1 | `mid("pencil", 2, 3)` is `enc` |
+| `min(xs…)` | the least; of dates alone, the earliest date | `min(3, -1, 7)` is `-1` |
+| `mod(x, y)` | what is left of `x` after dividing by `y`, with the sign of `y` | `mod(-1, 72)` is `71` |
+| `month(d)` | a date's month, 1 to 12 | `month(date(2026, 3, 1))` is `3` |
+| `power(x, y)` | `x` to the power `y` | `power(2, 10)` is `1024` |
+| `right(t, count)` | the last `count` characters | `right("pencil", 4)` is `ncil` |
+| `round(x, places)` | `x` rounded to `places` decimal places, half away from zero | `round(1234.5, -2)` is `1200` |
+| `round_down(x, places)` | `x` cut to `places` decimal places, toward zero | `round_down(2.79, 1)` is `2.7` |
+| `round_up(x, places)` | `x` taken to `places` decimal places, away from zero | `round_up(2.21, 1)` is `2.3` |
+| `substitute(t, old, new)` | `t` with every `old` in it replaced by `new`, from the left and without overlaps | `substitute("a-b-c", "-", "/")` is `a/b/c` |
+| `sum(xs…)` | the numbers added; of nothing, 0 | `sum(1, 2, 3.5)` is `6.5` |
+| `text(v, format)` | a number or a date written as text, as a column's number format would show it | `text(0.25, "percent:0")` is `25%` |
+| `value(v)` | the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is | `value(" -3 ")` is `-3` |
+| `year(d)` | a date's year | `year(date(2026, 3, 1))` is `2026` |
 
 ## Charts, images and drawing
 
@@ -332,6 +368,7 @@
 | Cut | `Ctrl`+`X` |
 | Copy | `Ctrl`+`C` |
 | Paste | `Ctrl`+`V` |
+| Paste values | `Ctrl`+`Shift`+`V` |
 | Find… | `Ctrl`+`F` |
 | Replace… | `Ctrl`+`H` |
 
@@ -343,6 +380,9 @@
 | Full width |  |
 | Reading width |  |
 | One line per cell |  |
+| Zoom in | `Ctrl`+`Alt`+`=` |
+| Zoom out | `Ctrl`+`Alt`+`-` |
+| Zoom 100% |  |
 | Read-only |  |
 | Quick access bar… |  |
 
@@ -359,6 +399,7 @@
 | Link… | `Ctrl`+`K` |
 | Today's date | `Ctrl`+`;` |
 | Time now | `Ctrl`+`:` |
+| Function… | `Shift`+`F3` |
 | Note… | `Shift`+`F2` |
 
 ### Format

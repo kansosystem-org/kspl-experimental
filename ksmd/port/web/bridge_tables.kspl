@@ -1,12 +1,16 @@
 //< The page's actions on tables and charts, through the bridge in `bridge.kspl`
 //< Each starts and answers as the bridge's other actions do (`begin`, `result`); here stand those
-//< that add a table, change its rows, columns and cells, paste or copy a grid, or set a chart.
+//< that add a table, change its rows, columns and cells, paste or copy a grid, or set a chart,
+//< and what the page shows of each function a formula calls.
 //< `extern` names a symbol, not an import, so each action is in the page's wasm wherever it
 //< stands.
-import "ksmd/calc/formula" { Positions }
+import "ksmd/calc/formula" { Positions, attachable, cycle_fixed }
+import "ksmd/calc/functions_table" as table
+import "ksmd/calc/help" { FORMS, Help, write_json }
 import "ksmd/calc/value"
+import "ksmd/edit/editor" { Refused }
 import "ksmd/edit/editor_charts" { Chart_settings }
-import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
+import "ksmd/edit/editor_tables" { Copied_at, Group_edit, Table_edit }
 import "ksmd/model/format" { currency_of, format_of, show_plain, write_format }
 import "ksmd/model/look" { Look_part }
 import "ksmd/model/model" { MAX_ROWS }
@@ -37,14 +41,15 @@ extern fn ksmd_web_remove_table(block: Sz): Sz
         return refused(e)
     return result(true, "")
 
-extern fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz): Sz //<
-    //< 0 inserts a row before row `at`, 1 removes it, 2 inserts a column, 3 removes one
+extern fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz, count: Sz): Sz //<
+    //< 0 inserts `count` rows before row `at`, 1 removes `count` from it, 2 and 3 do so with
+    //< columns
     if !begin()
         return full()
     edit: Table_edit =
         (.insert_row if what == 0 else .remove_row if what == 1 else .insert_column if what == 2
         else .remove_column)
-    ed.edit_table(block, edit, at) catch e
+    ed.edit_table(block, edit, at, count) catch e
         return refused(e)
     return result(true, "")
 
@@ -121,6 +126,96 @@ extern fn ksmd_web_paste_cells(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
     ed.paste_cells(block, row, column, grid@) catch e
         return refused(e)
     return result(true, "")
+
+extern fn ksmd_web_paste_copied(block: Sz, row: Sz, column: Sz, bottom: Sz, right: Sz, from_row: Sz,
+    from_column: Sz, len: Sz): Sz //<
+        //< Pastes cells copied in ksmd into the range from `row`, `column` to `bottom`, `right`
+        //< They are written in as `{"cells":…,"rows":[…]}`: `cells` a grid as
+        //< `ksmd_web_paste_cells` takes one, and `rows` the row each line was copied from, or
+        //< empty (`Copied_at.rows`). `from_row` and `from_column` name the cell they were copied
+        //< from, and the formulas shift by the distance; `from_column` -1 pastes the texts
+        //< unshifted, as Paste values does.
+    if !begin()
+        return full()
+    defer scratch: = Arena(64 * 1024)
+    $grid: = List<|List<|U8[]|>|>(scratch)
+    $rows: = List<|Sz|>(scratch)
+    doc: = json.parse(text_in(len), scratch) catch
+        return refused(.table(.outside))
+    for line in doc.val.get("cells").arr_list(scratch)
+        $cells: = List<|U8[]|>(scratch)
+        for cell in line.arr_list(scratch)
+            cells.push(cell.as_str().unwrap_or(""))
+        grid.push(cells)
+    for at in doc.val.get("rows").arr_list(scratch)
+        n: = number(at)
+        if n < -1
+            return refused(.table(.outside))
+        rows.push(n)
+    $from: Copied_at? = .none
+    if from_column >= 0
+        from =
+            .some(Copied_at::{ .row = from_row, .column = from_column, .rows = rows.slice() })
+    ed.paste_copied(block, row, column, bottom, right, grid@, from) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_copied_cells(block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz, len: Sz): Sz //<
+    //< What a copy of a rectangle of cells carries for a paste in ksmd, written to the output
+    //< (`Editor.copied_cells`); empty outside a table
+    //< The rows the copy leaves out are written in as `ksmd_web_set_heights` takes rows.
+    ensure()
+    out.clear()
+    defer scratch: = Arena(16 * 1024)
+    $left_out: = rows_in(len, scratch) catch
+        return 0
+    ed.copied_cells(block, top, left, bottom, right, left_out.slice(), out) catch
+        out.clear()
+    return out.slice().len
+
+extern fn ksmd_web_cycle_fixed(from: Sz, to: Sz, len: Sz): Sz //<
+    //< The open cell's text written in, with `$` turned in the references from byte `from` to
+    //< byte `to` (`cycle_fixed`): `{"text":…,"at":…}`, `at` the byte where the last one turned
+    //< ends; empty where the text is no formula or holds no reference there
+    ensure()
+    text: = text_in(len)
+    out.clear()
+    if text.len == 0 || text[0] != '='
+        return 0
+    defer $turned: = Str_builder()
+    turned.c('=')
+    at: = cycle_fixed(text.sub_from(1), from - 1, to - 1, turned@)
+    if at < 0
+        return 0
+    out.s("{\"text\":\"").escape_and_append(turned.slice()).s("\",\"at\":\{at\}}")
+    return out.slice().len
+
+extern fn ksmd_web_references(block: Sz, len: Sz): Sz //<
+    //< The references of a typed formula that name cells, as taking it attaches them
+    //< The text is typed into a cell of the table block `block` shows (`attachable`). Each
+    //< reference is `[from, to, table, row, column, row, column, whole]`: its bytes in the text,
+    //< its table's place, and its corners as written, counted from 0. Empty for no formula.
+    ensure()
+    out.clear()
+    text: = text_in(len)
+    if text.len == 0 || text[0] != '=' || block < 0 || block >= ed.doc.blocks.len ||
+        ed.doc.blocks.get(block).kind != .table
+        return 0
+    home: = ed.doc.blocks.get(block).first
+    formula: = text.sub_from(1)
+    out.c('[')
+    $at: Sz = 0
+    for
+        found: = attachable(ed.doc@, home, formula, at) catch
+            break
+        tok: = found.token
+        if at > 0
+            out.c(',')
+        out.s("[\{tok.start + 1\},\{tok.end + 1\},\{found.piece.table\},\{tok.from.row\},")
+        out.s("\{tok.from.column\},\{tok.to.row\},\{tok.to.column\},\{tok.whole\}]")
+        at = tok.end
+    out.c(']')
+    return out.slice().len
 
 extern fn ksmd_web_paste_table(len: Sz): Sz //<
     //< Puts a new table made from a grid, written in as `ksmd_web_paste_cells` takes it
@@ -269,13 +364,18 @@ extern fn ksmd_web_cell_link(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
     return result(true, "")
 
 extern fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz,
-    series: I32): Sz //<
+    series: I32, len: Sz): Sz //<
         //< Copies the `height` by `width` cells at `top`, `left` over the range up to `bottom`,
         //< `right`, repeating them, as fill down and fill right do; 1 in `series` goes on with a
         //< series where the cells make one, as the fill handle does
+        //< The rows the fill leaves out are written in as `ksmd_web_set_heights` takes rows.
     if !begin()
         return full()
-    ed.fill_cells(block, top, left, height, width, bottom, right, series == 1) catch e
+    defer scratch: = Arena(16 * 1024)
+    $left_out: = rows_in(len, scratch) catch e
+        return refused(e)
+    ed.fill_cells(block, top, left, height, width, bottom, right, series == 1, left_out.slice())
+        catch e
         return refused(e)
     return result(true, "")
 
@@ -328,19 +428,39 @@ extern fn ksmd_web_set_heights(block: Sz, len: Sz, points: Sz): Sz //<
     if !begin()
         return full()
     defer scratch: = Arena(64 * 1024)
+    $rows: = rows_in(len, scratch) catch e
+        return refused(e)
+    ed.set_heights(block, rows.slice(), points) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_clear_cells(block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz, len: Sz): Sz //<
+    //< Empties the cells from `top`, `left` to `bottom`, `right`, but those on the rows written in
+    //< as `ksmd_web_set_heights` takes rows (`Editor.clear_cells`)
+    if !begin()
+        return full()
+    defer scratch: = Arena(64 * 1024)
+    $left_out: = rows_in(len, scratch) catch e
+        return refused(e)
+    ed.clear_cells(block, top, left, bottom, right, left_out.slice()) catch e
+        return refused(e)
+    return result(true, "")
+
+priv fn rows_in(len: Sz, scratch: Arena$@): List<|Sz|>!Refused //<
+    //< The data rows the script wrote in, from 0, as `0,2,3`; none for no text
     text: = text_in(len)
     $rows: = List<|Sz|>(scratch)
+    if text.len == 0
+        return rows
     $start: Sz = 0
     for i in Range.asc(text.len + 1)
         if i < text.len && text[i] != ','
             continue
         row: = text.sub(start, i - start).to_count(MAX_ROWS) catch
-            return refused(.table(.outside))
+            throw .table(.outside)
         rows.push(row)
         start = i + 1
-    ed.set_heights(block, rows.slice(), points) catch e
-        return refused(e)
-    return result(true, "")
+    return rows
 
 extern fn ksmd_web_column_format(block: Sz, first: Sz, last: Sz, len: Sz): Sz //<
     //< Gives columns `first` to `last` the number format written in, as `formats` writes one
@@ -404,4 +524,13 @@ extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
         return 0
     defer scratch: = Arena(16 * 1024)
     out.s(ed.cell_text(u, row, column, scratch))
+    return out.slice().len
+
+extern fn ksmd_web_functions(): Sz //<
+    //< Every function of ksmd's own a formula calls, as a JSON array in the output; its length
+    //< The forms come first, then the table's (`ksmd/calc/help.kspl`). A person's own come from
+    //< the worker that runs them (`ksmd_own_help` in `ksmd/port/own_build.kspl`).
+    ensure()
+    out.clear()
+    write_json(Help[][]::{ Help[]::FORMS, Help[]::table.HELP }, out)
     return out.slice().len

@@ -224,7 +224,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
             right_first_id = right_node.infer_expr(ctx,
                 I32::sema_type_env.Builtin_type_id.unknown)!
             right_done = true
-            if ctx.env.get_real_type(right_first_id) != ctx.env.get_real_type(expected_id)
+            right_clean: = ctx.env.get_clean_real_type(right_first_id)
+            if right_clean != ctx.env.get_clean_real_type(expected_id)
                 pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
     left_type_id: = left_node.infer_expr(ctx, pass_left_id)!
     // An operand is a value, so a type's name is refused on either side, with nothing expected of
@@ -372,11 +373,12 @@ priv fn right_expected_id(ctx: Sema_ctx$@, right_node: Ast_node$@, left_type_id:
 
     // **Pass the left-hand side's type only to an integer literal with no fixed type**, and only
     // where the outer expected type equals it. The assignment above promotes other operands to the
-    // wider side, but a literal has no type of its own to promote.
+    // wider side, but a literal has no type of its own to promote. **Compare without the read-only
+    // mark**: an element of `c: U8[2] = ::{ a + 1, 0 }` expects a read-only `U8`, still a `U8`.
     // Caution: **Do not include a shift.** The amount's type is independent of the left-hand side's
     // ("Shifts are outside the exception" in docs/SPEC-programming-language.md).
     if ctx.env.is_integer(left_type_id) && !is_logical && !is_shift &&
-        ctx.env.get_real_type(expected_id) == ctx.env.get_real_type(left_type_id) &&
+        ctx.env.get_clean_real_type(expected_id) == ctx.env.get_clean_real_type(left_type_id) &&
         sema_body_literal.is_untyped_int_literal(right_node)
         pass_right_id = left_type_id
     return pass_right_id

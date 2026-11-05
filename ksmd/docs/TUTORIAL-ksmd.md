@@ -55,6 +55,8 @@ The menu bar now reads "Not saved." beside the name. Your edits are held as a dr
 
 Both totals show `240`. Open a total's cell with two presses, and it shows its formula again.
 
+**A formula can call functions too.** Type `=su` in a cell, and a list of the functions whose names start so opens under it. `Tab` writes the chosen one, such as `sum(`, and a tip then shows what it takes. Insert ▸ Function… (`Shift`+`F3`) lists every function, with an example of each.
+
 ## 5. Draw a chart of the table
 
 Press a cell of the table, and choose Table ▸ Table ▸ Insert chart. A bar chart of the prices, labelled Train and Hotel, appears after the table. Its Edit button changes what it draws.

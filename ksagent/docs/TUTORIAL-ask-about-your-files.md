@@ -31,13 +31,13 @@ This guide sets up ksagent once, then asks questions about a folder of Word, Exc
 
 ## 2. Download the model (once)
 
-**Go to the repository's root, and download the model file into `models/`.** The file is 2.5 GB, and `curl` shows its progress while it downloads.
+**Go to the repository's root, and download the model file into `data/`.** The file is 2.5 GB, and `curl` shows its progress while it downloads.
 
 ```sh
-curl -L -o models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+curl -L -o data/Qwen3-4B-Instruct-2507-Q4_K_M.gguf https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 ```
 
-The other models, and when to choose one, are in [`models/README.md`](../../models/README.md).
+The other models, and when to choose one, are in [`data/README.md`](../../data/README.md).
 
 ## 3. Put your files in a folder
 
@@ -63,7 +63,7 @@ The first run builds the programs, which takes a few minutes. Then make prints t
 ```
 ./out/ksagent_chat.exe --dir='/home/me/my-files' --model-file='' --port=''
 ksagent_chat: model server: nothing answers at http://127.0.0.1:8081, so this command starts one
-ksagent_chat: model server: starting llama-server on models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf (it is on PATH, and uses the graphics card)
+ksagent_chat: model server: starting llama-server on data/Qwen3-4B-Instruct-2507-Q4_K_M.gguf (it is on PATH, and uses the graphics card)
 ksagent_chat: waiting for llama-server to load the model (seconds to a minute)
 ksagent_chat: model server: ready at http://127.0.0.1:8081
 ksagent_chat: opening http://127.0.0.1:30000/
@@ -94,7 +94,7 @@ The buttons on the page, and the files a conversation keeps in the folder, are i
 
 | The message starts with | Do this |
 | :-- | :-- |
-| `models/… is not there. Download it` | Run the `curl` line it prints, at the repository's root |
+| `data/… is not there. Download it` | Run the `curl` line it prints, at the repository's root |
 | `llama-server is not on PATH, and chat_server is not built` | Do step 1, then run `make chat` again. To use the slower server instead, run `make chat-server NATIVE=1`, then `make chat` |
 | `starting chat_server …, since llama-server is not on PATH` | Do step 1, press Ctrl+C, and run `make chat` again |
 | `port 8081 answers, but not as a model server` | Stop the program that uses port 8081, or choose another port: `make chat DIR="$HOME/my-files" PORT=8082` |

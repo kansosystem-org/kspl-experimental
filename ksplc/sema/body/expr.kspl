@@ -250,7 +250,10 @@ priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I3
     u8_slice_id: = c.slice_type_of(I32::sema_type_env.Builtin_type_id.u8_type)
     void_ptr_id: = c.env
         .make_ptr(c.env.make_const(I32::sema_type_env.Builtin_type_id.void_type))
-    if expected_id == u8_ptr_id || expected_id == void_ptr_id
+    // **A typedef's name is its type** (`typedef CStr = Void@`): compared as written, the alias
+    // is a type of its own and the literal fits none of them. The alias itself is answered.
+    real_id: = c.env.get_real_type(expected_id)
+    if real_id == u8_ptr_id || real_id == void_ptr_id
         return expected_id
     read_only_id: = c
         .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
@@ -260,9 +263,9 @@ priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I3
     // `""` as an empty `U8$[]` stays: it has no element, so every write through it is refused by
     // the bounds check.
     span: = node.text.literal_span()
-    if expected_id == u8_slice_id && span.end == span.start
+    if real_id == u8_slice_id && span.end == span.start
         return expected_id
-    if expected_id == u8_ptr_id2 || expected_id == u8_slice_id
+    if real_id == u8_ptr_id2 || real_id == u8_slice_id
         shown: = c.env.display(expected_id)
         c.clear_scratch()
             .s("a string literal cannot be used as '\{shown\}'. It is placed in read-only memory, \

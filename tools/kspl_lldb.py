@@ -452,7 +452,7 @@ def __lldb_init_module(debugger, internal_dict):
     print("[Kanso] LLDB Advanced formatters & Demangler loaded.", flush=True)
 
 
-# **With no argument it is the self-test**, as in `tools/ai_assist/*.py`, so the gate running them
+# **With no argument it is the self-test**, as in `lib/ksai/tools/*.py`, so the gate running them
 # together needs no branch per tool.
 # **It looks only at the name conversion**; readability inside LLDB needs a debugger.
 if __name__ == "__main__":

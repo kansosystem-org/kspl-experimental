@@ -13,12 +13,15 @@ const COMMANDS = [
   ["print", "Print or save as PDF…", "Ctrl+P"],
   ["undo", "Undo", "Ctrl+Z"], ["redo", "Redo", "Ctrl+Y"],
   ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["paste", "Paste", "Ctrl+V"],
+  ["paste-values", "Paste values", "Ctrl+Shift+V"],
   ["find", "Find…", "Ctrl+F"], ["replace", "Replace…", "Ctrl+H"],
   ["contents", "Contents"], ["width-full", "Full width"], ["width-reading", "Reading width"],
   ["one-line", "One line per cell"],
+  ["zoom-in", "Zoom in", "Ctrl+Alt+="], ["zoom-out", "Zoom out", "Ctrl+Alt+-"], ["zoom-reset", "Zoom 100%"],
   ["read-only", "Read-only"], ["quick-choose", "Quick access bar…"],
   ["table", "Table"], ["diagram", "Diagram"], ["image", "Image…"], ["include", "Include…"], ["functions", "Functions…"], ["divider", "Divider"], ["link", "Link…", "Ctrl+K"],
   ["date", "Today's date", "Ctrl+;"], ["time", "Time now", "Ctrl+:"],
+  ["insert-function", "Function…", "Shift+F3"],
   ["p", "Paragraph", "Ctrl+Alt+0"], ["h1", "Heading 1", "Ctrl+Alt+1"], ["h2", "Heading 2", "Ctrl+Alt+2"],
   ["h3", "Heading 3", "Ctrl+Alt+3"], ["h4", "Heading 4", "Ctrl+Alt+4"], ["h5", "Heading 5", "Ctrl+Alt+5"],
   ["h6", "Heading 6", "Ctrl+Alt+6"], ["c", "Code block"],
@@ -61,6 +64,8 @@ const COMMANDS = [
 ];
 // The clipboard type that carries a whole table as ksmd's own source, so ksmd pastes it whole.
 const KSMD_TYPE = "application/x-ksmd";
+// The clipboard type that carries copied cells with their formulas and values (`paste.js`).
+const KSMD_CELLS_TYPE = "application/x-ksmd-cells";
 const COMMAND = new Map(COMMANDS.map(([name, label, key]) => [name, { label, key }]));
 // While rows of the table are cut, Insert row above inserts them instead, and Insert column left
 // likewise for columns, as Excel's Insert reads Insert Cut Cells in its place. Each gives the label
@@ -93,10 +98,10 @@ const TABLE_GROUPS = [
 // flyout. Every command stands in one of them, so the quick access bar's chooser lists them all.
 const MENUS = [
   ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print"]],
-  ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace"]],
-  ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "read-only", "-",
-    "quick-choose"]],
-  ["Insert", ["table", "diagram", "image", "include", "functions", "divider", "link", "-", "date", "time", "-", "note"]],
+  ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "paste-values", "-", "find", "replace"]],
+  ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "zoom-in", "zoom-out",
+    "zoom-reset", "-", "read-only", "-", "quick-choose"]],
+  ["Insert", ["table", "diagram", "image", "include", "functions", "divider", "link", "-", "date", "time", "insert-function", "-", "note"]],
   ["Format", [["Kind of block", ["p", "h1", "h2", "h3", "h4", "h5", "h6", "c"]], "-",
     "strong", "emphasis", "code", "-", "color", "fill",
     ["Font size", ["size-default", "size-9", "size-10", "size-11", "size-12", "size-14", "size-18", "size-24"]],
@@ -134,12 +139,16 @@ const ICONS = {
   cut: `<circle cx="4.5" cy="12" r="2"/><circle cx="11.5" cy="12" r="2"/><path d="M6 10.5L11 2 M10 10.5L5 2"/>`,
   copy: `<path d="M5.5 5.5h8v9h-8z M3 11V2.5h7.5"/>`,
   paste: `<path d="M5 3H3v11.5h10V3h-2 M5.5 1.5h5v3h-5z M5.5 8h5 M5.5 11h3.5"/>`,
+  "paste-values": `<path d="M5 3H3v11.5h10V3h-2 M5.5 1.5h5v3h-5z"/>${T("12", 6.5, "", 12)}`,
   find: `<circle cx="6.5" cy="6.5" r="4"/><path d="M9.5 9.5l4.5 4.5"/>`,
   replace: `<path d="M2 5h9l-2.5-2.5 M14 11H5l2.5 2.5"/>`,
   contents: `<path d="M2 3h1.5 M5.5 3h8.5 M2 6.5h1.5 M5.5 6.5h8.5 M3.5 10h1.5 M7 10h7 M3.5 13.5h1.5 M7 13.5h7"/>`,
   "width-full": `<path d="M1.5 2.5v11 M14.5 2.5v11 M4 8h8 M6 6l-2 2 2 2 M10 6l2 2-2 2"/>`,
   "width-reading": `<path d="M4.5 2.5v11 M11.5 2.5v11 M6.5 5h3 M6.5 8h3 M6.5 11h3"/>`,
   "one-line": `<path d="M2.5 3.5h11v9h-11z M2.5 8h11 M5 5.75h6 M5 10.25h4"/>`,
+  "zoom-in": `<circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5 M4.5 6.5h4 M6.5 4.5v4"/>`,
+  "zoom-out": `<circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5 M4.5 6.5h4"/>`,
+  "zoom-reset": `<circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5"/>${T("1", 7, "", 9)}`,
   "read-only": `<path d="M3.5 7.5h9v6.5h-9z M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5"/>`,
   "quick-choose": `<path d="M2 4h12 M2 8h12 M2 12h12"/><circle class="f" cx="5" cy="4" r="1.6"/><circle class="f" cx="11" cy="8" r="1.6"/><circle class="f" cx="7" cy="12" r="1.6"/>`,
   table: `<path d="${GRID}"/>`,
@@ -147,6 +156,7 @@ const ICONS = {
   image: `<path d="M2 3h12v10H2z M2 11l3.5-3.5 3 3 2-2L14 12"/><circle class="f" cx="10.5" cy="6" r="1.2"/>`,
   include: `<path d="M3 2h7l3 3v9H3z M6 9h5 M8.5 6.5L11 9l-2.5 2.5"/>`,
   functions: T("ƒx", 9),
+  "insert-function": T("ƒ( )", 8, 'font-style="italic" font-family="serif"'),
   divider: `<path d="M1.5 8h13 M4 4.5h8 M4 11.5h8"/>`,
   link: `<path d="M7 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1 M9 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1"/>`,
   date: `<path d="M2.5 3.5h11v10h-11z M2.5 6.5h11 M5.5 2v3 M10.5 2v3"/><path class="f" d="M5 9h2v2H5z"/>`,

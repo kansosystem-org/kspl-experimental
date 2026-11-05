@@ -472,7 +472,7 @@ priv fn check_linux_suites_gated(arena: Arena$@) //<
     verdict.check_list("each suite out of `test-suites` has a gate of its own", names.len, "suites",
         bad@, arena.text().s("give it a `Gate` in ").s(GATES_SRC).take())
 
-priv const BLAS_HOME: U8[] = "ksai/" //<
+priv const BLAS_HOME: U8[] = "lib/ksai/" //<
     //< The one package `make test-blas` builds with `BLAS=1`
     //< **A `#cfg(blas)` elsewhere is never built**: `make lint` analyses it, but no gate links or
     //< runs it ("note 15" in `docs/SPEC-gates.md`).
@@ -634,6 +634,33 @@ priv fn check_runner_pins(arena: Arena$@)
         "workflow files", bad@,
         "name the image the label stands for today (`ubuntu-24.04`, not `ubuntu-latest`)")
 
+// ==========================================
+// A dev container's step passes GITHUB_ACTIONS
+// **The container gets none of the runner's environment unless the step names it**, and
+// tools/ci.kspl writes a gate's error mark only where GITHUB_ACTIONS is set (`annotate`). Without
+// it a red round on Linux names no cause on its page.
+// ==========================================
+priv const CONTAINER_STEP: U8[] = "uses: devcontainers/ci@" //< how a dev container's step starts
+
+priv fn check_container_env(arena: Arena$@)
+    $bad: = List<|U8[]|>(arena)
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::{ "*.yml", "*.yaml" })
+        if !rel.starts_with(".github/")
+            continue
+        $rest: = harness.read_under_root(rel)
+        for rest.find_str(CONTAINER_STEP).is_some()
+            // The step's `with:` runs to the next step, which starts at `      - `.
+            rest = rest.sub_from(rest.find_str(CONTAINER_STEP).unwrap_or(0) + 1)
+            step: = rest.sub(0, rest.find_str("\n      - ").unwrap_or(rest.len))
+            seen += 1
+            if step.find_str("\n          env: |\n").is_none() ||
+                step.find_str("\n            GITHUB_ACTIONS\n").is_none()
+                bad
+                    .push(arena.text().s(rel).s(": a devcontainers/ci step").take())
+    verdict.check_list("every dev container step passes GITHUB_ACTIONS to its gates", seen, "steps",
+        bad@, "add `env: |` with the line `GITHUB_ACTIONS` to the step's `with:`")
+
 fn run(arena: Arena$@) //< this section's entry point
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
     check_shebang_modes(arena)
@@ -642,6 +669,7 @@ fn run(arena: Arena$@) //< this section's entry point
     check_dispatch_switches(arena)
     check_job_timeouts(arena)
     check_runner_pins(arena)
+    check_container_env(arena)
     check_ci_shards(arena)
     check_platform_table(arena)
     check_linux_suites_gated(arena)

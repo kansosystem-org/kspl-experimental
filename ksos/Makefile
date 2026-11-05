@@ -6,7 +6,8 @@
 #   make ksos / ksos-<demo> / ksos-cm-<demo> / ksos-cm0-<demo> / ksos-nrf51-<demo> /
 #        ksos-rp2040-<demo>                                       # one demo (README.md lists them)
 #   make test-ksos-posix / test-ksos-qemu / test-ksos-link        # the gates, each over every demo
-# `std` comes from the ksplc or `KSPLC_STD_DIR`; the packages it uses, from `KSPLC_PKG_SRC_DIR`.
+# `std` comes from the ksplc or `KSPLC_STD_DIR`; the packages it uses, from the `lib/` beside that
+# `std`, or from `KSPLC_PKG_SRC_DIR`.
 # Caution: **Keep this file standing alone**: a copy of the folder, nothing more, is tested by it.
 # **Keep a recipe to ASCII**: MSYS2's shell rereads it outside UTF-8; wording goes in an `export`.
 

@@ -370,7 +370,7 @@ Caution: **Always mix ksplc's own identity into the key** (`base/cache.append_se
 
 This section covers the compiler's one diagnostic for a syntax error. "Only the editor's parse recovers from a syntax error" in [`DESIGN-tools.md`](DESIGN-tools.md) covers how the editor's parse continues past one.
 
-The list of expectations (`expected …`) holds **only words the user can type, with the fix first**. `track_fail` in `kspeg/engine.kspl` implements what is suppressed, and `track_token_fail` / `order_expected` in `kspeg/expected.kspl` build the list. Four rules hold:
+The list of expectations (`expected …`) holds **only words the user can type, with the fix first**. `track_fail` in `lib/kspeg/engine.kspl` implements what is suppressed, and `track_token_fail` / `order_expected` in `lib/kspeg/expected.kspl` build the list. Four rules hold:
 
 1. **Nothing inside a suppression is collected.**
    * A failure inside a lookahead (`!_Keyword`) is not what the user fixes.

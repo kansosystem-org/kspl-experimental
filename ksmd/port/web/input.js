@@ -129,7 +129,10 @@ function ksmdInput(ks) {
   });
 
   root.addEventListener("keydown", (e) => {
-    if (ks.table.owns(e.target)) return;
+    // Caution: **A key another handler took is not the text's.** A chosen cell's Ctrl+; opens the
+    // cell and takes its box out of the page, so `owns` no longer sees the table, and the date
+    // went into the text at the hidden caret too.
+    if (e.defaultPrevented || ks.table.owns(e.target)) return;
     if (e.isComposing || e.keyCode === 229) {
       // An input method starts: take the selected text out first, so it composes in one place.
       if (!ks.composing && !collapsed()) {
@@ -216,7 +219,8 @@ function ksmdInput(ks) {
     if (ks.tooLarge(text)) return;
     // Cells copied from a spreadsheet: at a chosen cell they fill the table from there, and in
     // text they make a new table, whose first row gives the names.
-    if (ks.where === "cell" && ks.cell && ks.range.pasteGrid(text, false)) return;
+    if (ks.where === "cell" && ks.cell &&
+      (ks.pasting.paste(data, text) || ks.range.pasteGrid(text, false))) return;
     const g = ks.range.grid(text);
     if (g && text.includes("\t")) {
       ks.sync();

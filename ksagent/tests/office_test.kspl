@@ -17,6 +17,7 @@ embed "ksagent/tests/office_data/rules.docx" as rules_docx
 embed "ksagent/tests/office_data/leave.xlsx" as leave_xlsx
 
 const VIEW_CAP: Sz = 8 * 1024 * 1024 //< the cap the tools give a view
+priv const ROOM: Sz = 64 * 1024 //< the request's room a tool gets when a test calls it alone
 
 priv const RULES_VIEW: U8[] =
     """
@@ -158,23 +159,23 @@ priv fn ole(rest: U8[], arena: Arena$@): U8[] //< bytes that open as a compound 
 fn test_the_tools_search_and_read_word_and_excel_files(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] search and read reach a Word and an Excel file by their text views")
     root: = office_folder(work, arena)
-    hits: = files.tool_search(root, "有給休暇", "", arena)
+    hits: = files.tool_search(root, "有給休暇", "", ROOM, arena)
     verdict.check("a search finds the Excel row, named by its sheet and row, and the Word paragraph",
         hits
         .find_str("規程/leave.xlsx:2: 規程一覧!2: 有給休暇 | 入社6か月後に付与")
         .is_some() &&
         hits.find_str("規程/rules.docx:6: 第2条 年次有給休暇は").is_some(), hits)
-    numbered: = files.tool_search(root, "第3条", "", arena)
+    numbered: = files.tool_search(root, "第3条", "", ROOM, arena)
     verdict.check("a search finds an article by the number Word's list numbering writes",
         numbered.find_str("規程/rules.docx:10: 第3条 特別休暇は、5日とする。")
         .is_some(), numbered)
-    read: = files.tool_read(root, "規程/leave.xlsx", 7, 7, arena)
+    read: = files.tool_read(root, "規程/leave.xlsx", 7, 7, ROOM, arena)
     verdict.check("a read numbers the view's lines",
         read.find_str("7: 規程一覧!7: 割増賃金率 | 25%").is_some(), read)
     refusals: = U8[][]::{ "規程/old.doc", "save it as .docx", "規程/broken.xlsx",
         "it is not a zip file", "規程/locked.docx", "protected by a password" }
     for k in Range.asc(refusals.len / 2)
-        got: = files.tool_read(root, refusals[2 * k], 1, 5, arena)
+        got: = files.tool_read(root, refusals[2 * k], 1, 5, ROOM, arena)
         verdict.check(arena.text().s("reading ").s(refusals[2 * k]).s(" is refused with what to do")
             .take(),
             got.starts_with("refused: ") && got.find_str(refusals[2 * k + 1]).is_some(), got)

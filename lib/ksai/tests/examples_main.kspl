@@ -1,0 +1,215 @@
+//< Builds the applications as they ship and checks what they print when run
+//< `make test` runs it (`lib/ksai/Makefile`), passing the programs it built and a working
+//< directory.
+import "ksai/examples/code_complete/ksplc_oracle" as oracle
+import "ksai/tests/examples_car" as car
+import "ksai/tests/examples_chat" as chat
+import "ksai/tests/examples_chat35" as _chat35
+import "ksai/tests/examples_chat_http" as _chat_http
+import "ksai/tests/examples_chat_stream" as _chat_stream
+import "ksai/tests/examples_qwen" as qwen
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" + { Str_builder } // `arena.text()` and `lines`
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/suite"
+import "std/sys"
+import "std/verdict"
+
+priv const USAGE: U8[] =
+    "usage: ksplc run tests/examples_main.kspl <llama_engine> <qwen_infer> <code_complete> \
+        <car_pilot> <chat_server> <ksplc> <work_dir>" //<
+            //< the arguments, in that order (`make test` in `lib/ksai/Makefile` passes them)
+
+priv const LLAMA_VERDICT: U8[] = "RESULT: ALL PASS" //< what llama_engine says when training works
+    //< Caution: **Keep it in step with `lib/ksai/examples/llama_engine/main.kspl`**, whose line
+    //< `make run`'s gate reads too.
+
+priv const LLAMA_WAIT_MS: I32 = 600000 //< the cap on one run of llama_engine (it trains)
+
+priv const LLAMA_SAID_CAP: Sz = 1024 * 1024 //< how much of what it says is kept
+
+priv struct Tests //< what the tests take: each program's path, and where they run
+    llama_exe: U8[]
+    qwen_exe: U8[]
+    fim_exe: U8[]
+    car_exe: U8[]
+    chat_exe: U8[]
+    ksplc: U8[]
+    work: U8[]
+    arena: Arena$@
+
+impl Tests: suite.Suite {}
+
+fn main(): I32
+    io.set_line_buffered()
+    defer arena: = Arena(64 * 1024 * 1024)
+    argv: = sys.args()
+    if argv.len != 8
+        panic(arena.dup_str(USAGE))
+    // The children start in `work`, so the programs' paths are made absolute first.
+    llama: = fs.absolute(argv.get(1), arena) catch panic("cannot read the working directory")
+    fim: = fs.absolute(argv.get(3), arena) catch panic("cannot read the working directory")
+    car_exe: = fs.absolute(argv.get(4), arena) catch panic("cannot read the working directory")
+    $t: = Tests::{ .llama_exe = llama, .qwen_exe = arena.dup_str(argv.get(2)), .fim_exe = fim,
+        .car_exe = car_exe, .chat_exe = arena.dup_str(argv.get(5)),
+        .ksplc = arena.dup_str(argv.get(6)), .work = arena.dup_str(argv.get(7)), .arena = arena }
+    t.run()
+    return 0
+
+priv fn test_llama_trains(llama_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< llama_engine trains from the weights embedded in it, and reports that the loss went down
+    //< **It runs from the working directory**, which has no `lib/ksai/` folder. So a program that
+    //< still reads its weights by path fails here instead of in someone else's folder.
+    verdict.start("[examples] llama_engine trains from the weights burned into it")
+    fs.mkdir_all(work) catch
+        panic(arena.text().s("cannot create the working directory: \{work\}").take())
+    r: =
+        subproc.run_capture(U8[][]::{ llama_exe }, work, LLAMA_WAIT_MS, LLAMA_SAID_CAP, arena)
+        catch panic("llama_engine must start")
+    said: = arena.text().s(r.stdout_data).s(r.stderr_data).take()
+    $held: = false
+    for line in said.lines(arena)
+        if line.starts_with(LLAMA_VERDICT)
+            held = true
+    assert(r.exited_with(0) && held,
+        arena.text()
+        .s("llama_engine did not say the loss fell (exit \{r.exit_code.unwrap_or(-1)\}):\n").s(said)
+        .take())
+    verdict.pass("llama_engine trains from its own weights, from any folder, and the loss falls")
+
+// ==========================================
+// Trains `code_complete` for a few steps on a corpus written here, then has it fill one hole
+// Part of `lib/ksai/tests/examples_main.kspl`, not a suite. **What is tested is the round trip**
+// (train, write, read, complete, one answer line per hole) and that threads change only the time.
+// Answer quality is not tested here; the compiler's evaluation outside this package measures it.
+// ==========================================
+priv const FIM_WAIT_MS: I32 = 600000 //< the cap on one run of code_complete
+priv const SAID_CAP: Sz = 1024 * 1024 //< how much of what it says is kept
+
+priv fn fim_run(argv: U8[][], work: U8[], arena: Arena$@): U8[] //<
+    //< one run; its output if it failed
+    r: = subproc.run_capture(argv, work, FIM_WAIT_MS, SAID_CAP, arena) catch
+        return "code_complete could not be started"
+    if !r.exited_with(0)
+        return arena.text().s("exit \{r.exit_code.unwrap_or(-1)\}:\n").s(r.stdout_data)
+            .s(r.stderr_data).take()
+    return ""
+
+priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone, as IDs 1 to 256
+    //< **Every text encodes under it** with no merge, so no tokenizer is trained first.
+    b: = arena.text()
+    hex: = "0123456789abcdef"
+    for i in Range.asc(256)
+        b.s("\{i + 1\}\t").c(hex[i / 16]).c(hex[i % 16]).c('\n')
+    return b.take()
+
+fn test_fim_round_trip(fim_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< code_complete trains, writes its weights, reads them back, and answers each hole with candidates
+    verdict.start("[examples] code_complete trains on a corpus and answers a hole")
+    dir: = fs.join(work, "fim", arena)
+    fs.mkdir_all(dir) catch
+        panic(arena.text().s("cannot create the working directory: \{dir\}").take())
+    corpus: =
+        "{\"prefix\":\"fn one(): I32\\n  return \
+            \",\"middle\":\"1\",\"suffix\":\"\\n\"}\n{\"prefix\":\"fn two(): I32\\n  return \
+            \",\"middle\":\"2\",\"suffix\":\"\\n\"}\n"
+    holes: = "{\"prefix\":\"fn three(): I32\\n  return \",\"suffix\":\"\\n\"}\n"
+    fs.write_tree(dir, U8[][]::{ "vocab.txt", "merges.txt", "fim.jsonl", "holes.jsonl" },
+        U8[][]::{ byte_vocab(arena), "", corpus, holes }, arena) catch
+        panic(arena.text().s("the samples cannot be written: \{dir\}").take())
+    tok: = U8[][]::{ "--vocab=vocab.txt", "--merges=merges.txt" }
+    trained: =
+        fim_run(U8[][]::{ fim_exe, "train", tok[0], tok[1], "--corpus=fim.jsonl",
+        "--out=fim.safetensors", "--steps=5" }, dir, arena)
+    assert(trained.len == 0,
+        arena.text().s("code_complete train failed, ").s(trained).take())
+    answered: =
+        fim_run(U8[][]::{ fim_exe, "complete", tok[0], tok[1], "--weights=fim.safetensors",
+        "--in=holes.jsonl", "--out=answers.jsonl", "--samples=2" }, dir, arena)
+    assert(answered.len == 0,
+        arena.text().s("code_complete complete failed, ").s(answered).take())
+    text: = io.read_file(fs.join(dir, "answers.jsonl", arena), null) catch
+        panic("code_complete wrote no answers")
+    lines: = text.lines(arena)
+    assert(lines.len == 1,
+        arena.text().s("one hole, not one answer line:\n").s(text).take())
+    one: = json.parse(lines[0], arena) catch panic("code_complete's answer line is not JSON")
+    assert(one.val.get("candidates").arr_list(arena).len == 2,
+        arena.text().s("one hole did not get two candidates:\n").s(text).take())
+    verdict
+        .pass("code_complete's weights round-trip, and each hole gets its candidates, greedy first")
+
+fn test_fim_threads_keep_weights(fim_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< A batch trained on one thread and on two writes the same weights, byte for byte
+    verdict.start("[examples] code_complete's weights do not depend on the thread count")
+    dir: = fs.join(work, "fim", arena) // the round trip's samples, written already
+    tok: = U8[][]::{ "--vocab=vocab.txt", "--merges=merges.txt" }
+    for threads in U8[][]::{ "1", "2" }
+        said: =
+            fim_run(U8[][]::{ fim_exe, "train", tok[0], tok[1], "--corpus=fim.jsonl", "--steps=3",
+            "--batch=2", arena.text().s("--threads=").s(threads).take(),
+            arena.text().s("--out=threads_").s(threads).s(".safetensors").take() }, dir, arena)
+        assert(said.len == 0,
+            arena.text().s("code_complete train failed, ").s(said).take())
+    one: = io.read_file(fs.join(dir, "threads_1.safetensors", arena), null) catch
+        panic("code_complete wrote no weights on one thread")
+    two: = io.read_file(fs.join(dir, "threads_2.safetensors", arena), null) catch
+        panic("code_complete wrote no weights on two threads")
+    assert(one.equals(two), "code_complete: two threads wrote other weights than one")
+    verdict
+        .pass("code_complete: the sequences are drawn and summed in one order, whichever thread ran")
+
+// ==========================================
+// The coding example's oracle, run on the compiler `make test` hands over
+// ==========================================
+fn test_oracle_counts_errors(ksplc: U8[], work: U8[], arena: Arena$@) //<
+    //< The oracle's count and first error, from the real compiler it is handed
+    verdict.start("[examples] code_complete's oracle counts a real compiler's errors")
+    // The oracle writes its temporary sources under the folder it runs in.
+    fs.mkdir_all(work) catch panic("cannot create the working directory")
+    oracle.use_ksplc(ksplc)
+
+    good: = "fn main() {}\n"
+    good_r: = oracle.compile_errors(good, "_oracle_test_good", arena)
+    assert(good_r.error_count == 0, "valid source must compile with 0 errors")
+    kspl_left: = fs.exists(fs.join(oracle.CORPUS_DIR, "_oracle_test_good.kspl", arena))
+    c_left: = fs.exists(fs.join(oracle.CORPUS_DIR, "_oracle_test_good.c", arena))
+    assert(!kspl_left && !c_left, "compile_errors must clean up its temp .kspl/.c files")
+    assert(oracle.first_error(good_r.stderr_data, arena).len == 0, "a clean compile has no error")
+
+    type_err: = "fn main()\n    x: I32 = \"not a number\"\n\n"
+    type_r: = oracle.compile_errors(type_err, "_oracle_test_type_err", arena)
+    assert(type_r.error_count == 1, "a type error is the closing object's one error")
+    diag: = oracle.first_error(type_r.stderr_data, arena)
+    assert(diag.ends_with(":2:14: expected 'I32', but got 'U8[]'"),
+        "first_error gives the error's place and message, read from its JSON object")
+    type_err_compiles: = oracle.compiles(type_err, "_oracle_test_type_err2", arena)
+    assert(!type_err_compiles, "compiles() must be false when compile_errors' count is nonzero")
+
+    // A syntax error is counted in the closing object like any other.
+    garbage: = ")))garbage{{{***\n"
+    garbage_r: = oracle.compile_errors(garbage, "_oracle_test_garbage", arena)
+    assert(garbage_r.error_count == 1, "a parse-broken source is the closing object's one error")
+
+    // A source that passes sema and fails in code generation.
+    // Caution: **Always test this path.** A count taken right after sema misses later errors and
+    // says 0, counting a failure as a pass. In C a fixed-length array takes two pairs of braces per
+    // level, so 97 levels reach the limit on a zero initializer.
+    defer $deep: = Str_builder()
+    deep.s("fn main()\n    a: I32")
+    for _i in Range.asc(97)
+        deep.s("[1]")
+    deep.s(" = ::{};\n}\n")
+    late_r: = oracle.compile_errors(deep.slice(), "_oracle_test_late_err", arena)
+    assert(late_r.error_count == 1, "an error raised after sema must still reach the count")
+    late_compiles: = oracle.compiles(deep.slice(), "_oracle_test_late_err2", arena)
+    assert(!late_compiles, "compiles() must be false for a source that fails in codegen")
+
+    verdict
+        .pass("a clean compile, a type, a syntax and a late error give the closing object's count, \
+            and the temp file was cleared.")

@@ -19,6 +19,7 @@ import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/display" as _sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
 import "std/str"
@@ -92,6 +93,10 @@ priv enum Frame_escape //< what a value leaving the frame carries of the frame's
     local(name: Ast_node$@) //< a local binding set from one of these (holds_frame_pointer)
     address(at: Ast_node$@) //< a written `@` of the frame's storage
     local_address(name: Ast_node$@) //< a local binding set from one (holds_frame_address)
+    through(read: Ast_node$@, held: Sema_symbol$@) //<
+        //< a value read through a pointer to a local, held, set from a made pointer
+    through_address(read: Ast_node$@, held: Sema_symbol$@) //<
+        //< a value read through a pointer to a local, held, set from a written `@`
 
 priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node@, with_address: Bool, deeper_than: I32):
     Frame_escape //< the first of find_frame_escape's finds among nodes' children, or none
@@ -169,6 +174,22 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
         if root.name != null
             return local_escape(c, root.name, root.field, with_address, deeper_than)
         return find_frame_escape(c, target.get_postfix_receiver(), with_address, deeper_than)
+    // **A value read through a pointer or a slice carries what the local it reads holds**: `pp$`
+    // after `pp: = p@` reads `p`, and `hp.p` after `hp: = h@` reads `h.p`. Where the receiver
+    // points is followed through locals only (frame_points_at); elsewhere it is not known.
+    if via: = read_through_receiver(c, target)
+        if holds_no_pointer(c, target.type_id)
+            return .none
+        field: =
+            target.get_postfix_member().text if target.postfix_op_text().equals(".") else ""
+        if read_locals: = points_into(c, via)
+            for held in read_locals
+                found: = held_escape(target, held, field, with_address, deeper_than)
+                switch found
+                case .none {}
+                default
+                    return found
+        return .none
     // **An address behind a pointer or a slice points where that one does** (`s[1]@`, `p.f@`).
     if target.kind_id == .k_expr_postfix && target.postfix_op_text().equals("@")
         if via: = pointer_under_place(c, target.get_postfix_receiver())
@@ -219,6 +240,80 @@ priv fn value_part_receiver(c: Sema_ctx@, node: Ast_node$@): Bool //<
     if op.equals(".")
         return node.get_postfix_member() != null
     return op.starts_with("[") && c.env.is_array(c.env.get_real_type(recv.type_id))
+
+priv fn read_through_receiver(c: Sema_ctx$@, node: Ast_node$@): Ast_node$@? //<
+    //< The pointer or slice node reads through: `p` of `p$`, `p.f` and `p[i]`, `s` of `s[i]`
+    if node.kind_id != .k_expr_postfix
+        return .none
+    op: = node.postfix_op_text()
+    recv: = node.get_postfix_receiver()
+    if recv == null
+        return .none
+    if op.equals("$")
+        return .some(recv)
+    if op.equals(".") && node.get_postfix_member() != null &&
+        c.env.is_pointer(recv.type_id)
+        return .some(recv)
+    if op.starts_with("[") &&
+        (c.env.is_pointer(recv.type_id) || c.env.is_slice(recv.type_id))
+        return .some(recv)
+    return .none
+
+priv fn points_into(c: Sema_ctx$@, node: Ast_node$@): List<|Sema_symbol$@|>@? //<
+    //< The locals whose storage the pointer or slice node points into, as far as locals tell
+    //< A local answers its frame_points_at, and `x@` or `U8[]::a` its own operand's local. A part
+    //< read out of a local answers the whole local's. A read through one answers what the locals
+    //< it reads point into.
+    if node == null
+        return .none
+    if node.kind_id == .k_expr_primary && node.children.len > 0
+        return points_into(c, node.get_primary_inner_expr())
+    if node.is_path_or_ident()
+        sym: = c.read_written_name(node).sym
+        if sym == null || sym.flags.is_global || sym.frame_points_at == null
+            return .none
+        return .some(sym.frame_points_at)
+    if node.kind_id == .k_expr_postfix && node.postfix_op_text().equals("@")
+        return one_local(c, node.get_postfix_receiver())
+    if node.is_explicit_cast()
+        src: = node.get_postfix_receiver()
+        if src != null && c.env.is_array(c.env.get_real_type(src.type_id))
+            return one_local(c, src)
+        return points_into(c, src)
+    if value_part_receiver(c, node)
+        return points_into(c, part_root(c, node).name)
+    if via: = read_through_receiver(c, node)
+        if read_locals: = points_into(c, via)
+            $out: = List<|Sema_symbol$@|>(base_core.arena)
+            for held in read_locals
+                if held.frame_points_at != null
+                    for at in held.frame_points_at
+                        out.push(at)
+            if out.len > 0
+                return .some(base_core.arena.create(out))
+    return .none
+
+priv fn one_local(c: Sema_ctx$@, place: Ast_node$@): List<|Sema_symbol$@|>@? //<
+    //< The local of this frame place lies in, as a list of one, or none
+    if !is_frame_storage(c, place)
+        return .none
+    if sym: = storage_local(c, place)
+        $out: = List<|Sema_symbol$@|>(base_core.arena)
+        out.push(sym)
+        return .some(base_core.arena.create(out))
+    return .none
+
+priv fn held_escape(read: Ast_node$@, held: Sema_symbol$@, field: U8[], with_address: Bool,
+    deeper_than: I32): Frame_escape //<
+        //< What a value read through a pointer to the local held, or its field, carries
+        //< The same marks as local_escape reads, of the local the pointer points into.
+    if (held.flags.holds_frame_pointer || names_field(held.frame_pointer_fields, field)) &&
+        held.frame_pointer_depth > deeper_than
+        return .through(read, held)
+    if with_address &&
+        (held.flags.holds_frame_address || names_field(held.frame_address_fields, field))
+        return .through_address(read, held)
+    return .none
 
 priv struct Part_root //< the local a part of a value is read out of
     name: Ast_node$@ //< the local's name, or null where the value is no local's
@@ -312,8 +407,13 @@ priv fn note_frame_part(c: Sema_ctx$@, id_node: Ast_node$@, field: U8[], expr_no
     if field.len == 0 && expr_node != null && expr_node.kind_id == .k_struct_literal
         for child in expr_node.children
             if child.kind_id == .k_expr_field_init && child.children.len > 0
-                if f_name: = child.get_field_init_name()
+                // **An element has no field name, so it marks the whole local**
+                // (`arr: I32@[1] = ::{ x@ }`): its elements are not told apart.
+                switch child.get_field_init_name()
+                case .some(f_name)
                     note_frame_part(c, id_node, f_name.text, child.last_child())
+                case .none
+                    note_frame_part(c, id_node, "", child.last_child())
         return
     // Each round finds a pointer into a deeper block than the last, so it ends at the deepest.
     $depth: I32 = 0
@@ -327,16 +427,83 @@ priv fn note_frame_part(c: Sema_ctx$@, id_node: Ast_node$@, field: U8[], expr_no
             sym.flags.holds_frame_pointer = true
         else
             sym.frame_pointer_fields = with_field(sym.frame_pointer_fields, field)
+        note_points_at(c, sym, found)
         depth = escape_depth(c, found)
         if depth > sym.frame_pointer_depth
             sym.frame_pointer_depth = depth
-    switch find_frame_escape(c, expr_node, true, 0)
+    found_address: = find_frame_escape(c, expr_node, true, 0)
+    switch found_address
     case .none {}
     default
         if field.len == 0
             sym.flags.holds_frame_address = true
         else
             sym.frame_address_fields = with_field(sym.frame_address_fields, field)
+        note_points_at(c, sym, found_address)
+
+priv fn note_points_at(c: Sema_ctx$@, sym: Sema_symbol$@, found: Frame_escape) //<
+    //< Adds to sym's frame_points_at the locals whose storage what was found points into
+    switch found
+    case .slice(src)
+        add_points_at(sym, storage_local(c, src))
+    case .upcast(inner)
+        add_points_at(sym, storage_local(c, inner))
+    case .address(at)
+        add_points_at(sym, storage_local(c, at.get_postfix_receiver()))
+    case .local(name)
+        add_each_points_at(sym, c.read_written_name(name).sym)
+    case .local_address(name)
+        add_each_points_at(sym, c.read_written_name(name).sym)
+    case .through(_read, held)
+        add_each_points_at(sym, held)
+    case .through_address(_read, held)
+        add_each_points_at(sym, held)
+    case .none {}
+
+priv fn add_each_points_at(sym: Sema_symbol$@, from: Sema_symbol$@) //<
+    //< Adds to sym's frame_points_at each local from's points into
+    if from == null || from.frame_points_at == null
+        return
+    for at in from.frame_points_at
+        add_one_points_at(sym, at)
+
+priv fn add_points_at(sym: Sema_symbol$@, local: Sema_symbol$@?) //<
+    //< adds local, where there is one, to sym's frame_points_at
+    switch local
+    case .some(at)
+        add_one_points_at(sym, at)
+    case .none {}
+
+priv fn add_one_points_at(sym: Sema_symbol$@, at: Sema_symbol$@) //<
+    //< adds at to sym's frame_points_at
+    if at == null || at == sym
+        return
+    if sym.frame_points_at == null
+        sym.frame_points_at = base_core.arena
+            .create(List<|Sema_symbol$@|>(base_core.arena))
+    for have in sym.frame_points_at
+        if have == at
+            return
+    sym.frame_points_at.push(at)
+
+priv fn storage_local(c: Sema_ctx$@, node: Ast_node$@): Sema_symbol$@? //<
+    //< The local whose storage node lies in, following fields and elements as storage_depth does
+    //< None where node lies in no local of this frame (a temporary, a global).
+    $at: = node
+    for at != null
+        if at.is_path_or_ident()
+            sym: = c.read_written_name(at).sym
+            if sym == null || sym.flags.is_global
+                return .none
+            return .some(sym)
+        if at.kind_id == .k_expr_primary && at.children.len > 0
+            at = at.get_primary_inner_expr()
+            continue
+        op: = at.postfix_op_text() if at.kind_id == .k_expr_postfix else ""
+        if at.kind_id != .k_method_access && !op.equals(".") && !op.starts_with("[")
+            return .none
+        at = at.get_postfix_receiver()
+    return .none
 
 priv fn with_field(fields: List<|U8[]|>$@, field: U8[]): List<|U8[]|>$@ //<
     //< fields with field added, made on the arena where there was none
@@ -367,6 +534,8 @@ priv fn escape_depth(c: Sema_ctx$@, found: Frame_escape): I32 //<
         return storage_depth(c, at.get_postfix_receiver())
     case .local(name)
         return c.read_written_name(name).sym.frame_pointer_depth
+    case .through(_read, held)
+        return held.frame_pointer_depth
     default
         return frame_depth(c, I32::c.symtab.scope_stack.len)
 
@@ -587,6 +756,18 @@ priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate
             .s("cannot \{verb\} '\{name.get_path_or_ident_name()\}': it was set from the address of \
                 local storage, which points into this function's frame. \{fate\} \{fix\}")
         c.err(name, c.scratch.slice())
+    case .through(read, held)
+        c.clear_scratch()
+            .s("cannot \{verb\} this value: it is read through a pointer to '\{held.name\}', which \
+                was set from a slice or an interface value built from local storage. Its pointer \
+                points into this function's frame. \{fate\} \{fix\}")
+        c.err(read, c.scratch.slice())
+    case .through_address(read, held)
+        c.clear_scratch()
+            .s("cannot \{verb\} this value: it is read through a pointer to '\{held.name\}', which \
+                was set from the address of local storage. That address points into this function's \
+                frame. \{fate\} \{fix\}")
+        c.err(read, c.scratch.slice())
 
 fn check_fn_value_binding(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@): Bool //<
     //< Rejects binding a variadic function's name with no type annotation (`f: = log_all;`)

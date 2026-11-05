@@ -203,7 +203,8 @@ pub fn round(x: F64, places: I64): F64!Calc_error
 * **One set of rules converts every argument** (`ksmd/calc/args.kspl`). An `F64` takes a number, and an empty cell is 0; text there is `#VALUE!`. An `I64` takes a whole number, and a fraction is `#NUM!`. A `Value[]`, last, takes the arguments left, a range alone giving its numbers. A `T?`, last, may be left out.
 * **An argument holding an error is the result**, the leftmost first, and the function is not called. An error the function throws (`!Calc_error`) is the cell's mark.
 * **The table that calls them is written from their signatures** (`ksmd/calc/glue.kspl`, `make ksmd-functions`). So a function is added by writing it, and nothing else names it.
-* **Six forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, and `today` reads the date the document opened. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
+* **Seven forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, `sum_product` pairs two ranges' cells, and `today` reads the date the document opened. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
+* **What a person reads of a function is written beside it, in its doc comments.** The first line says what it gives, each parameter's line what that argument takes, and a sentence "For example, `f(…)` is `…`." shows a call. The divider above it names its group. `make ksmd-functions` refuses a function that leaves one out, and a test calculates every example. The seven forms have their entries in `ksmd/calc/help.kspl`, which the calculator takes their names from. The page's help while a formula is typed and the reference's lists both come from there.
 
 **Why ordinary functions**: a person reads how `sum` works in the language they write, and its rules for arguments are the ones any function follows.
 
@@ -468,12 +469,14 @@ Each error has its own mark, since each is fixed differently.
 Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert and remove a row or a column, set a cell and copy a cell. `ksmd/edit/moving.kspl` moves a block of rows, columns or cells, and `ksmd/edit/sort.kspl` sorts the rows.
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
-* **A whole column holds no row.** Rows inserted, removed or moved anywhere only change how many it takes. Its column follows as a range's does; a moved block of cells leaves it alone.
+* **A whole column holds no row.** Rows inserted, removed or moved anywhere only change how many it takes. Its column follows as a range's does.
+* **A moved block of cells moves a whole column only when the block holds every data row.** So a column cut by its letter and pasted on another takes `t.A` with it, as Excel moves `A:A`. A whole column written over by such a block becomes `#REF!`, and a block of some rows leaves it alone.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
 * **A sort moves each row with its identity.** A formula keeps naming the cells it named before, so `=B1*C1` in row 1 still names its own row after the sort.
 * **Removal turns a reference to the removed line into `#REF!`.** A range's corner on that line moves one line toward the other corner. A range with no line left becomes `#REF!`.
 * **`$` acts only on copying.** A copy shifts each part without `$` by the distance copied, and a part with `$` keeps its row or column. A shift outside the table gives `#REF!`.
 * **A reference without a table's name names a cell of the table that holds the formula.** So a copy into another table names a cell there.
+* **A paste of cells copied in the page moves their formulas by the same rule.** The copy carries each formula as typed, and the place it was copied from. So the paste works from the text, in another table or another document (`shift_formula` in `ksmd/calc/formula.kspl`). A reference to a table that document lacks stays as written.
 * **A reference that names no cell stays as written,** such as `Z9` in a four-column table. It attaches once that cell exists: after an insertion, and when the source is read again.
 * **A reference straight after a number, as in `1A1`, never attaches.** That formula does not read, and a moved column could join the two into one number (`1E1`).
 * **A value that would not read back is refused, and changes nothing.** A formula must be at most 4,096 bytes, and read back as itself alone in its cell. The reader's own rule decides (`reads_as_formula` in `ksmd/syntax/clause.kspl`): a formula stays on one line, with each `|` and `{` inside quotes.
@@ -735,7 +738,7 @@ The KSPL model remains authoritative: the page turns editing into model actions,
 
 **A removed table keeps its place in the document's list of tables, emptied and with no name.** Blocks and references name a table by its place, so taking it out would renumber every later table. A reference to it from another table becomes text as written, and calculates as `#REF!`. Removing a table's block by any action empties its table.
 
-**A cell edits as the text a person types.** Text after `=` is a formula, and a number as JSON writes one is a number. A quoted JSON string is text, so `"12"` is the text 12. Nothing makes the cell empty, and anything else is text as typed. A cell's editor shows text that would read as another kind in quotes.
+**A cell edits as the text a person types.** Text after `=` is a formula, and a number as JSON writes one is a number. A quoted JSON string is text, so `"12"` is the text 12. Nothing makes the cell empty, and anything else is text as typed. A number too large for a cell, as `1e400`, stays the text typed, as Excel keeps it. An `=` with nothing after it is refused as an empty formula. A cell's editor shows text that would read as another kind in quotes.
 
 ## Undo and redo
 

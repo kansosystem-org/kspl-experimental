@@ -143,7 +143,7 @@ fn test_an_escaping_path_is_refused(work: U8[], arena: Arena$@)
             body.find_str("outside contents").is_none() &&
             body.find_str("secret-value").is_none(), body)
     verdict.check("the loop goes on to the answer", said_not_found(a@), "")
-    listing: = files.tool_list(root, "", arena)
+    listing: = files.tool_list(root, "", stub.ROOM, arena)
     verdict.check("a listing leaves out hidden names, links and chat files",
         listing.find_str(".env").is_none() && listing.find_str(".hidden").is_none() &&
         listing.find_str("link.md").is_none() &&
@@ -191,11 +191,11 @@ fn test_a_conversation_file_in_any_case_is_no_source(work: U8[], arena: Arena$@)
     fs.write_tree(root, names, U8[][]::{ said, said, said, said }, arena)
         catch panic("the files can be written")
     for k in Range.asc(3)
-        got: = files.tool_read(root, names[k], 1I64, 5I64, arena)
+        got: = files.tool_read(root, names[k], 1I64, 5I64, stub.ROOM, arena)
         verdict.check(arena.text().s("reading ").s(names[k]).s(" is refused").take(),
             got.starts_with("refused: a conversation's file"), got)
-    listing: = files.tool_list(root, "", arena)
-    hits: = files.tool_search(root, "paid leave", "", arena)
+    listing: = files.tool_list(root, "", stub.ROOM, arena)
+    hits: = files.tool_search(root, "paid leave", "", stub.ROOM, arena)
     verdict.check("a listing and a search leave them out",
         listing.find_str("Team.").is_none() && listing.find_str("y.Live").is_none() &&
         hits.find_str("Team.").is_none() && hits.find_str("x.ASK").is_none() &&
@@ -231,7 +231,7 @@ fn test_a_search_keeps_only_the_lines_it_found(work: U8[], arena: Arena$@)
     fs.write_tree(root, U8[][]::{ "big/a.txt", "big/b.txt", "big/c.txt", "big/d.txt" },
         U8[][]::{ big, big, big, big }, arena) catch panic("the large files can be written")
     defer own: = Arena(64 * 1024)
-    hits: = files.tool_search(root, "paid leave", "", own)
+    hits: = files.tool_search(root, "paid leave", "", stub.ROOM, own)
     used: = own.get_total_used()
     verdict.check(arena.text().s("4 MiB searched, within 256 KiB kept (\{used / 1024\} KiB)").take(),
         hits.find_str("rules/leave.md:3:").is_some() && used < 256 * 1024, hits)
@@ -263,8 +263,8 @@ fn test_a_search_skips_out_unless_given_it(work: U8[], arena: Arena$@)
     fs.write_tree(root, U8[][]::{ "rules/out/deep.md" },
         U8[][]::{ "paid leave, deep output\n" }, arena)
         catch panic("the nested folder can be written")
-    all: = files.tool_search(root, "paid leave", "", arena)
-    given: = files.tool_search(root, "paid leave", "rules/out", arena)
+    all: = files.tool_search(root, "paid leave", "", stub.ROOM, arena)
+    given: = files.tool_search(root, "paid leave", "rules/out", stub.ROOM, arena)
     verdict.check("a search of the root passes over out/ and rules/out/",
         all.find_str("build output").is_none() && all.find_str("deep output").is_none(), all)
     verdict.check("a search given rules/out reads it",
@@ -273,7 +273,7 @@ fn test_a_search_skips_out_unless_given_it(work: U8[], arena: Arena$@)
 fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds Japanese text as plain bytes")
     root: = stub.folder(work, "japanese", arena)
-    hits: = files.tool_search(root, "有給休暇", "", arena)
+    hits: = files.tool_search(root, "有給休暇", "", stub.ROOM, arena)
     verdict.check("a Japanese word is found with its file and line",
         hits.find_str("規程/休暇.md:3: 第3条").is_some(), hits)
     verdict.check("a Japanese question is answered in Japanese lines",
@@ -283,22 +283,22 @@ fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
 fn test_a_search_matches_words_in_any_order(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds the lines that hold every word, in any order")
     root: = stub.folder(work, "words", arena)
-    hits: = files.tool_search(root, "LEAVE employee new", "", arena)
+    hits: = files.tool_search(root, "LEAVE employee new", "", stub.ROOM, arena)
     verdict.check("words in another order and case find the line that holds them all",
         hits.find_str("rules/leave.md:3: A new employee").is_some() &&
         hits.find_str("no line holds every word").is_none(), hits)
-    hits_part: = files.tool_search(root, "employees receive", "", arena)
+    hits_part: = files.tool_search(root, "employees receive", "", stub.ROOM, arena)
     verdict.check("a word is found inside a longer one only one way: employees is not in employee",
         hits_part.find_str("no line holds every word").is_some() &&
         hits_part.find_str("rules/leave.md:3:").is_some(), hits_part)
-    ranked: = files.tool_search(root, "unused days unicorn", "", arena)
+    ranked: = files.tool_search(root, "unused days unicorn", "", stub.ROOM, arena)
     verdict.check("with no line holding every word, the line holding the most comes first",
         ranked.find_str("these lines hold the most of them)\nrules/leave.md:6: Unused days")
         .is_some(), ranked)
-    none: = files.tool_search(root, "unicorn zebra", "", arena)
+    none: = files.tool_search(root, "unicorn zebra", "", stub.ROOM, arena)
     verdict.check("a search for words no line holds says so",
         none.equals("(no line holds any of those words)"), none)
-    ja: = files.tool_search(root, "有給休暇　付与", "", arena)
+    ja: = files.tool_search(root, "有給休暇　付与", "", stub.ROOM, arena)
     verdict.check("Japanese words split at an ideographic space are found together",
         ja.find_str("規程/休暇.md:3: 第3条").is_some() &&
         ja.find_str("no line holds every word").is_none(), ja)
@@ -430,9 +430,7 @@ fn test_the_round_cap_stops_the_loop(work: U8[], arena: Arena$@)
         ended.find_str("tool rounds").is_some(), ended)
     stub.release(s)
 
-fn test_the_request_cap_stops_before_the_servers_context(work: U8[], arena: Arena$@)
-    verdict.start("[ksagent] a conversation that outgrows the launcher's context stops at the cap")
-    root: = stub.folder(work, "request-cap", arena)
+priv fn wide_file(root: U8[], arena: Arena$@) //< `big/wide.txt`: 1000 lines of about 100 bytes
     wide: = arena.text()
     for k in Range.asc(1000)
         wide
@@ -440,15 +438,100 @@ fn test_the_request_cap_stops_before_the_servers_context(work: U8[], arena: Aren
                 \{k\}\n")
     fs.write_tree(root, U8[][]::{ "big/wide.txt" }, U8[][]::{ wide.take() }, arena)
         catch panic("the large file can be written")
+
+fn test_full_reads_stop_at_the_room_the_conversation_has(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] reads of 32 KiB each stop at the room the request has left")
+    root: = stub.folder(work, "request-room", arena)
+    wide_file(root, arena)
     call: = stub.call("read", "{\"path\": \"big/wide.txt\", \"from_line\": 1, \"to_line\": 400}",
         arena)
     read: = stub.one_call(call, arena)
-    s: = stub.start(U8[][]::{ read, read, read, read }, arena)
+    quote: = "a line of about a hundred bytes"
+    cites: = stub.list_of(U8[][]::{ stub.source("big/wide.txt", 1, 1, quote, arena) }, arena)
+    done: = stub.one_call(stub.answer_call("Lines of filler.", cites, arena), arena)
+    s: = stub.start(U8[][]::{ read, read, read, done }, arena)
+    a: = ask(s, root, "What fills the file?", arena)
+    $largest: Sz = 0
+    for i in Range.asc(s.bodies.len)
+        largest =
+            s.bodies.get(i).len if s.bodies.get(i).len > largest else largest
+    verdict.check(arena.text().s("every request fits the cap (largest \{largest\} bytes)").take(),
+        s.bodies.len == 4 && largest <= agent.MAX_REQUEST_BYTES, "")
+    verdict.check("the answer after three reads goes through, checked",
+        a.sources.len == 1 && answer.ended_line(a@, arena).len == 0, a.text)
+    verdict.check("the second read stops where the room ends, and says to answer",
+        s.bodies.get(2).find_str("the conversation has room for no more lines").is_some(),
+        s.bodies.get(2).sub_from(s.bodies.get(2).len - 600))
+    verdict.check("the third read is refused, and the model is told to answer",
+        s.bodies.get(3).find_str("no room left for what a tool gives back").is_some(), "")
+    stub.release(s)
+
+fn test_the_request_cap_still_stops_a_long_reply(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a conversation that outgrows the launcher's context stops at the cap")
+    root: = stub.folder(work, "request-cap", arena)
+    long: = arena.text()
+    for k in Range.asc(800)
+        long
+            .s("plain text of about a hundred bytes, which the loop sends back with a reminder: \
+                \{k\} ")
+    s: = stub.start(U8[][]::{ stub.text_reply(long.take(), arena) }, arena)
     a: = ask(s, root, "What fills the file?", arena)
     ended: = answer.ended_line(a@, arena)
-    verdict.check("the request after one read of 32 KiB goes out; the one after two stops at the \
-        cap", s.bodies.len == 2 && ended.find_str("cap of 64 KiB").is_some(), ended)
+    verdict.check("the request after a reply of 80 KB stops at the cap",
+        s.bodies.len == 1 && ended.find_str("cap of 64 KiB").is_some(), ended)
     stub.release(s)
+
+fn test_a_line_longer_than_one_read_comes_cut(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a line longer than one read comes cut at a character's start")
+    root: = stub.folder(work, "long-line", arena)
+    long: = arena.text().c('a')
+    for _k in Range.asc(20000)
+        long.s("é")
+    fs.write_tree(root, U8[][]::{ "long.txt" },
+        U8[][]::{ long.s("\nsecond line\n").take() }, arena)
+        catch panic("the long line can be written")
+    got: = files.tool_read(root, "long.txt", 1I64, 2I64, stub.ROOM, arena)
+    said: =
+        "(line 1 is cut after 32767 of its 40001 bytes: one read returns at most 32 KiB; read on \
+            from line 2)"
+    verdict.check("the line comes cut at the read's cap, which the read names, then where to go on",
+        got.find_str("\n1: aéé").is_some() && got.find_str(said).is_some() &&
+        files.text_problem(got).len == 0 && got.find_str("second line").is_none(),
+        got.sub_from(got.len - 160))
+    small: = files.tool_read(root, "long.txt", 1I64, 2I64, 4096, arena)
+    verdict.check("with little room left, it comes cut at the room, which the read names",
+        small.find_str("the conversation has room for no more; read on from line 2)").is_some() &&
+        files.sent_len(small) <= 4096 && files.text_problem(small).len == 0, small)
+    after: = files.tool_read(root, "long.txt", 2I64, 2I64, stub.ROOM, arena)
+    verdict.check("the next line reads as usual",
+        after.find_str("2: second line").is_some(), after)
+
+fn test_a_folder_given_with_a_slash_keeps_whole_paths(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a folder given with a slash at its end keeps each hit's whole path")
+    made: = stub.folder(work, "slash", arena)
+    fs.write_tree(made, U8[][]::{ "a.md" },
+        U8[][]::{ "paid leave, straight under the folder\n" }, arena)
+        catch panic("the file can be written")
+    root: = arena.text().s(made).c('/').take()
+    hits: = files.tool_search(root, "paid leave", "", stub.ROOM, arena)
+    verdict.check("a hit in a folder, and one straight under the root, keep their first character",
+        hits.starts_with("a.md:1: paid leave") &&
+        hits.find_str("\nrules/leave.md:3:").is_some(), hits)
+    given: = files.tool_search(root, "paid leave", "rules/", stub.ROOM, arena)
+    verdict.check("a path given with a slash keeps it too",
+        given.find_str("rules/leave.md:3:").is_some(), given)
+
+fn test_a_model_url_that_ends_in_v1_is_refused(arena: Arena$@)
+    verdict.start("[ksagent] a model URL that ends in /v1 is refused, saying how to write it")
+    for url in U8[][]::{ "http://127.0.0.1:8081/v1", "http://127.0.0.1:8081/v1/" }
+        _s: = model.parse_url(url, "test", 1000, arena) catch why
+            verdict.check(arena.text().s("refused: ").s(url).take(),
+                why.find_str("http://127.0.0.1:8081").is_some(), why)
+            continue
+        verdict.check(arena.text().s("refused: ").s(url).take(), false, "it was taken")
+    proxy: = model.parse_url("http://127.0.0.1:8081/llm", "test", 1000, arena) catch
+        panic("a base path that is not /v1 is taken")
+    verdict.check("a base path that is not /v1 is kept", proxy.base.equals("/llm"), proxy.base)
 
 fn test_a_request_refused_twice_names_the_context(work: U8[], arena: Arena$@)
     verdict

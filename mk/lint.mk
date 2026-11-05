@@ -93,7 +93,7 @@ LINT_TARGETS := $(lint_named) \
 # **Only ksai holds a `#cfg(blas)` branch** (`make test-conventions` holds it there), so its tests
 # are linted a second time with the branch on. The item's name ends in `-blas`, as the file is
 # also a plain item of `LINT_TARGETS`.
-LINT_TARGETS_BLAS := ksai/tests/main.kspl
+LINT_TARGETS_BLAS := lib/ksai/tests/main.kspl
 
 # $(call lint_clean,<log>,<what was linted>,<ksplc's exit status>): passes where ksplc ended with 0
 # and the log's whole tally line counts nothing down to Hint, and otherwise shows it and fails.

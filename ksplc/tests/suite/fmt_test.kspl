@@ -132,6 +132,32 @@ priv fn case_unknown_style_key(arena: Arena$@) //<
     verdict.check(name, good.exited_with(0),
         arena.text().s("the correct 'IndentWidth' was rejected\n\{good.out\}").take())
 
+priv fn case_bad_style_value(arena: Arena$@) //<
+    //< Checks that a `--style` value its key does not take is refused, naming the value
+    //< Read as no number, `IndentWidth: two` formatted with the default and reported success.
+    name: = "a `--style` value its key does not take is rejected"
+    path: = write_src("style_value", "a.kspl", "fn f(): I32\n    return 1\n", arena)
+    if path.len == 0
+        verdict.check(name, false, "cannot place the material")
+        return
+    exe: = harness.ksplc_exe()
+    bads: U8[][_] = ::{ "IndentWidth: two", "IndentWidth: 0", "IndentWidth: -3", "ColumnLimit: 2x",
+        "AllowShortFunctions: True", "AllowShortBlocks:" }
+    for style in bads
+        bad: = harness
+            .run(U8[][]::{ exe, "fmt", arena.text().s("--style=\{style\}").take(), path })
+        value: = style.sub_from(style.find_char(':').unwrap_or(0) + 1).trim_spaces()
+        if bad.exited_with(0) ||
+            bad.out.find_str(arena.text().s("'\{value\}'").take()).is_none()
+            verdict.check(name, false,
+                arena.text().s("'\{style\}' passed, or its value is not named\n\{bad.out\}").take())
+            return
+    // Caution: Good values must pass. If every value were rejected, the loop above would pass too.
+    good: = harness
+        .run(U8[][]::{ exe, "fmt", "--style=IndentWidth: 2, AllowShortBlocks: false", path })
+    verdict.check(name, good.exited_with(0),
+        arena.text().s("good values were rejected\n\{good.out\}").take())
+
 priv fn case_syntax_error_as_written(arena: Arena$@) //<
     //< A syntax error `ksplc fmt` meets shows the line as written, as a compile shows it
     //< Caution: **The formatter reads the indentation notation through the conversion to braces**,
@@ -258,6 +284,7 @@ fn main(): I32
         fmt_material.SRC_BARE_LINE_IN, fmt_material.SRC_BARE_LINE_OUT, arena,
         "--style=AllowShortFunctions: true, AllowShortBlocks: true")
     case_unknown_style_key(arena)
+    case_bad_style_value(arena)
     case_syntax_error_as_written(arena)
     fmt_cache.run(arena)
     return harness.finish()

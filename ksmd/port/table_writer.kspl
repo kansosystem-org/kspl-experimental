@@ -2,15 +2,18 @@
 //< `make ksmd-functions` writes it; `make debug-ksmd` checks it first, so a signature changed
 //< without the table fails there, not in a formula. The same run writes the list of functions in
 //< the editing page's reference (`ksmd/docs/SPEC-editing-page.md`), so a person reads every
-//< function a formula can call. Run from `ksmd/`:
+//< function a formula can call. It refuses a function whose doc comments leave out what a person
+//< reads of it (`glue.undocumented`). Run from `ksmd/`:
 //<
 //<     ksplc run port/table_writer.kspl <ksplc> write|check <work folder>
 import "ksmd/calc/glue"
+import "ksmd/calc/help" { FORMS, Help, call_form }
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
+import "std/str" { Arena_text }
 import "std/str"
 import "std/subproc"
 import "std/sys"
@@ -25,6 +28,8 @@ priv const TABLE: U8[] = "calc/functions_table.kspl" //< the table, from `ksmd/`
 priv const WAIT_MS: I32 = 120000 //< how long `ksplc doc` may take
 priv const REFERENCE_NAME: U8[] = "SPEC-editing-page.md" //< the reference, in `docs/` from `ksmd/`
 priv const HEADING: U8[] = "### Functions by name" //< the heading the written list stands under
+priv const FORMS_HEADING: U8[] = "### Functions that decide what they calculate" //<
+    //< the heading the list of `FORMS` stands under
 
 fn main(): I32
     defer arena: = Arena(4 * 1024 * 1024)
@@ -47,7 +52,17 @@ fn main(): I32
     rows: = io.read_file(tsv, arena) catch
         io.err().s("table_writer: ksplc doc wrote no \{tsv\}\n")
         return 1
-    fns: = glue.functions_of(rows, arena) catch why
+    $fns: = glue.functions_of(rows, arena) catch why
+        io.err().s("table_writer: \{SOURCE\}: \{why\}\n")
+        return 1
+    code: =
+        io.read_file(arena.text().s(DOC_TARGET).s(".kspl").take(), arena) catch
+        io.err().s("table_writer: cannot read \{SOURCE\}\n")
+        return 1
+    glue.grouped(fns@, code, arena) catch why
+        io.err().s("table_writer: \{SOURCE\}: \{why\}\n")
+        return 1
+    if why: = glue.undocumented(fns@, arena)
         io.err().s("table_writer: \{SOURCE\}: \{why\}\n")
         return 1
     // **The table is written as `ksplc fmt` lays it out**, so the tree's format check passes it.
@@ -68,8 +83,15 @@ fn main(): I32
     reference: = io.read_file(reference_path, arena) catch
         io.err().s("table_writer: cannot read \{reference_path\}\n")
         return 1
-    listed: = with_list(reference, fns@, arena) catch
+    $helps: = List<|Help|>(arena)
+    for i in Range.asc(fns.len)
+        f: = fns.get(i)
+        helps.push(glue.help_of(f@, arena))
+    $listed: = with_list(reference, HEADING, BY_NAME, helps.slice(), arena) catch
         io.err().s("table_writer: \{reference_path\} holds no heading \"\{HEADING\}\"\n")
+        return 1
+    listed = with_list(listed, FORMS_HEADING, OF_FORMS, Help[]::FORMS, arena) catch
+        io.err().s("table_writer: \{reference_path\} holds no heading \"\{FORMS_HEADING\}\"\n")
         return 1
     if a.get(2).equals("write")
         io.write_file(TABLE, source) catch
@@ -90,50 +112,44 @@ fn main(): I32
         .take(), reference.equals(listed), "run `make ksmd-functions`")
     return verdict.finish()
 
-priv fn with_list(text: U8[], fns: List<|glue.Function|>@, arena: Arena$@): U8[]? //<
-    //< The reference with the list of functions put in place of what stands under its heading,
-    //< up to the next heading; none where the heading is missing
-    marker: = arena.text().s("\n").s(HEADING).s("\n").take()
+priv const BY_NAME: U8[] =
+    "**This list is written from the functions' own signatures and doc comments** (`make \
+        ksmd-functions`). An argument in brackets can be left out, and `…` takes any number of \
+        them." //< what the list of ordinary functions says first
+priv const OF_FORMS: U8[] =
+    "**These functions choose which arguments are calculated**, so the calculator reads them \
+        itself. Their list is written from `ksmd/calc/help.kspl`." //<
+            //< what the list of `FORMS` says first
+
+priv fn with_list(text: U8[], heading: U8[], intro: U8[], helps: Help[], arena: Arena$@): U8[]? //<
+    //< The reference with the list of these functions put in place of what stands under the
+    //< heading, up to the next heading; none where the heading is missing
+    marker: = arena.text().s("\n").s(heading).s("\n").take()
     at: = text.find_str(marker) catch
         return .none
     from: = at + marker.len
     rest: = text.sub_from(from)
     to: = from + 1 + rest.find_str("\n#").unwrap_or(rest.len - 1)
     b: = arena.text()
-    b.s(text.sub(0, from))
-    b
-        .s("\n**This list is written from the functions' own signatures** (`make ksmd-functions`). \
-            An argument in brackets can be left out, and `…` takes any number of them.\n\n")
-    b.s("| Function | What it gives |\n| :-- | :-- |\n")
-    for f in fns
-        b.s("| `").s(f.name).c('(')
-        $first: = true
-        for p in f.params
-            if p.kind == .arena
-                continue
-            if !first
-                b.s(", ")
-            first = false
-            if p.optional
-                b.c('[')
-            b.s(p.name)
-            if p.kind == .rest
-                b.s("…")
-            if p.optional
-                b.c(']')
-        b.s(")` | ")
-        // The record joins a doc comment's lines, its first line closed with a full stop. The
-        // first line is the function's summary, so the list takes it alone.
-        $summary: = f.summary
-        if end: = summary.find_str(". ")
-            summary = summary.sub(0, end)
-        if summary.ends_with(".")
-            summary = summary.sub(0, summary.len - 1)
-        for c in summary
-            if c == '|'
-                b.c('\\')
-            b.c(c)
+    b.s(text.sub(0, from)).s("\n").s(intro).s("\n\n")
+    b.s("| Function | What it gives | For example |\n| :-- | :-- | :-- |\n")
+    for h in helps
+        b.s("| `").s(call_form(h@, arena)).s("` | ")
+        cell(h.summary, b)
+        b.s(" | `")
+        cell(h.example, b)
+        b.s("`")
+        if h.gives.len > 0
+            b.s(" is `")
+            cell(h.gives, b)
+            b.s("`")
         b.s(" |\n")
     b.c('\n')
     b.s(text.sub_from(to))
     return .some(b.take())
+
+priv fn cell(text: U8[], b: Arena_text$@) //< text in a table's cell, its `|` kept from ending it
+    for c in text
+        if c == '|'
+            b.c('\\')
+        b.c(c)

@@ -37,7 +37,7 @@ priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--jinja", "-c", "32768", "--flash-
         //< At 8 bits, 32 numbers take 34 bytes. Qwen3-4B keeps 36 layers × 8 heads × 128 × 2
         //< numbers a token: 76.5 KiB, so 2.4 GiB in all (4.5 GiB at 16 bits). Qwen3.5-9B keeps 8
         //< layers × 4 heads × 256 × 2: 17 KiB, so 0.53 GiB. Its other 24 layers keep a fixed 0.2
-        //< GiB for its 4 slots. `models/README.md` gives the sums.
+        //< GiB for its 4 slots. `data/README.md` gives the sums.
 priv const CHAT_NAMES: U8[][] = U8[][]::{ "chat_server.exe", "chat_server" } //<
     //< The names ksai's chat server is looked for by, beside this program
 const SLOW_TIMEOUT: U8[] = "--timeout=3600" //< what ksagent waits for one reply from chat_server
@@ -47,24 +47,24 @@ priv const ANSWER_WAIT_MS: I32 = 5000 //< how long one question to a server may 
 priv const NOTE_EVERY_S: I64 = 10 //< how often the wait says that it still waits [s]
 priv const TAIL_LINES: Sz = 12 //< how many of a failed server's last lines are shown
 
-struct Known_model //< a model `models/README.md` lists, and where it is downloaded from
-    file: U8[] //< its file name in `models/`, and in the repository it is downloaded from
+struct Known_model //< a model `data/README.md` lists, and where it is downloaded from
+    file: U8[] //< its file name in `data/`, and in the repository it is downloaded from
     size: U8[] //< its size, for the person deciding to download it
     repo: U8[] //< the Hugging Face repository that holds it
-        //< Caution: **Keep the URL as `models/README.md` and the tutorial write it**
+        //< Caution: **Keep the URL as `data/README.md` and the tutorial write it**
         //< (`tell_download`): `tools/tests/chat_launch.mjs` looks for the printed command in both.
 
 priv const FIRST: Known_model = Known_model::{ .file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
     .size = "2.5 GB", .repo = "unsloth/Qwen3-4B-Instruct-2507-GGUF" } //<
-        //< **The default**, the first model `models/README.md` lists
+        //< **The default**, the first model `data/README.md` lists
 priv const SECOND: Known_model = Known_model::{ .file = "Qwen3.5-9B-Q3_K_M.gguf", .size = "4.7 GB",
     .repo = "unsloth/Qwen3.5-9B-GGUF" } //<
-        //< The second model `models/README.md` lists
+        //< The second model `data/README.md` lists
 priv const MODELS: Known_model[] = Known_model[]::{ FIRST, SECOND } //< the models it can name
 
 struct Model_plan //< what the person asked for, and where this program's files are
     url: U8[] //< the address ksagent asks
-    model_file: U8[] //< the file in `models/` to start; empty for `FIRST`
+    model_file: U8[] //< the file in `data/` to start; empty for `FIRST`
     wait_s: I64 //< how long a server can take to load its model [s]
     beside: U8[] //< the folder this program, kssrv and `chat_server` are built into
     tmp: U8[] //< where the log of a server started goes
@@ -215,13 +215,13 @@ priv fn start(plan: Model_plan, at: I32, arena: Arena$@): Model_run? //<
     full: = fs.absolute(plan.beside, arena) catch plan.beside
     tidy: = aim.plain(full, arena)
     root: = aim.parent_of(tidy if tidy.len > 0 else full)
-    model: = fs.join(fs.join(root, "models", arena), file, arena)
+    model: = fs.join(fs.join(root, "data", arena), file, arena)
     if !fs.exists(model) || fs.is_dir(model)
         tell_download(file, root)
         return .none
     port: = arena.text().s("\{at\}").take()
     log: = fs.join(plan.tmp, arena.text().s("model.\{at\}.log").take(), arena)
-    shown: = arena.text().s("models/").s(file).take()
+    shown: = arena.text().s("data/").s(file).take()
     $llama: = List<|U8[]|>(arena)
     llama.push(LLAMA)
     llama.push("-m")
@@ -270,14 +270,14 @@ priv fn chat_beside(beside: U8[], arena: Arena$@): U8[] //< chat_server beside t
 
 priv fn tell_download(file: U8[], root: U8[]) //< says that the model file is missing, and the fix
     if m: = known(file)
-        warn().s("models/\{file\} is not there. Download it (\{m.size\}) in \{root\} with:\n")
+        warn().s("data/\{file\} is not there. Download it (\{m.size\}) in \{root\} with:\n")
         io.err()
-            .s("  curl -L -o models/\{file\} \
+            .s("  curl -L -o data/\{file\} \
                 https://huggingface.co/\{m.repo\}/resolve/main/\{file\}\n")
         return
     warn()
-        .s("models/\{file\} is not there. Put that GGUF file in the folder models in \{root\}, or \
-            leave MODEL out to use \{FIRST.file\}\n")
+        .s("data/\{file\} is not there. Put that GGUF file in the folder data in \{root\}, or leave \
+            MODEL out to use \{FIRST.file\}\n")
 
 priv fn wait_ready(run: Model_run$@, plan: Model_plan, at: I32, arena: Arena$@): Bool //<
     //< Waits until the server answers questions; false, said, where it ended or took too long
@@ -320,4 +320,4 @@ priv fn tell_tail(log: U8[], arena: Arena$@) //< shows a failed server's last li
     if body.find_str("out of memory").is_some()
         warn()
             .s("the model does not fit in memory: close programs that use the graphics card, or use \
-                a smaller model (models/README.md)\n")
+                a smaller model (data/README.md)\n")

@@ -132,8 +132,8 @@ impl Ast_node
 
         switch r.kind_id
         case .k_integer
-            // Caution: eval_constexpr stops at I32, so a large I64 / U64 / Sz literal would be
-            // truncated. An integer literal is emitted from its text, as genc's emit_integer does.
+            // An integer literal is emitted from its text, as genc's emit_integer does: a U64
+            // literal past I64's range does not fold.
             return r.emit_llvm_integer_literal(cg)
         case .k_literal, .k_char, .k_expr_sizeof, .k_expr_offsetof
             return r.emit_llvm_const_int(cg)
@@ -188,8 +188,9 @@ impl Ast_node
         return cg.take_scratch()
     fn emit_llvm_const_int(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< It evaluates an expression as a compile-time constant, such as a character or a sizeof
-        //< It is limited to I32; for a large-digit I64 / U64 literal use emit_llvm_integer_literal.
-        val: = cg.sema.eval_constexpr_quiet(r, 0)
+        //< **The fold keeps I64**: `sizeof(I32[1000000000])` is 4000000000, and a fold narrowed to
+        //< I32 fails on it and gave 0. A large-digit literal goes to emit_llvm_integer_literal.
+        val: = cg.sema.try_eval_constexpr_wide(r).unwrap_or(0)
         cg.clear_scratch().s("\{val\}")
         return cg.take_scratch()
 

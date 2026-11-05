@@ -17,7 +17,7 @@ const [launcherBuilt, work] = process.argv.slice(2);
 const check = (ok, what, detail = "") => verdict.check(ok, what, detail);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const FIRST = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
-const models = path.join(work, "models");
+const models = path.join(work, "data");
 const folder = path.join(work, "folder");
 const withLlama = path.join(work, "path");
 
@@ -103,9 +103,9 @@ async function missingModel() {
   const c = start(asMake(await freePort()));
   await ended(c, 10000);
   const line = (c.seen.split("\n").find((l) => l.trim().startsWith("curl ")) || "").trim();
-  check(c.code === 1 && line.startsWith(`curl -L -o models/${FIRST} https://`),
+  check(c.code === 1 && line.startsWith(`curl -L -o data/${FIRST} https://`),
     "it stops and prints the download command", c.seen);
-  for (const doc of ["models/README.md", "ksagent/docs/TUTORIAL-ask-about-your-files.md"]) {
+  for (const doc of ["data/README.md", "ksagent/docs/TUTORIAL-ask-about-your-files.md"]) {
     const text = fs.existsSync(doc) ? fs.readFileSync(doc, "utf8") : "";
     check(line !== "" && text.includes(line), `${doc} holds the same command`, line);
   }
@@ -117,8 +117,8 @@ async function missingOther() {
   const c = start(asMake(await freePort(), { model: other }));
   await ended(c, 10000);
   const line = (c.seen.split("\n").find((l) => l.trim().startsWith("curl ")) || "").trim();
-  check(c.code === 1 && line.startsWith(`curl -L -o models/${other} https://`) &&
-    fs.readFileSync("models/README.md", "utf8").includes(line), "models/README.md holds the command it prints",
+  check(c.code === 1 && line.startsWith(`curl -L -o data/${other} https://`) &&
+    fs.readFileSync("data/README.md", "utf8").includes(line), "data/README.md holds the command it prints",
     c.seen);
 }
 
@@ -161,7 +161,7 @@ async function startReuseStop() {
   const a = start(["--show", ...asMake(port)]);
   check(await until(() => /ready\. Ask on the page/.test(a.seen), 30000), "the launcher gets ready", a.seen);
   check(/nothing answers at .*so this command starts one/.test(a.seen) &&
-    /starting llama-server on models\/.*\(it is on PATH, and uses the graphics card\)/.test(a.seen) &&
+    /starting llama-server on data\/.*\(it is on PATH, and uses the graphics card\)/.test(a.seen) &&
     /waiting for llama-server to load/.test(a.seen) && /model server: ready at/.test(a.seen),
     "it says it starts llama-server, waits, and is ready", a.seen);
   const argv = JSON.parse(fs.readFileSync(`${file}.argv`, "utf8"));
@@ -215,7 +215,7 @@ async function fallback() {
   standInProgram(path.join(path.dirname(launcher), "chat_server.exe"));
   const c = start(["--show", ...asMake(port)], { PATH: bare.join(":") });
   check(await until(() => /ready\. Ask on the page/.test(c.seen), 30000), "the launcher gets ready", c.seen);
-  check(/starting chat_server on models\/.*since llama-server is not on PATH\. It runs on the CPU only/
+  check(/starting chat_server on data\/.*since llama-server is not on PATH\. It runs on the CPU only/
     .test(c.seen), "it says it uses chat_server, and that it is slow", c.seen);
   const argv = JSON.parse(fs.readFileSync(`${file}.argv`, "utf8"));
   check(argv.join(" ") === `${file} --port=${port}`, "chat_server gets the model and the port", argv.join(" "));

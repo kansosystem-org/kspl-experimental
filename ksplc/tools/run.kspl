@@ -186,18 +186,20 @@ priv fn file_hash(path: U8[]): Hash_hex!io.Io_error //< the file's digest
     return base_cache.hash_hex(data)
 
 priv fn shadowed_now(path: U8[]): Bool //<
-    //< Whether a path found under the given source directory is now hidden by a local copy
+    //< Whether a path found under a package folder elsewhere is now hidden by a local copy
     //< **Comparing contents alone is not enough.** When a copy is placed locally, **the file the
     //< cache names is still there, unchanged**, so the comparison passes. A copy that is removed is
     //< caught by the comparison, since a named file disappears.
-    base: = base_locate.pkg_src_dir()
-    if base.len == 0 || !path.starts_with(base)
-        return false
-    rest: = path.sub_from(base.len)
-    if rest.len == 0 || rest[0] != '/'
-        return false
-    unit: = base_locate.package_of(rest.sub_from(1))
-    return unit.len > 0 && fs.is_dir(unit)
+    for base in U8[][]::{ base_locate.pkg_src_dir(), base_locate.libs_dir() }
+        if base.len == 0 || !path.starts_with(base)
+            continue
+        rest: = path.sub_from(base.len)
+        if rest.len == 0 || rest[0] != '/'
+            continue
+        unit: = base_locate.package_of(rest.sub_from(1))
+        if unit.len > 0 && fs.is_dir(unit)
+            return true
+    return false
 
 priv fn is_absent_mark(digest: U8[]): Bool //< whether a deps line says "looked for, not there"
     for c in digest

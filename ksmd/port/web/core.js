@@ -52,8 +52,12 @@ function ksmdStart(root, bar, status, wasmBytes) {
       return len;
     };
     ks.out = (len) => (len > 0 ? dec.decode(new Uint8Array(mem.buffer, w.ksmd_web_out_ptr(), len)) : "");
+    // A message stands in the status bar until the next action. The bar's other items step aside
+    // for it, and its tooltip holds the whole of a message the bar cuts.
     ks.say = (text) => {
       status.textContent = text;
+      status.title = text;
+      status.parentElement.classList.toggle("saying", text !== "");
     };
     // Whether pasted text is longer than a source can hold, after saying so. It is checked before
     // it goes in, so a paste never asks for more memory than the editor has.
@@ -161,9 +165,10 @@ function ksmdStart(root, bar, status, wasmBytes) {
       return !!el && el.classList.contains("table");
     };
     // Leaves the table for the text: the caret shows again at the model's selection.
+    // Caution: **Focus the document without a scroll.** A focused document jumps to its top.
     ks.leaveTable = () => {
       ks.setPlace("text");
-      ks.root.focus();
+      ks.root.focus({ preventScroll: true });
       if (ks.sel) ks.view.showSelection(ks.sel);
     };
     // The header's height, under which a table's frozen heading and a heading scrolled to stand.
@@ -186,11 +191,18 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdSettings(ks);
     ksmdMerge(ks);
     ksmdNotes(ks);
+    ksmdStatus(ks);
     ksmdFigures(ks);
+    ksmdZoom(ks);
+    ksmdPages(ks);
     ksmdAutosum(ks);
     ksmdRange(ks);
     ksmdCut(ks);
+    ksmdPaste(ks);
     ksmdPoint(ks);
+    ksmdRefs(ks);
+    ksmdSuggest(ks);
+    ksmdCatalog(ks);
     ksmdFilter(ks);
     ksmdInput(ks);
     // The menus and the quick access bar stand before the commands set their ticks.
@@ -365,7 +377,9 @@ function ksmdCommands(ks) {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "F4" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     e.preventDefault();
-    ks.repeat();
+    // In a cell open on a formula, F4 turns the `$` of the reference at the caret instead, as
+    // Excel's does (`point.js`).
+    if (!ks.point.turn(e.target)) ks.repeat();
   }, true);
 
   ks.command = (name) => {
@@ -378,8 +392,8 @@ function ksmdCommands(ks) {
 
   // Paste reads the clipboard through the browser, as Excel for the web does. It hands what it read
   // to the place the focus stands as a paste event, so it acts as Ctrl+V does there. A browser can refuse to read, or lack the means: a cut waiting in the page then
-  // still moves, and anything else asks for Ctrl+V.
-  async function paste() {
+  // still moves, and anything else asks for Ctrl+V. With `values`, it acts as Ctrl+Shift+V does.
+  async function paste(values) {
     const at = document.activeElement && ks.root.contains(document.activeElement) ?
       document.activeElement : ks.root;
     const data = new DataTransfer();
@@ -395,14 +409,15 @@ function ksmdCommands(ks) {
       }
     } catch (_) {
       if (!ks.cut.text()) {
-        ks.say("Press Ctrl+V to paste.");
+        ks.say(values ? "Press Ctrl+Shift+V to paste values." : "Press Ctrl+V to paste.");
         return;
       }
       data.setData("text/plain", ks.cut.text());
     }
     const e = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
+    const send = () => at.dispatchEvent(e);
     // An input takes the text where no handler took the paste, as the browser's own paste puts it.
-    if (at.dispatchEvent(e) && at.matches("input, textarea")) {
+    if ((values ? ks.pasting.asValues(send) : send()) && at.matches("input, textarea")) {
       document.execCommand("insertText", false, data.getData("text/plain"));
     }
   }
@@ -434,7 +449,12 @@ function ksmdCommands(ks) {
     return null;
   }, { direct: true, looks: true });
   ks.handle("paste", () => {
-    paste();
+    paste(false);
+    return null;
+  }, { direct: true });
+  // Paste values puts copied cells' values alone, as Ctrl+Shift+V does (`paste.js`).
+  ks.handle("paste-values", () => {
+    paste(true);
     return null;
   }, { direct: true });
   ks.handle("undo", () => ks.act("ksmd_web_undo"));

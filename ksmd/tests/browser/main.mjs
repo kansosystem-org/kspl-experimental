@@ -4,7 +4,9 @@
 // gives back. The menus, the quick access bar and the table's own tools are
 // `menus.mjs`; the tools over a whole document or a range of cells are `tools.mjs`; a table as a
 // whole and the filter's dates are `tables.mjs`; its column widths and row heights `sizes.mjs`;
-// a diagram `diagrams.mjs`.
+// a diagram `diagrams.mjs`; help while a formula is typed, and its references' colours,
+// `formulas.mjs`; cells copied and pasted with their formulas or as values `pasting.mjs`; the
+// status bar `status.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -23,6 +25,9 @@ import { tables } from "./tables.mjs";
 import { sizes } from "./sizes.mjs";
 import { documents } from "./documents.mjs";
 import { diagrams } from "./diagrams.mjs";
+import { formulaHelp } from "./formulas.mjs";
+import { pasting } from "./pasting.mjs";
+import { statusBar } from "./status.mjs";
 import { SPEC, written } from "../../port/web/reference.mjs";
 
 const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
@@ -301,6 +306,27 @@ const sections = {
     await menu("undo");
     await saves("and undoing that", `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |` +
       `\n| 5 | 3 | =A1*B1 | |\n:::\n`);
+    // A row or column command acts on every line the range spans, as in Excel.
+    const lines = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | =sum(A1:A4) |\n| 2 | |\n| 3 | |\n| 4 | |\n:::\n`;
+    await load(lines);
+    await click('#doc td[data-r="1"][data-c="0"]');
+    await click('#doc td[data-r="2"][data-c="0"]', SHIFT);
+    await menu("row-remove");
+    await saves("Remove row with two rows chosen removes both",
+      `${H}:::table name="t"\n| "a" | "b" |\n| 1 | =sum(A1:A2) |\n| 4 | |\n:::\n`);
+    await menu("undo");
+    await saves("in one step of undo", lines);
+    await click('#doc td[data-r="1"][data-c="1"]');
+    await click('#doc td[data-r="2"][data-c="1"]', SHIFT);
+    await menu("row-above");
+    await saves("Insert row above with two rows chosen inserts two",
+      lines.replace("| 2 | |", "| | |\n| | |\n| 2 | |").replace("A1:A4", "A1:A6"));
+    await load(lines);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await click('#doc td[data-r="0"][data-c="1"]', SHIFT);
+    await menu("column-right");
+    await saves("Insert column right with two columns chosen inserts two after them",
+      lines.replace('| "b" |', '| "b" | "" | "" |').replace(/\| \|\n/g, "| | | |\n").replace("=sum(A1:A4) |", "=sum(A1:A4) | | |"));
   },
 
   // While a person works in a table, the page draws no caret in the text. No empty line then opens
@@ -577,6 +603,10 @@ Object.assign(sections, sizes({ page, js, settle, until, press, click, drag, men
   openCell, doubleClickAt }));
 Object.assign(sections, documents({ js, press, click, menu, load, saves }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
+Object.assign(sections, formulaHelp({ page, js, settle, press, type, click, menu, load, saves }));
+Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
+Object.assign(sections, statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
+  rightClick, openCell, drag }));
 
 try {
   const opened = await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });

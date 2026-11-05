@@ -3,7 +3,9 @@
 //< takes time linear in the text, whatever the pattern.** Every way through the pattern runs side
 //< by side, so no pattern or text can make a search hang. **Going past any limit is refused,
 //< never silently truncated.** The group count, the counted repetition `{m,n}`, the nesting depth
-//< and the compiled program's size each have their own error.
+//< and the compiled program's size each have their own error. **`.`, a class and `\w` match one
+//< byte**, so a character outside ASCII matches only as a whole literal run (`café`). Where one
+//< byte would split it (`[é]`, `é+`), the pattern is refused.
 
 // ==========================================
 // Caution: **Every notation must be either "carried" or "refused".** A notation in neither is
@@ -27,6 +29,8 @@ pub enum Regex_error //< why a pattern could not be compiled
     too_large //< the compiled program would hold more than `max_program_size` states
     too_many_groups //< there are more capturing groups than `max_groups`
     unsupported_backreference //< `\1`…`\9`, which refer to a captured string inside the pattern
+    unsupported_non_ascii //< a character outside ASCII inside `[...]`, or right before a quantifier
+        //< Each tests one byte: `[é]` would match any byte of `é`, and `é+` repeat only its last.
 
 priv const MAX_NESTING_DEPTH: Sz = 500 //<
     //< The deepest group nesting compile() accepts
@@ -182,6 +186,11 @@ impl Compiler
                         return n
                     continue
                 lo = r.escaped_char()
+            // Caution: **Refuse a byte outside ASCII**, escaped or not. The class tests one byte,
+            // so `[é]` would match any byte of `é`, and also the first byte of `è`.
+            if lo >= 0x80U8
+                r.fail(.unsupported_non_ascii)
+                return n
             if r.peek() == '-' && r.pos + 1 < r.pat.len && (r.pat.ptr + r.pos + 1)$ != ']'
                 r.advance() // consume the '-'
                 $hi: = r.advance()
@@ -193,6 +202,9 @@ impl Compiler
                         r.fail(.invalid_range)
                         return n
                     hi = r.escaped_char()
+                if hi >= 0x80U8
+                    r.fail(.unsupported_non_ascii)
+                    return n
                 // Caution: **Refuse a reversed range.** If allowed, it becomes a class that matches
                 // nothing, with no error.
                 if hi < lo
@@ -285,6 +297,11 @@ impl Compiler
             return atom
         if atom.kind != .group && atom.kind != .lit && atom.kind != .any && atom.kind != .class
             r.fail(.dangling_quantifier)
+            return atom
+        // Caution: **Refuse a quantifier after a character outside ASCII.** It would repeat only
+        // the character's last byte, so `é+` would match `é` and not `éé`. `(é)+` repeats it whole.
+        if atom.kind == .lit && atom.ch >= 0x80U8
+            r.fail(.unsupported_non_ascii)
             return atom
         // The four notations become one pair of minimum and maximum counts (`-1` means no upper
         // bound).
@@ -732,9 +749,9 @@ impl Regex
         return .some(r.found(vm@))
 
     pub fn find_all( //< every matched span; the search resumes past each one
-        //< Front to back; **even an empty match advances one byte**, and no match is an empty list.
-        //< Why it is eager, and its time, are in "Every match comes back in a `List`, with no lazy
-        //< iterator" in `std/docs/DESIGN-core.md`.
+        //< Front to back; **an empty match advances one character** (one byte in text not UTF-8).
+        //< No match is an empty list. Why it is eager, and its time: "Every match comes back in a
+        //< `List`, with no lazy iterator" in `std/docs/DESIGN-core.md`.
         //< Caution: **Over a text built for the pattern, it takes time quadratic in the text.** Do
         //< not run it with both the pattern and the text from outside; cap the text, or call
         //< `find`.
@@ -748,7 +765,10 @@ impl Regex
         for from <= text.len && r.search(text, from, vm@)
             m: = r.found(vm@)
             out.push(m)
-            from = m.end if m.end > m.start else m.start + 1
+            // A step of one byte would put the next start inside a character.
+            from =
+                (m.end if m.end > m.start
+                else m.start + text.utf8_seq_len(m.start).unwrap_or(1))
         return out
 
     pub fn is_match( //< whether anything in the text matches

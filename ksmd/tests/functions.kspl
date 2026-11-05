@@ -1,12 +1,19 @@
 //< The function table's writer: which signatures a formula can call, and why the others cannot
+//< And what a person reads of each function: every one has it, and each example gives what it says.
+import "ksmd/base/dates" { write_date }
 import "ksmd/calc/args" { Raw_arg, Raw_args }
 import "ksmd/calc/calc" + { Own_functions, Results }
+import "ksmd/calc/functions_table" as table
 import "ksmd/calc/glue"
+import "ksmd/calc/help" { FORMS, Help }
 import "ksmd/calc/value" { Value, empty, number, text }
 import "ksmd/calc/wire" + { Wire_error }
+import "ksmd/model/format" { show_plain }
 import "ksmd/tests/support" { read }
 import "std/chars" // `find_str`
+import "std/ds" { List }
 import "std/mem" { Arena }
+import "std/str" { Str_builder }
 import "std/str"
 import "std/verdict"
 
@@ -15,6 +22,9 @@ fn run()
     refused()
     asked()
     wired()
+    described()
+    documented()
+    exampled()
 
 priv fn row(sig: U8[], arena: Arena$@): U8[] //< one line of the record `--emit-surface` writes
     open: = sig.find_char('(').unwrap_or(0)
@@ -164,3 +174,84 @@ priv fn wired() //< a call and an answer come back from their bytes as they were
         return
     verdict.check("an answer reads back with its value and whether the arguments fit",
         got.value.number == -2.25 && got.misread, "")
+
+// ==========================================
+// What a person reads of each function
+// ==========================================
+
+priv fn described() //< a doc comment splits into a summary, the detail and the example
+    defer arena: = Arena(64 * 1024)
+    t: = arena.text()
+    t.s("mine\tf\tpub fn f(x: F64, y: F64?): F64\tdoubles it. For example, `f(2)` is `4`. ")
+        .s("Only once.\n")
+    t.s("mine\tf~00.x\tx\tthe number\n")
+    fns: = glue.functions_of(t.take(), arena) catch why
+        verdict.check("a documented function reads", false, why)
+        return
+    f: = fns.get(0)
+    verdict.check("the summary, the detail and the example are read apart",
+        f.summary.equals("doubles it") && f.detail.equals("Only once.") &&
+        f.example.equals("f(2)") && f.gives.equals("4"), f.detail)
+    verdict.check("a parameter's own comment is its meaning",
+        f.params.get(0).meaning.equals("the number"), f.params.get(0).meaning)
+    why: = glue.undocumented(fns@, arena).unwrap_or("")
+    verdict.check("a parameter with no comment of its own is named",
+        why.find_str("y has no").is_some(), why)
+    bare: = glue.functions_of(row("pub fn g(x: F64): F64", arena), arena) catch
+        return
+    said: = glue.undocumented(bare@, arena).unwrap_or("")
+    verdict.check("a function with no example is named",
+        said.find_str("x has no").is_some() || said.find_str("For example").is_some(), said)
+
+priv fn documented() //< every function a formula calls has all a person reads of it
+    defer arena: = Arena(64 * 1024)
+    verdict.check("the table has an entry for every function it calls, in its order",
+        table.HELP.len == table.NAMES.len, "")
+    for i in Range.asc(table.NAMES.len)
+        verdict.check(arena.text().s("the entry of ").s(table.NAMES[i]).s(" is its own").take(),
+            i < table.HELP.len && table.HELP[i].name.equals(table.NAMES[i]), "")
+    for list in Help[][]::{ Help[]::FORMS, Help[]::table.HELP }
+        for h in list
+            $missing: =
+                h.group.len == 0 || h.summary.len == 0 ||
+                !h.example.starts_with(arena.text().s(h.name).c('(').take())
+            for a in h.args
+                missing = missing || a.meaning.len == 0
+            verdict.check(arena.text().s(h.name).s(" has a group, a summary, an example and a ")
+                .s("meaning for each argument").take(), !missing && calc.known(h.name), "")
+
+priv fn exampled() //< each example calculates, and gives what its entry says
+    //< The examples stand in column E of one table, so those that name cells read its columns B to
+    //< D: "Pens" and "Ink" in turn, and numbers.
+    defer arena: = Arena(256 * 1024)
+    $all: = List<|Help|>(arena)
+    all.push_all(Help[]::FORMS)
+    all.push_all(Help[]::table.HELP)
+    t: = arena.text()
+    t.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" | \"e\" |\n")
+    for i in Range.asc(all.len)
+        t.s("| | \"Pens\" | " if i % 2 == 0 else "| | \"Ink\" | ").s("\{i + 1\} | \{2 * i\} | =")
+            .s(all.get(i).example).s(" |\n")
+    t.s(":::\n")
+    doc: = read(t.take(), arena)
+    r: = calc.calculate(doc@, "2026-10-23", arena, null)
+    for i in Range.asc(all.len)
+        h: = all.get(i)
+        v: = r.at(0, i, 4)
+        what: = arena.text().s("the example of ").s(h.name).s(" calculates")
+        if h.gives.len == 0
+            verdict.check(what.take(), v.kind != .error, h.example)
+            continue
+        defer $b: = Str_builder()
+        switch v.kind
+        case .number
+            show_plain(v.number, b@)
+        case .date
+            write_date(I64::v.number, b@)
+        case .text
+            b.s(v.text)
+        case .boolean
+            b.s("true" if v.boolean else "false")
+        default
+            b.s(v.error.mark() if v.kind == .error else "")
+        verdict.check(what.s(" to ").s(h.gives).take(), b.slice().equals(h.gives), b.slice())

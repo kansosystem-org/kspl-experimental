@@ -7,7 +7,6 @@ import "std/ds" as _ds // `contains`
 import "std/mem" { Arena }
 import "std/reflect"
 import "std/str" { Str_builder } // `text` / `split` / `trim_spaces`
-import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 
 struct Config //< the formatting specification
     //< Caution: **Add a field's key and its reading in the same change** (the reason is at
@@ -57,28 +56,26 @@ impl Config
 // Reading `--style` into Config
 // ==========================================
 
-priv fn match_style_key(style_str: U8[], i: Sz, key: U8[]): Sz //<
-    //< Where the value after `key` at position `i` of `style_str` starts, 0 where `key` is absent
-    if !style_str.starts_with(key, i)
-        return 0
-    $j: = i + key.len
-    for j < style_str.len &&
-        ((style_str.ptr + j)$ == ':' || (style_str.ptr + j)$ == ' ')
-        j += 1
-    return j
+priv fn read_style_size(value: U8[]): Sz? //<
+    //< The positive whole number `value` spells, digits alone
+    //< **Every other spelling is refused**: `two`, `0`, `-3` and `2x` read as no number, and the
+    //< default passed as a success.
+    if value.len == 0 || value.len > 9
+        return .none
+    $n: Sz = 0
+    for i in Range.asc(value.len)
+        ch: = (value.ptr + i)$
+        if !ch.is_digit()
+            return .none
+        n = n * 10 + Sz::(ch - '0')
+    return .some(n) if n > 0 else .none
 
-priv fn match_style_size(style_str: U8[], i: Sz, key: U8[], now: Sz): Sz //<
-    //< The size written after `key` at position `i`, or `now` where none is (0 is none)
-    j: = match_style_key(style_str, i, key)
-    if j == 0
-        return now
-    val: = style_str.parse_size(j) catch 0
-    return val if val > 0 else now
-
-priv fn match_style_bool(style_str: U8[], i: Sz, key: U8[], now: Bool): Bool //<
-    //< Whether `true` is written after `key` at position `i`, or `now` where `key` is not there
-    j: = match_style_key(style_str, i, key)
-    return now if j == 0 else style_str.starts_with("true", j)
+priv fn read_style_bool(value: U8[]): Bool? //< `true` or `false` as written, nothing else
+    if value.equals("true")
+        return .some(true)
+    if value.equals("false")
+        return .some(false)
+    return .none
 
 priv const INDENT_WIDTH_KEY: U8[] = "IndentWidth" //<
     //< `--style`'s keys, one per `Config` field, each written here alone
@@ -90,16 +87,18 @@ priv const COLUMN_LIMIT_KEY: U8[] = "ColumnLimit"
 priv const SHORT_BLOCKS_KEY: U8[] = "AllowShortBlocks"
 priv const SHORT_FUNCTIONS_KEY: U8[] = "AllowShortFunctions"
 
-priv fn check_style_keys(style_str: U8[], arena: Arena$@): U8[] //<
-    //< It splits the specification at `,` and checks that each item's key is known
-    //< It returns "" where all are known.
-    //< Caution: **An unknown key must not be silently ignored.** apply_style tries only known keys,
-    //< so `IndentWith: 8` would match nothing and the defaults would come back as a success.
+priv fn check_style_keys(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<
+    //< It splits the specification at `,`, checks each item's key and value, and applies them
+    //< It returns "" where all are good, else the diagnostic for the first bad item.
+    //< Caution: **An unknown key or a bad value must not be silently ignored.** Ignored,
+    //< `IndentWith: 8` or `IndentWidth: two` formats with the default and reports success.
     known: U8[][4] = ::{ INDENT_WIDTH_KEY, COLUMN_LIMIT_KEY, SHORT_BLOCKS_KEY, SHORT_FUNCTIONS_KEY }
     for item in style_str.split(',', arena)
-        key: = item.sub(0, item.find_char(':').unwrap_or(item.len)).trim_spaces()
+        colon: = item.find_char(':').unwrap_or(item.len)
+        key: = item.sub(0, colon).trim_spaces()
         if key.len == 0
             continue
+        value: = item.sub_from(colon + 1).trim_spaces() if colon < item.len else ""
         if !(U8[][]::known).contains(key)
             // Caution: Print the key as it was typed, or with several keys nobody knows which to
             // fix.
@@ -109,22 +108,40 @@ priv fn check_style_keys(style_str: U8[], arena: Arena$@): U8[] //<
                 msg.s(", " if k > 0 else "").s(known[k])
             msg.s(")\n")
             return msg.take()
+        $good: = true
+        if key.equals(INDENT_WIDTH_KEY) || key.equals(COLUMN_LIMIT_KEY)
+            switch read_style_size(value)
+            case .some(n)
+                if key.equals(INDENT_WIDTH_KEY)
+                    config.indent_width = n
+                else
+                    config.column_limit = n
+            case .none
+                good = false
+        else
+            switch read_style_bool(value)
+            case .some(b)
+                if key.equals(SHORT_BLOCKS_KEY)
+                    config.allow_short_blocks = b
+                else
+                    config.allow_short_functions = b
+            case .none
+                good = false
+        if !good
+            want: =
+                ("a positive whole number"
+                if key.equals(INDENT_WIDTH_KEY) || key.equals(COLUMN_LIMIT_KEY)
+                else "'true' or 'false'")
+            return arena.text()
+                .s("--style: '\{value\}' is not a value of '\{key\}'. It takes \{want\}\n").take()
     return ""
 
 fn apply_style(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<
     //< It applies the `--style` specification to Config
     //< **A non-empty return value is the diagnostic to print for the user** (the caller does not
-    //< build it; it sits with the accepted keys).
-    bad: = check_style_keys(style_str, arena)
-    if bad.len > 0
-        return bad
-    for i in Range.asc(style_str.len)
-        config.indent_width =
-            match_style_size(style_str, i, INDENT_WIDTH_KEY, config.indent_width)
-        config.column_limit =
-            match_style_size(style_str, i, COLUMN_LIMIT_KEY, config.column_limit)
-        config.allow_short_blocks =
-            match_style_bool(style_str, i, SHORT_BLOCKS_KEY, config.allow_short_blocks)
-        config.allow_short_functions =
-            match_style_bool(style_str, i, SHORT_FUNCTIONS_KEY, config.allow_short_functions)
-    return ""
+    //< build it; it sits with the accepted keys). Config is left as it was then.
+    $read: = config$
+    bad: = check_style_keys(style_str, read@, arena)
+    if bad.len == 0
+        config$ = read
+    return bad

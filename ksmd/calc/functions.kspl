@@ -1,12 +1,12 @@
 //< The functions a formula calls by name, written as any KSPL function is
 //< **Each one is an ordinary function.** Its parameters' types say what it takes, and the table
 //< generated from this file (`ksmd/calc/functions_table.kspl`) converts a formula's arguments
-//< to them by the rules in `ksmd/calc/args.kspl`. A function a person writes is read the same
-//< way. **`if`, `sum_if`, `count_if`, `average_if`, `lookup` and `today` are not here**: the
-//< first five choose which arguments are calculated, and `today` reads the date the document
-//< opened. They stay in `ksmd/calc/calc.kspl`.
-//< Caution: **Change a signature here, then run `make ksmd-functions`**, which writes the table
-//< again; `make debug-ksmd` fails while the two differ.
+//< to them by the rules in `ksmd/calc/args.kspl`. **What a person reads of each comes from here
+//< too**: its summary, each parameter's `//<`, a sentence "For example, `f(…)` is `…`.", and the
+//< divider above it, which names its group. `if`, `sum_if`, `today` and the other forms stay in
+//< `ksmd/calc/calc.kspl`, and their entries in `ksmd/calc/help.kspl`.
+//< Caution: **Change a signature or its comments here, then run `make ksmd-functions`**, which
+//< writes the table again; `make debug-ksmd` fails while the two differ.
 import "ksmd/base/dates" { day_of, write_date, write_date_with, ymd_of }
 import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
 import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value, number }
@@ -26,13 +26,18 @@ const MAX_ROUND: I64 = 15 //< the most places `round` takes, either way
     //< An F64 holds at most 17 significant digits, so a carry past them cannot overflow.
 
 // ==========================================
-// Folding numbers: sum, min, max, count, average
+// Numbers
 // ==========================================
-// Each takes its numbers in order and stops at the first that it cannot take: an error, or a
-// date where dates have no sum. A range alone gives its numbers, dates and errors, and leaves out
-// empty cells, text and `true`/`false` (`Value[]` in `ksmd/calc/args.kspl`).
+// `sum`, `min`, `max`, `count` and `average` fold their numbers. Each takes its numbers in order
+// and stops at the first that it cannot take: an error, or a date where dates have no sum. A range
+// alone gives its numbers, dates and errors, and leaves out empty cells, text and `true`/`false`
+// (`Value[]` in `ksmd/calc/args.kspl`).
 
-pub fn sum(xs: Value[]): F64!Calc_error //< the numbers added; of nothing, 0
+pub fn sum( //<
+    //< the numbers added; of nothing, 0
+    //< For example, `sum(1, 2, 3.5)` is `6.5`.
+    xs: Value[], //< the numbers, cells or ranges to add
+): F64!Calc_error
     $total: = 0.0
     for v in xs
         if v.kind == .error
@@ -43,7 +48,11 @@ pub fn sum(xs: Value[]): F64!Calc_error //< the numbers added; of nothing, 0
         total += v.number
     return total
 
-pub fn count(xs: Value[]): F64!Calc_error //< how many numbers and dates there are
+pub fn count( //<
+    //< how many numbers and dates there are
+    //< For example, `count(4, 8, 15)` is `3`.
+    xs: Value[], //< the values, cells or ranges to count
+): F64!Calc_error
     $n: Sz = 0
     for v in xs
         if v.kind == .error
@@ -51,16 +60,29 @@ pub fn count(xs: Value[]): F64!Calc_error //< how many numbers and dates there a
         n += 1
     return F64::n
 
-pub fn average(xs: Value[]): F64!Calc_error //< the numbers' mean; of nothing, `#EMPTY!`
+pub fn average( //<
+    //< the numbers' mean
+    //< Of no numbers it is `#EMPTY!`.
+    //< For example, `average(2, 4, 9)` is `5`.
+    xs: Value[], //< the numbers, cells or ranges to average
+): F64!Calc_error
     s: = sum(xs)!
     if xs.len == 0
         throw .no_numbers
     return s / F64::xs.len
 
-pub fn min(xs: Value[]): Value!Calc_error //< the least; of dates alone, the earliest date
+pub fn min( //<
+    //< the least; of dates alone, the earliest date
+    //< For example, `min(3, -1, 7)` is `-1`.
+    xs: Value[], //< the numbers or dates, cells or ranges to compare
+): Value!Calc_error
     return extreme(xs, true)!
 
-pub fn max(xs: Value[]): Value!Calc_error //< the greatest; of dates alone, the latest date
+pub fn max( //<
+    //< the greatest; of dates alone, the latest date
+    //< For example, `max(3, -1, 7)` is `7`.
+    xs: Value[], //< the numbers or dates, cells or ranges to compare
+): Value!Calc_error
     return extreme(xs, false)!
 
 priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
@@ -84,10 +106,14 @@ priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
         return date_value(I64::best)
     return number(best)
 
-pub fn mod(x: F64, y: F64): F64!Calc_error //<
-    //< what is left of `x` after dividing by `y`, with the sign of `y`: `mod(-1, 72)` is 71
+pub fn mod( //<
+    //< what is left of `x` after dividing by `y`, with the sign of `y`
     //< So a count of minutes wraps round a clock. A division by zero is `#DIV/0!`, and a quotient
     //< past 2^53, whose remainder an F64 no longer holds, is `#NUM!`.
+    //< For example, `mod(-1, 72)` is `71`.
+    x: F64, //< the number to divide
+    y: F64, //< the number to divide by
+): F64!Calc_error
     if y == 0.0
         throw .division
     q: = x / y
@@ -98,45 +124,78 @@ pub fn mod(x: F64, y: F64): F64!Calc_error //<
         times -= 1.0
     return x - y * times
 
-pub fn power(x: F64, y: F64): F64!Calc_error //< `x` to the power `y`; no real answer is `#NUM!`
+pub fn power( //<
+    //< `x` to the power `y`
+    //< Where no real number is the answer, it is `#NUM!`.
+    //< For example, `power(2, 10)` is `1024`.
+    x: F64, //< the base
+    y: F64, //< the power to raise it to
+): F64!Calc_error
     return math.pow(x, y)
 
 // ==========================================
-// Text ("Text" in `ksmd/docs/DESIGN-ksmd.md`)
+// Text
 // ==========================================
-// A position counts characters from 1, not bytes, so Japanese text cuts where it reads. A count
-// or a position below its least is `#NUM!`; one past the end takes what there is.
+// Why they work as they do is "Text" in `ksmd/docs/DESIGN-ksmd.md`. A position counts characters
+// from 1, not bytes, so Japanese text cuts where it reads. A count or a position below its least is
+// `#NUM!`; one past the end takes what there is.
 
-pub fn len(t: U8[]): I64 //< how many characters the text holds
+pub fn len( //<
+    //< how many characters the text holds
+    //< For example, `len("pencil")` is `6`.
+    t: U8[], //< the text
+): I64
     return t.count_codepoints()
 
-pub fn left(t: U8[], count: I64): U8[]!Calc_error //< the first `count` characters
+pub fn left( //<
+    //< the first `count` characters
+    //< For example, `left("pencil", 3)` is `pen`.
+    t: U8[], //< the text
+    count: I64, //< how many characters to take
+): U8[]!Calc_error
     return t.sub(0, offset_of(t, count, 0)!)
 
-pub fn right(t: U8[], count: I64): U8[]!Calc_error //< the last `count` characters
+pub fn right( //<
+    //< the last `count` characters
+    //< For example, `right("pencil", 4)` is `ncil`.
+    t: U8[], //< the text
+    count: I64, //< how many characters to take
+): U8[]!Calc_error
     if count < 0
         throw .not_finite
     skip: = I64::t.count_codepoints() - count
     return t.sub_from(offset_of(t, skip if skip > 0 else 0, 0)!)
 
-pub fn mid(t: U8[], start: I64, count: I64): U8[]!Calc_error //<
+pub fn mid( //<
     //< `count` characters from the `start`th, the first being 1
+    //< For example, `mid("pencil", 2, 3)` is `enc`.
+    t: U8[], //< the text
+    start: I64, //< the first character to take, counted from 1
+    count: I64, //< how many characters to take
+): U8[]!Calc_error
     if start < 1
         throw .not_finite
     from: = offset_of(t, start - 1, 0)!
     return t.sub(from, offset_of(t, count, from)! - from)
 
-pub fn find(part: U8[], t: U8[]): I64 //<
+pub fn find( //<
     //< where `part` first stands in `t`, in characters from 1; 0 where it does not
     //< Case counts: `find("a", "A")` is 0.
+    //< For example, `find("c", "pencil")` is `4`.
+    part: U8[], //< the text to look for
+    t: U8[], //< the text to look in
+): I64
     if at: = t.find_str(part)
         return I64::t.sub(0, at).count_codepoints() + 1
     return 0
 
-pub fn value(v: Value): F64!Calc_error //<
+pub fn value( //<
     //< the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is
     //< **The one way from text to a number**, since arithmetic never reads text. Any other text,
     //< `true`/`false` or a date is `#VALUE!`; an empty cell is 0.
+    //< For example, `value(" -3 ")` is `-3`.
+    v: Value, //< the text, or a cell that holds it
+): F64!Calc_error
     switch v.kind
     case .number
         return v.number
@@ -148,10 +207,16 @@ pub fn value(v: Value): F64!Calc_error //<
     default
         throw .wrong_kind
 
-pub fn substitute(t: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]!Calc_error //<
+pub fn substitute( //<
     //< `t` with every `old` in it replaced by `new`, from the left and without overlaps
     //< Case counts, as in `find`; an empty `old` leaves `t` as it is. A result past `MAX_TEXT`
     //< bytes is `#NUM!`, measured before the text is made.
+    //< For example, `substitute("a-b-c", "-", "/")` is `a/b/c`.
+    t: U8[], //< the text
+    old: U8[], //< the text to replace
+    new: U8[], //< the text to put in its place
+    arena: Arena$@,
+): U8[]!Calc_error
     if old.len == 0
         return t
     $length: = t.len
@@ -178,12 +243,17 @@ pub fn substitute(t: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]!Calc_erro
             at += 1
     return out.take()
 
-pub fn text(v: Value, format: U8[], arena: Arena$@): U8[]!Calc_error //<
+pub fn text( //<
     //< a number or a date written as text, as a column's number format would show it
-    //< `text(E2, "date:yyyy/mm/dd")` is `"2026/06/18"`, and `text(0.25, "percent:0")` is `"25%"`.
+    //< `text(E2, "date:yyyy/mm/dd")` is `"2026/06/18"` where `E2` holds that date.
     //< **The one way from a number to text**, so `&` can join it. An empty `format` writes the
     //< number as the page shows it without a format: `text(0.1 + 0.2, "")` is `"0.3"`. Text stays
     //< as it is; a format that does not read, or `true`/`false`, is `#VALUE!`.
+    //< For example, `text(0.25, "percent:0")` is `25%`.
+    v: Value, //< the number or the date
+    format: U8[], //< a number format, such as `"percent:0"` or `"date:yyyy/mm/dd"`
+    arena: Arena$@,
+): U8[]!Calc_error
     f: = format_of(format) catch
         throw .wrong_kind
     defer $out: = Str_builder()
@@ -216,23 +286,35 @@ priv fn offset_of(t: U8[], count: I64, from: Sz): Sz!Calc_error //<
     return at
 
 // ==========================================
-// Rounding and dates
+// Rounding
 // ==========================================
 
-pub fn round(x: F64, places: I64): F64!Calc_error //<
-    //< `x` rounded to `places` decimal places, half away from zero; -2 rounds to hundreds
-    //< It rounds the digits a person reads, as a number format does. `places` goes from -15 to 15.
+pub fn round( //<
+    //< `x` rounded to `places` decimal places, half away from zero
+    //< It rounds the digits a person reads, as a number format does.
+    //< For example, `round(1234.5, -2)` is `1200`.
+    x: F64, //< the number to round
+    places: I64, //< the decimal places to keep, from -15 to 15; -2 rounds to hundreds
+): F64!Calc_error
     if places < -MAX_ROUND || places > MAX_ROUND
         throw .not_finite
     return round_places(x, Sz::places) catch
         throw .not_finite
 
-pub fn round_down(x: F64, places: I64): F64!Calc_error //<
-    //< `x` cut to `places` decimal places, toward zero, as `round` takes its places
+pub fn round_down( //<
+    //< `x` cut to `places` decimal places, toward zero
+    //< For example, `round_down(2.79, 1)` is `2.7`.
+    x: F64, //< the number to round
+    places: I64, //< the decimal places to keep, as `round` takes them
+): F64!Calc_error
     return cut(x, places, false)!
 
-pub fn round_up(x: F64, places: I64): F64!Calc_error //<
-    //< `x` taken to `places` decimal places, away from zero, as `round` takes its places
+pub fn round_up( //<
+    //< `x` taken to `places` decimal places, away from zero
+    //< For example, `round_up(2.21, 1)` is `2.3`.
+    x: F64, //< the number to round
+    places: I64, //< the decimal places to keep, as `round` takes them
+): F64!Calc_error
     return cut(x, places, true)!
 
 priv fn cut(x: F64, places: I64, away: Bool): F64!Calc_error //<
@@ -255,19 +337,41 @@ priv fn cut(x: F64, places: I64, away: Bool): F64!Calc_error //<
         kept += 1.0 if near > 0.0 else -1.0
     return kept / scale if places >= 0 else kept * scale
 
-pub fn date(year: I64, month: I64, day: I64): Value!Calc_error //<
-    //< the day the three parts name, in the years 1 to 9999; any other is `#NUM!`
+// ==========================================
+// Dates
+// ==========================================
+
+pub fn date( //<
+    //< the day the three parts name, in the years 1 to 9999
+    //< Any other day, such as the 30th of February, is `#NUM!`.
+    //< For example, `date(2026, 3, 1)` is `2026-03-01`.
+    year: I64, //< the year, from 1 to 9999
+    month: I64, //< the month, from 1 to 12
+    day: I64, //< the day of the month
+): Value!Calc_error
     d: = day_of(year, month, day) catch
         throw .not_finite
     return date_value(d)
 
-pub fn year(d: Value): F64!Calc_error //< a date's year
+pub fn year( //<
+    //< a date's year
+    //< For example, `year(date(2026, 3, 1))` is `2026`.
+    d: Value, //< the date
+): F64!Calc_error
     return F64::ymd_of(day_in(d)!).year
 
-pub fn month(d: Value): F64!Calc_error //< a date's month, 1 to 12
+pub fn month( //<
+    //< a date's month, 1 to 12
+    //< For example, `month(date(2026, 3, 1))` is `3`.
+    d: Value, //< the date
+): F64!Calc_error
     return F64::ymd_of(day_in(d)!).month
 
-pub fn day(d: Value): F64!Calc_error //< a date's day of the month
+pub fn day( //<
+    //< a date's day of the month
+    //< For example, `day(date(2026, 3, 1))` is `1`.
+    d: Value, //< the date
+): F64!Calc_error
     return F64::ymd_of(day_in(d)!).day
 
 priv fn day_in(d: Value): I64!Calc_error //< the day a date names; anything else is `#VALUE!`
@@ -276,30 +380,64 @@ priv fn day_in(d: Value): I64!Calc_error //< the day a date names; anything else
     return I64::d.number
 
 // ==========================================
-// Hexadecimal and binary ("Hexadecimal and binary" in `ksmd/docs/DESIGN-ksmd.md`)
+// Hexadecimal and binary
 // ==========================================
-// The width is in bits, from 1 to 53. Left out, a negative number takes a minus sign; given, it
-// is written and read as its two's complement in that width (`ksmd/calc/bases.kspl`).
+// Why they work as they do is "Hexadecimal and binary" in `ksmd/docs/DESIGN-ksmd.md`. The width is
+// in bits, from 1 to 53. Left out, a negative number takes a minus sign; given, it is written and
+// read as its two's complement in that width (`ksmd/calc/bases.kspl`).
 
-pub fn dec_to_hex(n: I64, width: I64?, arena: Arena$@): U8[]!Calc_error //< `n` in hexadecimal
+pub fn dec_to_hex( //<
+    //< `n` in hexadecimal
+    //< For example, `dec_to_hex(255)` is `FF`.
+    n: I64, //< the whole number
+    width: I64?, //< the width in bits, from 1 to 53; left out, a negative number takes a minus sign
+    arena: Arena$@,
+): U8[]!Calc_error
     return written(n, .hex, width, arena)!
 
-pub fn dec_to_bin(n: I64, width: I64?, arena: Arena$@): U8[]!Calc_error //< `n` in binary
+pub fn dec_to_bin( //<
+    //< `n` in binary
+    //< For example, `dec_to_bin(5)` is `101`.
+    n: I64, //< the whole number
+    width: I64?, //< the width in bits, from 1 to 53; left out, a negative number takes a minus sign
+    arena: Arena$@,
+): U8[]!Calc_error
     return written(n, .binary, width, arena)!
 
-pub fn hex_to_dec(digits: Value, width: I64?, arena: Arena$@): I64!Calc_error //<
-    //< the number they name
+pub fn hex_to_dec( //<
+    //< the number hexadecimal digits name
+    //< For example, `hex_to_dec("FF")` is `255`.
+    digits: Value, //< the hexadecimal digits, such as `"FF"`
+    width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
+    arena: Arena$@,
+): I64!Calc_error
     return read_in(digits, .hex, width, arena)!
 
-pub fn bin_to_dec(digits: Value, width: I64?, arena: Arena$@): I64!Calc_error //<
-    //< the number they name
+pub fn bin_to_dec( //<
+    //< the number binary digits name
+    //< For example, `bin_to_dec("101")` is `5`.
+    digits: Value, //< the binary digits, such as `"101"`
+    width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
+    arena: Arena$@,
+): I64!Calc_error
     return read_in(digits, .binary, width, arena)!
 
-pub fn hex_to_bin(digits: Value, width: I64?, arena: Arena$@): U8[]!Calc_error //<
-    //< the same, in binary
+pub fn hex_to_bin( //<
+    //< hexadecimal digits written in binary
+    //< For example, `hex_to_bin("1F")` is `11111`.
+    digits: Value, //< the hexadecimal digits, such as `"1F"`
+    width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
+    arena: Arena$@,
+): U8[]!Calc_error
     return written(read_in(digits, .hex, width, arena)!, .binary, width, arena)!
 
-pub fn bin_to_hex(digits: Value, width: I64?, arena: Arena$@): U8[]!Calc_error //< the same, in hex
+pub fn bin_to_hex( //<
+    //< binary digits written in hexadecimal
+    //< For example, `bin_to_hex("11111")` is `1F`.
+    digits: Value, //< the binary digits, such as `"11111"`
+    width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
+    arena: Arena$@,
+): U8[]!Calc_error
     return written(read_in(digits, .binary, width, arena)!, .hex, width, arena)!
 
 priv fn written(n: I64, base: Base, width: I64?, arena: Arena$@): U8[]!Calc_error //<

@@ -25,6 +25,17 @@ const MAX_REQUEST_BYTES: Sz = 64 * 1024 //< the cap on one request's bytes
     //< about 3 bytes a token, so 64 KiB is about 22k tokens, and the other 10k hold the reply.
     //< Storing that memory at 8 bits changes its size in bytes, not its length in tokens.
 
+priv const TOOL_RESERVE: Sz = 4 * 1024 //< the bytes of a request no tool's result may take
+    //< **The model's next turn goes out in the next request too**: a few tool calls, or a short
+    //< text the loop answers with a reminder.
+priv const MIN_TOOL_ROOM: Sz = 1024 //< with less room left, a tool call is refused, not run
+    //< A few hundred bytes hold no more than a line or two, which helps the model less than the
+    //< sentence that tells it to answer (`NO_ROOM`).
+
+priv const NO_ROOM: U8[] = //< what a tool call gives back when the conversation has no room left
+    "refused: the conversation has no room left for what a tool gives back. Call answer now with \
+        what you have read."
+
 const SYSTEM_PROMPT: U8[] =
     """
 You answer questions about the files in one folder. You see the folder only through the tools list, search and read.
@@ -140,10 +151,16 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
                 msgs.push(tool_message(b@, c.id, refused))
                 continue
             looked = true
+            // **A tool gets only the room the request has left** (`tool_room`), so no result
+            // pushes the conversation past `MAX_REQUEST_BYTES`. A model told why can still answer.
+            room: = tool_room(b@, job.server, msgs@, tools.val, c.id)
+            if room < MIN_TOOL_ROOM
+                msgs.push(tool_message(b@, c.id, NO_ROOM))
+                continue
             // **A tool works in memory of its own**: only what it gives back stays (`tool_message`
             // copies it), so the files it read do not add up over the question's rounds.
             defer scratch: = Arena(64 * 1024)
-            gave: = run_tool(job.root, c.name, args.val, scratch)
+            gave: = run_tool(job.root, c.name, args.val, room, scratch)
             msgs.push(tool_message(b@, c.id, gave))
     why: = arena.text()
         .s("the model used all \{MAX_ROUNDS\} tool rounds without calling answer. Ask a narrower \
@@ -200,17 +217,30 @@ priv fn opened(job: Ask, b: Json_builder$@, msgs: List<|json.Value|>@, tools: js
         fallback plain
     return x
 
-priv fn run_tool(root: U8[], name: U8[], args: json.Value, arena: Arena$@): U8[] //<
-    //< Runs one of the reading tools, and returns what the model reads back
+priv fn tool_room(b: Json_builder$@, s: model.Server@, msgs: List<|json.Value|>@,
+    tools: json.Value, id: U8[]): Sz //<
+        //< The bytes the result of call `id` may take in the next request (`files.sent_len`)
+        //< What the request already holds, the result's own message and `TOOL_RESERVE` are taken
+        //< from `MAX_REQUEST_BYTES`; 0 where nothing is left.
+    defer $out: = Str_builder()
+    write_request(b, s.model, msgs, tools, s.stream, out@)
+    // The empty message, and the comma that comes before it in the list of messages.
+    tool_message(b, id, "").dump(out@)
+    used: = out.slice().len + 1 + TOOL_RESERVE
+    return MAX_REQUEST_BYTES - used if used < MAX_REQUEST_BYTES else 0
+
+priv fn run_tool(root: U8[], name: U8[], args: json.Value, room: Sz, arena: Arena$@): U8[] //<
+    //< Runs one of the reading tools in `room` bytes of the request, and returns what the model
+    //< reads back
     path: = args.get("path").as_str().unwrap_or("")
     if name.equals("list")
-        return files.tool_list(root, path, arena)
+        return files.tool_list(root, path, room, arena)
     if name.equals("search")
-        return files.tool_search(root, args.get("text").as_str().unwrap_or(""), path, arena)
+        return files.tool_search(root, args.get("text").as_str().unwrap_or(""), path, room, arena)
     if name.equals("read")
         from: = int_arg(args.get("from_line"))
         to: = int_arg(args.get("to_line"))
-        return files.tool_read(root, path, from, to, arena)
+        return files.tool_read(root, path, from, to, room, arena)
     return arena.text().s("refused: there is no tool called ").s(name)
         .s("; the tools are list, search, read and answer").take()
 
@@ -267,11 +297,15 @@ priv fn assistant_message(b: Json_builder$@, reply: model.Reply@): json.Value //
 priv fn request_body(b: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
     tools: json.Value, stream: Bool): U8[] //<
         //< One request's JSON text: the model, the whole conversation, the tools and the stream
+    defer $out: = Str_builder()
+    write_request(b, model_name, msgs, tools, stream, out@)
+    return b.arena.dup_str(out.slice())
+
+priv fn write_request(b: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
+    tools: json.Value, stream: Bool, out: Str_builder$@) //< writes one request's JSON text to `out`
     $all: = b.arr()
     for i in Range.asc(msgs.len)
         all = all.push(msgs.get(i))
     req: = b.obj().set("model", b.str_val(model_name)).set("messages", all.build())
         .set("tools", tools).set("stream", b.bool_val(stream)).build()
-    defer $out: = Str_builder()
-    req.dump(out@)
-    return b.arena.dup_str(out.slice())
+    req.dump(out)

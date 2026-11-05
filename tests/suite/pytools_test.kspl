@@ -29,30 +29,24 @@ priv const SELFTEST_TIMEOUT_MS: I32 = 300000 //< how long one tool's self-test m
 
 priv struct Tool //< one Python tool, and how it is started
     path: U8[] //< the file, from the repository's root
-    module: U8[] //< the name to run with `python3 -m`; empty runs the file itself
-        //< Caution: **Give a module name to a tool that imports across folders**
-        //< (`from TOOLS.ai_assist...`). Run as a file, it fails with `No module named 'tools'`,
-        //< because only the file's own folder enters `sys.path`.
     needs: U8[] //< a module whose absence makes the check a `SKIP`; empty if none
 
-priv const TOOLS: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .module = "", .needs = "" },
-    Tool::{ .path = "tools/ai_assist/export_qwen_tokenizer.py", .module = "", .needs = "" },
-    Tool::{ .path = "tools/ai_assist/lora_finetune_external.py",
-    .module = "tools.ai_assist.lora_finetune_external", .needs = "" },
-    Tool::{ .path = "tools/ai_assist/export_qwen_to_kspl.py",
-    .module = "tools.ai_assist.export_qwen_to_kspl", .needs = "numpy" },
-    Tool::{ .path = "tools/ai_assist/qwen_logit_parity.py", .module = "", .needs = "" },
-    Tool::{ .path = "tools/ai_assist/gen_unicode_class.py", .module = "", .needs = "" },
-    Tool::{ .path = "tools/ai_assist/check_qwen_tokenizer.py", .module = "", .needs = "" },
-    Tool::{ .path = "tools/ai_assist/make_quant_fixtures.py", .module = "", .needs = "numpy" },
-    Tool::{ .path = "tools/ai_assist/gguf_quant_check.py", .module = "", .needs = "numpy" },
-    Tool::{ .path = "tools/ai_assist/make_qwen_fixtures.py", .module = "", .needs = "numpy" },
-    Tool::{ .path = "tools/ai_assist/make_qwen35_fixtures.py", .module = "", .needs = "numpy" },
-    Tool::{ .path = "tools/ai_assist/qwen_gguf_check.py", .module = "", .needs = "numpy" },
-    Tool::{ .path = "ksagent/tests/make_office_fixtures.py", .module = "", .needs = "" } }
+priv const TOOLS: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .needs = "" },
+    Tool::{ .path = "lib/ksai/tools/export_qwen_tokenizer.py", .needs = "" },
+    Tool::{ .path = "lib/ksai/examples/code_complete/lora_finetune_external.py", .needs = "" },
+    Tool::{ .path = "lib/ksai/tools/export_qwen_to_kspl.py", .needs = "numpy" },
+    Tool::{ .path = "lib/ksai/tools/qwen_logit_parity.py", .needs = "" },
+    Tool::{ .path = "lib/ksai/tools/gen_unicode_class.py", .needs = "" },
+    Tool::{ .path = "lib/ksai/tools/check_qwen_tokenizer.py", .needs = "" },
+    Tool::{ .path = "lib/ksai/tools/make_quant_fixtures.py", .needs = "numpy" },
+    Tool::{ .path = "lib/ksai/tools/gguf_quant_check.py", .needs = "numpy" },
+    Tool::{ .path = "lib/ksai/tools/make_qwen_fixtures.py", .needs = "numpy" },
+    Tool::{ .path = "lib/ksai/tools/make_qwen35_fixtures.py", .needs = "numpy" },
+    Tool::{ .path = "lib/ksai/tools/qwen_gguf_check.py", .needs = "numpy" },
+    Tool::{ .path = "ksagent/tests/make_office_fixtures.py", .needs = "" } }
 
-priv const LIBRARIES: U8[][_] = ::{ "tools/ai_assist/safetensors_io.py" } //<
-    //< The Python files under `TOOLS/` that are no tool: modules the tools import, run by none
+priv const LIBRARIES: U8[][_] = ::{ "lib/ksai/tools/safetensors_io.py" } //<
+    //< The Python files under the tools' folders that are no tool: modules the tools import
     //< Each is exercised through the tools that import it.
 
 priv fn importable(name: U8[]): Bool //< whether `python3` can import the module `name`
@@ -81,11 +75,12 @@ priv fn check_fires() //< output with no self-test's line is told from output wi
     verdict.check("output in which no self-test ran is told apart",
         !ran_one(NOT_RUN) && ran_one(MARK_OK), NOT_RUN)
 
-priv fn check_listed() //< that every Python file under `TOOLS/` is a tool here or a library
+priv fn check_listed() //< that every Python file of the tools and examples is run here or a library
     //< **A tool left off the list is never run**, and goes on passing while it rots.
     arena: = ksplc_harness.arena()
     $missing: = List<|U8[]|>(arena)
-    found: = harness.tracked_matching(U8[][]::{ "tools/*.py" })
+    found: = harness
+        .tracked_matching(U8[][]::{ "tools/*.py", "lib/*/tools/*.py", "lib/*/examples/*.py" })
     for f in found
         $listed: = false
         for lib in LIBRARIES
@@ -94,8 +89,9 @@ priv fn check_listed() //< that every Python file under `TOOLS/` is a tool here 
             listed = listed || TOOLS[i].path.equals(f)
         if !listed
             missing.push(f)
-    verdict.check_list("every Python file under tools/ is a tool run here or a library", found.len,
-        "files", missing@, "add it to `tools` (with a self-test run by no argument) or `libraries`")
+    verdict.check_list("every Python file of the tools and the examples is a tool run here or a \
+        library", found.len, "files", missing@,
+        "add it to `tools` (with a self-test run by no argument) or `libraries`")
 
 priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
     arena: = ksplc_harness.arena()
@@ -104,9 +100,7 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
         verdict.skip_check(name,
             arena.text().s(t.needs).s(" is absent (put it in this environment and it runs)").take())
         return
-    argv: =
-        (U8[][]::{ PYTHON, t.path } if t.module.len == 0
-        else U8[][]::{ PYTHON, "-m", t.module })
+    argv: = U8[][]::{ PYTHON, t.path }
     r: = ksplc_harness.run_capped(argv, harness.root(), SELFTEST_TIMEOUT_MS)
     if !r.exited_with(0)
         verdict.check(name, false,

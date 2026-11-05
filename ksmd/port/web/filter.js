@@ -7,8 +7,10 @@
 // a formula counts every row, shown or not. Each column holds one condition, and a row shows when
 // it meets every column's. In Read-only a filter is the viewer's alone, and the file keeps its own.
 // A row the table did not hold before shows whatever the filter says, so a row just inserted or
-// pasted can be typed in, as in Excel. It shows until the filter is chosen again, changes, or the
-// document opens again; then the filter applies to it as to every row.
+// pasted can be typed in, as in Excel. A row whose values change stays as it was, shown or hidden,
+// so a value typed or cleared does not take its row out of sight. Each stays so until the filter
+// is chosen again, changes, or the document opens again; then the filter applies to it as to
+// every row.
 // Typing in the search box narrows the list shown and never unticks a value. Values differing only
 // in case are one value, since the matching ignores case. The row being edited stays in sight until
 // the edit is taken.
@@ -25,9 +27,11 @@ function ksmdFilter(ks) {
   // { values: Set of lower-case texts }, { out: Set of them } or { op, arg }. They stand over the
   // file's own.
   const viewed = new Map();
-  // By the table's place in the model: { filter, ids, fresh }. `filter` is the table's conditions
-  // as last applied, `ids` the identities of its rows then, and `fresh` those of the rows added
-  // since the filter last changed, which show whatever it says.
+  // By the table's place in the model: { filter, values, shown, kept }. `filter` is the table's
+  // conditions as last applied. `values` holds each row's values then, by its identity, as JSON,
+  // and `shown` whether the filter showed it. `kept` holds the rows that stay as they were since
+  // the filter last changed, each with whether it shows: a row added shows, and a row whose values
+  // changed keeps what the filter said before.
   const seen = new Map();
   // A value in an entry: `%`, `,` and `|` written as escapes, since they separate the entries.
   const enc = (t) => t.replace(/%/g, "%25").replace(/,/g, "%2C").replace(/\|/g, "%7C");
@@ -106,16 +110,18 @@ function ksmdFilter(ks) {
     const conds = condsOf(wrap);
     const rows = Array.from(wrap.querySelector("tbody").rows);
     const block = ks.view.blocks().indexOf(wrap);
-    const kept = ks.table.editing();
-    const fresh = freshRows(wrap, conds);
+    const open = ks.table.editing();
+    const now = track(wrap, conds);
     let shown = 0;
     rows.forEach((tr, r) => {
+      const id = wrap.rowIds[r];
       let ok = true;
       if (conds) for (const [c, cond] of conds) if (!meets(cond, wrap.values[r][c])) ok = false;
-      if (fresh.has(wrap.rowIds[r])) ok = true;
+      if (now.kept.has(id)) ok = now.kept.get(id);
+      now.shown.set(id, ok);
       // A hidden group's rows stay hidden whatever the filter shows.
       if (wrap.folded && wrap.folded[r]) ok = false;
-      if (kept && kept.block === block && kept.row === r) ok = true;
+      if (open && open.block === block && open.row === r) ok = true;
       tr.hidden = !ok;
       if (ok) shown += 1;
     });
@@ -125,6 +131,8 @@ function ksmdFilter(ks) {
     // Merged columns compare the rows that show now.
     ks.merge.paint(wrap);
     let note = wrap.querySelector(".filter-note");
+    // The status bar shows the same count while a cell of this table is chosen.
+    wrap.filterShown = conds ? { shown, all: rows.length } : null;
     if (!conds) {
       if (note) note.remove();
       return;
@@ -142,24 +150,36 @@ function ksmdFilter(ks) {
     note.appendChild(all);
   }
 
-  // The identities of the rows a table holds that it did not hold when its filter last changed. A
-  // table seen for the first time since the document opened has none.
-  // A table shown from an included file takes no edit here, so none of its rows is new.
-  function freshRows(wrap, conds) {
-    if (wrap.included) return new Set();
+  // What `seen` holds for a table now, `shown` still to fill: the rows it holds that it did not
+  // hold when its filter last changed are kept in sight, and those whose values changed since are
+  // kept as they were. A table seen for the first time since the document opened keeps none.
+  // A table shown from an included file takes no edit here, so it keeps none either.
+  function track(wrap, conds) {
     const filter = conds ? Array.from(conds, ([c, cond]) => `${c}=${entryOf(cond)}`).join(",") : "";
-    const ids = new Set(wrap.rowIds);
+    const values = new Map();
+    const now = { filter, values, shown: new Map(), kept: new Map() };
+    if (wrap.included) return now;
+    // A table with no filter keeps no values: no row of it hides, and a filter set later starts
+    // afresh.
+    wrap.rowIds.forEach((id, r) => values.set(id, conds ? JSON.stringify(wrap.values[r]) : ""));
     const was = seen.get(wrap.u);
-    const fresh = was && was.filter === filter ? was.fresh : new Set();
-    if (was) for (const id of ids) if (!was.ids.has(id)) fresh.add(id);
-    seen.set(wrap.u, { filter, ids, fresh });
-    return fresh;
+    const same = was && was.filter === filter;
+    if (same) now.kept = was.kept;
+    if (was) {
+      for (const [id, text] of values) {
+        if (!was.values.has(id)) now.kept.set(id, true);
+        else if (same && !now.kept.has(id) && was.values.get(id) !== text) now.kept.set(id, was.shown.get(id) !== false);
+      }
+    }
+    seen.set(wrap.u, now);
+    return now;
   }
 
-  // Choosing a filter applies it to every row, the new ones too, as Excel's Reapply does.
+  // Choosing a filter applies it to every row, those kept as they were too, as Excel's Reapply
+  // does.
   function reapply(wrap) {
     const was = seen.get(wrap.u);
-    if (was) was.fresh = new Set();
+    if (was) was.kept = new Map();
   }
 
   // Sets one column's condition, or none: in the file as one step, or in Read-only for the viewer.

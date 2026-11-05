@@ -31,21 +31,25 @@ priv const MAX_SHOWN: Sz = 20 //< the cap on how many are listed in the report
 // `ksos` points at `ksdb` for its append-only record.
 // ==========================================
 priv const LAYER_FROM: U8[][_] = ::{ "docs", "root", "ksplc", "std", "ksai", "kspeg", "ksos",
-    "kssrv", "ksdb", "ksbind", "ksmd", "ksagent", "tests", "tools" }
+    "kssrv", "ksdb", "kstls", "ksmd", "ksagent", "tests", "tools" }
 
 // Caution: **A leaf's row must be "everything upward".** What the table says to a leaf is "upward
 // only", and it does not sort the destinations ("Reference direction between documents" in
 // `docs/SPEC-documents.md`).
 // `make test-conventions` matches only the implementations' directions against each other, so it
 // does not catch this.
-priv const LAYER_TO: U8[][_] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd \
+priv const LAYER_TO: U8[][_] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb kstls ksmd \
     ksagent tests tools",
-    "root docs ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd ksagent tests tools",
+    "root docs ksplc std ksai kspeg ksos kssrv ksdb kstls ksmd ksagent tests tools",
     "ksplc docs std kspeg root", "std docs root", "ksai docs std root", "kspeg docs std root",
-    "ksos docs std ksai ksdb root", "kssrv docs std ksai ksbind root", "ksdb docs std root",
-    "ksbind docs std root", "ksmd docs std root", "ksagent docs std root",
-    "tests docs ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd ksagent tools root",
-    "tools docs ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd ksagent root" }
+    "ksos docs std ksai ksdb root", "kssrv docs std ksai kstls root", "ksdb docs std root",
+    "kstls docs std root", "ksmd docs std root", "ksagent docs std root",
+    "tests docs ksplc std ksai kspeg ksos kssrv ksdb kstls ksmd ksagent tools root",
+    "tools docs ksplc std ksai kspeg ksos kssrv ksdb kstls ksmd ksagent root" }
+
+priv const LIB_DIR: U8[] = "lib" //< the folder that holds the libraries, one package each
+    //< A path under it is in the group of its second step: `lib/ksai/tensor.kspl` is `ksai`'s,
+    //< as `import "ksai/tensor"` is.
 
 priv const SPEC_MAY_REACH_UP: U8[][_] = ::{ "docs", "root" } //<
     //< The groups whose specifications another specification may point at
@@ -103,7 +107,10 @@ priv const REF_NAMES: U8[][_] = ::{ "import", "embed" }
 
 priv fn group_of(rel: U8[]): U8[]
     if at: = rel.find_char('/')
-        top: = rel.sub(0, at)
+        $top: = rel.sub(0, at)
+        if top.equals(LIB_DIR)
+            rest: = rel.sub_from(at + 1)
+            top = rest.sub(0, rest.find_char('/').unwrap_or(rest.len))
         // Caution: **Do not hard-code the count.** A shorter count leaves the last rows unmatched,
         // `group_of` returns `root` (which may point anywhere), and **their references silently
         // skip the direction check**.
@@ -118,12 +125,12 @@ priv fn unlisted_packages(arena: Arena$@): Finding //<
     //< references would pass every direction check in silence.
     $f: = new_finding(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*/ksplc.cfg" })
-        if at: = rel.find_char('/')
-            if !rel.sub_from(at + 1).equals("ksplc.cfg")
-                continue
-            f.seen += 1
-            if group_of(rel).equals("root")
-                f.bad.push(rel.sub(0, at))
+        top: = rel.sub(0, rel.len - "/ksplc.cfg".len)
+        if top.find_char('/').is_some() && !sys.get_dir_name(top).equals(LIB_DIR)
+            continue
+        f.seen += 1
+        if group_of(rel).equals("root")
+            f.bad.push(top)
     return f
 
 priv fn may_refer(from: U8[], to: U8[], arena: Arena$@): Bool //< whether from may refer to to
@@ -170,6 +177,9 @@ priv fn doc_dirs(arena: Arena$@): U8[][] //<
     for d in LAYER_FROM
         if !d.equals("root")
             out.push(d)
+        lib: = arena.text().s("\{LIB_DIR\}/\{d\}").take()
+        if fs.is_dir(fs.join(harness.root(), lib, arena))
+            out.push(lib)
     return out.slice()
 
 priv fn doc_bares(arena: Arena$@): U8[][] //<

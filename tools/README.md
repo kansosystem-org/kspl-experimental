@@ -32,9 +32,8 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 | `opener.kspl` / `opener_aim.kspl` | What the two openers share: finding or starting the local server, handing the URL to a browser, and listing and stopping servers. `opener_aim.kspl` holds the rules a test checks alone: what each opener opens (`App`), the paths, the URL, the workspace and its port. |
 | `kspl_lldb.py` | The LLDB pretty printer: it shows slices, `Result`s and structs in readable form while debugging. |
 | **Folders** | |
-| `ai_assist/` | The coding assistant's data, evaluation and training pipeline, with its own tests ([its guide](ai_assist/README.md)). |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
-| `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tour page. `repo_test.kspl` covers the file statistics and the CI's sets. `ksmd_aim_test.kspl` covers the rules of ksmd's opener. `make_explain_test.kspl` holds `make explain`'s answers to `make -pn` and `make -n`, on real targets and a fixture of its own. `all.kspl` runs them and `ai_assist/tests/`; `main.kspl` gives them a `main` for `make debug-tools`. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
+| `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tour page. `repo_test.kspl` covers the file statistics and the CI's sets. `ksmd_aim_test.kspl` covers the rules of ksmd's opener. `make_explain_test.kspl` holds `make explain`'s answers to `make -pn` and `make -n`, on real targets and a fixture of its own. `all.kspl` runs them; `main.kspl` gives them a `main` for `make debug-tools`. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
 | `docs/` | The design ("Further reading" below). |
 
 ## Further reading
@@ -43,7 +42,5 @@ Every document here is for whoever changes Kanso's own tools.
 
 | Document | What it holds |
 | :-- | :-- |
-| [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) | Why the tools are built the way they are: the API record, `make explain`, the coding assistant, the desktop opener, the chat page's opener. |
-| The "tools" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left of the coding assistant. |
-| [`tools/ai_assist/README.md`](ai_assist/README.md) | The coding assistant's files, and how to run its pipeline. |
+| [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) | Why the tools are built the way they are: the API record, `make explain`, the desktop opener, the chat page's opener. |
 | [`../docs/DESIGN-principles.md`](../docs/DESIGN-principles.md) | The Development Principles, and why a leaf (a folder such as `tools/` that only points upward at the packages) points only upward. |

@@ -709,7 +709,7 @@ A body that can match empty is wrapped in a step that opens a round and one that
 
 **Only `compile` can fail.** Every refusal (a malformed pattern, a limit) is `compile`'s, so no match is an answer, not a failure. `find` gives none, `find_all` an empty list, and `is_match` `false` ("Absent or failed: one rule" below). With a no-match variant in `Regex_error`, every caller of `find` would name compile errors a search never gives.
 
-**The function, not the caller, steps one byte past a match of length zero**, as Python's `re.finditer` does: `a*` on "baa" gives (0,0) (1,3) (3,3). Left to the caller, a spin in place would be written every time.
+**The function, not the caller, steps one character past a match of length zero**: `a*` on "baa" gives (0,0) (1,3) (3,3). Left to the caller, a spin in place would be written every time. **The step is a whole UTF-8 character**, so `x*` on "éa" gives (0,0) (2,2) (3,3), and no position falls inside `é`. Where the bytes do not form a character, the step is one byte.
 
 **The positions are indices into the original string.** The search moves its start (`search`'s `from`) rather than cutting the string, which would leave the groups' offsets for the caller to add back unnoticed. `make debug`'s `test_regex_find_all` reads the second entry's group from the original string.
 
@@ -755,7 +755,7 @@ A pattern with more than 9 capture groups is refused with `too_many_groups`. A c
 
 | Pattern | Result |
 | :-- | :-- |
-| `.` | Any character except `\n` |
+| `.` | Any one byte except `\n` (one byte, not one character: see below) |
 | `[\s\S]` | Any character, `\n` included |
 | `a{3}`, `a{3,}`, `a{3,5}` | Exactly 3, at least 3, from 3 to 5 |
 | `a{3` | Refused: `invalid_repeat` |
@@ -772,6 +772,25 @@ A pattern with more than 9 capture groups is refused with `too_many_groups`. A c
 **A `{` not in a count's shape is refused** (`invalid_repeat`), since swallowed, `a{3` would silently match the characters `a{3`. `}` alone is a character, as Python's `re` and PCRE read it.
 
 **A malformed range is refused too** (`invalid_range`). The reversed `[z-a]` would build a class that matches nothing, with no error. A `-` beside a set (`[\d-z]`) reads as neither a range nor a character.
+
+### `.` and a class match one byte
+
+**The search reads one byte at a time, and `.`, a class, `\w`, `\d`, `\s` and `\b` each test one byte.** A character outside ASCII takes two to four bytes in UTF-8. So it matches only as a whole run of literal bytes: `café` finds "café".
+
+| Pattern | Result |
+| :-- | :-- |
+| `café`, `(é)+` | Matches the character whole |
+| `[é]`, `[^αβ]`, `[a-é]` | Refused: `unsupported_non_ascii` |
+| `é+`, `é*`, `é?`, `é{2}` | Refused: `unsupported_non_ascii` |
+| `.` against "é" | Matches its first byte only, so `^.$` does not match "é" |
+| `.*`, `[^,]*` | Cover a character outside ASCII whole, as they read every byte of it |
+| `\w`, `\b` | Count only ASCII letters, digits and `_` as word characters |
+
+**Why a class or quantifier is refused**: it would split the character with no error. `[é]` would match any one byte of `é`, and so the first byte of `è` too. `é+` would repeat only the last byte of `é`, so it would match `é` and not `éé`. A group repeats the whole character: `(é)+`.
+
+**Why `.` is not refused**: `.*` and `.+` read every byte, so they cover a character whole, and they are the common use. One `.` against a character outside ASCII matches a part of it; a `.` between two literals (`caf.\b`) then finds nothing. **A search over text outside ASCII writes the character itself.**
+
+**Matching a character as one unit would need a class of code points**, not a table of 256 bytes, and steps that read a whole character. That is a larger change, left until a program needs it.
 
 ## Failures and the log
 

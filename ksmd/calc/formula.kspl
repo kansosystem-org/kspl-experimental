@@ -185,12 +185,12 @@ fn has_attachable(doc: Document@, home: Sz, t: Table@, cell: Cell): Bool //<
                 return true
     return false
 
-priv struct Found //< a reference that attaches, and its piece
+struct Found //< a reference that attaches, and its piece
     token: Token
     piece: Piece
 
-priv fn attachable(doc: Document@, home: Sz, text: U8[], from: Sz): Found? //<
-    //< The next reference from `from` that names a cell in this source
+fn attachable(doc: Document@, home: Sz, text: U8[], from: Sz): Found? //<
+    //< The next reference from `from` that names a cell in this source, as `bind` attaches it
     //< A reference right after a number stays text: the formula is wrong, and a moved column
     //< would join the two into one number (`1A1` into `1E1`).
     $after_number: = false
@@ -237,6 +237,102 @@ fn write_formula(doc: Document@, t: Table@, cell: Cell, at: Positions@, rows: Sz
             write_reference(doc, p, at, rows, columns, out)
         case .columns
             write_columns(doc, p, at, columns, out)
+
+fn shift_formula(doc: Document@, home: Sz, text: U8[], rows: Sz, columns: Sz, out: Str_builder$@) //<
+    //< Writes a formula's text, without its `=`, as a copy `rows` down and `columns` right writes
+    //< it into table `home`, each reference shifted as `moved` shifts it
+    //< A paste of cells copied in ksmd calls it: the text may come from another document. A
+    //< reference without a table's name names a cell of `home`. A reference shifted outside its
+    //< table becomes `#REF!`. One that names no table of this source stays as written, as `bind`
+    //< keeps it.
+    $kept: Sz = 0
+    $at: Sz = 0
+    $after_number: = false
+    for
+        tok: = token_at(text, at)
+        if tok.kind == .end
+            break
+        if tok.kind == .reference && !(after_number && tok.start == at)
+            if u: = table_of(doc, home, tok)
+                out.s(text.sub(kept, tok.start - kept))
+                write_shifted(text, tok, doc.tables[u]@, rows, columns, out)
+                kept = tok.end
+        after_number = tok.kind == .number
+        at = tok.end
+    out.s(text.sub_from(kept))
+
+priv fn table_of(doc: Document@, home: Sz, tok: Token): Sz? //< the table a reference names
+    if tok.table.len == 0
+        return .some(home)
+    return find_written(doc, tok.table)
+
+priv fn write_shifted(text: U8[], tok: Token, t: Table@, rows: Sz, columns: Sz,
+    out: Str_builder$@) //<
+        //< One reference token, shifted, its table's name as written; `#REF!` where it leaves `t`
+    $a: = tok.from
+    $b: = tok.to
+    // Whole columns hold every row, so only their columns shift.
+    height: = 1 if tok.whole else t.rows.len
+    a.fixed_row = a.fixed_row || tok.whole
+    b.fixed_row = b.fixed_row || tok.whole
+    a = moved(a, rows, columns, height, t.columns.len)
+    b = moved(b, rows, columns, height, t.columns.len)
+    if a.row < 0 || b.row < 0
+        out.s(BROKEN)
+        return
+    write_token(text, tok, a, b, out)
+
+priv fn write_token(text: U8[], tok: Token, a: Address, b: Address, out: Str_builder$@) //<
+    //< A reference token with new corners: its table's name as written, then its addresses in the
+    //< order written, a second only where the text has one
+    if tok.table.len > 0
+        out.s(tok.table).c('.')
+    if tok.whole
+        write_letters(a, out)
+    else
+        write_address(a, out)
+    // `map.D` and `map.D:D` both name one column, so the text tells whether a second stands.
+    addresses: = tok.start + (tok.table.len + 1 if tok.table.len > 0 else 0)
+    if text.sub(addresses, tok.end - addresses).find_char(':').is_none()
+        return
+    out.c(':')
+    if tok.whole
+        write_letters(b, out)
+    else
+        write_address(b, out)
+
+fn cycle_fixed(text: U8[], from: Sz, to: Sz, out: Str_builder$@): Sz //<
+    //< Writes a formula's text, without its `=`, with `$` turned to its next form in each reference
+    //< from byte `from` to byte `to`, as F4 turns it in a spreadsheet's cell. It gives where the
+    //< last reference turned ends in `out`, or -1 where none turned.
+    //< `A1` becomes `$A$1`, then `A$1`, then `$A1`, then `A1` again. Whole columns turn between
+    //< `D` and `$D`. A range's corners both take the form that follows its first corner's. With
+    //< `from` equal to `to`, the reference the caret stands in or just after turns.
+    $kept: Sz = 0
+    $at: Sz = 0
+    $last: Sz = -1
+    for
+        tok: = token_at(text, at)
+        if tok.kind == .end
+            break
+        at = tok.end
+        touches: =
+            (tok.start < to && tok.end > from) ||
+            (from == to && tok.start <= from && tok.end >= from)
+        if tok.kind != .reference || !touches
+            continue
+        $a: = tok.from
+        a.fixed_row = !tok.whole && a.fixed_column == a.fixed_row
+        a.fixed_column = !tok.from.fixed_column
+        $b: = tok.to
+        b.fixed_row = a.fixed_row
+        b.fixed_column = a.fixed_column
+        out.s(text.sub(kept, tok.start - kept))
+        write_token(text, tok, a, b, out)
+        kept = tok.end
+        last = out.slice().len
+    out.s(text.sub_from(kept))
+    return last
 
 priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, columns: Sz,
     out: Str_builder$@) //<
@@ -342,25 +438,33 @@ impl Positions
 
     fn column_place(at: Self@, u: Sz, c: Corner, columns: Sz): Address //<
         //< Where a corner's column stands, shifted unless it has `$`; column -1 outside the table
-        $a: = Address::{ .row = 0, .column = at.of(u, c.column), .fixed_row = false,
-            .fixed_column = c.fixed_column }
-        if !c.fixed_column
-            a.column += columns
-        if a.column < 0 || a.column >= at.columns[u]
+        $a: =
+            moved(Address::{ .row = 0, .column = at.of(u, c.column), .fixed_row = true,
+            .fixed_column = c.fixed_column }, 0, columns, 1, at.columns[u])
+        if a.row < 0
             a.column = -1
+        a.fixed_row = false
         return a
 
     fn place(at: Self@, u: Sz, c: Corner, rows: Sz, columns: Sz): Address //<
         //< Where a corner stands, shifted on each axis without `$`; row -1 outside the table
-        $a: = Address::{ .row = at.of(u, c.row), .column = at.of(u, c.column),
-            .fixed_row = c.fixed_row, .fixed_column = c.fixed_column }
-        if !c.fixed_row
-            a.row += rows
-        if !c.fixed_column
-            a.column += columns
-        if a.row < 0 || a.row >= at.rows[u] || a.column < 0 || a.column >= at.columns[u]
-            a.row = -1
-        return a
+        return moved(Address::{ .row = at.of(u, c.row), .column = at.of(u, c.column),
+            .fixed_row = c.fixed_row, .fixed_column = c.fixed_column }, rows, columns,
+            at.rows[u], at.columns[u])
+
+fn moved($a: Address, rows: Sz, columns: Sz, height: Sz, width: Sz): Address //<
+    //< An address as a copy `rows` down and `columns` right writes it: each axis without `$`
+    //< shifts, and one with `$` stays. Row -1 where it falls outside a table of `height` rows and
+    //< `width` columns.
+    //< Caution: **Shift a reference only here.** A fill, a copy and a paste of a formula then
+    //< agree on which part moves.
+    if !a.fixed_row
+        a.row += rows
+    if !a.fixed_column
+        a.column += columns
+    if a.row < 0 || a.row >= height || a.column < 0 || a.column >= width
+        a.row = -1
+    return a
 
 priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
     //< The piece of a reference that names a cell in this source, or none

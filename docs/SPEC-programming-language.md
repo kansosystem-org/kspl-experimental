@@ -281,7 +281,7 @@ import "std/io"; fn main() { $n: = 0; for i in Range.asc(5) { if i % 2 == 0 { n 
 
 * **The line's last statement owns the line's end and a deeper line below it.** In `n: = 0; for i in r` with the loop's body on the lines below, the body is the `for`'s.
 * **A C-style loop header's `;` belongs to its `for`** until the loop's block has closed on the line, also on a line the header continues onto.
-* **A block written on one line ends its statement with its `}`**, so no `;` is needed after it (`for i in r { f(i) } g()`). **A `;` right after such a `}` is a compile error with no code.** A block that is part of a value does not end the statement, and its `;` stays: `x: = f() catch { 0 }; g(x)`.
+* **A block written on one line ends its statement with its `}`**, so no `;` is needed after it (`for i in r { f(i) } g()`). **A `;` right after such a `}` is a compile error with no code.** A block that is part of a value does not end the statement, and its `;` stays: `x: = f() catch { fallback 0 }; g(x)`.
 * `ksplc fmt` puts each statement on a line of its own.
 
 **`switch` carries no block**: its `case` and `default` do. In `.kspl` each `case` and `default` stands at the `switch`'s column, the first on the line below the `switch`.
@@ -356,7 +356,7 @@ flowchart LR
 
 2. **Fixed-length array (`T[N]`)**:
 
-* **Definition**: `N` is a compile-time constant (`U8[10]`). An array variable is the contiguous memory itself, not a pointer to its first element: a value type, copied whole when assigned or passed.
+* **Definition**: `N` is a compile-time constant from 1 to 2147483647, the largest `I32` (`U8[10]`). An array variable is the contiguous memory itself, not a pointer to its first element: a value type, copied whole when assigned or passed.
 * **Letting the compiler count the elements (`T[_]`)**: with a compound literal `::{ ... }` on the right, `_` takes the number of initial values written. With an array of fixed length on the right (a variable, a row `m[1]`, a field `s.a`), `_` takes that length. For `m: I32[3][2]`, `r: I32[_] = m[1]` is `r: I32[3] = m[1]`, whether `m` is immutable or not.
   * **Only in a variable declaration.** `T[_]` as a struct field's type is a compile error (the field layout needs the size first).
 
@@ -2128,7 +2128,7 @@ Any other type (`Bool` / `U8[]` / `F64` / a struct) is **a compile error**.
 * **It is written `T!E` wherever a type is written.** `Result<|I32, E|>` as a type is a compile error; the long form stands only in an expression (`Result<|I32, E|>.ok(1)`). A diagnostic writes the short form, bracketing a value side that is itself a result (`(A!B)!E`).
 * **A result nobody takes apart is a compile error**: a call standing as a statement (`f()`), or one bound to a name opening with `_` (`_r: = f()`). `f() catch {}` drops a failure on purpose.
 * **The error type cannot be omitted**: there is no `T!`. For a type compatible with C's `int`, write `T!I32`.
-* **`E` can be any type** (a number, an enum, a struct), any token returned to the caller, as `kspeg/`'s parser uses it. When it is a struct, decide who frees its contents.
+* **`E` can be any type** (a number, an enum, a struct), any token returned to the caller, as `lib/kspeg/`'s parser uses it. When it is a struct, decide who frees its contents.
 * **A result has no fields**: the success value is reached only through `!`, `catch` or a `switch`. Its one method, `is_err()`, answers whether it failed.
 
 Building a result (`return` / `throw`) and receiving it (`!` / `catch` / `fallback`) fit together as follows.
@@ -2352,7 +2352,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
 
 **Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check, so it refuses only what one function's code shows:
 
-* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. A field that no frame pointer set, and a number, pass.
+* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. **So does a value read through a pointer to such a local**: `return pp$` after `pp: = p@` is refused. So are `hp.p` after `hp: = h@`, and `s[0]` of a slice over a local array. A field that no frame pointer set, and a number, pass.
 * **A store of a written address into a global or behind a pointer is allowed** (`g = x@`), for a place cleared before the function returns. One the compiler makes is refused there as well.
 * **A local's storage ends with its block**, and so does a temporary's, such as a closure or a run of elements. So a pointer the compiler makes cannot be stored into a local of an outer block: in `inner:`, `c = fn(x: I32; n: I32): I32 { … }` is refused where `c` is declared outside `inner`. A written address stored so is the writer's, as above, and reading through it after the block ends is a dangling pointer.
 

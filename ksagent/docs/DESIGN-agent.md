@@ -32,8 +32,9 @@ Words used here: the *root* is the one folder whose files ksagent reads. A *sour
 | Requests to the model per question | 12 | A small model that has not found the answer in a dozen calls rarely finds it later. Each round can take a minute |
 | Bytes of one request | 64 KiB | The whole conversation goes out on every round. This bounds what the model must read. It fits the context of 32k tokens the launcher starts llama-server with: Japanese takes about 3 bytes a token, and the rest holds the reply. A context twice as long would not fit a graphics card of 6 GB |
 | Tool calls in one reply | 64 | A model asks for one call at a time, or a few at once to read several files. A stream names each call by its number, so without a cap a reply of a few MiB could open millions of empty calls |
-| Lines or bytes of one read | 400 lines or 32 KiB | One read fills no context alone. The last line says where to read on |
+| Lines or bytes of one read | 400 lines or 32 KiB | One read fills no context alone. The last line says where to read on. A first line longer than this comes cut at a character's start, with a line that says so; otherwise no read could show it |
 | Hits of one search | 50 | A longer list buries the right line. The last line says that the list was cut |
+| What one tool gives back | The room the request has left, less 4 KiB | Each result stays in every later request, so two full reads would pass the request's cap. A result stops where the room ends, with a last line that says so. With less than 1 KiB left, the call is refused with a sentence that tells the model to answer |
 | Names of one listing | 500 | The same reason |
 | An ask file's size | 1 MiB | It is read again for each question, and every 2 seconds while an answer is written. Ids are found by halving, so a read takes time in step with the file |
 | Earlier turns sent from a chat file | 4, and 16 KiB | A follow-up question refers to what was asked just before. A stopped or failed turn holds no answer, so it is not sent |

@@ -26,8 +26,9 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     const missing = await js("Array.from(document.querySelectorAll('.menubar .menu [data-cmd], .menubar .sub-name'))" +
       ".filter((b) => !b.querySelector('svg.glyph path, svg.glyph text, svg.glyph circle')).map((b) => b.textContent)");
     check(missing.length === 0, "every item of every menu carries its icon", missing.join(", "));
-    // The right-click menu holds Cut, Copy and Paste first, then the Table menu's commands.
-    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(3).map((b) => b.dataset.cmd).join(' ')");
+    // The right-click menu holds Cut, Copy, Paste and Paste values first, then the Table menu's
+    // commands.
+    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(4).map((b) => b.dataset.cmd).join(' ')");
     const tableMenu = await js("Array.from(document.querySelectorAll('.top-menu:has([data-cmd=\"row-above\"]) [data-cmd]'))" +
       ".map((b) => b.dataset.cmd).join(' ')");
     check(table.length > 0 && table === tableMenu, "the Table menu holds the right-click menu's commands", tableMenu);
@@ -202,6 +203,18 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
   },
 
   // The quick access bar, looks on text and cells, and copying and pasting cells as Excel does.
+  // Ctrl+; on a chosen cell types the date into that cell alone, never into the text beside it.
+  async dateInChosenCell() {
+    await load(`${H}# Todo\n\n:::table name="t"\n| "due" | "done" |\n| "x" | |\n:::\n`);
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press(";", CTRL);
+    await press("Enter");
+    const text = await js("ksmd.source()");
+    const dates = text.match(/\d{4}-\d{2}-\d{2}/g) || [];
+    check(dates.length === 1 && /\| "x" \| \d{4}-\d{2}-\d{2} \|/.test(text),
+      "Ctrl+; on a chosen cell puts the date in the cell and nowhere else", text);
+  },
+
   // A cell of several lines: its box shows every line, a typed line break turns Wrap text on.
   async cellLines() {
     const long = "srv/documents/output/a-very-long-folder-name-without-any-space-in-it";

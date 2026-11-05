@@ -199,14 +199,14 @@ priv fn check_descriptors(arena: Arena$@)
 // Note: A file that needs a table keyed from outside gets the seed `std/docs/DESIGN-core.md`
 // decides. Do not take its folder out of the list.
 // ==========================================
-priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "ksdb/", "ksmd/", "ksagent/", "ksai/",
+priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "lib/ksdb/", "ksmd/", "ksagent/", "lib/ksai/",
     "std/" } //< the folders whose files take keys from outside
-        //< **All of `std/` and `ksai/` are in it**: a library file cannot know where its caller's
-        //< bytes come from.
+        //< **All of `std/` and `lib/ksai/` are in it**: a library file cannot know where its
+        //< caller's bytes come from.
 
-priv const MODEL_KEYS_DIR: U8[] = "ksai/" //< where a line can mark its keys as the model's
+priv const MODEL_KEYS_DIR: U8[] = "lib/ksai/" //< where a line can mark its keys as the model's
     //< A model file is trusted as a program is ("A model file is trusted, a prompt is not" in
-    //< `ksai/docs/DESIGN-learning.md`). Its `Map`s stay, each line marked `MODEL_KEYS_MARK`.
+    //< `lib/ksai/docs/DESIGN-learning.md`). Its `Map`s stay, each line marked `MODEL_KEYS_MARK`.
 priv const MODEL_KEYS_MARK: U8[] = "keys from the model" //< read in the line's comment
     //< Caution: **The mark covers the map, not each write to it.** Text from a prompt put into a
     //< marked map still breaks the rule; only review sees that.
@@ -256,8 +256,8 @@ priv const MAP_FILE_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "std/json.kspl", .hits = true },
     Sample::{ .text = "std/http_body.kspl", .hits = true },
     Sample::{ .text = "kssrv/conn.kspl", .hits = true },
-    Sample::{ .text = "ksai/tokenizer.kspl", .hits = true },
-    Sample::{ .text = "ksai/examples/chat_server/request.kspl", .hits = true },
+    Sample::{ .text = "lib/ksai/tokenizer.kspl", .hits = true },
+    Sample::{ .text = "lib/ksai/examples/chat_server/request.kspl", .hits = true },
     Sample::{ .text = "std/ds.kspl", .hits = false },
     Sample::{ .text = "std/tests/encoding_test.kspl", .hits = false },
     Sample::{ .text = "ksplc/pipeline.kspl", .hits = false },
@@ -273,8 +273,8 @@ priv const MODEL_MARK_SAMPLES: Sample[_] = ::{
 }
 
 priv const MODEL_DIR_SAMPLES: Sample[_] = ::{
-    Sample::{ .text = "ksai/gguf.kspl", .hits = true },
-    Sample::{ .text = "ksai/examples/chat_server/engine.kspl", .hits = true },
+    Sample::{ .text = "lib/ksai/gguf.kspl", .hits = true },
+    Sample::{ .text = "lib/ksai/examples/chat_server/engine.kspl", .hits = true },
     Sample::{ .text = "std/json.kspl", .hits = false },
     Sample::{ .text = "ksagent/agent.kspl", .hits = false },
 }
@@ -306,8 +306,8 @@ priv fn check_map_at_boundary(arena: Arena$@)
     verdict.check_list("a file taking keys from outside does not use Map \
         (kssrv/ksdb/ksmd/ksagent/ksai/std)", seen, "lines", bad@,
         "sort or scan the keys instead, or design the seed (the Map line under \
-            std/docs/DESIGN-core.md's 'Known holes'). In ksai/, a map filled from the model file \
-            alone carries `MODEL_KEYS_MARK` in its line's comment")
+            std/docs/DESIGN-core.md's 'Known holes'). In lib/ksai/, a map filled from the model \
+            file alone carries `MODEL_KEYS_MARK` in its line's comment")
 
 // ==========================================
 // 10. The strings by which the compiler names std really exist ksplc finds std's declarations by
@@ -618,10 +618,9 @@ priv fn check_result_line(arena: Arena$@)
 // That a single test's line is not written by hand (hand-written lines always diverge): none of
 // `-> Passed!`, `-> Skipped` or the three-line `"\n[..."` comes back.
 // Caution: **Having added a package, add it here too.**
-priv const CASE_LINE_GLOBS: U8[][_] = ::{ "ksai/tests/*.kspl", "ksbind/tests/*.kspl",
-    "ksdb/tests/*.kspl", "ksmd/tests/*.kspl", "kspeg/tests/*.kspl", "ksos/tests/*.kspl",
-    "ksplc/tests/*.kspl", "kssrv/tests/*.kspl", "std/tests/*.kspl", "tools/ai_assist/tests/*.kspl",
-    "tools/tests/*.kspl" }
+priv const CASE_LINE_GLOBS: U8[][_] = ::{ "lib/ksai/tests/*.kspl", "lib/kstls/tests/*.kspl",
+    "lib/ksdb/tests/*.kspl", "ksmd/tests/*.kspl", "lib/kspeg/tests/*.kspl", "ksos/tests/*.kspl",
+    "ksplc/tests/*.kspl", "kssrv/tests/*.kspl", "std/tests/*.kspl", "tools/tests/*.kspl" }
 
 priv fn check_case_line(arena: Arena$@)
     $seen: Sz = 0
@@ -700,8 +699,8 @@ priv fn check_folder_names(arena: Arena$@) //<
 // ==========================================
 // A file of tests is imported **A file nobody imports is never compiled**, so no suite runs its
 // `test_…` functions, and the compiler never sees them to report it. [W0214] covers a file that is
-// compiled. A file holding its own suite runs its own tests (`ksai/tests/examples_main.kspl`). The
-// fixtures broken on purpose (`negative/`, `lint/`) are compiled one by one.
+// compiled. A file holding its own suite runs its own tests (`lib/ksai/tests/examples_main.kspl`).
+// The fixtures broken on purpose (`negative/`, `lint/`) are compiled one by one.
 // ==========================================
 priv const FIXTURE_FOLDERS: U8[][2] = ::{ "ksplc/tests/negative/", "ksplc/tests/lint/" } //<
     //< the folders whose files are compiled alone, never imported
@@ -728,8 +727,11 @@ priv fn check_test_files_imported(arena: Arena$@)
         $fixture: = false
         for folder in FIXTURE_FOLDERS
             fixture = fixture || rel.starts_with(folder)
+        // A library's file is imported by its name, without `lib/` (`ksai/tensor`).
+        logical: = rel.strip_suffix(".kspl")
         if !fixture && !own.contains(rel) &&
-            !imported.contains(rel.strip_suffix(".kspl"))
+            !imported
+            .contains(logical.sub_from(4) if logical.starts_with("lib/") else logical)
             bad.push(rel)
     verdict.check_list("a file of tests is imported, so a suite can run them", marked.len,
         "files of tests", bad@, "import it from the file that holds its package's suite (all.kspl)")

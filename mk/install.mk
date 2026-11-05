@@ -80,10 +80,13 @@ define install_ok_help
 #   ✅ the ksplc first on PATH is the one installed here, so a shebang starts it
 endef
 
+# **The libraries come as a third piece, `lib/` beside `std/`**, where the installed ksplc finds a
+# package with nothing set ("The source of a package other than `std`" in `ksplc/docs/SPEC-tools.md`).
+# A library's own `out/`, what its tests built, stays behind.
 # Stage every copy before moving any installed path. Keep the old ones until every move succeeds.
 # These are separate paths, not an atomic set; do not compile during installation. A failed
 # rollback keeps its backup folders and prints them rather than deleting the old files.
-# **ksmd's folder is the third piece where `$(KSMD_INSTALL_MARK)` stands** (`install_ksmd_probe`).
+# **ksmd's folder is the fourth piece where `$(KSMD_INSTALL_MARK)` stands** (`install_ksmd_probe`).
 # Its servers are stopped first, as `make` does before rebuilding them: the folder is replaced
 # whole, its `tmp/` with it, and Windows cannot remove a log a running server holds open.
 define install_compiler_and_std
@@ -91,12 +94,13 @@ set -eu; \
 mkdir -p "$(PREFIX)/bin" "$(PREFIX)/lib/kspl"; \
 lock="$(PREFIX)/lib/kspl/.install-lock"; \
 mkdir "$$lock" || { echo "Another install or an interrupted install holds $$lock" >&2; exit 1; }; \
-pieces="bin std"; [ ! -f "$(KSMD_INSTALL_MARK)" ] || pieces="bin std ksmd"; \
-bin_stage=; std_stage=; ksmd_stage=; committed=0; \
+pieces="bin std lib"; [ ! -f "$(KSMD_INSTALL_MARK)" ] || pieces="bin std lib ksmd"; \
+bin_stage=; std_stage=; lib_stage=; ksmd_stage=; committed=0; \
 place() { \
     case "$$1" in \
     bin) stage="$$bin_stage"; suffix="$(suffix $(INSTALL_NAME))"; dest="$(PREFIX)/bin/$(INSTALL_NAME)";; \
     std) stage="$$std_stage"; suffix=; dest="$(PREFIX)/lib/kspl/std";; \
+    lib) stage="$$lib_stage"; suffix=; dest="$(PREFIX)/lib/kspl/lib";; \
     ksmd) stage="$$ksmd_stage"; suffix=; dest="$(KSMD_INSTALL_DIR)";; \
     esac; \
 }; \
@@ -114,10 +118,10 @@ finish() { \
         done; \
     fi; \
     if [ "$$failed" = 0 ]; then \
-        for left in "$$bin_stage" "$$std_stage" "$$ksmd_stage"; do [ -z "$$left" ] || rm -rf "$$left"; done; \
+        for left in "$$bin_stage" "$$std_stage" "$$lib_stage" "$$ksmd_stage"; do [ -z "$$left" ] || rm -rf "$$left"; done; \
         rmdir "$$lock"; \
     else \
-        echo "Install rollback failed. Keep and recover backups: $$bin_stage $$std_stage $$ksmd_stage" >&2; \
+        echo "Install rollback failed. Keep and recover backups: $$bin_stage $$std_stage $$lib_stage $$ksmd_stage" >&2; \
         result=1; \
     fi; \
     exit "$$result"; \
@@ -127,6 +131,8 @@ bin_stage=$$(mktemp -d "$(PREFIX)/bin/.kspl-install.XXXXXX"); \
 std_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
 cp "$(SHIP_EXE)" "$$bin_stage/new$(suffix $(INSTALL_NAME))"; chmod +x "$$bin_stage/new$(suffix $(INSTALL_NAME))"; \
 cp -R std "$$std_stage/new"; \
+lib_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
+cp -R lib "$$lib_stage/new"; rm -rf "$$lib_stage/new"/*/out; \
 if [ -f "$(KSMD_INSTALL_MARK)" ]; then \
     ksmd_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
     page="$$ksmd_stage/new/$(patsubst $(OUT_DIR)/%,%,$(KSMD_PAGE))"; mkdir -p "$${page%/*}"; \
@@ -208,7 +214,7 @@ install: export ABS_HELP := $(install_abs_help)
 # re-bakes the seed: each rewrites files, and the seed is re-baked when the seed's rules call for
 # it, by `make commit-seed` ("The bootstrap, and keeping the seed in step" in
 # `ksplc/docs/DESIGN-compiler.md`).
-## Build-and-install|install|Check that ksplc reproduces itself, then put it in as `ksplc`, with ksmd beside it (the place is `PREFIX=`)
+## Build-and-install|install|Check that ksplc reproduces itself, then put it in as `ksplc`, with `std`, the libraries and ksmd beside it (the place is `PREFIX=`)
 install: self-host self-host-ship install-lsp
 	@echo "# INSTALLING ksplc FOR $(PLATFORM)..."
 	@# Caution: **Do not proceed unless it is an absolute path.**
@@ -220,6 +226,7 @@ install: self-host self-host-ship install-lsp
 	@$(install_compiler_and_std)
 	@echo "# installed -> $(PREFIX)/bin/$(INSTALL_NAME)"
 	@echo "# installed -> $(PREFIX)/lib/kspl/std"
+	@echo "# installed -> $(PREFIX)/lib/kspl/lib"
 	$(install_ksmd_link)
 	$(install_desktop_step)
 	@$(MAKE) --no-print-directory install-check

@@ -9,10 +9,11 @@
 }
 
 /* Its layer stands above the rows and under the header, which stands above it. The table is a
-   layer of its own, so the heading and the cells that stay in sight order only among its cells. */
+   layer of its own, so the heading and the cells that stay in sight order only among its cells.
+   The document's zoom scales `top` too, so the header's height is divided by it. */
 .table thead {
   position: sticky;
-  top: var(--top-height, 0px);
+  top: calc(var(--top-height, 0px) / var(--doc-zoom, 1));
   z-index: 2;
 }
 
@@ -415,16 +416,13 @@
 }
 
 /* Rows or columns cut and waiting to be inserted: a dashed frame round them, as Excel's moving
-   border (`cut.js`). The cells a formula's pointing names: a solid one (`point.js`). Each cell
-   draws the edges of the frame it stands on. Paper never shows either. */
+   border (`cut.js`). Each cell draws the edges of the frame it stands on. Paper never shows it. */
 @media screen {
-  .table .cut,
-  .table .pointed {
+  .table .cut {
     position: relative;
   }
 
-  .table .cut::after,
-  .table .pointed::after {
+  .table .cut::after {
     content: "";
     position: absolute;
     inset: 0;
@@ -432,27 +430,19 @@
     pointer-events: none;
   }
 
-  .table .pointed::after {
-    border-style: solid;
-  }
-
-  .table .cut-top::after,
-  .table .point-top::after {
+  .table .cut-top::after {
     border-top-width: 2px;
   }
 
-  .table .cut-bottom::after,
-  .table .point-bottom::after {
+  .table .cut-bottom::after {
     border-bottom-width: 2px;
   }
 
-  .table .cut-left::after,
-  .table .point-left::after {
+  .table .cut-left::after {
     border-left-width: 2px;
   }
 
-  .table .cut-right::after,
-  .table .point-right::after {
+  .table .cut-right::after {
     border-right-width: 2px;
   }
 }
@@ -529,4 +519,273 @@
 .table td.merged-repeat.chosen,
 .table td.merged-repeat:has(.cell-input) {
   color: inherit;
+}
+
+/* A formula's references in colour while it is typed (`refs.js`). The box's own text is
+   transparent, and a copy of it in colour stands behind, where the box stands, at its size. The
+   box keeps its caret and selection; the selection lets the copy show through. */
+.cell-input.tinted {
+  position: relative;
+  color: transparent;
+  background: transparent;
+}
+
+.cell-input.tinted::selection {
+  color: transparent;
+  background: var(--ref-pick);
+}
+
+.cell-copy {
+  position: absolute;
+  display: block;
+  box-sizing: border-box;
+  margin: 0;
+  border-style: solid;
+  border-color: transparent;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cell-copy.one-line {
+  display: flex;
+  align-items: center;
+}
+
+.cell-copy[hidden] {
+  display: none;
+}
+
+/* A frame round the cells a reference names, in its colour. The heading row stands over it. */
+.ref-frame {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  border: 2px solid var(--ref);
+  pointer-events: none;
+}
+
+.ref-text {
+  color: var(--ref);
+}
+
+[data-ref="1"] {
+  --ref: var(--ref-1);
+}
+
+[data-ref="2"] {
+  --ref: var(--ref-2);
+}
+
+[data-ref="3"] {
+  --ref: var(--ref-3);
+}
+
+[data-ref="4"] {
+  --ref: var(--ref-4);
+}
+
+[data-ref="5"] {
+  --ref: var(--ref-5);
+}
+
+[data-ref="6"] {
+  --ref: var(--ref-6);
+}
+
+[data-ref="7"] {
+  --ref: var(--ref-7);
+}
+
+[data-ref="8"] {
+  --ref: var(--ref-8);
+}
+
+/* The list of functions under a cell where a formula is typed, and the tip of the call the caret
+   stands in (`suggest.js`). Both stand over the page, fixed to the window. */
+.fx-list,
+.fx-tip {
+  position: fixed;
+  z-index: 40;
+  max-width: min(36rem, 96vw);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 2px 8px var(--shadow);
+  font-size: 13px;
+}
+
+.fx-list {
+  min-width: 16rem;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 2px 0;
+}
+
+.fx-option {
+  display: flex;
+  gap: 10px;
+  padding: 2px 8px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.fx-option[aria-selected="true"] {
+  background: var(--mark);
+  color: var(--paper);
+}
+
+.fx-name {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+
+.fx-option .fx-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+.fx-chosen {
+  position: sticky;
+  bottom: 22px;
+  padding: 3px 8px;
+  border-top: 1px solid var(--line);
+  background: var(--soft);
+  font-family: ui-monospace, monospace;
+}
+
+.fx-more {
+  position: sticky;
+  bottom: 0;
+  display: block;
+  width: 100%;
+  padding: 2px 8px;
+  border: 0;
+  background: var(--soft);
+  color: var(--mark);
+  font: inherit;
+  text-align: left;
+}
+
+.fx-tip {
+  padding: 4px 8px;
+}
+
+.fx-signature {
+  font-family: ui-monospace, monospace;
+}
+
+.fx-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--mark);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.fx-tip .fx-summary,
+.fx-meaning {
+  color: var(--muted);
+}
+
+/* Insert ▸ Function…, as Excel's Insert Function dialog (`catalog.js`). */
+.fx-dialog {
+  width: min(48rem, 94vw);
+  max-height: 88vh;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.fx-dialog h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.fx-find {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+
+.fx-find input,
+.fx-find select,
+.fx-names,
+.fx-buttons button {
+  font: inherit;
+}
+
+.fx-body {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) 1fr;
+  gap: 12px;
+}
+
+.fx-names {
+  min-height: 16rem;
+  font-family: ui-monospace, monospace;
+}
+
+.fx-about {
+  overflow: auto;
+  max-height: 22rem;
+  font-size: 14px;
+}
+
+.fx-about h3 {
+  margin: 10px 0 4px;
+  font-size: 14px;
+}
+
+.fx-about p {
+  margin: 4px 0;
+}
+
+.fx-about-signature {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fx-about-args dt {
+  font-family: ui-monospace, monospace;
+}
+
+.fx-about-args dd {
+  margin: 0 0 4px 16px;
+}
+
+.fx-note {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.fx-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.fx-buttons button {
+  padding: 4px 14px;
+}
+
+.fx-list code,
+.fx-tip code,
+.fx-about code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.95em;
+}
+
+.fx-about-how {
+  color: var(--muted);
+  font-size: 13px;
 }

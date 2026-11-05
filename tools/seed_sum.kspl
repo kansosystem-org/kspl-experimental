@@ -5,11 +5,14 @@
 //< skipped it: the self-host checks only that the tree reproduces itself.
 //< The record is one SHA-256 over the files the Makefile names. Each counts as its path, its length
 //< and its bytes with `\r\n` read as `\n`. So a checkout that converts line ends agrees.
+//< **The Makefile names the files on disk**, so a file git does not hold counts too. `make
+//< commit-seed` refuses one (`untracked`), as CI's checkout would lack it and the check would fail.
 
 // ==========================================
 // Usage:
 //     ./out/ksplc_stage1.exe run tools/seed_sum.kspl write <record> <file>...
 //     ./out/ksplc_stage1.exe run tools/seed_sum.kspl check <record> <file>...
+//     ./out/ksplc_stage1.exe run tools/seed_sum.kspl untracked <file>...
 // The Makefile passes the files sorted, so the order is the same everywhere.
 // ==========================================
 import "std/ds" { List }
@@ -18,7 +21,11 @@ import "std/mem" { Arena, dealloc }
 import "std/sha256" { Sha256 }
 import "std/str" { Str_builder }
 import "std/strfmt"
+import "std/subproc"
 import "std/sys"
+
+priv const GIT_TIMEOUT_MS: I32 = 60000 //< how long `git ls-files` may run
+priv const GIT_LIST_CAP: Sz = 1 << 24 //< the most of git's list kept; the list is far shorter
 
 priv fn sum_of( //< the record: the digest in hex and a newline
     paths: U8[][],
@@ -49,12 +56,46 @@ priv fn sum_of( //< the record: the digest in hex and a newline
     out.c('\n')
     return out.take()
 
+priv fn untracked(paths: U8[][], arena: Arena$@): List<|U8[]|>!U8[] //<
+    //< The files of `paths` that git neither tracks nor ignores; throws where git cannot say
+    //< Git is absent from a source tarball, and a folder that is no checkout has no list; there the
+    //< files on disk are all the source there is.
+    listed: =
+        subproc.run(U8[][]::{ "git", "ls-files", "-z", "--others", "--exclude-standard", "--",
+        "ksplc" }, "", GIT_TIMEOUT_MS, GIT_LIST_CAP, arena) catch
+        throw "git cannot list the files here"
+    $out: = List<|U8[]|>(arena)
+    for name in listed.split(0U8, arena)
+        for p in paths
+            if p.equals(name)
+                out.push(p)
+    return out
+
+priv fn write_untracked(found: List<|U8[]|>@) //< names each file git does not hold, on stderr
+    for i in Range.asc(found.len)
+        io.err().s("  ").s(found.get(i)).c('\n')
+    io.err()
+        .s("git holds none of these files, so CI's checkout lacks them. Add each one with `git \
+            add`, or delete it.\n")
+
 fn main(): I32
     a: = sys.args()
-    if a.len < 4 || !(a[1].equals("write") || a[1].equals("check"))
-        io.err().s("usage: seed_sum.kspl write|check <record> <file>...\n")
-        return 2
     defer arena: = Arena(1024 * 1024)
+    if a.len >= 3 && a[1].equals("untracked")
+        $given: = List<|U8[]|>(arena)
+        for i in Range(2, a.len, 1)
+            given.push(a[i])
+        found: = untracked(given.slice(), arena) catch why
+            io.out().s("# ").s(why).s(", so untracked files were not looked for\n")
+            return 0
+        if found.len == 0
+            return 0
+        io.err().s("ERROR: make commit-seed would record compiler source that git does not hold:\n")
+        write_untracked(found@)
+        return 1
+    if a.len < 4 || !(a[1].equals("write") || a[1].equals("check"))
+        io.err().s("usage: seed_sum.kspl write|check <record> <file>... | untracked <file>...\n")
+        return 2
     $paths: = List<|U8[]|>(arena)
     for i in Range(3, a.len, 1)
         paths.push(a[i])
@@ -77,6 +118,14 @@ fn main(): I32
     if kept.equals(sum)
         io.out().s("RESULT: ALL PASS (the seed was taken from the current compiler source)\n")
         return 0
+    // **A file git does not hold is the likelier cause**, and re-baking would record it.
+    found: = untracked(paths.slice(), arena) catch List<|U8[]|>(arena)
+    if found.len > 0
+        io.err()
+            .s("FAIL: \{record\} names other compiler source than the tree holds, and the tree \
+                holds files under ksplc/ that git does not:\n")
+        write_untracked(found@)
+        return 1
     io.err()
         .s("FAIL: \{record\} names other compiler source than the tree holds: something under \
             ksplc/ changed after the last `make commit-seed`. Run `make self-host`, then `make \

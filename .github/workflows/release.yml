@@ -136,6 +136,12 @@ jobs:
           set -e
           imports=$(llvm-readobj --coff-imports "dist/${{ matrix.exe }}" | tr -d '\r' | sed -n 's/^  Name: //p')
           echo "DLLs imported:" $imports
+          # **An empty list means the reading broke**, not a clean file: every Windows program
+          # imports KERNEL32.dll. A failed llvm-readobj or a changed output both read as empty.
+          if [ -z "$imports" ]; then
+            echo "no DLL import was read from ${{ matrix.exe }}, so the check cannot tell"
+            exit 1
+          fi
           bad=""
           for dll in $imports; do
             if [ -e "/ucrt64/bin/$dll" ]; then bad="$bad $dll"; fi

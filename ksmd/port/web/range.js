@@ -5,8 +5,12 @@
 // on its cells when the table is shown again, sorted, or has rows added above.
 // Delete clears the range, Ctrl+D fills it down and Ctrl+R right, and the handle at its corner
 // fills it by a drag. A copy puts its shown values on the clipboard as tab-separated rows, and a
-// paste of such rows fills cells from its corner. A cut puts them there too, and its cells wait for
-// a paste that moves them (`cut.js`). Each is one action.
+// paste of such rows fills cells from its corner. Beside them a copy puts the cells as ksmd pastes
+// them, with their formulas (`paste.js`). A cut puts them there too, and its cells wait for a
+// paste that moves them (`cut.js`). Each is one action.
+// Delete, a fill and a copy act on the rows in sight alone, as in Excel: a row a filter or a
+// closed group hides is left as it is, and a copy leaves it out. A cut over a hidden row is
+// refused, since the paste would move cells the person cannot see.
 // The whole table, names and all, is chosen by Ctrl+A twice, by the corner left of the column
 // letters, or by Select table. It copies as ksmd's own source too, and Delete removes it.
 "use strict";
@@ -40,6 +44,15 @@ function ksmdRange(ks) {
     const wrap = wrapOf(block);
     return { rows: wrap.rowIds.length, columns: wrap.colIds.length };
   };
+
+  // The data rows from `r1` to `r2` that a filter or a closed group hides, in order: the rows a
+  // clear, a fill and a copy leave as they are.
+  function hiddenRows(block, r1, r2) {
+    const body = wrapOf(block).querySelector("tbody").rows;
+    const out = [];
+    for (let row = Math.max(0, r1); row <= r2 && row < body.length; row++) if (body[row].hidden) out.push(row);
+    return out;
+  }
 
   // The rectangle a look, a copy, a paste or a fill acts on: the range, or the chosen cell.
   function rect() {
@@ -218,7 +231,7 @@ function ksmdRange(ks) {
         `Cell ${ks.table.letters(column)}${row + 1}`);
       // A touch screen keeps its keyboard down for a cell only chosen; a double tap opens it.
       if (window.matchMedia && window.matchMedia("(hover: none)").matches) box.inputMode = "none";
-      box.addEventListener("compositionstart", () => ks.table.openTyped(box));
+      box.addEventListener("compositionstart", () => ks.table.openTyped(box, true));
       box.addEventListener("input", (e) => {
         if (!e.isComposing) ks.table.openTyped(box);
       });
@@ -398,15 +411,16 @@ function ksmdRange(ks) {
     }
   });
 
-  // Clears every cell of the range as one action; each cell keeps its look.
+  // Clears every cell of the range in sight as one action; each cell keeps its look.
   function clear() {
     const r = rect();
-    const rows = Array.from({ length: r.r2 - r.r1 + 1 }, () => new Array(r.c2 - r.c1 + 1).fill(""));
-    return ks.act("ksmd_web_paste_cells", r.block, r.r1, r.c1, ks.put(JSON.stringify(rows)));
+    return ks.act("ksmd_web_clear_cells", r.block, r.r1, r.c1, r.r2, r.c2,
+      ks.put(hiddenRows(r.block, r.r1, r.r2).join(",")));
   }
 
   // Fill down copies the range's top row into the rest, and fill right its left column. A range
-  // of one row fills down from the cell above it, and one of one column right from the left.
+  // of one row fills down from the cell above it in sight, and one of one column right from the
+  // left. Hidden rows neither give nor take a cell.
   function fill(down) {
     if (!ks.cell || !wrapOf(ks.cell.block)) return null;
     ks.table.take();
@@ -414,7 +428,7 @@ function ksmdRange(ks) {
     const r1 = Math.max(0, r.r1);
     let top = r1;
     let left = r.c1;
-    if (down && r1 === r.r2) top -= 1;
+    if (down && r1 === r.r2) top = ks.table.step(r.block, r1, -1);
     if (!down && r.c1 === r.c2) left -= 1;
     if (top < 0 || left < 0 || r.r2 < 0) {
       ks.say(down ? "Fill down copies a cell above the chosen ones. Choose cells below a value." :
@@ -422,7 +436,7 @@ function ksmdRange(ks) {
       return null;
     }
     return ks.act("ksmd_web_fill", r.block, top, left, down ? 1 : r.r2 - top + 1,
-      down ? r.c2 - left + 1 : 1, r.r2, r.c2, 0);
+      down ? r.c2 - left + 1 : 1, r.r2, r.c2, 0, ks.put(hiddenRows(r.block, top, r.r2).join(",")));
   }
 
   // The square at the range's lower right corner. A drag down or right fills the cells it reaches
@@ -463,7 +477,7 @@ function ksmdRange(ks) {
       document.removeEventListener("mouseup", up);
       if (!to) return;
       ks.act("ksmd_web_fill", from.block, from.r1, from.c1, from.r2 - from.r1 + 1,
-        from.c2 - from.c1 + 1, to.row, to.column, 1);
+        from.c2 - from.c1 + 1, to.row, to.column, 1, ks.put(hiddenRows(from.block, from.r1, to.row).join(",")));
       focusChosen();
     };
     document.addEventListener("mousemove", move);
@@ -534,12 +548,15 @@ function ksmdRange(ks) {
   }
 
   // The range's shown values as tab-separated rows, as a spreadsheet takes them from the clipboard.
+  // A hidden row is left out.
   function copied() {
     const r = rect();
     const wrap = wrapOf(r.block);
+    const hidden = new Set(hiddenRows(r.block, r.r1, r.r2));
     const field = (t) => (/[\t\n"]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t);
     const lines = [];
     for (let row = r.r1; row <= r.r2; row++) {
+      if (row >= 0 && hidden.has(row)) continue;
       const cells = [];
       for (let column = r.c1; column <= r.c2; column++) {
         // A copy takes the number without its format, so no digit is lost.
@@ -552,12 +569,13 @@ function ksmdRange(ks) {
   }
 
   // The whole table as an HTML table, as Word and Excel take one from the clipboard: the names,
-  // then each row's values as the table shows them.
+  // then each row in sight with its values as the table shows them.
   function html(block) {
     const wrap = wrapOf(block);
+    const body = wrap.querySelector("tbody").rows;
     const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const head = wrap.names.map((n) => `<th>${esc(n)}</th>`).join("");
-    const rows = wrap.values.map((row) => `<tr>${row.map((v) => `<td>${esc(ks.filter.shown(v))}</td>`).join("")}</tr>`);
+    const rows = wrap.values.filter((_, r) => !body[r].hidden).map((row) => `<tr>${row.map((v) => `<td>${esc(ks.filter.shown(v))}</td>`).join("")}</tr>`);
     return `<table><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
   }
 
@@ -569,18 +587,28 @@ function ksmdRange(ks) {
     return ks.view.removeBlock("ksmd_web_remove_table", block);
   }
 
-  // A copy while a range is chosen, or no cell is open, takes the cells' shown values. The whole
-  // table also goes as ksmd's own source, which a paste in ksmd takes whole, and as HTML; a cut of
-  // it removes the table. A cut of other cells clears nothing: they wait, marked, for a paste that
-  // moves them (`cut.js`).
+  // A copy while a range is chosen, or no cell is open, takes the cells' shown values, as Excel
+  // puts them where other programs read. Beside them go the cells as ksmd pastes them, formulas
+  // and all (`paste.js`). The whole table also goes as ksmd's own source, which a paste in ksmd
+  // takes whole, hidden rows and all, and as HTML; a cut of it removes the table. A cut of other
+  // cells clears nothing: they wait, marked, for a paste that moves them (`cut.js`).
+  // A cut of cells or whole rows over a hidden row is refused, and the clipboard stays as it was.
+  // Whole columns move whole, so a cut of them may hold hidden rows.
   for (const type of ["copy", "cut"]) {
     document.addEventListener(type, (e) => {
       if (ks.where !== "cell" || !ks.cell || !wrapOf(ks.cell.block)) return;
       if (e.target && e.target.nodeType === Node.ELEMENT_NODE && !ks.root.contains(e.target)) return;
       if (ks.table.editing() && !end) return;
       e.preventDefault();
+      const r = rect();
+      const columns = lines() && !lines().rows;
+      if (type === "cut" && !ks.readOnly && !whole() && !columns && hiddenRows(r.block, r.r1, r.r2).length > 0) {
+        ks.say("A cut cannot pass over hidden rows. Show all rows to move the cells, or copy them instead.");
+        return;
+      }
       const text = copied();
       e.clipboardData.setData("text/plain", text);
+      if (type === "copy") ks.pasting.copy(e.clipboardData, rect(), text);
       if (whole()) {
         e.clipboardData.setData("text/html", html(ks.cell.block));
         e.clipboardData.setData(KSMD_TYPE, ks.out(ks.w.ksmd_web_block_source(ks.cell.block)));
@@ -594,7 +622,8 @@ function ksmdRange(ks) {
     });
   }
 
-  // A paste on a chosen cell that is not open moves the cells a cut left waiting, or else fills the
+  // A paste on a chosen cell that is not open moves the cells a cut left waiting. Cells copied in
+  // ksmd go in with their formulas or as values (`paste.js`), and text from elsewhere fills the
   // range.
   ks.root.addEventListener("paste", (e) => {
     const el = chosenOf(e.target);
@@ -605,6 +634,7 @@ function ksmdRange(ks) {
     if (ks.cut.paste(text)) return;
     // A whole table copied from ksmd, pasted on a whole table chosen, goes after that table.
     if (whole() && ks.pasteTable(e.clipboardData, ks.cell.block + 1)) return;
+    if (ks.pasting.paste(e.clipboardData, text)) return;
     if (!ks.tooLarge(text)) pasteGrid(text, true);
   });
 
@@ -613,7 +643,7 @@ function ksmdRange(ks) {
   ks.handle("table-select", (_, c) => selectTable(c.block), { table: true });
 
   ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, selectTable,
-    lines, chooseLines,
+    lines, chooseLines, hiddenRows,
     // Puts the focus on the chosen cell, so the keys act on it.
     focus: focusChosen,
     // Whether a range of more than one cell is chosen.

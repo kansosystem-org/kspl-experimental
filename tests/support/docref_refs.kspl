@@ -112,7 +112,7 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
         // `/../ui/app.html` in a test reads as a path in this repo that **does not exist**.
         rel: = after_dots > i && !(i > 0 && text[i - 1] == '/')
         // Caution: **After a path byte, this is the tail of a longer path or word, not a start.**
-        // Else `ksai/tests/all.kspl` reads as the root's `tests/`, `*/tests/all.kspl` as a
+        // Else `lib/ksai/tests/all.kspl` reads as the root's `tests/`, `*/tests/all.kspl` as a
         // missing file, and `onlinedocs/gcc/…` as `docs/`. **A leading `../` is the exception**
         // (the test is on `after_dots`).
         if after_dots == i && i > 0 && is_path_at(text, i - 1)
@@ -300,7 +300,7 @@ priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[
     //< **A bare name, and a link's target, are relative to the file that writes it.** Only a naming
     //< that already has a folder is relative to the root.
     //< Caution: **Read a link the other way, and a correct one looks broken.** That happens where
-    //< its first folder shares a root folder's name (`ksai/README.md`'s link to its own
+    //< its first folder shares a root folder's name (`lib/ksai/README.md`'s link to its own
     //< `docs/DESIGN-principles.md`).
     if linked || text.starts_with("../") || text.find_char('/').is_none()
         return normalize(arena.text().s("\{here\}/\{text\}").take(), arena)
@@ -336,7 +336,7 @@ fn find_misnamed_links(text: U8[], arena: Arena$@): List<|Hit|> //<
     //< The `` [`X`](Y) `` links whose text names a file other than the one they point at
     //< A hit's `text` is X and its `extra` is Y. **Only the file names are compared**, since a
     //< comment and a document write the folder each from its own place. A text with no file
-    //< extension (`` `Row.put` ``, `` `ksai/` ``) names no file and is not read.
+    //< extension (`` `Row.put` ``, `` `lib/ksai/` ``) names no file and is not read.
     //< Caution: **Do not leave the two apart.** The checks of a citation read the text, the reader
     //< follows the target, so a heading checked in one file is opened in the other.
     $out: = List<|Hit|>(arena)
@@ -385,20 +385,29 @@ struct Src_places //< where a naming of a source file is looked up, in order
     bases: List<|U8[]|>
     raw: U8[]
 
+priv fn package_root_of(here: U8[]): U8[] //< the top folder of the package a folder is in
+    //< Its first step, or its first two under `lib/`; empty for the repository's root.
+    cut: = here.find_char('/').unwrap_or(here.len)
+    if !here.sub(0, cut).equals("lib") || cut == here.len
+        return here.sub(0, cut)
+    rest: = here.sub_from(cut + 1)
+    return here.sub(0, cut + 1 + rest.find_char('/').unwrap_or(rest.len))
+
 fn src_places(here: U8[], raw: U8[], arena: Arena$@): Src_places //<
     //< Where a named implementation or test file is looked up
-    //< They start from the naming file's folder.
-    //< Four, in this order: next to the naming file, from its package's root, from the repository's
-    //< root, and under `tests/` (where `mk/test.mk`'s `suite_*` points).
+    //< They start from the naming file's folder. Five, in this order: next to the naming file, from
+    //< its package's root, from the repository's root, under `lib/` (where the compiler finds a
+    //< library) and under `tests/` (where `mk/test.mk`'s `suite_*` points).
     //< Caution: **Check the package's root too**: inside a package, this repository writes paths
     //< that way. **Add the extension too** (`src_place`) for an import path (`std/lang`).
     $bases: = List<|U8[]|>(arena)
     if here.len > 0
         bases.push(arena.text().s("\{here\}/\{raw\}").take())
-    cut: = here.find_char('/').unwrap_or(0)
-    if cut > 0
-        bases.push(arena.text().s("\{here.sub(0, cut)\}/\{raw\}").take())
+    root: = package_root_of(here)
+    if root.len > 0
+        bases.push(arena.text().s("\{root\}/\{raw\}").take())
     bases.push(raw)
+    bases.push(arena.text().s("lib/\{raw\}").take())
     bases.push(arena.text().s("tests/\{raw\}").take())
     return Src_places::{ .bases = bases, .raw = raw }
 

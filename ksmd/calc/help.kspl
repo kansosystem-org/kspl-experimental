@@ -1,0 +1,105 @@
+//< What a person reads of each function a formula calls: its arguments, what it gives, an example
+//< The editing page shows it as a formula is typed and in its Insert Function dialog, and the
+//< reference lists it (`ksmd/docs/SPEC-editing-page.md`). **An ordinary function's entry comes
+//< from its signature and doc comments**: `ksmd/calc/glue.kspl` writes it into the function table.
+//< The seven forms that `ksmd/calc/calc.kspl` reads itself have no signature, so their entries
+//< stand here, and the calculator takes their names from here too.
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+// **A person's own function table reads these from outside this package**
+// (`ksmd/port/own_build.kspl` writes it), so they are public and [I0402] is off here.
+##lint(I0402 = off)
+
+pub struct Arg //< one argument of a function, as a person reads it; a field left out is false
+    pub name: U8[]
+    pub meaning: U8[] //< what to give it, in a phrase; empty where its writer gave none
+    pub optional: Bool //< it can be left out
+    pub rest: Bool //< it takes every argument left, written `xs…`
+
+pub struct Help //< one function a formula calls, as a person reads it
+    pub name: U8[]
+    pub group: U8[] //< such as `Text`; empty for a person's own function
+    pub args: Arg[]
+    pub summary: U8[] //< what it gives, in one line
+    pub detail: U8[] //< the rest of its description; empty for none
+    pub example: U8[] //< a call that shows its use, such as `hex_to_dec("FF")`; empty for none
+    pub gives: U8[] //< what the example's cell shows; empty where the example reads cells
+
+const FORMS: Help[_] = ::{
+    Help::{ .name = "today", .group = "Dates", .args = Arg[]::{},
+        .summary = "today's date, as the page opened the document",
+        .detail = "It stays the same until the document opens again.", .example = "today()",
+        .gives = "" },
+    Help::{ .name = "if", .group = "Conditions and lookup",
+        .args = Arg[]::{ Arg::{ .name = "condition",
+        .meaning = "a comparison or a cell that is true or false" },
+        Arg::{ .name = "then", .meaning = "the value where the condition holds" },
+        Arg::{ .name = "else", .meaning = "the value where it does not" } },
+        .summary = "`then` where the condition holds, else `else`",
+        .detail = "All three are needed. Only the value taken is calculated.",
+        .example = "if(3 > 2, \"yes\", \"no\")", .gives = "yes" },
+    Help::{ .name = "sum_if", .group = "Conditions and lookup",
+        .args = Arg[]::{ Arg::{ .name = "values", .meaning = "the cells to add, such as D1:D9" },
+        Arg::{ .name = "condition",
+        .meaning = "a comparison read on each row, such as B1:B9 = \"Pens\"" } },
+        .summary = "the numbers of `values` on the rows where the condition holds",
+        .detail = "A range in the condition is read as its cell on the same row.",
+        .example = "sum_if(D1:D9, B1:B9 = \"Pens\")", .gives = "" },
+    Help::{ .name = "count_if", .group = "Conditions and lookup",
+        .args = Arg[]::{ Arg::{ .name = "values", .meaning = "the cells to count, such as D1:D9" },
+        Arg::{ .name = "condition",
+        .meaning = "a comparison read on each row, such as B1:B9 = \"Pens\"" } },
+        .summary = "how many numbers of `values` stand on the rows where the condition holds",
+        .detail = "", .example = "count_if(D1:D9, B1:B9 = \"Pens\")", .gives = "" },
+    Help::{ .name = "average_if", .group = "Conditions and lookup",
+        .args = Arg[]::{ Arg::{ .name = "values",
+        .meaning = "the cells to average, such as D1:D9" },
+        Arg::{ .name = "condition",
+        .meaning = "a comparison read on each row, such as B1:B9 = \"Pens\"" } },
+        .summary = "the average of the numbers of `values` on the rows where the condition holds",
+        .detail = "", .example = "average_if(D1:D9, B1:B9 = \"Pens\")", .gives = "" },
+    Help::{ .name = "lookup", .group = "Conditions and lookup",
+        .args = Arg[]::{ Arg::{ .name = "key", .meaning = "the value to look for" },
+        Arg::{ .name = "keys", .meaning = "one column or one row to look in" },
+        Arg::{ .name = "values", .meaning = "the cells beside them, as many as `keys`" },
+        Arg::{ .name = "otherwise", .meaning = "the value where no key equals `key`" } },
+        .summary = "the value beside the first key that equals `key`, else `otherwise`",
+        .detail = "Text equals text without regard to case.",
+        .example = "lookup(\"Pens\", B1:B9, D1:D9, 0)", .gives = "" },
+    Help::{ .name = "sum_product", .group = "Numbers",
+        .args = Arg[]::{ Arg::{ .name = "a", .meaning = "one column or one row of numbers" },
+        Arg::{ .name = "b", .meaning = "the cells beside them, as many as `a`" } },
+        .summary = "each cell of `a` times the cell of `b` beside it, added",
+        .detail = "A pair that is not two numbers is left out.",
+        .example = "sum_product(C1:C9, D1:D9)", .gives = "" },
+} //< the forms `Parser.function` in `ksmd/calc/calc.kspl` reads before the table, in its order
+
+fn call_form(h: Help@, arena: Arena$@): U8[] //< `name(a, [b], xs…)`, as the reference writes it
+    t: = arena.text()
+    t.s(h.name).c('(')
+    for i in Range.asc(h.args.len)
+        a: = h.args[i]
+        t.s(", " if i > 0 else "").s("[" if a.optional else "").s(a.name)
+            .s("…" if a.rest else "").s("]" if a.optional else "")
+    return t.c(')').take()
+
+fn write_json(lists: Help[][], out: Str_builder$@) //<
+    //< Every entry of the lists, as one JSON array the page reads
+    defer $b: = Json_builder(null)
+    $all: = b.arr()
+    for list in lists
+        for h in list
+            $args: = b.arr()
+            for a in h.args
+                args = args
+                    .push(b.obj().set("name", b.str_val(a.name))
+                    .set("meaning", b.str_val(a.meaning))
+                    .set("optional", b.bool_val(a.optional)).set("rest", b.bool_val(a.rest)).build())
+            all = all
+                .push(b.obj().set("name", b.str_val(h.name))
+                .set("group", b.str_val(h.group)).set("args", args.build())
+                .set("summary", b.str_val(h.summary)).set("detail", b.str_val(h.detail))
+                .set("example", b.str_val(h.example)).set("gives", b.str_val(h.gives)).build())
+    all.build().dump(out)

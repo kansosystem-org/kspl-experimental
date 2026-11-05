@@ -369,7 +369,7 @@ Caution: **Keep the register check in `cortex_m_preempt.kspl`: it is the only de
 
 * the atomics: `port/rp2040/ksos_atomic_sio.c` takes the SIO's hardware spinlock, which no other chip has;
 * the boot: boot2, the flash's XIP mode and the vector table at flash+0x100 through VTOR;
-* the second core, which ksos does not start (the "ksos" section of [`docs/PLAN.md`](../../docs/PLAN.md));
+* the second core, which ksos does not start;
 * the RP2040's peripherals and its real timing (the drivers under `drivers/rp2040/`).
 
 ### The RP2040 port (`port/rp2040/`)
@@ -568,7 +568,7 @@ The VK16K33 / HT16K33 holds display RAM and scans it by itself, so a picture onc
 
 ### Writing Flash (`flash.kspl`) — real chip only
 
-It offers the last 64KB of Flash as a place to erase and write, where the append-only record ([ksdb](../../ksdb/README.md)) goes. **It alone hits no MMIO.** Writing and erasing are the boot ROM's functions, looked up from the ROM's fixed table. What those functions ask for:
+It offers the last 64KB of Flash as a place to erase and write, where the append-only record ([ksdb](../../lib/ksdb/README.md)) goes. **It alone hits no MMIO.** Writing and erasing are the boot ROM's functions, looked up from the ROM's fixed table. What those functions ask for:
 
 | The operation | The unit | The position |
 | :-- | :-- | :-- |
@@ -744,7 +744,7 @@ conn: = tcpconn.make(link, ...)
 
 **`net/mini_ipv4.kspl` holds not one import.** Only the three calls through `Link` in `net/tcp_conn.kspl` touch the hardware, so all of `ksos/net` is independent of the NIC.
 
-**`Link` takes the shape of ksdb's `Store`**: a struct of function pointers with no context pointer ("The place is swapped through a struct of function pointers" in [`ksdb/docs/DESIGN-storage.md`](../../ksdb/docs/DESIGN-storage.md)). Add a context pointer only when two NICs of the same kind come up (Principle 5).
+**`Link` takes the shape of ksdb's `Store`**: a struct of function pointers with no context pointer ("The place is swapped through a struct of function pointers" in [`lib/ksdb/docs/DESIGN-storage.md`](../../lib/ksdb/docs/DESIGN-storage.md)). Add a context pointer only when two NICs of the same kind come up (Principle 5).
 
 ## 🚗 The board: Freenove's 4WD car with a Pico W
 
@@ -777,7 +777,7 @@ Caution: Do not point at a demo from here. Once the board knows a particular dem
 
 At start-up the car fetches one whole policy from kssrv (`GET /pilot_policy.safetensors`), keeps it inside the device and disconnects. From then on, each round, it reads the sensors, decides the next manoeuvre in the car, turns the wheels and keeps the observation.
 
-**The policy file is `ksos/demo/cortex_m/pilot_policy.safetensors`, the one copy that the car and `cortex_m_pilot_probe` both use.** `ksai/examples/car_pilot` writes it offline. After the rules, the net or the encoding change, write it again with `ksplc run ksai/examples/car_pilot/main.kspl ksos/demo/cortex_m/pilot_policy.safetensors`.
+**The policy file is `ksos/demo/cortex_m/pilot_policy.safetensors`, the one copy that the car and `cortex_m_pilot_probe` both use.** `lib/ksai/examples/car_pilot` writes it offline. After the rules, the net or the encoding change, write it again with `ksplc run lib/ksai/examples/car_pilot/main.kspl ksos/demo/cortex_m/pilot_policy.safetensors`.
 
 The policy and the observations live in **the record inside the device** (the last 64KB of Flash). Where the link or kssrv is down, or the policy it sends is refused, the car decides with the policy it took last time. It stays put only when neither can be used, and the console says which policy it uses.
 
@@ -869,9 +869,9 @@ Training on a microcontroller is checked apart from the car: `make ksos-cm-ai-tr
 
 ## 🚫 What is out of scope, and why
 
-**It assumes a single core (core0).** The atomics already hold between cores, so starting core1 needs no fix to the runtime. What it does need is in the "ksos" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+**It assumes a single core (core0).** The atomics already hold between cores, so starting core1 needs no fix to the runtime.
 
-**Hardware checks cover only the RP2040.** There is no port or driver for a real Cortex-M33 chip (a Renesas RA6M4, or a Raspberry Pi Pico 2 W / RP2350). One is in the "ksos" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+**Hardware checks cover only the RP2040.** There is no port or driver for a real Cortex-M33 chip (a Renesas RA6M4, or a Raspberry Pi Pico 2 W / RP2350).
 
 ### TLS
 

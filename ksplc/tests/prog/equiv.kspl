@@ -62,10 +62,17 @@ priv struct Byte_tags
     priv a: Byte_tag
     priv b: Byte_tag
 
+priv struct Big_head //< a field 4000000000 bytes in, measured only, never made
+    head: I32[1000000000]
+    tail: U8
+
 priv typedef Form = Shape //< an enum whose variants are reached through an alias
 priv typedef Form2 = Form //< and through an alias of that alias
 priv typedef Opt_i32 = I32? //< a generic enum's instance, reached through an alias
 priv typedef Nums = List<|I32|> //< a generic struct's instance, `new` reached through an alias
+priv typedef C_text = Void@ //< a string literal fits an alias of the pointer it fits
+priv typedef Byte_ptr = U8@ //< the same for an immutable byte's pointer
+priv typedef Bytes = U8$[] //< and `""` for a writable slice
 
 priv const G_TEXT: U8[] = "ksplc.cfg" //< a global declaration's initialiser
     //< Unlike C, the LLVM backend has to rebuild an initialiser as a static constant expression
@@ -741,6 +748,22 @@ raw-line-2""").s("<END>\n")
     neg_sz: Sz = runtime_divisor(-1)
     sz_signed: = neg_sz > sizeof(I32)
     b.s("sizeof_sign=\{sz_signed\}/\{I64::(neg_sz - sizeof(I32))\}\n")
+    // A size or an offset of 2^31 bytes or more. **Keep one past I32's range**: genllvm folded
+    // them through I32 and wrote 0, while the C asks C's `sizeof` and is right.
+    b.s("sizeof_big=\{sizeof(I32[1000000000])\}/\{offsetof(Big_head, tail)\}\n")
+    // **An element computes at its own width, as a declaration's value does**: `a + 1` of a `U8`
+    // 255 is 0 in an array's element and in an argument. The element's expected type is
+    // read-only, and that mark once made `1` an `I32`, refused as a narrowing.
+    byte: U8 = runtime_u8(255)
+    wrapped: U8[2] = ::{ byte + 1, byte }
+    b.s("u8_element=\{wrapped[0]\}/\{wrapped[1]\}/\{runtime_u8(byte + 1)\}\n")
+    // A string literal through an alias of the type it fits.
+    c_text: C_text = "C"
+    first: Byte_ptr = "B"
+    none: Bytes = ""
+    c_byte: = (U8@::c_text)$
+    first_byte: = first$
+    b.s("alias_text=\{c_byte:c\}/\{first_byte:c\}/\{none.len\}\n")
     ptr_lines(b@, msg)
     shadow_lines(b@)
     // Floating-point conversion ("Primitive types" in docs/SPEC-programming-language.md).

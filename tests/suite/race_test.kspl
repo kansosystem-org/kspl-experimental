@@ -59,7 +59,8 @@ struct Left_out //< a file that starts threads and that no program here runs, wi
     why: U8[]
 
 priv const LEFT_OUT: Left_out[_] = ::{
-    Left_out::{ .path = "tools/ai_assist/build_corpus.kspl", .why = "a tool no gate runs" },
+    Left_out::{ .path = "lib/ksai/examples/code_complete/build_corpus.kspl",
+        .why = "a program of the coding example no gate runs" },
     Left_out::{ .path = "ksplc/tests/negative/closure.kspl",
         .why = "compiled to be refused or accepted, never run" },
     Left_out::{ .path = "ksplc/tests/negative/thread.kspl",
@@ -302,7 +303,7 @@ priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], define: U8[], work: U8
     $exes: = List<|U8[]|>(arena)
     dir: = fs.join(harness.root(), pkg, arena)
     for i in Range.asc(entries.len)
-        stem: = arena.text().s(pkg).s("_\{i\}.exe").take()
+        stem: = arena.text().s(sys.get_file_name(pkg)).s("_\{i\}.exe").take()
         b: =
             build(dir, fs.join(harness.root(), entries[i], arena), fs.join(work, stem, arena),
             OPT_FOR_RUN, define, arena)
@@ -314,22 +315,22 @@ priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], define: U8[], work: U8
     return exes
 
 priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
-    //< ksai's examples, the tests that run them, and its unit tests (`ksai/Makefile`'s `test`)
-    //< fim_coder trains on two threads there. The unit tests split products over threads.
+    //< ksai's examples, the tests that run them, and its unit tests (`lib/ksai/Makefile`'s `test`)
+    //< code_complete trains on two threads there. The unit tests split products over threads.
     name: = "ksai's examples and their tests run with no data race"
     exes: =
-        build_all(name, "ksai",
-        U8[][]::{ "ksai/examples/llama_engine/main.kspl", "ksai/examples/qwen_infer/main.kspl",
-        "ksai/examples/fim_coder/main.kspl", "ksai/examples/car_pilot/main.kspl",
-        "ksai/examples/chat_server/main.kspl", "ksai/tests/examples_main.kspl",
-        "ksai/tests/main.kspl" }, "", work, deps, arena)
+        build_all(name, "lib/ksai",
+        U8[][]::{ "lib/ksai/examples/llama_engine/main.kspl",
+        "lib/ksai/examples/qwen_infer/main.kspl", "lib/ksai/examples/code_complete/main.kspl",
+        "lib/ksai/examples/car_pilot/main.kspl", "lib/ksai/examples/chat_server/main.kspl",
+        "lib/ksai/tests/examples_main.kspl", "lib/ksai/tests/main.kspl" }, "", work, deps, arena)
     if exes.len == 0
         return
     tmp: = fs.join(work, "ksai_work", arena)
-    // The arguments are as `ksai/Makefile`'s `test` passes them, in its order.
+    // The arguments are as `lib/ksai/Makefile`'s `test` passes them, in its order.
     argv: = harness_sanitizer.kept(U8[][]::{ exes.get(5), exes.get(0), exes.get(1), exes.get(2),
-        exes.get(3), exes.get(4), tmp }, arena)
-    dir: = fs.join(harness.root(), "ksai", arena)
+        exes.get(3), exes.get(4), ksplc_harness.ksplc_exe(), tmp }, arena)
+    dir: = fs.join(harness.root(), "lib/ksai", arena)
     log_dir: = fs.join(work, "ksai_log", arena)
     runs
         .push(Raced::{ .name = name, .dir = dir, .argv = argv, .log_dir = log_dir,
@@ -340,13 +341,13 @@ priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena:
         .env = harness_sanitizer.pkg_env(arena) })
 
 priv fn race_ksai_pool(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
-    //< ksai's thread pool, given rounds back to back (`ksai/tests/pool_stress_main.kspl`)
+    //< ksai's thread pool, given rounds back to back (`lib/ksai/tests/pool_stress_main.kspl`)
     //< **The programs above post a round now and then**, so the workers sleep between rounds, and
     //< the hand-over while they spin is not raced. A lost wakeup fails there with a message.
     name: = "ksai's thread pool hands over thousands of rounds with no data race"
-    dir: = fs.join(harness.root(), "ksai", arena)
+    dir: = fs.join(harness.root(), "lib/ksai", arena)
     b: =
-        build(dir, fs.join(harness.root(), "ksai/tests/pool_stress_main.kspl", arena),
+        build(dir, fs.join(harness.root(), "lib/ksai/tests/pool_stress_main.kspl", arena),
         fs.join(work, "ksai_pool.exe", arena), OPT_FOR_SPIN, "", arena)
     if b.exe.len == 0
         verdict.check(name, false, b.why)
@@ -358,20 +359,20 @@ priv fn race_ksai_pool(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, a
         .log_dir = fs.join(work, "ksai_pool_log", arena),
         .env = harness_sanitizer.pkg_env(arena) })
 
-priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
-    //< ksbind's tests (`ksbind/Makefile`'s `test`), where the libraries it binds link
+priv fn race_kstls(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+    //< kstls's tests (`lib/kstls/Makefile`'s `test`), where the libraries it binds link
     //< The TLS test serves its handshake from a second thread.
-    //< **Only a link that fails can skip, and only where `KSBIND_REQUIRE_LIBS` is not `1`**, as in
-    //< ksbind's own `make test`. Linux's image holds OpenSSL, so there it fails.
-    name: = "ksbind's tests run with no data race"
-    dir: = fs.join(harness.root(), "ksbind", arena)
+    //< **Only a link that fails can skip, and only where `KSTLS_REQUIRE_LIBS` is not `1`**, as in
+    //< kstls's own `make test`. Linux's image holds OpenSSL, so there it fails.
+    name: = "kstls's tests run with no data race"
+    dir: = fs.join(harness.root(), "lib/kstls", arena)
     b: =
-        build(dir, fs.join(harness.root(), "ksbind/tests/main.kspl", arena),
-        fs.join(work, "ksbind.exe", arena), OPT_FOR_RUN, "", arena)
+        build(dir, fs.join(harness.root(), "lib/kstls/tests/main.kspl", arena),
+        fs.join(work, "kstls.exe", arena), OPT_FOR_RUN, "", arena)
     if b.exe.len == 0
         if b.why.starts_with("it does not link")
-            ksplc_harness.require_or_skip(name, "KSBIND_REQUIRE_LIBS",
-                arena.text().s("the libraries ksbind binds do not link here: ").s(b.why).take())
+            ksplc_harness.require_or_skip(name, "KSTLS_REQUIRE_LIBS",
+                arena.text().s("the libraries kstls binds do not link here: ").s(b.why).take())
         else
             verdict.check(name, false, b.why)
         return
@@ -379,7 +380,7 @@ priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, aren
     runs
         .push(Raced::{ .name = name, .dir = dir,
         .argv = harness_sanitizer.kept(U8[][]::{ b.exe }, arena),
-        .log_dir = fs.join(work, "ksbind_log", arena),
+        .log_dir = fs.join(work, "kstls_log", arena),
         .env = harness_sanitizer.pkg_env(arena) })
 
 priv fn race_ksagent(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
@@ -589,7 +590,7 @@ fn main(): I32
     race_tests(work, deps@, runs@, arena)
     race_ksai(work, deps@, runs@, arena)
     race_ksai_pool(work, deps@, runs@, arena)
-    race_ksbind(work, deps@, runs@, arena)
+    race_kstls(work, deps@, runs@, arena)
     race_ksagent(work, deps@, runs@, arena)
     race_lsp(work, deps@, arena)
     run_all_raced(runs@, work, arena)

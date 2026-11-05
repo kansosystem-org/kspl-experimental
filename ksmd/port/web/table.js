@@ -1,14 +1,15 @@
 // ksmd page: tables. A table shows calculated values; a cell opened to edit shows what was typed in
 // it (its formula, number or text), and the value is calculated again once the edit is taken.
 // A table is not editable text: the document's selection stops at its edges, and a cell edits in
-// an input of its own. Arrow keys past the first or last row leave the table for the gap there.
+// an input of its own. Arrow keys past the first or last row leave the table for the text there.
 // Column widths and row heights, and the edges that change them, are `sizes.js`.
 // Each name in the heading row carries the arrow that opens its column's filter (`filter.js`).
 // Ctrl+; types today's date into a cell, and Ctrl+: the time, as Excel does.
 // Shift+click, and Shift with an arrow key, choose a range of cells from the chosen one
 // (`range.js`).
 // A right-click on a cell, a row number or a column letter opens the table's menu (`menu.js`).
-// While a formula is typed, a press on a cell can write its reference instead (`point.js`).
+// While a formula is typed, a press on a cell can write its reference instead (`point.js`), and
+// a list offers the functions whose names fit what is typed (`suggest.js`).
 // Groups of rows show beside the row numbers, and groups of columns above the letters (`outline.js`).
 "use strict";
 
@@ -147,11 +148,13 @@ function ksmdTable(ks) {
   // Measures each table's row numbers, so its first column stays in sight just right of them
   // (`--first-left` in `tools.css`). Every width is read first, then every one is set, so the page
   // is laid out once. A table an include shows is measured too: it scrolls sideways as well.
+  // A width on the screen is divided by the document's zoom, which scales the property again.
   function pin() {
     const wraps = Array.from(ks.root.querySelectorAll(".b.table"));
+    const zoom = ks.zoom ? ks.zoom.factor() : 1;
     const widths = wraps.map((wrap) => {
       const corner = wrap.querySelector("thead tr:first-child > th:first-child");
-      return corner ? corner.getBoundingClientRect().width : 0;
+      return corner ? corner.getBoundingClientRect().width / zoom : 0;
     });
     wraps.forEach((wrap, i) => wrap.style.setProperty("--first-left", `${widths[i]}px`));
   }
@@ -202,7 +205,8 @@ function ksmdTable(ks) {
   // Chooses a cell, or with `opening` opens it to edit, as a spreadsheet's double-click or F2 does,
   // the caret at the end. With `whole`, all of its text is selected, so what is typed replaces it.
   // With `typed`, the box that holds the chosen cell's focus becomes the input, keeping what was
-  // typed or is being composed in it (`catcher` in `range.js`).
+  // typed or is being composed in it (`catcher` in `range.js`). With `composing`, an input
+  // method's composition goes on in it.
   // The element a cell's box is: an input where its column has choices, else a text area.
   function boxKind(el) {
     const wrap = el.closest(".table");
@@ -220,7 +224,7 @@ function ksmdTable(ks) {
     input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
   }
 
-  function edit(el, opening = true, whole = false, typed = null) {
+  function edit(el, opening = true, whole = false, typed = null, composing = false) {
     if (open && open.input.parentNode === el) return;
     take();
     const block = blockOf(el);
@@ -260,6 +264,11 @@ function ksmdTable(ks) {
     for (const n of open.nodes) n.remove();
     if (!typed) el.appendChild(input);
     fitLines(input);
+    // The list of functions takes its keys first, while it is open, so this cell's keys stay as
+    // they are whenever it is closed.
+    if (row >= 0) ks.suggest.attach(input);
+    // A formula's references show in colour while it is typed (`refs.js`).
+    if (row >= 0) ks.refs.attach(input, block, composing);
     input.addEventListener("keydown", keys);
     if (row >= 0) ks.choices.attach(el.closest(".table"), column, input);
     ks.range.collapse();
@@ -278,12 +287,14 @@ function ksmdTable(ks) {
       // own paste handler must not take the event a second time.
       e.stopPropagation();
       if (open && open.input === input) input.value = open.before;
-      ks.range.pasteGrid(text, false);
+      // Cells copied in ksmd keep their formulas (`paste.js`).
+      if (!ks.pasting.paste(e.clipboardData, text)) ks.range.pasteGrid(text, false);
     });
     // A blur of an input already closed, as a resize closes and opens its cell, takes nothing. A
-    // value the model refuses stays: the person may have only pressed a menu or a dialog.
+    // value the model refuses stays: the person may have only pressed a menu or a dialog. A cell
+    // held for the Insert Function dialog stays open (`catalog.js`).
     input.addEventListener("blur", () => {
-      if (open && open.input === input) take("stay");
+      if (open && open.input === input && !open.held) take("stay");
     });
     if (typed) return;
     input.focus();
@@ -300,6 +311,7 @@ function ksmdTable(ks) {
     if (!open) return true;
     const o = open;
     open = null;
+    ks.refs.detach();
     if (o.input.value === o.before) {
       const el = o.input.parentNode;
       if (el) {
@@ -315,10 +327,14 @@ function ksmdTable(ks) {
     if (keep === "stay") {
       if (!o.input.isConnected) return true;
       open = o;
+      if (o.row >= 0) ks.refs.attach(o.input, o.block);
       return false;
     }
     const el = find(o.block, o.row, o.column);
     if (el) {
+      // The cell's own content goes back first, so Esc in the box opened next puts it back
+      // rather than the refused box.
+      if (o.input.parentNode === el) o.input.replaceWith(...o.nodes);
       edit(el);
       open.input.value = o.input.value;
     }
@@ -334,11 +350,14 @@ function ksmdTable(ks) {
     if (el) edit(el, opening, whole);
   }
 
-  // Leaves the table for the gap before or after it.
+  // Leaves the table for the text after it, or before it (`select_beside` in
+  // `ksmd/edit/editor.kspl`), and scrolls only as far as the caret needs.
+  // Caution: **Focus the document without a scroll.** A focused document jumps to its top.
   function leave(block, after) {
-    ks.root.focus();
-    const b = block + (after ? 1 : 0);
-    ks.place([1, b, 0, 0]);
+    ks.root.focus({ preventScroll: true });
+    ks.setPlace("text");
+    ks.act("ksmd_web_select_beside", block, after ? 1 : 0);
+    ks.view.caretIntoSight();
   }
 
   function keys(e) {
@@ -597,17 +616,21 @@ function ksmdTable(ks) {
   // Whether a table is left out of print and PDF.
   const leftOut = (block) => ks.view.blocks()[block].classList.contains("print-hidden");
 
-  // The commands on a table's rows and columns, and on the table as a whole. While rows of the
-  // table are cut, Insert row above inserts them instead, and Insert column left the columns
-  // (`CUT_FORMS` in `commands.js`). A filter stays, and shows a new row until it is chosen again
-  // (`filter.js`).
+  // The commands on a table's rows and columns, and on the table as a whole. Each acts on every
+  // row or column the range spans, as one step: with rows 2 to 3 chosen, Insert row above inserts
+  // two rows, as Excel does. While rows of the table are cut, Insert row above inserts them
+  // instead, and Insert column left the columns (`CUT_FORMS` in `commands.js`). A filter stays,
+  // and shows a new row until it is chosen again (`filter.js`).
   const LINES = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0],
     "column-left": [2, 0], "column-right": [2, 1], "column-remove": [3, 0] };
   const editLines = (name, c) => {
     const rows = name.startsWith("row-");
     if (name in CUT_FORMS && ks.cut.waiting(c.block, rows)) return ks.cut.insert(c.block, rows);
     const [what, after] = LINES[name];
-    return ks.act("ksmd_web_table_edit", c.block, what, (rows ? Math.max(c.row, 0) : c.column) + after);
+    const r = ks.range.rect();
+    const first = rows ? Math.max(r.r1, 0) : r.c1;
+    const last = rows ? Math.max(r.r2, 0) : r.c2;
+    return ks.act("ksmd_web_table_edit", c.block, what, after ? last + 1 : first, last - first + 1);
   };
   ks.handle(["row-above", "row-below", "row-remove"], editLines,
     { table: true, repeat: true, when: (c) => c.row >= 0 });
@@ -640,11 +663,11 @@ function ksmdTable(ks) {
     // typed replaces its text.
     open: (block, row, column, whole = false) => moveTo(block, row, column, true, whole),
     // Opens the chosen cell with what was typed or is being composed in the box over it.
-    openTyped: (box) => {
+    openTyped: (box, composing = false) => {
       const el = box.parentElement;
       if (!el || ks.readOnly || (open && open.input === box)) return;
       ks.range.collapse();
-      edit(el, true, false, box);
+      edit(el, true, false, box, composing);
     },
     // Chooses a cell, or leaves the table past its first or last row.
     choose: (block, row, column) => moveTo(block, row, column, false),
@@ -668,6 +691,10 @@ function ksmdTable(ks) {
       { block: open.block, row: open.row, column: open.column, text: open.input.value } : null),
     // Whether an event belongs to a cell's own input rather than to the document.
     owns: (target) => !!(target && target.closest && target.closest(".table")),
+    // Keeps the open cell open while the focus is elsewhere, or lets it be taken again on a blur.
+    hold: (on) => {
+      if (open) open.held = on;
+    },
     // Opens a cell with text typed in and part of it selected, as AutoSum leaves its formula.
     openWith: (block, row, column, text, from, to) => {
       moveTo(block, row, column, true);

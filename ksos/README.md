@@ -231,7 +231,7 @@ These components support embedded devices. They are optional for a first reading
 
 - `ksos/net/` provides a minimal network stack: `ksos/net/tcp_conn.kspl` implements TCP above `ksos/net/mini_ipv4.kspl` (ARP, IPv4, and UDP without fragmentation).
 
-- `ksai` runs beside a control loop without `malloc`, as the Cortex-M AI demos show. [ksai](../ksai/README.md) introduces the engine.
+- `ksai` runs beside a control loop without `malloc`, as the Cortex-M AI demos show. [ksai](../lib/ksai/README.md) introduces the engine.
 
 - A freestanding panic saves a crash record in `.noinit_panic`, RAM that the linker scripts (`ksos/port/*/link.ld`) reserve without zeroing. After a warm reset, `take_panic_record` in `std/lang.kspl` reads the record once. `make ksos-cm-panic-probe` tests a watchdog reset, a panic, and a soft reset (`system_reset()` in `ksos/drivers/cortex_m/scs.kspl`).
 
@@ -305,6 +305,5 @@ Only code without shared state can move to another file unchanged. Here, state m
 | [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md) | The car's own facts: pin assignment, motor polarity, conversion formulae | Whoever wires or drives the car, or writes a driver against it |
 | [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) | Design reasons: kernel, port layer, drivers, network stack, AI on bare metal | Anyone changing ksos |
 | [std](../std/README.md) | The standard library. `ksplc doc std` lists its published files | Anyone changing ksos |
-| [ksai](../ksai/README.md) | The inference that runs beside the control loop, without `malloc` | Anyone changing ksos |
-| [ksdb](../ksdb/README.md) | The append-only log stored on the device | Anyone changing ksos |
-| The "ksos" section of [`docs/PLAN.md`](../docs/PLAN.md) | Remaining work and completion criteria | Anyone changing ksos |
+| [ksai](../lib/ksai/README.md) | The inference that runs beside the control loop, without `malloc` | Anyone changing ksos |
+| [ksdb](../lib/ksdb/README.md) | The append-only log stored on the device | Anyone changing ksos |

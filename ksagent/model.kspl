@@ -52,6 +52,12 @@ fn parse_url(url: U8[], model: U8[], timeout_ms: I32, arena: Arena$@): Server!U8
     $base: = rest.sub_from(slash)
     for base.len > 0 && base[base.len - 1] == '/'
         base = base.sub(0, base.len - 1)
+    // **A URL that ends in `/v1` is refused, not cut**: ksagent writes `/v1` itself (`CHAT_PATH`),
+    // and the person learns the form the option takes.
+    if base.ends_with("/v1")
+        throw arena.text()
+            .s("the model URL must leave out /v1, which ksagent adds itself: give http://")
+            .s(host_port).s(base.strip_suffix("/v1")).take()
     $host: = host_port
     $port: I64 = 80I64
     if colon: = host_port.rfind_char(':')

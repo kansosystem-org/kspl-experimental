@@ -307,7 +307,9 @@ function ksmdSizes(ks) {
     const start = wrap.px.slice();
     const x0 = e.clientX;
     const least = SIZE_LEAST * m.ch + m.pad;
-    const width = (x) => clamp(start[column] + x - x0, least, SIZE_MOST * m.ch + m.pad);
+    // The pointer moves in the window's pixels, and the widths are the document's, before its zoom.
+    const zoom = ks.zoom.factor();
+    const width = (x) => clamp(start[column] + (x - x0) / zoom, least, SIZE_MOST * m.ch + m.pad);
     wrap.classList.add("resizing");
     const move = (mv) => {
       const px = start.slice();
@@ -336,13 +338,15 @@ function ksmdSizes(ks) {
     const tr = edge.closest("tr");
     const top = tr.getBoundingClientRect().top;
     const y0 = e.clientY;
-    const points = (y) => clamp(Math.round((y - top) * 0.75), 6, 409);
+    // The pointer moves in the window's pixels, and the guide and the height are the document's.
+    const zoom = ks.zoom.factor();
+    const points = (y) => clamp(Math.round(((y - top) / zoom) * 0.75), 6, 409);
     const guide = document.createElement("div");
     guide.className = "row-guide";
     wrap.appendChild(guide);
     const show = (y) => {
       const p = points(y);
-      guide.style.top = `${top + p / 0.75 - wrap.getBoundingClientRect().top}px`;
+      guide.style.top = `${(top - wrap.getBoundingClientRect().top) / zoom + p / 0.75}px`;
       guide.dataset.height = `${p} pt`;
     };
     show(tr.getBoundingClientRect().bottom);
@@ -388,15 +392,11 @@ function ksmdSizes(ks) {
     return dragRow(e, row);
   }, true);
 
-  // The width a page of the document's paper leaves for a table, in CSS pixels: the paper's width
-  // less the browser's margins of about 10 mm on each side, and the document's own. A document that names no paper
-  // takes A4, the narrower of the two common papers.
+  // The width a page of the document's paper leaves for a table, in CSS pixels: the room inside
+  // the print's margins (`ks.pages.paper`), less the document's own padding.
   function printable() {
-    const s = ks.settings && ks.settings.current ? ks.settings.current() : null;
-    const [w, h] = SIZE_PAPERS[(s && s.paper) || "A4"] || SIZE_PAPERS.A4;
-    const across = s && s.land ? h : w;
     const doc = getComputedStyle(ks.root);
-    return ((across - 20) * 96) / 25.4 - parseFloat(doc.paddingLeft) - parseFloat(doc.paddingRight);
+    return ks.pages.paper().width - parseFloat(doc.paddingLeft) - parseFloat(doc.paddingRight);
   }
 
   // A table wider than the paper prints smaller, so all of its columns fit, and the page says so

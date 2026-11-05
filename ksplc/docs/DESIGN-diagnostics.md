@@ -246,7 +246,7 @@ Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`
 
 | The ceiling | What it guards | How it breaks down |
 | :-- | :-- | :-- |
-| KSPEG's parse depth (`kspeg/rule.kspl`) | the parser's own native stack | a crash on a deep expression |
+| KSPEG's parse depth (`lib/kspeg/rule.kspl`) | the parser's own native stack | a crash on a deep expression |
 | the AST's copying / validation / walking (`base/ast.kspl`) | each walk's recursion | the same |
 | the type chain, the alias chain, the layout, the monomorphization | each layer's mutual recursion | the same |
 | the method table's chain (`MAX_METHOD_CHAIN_DEPTH` in `sema/decl/mono_queue.kspl`) | **the instantiation queue** | it never returns, with no diagnostic |

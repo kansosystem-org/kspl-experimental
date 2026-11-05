@@ -1,4 +1,4 @@
-//< Installation failures against the real recipe, with a tiny compiler and library
+//< Installation failures against the real recipe, with a tiny compiler, std and library
 //< The shell functions fail one copy or move. Rollback uses the real commands afterwards.
 import "ksplc/tests/support/harness" as compiler_harness
 import "std/fs"
@@ -28,13 +28,18 @@ priv fn one(mode: U8[], arena: Arena$@) //< one fresh sandbox per failure point
     bin: = fs.join(prefix, "bin", arena)
     lib: = fs.join(prefix, "lib/kspl/std", arena)
     src: = fs.join(dir, "std", arena)
-    for path in U8[][]::{ bin, lib, src }
+    libs: = fs.join(prefix, "lib/kspl/lib", arena)
+    one_lib: = fs.join(dir, "lib/one", arena)
+    built: = fs.join(one_lib, "out", arena)
+    for path in U8[][]::{ bin, lib, src, built }
         fs.mkdir_all(path) catch panic("cannot make the installation fixture")
     name: = "ksplc.exe" if sys.is_windows() else "ksplc"
     exe: = fs.join(bin, name, arena)
     put(exe, "old compiler")
     put(fs.join(lib, "obsolete.kspl", arena), "old library")
     put(fs.join(src, "current.kspl", arena), "new library")
+    put(fs.join(one_lib, "current.kspl", arena), "new package")
+    put(fs.join(built, "test.c", arena), "what its tests built")
     put(fs.join(dir, "compiler", arena), "new compiler")
     put(fs.join(dir, "probe.mk", arena), PROBE)
     rules: = fs.join(harness.root(), "mk/install.mk", arena)
@@ -55,6 +60,12 @@ priv fn one(mode: U8[], arena: Arena$@) //< one fresh sandbox per failure point
     if good
         verdict.check("install: an obsolete library file is removed",
             !fs.exists(fs.join(lib, "obsolete.kspl", arena)), r.out)
+        verdict.check("install: the libraries stand beside std, without what their tests built",
+            fs.exists(fs.join(libs, "one/current.kspl", arena)) &&
+            !fs.exists(fs.join(libs, "one/out", arena)), r.out)
+    else
+        verdict.check(arena.text().s("install: ").s(mode).s(" leaves no libraries half placed")
+            .take(), !fs.exists(libs), r.out)
     verdict.check(arena.text().s("install: ").s(mode).s(" releases its lock").take(),
         !fs.exists(fs.join(prefix, "lib/kspl/.install-lock", arena)), r.out)
 
