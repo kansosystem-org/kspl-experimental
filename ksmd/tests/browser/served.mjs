@@ -8,6 +8,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import zlib from "zlib";
 import { CTRL, driver, verdict } from "./drive.mjs";
 import { drafts } from "./drafts.mjs";
 import { losses } from "./losses.mjs";
@@ -30,6 +31,36 @@ function pngHeader(width, height) {
   b[24] = 8;
   b[25] = 2;
   return b;
+}
+
+// A grey PNG that a browser decodes, of any size: one byte per pixel, each row unfiltered.
+function grayPng(width, height) {
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (bytes) => {
+    let c = 0xffffffff;
+    for (const b of bytes) c = table[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const b = Buffer.alloc(body.length + 8);
+    b.writeUInt32BE(data.length, 0);
+    body.copy(b, 4);
+    b.writeUInt32BE(crc(body), body.length + 4);
+    return b;
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(width, 0);
+  head.writeUInt32BE(height, 4);
+  head[8] = 8;
+  const rows = Buffer.alloc((width + 1) * height, 0xee);
+  for (let r = 0; r < height; r++) rows[r * (width + 1)] = 0;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", head),
+    chunk("IDAT", zlib.deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
 
 const H = "%ksmd 1\n\n";
@@ -302,10 +333,20 @@ const SECTIONS = {
     await idle(d);
     check((await noticed(d)).includes("changed on disk") && ctx.disk("top.ksmd") === second,
       "a save over a file changed on disk writes nothing and asks", await noticed(d));
-    await choose(d, "Replace the file");
+    // A double press: the second press must not write again over the file the first one wrote.
+    await d.js(`(() => {
+      const b = Array.from(document.querySelectorAll('#notice button'))
+        .find((x) => x.textContent.startsWith("Replace the file"));
+      b.click();
+      b.click();
+    })()`);
+    await idle(d);
     const mine = await d.js("ksmd.source()");
     check(mine.includes("Mine.") && ctx.disk("top.ksmd") === mine,
       "choosing to replace it writes this page's version", JSON.stringify(ctx.disk("top.ksmd")));
+    check(await noticed(d) === "" && await said(d) === "Saved top.ksmd.",
+      "a notice runs one choice: a double press saves once, and no change on disk is reported",
+      `${await noticed(d)} | ${await said(d)}`);
     await typeAtEnd(d, 1, " Again.");
     const third = mine.replace("# Their title", "# Third title");
     fs.writeFileSync(path.join(ctx.root, "top.ksmd"), third);
@@ -494,15 +535,16 @@ const SECTIONS = {
     check(child !== null, "the include's button opens the included file in a tab of its own");
     if (child === null) return;
     const c = driver(child);
-    await c.until("document.documentElement.dataset.files === 'ready'");
+    if (!await c.until("!!window.ksmd && document.documentElement.dataset.files === 'ready'", 30000)) throw new Error("its tab did not load in 30 s");
     check(await c.js("ksmd.source()") === NOTES && await c.js("location.search") ===
       "?doc=parts%2Fnotes.ksmd", "that tab opens the included file alone");
     await typeAtEnd(c, 0, " Edited.");
     await c.press("s", CTRL);
     await idle(c);
     const notes = NOTES.replace("Note text.", "Note text. Edited.");
-    check(ctx.disk("parts/notes.ksmd") === notes && ctx.disk("top.ksmd") === top,
-      "saving it writes the included file, and the parent's bytes stay");
+    check(await onDisk(ctx, "parts/notes.ksmd", notes) && ctx.disk("top.ksmd") === top,
+      "saving it writes the included file, and the parent's bytes stay",
+      JSON.stringify([ctx.disk("parts/notes.ksmd"), ctx.disk("top.ksmd")]));
     await c.press("z", CTRL);
     await c.settle();
     check(await c.js("ksmd.source()") === NOTES && await d.js("ksmd.source()") === top,
@@ -609,6 +651,63 @@ const SECTIONS = {
     check(ctx.disk("parts/notes.ksmd") === theirs && (await said(d)).includes("changed after you chose it"),
       "the second press replaces only the bytes that stood when the file was chosen", await said(d));
     fs.writeFileSync(path.join(ctx.root, "parts/notes.ksmd"), notes);
+
+    // A Save As into another folder that fails, with text typed while the write is out: the text
+    // stays, and the paths stay written for the document's own folder.
+    await d.js(`window.heldWrite = null;
+      const realFetch = window.fetch;
+      window.fetch = (url, how) => {
+        if (!how || how.method !== "PUT" || window.heldWrite) return realFetch(url, how);
+        return new Promise((r) => { window.heldWrite = () => r(realFetch(url, how)); });
+      };
+      true;`);
+    await d.menu("file-save-as");
+    await press("..");
+    await press("top.ksmd");
+    await d.click('#browse [data-browse="ok"]');
+    await d.until(asked);
+    await d.click('#browse [data-browse="ok"]');
+    await d.until("window.heldWrite !== null");
+    await typeAtEnd(d, 0, " During.");
+    const before = await d.js("ksmd.source()");
+    const topNow = `${top}\nChanged while the write was out.\n`;
+    fs.writeFileSync(path.join(ctx.root, "top.ksmd"), topNow);
+    await d.js("window.heldWrite()");
+    await idle(d);
+    const after = await d.js("ksmd.source()");
+    check(after === before && after.includes(" During.") && after.includes(':::include path="notes.ksmd"') &&
+      ctx.disk("top.ksmd") === topNow && await d.js("document.querySelector('.menubar .doc-name').textContent") ===
+        "parts/copy.ksmd",
+    "a Save As into another folder that fails keeps the text typed during the write, and changes no path",
+    after);
+    fs.writeFileSync(path.join(ctx.root, "top.ksmd"), top);
+
+    // A folder pressed, then Save at once: the save waits for the folder, and lands there.
+    await d.js(`window.fetch = ((realFetch) => (url, how) => String(url).includes("/api/list?path=parts")
+      ? new Promise((r) => setTimeout(() => r(realFetch(url, how)), 400)) : realFetch(url, how))(window.fetch);
+      true;`);
+    await d.menu("file-save-as");
+    await press("..");
+    await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
+      .find((b) => b.textContent === "parts").click()`);
+    await d.js("document.querySelector('#browse .browse-name').value = 'quick'");
+    await d.click('#browse [data-browse="ok"]');
+    await idle(d);
+    check(await onDisk(ctx, "parts/quick.ksmd", await d.js("ksmd.source()")) && ctx.disk("quick.ksmd") === null,
+      "Save pressed while a folder's listing is on its way saves in that folder", await said(d));
+    fs.rmSync(path.join(ctx.root, "parts/quick.ksmd"), { force: true });
+    // A slow listing that arrives after a newer one does not show its folder.
+    await d.menu("file-save-as");
+    await press("..");
+    await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
+      .find((b) => b.textContent === "parts").click()`);
+    await press("pics");
+    await new Promise((r) => setTimeout(r, 600));
+    check(await d.js("document.querySelector('#browse .browse-where').textContent") === "Workspace / pics",
+      "the folder pressed last shows, whichever listing arrives last",
+      await d.js("document.querySelector('#browse .browse-where').textContent"));
+    await d.click('#browse [data-browse="cancel"]');
+    await d.settle();
     await openInDialog(d, ["..", "top.ksmd"]);
     check(await d.js("document.querySelector('.menubar .doc-name').textContent") === "top.ksmd" &&
       await d.js("ksmd.source()") === top, "Open shows the same dialog; a double press opens",
@@ -735,6 +834,65 @@ const SECTIONS = {
       "the local server takes a save as large as the largest source the editor holds",
       `limit ${max}, status ${put.status}, ${size} bytes on disk`);
     fs.rmSync(file, { force: true });
+  },
+
+  // An open shows each block once: after the include's file comes, only the include is shown again.
+  async renderOnce(ctx) {
+    const lines = Array.from({ length: 50 }, (_, k) => `Line ${k + 1}.`).join("\n\n");
+    fs.writeFileSync(path.join(ctx.root, "many.ksmd"), `${H}${lines}\n\n:::include path="parts/notes.ksmd"\n:::\n`);
+    const d = await tab(ctx, "?doc=many.ksmd", "window.__added = 0; new MutationObserver((list) => { for (const m of " +
+      "list) if (m.target.id === 'doc') window.__added += m.addedNodes.length; }).observe(document, { childList: true, subtree: true });");
+    check(await d.until("(document.querySelector('#doc .include') || {}).textContent.includes('Note text.')"),
+      "the include shows its file once it has come");
+    const [added, blocks] = [await d.js("window.__added"), await d.js("document.getElementById('doc').children.length")];
+    check(added <= blocks + 2, "an open puts each block on the page once, and the include again", `${added} for ${blocks} blocks`);
+    await ctx.browser.closeTab(d.page);
+    fs.rmSync(path.join(ctx.root, "many.ksmd"), { force: true });
+  },
+
+  // A wide table an include shows keeps its first column right of its row numbers, as the
+  // document's own tables do.
+  async includedWide(ctx) {
+    const names = Array.from({ length: 30 }, (_, c) => `"n${c}"`).join(" | ");
+    const row = Array.from({ length: 30 }, (_, c) => `"${c} a long text that would wrap in a narrow cell"`).join(" | ");
+    fs.writeFileSync(path.join(ctx.root, "parts/wide.ksmd"), `${H}:::table name="w"\n| ${names} |\n| ${row} |\n:::\n`);
+    fs.writeFileSync(path.join(ctx.root, "widehost.ksmd"), `${H}Host.\n\n:::include path="parts/wide.ksmd"\n:::\n`);
+    const d = await tab(ctx, "?doc=widehost.ksmd");
+    const first = "document.querySelector('#doc .include td[data-r=\"0\"][data-c=\"0\"]')";
+    await d.until(`!!${first}`);
+    await d.js("window.scrollBy(2000, 0)");
+    const left = await d.js(`${first}.getBoundingClientRect().left`);
+    const number = await d.js("document.querySelector('#doc .include th.row-number').getBoundingClientRect().right");
+    check(await d.js("window.scrollX") > 0 && left === number,
+      "scrolled sideways, an included table's first column stays right of its row numbers", `${left} ${number}`);
+    await ctx.browser.closeTab(d.page);
+    fs.rmSync(path.join(ctx.root, "parts/wide.ksmd"), { force: true });
+    fs.rmSync(path.join(ctx.root, "widehost.ksmd"), { force: true });
+  },
+
+  // A shape drawn on an image wider than the reader's largest coordinate stays within it, so the
+  // file takes it.
+  async wideImage(ctx) {
+    fs.writeFileSync(path.join(ctx.root, "pics/wide.png"), grayPng(30000, 500));
+    fs.writeFileSync(path.join(ctx.root, "wideimg.ksmd"), `${H}:::image src="pics/wide.png" alt="Wide"\n:::\n`);
+    const d = await tab(ctx, "?doc=wideimg.ksmd");
+    const img = "document.querySelector('#doc .figure .picture img')";
+    await d.until(`!!${img} && ${img}.complete && ${img}.naturalWidth === 30000`, 15000);
+    await d.click('#doc .figure .draw-tools button[data-shape="rect"]');
+    const [left, top, width, height] = JSON.parse(await d.js("JSON.stringify((({ left, top, width, height }) => " +
+      "[left, top, width, height])(document.querySelector('#doc .figure svg.drawings').getBoundingClientRect()))"));
+    const mouse = (type, fx, fy) => d.page("Input.dispatchMouseEvent", { type, x: left + width * fx,
+      y: top + height * fy, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+    await mouse("mousePressed", 0.6, 0.2);
+    await mouse("mouseMoved", 0.8, 0.5);
+    await mouse("mouseReleased", 0.95, 0.8);
+    await d.settle();
+    const source = await d.js("ksmd.source()");
+    check(/draw shape="rect" from="1\d{4},\d+" to="20000,\d+"/.test(source),
+      "a shape drawn past 20,000 pixels on an image stops there, and the file takes it", `${source} | ${await said(d)}`);
+    await ctx.browser.closeTab(d.page);
+    fs.rmSync(path.join(ctx.root, "pics/wide.png"), { force: true });
+    fs.rmSync(path.join(ctx.root, "wideimg.ksmd"), { force: true });
   },
 };
 

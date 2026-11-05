@@ -70,13 +70,13 @@ pub fn set_threads( //< the most threads one product may use; the default, 0, is
     thread_cap.store(n)
 
 #cfg(!freestanding)
-priv fn most_threads(): Sz //< the cap `set_threads` set, or the CPU count
+priv fn most_threads(): Sz //< the cap `set_threads` set, but never more than the CPU count
     $cpus: = cpus_seen.load()
     if cpus == 0
         cpus = sys.cpu_count()
         cpus_seen.store(cpus)
     cap: = thread_cap.load()
-    return cpus if cap == 0 else cap
+    return cpus if cap == 0 || cap > cpus else cap
 
 #cfg(!freestanding)
 fn threads_for(m: Sz, k: Sz, n: Sz): Sz //< how many threads `m × k × n` multiply-adds pay for
@@ -105,12 +105,14 @@ priv struct Pool //< the worker threads, and what they share
     busy: Atomic_sz //< 1 while a caller uses the pool; a second caller computes alone
     posted: Atomic_sz //< the round's number, also readable without the lock, for a spinning worker
     left: Atomic_sz //< the helpers of the round that have not finished
-    workers: Sz //< the threads started, besides the caller
+    workers: Sz //< the threads started, besides the caller; only the caller holding `busy` adds
+    stuck: Bool //< a thread failed to start, so no more are tried; written as `workers` is
 
 #cfg(!freestanding)
 priv struct Pool_seat //< one worker's view: the pool and its number in it
     pool: Pool$@
     index: Sz
+    seen: Sz //< the round posted last when it started, which it does not take part in
     thread: Thread //< kept so the handle stays reachable; the thread runs to the program's end
 
 #cfg(!freestanding)
@@ -126,7 +128,7 @@ priv fn take_pieces(p: Pool$@, f: Span_fn, job: Void$@, count: Sz, grain: Sz) //
 extern fn ksai_pool_worker(seat: Pool_seat$@): Void$@ //<
     //< one worker: it waits for a round, takes part
     p: = seat.pool
-    $seen: Sz = 0
+    $seen: = seat.seen
     for
         $spins: Sz = 0
         for p.posted.load() == seen && spins < SPIN
@@ -150,9 +152,8 @@ extern fn ksai_pool_worker(seat: Pool_seat$@): Void$@ //<
                 p.round.unlock()
 
 #cfg(!freestanding)
-priv fn start_pool(): Pool$@? //< the pool, with a worker per CPU but the caller's
-    //< It starts at least one worker, so a split can be checked on a machine with one CPU. It is
-    //< none only when the OS gives no lock; a thread that cannot start leaves fewer workers.
+priv fn start_pool(): Pool$@? //< the pool, with no worker yet; `grow` starts them
+    //< It is none only when the OS gives no lock.
     $round: = Mutex<|Pool_round|>(Pool_round::{}) catch
         return .none
     $wake: = Cond_var() catch
@@ -165,17 +166,25 @@ priv fn start_pool(): Pool$@? //< the pool, with a worker per CPU but the caller
     // Every field is written: heap memory comes back holding whatever was there before.
     p: = mem.alloc_as<|Pool|>()
     p$ = Pool::{ .round = round, .wake = wake, .done = done, .next = Atomic_sz(0),
-        .busy = Atomic_sz(0), .posted = Atomic_sz(0), .left = Atomic_sz(0), .workers = 0 }
-    want: = math.max(most_threads(), 2) - 1
-    for i in Range.asc(want)
+        .busy = Atomic_sz(0), .posted = Atomic_sz(0), .left = Atomic_sz(0), .workers = 0,
+        .stuck = false }
+    return .some(p)
+
+#cfg(!freestanding)
+priv fn grow(p: Pool$@, want: Sz) //< starts workers until the pool has `want` of them
+    //< **The pool grows to what a split asks for**, so a cap raised by `set_threads` later still
+    //< takes effect. It never shrinks: a worker a round does not ask for waits.
+    //< Only the caller holding `busy` calls it. So no round runs, and `workers` has one writer.
+    for p.workers < want && !p.stuck
         seat: = mem.alloc_as<|Pool_seat|>()
         seat.pool = p
-        seat.index = i
+        seat.index = p.workers
+        seat.seen = p.posted.load()
         seat.thread = Thread.spawn<|Pool_seat|>(ksai_pool_worker, seat) catch
             mem.dealloc(Void$@::seat)
-            break
+            p.stuck = true
+            return
         p.workers += 1
-    return .some(p)
 
 #cfg(!freestanding)
 priv fn pool(): Pool$@? //<
@@ -214,7 +223,12 @@ fn split( //< computes outputs [0, count) of a job, on up to `threads` threads; 
         return alone(f, job, count)
     p: = pool() catch
         return alone(f, job, count)
-    if p.workers == 0 || !p.busy.compare_and_swap(0, 1)
+    if !p.busy.compare_and_swap(0, 1)
+        return alone(f, job, count)
+    // At least one worker, so a split can be checked on a machine with one CPU.
+    grow(p, math.min(want, math.max(most_threads(), 2)) - 1)
+    if p.workers == 0
+        p.busy.store(0)
         return alone(f, job, count)
     helpers: = math.min(want - 1, p.workers)
     p.next.store(0)

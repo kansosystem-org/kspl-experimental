@@ -20,6 +20,7 @@ import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/body/stmt" as sema_body_stmt
 import "ksplc/sema/body/struct_literal" as sema_body_struct_literal
+import "ksplc/sema/decl/access" as _sema_decl_access // `refuse_writing_receiver`
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
@@ -322,11 +323,15 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         case .user(method_sym)
             node.def_node = method_sym.node
             c.refuse_packed_receiver(inner, method_sym.node, op)
+            c.refuse_writing_receiver(inner, method_sym.node, op)
             node.type_id = method_sym.type_id
             return method_sym.type_id
         case .failed
             return I32::sema_type_env.Builtin_type_id.unknown
         case .builtin {}
+    if (op.equals("-") || op.equals("~")) &&
+        sema_body_binary.refuses_enum_operand(c, node, op, inner_type_id)
+        return I32::sema_type_env.Builtin_type_id.unknown
     if sema_body_binary.refuses_operator_operand(c, node, op, inner_type_id, true)
         return I32::sema_type_env.Builtin_type_id.unknown
     return inner_type_id
@@ -453,6 +458,52 @@ fn require_result_operand(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, op: U8[
                 '.unwrap_or(v)'.")
     c.err(node, c.scratch.slice())
     return false
+
+fn check_propagation_target(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, ret_id: I32) //<
+    //< Refuses a `!` whose error the enclosing function cannot pass on, naming how to write it
+    //< `!` throws the operand's error from the function as it stands, so the function must return
+    //< a Result with the same error type. **Each message names both ways out**: change what the
+    //< function returns, or handle the error where it is made.
+    if sema_type_env.is_unknown(ret_id) || sema_type_env.is_unknown(target_id)
+        return
+    target_err_id: = c.env.get_real_type(c.env.get_result_err_id(target_id))
+    if !c.env.is_result(ret_id)
+        ret: = c.env.display(ret_id)
+        c.clear_scratch()
+            .s("cannot use '!' operator in a function that does not return a Result type\n  Hint: \
+                '!' passes the error to the caller, so the function must return a result: declare \
+                its return type '\{ret\}!\{c.env.display(target_err_id)\}' in place of '\{ret\}'. \
+                Or handle the error here: 'x catch <value>' uses a value in its place, and 'x catch \
+                e' with a block below it runs the block.")
+        c.err(node, c.scratch.slice())
+        return
+    ret_err_id: = c.env.get_real_type(c.env.get_result_err_id(ret_id))
+    if target_err_id == ret_err_id || sema_type_env.is_unknown(target_err_id) ||
+        sema_type_env.is_unknown(ret_err_id)
+        return
+    t_err_str: = c.env.display(target_err_id)
+    r_err_str: = c.env.display(ret_err_id)
+    variant: = variant_holding(c, ret_err_id, target_err_id)
+    c.clear_scratch()
+        .s("cannot propagate error of type '\{t_err_str\}' using '!' operator. The enclosing \
+            function expects error type '\{r_err_str\}'.\n  Hint: take the error with 'catch', \
+            convert it, and throw it: write 'x: = f() catch e', with 'throw .\{variant\}(e)' \
+            indented below it")
+    if variant.equals("<variant>")
+        c.scratch.s(". Give '\{r_err_str\}' a variant that holds a '\{t_err_str\}' for it")
+    c.scratch.c('.')
+    c.err(node, c.scratch.slice())
+
+priv fn variant_holding(c: Sema_ctx@, enum_id: I32, payload_id: I32): U8[] //<
+    //< The first variant of `enum_id` whose one payload is a `payload_id`; `<variant>` where none is
+    switch c.env.get_info(enum_id)
+    case .enum_type(def)
+        for v in def.variants_list
+            if v.payload_fields.len == 1 &&
+                c.env.get_real_type(v.payload_fields.get(0).type_id) == payload_id
+                return v.name
+    default {}
+    return "<variant>"
 
 priv fn require_catch_operand(c: Sema_ctx$@, node: Ast_node$@, type_id: I32) //<
     //< Refuses a `catch` on a type that is neither a Result nor an Option

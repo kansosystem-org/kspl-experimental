@@ -50,6 +50,8 @@ flowchart LR
 
 The pipeline's folders come first, in the order the data flows. Then come `base/`, `lsp/`, `fmt/` and `tools/`, the grammar and the seed, and the suites under `tests/`. Each section names its folder's files and ends with its design chapter.
 
+**A folder imports only the folders before it in that flow, and `base/`.** So `parse/` builds on `base/` alone, `sema/` on `parse/`, `lower/` on `sema/`, and `gen/` on `lower/`. `fmt/` builds on `parse/`, `tools/` on `sema/` and `fmt/`, and `lsp/` on `sema/` and `pipeline.kspl`. `make test-conventions` refuses an import that goes the other way.
+
 Directly in this folder:
 
 * [`main.kspl`](main.kspl) — the entry point: it starts the subcommand [`cli.kspl`](cli.kspl) read from the command line. The usage text is in [`usage.kspl`](usage.kspl).
@@ -82,10 +84,10 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 | Folder | The question it answers | Files |
 | :-- | :-- | :-- |
 | [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `naming` (output names and cache keys), `scope` (the symbol table), `display` (what a diagnostic prints) |
-| [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx`, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the imports and their ledger), `pointer` (a comment's pointer), `c_boundary` (what the generated C cannot hold), `prof` (sema's time) |
+| [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx`, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the imports and their ledger), `pointer` (a comment's pointer), `c_boundary` (what the generated C cannot hold). Then `mismatch` (the notes a type mismatch adds) and `prof` (sema's time) |
 | [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
 | [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
-| [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` and `lint_written` |
+| [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` and `lint_written`. Then the checks on the program as a whole: `analyze`, and `closed` for `--closed` |
 
 ```sh
 make debug-ksplc   # the compiler's own tests, the type checks and the diagnostics among them
@@ -118,7 +120,7 @@ The design is "The Lower layer: a flat tree independent of backends" in [`ksplc/
 
 **What the two outputs must agree on is written once, directly under `gen/`** (why is "What the two generators share: the decisions, not the spelling" in [`ksplc/docs/DESIGN-backends.md`](docs/DESIGN-backends.md)).
 
-* [`runtime.kspl`](gen/runtime.kspl) — hands out the C runtime that every program links. The runtime itself is [`gen/runtime/`](gen/runtime/): `core.*` for every target, plus `hosted.*` for an OS beneath the program or `freestanding.*` for bare metal. `hosted.*` is split into `hosted_fs` / `hosted_net` / `hosted_proc` / `hosted_spawn` / `hosted_thread`.
+* [`runtime.kspl`](gen/runtime.kspl) — hands out the C runtime that every program links. The runtime itself is [`gen/runtime/`](gen/runtime/): `core.*` for every target, plus `hosted.*` for an OS beneath the program or `freestanding.*` for bare metal. `hosted.*` is split into `hosted_fs` / `hosted_io` / `hosted_net` / `hosted_proc` / `hosted_spawn` / `hosted_thread`.
 * [`entry.kspl`](gen/entry.kspl) — what the generated `main` does around `kspl_main`.
 * [`embed.kspl`](gen/embed.kspl) — reads the file an `embed` names.
 
@@ -161,7 +163,7 @@ import "ksplc/base/ast" { Ast_node }
 | :-- | :-- |
 | **The tree** | [`ast.kspl`](base/ast.kspl) is the general-purpose node `Ast_node` and its verification. [`ast_kinds.kspl`](base/ast_kinds.kspl) is the closed set of node kinds. [`ast_ext.kspl`](base/ast_ext.kspl) holds the safe accessors. [`ast_place.kspl`](base/ast_place.kspl) holds the predicates a node's shape alone answers (does an expression have a side effect?). [`ast_spell.kspl`](base/ast_spell.kspl) spells a node back as text. [`ast_doc.kspl`](base/ast_doc.kspl) reads the `//<` description that a declaration carries |
 | **The shared state** | [`core.kspl`](base/core.kspl) holds the shared arenas, the string pool and the compiler's configuration. [`setup.kspl`](base/setup.kspl) starts and ends the layer in one go. [`target.kspl`](base/target.kspl) is the table of machines that ksplc lays values out for, and which one a compile is for |
-| **The source** | [`as_written.kspl`](base/as_written.kspl) keeps the text as typed before the indentation is fixed (what a diagnostic quotes). [`locate.kspl`](base/locate.kspl) says where a source comes from and its logical name. [`lines.kspl`](base/lines.kspl) finds where a line begins and ends. [`literal.kspl`](base/literal.kspl) reads a literal's spelling |
+| **The source** | [`as_written.kspl`](base/as_written.kspl) keeps the text as typed before the indentation is fixed (what a diagnostic quotes). [`locate.kspl`](base/locate.kspl) says where a source comes from and its logical name. [`lines.kspl`](base/lines.kspl) finds where a line begins and ends. [`literal.kspl`](base/literal.kspl) reads a literal's spelling. [`near.kspl`](base/near.kspl) says how near one name is to another, for a message that offers the name meant |
 | **The diagnostics** (the compiler's messages about your code) | [`diag.kspl`](base/diag.kspl) prints them, [`lint_codes.kspl`](base/lint_codes.kspl) is the registry of their codes, and [`cfg_inactive.kspl`](base/cfg_inactive.kspl) keeps the ranges a `#cfg()` left out, so the editor can say why nothing stands there |
 | **The names emitted** | [`mangle.kspl`](base/mangle.kspl) turns KSPL's names into C and LLVM identifiers, and [`c_name.kspl`](base/c_name.kspl) avoids the C names that cannot be used plain |
 | **The settings and the packages** | [`config_file.kspl`](base/config_file.kspl) reads `ksplc.cfg`, and [`package.kspl`](base/package.kspl) its `[package]` section: a package's name, what it uses, and the logical name of a file inside it |

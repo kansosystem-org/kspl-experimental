@@ -86,14 +86,15 @@ static inline KSPL_UNUSED KSPL_NORETURN void kspl_shift_breach(int64_t amount, i
     kspl_check_panic(buf, at);
 }
 
-static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, const char* enum_name,
-    const char* file, int line)
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, int value_unsigned,
+    const char* enum_name, const char* file, int line)
 {
     U8 buf[KSPL_CHECK_MSG_CAP];
     Sz at = kspl_msg_text(buf, 0, "enum ");
     (void)file; (void)line;
     at = kspl_msg_text(buf, at, enum_name != NULL ? enum_name : "?");
     at = kspl_msg_text(buf, at, " has no tag ");
-    at = kspl_msg_i64(buf, at, value);
+    at = value_unsigned ? kspl_msg_digits(buf, at, (uint64_t)value, 0)
+        : kspl_msg_i64(buf, at, value);
     kspl_check_panic(buf, at);
 }

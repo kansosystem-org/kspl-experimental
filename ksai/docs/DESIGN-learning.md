@@ -184,10 +184,10 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 
 * **One thread computes each output whole**, with the same code and order of additions as on one thread. So a test compares one thread with four bit for bit, and results compare across machines.
 * **The attention splits the key heads.** Each thread takes a key head with the query heads that share it. So each row of the cache is read once for all of them.
-* **The pool keeps a thread per CPU but the caller's, which computes a share too.** A small product stays on the caller's thread, and a freestanding build has no threads at all. The thresholds and their reasons are in `parallel.kspl`'s comments.
+* **The pool grows to a thread per CPU but the caller's, which computes a share too.** It starts the threads a product asks for, so a cap raised later takes effect. A small product stays on the caller's thread, and a freestanding build has no threads at all. The thresholds and their reasons are in `parallel.kspl`'s comments.
 * **The threads spin briefly before they sleep** (`SPIN`), since a model asks for products a few microseconds apart. Waking a sleeping thread took about 55 microseconds a product; spinning, a split takes about 9.
 * **A second caller while the pool is busy computes alone**, with the same result, a little later. So two threads that each run a model never wait on each other.
-* **`parallel.set_threads(n)` caps the threads one product uses.** A program whose own threads already keep every CPU busy sets 1.
+* **`parallel.set_threads(n)` caps the threads one product uses, at most the CPU count.** A program whose own threads already keep every CPU busy sets 1.
 
 The race gate runs ksai's unit tests, so the pool runs under ThreadSanitizer there.
 
@@ -335,7 +335,7 @@ The tests run a tiny Qwen3.5 model against an F64 computation of the same graph,
 
 | Layer | What it checks |
 | :-- | :-- |
-| 1 | The dtype's width (how many bytes one element takes) |
+| 1 | The dtype's name, against the element type read (an `I32` tensor is not read as `F32`) |
 | 2 | `data_offsets`' start and end |
 | 3 | `shape`'s element count |
 | 4 | That count's cap |

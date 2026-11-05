@@ -1,0 +1,119 @@
+//< The document's own settings, as the `:::document` clause saves them
+//< `:::document paper="A3" orientation="landscape" header="[Confidential]" footer="No.12
+//< ({page}/{pages})" numbers=2 table_label="表" figure_label="図"` sets the paper, the printed
+//< header's middle and footer's left, the heading level numbering starts at, and the words before a
+//< table's and an image's number. Each is optional, and the clause stands first in its source, so a
+//< reader meets it before what it numbers.
+import "ksmd/base/attribute" { Attribute }
+import "ksmd/model/model" { MAX_SETTING, Settings }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+const PAPERS: U8[][_] = ::{ "A3", "A4", "A5", "B4", "B5", "letter", "legal" } //<
+    //< in the order offered
+
+fn no_settings(): Settings //< the settings of a document without the clause
+    return Settings::{ .paper = "", .landscape = false, .header = "", .footer = "", .numbers = 0,
+        .table_label = "", .figure_label = "" }
+
+fn is_paper(text: U8[]): Bool //< one of `PAPERS`
+    for p in PAPERS
+        if p.equals(text)
+            return true
+    return false
+
+fn is_text(text: U8[]): Bool //<
+    //< A header's, a footer's or a label's text: 1 to 200 bytes with no control character, and
+    //< braces only as `{page}` and `{pages}`
+    if text.len == 0 || text.len > MAX_SETTING
+        return false
+    $i: Sz = 0
+    for i < text.len
+        c: = text[i]
+        if c < 0x20U8 || c == 0x7FU8 || c == '}'
+            return false
+        if c == '{'
+            if text.starts_with("{pages}", i)
+                i += 7
+                continue
+            if text.starts_with("{page}", i)
+                i += 6
+                continue
+            return false
+        i += 1
+    return true
+
+fn is_label(text: U8[]): Bool //< a label's text: as `is_text`, with no braces at all
+    return is_text(text) && text.find_char('{').is_none()
+
+fn fault_of(s: Settings): U8[]? //<
+    //< what is wrong with settings, as the reader says it; none if sound
+    if s.paper.len > 0 && !is_paper(s.paper)
+        return .some("paper is A3, A4, A5, B4, B5, letter or legal")
+    if s.header.len > 0 && !is_text(s.header) || s.footer.len > 0 && !is_text(s.footer)
+        return .some("a header or a footer is 1 to 200 bytes of text, with {page} and {pages} the \
+            only braces")
+    if s.numbers < 0 || s.numbers > 6
+        return .some("numbers is the heading level numbering starts at, 1 to 6")
+    if s.table_label.len > 0 && !is_label(s.table_label) ||
+        s.figure_label.len > 0 && !is_label(s.figure_label)
+        return .some("a label is 1 to 200 bytes of text, with no braces")
+    if is_empty(s)
+        return .some("':::document' sets at least one of paper, orientation, header, footer, \
+            numbers, table_label and figure_label")
+    return .none
+
+fn is_empty(s: Settings): Bool //< whether the settings set nothing
+    return s.paper.len == 0 && !s.landscape && s.header.len == 0 && s.footer.len == 0 &&
+        s.numbers == 0 && s.table_label.len == 0 && s.figure_label.len == 0
+
+fn settings_of(attributes: List<|Attribute|>@): Settings!Attribute //<
+    //< The settings the clause's attributes give; the attribute that is not one of them, or not
+    //< quoted where it must be, is thrown, with `fault_of` left to say what else is wrong
+    $s: = no_settings()
+    for a in attributes
+        if a.name.equals("numbers")
+            if a.quoted || a.value.len != 1 || !a.value[0].is_digit()
+                throw a
+            s.numbers = a.value[0] - '0'
+            if s.numbers == 0
+                throw a
+            continue
+        if !a.quoted
+            throw a
+        if a.name.equals("paper")
+            s.paper = a.value
+        else if a.name.equals("orientation")
+            if !a.value.equals("landscape")
+                throw a
+            s.landscape = true
+        else if a.name.equals("header")
+            s.header = a.value
+        else if a.name.equals("footer")
+            s.footer = a.value
+        else if a.name.equals("table_label")
+            s.table_label = a.value
+        else if a.name.equals("figure_label")
+            s.figure_label = a.value
+        else
+            throw a
+    return s
+
+fn write_settings(s: Settings, out: Str_builder$@) //< the clause, as `settings_of` reads it
+    out.s(":::document")
+    if s.paper.len > 0
+        out.s(" paper=\"").s(s.paper).c('"')
+    if s.landscape
+        out.s(" orientation=\"landscape\"")
+    if s.header.len > 0
+        out.s(" header=\"").escape_and_append(s.header).c('"')
+    if s.footer.len > 0
+        out.s(" footer=\"").escape_and_append(s.footer).c('"')
+    if s.numbers > 0
+        out.s(" numbers=\{s.numbers\}")
+    if s.table_label.len > 0
+        out.s(" table_label=\"").escape_and_append(s.table_label).c('"')
+    if s.figure_label.len > 0
+        out.s(" figure_label=\"").escape_and_append(s.figure_label).c('"')
+    out.s("\n:::\n")

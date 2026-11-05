@@ -207,9 +207,11 @@ ok:
     ret i64 %divisor
 }
 
-define i64 @kspl_tag_check(i64 %value, ptr %tags, i64 %count, ptr %enum_name, ptr %file, i32 %line) {
+define i64 @kspl_tag_check(i64 %value, i1 %value_unsigned, ptr %tags, i64 %count, ptr %enum_name, ptr %file, i32 %line) {
 entry:
-    br label %test
+    %neg = icmp slt i64 %value, 0
+    %above = and i1 %value_unsigned, %neg
+    br i1 %above, label %panic, label %test
 test:
     %i = phi i64 [ 0, %entry ], [ %next, %step ]
     %more = icmp slt i64 %i, %count
@@ -223,7 +225,8 @@ step:
     %next = add i64 %i, 1
     br label %test
 panic:
-    call void @kspl_tag_fail(i64 %value, ptr %enum_name, ptr %file, i32 %line)
+    %unsigned = zext i1 %value_unsigned to i32
+    call void @kspl_tag_fail(i64 %value, i32 %unsigned, ptr %enum_name, ptr %file, i32 %line)
     unreachable
 ok:
     ret i64 %value

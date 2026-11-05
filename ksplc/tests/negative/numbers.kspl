@@ -30,7 +30,9 @@ fn main(): I32
 //< A constant that is none of the tags is refused here; a value known only at run time is checked
 //< there (the case enum_cast_from_no_tag in `../runtime/stops.kspl`). **Let it through and an
 //< exhaustive `switch` takes a value it never lists.** Only an integer or another enum converts to
-//< a scalar enum, and nothing to a tagged union.
+//< a scalar enum, and nothing to a tagged union. A `U64` above `I64`'s maximum is no tag, though
+//< its bits read as `Signed.neg`'s -1, and the message prints it as written.
+// EXPECT: cannot cast 18446744073709551615 to
 // EXPECT: cannot cast 300 to
 // EXPECT: cannot cast 8 to
 // EXPECT: cannot cast 'F64' to
@@ -38,9 +40,14 @@ fn main(): I32
 // EXPECT: with payloads; such a value is built from one of its
 // EXPECT-NOT: cannot cast 1 to
 // EXPECT-NOT: cannot cast 200 to
+// EXPECT-NOT: cannot cast -1 to
 priv enum E
   a
   b
+
+priv enum Signed
+  neg = -1
+  zero = 0
 
 priv enum Wide: U8
   low = 7
@@ -54,6 +61,8 @@ fn main(): I32
   _ok: = E::1
   _bad: = E::300
   _high: = Wide::200
+  _neg: = Signed::(0 - 1)
+  _top: = Signed::18446744073709551615U64
   _not_listed: = Wide::8
   _from_float: = E::1.5
   _from_bool: = E::true

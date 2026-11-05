@@ -33,6 +33,11 @@ struct Formatter
     src: U8[]
     last_offset: Sz
     last_char: U8
+    folded_space: Bool //<
+        //< Whether a line end folded into the line waits to become a space before the next token
+        //< **It becomes one only where the spacing rule gives one** (`calc_spacing_requirement`),
+        //< as a space in the source would. Written at once, it stayed where the rule gives none
+        //< (`U8` and `[]` on two lines came out `U8 []`), and a second pass took it out.
     last_text: Str_builder
     code_end: Sz //<
         //< How far into `out` the code on the line being written reaches
@@ -212,6 +217,7 @@ impl Formatter
         return line.sub_from(r.code_end).find_str("//").is_some()
 
     fn write_nl(r: Self$@)
+        r.folded_space = false
         r.flags.wrap_indent = r.in_continuation()
         if !r.flags.is_line_start
             if r.ternary_depth >= 0 && r.paren_depth == r.ternary_depth
@@ -251,6 +257,13 @@ impl Formatter
         for r.out.len > 0 && (r.out.ptr + r.out.len - 1)$ == '\n'
             r.out.len -= 1
         r.out.c('\n')
+    priv fn write_folded_space(r: Self$@, require_space: Bool) //<
+        //< It writes the space a folded line end left waiting, where the next token takes one
+        //< The wait is `folded_space`. Without a space, it is dropped.
+        if r.folded_space && require_space && !r.flags.is_line_start
+            r.write_space()
+        r.folded_space = false
+
     fn calc_will_break(r: Self$@, last_txt: U8[], text: U8[], require_space: Bool, text_len: Sz,
         dot_break_ok: Bool): Bool //<
             //< The wrapping decision shared by write_token and format_internal (a string token)
@@ -419,6 +432,7 @@ impl Formatter
             r.flags.wrap_indent = false
 
         $require_space: = calc_spacing_requirement(last_txt, text, r.flags, no_space_mode)
+        r.write_folded_space(require_space)
         // A `-` is unary where the preceding token is **a place where an expression begins**.
         // Caution: Do not list the preceding tokens one by one. A missed one is taken as binary and
         // printed `::{ - 1` / `else - 2`; the existing predicates keep up as brackets and keywords
@@ -558,6 +572,7 @@ impl Formatter
         text: = joined.slice() if carry else raw_text
         last_txt: = r.last_text.slice()
         require_space: = calc_spacing_requirement(last_txt, text, r.flags, no_space_mode)
+        r.write_folded_space(require_space)
         will_break: = r.calc_will_break(last_txt, text, require_space, text.len, false)
         if will_break
             r.write_nl()

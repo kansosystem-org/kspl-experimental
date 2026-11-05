@@ -227,7 +227,10 @@ impl sema_type_env.Env
         //< .one_thread_count what a pointer points at and a slice's element as well
         switch test
         case .marker
-            r.owned_parts(r.get_real_type(target_id), out)
+            // **Without its `const`**: an immutable binding's array holds `const W` elements, and
+            // owned_parts finds no part under the qualifier, so a `W` holding a `Move_only` was
+            // copied freely.
+            r.owned_parts(r.get_clean_real_type(target_id), out)
         case .one_thread_count
             elem: = r.slice_struct_elem(target_id)
             if r.is_pointer(target_id)

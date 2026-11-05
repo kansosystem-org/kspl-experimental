@@ -24,9 +24,11 @@ function ksmdBrowse(local) {
   // The file a second press of Save replaces: { path, digest } of its bytes when it was chosen.
   let replacing = null;
   let done = null;
-  // The first folder's listing. **A choice waits for it**: the name shows at once, and pressed
-  // before the folder shows, it would land in the folder shown before.
-  let shown = Promise.resolve();
+  // The newest listing asked for. **A choice waits for it**: the name shows at once, and pressed
+  // before the folder shows, it would land in the folder shown before. A listing asked for
+  // earlier that arrives after it is let go, so the folder shown is the one last pressed.
+  let shown = Promise.resolve(true);
+  let asked = 0;
 
   const join = (a, b) => (a === "" ? b : `${a}/${b}`);
   const parentOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
@@ -61,8 +63,17 @@ function ksmdBrowse(local) {
     });
   }
 
-  async function go(to) {
+  // Shows a folder: true once it shows, false where it cannot be listed, and null where a newer
+  // listing was asked for meanwhile.
+  function go(to) {
+    asked += 1;
+    shown = listing(to, asked);
+    return shown;
+  }
+
+  async function listing(to, mine) {
     const got = await local.list(to);
+    if (mine !== asked) return null;
     if (got.status !== 200) {
       note.textContent = `${to || "The workspace"} cannot be shown. ${got.status === 404 ? "No folder stands there." : got.why}`;
       return false;
@@ -97,7 +108,11 @@ function ksmdBrowse(local) {
   // decided. `expected` is null, or the digest of a file chosen to be replaced. **The file is read
   // when the person chooses it**, so the second press replaces only the bytes that stood then.
   async function choose() {
-    await shown;
+    // A folder pressed while the wait goes on asks for a newer listing, which is waited for too.
+    for (let waited = null; waited !== shown;) {
+      waited = shown;
+      await waited;
+    }
     let n = name.value.trim();
     if (n === "") {
       note.textContent = mode === "functions" ? "Type a name for the functions file, such as " +
@@ -177,9 +192,7 @@ function ksmdBrowse(local) {
       box.showModal();
       name.focus();
       // A folder that has gone since the document was opened shows the workspace instead.
-      shown = (async () => {
-        if (!(await go(parentOf(start)))) await go("");
-      })();
+      shown = go(parentOf(start)).then((ok) => (ok === false ? go("") : ok));
       await shown;
       return answer;
     },

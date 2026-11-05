@@ -141,7 +141,7 @@ $ curl -s -o pilot.safetensors localhost:8080/pilot_policy.safetensors
 
 The car is a Freenove 4WD mecanum car with a Pico W. The steps for connecting it are in ksos's bring-up guide, named in the root [`README.md`](../../README.md#-what-works-and-how-far). kssrv does not know the file's contents.
 
-The `Content-Type` is looked up from the extension. **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so the policy file is returned this way.
+The `Content-Type` is looked up from the extension, whatever its letter case (`PHOTO.JPG` is `image/jpeg`). **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so the policy file is returned this way.
 
 ## What a client can rely on
 
@@ -165,5 +165,5 @@ These are the places where the server does less than a client can expect.
 * **`Range` and conditional requests (`If-Modified-Since` and the like) are not supported.** It always returns the whole thing.
 * **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served. A folder is checked together with its `index.html`. The root itself can be a link (macOS's `/tmp` is one).
 * **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent, since its read can go on forever.
-* **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception (RFC 8615).
+* **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception (RFC 8615). In `path=`, `GET /api/file` reads a dot name, and `PUT /api/file` refuses one with 403.
 * **A path in a form that Windows reads as another name is refused** (403) on every OS, both here and in `path=`. These are a `\`, an empty segment (`/a//b`), a `:`, a name ending in `.` or a space, a device name (`CON`), `~` before a digit (`GIT~1`) and a wildcard (`*`, `?`). One `/` at the end names a folder: `/sub/` is `/sub`. So a file whose name holds one of these forms is not served, and `GET /api/list` leaves it out.

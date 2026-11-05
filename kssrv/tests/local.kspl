@@ -65,6 +65,8 @@ fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_e
     stat_cases(port, auth, arena)!
     list_cases(port, auth, root, arena)!
     write_cases(port, auth, root, arena)!
+    dot_cases(port, auth, root, arena)!
+    link_cases(port, auth, root, arena)!
     conditional_cases(port, auth, arena)!
     cap_cases(port, auth, arena)!
     files_only_cases(port, auth, arena)!
@@ -367,6 +369,59 @@ priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     // can still be written).
     out: = client.put_file(port, "/api/file?path=%2e%2e/secret.txt", auth, "x", arena)!
     client.expect_status("PUT refuses outside the root too", out, 403, arena)
+
+priv const DOT_RELS: U8[][2] = ::{ ".git/config", ".hidden" } //< the dot names a write tries
+priv const DOT_BODIES: U8[][2] = ::{ "[core]\n", "hidden\n" } //< what each holds before
+
+priv fn dot_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< A write to a dot name is refused, and a read of one is answered
+    // Caution: **A write to `.git/config` runs a command later**: its `core.fsmonitor` runs on the
+    // next `git status`. So even the token must not write there.
+    fs.write_tree(root, U8[][]::DOT_RELS, U8[][]::DOT_BODIES, arena) catch
+        verdict.check("PUT /api/file refuses a dot name", false, "the files cannot be made")
+        return
+    for i in Range.asc(DOT_RELS.len)
+        rel: = DOT_RELS[i]
+        put: = client.put_file(port, arena.text().s("/api/file?path=\{rel\}").take(), auth, "x\n",
+            arena)!
+        nm_w: = arena.text().s("PUT /api/file refuses a dot name: \{rel\}").take()
+        client.expect_status(nm_w, put, 403, arena)
+        kept: = io.read_file(fs.join(root, rel, arena), arena) catch ""
+        nm_k: = arena.text().s("a refused write leaves the dot name as it was: \{rel\}").take()
+        verdict.check(nm_k, kept.equals(DOT_BODIES[i]), kept)
+        got: = client.get(port, arena.text().s("/api/file?path=\{rel\}").take(), auth, arena)!
+        nm_r: = arena.text().s("GET /api/file still reads a dot name: \{rel\}").take()
+        verdict.check(nm_r, got.status == 200 && got.body.equals(DOT_BODIES[i]),
+            client.shown(got, arena))
+
+priv const SECRET_BODY: U8[] = "secret\n" //< what `secret.txt`, outside the root, holds
+
+priv fn link_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< A link to outside the root is refused even with the token, read and write alike
+    // **The token is no key past a link**: a link at the end and a folder link mid-path both fail.
+    // `peek.txt` is made by `token_cases`; a run started again finds it standing.
+    peek: =
+        fs.is_link(fs.join(root, "peek.txt", arena)) ||
+        make_link(root, "peek.txt", "../secret.txt", arena)
+    up: =
+        fs.is_link(fs.join(root, "up", arena)) || make_link(root, "up", "..", arena)
+    if !peek || !up
+        verdict.skip_check("the file endpoints refuse a link with the token",
+            "a link cannot be made with `ln -s` in this environment")
+        return
+    for rel in U8[][]::{ "peek.txt", "up/secret.txt" }
+        for ep in U8[][]::{ "file", "stat" }
+            r: = client.get(port, arena.text().s("/api/\{ep\}?path=\{rel\}").take(), auth, arena)!
+            nm_g: = arena.text().s("GET /api/\{ep\} refuses a link with the token: \{rel\}").take()
+            verdict.check(nm_g, r.status == 403 && r.body.find_str("secret").is_none(),
+                client.shown(r, arena))
+        put: = client.put_file(port, arena.text().s("/api/file?path=\{rel\}").take(), auth,
+            "overwritten\n", arena)!
+        nm_p: = arena.text().s("PUT /api/file refuses a link with the token: \{rel\}").take()
+        client.expect_status(nm_p, put, 403, arena)
+    outside: = io.read_file(fs.join(root, "../secret.txt", arena), arena) catch ""
+    verdict.check("a refused write through a link leaves the file outside as it was",
+        outside.equals(SECRET_BODY), outside)
 
 priv fn cap_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //< the cap on a body
     // **Check both sides of the ceiling.** Below it, a document cannot be written back whole;

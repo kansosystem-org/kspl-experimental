@@ -276,12 +276,27 @@ priv fn check_enum_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_
             .s(what)
         c.err(node, c.scratch.slice())
         return
-    if v: = c.try_eval_constexpr_wide(node.get_postfix_receiver())
-        if def.has_tag(v)
+    recv: = node.get_postfix_receiver()
+    if v: = c.try_eval_constexpr_wide(recv)
+        if is_tag_of(c, def, recv, v)
             return
-        c.clear_scratch().s("cannot cast \{v\} to '").s(shown).s("': no variant of '").s(shown)
+        c.clear_scratch().s("cannot cast ")
+        if above_i64(c, recv, v)
+            c.scratch.s("\{U64::v\}")
+        else
+            c.scratch.s("\{v\}")
+        c.scratch.s(" to '").s(shown).s("': no variant of '").s(shown)
             .s("' has that tag, and an enum holds only the values it lists")
         c.err(node, c.scratch.slice())
+
+priv fn above_i64(c: Sema_ctx@, recv: Ast_node@, v: I64): Bool //<
+    //< Whether a folded operand is a `U64` above `I64`'s maximum, whose 64 bits read negative
+    return v < 0 && c.env.is_unsigned(c.env.scalar_repr_id(recv.type_id))
+
+priv fn is_tag_of(c: Sema_ctx@, def: Enum_def@, recv: Ast_node@, v: I64): Bool //<
+    //< Whether a cast's folded operand is one of the enum's tags
+    //< A `U64` above `I64`'s maximum is none, though its bits match a negative tag (`neg = -1`).
+    return def.has_tag(v) && !above_i64(c, recv, v)
 
 fn enum_cast_needs_check(c: Sema_ctx$@, node: Ast_node$@): Enum_def$@? //<
     //< The enum whose tag a cast must check at run time; none where the cast needs no check
@@ -296,7 +311,7 @@ fn enum_cast_needs_check(c: Sema_ctx$@, node: Ast_node$@): Enum_def$@? //<
     if def == null
         return .none
     if v: = c.try_eval_constexpr_wide(recv)
-        if def.has_tag(v)
+        if is_tag_of(c, def, recv, v)
             return .none
     return .some(def)
 
@@ -401,19 +416,7 @@ priv fn infer_propagate_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32)
     ret_id: = c.fn_ctx.ret_id
     if !sema_body_expr.require_result_operand(c, node, target_id, "!")
         return c.env.strip_result(target_id)
-    if !sema_type_env.is_unknown(ret_id) && !c.env.is_result(ret_id)
-        c.err(node, "cannot use '!' operator in a function that does not return a Result type")
-    else if !sema_type_env.is_unknown(target_id) && !sema_type_env.is_unknown(ret_id)
-        target_err_id: = c.env.get_real_type(c.env.get_result_err_id(target_id))
-        ret_err_id: = c.env.get_real_type(c.env.get_result_err_id(ret_id))
-        if target_err_id != ret_err_id && !sema_type_env.is_unknown(target_err_id) &&
-            !sema_type_env.is_unknown(ret_err_id)
-            t_err_str: = c.env.display(target_err_id)
-            r_err_str: = c.env.display(ret_err_id)
-            c.clear_scratch()
-                .s("cannot propagate error of type '\{t_err_str\}' using '!' operator. The \
-                    enclosing function expects error type '\{r_err_str\}'.")
-            c.err(node, c.scratch.slice())
+    sema_body_expr.check_propagation_target(c, node, target_id, ret_id)
     return c.env.strip_result(target_id)
 
 priv fn read_as_path(c: Sema_ctx$@, node: Ast_node$@, operand: Ast_node$@, type_node: Ast_node$@,

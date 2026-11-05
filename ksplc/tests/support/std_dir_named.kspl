@@ -382,6 +382,73 @@ fn case_named_embed(std: U8[], arena: Arena$@) //<
         stray.out.find_str("probe/embed_stray.kspl:1:1: error: the package 'mylib' does ").is_some()
         && stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
 
+// Each names a file outside the package through the link `esc` inside it.
+priv const LINK_EMBED: U8[] =
+    """embed "mylib/esc/outside.txt" as o
+
+fn main(): I32
+    return 0 if o.len > 0 else 1
+
+"""
+
+priv const LINK_IMPORT: U8[] = """import "mylib/esc/away" as _away
+
+fn main(): I32
+    return 0
+
+"""
+
+priv fn made_link(target: U8[], at: U8[]): Bool //< `ln -s`; false where none is made
+    //< Windows has no `ln -s`, and `mklink` needs privileges, so the case is skipped there.
+    return harness.run(U8[][]::{ "ln", "-s", target, at }).exited_with(0) && fs.is_link(at)
+
+fn case_named_link(std: U8[], arena: Arena$@) //<
+    //< A link below a package's top folder is refused at the embed and the import that pass it
+    //< A link there can lead out of the package, to a file nobody meant to build in.
+    //< **The package's top folder itself, and std's folder, may be links**: those still build.
+    //< Caution: **Compile rather than run** a refused file, as `case_named_refused` does.
+    name: = "a link inside a package that leads out of it is refused at the embed"
+    dir: = named_dir(name, "named_link")
+    if dir.len == 0
+        return
+    fs.write_tree(dir,
+        U8[][]::{ "outside/outside.txt", "outside/away.kspl", "lib_here/probe/leak.kspl",
+        "lib_here/probe/reach.kspl" },
+        U8[][]::{ "outside\n", "pub fn f(): I32\n    return 0\n", LINK_EMBED, LINK_IMPORT }, arena)
+        catch
+        verdict.check(name, false, "cannot place the files")
+        return
+    top: = fs.join(dir, "lib_here", arena)
+    whole_top: = fs.absolute(top, arena) catch ""
+    whole_out: = fs.absolute(fs.join(dir, "outside", arena), arena) catch ""
+    whole_std: = fs.absolute(std, arena) catch ""
+    linked_top: = fs.join(dir, "linked_top", arena)
+    linked_std: = fs.join(dir, "linked_std", arena)
+    if !made_link(whole_out, fs.join(top, "esc", arena)) || !made_link(whole_top, linked_top) ||
+        !made_link(whole_std, linked_std)
+        verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
+        return
+    leak: = ksplc_env(U8[][]::{ "probe/leak.kspl", "leak.c" }, top, std, "", arena)
+    verdict.check(name,
+        !leak.exited_with(0) &&
+        leak.out
+        .find_str("probe/leak.kspl:1:1: error: 'mylib/esc/outside.txt' is reached through the link")
+        .is_some(), leak.out)
+    reach: = ksplc_env(U8[][]::{ "probe/reach.kspl", "reach.c" }, top, std, "", arena)
+    verdict.check("and so is an import through it",
+        !reach.exited_with(0) &&
+        reach.out
+        .find_str("probe/reach.kspl:1:1: error: 'mylib/esc/away' is reached through the link")
+        .is_some(), reach.out)
+    via_top: =
+        ksplc_env(U8[][]::{ "run", "linked_top/probe/main.kspl" }, dir, std, "", arena)
+    verdict.check("a package whose own top folder is a link still builds",
+        via_top.out.equals("named\n"), via_top.out)
+    via_std: =
+        ksplc_env(U8[][]::{ "run", "lib_here/probe/main.kspl" }, dir, linked_std, "", arena)
+    verdict.check("and so does a package read with std's folder through a link",
+        via_std.out.equals("named\n"), via_std.out)
+
 fn case_named_refused(std: U8[], arena: Arena$@) //<
     //< A declaration that cannot mean what it says is rejected on reading, with its line
     //< Caution: **Compile rather than run.** `ksplc run` answers from its cache, which would have

@@ -1,9 +1,10 @@
 //< Where the on-disk cache lives, and the "identity of ksplc itself" that caches share
 //< Note: It lives in base, below its users (`ksplc/parse/ast_cache.kspl`, `ksplc/tools/run.kspl`
 //< and `ksplc/fmt/file.kspl`), since the parse layer must not import a tool.
+import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "std/chars"
-import "std/ds" { List }
+import "std/ds" { List, Map }
 import "std/fs"
 import "std/io"
 import "std/math"
@@ -50,6 +51,27 @@ fn refused_root(root: U8[], arena: Arena$@): U8[] //<
     default
         return ""
 
+fn refused_inside(dir: U8[], arena: Arena$@): U8[] //<
+    //< Why a folder inside the cache folder cannot be used; empty where it can
+    //< **Each folder on the way to what is run is judged as the root is** (`refused_root`
+    //< above). The root alone is not enough: a folder planted in it while it could be written
+    //< stays once the root is mended (`chmod go-w`), and what that folder holds would be run.
+    //< Caution: **Do not advise `chmod go-w` here.** Unlike the root, this folder holds files
+    //< that may already have been planted, and the `chmod` would leave them. It is removed.
+    switch fs.dir_trust(dir)
+    case .foreign
+        return arena.text()
+            .s("the cache directory \{dir\} belongs to another user. What it holds could have been \
+                planted there. Have it removed, or set \{CACHE_ENV_NAME\} to a directory of your \
+                own").take()
+    case .shared
+        return arena.text()
+            .s("the cache directory \{dir\} can be written by its group or by everyone. What it \
+                holds could have been planted there. Run 'rm -r \{dir\}', or set \{CACHE_ENV_NAME\} \
+                to a directory of your own").take()
+    default
+        return ""
+
 fn exit_refused(tool: U8[], why: U8[]) //< it ends a command whose cache folder is refused
     io.err().s(tool).s(": ").s(why).c('\n')
     sys.exit(1)
@@ -92,7 +114,12 @@ fn append_self_identity(out: Str_builder$@): Bool //<
         .mtime = 0 }
     if info.size <= 0 || info.kind != .file
         return false
-    out.s(self_path.slice()).c('\0').s("\{info.size\}\0\{info.mtime\}\0")
+    // **The time in nanoseconds, not `info.mtime`'s whole seconds.** Two builds of one size
+    // written to one path within a second would otherwise share every entry, and a compiler fixed
+    // by one constant often keeps its size.
+    mtime_ns: = fs.mtime_ns(self_path.slice()) catch
+        return false
+    out.s(self_path.slice()).c('\0').s("\{info.size\}\0\{mtime_ns\}\0")
     return true
 
 const HASH_HEX_LEN: Sz = sha256.HEX_LEN //< a sha256 as 64 hexadecimal characters
@@ -104,6 +131,40 @@ fn hash_hex(data: U8[]): Hash_hex //< the digest as fixed-size text, without all
     $hex: U8[HASH_HEX_LEN] = ::{}
     sha256.write_hex(sha256.hash(data), U8$[]::hex)
     return hex
+
+// ==========================================
+// The digest of each input as it was read. `ksplc run` keeps a build while every input still has
+// the digest written beside it (`write_deps_file` in `../tools/run.kspl`). **The digest must be
+// of the bytes compiled**: one taken from the disk after the build would take in a file saved
+// during it, and the old build would then pass as the new one's until the next edit.
+// ==========================================
+priv $read_digests: Map<|U8[], U8[]|>$@ = null //< each input's digest, by path; null while unkept
+
+fn keep_read_digests() //< from here on, each input read keeps its digest (for `--emit-deps`)
+    //< **Only a compile that writes the deps keeps them.** A language server reads the same files
+    //< again for hours, and would pay for a digest it never uses.
+    if read_digests == null
+        read_digests = base_core.perm_arena
+            .create(Map<|U8[], U8[]|>.new_with_cap(64, base_core.perm_arena))
+
+fn note_read(path: U8[], data: U8[]) //< it keeps the digest of `data`, just read from `path`
+    //< **A file read twice with different bytes keeps no digest**: no one digest stands for what
+    //< was compiled, so the deps are not written and the next run builds again.
+    if read_digests == null
+        return
+    hex: = hash_hex(data)
+    switch read_digests.get(path)
+    case .some(old)
+        if !old.equals(U8[]::hex)
+            read_digests.set(path, "")
+    case .none
+        read_digests.set(base_core.perm_arena.dup_str(path),
+            base_core.perm_arena.dup_str(U8[]::hex))
+
+fn read_digest(path: U8[]): U8[] //< the digest kept for `path` when it was read; empty where none
+    if read_digests == null
+        return ""
+    return read_digests.get(path).unwrap_or("")
 
 // ==========================================
 // Cleaning the cache. A rebuilt ksplc cannot use any entry the old one made (the key holds ksplc's
@@ -246,6 +307,13 @@ fn append_generation_dir(kind: U8[], out: Str_builder$@, arena: Arena$@): Bool /
     is_new: = !fs.is_dir(dir)
     fs.mkdir_all(dir) catch
         return false
+    for inside in U8[][]::{ base_dir, dir }
+        why_inside: = refused_inside(inside, arena)
+        if why_inside.len > 0
+            if !root_warned
+                root_warned = true
+                io.err().s("ksplc: not using the cache: ").s(why_inside).c('\n')
+            return false
     // Nothing is spared: a generation removed mid-run only costs that run some misses, since every
     // write into it is a rename that can fail.
     if is_new

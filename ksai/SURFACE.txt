@@ -273,7 +273,7 @@ ksai/pretokenizer	Split_rule.qwen35	qwen35	Qwen3.5's: a mark belongs to the lett
 ksai/pretokenizer	chunk_end	pub fn chunk_end(text: U8[], start: Sz, rule: Split_rule): Sz	where the chunk that starts at `start` ends; the next chunk starts there. The alternatives are tried in the rule's order, and the first that matches is taken.
 ksai/quant	Q8_input:Manual_free	impl Q8_input: Manual_free	it owns its memory and gives it back with `free()`
 ksai/quant	Quant_error	pub enum Quant_error	why a quantized matrix or its product was refused
-ksai/quant	Quant_error.bad_shape	bad_shape	a dimension is negative, or the columns do not fill whole blocks
+ksai/quant	Quant_error.bad_shape	bad_shape	a dimension is negative, the columns do not fill whole blocks, or a row's bytes overflow
 ksai/quant	Quant_error.no_quantizer	no_quantizer	there is no quantizer for that format here; only Q8_0 and Q4_K have one
 ksai/quant	Quant_error.out_of_bounds	out_of_bounds	a row number outside the matrix
 ksai/quant	Quant_error.shape_mismatch	shape_mismatch	a product's operand or result is not the shape the matrix needs
@@ -341,13 +341,17 @@ ksai/qwen	Qwen_error.not_qwen	not_qwen(arch: U8[])	`general.architecture` names 
 ksai/qwen	Qwen_error.unread	unread(name: U8[])	a tensor the model does not use; the file is another model's. Caution: **Refused, not skipped.** A tensor the code does not read means a layer it does not compute, so the answers would be another model's, with no error.
 ksai/qwen	Qwen_state	pub struct Qwen_state	a copy of the delta nets' running state, and the tokens it follows. **The attention blocks' keys and values are not in it**: they stay in the cache, one row per position. So a copy made after `tokens` tokens is good while the cache still holds the rows of those tokens.
 ksai/qwen	Qwen_state.tokens	pub tokens: Sz	how many tokens the copy follows
+ksai/safetensors	F32:Safetensors_dtype	impl F32: Safetensors_dtype	an F32 tensor is read as F32
+ksai/safetensors	F64:Safetensors_dtype	impl F64: Safetensors_dtype	an F64 tensor is read as F64
 ksai/safetensors	Safetensors	pub struct Safetensors	a parsed header and weights, borrowed for their arenas' lifetimes
-ksai/safetensors	Safetensors.get_tensor	pub fn get_tensor<|T|>(r: Self@, name: U8[], arena: Arena$@): Tensor<|T|>!Safetensors_error	one tensor, borrowing aligned elements or copying misaligned ones. Caution: **An aligned result borrows from the file.** Its elements are not copied, so the backing bytes must stay alive while the tensor is used. A misaligned result uses an aligned copy in the supplied arena instead.
+ksai/safetensors	Safetensors.get_tensor	pub fn get_tensor<|T: Safetensors_dtype|>(r: Self@, name: U8[], arena: Arena$@): Tensor<|T|>!Safetensors_error	one tensor, borrowing aligned elements or copying misaligned ones. Caution: **An aligned result borrows from the file.** Its elements are not copied, so the backing bytes must stay alive while the tensor is used. A misaligned result uses an aligned copy in the supplied arena instead.
 ksai/safetensors	Safetensors.load_from_bytes	pub fn load_from_bytes(file_data: U8[], arena: Arena$@): Safetensors!Safetensors_error	reads the header of a file the caller already holds in memory. **The function that opens a file lives elsewhere** (`ksai/model_file`): here it would need `std/io`, and code that only uses tensors would pay for file I/O. The bytes belong to the caller (typically `embed "model.safetensors" as model_bytes;`) and must outlive every tensor borrowing them.
-ksai/safetensors	Safetensors.map_into	pub fn map_into<|T|>(r: Self@, name: U8[], dst: Tensor<|T|>$@, arena: Arena$@): Void!Safetensors_error	maps one tensor from the file into `dst`, rejecting a different shape. Caution: **Check the shape before swapping the weights in.** The model is built with its own dimensions. Weights that do not fit fail later in some matmul, with no hint of which tensor differs. Typically, a different checkpoint was passed.
+ksai/safetensors	Safetensors.map_into	pub fn map_into<|T: Safetensors_dtype|>(r: Self@, name: U8[], dst: Tensor<|T|>$@, arena: Arena$@): Void!Safetensors_error	maps one tensor from the file into `dst`, rejecting a different shape. Caution: **Check the shape before swapping the weights in.** The model is built with its own dimensions. Weights that do not fit fail later in some matmul, with no hint of which tensor differs. Typically, a different checkpoint was passed.
 ksai/safetensors	Safetensors.metadata	pub fn metadata(r: Self@): json.Value	the header; its values live in the parsing arena
+ksai/safetensors	Safetensors_dtype	pub trait Safetensors_dtype	an element type a tensor can be read as, with its dtype name. Caution: **Compare the dtype's name, not its width.** The content is just bytes. A read as another type garbles the numbers with no error: an I32 tensor read as F32 gives tiny meaningless values. **Only the types a model reads have an impl**; a type without one is a compile error at `get_tensor`.
+ksai/safetensors	Safetensors_dtype.dtype	fn dtype(): U8[]	the name the header gives this element type
 ksai/safetensors	Safetensors_error	pub enum Safetensors_error	why a weights file could not be read or written. I/O, a broken header and a missing tensor are recoverable run-time conditions. So they propagate as an error union (?E) for the caller to handle.
-ksai/safetensors	Safetensors_error.dtype_mismatch	dtype_mismatch(name: U8[])	the file's element width is not the one being read, naming it
+ksai/safetensors	Safetensors_error.dtype_mismatch	dtype_mismatch(name: U8[])	the file's dtype is not the type being read, naming the tensor
 ksai/safetensors	Safetensors_error.invalid_header	invalid_header	the JSON header could not be parsed
 ksai/safetensors	Safetensors_error.read_failed	read_failed	the file could not be read
 ksai/safetensors	Safetensors_error.shape_mismatch	shape_mismatch(name: U8[])	the file's shape is not the one expected, naming the tensor
@@ -375,7 +379,7 @@ ksai/tensor	Tensor	pub struct Tensor<|T|>	a multi-dimensional array: the element
 ksai/tensor	Tensor.data	pub data: T$@	the elements, laid out with the last dimension varying fastest
 ksai/tensor	Tensor.shape	pub shape: Sz$[]	each dimension's size; how many there are is `shape.len`
 ksai/tensor	Tensor.size	pub size: Sz	the total number of elements, kept because every loop bound needs it
-ksai/tensor	Tensor<|T|>.add	pub fn add(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the sum; a shape mismatch panics
+ksai/tensor	Tensor<|T|>.add	pub fn add(r: Self@, rhs: Tensor<|T|>): Tensor<|T|>	the sum; a shape mismatch panics
 ksai/tensor	Tensor<|T|>.apply_rope	pub fn apply_rope(r: Self$@, start_pos: Sz): Tensor<|T|>!Tensor_error	rotates each pair of elements by its position, so the order is encoded
 ksai/tensor	Tensor<|T|>.at #inline	pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@	the element at a flat index
 ksai/tensor	Tensor<|T|>.dup	pub fn dup(r: Self$@, arena: Arena$@): Tensor<|T|>	a copy in another arena, flattened to one dimension. It is for keeping a value alive after the caller's arena is gone.
@@ -383,13 +387,13 @@ ksai/tensor	Tensor<|T|>.fill	pub fn fill(r: Self@, val: T)	writes the same value
 ksai/tensor	Tensor<|T|>.fill_uniform	pub fn fill_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	writes uniform random values into every element. **A constant start makes every unit symmetric and training impossible** (every token would get the same embedding), so training from scratch begins here.
 ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	the matrix product, in a newly allocated tensor
 ksai/tensor	Tensor<|T|>.matmul_into	pub fn matmul_into(r: Self$@, rhs: Tensor<|T|>, out: Tensor<|T|>): Void!Tensor_error	the matrix product, written into a tensor the caller owns. It is for a hot loop that would otherwise allocate once per step.
-ksai/tensor	Tensor<|T|>.mul	pub fn mul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the element-wise product
+ksai/tensor	Tensor<|T|>.mul	pub fn mul(r: Self@, rhs: Tensor<|T|>): Tensor<|T|>	the element-wise product
 ksai/tensor	Tensor<|T|>.new	pub fn new(shape: Sz[], arena: Arena$@): Tensor<|T|>	a tensor of that shape, its elements not yet written
 ksai/tensor	Tensor<|T|>.rmsnorm	pub fn rmsnorm(r: Self$@, weight: Tensor<|T|>, eps: T): Tensor<|T|>!Tensor_error	root-mean-square normalization over the last dimension
 ksai/tensor	Tensor<|T|>.scale	pub fn scale(r: Self$@, factor: T): Tensor<|T|>	every element multiplied, in a newly allocated tensor
 ksai/tensor	Tensor<|T|>.silu	pub fn silu(r: Self$@): Tensor<|T|>	the SiLU (Swish) activation, element by element. F32 elements take `exp_f32`, so the loop runs on vectors; F64 ones keep `math.exp`.
 ksai/tensor	Tensor<|T|>.softmax	pub fn softmax(r: Self$@): Tensor<|T|>!Tensor_error	each row turned into weights that sum to 1. The row's maximum is subtracted first, so a large value does not overflow.
-ksai/tensor	Tensor<|T|>.sub	pub fn sub(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the difference; a mismatch panics
+ksai/tensor	Tensor<|T|>.sub	pub fn sub(r: Self@, rhs: Tensor<|T|>): Tensor<|T|>	the difference; a mismatch panics
 ksai/tensor	Tensor<|T|>:Add<|Tensor<|T|>, Tensor<|T|>|>	impl<|T|> Tensor<|T|>: Add<|Tensor<|T|>, Tensor<|T|>|>	so `a + b` can be written
 ksai/tensor	Tensor<|T|>:Index_place<|Sz, T|>	impl<|T|> Tensor<|T|>: Index_place<|Sz, T|>	so `t[i]` reads and writes one element. Note: An index out of range panics, for the same reason as `std/ds.kspl`'s List. The caller can compute the range from `size`, so going outside it is a bug. Only a shape mismatch is a recoverable `Tensor_error` (the reason is at `Tensor_error`).
 ksai/tensor	Tensor<|T|>:Mul<|Tensor<|T|>, Tensor<|T|>|>	impl<|T|> Tensor<|T|>: Mul<|Tensor<|T|>, Tensor<|T|>|>	so `a * b` is element-wise, not matmul

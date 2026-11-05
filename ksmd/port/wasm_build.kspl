@@ -5,6 +5,8 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/sys"
 
+priv const WAIT_MS: I64 = 900000I64 //< how long the page's build may take, its steps together
+
 fn main(): I32
     defer arena: = Arena(1 << 20)
     a: = sys.args()
@@ -13,7 +15,7 @@ fn main(): I32
         return 2
     b: = Wasm_build::{ .ksplc = a.get(1), .entry = a.get(2), .out = a.get(3),
         .imports = a.get(4), .work = a.get(5), .cwd = "", .deps = a.get(6),
-        .options = U8[][]::{} }
+        .options = U8[][]::{}, .ends = sys.deadline_after_ms(WAIT_MS) }
     build(b@, arena) catch why
         io.err().s(why).c('\n')
         return 1

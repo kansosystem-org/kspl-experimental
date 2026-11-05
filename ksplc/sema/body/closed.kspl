@@ -1,0 +1,82 @@
+//< The closed package (`--closed=<package>`): its files reach no C symbol, linker or assembler
+//< **A build that compiles code nobody checked closes that code's package.** `import` and `embed`
+//< already keep its files inside their package (`refused_use` in `../../base/package.kspl`). C
+//< interoperability is the other way out: assembler text, a C symbol or a library name reach the
+//< C compiler, the assembler and the linker, which read and run what the package rules never see.
+//< The assembler's `.include` reads any file the user can read, for example. So a closed package's
+//< files may write none of the forms of "C interoperability" in docs/SPEC-programming-language.md,
+//< nor the attributes that hand text to the C side.
+//< The standard library and the other packages the build uses stay open: they are trusted.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as _base_ast_ext // `attribute_name`, `unwrap_top_level`
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/decl/attrs" as sema_decl_attrs
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "std/str"
+
+priv const C_SIDE_ATTRIBUTES: U8[][4] = ::{ "interrupt", "naked", "raw_address", "section" } //<
+    //< The attributes a closed package's files may not write
+    //< `#section` hands its name to the assembler, `#naked` leaves the body to it, and `#interrupt`
+    //< and `#raw_address` serve code that drives the machine directly.
+
+impl Sema_ctx
+    fn check_closed_package(r: Self$@, root: Ast_node@) //<
+        //< Refuses each way to C in the files of the package `--closed=` names
+        //< **A name no file of the compile is in is refused too**: a mistyped package would close
+        //< nothing, and the build would look closed (Principle 5 in docs/DESIGN-principles.md).
+        closed: = base_core.config.closed_package
+        if closed.len == 0 || r.suppress_errors
+            return
+        $found: = false
+        for top in root.children
+            file: = top.unwrap_top_level().loc.file()
+            if !base_locate.package_of(file).equals(closed)
+                continue
+            found = true
+            r.set_current_file(file)
+            r.refuse_c_reach(top, closed)
+        if found
+            return
+        r.clear_scratch()
+            .s("--closed=\{closed\}: no file of this compile is in the package '\{closed\}', so the \
+                option closes nothing. Name the package of the code the build does not trust")
+        r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
+            .error, r.scratch.slice())
+
+    priv fn refuse_c_reach(r: Self$@, n: Ast_node$@, closed: U8[]) //<
+        //< Refuses what in n's tree reaches C, once per form, at the form
+        if n == null
+            return
+        what: = c_reach_of(n)
+        if what.len > 0
+            r.clear_scratch()
+                .s("\{what\} cannot be written in the package '\{closed\}'. The build closes it \
+                    (--closed=\{closed\}): its files stay inside KSPL, so they reach no C symbol, \
+                    linker or assembler, and the build reads nothing outside them")
+            r.err(n, r.scratch.slice())
+            return
+        for child in n.children
+            r.refuse_c_reach(child, closed)
+
+priv fn c_reach_of(n: Ast_node$@): U8[] //<
+    //< The form n writes that reaches C, as a message names it; empty where it writes none
+    switch n.kind_id
+    case .k_decl_extern, .k_decl_extern_block, .k_decl_extern_struct
+        return "'extern'"
+    case .k_decl_directive
+        if sema_decl_attrs.directive_name(n).equals("link")
+            return "'##link'"
+    case .k_attribute
+        name: = n.attribute_name()
+        for c_side in C_SIDE_ATTRIBUTES
+            if name.equals(c_side)
+                return base_core.arena.text().s("'#").s(name).c('\'').take()
+    case .k_identifier
+        if sema_body_call.intrinsic_of(n.text) != .not_intrinsic
+            return base_core.arena.text().c('\'').s(n.text).c('\'').take()
+    default {}
+    if n.linkage_of().is_some()
+        return "'extern'"
+    return ""

@@ -22,13 +22,21 @@ import "std/sys"
 
 priv const MAX_CLONE_DEPTH: Sz = 2000 //<
     //< The deepest AST clone_with walks before it exits with a fatal error
-    //< Caution: A postfix chain (`@` / `$` / `[]`) is outside the parser's max_parse_depth, so a
-    //< pathologically deep type (`I32@@@@...@`) reaches every later pass as a deep AST. clone_with
-    //< / validate_layout recurse, and they can get there before the other depth guards
-    //< (max_mangle_depth in sema/type/naming.kspl). This limit keeps the native stack from
-    //< overflowing.
+    //< Caution: A value's postfix chain is outside the parser's max_parse_depth, so a
+    //< pathologically long one (`p$$$$...$`) reaches every later pass as a deep AST. clone_with
+    //< / validate_layout recurse, and they can get there before the other depth guards. This limit
+    //< keeps the native stack from overflowing. A type's postfix steps have a limit of their own,
+    //< `MAX_TYPE_POSTFIX` below.
 priv const MAX_VALIDATE_DEPTH: Sz = 2000
 priv const MAX_FIND_DEEP_CHILD_DEPTH: Sz = 2000
+const MAX_TYPE_POSTFIX: Sz = 256 //<
+    //< The most postfix steps (`@`, `[]`, `[N]`, `?`, `!E`) one written type can carry
+    //< **A type's steps are a depth, though the tree holds them side by side.** Desugar nests each
+    //< step in the one before, and every later pass walks one level per step. Unchecked, 5000
+    //< steps overflow the stack and 2000 take a minute. It is well above the 64 the language
+    //< guarantees ("Implementation limits" in `docs/SPEC-programming-language.md`). A type built
+    //< through typedefs is held to it too, its steps counted once every typedef is expanded
+    //< (`expanded_steps` in `../sema/decl/resolve.kspl`).
 
 priv const ANON_FN_PREFIX: U8[] = "_anon_fn_" //<
     //< The prefix on the name of the top-level function an anonymous function is lifted into
@@ -710,6 +718,23 @@ impl Ast_node
     fn validate_layout(r: Self$@, src: U8[], file: U8[]): Bool //< false where it is too deep
         return r.validate_layout_impl(src, file, 0)
 
+    priv fn type_steps_fit(r: Self@, src: U8[], file: U8[]): Bool //<
+        //< Whether a written type carries no more postfix steps than `MAX_TYPE_POSTFIX`
+        //< Where it carries more, it reports that at the type and returns false.
+        $steps: Sz = 0
+        for c in r.children
+            if c.kind_id == .k_type_postfix
+                steps += 1
+        if steps <= MAX_TYPE_POSTFIX
+            return true
+        starts: = src.line_starts(base_core.arena)
+        msg: = base_core.arena.text()
+            .s("type nesting too deep. The type has \{steps\} postfix steps (`@`, `[]`, `[N]`, `?`, \
+                `!`), each one level deeper. The language guarantees 64 and ksplc accepts \
+                \{MAX_TYPE_POSTFIX\}. Name a part with a `typedef`").take()
+        base_diag.print_diagnostic(file, src, r.loc.offset, 1, msg, .error, starts)
+        return false
+
     priv fn validate_layout_impl(r: Self$@, src: U8[], file: U8[], depth: Sz): Bool
         if r == null
             return true
@@ -778,6 +803,9 @@ impl Ast_node
         case .k_expr_implicit_dot
             r.ice_assert(len >= 1 && len <= 2,
                 "AST Validation Error: implicit dot must have 1 or 2 children")
+        case .k_type_expr
+            if !r.type_steps_fit(src, file)
+                return false
         default { // the other kinds have no fixed layout to check
         }
 

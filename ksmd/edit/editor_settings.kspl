@@ -1,0 +1,36 @@
+//< The editor's action on the document's own settings: its `:::document` clause
+//< Settings never change in place. New settings are a new entry in `Document.settings`, and the
+//< first block points at it, so undo swaps the block back, as for a chart.
+import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
+import "ksmd/edit/history" { begin }
+import "ksmd/edit/region" { Unit, gap_spot, whole_unit }
+import "ksmd/model/model" { Block, Settings }
+import "ksmd/syntax/settings" { fault_of, is_empty }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+impl Editor
+    fn set_settings(ed: Self$@, s: Settings): Void!Refused //<
+        //< Gives the document these settings, as one step: the first block becomes, or stays, the
+        //< `:::document` clause. Settings that set nothing take the clause away.
+        had: = ed.doc.blocks.len > 0 && ed.doc.blocks.get(0).kind == .document
+        if is_empty(s)
+            if had
+                ed.remove_whole(0)!
+            return
+        if _says: = fault_of(s)
+            throw .no_read_back
+        defer scratch: = Arena(16 * 1024)
+        $frag: = List<|Unit|>(scratch)
+        ed.doc.settings.push(s)
+        b: = Block::{ .kind = .document, .level = 0, .label = "", .text = "",
+            .first = ed.doc.settings.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
+            .invisible = false }
+        frag.push(whole_unit(b, scratch))
+        start: = gap_spot(0)
+        end: = gap_spot(1 if had else 0)
+        $w: = ed.work(start, end, start.block, end_block(end), scratch)
+        r: = replace(w@, frag@, scratch)
+        $tx: = begin(ed.selection(), ed.arena)
+        ed.commit(w@, tx@, r.caret, r.caret, scratch)!
+        ed.finish(tx, .other, false)!

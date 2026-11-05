@@ -1,9 +1,13 @@
 //< Writes ksmd's own function table from `calc/functions.kspl`, or checks that it is current
 //< `make ksmd-functions` writes it; `make debug-ksmd` checks it first, so a signature changed
-//< without the table fails there, not in a formula. Run from `ksmd/`:
+//< without the table fails there, not in a formula. The same run writes the list of functions in
+//< the editing page's reference (`ksmd/docs/SPEC-editing-page.md`), so a person reads every
+//< function a formula can call. Run from `ksmd/`:
 //<
 //<     ksplc run port/table_writer.kspl <ksplc> write|check <work folder>
 import "ksmd/calc/glue"
+import "std/chars"
+import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
@@ -19,6 +23,8 @@ priv const DOC_TARGET: U8[] = "calc/functions" //< the same, as `ksplc doc` name
     //< (`make test-extract-rest`) has no `ksmd/` folder for `ksplc doc` to look in.
 priv const TABLE: U8[] = "calc/functions_table.kspl" //< the table, from `ksmd/`
 priv const WAIT_MS: I32 = 120000 //< how long `ksplc doc` may take
+priv const REFERENCE_NAME: U8[] = "SPEC-editing-page.md" //< the reference, in `docs/` from `ksmd/`
+priv const HEADING: U8[] = "### Functions by name" //< the heading the written list stands under
 
 fn main(): I32
     defer arena: = Arena(4 * 1024 * 1024)
@@ -58,14 +64,76 @@ fn main(): I32
         io.err().s("table_writer: ksplc fmt failed on the table:\n").s(laid.text(arena))
         return 1
     source: = io.read_file(draft, arena) catch ""
+    reference_path: = fs.join("docs", REFERENCE_NAME, arena)
+    reference: = io.read_file(reference_path, arena) catch
+        io.err().s("table_writer: cannot read \{reference_path\}\n")
+        return 1
+    listed: = with_list(reference, fns@, arena) catch
+        io.err().s("table_writer: \{reference_path\} holds no heading \"\{HEADING\}\"\n")
+        return 1
     if a.get(2).equals("write")
         io.write_file(TABLE, source) catch
             io.err().s("table_writer: cannot write \{TABLE\}\n")
             return 1
-        io.out().s("wrote ksmd/\{TABLE\} (\{fns.len\} functions)\n")
+        io.write_file(reference_path, listed) catch
+            io.err().s("table_writer: cannot write \{reference_path\}\n")
+            return 1
+        io.out()
+            .s("wrote ksmd/\{TABLE\} and the list in ksmd/\{reference_path\} (\{fns.len\} \
+                functions)\n")
         return 0
     have: = io.read_file(TABLE, arena) catch ""
     verdict.begin("ksmd functions")
     verdict.check(arena.text().s("ksmd/\{TABLE\} is the table of \{SOURCE\}").take(),
         have.equals(source), "run `make ksmd-functions`")
+    verdict.check(arena.text().s("ksmd/\{reference_path\} lists every function of \{SOURCE\}")
+        .take(), reference.equals(listed), "run `make ksmd-functions`")
     return verdict.finish()
+
+priv fn with_list(text: U8[], fns: List<|glue.Function|>@, arena: Arena$@): U8[]? //<
+    //< The reference with the list of functions put in place of what stands under its heading,
+    //< up to the next heading; none where the heading is missing
+    marker: = arena.text().s("\n").s(HEADING).s("\n").take()
+    at: = text.find_str(marker) catch
+        return .none
+    from: = at + marker.len
+    rest: = text.sub_from(from)
+    to: = from + 1 + rest.find_str("\n#").unwrap_or(rest.len - 1)
+    b: = arena.text()
+    b.s(text.sub(0, from))
+    b
+        .s("\n**This list is written from the functions' own signatures** (`make ksmd-functions`). \
+            An argument in brackets can be left out, and `…` takes any number of them.\n\n")
+    b.s("| Function | What it gives |\n| :-- | :-- |\n")
+    for f in fns
+        b.s("| `").s(f.name).c('(')
+        $first: = true
+        for p in f.params
+            if p.kind == .arena
+                continue
+            if !first
+                b.s(", ")
+            first = false
+            if p.optional
+                b.c('[')
+            b.s(p.name)
+            if p.kind == .rest
+                b.s("…")
+            if p.optional
+                b.c(']')
+        b.s(")` | ")
+        // The record joins a doc comment's lines, its first line closed with a full stop. The
+        // first line is the function's summary, so the list takes it alone.
+        $summary: = f.summary
+        if end: = summary.find_str(". ")
+            summary = summary.sub(0, end)
+        if summary.ends_with(".")
+            summary = summary.sub(0, summary.len - 1)
+        for c in summary
+            if c == '|'
+                b.c('\\')
+            b.c(c)
+        b.s(" |\n")
+    b.c('\n')
+    b.s(text.sub_from(to))
+    return .some(b.take())

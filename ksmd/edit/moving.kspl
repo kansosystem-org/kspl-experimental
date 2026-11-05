@@ -1,0 +1,201 @@
+//< Moving a table's rows, columns and cells: what a drag or a paste after a cut does
+//< A moved line keeps its identity, so its references, height and notes go with it. Cells moved
+//< as a block take their values, looks and notes, and a reference to a moved cell follows it.
+import "ksmd/calc/formula" { BROKEN, Positions, text_piece }
+import "ksmd/edit/edit" { Edit_error, Saved, charts_found, chosen, drop_filters, empty_cell, fits,
+    restore, table_at }
+import "ksmd/model/format" { no_format, same_format }
+import "ksmd/model/model" { Cell, Corner, Document, Table }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+fn move_rows(doc: Document$@, u: Sz, first: Sz, count: Sz, at: Sz): Void!Edit_error //<
+    //< Moves `count` data rows from `first` to stand before the row at `at`; at the count of rows,
+    //< after the last one
+    //< Each row keeps its identity, so its references, height and notes go with it. A place inside
+    //< the rows moved, or just after them, changes nothing.
+    t: = table_at(doc, u)!
+    if count < 1 || first < 0 || first + count > t.rows.len || at < 0 || at > t.rows.len
+        throw .outside
+    if at >= first && at <= first + count
+        return
+    lo: = at if at < first else first
+    mid: = first if at < first else first + count
+    hi: = first + count if at < first else at
+    shift_rows(t, lo, mid, hi)
+    fits(doc) catch
+        shift_rows(t, lo, lo + hi - mid, hi)
+        throw .too_long
+
+fn move_columns(doc: Document$@, u: Sz, first: Sz, count: Sz, at: Sz): Void!Edit_error //<
+    //< Moves `count` columns from `first` to stand before the column at `at`; at the count of
+    //< columns, after the last one
+    //< Each column keeps its identity, name, width, format, choices, rule and filter. A place
+    //< inside the columns moved, or just after them, changes nothing.
+    t: = table_at(doc, u)!
+    if count < 1 || first < 0 || first + count > t.columns.len || at < 0 || at > t.columns.len
+        throw .outside
+    if at >= first && at <= first + count
+        return
+    lo: = at if at < first else first
+    mid: = first if at < first else first + count
+    hi: = first + count if at < first else at
+    shift_columns(t, lo, mid, hi)
+    fits(doc) catch
+        shift_columns(t, lo, lo + hi - mid, hi)
+        throw .too_long
+    // Of two columns with one name, a chart finds the first.
+    charts_found(doc, u) catch why
+        shift_columns(t, lo, lo + hi - mid, hi)
+        throw why
+
+fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, to_row: Sz,
+    to_column: Sz): Void!Edit_error //<
+        //< Moves the `height` by `width` cells at `top`, `left` to stand from `to_row`,
+        //< `to_column` of the same table, as a paste after a cut moves them
+        //< Each cell there takes a moved cell whole: its value or formula, look and note. A cell
+        //< left behind becomes empty. Row -1 is the names, which move only along the names row.
+        //< A reference to a moved cell follows it, and a range follows when it moves whole. A
+        //< reference to a cell written over becomes `#REF!`, and so does a range whose two corners
+        //< were written over. A range moved in part stays where it is.
+    t: = table_at(doc, u)!
+    if height < 1 || width < 1 || top < -1 || left < 0 || to_row < -1 || to_column < 0 ||
+        (top < 0 && to_row >= 0) || (top >= 0 && to_row < 0) || top + height > t.rows.len ||
+        to_row + height > t.rows.len || left + width > t.columns.len ||
+        to_column + width > t.columns.len
+        throw .outside
+    if top == to_row && left == to_column
+        return
+    // A value moved into a column with choices must be one of them, as for a copy.
+    for r in Range.asc(height)
+        for c in Range.asc(width)
+            cell: = t.cells[t.at(top + r, left + c)]
+            if top + r >= 0 &&
+                (cell.kind == .text || cell.kind == .number || cell.kind == .date)
+                _ok: = chosen(t, to_column + c, cell.text)!
+    defer scratch: = Arena(64 * 1024)
+    at: = Positions(doc, scratch)
+    $saved: = List<|Saved|>(scratch)
+    from: = Area::{ .top = top, .left = left, .height = height, .width = width }
+    to: = Area::{ .top = to_row, .left = to_column, .height = height, .width = width }
+    for v in Range.asc(doc.tables.len)
+        for i in Range.asc(doc.tables[v].cells.len)
+            cell: = doc.tables[v].cells[i]
+            if cell.kind != .formula
+                continue
+            for k in Range(cell.first, cell.first + cell.count, 1)
+                $p: = doc.tables[v].pieces[k]
+                // Whole columns name no cell, so cells moving in or out leave them as they are.
+                if p.kind == .text || p.kind == .columns || p.table != u
+                    continue
+                a_moves: = from.holds(at@, u, p.from)
+                b_moves: = from.holds(at@, u, p.to)
+                if a_moves && b_moves
+                    p.from = moved(t, at@, u, p.from, to_row - top, to_column - left)
+                    p.to = moved(t, at@, u, p.to, to_row - top, to_column - left)
+                else if !a_moves && !b_moves && to.holds(at@, u, p.from) &&
+                    to.holds(at@, u, p.to)
+                    p = text_piece(BROKEN)
+                else
+                    continue
+                saved
+                    .push(Saved::{ .table = v, .index = k,
+                    .piece = doc.tables[v].pieces[k] })
+                doc.tables[v].pieces[k] = p
+    // The cells of both places as they were, to put back on a refusal.
+    $places: = List<|Sz|>(scratch)
+    $was: = List<|Cell|>(scratch)
+    for which in Range.asc(2)
+        area: = from if which == 0 else to
+        for r in Range.asc(height)
+            for c in Range.asc(width)
+                index: = t.at(area.top + r, area.left + c)
+                places.push(index)
+                was.push(t.cells[index])
+    $name: = empty_cell()
+    name.kind = .text
+    for r in Range.asc(height)
+        for c in Range.asc(width)
+            t.cells[t.at(top + r, left + c)] = name if top + r < 0 else empty_cell()
+    for r in Range.asc(height)
+        for c in Range.asc(width)
+            t.cells[t.at(to_row + r, to_column + c)] = was[r * width + c]
+    fits(doc) catch
+        put_back(doc, u, places@, was@, saved@)
+        throw .too_long
+    // A name moved can leave a chart without its column.
+    charts_found(doc, u) catch why
+        put_back(doc, u, places@, was@, saved@)
+        throw why
+    // A filter matches the text a cell shows, so a column whose cells change format loses it.
+    for c in Range.asc(width)
+        for r in Range.asc(height)
+            format: = was[r * width + c].look.format
+            if top + r >= 0 && !same_format(format, no_format())
+                drop_filters(t, left + c, left + c)
+            if top + r >= 0 &&
+                !same_format(format, was[height * width + r * width + c].look.format)
+                drop_filters(t, to_column + c, to_column + c)
+
+priv struct Area //< a rectangle of a table's cells, by places
+    top: Sz
+    left: Sz
+    height: Sz
+    width: Sz
+
+impl Area
+    fn holds(a: Self@, at: Positions@, u: Sz, c: Corner): Bool //< whether a corner stands in it
+        row: = at.of(u, c.row)
+        column: = at.of(u, c.column)
+        return row >= 0 && column >= 0 && row >= a.top && row < a.top + a.height &&
+            column >= a.left && column < a.left + a.width
+
+priv fn moved(t: Table@, at: Positions@, u: Sz, $c: Corner, rows: Sz, columns: Sz): Corner //<
+    //< The corner `rows` lower and `columns` further right, keeping its `$` marks
+    c.row = t.rows[at.of(u, c.row) + rows]
+    c.column = t.columns[at.of(u, c.column) + columns]
+    return c
+
+priv fn put_back(doc: Document$@, u: Sz, places: List<|Sz|>@, was: List<|Cell|>@,
+    saved: List<|Saved|>$@) //< puts back the cells and pieces `move_cells` changed
+    for j in Range.asc(places.len)
+        doc.tables[u].cells[places[j]] = was[j]
+    restore(doc, saved)
+
+priv fn shift_rows(t: Table$@, lo: Sz, mid: Sz, hi: Sz) //<
+    //< Puts the data rows from `mid` up to `hi` before those from `lo`, with their identities and
+    //< cells; `shift_rows(t, lo, lo + hi - mid, hi)` puts them back
+    rotate(t.rows@, lo, mid, hi)
+    rotate(t.cells@, t.at(lo, 0), t.at(mid, 0), t.at(hi, 0))
+
+priv fn shift_columns(t: Table$@, lo: Sz, mid: Sz, hi: Sz) //<
+    //< Puts the columns from `mid` up to `hi` before those from `lo`, with their identities, cells,
+    //< widths, formats, choices and rules, as `shift_rows` puts rows
+    columns: = t.columns.len
+    for r in Range.asc(t.rows.len + 1)
+        rotate(t.cells@, r * columns + lo, r * columns + mid, r * columns + hi)
+    rotate(t.columns@, lo, mid, hi)
+    if t.widths.len > 0
+        rotate(t.widths@, lo, mid, hi)
+    if t.formats.len > 0
+        rotate(t.formats@, lo, mid, hi)
+    if t.choices.len > 0
+        rotate(t.choices@, lo, mid, hi)
+    if t.rules.len > 0
+        rotate(t.rules@, lo, mid, hi)
+
+priv fn rotate<|T|>(list: List<|T|>$@, lo: Sz, mid: Sz, hi: Sz) //<
+    //< Puts the elements from `mid` up to `hi` before those from `lo`, moving each element once
+    reverse(list, lo, mid)
+    reverse(list, mid, hi)
+    reverse(list, lo, hi)
+
+priv fn reverse<|T|>(list: List<|T|>$@, lo: Sz, hi: Sz) //< the elements from `lo` up to `hi`
+    $i: = lo
+    $j: = hi - 1
+    for i < j
+        kept: = list[i]
+        list[i] = list[j]
+        list[j] = kept
+        i += 1
+        j -= 1

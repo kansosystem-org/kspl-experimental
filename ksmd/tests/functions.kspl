@@ -132,17 +132,25 @@ priv fn wired() //< a call and an answer come back from their bytes as they were
     cells: = Raw_arg::{ .value = empty(),
         .cells = Value[]::{ number(1.5), Value.failed(.division) }, .is_cells = true, .range = true,
         .piece = 0 }
+    // `f(A1:A1)` is a range of one cell, and `f(A1)` one cell: only the flag tells them apart.
+    small: = Raw_arg::{ .value = empty(), .cells = Value[]::{ number(2.0) }, .is_cells = true,
+        .range = true, .piece = 1 }
+    lone: = Raw_arg::{ .value = empty(), .cells = Value[]::{ number(3.0) }, .is_cells = true,
+        .range = false, .piece = 2 }
     out: = arena.text()
-    wire.put_call(out, "twice", Raw_arg[]::{ one, cells })
+    wire.put_call(out, "twice", Raw_arg[]::{ one, cells, small, lone })
     data: = out.take()
     call: = wire.read_call(data, arena) catch
         verdict.check("a call reads back from its bytes", false, "")
         return
     verdict.check("a call reads back with its name and each argument",
-        call.name.equals("twice") && call.args.len == 2 &&
+        call.name.equals("twice") && call.args.len == 4 &&
         call.args[0].value.text.equals("x") && call.args[1].is_cells &&
         call.args[1].cells.len == 2 && call.args[1].cells[0].number == 1.5 &&
-        call.args[1].cells[1].error == .division, "")
+        call.args[1].cells[1].error == .division && call.args[1].range, "")
+    verdict.check("a range of one cell reads back as a range, and one cell as no range",
+        call.args[2].range && call.args[2].cells.len == 1 && !call.args[3].range &&
+        call.args[3].cells[0].number == 3.0, "")
     $why: = Wire_error.unknown
     $whole: = true
     _cut: = wire.read_call(data.sub(0, data.len - 1), arena) catch e

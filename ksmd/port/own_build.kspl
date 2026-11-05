@@ -4,33 +4,40 @@
 //< workspace. The wasm goes to standard output and exit 0; a failure is a message on standard
 //< error and exit 1, for the page to show at the `:::functions` clause. The local server runs it
 //< with two arguments, and it finds `ksplc` and ksmd's sources from its own place (`tools_near`).
+//< The server starts it on a page's request, so the build must read nothing else.
 //<
 //< The steps, in a scratch folder removed at the end:
 //<
 //< 1. The person's file is copied in as `own/functions.kspl`, in a package that names itself
 //<    (`own/ksplc.cfg`) and uses only ksmd. **This closes the build**: a path that climbs out of
-//<    the folder, or names any other package, is a compile error, for an `embed` too. The server
-//<    starts this program on a page's request, so the build must read nothing else.
+//<    the folder, or names any other package, is a compile error, for an `embed` too.
 //< 2. `ksplc doc` lists its `pub fn`s; `ksmd/calc/glue.kspl` writes their table as
-//<    `own/table.kspl`, and refuses a name ksmd already has.
-//< 3. `own/main.kspl`, the entry (`ENTRY`), hands the table to `ksmd/port/own/serve.kspl`.
+//<    `entry/table.kspl`, and refuses a name ksmd already has.
+//< 3. `entry/main.kspl`, the entry (`ENTRY`), hands the table to `ksmd/port/own/serve.kspl`. Both
+//<    stand in the package `entry`, with its own `ksplc.cfg`, as `own` may write no `extern fn`.
 //< 4. `ksmd/port/wasm.kspl` builds the entry, with ksmd's sources as the place packages are found.
+//<    **`--closed=own` closes `own` to C too**, so no assembler `.include` reads a file elsewhere.
 import "ksmd/calc/calc" { known }
 import "ksmd/calc/glue"
-import "ksmd/port/wasm" { Wasm_build, build }
+import "ksmd/port/wasm" { Wasm_build, build, step }
+import "std/chars" // `starts_with`
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str"
-import "std/subproc"
 import "std/sys"
 
 priv const PERSON: U8[] = "own/functions.kspl" //< the person's file in the scratch folder
-priv const WAIT_MS: I32 = 120000 //< how long `ksplc doc` may take
+priv const SERVER_MS: I64 = 60000I64 //< how long the local server waits for one build
+    //< It is the 60 s of "Building a page's own functions" in `docs/SPEC-local-server.md`. Past it,
+    //< the server kills this program, and the scratch folder stays.
+priv const LIMIT_MS: I64 = SERVER_MS - 10000I64 //< how long every step may take together
+    //< **It ends before the server's limit**, so this program removes its own scratch folder. The
+    //< 10 s left cover its start and the removal.
 
 priv const ENTRY: U8[][_] = ::{ "//< A person's own functions, as the page's worker calls them",
-        "import \"ksmd/port/own/serve\"", "import \"own/table\"", "",
+        "import \"ksmd/port/own/serve\"", "import \"entry/table\"", "",
         "extern fn ksmd_own_call(len: Sz): Sz //< answers the call in the input; the answer's \
             length", "    return serve.answer(len, table.call)", "",
         "extern fn ksmd_own_names(): Sz //< the functions' names, one per line, in the output",
@@ -38,10 +45,12 @@ priv const ENTRY: U8[][_] = ::{ "//< A person's own functions, as the page's wor
 } //< the entry's lines, the same for every person
 
 priv const PACKAGE: U8[] = "[package]\nname = own\nuses = ksmd\n" //< `own/ksplc.cfg`
+priv const ENTRY_PACKAGE: U8[] = "[package]\nname = entry\nuses = own ksmd\n" //<
+    //< `entry/ksplc.cfg`
 
-priv const SCRATCH: U8[][_] = ::{ "own/ksplc.cfg", "own/functions.kspl", "own/table.kspl",
-    "own/main.kspl", "functions.tsv", "c/module.c", "c/module.o", "own.wasm", "own", "c" } //<
-        //< Every file and folder a build makes, removed in this order
+priv const SCRATCH: U8[][_] = ::{ "own/ksplc.cfg", "own/functions.kspl", "entry/ksplc.cfg",
+    "entry/table.kspl", "entry/main.kspl", "functions.tsv", "c/module.c", "c/module.o", "own.wasm",
+    "own", "entry", "c" } //< Every file and folder a build makes, removed in this order
 
 struct Tools //< what a build runs
     ksplc: U8[]
@@ -101,16 +110,19 @@ fn own_wasm(file: U8[], shown: U8[], t: Tools, arena: Arena$@): U8[]!U8[] //<
     //< The wasm of the functions in `file`, or why there is none, naming the file as `shown`
     $buf: U8[4096] = ::{}
     exe: = sys.exe_path(U8$[]::buf).unwrap_or("")
+    ends: = sys.deadline_after_ms(LIMIT_MS)
     base: = fs.join(sys.get_dir_name(exe), "tmp", arena)
-    work: = fs.mkdir_unique(base, "own-build-", arena) catch
+    clean_stale(base, arena)
+    work: = fs.mkdir_unique(base, PREFIX, arena) catch
         throw arena.text().s("cannot make a scratch folder in \{base\}\n").take()
     defer clean(work, arena)
-    got: = steps(file, shown, t, work, arena) catch why
+    got: = steps(file, shown, t, work, ends, arena) catch why
         throw why.replace(PERSON, shown, arena)
     return got
 
-priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], arena: Arena$@): U8[]!U8[] //<
-    //< The build's steps in `work`; a message names the person's file as it stands there
+priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena: Arena$@):
+    U8[]!U8[] //<
+        //< The build's steps in `work`; a message names the person's file as it stands there
     source: = io.read_file(file, arena) catch
         throw arena.text().s("cannot read \{shown\}\n").take()
     fs.mkdir_all(fs.join(work, "own", arena)) catch
@@ -127,11 +139,7 @@ priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], arena: Arena$@): U8
     doc.push_all(options.slice())
     doc
         .push_all(U8[][]::{ arena.text().s("--emit-surface=").s(tsv).take(), "own/functions" })
-    listed: =
-        subproc.run_capture(doc.slice(), work, WAIT_MS, 1 << 20, arena) catch
-        throw arena.text().s("\{t.ksplc\} did not start\n").take()
-    if !listed.exited_with(0)
-        throw listed.text(arena)
+    step(doc.slice(), work, ends, arena)!
     rows: = io.read_file(tsv, arena) catch
         throw "ksplc doc listed no functions\n"
     fns: = glue.functions_of(rows, arena) catch why
@@ -143,16 +151,20 @@ priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], arena: Arena$@): U8
         if known(name)
             throw arena.text().s(PERSON)
                 .s(": ksmd has a function `\{name\}` of its own. Name yours otherwise\n").take()
-    put(work, "own/table.kspl", glue.table_source(fns@, "own/functions", shown, arena), arena)!
     entry: = arena.text()
     for line in ENTRY
         entry.s(line).c('\n')
-    put(work, "own/main.kspl", entry.take(), arena)!
+    fs.mkdir_all(fs.join(work, "entry", arena)) catch
+        throw arena.text().s("cannot write in \{work\}\n").take()
+    put(work, "entry/ksplc.cfg", ENTRY_PACKAGE, arena)!
+    put(work, "entry/table.kspl", glue.table_source(fns@, "own/functions", shown, arena), arena)!
+    put(work, "entry/main.kspl", entry.take(), arena)!
+    options.push("--closed=own")
     out: = fs.join(work, "own.wasm", arena)
-    b: = Wasm_build::{ .ksplc = t.ksplc, .entry = "own/main.kspl", .out = out,
+    b: = Wasm_build::{ .ksplc = t.ksplc, .entry = "entry/main.kspl", .out = out,
         .imports = fs.join(t.sources, "ksmd/port/own/imports.txt", arena),
-        .work = fs.join(work, "c", arena), .cwd = work, .deps = "",
-        .options = options.slice() }
+        .work = fs.join(work, "c", arena), .cwd = work, .deps = "", .options = options.slice(),
+        .ends = ends }
     build(b@, arena)!
     return io.read_file(out, arena) catch
         throw "the build wrote no wasm\n"
@@ -160,6 +172,23 @@ priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], arena: Arena$@): U8
 priv fn put(work: U8[], name: U8[], text: U8[], arena: Arena$@): Void!U8[] //< writes one file
     io.write_file(fs.join(work, name, arena), text) catch
         throw arena.text().s("cannot write \{name\} in \{work\}\n").take()
+
+priv const PREFIX: U8[] = "own-build-" //< the start of every scratch folder's name
+
+priv fn clean_stale(base: U8[], arena: Arena$@) //< removes scratch folders a killed build left
+    //< **Only one older than the server's limit**: the build that made it has ended, since the
+    //< server kills it there. A folder still in use is younger.
+    names: = fs.read_dir(base, arena) catch
+        return
+    now: = sys.wall_seconds()
+    for name in names
+        if !name.starts_with(PREFIX)
+            continue
+        work: = fs.join(base, name, arena)
+        info: = fs.stat(work) catch
+            continue
+        if fs.is_dir(work) && !fs.is_link(work) && (now - info.mtime) * 1000I64 > SERVER_MS
+            clean(work, arena)
 
 priv fn clean(work: U8[], arena: Arena$@) //< removes the scratch folder and what a build made
     for name in SCRATCH

@@ -4,16 +4,22 @@
 import "ksmd/base/dates" { in_range }
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/formula" { Token_kind }
+import "std/mem" { Arena }
+import "std/str" // `text`
 import "std/strnum"
 
 // **What a person's own functions use is public, so [I0402] is off here.** Their file stands in
 // their own workspace, outside this package, and calls these; the lint sees only ksmd's own uses.
 ##lint(I0402 = off)
 
+const MAX_TEXT: Sz = 32767 //< the most bytes of text that `&` or a function gives
+    //< A longer result is `#NUM!`, found before its text is made. Spreadsheets cap a cell's text
+    //< at 32,767 characters; here, as every other limit, the count is in UTF-8 bytes.
+
 pub enum Calc_error //< why a cell has no value; each is fixed differently
     wrong_kind //< text or true and false in arithmetic, or two kinds ordered: `#VALUE!`
     division //< a division by zero: `#DIV/0!`
-    not_finite //< a result too large for a number: `#NUM!`
+    not_finite //< a result too large for a number or text, or out of range: `#NUM!`
     reference //< a reference to no cell: `#REF!`
     cycle //< the cell depends on itself: `#CYCLE!`
     no_numbers //< `min`, `max` or `average` of no numbers: `#EMPTY!`
@@ -125,6 +131,33 @@ pub fn truth(v: Value): Value //< a value as a condition: empty is false, a numb
 fn is_comparison(k: Token_kind): Bool
     return k == .equal || k == .unequal || k == .less || k == .less_equal || k == .greater ||
         k == .greater_equal
+
+fn joined(x: Value, y: Value, arena: Arena$@): Value //<
+    //< Two texts joined by `&`; the left error comes first. An empty cell is empty text. **A
+    //< number, a date or `true`/`false` is `#VALUE!`**: written as text, its digits would depend on
+    //< a format the formula does not name. Text past `MAX_TEXT` is `#NUM!`.
+    a: = as_text(x)
+    if a.kind == .error
+        return a
+    b: = as_text(y)
+    if b.kind == .error
+        return b
+    if a.text.len + b.text.len > MAX_TEXT
+        return Value.failed(.not_finite)
+    if a.text.len == 0
+        return b
+    if b.text.len == 0
+        return a
+    return text(arena.text().s(a.text).s(b.text).take())
+
+priv fn as_text(v: Value): Value //< a value as one side of `&`: text, or an error
+    switch v.kind
+    case .text, .error
+        return v
+    case .empty
+        return text("")
+    default
+        return Value.failed(.wrong_kind)
 
 fn compare(x: Value, y: Value, op: Token_kind): Value //<
     //< Two values compared; the left error comes first

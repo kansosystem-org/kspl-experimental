@@ -61,5 +61,7 @@ function ksmdNotes(ks) {
     return set(t, typed.trim());
   }
 
+  ks.handle(["note", "note-resolve"], (name) => ask(name === "note-resolve"));
+
   ks.notes = { mark, markBlock, ask };
 }

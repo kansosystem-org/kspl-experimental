@@ -1,0 +1,292 @@
+//< A diagram's clause: its size and caption, then one line per shape and per arrow
+//< ```text
+//< :::diagram size="800,400" caption="Moving between screens"
+//< box id="menu" at="40,40" size="200,120" text="MENU\n1.SET\n2.END" font="mono"
+//< diamond id="ask" at="320,60" size="120,80" text="Save?"
+//< arrow from="menu" to="ask" text="[OK] pressed"
+//< :::
+//< ```
+//<
+//< A shape names itself with `id`, and an arrow names the two shapes it joins, so a moved shape
+//< keeps its arrows. Every place is in the diagram's own pixels, inside its size. The writer
+//< writes the shapes first and the arrows after them, as the reader takes them.
+import "ksmd/base/attribute" { Attribute, find, read_attributes }
+import "ksmd/base/keyed" { Keyed }
+import "ksmd/base/source" { Diagnostic, Line, Source }
+import "ksmd/model/model" { MAX_BENDS, MAX_FIGURE_TEXT, MAX_FIGURES, MAX_LINKS, MAX_SPOT,
+    MIN_DIAGRAM, Block, Diagram, Document, Figure, Figure_kind, Link }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const MAX_ID: Sz = 32 //< the most bytes of a shape's id
+
+fn read_diagram(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
+    arena: Arena$@): Sz!Diagnostic //<
+        //< Reads the diagram whose clause opens at `first` into `doc`, its block and its entry, and
+        //< returns where the line after its closing `:::` starts
+    for a in attributes
+        if !a.name.equals("size") && !a.name.equals("caption") &&
+            !a.name.equals("invisible")
+            throw src.diagnostic(a.offset, "':::diagram' takes only size, caption and invisible")
+    size_at: = find(attributes, "size") catch
+        throw src.diagnostic(first.offset, "':::diagram' needs a size, as in size=\"800,400\"")
+    size: =
+        pair_of(src, size_at, MIN_DIAGRAM,
+        "size is a width and a height from 50 to 20000, as \"800,400\"")!
+    $caption: U8[] = ""
+    if a: = find(attributes, "caption")
+        if !a.quoted || a.value.len == 0 || !is_text(a.value, false)
+            throw src.diagnostic(a.offset, "caption is one line of text in quotes, or leave it out")
+        caption = a.value
+    $d: = Diagram::{ .width = size.x, .height = size.y, .caption = caption,
+        .figures = List<|Figure|>(arena), .links = List<|Link|>(arena) }
+    $ids: = Keyed<|Sz|>(arena)
+    $at: = first.next
+    for
+        if at >= src.bytes.len
+            throw src.diagnostic(first.offset, "this clause has no closing ':::' line")
+        line: = src.line_at(at)
+        if line.text.equals(":::")
+            doc.diagrams.push(d)
+            doc.blocks
+                .push(Block::{ .kind = .diagram, .level = 0, .label = "", .text = "",
+                .first = doc.diagrams.len - 1, .count = 1, .offset = first.offset, .align = .none,
+                .note = "", .invisible = false })
+            return line.next
+        word_end: = line.text.find_char(' ').unwrap_or(line.text.len)
+        word: = line.text.sub(0, word_end)
+        attrs: =
+            read_attributes(src, line.text, word_end, line.text.len, line.offset, arena)!
+        if link_kind_of(word)
+            if d.links.len == MAX_LINKS
+                throw src.diagnostic(line.offset, "a diagram holds at most 2,000 arrows and lines")
+            d.links.push(link_of(src, line, word, attrs, d@, ids@, arena)!)
+        else if figure_kind_of(word)
+            if d.links.len > 0
+                throw src.diagnostic(line.offset,
+                    "a diagram's shapes stand before its arrows and lines")
+            if d.figures.len == MAX_FIGURES
+                throw src.diagnostic(line.offset, "a diagram holds at most 1,000 shapes")
+            f: = figure_of(src, line, word, attrs, d@)!
+            if ids.get(f.id).is_some()
+                throw src.diagnostic(attribute_at(attrs, "id"), "another shape has this id")
+            ids.set(f.id, d.figures.len)
+            d.figures.push(f)
+        else
+            throw src.diagnostic(line.offset,
+                "a line inside ':::diagram' is a shape (box, diamond, start, end, group or note) or \
+                    an arrow or line between two; close the clause with ':::'")
+        at = line.next
+
+priv struct Pair
+    x: Sz
+    y: Sz
+
+priv fn figure_kind_of(word: U8[]): Bool //< whether a line's first word names a shape
+    for k in U8[][]::{ "box", "diamond", "start", "end", "group", "note" }
+        if word.equals(k)
+            return true
+    return false
+
+priv fn link_kind_of(word: U8[]): Bool //< whether a line's first word names an arrow or a line
+    return word.equals("arrow") || word.equals("line")
+
+priv fn figure_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, d: Diagram@):
+    Figure!Diagnostic //<
+        //< One shape's line: `box id="a" at="40,40" size="200,120"`, with text, font, color, fill
+    for a in attrs
+        if !a.name.equals("id") && !a.name.equals("at") && !a.name.equals("size") &&
+            !a.name.equals("text") && !a.name.equals("font") && !a.name.equals("color") &&
+            !a.name.equals("fill")
+            throw src.diagnostic(a.offset,
+                "a shape takes only id, at, size, text, font, color and fill")
+    id_at: = find(attrs, "id") catch
+        throw src.diagnostic(line.offset, "a shape needs id, at and size")
+    if !id_at.quoted || !is_id(id_at.value)
+        throw src.diagnostic(id_at.offset,
+            "id is 1 to 32 letters, digits, '_' and '-', in quotes, unique in its diagram")
+    at_at: = find(attrs, "at") catch
+        throw src.diagnostic(line.offset, "a shape needs id, at and size")
+    place: =
+        pair_of(src, at_at, 0, "a point is two whole numbers from 0 to 20000, as \"40,40\"")!
+    size_at: = find(attrs, "size") catch
+        throw src.diagnostic(line.offset, "a shape needs id, at and size")
+    size: =
+        pair_of(src, size_at, 1, "size is a width and a height from 1 to 20000, as \"200,120\"")!
+    if place.x + size.x > d.width || place.y + size.y > d.height
+        throw src.diagnostic(at_at.offset, "a shape stands inside its diagram's size")
+    $text: U8[] = ""
+    if a: = find(attrs, "text")
+        if !a.quoted || a.value.len == 0 || !is_text(a.value, true)
+            throw src.diagnostic(a.offset,
+                "text is 1 to 2,000 bytes in quotes, its lines parted by \\n, or leave it out")
+        text = a.value
+    $mono: = false
+    if a: = find(attrs, "font")
+        if !a.quoted || !a.value.equals("mono")
+            throw src.diagnostic(a.offset, "font is \"mono\", or leave it out")
+        mono = true
+    return Figure::{ .id = id_at.value, .kind = figure_kind(word), .x = place.x, .y = place.y,
+        .w = size.x, .h = size.y, .text = text, .mono = mono,
+        .color = color_in(src, attrs, "color")!, .fill = color_in(src, attrs, "fill")! }
+
+priv fn figure_kind(word: U8[]): Figure_kind //< the kind a shape's first word names
+    if word.equals("diamond")
+        return .diamond
+    if word.equals("start")
+        return .start
+    if word.equals("end")
+        return .end
+    if word.equals("group")
+        return .group
+    if word.equals("note")
+        return .note
+    return .box
+
+priv fn link_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, d: Diagram@,
+    ids: Keyed<|Sz|>@, arena: Arena$@): Link!Diagnostic //<
+        //< One arrow's or line's line: `arrow from="a" to="b"`, with text, color and via
+    for a in attrs
+        if !a.name.equals("from") && !a.name.equals("to") && !a.name.equals("text") &&
+            !a.name.equals("color") && !a.name.equals("via")
+            throw src.diagnostic(a.offset,
+                "an arrow or a line takes only from, to, text, color and via")
+    from: = end_of(src, line, attrs, "from", ids)!
+    to: = end_of(src, line, attrs, "to", ids)!
+    if from == to
+        throw src.diagnostic(attribute_at(attrs, "to"), "an arrow joins two different shapes")
+    $text: U8[] = ""
+    if a: = find(attrs, "text")
+        if !a.quoted || a.value.len == 0 || !is_text(a.value, false)
+            throw src.diagnostic(a.offset, "text is one line of text in quotes, or leave it out")
+        text = a.value
+    $bends: = List<|Sz|>(arena)
+    if a: = find(attrs, "via")
+        message: =
+            "via is up to 20 points inside the diagram, parted by spaces, as \"300,80 300,200\""
+        if !a.quoted || a.value.len == 0
+            throw src.diagnostic(a.offset, message)
+        for part in a.value.split(' ', arena)
+            p: = pair_text(part, 0) catch
+                throw src.diagnostic(a.offset, message)
+            if p.x > d.width || p.y > d.height || bends.len == MAX_BENDS * 2
+                throw src.diagnostic(a.offset, message)
+            bends.push(p.x)
+            bends.push(p.y)
+    return Link::{ .kind = .arrow if word.equals("arrow") else .line, .from = from, .to = to,
+        .text = text, .color = color_in(src, attrs, "color")!, .bends = bends }
+
+priv fn end_of(src: Source@, line: Line, attrs: List<|Attribute|>, name: U8[],
+    ids: Keyed<|Sz|>@): Sz!Diagnostic //<
+        //< The place of the shape `from` or `to` names
+    a: = find(attrs, name) catch
+        throw src.diagnostic(line.offset, "an arrow or a line needs from and to")
+    if !a.quoted
+        throw src.diagnostic(a.offset, "from and to name a shape's id, in quotes")
+    return ids.get(a.value) catch
+        throw src.diagnostic(a.offset, "from and to name a shape drawn above in this diagram")
+
+priv fn attribute_at(attrs: List<|Attribute|>, name: U8[]): Sz //< where an attribute stands
+    for a in attrs
+        if a.name.equals(name)
+            return a.offset
+    return 0
+
+priv fn color_in(src: Source@, attrs: List<|Attribute|>, name: U8[]): U8[]!Diagnostic //<
+    //< `color` or `fill`: `#` and six lowercase hexadecimal digits, or empty where it is left out
+    a: = find(attrs, name) catch
+        return ""
+    if !a.quoted || a.value.len != 7 || a.value[0] != '#'
+        throw src.diagnostic(a.offset, "a colour is as \"#c00000\", or leave it out")
+    for c in a.value.sub_from(1)
+        if !c.is_digit() && (c < 'a' || c > 'f')
+            throw src.diagnostic(a.offset, "a colour is as \"#c00000\", or leave it out")
+    return a.value
+
+priv fn pair_of(src: Source@, a: Attribute, least: Sz, message: U8[]): Pair!Diagnostic //<
+    //< `"40,40"`: two whole numbers from `least` to 20000, in quotes
+    if !a.quoted
+        throw src.diagnostic(a.offset, message)
+    return pair_text(a.value, least) catch
+        throw src.diagnostic(a.offset, message)
+
+priv fn pair_text(text: U8[], least: Sz): Pair? //< `x,y`, each from `least` to `MAX_SPOT`
+    comma: = text.find_char(',') catch
+        return .none
+    x: = whole_of(text.sub(0, comma)) catch
+        return .none
+    y: = whole_of(text.sub_from(comma + 1)) catch
+        return .none
+    if x < least || y < least
+        return .none
+    return .some(Pair::{ .x = x, .y = y })
+
+priv fn whole_of(text: U8[]): Sz? //< digits without a leading zero, from 0 to `MAX_SPOT`
+    if text.len == 0 || text.len > 5 || text.len > 1 && text[0] == '0'
+        return .none
+    $n: Sz = 0
+    for c in text
+        if !c.is_digit()
+            return .none
+        n = n * 10 + Sz::(c - '0')
+    if n > MAX_SPOT
+        return .none
+    return .some(n)
+
+priv fn is_id(text: U8[]): Bool //< 1 to 32 letters, digits, `_` and `-`
+    if text.len == 0 || text.len > MAX_ID
+        return false
+    for c in text
+        if !c.is_alnum() && c != '_' && c != '-'
+            return false
+    return true
+
+priv fn is_text(text: U8[], lines: Bool): Bool //<
+    //< Up to `MAX_FIGURE_TEXT` bytes with no control character, but a line break where `lines`
+    if text.len > MAX_FIGURE_TEXT
+        return false
+    for c in text
+        if c == '\n' && lines
+            continue
+        if c < 0x20U8 || c == 0x7FU8
+            return false
+    return true
+
+fn write_diagram(d: Diagram@, invisible: Bool, out: Str_builder$@) //<
+    //< The whole clause, as `read_diagram` reads it
+    out.s(":::diagram size=\"\{d.width\},\{d.height\}\"")
+    if d.caption.len > 0
+        out.s(" caption=\"").escape_and_append(d.caption).c('"')
+    if invisible
+        out.s(" invisible=\"printing\"")
+    out.c('\n')
+    for f in d.figures
+        out.s(f.kind.variant_name()).s(" id=\"").s(f.id).s("\" at=\"\{f.x\},\{f.y\}\" size=\"")
+            .s("\{f.w\},\{f.h\}\"")
+        if f.text.len > 0
+            out.s(" text=\"").escape_and_append(f.text).c('"')
+        if f.mono
+            out.s(" font=\"mono\"")
+        if f.color.len > 0
+            out.s(" color=\"").s(f.color).c('"')
+        if f.fill.len > 0
+            out.s(" fill=\"").s(f.fill).c('"')
+        out.c('\n')
+    for k in d.links
+        out.s(k.kind.variant_name()).s(" from=\"").s(d.figures[k.from].id).s("\" to=\"")
+            .s(d.figures[k.to].id).c('"')
+        if k.text.len > 0
+            out.s(" text=\"").escape_and_append(k.text).c('"')
+        if k.color.len > 0
+            out.s(" color=\"").s(k.color).c('"')
+        if k.bends.len > 0
+            out.s(" via=\"")
+            for i in Range(0, k.bends.len, 2)
+                if i > 0
+                    out.c(' ')
+                out.s("\{k.bends[i]\},\{k.bends[i + 1]\}")
+            out.c('"')
+        out.c('\n')
+    out.s(":::\n")

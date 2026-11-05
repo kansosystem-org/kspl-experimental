@@ -101,7 +101,9 @@ jobs:
   macos:
     if: github.event_name != 'workflow_dispatch' || inputs['macos']
     runs-on: macos-26
-    # Above `CI_GATE_CAP` in mk/ci.mk, so a gate that hangs is stopped and named before the job is.
+    # **A gate's cap here is 10 minutes, not mk/ci.mk's 20**: the job's 25 minutes then leave 15
+    # for its other gates, which take about 5. So a gate that hangs is stopped and named before the
+    # job is. A smaller cap, not a larger limit, since a macOS minute costs ten times.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,7 +111,7 @@ jobs:
           # The token stays out of .git/config, where any later step could read it.
           persist-credentials: false
       - name: make ci-macos
-        run: make ci-macos
+        run: make ci-macos CI_GATE_CAP=600
       - name: Report each gate
         uses: ./.github/actions/gate-report
         if: always()

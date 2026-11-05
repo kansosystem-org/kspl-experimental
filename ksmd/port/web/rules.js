@@ -1,6 +1,7 @@
 // ksmd page: a column's colour rule, as Excel's conditional formatting does in its simplest form:
 // one rule per column, comparing each cell's value with one value, or finding the empty cells. A
-// cell that meets it takes the rule's colours over its own. The rule is saved in the file (`rules`
+// cell that meets it takes the rule's colours over its own. A colour scale fills each number's
+// cell from white to a colour, and the columns that share one scale compare as one block. The rule is saved in the file (`rules`
 // on the table); Table, Columns, Colour by value... sets it in a small panel.
 "use strict";
 
@@ -12,6 +13,9 @@ const RULE_STYLES = [
   ["Red text", "#c00000", ""],
   ["Light red fill", "", "#ffc7ce"],
 ];
+
+// A scale's colour at the greatest number; the least is white. Excel's two-colour scales.
+const SCALE_COLOURS = [["Yellow", "#ffef9c"], ["Green", "#63be7b"], ["Red", "#f8696b"], ["Blue", "#5a8ac6"]];
 
 function ksmdRules(ks) {
   // Whether a calculated value meets a rule: [condition, value, colour, fill].
@@ -25,11 +29,45 @@ function ksmdRules(ks) {
     return v[0] === 2 && String(v[1]).toLowerCase() === value.toLowerCase();
   }
 
+  // A colour `t` of the way from one `#rrggbb` to another.
+  function between(from, to, t) {
+    const part = (hex, i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
+    return `rgb(${[0, 1, 2].map((i) => Math.round(part(from, i) + (part(to, i) - part(from, i)) * t)).join(",")})`;
+  }
+
+  // Fills the number cells of the columns that share one colour scale, from its first colour at
+  // their least number to its second at their greatest.
+  function scale(wrap, rules, rule) {
+    const columns = rules.map((r, c) => (r && r[0] === "scale" && r[2] === rule[2] && r[3] === rule[3] ? c : -1))
+      .filter((c) => c >= 0);
+    const numbers = columns.flatMap((c) => wrap.values.map((row) => row[c]).filter((v) => v && v[0] === 1)
+      .map((v) => v[1]));
+    if (numbers.length === 0) return;
+    const lo = Math.min(...numbers);
+    const span = Math.max(...numbers) - lo;
+    for (const c of columns) {
+      wrap.values.forEach((row, r) => {
+        const v = row[c];
+        const el = v && v[0] === 1 && wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+        if (!el) return;
+        el.style.backgroundColor = between(rule[2], rule[3], span > 0 ? (v[1] - lo) / span : 1);
+        el.classList.add("ruled", "looked");
+      });
+    }
+  }
+
   // Colours the cells of a rendered table that meet their column's rule.
   function paint(wrap, rules) {
     wrap.rules = rules;
+    const scaled = new Set();
     rules.forEach((rule, c) => {
       if (!rule) return;
+      if (rule[0] === "scale") {
+        const key = `${rule[2]} ${rule[3]}`;
+        if (!scaled.has(key)) scale(wrap, rules, rule);
+        scaled.add(key);
+        return;
+      }
       wrap.values.forEach((row, r) => {
         if (!meets(rule, row[c])) return;
         const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
@@ -59,24 +97,43 @@ function ksmdRules(ks) {
     const kind = document.createElement("select");
     kind.className = "rule-kind";
     for (const [v, label] of [["", "No rule"], ["below", "Below"], ["above", "Above"],
-      ["equal", "Equal to"], ["empty", "Empty"]]) {
+      ["equal", "Equal to"], ["empty", "Empty"], ["scale", "A colour scale"]]) {
       kind.add(new Option(label, v));
     }
     const value = document.createElement("input");
     value.className = "rule-value";
     value.type = "text";
     value.setAttribute("aria-label", "Value");
+    // Colours written in the file that no offered choice holds are offered too, and chosen, so
+    // the panel never changes a colour the person did not change.
+    const scaled = !!now && now[0] === "scale";
+    const styles = RULE_STYLES.slice();
+    if (now && !scaled && !styles.some(([, color, fill]) => color === now[2] && fill === now[3])) {
+      styles.push(["The colours the file names", now[2], now[3]]);
+    }
     const style = document.createElement("select");
     style.className = "rule-style";
-    RULE_STYLES.forEach(([label], i) => style.add(new Option(label, String(i))));
+    styles.forEach(([label], i) => style.add(new Option(label, String(i))));
     if (now) {
       kind.value = now[0];
       value.value = now[1];
-      const i = RULE_STYLES.findIndex(([, color, fill]) => color === now[2] && fill === now[3]);
+      const i = styles.findIndex(([, color, fill]) => color === now[2] && fill === now[3]);
       if (i >= 0) style.value = String(i);
     }
+    // A scale's two colours: the one at the least number, white for a new scale, and the one at
+    // the greatest, which the person picks.
+    const low = scaled ? now[2] : "#ffffff";
+    const high = document.createElement("select");
+    high.className = "rule-scale";
+    high.setAttribute("aria-label", "The colour of the greatest number");
+    const highs = SCALE_COLOURS.slice();
+    if (scaled && !highs.some(([, hex]) => hex === now[3])) highs.push(["The colour the file names", now[3]]);
+    for (const [label, hex] of highs) high.add(new Option(label, hex));
+    if (scaled) high.value = now[3];
     const sync = () => {
-      value.hidden = kind.value === "" || kind.value === "empty";
+      value.hidden = kind.value === "" || kind.value === "empty" || kind.value === "scale";
+      style.hidden = kind.value === "scale";
+      high.hidden = kind.value !== "scale";
       style.disabled = kind.value === "";
     };
     kind.addEventListener("change", sync);
@@ -86,19 +143,21 @@ function ksmdRules(ks) {
     apply.textContent = "Apply";
     apply.className = "rule-apply";
     apply.addEventListener("click", () => {
-      const [, color, fill] = RULE_STYLES[Number(style.value)];
+      const [, color, fill] = styles[Number(style.value)];
       const sign = { below: "<", above: ">", equal: "=" }[kind.value];
       const condition = kind.value === "empty" ? "empty" : `${sign}${value.value.trim()}`;
       const look = [color && `color:${color}`, fill && `fill:${fill}`].filter(Boolean).join(" ");
+      const entry = kind.value === "" ? "" : kind.value === "scale" ?
+        `scale;from:${low} to:${high.value}` : `${condition};${look}`;
       close();
-      ks.act("ksmd_web_rule", block, column, ks.put(kind.value === "" ? "" : `${condition};${look}`));
+      ks.act("ksmd_web_rule", block, column, ks.put(entry));
     });
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancel";
     cancel.addEventListener("click", close);
     panel.append(`Colour the cells of column ${ks.table.letters(column)} that are `, kind, value,
-      " with ", style, apply, cancel);
+      " with ", style, high, apply, cancel);
     panel.addEventListener("keydown", (e) => {
       if (e.key === "Escape") close();
       if (e.key === "Enter" && e.target === value) apply.click();
@@ -115,6 +174,8 @@ function ksmdRules(ks) {
   document.addEventListener("mousedown", (e) => {
     if (panel && !panel.contains(e.target)) close();
   }, true);
+
+  ks.handle("column-rule", (_, c) => ask(c.block, c.column), { table: true });
 
   ks.rules = { paint, ask };
 }

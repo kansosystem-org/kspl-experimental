@@ -11,9 +11,9 @@ import "std/fs"
 import "std/mem" { Arena }
 import "std/str"
 import "std/subproc"
+import "std/sys"
 
 priv const MACHINE: U8[] = "wasm32-unknown-unknown"
-priv const WAIT_MS: I32 = 300000 //< how long one step may take
 priv const OUTPUT_CAP: Sz = 1 << 20
 
 struct Wasm_build //< what one build reads and where it writes
@@ -25,13 +25,19 @@ struct Wasm_build //< what one build reads and where it writes
     cwd: U8[] //< where ksplc runs, where imports are looked for first; empty for the caller's
     deps: U8[] //< where ksplc records the files it read (`--emit-deps`), or empty
     options: U8[][] //< more of ksplc's options, such as where packages are found
+    ends: I64 //< the `sys.mono_us` reading by which every step has ended (`sys.deadline_after_ms`)
+        //< **One limit for the whole build, not one per step**, so its caller knows when it ends.
 
-fn builtins(arena: Arena$@): U8[] //< clang's wasm32 builtins, or empty where none are installed
+fn builtins(ends: I64, arena: Arena$@): U8[] //<
+    //< clang's wasm32 builtins, or empty where none are installed or `ends` has passed
     //< clang lowers what wasm32 has no instruction for, such as a 128-bit product, to calls only
     //< this library defines. clang files it under the `wasi` machine's folder.
+    left: = left_ms(ends)
+    if left == 0
+        return ""
     got: =
         subproc.run_capture(U8[][]::{ "clang", "--target=wasm32-wasi", "-rtlib=compiler-rt",
-        "-print-libgcc-file-name" }, "", WAIT_MS, OUTPUT_CAP, arena) catch
+        "-print-libgcc-file-name" }, "", left, OUTPUT_CAP, arena) catch
         return ""
     // **Standard output alone**: a newer clang warns on standard error that the machine's name is
     // old.
@@ -40,7 +46,9 @@ fn builtins(arena: Arena$@): U8[] //< clang's wasm32 builtins, or empty where no
 
 fn build(b: Wasm_build@, arena: Arena$@): Void!U8[] //<
     //< Compiles, then links; the failure is the step's own output, for the person to read
-    rt: = builtins(arena)
+    rt: = builtins(b.ends, arena)
+    if rt.len == 0 && left_ms(b.ends) == 0
+        throw "the build ran out of time at its first step"
     if rt.len == 0
         throw "clang's wasm32 builtins are not installed. Debian/Ubuntu: install \
             libclang-rt-<version>-dev-wasm32 for your clang version"
@@ -56,21 +64,32 @@ fn build(b: Wasm_build@, arena: Arena$@): Void!U8[] //<
         kspl.push(arena.text().s("--emit-deps=").s(b.deps).take())
     kspl.push_all(b.options)
     kspl.push_all(U8[][]::{ b.entry, c })
-    step(kspl.slice(), b.cwd, arena)!
+    step(kspl.slice(), b.cwd, b.ends, arena)!
     // **Put the stack first**: after the data, a deep call runs past its end into the heap without
-    // a trap.
+    // a trap. `-fno-strict-aliasing` is ksplc's own (`ksplc info exe-flags`): KSPL lets two pointer
+    // types reach one address, which `-O2` would otherwise ignore.
     step(U8[][]::{ "clang", arena.text().s("--target=").s(MACHINE).take(), "-std=c99", "-O2",
-        "-ffreestanding", "-nostdlib", "-Wall", "-mbulk-memory", "-ffunction-sections",
-        "-fdata-sections", "-c", c, "-o", o }, "", arena)!
+        "-fno-strict-aliasing", "-ffreestanding", "-nostdlib", "-Wall", "-mbulk-memory",
+        "-ffunction-sections", "-fdata-sections", "-c", c, "-o", o }, "", b.ends, arena)!
     // Caution: **Do not use `--allow-undefined`**: only what `imports` names comes from the
     // script, so anything else fails the link rather than the page.
     step(U8[][]::{ "wasm-ld", "--no-entry", "--gc-sections", "--stack-first", "-z",
         "stack-size=1048576",
         arena.text().s("--allow-undefined-file=").s(b.imports).take(), o, rt, "-o", b.out }, "",
-        arena)!
+        b.ends, arena)!
 
-priv fn step(argv: U8[][], cwd: U8[], arena: Arena$@): Void!U8[] //< runs one step to its end
-    got: = subproc.run_capture(argv, cwd, WAIT_MS, OUTPUT_CAP, arena) catch
+fn step(argv: U8[][], cwd: U8[], ends: I64, arena: Arena$@): Void!U8[] //<
+    //< Runs one step to its end, or stops it once `ends` passes
+    left: = left_ms(ends)
+    if left == 0
+        throw arena.text().s("the build ran out of time before ").s(argv[0]).take()
+    got: = subproc.run_capture(argv, cwd, left, OUTPUT_CAP, arena) catch
         throw arena.text().s(argv[0]).s(" did not start").take()
+    if got.exit_code.is_none()
+        throw arena.text().s(argv[0]).s(" did not end within the build's time limit").take()
     if !got.exited_with(0)
         throw got.text(arena)
+
+priv fn left_ms(ends: I64): I32 //< the milliseconds left before `ends`, or 0 once it has passed
+    left: = (ends - sys.mono_us()) / 1000I64
+    return 0 if left <= 0I64 else I32::(left if left < 0x7FFFFFFFI64 else 0x7FFFFFFFI64)

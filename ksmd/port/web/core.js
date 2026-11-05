@@ -74,7 +74,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ks.act = (name, ...args) => {
       if (ks.stopped) return null;
       // Read-only takes every action that changes the document; showing it again is no change.
-      if (ks.readOnly && name !== "ksmd_web_render" && name !== "ksmd_web_selection") {
+      if (ks.readOnly && !["ksmd_web_render", "ksmd_web_render_files", "ksmd_web_selection"].includes(name)) {
         ks.say("The page is read-only. View, Read-only turns editing on again.");
         return null;
       }
@@ -134,6 +134,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
       return ks.here;
     };
     ks.cellText = (block, row, column) => ks.out(w.ksmd_web_cell_text(block, row, column));
+    // A number the page worked out, such as a sum, written as a cell shows it.
+    ks.showNumber = (n) => ks.out(w.ksmd_web_show_number(n));
     // Today's date as 2026-10-23, or the time now as 14:05: what Ctrl+; and Ctrl+: type, as in
     // Excel. The form is ISO 8601's, which reads the same in every country and sorts as text.
     ks.now = (time) => {
@@ -171,12 +173,18 @@ function ksmdStart(root, bar, status, wasmBytes) {
         document.documentElement.style.setProperty("--top-height", `${top.offsetHeight}px`);
       }).observe(top);
     }
+    ksmdHandlers(ks);
     ksmdView(ks);
     ksmdTable(ks);
+    ksmdSizes(ks);
     ksmdOutline(ks);
     ksmdChoices(ks);
     ksmdRules(ks);
     ksmdChart(ks);
+    ksmdDrawings(ks);
+    ksmdDiagram(ks);
+    ksmdSettings(ks);
+    ksmdMerge(ks);
     ksmdNotes(ks);
     ksmdFigures(ks);
     ksmdAutosum(ks);
@@ -192,6 +200,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdTouch(ks);
     ksmdFind(ks);
     ksmdContents(ks);
+    ks.checkHandlers();
     ks.quick.sync();
     try {
       if (localStorage.getItem("ksmd.readonly") === "1") ks.setReadOnly(true);
@@ -227,7 +236,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
           return said;
         }
         ks.root.textContent = "";
-        ks.cell = null;
+        ks.table.chooseCell(null);
         ks.cut.drop();
         ks.filter.forget();
         ks.setPlace("text");
@@ -274,31 +283,46 @@ function ksmdStart(root, bar, status, wasmBytes) {
   });
 }
 
-// The menus' and the keyboard's commands, by name.
+// The commands' handlers, by name. The file that does a command's work registers it (`ks.handle`),
+// with what the command needs: a chosen cell of a table (`table`), whether Repeat does it again
+// (`repeat`), whether Read-only leaves it (`looks`), when else it can act (`when`, given the chosen
+// cell), and whether it runs as the browser's own, before an open cell is taken (`direct`). So a
+// command's work stands in one file, `commands.js` says what it is called, and this file only
+// looks it up.
+function ksmdHandlers(ks) {
+  const handlers = new Map();
+  ks.handle = (names, run, how = {}) => {
+    for (const name of [].concat(names)) {
+      if (handlers.has(name)) throw new Error(`The command ${name} has two handlers.`);
+      handlers.set(name, { run, table: !!how.table, repeat: !!how.repeat, looks: !!how.looks,
+        when: how.when || null, direct: !!how.direct });
+    }
+  };
+  ks.handler = (name) => handlers.get(name) || null;
+  // Every command `commands.js` names has a handler, and every handler a command. A page that would
+  // show an item doing nothing does not start, so the browser's checks stop on it at once.
+  ks.checkHandlers = () => {
+    const missing = COMMANDS.map(([name]) => name).filter((name) => !handlers.has(name));
+    const extra = [...handlers.keys()].filter((name) => !COMMAND.has(name));
+    if (missing.length > 0 || extra.length > 0) {
+      throw new Error(`Commands without a handler: ${missing.join(", ") || "none"}. ` +
+        `Handlers without a command: ${extra.join(", ") || "none"}.`);
+    }
+  };
+}
+
+// The menus' and the keyboard's commands, by name, and the handlers of the commands on text and
+// on the page as a whole. A table's commands are handled by the files that do their work.
 function ksmdCommands(ks) {
   const kinds = { p: [0, 0, 0], c: [2, 0, 0], bullets: [3, 0, 0], numbers: [3, 0, 1], checks: [3, 0, 2],
     quote: [4, 0, 0] };
   for (let n = 1; n <= 6; n++) kinds[`h${n}`] = [1, n, 0];
   const marks = { emphasis: 0, strong: 1, code: 2 };
-  const rows = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0] };
-  const columns = { "column-left": [2, 0], "column-right": [2, 1], "column-remove": [3, 0] };
-  // The commands that act on the chosen cell's table.
-  const aligns = { "align-left": "left", "align-center": "center", "align-right": "right",
-    "align-none": "" };
-  const onTable = new Set([...Object.keys(rows), ...Object.keys(columns), "column-fit", "column-width",
-    "row-height", "sort-up",
-    "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-csv", "table-chart", "table-print", "table-remove", "table-select",
-    ...["Number format", "AutoSum"].flatMap((name) => TABLE_GROUPS.find(([group]) => group === name)[1]),
-    "fill-down", "fill-right", "column-choices", "column-rule", "group-rows", "ungroup-rows", "group-hide", "group-show"]);
+  const aligns = { "align-left": "left", "align-center": "center", "align-right": "right" };
 
   // Repeat, as Office's: with nothing to redo, Redo (Ctrl+Y) and F4 do the last command again where
-  // the person works now. A command that asks for something, typing and pasting are not repeated,
-  // and a change none of the commands below made forgets what would be.
-  const REPEATS = new Set([...Object.keys(kinds), ...Object.keys(marks), ...Object.keys(rows),
-    ...Object.keys(columns), ...Object.keys(aligns), "column-fit", "fill-down", "fill-right",
-    "sort-up", "sort-down", "group-rows", "ungroup-rows", "group-hide", "group-show",
-    "table-print", "format-none", "format-number", "format-grouped", "format-percent",
-    "format-more", "format-fewer", "format-date", "format-date-slash", "indent", "outdent", "divider", "date", "time", "look-clear"]);
+  // the person works now. Only a command whose handler says `repeat` is repeated: one that asks for
+  // something, typing and pasting are not, and a change no command made forgets what would be.
   let repeat = null; // the last command that can be repeated, as a function, or null
   let running = 0; // how deep commands run, so a change can be told from one a command made
   let acted = false; // whether the running command changed the document
@@ -330,7 +354,8 @@ function ksmdCommands(ks) {
     } finally {
       running -= 1;
       if (running === 0) {
-        if (REPEATS.has(name)) repeat = () => ks.command(name);
+        const h = ks.handler(name);
+        if (h && h.repeat) repeat = () => ks.command(name);
         else if (acted && name !== "undo" && name !== "redo") repeat = null;
         ks.showRedo();
       }
@@ -344,18 +369,11 @@ function ksmdCommands(ks) {
   }, true);
 
   ks.command = (name) => {
+    const h = ks.handler(name);
+    if (!h) return null;
     if (name === "redo" && !ks.canRedo) return ks.repeat();
-    // Cut and Copy run the browser's own, so they act as Ctrl+X and Ctrl+C do where the focus
-    // stands. An open cell stays open, and its selected text is what goes.
-    if (name === "cut" || name === "copy") {
-      document.execCommand(name);
-      return null;
-    }
-    if (name === "paste") {
-      paste();
-      return null;
-    }
-    return runs(name, () => command(name));
+    if (h.direct) return h.run(name);
+    return runs(name, () => command(name, h));
   };
 
   // Paste reads the clipboard through the browser, as Excel for the web does. It hands what it read
@@ -390,75 +408,111 @@ function ksmdCommands(ks) {
   }
 
   // A command first takes the open cell. Text there that the editor refuses stays, and the
-  // command does nothing, so a menu never drops what was typed.
-  const command = (name) => {
+  // command does nothing, so a menu never drops what was typed. A table's command acts on the
+  // chosen cell, and says so where none is chosen.
+  const command = (name, h) => {
     ks.flush();
     if (!ks.table.take("stay")) return null;
-    if (name.startsWith("file-")) return ks.fileCommand ? ks.fileCommand(name) : null;
-    if (name === "undo") return ks.act("ksmd_web_undo");
-    if (name === "find" || name === "replace") return ks.find.open(name === "replace");
-    if (name === "contents") return ks.contents.toggle();
-    if (name === "read-only") return ks.setReadOnly(!ks.readOnly);
-    if (name === "print") return window.print();
-    if (name === "quick-choose") return ks.quick.choose();
-    if (name === "color" || name === "fill") return ks.quick.palette(name);
-    if (name.startsWith("size-")) return ks.applyLook("size", name === "size-default" ? "" : name.slice(5));
-    if (name === "note" || name === "note-resolve") return ks.notes.ask(name === "note-resolve");
-    if (name === "width-full" || name === "width-reading") return ks.setWidth(name === "width-reading");
-    if (name === "redo") return ks.act("ksmd_web_redo");
-    if (onTable.has(name)) return tableCommand(name);
-    // Pressing an alignment that is on takes it off, as in Excel and Word: the text then stands
-    // where the page sets it.
-    if (name in aligns) return ks.applyLook("align", alignNow() === aligns[name] ? "" : aligns[name]);
-    if (name === "look-clear") return ks.applyLook("all", "");
-    ks.sync();
-    // A list or a quote pressed where it stands already turns back into paragraphs, as in Word.
-    if (name in kinds && isOn(name, ks.hereNow())) return ks.act("ksmd_web_kind", ...kinds.p);
-    if (name in kinds) return ks.act("ksmd_web_kind", ...kinds[name]);
-    if (name in marks) return ks.act("ksmd_web_mark", marks[name], 0);
-    if (name === "indent" || name === "outdent") return ks.act("ksmd_web_indent", name === "indent" ? 1 : 0);
-    if (name === "divider") return ks.act("ksmd_web_divider");
-    // Insert ▸ Image… chooses a file, which then goes in as a pasted image does (`addImage` in
-    // `file.js`): written beside the document, its clause at the caret.
-    if (name === "image") {
-      if (!ks.imagesHere()) return null;
-      const pick = document.createElement("input");
-      pick.type = "file";
-      pick.accept = "image/png,image/jpeg";
-      pick.addEventListener("change", () => {
-        if (!pick.files || !pick.files[0]) return;
-        ks.sync();
-        ks.addImage(pick.files[0]);
-      });
-      pick.click();
+    if (!h.table) return h.run(name);
+    const c = chosen();
+    if (!c) {
+      ks.say("Choose a cell of the table first.");
       return null;
     }
-    // Insert ▸ Functions… and Insert ▸ Include… choose a file in the workspace, or start one
-    // (`addClause` in `file.js`), and put its clause at the caret.
-    if (name === "functions" || name === "include") {
-      if (!ks.addClause) {
-        ks.say(name === "functions" ?
-          "Functions go in only where the local server opened the document, to build them." :
-          "An include goes in only where the local server opened the document, to read its file.");
-        return null;
-      }
-      ks.sync();
-      ks.addClause(name);
-      return null;
-    }
-    if (name === "date" || name === "time") return ks.act("ksmd_web_type", ks.put(ks.now(name === "time")), 0);
-    if (name === "link") {
-      const to = window.prompt("Link to an https:, http: or mailto: address, or a #place", "https://");
-      if (to === null) return null;
-      return ks.act("ksmd_web_mark", 3, ks.put(to.trim()));
-    }
-    if (name === "table") {
-      const r = ks.act("ksmd_web_insert_table", 3, 2);
-      if (r && r.ok) ks.table.editFirst(r.from + (r.blocks[0] && r.blocks[0].k === "t" ? 0 : 1));
-      return r;
-    }
-    return null;
+    return h.run(name, c);
   };
+
+  // The commands on the page as a whole. Cut and Copy run the browser's own, so they act as Ctrl+X
+  // and Ctrl+C do where the focus stands: an open cell stays open, and its selected text is what
+  // goes.
+  ks.handle("cut", (name) => {
+    document.execCommand(name);
+    return null;
+  }, { direct: true });
+  ks.handle("copy", (name) => {
+    document.execCommand(name);
+    return null;
+  }, { direct: true, looks: true });
+  ks.handle("paste", () => {
+    paste();
+    return null;
+  }, { direct: true });
+  ks.handle("undo", () => ks.act("ksmd_web_undo"));
+  ks.handle("redo", () => ks.act("ksmd_web_redo"));
+  ks.handle(["file-open", "file-save", "file-save-as"],
+    (name) => (ks.fileCommand ? ks.fileCommand(name) : null), { looks: true });
+  ks.handle("print", () => window.print(), { looks: true });
+  ks.handle("read-only", () => ks.setReadOnly(!ks.readOnly), { looks: true });
+  ks.handle(["width-full", "width-reading"], (name) => ks.setWidth(name === "width-reading"),
+    { looks: true });
+  ks.handle("one-line", () => ks.setOneLine(!document.body.classList.contains("one-line")),
+    { looks: true });
+
+  // The looks: a size, an alignment and Clear format.
+  ks.handle(COMMANDS.map(([name]) => name).filter((name) => name.startsWith("size-")),
+    (name) => ks.applyLook("size", name === "size-default" ? "" : name.slice(5)));
+  // Pressing an alignment that is on takes it off, as in Excel and Word: the text then stands
+  // where the page sets it.
+  ks.handle(Object.keys(aligns),
+    (name) => ks.applyLook("align", alignNow() === aligns[name] ? "" : aligns[name]), { repeat: true });
+  ks.handle("look-clear", () => ks.applyLook("all", ""), { repeat: true });
+  // Wrap text, as Excel's: pressed on a cell that wraps, it stops the chosen cells wrapping.
+  ks.handle("wrap-text", () => ks.applyLook("wrap", wrapNow() ? "" : "on"), { repeat: true });
+
+  // The commands on text, which act at the model's selection, so the page's own is read first.
+  const synced = (f) => (name) => {
+    ks.sync();
+    return f(name);
+  };
+  // A list or a quote pressed where it stands already turns back into paragraphs, as in Word.
+  ks.handle(Object.keys(kinds), synced((name) => ks.act("ksmd_web_kind",
+    ...(isOn(name, ks.hereNow()) ? kinds.p : kinds[name]))), { repeat: true });
+  ks.handle(Object.keys(marks), synced((name) => ks.act("ksmd_web_mark", marks[name], 0)),
+    { repeat: true });
+  ks.handle(["indent", "outdent"], synced((name) => ks.act("ksmd_web_indent", name === "indent" ? 1 : 0)),
+    { repeat: true });
+  ks.handle("divider", synced(() => ks.act("ksmd_web_divider")), { repeat: true });
+  ks.handle(["date", "time"], synced((name) => ks.act("ksmd_web_type", ks.put(ks.now(name === "time")), 0)),
+    { repeat: true });
+  // Insert ▸ Image… chooses a file, which then goes in as a pasted image does (`addImage` in
+  // `file.js`): written beside the document, its clause at the caret.
+  ks.handle("image", synced(() => {
+    if (!ks.imagesHere()) return null;
+    const pick = document.createElement("input");
+    pick.type = "file";
+    pick.accept = "image/png,image/jpeg";
+    pick.addEventListener("change", () => {
+      if (!pick.files || !pick.files[0]) return;
+      ks.sync();
+      ks.addImage(pick.files[0]);
+    });
+    pick.click();
+    return null;
+  }));
+  // Insert ▸ Functions… and Insert ▸ Include… choose a file in the workspace, or start one
+  // (`addClause` in `file.js`), and put its clause at the caret.
+  ks.handle(["functions", "include"], synced((name) => {
+    if (!ks.addClause) {
+      ks.say(name === "functions" ?
+        "Functions go in only where the local server opened the document, to build them." :
+        "An include goes in only where the local server opened the document, to read its file.");
+      return null;
+    }
+    ks.addClause(name);
+    return null;
+  }));
+  ks.handle("link", synced(() => {
+    // A chosen cell takes the link on its text.
+    if (ks.inTable() && ks.cell && ks.cell.row >= 0) return ks.table.askLink();
+    const to = window.prompt("Link to an https:, http: or mailto: address, or a #place", "https://");
+    if (to === null) return null;
+    return ks.act("ksmd_web_mark", 3, ks.put(to.trim()));
+  }));
+  ks.handle("table", synced(() => {
+    const r = ks.act("ksmd_web_insert_table", 3, 2);
+    if (r && r.ok) ks.table.editFirst(r.from + (r.blocks[0] && r.blocks[0].k === "t" ? 0 : 1));
+    return r;
+  }));
 
   // Whether a kind that turns off when pressed again stands at the selection.
   const isOn = (name, h) => !!h && ((h.k === "list" && ((name === "bullets" && h.o === 0 && h.c === 0) ||
@@ -475,6 +529,13 @@ function ksmdCommands(ks) {
     return h ? h.a : "";
   };
 
+  // Whether the chosen cell's text wraps.
+  const wrapNow = () => {
+    const c = ks.where === "cell" && chosen();
+    const el = c && ks.view.blocks()[c.block].querySelector(`[data-r="${c.row}"][data-c="${c.column}"]`);
+    return !!el && el.classList.contains("wrap");
+  };
+
   // An open cell's edit is taken before the browser prints, also when Ctrl+P prints. The printed
   // page's header shows the time of this print (`@top-left` in `print.css`).
   window.addEventListener("beforeprint", () => {
@@ -485,8 +546,8 @@ function ksmdCommands(ks) {
 
   // Sets one part of a look, or clears it with an empty value: on the chosen cells where a cell
   // was worked in last, or else on the selected text: its colour, or its paragraphs' alignment.
-  // A fill and a size belong to cells alone, so in text Clear clears the alignment.
-  const parts = { color: 0, fill: 1, size: 2, align: 3, all: 4 };
+  // A fill, a size and wrapping belong to cells alone, so in text Clear clears the alignment.
+  const parts = { color: 0, fill: 1, size: 2, align: 3, all: 4, wrap: 6 };
   ks.applyLook = (part, value) => {
     const r = runs("look", () => look(part, value));
     if (r && r.ok) repeat = () => ks.applyLook(part, value);
@@ -504,7 +565,7 @@ function ksmdCommands(ks) {
     if (part === "all") return ks.act("ksmd_web_clear_look");
     if (part === "align") return ks.act("ksmd_web_align", ks.put(value));
     if (part === "color") return ks.act("ksmd_web_text_color", ks.put(value));
-    ks.say("Fill colours and font sizes apply to table cells. Choose cells first.");
+    ks.say("Fill colours, font sizes and wrapping apply to table cells. Choose cells first.");
     return null;
   };
 
@@ -546,7 +607,24 @@ function ksmdCommands(ks) {
     ks.setWidth(false);
   }
 
-  const leftOut = (block) => ks.view.blocks()[block].classList.contains("print-hidden");
+  // One line per cell: a long text is cut at its cell's edge, so a wide table keeps short rows.
+  // The choice is this browser's own, as the width is, and the document is unchanged.
+  ks.setOneLine = (on) => {
+    document.body.classList.toggle("one-line", on);
+    for (const el of document.querySelectorAll('[data-cmd="one-line"]')) {
+      el.setAttribute("aria-checked", String(on));
+    }
+    try {
+      localStorage.setItem("ksmd.oneLine", on ? "1" : "0");
+    } catch (_) { /* a browser that keeps nothing wraps the text next time */ }
+    if (ks.table && ks.view) ks.table.pin();
+    return null;
+  };
+  let oneLine = false;
+  try {
+    oneLine = localStorage.getItem("ksmd.oneLine") === "1";
+  } catch (_) { /* a browser that keeps nothing wraps the text */ }
+  ks.setOneLine(oneLine);
 
   // The chosen cell, while its table still stands where it was chosen.
   const chosen = () => {
@@ -556,10 +634,7 @@ function ksmdCommands(ks) {
   };
 
   // Enables only the commands that can act now, so no item is pressed for nothing. Read-only
-  // leaves those that only look: finding, the view, printing, files, filters and CSV.
-  const LOOKS = new Set(["copy", "find", "contents", "width-full", "width-reading", "read-only", "print", "quick-choose",
-    "file-open", "file-save", "file-save-as", "filter-column", "filter-value", "filter-clear",
-    "table-csv"]);
+  // leaves those whose handler only looks: finding, the view, printing, files, filters and CSV.
   const MARKS = new Set(["strong", "emphasis", "code", "link"]);
   ks.enableTable = () => {
     const c = chosen();
@@ -572,8 +647,10 @@ function ksmdCommands(ks) {
       }
       if (name === "redo") continue;
       if (MARKS.has(name)) {
-        // A mark belongs to text: a cell holds a value, and a code block literal text.
-        el.disabled = ks.readOnly || ks.where === "cell" || !!(ks.here && /^(code|other)$/.test(ks.here.k));
+        // A mark belongs to text: a cell holds a value, and a code block literal text. A link is
+        // the one a cell takes too, on its text.
+        el.disabled = ks.readOnly || (ks.where === "cell" && name !== "link") ||
+          !!(ks.here && /^(code|other)$/.test(ks.here.k));
         continue;
       }
       if (name === "fill" || name.startsWith("size-")) {
@@ -581,13 +658,12 @@ function ksmdCommands(ks) {
         el.disabled = ks.readOnly || ks.where !== "cell";
         continue;
       }
-      if (!onTable.has(name)) {
-        el.disabled = ks.readOnly && !LOOKS.has(name);
+      const h = ks.handler(name);
+      if (!h || !h.table) {
+        el.disabled = ks.readOnly && !(h && h.looks);
         continue;
       }
-      el.disabled = !c || (ks.readOnly && !LOOKS.has(name)) ||
-        (name === "filter-clear" && !ks.filter.on(c.block)) ||
-        ((name === "filter-value" || name.startsWith("row-")) && c.row < 0);
+      el.disabled = !c || (ks.readOnly && !h.looks) || (!!h.when && !h.when(c));
       // While lines of this table are cut, Insert row above or Insert column left reads as the
       // insert of them, in the same place (`CUT_FORMS` in `commands.js`).
       if (name in CUT_FORMS) {
@@ -603,74 +679,10 @@ function ksmdCommands(ks) {
         }
       }
       if (name === "table-print") {
-        const text = c && leftOut(c.block) ? "Put back in print" : "Leave out of print";
+        const text = c && ks.table.leftOut(c.block) ? "Put back in print" : "Leave out of print";
         label(el, text);
         if (el.closest(".quick")) el.title = text;
       }
     }
   };
-
-  function tableCommand(name) {
-    const c = chosen();
-    if (!c) {
-      ks.say("Choose a cell of the table first.");
-      return null;
-    }
-    switch (name) {
-      case "table-remove":
-        ks.cell = null;
-        return ks.view.removeBlock("ksmd_web_remove_table", c.block);
-      case "table-rename":
-        return ks.table.rename(c.block);
-      case "table-select":
-        return ks.range.selectTable(c.block);
-      case "table-csv":
-        return ks.table.csv(c.block);
-      case "table-print":
-        return ks.act("ksmd_web_invisible", c.block, leftOut(c.block) ? 0 : 1);
-      case "table-chart":
-        return ks.act("ksmd_web_insert_chart", c.block);
-      case "column-fit":
-        return ks.table.fit(c.block, c.column);
-      case "column-width":
-        return ks.table.askWidth(c.block);
-      case "row-height":
-        return ks.table.askHeight(c.block);
-      case "column-choices":
-        return ks.choices.ask(c.block, c.column);
-      case "column-rule":
-        return ks.rules.ask(c.block, c.column);
-      case "sort-up":
-      case "sort-down":
-        return ks.act("ksmd_web_sort", c.block, c.column, name === "sort-down" ? 1 : 0);
-      case "filter-column":
-        return ks.filter.open(c.block, c.column);
-      case "filter-value":
-        return ks.filter.only(c.block, c.row, c.column);
-      case "filter-clear":
-        return ks.filter.clearAll(c.block);
-      case "fill-down":
-      case "fill-right":
-        return ks.range.fill(name === "fill-down");
-      case "group-rows":
-      case "ungroup-rows":
-      case "group-hide":
-      case "group-show":
-        return ks.outline.act(name);
-      default:
-        if (name.startsWith("format-")) return ks.table.format(c.block, name);
-        if (name.startsWith("autosum-")) return ks.autosum.run(name, c);
-        break;
-    }
-    if (name in CUT_FORMS && ks.cut.waiting(c.block, name === "row-above")) {
-      return ks.cut.insert(c.block, name === "row-above");
-    }
-    if (name in rows) {
-      // A filter stays, and shows the new row until it is chosen again (`ksmd/port/web/filter.js`).
-      const [what, after] = rows[name];
-      return ks.act("ksmd_web_table_edit", c.block, what, Math.max(c.row, 0) + after);
-    }
-    const [what, after] = columns[name];
-    return ks.act("ksmd_web_table_edit", c.block, what, c.column + after);
-  }
 }

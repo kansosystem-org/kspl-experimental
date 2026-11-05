@@ -4,6 +4,8 @@ import "ksmd/edit/editor_tables"
 import "ksmd/edit/region" { text_spot }
 import "ksmd/syntax/reader"
 import "ksmd/tests/support" { opened, saves }
+import "ksmd/tests/support"
+import "std/chars"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -14,6 +16,7 @@ fn run()
     reading()
     cells()
     paragraphs()
+    links()
 
 priv fn reading()
     defer arena: = Arena(64 * 1024)
@@ -85,3 +88,41 @@ priv fn paragraphs()
     table.set_block_note(0, "x") catch
         refused = true
     verdict.check("a table takes no block note; its cells take notes", refused, "")
+
+// A text cell's link: read and saved after its note, refused on any other cell, and set, kept and
+// dropped by the editor.
+priv fn links()
+    defer arena: = Arena(64 * 1024)
+    for text in U8[][]::{ arena.text().s(TABLE)
+        .s("| \"Results\" {link=\"https://example.com/r\"} |\n:::\n").take(),
+        arena.text().s(TABLE).s("| \"Mail\" {fill=\"#fff2cc\" link=\"mailto:a@b.c\"} |\n:::\n")
+        .take() }
+        ed: = opened(text, arena)
+        saves("a cell's link reads and saves unchanged", ed@, arena, text)
+    for cell in U8[][]::{ "12 {link=\"https://example.com\"}", "{link=\"https://example.com\"}",
+        "\"x\" {link=\"ftp://example.com\"}", "\"x\" {link=\"https://a b\"}", "\"x\" {link=1}",
+        "\"x\" {link=\"\"}" }
+        support.refused(arena.text().s(TABLE).s("| ").s(cell).s(" |\n:::\n").take(), cell)
+    $ed: =
+        opened(arena.text().s(TABLE).s("| \"Results\" |\n:::\n").take(), arena)
+    ed.set_cell_link(0, 0, 0, "https://example.com/r") catch e
+        verdict.check("setting a cell's link", false, e.message())
+    with_link: = arena.text().s(TABLE).s("| \"Results\" {link=\"https://example.com/r\"} |\n:::\n")
+        .take()
+    saves("a link set on a text cell is saved", ed@, arena, with_link)
+    ed.undo()
+    saves("undo takes the link away", ed@, arena,
+        arena.text().s(TABLE).s("| \"Results\" |\n:::\n").take())
+    ed.redo()
+    saves("redo sets it again", ed@, arena, with_link)
+    ed.set_cell(0, 0, 0, "Report") catch e
+        verdict.check("new text", false, e.message())
+    saves("new text keeps the link", ed@, arena,
+        arena.text().s(TABLE).s("| \"Report\" {link=\"https://example.com/r\"} |\n:::\n").take())
+    ed.set_cell(0, 0, 0, "12") catch e
+        verdict.check("a number", false, e.message())
+    saves("a number takes the link away", ed@, arena,
+        arena.text().s(TABLE).s("| 12 |\n:::\n").take())
+    ed.set_cell_link(0, 0, 0, "https://example.com/r") catch e
+        verdict.check("a number takes no link",
+            e.message().find_str("Only a cell that holds text").is_some(), e.message())

@@ -20,6 +20,7 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/display" as _sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
+import "std/ds" { List }
 import "std/str"
 
 priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
@@ -120,12 +121,7 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
     if target == null
         return .none
     if target.is_path_or_ident()
-        sym: = c.read_written_name(target).sym
-        if sym != null && sym.flags.holds_frame_pointer && sym.frame_pointer_depth > deeper_than
-            return .local(target)
-        if sym != null && with_address && sym.flags.holds_frame_address
-            return .local_address(target)
-        return .none
+        return local_escape(c, target, "", with_address, deeper_than)
     // A field's value is checked too. **Skipping it misses the case that matters most**: a returned
     // struct holding a closure, as a lazy chain does. An enum's payload is the same (`.view(s)`),
     // and so is a `T!Err` returned (result_wrap) and each branch of a ternary.
@@ -163,6 +159,20 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
         default
             return found
     default {}
+    // **A part read out of a value carries what the value holds** (`h.s`, `s.ptr`, `arr[0]` of a
+    // fixed-length array): checked as the value would be. A number holds no pointer, so `h.n` and
+    // `s.len` pass. A step through a pointer or a slice reads memory elsewhere.
+    if value_part_receiver(c, target)
+        if holds_no_pointer(c, target.type_id)
+            return .none
+        root: = part_root(c, target)
+        if root.name != null
+            return local_escape(c, root.name, root.field, with_address, deeper_than)
+        return find_frame_escape(c, target.get_postfix_receiver(), with_address, deeper_than)
+    // **An address behind a pointer or a slice points where that one does** (`s[1]@`, `p.f@`).
+    if target.kind_id == .k_expr_postfix && target.postfix_op_text().equals("@")
+        if via: = pointer_under_place(c, target.get_postfix_receiver())
+            return find_frame_escape(c, via, with_address, deeper_than)
     if with_address && target.kind_id == .k_expr_postfix &&
         target.postfix_op_text().equals("@") &&
         is_frame_storage(c, target.get_postfix_receiver()) &&
@@ -197,6 +207,92 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
         return .none
     return .slice(src)
 
+priv fn value_part_receiver(c: Sema_ctx@, node: Ast_node$@): Bool //<
+    //< Whether node reads a field or an element held inside its receiver's own value
+    //< That is a `.` on a value (a slice's `.ptr` among them), or a `[` on a fixed-length array.
+    if node.kind_id != .k_expr_postfix
+        return false
+    op: = node.postfix_op_text()
+    recv: = node.get_postfix_receiver()
+    if recv == null || c.env.is_pointer(recv.type_id)
+        return false
+    if op.equals(".")
+        return node.get_postfix_member() != null
+    return op.starts_with("[") && c.env.is_array(c.env.get_real_type(recv.type_id))
+
+priv struct Part_root //< the local a part of a value is read out of
+    name: Ast_node$@ //< the local's name, or null where the value is no local's
+    field: U8[] //< the local's field the path steps into first; empty for the whole local
+
+priv fn part_root(c: Sema_ctx$@, node: Ast_node$@): Part_root //<
+    //< The local a part (`h.s`, `h.a.b`, `arr[0].s`) is read out of, and its field stepped into
+    //< An element of a local array is the whole local: its fields are not told apart by element.
+    $at: = node
+    $field: U8[] = ""
+    for at != null
+        if at.kind_id == .k_expr_primary && at.children.len > 0
+            at = at.get_primary_inner_expr()
+            continue
+        if at.is_path_or_ident()
+            return Part_root::{ .name = at, .field = field }
+        if !value_part_receiver(c, at)
+            break
+        field =
+            at.get_postfix_member().text if at.postfix_op_text().equals(".") else ""
+        at = at.get_postfix_receiver()
+    return Part_root::{ .name = null, .field = "" }
+
+priv fn names_field(fields: List<|U8[]|>@, field: U8[]): Bool //<
+    //< Whether a local's marked fields hold field, or hold any where field is empty (the whole)
+    if fields == null
+        return false
+    if field.len == 0
+        return fields.len > 0
+    for f in fields
+        if f.equals(field)
+            return true
+    return false
+
+priv fn local_escape(c: Sema_ctx$@, name: Ast_node$@, field: U8[], with_address: Bool,
+    deeper_than: I32): Frame_escape //<
+        //< What a local, or its field (empty for the whole), carries of the frame's memory
+    sym: = c.read_written_name(name).sym
+    if sym == null
+        return .none
+    if (sym.flags.holds_frame_pointer || names_field(sym.frame_pointer_fields, field)) &&
+        sym.frame_pointer_depth > deeper_than
+        return .local(name)
+    if with_address &&
+        (sym.flags.holds_frame_address || names_field(sym.frame_address_fields, field))
+        return .local_address(name)
+    return .none
+
+priv fn holds_no_pointer(c: Sema_ctx@, type_id: I32): Bool //<
+    //< Whether a value of type_id surely holds no pointer: a number, a `Bool`, an enum with no payload
+    return c.env.is_numeric(type_id) || c.env.is_bool(type_id) ||
+        c.env.is_scalar_enum(type_id)
+
+priv fn pointer_under_place(c: Sema_ctx$@, place: Ast_node$@): Ast_node$@? //<
+    //< The pointer or slice a place lies behind, following its fields and array elements
+    //< None where the place lies in a value all the way (is_frame_storage answers for that).
+    $at: = place
+    for at != null
+        if at.kind_id == .k_expr_primary && at.children.len > 0
+            at = at.get_primary_inner_expr()
+            continue
+        if at.kind_id != .k_expr_postfix
+            return .none
+        op: = at.postfix_op_text()
+        recv: = at.get_postfix_receiver()
+        if recv == null ||
+            (!op.equals(".") && !op.equals("$") && !op.starts_with("["))
+            return .none
+        if op.equals("$") || c.env.is_pointer(recv.type_id) ||
+            (op.starts_with("[") && c.env.is_slice(recv.type_id))
+            return .some(recv)
+        at = recv
+    return .none
+
 fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@) //<
     //< Marks a local binding set from a value carrying a pointer into the frame
     //< A declaration's initializer and a plain `x = …` both set it, so `s: = I32[]::a; t: = s;
@@ -204,8 +300,20 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
     //< `return s`, the safe side of a check that follows names, not control flow.
     //< The local also keeps the deepest block its pointers reach (frame_pointer_depth), for a
     //< store of it into a local of an outer block.
+    note_frame_part(c, id_node, "", expr_node)
+
+priv fn note_frame_part(c: Sema_ctx$@, id_node: Ast_node$@, field: U8[], expr_node: Ast_node$@) //<
+    //< note_frame_pointer for one field of the local (empty for the whole)
+    //< **A struct literal marks each field apart**, so reading out a field that holds no frame
+    //< pointer passes (`r.calls` of a `Reading` whose `raw` is a frame's `@`).
     sym: = c.read_written_name(id_node).sym
     if sym == null || sym.flags.is_global
+        return
+    if field.len == 0 && expr_node != null && expr_node.kind_id == .k_struct_literal
+        for child in expr_node.children
+            if child.kind_id == .k_expr_field_init && child.children.len > 0
+                if f_name: = child.get_field_init_name()
+                    note_frame_part(c, id_node, f_name.text, child.last_child())
         return
     // Each round finds a pointer into a deeper block than the last, so it ends at the deepest.
     $depth: I32 = 0
@@ -215,14 +323,29 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
         case .none
             break
         default {}
-        sym.flags.holds_frame_pointer = true
+        if field.len == 0
+            sym.flags.holds_frame_pointer = true
+        else
+            sym.frame_pointer_fields = with_field(sym.frame_pointer_fields, field)
         depth = escape_depth(c, found)
         if depth > sym.frame_pointer_depth
             sym.frame_pointer_depth = depth
     switch find_frame_escape(c, expr_node, true, 0)
     case .none {}
     default
-        sym.flags.holds_frame_address = true
+        if field.len == 0
+            sym.flags.holds_frame_address = true
+        else
+            sym.frame_address_fields = with_field(sym.frame_address_fields, field)
+
+priv fn with_field(fields: List<|U8[]|>$@, field: U8[]): List<|U8[]|>$@ //<
+    //< fields with field added, made on the arena where there was none
+    $out: = fields
+    if out == null
+        out = base_core.arena.create(List<|U8[]|>(base_core.arena))
+    if !names_field(out, field)
+        out.push(field)
+    return out
 
 fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
     //< Rejects a pointer into the frame leaving by return / throw, a written `@` among them
@@ -295,7 +418,7 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     place: = store_place(c, left)
     switch place
     case .local(name)
-        note_frame_pointer(c, name, right)
+        note_frame_part(c, name, part_root(c, left).field, right)
     default {}
     $found: = find_frame_escape(c, right, false, 0)
     switch found
@@ -374,7 +497,7 @@ fn check_frame_kept_by_call(c: Sema_ctx$@, recv: Ast_node$@, def_node: Ast_node$
             sym: = c.read_written_name(name).sym
             switch find_frame_escape(c, arg, false, frame_depth(c, sym.scope_depth))
             case .none
-                note_frame_pointer(c, name, arg)
+                note_frame_part(c, name, part_root(c, recv).field, arg)
                 continue
             default {}
             c.clear_scratch()

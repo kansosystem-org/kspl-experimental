@@ -4,14 +4,16 @@
 //< `extern` names a symbol, not an import, so each action is in the page's wasm wherever it
 //< stands.
 import "ksmd/calc/formula" { Positions }
+import "ksmd/calc/value"
 import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
-import "ksmd/model/format" { currency_of, format_of, write_format }
+import "ksmd/model/format" { currency_of, format_of, show_plain, write_format }
 import "ksmd/model/look" { Look_part }
 import "ksmd/model/model" { MAX_ROWS }
-import "ksmd/port/web/bridge" { begin, ed, ensure, full, number, out, refused, result, text_in }
+import "ksmd/port/web/bridge_session" { begin, ed, ensure, full, number, out, refused, result,
+    text_in }
 import "ksmd/syntax/chart" { kind_of }
-import "ksmd/syntax/clause" { parse_weights }
+import "ksmd/syntax/clause" { parse_widths }
 import "ksmd/syntax/writer"
 import "std/chars"
 import "std/ds" { List }
@@ -77,12 +79,13 @@ extern fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: S
     part: I32, len: Sz): Sz //<
         //< Sets one part of the look of a rectangle of cells: 0 the text's colour, 1 the
         //< background's, 2 the font size in points, 3 the alignment, 4 every part, 5 the cell's own
-        //< number format, as `formats` writes an entry or `general`; empty text clears it
+        //< number format, as `formats` writes an entry or `general`, 6 the wrapping of its text,
+        //< `on`; empty text clears it
     if !begin()
         return full()
     which: Look_part =
         (.color if part == 0 else .fill if part == 1 else .size if part == 2
-        else .align if part == 3 else .format if part == 5 else .all)
+        else .align if part == 3 else .format if part == 5 else .wrap if part == 6 else .all)
     ed.set_look(block, from_row, from_column, to_row, to_column, which, text_in(len)) catch e
         return refused(e)
     return result(true, "")
@@ -165,16 +168,16 @@ extern fn ksmd_web_sort(block: Sz, column: Sz, descending: I32): Sz //<
         return refused(e)
     return result(true, "")
 
-extern fn ksmd_web_group(block: Sz, how: I32, first: Sz, last: Sz): Sz //<
-    //< Groups the data rows from `first` to `last` (how 0), takes away the smallest group that holds
-    //< them (1), hides that group's rows (2) or shows them (3)
-    if how < 0 || how > 3
+extern fn ksmd_web_group(block: Sz, how: I32, columns: I32, first: Sz, last: Sz): Sz //<
+    //< Groups the data rows, or with `columns` 1 the columns, from `first` to `last` (how 0), takes
+    //< away the smallest group that holds them (1), hides that group's lines (2) or shows them (3)
+    if how < 0 || how > 3 || columns < 0 || columns > 1
         return result(false, "")
     if !begin()
         return full()
     what: Group_edit =
         (.group if how == 0 else .ungroup if how == 1 else .hide if how == 2 else .show)
-    ed.group_rows(block, first, last, what) catch e
+    ed.group_lines(block, columns == 1, first, last, what) catch e
         return refused(e)
     return result(true, "")
 
@@ -195,6 +198,30 @@ extern fn ksmd_web_rule(block: Sz, column: Sz, len: Sz): Sz //<
         return refused(e)
     return result(true, "")
 
+extern fn ksmd_web_table_caption(block: Sz, len: Sz): Sz //<
+    //< Gives a table the caption in the `len` bytes written in; takes it away with none
+    if !begin()
+        return full()
+    ed.set_caption(block, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_merge(block: Sz, column: Sz, on: I32): Sz //<
+    //< Shows a column's repeated values once (on 1), or each again (0)
+    if !begin()
+        return full()
+    ed.set_merged(block, column, on == 1) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_row_colors(block: Sz, column: Sz): Sz //<
+    //< Colours a table's rows by the choice a column holds, or no row with -1
+    if !begin()
+        return full()
+    ed.set_row_colors(block, column) catch e
+        return refused(e)
+    return result(true, "")
+
 extern fn ksmd_web_insert_chart(block: Sz): Sz //< a bar chart of a table, after the table
     if !begin()
         return full()
@@ -204,7 +231,8 @@ extern fn ksmd_web_insert_chart(block: Sz): Sz //< a bar chart of a table, after
 
 extern fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
     //< New settings for a chart, written in as JSON: `{"t":table,"k":"bar","l":labels column,
-    //< "v":[columns],"title":text}`, the columns by their places
+    //< "v":[columns],"title":text}`, the columns by their places; by rows, also `"r":1`, `"v"` the
+    //< rows' places, and `"f"` and `"e"` the first and last columns drawn
     if !begin()
         return full()
     defer scratch: = Arena(16 * 1024)
@@ -217,7 +245,9 @@ extern fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
         return result(false, "A chart is a bar chart or a line chart.")
     settings: = Chart_settings::{ .table = number(doc.val.get("t")), .kind = kind,
         .labels = number(doc.val.get("l")), .values = values,
-        .title = doc.val.get("title").as_str().unwrap_or("") }
+        .title = doc.val.get("title").as_str().unwrap_or(""),
+        .by_rows = number(doc.val.get("r")) == 1, .from = number(doc.val.get("f")),
+        .to = number(doc.val.get("e")) }
     ed.set_chart(block, settings@) catch e
         return refused(e)
     return result(true, "")
@@ -227,6 +257,14 @@ extern fn ksmd_web_cell_note(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
     if !begin()
         return full()
     ed.set_cell_note(block, row, column, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_cell_link(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
+    //< Gives a text cell the link in the `len` bytes written in; takes it away with none
+    if !begin()
+        return full()
+    ed.set_cell_link(block, row, column, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -266,14 +304,14 @@ extern fn ksmd_web_table_texts(block: Sz): Sz //<
     return out.slice().len
 
 extern fn ksmd_web_set_widths(block: Sz, len: Sz): Sz //<
-    //< Gives the table's columns the relative widths written in, as `widths` holds them: `1,2,1`
+    //< Gives the table's columns the widths written in, as `char_widths` holds them: `12,,8.5`
     if !begin()
         return full()
     defer scratch: = Arena(4096)
-    $weights: = List<|Sz|>(scratch)
-    if !parse_weights(text_in(len), weights@)
+    $widths: = List<|Sz|>(scratch)
+    if !parse_widths(text_in(len), widths@)
         return refused(.table(.not_widths))
-    ed.set_widths(block, weights@) catch e
+    ed.set_widths(block, widths@) catch e
         return refused(e)
     return result(true, "")
 
@@ -286,7 +324,7 @@ extern fn ksmd_web_set_filter(block: Sz, column: Sz, len: Sz): Sz //<
     return result(true, "")
 
 extern fn ksmd_web_set_heights(block: Sz, len: Sz, points: Sz): Sz //<
-    //< Gives the data rows written in, from 0, as `0,2,3`, a least height in points; 0 takes it away
+    //< Gives the data rows written in, from 0, as `0,2,3`, a height in points; 0 takes it away
     if !begin()
         return full()
     defer scratch: = Arena(64 * 1024)
@@ -339,6 +377,19 @@ extern fn ksmd_web_rename_table(block: Sz, len: Sz): Sz
     ed.rename_table(block, text_in(len)) catch e
         return refused(e)
     return result(true, "")
+
+extern fn ksmd_web_show_number(n: F64): Sz //<
+    //< A number the page worked out, such as a sum, as a cell shows it without a format
+    //< **The page writes no number itself**: a second rule would round some numbers differently.
+    //< A sum too large for a number shows `#NUM!`, as a formula's would.
+    ensure()
+    out.clear()
+    v: = value.number(n)
+    if v.kind == .error
+        out.s(v.error.mark())
+    else
+        show_plain(n, out)
+    return out.slice().len
 
 extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
     //< The text a cell shows to edit, written to the output; empty outside a table

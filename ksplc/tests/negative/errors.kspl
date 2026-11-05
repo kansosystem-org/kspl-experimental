@@ -363,3 +363,59 @@ fn main(): I32
   if doubled(none).is_some() || tried().is_some() || step().is_some() || held.spelled()
     return 1
   return I32::empty()
+// ==== case result_as_operand
+//< A result or an optional as an operator's operand names how to take the value out
+//< The usual cause is a call whose value was not taken out. "Implement 'Add'", or "take it apart
+//< with 'switch'", pointed at a fix nobody wants.
+// EXPECT: result_as_operand.kspl:13:8: error: operator '+' cannot take 'I32!result_as_operand.E'. It is a result
+// EXPECT: 'g()!' passes the error on to the caller, and 'g() catch <value>' uses a value in its place
+// EXPECT: result_as_operand.kspl:14:8: error: operator '*' cannot take 'I32?'. It is an optional
+// EXPECT: 'if v: = x' runs only where x holds one, and 'x.unwrap_or(<value>)' uses a value in its place
+// EXPECT-NOT: Take it apart with 'switch'
+enum E
+  bad
+
+fn sum(a: I32!E, b: I32?): I32!E
+  x: = a + 1
+  y: = b * 2
+  return x + y
+// ==== case propagate_outside_result
+//< `!` in a function that returns no result names both fixes
+//< The return type to declare is spelled from the function's own and the error's.
+// EXPECT: propagate_outside_result.kspl:13:10: error: cannot use '!' operator in a function that does not return a Result type
+// EXPECT: declare its return type 'I32!propagate_outside_result.E' in place of 'I32'
+// EXPECT: 'x catch <value>' uses a value in its place, and 'x catch e' with a block below it runs the block
+enum E
+  bad
+
+fn g(): I32!E
+  return 1
+
+fn main(): I32
+  return g()!
+// ==== case propagate_other_error
+//< `!` on another error type shows how to convert it: `catch e`, then `throw` a variant holding it
+//< The variant is named where the function's error type has one holding the other; else the note
+//< asks for one.
+// EXPECT: propagate_other_error.kspl:22:10: error: cannot propagate error of type 'propagate_other_error.Low' using '!' operator
+// EXPECT: write 'x: = f() catch e', with 'throw .low(e)' indented below it.
+// EXPECT: propagate_other_error.kspl:25:10: error: cannot propagate error of type 'propagate_other_error.Low' using '!' operator
+// EXPECT: with 'throw .<variant>(e)' indented below it. Give 'propagate_other_error.Plain' a variant that holds a 'propagate_other_error.Low' for it.
+enum Low
+  gone
+
+enum High
+  busy
+  low(why: Low)
+
+enum Plain
+  busy
+
+fn low(): I32!Low
+  return 1
+
+fn high(): I32!High
+  return low()!
+
+fn plain(): I32!Plain
+  return low()!

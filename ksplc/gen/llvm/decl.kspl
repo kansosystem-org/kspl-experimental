@@ -424,14 +424,16 @@ impl Ast_node
         n: = s_def.fields_list.len
         $slots: = r.const_struct_slots(s_def)
         defer slots.free()
-        cg.s("{")
+        // A `#packed` struct's type is written `<{ … }>` (`types.kspl`), and LLVM refuses a
+        // constant whose brackets differ from its type's.
+        cg.s("<{" if s_def.is_packed else "{")
         for i in Range.asc(n)
             if i > 0
                 cg.s(",")
             field: = s_def.fields_list.get(i)
             cg.s(" ").t(field.type_id).s(" ")
             slots.get(i).emit_llvm_const_init(cg, field.type_id)
-        cg.s(" }")
+        cg.s(" }>" if s_def.is_packed else " }")
 
     priv fn emit_llvm_laid_const(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32, as_type: Bool) //<
         //< A global initializer holding a tagged union, as a packed struct at ksplc's layout

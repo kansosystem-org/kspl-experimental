@@ -1,20 +1,23 @@
 // ksmd page: every command once, with its name, its key and its icon. The menu bar, the table's
 // right-click menu, the quick access bar and its chooser are all built from these lists, so a
 // command's name, key and icon cannot differ between them.
-// Caution: **Add a command here, and nowhere else.** A command that stands in no menu cannot be
-// found, and one listed twice drifts apart.
+// Caution: **Add a command here, and its handler in the file that does its work** (`ks.handle`
+// in `core.js`). A command that stands in no menu cannot be found, and one listed twice drifts
+// apart. The page does not start while a command lacks a handler, or a handler its command.
 "use strict";
 
 // Each command: [name, label, key]. The key is the one the page already acts on; the item shows it.
 const COMMANDS = [
   ["file-open", "Open…", "Ctrl+O"], ["file-save", "Save", "Ctrl+S"],
-  ["file-save-as", "Save as…", "Ctrl+Shift+S"], ["print", "Print or save as PDF…", "Ctrl+P"],
+  ["file-save-as", "Save as…", "Ctrl+Shift+S"], ["page-setup", "Page setup…"],
+  ["print", "Print or save as PDF…", "Ctrl+P"],
   ["undo", "Undo", "Ctrl+Z"], ["redo", "Redo", "Ctrl+Y"],
   ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["paste", "Paste", "Ctrl+V"],
   ["find", "Find…", "Ctrl+F"], ["replace", "Replace…", "Ctrl+H"],
   ["contents", "Contents"], ["width-full", "Full width"], ["width-reading", "Reading width"],
+  ["one-line", "One line per cell"],
   ["read-only", "Read-only"], ["quick-choose", "Quick access bar…"],
-  ["table", "Table"], ["image", "Image…"], ["include", "Include…"], ["functions", "Functions…"], ["divider", "Divider"], ["link", "Link…", "Ctrl+K"],
+  ["table", "Table"], ["diagram", "Diagram"], ["image", "Image…"], ["include", "Include…"], ["functions", "Functions…"], ["divider", "Divider"], ["link", "Link…", "Ctrl+K"],
   ["date", "Today's date", "Ctrl+;"], ["time", "Time now", "Ctrl+:"],
   ["p", "Paragraph", "Ctrl+Alt+0"], ["h1", "Heading 1", "Ctrl+Alt+1"], ["h2", "Heading 2", "Ctrl+Alt+2"],
   ["h3", "Heading 3", "Ctrl+Alt+3"], ["h4", "Heading 4", "Ctrl+Alt+4"], ["h5", "Heading 5", "Ctrl+Alt+5"],
@@ -26,13 +29,16 @@ const COMMANDS = [
   ["size-12", "12 pt"], ["size-14", "14 pt"], ["size-18", "18 pt"], ["size-24", "24 pt"],
   ["look-clear", "Clear format"],
   ["align-left", "Align left"], ["align-center", "Centre"], ["align-right", "Align right"],
+  ["wrap-text", "Wrap text"],
   ["bullets", "Bulleted list"], ["numbers", "Numbered list"], ["checks", "Checklist"],
   ["indent", "Indent", "Tab"], ["outdent", "Outdent", "Shift+Tab"],
   ["row-above", "Insert row above"], ["row-below", "Insert row below"], ["row-remove", "Remove row"],
   ["column-left", "Insert column left"], ["column-right", "Insert column right"],
   ["column-remove", "Remove column"], ["column-fit", "Fit column width"],
   ["column-width", "Column width…"], ["row-height", "Row height…"],
-  ["column-choices", "Choices…"], ["column-rule", "Colour by value…"],
+  ["column-choices", "Choices…"], ["column-rows", "Colour rows by this column"],
+  ["column-merge", "Merge repeated values"],
+  ["column-rule", "Colour by value…"],
   ["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"],
   ["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"],
   ["filter-column", "Filter this column…", "Alt+↓"], ["filter-value", "Show only rows with this value"],
@@ -44,10 +50,12 @@ const COMMANDS = [
   ["format-date-slash", "Date: 2026/10/26"],
   ["group-rows", "Group rows", "Alt+Shift+→"], ["ungroup-rows", "Ungroup rows", "Alt+Shift+←"],
   ["group-hide", "Hide detail"], ["group-show", "Show detail"],
+  ["group-columns", "Group columns"], ["ungroup-columns", "Ungroup columns"],
+  ["column-group-hide", "Hide column detail"], ["column-group-show", "Show column detail"],
   ["autosum-sum", "Sum", "Alt+="], ["autosum-average", "Average"], ["autosum-count", "Count numbers"],
   ["autosum-max", "Max"], ["autosum-min", "Min"],
   ["note", "Note…", "Shift+F2"], ["note-resolve", "Resolve note"],
-  ["table-rename", "Rename table…"], ["table-chart", "Insert chart"], ["table-csv", "Export as CSV"],
+  ["table-rename", "Rename table…"], ["table-caption", "Caption…"], ["table-chart", "Insert chart"], ["table-csv", "Export as CSV"],
   ["table-print", "Leave out of print"], ["table-remove", "Remove table"],
   ["table-select", "Select table"],
 ];
@@ -65,38 +73,41 @@ const CUT_FORMS = { "row-above": ["Insert cut rows", "row-insert-cut"],
 // and Filter as flyouts too. Rows, Columns and Note stay open, as the most used; Size is a flyout, as Excel holds Row Height and Column Width under Format.
 const TABLE_GROUPS = [
   ["Rows", ["row-above", "row-below", "row-remove"]],
-  ["Columns", ["column-left", "column-right", "column-remove", "column-choices",
-    "column-rule"]],
+  ["Columns", ["column-left", "column-right", "column-remove", "column-choices"]],
+  ["Look", ["wrap-text", "column-rule", "column-rows", "column-merge"], true],
   ["Size", ["column-fit", "column-width", "row-height"], true],
   ["Fill", ["fill-down", "fill-right"], true],
   ["Sort", ["sort-up", "sort-down"], true],
   ["Filter", ["filter-column", "filter-value", "filter-clear"], true],
   ["Number format", ["format-none", "format-number", "format-grouped", "format-percent",
     "format-currency", "format-more", "format-fewer", "format-date", "format-date-slash"], true],
-  ["Group", ["group-rows", "ungroup-rows", "group-hide", "group-show"], true],
+  ["Group", ["group-rows", "ungroup-rows", "group-hide", "group-show", "group-columns",
+    "ungroup-columns", "column-group-hide", "column-group-show"], true],
   ["AutoSum", ["autosum-sum", "autosum-average", "autosum-count", "autosum-max", "autosum-min"], true],
   ["Note", ["note", "note-resolve"]],
-  ["Table", ["table-select", "table-rename", "table-chart", "table-csv", "table-print", "table-remove"], true],
+  ["Table", ["table-select", "table-rename", "table-caption", "table-chart", "table-csv", "table-print",
+    "table-remove"], true],
 ];
 
 // The menu bar: each menu's name and its items. "-" is a line between groups, and [name, items] a
 // flyout. Every command stands in one of them, so the quick access bar's chooser lists them all.
 const MENUS = [
-  ["File", ["file-open", "file-save", "file-save-as", "-", "print"]],
+  ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print"]],
   ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace"]],
-  ["View", ["contents", "-", "width-full", "width-reading", "-", "read-only", "-", "quick-choose"]],
-  ["Insert", ["table", "image", "include", "functions", "divider", "link", "-", "date", "time", "-", "note"]],
+  ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "read-only", "-",
+    "quick-choose"]],
+  ["Insert", ["table", "diagram", "image", "include", "functions", "divider", "link", "-", "date", "time", "-", "note"]],
   ["Format", [["Kind of block", ["p", "h1", "h2", "h3", "h4", "h5", "h6", "c"]], "-",
     "strong", "emphasis", "code", "-", "color", "fill",
     ["Font size", ["size-default", "size-9", "size-10", "size-11", "size-12", "size-14", "size-18", "size-24"]],
-    "look-clear", "-", "align-left", "align-center", "align-right", "-",
+    "look-clear", "-", "align-left", "align-center", "align-right", "wrap-text", "-",
     "bullets", "numbers", "checks", "quote", "indent", "outdent"]],
   ["Table", TABLE_GROUPS.flatMap(([name, items, nested], k) =>
     [...(k > 0 && !(nested && TABLE_GROUPS[k - 1][2]) ? ["-"] : []), ...(nested ? [[name, items]] : items)])],
 ];
 
 // How a View choice shows that it is on: a tick, or a dot among choices that exclude each other.
-const CHECKED = { contents: "menuitemcheckbox", "read-only": "menuitemcheckbox",
+const CHECKED = { contents: "menuitemcheckbox", "read-only": "menuitemcheckbox", "one-line": "menuitemcheckbox",
   "width-full": "menuitemradio", "width-reading": "menuitemradio" };
 
 // The quick access bar's tools that are not commands: two lists to choose a kind or a size from.
@@ -128,9 +139,11 @@ const ICONS = {
   contents: `<path d="M2 3h1.5 M5.5 3h8.5 M2 6.5h1.5 M5.5 6.5h8.5 M3.5 10h1.5 M7 10h7 M3.5 13.5h1.5 M7 13.5h7"/>`,
   "width-full": `<path d="M1.5 2.5v11 M14.5 2.5v11 M4 8h8 M6 6l-2 2 2 2 M10 6l2 2-2 2"/>`,
   "width-reading": `<path d="M4.5 2.5v11 M11.5 2.5v11 M6.5 5h3 M6.5 8h3 M6.5 11h3"/>`,
+  "one-line": `<path d="M2.5 3.5h11v9h-11z M2.5 8h11 M5 5.75h6 M5 10.25h4"/>`,
   "read-only": `<path d="M3.5 7.5h9v6.5h-9z M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5"/>`,
   "quick-choose": `<path d="M2 4h12 M2 8h12 M2 12h12"/><circle class="f" cx="5" cy="4" r="1.6"/><circle class="f" cx="11" cy="8" r="1.6"/><circle class="f" cx="7" cy="12" r="1.6"/>`,
   table: `<path d="${GRID}"/>`,
+  diagram: `<path d="M1.5 2.5h5v4h-5z M9.5 9.5h5v4h-5z M4 6.5v4.5h5.5 M7.5 9.5l2 1.5-2 1.5"/>`,
   image: `<path d="M2 3h12v10H2z M2 11l3.5-3.5 3 3 2-2L14 12"/><circle class="f" cx="10.5" cy="6" r="1.2"/>`,
   include: `<path d="M3 2h7l3 3v9H3z M6 9h5 M8.5 6.5L11 9l-2.5 2.5"/>`,
   functions: T("ƒx", 9),
@@ -154,6 +167,7 @@ const ICONS = {
   "align-left": `<path d="${LINES([[2, 14], [2, 10], [2, 14], [2, 10]])}"/>`,
   "align-center": `<path d="${LINES([[2, 14], [4, 12], [2, 14], [4, 12]])}"/>`,
   "align-right": `<path d="${LINES([[2, 14], [6, 14], [2, 14], [6, 14]])}"/>`,
+  "wrap-text": `<path d="M2 3.5h12 M2 7h10.5a2 2 0 0 1 0 4H8 M9.5 9.5L8 11l1.5 1.5 M2 11h3.5"/>`,
   bullets: `<circle class="f" cx="3" cy="4" r="1.3"/><circle class="f" cx="3" cy="8" r="1.3"/><circle class="f" cx="3" cy="12" r="1.3"/><path d="M6 4h8 M6 8h8 M6 12h8"/>`,
   numbers: `<text x="0.5" y="6" font-size="5.5">1</text><text x="0.5" y="10" font-size="5.5">2</text><text x="0.5" y="14" font-size="5.5">3</text><path d="M6 4h8 M6 8h8 M6 12h8"/>`,
   checks: `<path d="M1.5 2.5h4v4h-4z M1.5 9.5h4v4h-4z M2.5 11.5l1 1 1.5-2.5 M8 4.5h6 M8 11.5h6"/>`,
@@ -171,6 +185,8 @@ const ICONS = {
   "column-width": `<path d="M2 2v12 M14 2v12 M4.5 8h7 M6.5 6l-2 2 2 2 M9.5 6l2 2-2 2"/>${T("%", 5, "", 5)}`,
   "row-height": `<path d="M2 2h12 M2 14h12 M8 4.5v7 M6 6.5l2-2 2 2 M6 9.5l2 2 2-2"/>`,
   "column-choices": `<path d="M2.5 2.5h11v11h-11z M5 6l3 3 3-3"/>`,
+  "column-merge": `<path d="M2.5 2.5h11v11h-11z M8 2.5v11 M2.5 8h5.5"/>`,
+  "column-rows": `<path class="f" d="M2 3h12v3H2z"/><path d="M2 8h12v2H2z"/><path class="f" d="M2 12h12v2H2z"/>`,
   "column-rule": `<path class="f" d="M2 3h4v4H2z"/><path d="M2 9h4v4H2z M10 3h4v4h-4z"/><path class="f" d="M10 9h4v4h-4z"/>`,
   "fill-down": `<path d="M3 2.5h10v3H3z M8 7v7 M5 11l3 3 3-3"/>`,
   "fill-right": `<path d="M2.5 3h3v10h-3z M7 8h7 M11 5l3 3-3 3"/>`,
@@ -192,6 +208,10 @@ const ICONS = {
   "ungroup-rows": `<path d="M3 2v4 M3 10v4 M3 2h2 M3 14h2 M7.5 4h6.5 M7.5 8h6.5 M7.5 12h6.5"/>`,
   "group-hide": `<path d="M2.5 2.5h11v11h-11z M5 8h6"/>`,
   "group-show": `<path d="M2.5 2.5h11v11h-11z M5 8h6 M8 5v6"/>`,
+  "group-columns": `<path d="M2 3h12 M2 3v2 M14 3v2 M4 7.5v6.5 M8 7.5v6.5 M12 7.5v6.5"/>`,
+  "ungroup-columns": `<path d="M2 3h4 M10 3h4 M2 3v2 M14 3v2 M4 7.5v6.5 M8 7.5v6.5 M12 7.5v6.5"/>`,
+  "column-group-hide": `<path d="M2.5 2.5h11v11h-11z M5 8h6"/>`,
+  "column-group-show": `<path d="M2.5 2.5h11v11h-11z M5 8h6 M8 5v6"/>`,
   "autosum-sum": T("Σ", 14),
   "autosum-average": T("x̄", 14, 'font-style="italic" font-family="serif"'),
   "autosum-count": T("#", 13),
@@ -200,6 +220,8 @@ const ICONS = {
   note: `<path d="M2 2.5h12v8.5H7l-3.5 3v-3H2z"/>`,
   "note-resolve": `<path d="M2 2.5h12v8.5H7l-3.5 3v-3H2z M5 6.5l2 2 4-4"/>`,
   "table-rename": `<path d="M1.5 4h8v8h-8z M5.5 4v8 M10.5 13.5l.5-2 3-3 1.5 1.5-3 3z"/>`,
+  "table-caption": `<path d="M2 3h12 M2 6h7 M2.5 9h11v5h-11z"/>`,
+  "page-setup": `<path d="M3.5 1.5h7l3 3v10h-10z M10.5 1.5v3h3 M5.5 8h5 M5.5 11h5"/>`,
   "table-chart": `<path d="M2 14h12 M2 2v12"/><path class="f" d="M4 9h2.5v5H4z M7.5 5h2.5v9H7.5z M11 7.5h2.5V14H11z"/>`,
   "table-csv": `<path d="M3 1.5h7l3 3v10H3z M10 1.5v3h3"/>${T("CSV", 4.5, "", 11.5)}`,
   "table-print": `<path d="M4.5 6V2.5h7V6 M4.5 11.5h-2v-5.5h11v5.5h-2 M4.5 9.5h7v4.5h-7z M1.5 1.5l13 13"/>`,

@@ -6,7 +6,7 @@ import "ksmd/calc/value" { Value_kind }
 import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
 import "ksmd/edit/history" { begin }
 import "ksmd/edit/region" { Spot, Unit, gap_spot, whole_unit }
-import "ksmd/model/model" { Block, Chart, Chart_kind, MAX_SERIES, Table }
+import "ksmd/model/model" { Block, Chart, Chart_kind, Drawing, MAX_SERIES, Table, UNBOUND }
 import "ksmd/syntax/chart" { reads_back }
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -15,8 +15,11 @@ struct Chart_settings //< what a page asks a chart to show, by the places of the
     table: Sz //< the table's place in `Document.tables`
     kind: Chart_kind
     labels: Sz
-    values: List<|Sz|>
+    values: List<|Sz|> //< the columns drawn; by rows, the rows drawn, by their places
     title: U8[]
+    by_rows: Bool
+    from: Sz //< by rows, the first and last columns drawn as points
+    to: Sz
 
 impl Editor
     fn insert_chart(ed: Self$@, block: Sz): Void!Refused //<
@@ -32,7 +35,7 @@ impl Editor
         $values: = List<|Sz|>(scratch)
         values.push(numeric_column(ed, u, t) if t.columns.len > 1 else 0)
         settings: = Chart_settings::{ .table = u, .kind = .bar, .labels = 0, .values = values,
-            .title = "" }
+            .title = "", .by_rows = false, .from = 0, .to = 0 }
         chart: = ed.chart_of(settings@)!
         s: = gap_spot(block + 1)
         ed.put_chart(s, s, chart, scratch)!
@@ -42,7 +45,9 @@ impl Editor
         if block < 0 || block >= ed.doc.blocks.len ||
             ed.doc.blocks.get(block).kind != .chart
             throw .not_whole
-        chart: = ed.chart_of(settings)!
+        $chart: = ed.chart_of(settings)!
+        // What is drawn over it stays, in the same frame.
+        chart.drawings = ed.doc.charts[ed.doc.blocks.get(block).first].drawings
         defer scratch: = Arena(16 * 1024)
         ed.put_chart(gap_spot(block), gap_spot(block + 1), chart, scratch)!
 
@@ -60,13 +65,31 @@ impl Editor
         $ids: = List<|Sz|>(ed.arena)
         $names: = List<|U8[]|>(ed.arena)
         for c in s.values
+            if s.by_rows
+                // A row is named by its text in the labels column, as the file writes it.
+                if c < 0 || c >= t.rows.len
+                    throw .table(.outside)
+                cell: = t.cells[t.at(c, s.labels)]
+                if cell.kind != .text || cell.text.len == 0
+                    throw .table(.chart_name)
+                ids.push(UNBOUND)
+                names.push(cell.text)
+                continue
             if c < 0 || c >= t.columns.len
                 throw .table(.outside)
             ids.push(t.columns[c])
             names.push(t.cells[c].text)
+        if s.by_rows &&
+            (s.from < 0 || s.from >= t.columns.len || s.to < 0 || s.to >= t.columns.len)
+            throw .table(.outside)
         chart: = Chart::{ .kind = s.kind, .title = ed.arena.dup_str(s.title), .table = s.table,
             .name = t.name, .labels = t.columns[s.labels],
-            .label_name = t.cells[s.labels].text, .series = ids, .series_names = names }
+            .label_name = t.cells[s.labels].text, .series = ids, .series_names = names,
+            .by_rows = s.by_rows, .from = t.columns[s.from] if s.by_rows else UNBOUND,
+            .from_name = t.cells[s.from].text if s.by_rows else "",
+            .to = t.columns[s.to] if s.by_rows else UNBOUND,
+            .to_name = t.cells[s.to].text if s.by_rows else "",
+            .drawings = List<|Drawing|>(ed.arena) }
         if !reads_back(ed.doc@, chart@)
             throw .table(.chart_name)
         return chart

@@ -15,9 +15,10 @@ const MAX_COLUMNS: Sz = 256 //< the columns of one table
 const MAX_ROWS: Sz = 10000 //< the data rows of one table
 const MAX_CELLS: Sz = 100000 //< the cells of one table, the header's included
 const MAX_FORMULA: Sz = 4096 //< the bytes of one formula as written, after its `=`
-const MAX_WEIGHT: Sz = 10000 //< the largest relative width of one column
+const MIN_WIDTH: Sz = 5 //< the least width a column can be given, in tenths of a character
+const MAX_WIDTH: Sz = 2550 //< the most, 255 characters, as Excel's limit
 const MAX_NAME: Sz = 255 //< the bytes of one table's name
-const MAX_DEPTH: Sz = 8 //< the most groups one row of a table stands in
+const MAX_DEPTH: Sz = 8 //< the most groups one row, or one column, of a table stands in
 
 enum Block_kind //< what one block is
     paragraph //< inline nodes, where a hard break is a node of its own
@@ -32,6 +33,8 @@ enum Block_kind //< what one block is
     chart //< the chart `Document.charts` holds at `first`
     functions //<
         //< a person's own functions, in the KSPL file whose path relative to this one is `text`
+    document //< the document's own settings, `Document.settings` at `first`: paper and numbers
+    diagram //< the diagram `Document.diagrams` holds at `first`: boxes and the arrows between them
 
 struct Block
     kind: Block_kind
@@ -80,23 +83,29 @@ struct Inline
 
 struct Table //< a calculating table: a header row of names, then rows of cells
     name: U8[] //< unique among the tables of one source
+    caption: U8[] //< the words shown above it, after its number where headings are numbered
     cells: List<|Cell|> //< the header's cells, then each data row's, left to right
     rows: List<|Sz|> //< each data row's identity, from the top
     columns: List<|Sz|> //< each column's identity, from the left
     next_id: Sz //< the identity the next new row or column takes; no two share one
     pieces: List<|Piece|> //< the pieces of every formula in this table, each formula's in one run
-    weights: List<|Sz|> //< one relative width per column, or none when the source gave none
+    widths: List<|Sz|> //<
+        //< one width per column in tenths of a character, 0 where it fits its text; none when no
+        //< column has one
     formats: List<|Number_format|> //< one number format per column, or none when no column has one
     choices: List<|U8[]|> //< one entry of choices per column, or none (`ksmd/model/choice.kspl`)
     rules: List<|Rule|> //< one colour rule per column, or none (`ksmd/model/rule.kspl`)
     groups: List<|Group|> //< its groups of rows, in the writer's order (`ksmd/model/group.kspl`)
+    column_groups: List<|Group|> //< its groups of columns, in the writer's order
+    row_colors: Sz //< the identity of the column whose choices colour whole rows, or `UNBOUND`
+    merged: List<|Sz|> //< the columns, by identity, whose repeated values show once, as merged
     heights: List<|Row_height|> //< the rows given a height, by identity, so they follow every edit
     filters: List<|Column_filter|> //< the columns that narrow the rows shown, by identity
 
 const MIN_HEIGHT: Sz = 6 //< the least height a row can be given, in points
 const MAX_HEIGHT: Sz = 409 //< the most, in points, as Excel's limit
 
-struct Row_height //< a data row's least height in points; its text can make it taller
+struct Row_height //< a data row's height in points; text taller than it is cut, as in Excel
     row: Sz //< the row's identity; an entry whose row is gone is kept for an undo, and not written
     points: Sz
 
@@ -104,7 +113,7 @@ struct Column_filter //< which rows one column lets show (`ksmd/model/filter.ksp
     column: Sz //< the column's identity; as for a height, a gone column's entry is not written
     entry: U8[]
 
-struct Group //< data rows that show and hide together, by their places from the top
+struct Group //< data rows or columns that show and hide together, by their places from the start
     first: Sz
     last: Sz
     closed: Bool //< its rows are hidden
@@ -124,11 +133,14 @@ struct Cell
     offset: Sz //< where the cell's value starts in the original bytes; 0 for an edited cell
     look: Look //< its colours, font size and alignment; plain for none
     note: U8[] //< its note (`ksmd/model/look.kspl`); empty for none
+    link: U8[] //< a text cell's link, as a prose link's destination; empty for none
 
 enum Piece_kind //< what one piece of a formula is
     text //< bytes kept as written, a reference that names no cell and `#REF!` among them
     cell //< a reference to the cell at `from`
     range //< a reference to the rectangle between `from` and `to`, corners in either order
+    columns //< a reference to whole columns, `from`'s to `to`'s: every data row they have now
+        //< The rows of `from` and `to` are unused, so no row's removal or move changes it.
 
 struct Corner //< a cell a reference attaches to, by the identities of its row and column
     row: Sz
@@ -157,14 +169,88 @@ struct Chart //< a chart's settings (`ksmd/syntax/chart.kspl`)
     table: Sz //< the table's place in `Document.tables`, or `UNBOUND`
     name: U8[] //< the table's name as read or set, written where `table` finds nothing
     labels: Sz //< the identity of the column that labels the bars or points, or `UNBOUND`
+        //< By rows, the column whose text names each row drawn.
     label_name: U8[]
     series: List<|Sz|> //< the identities of the columns drawn, `UNBOUND` where one is missing
-    series_names: List<|U8[]|>
+        //< By rows, unused: each `UNBOUND`, as a row is found by its name when drawn.
+    series_names: List<|U8[]|> //< the columns' names; by rows, the names of the rows drawn
+    by_rows: Bool //< each row named in `series_names` is a series, its points the columns between
+        //< `from` and `to`, as a spreadsheet's chart of rows
+    from: Sz //< by rows, the identity of the first column drawn as a point, or `UNBOUND`
+    from_name: U8[]
+    to: Sz //< by rows, the identity of the last column drawn as a point, or `UNBOUND`
+    to_name: U8[]
+    drawings: List<|Drawing|> //< what is drawn over it, in the chart's 640 by 300 frame
 
 struct Image //< an image in the document flow
     src: U8[] //< its path relative to this source
     alt: U8[] //< the alternate text; empty for a decorative image
     caption: U8[] //< empty when it has none
+    drawings: List<|Drawing|> //<
+        //< what is drawn over it, in its own pixels (`ksmd/syntax/drawing.kspl`)
+
+const MAX_DRAWINGS: Sz = 100 //< the most shapes drawn over one image or chart
+const MAX_SPOT: Sz = 20000 //< the largest coordinate of a drawing, in the picture's pixels
+const MAX_DRAWING_TEXT: Sz = 200 //< the most bytes of a rectangle's text
+
+enum Drawing_shape //< what a drawing draws
+    rect //< a rectangle's outline, with text inside where it has some
+    arrow //< a line with a head at its end
+    line
+
+struct Drawing //< one shape drawn over an image or a chart
+    shape: Drawing_shape
+    x1: Sz //< where it starts: a rectangle's corner, or a line's first end
+    y1: Sz
+    x2: Sz //< where it ends: the other corner, or the end an arrow points at
+    y2: Sz
+    color: U8[] //< `#rrggbb`, or empty for the page's colour of marks
+    text: U8[] //< a rectangle's text; empty for none, and for every other shape
+
+const MAX_FIGURES: Sz = 1000 //< the most shapes one diagram holds
+const MAX_LINKS: Sz = 2000 //< the most arrows and lines one diagram holds
+const MAX_FIGURE_TEXT: Sz = 2000 //< the most bytes of a shape's or an arrow's text
+const MAX_BENDS: Sz = 20 //< the most points an arrow bends at
+const MIN_DIAGRAM: Sz = 50 //< the least width and height of a diagram, in its pixels
+
+enum Figure_kind //< what a shape in a diagram is
+    box //< a rectangle holding text, as a screen or a step
+    diamond //< a decision, Yes or No leaving it
+    start //< a filled dot where a flow begins
+    end //< a ringed dot where a flow ends
+    group //< a dashed frame round other shapes, its text a title at its top
+    note //< a remark on a pale ground, its text at its top left
+
+struct Figure //< one shape of a diagram, in the diagram's own pixels
+    id: U8[] //< unique in its diagram; the arrows name their ends by it
+    kind: Figure_kind
+    x: Sz //< its upper left corner
+    y: Sz
+    w: Sz
+    h: Sz
+    text: U8[] //< its words, with `\n` between lines; empty for none
+    mono: Bool //< whether the words take a fixed-width font, as a screen's mock-up does
+    color: U8[] //< `#rrggbb` for its line and words, or empty for the page's
+    fill: U8[] //< `#rrggbb` for its ground, or empty for the page's
+
+enum Link_kind //< what joins two shapes
+    arrow //< a line with a head at the shape it points at
+    line
+
+struct Link //< an arrow or a line between two shapes of a diagram
+    kind: Link_kind
+    from: Sz //< the place in `Diagram.figures` of the shape it leaves
+    to: Sz //< the place of the shape it reaches; never `from`
+    text: U8[] //< its label, as the key pressed; empty for none
+    color: U8[] //< `#rrggbb`, or empty for the page's
+    bends: List<|Sz|> //< the points it passes, as x and y in turn; none for a straight line
+
+struct Diagram //< a drawing area of boxes and the arrows that join them
+    width: Sz //< its size in its own pixels, as the page shows it at full size
+    height: Sz
+    caption: U8[] //< the words under it, numbered as a figure's; empty for none
+    figures: List<|Figure|>
+    links: List<|Link|>
 
 struct Document
     blocks: List<|Block|>
@@ -174,21 +260,37 @@ struct Document
         //< A removed table stays as an empty table with no name, so the others keep their places.
     images: List<|Image|>
     charts: List<|Chart|> //< only ever added: a changed chart is a new one, so undo swaps blocks
+    settings: List<|Settings|> //< only ever added, as charts are; a `:::document` block names one
+    diagrams: List<|Diagram|> //< only ever added, as charts are: a changed diagram is a new one
+
+const MAX_SETTING: Sz = 200 //< the bytes of a header's or a footer's text, or a label's
+
+struct Settings //< what a `:::document` clause sets for the whole document
+    paper: U8[] //< `A3`, `A4`, `A5`, `B4`, `B5`, `letter` or `legal`; empty for the browser's own
+    landscape: Bool
+    header: U8[] //< the printed header's middle, `{page}` and `{pages}` filled in; empty for the
+        //< document's name
+    footer: U8[] //< the printed footer's left, filled in as the header; empty for none
+    numbers: Sz //< the heading level numbering starts at, 1 to 6; 0 for no numbers
+    table_label: U8[] //< the word before a table's number, as `表`; empty for `Table`
+    figure_label: U8[] //< the word before an image's number, as `図`; empty for `Figure`
 
 impl Document
     fn new(arena: Arena$@): Document //< an empty document, whose lists grow in `arena`
         return Document::{ .blocks = List<|Block|>(arena), .items = List<|Item|>(arena),
             .inlines = List<|Inline|>(arena), .tables = List<|Table|>(arena),
-            .images = List<|Image|>(arena), .charts = List<|Chart|>(arena) }
+            .images = List<|Image|>(arena), .charts = List<|Chart|>(arena),
+            .settings = List<|Settings|>(arena), .diagrams = List<|Diagram|>(arena) }
 
 impl Table
     fn new(name: U8[], arena: Arena$@): Table //< a table with no cells, rows or columns yet
         return Table::{ .name = name, .cells = List<|Cell|>(arena), .rows = List<|Sz|>(arena),
             .columns = List<|Sz|>(arena), .next_id = 0, .pieces = List<|Piece|>(arena),
-            .weights = List<|Sz|>(arena), .formats = List<|Number_format|>(arena),
+            .widths = List<|Sz|>(arena), .formats = List<|Number_format|>(arena),
             .choices = List<|U8[]|>(arena), .rules = List<|Rule|>(arena),
-            .groups = List<|Group|>(arena), .heights = List<|Row_height|>(arena),
-            .filters = List<|Column_filter|>(arena) }
+            .groups = List<|Group|>(arena), .column_groups = List<|Group|>(arena),
+            .row_colors = UNBOUND, .merged = List<|Sz|>(arena),
+            .heights = List<|Row_height|>(arena), .filters = List<|Column_filter|>(arena) }
 
     fn at(t: Self@, row: Sz, column: Sz): Sz //< where a data cell stands in `cells`
         return (row + 1) * t.columns.len + column

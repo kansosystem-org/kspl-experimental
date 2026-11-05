@@ -205,6 +205,18 @@ priv fn f(): Shape!Err
 
 **Raw memory can still hold a value that is no tag**, such as a C function filling the enum. That is undefined, as a dangling pointer is ([`docs/SPEC-programming-language.md`, 14.2](SPEC-programming-language.md)).
 
+### A simple enum takes no arithmetic
+
+**An enum value names a variant; it is not a number.** So a simple enum takes the comparisons alone, and an operator that computes a number is a compile error on it ("3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+
+* **A computed enum is no variant.** `E.big + E.one` or `a / b` gives a number that no tag matches. An exhaustive `switch` and `variant_name` then read it as the last variant they test, the case the checked cast exists to prevent.
+* **Nor does it silently become a number.** Typing `a + b` as the base type would let a variant slip into arithmetic unseen. The cast written out shows where a variant becomes a number. From there the integer rules apply: the wrap, and the stop on a divisor of 0 or a wide shift.
+* **The comparisons stay.** An order of tags is often meant (a level, a priority), and comparing two tags makes no new value.
+
+**The arithmetic stays one cast away.** `I32::e + 1` computes in the base type under every integer rule, and `E::n` checks the result is a tag before it becomes a variant again. A tag written from a sibling follows the same rule (`b = I32::E.a + 1`), so one spelling holds in a declaration and in a body.
+
+**What is given up**: flags combined with `|` cannot be an enum. Such a set is an integer type with named constants, whose values need not be tags.
+
 ### A cast from floating point to an integer saturates
 
 **`I32::x` always gives an answer, and the same one on every target and backend.** NaN gives `0`, a value below the type's range its minimum, a value above its maximum. Anything else is truncated toward zero ("6.4 Type conversion (`::`) and implicit casts" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
@@ -234,7 +246,7 @@ priv fn f(): Shape!Err
 
 ### A tag names another variant through its enum
 
-**`b = E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A bare `a` would open one place where the enum's names stand beside the file's own. A `const a` in the same file would then mean two things. Two variants sharing a tag are refused, so a bare alias cannot arise either.
+**`b = I32::E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A bare `a` would open one place where the enum's names stand beside the file's own. A `const a` in the same file would then mean two things. Two variants sharing a tag are refused, so a bare alias cannot arise either.
 
 ### An enum lists its variants and reads one back
 
@@ -795,7 +807,7 @@ A closure lists the outer variables it uses after a `;`, with their types. It ca
 
 * **It cannot be carried out.** Where the writer decides the environment's lifetime, put the captures in a `struct` and pass that (docs/SPEC-programming-language.md appendix A).
 * **The call goes through a vtable**, one level more than a direct call.
-* **A closure cannot be captured.** Composition passes an argument instead (docs/SPEC-programming-language.md §8.1.3). The diagnostic says so, rather than naming `_anon_env_N` (`append_closure_capture_note` in `ksplc/sema/session/ctx.kspl`).
+* **A closure cannot be captured.** Composition passes an argument instead (docs/SPEC-programming-language.md §8.1.3). The diagnostic says so, rather than naming `_anon_env_N` (`closure_capture_note` in `ksplc/sema/session/mismatch.kspl`).
 * **It cannot be placed at the top level**, even with zero captures, since the environment is a temporary on the caller's frame (`block_depth` in `ksplc/parse/desugar.kspl`). So a reused predicate cannot be named, while a function pointer can.
 * **Diagnostics can name synthesized declarations** (`_anon_env_N` / `_anon_env_new_N` / `_anon_env_v_N`), placed where the closure was written.
 * **An outer name used in an anonymous function's body gives `undefined path or identifier`.** The diagnostic adds that capture is impossible (`append_anon_fn_capture_note` in `ksplc/sema/session/ctx.kspl`), worded in one place for both reporting points.

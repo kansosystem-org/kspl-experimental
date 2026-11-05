@@ -88,7 +88,9 @@ The page reads a file whole and writes a file whole, by its path under the root.
 | Request | Response |
 | :-- | :-- |
 | `GET /api/file?path=<p>` | That byte sequence. 404 if absent |
-| `PUT /api/file?path=<p>` | Writes the body under that name. On success, `{"wrote":<byte count>}` |
+| `PUT /api/file?path=<p>` | Writes the body under that name. On success, `{"wrote":<byte count>}`. 403 if a step of the path starts with `.` |
+
+**A write never reaches a name that starts with `.`**, at any step of the path, such as `.git/config` or `.env`. A write to `.git/config` can set a command that the next `git status` runs. A read of such a name is answered as any other.
 
 A PUT can carry `X-Kanso-If-Content`: either `missing`, or the 64-character lowercase SHA-256 digest of the expected file bytes. `missing` permits creation only when the path does not exist. A digest permits replacement only when the existing bytes match. A mismatch returns 409 without writing; a malformed guard returns 400. Without this header, PUT replaces unconditionally.
 
@@ -174,7 +176,7 @@ A page whose document names a file of functions in KSPL asks the server to build
 
 **The server builds only through a builder named when it starts**, by whoever starts it, never by a request. With no builder named, the endpoint does not exist (404). A server facing outward has none.
 
-**The build is closed**: it reads the one file named, the standard library, and the sources the builder ships. A path in that file that climbs out of its folder, or names anything else, fails the build. So a request reads nothing the token does not already reach, and the result is code for the page's sandbox, not for the machine.
+**The build is closed**: it reads the one file named, the standard library, and the sources the builder ships. A path in that file that climbs out of its folder, or names anything else, fails the build. **So does any way to C in it**: `extern`, `##link`, assembler text and the attributes that hand text to the C side. The assembler and the linker would otherwise read files the paths never name. So a request reads nothing the token does not already reach, and the result is code for the page's sandbox, not for the machine.
 
 **The server answers once the build ends**, at most 60 seconds later. It handles no other request in that time.
 
@@ -186,7 +188,7 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | :-- | :-- |
 | 400 | A malformed request (a `Host` given twice included), or a malformed `%XX` |
 | 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike). So a request without the token learns nothing of the names under the root |
-| 403 | It pointed outside the root, or named a `Host` other than the loopback |
+| 403 | It pointed outside the root, wrote to a name that starts with `.`, or named a `Host` other than the loopback |
 | 404 | A name that does not exist, an unknown endpoint, or a build with no builder named |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
 | 409 | The conditional write no longer matches the file, or its target is not a regular file |

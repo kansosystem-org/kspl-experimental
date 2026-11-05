@@ -3,7 +3,8 @@
 // driven through the browser's own input events and checked by the canonical source the page
 // gives back. The menus, the quick access bar and the table's own tools are
 // `menus.mjs`; the tools over a whole document or a range of cells are `tools.mjs`; a table as a
-// whole, its sizes by number and the filter's dates are `tables.mjs`.
+// whole and the filter's dates are `tables.mjs`; its column widths and row heights `sizes.mjs`;
+// a diagram `diagrams.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -19,6 +20,10 @@ import { served } from "./served.mjs";
 import { menus } from "./menus.mjs";
 import { tools } from "./tools.mjs";
 import { tables } from "./tables.mjs";
+import { sizes } from "./sizes.mjs";
+import { documents } from "./documents.mjs";
+import { diagrams } from "./diagrams.mjs";
+import { SPEC, written } from "../../port/web/reference.mjs";
 
 const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
@@ -46,6 +51,10 @@ const H = "%ksmd 1\n\n";
 const sections = {
   // Only the actions the script calls go out of the module, and only one function comes in.
   async module() {
+    // The reference lists the commands the page has, with their keys (`make ksmd-reference`).
+    const spec = fs.readFileSync(SPEC, "utf8");
+    check(written(spec) === spec, "the editing page's reference lists every command and its key",
+      "run make ksmd-reference");
     const bytes = fs.readFileSync(path.join(path.dirname(pageFile), "ksmd.wasm"));
     const mod = new WebAssembly.Module(bytes);
     const out = WebAssembly.Module.exports(mod).map((e) => e.name);
@@ -57,8 +66,8 @@ const sections = {
       into.join(" "));
     check(await until("document.documentElement.dataset.files === 'none'") &&
       await js("Array.from(document.querySelectorAll('.files [data-cmd]')).filter((b) => !b.hidden)" +
-        ".map((b) => b.dataset.cmd).join() === 'print'"),
-    "a page opened from a file offers Print alone in File; a host gives it a source");
+        ".map((b) => b.dataset.cmd).join() === 'page-setup,print'"),
+    "a page opened from a file offers Page setup and Print alone in File; a host gives it a source");
     const names = await js("[document.querySelector('.menubar .doc-name').textContent, document.title, " +
       "getComputedStyle(document.documentElement).getPropertyValue('--print-name').trim()].join('|')");
     check(names === 'Untitled|Untitled - ksmd|"Untitled"',
@@ -427,118 +436,6 @@ const sections = {
     }
   },
 
-  // Column widths: a drag of the edge between two column letters, and Alt+Left and Alt+Right in a
-  // cell. Each is one undo step, and the cells stay as they were.
-  // Caution: **Wait for what each event shows** before the next step: a press can be handled after
-  // the call that sent it returns, and reading the source takes the open cell, as a save does.
-  async widths() {
-    const rows = `| "a" | "b" | "c" |\n| 1 | 2 | =A1+B1 |\n:::\n`;
-    const weighted = `${H}:::table name="t" widths="1,1,2"\n${rows}`;
-    const widths = async () => {
-      const m = (await source()).match(/ widths="([0-9,]+)"/);
-      return m ? m[1].split(",").map(Number) : [];
-    };
-    const shownWidths = "Array.from(document.querySelectorAll('#doc col')).map((c) => c.style.width).join()";
-    // Runs a step, and waits until the widths the page shows differ from those before it.
-    const resized = async (step) => {
-      const was = await js(shownWidths);
-      await step();
-      return until(`${shownWidths} !== ${JSON.stringify(was)}`, 3000);
-    };
-    // Alt+Left outside a cell goes back in the browser's history, so a cell that does not open
-    // stops the section.
-    const openAt = async (column) => {
-      await openCell(`#doc td[data-r="0"][data-c="${column}"]`);
-      const name = `Cell ${"ABC"[column]}1`;
-      if (!await until(`document.activeElement.getAttribute("aria-label") === "${name}"`, 3000)) {
-        throw new Error(`${name} did not open; the focus is on ${await js("document.activeElement.outerHTML.slice(0, 80)")}`);
-      }
-    };
-    const px = (c) => js(`document.querySelectorAll("#doc th.letter")[${c}].getBoundingClientRect().width`);
-    const cellsKept = async (what) => {
-      const got = await source();
-      check(got.endsWith(`\n${rows}`) &&
-        await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "3",
-      what, got);
-    };
-
-    await load(weighted);
-    const before = await px(0);
-    await resized(() => drag('#doc [data-edge="0"]', 60));
-    const dragged = await widths();
-    check(dragged.length === 3 && dragged[0] > dragged[1] && dragged[0] + dragged[1] === dragged[2],
-      "dragging the edge between A and B gives A width from B, and C keeps its share",
-      JSON.stringify(dragged));
-    const after = await px(0);
-    check(Math.abs(after - before - 60) <= 8, "column A grows by the distance dragged",
-      `${before} -> ${after}`);
-    await cellsKept("the cells and the formula's value stay as they were");
-    await menu("undo");
-    await saves("one undo gives the widths before the drag back", weighted);
-    await menu("redo");
-    await settle();
-    check((await widths()).join() === dragged.join(), "and redo the dragged ones again");
-    await drag('#doc [data-edge="0"]', 0);
-    await settle();
-    check((await widths()).join() === dragged.join(),
-      "a press on the edge that does not move changes nothing");
-
-    await load(weighted);
-    check(await js("document.getElementById('doc').firstElementChild.classList.contains('gap')"),
-      "an opened document that starts with a table puts the caret on an empty line above it");
-    await openAt(1);
-    check(true, "a press on a cell opens it, although the empty line above the table goes");
-    await resized(() => press("ArrowRight", ALT));
-    check(await until("document.activeElement.getAttribute('aria-label') === 'Cell B1'", 3000),
-      "the cell stays open after Alt+Right");
-    await resized(() => press("ArrowRight", ALT));
-    const more = await widths();
-    check(more.length === 3 && more[1] > more[0] && more[0] * 3 === more[1] + more[2],
-      "Alt+Right in a cell makes its column wider, from the column on its right",
-      JSON.stringify(more));
-    await menu("undo");
-    await settle();
-    const wider = await widths();
-    check(wider[1] > wider[0] && more[1] / (more[1] + more[2]) > wider[1] / (wider[1] + wider[2]),
-      "each press is one undo step, and a second press makes it wider again", JSON.stringify(wider));
-    await openAt(1);
-    for (let i = 0; i < 3; i++) await resized(() => press("ArrowLeft", ALT));
-    const narrower = await widths();
-    check(narrower[1] < narrower[0] && narrower[0] * 3 === narrower[1] + narrower[2],
-      "Alt+Left makes it narrower", JSON.stringify(narrower));
-    for (let i = 0; i < 4; i++) await menu("undo");
-    await saves("undo goes back one press at a time", weighted);
-    // On a chosen cell too: left to the browser, Alt+Left goes back a page, out of the editor.
-    await click('#doc td[data-r="0"][data-c="1"]');
-    const href = await js("location.href");
-    await resized(() => press("ArrowRight", ALT));
-    check((await widths())[1] > (await widths())[0] && await js("location.href") === href &&
-      await js("!!document.querySelector('#doc td.chosen[data-c=\"1\"]')"),
-    "Alt+Right on a chosen cell makes its column wider, and the page stays");
-    await menu("undo");
-    await openAt(2);
-    await resized(() => press("ArrowRight", ALT));
-    const last = await widths();
-    check(last[2] / (last[1] + last[2]) > 2 / 3 && last[0] * 3 === last[1] + last[2],
-      "in the last column, Alt+Right takes the width from the column on its left",
-      JSON.stringify(last));
-    await cellsKept("the cells stay as they were");
-
-    await load(`${H}:::table name="t"\n${rows}`);
-    await resized(() => drag('#doc [data-edge="1"]', -40));
-    const made = await widths();
-    check(made.length === 3 && made[1] < made[2] && made.every((n) => n >= 1 && n <= 10000),
-      "a table without widths takes them at its first resize", JSON.stringify(made));
-    await cellsKept("and its cells stay as they were");
-    const single = `${H}:::table name="t"\n| "a" |\n| 1 |\n:::\n`;
-    await load(single);
-    await openAt(0);
-    await press("ArrowRight", ALT);
-    check(await until("document.getElementById('status').textContent.startsWith('A table with one column')",
-      3000), "a table of one column has no width to share, and the page says so");
-    await saves("and nothing changes", single);
-  },
-
   // A column's number format: what the cells show, the cell's own number when it opens, undo,
   // the source, and a copy that keeps every digit.
   async numberFormats() {
@@ -675,7 +572,11 @@ Object.assign(sections, menus({ browser, js, until, press, type, select, click, 
 Object.assign(sections, tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
   saves, dragTo, rightClick, openCell, drag, doubleClickAt }));
 Object.assign(sections, tables({ page, js, settle, press, type, select, click, menu, load, saves,
-  rightClick }));
+  rightClick, openCell }));
+Object.assign(sections, sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source,
+  openCell, doubleClickAt }));
+Object.assign(sections, documents({ js, press, click, menu, load, saves }));
+Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
 
 try {
   const opened = await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });

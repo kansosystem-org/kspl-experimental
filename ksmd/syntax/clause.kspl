@@ -1,5 +1,5 @@
-//< Reads a clause, from `:::kind name=value ...` to a line of `:::`: a table, an include or an
-//< image
+//< Reads a clause, from `:::kind name=value ...` to a line of `:::`: a table, an include, an
+//< image, a chart or a person's functions
 //< A table's names, cells and widths are read and checked here. What a formula means, and where a
 //< path leads, are not: calculation and file resolution come after reading.
 import "ksmd/base/attribute" { Attribute, attribute_at, decode, find, read_attributes }
@@ -8,16 +8,20 @@ import "ksmd/base/keyed" { Keyed }
 import "ksmd/base/marker" { is_decimal, leading, quoted_end }
 import "ksmd/base/source" { Diagnostic, Line, Source }
 import "ksmd/calc/formula" { text_piece }
-import "ksmd/model/choice" { has_choices, is_entry }
+import "ksmd/model/choice" { has_choices, is_entry, lowered }
 import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { format_of }
 import "ksmd/model/group" { Group_fault, read_groups }
 import "ksmd/model/look" { look_of, note_of, plain_look }
-import "ksmd/model/model" { Block, Cell, Chart, Document, Image, UNBOUND, MAX_CELLS, MAX_COLUMNS,
-    MAX_FORMULA, MAX_HEIGHT, MAX_NAME, MAX_ROWS, MAX_WEIGHT, MIN_HEIGHT, Column_filter, Row_height,
-    Table }
+import "ksmd/model/model" { Block, Cell, Chart, Document, Image, Drawing, UNBOUND, MAX_CELLS,
+    MAX_COLUMNS, MAX_FORMULA, MAX_HEIGHT, MAX_NAME, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH,
+    Column_filter, Row_height, Table }
 import "ksmd/model/rule" { has_rule, rule_of }
 import "ksmd/syntax/chart" { kind_of, split_names }
+import "ksmd/syntax/diagram" { read_diagram }
+import "ksmd/syntax/drawing" { read_drawings }
+import "ksmd/syntax/inline" { is_destination }
+import "ksmd/syntax/settings" { fault_of, is_label, settings_of }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -79,10 +83,15 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             .push(Block::{ .kind = .image, .level = 0, .label = "", .text = "",
             .first = doc.images.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
             .invisible = false })
-        doc.images.push(Image::{ .src = image_src, .alt = alt, .caption = caption })
-        return empty_body(src, first, "':::image' has no body. Close it on the next line")
+        $drawings: = List<|Drawing|>(arena)
+        next: = read_drawings(src, first, drawings@, arena)!
+        doc.images
+            .push(Image::{ .src = image_src, .alt = alt, .caption = caption, .drawings = drawings })
+        return next
     if kind.equals("chart")
         return read_chart(src, first, attributes, doc, arena)
+    if kind.equals("diagram")
+        return read_diagram(src, first, attributes, doc, arena)
     if kind.equals("functions")
         allow(src, attributes, U8[][]::{ "path" }, "':::functions' takes only path")!
         path: =
@@ -94,19 +103,47 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             .push(Block::{ .kind = .functions, .level = 0, .label = "", .text = path, .first = 0,
             .count = 0, .offset = first.offset, .align = .none, .note = "", .invisible = false })
         return empty_body(src, first, "':::functions' has no body. Close it on the next line")
+    if kind.equals("document")
+        // It stands first, so a reader meets the paper and the numbers before what they number.
+        if doc.blocks.len > 0
+            throw src.diagnostic(first.offset,
+                "':::document' stands first in its source, before every other block, and once")
+        settings: = settings_of(attributes@) catch a
+            throw src.diagnostic(a.offset, document_says(a))
+        if says: = fault_of(settings)
+            throw src.diagnostic(first.offset, says)
+        doc.settings.push(settings)
+        doc.blocks
+            .push(Block::{ .kind = .document, .level = 0, .label = "", .text = "",
+            .first = doc.settings.len - 1, .count = 1, .offset = first.offset, .align = .none,
+            .note = "", .invisible = false })
+        return empty_body(src, first, "':::document' has no body. Close it on the next line")
     throw src.diagnostic(first.offset + 3,
-        "a clause is ':::table', ':::include', ':::image', ':::chart' or ':::functions'")
+        "a clause is ':::table', ':::include', ':::image', ':::chart', ':::diagram', ':::functions' \
+            or ':::document'")
+
+priv fn document_says(a: Attribute): U8[] //< what the reader says of an attribute it cannot take
+    if a.name.equals("numbers")
+        return "numbers is the heading level numbering starts at, 1 to 6, unquoted"
+    if a.name.equals("orientation")
+        return "orientation is \"landscape\", or leave it out for portrait"
+    if a.name.equals("paper") || a.name.equals("header") || a.name.equals("footer") ||
+        a.name.equals("table_label") || a.name.equals("figure_label")
+        return "this attribute takes a quoted string"
+    return "':::document' takes only paper, orientation, header, footer, numbers, table_label and \
+        figure_label"
 
 fn names_kspl(path: U8[]): Bool //< whether a `:::functions` clause's path names a KSPL file
     return path.len > ".kspl".len && path.ends_with(".kspl")
 
 priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
     arena: Arena$@): Sz!Diagnostic //<
-        //< `:::chart table="t" kind="bar" labels="item" values="cost,tax" title="..."`
+        //< `:::chart table="t" kind="bar" labels="item" values="cost,tax" title="..."`, or by rows
+        //< with `by="rows" from="Jan" to="Dec"`, `values` then naming rows
         //< The names are found once every table is read (`chart.bind_charts`).
     allow(src, attributes,
-        U8[][]::{ "table", "kind", "labels", "values", "title", "invisible" },
-        "':::chart' takes only table, kind, labels, values, title and invisible")!
+        U8[][]::{ "table", "kind", "labels", "values", "by", "from", "to", "title", "invisible" },
+        "':::chart' takes only table, kind, labels, values, by, from, to, title and invisible")!
     message: = "':::chart' needs table, kind, labels and values"
     table: = required(src, first, attributes, "table", message)!
     kind_text: = required(src, first, attributes, "kind", message)!
@@ -117,7 +154,22 @@ priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc
     $names: = List<|U8[]|>(arena)
     if !split_names(values, names@)
         throw src.diagnostic(attribute_at(attributes, "values"),
-            "values names 1 to 8 columns, separated by ','")
+            "values names 1 to 8 columns, or rows, separated by ','")
+    // `by="rows"` draws each named row, its points the columns from `from` to `to`.
+    $by_rows: = false
+    $from: U8[] = ""
+    $to: U8[] = ""
+    if a: = find(attributes, "by")
+        if !string_of(src, a)!.equals("rows")
+            throw src.diagnostic(a.offset, "by is \"rows\", or leave it out for columns")
+        by_rows = true
+        rows_message: = "a chart by rows needs from and to, the first and last columns it draws"
+        from = required(src, first, attributes, "from", rows_message)!
+        to = required(src, first, attributes, "to", rows_message)!
+    else if a: = find(attributes, "from")
+        throw src.diagnostic(a.offset, "from and to belong to a chart by rows")
+    else if a: = find(attributes, "to")
+        throw src.diagnostic(a.offset, "from and to belong to a chart by rows")
     $title: U8[] = ""
     if a: = find(attributes, "title")
         title = string_of(src, a)!
@@ -130,19 +182,23 @@ priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc
         .push(Block::{ .kind = .chart, .level = 0, .label = "", .text = "",
         .first = doc.charts.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
         .invisible = false })
+    $drawings: = List<|Drawing|>(arena)
+    next: = read_drawings(src, first, drawings@, arena)!
     doc.charts
         .push(Chart::{ .kind = kind, .title = title, .table = UNBOUND, .name = table,
-        .labels = UNBOUND, .label_name = labels, .series = ids, .series_names = names })
-    return empty_body(src, first, "':::chart' has no body. Close it on the next line")
+        .labels = UNBOUND, .label_name = labels, .series = ids, .series_names = names,
+        .by_rows = by_rows, .from = UNBOUND, .from_name = from, .to = UNBOUND, .to_name = to,
+        .drawings = drawings })
+    return next
 
 priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
     names: Keyed<|Bool|>$@, arena: Arena$@): Sz!Diagnostic //<
         //< A header row of quoted names, then data rows, each with as many cells
     allow(src, attributes,
-        U8[][]::{ "name", "widths", "heights", "formats", "choices", "rules", "groups", "filter",
-        "invisible" },
-        "':::table' takes only name, widths, heights, formats, choices, rules, groups, filter and \
-            invisible")!
+        U8[][]::{ "name", "caption", "char_widths", "widths", "heights", "formats", "choices",
+        "color_rows", "rules", "groups", "merge", "filter", "invisible" },
+        "':::table' takes only name, caption, char_widths, widths, heights, formats, choices, \
+            color_rows, rules, groups, merge, filter and invisible")!
     name: =
         required(src, first, attributes, "name", "':::table' needs a name, as in name=\"budget\"")!
     name_at: = attribute_at(attributes, "name")
@@ -182,14 +238,21 @@ priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc
         at = line.next
     if at == first.next
         throw src.diagnostic(first.offset, "a table has a header row of quoted names")
-    if a: = find(attributes, "widths")
-        read_widths(src, a, t@)!
+    read_widths(src, attributes, t@)!
     if a: = find(attributes, "heights")
         read_heights(src, a, t@)!
     if a: = find(attributes, "formats")
         read_formats(src, a, t@)!
     if a: = find(attributes, "choices")
-        read_choice_list(src, a, t@)!
+        read_choice_list(src, a, t@, arena)!
+    if a: = find(attributes, "color_rows")
+        read_color_rows(src, a, t@)!
+    if a: = find(attributes, "caption")
+        t.caption = string_of(src, a)!
+        if !is_label(t.caption)
+            throw src.diagnostic(a.offset, "a caption is 1 to 200 bytes of text, with no braces")
+    if a: = find(attributes, "merge")
+        read_merge(src, a, t@)!
     if a: = find(attributes, "rules")
         read_rule_list(src, a, t@, arena)!
     if a: = find(attributes, "groups")
@@ -255,6 +318,8 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$
     brace: = brace_at(whole)
     $look: = plain_look()
     $note: U8[] = ""
+    $link: U8[] = ""
+    $link_at: Sz = 0
     $body: = whole
     if brace < whole.len
         if whole[whole.len - 1] != '}'
@@ -262,9 +327,19 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$
         attributes: = read_attributes(src, whole, brace + 1, whole.len - 1, at, arena)!
         look = look_of(src, attributes@, at + brace)!
         note = note_of(src, attributes@)!
+        if a: = find(attributes, "link")
+            if !a.quoted || !is_destination(a.value)
+                throw src.diagnostic(a.offset,
+                    "a link goes to an https:, http: or mailto: address, or to a '#' place, with no \
+                        space or bracket")
+            link = a.value
+            link_at = a.offset
         body = whole.sub(0, brace).trim_end()
     $cell: = Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = at, .look = look,
-        .note = note }
+        .note = note, .link = link }
+    // A link names what its text says, so only a text cell holds one.
+    if link.len > 0 && (body.len == 0 || body[0] != '"')
+        throw src.diagnostic(link_at, "only a text cell holds a link")
     if body.len == 0
         cell.offset = offset
         return cell
@@ -313,18 +388,45 @@ priv fn brace_at(text: U8[]): Sz //< where the first `{` outside quotes stands, 
         i += 1
     return text.len
 
-priv fn read_widths(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
-    //< `widths="1,2,1"`: one whole-number weight per column
-    if !a.quoted
-        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
-    if !parse_weights(a.value, t.weights@)
-        throw src.diagnostic(a.offset,
-            "widths is a list of whole numbers from 1 to 10,000, separated by ','")
-    if t.weights.len != t.columns.len
-        throw src.diagnostic(a.offset, "widths has one weight per column")
+priv fn read_widths(src: Source@, attributes: List<|Attribute|>, t: Table$@): Void!Diagnostic //<
+    //< `char_widths="12,,8.5"`: one entry per column, its width in characters, empty where it fits
+    //< its text. The older `widths="1,2,1"` gave weights, read as shares of 80 characters.
+    given: = find(attributes, "char_widths")
+    weights: = find(attributes, "widths")
+    if given.is_some() && weights.is_some()
+        throw src.diagnostic(attribute_at(attributes, "widths"),
+            "give char_widths or the older widths, not both")
+    if a: = given
+        if !a.quoted
+            throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+        if !parse_widths(a.value, t.widths@)
+            throw src.diagnostic(a.offset,
+                "a column's width is 0.5 to 255 characters, with at most one decimal place, or \
+                    nothing")
+        if t.widths.len != t.columns.len
+            throw src.diagnostic(a.offset, "char_widths has one entry per column, empty for none")
+        $any: = false
+        for w in t.widths
+            any = any || w > 0
+        if !any
+            throw src.diagnostic(a.offset, "leave out char_widths when no column has a width")
+    if a: = weights
+        if !a.quoted
+            throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+        if !parse_weights(a.value, t.widths@)
+            throw src.diagnostic(a.offset,
+                "widths is a list of whole numbers from 1 to 10,000, separated by ','")
+        if t.widths.len != t.columns.len
+            throw src.diagnostic(a.offset, "widths has one weight per column")
+        $sum: Sz = 0
+        for w in t.widths
+            sum += w
+        for i in Range.asc(t.widths.len)
+            share: = (t.widths[i] * OLD_TOTAL * 2 + sum) / (sum * 2)
+            t.widths[i] = share if share > MIN_WIDTH else MIN_WIDTH
 
 priv fn read_heights(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
-    //< `heights=",20,,"`: one entry per data row, its least height in whole points, empty for none
+    //< `heights=",20,,"`: one entry per data row, its height in whole points, empty for none
     if !a.quoted
         throw src.diagnostic(a.offset, "this attribute takes a quoted string")
     $count: Sz = 0
@@ -381,7 +483,7 @@ priv fn read_formats(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //
     if !any
         throw src.diagnostic(a.offset, "leave out formats when no column has one")
 
-priv fn read_choice_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+priv fn read_choice_list(src: Source@, a: Attribute, t: Table$@, arena: Arena$@): Void!Diagnostic //<
     //< `choices=",Open|Done,"`: one entry per column, empty for a column that takes any value
     if !a.quoted
         throw src.diagnostic(a.offset, "this attribute takes a quoted string")
@@ -389,11 +491,11 @@ priv fn read_choice_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnosti
     for i in Range.asc(a.value.len + 1)
         if i < a.value.len && a.value[i] != ','
             continue
-        entry: = a.value.sub(start, i - start)
+        entry: = lowered(a.value.sub(start, i - start), arena)
         if !is_entry(entry)
             throw src.diagnostic(a.offset,
-                "a column's choices are 1 to 50 texts separated by '|', each with no ',', '|', '\"' \
-                    or '\\', none twice")
+                "a column's choices are 1 to 50 texts separated by '|', each with no ',', '|', ';', \
+                    '\"' or '\\', none twice, and each maybe with colours after ';'")
         t.choices.push(entry)
         start = i + 1
     if t.choices.len != t.columns.len
@@ -401,6 +503,42 @@ priv fn read_choice_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnosti
     if !has_choices(t.choices@)
         throw src.diagnostic(a.offset, "leave out choices when no column has any")
     // A cell that holds a value off its column's list still reads: the page marks it.
+
+priv fn read_merge(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `merge="A,B"`: the columns, from the left, whose repeated values show once
+    message: = "merge names columns by their letters from the left, as \"A,B\", each once"
+    if !a.quoted || a.value.len == 0
+        throw src.diagnostic(a.offset, message)
+    $start: Sz = 0
+    $last: Sz = -1
+    for i in Range.asc(a.value.len + 1)
+        if i < a.value.len && a.value[i] != ','
+            continue
+        letters: = a.value.sub(start, i - start)
+        start = i + 1
+        $n: Sz = 0
+        for c in letters
+            if !c.is_upper() || n > t.columns.len
+                throw src.diagnostic(a.offset, message)
+            n = n * 26 + Sz::(c - 'A') + 1
+        if n == 0 || n > t.columns.len || n - 1 <= last
+            throw src.diagnostic(a.offset, message)
+        last = n - 1
+        t.merged.push(t.columns[n - 1])
+
+priv fn read_color_rows(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `color_rows="C"`: each row takes the colours of the choice its column C holds
+    message: = "color_rows names a column with choices by its letters, as \"C\""
+    if !a.quoted || a.value.len == 0 || a.value.len > 3
+        throw src.diagnostic(a.offset, message)
+    $n: Sz = 0
+    for c in a.value
+        if !c.is_upper()
+            throw src.diagnostic(a.offset, message)
+        n = n * 26 + Sz::(c - 'A') + 1
+    if n > t.columns.len || t.choices.len == 0 || t.choices[n - 1].len == 0
+        throw src.diagnostic(a.offset, message)
+    t.row_colors = t.columns[n - 1]
 
 priv fn read_rule_list(src: Source@, a: Attribute, t: Table$@, arena: Arena$@): Void!Diagnostic //<
     //< `rules=",<0;color:#9c0006"`: one colour rule per column, empty for none
@@ -422,12 +560,12 @@ priv fn read_rule_list(src: Source@, a: Attribute, t: Table$@, arena: Arena$@): 
         throw src.diagnostic(a.offset, "leave out rules when no column has one")
 
 priv fn read_group_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
-    //< `groups="rows 2-4, rows 6-9 closed"`: the groups of data rows, from the top
+    //< `groups="rows 2-4, rows 6-9 closed, columns B-D"`: the groups of data rows, then of columns
     if !a.quoted
         throw src.diagnostic(a.offset, "this attribute takes a quoted string")
     if a.value.len == 0
         throw src.diagnostic(a.offset, "leave out groups when the table has none")
-    read_groups(a.value, t.rows.len, t.groups@) catch f
+    read_groups(a.value, t) catch f
         throw src.diagnostic(a.offset, message_of(f))
 
 priv fn read_filter_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
@@ -458,30 +596,63 @@ priv fn read_filter_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnosti
 priv fn message_of(f: Group_fault): U8[] //< what the reader says of groups it cannot read
     switch f
     case .not_rows
-        return "groups lists entries such as rows 2-4 or rows 6 closed, each naming data rows from \
-            1, separated by ', '"
+        return "groups lists entries such as rows 2-4, rows 6 closed or columns B-D, naming data \
+            rows from 1 and columns by letter, separated by ', '"
     case .out_of_order
-        return "groups lists its entries from the top, an outer group before the groups it holds"
+        return "groups lists the rows' entries from the top, then the columns' from the left, an \
+            outer group before the groups it holds"
     case .crosses
         return "a group holds another whole, or shares no row with it"
     case .twice
         return "two groups hold the same rows"
     case .too_deep
-        return "a row stands in at most 8 groups"
+        return "a row or a column stands in at most 8 groups"
 
-fn parse_weights(text: U8[], weights: List<|Sz|>$@): Bool //<
+const OLD_TOTAL: Sz = 800 //<
+    //< the tenths of a character the older `widths` weights share: 80 characters, a table that
+    //< a laptop's window and a landscape A4 page both hold
+
+priv fn parse_weights(text: U8[], weights: List<|Sz|>$@): Bool //<
     //< Adds the weights `1,2,1` names to `weights`; false if the text is not that form
     //< Each is a whole number from 1 to 10,000, and a ',' separates two of them.
     $start: Sz = 0
     for i in Range.asc(text.len + 1)
         if i < text.len && text[i] != ','
             continue
-        weight: = text.sub(start, i - start).to_count(MAX_WEIGHT) catch
+        weight: = text.sub(start, i - start).to_count(10000) catch
             return false
         if weight == 0
             return false
         weights.push(weight)
         start = i + 1
+    return true
+
+fn parse_widths(text: U8[], widths: List<|Sz|>$@): Bool //<
+    //< Adds the widths `12,,8.5` names to `widths`, in tenths of a character, 0 for an empty
+    //< entry; false if the text is not that form
+    //< Each entry is empty, or 0.5 to 255 with at most one decimal place.
+    $start: Sz = 0
+    for i in Range.asc(text.len + 1)
+        if i < text.len && text[i] != ','
+            continue
+        entry: = text.sub(start, i - start)
+        start = i + 1
+        if entry.len == 0
+            widths.push(0)
+            continue
+        $whole: = entry
+        $tenth: Sz = 0
+        if dot: = entry.find_char('.')
+            if dot + 2 != entry.len || !entry[dot + 1].is_digit()
+                return false
+            whole = entry.sub(0, dot)
+            tenth = entry[dot + 1] - '0'
+        count: = whole.to_count(MAX_WIDTH / 10) catch
+            return false
+        width: = count * 10 + tenth
+        if width < MIN_WIDTH || width > MAX_WIDTH
+            return false
+        widths.push(width)
     return true
 
 priv fn allow(src: Source@, attributes: List<|Attribute|>, names: U8[][], message: U8[]):

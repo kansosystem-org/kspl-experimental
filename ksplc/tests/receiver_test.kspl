@@ -197,7 +197,7 @@ fn test_write_through_a_method_result(arena: Arena$@)
 
 impl U8[]
     priv fn rv_drop_last(r: Self$@): Sz //< changes the descriptor, not the bytes
-        r.len -= 1
+        r$ = U8[]::{ .ptr = r.ptr, .len = r.len - 1 }
         return r.len
 
     priv fn rv_len(r: Self@): Sz //< reads the descriptor through a pointer
@@ -214,3 +214,20 @@ fn test_string_literal_as_a_receiver() //<
     assert(s.rv_drop_last() == 3, "a method that changes the descriptor runs on a '$' copy")
     assert("abcd".rv_len() == 4, "and the literal keeps its length")
     verdict.pass("a literal is read whole; a copy in a '$' name is written.")
+
+priv struct Points_at //< holds a writable pointer
+    p: I32$@
+
+fn test_write_through_an_element_pointer() //<
+    //< A pointer an immutable array holds is written through by its own `$@`
+    //< The array's elements cannot change, but what a `$@` element points at can: the pointer, not
+    //< the root binding, decides the write. Both were refused as writes to the array's element.
+    verdict.start("[Receiver] a write through a pointer an immutable array holds test...")
+    $x: I32 = 1
+    $y: I32 = 2
+    ptrs: I32$@[2] = ::{ x@, y@ }
+    ptrs[0]$ = 7
+    held: Points_at[1] = ::{ Points_at::{ .p = y@ } }
+    held[0].p$ = 8
+    assert(x == 7 && y == 8, "both writes reach the variables pointed at")
+    verdict.pass("the pointer's own permission decides the write.")

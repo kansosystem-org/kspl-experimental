@@ -1,0 +1,146 @@
+//< Shapes drawn over an image or a chart, as the lines of its clause's body save them
+//< Each line is `draw`, then attributes, as a clause's are:
+//<
+//< ```text
+//< :::image src="build.png" alt="The build window"
+//< draw shape="rect" from="120,40" to="420,120" text="Press here"
+//< draw shape="arrow" from="460,200" to="430,110" color="#1f5fbf"
+//< :::
+//< ```
+//<
+//< A drawing stands in the picture's own pixels, so it stays on what it points at however wide
+//< the page shows the picture. A chart's frame is 640 by 300. The page sends a whole new list as
+//< the same lines (`drawings_of`), so what it draws passes the reader's one set of rules.
+import "ksmd/base/attribute" { Attribute, find, read_attributes }
+import "ksmd/base/source" { Diagnostic, Line, Source }
+import "ksmd/model/model" { MAX_DRAWING_TEXT, MAX_DRAWINGS, MAX_SPOT, Drawing, Drawing_shape }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const WORD: U8[] = "draw " //< what each line starts with
+
+fn read_drawings(src: Source@, first: Line, drawings: List<|Drawing|>$@, arena: Arena$@):
+    Sz!Diagnostic //<
+        //< Reads the `draw` lines after a clause's opening line `first`, and returns where the line
+        //< after the closing `:::` starts
+    $at: = first.next
+    for
+        if at >= src.bytes.len
+            throw src.diagnostic(first.offset, "this clause has no closing ':::' line")
+        line: = src.line_at(at)
+        if line.text.equals(":::")
+            return line.next
+        if !line.text.starts_with(WORD)
+            throw src.diagnostic(line.offset,
+                "a line inside this clause draws a shape, as in draw shape=\"rect\" from=\"10,10\" \
+                    to=\"90,40\"; close the clause with ':::'")
+        if drawings.len == MAX_DRAWINGS
+            throw src.diagnostic(line.offset, "at most 100 shapes are drawn over one image or chart")
+        drawings.push(drawing_of(src, line, arena)!)
+        at = line.next
+
+fn drawings_of(text: U8[], drawings: List<|Drawing|>$@, arena: Arena$@): Void!Diagnostic //<
+    //< The drawings of `text`, the lines a clause's body holds, without the closing `:::`
+    defer $whole: = Str_builder()
+    whole.s("%ksmd 1\n:::drawings\n").s(text)
+    if text.len > 0 && !text.ends_with("\n")
+        whole.c('\n')
+    whole.s(":::\n")
+    bytes: = arena.dup_str(whole.slice())
+    src: = Source("drawings", bytes)!
+    first: = src.line_at(src.body)
+    _end: = read_drawings(src@, first, drawings, arena)!
+
+priv fn drawing_of(src: Source@, line: Line, arena: Arena$@): Drawing!Diagnostic //< one `draw` line
+    attributes: =
+        read_attributes(src, line.text, WORD.len, line.text.len, line.offset, arena)!
+    for a in attributes
+        if !a.name.equals("shape") && !a.name.equals("from") && !a.name.equals("to") &&
+            !a.name.equals("color") && !a.name.equals("text")
+            throw src.diagnostic(a.offset, "a drawing takes only shape, from, to, color and text")
+    shape_at: = find(attributes, "shape") catch
+        throw src.diagnostic(line.offset, "a drawing needs shape, from and to")
+    shape: = shape_of(shape_at.value) catch
+        throw src.diagnostic(shape_at.offset, "shape is \"rect\", \"arrow\" or \"line\"")
+    if !shape_at.quoted
+        throw src.diagnostic(shape_at.offset, "shape is \"rect\", \"arrow\" or \"line\"")
+    from: = point_of(src, attributes, "from", line)!
+    to: = point_of(src, attributes, "to", line)!
+    $color: U8[] = ""
+    if a: = find(attributes, "color")
+        if !a.quoted || !is_color(a.value)
+            throw src.diagnostic(a.offset, "color is a colour as \"#c00000\", or leave it out")
+        color = a.value
+    $text: U8[] = ""
+    if a: = find(attributes, "text")
+        if !a.quoted || a.value.len == 0 || a.value.len > MAX_DRAWING_TEXT ||
+            a.value.find_char('\n').is_some()
+            throw src.diagnostic(a.offset,
+                "text is one line of 1 to 200 bytes in quotes, or leave it out")
+        if shape != .rect
+            throw src.diagnostic(a.offset, "only a rect holds text")
+        text = a.value
+    return Drawing::{ .shape = shape, .x1 = from.x, .y1 = from.y, .x2 = to.x, .y2 = to.y,
+        .color = color, .text = text }
+
+priv struct Point
+    x: Sz
+    y: Sz
+
+priv fn point_of(src: Source@, attributes: List<|Attribute|>, name: U8[], line: Line):
+    Point!Diagnostic //<
+        //< `from="120,40"`: two whole numbers from 0 to 20000, the second down from the top
+    a: = find(attributes, name) catch
+        throw src.diagnostic(line.offset, "a drawing needs shape, from and to")
+    message: = "a point is two whole numbers from 0 to 20000, as \"120,40\""
+    if !a.quoted
+        throw src.diagnostic(a.offset, message)
+    comma: = a.value.find_char(',') catch
+        throw src.diagnostic(a.offset, message)
+    x: = whole_of(a.value.sub(0, comma)) catch
+        throw src.diagnostic(a.offset, message)
+    y: = whole_of(a.value.sub_from(comma + 1)) catch
+        throw src.diagnostic(a.offset, message)
+    return Point::{ .x = x, .y = y }
+
+priv fn whole_of(text: U8[]): Sz? //< digits without a leading zero, from 0 to `MAX_SPOT`
+    if text.len == 0 || text.len > 5 || text.len > 1 && text[0] == '0'
+        return .none
+    $n: Sz = 0
+    for c in text
+        if !c.is_digit()
+            return .none
+        n = n * 10 + Sz::(c - '0')
+    if n > MAX_SPOT
+        return .none
+    return .some(n)
+
+priv fn shape_of(text: U8[]): Drawing_shape? //< `rect`, `arrow` or `line`
+    if text.equals("rect")
+        return .some(.rect)
+    if text.equals("arrow")
+        return .some(.arrow)
+    if text.equals("line")
+        return .some(.line)
+    return .none
+
+priv fn is_color(text: U8[]): Bool //< `#` and six hexadecimal digits, as the writer keeps them
+    if text.len != 7 || text[0] != '#'
+        return false
+    for c in text.sub_from(1)
+        if !c.is_digit() && (c < 'a' || c > 'f')
+            return false
+    return true
+
+fn write_drawings(drawings: List<|Drawing|>@, out: Str_builder$@) //<
+    //< Each drawing's line, as `read_drawings` reads it
+    for m in drawings
+        out.s("draw shape=\"").s(m.shape.variant_name()).s("\" from=\"\{m.x1\},\{m.y1\}\" to=\"")
+            .s("\{m.x2\},\{m.y2\}\"")
+        if m.color.len > 0
+            out.s(" color=\"").s(m.color).c('"')
+        if m.text.len > 0
+            out.s(" text=\"").escape_and_append(m.text).c('"')
+        out.c('\n')

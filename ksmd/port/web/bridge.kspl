@@ -5,93 +5,37 @@
 //< undo and redo can run. Numbers cross as arguments; no struct crosses.
 //< Where the local server serves the page, the script also hands in the document's path and each
 //< file the view asks for (`ksmd_web_wanted`, `ksmd_web_hold`).
-//< Caution: **Refuse an action before memory runs short**, not during it. The heap is a fixed
-//< buffer, and running out midway stops the page with the document half changed
-//< (`ksmd_js_gave_up`).
+//< This file holds the actions on the text and on files. What every action shares, the memory,
+//< the open document and the result, is `bridge_session.kspl`.
 import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
-import "ksmd/calc/calc" { Results }
-import "ksmd/calc/calc"
-import "ksmd/calc/value" { Value }
-import "ksmd/edit/editor" { Editor, Input, Refused }
+import "ksmd/edit/editor" { Input }
 import "ksmd/edit/editor"
+import "ksmd/edit/editor_diagrams" // `insert_diagram`, `set_diagram`
+import "ksmd/edit/editor_drawings" // `set_drawings`
 import "ksmd/edit/editor_looks"
 import "ksmd/edit/editor_replace" { Cell_text, Span }
+import "ksmd/edit/editor_settings" // `set_settings`
 import "ksmd/edit/history" { Change }
 import "ksmd/edit/region" { Place, Spot, paragraph_style }
 import "ksmd/edit/styled" { Mark }
-import "ksmd/files/assemble" { assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
-import "ksmd/files/files" { Refusal, parse, resolve_text }
+import "ksmd/files/files" { Refusal, resolve_text }
 import "ksmd/files/image" { measure }
+import "ksmd/model/model" { Settings }
 import "ksmd/port/web/bridge_own" { own_functions } // a person's own functions, and their actions
+import "ksmd/port/web/bridge_session" { HEAP_BYTES, RESERVE, assembled, begin, doc_path, ed, ensure,
+    fetched, files, full, here, loading, number, out, refused, release_input, result, result_with,
+    session, text_in }
 import "ksmd/port/web/bridge_tables" as _tables // the table actions; this brings them into the wasm
 import "ksmd/port/web/moving"
-import "ksmd/port/web/view" { Inside }
-import "ksmd/port/web/view"
 import "ksmd/syntax/reader"
+import "ksmd/syntax/settings" { fault_of, is_empty }
 import "ksmd/syntax/writer"
 import "std/chars"
 import "std/ds" { List }
 import "std/json"
-import "std/mem" + { Arena, dealloc }
+import "std/mem" + { Arena }
 import "std/str" { Str_builder }
-
-extern fn ksmd_js_gave_up(msg: U8@, msg_len: Sz) //<
-    //< Throws in the script with the reason the page stopped; it does not return
-
-const HEAP_BYTES: Sz = 128 * 1024 * 1024 //< the fixed buffer that stands in for a heap
-    //< wasm has neither libc nor malloc (`mem.init_freestanding_heap`). It is zero-filled static
-    //< memory, so its size does not grow the `.wasm` file.
-const RESERVE: Sz = 16 * 1024 * 1024 //< the free memory an action needs before it starts
-$heap: U8[128*1024*1024] = ::{}
-$ready: Bool = false
-$out: Str_builder$@ = null //< where an action's result is written
-$input: U8$@ = null //< where the script writes text for an action
-$input_cap: Sz = 0
-$session: Arena$@ = null //< holds the open document, its edits and its history
-$loading: Arena$@ = null //< a document being read; freed by `ksmd_web_recover` if reading stops
-$ed: Editor$@ = null
-$files: Arena$@ = null //< holds the document's path and what was fetched for its view
-$fetched: Fetched$@ = null //< null until the page names a path: no file is fetched then
-$doc_path: U8[] = "" //< the open document's path from the workspace root
-
-priv fn give_up(msg: U8[]) //< the panic hook: the reason goes to the script, which throws
-    ksmd_js_gave_up(msg.ptr, msg.len)
-
-fn ensure() //< sets up the heap, the output and an empty document, once
-    if ready
-        return
-    mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
-    out = mem.alloc_as<|Str_builder|>()
-    mem.init_at(out, Str_builder())
-    panic_hook = give_up
-    ready = true
-    first: = Arena(64 * 1024)
-    src: = Source("document.ksmd", "%ksmd 1\n") catch
-        panic("the empty document reads")
-    doc: = reader.read(src@, first) catch
-        panic("the empty document reads")
-    session = first
-    // No date yet: the page loads its first document, with the date, before it shows anything.
-    ed = session.create(editor.open(doc, "", session))
-
-extern fn ksmd_web_in(n: Sz): U8$@ //<
-    //< a buffer of at least `n` bytes for the script to write text into
-    ensure()
-    if n > input_cap
-        // Caution: **Forget the old buffer before asking for a new one.** A request that fails
-        // stops the page, and a freed buffer still named here would be written again.
-        release_all_input()
-        input = U8$@::mem.alloc(n)
-        input_cap = n
-    return input
-
-extern fn ksmd_web_out_ptr(): U8@ //<
-    //< the last result's bytes; ask after the action, as memory can move
-    return out.slice().ptr
-
-extern fn ksmd_web_out_len(): Sz
-    return out.slice().len
 
 extern fn ksmd_web_recover() //< frees a document whose reading stopped when memory ran out
     if loading != null
@@ -133,19 +77,6 @@ priv fn date_text(year: I32, month: I32, day: I32, arena: Arena$@): U8[] //< `20
     b.c('-').c('0' + U8::(month / 10 % 10)).c('0' + U8::(month % 10))
     b.c('-').c('0' + U8::(day / 10 % 10)).c('0' + U8::(day % 10))
     return b.take()
-
-priv const KEPT_INPUT: Sz = 1024 * 1024 //< the input buffer kept between actions
-    //< A source or an image's window can need more for one call; it is let go after it.
-
-priv fn release_input() //< lets go a large input buffer, so a load does not hold it twice
-    if input_cap > KEPT_INPUT
-        release_all_input()
-
-priv fn release_all_input() //< lets go the input buffer, whatever its size
-    if input != null
-        dealloc(Void$@::input)
-    input = null
-    input_cap = 0
 
 extern fn ksmd_web_source_limit(): Sz //<
     //< the most bytes a source may hold; the script reads one more
@@ -231,17 +162,6 @@ extern fn ksmd_web_image(at: Sz, total: Sz, len: Sz): Sz //<
     release_input()
     return out.slice().len
 
-priv fn assembled(scratch: Arena$@): Inside$@ //<
-    //< The view of the open document as it is now, over what was fetched. Each file it lacks is
-    //< in `fetched.wanted`. Only a page that named a path calls it, so `fetched` is set.
-    defer $text: = Str_builder()
-    writer.write(ed.doc@, text@)
-    top: = parse(doc_path, scratch.dup_str(text.slice()), scratch) catch
-        panic("the editor's document reads back")
-    fetched.ask(scratch)
-    a: = assemble_loaded(fetched, top, scratch)
-    return scratch.create(Inside(a, fetched.asked, ed.today, ed.own, scratch))
-
 priv fn refuse_source(d: Diagnostic): I32 //< `{"ok":false,"why":…,"line":…,"column":…}`
     out.s("{\"ok\":false,\"why\":\"").escape_and_append(d.message)
         .s("\",\"line\":\{d.line\},\"column\":\{d.column\}}")
@@ -257,6 +177,17 @@ extern fn ksmd_web_render(): Sz //<
     ed.change.tail = 0
     ed.change.tables = true
     return result(true, "")
+
+extern fn ksmd_web_render_files(): Sz //<
+    //< the blocks that show a fetched file, and every table and chart, once files have come
+    //< **The rest of the document stays as it was shown**: showing it all again doubled the time
+    //< a large document took to open.
+    ensure()
+    ed.change = Change.none(ed.doc@)
+    ed.change.from = ed.doc.blocks.len
+    ed.change.tail = 0
+    ed.change.tables = true
+    return result_with(true, "", true)
 
 extern fn ksmd_web_source(): Sz //< the canonical source, as the writer saves it
     ensure()
@@ -347,6 +278,30 @@ extern fn ksmd_web_move_paths(from_len: Sz, to_len: Sz): Sz //<
     ed.move_paths(both.sub(0, from_len), both.sub_from(from_len))
     return result(true, "")
 
+extern fn ksmd_web_moved_source(from_len: Sz, to_len: Sz): Sz //<
+    //< The canonical source with its paths written for a new folder, as `ksmd_web_move_paths`
+    //< writes them; the open document stays as it is. The old folder, then the new one, from the
+    //< workspace's root, are written in. -1 where the editor's memory cannot hold a copy.
+    //< Save As writes this, and moves the document's own paths only once the write has
+    //< succeeded, so a failed write leaves nothing to take back.
+    ensure()
+    if mem.heap_used_bytes() + RESERVE > HEAP_BYTES
+        return -1
+    both: = text_in(from_len + to_len)
+    defer copy: = Arena(64 * 1024)
+    defer $text: = Str_builder()
+    writer.write(ed.doc@, text@)
+    src: = Source("document.ksmd", copy.dup_str(text.slice())) catch
+        panic("the editor's document reads back")
+    doc: = reader.read(src@, copy) catch
+        panic("the editor's document reads back")
+    $moved: = editor.open(doc, ed.today, copy)
+    moved.move_paths(both.sub(0, from_len), both.sub_from(from_len))
+    out.clear()
+    writer.write(moved.doc@, out)
+    release_input()
+    return out.slice().len
+
 extern fn ksmd_web_insert_image(src_len: Sz, alt_len: Sz): Sz //<
     //< An image in place of the selection: its path from the document's folder, then its
     //< alternate text, are written in
@@ -356,6 +311,39 @@ extern fn ksmd_web_insert_image(src_len: Sz, alt_len: Sz): Sz //<
     ed.insert_image(both.sub(0, src_len), both.sub_from(src_len)) catch e
         return refused(e)
     return result(true, "")
+
+extern fn ksmd_web_drawings(block: Sz, len: Sz): Sz //<
+    //< Gives an image or a chart the shapes drawn over it: their `draw` lines, as its clause's
+    //< body holds them, are written in
+    if !begin()
+        return full()
+    ed.set_drawings(block, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_settings(len: Sz): Sz //<
+    //< Gives the document its settings, written in as JSON: `{"paper":"A3","land":1,"header":text,
+    //< "footer":text,"numbers":2,"tl":text,"fl":text}`, each empty or 0 for none
+    if !begin()
+        return full()
+    defer scratch: = Arena(4 * 1024)
+    got: = json.parse(text_in(len), scratch) catch
+        return result(false, "The settings did not arrive whole, so nothing changed.")
+    v: = got.val
+    numbers: = number(v.get("numbers"))
+    s: = Settings::{ .paper = word_of(v, "paper"), .landscape = number(v.get("land")) == 1,
+        .header = word_of(v, "header"), .footer = word_of(v, "footer"),
+        .numbers = 0 if numbers < 0 else numbers, .table_label = word_of(v, "tl"),
+        .figure_label = word_of(v, "fl") }
+    if says: = fault_of(s)
+        if !is_empty(s)
+            return result(false, says)
+    ed.set_settings(s) catch e
+        return refused(e)
+    return result(true, "")
+
+priv fn word_of(v: json.Value, name: U8[]): U8[] //< a text field of JSON written in, kept
+    return ed.arena.dup_str(v.get(name).as_str().unwrap_or(""))
 
 extern fn ksmd_web_insert_include(len: Sz): Sz //<
     //< An `:::include` clause in place of the selection: the included file's path from the
@@ -405,6 +393,21 @@ extern fn ksmd_web_mark(which: I32, len: Sz): Sz //<
     mark: Mark =
         (.emphasis if which == 0 else .strong if which == 1 else .code if which == 2 else .link)
     ed.toggle_mark(mark, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_insert_diagram(): Sz //< an empty diagram at the selection
+    if !begin()
+        return full()
+    ed.insert_diagram() catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_diagram(block: Sz, len: Sz): Sz //<
+    //< Gives a diagram the whole `:::diagram` clause written in, as one step
+    if !begin()
+        return full()
+    ed.set_diagram(block, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -474,97 +477,6 @@ extern fn ksmd_web_replace(len: Sz): Sz //<
     ed.replace_found(spans@, text, cells@) catch e
         return refused(e)
     return result(true, "")
-
-fn number(v: json.Value): Sz //<
-    //< a whole number written in; -2, a place that names nothing, if not
-    if n: = v.as_int()
-        return n
-    return -2
-
-fn begin(): Bool //< whether an action may start; it clears what the last one changed
-    ensure()
-    ed.change = Change.none(ed.doc@)
-    return mem.heap_used_bytes() + RESERVE <= HEAP_BYTES
-
-fn full(): Sz //< the refusal of an action for want of memory
-    return result(false,
-        "The editor's memory is used up, so the change was not made. Save the document, then open \
-            it again.")
-
-fn refused(e: Refused): Sz
-    return result(false, e.message())
-
-fn result(ok: Bool, why: U8[]): Sz //<
-    //< `{"ok","why","from","tail","blocks","tables","sel","here","changed","undo","redo"}`: the blocks
-    //< from `from` up to the `tail` unchanged at the end, and each other table when values may have
-    //< changed. `changed` is 1 when the document changed, so a host knows to save it.
-    defer scratch: = Arena(64 * 1024)
-    out.clear()
-    n: = ed.doc.blocks.len
-    from: = ed.change.from if ed.change.from < n else n
-    to: = n - ed.change.tail if ed.change.tail < n - from else from
-    values: = values_for(from, to, scratch)
-    inside: = assembled(scratch) if shows_files(from, to) else null
-    out.s("{\"ok\":").s("true" if ok else "false").s(",\"why\":\"").escape_and_append(why)
-    out.s("\",\"from\":\{from\},\"tail\":\{n - to\},\"blocks\":")
-    view.blocks(ed, from, to, values@, inside, out)
-    out.s(",\"tables\":")
-    if ed.change.tables
-        view.tables(ed, from, to, values@, out)
-    else
-        out.s("[]")
-    out.s(",\"sel\":")
-    view.selection(ed, out)
-    out.s(",\"here\":")
-    here(out)
-    out.s(",\"changed\":").s("1" if ed.change.any else "0")
-    out.s(",\"undo\":").s("1" if ed.can_undo() else "0")
-    out.s(",\"redo\":").s("1" if ed.can_redo() else "0").c('}')
-    return out.slice().len
-
-priv fn here(out: Str_builder$@) //<
-    //< `{"k","l","o","c","a","m"}`: the first selected unit's kind, level, numbering, tick box and
-    //< alignment, and `[emphasis, strong, code]` as 0 or 1, for the quick access bar to show
-    h: = ed.here()
-    st: = h.style
-    kind: =
-        ("other" if h.whole else "paragraph" if st.kind == .paragraph
-        else "heading" if st.kind == .heading else "code" if st.kind == .code
-        else "list" if st.kind == .list else "quote" if st.kind == .quote else "other")
-    align: =
-        ("left" if st.align == .left else "center" if st.align == .center
-        else "right" if st.align == .right else "")
-    check: = 1 if st.check == .open else 2 if st.check == .done else 0
-    out
-        .s("{\"k\":\"\{kind\}\",\"l\":\{st.level\},\"o\":\{1 if st.ordered else 0\},\"c\":\{check\},")
-    out.s("\"a\":\"\{align\}\",\"m\":[\{1 if h.emphasis else 0\},\{1 if h.strong else 0\},")
-    out.s("\{1 if h.code else 0\}]}")
-
-priv fn values_for(from: Sz, to: Sz, scratch: Arena$@): Results //<
-    //< Every table's values when the result shows a table or a chart; typing in prose
-    //< calculates nothing
-    $shows: = ed.change.tables
-    for b in Range(from, to, 1)
-        kind: = ed.doc.blocks.get(b).kind
-        shows = shows || kind == .table || kind == .chart
-    if shows
-        return calc.calculate(ed.doc@, ed.today, scratch, ed.own)
-    return Results::{ .values = List<|Value|>(scratch), .starts = List<|Sz|>(scratch),
-        .columns = List<|Sz|>(scratch) }
-
-priv fn shows_files(from: Sz, to: Sz): Bool //< whether an include, image or functions file is there
-    if fetched == null
-        return false
-    for b in Range(from, to, 1)
-        kind: = ed.doc.blocks.get(b).kind
-        if kind == .include || kind == .image || kind == .functions
-            return true
-    return false
-
-fn text_in(len: Sz): U8[] //< the text the script wrote into the input buffer
-    if len <= 0 || input == null
-        return ""
-    return U8[]::{ .ptr = input, .len = len if len <= input_cap else input_cap }
 
 priv fn spot(place: I32, block: Sz, item: Sz, offset: Sz): Spot
     p: Place = .text if place == 0 else .block_gap if place == 1 else .item_gap

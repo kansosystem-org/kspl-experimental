@@ -795,3 +795,29 @@ fn main()
         return
     default
         return
+// ==== case move_only_in_immutable_array
+//< An array is `Move_only` where its element only derives the marker, also on an immutable binding
+//< An immutable binding's array holds `const` elements, and the walk over a value's parts found
+//< none under the qualifier. So `eat(a) + eat(a)` copied the handle twice, and a `const` array of
+//< optional atomics passed.
+// EXPECT: move_only_in_immutable_array.kspl:25:23: error: variable 'a' was moved out of and cannot be used again
+// EXPECT: move_only_in_immutable_array.kspl:18:12: error: const 'B' holds 'std.thread.Atomic_sz?[2]'
+// EXPECT: Finished with 2 error(s)
+import "std/thread" { Atomic_sz }
+
+priv struct H
+  n: I32
+
+impl H: Move_only {}
+
+priv struct W
+  h: H
+
+priv const B: Atomic_sz?[2] = ::{}
+
+priv fn eat(x: W[1]): I32
+  return x[0].h.n
+
+fn main(): I32
+  a: W[1] = ::{}
+  return eat(a) + eat(a)

@@ -1,0 +1,43 @@
+//< The editor's action on the shapes drawn over an image or a chart
+//< Drawings never change in place. New drawings make a new entry in `Document.images` or
+//< `Document.charts`, and the block points at it, so undo swaps the block back, as for a chart.
+import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
+import "ksmd/edit/history" { begin }
+import "ksmd/edit/region" { Unit, gap_spot, whole_unit }
+import "ksmd/model/model" { Drawing }
+import "ksmd/syntax/drawing" { drawings_of }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+impl Editor
+    fn set_drawings(ed: Self$@, block: Sz, text: U8[]): Void!Refused //<
+        //< Gives an image or a chart the drawings `text` writes, as its clause's `draw` lines, as
+        //< one step. What the reader would refuse is refused here, so the file reads back.
+        if block < 0 || block >= ed.doc.blocks.len
+            throw .not_whole
+        $b: = ed.doc.blocks.get(block)
+        if b.kind != .image && b.kind != .chart
+            throw .not_whole
+        $drawings: = List<|Drawing|>(ed.arena)
+        drawings_of(ed.arena.dup_str(text), drawings@, ed.arena) catch
+            throw .no_read_back
+        if b.kind == .image
+            $image: = ed.doc.images.get(b.first)
+            image.drawings = drawings
+            ed.doc.images.push(image)
+            b.first = ed.doc.images.len - 1
+        else
+            $chart: = ed.doc.charts[b.first]
+            chart.drawings = drawings
+            ed.doc.charts.push(chart)
+            b.first = ed.doc.charts.len - 1
+        defer scratch: = Arena(16 * 1024)
+        s: = gap_spot(block)
+        e: = gap_spot(block + 1)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        $frag: = List<|Unit|>(scratch)
+        frag.push(whole_unit(b, scratch))
+        r: = replace(w@, frag@, scratch)
+        $tx: = begin(ed.selection(), ed.arena)
+        ed.commit(w@, tx@, r.caret, r.caret, scratch)!
+        ed.finish(tx, .other, false)!

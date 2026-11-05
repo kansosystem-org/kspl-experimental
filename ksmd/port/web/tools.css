@@ -1,5 +1,5 @@
-/* ksmd page: the look of the tools over a whole document or a range of cells, of the outline of
-   a table's groups of rows, and of the Save As and Open dialog. */
+/* ksmd page: the look of the tools over a whole document or a range of cells, of a wide table and
+   the outline of a table's groups, and of the Save As and Open dialog. */
 /* The find bar, under the menu bar and the quick access bar. */
 .find {
   display: flex;
@@ -59,15 +59,16 @@
   box-shadow: inset 0 0 0 9999px var(--found-now);
 }
 
-/* The square at a range's lower right corner, which a drag fills from. */
+/* The square at a range's lower right corner, which a drag fills from. It stands inside the
+   corner cell, which cuts what passes its edge (`sizes.js`). */
 .table .corner {
   position: relative;
 }
 
 .fill-handle {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
+  right: 0;
+  bottom: 0;
   width: 7px;
   height: 7px;
   background: var(--mark);
@@ -296,6 +297,57 @@ body.with-contents {
   padding: 2px 12px;
 }
 
+/* The row numbers and the first column stay in sight while the page scrolls sideways, so a wide
+   row keeps its name, as a spreadsheet's frozen first column does. The first column stands right
+   of the row numbers, whose width `table.js` measures into `--first-left`. A cell that stays takes
+   the paper's ground, so the cells passing beneath do not show through. */
+.table tr > :first-child,
+.table tr > :nth-child(2) {
+  position: sticky;
+  left: 0;
+}
+
+.table tr > :nth-child(2) {
+  left: var(--first-left, 0px);
+}
+
+/* Above the cells that pass beneath, a chosen cell among them. */
+.table tbody tr > :first-child,
+.table tbody tr > :nth-child(2),
+.table thead th:first-child,
+.table thead th:nth-child(2) {
+  z-index: 1;
+}
+
+/* The headings hold positioned parts, the column edge and the filter arrow, and stay too. */
+.table th.letter:nth-child(2),
+.table th.name:nth-child(2) {
+  position: sticky;
+}
+
+.table tbody td:nth-child(2):not(.looked) {
+  background-color: var(--paper);
+}
+
+/* A hidden group's columns (`outline.js`). */
+.table .col-folded {
+  display: none;
+}
+
+/* One line per cell, a choice of the View menu kept by this browser (`core.js`): a long text is
+   cut at its cell's edge, as a spreadsheet's is, so every row is one line tall. The whole text
+   shows while the cell is edited. */
+body.one-line .table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.one-line .table td:has(.cell-input) {
+  white-space: normal;
+  overflow: visible;
+}
+
 /* A table's outline: one slot per level of groups, left of the row number (`outline.js`). */
 .table .outline {
   display: inline-flex;
@@ -324,6 +376,40 @@ body.with-contents {
   bottom: 50%;
   width: 5px;
   border-bottom: 1px solid var(--muted);
+}
+
+/* The columns' outline: one slot per level, above the column letters, each as wide as its cell. A
+   shown group's line runs above its columns, and its button stands over the column before it. */
+.table .outline-cols {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -6px 2px;
+}
+
+.table .outline-cols .outline-slot {
+  display: flex;
+  justify-content: flex-end;
+  width: auto;
+  height: 14px;
+  min-height: 0;
+}
+
+.table .outline-cols .outline-line::before,
+.table .outline-cols .outline-end::before {
+  top: 6px;
+  bottom: auto;
+  left: -1px;
+  right: -1px;
+  width: auto;
+  border-left: none;
+  border-bottom: none;
+  border-top: 1px solid var(--muted);
+}
+
+.table .outline-cols .outline-end::before {
+  right: 50%;
+  height: 5px;
+  border-right: 1px solid var(--muted);
 }
 
 .table .outline-toggle {
@@ -379,6 +465,65 @@ body.with-contents {
   display: flex;
   gap: 4px;
   justify-content: flex-end;
+}
+
+/* An image's or a chart's picture, and the layer of shapes drawn over it in the picture's own
+   pixels (`drawings.js`). The layer takes presses only on its shapes, or while a tool draws. */
+.picture {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.chart .picture {
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+.picture svg.drawings {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+body:not(.read-only) .picture svg.drawings .drawing {
+  pointer-events: visiblePainted;
+  cursor: move;
+}
+
+body:not(.read-only) .drawing-now svg.drawings {
+  pointer-events: all;
+  cursor: crosshair;
+}
+
+.drawing-text {
+  font-family: system-ui, sans-serif;
+}
+
+.draw-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.draw-tools button,
+.draw-tools select {
+  font: inherit;
+  padding: 0 6px;
+}
+
+.draw-tools button[aria-pressed="true"] {
+  background: var(--range);
+  border-color: var(--mark);
+}
+
+.include .draw-tools {
+  display: none;
 }
 
 .chart figcaption {

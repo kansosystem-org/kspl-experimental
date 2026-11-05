@@ -4,9 +4,9 @@
 //< or 2 for an open or a ticked box. Text is a list of segments `{"t":…,"m":…,"l":…}`: `m` adds 1
 //< for emphasis, 2 strong, 4 code; `l` is a link's destination; a hard break is `{"br":1}`. A cell
 //< is `[kind]` or `[kind, value]`: 0 empty, 1 number, 2 text, 3 an error's mark, 4 a truth value,
-//< 5 a date. A spot is `[place, block, item, offset]`: place 0 text, 1 a block's gap, 2 an item's.
-//< An include and an image add where their path leads (`to`) and any problem (`why`), and an
-//< include its file's blocks (`inside`).
+//< 5 a date; a number adds its shown text (`cell`). A spot is `[place, block, item, offset]`:
+//< place 0 text, 1 a block's gap, 2 an item's. An include and an image add where their path leads
+//< (`to`) and any problem (`why`), and an include its file's blocks (`inside`).
 //< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
 import "ksmd/base/dates" { write_date, write_date_with }
 import "ksmd/base/keyed" { Keyed }
@@ -17,12 +17,13 @@ import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/region" { Spot, Style, Unit, gather }
 import "ksmd/edit/styled" { Seg }
 import "ksmd/files/assemble" { Assembly, NONE }
-import "ksmd/model/format" { Number_format, no_format, show, shows_numbers }
+import "ksmd/model/choice" { colours_in, name_of }
+import "ksmd/model/format" { Number_format, no_format, show, show_plain, shows_numbers }
 import "ksmd/model/group" { depths }
 import "ksmd/model/look" { is_plain }
-import "ksmd/model/model" { Block_kind, Chart, Document, UNBOUND }
+import "ksmd/model/model" { Block_kind, Chart, Diagram, Document, Drawing, Table, UNBOUND }
 import "ksmd/model/rule" { no_rule }
-import "ksmd/syntax/chart" { column_at }
+import "ksmd/syntax/chart" { column_at, row_named, split_names }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -70,21 +71,30 @@ fn blocks(ed: Editor@, from: Sz, to: Sz, values: Results@, inside: Inside$@, out
         block(ed.doc@, b, values, out, scratch, inside, entry)
     out.c(']')
 
-fn tables(ed: Editor@, from: Sz, to: Sz, values: Results@, out: Str_builder$@) //<
-    //< Each table and chart block outside `from` to `to`, as a JSON list of `[block, block's JSON]`
-    //< A chart draws a table's values, so it is shown again whenever the tables are.
+fn tables( //< each table and chart block outside `from` to `to`, as a JSON list
+    //< Each entry is `[block, block's JSON]`. A chart draws a table's values, so it is shown again
+    //< whenever the tables are. With `inside`, each block that shows a fetched file is listed too.
+    ed: Editor@,
+    from: Sz,
+    to: Sz,
+    values: Results@,
+    inside: Inside$@, //< what was fetched, or null to list the tables and charts alone
+    out: Str_builder$@,
+)
     defer scratch: = Arena(16 * 1024)
     out.c('[')
     $first: = true
     for b in Range.asc(ed.doc.blocks.len)
         kind: = ed.doc.blocks.get(b).kind
-        if b >= from && b < to || kind != .table && kind != .chart
+        file: = kind == .include || kind == .image || kind == .functions
+        if b >= from && b < to || kind != .table && kind != .chart && !(file && inside != null)
             continue
         if !first
             out.c(',')
         first = false
         out.s("[\{b\},")
-        block(ed.doc@, b, values, out, scratch, null, NONE)
+        entry: = inside.top.get(b) if inside != null && b < inside.top.len else NONE
+        block(ed.doc@, b, values, out, scratch, inside, entry)
         out.c(']')
     out.c(']')
 
@@ -129,6 +139,10 @@ priv fn kind_letter(kind: Block_kind): U8[]
         return "d"
     case .functions
         return "f"
+    case .document
+        return "s"
+    case .diagram
+        return "x"
 
 priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
     inside: Inside$@, entry: Sz) //<
@@ -175,6 +189,7 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         table(doc, x.first, values, out)
     case .chart
         chart(doc, doc.charts[x.first]@, values, out)
+        drawings(doc.charts[x.first].drawings@, out)
     case .divider {}
     case .image
         image: = doc.images.get(x.first)
@@ -184,6 +199,7 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         text(image.alt, out)
         out.s(",\"cap\":")
         text(image.caption, out)
+        drawings(image.drawings@, out)
         if entry != NONE
             aim(inside, entry, out)
     case .include
@@ -197,6 +213,21 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         text(x.text, out)
         if entry != NONE
             aim(inside, entry, out)
+    case .diagram
+        diagram(doc.diagrams[x.first]@, out)
+    case .document
+        // The settings as the page sets them up: paper, header, footer, numbers and labels.
+        st: = doc.settings[x.first]
+        out.s(",\"paper\":")
+        text(st.paper, out)
+        out.s(",\"land\":\{1 if st.landscape else 0\},\"header\":")
+        text(st.header, out)
+        out.s(",\"footer\":")
+        text(st.footer, out)
+        out.s(",\"numbers\":\{st.numbers\},\"tl\":")
+        text(st.table_label, out)
+        out.s(",\"fl\":")
+        text(st.figure_label, out)
     out.c('}')
 
 priv fn aim(inside: Inside@, entry: Sz, out: Str_builder$@) //<
@@ -262,17 +293,31 @@ priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
     out.c(']')
 
 priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
-    //< `"name"`, the column weights `"w"`, the rows' heights `"h"`, the columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`)
-    //< and columns (`"ci"`), the groups of rows (`"g"`), and each data row's values
+    //< `"name"`, the columns' widths in tenths of a character `"w"`, the rows' heights `"h"`, the
+    //< columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`) and columns
+    //< (`"ci"`), the groups of rows (`"g"`) and of columns (`"cg"`), and each data row's values
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
     text(t.name, out)
+    out.s(",\"cap\":")
+    text(t.caption, out)
+    // The places of the columns whose repeated values show once, from the left.
+    out.s(",\"mg\":[")
+    $merged_any: = false
+    for c in Range.asc(t.columns.len)
+        for id in t.merged
+            if id == t.columns[c]
+                if merged_any
+                    out.c(',')
+                merged_any = true
+                out.s("\{c\}")
+    out.c(']')
     out.s(",\"w\":[")
-    for i in Range.asc(t.weights.len)
+    for i in Range.asc(t.widths.len)
         if i > 0
             out.c(',')
-        out.s("\{t.weights[i]\}")
-    // Each data row's least height in points, 0 for none.
+        out.s("\{t.widths[i]\}")
+    // Each data row's height in points, 0 for none.
     out.s("],\"h\":[")
     defer tall: = Arena(16 * 1024)
     $by_id: = List<|Sz|>(tall)
@@ -307,14 +352,15 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         if any
             out.c(',')
         any = true
-        // [row, column, colour, fill, size in half points, alignment]; row -1 is the names.
+        // [row, column, colour, fill, size in half points, alignment, wrap 1 or 0]; row -1 is
+        // the names.
         out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
         text(l.color, out)
         out.c(',')
         text(l.fill, out)
         out.s(",\{l.size\},")
         text(l.align.name(), out)
-        out.c(']')
+        out.s(",1]" if l.wrap else ",0]")
     // Each note as [row, column, text].
     out.s("],\"notes\":[")
     $noted: = false
@@ -327,13 +373,27 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
         text(t.cells[i].note, out)
         out.c(']')
+    // Each link as [row, column, destination].
+    out.s("],\"links\":[")
+    $linked: = false
+    for i in Range.asc(t.cells.len)
+        if t.cells[i].link.len == 0
+            continue
+        if linked
+            out.c(',')
+        linked = true
+        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
+        text(t.cells[i].link, out)
+        out.c(']')
     // The identities of the rows and columns, which a range of chosen cells keeps to.
     out.s("],\"ri\":[")
     ids(t.rows@, out)
     out.s("],\"ci\":[")
     ids(t.columns@, out)
-    // Each column's choices, a list of texts, empty for a column that takes any value.
+    // Each column's choices, a list of [text, colour, fill], empty for a column that takes any
+    // value; a choice without colours has empty ones.
     out.s("],\"ch\":[")
+    defer tints: = Arena(1024)
     for c in Range.asc(t.columns.len)
         if c > 0
             out.c(',')
@@ -345,11 +405,26 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
                 if entry.len > 0 && (i == entry.len || entry[i] == '|')
                     if start > 0
                         out.c(',')
-                    text(entry.sub(start, i - start), out)
+                    piece: = entry.sub(start, i - start)
+                    colours: = colours_in(piece, tints)
+                    out.c('[')
+                    text(name_of(piece), out)
+                    out.c(',')
+                    text(colours.color, out)
+                    out.c(',')
+                    text(colours.fill, out)
+                    out.c(']')
                     start = i + 1
         out.c(']')
+    // The place of the column whose choices colour whole rows, or -1.
+    out.s("],\"rc\":")
+    $rc: Sz = -1
+    for c in Range.asc(t.columns.len)
+        if t.columns[c] == t.row_colors
+            rc = c
+    out.s("\{rc\}")
     // Each column's colour rule as [condition, value, colour, fill], or null for none.
-    out.s("],\"ru\":[")
+    out.s(",\"ru\":[")
     for c in Range.asc(t.columns.len)
         if c > 0
             out.c(',')
@@ -376,6 +451,15 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         if i > 0
             out.c(',')
         out.s("[\{g.first\},\{g.last\},\{1 if g.closed else 0\},\{deep[i]\}]")
+    // The groups of columns in the same form.
+    out.s("],\"cg\":[")
+    deep.clear()
+    depths(t.column_groups@, deep@)
+    for i in Range.asc(t.column_groups.len)
+        g: = t.column_groups[i]
+        if i > 0
+            out.c(',')
+        out.s("[\{g.first\},\{g.last\},\{1 if g.closed else 0\},\{deep[i]\}]")
     out.s("],\"rows\":[")
     for r in Range.asc(t.rows.len)
         if r > 0
@@ -391,11 +475,27 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         out.c(']')
     out.s("]")
 
+priv fn drawings(list: List<|Drawing|>@, out: Str_builder$@) //<
+    //< `"dr"`: each shape drawn over an image or a chart, as [shape, x1, y1, x2, y2, colour, text]
+    out.s(",\"dr\":[")
+    for i in Range.asc(list.len)
+        d: = list[i]
+        if i > 0
+            out.c(',')
+        out.c('[')
+        text(d.shape.variant_name(), out)
+        out.s(",\{d.x1\},\{d.y1\},\{d.x2\},\{d.y2\},")
+        text(d.color, out)
+        out.c(',')
+        text(d.text, out)
+        out.c(']')
+    out.c(']')
+
 priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) //<
-    //< `"kind"`, `"title"`, the table's place `"u"` and columns' names `"cols"`, the labels
-    //< column's place `"l"` and the drawn columns' `"v"`, then each row's label (`"lab"`) and each
-    //< drawn column's numbers (`"ser"`, null for a cell that holds none). `"why"` says what is
-    //< missing where the chart cannot be drawn.
+    //< `"kind"`, `"title"`, the table's place `"u"` and columns' names `"cols"`, the rows that can
+    //< be series (`"sr"`, by `series_rows`), the labels column's place `"l"` and the drawn columns'
+    //< `"v"`, then each row's label (`"lab"`) and each drawn column's numbers (`"ser"`, null for a
+    //< cell that holds none). `"why"` says what is missing where the chart cannot be drawn.
     out.s(",\"kind\":\"").s("bar" if c.kind == .bar else "line").s("\",\"title\":")
     text(c.title, out)
     bound: =
@@ -413,9 +513,14 @@ priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) /
         if k > 0
             out.c(',')
         text(t.cells[k].text, out)
+    out.c(']')
+    series_rows(t, out)
     labels: = column_at(t, c.labels)
+    if c.by_rows
+        rows_chart(c, t, labels, values, out)
+        return
     $missing: U8[] = c.label_name if labels == UNBOUND else ""
-    out.s("],\"l\":\{labels\},\"v\":[")
+    out.s(",\"l\":\{labels\},\"v\":[")
     for j in Range.asc(c.series.len)
         at: = column_at(t, c.series[j])
         if at == UNBOUND && missing.len == 0
@@ -453,6 +558,87 @@ priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) /
         out.s("]}")
     out.c(']')
 
+priv fn series_rows(t: Table@, out: Str_builder$@) //<
+    //< `"sr"`: for each column, the rows whose text there can name a series of a chart by rows
+    //< The editor takes a row whose cell holds text in the source, not a value calculated there.
+    //< The saved chart finds a row again by that name, so the name must split as one, and the
+    //< first row of the name is the one found.
+    out.s(",\"sr\":[")
+    for k in Range.asc(t.columns.len)
+        if k > 0
+            out.c(',')
+        out.c('[')
+        defer scratch: = Arena(1024)
+        $names: = List<|U8[]|>(scratch)
+        $seen: = Keyed<|Bool|>(scratch)
+        $first: = true
+        for r in Range.asc(t.rows.len)
+            cell: = t.cells[t.at(r, k)]
+            if cell.kind != .text || seen.get(cell.text).is_some()
+                continue
+            seen.set(cell.text, true)
+            names.clear()
+            if !split_names(cell.text, names@) || names.len != 1
+                continue
+            if !first
+                out.c(',')
+            first = false
+            out.s("\{r\}")
+        out.c(']')
+    out.c(']')
+
+priv fn rows_chart(c: Chart@, t: Table@, labels: Sz, values: Results@, out: Str_builder$@) //<
+    //< The rest of a chart by rows: `"r":1`, the first and last columns' places `"f"` and `"e"`,
+    //< the drawn rows' places `"v"`, then the columns' names as the points' labels (`"lab"`) and
+    //< each row's numbers across them (`"ser"`)
+    a: = column_at(t, c.from)
+    b: = column_at(t, c.to)
+    out.s(",\"r\":1,\"l\":\{labels\},\"f\":\{a\},\"e\":\{b\},\"v\":[")
+    defer $why: = Str_builder()
+    if labels == UNBOUND
+        why.s("No column named \"").s(c.label_name).s("\" stands in table \"").s(t.name).s("\".")
+    else if a == UNBOUND || b == UNBOUND
+        missing: = c.from_name if a == UNBOUND else c.to_name
+        why.s("No column named \"").s(missing).s("\" stands in table \"").s(t.name).s("\".")
+    for j in Range.asc(c.series_names.len)
+        at: = UNBOUND if labels == UNBOUND else row_named(t, labels, c.series_names[j])
+        if at == UNBOUND && why.slice().len == 0
+            why.s("No row named \"").s(c.series_names[j]).s("\" stands in column \"")
+                .s(c.label_name).s("\".")
+        if j > 0
+            out.c(',')
+        out.s("\{at\}")
+    out.c(']')
+    if why.slice().len > 0
+        out.s(",\"why\":")
+        text(why.slice(), out)
+        return
+    low: = a if a <= b else b
+    high: = b if a <= b else a
+    out.s(",\"lab\":[")
+    for k in Range(low, high + 1, 1)
+        if k > low
+            out.c(',')
+        text(t.cells[k].text, out)
+    out.s("],\"ser\":[")
+    for j in Range.asc(c.series_names.len)
+        r: = row_named(t, labels, c.series_names[j])
+        if j > 0
+            out.c(',')
+        out.s("{\"n\":")
+        text(c.series_names[j], out)
+        out.s(",\"v\":[")
+        for k in Range(low, high + 1, 1)
+            if k > low
+                out.c(',')
+            v: = values.at(c.table, r, k)
+            if v.kind == .number
+                out.s("\{v.number\}")
+            else
+                out.s("null")
+        out.s("]}")
+    out.c(']')
+
 priv fn label(v: Value, out: Str_builder$@) //< a value as a chart's label shows it
     switch v.kind
     case .number
@@ -477,18 +663,19 @@ priv fn ids(list: List<|Sz|>@, out: Str_builder$@) //< numbers separated by comm
         out.s("\{list[i]\}")
 
 priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
-    //< `[kind, value]`; a number in a column with a format adds the text the format shows, and a
-    //< date is `[5, "2026-10-23"]`
+    //< `[kind, value]`; a number adds the text it shows, then its text without a format if it has
+    //< one (`[1,1234.5,"1,234.50","1234.5"]`), and a date is `[5, "2026-10-23"]`
+    //< **The page writes no number itself**, so a cell and `text(A1, "")` show the same digits.
     switch v.kind
     case .empty
         out.s("[0]")
     case .number
-        out.s("[1,\{v.number\}")
+        out.s("[1,\{v.number\},\"")
         if shows_numbers(f)
-            out.s(",\"")
             show(v.number, f, out)
-            out.c('"')
-        out.c(']')
+            out.s("\",\"")
+        show_plain(v.number, out)
+        out.s("\"]")
     case .text
         out.s("[2,")
         text(v.text, out)
@@ -510,3 +697,39 @@ priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
 
 priv fn text(s: U8[], out: Str_builder$@) //< a JSON string
     out.c('"').escape_and_append(s).c('"')
+
+priv fn diagram(d: Diagram@, out: Str_builder$@) //<
+    //< `"size":[w,h]`, `"cap"`, each shape as `[id,kind,x,y,w,h,text,mono,color,fill]` in `"fig"`,
+    //< and each arrow or line as `[kind,from,to,text,color,[x,y,…]]` in `"ln"`, its ends by place
+    out.s(",\"size\":[\{d.width\},\{d.height\}],\"cap\":")
+    text(d.caption, out)
+    out.s(",\"fig\":[")
+    for i in Range.asc(d.figures.len)
+        f: = d.figures[i]@
+        if i > 0
+            out.c(',')
+        out.c('[')
+        text(f.id, out)
+        out.s(",\"").s(f.kind.variant_name()).s("\",\{f.x\},\{f.y\},\{f.w\},\{f.h\},")
+        text(f.text, out)
+        out.s(",\{1 if f.mono else 0\},")
+        text(f.color, out)
+        out.c(',')
+        text(f.fill, out)
+        out.c(']')
+    out.s("],\"ln\":[")
+    for i in Range.asc(d.links.len)
+        k: = d.links[i]@
+        if i > 0
+            out.c(',')
+        out.s("[\"").s(k.kind.variant_name()).s("\",\{k.from\},\{k.to\},")
+        text(k.text, out)
+        out.c(',')
+        text(k.color, out)
+        out.s(",[")
+        for j in Range.asc(k.bends.len)
+            if j > 0
+                out.c(',')
+            out.s("\{k.bends[j]\}")
+        out.s("]]")
+    out.c(']')

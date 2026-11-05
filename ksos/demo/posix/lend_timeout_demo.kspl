@@ -1,0 +1,45 @@
+//< A mutex waiter's timeout gives back the priority it lent (a POSIX host)
+//< The holder (priority 1) holds the mutex; the waiter (priority 5) waits for it with a timeout,
+//< which lends the holder priority 5. **At the timeout the loan ends**, in the tick itself: the
+//< waiter may be deleted or suspended before it runs its recheck, and the holder must not keep
+//< priority 5 with nobody waiting. A task of priority 6, woken in the same tick, checks that and
+//< then deletes the waiter.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/verdict"
+
+$g_m: sync.Mutex
+$tcb_h: Task
+$tcb_w: Task
+$tcb_x: Task
+$stack_h: U8[65536]
+$stack_w: U8[65536]
+$stack_x: U8[65536]
+
+fn holder(_a: Void$@): Void //< priority 1: takes the mutex and holds it until tick 20
+    g_m.lock()
+    Task.delay(20)
+    verdict.check("the holder is back at its own priority while it still holds the mutex",
+        tcb_h.get_prio() == 1, "")
+    g_m.unlock()
+
+fn waiter(_a: Void$@): Void //< priority 5: from tick 1, waits 9 ticks for the mutex
+    Task.delay(1)
+    _got: = g_m.lock_for(9)
+
+fn checker(_a: Void$@): Void //< priority 6: wakes at tick 10, the tick the waiter gives up in
+    Task.delay(10)
+    verdict.check("in the tick the waiter gives up, the holder is back at its own priority",
+        tcb_h.get_prio() == 1, "")
+    tcb_w.delete()
+    verdict.check("and deleting the waiter before its recheck leaves it there",
+        tcb_h.get_prio() == 1, "")
+
+fn main(): I32
+    verdict.begin("ksos lend_timeout")
+    g_m.init()
+    tcb_h.create(U8$[]::stack_h, holder, null, 1, "holder")
+    tcb_w.create(U8$[]::stack_w, waiter, null, 5, "waiter")
+    tcb_x.create(U8$[]::stack_x, checker, null, 6, "checker")
+    task.start_scheduler()
+    return verdict.finish()

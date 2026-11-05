@@ -17,6 +17,7 @@ import "ksplc/sema/body/fixed_answer" as sema_body_fixed_answer
 import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
 import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
+import "ksplc/sema/decl/access" as _sema_decl_access // `refuse_writing_receiver`
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
@@ -247,6 +248,7 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         case .user(method_sym)
             node.def_node = method_sym.node
             ctx.refuse_packed_receiver(left_node, method_sym.node, op_text)
+            ctx.refuse_writing_receiver(left_node, method_sym.node, op_text)
             if !right_done
                 right_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
             node.type_id = method_sym.type_id
@@ -401,11 +403,45 @@ priv fn refuses_operand_types(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], 
         ctx.err(node, ctx.scratch.slice())
         return true
 
+    if is_number_op(op_text, is_shift)
+        if refuses_enum_operand(ctx, node, written, left_type_id) ||
+            refuses_enum_operand(ctx, node, written, right_type_id)
+            return true
+
     if (ctx.env.is_float(left_type_id) || ctx.env.is_float(right_type_id)) &&
         reject_float_remainder(ctx, node,
         left_type_id if ctx.env.is_float(left_type_id) else right_type_id, written)
         return true
     return false
+
+priv fn is_number_op(op_text: U8[], is_shift: Bool): Bool //<
+    //< Whether the operator computes a number: arithmetic, a bit operation or a shift
+    //< Caution: **List the operators explicitly**, for the reason `is_bool_arith_operand` gives.
+    return is_shift || op_text.equals("+") || op_text.equals("-") || op_text.equals("*") ||
+        op_text.equals("/") || op_text.equals("%") || op_text.equals("&") ||
+        op_text.equals("|") || op_text.equals("^")
+
+fn refuses_enum_operand(ctx: Sema_ctx$@, node: Ast_node$@, written: U8[], type_id: I32): Bool //<
+    //< Whether it reported a simple enum given to an operator that computes a number
+    //< Computed on, `E.big + E.one` makes a value that is no variant, and skips an integer's wrap
+    //< and its stops on a zero divisor or a wide shift. The cast to the base type keeps the
+    //< arithmetic ("3.4 Enums (`enum`)" in docs/SPEC-programming-language.md). The unary `-` and
+    //< `~` ask it too (`sema/body/expr.kspl`).
+    switch ctx.env.get_info(ctx.env.get_clean_real_type(type_id))
+    case .enum_type(def)
+        if !def.is_scalar()
+            return false
+        shown: = ctx.env.display(type_id)
+        base: = ctx.env.display(def.base_type_id)
+        ctx.clear_scratch()
+            .s("Operator '\{written\}' cannot be applied to the enum '\{shown\}'. An enum value \
+                names a variant, not a number, so only '==' '!=' '<' '<=' '>' '>=' apply to it. For \
+                arithmetic, cast it to its base type first ('\{base\}::e'); a cast back \
+                ('\{shown\}::n') checks that the result is a tag")
+        ctx.err(node, ctx.scratch.slice())
+        return true
+    default
+        return false
 
 priv fn refuses_slice_operand(ctx: Sema_ctx$@, node: Ast_node$@, written: U8[], type_id: I32): Bool //<
     //< Whether it reported an operator on a slice
@@ -447,10 +483,11 @@ priv fn op_trait_name(op: U8[], is_unary: Bool): U8[] //< the std/lang trait op 
 fn refuses_operator_operand(ctx: Sema_ctx$@, node: Ast_node$@, op: U8[], type_id: I32,
     is_unary: Bool): Bool //<
         //< Whether it reported an operand no built-in operator takes, and the operator traits miss
-        //< An operator applies to numbers, `Bool`, simple enums and pointers. A struct, a tagged
-        //< union, an array or a trait value has no C operator, so letting one through gives the C
-        //< compiler's `invalid operands` (Principle 5). The caller asks after an operator trait
-        //< found no implementation, on each operand. A type parameter is not one of these kinds.
+        //< An operator applies to numbers, `Bool`, simple enums and pointers (a simple enum takes
+        //< only the comparisons: `refuses_enum_operand`). A struct, a tagged union, an array or a
+        //< trait value has no C operator, so letting one through gives the C compiler's `invalid
+        //< operands` (Principle 5). The caller asks after an operator trait found no
+        //< implementation, on each operand. A type parameter is not one of these kinds.
     if refuses_slice_operand(ctx, node, op, type_id)
         return true
     $is_array: = false

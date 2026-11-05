@@ -24,27 +24,52 @@ fn call(name: U8[], a: Raw_args$@): Value? //<
         return .some(call_dec_to_bin(a))
     if name.equals("dec_to_hex")
         return .some(call_dec_to_hex(a))
+    if name.equals("find")
+        return .some(call_find(a))
     if name.equals("hex_to_bin")
         return .some(call_hex_to_bin(a))
     if name.equals("hex_to_dec")
         return .some(call_hex_to_dec(a))
+    if name.equals("left")
+        return .some(call_left(a))
+    if name.equals("len")
+        return .some(call_len(a))
     if name.equals("max")
         return .some(call_max(a))
+    if name.equals("mid")
+        return .some(call_mid(a))
     if name.equals("min")
         return .some(call_min(a))
+    if name.equals("mod")
+        return .some(call_mod(a))
     if name.equals("month")
         return .some(call_month(a))
+    if name.equals("power")
+        return .some(call_power(a))
+    if name.equals("right")
+        return .some(call_right(a))
     if name.equals("round")
         return .some(call_round(a))
+    if name.equals("round_down")
+        return .some(call_round_down(a))
+    if name.equals("round_up")
+        return .some(call_round_up(a))
+    if name.equals("substitute")
+        return .some(call_substitute(a))
     if name.equals("sum")
         return .some(call_sum(a))
+    if name.equals("text")
+        return .some(call_text(a))
+    if name.equals("value")
+        return .some(call_value(a))
     if name.equals("year")
         return .some(call_year(a))
     return .none
 
 const NAMES: U8[][_] = ::{ "average", "bin_to_dec", "bin_to_hex", "count", "date", "day",
-        "dec_to_bin", "dec_to_hex", "hex_to_bin", "hex_to_dec", "max", "min", "month", "round",
-        "sum", "year",
+        "dec_to_bin", "dec_to_hex", "find", "hex_to_bin", "hex_to_dec", "left", "len", "max", "mid",
+        "min", "mod", "month", "power", "right", "round", "round_down", "round_up", "substitute",
+        "sum", "text", "value", "year",
 } //< every function this table calls, by its name
 
 priv fn call_average(a: Raw_args$@): Value //< `average(…)`
@@ -171,6 +196,21 @@ priv fn call_dec_to_hex(a: Raw_args$@): Value //< `dec_to_hex(…)`
         return Value.failed(e)
     return text(r)
 
+priv fn call_find(a: Raw_args$@): Value //< `find(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_part: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.find(p_part, p_t)
+    return number(F64::r)
+
 priv fn call_hex_to_bin(a: Raw_args$@): Value //< `hex_to_bin(…)`
     $first: = First_error::{ .broken = false, .error = .syntax }
     p_digits: = a.value() catch e
@@ -209,6 +249,34 @@ priv fn call_hex_to_dec(a: Raw_args$@): Value //< `hex_to_dec(…)`
         return Value.failed(e)
     return number(F64::r)
 
+priv fn call_left(a: Raw_args$@): Value //< `left(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_count: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.left(p_t, p_count) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_len(a: Raw_args$@): Value //< `len(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.len(p_t)
+    return number(F64::r)
+
 priv fn call_max(a: Raw_args$@): Value //< `max(…)`
     p_xs: = a.rest()
     if !a.calculating()
@@ -217,6 +285,25 @@ priv fn call_max(a: Raw_args$@): Value //< `max(…)`
         return Value.failed(e)
     return r
 
+priv fn call_mid(a: Raw_args$@): Value //< `mid(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_start: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    p_count: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.mid(p_t, p_start, p_count) catch e
+        return Value.failed(e)
+    return text(r)
+
 priv fn call_min(a: Raw_args$@): Value //< `min(…)`
     p_xs: = a.rest()
     if !a.calculating()
@@ -224,6 +311,22 @@ priv fn call_min(a: Raw_args$@): Value //< `min(…)`
     r: = fns.min(p_xs) catch e
         return Value.failed(e)
     return r
+
+priv fn call_mod(a: Raw_args$@): Value //< `mod(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_x: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    p_y: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.mod(p_x, p_y) catch e
+        return Value.failed(e)
+    return number(r)
 
 priv fn call_month(a: Raw_args$@): Value //< `month(…)`
     $first: = First_error::{ .broken = false, .error = .syntax }
@@ -237,6 +340,38 @@ priv fn call_month(a: Raw_args$@): Value //< `month(…)`
     r: = fns.month(p_d) catch e
         return Value.failed(e)
     return number(r)
+
+priv fn call_power(a: Raw_args$@): Value //< `power(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_x: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    p_y: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.power(p_x, p_y) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_right(a: Raw_args$@): Value //< `right(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_count: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.right(p_t, p_count) catch e
+        return Value.failed(e)
+    return text(r)
 
 priv fn call_round(a: Raw_args$@): Value //< `round(…)`
     $first: = First_error::{ .broken = false, .error = .syntax }
@@ -254,11 +389,91 @@ priv fn call_round(a: Raw_args$@): Value //< `round(…)`
         return Value.failed(e)
     return number(r)
 
+priv fn call_round_down(a: Raw_args$@): Value //< `round_down(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_x: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    p_places: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.round_down(p_x, p_places) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_round_up(a: Raw_args$@): Value //< `round_up(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_x: = a.number() catch e
+        first.take(e)
+        fallback 0.0
+    p_places: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.round_up(p_x, p_places) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_substitute(a: Raw_args$@): Value //< `substitute(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_old: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_new: = a.text() catch e
+        first.take(e)
+        fallback ""
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.substitute(p_t, p_old, p_new, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
 priv fn call_sum(a: Raw_args$@): Value //< `sum(…)`
     p_xs: = a.rest()
     if !a.calculating()
         return empty()
     r: = fns.sum(p_xs) catch e
+        return Value.failed(e)
+    return number(r)
+
+priv fn call_text(a: Raw_args$@): Value //< `text(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_v: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    p_format: = a.text() catch e
+        first.take(e)
+        fallback ""
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.text(p_v, p_format, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_value(a: Raw_args$@): Value //< `value(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_v: = a.value() catch e
+        first.take(e)
+        fallback empty()
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.value(p_v) catch e
         return Value.failed(e)
     return number(r)
 

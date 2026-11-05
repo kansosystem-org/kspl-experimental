@@ -651,3 +651,17 @@ fn test_json_indent(arena: Arena$@) //<
     verdict
         .pass("The default stays on one line, and indentation gives the same strings as other \
             implementations.")
+
+fn test_json_obj_keys(arena: Arena$@) //< std/json: an object's keys, in the order written
+    verdict.start("[Json] an object's keys list in the order the text gave them test...")
+    doc: = json.parse("{\"b\": 1, \"a\": {\"x\": 2}, \"c\": []}", arena) catch
+        panic("the object parses")
+    keys: = doc.val.obj_keys(arena)
+    assert(keys.len == 3 && keys.get(0).equals("b") && keys.get(1).equals("a") &&
+        keys.get(2).equals("c"), "each key once, in the order written")
+    assert(doc.val.get(keys.get(1)).obj_keys(arena).len == 1, "a nested object lists its own")
+    empty: = json.parse("{}", arena) catch panic("an empty object parses")
+    assert(empty.val.obj_keys(arena).len == 0, "an empty object lists nothing")
+    list: = json.parse("[1, 2]", arena) catch panic("an array parses")
+    assert(list.val.obj_keys(arena).len == 0, "a value of another kind lists nothing")
+    verdict.pass("obj_keys walks an object as arr_list walks an array.")

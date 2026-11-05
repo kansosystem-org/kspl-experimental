@@ -33,6 +33,9 @@ priv fn weights(arena: Arena$@)
     input.fill(F32::7.0)
     $writer: = Safetensors_writer()
     writer.add("w", input)
+    // An empty tensor last starts at the data's end, with no byte left after it.
+    tail_dims: Sz[2] = ::{ 0, 4 }
+    writer.add("tail", Tensor<|F32|>(Sz[]::tail_dims, arena))
     defer $bytes: = writer.finish()
 
     file: = Safetensors.load_from_bytes(bytes.slice(), arena)
@@ -41,6 +44,9 @@ priv fn weights(arena: Arena$@)
     view: = file.get_tensor<|F32|>("w", arena) catch panic("the written tensor exists")
     assert(U8@::view.data == bytes.slice().ptr + 8 + Sz::bytes.slice().get_u64_le(0),
         "aligned weights remain zero-copy")
+    tail: = file.get_tensor<|F32|>("tail", arena) catch panic("an empty tensor at the end is read")
+    assert(tail.size == 0 && tail.shape.len == 2 && tail.shape[1] == 4,
+        "an empty tensor at the data's end keeps its shape")
 
     // Shifting the whole file by one byte makes its aligned payload misaligned.
     defer $shifted: = Str_builder()
@@ -77,6 +83,26 @@ priv fn refused_header(header: U8[], arena: Arena$@)
         refused = true
     assert(refused, "a bad dimension or data range is refused")
 
+priv const SHARING: U8[] =
+    "{\"a\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[4,12]}}" //<
+        //< Two tensors over the bytes 4 to 8
+priv const SIDE_BY_SIDE: U8[] =
+    "{\"a\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[8,16]}}" //<
+        //< Two tensors that touch and share nothing
+
+priv fn sharing_tensors(arena: Arena$@) //< two tensors over one byte are refused at load
+    //< Read in place, they would change together: training one would change the other.
+    for header in U8[][]::{ SHARING, SIDE_BY_SIDE }
+        defer $bytes: = Str_builder()
+        $prefix: U8[8] = ::{}
+        (U8$[]::prefix).put_u64_le(0, U64::header.len)
+        bytes.s(U8[]::prefix).s(header).s("0123456789012345")
+        $refused: = false
+        _file: = Safetensors.load_from_bytes(bytes.slice(), arena) catch
+            refused = true
+        assert(refused == header.equals(SHARING),
+            "tensors sharing a byte are refused at load, and tensors side by side are read")
+
 priv fn adapters(arena: Arena$@)
     dims: Sz[2] = ::{ 1, 1 }
     matrix: = Tensor<|F32|>(Sz[]::dims, arena)
@@ -110,6 +136,34 @@ priv fn adapters(arena: Arena$@)
                     refused = true
             assert(refused, "missing B, an empty scale and a missing second adapter are refused")
 
+priv fn rank_zero_adapter(arena: Arena$@) //<
+    //< An adapter of rank 0 is refused at load, by name, and not at its first forward pass
+    a_dims: Sz[2] = ::{ 1, 0 }
+    b_dims: Sz[2] = ::{ 0, 1 }
+    one: Sz[1] = ::{ 1 }
+    scale: = Tensor<|F32|>(Sz[]::one, arena)
+    scale.fill(F32::1.0)
+    $writer: = Safetensors_writer()
+    defer $key: = Str_builder()
+    for name in U8[][]::{ "q", "v" }
+        key.clear().s("blocks.0.attn.\{name\}.lora_a")
+        writer.add(key.slice(), Tensor<|F32|>(Sz[]::a_dims, arena))
+        key.clear().s("blocks.0.attn.\{name\}.lora_b")
+        writer.add(key.slice(), Tensor<|F32|>(Sz[]::b_dims, arena))
+        key.clear().s("blocks.0.attn.\{name\}.lora_scale")
+        writer.add(key.slice(), scale)
+    defer $bytes: = writer.finish()
+    file: = Safetensors.load_from_bytes(bytes.slice(), arena)
+        catch panic("the rank-0 adapter has a valid file header")
+    fits: = Lora_widths::{ .in_dim = 1, .out_dim = 1 }
+    $named: U8[] = ""
+    Qkv_lora<|F32|>.load_set_from(file, 1, fits, fits, arena) catch e
+        switch e
+        case .shape_mismatch(n)
+            named = n
+        default {}
+    assert(named.equals("q"), "an adapter of rank 0 is refused as a shape mismatch, by name")
+
 fn test_ownership()
     verdict.start("[Ownership] tensors and headers share an explicit arena lifetime...")
     before: = mem.heap_used_bytes()
@@ -117,6 +171,8 @@ fn test_ownership()
     tensors(arena)
     weights(arena)
     adapters(arena)
+    rank_zero_adapter(arena)
+    sharing_tensors(arena)
     for header in U8[][]::{ "{\"w\":{\"dtype\":\"F32\",\"shape\":[-1],\"data_offsets\":[0,24]}}",
         "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[0,8]}}",
         "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[0,40]}}" }

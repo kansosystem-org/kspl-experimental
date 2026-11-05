@@ -38,11 +38,17 @@ fn run()
     lazy_choices()
     rounding()
     bases()
+    texts()
+    more_functions()
     today()
     conditional_totals()
     condition_shapes()
     conditional_cycles()
     lookups()
+    whole_columns()
+    empty_columns()
+    argument_memory()
+    long_texts()
 
 priv fn arithmetic()
     defer arena: = Arena(64 * 1024)
@@ -460,6 +466,54 @@ priv fn bases()
         "dec_to_hex(1, B2) -> #DIV/0!", "dec_to_hex() -> #SYNTAX!",
         "dec_to_hex(1, 2, 3) -> #SYNTAX!" })
 
+// The text functions count characters from 1, and `&` joins text alone: kinds still never convert.
+priv fn texts()
+    cases(U8[][]::{ "mid(\"1234 5678 90123\", 6, 4) -> \"5678\"", "mid(\"abc\", 1, 0) -> \"\"",
+        "mid(\"abc\", 3, 9) -> \"c\"", "mid(\"abc\", 4, 1) -> \"\"", "mid(\"abc\", 0, 1) -> #NUM!",
+        "mid(\"abc\", 1, -1) -> #NUM!", "mid(\"かんそ\", 2, 1) -> \"ん\"",
+        "mid(A1, 1, 1) -> #VALUE!", "mid(A2, 1, 1) -> \"\"", "mid(B1, 2, 2) -> \"en\"",
+        "mid(B2, 1, 1) -> #DIV/0!", "left(\"abc\", 2) -> \"ab\"", "left(\"abc\", 9) -> \"abc\"",
+        "left(\"abc\", -1) -> #NUM!", "right(\"abc\", 2) -> \"bc\"", "right(\"abc\", 9) -> \"abc\"",
+        "right(\"かんそ\", 1) -> \"そ\"", "right(\"abc\", -1) -> #NUM!", "len(\"abc\") -> 3",
+        "len(\"かんそ\") -> 3", "len(A2) -> 0", "len(A1) -> #VALUE!", "find(\"ns\", B1) -> 3",
+        "find(\"x\", B1) -> 0", "find(\"p\", B1) -> 0", "find(\"そ\", \"かんそ\") -> 3",
+        "find(\"\", \"abc\") -> 1", "value(\"12.5\") -> 12.5", "value(\" -3 \") -> -3",
+        "value(A1) -> 2", "value(A2) -> 0", "value(\"0x10\") -> #VALUE!", "value(B1) -> #VALUE!",
+        "value(true) -> #VALUE!", "value(\"2\") + 1 -> 3",
+        "\"24\" & mid(\"0123\", 3, 2) -> \"2423\"", "B1 & \"!\" -> \"Pens!\"", "A2 & \"x\" -> \"x\"",
+        "\"a\" & A1 -> #VALUE!", "\"a\" & B2 -> #DIV/0!", "\"a\" & \"b\" = \"AB\" -> true",
+        "\"n\" & 1 + 1 -> #VALUE!", "mod(7, 3) -> 1", "mod(-1, 72) -> 71", "mod(1, -3) -> -2",
+        "mod(5.5, 2) -> 1.5", "mod(1, 0) -> #DIV/0!", "mod(1e300, 3) -> #NUM!",
+        "power(2, 10) -> 1024", "power(4, 0.5) -> 2", "power(-1, 0.5) -> #NUM!",
+        "power(10, 400) -> #NUM!", "mod(B1, 2) -> #VALUE!" })
+
+// Rounding toward and away from zero, replacing text, writing a number as text, and the sum of
+// two ranges' products.
+priv fn more_functions()
+    cases_with(U8[][]::{ "round_down(0.97124887, 2) -> 0.97", "round_down(-2.5, 0) -> -2",
+        "round_down(0.1 + 0.2, 1) -> 0.3", "round_down(1250, -2) -> 1200",
+        "round_up(0.971, 2) -> 0.98", "round_up(-2.1, 0) -> -3", "round_up(2, 0) -> 2",
+        "round_down(0.99999999, 0) -> 0", "round_down(2.9999999, 0) -> 2",
+        "round_up(0.0000001, 0) -> 1", "round_up(1.0000001, 0) -> 2", "round_down(1, 16) -> #NUM!",
+        "round_up(B1, 1) -> #VALUE!", "substitute(\"a\\nb\\nc\", \"\\n\", \", \") -> \"a, b, c\"",
+        "substitute(\"aaa\", \"aa\", \"b\") -> \"ba\"",
+        "substitute(\"abc\", \"\", \"x\") -> \"abc\"", "substitute(A1, \"2\", \"3\") -> #VALUE!",
+        "text(date(2026, 6, 18), \"date:yyyy/mm/dd\") -> \"2026/06/18\"",
+        "text(date(2026, 6, 18), \"\") -> \"2026-06-18\"", "text(0.25, \"percent:0\") -> \"25%\"",
+        "text(1234.5, \"grouped:2\") -> \"1,234.50\"", "text(2.5, \"\") -> \"2.5\"",
+        "text(0.1 + 0.2, \"\") -> \"0.3\"", "text(-1.5, \"\") -> \"-1.5\"",
+        "text(1e20, \"\") -> \"100000000000000000000\"", "text(1e21, \"\") -> \"1e+21\"",
+        "text(123456789012345678, \"\") -> \"123456789012346000\"",
+        "text(0.000001, \"\") -> \"0.000001\"", "text(0.0000001, \"\") -> \"1e-7\"",
+        "text(-1.5e-10, \"\") -> \"-1.5e-10\"", "text(0, \"\") -> \"0\"",
+        "\"No. \" & text(A1, \"\") -> \"No. 2\"", "text(B1, \"number:2\") -> \"Pens\"",
+        "text(A2, \"\") -> \"\"", "text(1, \"nonsense\") -> #VALUE!", "text(true, \"\") -> #VALUE!",
+        "sum_product(d.B1:B3, d.C1:C3) -> 19.5", "sum_product(d.B1:B4, d.C1:C4) -> 19.5",
+        "sum_product(d.B1:B6, d.C1:C6) -> #DIV/0!", "sum_product(d.B1:B3, d.C1:C4) -> #SHAPE!",
+        "sum_product(d.B, d.C) -> #DIV/0!", "sum_product(d.B1:B3, Z1:Z3) -> #REF!",
+        "sum_product(d.B1:B3) -> #SYNTAX!", "sum_product(d.B1:B5, d.C1:C5) / sum(d.B1:B5) -> 3.25" },
+        DATA)
+
 // `today()` is the date the document was opened, as text in the form Ctrl+; types.
 priv fn today()
     cases(U8[][]::{ "today() -> @2026-10-23", "today() = date(2026, 10, 23) -> true",
@@ -561,6 +615,63 @@ priv fn conditional_cycles()
     number("a total in its own range, left out by the condition", r@, 0, 2, 1, 5.0)
     failure("a total in its own range that the condition takes", r@, 0, 3, 1, .cycle)
     number("a set of cells leaves out true and false", r@, 0, 4, 1, 5.0)
+
+// A table's whole column takes its data rows, never its names row, and serves wherever a range
+// does.
+priv fn whole_columns()
+    cases_with(U8[][]::{ "sum(d.C) -> 20.5", "count(d.A) -> 0", "sum(d.B:C) -> #DIV/0!",
+        "sum_if(d.C, d.A = \"Pens\") -> 4.5", "count_if(d.C, d.A = \"Ink\") -> 3",
+        "sum_if(d.C, d.A1:A6 = \"Pens\") -> 4.5", "sum_if(d.C, d.A1:A5 = \"Pens\") -> #SHAPE!",
+        "lookup(\"Ink\", d.A, d.C, 0) -> 8", "max(d.C) -> 8", "sum(d.Z) -> #REF!",
+        "sum(d.$C) -> 20.5", "d.C -> #SYNTAX!" }, DATA)
+
+// A table with no data rows: its whole columns hold no cells, and a condition over them takes
+// no row.
+priv fn empty_columns()
+    cases_with(U8[][]::{ "sum_if(e.B, e.A = \"a\") -> 0", "count_if(e.B, e.A = \"a\") -> 0",
+        "average_if(e.B, e.A = \"a\") -> #EMPTY!", "sum_if(e.B, round(e.A, 0) = 1) -> 0",
+        "sum(e.B) -> 0", "if(e.A = \"a\", 1, 2) -> #SYNTAX!", "round(e.A, 0) -> #SYNTAX!" },
+        "\n:::table name=\"e\"\n| \"a\" | \"b\" |\n:::\n")
+
+// A function's arguments live only while it runs. So where every row adds up a whole column, the
+// results take memory that grows with the rows, not with the cells each row reads.
+priv fn argument_memory()
+    rows: Sz = 100
+    defer $source: = Str_builder()
+    source.s("%ksmd 1\n\n:::table name=\"t\"\n| \"n\" | \"total\" | \"above\" |\n")
+    for n in Range(1, rows + 1, 1)
+        source.s("| \{n\} | =sum(t.A) | =sum_if(t.A, t.A > average(t.A)) |\n")
+    source.s(":::\n")
+    defer model: = Arena(256 * 1024)
+    doc: = read(source.slice(), model)
+    defer memory: = Arena(64 * 1024)
+    r: = calc.calculate(doc@, TODAY, memory)
+    number("a whole column added up on every row", r@, 0, rows - 1, 1, 5050.0)
+    number("the numbers above the average, on every row", r@, 0, rows - 1, 2, 3775.0)
+    used: = memory.get_total_used()
+    verdict.check("the results take at most 1 KiB for each row", used <= rows * 1024,
+        model.text().s("\{used\} bytes").take())
+
+// Text a formula makes is at most 32,767 bytes. A longer result is `#NUM!`, found before the text
+// is made.
+priv fn long_texts()
+    defer arena: = Arena(64 * 1024)
+    defer $rows: = Str_builder()
+    rows.s("| \"ab\" | |\n")
+    for n in Range(1, 16, 1)
+        rows.s("| =A\{n\} & A\{n\} | |\n")
+    rows.s("| =substitute(A10, \"a\", A10) | =len(A15) |\n| =A14 & A13 | |\n:::\n")
+    r: = results(arena.dup_str(rows.slice()), arena)
+    v: = r.at(0, 13, 0)
+    verdict.check("joined text of 16,384 bytes", v.kind == .text && v.text.len == 16384,
+        v.error.mark())
+    w: = r.at(0, 17, 0)
+    verdict.check("joined text of 24,576 bytes", w.kind == .text && w.text.len == 24576,
+        w.error.mark())
+    failure("joined text of 32,768 bytes is #NUM!", r@, 0, 14, 0, .not_finite)
+    failure("and the error carries on", r@, 0, 15, 0, .not_finite)
+    failure("text replaced past 32,767 bytes is #NUM!", r@, 0, 16, 0, .not_finite)
+    failure("a function given the long text gives its error", r@, 0, 16, 1, .not_finite)
 
 // The value beside the first key that equals the one looked for, or `otherwise`.
 priv fn lookups()

@@ -1,0 +1,53 @@
+//< The editor's actions on diagrams: an empty one at the selection, and a diagram changed whole
+//< A diagram never changes in place. A changed diagram is a new entry in `Document.diagrams`, and
+//< its block points at it, so undo swaps the block back, as for a chart.
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
+import "ksmd/edit/history" { begin }
+import "ksmd/edit/region" { Unit, gap_spot, whole_unit }
+import "ksmd/model/model" { Block, Diagram, Figure, Link }
+import "ksmd/syntax/reader"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const NEW_WIDTH: Sz = 800 //< a new diagram's size, in its own pixels
+const NEW_HEIGHT: Sz = 400
+
+impl Editor
+    fn insert_diagram(ed: Self$@): Void!Refused //< an empty diagram in place of the selection
+        ed.doc.diagrams
+            .push(Diagram::{ .width = NEW_WIDTH, .height = NEW_HEIGHT, .caption = "",
+            .figures = List<|Figure|>(ed.arena), .links = List<|Link|>(ed.arena) })
+        b: = Block::{ .kind = .diagram, .level = 0, .label = "", .text = "",
+            .first = ed.doc.diagrams.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
+            .invisible = false }
+        ed.insert_whole(b)!
+
+    fn set_diagram(ed: Self$@, block: Sz, clause: U8[]): Void!Refused //<
+        //< Gives the diagram at `block` what `clause`, a whole `:::diagram` clause, writes, as one
+        //< step. The file's reader reads it, so what it would refuse is refused here.
+        if block < 0 || block >= ed.doc.blocks.len ||
+            ed.doc.blocks.get(block).kind != .diagram
+            throw .not_whole
+        defer $whole: = Str_builder()
+        whole.s("%ksmd 1\n\n").s(clause)
+        src: = Source("diagram", ed.arena.dup_str(whole.slice())) catch
+            throw .not_a_diagram
+        read: = reader.read(src@, ed.arena) catch
+            throw .not_a_diagram
+        if read.blocks.len != 1 || read.blocks.get(0).kind != .diagram
+            throw .not_a_diagram
+        ed.doc.diagrams.push(read.diagrams[0])
+        $b: = ed.doc.blocks.get(block)
+        b.first = ed.doc.diagrams.len - 1
+        defer scratch: = Arena(16 * 1024)
+        s: = gap_spot(block)
+        e: = gap_spot(block + 1)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        $frag: = List<|Unit|>(scratch)
+        frag.push(whole_unit(b, scratch))
+        r: = replace(w@, frag@, scratch)
+        $tx: = begin(ed.selection(), ed.arena)
+        ed.commit(w@, tx@, r.caret, r.caret, scratch)!
+        ed.finish(tx, .other, false)!

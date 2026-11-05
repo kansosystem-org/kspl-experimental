@@ -532,3 +532,63 @@ fn static_init_lines(b: Str_builder$@) //< each top-level shape, read at run tim
         b.s("\{v\}\n")
     case .none
         b.s("none\n")
+
+// ==========================================
+// Shapes on which the builds once parted: a level, or a backend
+// ==========================================
+
+#noinline
+priv fn pun_word(a: I64$@, f: F64$@): I64 //<
+    //< Stores through two pointer types to one address, then reads through the first
+    //< C's strict aliasing lets `-O2` keep 5, as if `f` reached other memory; KSPL allows the
+    //< cast, so every build must read the 0 the second store left.
+    a$ = 5
+    f$ = 0.0
+    return a$
+
+#noinline
+priv fn pun_slice(s: F32$[], t: I32$[]): Bool //< the same through two slices of one array
+    s[0] = 2.0F32
+    t[0] = 0
+    return s[0] == 0.0F32
+
+priv enum Ord_u8: U8 //< tags above `I8`'s range, which order as a `U8`
+    high = 200
+    low = 10
+
+priv enum Ord_u16: U16 //< tags above `I16`'s range, which order as a `U16`
+    high = 40000
+    low = 1
+
+impl Ord_u8
+    #noinline
+    priv fn kept(e: Self): Self //< the value, through a call the optimizer does not fold
+        return e
+
+impl Ord_u16
+    #noinline
+    priv fn kept(e: Self): Self //< the value, through a call the optimizer does not fold
+        return e
+
+#packed
+priv struct Pk //< a packed struct's global initializer, which LLVM writes `<{ … }>`
+    a: U8
+    b: I32
+
+priv const PK: Pk = ::{ .a = 1, .b = -2 }
+priv $pk_var: Pk = ::{ .a = 3, .b = 4 }
+
+#raw_address
+#noinline
+priv fn addr_of(x: I32): U8@ //< a negative `I32` as an address, widened by its sign
+    return U8@::x
+
+fn parted_lines(b: Str_builder$@) //< each shape's answer, one line
+    $word: I64 = 9
+    w: = pun_word(word@, F64$@::word@)
+    $arr: F32[2] = ::{ 0.0F32, 0.0F32 }
+    s: = F32$[]::arr
+    zeroed: = pun_slice(s, I32$[]::s)
+    b.s("parted=\{w\}/\{word\}/\{zeroed\}/\{Ord_u8.high.kept() > Ord_u8.low.kept()\}/")
+        .s("\{Ord_u16.high.kept() > Ord_u16.low.kept()\}/\{PK.a\}/\{PK.b\}/\{pk_var.b\}/")
+        .s("\{Sz::addr_of(-16)\}\n")

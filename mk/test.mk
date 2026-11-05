@@ -312,7 +312,7 @@ test-llvm-abi: $(STAGE1_EXE) $(SEED_EXE)
 test-freestanding-math: $(STAGE1_EXE)
 	@echo "# RUNNING freestanding std/math vs libm numerical test"
 	./$(STAGE1_EXE) --freestanding tests/freestanding/probe.kspl $(TMP_DIR)/fm_probe.c
-	$(CC) -std=c99 -O2 -ffreestanding -ffunction-sections -fdata-sections -c $(TMP_DIR)/fm_probe.c -o $(TMP_DIR)/fm_probe.o
+	$(CC) -std=c99 -O2 -fno-strict-aliasing -ffreestanding -ffunction-sections -fdata-sections -c $(TMP_DIR)/fm_probe.c -o $(TMP_DIR)/fm_probe.o
 	$(CC) -std=c99 -O2 tests/freestanding/harness.c $(TMP_DIR)/fm_probe.o -lm \
 		$(GC_SECTIONS_FLAG) -o $(TMP_DIR)/fm_test.exe
 	./$(TMP_DIR)/fm_test.exe
@@ -348,7 +348,7 @@ simd_prog := FILENAME == src && index($$0, "`make test-simd` sees this sum") { s
 # $(call simd_check,<program>,<the .kspl its loops are in>,<stem>): builds it, then checks them
 define simd_check
 	./$(STAGE1_EXE) $(1) $(TMP_DIR)/$(3).c
-	@$(CC) -std=c99 -O3 -g -c $(TMP_DIR)/$(3).c -o $(TMP_DIR)/$(3).o -fsave-optimization-record \
+	@$(CC) -std=c99 -O3 -fno-strict-aliasing -g -c $(TMP_DIR)/$(3).c -o $(TMP_DIR)/$(3).o -fsave-optimization-record \
 		-foptimization-record-file=$(LOG_DIR)/$(3).yaml \
 		-foptimization-record-passes='loop-vectorize|slp-vectorizer'
 	@awk -v src=$(2) -v gen=$(TMP_DIR)/$(3).c -v rec=$(LOG_DIR)/$(3).yaml '$(simd_prog)' \

@@ -16,6 +16,11 @@
 
 **The menu bar holds every command: File, Edit, View, Insert, Format and Table.** Each item shows its icon, its name and its shortcut. One list in `ksmd/port/web/commands.js` gives each command its name, key and icon, and builds the menus, the right-click menu and the quick access bar. Open and Save stand in File only where the local server opens files.
 
+**A command's work stands in the script that does it, which registers it by name** (`ks.handle` in `ksmd/port/web/core.js`). The registration also says what the command needs: a chosen cell, Repeat, or nothing that edits under Read-only. That file only looks a command up, so a new command touches its list entry and its own script.
+
+* **The page does not start while a command lacks a handler, or a handler its command.** An item that does nothing would otherwise be found only by pressing it.
+* **The chosen cell has one keeper, `ksmd/port/web/table.js`.** Another script changes it through `ks.table.chooseCell`, and a plain write throws, so a wrong choice has one door to look at.
+
 * **A menu opens on a press of its name, not on pointing.** While one menu is open, pointing at another name opens that one. A flyout opens on pointing, on a press, or with Right.
 * **Esc, a press outside and a chosen command close every menu**, and the focus goes back where it was. The arrow keys move through the menus and flyouts.
 * **Edit holds Cut and Copy, which run the browser's own cut and copy.** So each acts as its key does where the focus stands, and a touch screen without keys reaches them.
@@ -30,9 +35,11 @@
 
 **A command's key stands beside its item, and the same list runs it from a cell**, so the two keys cannot differ.
 
-**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading. A press chooses a cell. A double press or F2 opens it in an input of its own. Typing on a chosen cell replaces its value. Enter, Tab and the arrow keys move the choice, passing over hidden rows. Esc drops the open cell's edit. The arrow keys past the first or last row leave the table for the gap there.
+**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading. A press chooses a cell. A double press or F2 opens it in an input of its own. Typing on a chosen cell replaces its value. Enter, Tab and the arrow keys move the choice, passing over hidden rows, except in a cell opened to edit (below). Esc drops the open cell's edit. The arrow keys past the first or last row leave the table for the gap there.
 
-**Left and Right move the caret inside a cell's text, and move to the next cell at the text's edge.** A cell opens with all its text selected, so Left and Right then move to the next cell at once.
+**Alt+Enter types a line break inside an open cell**, as in a spreadsheet, and the cell shows its lines. A line break typed into a cell that held none turns its Wrap text on, in the same step, as Excel does. Unwrapped, the lines after it would run past the column and be cut. The open cell's box is as tall as the lines it shows, those its column's width breaks included. So no line scrolls out of sight while the cell is edited.
+
+**An open cell has Excel's two modes.** A cell opened by a double press or F2 is *edited*. Every arrow key, with Shift or Ctrl or neither, then works on its text, and the caret never leaves the cell. A cell typed into is *entered*. Up and Down then take the text and move to the next cell. Left and Right move the caret inside the text, and to the next cell at its edge. F2 in an entered cell edits it. Enter, Tab and Esc act the same in both.
 
 **Sorting orders a table's data rows by the chosen cell's column, as one step of undo.** Numbers come first, smallest first, then text from A to Z without regard to case, then `false` and `true`, then errors. Descending reverses that order. Empty cells stand last either way. Rows with equal values keep their order, so a sort by one column after another sorts by both. A formula sorts by its calculated value.
 
@@ -96,32 +103,16 @@
 
 **Ctrl+; types today's date, and Ctrl+: the time**, in a cell and in the text; the Insert menu holds both. They are written `2026-10-23` and `14:05`, ISO 8601's forms. In a cell, the date is a date and the time is text.
 
-**A double-click on a column's border fits the column to its widest value on one line.** The table keeps its width, and the other columns share what is left in their proportions. The fit saves as `widths`, in one step of undo.
-
-**Column width… and Row height… ask for a number**, as Excel's dialogs do. Both stand in the Size flyout of the Table menu and the right-click menu, beside Fit column width. Each change is one step of undo.
-
-* **Column width takes a percent of the table's width, from 1 to 99, with at most one decimal place.** The chosen columns each take it, and the other columns share the rest in the proportions they have. With every column chosen, nothing is left to share, so a share that does not add up to 100% is refused with the reason. A table fills the width of its page, so a share is the one width that holds on every screen and on paper. Excel's characters would mean another width on each screen.
-* **Row height takes whole points from 6 to 409**, saved in `heights` ("Model and editor architecture" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)). An empty answer takes the height away. The rows keep their heights on paper too.
-* **Only the data rows in sight take the height**, as in Excel. A row a filter or a closed group hides keeps its own. Row height cannot be pressed on the names row, which takes the height its text needs.
-* **A number outside the limits is refused, and the page says which numbers it takes.** Nothing changes then.
-* **Neither has a key of its own.** Excel's Alt, H, O, W and Alt, H, O, H walk its ribbon, which the page does not have.
-
 **A cell is chosen when the mouse button goes down, not on the click.** The press can remove a gap above the table and move the table up a line, so no click would come. For the same reason, the second press of a double-click opens the cell the first chose.
 
 **While a person works in a table, the page draws no caret in the text.** A caret beside a table would stand in a gap, which would push the table down a line after each action. So the keys go to the chosen cell. Esc, a press in the text, and an arrow key past the table's edge leave the table. The caret then comes back where the model holds it.
-
-**Dragging the edge between two column letters resizes the two columns beside it**, and every other column keeps its weight. When the button comes up, the table's `widths` change in one step of undo.
-
-* **The page turns pixels into weights.** A table without `widths` first takes weights from its columns' widths on the page, about 1,000 in all.
-* **All weights are multiplied by one whole number before the two columns share theirs.** The two then have about 1,000 steps to share, and the other columns keep their proportions exactly.
-* **No weight passes 10,000 or falls below 1**, the bounds the reader takes.
-
-**In a cell, chosen or open, Alt+Right makes its column wider and Alt+Left narrower, by a twentieth of the table's width.** The width comes from the neighbouring column. Each press is one step of undo. The keys work in the cell because a keyboard already reaches it; a focusable edge would be one more Tab stop on every table.
 
 **Removing a whole block puts the caret on the block that takes its place** (`remove_whole` in `ksmd/edit/editor.kspl`). That is the start of the text after it, else the end of the text before it. A table, chart, image, include or divider goes this way, by its Remove button, the table menu, or Delete on a whole table.
 
 * **The window scrolls only as far as it must to show the caret.** The person goes on working where the block stood, not at the top of the document.
 * **The caret takes a gap only where no text stands on either side**, as in an empty document. A gap shows as an empty line, which looks like a paragraph no one typed.
+
+**Ctrl+End and Ctrl+Home reach the gap after a last block, or before a first one, that holds no text**, such as a chart. The browser cannot put its caret beside such a block, and would leave it where it was. Where text stands at that end, the browser's own move stays.
 
 **An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
@@ -134,6 +125,37 @@
 **Opened from a file, the page reaches no file: a host opens and saves through two calls.** `ksmd.load(source)` opens a source, or names the line and column it refuses. `ksmd.source()` returns the canonical source to save, and `ksmd.onchange` learns of each change.
 
 **The editor's memory is a fixed 128 MiB.** An action that starts with less than 16 MiB free is refused, and the page asks the person to save and open the document again. The document and its whole history stay in that memory until another document opens.
+
+## Column widths and row heights
+
+**A table's columns and rows keep the sizes a person gives them, as in a spreadsheet** (`sizes.js`). The file holds them as `char_widths` and `heights` ("Model and editor architecture" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+
+* **A column is as wide as its width in characters, and the table as wide as its columns.** A narrow window makes the page scroll sideways, and no text wraps to fit it. A table that filled the window wrapped its text differently on each screen, and a person could not make one column stay narrow.
+* **A column with no width fits its text**: its widest value or its name, from 3 to 60 characters. Rows a filter hides count too, so a filter moves no column.
+* **A cell's text stays on its lines.** Alt+Enter's line breaks still show as lines, and nothing else breaks a line, unless the cell wraps.
+* **Wrap text, as Excel's, breaks a cell's text into lines at its column's width.** It is set on each cell, as `wrap="on"` in its braces. Its row grows to show the lines, unless the row has a height. A word too long for the column breaks inside the word.
+* **A text runs on over the empty cells to its right, and is cut where the next cell holds a value**, as Excel shows it. It is cut at the table's right edge too.
+* **A number, a date or an error is always cut at its own cell.** A number or a date too wide for its column shows `###`, as in Excel: cut, 1200 would read as 120. Opening the cell shows the value.
+* **A row with a height is that tall, and text taller than it is cut.** A row without one fits its lines.
+
+**Dragging the right edge of a column letter sets that column's width**, and every other column keeps its own. The last column has an edge too. When the button comes up, the width is saved in characters, as one step of undo.
+
+* **Where the chosen cells run through every row of their columns and the edge is one of theirs, each takes the width**, as in Excel. Column letters, Ctrl+A and the corner choose such cells.
+* **While the edge moves, the status line shows the width in characters.** A press that does not move changes nothing.
+
+**Dragging the bottom edge of a row number sets that row's height in points**, as one step of undo. A dashed line with the height shows where the row's bottom will stand. Chosen cells that run across every column take the height together.
+
+**A double-click on an edge fits it to its text.** On a column's edge, or on the border between two cells, the column takes the width of its widest value, and keeps it. On a row's edge, the row's height goes, so the row fits its lines again. The chosen columns or rows fit together, as a drag sets them.
+
+**In a cell, chosen or open, Alt+Right makes its column one character wider and Alt+Left one narrower.** Each press is one step of undo. The keys work in the cell because a keyboard already reaches it; a focusable edge would be one more Tab stop on every table.
+
+**Column width… and Row height… ask for a number**, as Excel's dialogs do. Both stand in the Size flyout of the Table menu and the right-click menu, beside Fit column width. Each change is one step of undo.
+
+* **Column width takes 0.5 to 255 characters, with at most one decimal place.** The chosen columns each take it. An empty answer lets them fit their text again.
+* **Row height takes whole points from 6 to 409.** An empty answer takes the height away. The rows keep their heights on paper too.
+* **Only the data rows in sight take the height**, as in Excel. A row a filter or a closed group hides keeps its own. Row height cannot be pressed on the names row, which takes the height its text needs.
+* **A number outside the limits is refused, and the page says which numbers it takes.** Nothing changes then.
+* **Neither has a key of its own.** Excel's Alt, H, O, W and Alt, H, O, H walk its ribbon, which the page does not have.
 
 ## Ranges of cells
 
@@ -169,7 +191,7 @@
 
 * **The move is one step of undo, and the moved lines stay chosen at their new place.**
 * **Each line keeps its identity** (`move_lines` in `ksmd/edit/editor_tables.kspl`). A formula's reference follows its row or column, so no `#REF!` appears. A row takes its height and notes along. A column takes its name, width, number format, filter, choices and colour rule, and a chart still finds it by name.
-* **A group keeps its places, as after a sort**: it belongs to the table's layout ("Groups of rows" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+* **A group keeps its places, as after a sort**: it belongs to the table's layout ("Groups of rows and columns" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 * **A move is refused whole when a formula would grow past 4,096 bytes**, or when a chart would no longer find its column. Nothing changes then, and the page says why.
 * **Esc, or any other change to the document, drops the cut**, as in Excel. A place inside the cut lines, or just after them, changes nothing, and the cut stays.
 * **The cut also puts the lines' values on the clipboard as tab-separated rows.** So a paste in another program takes them, and the lines stay, as in Excel.
@@ -233,12 +255,17 @@
 **A table's column letters and names stay in sight under the header while the page scrolls through the table** (`position: sticky` on the table's `thead`).
 
 * **A table never scrolls in a box of its own.** A box would take the mouse wheel in the middle of a document, and its heading would hide under the header. A table wider than the page reaches past it, and the page scrolls sideways.
+* **The row numbers and the first column stay in sight while the page scrolls sideways** (`position: sticky` on each row's first two cells). So a row of a wide table keeps its name, as a spreadsheet's frozen first column does. `table.js` measures the row numbers' width, so the first column stands just right of them. It measures a table that an include shows too.
 * **Every table's heading sticks, and no source notation chooses it.** A choice per table would change the file for a way of looking.
 * **On paper, the browser repeats the `thead` on each page.**
 
 ## Colour rules on the page
 
-**The right-click menu's Columns group holds Colour by value…, which opens a small panel over the table.** It holds the condition (below, above, equal to, empty, or no rule), its value and a style. The styles are ready-made pairs, such as a light red fill with dark red text, so a person picks one rather than two colours. Apply sets the rule as one step.
+**The right-click menu's Look flyout holds Colour by value…, which opens a small panel over the table.** It holds the condition (below, above, equal to, empty, or no rule), its value and a style. The styles are ready-made pairs, such as a light red fill with dark red text, so a person picks one rather than two colours. Apply sets the rule as one step.
+
+**A colour scale is one more condition in the panel**, with the colour of the greatest number: yellow, green, red or blue. The least number's cell stays white.
+
+**The panel keeps colours written in the file that it does not offer.** It lists them as one more choice, chosen, so Apply changes only what the person changed. A new scale starts from white.
 
 ## Notes on the page
 
@@ -254,14 +281,68 @@
 * **An open cell of the column offers the list while one types** (an HTML `datalist`).
 * **A value off the list stays in its cell to be put right, and the page says why.** Esc, or leaving the cell, drops it.
 * **A cell that holds a value off its column's list has a wavy underline**, and its title names the choices.
+* **A choice takes a colour after `=` in that line**, such as `Open=red, Done=green`. The names are red, yellow, green, blue, orange, purple and gray, each a fill and a text colour that read together. `=own` keeps colours the file gave, and `=none` gives none.
+* **Text after the last `=` that names no colour is part of the choice**, so `1+1=2` is a choice of its own. A choice with no colour whose text ends in `=` and a colour's name shows with `=none` after it. So the line reads back as the same choices.
+* **A cell that holds a coloured choice shows its colours**, as a tag does in a list of tasks.
+* **Colour rows by this column, in the Look flyout, colours each row by the choice that column holds.** Pressed again on that column, it stops. A column's colour rule stands over a row's colours.
+* **A column with choices opens its cells in a box of one line**, the only box a browser offers a list in. Other cells open in a text area that keeps line breaks.
 
-## Groups of rows on the page
+## A link in a cell
 
-**A table's outline stands left of its row numbers**: one column of marks per level of groups (`outline.js`).
+**Insert ▸ Link… on a chosen cell links the cell's text**, and an empty answer takes the link away. The text shows as a link. It opens in a new tab on Ctrl+press, or on a press while read-only, as a link in the text does. A plain press chooses the cell, so it can still be edited.
 
-* **Each group has a button on the row above it: − while its rows show, + while they are hidden.** A hidden row could not hold the button. A line runs down beside the rows of a group that shows.
+## Groups of rows and columns on the page
+
+**A table's outline of rows stands left of its row numbers, and its outline of columns above its letters.** Each has one line of marks per level of groups (`outline.js`).
+
+* **Each group has a button on the line before it: − while its lines show, + while they are hidden.** A hidden row or column could not hold the button. A line runs beside the lines of a group that shows.
 * **The right-click menu's Group flyout holds Group rows (Alt+Shift+Right), Ungroup rows (Alt+Shift+Left), Hide detail and Show detail.** They act on the chosen cells' rows.
+* **The same flyout holds Group columns, Ungroup columns, Hide column detail and Show column detail.** They act on the chosen cells' columns.
+* **A hidden column takes no width, and the arrow keys and Tab pass over it.** Its `col` stays, so each `col` keeps standing over its own cells.
 * **A row shows only when neither a hidden group nor a filter hides it.**
+
+## A chart's panel
+
+**A chart's Edit button opens a panel**: the kind, series in columns or in rows, the labels column, the series drawn and the title (`chart.js`). In rows, the panel lists the rows that the editor takes as series, and asks for the first and last columns drawn. Such a row holds text written in the labels column, not a calculated value. The saved chart finds the row by that text, so the text holds no `,` and no row above it holds the same text. The view sends these rows for each column (`sr` in `ksmd/port/web/view.kspl`), so the panel and the editor apply one rule. Apply sets the chart as one step.
+
+## Page setup, numbers and references
+
+**File ▸ Page setup… opens a panel for the document's settings.** It holds the paper, the orientation, the header and the footer. It also holds where heading numbers start, and the words before table and image numbers. Apply sets them as one step (`settings.js`).
+
+* **The settings stand at the document's top as a dashed bar** that says what they set, with Edit and Remove. Paper never shows the bar.
+* **A heading's or a caption's number is drawn by CSS from an attribute, never written into the text.** The editor counts the text of each block, so a number inside it would move every caret after it. The contents list shows the numbers too.
+* **A reference's `#` stays in the text and takes no room.** Its number is drawn after it.
+* **Ctrl+press on a reference, or a press while read-only, scrolls to what it names.**
+* **Table ▸ Caption… sets a table's caption, and the Look flyout's Merge repeated values merges the chosen column** (`merge.js`). Each is one step of undo, and pressed again on a merged column, it stops.
+
+## Drawing on an image or a chart
+
+**An image and a chart each have the tools Rectangle, Arrow, Line, a colour, Text… and Delete** (`drawings.js`). The shapes are saved in the picture's clause ("Shapes drawn over an image or a chart" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+
+* **A shape is drawn by a drag across the picture once its tool is pressed.** The new shape is then chosen.
+* **A press on a shape chooses it, and a drag moves it**, kept inside the picture. Delete takes the chosen shape away, and Esc lets it go.
+* **A chosen shape takes the keyboard's focus.** Where the focus then goes to the text or to a field, Delete and Backspace act there and leave the shape. Any change to the document lets the chosen shape go, as another shape can then stand in its place.
+* **A shape stands no further than 20,000 pixels from the picture's corner**, the most the file's reader takes, however large the image is.
+* **The colour list sets the colour of new shapes and of the chosen one.** Text… writes the words inside the chosen rectangle.
+* **Each change is one step of undo.** The page sends the whole list as `draw` lines, so the file's reader checks every change.
+* **The shapes are drawn in the picture's own pixels**, so they scale with it. A line's width, an arrow's head and the words keep a size a person reads.
+* **Read-only, an included file and paper show the shapes without the tools.**
+
+## A diagram on the page
+
+**Insert ▸ Diagram puts an empty drawing area at the caret** (`diagram.js`). Its tools draw a box, a diamond, a start or end dot, a group and a note. They also draw an arrow or a line between two shapes. The file's form is "Diagrams" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
+
+* **A shape is drawn by a drag across the area once its tool is pressed**, or at its own size by one press. An arrow is drawn by a drag from one shape to another.
+* **A press chooses a shape or an arrow.** A drag moves a shape and its arrows follow, kept inside the area. A group carries the shapes it holds whole.
+* **A chosen shape's corner handle resizes it, and the area's corner handle resizes the area**, never smaller than what it holds.
+* **A chosen arrow shows a handle halfway along each stretch; a drag of one adds a bend there.** A bend's own handle moves it, and two presses on it take it away.
+* **Two presses on a part, or Text…, open a box for its words.** Ctrl+Enter or a press elsewhere takes them, and Esc drops them. A shape's words may have several lines.
+* **Mono, the colour list and the ground list change the chosen part**, and the next one drawn. Caption… writes the words under the diagram.
+* **Delete takes the chosen part away, and a shape's arrows go with it.** An arrow key nudges a chosen shape one pixel, ten with Shift.
+* **Each change is one step of undo.** The page sends the whole clause, so the file's reader checks every change.
+* **The area shows at its own size, and a wide one reaches past the page**, as a wide table does. Paper shrinks it to the page's width. Read-only, an included file and paper show it without its tools.
+* **The page tells two presses apart itself.** The first press draws the area again, so the browser sends no double-click.
+* **The box for a part's words stands outside the document**, as the chart's panel does. Inside it, the document's own keys would type into its text.
 
 ## AutoSum
 
@@ -280,12 +361,14 @@
 * **Rows a filter or a closed group hides stay hidden on paper**, so a printout shows what the person sees.
 * **A divider ends a page.** Its line still shows at the page's end.
 * **The page always prints light, and the author's fills and colours print as the page shows them.** The browser would otherwise leave background colours out.
-* **A table fits the page.** A number or a date stays on one line, and a long word, such as a URL or a path, breaks where it must. The width left over goes by the columns' weights.
+* **A table keeps its columns' widths on paper.** A table wider than the paper prints smaller, so all its columns fit, and no text wraps to fit the paper. The paper is the one File, Page setup… names, else A4.
+* **The page says when a table will print smaller.** While editing, "Prints at 72% to fit the paper" stands beside the table's name. Before a print, the status line names each such table. A shrunk table is harder to read, so the person learns of it before the paper does.
 * **The row numbers' column keeps its place with no width**, so no value moves under another column's name.
 
 **Each page has a header and a footer of the page's own**, drawn with the margin boxes of CSS (`@page` in `print.css`).
 
 * **The header holds the time of the print at the left and the document's name in the middle of the page.** The footer holds "page / pages" at the right.
+* **The document's settings can put their own text in the header's middle and at the footer's left.** They also set the paper and its orientation ("The document's own settings" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 * **A document with no file yet is named "Untitled", as Excel names a new workbook Book1.** The menu bar, the window's title ("Untitled - ksmd") and the printed header show it, so each still says which document is open. Saving asks for a path as before.
 * **The browser's own line would put the title off the middle.** Chrome centres it in the room after the date, so a longer date moves it further right.
 * **A browser that draws margin boxes then draws no line of its own at that edge**, so the person changes no setting. Chrome 153 does so, as the checks here found.
@@ -320,6 +403,7 @@
 **With two or more cells chosen, the status line's right end shows their sum, average and count** (`figures.js`).
 
 * **The sum and average take the numbers alone. The count takes every cell that holds a value.** Rows a filter hides are left out.
+* **The sum and average are written as a cell writes a number without a format**, by the engine. The page has no rule of its own for a number's digits, so a cell, `text(A1, "")` and the status line never round one value differently.
 * **Otherwise it shows the words and characters of the selection, or of the whole document.** A word is a run of letters or digits. Japanese has no spaces between words, so the count of characters stands beside it.
 
 ## A compact page
@@ -329,7 +413,8 @@
 * **Prose has a line height of 1.4 and half a line between blocks.** The text keeps its size of 16 pixels, so nothing becomes harder to read.
 * **A table's cells have a line height of 1.3 and a padding of 2 by 6 pixels.** A row of one line is 26 pixels tall, near a spreadsheet's 20 or 21.
 * **Anything a pointer presses is at least 24 pixels tall**, the least size that the web's accessibility guidelines ask for (WCAG 2.2, "Target Size (Minimum)"). This holds for the menus, the quick access bar, the column letters and the contents.
-* **A row height the person typed stays as typed.** It is a least height, and the compact padding only lowers the rows that have none.
+* **A row height the person typed stays as typed**, and the compact padding only lowers the rows that have none.
+* **View, One line per cell keeps every row one line tall.** A text of several lines shows them on one line, cut at its cell's edge with `…`, and shows whole while the cell is edited. The choice is kept by this browser and leaves the file unchanged, as the page's width does.
 * **The page has no setting for a roomier look.** The browser's zoom makes everything larger, and a second size would double what the checks must look at.
 
 ## A dark scheme
@@ -375,7 +460,10 @@ Served by the local server, the page opens and saves files itself ("The file lif
 * **Leaving the page asks first while no draft holds the latest edits**: in the second after typing, and where no draft can be held. A draft written as the page goes may not land before the page closes.
 * **A document named in the address that does not open leaves the address.** The new document is then open, and its draft is offered.
 * **Text typed in a cell that the editor refuses stays in its cell, and the draft holds it.** A save writes nothing, another document does not open, and a menu command does nothing until the text is put right or Esc drops it. A press in the menu bar or in a dialog leaves the cell open.
-* **Save As into another folder writes each include's, image's and functions file's path again, so it names the same file from there** (`ksmd/port/web/moving.kspl`). A save that fails takes the rewrite back.
+* **Save As into another folder writes each include's, image's and functions file's path again, so it names the same file from there** (`ksmd/port/web/moving.kspl`). The file is written from a copy with the new paths. The page's document takes them, as one step of undo, only after the write succeeds. So a save that fails changes nothing, and text typed during the write stays.
+* **A notice runs one choice.** The first press closes it, so a double press does not save twice or hold a second draft.
+* **Before the page lays another file in, a draft holds what the page shows.** Text typed while the draft is written makes the page write the draft again, so no key is lost.
+* **The Save as and Open dialog shows the folder pressed last, and a choice waits for its listing.** A listing that arrives after a newer one is let go.
 * **Pasted text larger than a document can hold is refused before it reaches the editor's fixed memory.**
 
 ## A document's own functions on the page
@@ -412,7 +500,6 @@ sequenceDiagram
 * Find has no whole-word search and no regular expressions. It does not search table names.
 * A browser without the highlight API (`CSS.highlights`) marks no match in text. The current match still scrolls into sight, and the count still shows.
 * A filter's hidden rows are filled as the shown ones are.
-* Columns cannot be grouped; only rows can.
 * It never trims the undo history. A long session can use up the editor's memory, and the page then asks the person to save and open the document again.
 * The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked.
 * A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves, and hide the page by script.

@@ -361,3 +361,35 @@ fn main(): I32
   s[0] = 9
   io.out().s("\{s[0]\}\n")
   return 0
+// ==== case slice_descriptor_fields_read_only
+//< A slice's `.ptr` and `.len` can be read and never written
+//< The bounds check trusts `.len`, so `s.len = 100000` let a checked subscript read far past the
+//< memory. A write, a compound assignment, a write through a pointer to the slice, a writable
+//< address of `.len` and a `Self$@` method's `r.ptr` are all refused. A new slice is made whole
+//< instead, as `shrink` does.
+// EXPECT: slice_descriptor_fields_read_only.kspl:24:3: error: cannot write to a slice's '.ptr' or '.len'
+// EXPECT: slice_descriptor_fields_read_only.kspl:25:3: error: cannot write to a slice's '.ptr' or '.len'
+// EXPECT: slice_descriptor_fields_read_only.kspl:27:3: error: cannot write to a slice's '.ptr' or '.len'
+// EXPECT: slice_descriptor_fields_read_only.kspl:28:7: error: expected 'Sz$@', but got 'Sz@'
+// EXPECT: slice_descriptor_fields_read_only.kspl:17:5: error: cannot write to a slice's '.ptr' or '.len'
+// EXPECT: Finished with 5 error(s)
+priv fn set(p: Sz$@)
+  p$ = 100000
+
+impl U8[]
+  fn skip_one(r: Self$@)
+    r.ptr = r.ptr + 1
+
+  fn shrink(r: Self$@)
+    r$ = U8[]::{ .ptr = r.ptr, .len = r.len - 1 }
+
+fn main(): I32
+  $s: U8[] = "abc"
+  s.len = 100000
+  s.len += 1
+  $q: U8[]$@ = s@
+  q.len = 100000
+  set(s.len@)
+  s.skip_one()
+  s.shrink()
+  return I32::s.len

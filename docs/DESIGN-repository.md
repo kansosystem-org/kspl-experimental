@@ -340,7 +340,7 @@ sequenceDiagram
 
 **The transport is built on what `std` already has.**
 
-* **No program is started, except one closed build.** Debugging and plugins serve a code editor, which the page is not. A started program reads beyond the root and reaches the network, with the token as the whole defence (Principle 1). A document's own functions need a build, and a page cannot build them alone. So the server may start one builder, named when it starts. That build reads only the file named, the standard library and the builder's own sources. Its result runs in the browser's sandbox, not on the machine.
+* **No program is started, except one closed build.** Debugging and plugins serve a code editor, which the page is not. A started program reads beyond the root and reaches the network, with the token as the whole defence (Principle 1). A document's own functions need a build, and a page cannot build them alone. So the server may start one builder, named when it starts. That build reads only the file named, the standard library and the builder's own sources. The file's code also reaches no C symbol, linker or assembler, which would read past those (`--closed`). Its result runs in the browser's sandbox, not on the machine.
 * **`HEAD` is not carried.** Watching already returns the size and whether the file exists (Principle 6).
 * **The type is not guessed, and the encoding is UTF-8 only.** A wrong guess shows only where it misses.
 

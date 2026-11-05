@@ -11,8 +11,6 @@ function ksmdFigures(ks) {
   box.setAttribute("aria-live", "polite");
   document.body.appendChild(box);
 
-  const shown = (n) => Number(n.toPrecision(15)).toLocaleString("en-US", { maximumFractionDigits: 10 });
-
   function cells() {
     if (ks.where !== "cell" || !ks.cell || !ks.range || !ks.range.any()) return null;
     const r = ks.range.rect();
@@ -35,7 +33,7 @@ function ksmdFigures(ks) {
       }
     }
     const parts = [];
-    if (numbers > 0) parts.push(`Sum ${shown(sum)}`, `Average ${shown(sum / numbers)}`);
+    if (numbers > 0) parts.push(`Sum ${ks.showNumber(sum)}`, `Average ${ks.showNumber(sum / numbers)}`);
     parts.push(`Count ${filled}`);
     return parts.join(" · ");
   }

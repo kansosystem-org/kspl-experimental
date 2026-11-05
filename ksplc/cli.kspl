@@ -8,6 +8,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/lint_codes" as base_lint_codes
 import "ksplc/base/locate" as base_locate
+import "ksplc/base/near" as base_near
 import "ksplc/base/target" as base_target
 import "ksplc/fmt/style" as fmt_style
 import "ksplc/tools/explain" as tools_explain
@@ -265,6 +266,10 @@ priv fn declare_options(p: argparse.Parser$@, o: Cli$@) //< it declares every su
             more interfaces. Only extern functions are externally visible. The library keeps its \
             own runtime and std")
     p.only_for("--library", "compile")
+    p.str_opt("--closed", base_core.config.closed_package@,
+        "a package whose files must not reach C: no extern, ##link, __kspl_ built-in, #section, \
+            #naked, #interrupt or #raw_address. For code the build does not trust")
+    p.only_for("--closed", "compile")
     p.flag("--in-place", o.fmt_in_place@, "write the formatting result back into the source")
     p.only_for("--in-place", "fmt")
 
@@ -460,6 +465,7 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
             U8[][]::{ in_files.get(1) })
         return .build(source_input(in_files.get(0)), in_files.get(1), o.cflags)
     case .compile
+        refuse_missed_subcommand(in_files)
         if in_files.len != 2
             // It rejects "too many" as well as "too few". Suppose it silently used the first two.
             // Then a path cut by the shell's word splitting (one containing a space) would compile
@@ -472,6 +478,44 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
         refuse_output_on_input(face.face_name(), in_files.get(0),
             U8[][]::{ in_files.get(1), o.deps_path, o.libs_path })
         return .compile(source_input(in_files.get(0)), in_files.get(1), o.deps_path, o.libs_path)
+
+priv fn refuse_missed_subcommand(in_files: List<|U8[]|>@) //<
+    //< Exits with one line where a compile's inputs show a subcommand left out or misspelled
+    //< **`ksplc hello.kspl` meant `run`, and `ksplc bulid a.kspl a.exe` meant `build`**, which
+    //< otherwise read as a compile's inputs, whatever their count. The whole usage after the
+    //< error would bury its one line, so the line names the likely command and points at `--help`.
+    if in_files.len == 0
+        return
+    first: = in_files.get(0)
+    $said: U8[] = ""
+    if first.ends_with(".kspl") && in_files.len == 1
+        said = base_core.arena.text()
+            .s("ksplc: a compile takes an input and an output ('ksplc <input.kspl> <output.c>'). \
+                Did you mean 'ksplc run \{first\}'?").take()
+    else if near: = nearest_face(first)
+        said = base_core.arena.text()
+            .s("ksplc: '\{first\}' is not a subcommand. Did you mean 'ksplc \{near\}'?").take()
+    if said.len > 0
+        usage
+            .error_exit(base_core.arena.text().s(said)
+            .s(" 'ksplc --help' lists the subcommands and options.\n").take())
+
+priv fn nearest_face(written: U8[]): U8[]? //<
+    //< The subcommand whose name is near `written` (`near_enough` in `base/near.kspl`)
+    //< **A file's name is never one**: a path or an extension shows it is meant as an input.
+    if written.find_str(".").is_some() || written.find_str("/").is_some() ||
+        written.find_str("\\").is_some()
+        return .none
+    $best: U8[] = ""
+    $best_cost: = base_near.near_enough(written)
+    for row in FACES
+        if row.declared != Declared.named && row.declared != Declared.trailing
+            continue
+        cost: = base_near.edit_distance(written, row.face.face_name())
+        if cost < best_cost
+            best = row.face.face_name()
+            best_cost = cost
+    return .some(best) if best.len > 0 else .none
 
 impl Mode
     fn new(): Self //< the mode the process's command line asks for; a refused line exits

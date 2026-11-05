@@ -1,15 +1,16 @@
-// A table as a whole, and its columns and rows by number: selecting, copying, pasting and removing a
-// whole table, the caret after a block is removed, a column's width and a row's height typed in,
-// the filter's tree of dates, a filter on more values than its panel lists, and the edits that change what a filter matches. Each is driven
-// through the browser's own input events, as `main.mjs` drives the rest, and checked by the saved
-// source and its undo.
+// A table as a whole: selecting, copying, pasting and removing a whole table, the caret after a
+// block is removed, the filter's tree of dates, a filter on more values than its panel lists, and
+// the edits that change what a filter matches. Groups of columns. A number's shown digits. Each
+// is driven through the browser's own input events, as `main.mjs` drives the rest, and checked by
+// the saved source and its undo.
 // `tables(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
 
 const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
-export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick }) {
+export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick,
+  openCell }) {
   const sel = () => js("JSON.stringify(ksmd.selection().f)");
   // Whether the caret's block stands inside the window, below the header.
   const caretInSight = () => js(`(() => {
@@ -31,7 +32,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
     // copies as ksmd's own table, as tab-separated text and as HTML; it pastes after the caret's
     // paragraph with a name of its own; and it cuts and deletes as one step.
     async wholeTable() {
-      const clause = (name, ref) => `:::table name="${name}" widths="1,2" formats=",number:2"\n` +
+      const clause = (name, ref) => `:::table name="${name}" char_widths="1,2" formats=",number:2"\n` +
         `| "a" | "b" |\n| 1 | =${ref}.A1*2 |\n| 3 | =A2+1 |\n:::\n`;
       const start = `${H}Intro\n\n${clause("t", "t")}\nAfter\n`;
       await load(start);
@@ -118,90 +119,6 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       check(await whole(), "Select table still chooses such a table whole");
       await press("Delete");
       await saves("and Delete then removes it", `${H}Intro\n`);
-    },
-
-    // Column width and row height typed as numbers, as Excel's dialogs take them: a column's share
-    // of the table in percent, and a row's least height in points.
-    async sizes() {
-      const t3 = (attrs) => `${H}:::table name="t"${attrs}\n| "a" | "b" | "c" |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n:::\n`;
-      await load(t3(""));
-      check(await js("!!document.querySelector('.menubar [data-cmd=\"column-width\"]') && " +
-        "!!document.querySelector('.menu.context [data-cmd=\"row-height\"]')"),
-      "the Table menu and the right-click menu hold Column width and Row height");
-      const tallMenu = await js("(() => { const m = document.querySelector('.menu.context'); m.hidden = false; " +
-        "const h = m.getBoundingClientRect().height; m.hidden = true; return Math.round(h); })()");
-      check(tallMenu <= 600, "and the right-click menu still fits a window 600 pixels tall", String(tallMenu));
-      const answer = (text) => js(`window.prompt = () => ${JSON.stringify(text)}`);
-      const status = () => js("document.getElementById('status').textContent");
-      await click('#doc td[data-r="0"][data-c="0"]');
-      await answer("50");
-      await menu("column-width");
-      await saves("Column width 50 gives the column half the table, the others the rest in their shares",
-        t3(' widths="2,1,1"'));
-      const share = await js(`(() => { const t = document.querySelector("#doc .table table");
-        const th = t.tHead.rows[0].cells; let all = 0; for (let k = 1; k < th.length; k++) all += th[k].getBoundingClientRect().width;
-        return Math.round(100 * th[1].getBoundingClientRect().width / all); })()`);
-      check(share === 50, "and the page shows it so", String(share));
-      for (const wrong of ["100", "0", "abc", "12.25"]) {
-        await answer(wrong);
-        await menu("column-width");
-        check((await status()).includes("1 to 99"), `a width of ${wrong} is refused, and the page says why`, await status());
-      }
-      await saves("so nothing changes", t3(' widths="2,1,1"'));
-      await click('#doc td[data-r="1"][data-c="1"]');
-      await answer("30");
-      await menu("row-height");
-      await saves("Row height 30 gives the chosen row a height of 30 points", t3(' widths="2,1,1" heights=",30"'));
-      const tall = () => js("Math.round(document.querySelectorAll('#doc tbody tr')[1].getBoundingClientRect().height)");
-      check(await tall() === 40, "and the row stands 40 pixels tall", String(await tall()));
-      await page("Emulation.setEmulatedMedia", { media: "print" });
-      check(await tall() === 40, "on paper too", String(await tall()));
-      await page("Emulation.setEmulatedMedia", { media: "" });
-      for (const wrong of ["5", "410", "x", "20.5"]) {
-        await answer(wrong);
-        await menu("row-height");
-        check((await status()).includes("6 to 409"), `a height of ${wrong} is refused, and the page says why`, await status());
-      }
-      await answer("");
-      await menu("row-height");
-      await saves("an empty answer takes the height away", t3(' widths="2,1,1"'));
-      await answer(null);
-      await menu("row-height");
-      await saves("and Cancel changes nothing", t3(' widths="2,1,1"'));
-      await menu("undo");
-      await menu("undo");
-      await menu("undo");
-      await saves("each change was one step of undo", t3(""));
-      // With every column chosen, nothing is left to share, so the shares must add to 100.
-      await click('#doc td[data-r="0"][data-c="0"]');
-      await press("a", CTRL);
-      await answer("30");
-      await menu("column-width");
-      check((await status()).includes("add to 100%"), "with every column chosen, a share that does not add to 100 is refused",
-        await status());
-      await saves("so nothing changes", t3(""));
-      // Row height: the names row takes the height its text needs, and rows a filter hides keep theirs.
-      // Row height on the names row asks nothing and changes nothing.
-      const heightOff = async (start) => {
-        await js("window.__asked = false; window.prompt = () => { window.__asked = true; return '30'; }");
-        await menu("row-height");
-        return !await js("window.__asked") && await js("ksmd.source()") === start;
-      };
-      await click('#doc th.name[data-c="0"]');
-      check(await heightOff(t3("")), "Row height cannot be pressed on the names row");
-      const t1 = (attrs) => `${H}:::table name="t"${attrs}\n| "a" |\n| 1 |\n| 2 |\n| 3 |\n:::\n`;
-      await load(t1(' filter="not:2"'));
-      await click('#doc td[data-r="0"][data-c="0"]');
-      await click('#doc td[data-r="2"][data-c="0"]', SHIFT);
-      await answer("30");
-      await menu("row-height");
-      await saves("Row height across a row a filter hides leaves that row as it was",
-        t1(' heights="30,,30" filter="not:2"'));
-      await menu("undo");
-      await saves("in one step of undo", t1(' filter="not:2"'));
-      await load(`${H}:::table name="e"\n| "a" |\n:::\n`);
-      await click('#doc th.name[data-c="0"]');
-      check(await heightOff(`${H}:::table name="e"\n| "a" |\n:::\n`), "nor on a table with no data rows");
     },
 
     // A column of dates filters by a tree, as Excel's does: years, then months, then days, each with
@@ -618,7 +535,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await press("Escape");
 
       // Columns, chosen by their letters, likewise.
-      const columns = `${H}:::table name="t" widths="1,3"\n| "a" | "b" |\n| 1 | =A1 |\n:::\n`;
+      const columns = `${H}:::table name="t" char_widths="1,3"\n| "a" | "b" |\n| 1 | =A1 |\n:::\n`;
       await load(columns);
       await click(letter(2));
       await menu("cut");
@@ -629,7 +546,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
         "Insert column left then reads Insert cut columns, and Insert row above stays");
       await click('.menu.context [data-cmd="column-left"]');
       await saves("Insert cut columns moves it left of the column, with its name, width and references",
-        `${H}:::table name="t" widths="3,1"\n| "b" | "a" |\n| =B1 | 1 |\n:::\n`);
+        `${H}:::table name="t" char_widths="3,1"\n| "b" | "a" |\n| =B1 | 1 |\n:::\n`);
       await menu("undo");
       await saves("in one step of undo", columns);
     },
@@ -726,5 +643,163 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
         `${H}${filler}\n\n${table}\n:::chart table="t" kind="bar" labels="a" values="a"\n:::\n\nAfter\n`,
         button("chart"), "[0,61,0,0]", `${H}${filler}\n\n${table}\nXAfter\n`);
     },
+
+    // Groups of columns hide and show from the outline above the column letters, and are saved.
+    async columnGroups() {
+      const body = '| "a" | "b" | "c" | "d" |\n| 1 | 2 | 3 | 4 |\n:::\n';
+      const table = (groups) => `${H}:::table name="t"${groups ? ` groups="${groups}"` : ""}\n${body}`;
+      const hidden = () => js("Array.from(document.querySelectorAll('#doc tbody td'))" +
+        ".map((td) => (getComputedStyle(td).display === 'none' ? td.dataset.c : '')).filter(String).join(' ')");
+      const toggles = () => js("Array.from(document.querySelectorAll('#doc .outline-toggle'))" +
+        ".map((b) => `${b.dataset.from}-${b.dataset.to}:${b.textContent}`).join(' ')");
+      await load(table("columns B-C closed"));
+      check(await hidden() === "1 2" && await toggles() === "1-2:+",
+        "a hidden group's columns do not show, and a + stands over the column before them",
+        `${await hidden()} | ${await toggles()}`);
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await press("ArrowRight");
+      check(await js("!!document.querySelector('#doc td.chosen[data-c=\"3\"]')"),
+        "a step right passes over the hidden columns");
+      await click("#doc .outline-toggle");
+      await saves("a press on + shows the columns, and the file keeps that", table("columns B-C"));
+      check(await hidden() === "" && await toggles() === "1-2:\u2212",
+        "a group that shows has a \u2212 over the column before it", await toggles());
+      await click('#doc td[data-r="0"][data-c="3"]');
+      await menu("group-columns");
+      await saves("Group columns makes the chosen column a group of its own", table("columns B-C, columns D"));
+      await menu("column-group-hide");
+      await saves("Hide column detail hides the group of the chosen column",
+        table("columns B-C, columns D closed"));
+      for (let i = 0; i < 3; i++) await menu("undo");
+      await saves("undo takes each step back", table("columns B-C closed"));
+    },
+
+    // A choice's colours show on its cell, and on its whole row where the table colours rows by
+    // its column; Colour rows by this column turns that on and off.
+    async choiceColours() {
+      const choices = ' choices=",Open;color:#9c0006 fill:#ffc7ce|Done;fill:#c6efce"';
+      const table = (rows) => `${H}:::table name="t"${choices}${rows}\n| "task" | "status" |\n` +
+        '| "Write" | "Open" |\n| "Read" | "Done" |\n| "Sum" | |\n:::\n';
+      await load(table(""));
+      const fill = (r, c) => js(`getComputedStyle(document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]')).backgroundColor`);
+      check(await fill(0, 1) === "rgb(255, 199, 206)" && await fill(0, 0) !== "rgb(255, 199, 206)",
+        "a cell holding a coloured choice shows its colours, and the rest of its row does not",
+        `${await fill(0, 1)} ${await fill(0, 0)}`);
+      await click('#doc td[data-r="0"][data-c="1"]');
+      await menu("column-rows");
+      await saves("Colour rows by this column saves color_rows", table(' color_rows="B"'));
+      check(await fill(0, 0) === "rgb(255, 199, 206)" && await fill(1, 0) === "rgb(198, 239, 206)" &&
+        ![await fill(0, 0), await fill(1, 0)].includes(await fill(2, 0)),
+      "each row takes its choice's colours, and a row without one none", `${await fill(0, 0)} ${await fill(1, 0)}`);
+      await click('#doc td[data-r="0"][data-c="1"]');
+      await menu("column-rows");
+      await saves("pressed again, the rows lose their colours", table(""));
+    },
+
+    // A text cell's link: written in its braces, shown as a link, and set from Insert, Link.
+    async cellLinks() {
+      const table = (cell) => `${H}:::table name="t"\n| "doc" |\n| ${cell} |\n:::\n`;
+      await load(table('"Results" {link="https://example.com/a"}'));
+      check(await js("document.querySelector('#doc td[data-r=\"0\"] a.cell-link').getAttribute('href')") ===
+        "https://example.com/a", "a cell's link shows as a link on its text");
+      await js("window.__prompt = window.prompt; window.prompt = () => 'https://example.com/b'");
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await menu("link");
+      await saves("Insert, Link on a chosen cell sets the cell's link", table('"Results" {link="https://example.com/b"}'));
+      await js("window.prompt = () => ''");
+      await menu("link");
+      await saves("and an empty answer takes it away", table('"Results"'));
+      await js("window.prompt = window.__prompt");
+    },
+
+    // A chart by rows: each named row a line, its points the columns from one to another, as a
+    // burn-up chart of a plan whose months stand across. The panel switches a chart to rows.
+    async chartByRows() {
+      const plan = ':::table name="plan"\n| "item" | "hours" | "Oct" | "Nov" | "Dec" |\n' +
+        '| "plan" | 9 | 2 | 5 | 9 |\n| "done" | | 1 | 4 | |\n:::\n';
+      await load(`${H}${plan}\n:::chart table="plan" kind="line" labels="item" values="plan,done" ` +
+        'by="rows" from="Oct" to="Dec"\n:::\n');
+      const drawn = () => js("JSON.stringify([document.querySelectorAll('#doc .chart path').length, " +
+        "Array.from(document.querySelectorAll('#doc .chart .chart-label'), (t) => t.textContent)])");
+      check(await drawn() === JSON.stringify([2, ["Oct", "Nov", "Dec"]]),
+        "each row is a line, and the columns from Oct to Dec its points", await drawn());
+      check(await js("document.querySelectorAll('#doc .chart circle').length") === 5,
+        "a cell without a number leaves a gap", String(await js("document.querySelectorAll('#doc .chart circle').length")));
+      await load(`${H}${plan}\n:::chart table="plan" kind="bar" labels="item" values="hours"\n:::\n`);
+      await click("#doc .chart .chart-edit");
+      await js(`(() => {
+        const p = document.querySelector('.chart-panel');
+        p.querySelector('.chart-kind').value = 'line';
+        const by = p.querySelector('.chart-by');
+        by.value = 'rows';
+        by.dispatchEvent(new Event('change'));
+        p.querySelector('.chart-from').value = '2';
+        p.querySelector('.chart-to').value = '4';
+        for (const box of p.querySelectorAll('.chart-columns input')) box.checked = true;
+      })()`);
+      await click(".chart-panel .chart-apply");
+      await saves("the panel sets a chart by rows, naming its rows by their text", `${H}${plan}\n` +
+        ':::chart table="plan" kind="line" labels="item" values="plan,done" by="rows" from="Oct" to="Dec"\n:::\n');
+      // Only a row the editor takes is offered: text written in the cell, a name with no ',',
+      // and the first row of its name, which the saved chart finds.
+      await load(`${H}:::table name="plan"\n| "item" | "Oct" |\n| "plan" | 2 |\n| "done" | 1 |\n| =A2 | 3 |\n` +
+        '| "plan" | 4 |\n| "a,b" | 5 |\n:::\n\n:::chart table="plan" kind="bar" labels="item" values="Oct"\n:::\n');
+      await click("#doc .chart .chart-edit");
+      const offered = await js(`(() => {
+        const by = document.querySelector('.chart-panel .chart-by');
+        by.value = 'rows';
+        by.dispatchEvent(new Event('change'));
+        return Array.from(document.querySelectorAll('.chart-panel .chart-columns label'), (l) => l.textContent.trim()).join('|');
+      })()`);
+      check(offered === "plan|done", "the panel offers only the rows a chart by rows can name", offered);
+      await press("Escape");
+    },
+
+    // A colour scale fills each number's cell from white at the least to its colour at the
+    // greatest, and two columns that share one scale compare as one block.
+    async colourScale() {
+      const scale = "scale;from:#ffffff to:#ffef9c";
+      await load(`${H}:::table name="t" rules=",${scale},${scale}"\n| "who" | "oct" | "nov" |\n` +
+        '| "a" | 0 | 50 |\n| "b" | 100 | "x" |\n:::\n');
+      const fill = (r, c) => js(`getComputedStyle(document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]')).backgroundColor`);
+      check(await fill(0, 1) === "rgb(255, 255, 255)" && await fill(1, 1) === "rgb(255, 239, 156)",
+        "the least number is white and the greatest takes the scale's colour", `${await fill(0, 1)} ${await fill(1, 1)}`);
+      check(await fill(0, 2) === "rgb(255, 247, 206)", "a number half way takes the colour half way, across both columns",
+        await fill(0, 2));
+      check(!(await js("document.querySelector('#doc td[data-r=\"1\"][data-c=\"2\"]').classList.contains('ruled')")),
+        "and text is not filled");
+    },
+
+    // A number shows the same digits in its cell as `text(…, "")` writes for it: one rule, the
+    // engine's, writes both. The two values round differently from the exact binary value.
+    async plainNumbers() {
+      const values = ["2.000000000000005", "0.1234567890123455"];
+      const rows = values.map((v, k) => `| ${v} | =text(A${k + 1}, "") |`).join("\n");
+      await load(`${H}:::table name="t"\n| "n" | "t" |\n${rows}\n:::\n`);
+      const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+      for (let r = 0; r < values.length; r++) {
+        const [shown, written] = [await cell(r, 0), await cell(r, 1)];
+        check(shown === written, `the cell for ${values[r]} shows what text(…, "") writes`, `${shown} ${written}`);
+      }
+      check(await cell(0, 0) === "2.00000000000001", "and it rounds the decimal digits as written", await cell(0, 0));
+    },
+
+    // Alt+Enter types a line break inside a cell, the cell shows it, and Enter moves down.
+    async lineBreaks() {
+      const table = (cell) => `${H}:::table name="t"\n| "a" |\n| ${cell} |\n| |\n:::\n`;
+      await load(table('"one\\ntwo"'));
+      check(await js("document.querySelector('#doc td[data-r=\"0\"]').getClientRects()[0].height > " +
+        "document.querySelector('#doc td[data-r=\"1\"]').getClientRects()[0].height"),
+      "a cell holding a line break shows two lines");
+      await openCell('#doc td[data-r="0"][data-c="0"]');
+      check(await js("document.activeElement.value") === "one\ntwo", "and its box keeps the break");
+      await press("End", CTRL);
+      await press("Enter", ALT);
+      await type("three");
+      await press("Enter");
+      await saves("Alt+Enter types a break, and Enter takes the text", table('"one\\ntwo\\nthree"'));
+      check(await js("!!document.querySelector('#doc td.chosen[data-r=\"1\"]')"), "and moves down");
+    },
+
   };
 }

@@ -8,6 +8,7 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str"
+import "std/sys"
 import "std/verdict"
 
 fn cli(args: U8[][]): verdict.Run_out //< it runs ksplc once
@@ -237,3 +238,61 @@ fn case_output_is_input(arena: Arena$@) //<
         kept: = io.read_file(src, null) catch ""
         verdict.check(arena.text().s("the input is kept (case \{i\})").take(),
             kept.equals(text), kept)
+
+fn case_output_cut_short(arena: Arena$@) //<
+    //< A write cut short fails the compile and leaves the older output, with no file left beside it
+    //< **The output is written under a temporary name and renamed once whole** (`Staged_outputs`
+    //< in `ksplc/pipeline.kspl`). Otherwise a full disk would leave an empty file newer than its
+    //< source, which `make` takes as up to date, and the compile would exit 0.
+    name: = "a write cut short fails the compile and keeps the older output"
+    if sys.is_windows()
+        verdict.skip_check(name, "a short write needs `ulimit -f`, which Windows does not have")
+        return
+    dir: = harness.sandbox("cli_output_cut_short")
+    src: = fs.join(dir, "a.kspl", arena)
+    io.write_file(src, "fn main(): I32\n  return 0\n") catch
+        verdict.check(name, false, "the source cannot be written")
+        return
+    old: U8[] = "the older output\n"
+    out_c: = fs.join(dir, "a.c", arena)
+    out_ll: = fs.join(dir, "a.ll", arena)
+    rt: = fs.join(dir, "rt.c", arena)
+    split_h: = fs.join(dir, "s.h", arena)
+    cases: = U8[][][]::{ U8[][]::{ std_flag(), src, out_c },
+        U8[][]::{ std_flag(), "--to=llvm", src, out_ll },
+        U8[][]::{ std_flag(), "--split=2", src, fs.join(dir, "s.c", arena) },
+        U8[][]::{ "emit-runtime", rt } }
+    kept_files: = U8[][]::{ out_c, out_ll, split_h, rt }
+    for i in Range.asc(cases.len)
+        io.write_file(kept_files[i], old) catch {}
+        // One or two KiB (`ulimit -f` counts blocks of 512 or 1024 bytes), below every output.
+        // With SIGXFSZ ignored, the write returns short instead of ending ksplc.
+        $argv: = List<|U8[]|>(arena)
+        argv.push("/bin/sh")
+        argv.push("-c")
+        argv.push("ulimit -f 2 && trap '' XFSZ && exec \"$0\" \"$@\"")
+        argv.push(harness.ksplc_exe())
+        argv.push_all(cases[i])
+        r: = harness.run_in(argv.slice(), dir)
+        kept: = (io.read_file(kept_files[i], arena) catch "").equals(old)
+        verdict.check(arena.text().s("\{name\} (case \{i\})").take(),
+            !r.exited_with(0) && r.out.find_str("write_failed").is_some() && kept,
+            arena.text().s("older output kept: \{kept\}\n").s(r.out).take())
+    $left: = List<|U8[]|>(arena)
+    names: = fs.read_dir(dir, arena) catch
+        fallback List<|U8[]|>(arena)
+    for n in names
+        if n.find_str(".tmp").is_some() || n.starts_with("s.0") || n.starts_with("s.1")
+            left.push(n)
+    verdict.check("a failed compile leaves no temporary or partial file", left.len == 0,
+        arena.text().s("left: \{left.len\}").take())
+    // Killed part way (SIGXFSZ's default), the compile leaves the older output as it was.
+    io.write_file(out_c, old) catch {}
+    k: = harness.run_in(U8[][]::{ "/bin/sh", "-c", "ulimit -f 2 && exec \"$0\" \"$@\"",
+        harness.ksplc_exe(), std_flag(), src, out_c }, dir)
+    verdict.check("a compile killed part way leaves the older output",
+        !k.exited_with(0) && (io.read_file(out_c, arena) catch "").equals(old), k.out)
+    // A device named as the output is written where it is, never replaced by a file.
+    d: = cli(U8[][]::{ std_flag(), src, "/dev/null" })
+    verdict.check("a device named as the output is written in place",
+        d.exited_with(0) && fs.exists("/dev/null") && !fs.is_link("/dev/null"), d.out)

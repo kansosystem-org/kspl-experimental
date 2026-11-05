@@ -86,11 +86,6 @@ const LINE_INTERVAL_MS: U32 = 10 //<
 const EMERGENCY_MM: U32 = 100 //<
     //< The distance at which it backs off, before the policy's decision [mm]
 
-const WATCHDOG_MS: U32 = 1000 //< how long the loop may go without feeding the watchdog [ms]
-    //< **Longer than the longest step between two feeds**: a lap (100ms, stretched by IR frames
-    //< and a report line to about 300ms) and one Flash sector erase (at most 400ms). **Short enough
-    //< to stop quickly**: at the speed cap the car rolls well under a metre in a second. The
-    //< reasons are in "The watchdog (`watchdog.kspl`)" in ksos/docs/DESIGN-rtos.md.
 const HANG_AFTER_ROUNDS: U32 = 0 //< a test build's forced hang: the loop stops after this many
     //< driving rounds; 0 is never
     //< **Only for the on-car check of the watchdog** (stage 7 in ksos/docs/HOWTO-bring-up.md).
@@ -411,37 +406,12 @@ priv fn decide_once(p: policy.Policy$@, arena: Arena$@) //< makes one decision a
     _first: = policy.decide(p, 0I64, 0I64, arena)
     arena.restore(mark)
 
-priv fn stop_wheels(_msg: U8[]) //< the panic hook: the wheels stop before the program does
-    //< Caution: **A freestanding panic loops for ever, and the PWM keeps its last duty.** With no
-    //< hook a panic while driving leaves the car running with nothing deciding.
-    //< An index out of range or a division by zero stops in the runtime without calling this
-    //< hook. So `policy.load` still has to refuse every file that could cause one.
-    motor.stop()
-
-priv fn say_restart(ln: con.Line$@, why: watchdog.Reset_reason) //<
-    //< Says on the console why the chip started, and the panic left by the run before, if any
-    //< **A watchdog restart is the only trace of a hang**: the run that hung could print nothing.
-    if why == watchdog.Reset_reason.watchdog
-        con.say(ln, "[car]", "restarted by the watchdog: the program had stopped answering")
-    else if why == watchdog.Reset_reason.other
-        con.say(ln, "[car]", "restarted by a reboot (boot ROM or debugger)")
-    switch take_panic_record()
-    case .some(info)
-        ln.reset()
-        ln.str("[car] the run before panicked: ")
-        ln.str(info.msg)
-        _sent: = ln.flush()
-    case .none {}
-
 fn car_task(_arg: Void$@): Void
-    // Read why it started **before arming**, which leaves the mark again. **Stop a watchdog left
-    // running first**: start-up takes far longer than its timeout, and nothing feeds it yet.
+    // Read why it started **before arming**, which leaves the mark again. `pilot_boot.bring_up`
+    // stops a watchdog left running, and sets the panic hook that stops the wheels.
     started_by: = watchdog.last_reset()
-    watchdog.disarm()
     if !pilot_boot.bring_up()
         return
-    // From here the motors are set up, so stopping them in a panic is safe.
-    panic_hook = stop_wheels
     $ln: = con.Line()
     abuf: = U8$[]::arena_buf
     $arena: = Arena.from_buffer(Void$@::abuf.ptr, abuf.len)
@@ -459,7 +429,7 @@ fn car_task(_arg: Void$@): Void
         // **Keep it lit through the wait** (seconds on battery).
         status.State.starting.show(false)
 
-    say_restart(ln@, started_by)
+    con.say_restart(ln@, "[car]", started_by)
     if !records.claim(RECORD_MARKER)
         con.say(ln@, "[car]", "no on-board records (flash region unavailable)")
     else if records.wiped()
@@ -524,7 +494,7 @@ fn car_task(_arg: Void$@): Void
     // **Armed only here, where the wheels can first turn.** Start-up (the console, the link and
     // the download) waits up to tens of seconds, past the watchdog's longest timeout, while the
     // wheels stay stopped. The motor stop is what the watchdog is for.
-    watchdog.arm(WATCHDOG_MS) catch
+    watchdog.arm(boot.CAR_WATCHDOG_MS) catch
         con.say(ln@, "[car]", "FAILED to arm the watchdog")
 
     // It does not return; the lines **that keep flowing** are the sign of life.

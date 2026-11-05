@@ -184,6 +184,9 @@ fn test_null_arena_json() //< a JSON document, and a builder, free with their ow
     assert(doc.val.get("a").get_at(1).as_str().unwrap_or("").equals("x") &&
         doc.val.get("c").as_str().unwrap_or("").equals("d"),
         "a document parsed with a null arena reads")
+    $keys: = doc.val.obj_keys(null)
+    assert(keys.len == 2 && keys.get(1).equals("c"), "an object's keys, listed on the heap")
+    keys.free()
     doc.free()
     back_to(before, "a parsed document frees all of itself")
     top: = json.parse("\"s\"", null) catch panic("a lone string parses")
@@ -414,7 +417,7 @@ fn test_null_arena_fuzz() //< the fuzz driver's steps: a record frees with `free
     back_to(before, "the seeds free as gather's summary says, and the folders' work is gone")
     found: = fuzz.findings_new(null)
     t: = fuzz.Trial::{ .got = subproc.Run_result::{ .exit_code = .some(139), .stdout_data = "",
-        .stderr_data = "", .output_lost = false }, .slow = false }
+        .stderr_data = "", .output_lost = false, .output_cut = false }, .slow = false }
     fuzz.note(found, t@, 0, "seed", "data", dir, ".bin")
     assert(found.crashes.len == 1, "note into findings made with a null arena")
     found.free()

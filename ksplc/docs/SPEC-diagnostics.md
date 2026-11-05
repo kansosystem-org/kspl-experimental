@@ -12,20 +12,21 @@ A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights"
 
 The terminal view omits parenthetical document references and Markdown link targets. It wraps prose, preserves code examples, and names this document once at the end.
 
-**Eight shapes are errors with no code**, so no setting can silence them. An error has no section: its message explains itself.
+**Nine shapes are errors with no code**, so no setting can silence them. An error has no section: its message explains itself.
 
 | The shape | What goes wrong |
 | :-- | :-- |
 | a division or remainder by `0` | changes what runs |
 | a bit shift by the left side's type width or more, or by a negative amount | changes what runs |
 | an integer literal outside its range (`U8 = 300` and the like) | changes what runs |
+| a carriage return (`\r`) with no line feed after it, anywhere in the source | an editor ends a line there and the compiler would not, so they would number the lines below differently |
 | a line in the indentation notation whose column matches no block | the reader and the compiler would disagree. `ksplc fmt` rebuilds the columns from the tree, so no formatted source meets it |
 | `extern` before a `priv` definition | written but does nothing: `priv` makes the generated C `static`, so the published name still links to nothing outside |
 | a `;` at the end of a statement's line in the indentation notation | a second way of writing the line's end, which already ends the statement. `ksplc fmt` drops it |
 | a `;` right after the `}` of a block written on one line, where that block ends its statement (`if c { f() }; g()`) | a second way of writing that end. A block inside a value (`x: = f() catch { 0 }; g(x)`) ends no statement, and its `;` stays |
 | a method a trait requires, written in another block of the type than `impl T: Trait` (`'Arena: Manual_free' requires 'free'. Move 'fn free' (line 650) into this block`) | the conformance block no longer shows what meets the trait. The error names the line the method stands on now |
 
-The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). For `extern` the rule is "11.3 Publishing a KSPL definition to C (`extern` with a body)", and for a trait's methods "5.3 Checking trait conformance", in the same document.
+The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). For a carriage return the rule is "2. Lexical structure". For `extern` the rule is "11.3 Publishing a KSPL definition to C (`extern` with a body)", and for a trait's methods "5.3 Checking trait conformance", in the same document.
 
 ## 2. The list of warnings (W)
 

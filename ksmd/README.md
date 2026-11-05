@@ -9,11 +9,13 @@ The reader models every structure of the design, and the writer saves it in cano
 The editing page edits one document in a browser, with undo and redo. It holds:
 
 * **Prose**: formatting, lists and checklists, quotes, dividers, code, colours and alignment, and notes.
-* **Tables**: formulas, a document's own functions written in KSPL, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. Columns resize, fit their values or take a typed share of the width, and rows take a typed height. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
+* **Tables**: formulas, a document's own functions written in KSPL, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. Columns take a width in characters and rows a height in points, by a drag, a double-click that fits them, or a number typed. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
 * **Tools**: a menu bar, a right-click table menu, a quick access bar, find and replace, a contents panel, Read-only, and Print or PDF. The status line shows a sum or a word count, and the page turns dark with the system.
 * **Files**: served by the local server on a workspace folder, the page opens and saves files, shows includes and images. An include goes in from Insert, and an image from Insert, a paste or a drop. It notices a change on disk and holds unsaved edits as drafts. A `.ksmd` file double-clicked in a file manager opens in the browser.
 
 Markdown supplies familiar notation, but compatibility with `.md` is not a requirement. Presentations are outside ksmd's scope.
+
+**New to ksmd?** [`ksmd/docs/TUTORIAL-ksmd.md`](docs/TUTORIAL-ksmd.md) walks from nothing to a saved document. [`ksmd/docs/SPEC-editing-page.md`](docs/SPEC-editing-page.md) is the reference to look a task, a key or a function up.
 
 ## Open a document by double-clicking it
 
@@ -153,7 +155,7 @@ flowchart BT
 | [calc/value.kspl](calc/value.kspl) | A value a formula calculates, and the arithmetic and comparisons between values |
 | [calc/bases.kspl](calc/bases.kspl) | Whole numbers written in hexadecimal or binary, and read back |
 | [calc/calc.kspl](calc/calc.kspl) | Calculates every table cell, apart from the document |
-| [calc/functions.kspl](calc/functions.kspl) | The functions a formula calls by name, as ordinary KSPL functions: `sum`, `round`, `date`, the base conversions and the rest |
+| [calc/functions.kspl](calc/functions.kspl) | The functions a formula calls by name, as ordinary KSPL functions: `sum`, `round`, `date`, the base conversions, the text functions and the rest |
 | [calc/args.kspl](calc/args.kspl) | How a function receives its arguments: what each parameter type takes |
 | [calc/glue.kspl](calc/glue.kspl) | Writes the table that calls a file's functions, from their signatures |
 | [calc/wire.kspl](calc/wire.kspl) | A call to a person's own function, and its answer, as bytes between the page and its worker |
@@ -162,6 +164,8 @@ flowchart BT
 | [syntax/inline.kspl](syntax/inline.kspl) | Reads the inline markup of a paragraph, a heading or a list item |
 | [syntax/clause.kspl](syntax/clause.kspl) | Reads a table, an include or an image clause |
 | [syntax/chart.kspl](syntax/chart.kspl) | A chart clause, the table and columns it names, and the clause written back |
+| [syntax/drawing.kspl](syntax/drawing.kspl) | The shapes drawn over an image or a chart: the `draw` lines of its clause, read and written back |
+| [syntax/settings.kspl](syntax/settings.kspl) | The document's own settings: the `:::document` clause, read, checked and written back |
 | [syntax/writer.kspl](syntax/writer.kspl) | Saves the model as canonical source |
 | [files/files.kspl](files/files.kspl) | Which paths are refused by their text alone, and `Files`, where a document's files are read from |
 | [files/workspace.kspl](files/workspace.kspl) | The workspace on disk: the refusal of links, and reading and saving one source |
@@ -169,18 +173,21 @@ flowchart BT
 | [files/assemble.kspl](files/assemble.kspl) | The assembled view: each included file in place, with where each block came from |
 | [files/image.kspl](files/image.kspl) | An image's format and size, read from its header |
 | [edit/series.kspl](edit/series.kspl) | How a line of cells goes on when the fill handle drags it |
-| [edit/edit.kspl](edit/edit.kspl) | Inserts, removes and moves rows and columns, sets and copies cells, and adds, removes and renames tables |
+| [edit/edit.kspl](edit/edit.kspl) | Inserts and removes rows and columns, sets and copies cells, and adds, removes and renames tables |
+| [edit/moving.kspl](edit/moving.kspl) | Moves rows, columns and blocks of cells |
 | [edit/sort.kspl](edit/sort.kspl) | Orders a table's data rows by one key for each row |
 | [edit/styled.kspl](edit/styled.kspl) | A block's text as segments with marks, and the inline nodes built from them |
 | [edit/region.kspl](edit/region.kspl) | Blocks taken apart into units of text, and settled into blocks again |
 | [edit/history.kspl](edit/history.kspl) | Undo and redo: each action's changes, kept to swap back |
 | [edit/editor.kspl](edit/editor.kspl) | The editor: the selection, and every action on prose as one transaction |
 | [edit/editor_charts.kspl](edit/editor_charts.kspl) | The editor's actions on charts |
+| [edit/editor_drawings.kspl](edit/editor_drawings.kspl) | The editor's action on the shapes drawn over an image or a chart |
+| [edit/editor_settings.kspl](edit/editor_settings.kspl) | The editor's action on the document's own settings |
 | [edit/editor_tables.kspl](edit/editor_tables.kspl) | The editor's actions on tables: rows, columns, cells, looks, sorting, pasting, filling |
 | [edit/editor_looks.kspl](edit/editor_looks.kspl) | The editor's looks of text, Clear format, and what stands at the selection |
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
-| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
+| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. What they all share, the memory, the open document and the result, is `bridge_session.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `drawings.js`, `settings.js`, `sizes.js`, `merge.js`, `find.js`, `file.js` and `touch.js`. `bundle.kspl` makes the page one file |
 | [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions'. `wasm_build.kspl` runs it for `ksmd/Makefile` |
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
 | [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |
@@ -191,8 +198,14 @@ flowchart BT
 
 How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).
 
-* [`ksmd/edit/edit.kspl`](edit/edit.kspl): **moving** goes to a new `moving.kspl` beside it. That is `move_rows`, `move_columns` and `move_cells`, with the helpers only they use (`shift_rows`, `shift_columns`, `rotate`, `Area`). Across the cut they call `fits`, `charts_found`, `chosen`, `restore` and `empty_cell`, which then become public. Inserting, removing, setting and copying stay.
+No file stands near the limit now.
 
 ## Further reading
 
-Read the [design](docs/DESIGN-ksmd.md) for the document language, the model, the file lifecycle and the limits. The [page's design](docs/DESIGN-page.md) covers the editing page. The repository's [development principles](../docs/DESIGN-principles.md) explain how to weigh reuse and complexity.
+| Document | What it is for | Who reads it |
+| :-- | :-- | :-- |
+| [`ksmd/docs/TUTORIAL-ksmd.md`](docs/TUTORIAL-ksmd.md) | A first walk: a document with a table, a chart and a diagram, saved and printed | A newcomer to ksmd, with a clone that builds and a browser |
+| [`ksmd/docs/SPEC-editing-page.md`](docs/SPEC-editing-page.md) | The reference: every task, command, key and function of the editing page | A person who writes documents in ksmd |
+| [`ksmd/docs/DESIGN-ksmd.md`](docs/DESIGN-ksmd.md) | The document language, the model, the file lifecycle and the limits, and why | Whoever changes ksmd |
+| [`ksmd/docs/DESIGN-page.md`](docs/DESIGN-page.md) | Why the editing page works the way it does | Whoever changes the page |
+| [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md) | How to weigh reuse and complexity | Whoever changes Kanso |

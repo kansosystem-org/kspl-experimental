@@ -1,5 +1,5 @@
-//< Editing a table: inserting, removing and moving lines, and setting, copying and moving cells
-//< Sorting the rows is in `sort.kspl`.
+//< Editing a table: inserting and removing lines, and setting and copying cells
+//< Moving lines and cells is in `moving.kspl`, and sorting the rows in `sort.kspl`.
 //< A reference stays attached to its row and column, so an insertion or a move changes only where
 //< the reference is written. Removing a row or a column turns a reference to it into `#REF!`, and
 //< moves a range's corner on it one line inward.
@@ -14,10 +14,13 @@ import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, same_format, 
 import "ksmd/model/group" { after_insert, after_remove, fault_of, innermost, order }
 import "ksmd/model/look" { Look_part, is_note, plain_look, with_part }
 import "ksmd/model/model" { Cell, Cell_kind, Corner, Document, Group, MAX_CELLS, MAX_COLUMNS,
-    MAX_FORMULA, MAX_HEIGHT, MAX_ROWS, MAX_WEIGHT, MIN_HEIGHT, Piece, Row_height, Table }
+    MAX_FORMULA, MAX_HEIGHT, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, Piece, Row_height, Table,
+    UNBOUND }
 import "ksmd/model/rule" { Rule, no_rule }
 import "ksmd/syntax/chart" { reads_back }
 import "ksmd/syntax/clause" { is_table_name, reads_as_formula }
+import "ksmd/syntax/inline" { is_destination }
+import "ksmd/syntax/settings" { is_label }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -34,7 +37,7 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     not_a_value //< the text is not a value of that kind, or would not read back as one cell
     not_a_name //< a table name is 1 to 255 bytes of text, with no control character
     name_taken //< another table of this source has the name
-    not_widths //< a table takes one width per column, each a whole number from 1 to 10,000
+    not_widths //< a table takes one width per column, each 0.5 to 255 characters or none
     not_a_height //< a row's height is a whole number of points from 6 to 409
     not_a_filter //< a column's filter that the `filter` attribute does not hold
     not_a_look //< a colour is `#rrggbb`, a size 6 to 72 points, an alignment left, center or right
@@ -43,12 +46,16 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     places //< a number format shows 0 to 9 decimal places
     groups_cross //< a group holds another whole, or shares no row with it
     grouped_already //< these rows are a group already
-    too_deep //< a row stands in at most 8 groups
+    too_deep //< a row or a column stands in at most 8 groups
     no_group //< no group holds these rows
     not_a_choice //< the column takes only its choices
     not_choices //< a list of choices that cannot be saved
     not_a_rule //< a colour rule that cannot be saved
+    no_choices //< only a column with choices colours rows
+    not_a_caption //< a caption is 1 to 200 bytes of text, with no braces
     not_a_note //< a note is 1 to 1,000 bytes of text
+    not_text //< only a text cell holds a link
+    not_a_link //< a link goes to an https:, http: or mailto: address, or a `#` place
     chart_name //< a chart would not find its column again by the column's name
 
 impl Edit_error
@@ -78,8 +85,8 @@ impl Edit_error
             return "This look cannot be saved. A colour is '#' and six hex digits, a size 6 to 72 \
                 points, and alignment left, center or right."
         case .not_widths
-            return "These column widths cannot be saved. Give each column one whole number from 1 \
-                to 10,000."
+            return "These column widths cannot be saved. A column's width is 0.5 to 255 characters, \
+                with at most one decimal place, or none for a column that fits its text."
         case .not_a_filter
             return "This filter cannot be saved. Clear it, and choose the values or the condition \
                 again."
@@ -93,22 +100,31 @@ impl Edit_error
         case .places
             return "A number format shows 0 to 9 decimal places."
         case .groups_cross
-            return "A group holds another group whole, or none of its rows. Choose rows that hold \
-                each group whole, or none of it."
+            return "A group holds another group whole, or none of it. Choose rows or columns that \
+                hold each group whole, or none of it."
         case .grouped_already
-            return "These rows are a group already."
+            return "These rows or columns are a group already."
         case .too_deep
-            return "A row stands in at most 8 groups."
+            return "A row or a column stands in at most 8 groups."
         case .no_group
-            return "No group holds these rows. Choose a row inside a group."
+            return "No group holds these rows or columns. Choose one inside a group."
         case .not_a_choice
             return "This column takes only its choices. Choose one from the list, or change the \
                 column's choices."
+        case .not_text
+            return "Only a cell that holds text takes a link. Type its text first."
+        case .not_a_link
+            return "A link goes to an https:, http: or mailto: address, or to a '#' place, with no \
+                space or bracket."
         case .not_a_note
             return "This note cannot be saved. A note is 1 to 1,000 bytes of text."
         case .chart_name
             return "A chart finds its columns by their names. Give each column it shows a name no \
                 other column has, with no ','."
+        case .not_a_caption
+            return "A caption is 1 to 200 bytes of text, with no line break or brace."
+        case .no_choices
+            return "Only a column with choices colours rows. Give the column its choices first."
         case .not_a_rule
             return "This rule cannot be saved. Compare with a number, or with text that has no ',', \
                 ';', '\"' or '\\', and choose a colour."
@@ -116,7 +132,7 @@ impl Edit_error
             return "These choices cannot be saved. Give 1 to 50 choices separated by commas, with \
                 no '|', '\"' or '\\', and none twice."
 
-priv struct Saved //< a piece an edit changed, kept to undo the edit
+struct Saved //< a piece an edit changed, kept to undo the edit
     table: Sz
     index: Sz
     piece: Piece
@@ -141,7 +157,7 @@ fn insert_rows(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!
         narrow(t.rows@, at, count)
         t.next_id -= count
         throw .too_long
-    after_insert(t, at, count)
+    after_insert(t.groups@, at, count)
     attach_loose(doc, arena)
 
 fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
@@ -155,8 +171,8 @@ fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Vo
         throw .too_many_columns
     if t.cells.len + count * (t.rows.len + 1) > MAX_CELLS
         throw .too_many_cells
-    if t.weights.len > 0
-        widen(t.weights@, at, count, t.weights[at if at < t.weights.len else at - 1])
+    if t.widths.len > 0
+        widen(t.widths@, at, count, t.widths[at if at < t.widths.len else at - 1])
     if t.formats.len > 0
         widen(t.formats@, at, count, no_format())
     if t.choices.len > 0
@@ -172,8 +188,8 @@ fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Vo
         remove_cells(t, at, count, false)
         narrow(t.columns@, at, count)
         t.next_id -= count
-        if t.weights.len > 0
-            narrow(t.weights@, at, count)
+        if t.widths.len > 0
+            narrow(t.widths@, at, count)
         if t.formats.len > 0
             narrow(t.formats@, at, count)
         if t.choices.len > 0
@@ -181,6 +197,7 @@ fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Vo
         if t.rules.len > 0
             narrow(t.rules@, at, count)
         throw .too_long
+    after_insert(t.column_groups@, at, count)
     attach_loose(doc, arena)
 
 fn remove_row(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
@@ -203,7 +220,7 @@ fn remove_row(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
             t.cells.insert(t.at(at, c), cells[c])
         restore(doc, saved@)
         throw .too_long
-    after_remove(t, at)
+    after_remove(t.groups@, at)
 
 fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
     //< Removes a column, its name, width and format; a reference to it becomes `#REF!`
@@ -219,10 +236,10 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
     $cells: = List<|Cell|>(scratch)
     for r in Range.asc(t.rows.len + 1)
         cells.push(t.cells[r * t.columns.len + at])
-    $weight: Sz = 0
-    if t.weights.len > 0
-        weight = t.weights[at]
-        t.weights.remove_at(at)
+    $width: Sz = 0
+    if t.widths.len > 0
+        width = t.widths[at]
+        t.widths.remove_at(at)
     $format: = no_format()
     if t.formats.len > 0
         format = t.formats[at]
@@ -242,8 +259,8 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
         columns: = t.columns.len
         for r in Range.asc(t.rows.len + 1)
             t.cells.insert(r * columns + at, cells[r])
-        if t.weights.len > 0
-            t.weights.insert(at, weight)
+        if t.widths.len > 0
+            t.widths.insert(at, width)
         if t.formats.len > 0
             t.formats.insert(at, format)
         if t.choices.len > 0
@@ -252,158 +269,13 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
             t.rules.insert(at, rule)
         restore(doc, saved@)
         throw .too_long
-
-fn move_rows(doc: Document$@, u: Sz, first: Sz, count: Sz, at: Sz): Void!Edit_error //<
-    //< Moves `count` data rows from `first` to stand before the row at `at`; at the count of rows,
-    //< after the last one
-    //< Each row keeps its identity, so its references, height and notes go with it. A place inside
-    //< the rows moved, or just after them, changes nothing.
-    t: = table_at(doc, u)!
-    if count < 1 || first < 0 || first + count > t.rows.len || at < 0 || at > t.rows.len
-        throw .outside
-    if at >= first && at <= first + count
-        return
-    lo: = at if at < first else first
-    mid: = first if at < first else first + count
-    hi: = first + count if at < first else at
-    shift_rows(t, lo, mid, hi)
-    fits(doc) catch
-        shift_rows(t, lo, lo + hi - mid, hi)
-        throw .too_long
-
-fn move_columns(doc: Document$@, u: Sz, first: Sz, count: Sz, at: Sz): Void!Edit_error //<
-    //< Moves `count` columns from `first` to stand before the column at `at`; at the count of
-    //< columns, after the last one
-    //< Each column keeps its identity, name, width, format, choices, rule and filter. A place
-    //< inside the columns moved, or just after them, changes nothing.
-    t: = table_at(doc, u)!
-    if count < 1 || first < 0 || first + count > t.columns.len || at < 0 || at > t.columns.len
-        throw .outside
-    if at >= first && at <= first + count
-        return
-    lo: = at if at < first else first
-    mid: = first if at < first else first + count
-    hi: = first + count if at < first else at
-    shift_columns(t, lo, mid, hi)
-    fits(doc) catch
-        shift_columns(t, lo, lo + hi - mid, hi)
-        throw .too_long
-    // Of two columns with one name, a chart finds the first.
-    charts_found(doc, u) catch why
-        shift_columns(t, lo, lo + hi - mid, hi)
-        throw why
-
-fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, to_row: Sz,
-    to_column: Sz): Void!Edit_error //<
-        //< Moves the `height` by `width` cells at `top`, `left` to stand from `to_row`,
-        //< `to_column` of the same table, as a paste after a cut moves them
-        //< Each cell there takes a moved cell whole: its value or formula, look and note. A cell
-        //< left behind becomes empty. Row -1 is the names, which move only along the names row.
-        //< A reference to a moved cell follows it, and a range follows when it moves whole. A
-        //< reference to a cell written over becomes `#REF!`, and so does a range whose two corners
-        //< were written over. A range moved in part stays where it is.
-    t: = table_at(doc, u)!
-    if height < 1 || width < 1 || top < -1 || left < 0 || to_row < -1 || to_column < 0 ||
-        (top < 0 && to_row >= 0) || (top >= 0 && to_row < 0) || top + height > t.rows.len ||
-        to_row + height > t.rows.len || left + width > t.columns.len ||
-        to_column + width > t.columns.len
-        throw .outside
-    if top == to_row && left == to_column
-        return
-    // A value moved into a column with choices must be one of them, as for a copy.
-    for r in Range.asc(height)
-        for c in Range.asc(width)
-            cell: = t.cells[t.at(top + r, left + c)]
-            if top + r >= 0 &&
-                (cell.kind == .text || cell.kind == .number || cell.kind == .date)
-                _ok: = chosen(t, to_column + c, cell.text)!
-    defer scratch: = Arena(64 * 1024)
-    at: = Positions(doc, scratch)
-    $saved: = List<|Saved|>(scratch)
-    from: = Area::{ .top = top, .left = left, .height = height, .width = width }
-    to: = Area::{ .top = to_row, .left = to_column, .height = height, .width = width }
-    for v in Range.asc(doc.tables.len)
-        for i in Range.asc(doc.tables[v].cells.len)
-            cell: = doc.tables[v].cells[i]
-            if cell.kind != .formula
-                continue
-            for k in Range(cell.first, cell.first + cell.count, 1)
-                $p: = doc.tables[v].pieces[k]
-                if p.kind == .text || p.table != u
-                    continue
-                a_moves: = from.holds(at@, u, p.from)
-                b_moves: = from.holds(at@, u, p.to)
-                if a_moves && b_moves
-                    p.from = moved(t, at@, u, p.from, to_row - top, to_column - left)
-                    p.to = moved(t, at@, u, p.to, to_row - top, to_column - left)
-                else if !a_moves && !b_moves && to.holds(at@, u, p.from) &&
-                    to.holds(at@, u, p.to)
-                    p = text_piece(BROKEN)
-                else
-                    continue
-                saved
-                    .push(Saved::{ .table = v, .index = k,
-                    .piece = doc.tables[v].pieces[k] })
-                doc.tables[v].pieces[k] = p
-    // The cells of both places as they were, to put back on a refusal.
-    $places: = List<|Sz|>(scratch)
-    $was: = List<|Cell|>(scratch)
-    for which in Range.asc(2)
-        area: = from if which == 0 else to
-        for r in Range.asc(height)
-            for c in Range.asc(width)
-                index: = t.at(area.top + r, area.left + c)
-                places.push(index)
-                was.push(t.cells[index])
-    $name: = empty_cell()
-    name.kind = .text
-    for r in Range.asc(height)
-        for c in Range.asc(width)
-            t.cells[t.at(top + r, left + c)] = name if top + r < 0 else empty_cell()
-    for r in Range.asc(height)
-        for c in Range.asc(width)
-            t.cells[t.at(to_row + r, to_column + c)] = was[r * width + c]
-    fits(doc) catch
-        put_back(doc, u, places@, was@, saved@)
-        throw .too_long
-    // A name moved can leave a chart without its column.
-    charts_found(doc, u) catch why
-        put_back(doc, u, places@, was@, saved@)
-        throw why
-    // A filter matches the text a cell shows, so a column whose cells change format loses it.
-    for c in Range.asc(width)
-        for r in Range.asc(height)
-            format: = was[r * width + c].look.format
-            if top + r >= 0 && !same_format(format, no_format())
-                drop_filters(t, left + c, left + c)
-            if top + r >= 0 &&
-                !same_format(format, was[height * width + r * width + c].look.format)
-                drop_filters(t, to_column + c, to_column + c)
-
-priv struct Area //< a rectangle of a table's cells, by places
-    top: Sz
-    left: Sz
-    height: Sz
-    width: Sz
-
-impl Area
-    fn holds(a: Self@, at: Positions@, u: Sz, c: Corner): Bool //< whether a corner stands in it
-        row: = at.of(u, c.row)
-        column: = at.of(u, c.column)
-        return row >= 0 && column >= 0 && row >= a.top && row < a.top + a.height &&
-            column >= a.left && column < a.left + a.width
-
-priv fn moved(t: Table@, at: Positions@, u: Sz, $c: Corner, rows: Sz, columns: Sz): Corner //<
-    //< The corner `rows` lower and `columns` further right, keeping its `$` marks
-    c.row = t.rows[at.of(u, c.row) + rows]
-    c.column = t.columns[at.of(u, c.column) + columns]
-    return c
-
-priv fn put_back(doc: Document$@, u: Sz, places: List<|Sz|>@, was: List<|Cell|>@,
-    saved: List<|Saved|>$@) //< puts back the cells and pieces `move_cells` changed
-    for j in Range.asc(places.len)
-        doc.tables[u].cells[places[j]] = was[j]
-    restore(doc, saved)
+    after_remove(t.column_groups@, at)
+    if t.row_colors == id
+        t.row_colors = UNBOUND
+    for i in Range.asc(t.merged.len)
+        if t.merged[i] == id
+            t.merged.remove_at(i)
+            break
 
 fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: U8[],
     arena: Arena$@): Void!Edit_error //<
@@ -452,7 +324,7 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
     // A new value keeps the cell's look and note, as a spreadsheet's cell keeps its format.
     t.cells[index] = with_look(cell, t.cells[index])
 
-priv fn chosen(t: Table@, column: Sz, text: U8[]): U8[]!Edit_error //<
+fn chosen(t: Table@, column: Sz, text: U8[]): U8[]!Edit_error //<
     //< The text a cell of the column holds: one of its choices, as the list spells it, where the
     //< column has a list; the text itself where it has none
     if t.choices.len == 0 || t.choices[column].len == 0
@@ -460,9 +332,12 @@ priv fn chosen(t: Table@, column: Sz, text: U8[]): U8[]!Edit_error //<
     return choice_of(t.choices[column], text) catch
         throw .not_a_choice
 
-priv fn with_look($cell: Cell, was: Cell): Cell //< the cell, with the look and note it had
+priv fn with_look($cell: Cell, was: Cell): Cell //< the cell, with the look, note and link it had
+    //< Only text holds a link, so a cell that becomes a number, a date, a formula or empty loses
+    //< it.
     cell.look = was.look
     cell.note = was.note
+    cell.link = was.link if cell.kind == .text else ""
     return cell
 
 fn copy_cell(doc: Document$@, from: Sz, row: Sz, column: Sz, to: Sz, to_row: Sz, to_column: Sz,
@@ -509,17 +384,18 @@ fn set_look(doc: Document$@, u: Sz, row: Sz, column: Sz, part: Look_part, value:
         drop_filters(t, column, column)
     t.cells[index].look = look
 
-fn group_rows(doc: Document$@, u: Sz, first: Sz, last: Sz): Void!Edit_error //<
-    //< Makes the data rows from `first` to `last` a group, shown
+fn group_lines(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz): Void!Edit_error //<
+    //< Makes the data rows, or the columns, from `first` to `last` a group, shown
     t: = table_at(doc, u)!
-    if first > last || last >= t.rows.len
+    if first < 0 || first > last || last >= (t.columns.len if columns else t.rows.len)
         throw .outside
-    t.groups.push(Group::{ .first = first, .last = last, .closed = false })
-    order(t.groups@)
-    if f: = fault_of(t.groups@)
-        for i in Range.asc(t.groups.len)
-            if t.groups[i].first == first && t.groups[i].last == last && !t.groups[i].closed
-                t.groups.remove_at(i)
+    groups: = t.column_groups@ if columns else t.groups@
+    groups.push(Group::{ .first = first, .last = last, .closed = false })
+    order(groups)
+    if f: = fault_of(groups)
+        for i in Range.asc(groups.len)
+            if groups[i].first == first && groups[i].last == last && !groups[i].closed
+                groups.remove_at(i)
                 break
         switch f
         case .twice
@@ -529,19 +405,22 @@ fn group_rows(doc: Document$@, u: Sz, first: Sz, last: Sz): Void!Edit_error //<
         default
             throw .groups_cross
 
-fn ungroup_rows(doc: Document$@, u: Sz, first: Sz, last: Sz): Void!Edit_error //<
-    //< Takes away the smallest group that holds the data rows from `first` to `last`
+fn ungroup_lines(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz): Void!Edit_error //<
+    //< Takes away the smallest group that holds the rows, or columns, from `first` to `last`
     t: = table_at(doc, u)!
-    at: = innermost(t.groups@, first, last) catch
+    groups: = t.column_groups@ if columns else t.groups@
+    at: = innermost(groups, first, last) catch
         throw .no_group
-    t.groups.remove_at(at)
+    groups.remove_at(at)
 
-fn show_group(doc: Document$@, u: Sz, first: Sz, last: Sz, shown: Bool): Void!Edit_error //<
-    //< Shows or hides the rows of the smallest group that holds the rows from `first` to `last`
+fn show_group(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz, shown: Bool):
+    Void!Edit_error //<
+        //< Shows or hides the lines of the smallest group that holds those from `first` to `last`
     t: = table_at(doc, u)!
-    at: = innermost(t.groups@, first, last) catch
+    groups: = t.column_groups@ if columns else t.groups@
+    at: = innermost(groups, first, last) catch
         throw .no_group
-    t.groups[at].closed = !shown
+    groups[at].closed = !shown
 
 fn set_choices(doc: Document$@, u: Sz, column: Sz, entry: U8[], arena: Arena$@): Void!Edit_error //<
     //< Gives a column its choices, as `choice.entry_of` makes them, or none with empty text
@@ -555,6 +434,9 @@ fn set_choices(doc: Document$@, u: Sz, column: Sz, entry: U8[], arena: Arena$@):
         for _ in Range.asc(t.columns.len)
             t.choices.push("")
     t.choices[column] = arena.dup_str(entry)
+    // Rows take their colours from a list, so a column without one colours none.
+    if entry.len == 0 && t.row_colors == t.columns[column]
+        t.row_colors = UNBOUND
 
 fn set_rule(doc: Document$@, u: Sz, column: Sz, r: Rule): Void!Edit_error //<
     //< Gives a column its colour rule, or none with `no_rule()`
@@ -566,6 +448,40 @@ fn set_rule(doc: Document$@, u: Sz, column: Sz, r: Rule): Void!Edit_error //<
             t.rules.push(no_rule())
     t.rules[column] = r
 
+fn set_caption(doc: Document$@, u: Sz, caption: U8[], arena: Arena$@): Void!Edit_error //<
+    //< Gives a table the words shown above it, or takes them away with empty text
+    t: = table_at(doc, u)!
+    if caption.len > 0 && !is_label(caption)
+        throw .not_a_caption
+    t.caption = arena.dup_str(caption)
+
+fn set_merged(doc: Document$@, u: Sz, column: Sz, on: Bool): Void!Edit_error //<
+    //< Shows a column's repeated values once, as merged, or each again
+    t: = table_at(doc, u)!
+    if column < 0 || column >= t.columns.len
+        throw .outside
+    id: = t.columns[column]
+    for i in Range.asc(t.merged.len)
+        if t.merged[i] == id
+            if !on
+                t.merged.remove_at(i)
+            return
+    if on
+        t.merged.push(id)
+
+fn set_row_colors(doc: Document$@, u: Sz, column: Sz): Void!Edit_error //<
+    //< Colours each row by the choice that column `column` holds, or no row with -1
+    //< Only a column with choices colours rows, so a row's colours always come from its list.
+    t: = table_at(doc, u)!
+    if column == -1
+        t.row_colors = UNBOUND
+        return
+    if column < 0 || column >= t.columns.len
+        throw .outside
+    if t.choices.len == 0 || t.choices[column].len == 0
+        throw .no_choices
+    t.row_colors = t.columns[column]
+
 fn set_note(doc: Document$@, u: Sz, row: Sz, column: Sz, note: U8[], arena: Arena$@):
     Void!Edit_error //<
         //< Gives a data cell a note, or takes its note away with empty text
@@ -576,20 +492,37 @@ fn set_note(doc: Document$@, u: Sz, row: Sz, column: Sz, note: U8[], arena: Aren
         throw .not_a_note
     t.cells[t.at(row, column)].note = arena.dup_str(note)
 
-fn set_widths(doc: Document$@, u: Sz, weights: List<|Sz|>@): Void!Edit_error //<
-    //< Gives each column a relative width: its weight divided by the sum of the weights
+fn set_link(doc: Document$@, u: Sz, row: Sz, column: Sz, link: U8[], arena: Arena$@):
+    Void!Edit_error //<
+        //< Gives a text cell a link, or takes its link away with empty text
     t: = table_at(doc, u)!
-    if weights.len != t.columns.len
+    if row < 0 || row >= t.rows.len || column < 0 || column >= t.columns.len
+        throw .outside
+    if link.len > 0 && t.cells[t.at(row, column)].kind != .text
+        throw .not_text
+    if link.len > 0 && !is_destination(link)
+        throw .not_a_link
+    t.cells[t.at(row, column)].link = arena.dup_str(link)
+
+fn set_widths(doc: Document$@, u: Sz, widths: List<|Sz|>@): Void!Edit_error //<
+    //< Gives each column a width in tenths of a character, 0 for one that fits its text
+    //< Widths that are all 0 take the table's widths away, so the writer writes none.
+    t: = table_at(doc, u)!
+    if widths.len != t.columns.len
         throw .not_widths
-    for weight in weights
-        if weight < 1 || weight > MAX_WEIGHT
+    $any: = false
+    for width in widths
+        if width != 0 && (width < MIN_WIDTH || width > MAX_WIDTH)
             throw .not_widths
-    t.weights.clear()
-    for weight in weights
-        t.weights.push(weight)
+        any = any || width > 0
+    t.widths.clear()
+    if !any
+        return
+    for width in widths
+        t.widths.push(width)
 
 fn set_heights(doc: Document$@, u: Sz, rows: Sz[], points: Sz): Void!Edit_error //<
-    //< Gives each data row listed a least height in points; 0 takes it away
+    //< Gives each data row listed a height in points; 0 takes it away, so the row fits its lines
     //< Every row is checked first, so a refusal changes none.
     t: = table_at(doc, u)!
     if rows.len == 0
@@ -788,7 +721,8 @@ priv fn detach(doc: Document$@, u: Sz, id: Sz, row: Bool, saved: List<|Saved|>$@
                 continue
             for k in Range(cell.first, cell.first + cell.count, 1)
                 $p: = doc.tables[v].pieces[k]
-                if p.kind == .text || p.table != u
+                // Whole columns hold no row, so a row's removal only shortens them.
+                if p.kind == .text || p.table != u || row && p.kind == .columns
                     continue
                 $a: = line_of(p.from, row)
                 $b: = line_of(p.to, row)
@@ -809,7 +743,7 @@ priv fn detach(doc: Document$@, u: Sz, id: Sz, row: Bool, saved: List<|Saved|>$@
                 p.to = with_line(p.to, row, b)
                 doc.tables[v].pieces[k] = p
 
-priv fn restore(doc: Document$@, saved: List<|Saved|>@) //< puts back the pieces `detach` changed
+fn restore(doc: Document$@, saved: List<|Saved|>@) //< puts back the pieces `detach` changed
     for s in saved
         doc.tables[s.table].pieces[s.index] = s.piece
 
@@ -829,7 +763,7 @@ fn fits(doc: Document@): Void!Edit_error //<
             if out.slice().len > MAX_FORMULA
                 throw .too_long
 
-priv fn charts_found(doc: Document@, u: Sz): Void!Edit_error //<
+fn charts_found(doc: Document@, u: Sz): Void!Edit_error //<
     //< Refuses when a chart that a block shows would not find its columns of table `u` again
     for i in Range.asc(doc.blocks.len)
         b: = doc.blocks.get(i)
@@ -855,44 +789,6 @@ fn attach_loose(doc: Document$@, arena: Arena$@) //<
                 bind(doc, v, arena.dup_str(out.slice()), doc.tables[v].pieces@)
             doc.tables[v].cells[i].first = first
             doc.tables[v].cells[i].count = count
-
-priv fn shift_rows(t: Table$@, lo: Sz, mid: Sz, hi: Sz) //<
-    //< Puts the data rows from `mid` up to `hi` before those from `lo`, with their identities and
-    //< cells; `shift_rows(t, lo, lo + hi - mid, hi)` puts them back
-    rotate(t.rows@, lo, mid, hi)
-    rotate(t.cells@, t.at(lo, 0), t.at(mid, 0), t.at(hi, 0))
-
-priv fn shift_columns(t: Table$@, lo: Sz, mid: Sz, hi: Sz) //<
-    //< Puts the columns from `mid` up to `hi` before those from `lo`, with their identities, cells,
-    //< widths, formats, choices and rules, as `shift_rows` puts rows
-    columns: = t.columns.len
-    for r in Range.asc(t.rows.len + 1)
-        rotate(t.cells@, r * columns + lo, r * columns + mid, r * columns + hi)
-    rotate(t.columns@, lo, mid, hi)
-    if t.weights.len > 0
-        rotate(t.weights@, lo, mid, hi)
-    if t.formats.len > 0
-        rotate(t.formats@, lo, mid, hi)
-    if t.choices.len > 0
-        rotate(t.choices@, lo, mid, hi)
-    if t.rules.len > 0
-        rotate(t.rules@, lo, mid, hi)
-
-priv fn rotate<|T|>(list: List<|T|>$@, lo: Sz, mid: Sz, hi: Sz) //<
-    //< Puts the elements from `mid` up to `hi` before those from `lo`, moving each element once
-    reverse(list, lo, mid)
-    reverse(list, mid, hi)
-    reverse(list, lo, hi)
-
-priv fn reverse<|T|>(list: List<|T|>$@, lo: Sz, hi: Sz) //< the elements from `lo` up to `hi`
-    $i: = lo
-    $j: = hi - 1
-    for i < j
-        kept: = list[i]
-        list[i] = list[j]
-        list[j] = kept
-        i += 1
-        j -= 1
 
 priv fn add_cells(t: Table$@, at: Sz, count: Sz, row: Bool) //<
     //< Puts empty cells for `count` data rows from row `at`, or for `count` columns from column
@@ -983,6 +879,6 @@ priv fn is_utf8(text: U8[]): Bool //< whether the text is well-formed UTF-8, as 
         i += width
     return true
 
-priv fn empty_cell(): Cell
+fn empty_cell(): Cell
     return Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = 0,
         .look = plain_look(), .note = "" }

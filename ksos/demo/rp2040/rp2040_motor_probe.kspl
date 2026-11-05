@@ -11,6 +11,7 @@ import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/boards/freenove_4wd_pico/motor"
 import "ksos/demo/rp2040/common/bringup" as boot
 import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/watchdog"
 import "ksos/kernel/task" + { Task }
 
 $tcb_motor: Task
@@ -18,12 +19,17 @@ $stack_motor: U8[2048]
 
 const STEP_MS: U32 = 1000 //< how long one step is held
     //< It is real time (it uses the TIMER after clocks.init).
+const WATCHDOG_MS: U32 = 3 * STEP_MS //< how long the sequence may go without a feed [ms]
+    //< **Longer than the longest stretch between two feeds**: the last single wheel's step (1.5 s)
+    //< and the two beeps after it (0.6 s).
 const TEST_SPEED: I32 = 30 //< the trial run's speed
     //< It is kept low (wheels off the ground spinning fast are dangerous).
 
 priv fn hold(longitudinal: I32, lateral: I32, rotation: I32) //<
     //< Sends the command, holds it about a second, then stops and waits a little
     //< The wait leaves a pause before the next movement.
+    // **Fed once per step**, the sequence's lap.
+    watchdog.feed()
     motor.drive(longitudinal, lateral, rotation)
     timer.delay_ms(STEP_MS)
     motor.stop()
@@ -35,14 +41,20 @@ fn motor_task(_arg: Void$@): Void
     // you).
     boot.clocks_and_gpio() catch
         return
-    motor.init() catch
+    // A panic stops the wheels from here on.
+    boot.motors_up() catch
         boot.beep(5) // five beeps say that releasing the PWM's reset failed
         return
     boot.beep(1) // the start signal
+    // **Armed only here, where the wheels can first turn** (the reason is at `boot.motors_up`).
+    watchdog.arm(WATCHDOG_MS) catch
+        boot.beep(7) // seven beeps say that the watchdog could not be armed
+        return
 
     // 1. Turn each wheel on its own (in the order front-left -> rear-left -> rear-right ->
     //    front-right). This order matches board.kspl's indices.
     for w in Range.asc(board.WHEEL_COUNT)
+        watchdog.feed()
         motor.set_wheel(w, TEST_SPEED)
         timer.delay_ms(STEP_MS)
         motor.stop()
@@ -59,6 +71,8 @@ fn motor_task(_arg: Void$@): Void
     hold(0, 0, -TEST_SPEED) // turning the other way
 
     motor.stop()
+    // The sequence has ended, and nothing feeds it from here on.
+    watchdog.disarm()
     boot.beep(2) // the end; stopped from then on
 
 // The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.

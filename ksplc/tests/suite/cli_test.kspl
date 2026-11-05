@@ -17,6 +17,7 @@
 // Caution: **Do not copy the per-subcommand list into here.** Its source is each option's
 // `only_for` in ksplc/cli.kspl, which `--help` prints; the test checks that ksplc behaves as those
 // lines say.
+import "ksplc/tests/support/cli_cache"
 import "ksplc/tests/support/cli_emit" + { cli, ok_case, ng_case, std_flag }
 import "ksplc/tests/support/cli_sanitize"
 import "ksplc/tests/support/cli_streams"
@@ -32,14 +33,6 @@ import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
 import "std/verdict"
-
-priv const CACHE_ENV: U8[] = "KSPLC_CACHE_DIR" //<
-    //< The environment variable naming the disk cache's directory
-    //< It is cache_env_name in `ksplc/base/cache.kspl`.
-
-priv fn cache_root(arena: Arena$@): U8[] //< the cache directory for this suite only
-    //< `info cache-dir` and `clean` point here.
-    return fs.join(harness.tmp_dir(), "cli_cache", arena)
 
 priv struct Face_flags //<
     //< One line of `--help`'s "the options each subcommand accepts"
@@ -150,7 +143,7 @@ priv fn case_info(arena: Arena$@)
     ok_case("info std-dir", U8[][]::{ "info", "std-dir" }, "std")
     ok_case("info link-libs", U8[][]::{ "info", "link-libs" }, "-lm")
     ok_case("info exe-flags", U8[][]::{ "info", "exe-flags" }, "-")
-    ok_case("info cache-dir", U8[][]::{ "info", "cache-dir" }, cache_root(arena))
+    ok_case("info cache-dir", U8[][]::{ "info", "cache-dir" }, cli_cache.cache_root(arena))
     // One keyword a line, sorted and each once, as the other subjects answer a list.
     kw: = cli(U8[][]::{ "info", "keywords" })
     $prev: U8[] = ""
@@ -170,112 +163,6 @@ priv fn case_info(arena: Arena$@)
     for subject in U8[][]::{ "link-libs", "exe-flags", "cache-dir", "keywords", "package" }
         ng_case(arena.text().s("info \{subject\}: --std-dir= is refused").take(),
             U8[][]::{ "--std-dir=std", "info", subject }, "does not change this subject's answer")
-
-priv fn case_clean(arena: Arena$@)
-    ok_case("clean", U8[][]::{ "clean" }, cache_root(arena))
-    // A word after it would change nothing, so it is refused (Principle 5 in
-    // docs/DESIGN-principles.md).
-    ng_case("clean: a subject after it is turned away", U8[][]::{ "clean", "cache" },
-        "usage: ksplc clean\n")
-
-// Names the cleaning takes as its own (64 hexadecimal digits, a `ksplc run` slot's).
-priv const PLANTED_NAME: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-priv const SLOT_NAME: U8[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-priv fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where none can be made
-    //< Windows has no `ln -s`, and `mklink` needs privileges, so the case becomes a `skip` there.
-    r: =
-        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
-        return false
-    return r.exited_with(0) && fs.is_link(at)
-
-priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
-    //< `clean` removes a link planted in the cache, never what it points at
-    //< Whoever can write a shared cache folder could otherwise plant `run/<hex>`, or `obj` inside a
-    //< slot, pointing at a home folder. The next cleaning would empty it.
-    name: = "clean: a link in the cache leaves its target alone"
-    victim: = harness.sandbox("cli_victim")
-    kept: = fs.join(victim, "kept.txt", arena)
-    io.write_file(kept, "kept\n") catch
-        verdict.check(name, false, "the victim's file cannot be written")
-        return
-    run: = fs.join(cache_root(arena), "run", arena)
-    slot: = fs.join(run, SLOT_NAME, arena)
-    fs.mkdir_all(slot) catch
-        verdict.check(name, false, "the slot cannot be made")
-        return
-    if !plant_link(fs.join(run, PLANTED_NAME, arena), victim, arena) ||
-        !plant_link(fs.join(slot, "obj", arena), victim, arena)
-        verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
-        return
-    r: = cli(U8[][]::{ "clean" })
-    survived: = fs.exists(kept)
-    removed: = !fs.exists(slot)
-    why: = arena.text()
-        .s("exit \{r.code.unwrap_or(-1)\}, target file kept: \{survived\}, slot removed: \
-            \{removed\}\n\{r.out\}").take()
-    verdict.check(name, r.exited_with(0) && survived && removed, why)
-
-priv fn hand_over(dir: U8[]): Bool //<
-    //< Gives `dir` to user 65534 (`nobody`), and whether that worked
-    //< **Only root can hand a folder over**, so a user who is not tries `sudo -n`, which never
-    //< waits for a password.
-    if harness.run(U8[][]::{ "chown", "65534", dir }).exited_with(0)
-        return true
-    return harness.run(U8[][]::{ "sudo", "-n", "chown", "65534", dir }).exited_with(0)
-
-priv fn case_cache_others_can_write(arena: Arena$@) //<
-    //< A cache folder everyone can write is refused by `ksplc run`, and skipped by a compile
-    //< Whoever can write it could plant a normalized AST carrying inline assembly, or a built
-    //< program, and the next build would take it in. Windows's permissions are an ACL, not read
-    //< here.
-    name_run: = "cache: ksplc run refuses a cache folder everyone can write"
-    name_cc: = "cache: a compile warns and goes on without such a cache folder"
-    if sys.is_windows()
-        verdict.skip_check(name_run, "Windows's permissions are an ACL, which ksplc does not read")
-        return
-    dir: = harness.sandbox("cli_shared")
-    shared: = fs.join(dir, "cache", arena)
-    fs.mkdir(shared) catch
-        verdict.check(name_run, false, "the cache folder cannot be made")
-        return
-    if !harness.run(U8[][]::{ "chmod", "777", shared }).exited_with(0)
-        verdict.skip_check(name_run, "`chmod` cannot open the folder to everyone here")
-        return
-    src: = fs.join(dir, "hi.kspl", arena)
-    io.write_file(src, "fn main(): I32\n  return 0\n") catch
-        verdict.check(name_run, false, "the program cannot be written")
-        return
-    sys.set_env(CACHE_ENV, shared) catch
-        verdict.check(name_run, false, "the cache cannot be pointed at the folder")
-        return
-    ran: = harness.ksplc(U8[][]::{ "run", src })
-    built: = harness.ksplc(U8[][]::{ src, fs.join(dir, "hi.c", arena) })
-    name_foreign: = "cache: ksplc run refuses a cache folder another user owns"
-    foreign: = fs.join(dir, "theirs", arena)
-    fs.mkdir(foreign) catch {}
-    handed: = hand_over(foreign)
-    $theirs: = verdict.Run_out::{ .code = .some(0), .out = "" }
-    if handed
-        sys.set_env(CACHE_ENV, foreign)
-            catch panic("the cache cannot be pointed at the other folder")
-        theirs = harness.ksplc(U8[][]::{ "run", src })
-    // Caution: **Point it back before checking**, or every case after this one runs refused.
-    sys.set_env(CACHE_ENV, cache_root(arena)) catch panic("the cache cannot be pointed back")
-    verdict.check(name_run,
-        !ran.exited_with(0) && ran.out.find_str("chmod go-w").is_some(), ran.out)
-    verdict.check(name_cc,
-        built.exited_with(0) && built.out.find_str("not using the cache").is_some(), built.out)
-    if !handed
-        // Caution: **Required where `KANSO_REQUIRE_CHOWN=1`**, which the repository sets where its
-        // image gives the user sudo without a password: a skip there would never run the case.
-        harness.require_or_skip(name_foreign, "KANSO_REQUIRE_CHOWN",
-            "neither `chown` nor `sudo -n chown` can hand a folder to another user here (it takes \
-                root, or sudo without a password)")
-        return
-    verdict.check(name_foreign,
-        !theirs.exited_with(0) &&
-        theirs.out.find_str("belongs to another user").is_some(), theirs.out)
 
 priv fn case_emit_runtime(arena: Arena$@)
     dir: = harness.sandbox("cli")
@@ -530,6 +417,13 @@ priv fn case_refusals()
         "Rename this file and the files beside it from .kspls to .kspl")
     ng_case("fmt with no input gives fmt's usage line", U8[][]::{ "fmt" },
         "usage: ksplc fmt [options...] <input.kspl>...")
+    // **A subcommand left out or misspelled gets one line naming the likely command**, not the
+    // whole usage, whose length would bury the error.
+    ng_case("a lone .kspl input names ksplc run", U8[][]::{ "hello.kspl" },
+        "Did you mean 'ksplc run hello.kspl'? 'ksplc --help' lists the subcommands and options.")
+    ng_case("a misspelled subcommand names the nearest one",
+        U8[][]::{ "bulid", "a.kspl", "a.exe" },
+        "'bulid' is not a subcommand. Did you mean 'ksplc build'?")
 
 priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives formatting
     //< Caution: **Check that it survives formatting** — forget to put the mark back and `make fmt`
@@ -604,7 +498,7 @@ priv fn case_fmt_in_place_safe(arena: Arena$@) //<
             verdict.check("fmt --in-place: the samples can be written", false, p)
             return
     name_link: = "fmt --in-place: a link is refused, and stays a link to an unchanged file"
-    if plant_link(link, target, arena)
+    if cli_cache.plant_link(link, target, arena)
         f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", "--in-place", link }, dir)
         verdict.check(name_link,
             !f.exited_with(0) && f.out.find_str("symbolic link").is_some() && fs.is_link(link) &&
@@ -866,15 +760,13 @@ fn main(): I32
     // Caution: **Point the cache at your own directory before starting.** `clean` really
     // erases: left on the shared cache it erases what suites running in parallel are building (a
     // `ksplc run` loses a file mid-build).
-    sys.set_env(CACHE_ENV, cache_root(arena)) catch
+    sys.set_env(cli_cache.CACHE_ENV, cli_cache.cache_root(arena)) catch
         return harness.fatal("the cache cannot be pointed at this suite's own directory")
     // Caution: **Clear the package directory setting.** The Makefile passes it on, and this suite's
     // missing import must be searched from the working directory, as when nothing is set.
     sys.unset_env("KSPLC_PKG_SRC_DIR") catch panic("KSPLC_PKG_SRC_DIR could not be unset")
     case_info(arena)
-    case_clean(arena)
-    case_clean_keeps_link_targets(arena)
-    case_cache_others_can_write(arena)
+    cli_cache.run(arena)
     case_emit_runtime(arena)
     case_build(arena)
     case_main_failure_status(arena)
@@ -894,6 +786,7 @@ fn main(): I32
     cli_emit.case_surface_doc(arena)
     cli_emit.case_emit_libs(arena)
     cli_emit.case_output_is_input(arena)
+    cli_emit.case_output_cut_short(arena)
     case_entry_spelling(arena)
     case_diagnostic_json(arena)
     return harness.finish()

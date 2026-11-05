@@ -95,36 +95,7 @@ priv fn check_method_receiver_lvalue(c: Sema_ctx$@, left: Ast_node$@, def_node: 
     recv_node: = left.get_postfix_receiver()
     member: = left.get_postfix_member()
     c.refuse_packed_receiver(recv_node, def_node, member.text if member != null else "")
-    switch c.env.method_receiver_permission(def_node)
-    case .some(need)
-        requires_ptr: = need.ptr
-        requires_mut_ptr: = need.mut_ptr
-
-        if requires_ptr && recv_node != null
-            // The receiver **implicitly has its address taken**. A call's or a computation's
-            // result has no address, so it is stored in a temporary in the frame.
-            // Caution: **Writing (`Self$@`) is rejected**: the temporary is a copy, so the
-            // caller never sees the write (`make_point().set_n(5)`: "called, nothing
-            // happened").
-            is_copy: = c.env.receiver_is_copy(recv_node, recv_node.type_id)
-            if is_copy && requires_mut_ptr
-                c.clear_scratch()
-                    .s("cannot call a method that writes its receiver ('Self$@') on a temporary \
-                        object. The write would affect a copy that is then discarded. Bind the \
-                        object first (`$x: = ...;`), or take the receiver as 'Self@' if the method \
-                        does not write.")
-                c.err(recv_node, c.scratch.slice())
-            // **A `Self$@` method must demand the same permission as an assignment**, or `v.n =
-            // 9` is rejected while `v.bump()` passes (on `const` data, a write to ROM). A
-            // temporary is rejected above; "a read-only location" does not describe it.
-            if requires_mut_ptr && !is_copy && c.place_is_readonly(recv_node) &&
-                !c.refuse_made_binding_write(recv_node)
-                c.clear_scratch()
-                    .s("cannot call a method that takes a writable receiver ('Self$@') on a \
-                        read-only location. Make the binding mutable ('$x'), take the receiver as \
-                        'Self@', or cast explicitly ('T$@::(...)') if the write is intended.")
-                c.err(recv_node, c.scratch.slice())
-    case .none {} // not a declared function's signature (no first parameter to read)
+    c.refuse_writing_receiver(recv_node, def_node, "")
 
 priv fn owner_was_refused(c: Sema_ctx$@, parts: sema_decl_name.Named_fn): Bool //<
     //< Whether the callee is reached through an instance whose type arguments were refused
@@ -729,6 +700,7 @@ priv fn name_enum_put_value(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): 
     default {}
     if !is_enum
         return
+    refuse_unopened_put(c, value, base_id)!
     t_entry: = c.env.id_to_type.get(base_id)
     if t_entry == null
         return
@@ -761,3 +733,25 @@ priv fn name_enum_put_value(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): 
         name_arg = Ast_node.build_method_call(value, "variant_name", null, 0, value.loc)
     args.children.set(1, name_arg)
     name_arg.infer_expr(c, 0)!
+
+priv fn refuse_unopened_put(c: Sema_ctx$@, value: Ast_node$@, base_id: I32): Void!Sema_error //<
+    //< Refuses a Result or an Option written in `\{…\}` as it stands
+    //< **Its variant's name is all an enum's interpolation writes**, so `ok`, `err` or `some` would
+    //< stand where the value or the error belongs, and both would be lost without a word.
+    $what: U8[] = ""
+    if c.env.is_result(base_id)
+        what =
+            "a result: it holds a value, or an error where the call failed. Take the value out \
+                first: 'x!' passes the error on to the caller, and 'x catch <value>' uses a value \
+                in its place"
+    else if c.env.is_option(base_id)
+        what =
+            "an optional: it may hold no value. Take the value out first: 'if v: = x' runs only \
+                where x holds one, and 'x.unwrap_or(<value>)' uses a value in its place"
+    if what.len == 0
+        return
+    c.clear_scratch()
+        .s("'\{c.env.display(value.type_id)\}' cannot be written in '\\{…\\}' as it stands. It is \
+            \{what\}")
+    c.err(value, c.scratch.slice())
+    throw .analysis_failed

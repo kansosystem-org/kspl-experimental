@@ -6,13 +6,14 @@
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_build"
 import "ksplc/tests/support/run_case"
+import "ksplc/tests/support/run_during"
 import "ksplc/tests/support/run_progs"
 import "std/chars" // `find_str`
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str"
+import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
@@ -527,6 +528,42 @@ priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): ru
     return run_case.expect_out(run_case.run_script(src, arena), "VERSION-2",
         "it did not recover by itself after cc was mended", arena)
 
+priv fn case_damaged_exe_is_not_run(work: U8[], arena: Arena$@): run_case.Outcome //<
+    //< A cached program a crash left empty is built again, and one damaged at its size never runs
+    //< **An empty program would exit 0 having done nothing**, every run. The link records the
+    //< program's size (`exe_is_recorded` in `ksplc/tools/run.kspl`). A file of the recorded size
+    //< that is no program reaches the start, which refuses it: it must not run as a shell script.
+    s: = fs.join(work, "s.kspl", arena)
+    first: = first_round(work, arena)
+    if first.state != run_case.STATE_OK
+        return first
+    slot: = run_case.only_slot(work, arena)
+    if slot.len == 0
+        return run_case.failed("the cache's slots are not one")
+    exe: = fs.join(slot, "prog.exe", arena)
+    io.write_file(exe, "") catch
+        return run_case.failed("the cached program cannot be emptied")
+    rebuilt: = run_case.expect_out(run_case.run_script(s, arena), "v=1",
+        "an emptied cached program is not built again", arena)
+    if rebuilt.state != run_case.STATE_OK
+        return rebuilt
+    size: = fs.stat(exe) catch
+        return run_case.failed("the rebuilt program cannot be read")
+    // A shell would run the first line and skip the rest as a comment.
+    mark: = fs.join(work, "ran_as_script", arena)
+    defer $text: = Str_builder()
+    text.s("touch '\{mark\}'\n")
+    for text.len < Sz::size.size
+        text.c('#')
+    io.write_file(exe, text.slice()) catch
+        return run_case.failed("the cached program cannot be overwritten")
+    damaged: = run_case.run_script(s, arena)
+    if fs.exists(mark)
+        return run_case.broke("a damaged cached program ran as a shell script", damaged.out, arena)
+    if damaged.exited_with(0)
+        return run_case.broke("a damaged cached program ended with 0", damaged.out, arena)
+    return run_case.ok_result()
+
 priv fn run_with_cc_probe(work: U8[], body: U8[], arena: Arena$@, before: U8[] = ""): U8[] //<
     //< It runs once with a stand-in cc and returns the record
     //< A non-empty `before` runs first; the record holds only `body`'s run, opened by a `ROUND`
@@ -785,7 +822,7 @@ priv fn case_unused_std_is_stripped(work: U8[], arena: Arena$@): run_case.Outcom
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
-    io.out().s("# ksplc run: 30\n")
+    io.out().s("# ksplc run: 31\n")
     run_case.run("it runs, and the second round runs from the cache", "run_cache",
         case_runs_and_caches, arena)
     run_case.run("editing the entry script rebuilds it", "run_edit_entry", case_edit_entry_rebuilds,
@@ -796,6 +833,8 @@ fn main(): I32
         case_new_settings_file_rebuilds, arena)
     run_case.run("an embedded file edited in place makes it read again", "run_edit_embed",
         case_edited_embed_rebuilds, arena)
+    run_case.run("a file saved while its build runs is built again on the next run",
+        "run_edit_during", run_during.case_edit_during_build_rebuilds, arena)
     run_case.run("the objects of unchanged units are not made again", "run_reuse_obj",
         case_unchanged_objects_are_reused, arena)
     run_case.run("however many times it is mended the objects do not pile up", "run_obj_sweep",
@@ -826,6 +865,8 @@ fn main(): I32
         case_compile_error_is_reported, arena)
     run_case.run("it does not run the old executable when cc fails", "run_cc_fail",
         case_cc_failure_does_not_leave_stale_exe, arena)
+    run_case.run("a damaged cached program is built again or refused, never run", "run_damaged_exe",
+        case_damaged_exe_is_not_run, arena)
     run_case.run("there is no absolute path among the arguments handed to cc", "run_cc_argv",
         case_cc_gets_relative_paths, arena)
     run_case.run("cc is not started many times for the same question", "run_cc_once",

@@ -113,7 +113,11 @@ function ksmdChart(ks) {
       el.appendChild(p);
       return el;
     }
-    el.appendChild(draw(b));
+    // The chart and the shapes drawn over it share one box (`drawings.js`).
+    const picture = document.createElement("div");
+    picture.className = "picture";
+    picture.appendChild(draw(b));
+    el.appendChild(picture);
     if (b.ser.length > 1) {
       const key = document.createElement("div");
       key.className = "chart-key";
@@ -136,7 +140,7 @@ function ksmdChart(ks) {
     panel = null;
   }
 
-  // The panel that sets a chart's kind, labels, columns and title.
+  // The panel that sets a chart's kind, labels, columns or rows, and title.
   function ask(block) {
     close();
     const el = ks.view.blocks()[block];
@@ -158,17 +162,52 @@ function ksmdChart(ks) {
     labels.className = "chart-labels";
     b.cols.forEach((n, c) => labels.add(new Option(n || ks.table.letters(c), String(c))));
     labels.value = String(Math.max(b.l, 0));
+    // Series in columns, or in rows as a burn-up chart of a plan whose months stand across.
+    const by = document.createElement("select");
+    by.className = "chart-by";
+    by.add(new Option("Series in columns", "columns"));
+    by.add(new Option("Series in rows", "rows"));
+    by.value = b.r ? "rows" : "columns";
+    const name = (c) => b.cols[c] || ks.table.letters(c);
+    const ends = ["chart-from", "chart-to"].map((cls, i) => {
+      const pick = document.createElement("select");
+      pick.className = cls;
+      b.cols.forEach((n, c) => pick.add(new Option(name(c), String(c))));
+      pick.value = String(b.r ? (i === 0 ? b.f : b.e) : (i === 0 ? 0 : b.cols.length - 1));
+      return pick;
+    });
+    const span = document.createElement("span");
+    span.append(" from ", ends[0], " to ", ends[1]);
+    // The table's own block, whose values name the rows.
+    const table = ks.view.blocks().find((x) => x.classList.contains("table") && x.u === b.u && !x.included);
     const columns = document.createElement("span");
     columns.className = "chart-columns";
-    b.cols.forEach((n, c) => {
-      const label = document.createElement("label");
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.value = String(c);
-      box.checked = b.v.includes(c);
-      label.append(box, ` ${n || ks.table.letters(c)}`);
-      columns.appendChild(label);
-    });
+    // The boxes: the table's columns, or the rows by their text in the labels column. Only the
+    // rows the editor takes as series are offered (`sr`): text written in the cell, not a
+    // calculated value, and a name the saved chart finds that row by.
+    const boxes = () => {
+      columns.textContent = "";
+      const rows = by.value === "rows";
+      const l = Number(labels.value);
+      const rowName = (r) => {
+        const v = table && table.values[r] && table.values[r][l];
+        return v && v[0] === 2 ? String(v[1]) : `Row ${r + 1}`;
+      };
+      const items = rows ? (b.sr[l] || []).map((r) => [r, rowName(r)]) : b.cols.map((n, c) => [c, name(c)]);
+      for (const [at, text] of items) {
+        const label = document.createElement("label");
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.value = String(at);
+        box.checked = !!b.r === rows && b.v.includes(at);
+        label.append(box, ` ${text}`);
+        columns.appendChild(label);
+      }
+      span.hidden = !rows;
+    };
+    by.addEventListener("change", boxes);
+    labels.addEventListener("change", boxes);
+    boxes();
     const title = document.createElement("input");
     title.className = "chart-title";
     title.type = "text";
@@ -181,14 +220,16 @@ function ksmdChart(ks) {
     apply.addEventListener("click", () => {
       const v = Array.from(columns.querySelectorAll("input:checked"), (x) => Number(x.value));
       close();
+      const rows = by.value === "rows";
       ks.act("ksmd_web_set_chart", block, ks.put(JSON.stringify({ t: b.u, k: kind.value,
-        l: Number(labels.value), v, title: title.value.trim() })));
+        l: Number(labels.value), v, title: title.value.trim(), r: rows ? 1 : 0,
+        f: Number(ends[0].value), e: Number(ends[1].value) })));
     });
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancel";
     cancel.addEventListener("click", close);
-    panel.append(kind, " labelled by ", labels, " showing ", columns, title, apply, cancel);
+    panel.append(kind, " ", by, " labelled by ", labels, span, " showing ", columns, title, apply, cancel);
     panel.addEventListener("keydown", (e) => {
       if (e.key === "Escape") close();
     });

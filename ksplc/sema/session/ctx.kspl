@@ -3,13 +3,14 @@
 //< environment. It also holds the analysis's switches, a body walk's flags (`Fn_ctx`) and each
 //< concern's state (`sema/session/state.kspl`). Every diagnostic goes through `report_diagnostic`,
 //< which applies the `##lint` levels. Declaring a symbol is checked here (`declare_symbol`).
-import "ksplc/base/ast" { Ast_node, Loc, Span_info, is_anon_env_type, is_anon_fn_name }
+import "ksplc/base/ast" { Ast_node, Loc, Span_info, is_anon_fn_name }
 import "ksplc/base/ast_ext" as _base_ast_ext // `is_implicit_name`
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/lint_codes" as base_lint_codes
 import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/session/mismatch" as sema_session_mismatch
 import "ksplc/sema/session/state" { Generic_arg, Alias_info, Import_symbol_info, Pending_inst,
     Pending_constraint, Pending_methods, Trait_inst, Diagnostic_counts, Generic_state, Mono_state,
     Alias_state, Import_hit, Import_symbol_state, Lint_setting_entry, Type_layout, Folded_layout,
@@ -242,6 +243,7 @@ impl Sema_ctx
             },
             .resolving = Resolving_state::{
                 .aliases = base_core.arena.create(List<|U8[]|>(null)),
+                .alias_steps = base_core.arena.create(Map<|I32, Sz|>(base_core.arena)),
                 .consts = base_core.arena.create(Map<|Sz, Bool|>(null)),
                 .cut_path = List<|Sz|>.create(base_core.arena),
                 .cut_reported = base_core.arena.create(Map<|Sz, Bool|>(base_core.arena)),
@@ -571,22 +573,9 @@ impl Sema_ctx
             r.scratch
                 .s("\n  Note: a fixed-length array becomes a slice only by an explicit cast: \
                     '\{exp.slice()\}::(...)'.")
-        r.append_closure_capture_note(actual_id)
+        sema_session_mismatch.closure_capture_note(r.env, actual_id, r.scratch@)
+        sema_session_mismatch.address_hint(r.env, node, expected_id, actual_id, r.scratch@)
         r.err(node, r.scratch.slice())
-
-    priv fn append_closure_capture_note(r: Self$@, actual_id: I32) //<
-        //< Explains in scratch a closure's environment struct appearing in a type mismatch
-        //< **Without this note the user sees a type name they never wrote, `_anon_env_1`.** Two
-        //< cases reach here: a captured closure (the field is `Callable1<|…|>`, but the environment
-        //< struct itself is passed) and a receiving `Callable` whose type arguments differ.
-        base_id: = r.env.strip_const_deep(r.env.strip_ptr(actual_id))
-        if !is_anon_env_type(r.env.get_str(base_id))
-            return
-        r.scratch
-            .s("\n  Hint: a closure's type is its synthesized environment, which conforms only to \
-                the exact 'Callable' in its signature. Check that the receiving parameter's type \
-                arguments match. A closure cannot capture another closure. Pass it as a parameter \
-                instead.")
 
     fn note_undefined_at(r: Self$@, node: Ast_node$@) //<
         //< records where an undefined name was reported

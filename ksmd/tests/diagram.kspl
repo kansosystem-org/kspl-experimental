@@ -1,0 +1,122 @@
+//< Diagrams: how a `:::diagram` clause reads and saves, what the reader refuses and why, and
+//< inserting and changing a diagram with its undo
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor_diagrams" // `insert_diagram`, `set_diagram`
+import "ksmd/syntax/reader"
+import "ksmd/tests/support" { opened, saves }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const FULL: U8[] =
+    ":::diagram size=\"700,320\" caption=\"Menu to settings\"\ngroup id=\"g1\" at=\"20,20\" \
+        size=\"460,280\" text=\"Settings\"\nstart id=\"s0\" at=\"40,130\" size=\"24,24\"\nbox \
+        id=\"menu\" at=\"100,60\" size=\"160,90\" text=\"MENU\\n1.SET\\n2.END\" font=\"mono\" \
+        fill=\"#fff2cc\"\ndiamond id=\"ask\" at=\"300,70\" size=\"140,80\" text=\"Save?\"\nend \
+        id=\"e1\" at=\"600,100\" size=\"24,24\" color=\"#1f5fbf\"\nnote id=\"n1\" at=\"300,200\" \
+        size=\"160,50\" text=\"Yes saves\"\narrow from=\"s0\" to=\"menu\"\narrow from=\"menu\" \
+        to=\"ask\" text=\"[OK] pressed\"\nline from=\"n1\" to=\"ask\" color=\"#c00000\" \
+        via=\"370,180 380,170\"\n:::\n"
+
+fn run()
+    reading()
+    refusals()
+    editing()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    for clause in U8[][]::{ FULL, ":::diagram size=\"800,400\"\n:::\n",
+        ":::diagram size=\"50,50\" invisible=\"printing\"\nbox id=\"a\" at=\"0,0\" \
+            size=\"50,50\"\n:::\n" }
+        text: = arena.text().s("%ksmd 1\n\n").s(clause).take()
+        ed: = opened(text, arena)
+        saves(arena.text().s("a diagram reads and saves unchanged: \{clause\}").take(), ed@, arena,
+            text)
+    ed: = opened(arena.text().s("%ksmd 1\n\n").s(FULL).take(), arena)
+    d: = ed.doc.diagrams[0]@
+    verdict.check("a diagram holds its shapes, and each arrow names its ends by their places",
+        d.width == 700 && d.figures.len == 6 && d.links.len == 3 && d.figures[2].mono &&
+        d.figures[2].text.equals("MENU\n1.SET\n2.END") && d.links[1].from == 2 &&
+        d.links[1].to == 3 && d.links[2].bends.len == 4, "")
+
+priv fn refusals()
+    says("%ksmd 1\n\n:::diagram\n:::\n", "':::diagram' needs a size, as in size=\"800,400\"")
+    says("%ksmd 1\n\n:::diagram size=\"40,400\"\n:::\n",
+        "size is a width and a height from 50 to 20000, as \"800,400\"")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\" kind=\"x\"\n:::\n",
+        "':::diagram' takes only size, caption and invisible")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"60,60\" size=\"50,50\"\n:::\n",
+        "a shape stands inside its diagram's size")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\nbox \
+        id=\"a\" at=\"20,0\" size=\"10,10\"\n:::\n", "another shape has this id")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a b\" at=\"0,0\" size=\"10,10\"\n:::\n",
+        "id is 1 to 32 letters, digits, '_' and '-', in quotes, unique in its diagram")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\narrow \
+        from=\"a\" to=\"b\"\n:::\n", "from and to name a shape drawn above in this diagram")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\narrow \
+        from=\"a\" to=\"a\"\n:::\n", "an arrow joins two different shapes")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\nbox \
+        id=\"b\" at=\"20,0\" size=\"10,10\"\nline from=\"a\" to=\"b\"\nbox id=\"c\" at=\"40,0\" \
+        size=\"10,10\"\n:::\n", "a diagram's shapes stand before its arrows and lines")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\nbox \
+        id=\"b\" at=\"20,0\" size=\"10,10\"\narrow from=\"a\" to=\"b\" via=\"200,0\"\n:::\n",
+        "via is up to 20 points inside the diagram, parted by spaces, as \"300,80 300,200\"")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\" \
+        color=\"red\"\n:::\n", "a colour is as \"#c00000\", or leave it out")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\" \
+        font=\"serif\"\n:::\n", "font is \"mono\", or leave it out")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\ncircle id=\"a\" at=\"0,0\" size=\"10,10\"\n:::\n",
+        "a line inside ':::diagram' is a shape (box, diamond, start, end, group or note) or an \
+            arrow or line between two; close the clause with ':::'")
+    says("%ksmd 1\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\n",
+        "this clause has no closing ':::' line")
+
+priv fn refuses(ed: Editor$@, block: Sz, clause: U8[], what: U8[]) //<
+    //< The editor refuses to give the diagram this clause, and says what a diagram holds
+    ed.set_diagram(block, clause) catch e
+        verdict.check(what, e.message().find_str("A diagram holds").is_some(), e.message())
+        return
+    verdict.check(what, false, "the diagram was changed")
+
+priv fn says(text: U8[], message: U8[]) //< the reader refuses the source with this message
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", text) catch e
+        verdict.check(message, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch e
+        verdict.check(message, e.message.equals(message), e.message)
+        return
+    verdict.check(message, false, "the source was read")
+
+priv fn editing()
+    defer arena: = Arena(64 * 1024)
+    plain: = "%ksmd 1\n\nIntro\n"
+    $ed: = opened(plain, arena)
+    ed.insert_diagram() catch e
+        verdict.check("inserting a diagram", false, e.message())
+    empty: = "%ksmd 1\n\n:::diagram size=\"800,400\"\n:::\n\nIntro\n"
+    saves("Insert, Diagram puts an empty diagram at the caret", ed@, arena, empty)
+    $block: Sz = 0
+    for i in Range.asc(ed.doc.blocks.len)
+        if ed.doc.blocks.get(i).kind == .diagram
+            block = i
+    two: =
+        ":::diagram size=\"800,400\"\nbox id=\"a\" at=\"10,10\" size=\"100,50\"\nbox id=\"b\" \
+            at=\"300,10\" size=\"100,50\"\narrow from=\"a\" to=\"b\"\n:::\n"
+    ed.set_diagram(block, two) catch e
+        verdict.check("changing a diagram", false, e.message())
+    changed: = arena.text().s("%ksmd 1\n\n").s(two).s("\nIntro\n").take()
+    saves("a diagram takes the whole clause the page sends", ed@, arena, changed)
+    before: = ed.history.done.len
+    refuses(ed@, block,
+        ":::diagram size=\"800,400\"\nbox id=\"a\" at=\"790,10\" size=\"100,50\"\n:::\n",
+        "a shape outside the diagram is refused")
+    refuses(ed@, block, ":::table name=\"t\"\n| \"a\" |\n:::\n",
+        "a clause of another kind is refused")
+    verdict.check("and nothing changes", ed.history.done.len == before, "")
+    ed.undo()
+    saves("one undo gives the diagram before back", ed@, arena, empty)
+    ed.undo()
+    saves("and another takes it away", ed@, arena, plain)

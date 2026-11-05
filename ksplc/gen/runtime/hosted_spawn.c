@@ -15,25 +15,33 @@
 #include <fcntl.h> /* open / O_*. No include after this section is leaned on */
 #include <pthread.h>
 
-/* Splits argv_buf (an argument run separated by NULs) into an argv array for execv. out must hold
- * room for argc+1 entries (a NULL is placed at the end). false where it cannot be split.
- *
+/* Splits argv_buf (an argument run separated by NULs) into an argv array for execv, on the heap
+ * with a NULL at the end; the caller frees it. NULL where it cannot be split.
+ * Caution: **Size the array by argc, with no fixed cap.** The OS's own limit (ARG_MAX) is the
+ * only one: exec refuses a run past it, and the start fails as any failed exec does.
  * Caution: **Confirm that the number of steps agrees with argc exactly.** A KSPL string can hold a
  * NUL, which here is the separator. One argument splits in two, and an argument the caller never
  * wrote is inserted. Only the end position against argv_buf_len tells it. In the assembled
  * buffer, a separating NUL and a content NUL look the same. */
-static Bool kspl_argv_split(const U8 *argv_buf, Sz argv_buf_len, I32 argc, char **out) {
-    if (argc <= 0 || argc > 256) return false;
+static char **kspl_argv_split(const U8 *argv_buf, Sz argv_buf_len, I32 argc) {
+    if (argc <= 0) return NULL;
+    char **out = (char **)malloc(((size_t)argc + 1) * sizeof(char *));
+    if (out == NULL) return NULL;
     Sz off = 0;
-    for (I32 i = 0; i < argc; i++) {
+    Bool whole = true;
+    for (I32 i = 0; i < argc && whole; i++) {
         out[i] = (char *)(argv_buf + off);
         while (off < argv_buf_len && argv_buf[off] != '\0') off++;
-        if (off >= argv_buf_len) return false; /* no terminating \0 = invalid input */
+        whole = off < argv_buf_len; /* no terminating \0 = invalid input */
         off++;
     }
-    if (off != argv_buf_len) return false; /* too many steps = one of the arguments holds a NUL */
+    /* too many steps = one of the arguments holds a NUL */
+    if (!whole || off != argv_buf_len) {
+        free(out);
+        return NULL;
+    }
     out[argc] = NULL;
-    return true;
+    return out;
 }
 
 /* Closes the pipes.
@@ -97,12 +105,13 @@ static void kspl_child_fail(int done) {
  * The start then returns 0, as Windows's CreateProcessW fails for the same causes. */
 KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, const U8 *cwd_ptr, Sz cwd_len,
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
-    char *argv_arr[257];
     char cwd_path[4096], out_path[4096], err_path[4096];
-    if (!kspl_argv_split(argv_buf, argv_buf_len, argc, argv_arr)) return 0;
     if (cwd_len > 0 && !kspl_to_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path))) return 0;
     if (out_len > 0 && !kspl_to_cstr(out_ptr, out_len, out_path, sizeof(out_path))) return 0;
     if (err_len > 0 && !kspl_to_cstr(err_ptr, err_len, err_path, sizeof(err_path))) return 0;
+    /* Freed in the parent once the fork is past; the child's copy goes with its exec. */
+    char **argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);
+    if (argv_arr == NULL) return 0;
     int one_file = (out_len > 0 && out_len == err_len && memcmp(out_ptr, err_ptr, (size_t)out_len) == 0);
     int pipe_in = (stdio & 1) != 0;
     int pipe_out = (stdio & 2) != 0 && out_len == 0;
@@ -110,7 +119,10 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     int group = (stdio & 16) != 0;
 
     kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
-    if (h == NULL) return 0;
+    if (h == NULL) {
+        free(argv_arr);
+        return 0;
+    }
     int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};
     kspl_spawn_take();
     if ((pipe_in && kspl_pipe_cloexec(in_p) != 0) || (pipe_out && kspl_pipe_cloexec(out_p) != 0) ||
@@ -142,10 +154,17 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
             if (!one_file && efd > 2) close(efd);
         }
         if (cwd_len > 0 && chdir(cwd_path) != 0) kspl_child_fail(done);
-        execvp(argv_arr[0], argv_arr);
+        /* Caution: **A path with a `/` goes to execv, not execvp.** Where the file is not a
+         * program the OS can start (ENOEXEC), execvp hands it to /bin/sh. A damaged or empty file
+         * would then run as a shell script, or as nothing with exit 0. execv refuses it, and the
+         * start fails. Only a bare name is searched for in PATH, as a shell does. */
+        if (strchr(argv_arr[0], '/') != NULL) execv(argv_arr[0], argv_arr);
+        else execvp(argv_arr[0], argv_arr);
         kspl_child_fail(done);
     }
     kspl_spawn_give();
+    free(argv_arr);
+    argv_arr = NULL;
     if (pid < 0) goto fail;
     /* exec_p's write end closes when the child execs; a byte on it says the child failed first. */
     close(exec_p[1]);
@@ -175,6 +194,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
 fail:
     kspl_close_pipe_pair(in_p); kspl_close_pipe_pair(out_p); kspl_close_pipe_pair(err_p);
     kspl_close_pipe_pair(exec_p);
+    free(argv_arr);
     free(h);
     return 0;
 }
@@ -191,7 +211,7 @@ fail:
 
 static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc, char *cmd,
     int cmd_cap) {
-    if (argc <= 0 || argc > 256) return false;
+    if (argc <= 0) return false;
     int limit = cmd_cap - 192; /* one argument's margin. At the limit it fails, not cuts */
     int m = 0;
     Sz off = 0;
@@ -390,7 +410,8 @@ static Bool kspl_win_is_cwd_relative(const char *name) {
  * onto cwd (where cwd_len > 0). POSIX's exec reads it after the chdir, and CreateProcessW would
  * read it from this process's own directory.
  * Caution: **Measure it in UTF-16 units, after the conversion.** The OS's limit counts those.
- * Counted as UTF-8 bytes, a line of kana (three bytes a unit) would be refused at a third of it. */
+ * Counted as UTF-8 bytes, a line of kana (three bytes a unit) would be refused at a third of it.
+ * **That limit (KSPL_WCMD_MAX) is the only cap**, on the count of arguments as on their length. */
 static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 argc,
     const U8 *cwd_ptr, Sz cwd_len) {
     char prog[KSPL_WPATH_CAP * 3];

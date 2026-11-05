@@ -292,7 +292,8 @@ impl Ast_node
             else r.get_binary_right().emit_llvm_expr(cg))
 
         is_float: = cg.env.is_float(left_type_id)
-        is_unsigned: = cg.env.is_unsigned(left_type_id)
+        // A simple enum orders as its base type: `enum E: U8` with `a = 200` is above `b = 10`.
+        is_unsigned: = cg.env.is_unsigned(cg.env.scalar_repr_id(left_type_id))
         is_ptr: =
             cg.env.is_pointer(r.get_binary_left().type_id) ||
             cg.env.is_fn_ptr(r.get_binary_left().type_id)
@@ -464,9 +465,16 @@ impl Ast_node
                 return cg.emit_numeric_coerce(recv_reg, recv_type, target_type)
             cast_inst = "uitofp" if cg.env.is_unsigned(real_src_id) else "sitofp"
 
+        // Caution: **Widen a narrow integer by its own sign before `inttoptr`**, which would
+        // zero-extend it. C sign-extends, so `U8@::x` with `x: I32 = -16` must give the same
+        // address in both backends.
+        $src_type: = recv_type
+        if is_ptr_dst && !is_ptr_src
+            src_type = I32::sema_type_env.Builtin_type_id.size_type
+            recv_reg = cg.emit_numeric_coerce(recv_reg, recv_type, src_type)
         res_reg: = cg.next_reg()
         cg.s("    %\{res_reg\} = ").s(cast_inst).s(" ")
-        cg.t(recv_type).s(" ").s(recv_reg).s(" to ")
+        cg.t(src_type).s(" ").s(recv_reg).s(" to ")
         cg.t(target_type).s("\n")
 
         return cg.reg_str(res_reg)
@@ -499,8 +507,11 @@ priv fn emit_tag_check(cg: Genllvm_ctx$@, r: Ast_node$@, def: Enum_def$@, recv_r
     cg.s("], ptr ").s(slot).s("\n")
     name: = cg.get_or_add_raw_literal(cg.env.display(r.type_id))
     safe_reg: = cg.next_reg()
-    cg.s("    %\{safe_reg\} = call i64 @kspl_tag_check(i64 ").s(wide_reg).s(", ptr ").s(slot)
-        .s(", i64 \{n\}, ptr @.str.\{name\}")
+    // A `U64` above INT64_MAX arrives negative in i64; the flag makes it no tag and prints it
+    // unsigned.
+    unsigned_flag: = "true" if cg.env.is_unsigned(src_id) else "false"
+    cg.s("    %\{safe_reg\} = call i64 @kspl_tag_check(i64 ").s(wide_reg)
+        .s(", i1 \{unsigned_flag\}, ptr ").s(slot).s(", i64 \{n\}, ptr @.str.\{name\}")
     emit_check_loc(cg, r.loc)
     return cg.emit_numeric_coerce(cg.reg_str(safe_reg), I64_ID, src_id)
 

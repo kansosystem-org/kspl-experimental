@@ -140,6 +140,10 @@ function ksmdInput(ks) {
     }
     flush();
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && !e.shiftKey && (e.key === "End" || e.key === "Home")) {
+      if (toEdge(e.key === "End")) e.preventDefault();
+      return;
+    }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let name = null;
     if (mod && !e.altKey) {
@@ -162,6 +166,21 @@ function ksmdInput(ks) {
       ks.command(name);
     }
   });
+
+  // Ctrl+End and Ctrl+Home where the document ends, or starts, with a block that holds no text, as
+  // a table, a chart or a diagram. The browser cannot put its caret beside such a block, and
+  // would leave it where it was, so the page puts it in the gap there. Where text stands at that
+  // end, the browser's own move stays. True where the page moved the caret.
+  function toEdge(end) {
+    const all = ks.view.blocks();
+    if (all.length === 0) return false;
+    const edge = all[end ? all.length - 1 : 0];
+    if (edge.classList.contains("u") || edge.classList.contains("list")) return false;
+    ks.place([1, end ? all.length : 0, 0, 0]);
+    const gap = root.querySelector(".gap");
+    if (gap) gap.scrollIntoView({ block: "nearest" });
+    return true;
+  }
 
   function inList() {
     const s = window.getSelection();
@@ -218,7 +237,7 @@ function ksmdInput(ks) {
     if (!/^%ksmd 1\r?\n\r?\n:::table /.test(own) || ks.tooLarge(own)) return false;
     ks.table.take();
     if (at >= 0) {
-      ks.cell = null;
+      ks.table.chooseCell(null);
       ks.setPlace("text");
       ks.root.focus({ preventScroll: true });
       ks.select([1, at, 0, 0], [1, at, 0, 0]);

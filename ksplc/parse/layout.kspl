@@ -335,27 +335,6 @@ priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@): Sz //<
     open_str$ = 1 if raw else 2
     return string_goes_on(src, at + 3 if raw else at + 1, open_str)
 
-priv fn skip_interp(src: U8[], at: Sz): Sz //<
-    //< It skips an interpolation's expression, from past its `\{` to past its `\}`
-    //< Caution: **A quote inside it opens a string of its own** (`\{"""ab""".len\}`). Read as the
-    //< end of the string around it, a raw string would seem left open, and the line get no `;`.
-    //< It stops at a newline, which the string around it then reports open.
-    $j: = at
-    for j < src.len && src[j] != '\n'
-        if src[j] == '\\' && j + 1 < src.len && src[j + 1] == '}'
-            return j + 2
-        if src[j] == '"'
-            $inner_open: Sz = 0
-            j = skip_string(src, j, inner_open@)
-            if inner_open != 0
-                return j
-            continue
-        if src[j] == '\''
-            j = skip_char(src, j)
-            continue
-        j += 1
-    return j
-
 priv fn skip_char(src: U8[], at: Sz): Sz
     $j: = at + 1
     for j < src.len
@@ -370,29 +349,58 @@ priv fn skip_char(src: U8[], at: Sz): Sz
 priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
     //< It walks a string's contents from `at` to past its close, or to the line's end
     //< `open_str` says which kind is open (1 raw, 2 plain), and is 0 once it closes. **The one walk
-    //< for a string's contents**, its first line and the lines a `\` continues alike. Walked apart,
-    //< a continued line would read the quotes of a string inside `\{ … \}` as the outer string's.
+    //< for a string's contents**, on its first line and on the lines a `\` continues alike.
+    //< Caution: **A quote inside an interpolation opens a string of its own** (`\{"""ab""".len\}`).
+    //< **It counts the levels, not recursing.** Recursion spent the stack per level, and a deep
+    //< enough line crashed every tool before the parser's depth limit could report it.
+    $level: Sz = 0 // the interpolations open around the walk
+    $kind: = open_str$ // the string walked (1 raw, 2 plain), or 0 in an interpolation's code
     $j: = at
     for j < src.len
-        if open_str$ == 1
-            if src[j] == '"' && src.starts_with("\"\"\"", j)
-                open_str$ = 0
-                return j + 3
+        c: = src[j]
+        if c == '\n'
+            return j
+        if kind == 0
+            if c == '\\' && j + 1 < src.len && src[j + 1] == '}'
+                level -= 1
+                kind = 2
+                j += 2
+                continue
+            if c == '"'
+                raw: = src.starts_with("\"\"\"", j)
+                kind = 1 if raw else 2
+                j += 3 if raw else 1
+                continue
+            if c == '\''
+                j = skip_char(src, j)
+                continue
+        else if kind == 1
+            if c == '"' && src.starts_with("\"\"\"", j)
+                j += 3
+                kind = 0
+                if level == 0
+                    open_str$ = 0
+                    return j
+                continue
         else
-            if src[j] == '\\' && j + 1 < src.len && src[j + 1] == '{'
-                j = skip_interp(src, j + 2)
+            if c == '\\' && j + 1 < src.len && src[j + 1] == '{'
+                level += 1
+                kind = 0
+                j += 2
                 continue
             // Caution: **A `\` at a line's end does not skip the newline.** It continues the text
             // with the string still open; skipping it would join two physical lines and shift every
             // line number below.
-            if src[j] == '\\' && j + 1 < src.len && src[j + 1] != '\n' && src[j + 1] != '\r'
+            if c == '\\' && j + 1 < src.len && src[j + 1] != '\n' && src[j + 1] != '\r'
                 j += 2
                 continue
-            if src[j] == '"'
-                open_str$ = 0
-                return j + 1
-        if src[j] == '\n'
-            return j
+            if c == '"'
+                j += 1
+                kind = 0
+                if level == 0
+                    open_str$ = 0
+                    return j
+                continue
         j += 1
     open_str$ = 0
     return src.len

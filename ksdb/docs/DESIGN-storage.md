@@ -128,7 +128,7 @@ The content cap is therefore the **smaller** of "the sector's size − the 8-byt
 
 ### A place that cannot be written is skipped
 
-Before writing, `append` checks that the place is still erased. If it is not, `append` moves on to the next sector.
+Before writing, `append` checks that the place is still erased. If it is not, `append` moves on to the next sector. **Entering a sector, it checks all the rest of that sector**, as `open` does for `tail`'s. An erase cut by a power loss can leave a sector's start erased and an old record after it. A record written at that start would lead the scan onto the old record, and `last` would return it.
 
 Caution: **Do not stop when it is not erased.** A half-written record from a power loss can sit in a sector beyond `tail`'s, sent there to avoid straddling. `open` checks only the rest of `tail`'s sector, so that record is not found. A stopping `append` would stop there after every reopen, until `reset` threw everything away.
 
@@ -136,7 +136,7 @@ Caution: **Do not stop when it is not erased.** A half-written record from a pow
 
 ### Full comes back as `full`, and nothing is silently overwritten
 
-When nothing more fits, `append` returns `full`, with every record so far still readable. There is no erasing of an old sector to go round, as a ring buffer would.
+When nothing more fits, `append` returns `full`, with every record so far still readable. **A refused record moves nothing**, so a smaller one that still fits goes in after it. There is no erasing of an old sector to go round, as a ring buffer would.
 
 Caution: **Do not make it overwrite silently.** A lost record cannot be recovered, and nobody can even notice it disappeared. Once the records are read off, `reset` empties the place.
 

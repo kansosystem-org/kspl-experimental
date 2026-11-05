@@ -112,6 +112,35 @@ priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
         broken += 1
     return broken
 
+priv fn failed_writes_leave_nothing(work: U8[], cold_stores: Sz, arena: Arena$@) //<
+    //< Entries whose write is cut short leave no temporary file behind
+    //< A file size limit of one or two KiB (`ulimit -f` counts blocks of 512 or 1024 bytes) cuts
+    //< the larger entries. With SIGXFSZ ignored, the write returns short instead of ending ksplc.
+    //< The output goes to `/dev/null`, which the limit does not reach.
+    name: = "an entry whose write fails leaves no temporary file"
+    if sys.is_windows()
+        verdict.skip_check(name, "a short write needs `ulimit -f`, which Windows does not have")
+        return
+    cache: = fs.join(work, "cache_cut", arena)
+    sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
+    r: = harness
+        .run(U8[][]::{ "/bin/sh", "-c", "ulimit -f 2 && trap '' XFSZ && exec \"$0\" \"$@\"",
+        harness.ksplc_exe(), arena.text().s("--std-dir=\{harness.std_dir()\}").take(), "--stats",
+        FIXTURE, "/dev/null" })
+    counts: = parse_counts(r.out, arena)
+    $left: Sz = 0
+    files: = fs.walk_files(cache, fs.skip_none, arena) catch
+        fallback List<|U8[]|>(arena)
+    for f in files
+        if f.find_str(".ksast.tmp").is_some()
+            left += 1
+    // The control: some writes were cut, or the check would pass having tested nothing.
+    verdict.check(name,
+        r.exited_with(0) && counts.ok && counts.stores < cold_stores && left == 0,
+        arena.text()
+        .s("stored \{counts.stores\} of \{cold_stores\}, temporary files left \{left\}\n")
+        .s(r.out).take())
+
 priv fn cfg_probe_line(src: U8[]): Sz //<
     //< The line the dropped `cfg_probe` is on, counted from the `#cfg()` above it
     //< **The number is not written here**; written twice, it drifts with nothing saying so.
@@ -226,6 +255,8 @@ fn main(): I32
         warm.counts.hits == cold.counts.stores,
         arena.text().s("warm hit=\{warm.counts.hits\} / cold wrote out=\{cold.counts.stores\}")
         .take())
+
+    failed_writes_leave_nothing(work, cold.counts.stores, arena)
 
     // --- the reason a `#cfg()` gives comes through the cache as well ---
     // The editor's reading of an entry, too, must be indistinguishable from a parse.

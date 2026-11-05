@@ -3,7 +3,7 @@
 //< `resolve_all_types` walks a tree doing so. The name itself is read through
 //< `sema/decl/name.kspl`. This file turns what it names into a type, checks a type argument's
 //< constraint, and builds a function's own type (`fn_signature_type_id`).
-import "ksplc/base/ast" { Ast_node, variance_names_mut }
+import "ksplc/base/ast" + { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
@@ -178,6 +178,20 @@ impl Sema_ctx
             target_id = type_node.resolve_type(r)!
             type_node.resolve_all_types(r)!
 
+        // **The written limit holds for the expanded type too**: each of four typedefs adding 250
+        // `[]` stays under it on its own line, yet makes a type 1000 steps deep, whose
+        // per-level names cost the square of the depth.
+        steps: = type_node.expanded_steps(r) if type_node != null else 0
+        if steps > ast.MAX_TYPE_POSTFIX
+            msg: = base_core.arena.text()
+                .s("type nesting too deep: '\{name\}' expands to \{steps\} postfix steps (`@`, \
+                    `[]`, `[N]`, `?`, `!`) once the typedefs it names are expanded. ksplc accepts \
+                    \{ast.MAX_TYPE_POSTFIX\}, written out or built through typedefs").take()
+            r.err(sym.node, msg)
+            sym.type_id = 0
+            r.resolving.aliases.len -= 1
+            return 0
+
         // Caution: **Check the depth here too.** The stack of aliases being resolved counts only a
         // forward chain (`A0 = A1; A1 = A2; …`). A backward one (`A1 = A0; A2 = A1; …`) does not
         // nest.
@@ -203,6 +217,7 @@ impl Sema_ctx
 
         sym.type_id = alias_id
         sym.node.type_id = alias_id
+        r.resolving.alias_steps.set(alias_id, steps)
         r.resolving.aliases.len -= 1
         return alias_id
 
@@ -302,6 +317,39 @@ priv fn lookup_def_node(c: Sema_ctx$@, path: Ast_node$@): Ast_node$@? //<
     return .none
 
 impl Ast_node
+    priv fn expanded_steps(r: Self$@, c: Sema_ctx$@): Sz //<
+        //< The postfix steps of a resolved type, a named typedef counted with its own steps
+        //< One less than `expanded_levels`, which counts the base type as a level.
+        levels: = r.expanded_levels(c)
+        return levels - 1 if levels > 0 else 0
+
+    priv fn expanded_levels(r: Self$@, c: Sema_ctx$@): Sz //<
+        //< The deepest run of type levels below the node, typedefs expanded
+        //< A type expression is one level, plus one per `@` beside it. Desugar turned `[]`, `?` and
+        //< `!E` into type arguments (`Slice<|T|>`), so those nest as type expressions.
+        if r == null
+            return 0
+        $deepest: Sz = 0
+        $own: Sz = 0
+        for child in r.children
+            if child.kind_id == .k_type_postfix
+                own += 1
+                continue
+            d: = child.expanded_levels(c)
+            if d > deepest
+                deepest = d
+            if child.kind_id != .k_identifier && child.kind_id != .k_type_path
+                continue
+            // A name that is a typedef brings that typedef's steps, as if written out here.
+            sym: = c.symtab.resolve(child.text).unwrap_or(null)
+            if sym != null && sym.kind.is_alias()
+                named: = c.resolving.alias_steps.get(sym.type_id).unwrap_or(0)
+                if named > deepest
+                    deepest = named
+        if r.kind_id != .k_type_expr
+            return deepest
+        return 1 + own + deepest
+
     fn resolve_all_types(r: Self$@, c: Sema_ctx$@): Void!Sema_error
         if r == null
             return

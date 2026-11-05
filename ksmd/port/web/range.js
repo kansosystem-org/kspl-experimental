@@ -76,13 +76,13 @@ function ksmdRange(ks) {
       };
       const a = wrap && place(kept.a);
       if (a) {
-        ks.cell = { block, row: a.row, column: a.column };
+        ks.table.chooseCell({ block, row: a.row, column: a.column });
         end = kept.f ? place(kept.f) : null;
       } else {
         end = null;
       }
       // A table that went, as an undo of its insert takes it, holds no chosen cell.
-      if (!wrap) ks.cell = null;
+      if (!wrap) ks.table.chooseCell(null);
     } else if (!c) {
       end = null;
     }
@@ -182,7 +182,7 @@ function ksmdRange(ks) {
 
   // Sets the range: the chosen cell, and the far corner or null.
   function set(block, row, column, to) {
-    ks.cell = { block, row, column };
+    ks.table.chooseCell({ block, row, column });
     tableChosen = -1;
     linesChosen = null;
     ks.setPlace("cell");
@@ -209,7 +209,8 @@ function ksmdRange(ks) {
     for (const old of document.querySelectorAll(".cell-catch")) if (old.parentNode !== el) old.remove();
     let box = el.querySelector(":scope > .cell-catch");
     if (!box) {
-      box = document.createElement("input");
+      // The kind of box the open cell takes, since this box becomes it.
+      box = document.createElement(ks.table.boxKind(el));
       box.className = "cell-catch";
       box.tabIndex = -1;
       const [row, column] = [Number(el.dataset.r), Number(el.dataset.c)];
@@ -263,11 +264,15 @@ function ksmdRange(ks) {
   // A drag across cells chooses the range from the cell pressed to the cell under the pointer, as
   // in a spreadsheet. The press opens its cell as before; once the drag reaches another cell, that
   // cell closes unchanged and the range follows the pointer until the button comes up.
+  // Caution: **A press inside the open cell's text box selects its text, wherever the drag goes**,
+  // as in a spreadsheet's edit mode. Taken as a range's start, a selection dragged past the cell's
+  // edge would close the cell under the person's hand.
   let dragFrom = null;
   ks.root.addEventListener("mousedown", (e) => {
     const el = e.target.closest && e.target.closest(".table [data-r]");
     dragFrom = null;
     if (!el || e.button !== 0 || e.shiftKey || e.detail > 1 || el.closest(".include")) return;
+    if (e.target.closest(".cell-input")) return;
     const block = ks.view.blocks().indexOf(el.closest(".table"));
     dragFrom = { block, row: Number(el.dataset.r), column: Number(el.dataset.c) };
   }, true);
@@ -333,7 +338,8 @@ function ksmdRange(ks) {
       e.preventDefault();
       collapse();
       const [dr, dc] = steps[e.key];
-      ks.table.choose(c.block, dr ? ks.table.step(c.block, c.row, dr) : c.row, Math.max(0, c.column + dc));
+      ks.table.choose(c.block, dr ? ks.table.step(c.block, c.row, dr) : c.row,
+        dc ? ks.table.stepColumn(c.block, c.column, dc) : c.column);
     } else if ((e.key === "Delete" || e.key === "Backspace") && whole()) {
       // The whole table goes, as Backspace on a table Word has selected takes it away.
       e.preventDefault();
@@ -370,7 +376,7 @@ function ksmdRange(ks) {
       // go back or forward a page, out of the editor.
       e.preventDefault();
       collapse();
-      ks.table.widen(c.block, c.column, e.key === "ArrowRight");
+      ks.sizes.widen(c.block, c.column, e.key === "ArrowRight");
     } else if (e.key === "F2") {
       e.preventDefault();
       collapse();
@@ -536,9 +542,9 @@ function ksmdRange(ks) {
     for (let row = r.r1; row <= r.r2; row++) {
       const cells = [];
       for (let column = r.c1; column <= r.c2; column++) {
-        // A copy takes the number as calculated, not as its format shows it, so no digit is lost.
-        const v = row < 0 ? null : wrap.values[row][column].slice(0, 2);
-        cells.push(field(v ? ks.filter.shown(v) : wrap.names[column]));
+        // A copy takes the number without its format, so no digit is lost.
+        const v = row < 0 ? null : wrap.values[row][column];
+        cells.push(field(v ? ks.filter.plain(v) : wrap.names[column]));
       }
       lines.push(cells.join("\t"));
     }
@@ -550,16 +556,15 @@ function ksmdRange(ks) {
   function html(block) {
     const wrap = wrapOf(block);
     const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const shown = (v) => (v.length > 2 ? v[2] : ks.filter.shown(v));
     const head = wrap.names.map((n) => `<th>${esc(n)}</th>`).join("");
-    const rows = wrap.values.map((row) => `<tr>${row.map((v) => `<td>${esc(shown(v))}</td>`).join("")}</tr>`);
+    const rows = wrap.values.map((row) => `<tr>${row.map((v) => `<td>${esc(ks.filter.shown(v))}</td>`).join("")}</tr>`);
     return `<table><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
   }
 
   // Removes the whole table chosen, as one step; the caret takes its place.
   function removeTable() {
     const block = ks.cell.block;
-    ks.cell = null;
+    ks.table.chooseCell(null);
     end = null;
     return ks.view.removeBlock("ksmd_web_remove_table", block);
   }
@@ -602,6 +607,10 @@ function ksmdRange(ks) {
     if (whole() && ks.pasteTable(e.clipboardData, ks.cell.block + 1)) return;
     if (!ks.tooLarge(text)) pasteGrid(text, true);
   });
+
+  ks.handle(["fill-down", "fill-right"], (name) => fill(name === "fill-down"),
+    { table: true, repeat: true });
+  ks.handle("table-select", (_, c) => selectTable(c.block), { table: true });
 
   ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, selectTable,
     lines, chooseLines,

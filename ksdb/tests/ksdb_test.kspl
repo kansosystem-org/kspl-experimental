@@ -2,6 +2,7 @@ import "ksdb/log" as ksdblog
 import "ksdb/ram_store" as ram
 import "ksdb/store" { Store }
 import "std/bytes"
+import "std/chars" // `sub`
 import "std/prng"
 import "std/str"
 import "std/verdict"
@@ -684,3 +685,54 @@ fn test_every_power_cut_while_keeping_keeps_the_policy()
     verdict
         .pass("Under each write and each erase of reset_keeping, cut in each way, the marker and \
             the newest policy read after the restart, and erasing again finishes the job.")
+
+fn test_full_leaves_room_for_what_fits() //< a record refused as full moves nothing
+    verdict.start("[ksdb] after full, a smaller record that fits still goes in test...")
+    store: = ram.make(U8$[]::store_buf, SECTOR)
+    $lg: = ksdblog.Log.open(store)
+    // Three records of 240 bytes (a span of 248) take a sector each; a small one starts the last.
+    big: U8[240] = ::{}
+    for _i in Range.asc(3)
+        lg.append(KIND_SAMPLE, U8[]::big) catch panic("a 240-byte record fits in an empty sector")
+    lg.append(KIND_SAMPLE, "sample-8") catch panic("a small record fits in the last sector")
+    $refused: = false
+    lg.append(KIND_SAMPLE, U8[]::big) catch e
+        refused = e == ksdblog.Ksdb_error.full
+    assert(refused, "a record that fits in no sector left is refused as full")
+    assert(lg.used() == 784, "and the refusal moves nothing")
+    lg.append(KIND_SAMPLE, "sample-8") catch panic("a small record that still fits goes in")
+    assert(lg.used() == 800, "it goes right after the last record")
+    verdict.pass("A record refused as full moves nothing, so a smaller one still goes in.")
+
+fn test_a_half_erased_sector_brings_no_old_record_back() //<
+    //< An erase cut by a power loss leaves a sector's start erased and an old record after it
+    verdict.start("[ksdb] a half-erased sector brings no old record back test...")
+    store: = ram.make(U8$[]::store_buf, 64) // 16 sectors of 64 bytes
+    $lg: = ksdblog.Log.open(store)
+    // 61 records of 16 bytes fill 15 sectors and start the last; the old policy follows them.
+    for _i in Range.asc(61)
+        lg.append(KIND_SAMPLE, "sample-8") catch panic("the log has room")
+    lg.append(KIND_POLICY, "OLD-POL1") catch panic("the log has room for the policy")
+    // The reset loses power in the last sector's erase, after its first 16 bytes.
+    ram.arm_erase_cut(16, 16)
+    $cut: = false
+    lg.reset() catch
+        cut = true
+    assert(cut, "the armed power cut stops the reset")
+    $after: = ksdblog.Log.open(store)
+    after.append(KIND_POLICY, "NEW-POL2") catch panic("the erased sectors have room")
+    $appended: Sz = 1
+    for _i in Range.asc(100)
+        after.append(KIND_SAMPLE, "sample-8") catch
+            break
+        appended += 1
+    $dst: U8[16] = ::{}
+    reread: = ksdblog.Log.open(store)
+    n: = reread.last(KIND_POLICY, U8$[]::dst) catch panic("a policy was written")
+    assert((U8[]::dst).sub(0, n).equals("NEW-POL2"), "the newest policy is the one written last")
+    $seen: Sz = 0
+    $it: = reread.iter()
+    for it.next()
+        seen += 1
+    assert(seen == appended, "every record read was written after the reset")
+    verdict.pass("A half-erased sector is skipped, so no record from before the reset comes back.")

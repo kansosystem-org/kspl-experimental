@@ -12,6 +12,7 @@ import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/literal" as base_literal
@@ -271,6 +272,19 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@, laid_out: B
         base_diag.print_diagnostic(file_path, src, bad, 1, msg.slice(), .error,
             src.line_starts(base_core.arena))
         throw .syntax_error
+    // **A carriage return stands only before a line feed.** Each `\r\n` is `\n` by here (`to_lf`
+    // in `source_fix.kspl`), so a `\r` left is a lone one. An editor ends a line there and the
+    // compiler does not, so the two would number every line below it apart: a comment would hide
+    // code the editor shows, and a language server's positions would land on other lines.
+    switch src.find_str("\r")
+    case .some(cr)
+        base_diag.print_diagnostic(file_path, src, cr, 1,
+            "a carriage return ('\\r') with no line feed after it. An editor ends a line here and \
+                the compiler does not, so the two would count the lines below differently. End the \
+                line with '\\n' or '\\r\\n'. In a string, write the escape '\\r'", .error,
+            src.line_starts(base_core.arena))
+        throw .syntax_error
+    case .none {}
     arena_state: = save_kspeg_arena()
     defer kspeg_arena.restore(arena_state)
 
@@ -524,6 +538,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         // `../base/package.kspl`).
         refuse_at_import(base_package.refused_use(import_path, perm_slice), decl, import_path,
             perm_src)!
+        refuse_at_import(base_package.refused_link(perm_slice, true), decl, import_path, perm_src)!
         refuse_at_import(refused_file_name(perm_slice), decl, import_path, perm_src)!
         load_and_parse_file(perm_slice, loaded_files, root_file, parser, source_map, import_stack,
             false) catch e
@@ -542,6 +557,7 @@ priv fn read_mended(import_path: U8[], path_key: U8[]): U8$[]!Parse_error //<
     defer $file_path: = Str_builder()
     base_locate.append_file_path(import_path, file_path@)
     raw: = read_source(file_path.slice())!
+    base_cache.note_read(file_path.slice(), raw)
     // The notes are only collected (the reason is at `layout_notes` above).
     laid_notes: = List<|parse_layout.Note|>.create(base_core.arena)
     mended: = mend_as_read(raw, path_key, laid_notes)
@@ -553,8 +569,9 @@ priv fn read_mended(import_path: U8[], path_key: U8[]): U8$[]!Parse_error //<
 priv fn check_embeds(decls: List<|Ast_node$@|>@, import_path: U8[], src: U8[]): Void!Parse_error //<
     //< It rejects an `embed` of a file the package may not use
     //< **An embedded file follows the rule for an imported one.** A package that declares its
-    //< name embeds only its own files, `std`'s and those of what it uses. The rest is rejected
-    //< here, as an import outside the list is (the file is read when emitted).
+    //< name embeds only its own files, `std`'s and those of what it uses, and none through a link
+    //< inside a package. The rest is rejected here, as such an import is (the file is read when
+    //< emitted).
     for decl in decls
         if decl.kind_id != .k_decl_embed
             continue
@@ -565,6 +582,7 @@ priv fn check_embeds(decls: List<|Ast_node$@|>@, import_path: U8[], src: U8[]): 
         refuse_at_import(base_package.refused_written(written), decl, import_path, src)!
         embedded: = import_path.resolve_embed_path(written)
         refuse_at_import(base_package.refused_use(import_path, embedded), decl, import_path, src)!
+        refuse_at_import(base_package.refused_link(embedded, false), decl, import_path, src)!
 
 fn parse_synth_decls(src: U8[], file_path: U8[], parser: kspeg.Target$@,
     out: List<|Ast_node$@|>$@): Void!Parse_error //<

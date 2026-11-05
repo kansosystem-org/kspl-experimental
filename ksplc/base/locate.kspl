@@ -453,16 +453,43 @@ fn append_file_path(import_path: U8[], out: Str_builder$@) //<
     //< Caution: Do not mix a logical name (`std/io`) with the file's path. An absolute path in the
     //< logical name makes mangled names differ per machine. That breaks seed.c's byte-for-byte
     //< match ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
-    append_disk_path(import_path, out)
+    _top: = append_source_path(import_path, out)
+
+priv fn append_source_path(import_path: U8[], out: Str_builder$@): Sz? //<
+    //< `append_disk_path` for a source, with the extension added where the name has none
+    top: = append_disk_path(import_path, out)
     if !out.slice().has_kspl_ext()
         out.s(base_core.SOURCE_EXT)
+    return top
 
 fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read from
     //< **The same path as a source's** (`append_disk_path` below), with nothing added: an embedded
     //< file's name includes its own extension.
     defer $out: = Str_builder()
-    append_disk_path(logical, out@)
+    _top: = append_disk_path(logical, out@)
     return base_core.arena.dup_str(out.slice())
+
+fn link_on_the_way( //< the first step below a package's top folder that is a link; empty if none
+    //< Only a package read from a place of its own is checked: std's, one that names itself, and
+    //< one under `pkg_src_dir`. A link there can lead out of the package.
+    //< Caution: **Do not check the top folder itself**, or the steps above it. A top that is a
+    //< link is normal: macOS's `/tmp`, or a checkout linked into place. **Check the prefixes of
+    //< the path that is opened**, as std's `fs.stays_under` does, so the check and the read
+    //< cannot name two places.
+    logical: U8[], //< the logical name of a source or an embedded file
+    source: Bool, //< true for a source, whose path takes the extension `append_file_path` adds
+): U8[] //< the link's path as opened
+    defer $out: = Str_builder()
+    top: =
+        append_source_path(logical, out@) if source else append_disk_path(logical, out@)
+    path: = out.slice()
+    $at: = top.unwrap_or(path.len)
+    for at < path.len
+        end: = sys.segment_end(path, at)
+        if end > at && fs.is_link(path.sub(0, end))
+            return base_core.arena.dup_str(path.sub(0, end))
+        at = end + 1
+    return ""
 
 // The embedded files this compilation read, by path. **They are sources too** (their bytes go
 // into the output), so `--emit-deps` lists them. Kept per run, like `files_read` in
@@ -482,20 +509,32 @@ fn embedded_read(): List<|U8[]|>$@ //< the embedded files this compilation read
         embedded_paths = List<|U8[]|>.create(base_core.perm_arena)
     return embedded_paths
 
-priv fn append_disk_path(import_path: U8[], out: Str_builder$@) //<
+priv fn append_disk_path(import_path: U8[], out: Str_builder$@): Sz? //<
     //< Where a logical name's file is: under std's folder, in a package's own folder, or locally
+    //< It returns how much of what it wrote is the top folder of a package read from a place of
+    //< its own (`link_on_the_way` above); none for a local folder.
+    start: = out.len
     if import_path.starts_with(STD_PREFIX)
-        out.s(std_dir()).c('/').s(import_path.sub_from(STD_PREFIX.len))
-    else if recorded_root(declared_roots, package_of(import_path)).is_some()
-        // **A package that named itself is read from its own folder** (`disk_name` above).
-        out.s(disk_name(import_path))
-    else
-        // **A folder can be given for packages other than `std` too** (`--pkg-src-dir=`;
-        // `package_root` above).
-        // With none given, it returns empty: relative to the current folder.
-        root: = package_root(package_of(import_path))
-        if root.len > 0
-            out.s(root).c('/')
+        out.s(std_dir())
+        top: = out.len - start
+        out.c('/').s(import_path.sub_from(STD_PREFIX.len))
+        return .some(top)
+    unit: = package_of(import_path)
+    if recorded_root(declared_roots, unit).is_some()
+        // **A package that named itself is read from its own folder** (`disk_name` above). That
+        // path ends with the rest of the name, after a `/` unless the folder is the current one.
+        disk: = disk_name(import_path)
+        out.s(disk)
+        rest: = import_path.len - unit.len - 1
+        return .some(0 if disk.len == rest else disk.len - rest - 1)
+    // **A folder can be given for packages other than `std` too** (`--pkg-src-dir=`;
+    // `package_root` above).
+    // With none given, it returns empty: relative to the current folder.
+    root: = package_root(unit)
+    if root.len == 0
         out.s(import_path)
+        return .none
+    out.s(root).c('/').s(import_path)
+    return .some(root.len + 1 + unit.len)
 
 const LANG_FILE_PATH: U8[] = "std/lang" //< the file every file imports without an import line

@@ -2,12 +2,14 @@
 
 kssrv is a small web server written in KSPL. It hands out the files under `<root>` (the folder you name) over HTTP, or HTTPS. It also answers a JSON API under `/api/`: the server's status, and the file endpoints that a local page uses.
 
-This page is for whoever wants to run it, call it, or change it. The quickest try is the first two lines under "Run it", then opening `http://localhost:8080/` in a browser, which shows `./public/index.html`.
+This page is for whoever wants to run it, call it, or change it. The quickest try is the first four lines under "Run it", then opening `http://localhost:8080/` in a browser, which shows `./public/index.html`.
 
 ## Run it
 
 ```sh
 make kssrv                              # -> out/kssrv.exe
+mkdir -p public                         # the folder to serve; the repository has none
+echo '<h1>Hello</h1>' > public/index.html
 ./out/kssrv.exe 8080 ./public           # serves ./public on 0.0.0.0:8080
 ./out/kssrv.exe 8080 ./public --local   # 127.0.0.1:8080. Prints a token and opens the file endpoints
 ./out/kssrv.exe 8080 ./docs --page=ui/app.html   # `/` is returned as this file
@@ -23,9 +25,10 @@ The port and the root are **positional**; no environment variable fills either i
 | Option | What it does |
 | :-- | :-- |
 | (none) | Faces outward: any machine on the network can fetch the files |
-| `--local` | **Makes it a local server**, reachable from this machine only. Only then do the endpoints a local page uses exist (`/api/file`, `/api/stat`, `/api/list`, `/api/here`, `/api/stop`). It prints a token (a secret string) that every request but the page must carry |
+| `--local` | **Makes it a local server**, reachable from this machine only. Only then do the endpoints a local page uses exist (`/api/file`, `/api/stat`, `/api/list`, `/api/here`, `/api/stop`, and `/api/build` with `--builder`). It prints a token (a secret string) that every request but the page must carry |
 | `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** The server does not start when it names a folder, a FIFO or a device, or nothing. It can sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
-| `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** Absent, it stays up ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
+| `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** It takes 1 to 604800 (one week); the server does not start on another value. Absent, it stays up ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
+| `--builder=<program>` | **Names the program that builds a page's own functions** for `POST /api/build`. It needs `--local`, and the server does not start when the program cannot be run. Absent, `/api/build` answers 404 ("Building a page's own functions" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 | `--cert=<file>` | **Answers HTTPS on the port, with this PEM certificate chain**: the server's own certificate first, then each one that issued the one before it. It needs `--key`, and cannot go with `--local` |
 | `--key=<file>` | **The private key of `--cert`**, in PEM, with no passphrase, readable by this account alone ("Serve HTTPS" below) |
 

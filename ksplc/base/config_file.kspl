@@ -11,6 +11,7 @@
 //     W0105 = error
 // ==========================================
 
+import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/locate" as base_locate
@@ -79,13 +80,16 @@ fn files_missed(): List<|U8[]|>$@ //< every `ksplc.cfg` looked for and not found
         files_absent = List<|U8[]|>.create(base_core.perm_arena)
     return files_absent
 
-priv fn note_once(names: List<|U8[]|>$@, path: U8[]) //< adds a file's project-relative name once
+priv fn note_once(names: List<|U8[]|>$@, path: U8[]): U8[] //<
+    //< It adds a file's project-relative name once, and returns that name
     //< Under that name, a file reached from the root and from its own folder gives one entry.
     named: = base_locate.to_project_relative(path)
     for f in names
         if f.equals(named)
-            return
-    names.push(base_core.perm_arena.dup_str(named))
+            return f
+    kept: = base_core.perm_arena.dup_str(named)
+    names.push(kept)
+    return kept
 
 priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
     //< It reads one `ksplc.cfg` and appends to out; false where there is no such file
@@ -96,7 +100,7 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
             fail(path, 0, "this ksplc.cfg is there but cannot be read")
         note_once(files_missed(), path)
         return false
-    note_once(files_read(), path)
+    base_cache.note_read(note_once(files_read(), path), text)
     // The buffer is on the heap and freed after parsing (a Setting's strings are copies), or the
     // leak check at exit fails.
     defer dealloc(Void$@::text.ptr)

@@ -19,6 +19,7 @@ fn run()
     refusals()
     grouping()
     following()
+    column_groups()
     heights()
     filters()
 
@@ -34,12 +35,14 @@ priv fn refusals()
     for groups in U8[][]::{ "rows 0", "rows 2-2", "rows 4-2", "rows 7", "rows 2-4,rows 5",
         "rows 02", "row 2", "rows 2 open", "rows 2-4, " }
         refused(groups,
-            "groups lists entries such as rows 2-4 or rows 6 closed, each naming data rows from 1, \
-                separated by ', '")
+            "groups lists entries such as rows 2-4, rows 6 closed or columns B-D, naming data rows \
+                from 1 and columns by letter, separated by ', '")
     refused("rows 3, rows 2",
-        "groups lists its entries from the top, an outer group before the groups it holds")
+        "groups lists the rows' entries from the top, then the columns' from the left, an outer \
+            group before the groups it holds")
     refused("rows 2-3, rows 1-6",
-        "groups lists its entries from the top, an outer group before the groups it holds")
+        "groups lists the rows' entries from the top, then the columns' from the left, an outer \
+            group before the groups it holds")
     refused("rows 2-4, rows 3-5", "a group holds another whole, or shares no row with it")
     refused("rows 2-3, rows 2-3 closed", "two groups hold the same rows")
     // Nine groups, each inside the one before, in a table of nine rows.
@@ -56,7 +59,8 @@ priv fn refusals()
         else
             deep.s("rows 1")
         rows.s("| \{i + 1\} |")
-    refused_in(with_rows(deep.slice(), rows.slice(), arena), "a row stands in at most 8 groups")
+    refused_in(with_rows(deep.slice(), rows.slice(), arena),
+        "a row or a column stands in at most 8 groups")
 
 priv fn grouping()
     defer arena: = Arena(64 * 1024)
@@ -113,6 +117,61 @@ priv fn following()
     changed(two@, .remove_row, 1)
     saves("of two groups left on the same rows, the outer one stays", two@, arena,
         with_rows("rows 2-3", "| 1 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
+
+// Columns group as rows do, in a list of their own after the rows' entries, named by letter.
+priv fn column_groups()
+    defer arena: = Arena(64 * 1024)
+    for groups in U8[][]::{ "columns B-D", "rows 2-3, columns A-E, columns B-C closed",
+        "columns E closed" }
+        text: = wide(groups, arena)
+        ed: = opened(text, arena)
+        saves(arena.text().s("column groups read and save unchanged: \{groups\}").take(), ed@, arena,
+            text)
+    for groups in U8[][]::{ "columns F", "columns C-B", "columns b", "columns 2", "column B",
+        "columns B-B" }
+        refused_in(wide(groups, arena),
+            "groups lists entries such as rows 2-4, rows 6 closed or columns B-D, naming data rows \
+                from 1 and columns by letter, separated by ', '")
+    refused_in(wide("columns B, rows 2", arena),
+        "groups lists the rows' entries from the top, then the columns' from the left, an outer \
+            group before the groups it holds")
+    refused_in(wide("columns B-D, columns C-E", arena),
+        "a group holds another whole, or shares no row with it")
+    $ed: = opened(wide("", arena), arena)
+    ed.group_lines(0, true, 1, 3, .group) catch e
+        verdict.check("grouping columns", false, e.message())
+    ed.group_lines(0, true, 1, 3, .hide) catch e
+        verdict.check("hiding columns", false, e.message())
+    saves("columns B to D make a group, hidden", ed@, arena, wide("columns B-D closed", arena))
+    ed.group_lines(0, true, 4, 4, .ungroup) catch e
+        verdict.check("ungrouping a column outside a group",
+            e.message().find_str("No group").is_some(), e.message())
+    changed(ed@, .insert_column, 2)
+    joined: =
+        with_columns("columns B-E closed",
+        "| \"a\" | \"b\" | \"\" | \"c\" | \"d\" | \"e\" |\n| 1 | 2 | | 3 | 4 | 5 |\n| 6 | 7 | | 8 | \
+            9 | 10 |\n| 11 | 12 | | 13 | 14 | 15 |", arena)
+    saves("a column inserted inside a group joins it", ed@, arena, joined)
+    changed(ed@, .remove_column, 0)
+    changed(ed@, .remove_column, 0)
+    left: =
+        with_columns("columns A-C closed",
+        "| \"\" | \"c\" | \"d\" | \"e\" |\n| | 3 | 4 | 5 |\n| | 8 | 9 | 10 |\n| | 13 | 14 | 15 |",
+        arena)
+    saves("removed columns leave the group", ed@, arena, left)
+    for _ in Range.asc(5)
+        ed.undo()
+    saves("undo takes each step back", ed@, arena, wide("", arena))
+
+priv fn wide(groups: U8[], arena: Arena$@): U8[] //< a table of five columns with these groups
+    return with_columns(groups,
+        "| \"a\" | \"b\" | \"c\" | \"d\" | \"e\" |\n| 1 | 2 | 3 | 4 | 5 |\n| 6 | 7 | 8 | 9 | 10 \
+            |\n| 11 | 12 | 13 | 14 | 15 |", arena)
+
+priv fn with_columns(groups: U8[], body: U8[], arena: Arena$@): U8[] //< groups, names and rows
+    if groups.len == 0
+        return arena.text().s(OPEN).s("\n").s(body).s("\n:::\n").take()
+    return arena.text().s(OPEN).s(" groups=\"").s(groups).s("\"\n").s(body).s("\n:::\n").take()
 
 priv fn heights()
     defer arena: = Arena(64 * 1024)
@@ -304,7 +363,7 @@ priv fn refused_in(text: U8[], message: U8[]) //< the reader refuses the source 
         arena.text().s("the source was read: ").s(text).take())
 
 priv fn grouped(ed: Editor$@, first: Sz, last: Sz, what: Group_edit)
-    ed.group_rows(0, first, last, what) catch e
+    ed.group_lines(0, false, first, last, what) catch e
         verdict.check("a group edit", false, e.message())
 
 priv fn changed(ed: Editor$@, what: Table_edit, at: Sz)
@@ -313,7 +372,7 @@ priv fn changed(ed: Editor$@, what: Table_edit, at: Sz)
 
 priv fn wrong(ed: Editor$@, first: Sz, last: Sz, what: Group_edit, says: U8[], name: U8[]) //<
     //< The group edit is refused with a message that holds `says`
-    ed.group_rows(0, first, last, what) catch e
+    ed.group_lines(0, false, first, last, what) catch e
         verdict.check(name, e.message().find_str(says).is_some(), e.message())
         return
     verdict.check(name, false, "the action was taken")

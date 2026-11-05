@@ -99,6 +99,23 @@ KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I3
     return true;
 }
 
+/* The modification time in nanoseconds since the Unix epoch, following links (for std/fs.kspl's
+ * mtime_ns). False where nothing can be read there.
+ * **A separate function, not a field of kspl_path_info** (the reason is at kspl_is_exec below).
+ * A file system that keeps whole seconds gives a multiple of 10^9. */
+KSPL_LINK Bool kspl_path_mtime_ns(const U8 *path_ptr, Sz path_len, I64 *ns_out) {
+    char path[4096];
+    struct stat st;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
+    if (stat(path, &st) != 0) return false;
+#if defined(__APPLE__)
+    *ns_out = (I64)st.st_mtimespec.tv_sec * 1000000000 + (I64)st.st_mtimespec.tv_nsec;
+#else
+    *ns_out = (I64)st.st_mtim.tv_sec * 1000000000 + (I64)st.st_mtim.tv_nsec;
+#endif
+    return true;
+}
+
 /* Whether the owner's execute bit is up (for std/fs.kspl's is_executable).
  * The owner's bit, not access(X_OK), which is nearly always true under root.
  * Caution: It must not be shaped as adding an output argument to kspl_path_info. std/io.kspl and
@@ -267,6 +284,14 @@ static int kspl_sync_parent(const char *path) {
     int err = errno;
     close(fd);
     return r == 0 || err == EINVAL || err == EBADF ? 0 : -1;
+}
+
+/* Puts an open stream's data on the disk, for std/io.kspl's File_stream.sync_to_disk: 0 = done.
+ * The flush first hands the C library's buffer to the OS, and a write refused before fails it. */
+KSPL_LINK I32 kspl_stream_sync_disk(void *stream) {
+    FILE *f = (FILE *)stream;
+    if (fflush(f) != 0 || ferror(f)) return -1;
+    return kspl_sync_fd(fileno(f)) == 0 ? 0 : -1;
 }
 
 /* Puts data at `path` so a crash leaves the old content or the new. The new is on the disk at 0
@@ -446,8 +471,16 @@ static int kspl_path_to_wide(const U8 *path_ptr, Sz path_len, wchar_t *out, Sz o
     Sz len, prefix_len, body_len;
     if (!kspl_win_to_wide((const char *)path_ptr, path_len, out, out_cap)) return 0;
     len = (Sz)wcslen(out);
+    /* Caution: **Turn each `/` after a verbatim prefix into `\`, before any other test.** The OS
+     * reads no `/` there as a separator, and std/fs joins with `/`. So `\\?\C:\root/a` names no
+     * file. The test for a short absolute path takes this form too, so it comes after. */
+    if (kspl_wide_is_verbatim(out)) {
+        for (Sz i = 4; i < len; i++) {
+            if (out[i] == L'/') out[i] = L'\\';
+        }
+        return 1;
+    }
     if (len + 1 < KSPL_WPATH_LEGACY && kspl_wide_is_absolute(out)) return 1;
-    if (kspl_wide_is_verbatim(out)) return 1;
     n = GetFullPathNameW(out, (DWORD)KSPL_WPATH_CAP, full, NULL);
     if (n == 0 || (Sz)n >= KSPL_WPATH_CAP) return 0;
     /* A short relative path goes as written: the OS resolves it the same way.
@@ -547,6 +580,22 @@ KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I3
     *size_out = (I64)st.st_size;
     *kind_out = (st.st_mode & _S_IFMT) == _S_IFREG ? 0 : (st.st_mode & _S_IFMT) == _S_IFDIR ? 1 : 2;
     *mtime_out = (I64)st.st_mtime;
+    return true;
+}
+
+/* The POSIX side's meaning. The time is kept in 100 ns steps from 1601, so the last two digits
+ * are 0. **_wstat64 gives whole seconds only**, so it is read from the attributes.
+ * Caution: GetFileAttributesExW does not follow a link. A link's own time is answered. */
+KSPL_LINK Bool kspl_path_mtime_ns(const U8 *path_ptr, Sz path_len, I64 *ns_out) {
+    wchar_t path[KSPL_WPATH_CAP];
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    ULARGE_INTEGER ticks;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return false;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &data)) return false;
+    ticks.LowPart = data.ftLastWriteTime.dwLowDateTime;
+    ticks.HighPart = data.ftLastWriteTime.dwHighDateTime;
+    /* 116444736000000000 is 1970-01-01 in 100 ns steps from 1601-01-01. */
+    *ns_out = ((I64)ticks.QuadPart - (I64)116444736000000000LL) * 100;
     return true;
 }
 
@@ -752,6 +801,15 @@ static BOOL kspl_win_move(const wchar_t *from, const wchar_t *to, DWORD flags) {
         }
         Sleep(KSPL_MOVE_PAUSE_MS);
     }
+}
+
+/* The POSIX side's meanings. FlushFileBuffers needs the stream opened for writing. */
+KSPL_LINK I32 kspl_stream_sync_disk(void *stream) {
+    FILE *f = (FILE *)stream;
+    if (fflush(f) != 0 || ferror(f)) return -1;
+    HANDLE h = (HANDLE)_get_osfhandle(_fileno(f));
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    return FlushFileBuffers(h) ? 0 : -1;
 }
 
 /* The POSIX side's meanings, with no folder to sync. FlushFileBuffers puts the part on the disk,

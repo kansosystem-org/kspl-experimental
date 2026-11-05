@@ -245,3 +245,24 @@ fn test_iter_wins_over_index()
             break
     assert(via == 6, "it turns by next() through a trait value too")
     verdict.pass("an `Iter` given explicitly does not lose to a match on structure alone.")
+
+priv trait Reads_count //< returns a value; an implementation may hand back a pointer to it
+    fn count_of(r: Self): I32
+
+priv struct Tally
+    n: I32
+
+impl Tally: Reads_count
+    fn count_of(r: Self@): I32@ //< a pointer where the trait returns a value
+        return r.n@
+
+priv fn count_through(c: Reads_count): I32
+    return c.count_of()
+
+fn test_thunk_reads_through_a_returned_pointer()
+    verdict.start("[Thunk] a pointer returned for a value test...")
+    // Caution: **The thunk must read through the pointer.** Passed on as it is, the C compiler only
+    // warned, and the caller took the address for the number.
+    t: = Tally::{ .n = 41 }
+    assert(count_through(t) == 41, "the caller receives the value the pointer points at")
+    verdict.pass("a call through the trait reads through a pointer the implementation returns.")

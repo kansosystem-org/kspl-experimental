@@ -116,9 +116,12 @@ impl Delta_net
             for i in Range.asc(s.kernel)
                 p: = t + i - kept // the position read, counted from this call's first row
                 src: = hist + (kept + p) * c if p < 0 else mixed.data + p * c
+                // The weights' row is read once here: a store through `o` may reach any memory,
+                // `r.conv` included, so read inside the loop it would be read again each step.
+                w: = r.conv.data + i * c
                 // `make test-simd` sees this loop vectorize.
                 for ch in Range.asc(c)
-                    term: = (src + ch)$ * (r.conv.data + i * c + ch)$
+                    term: = (src + ch)$ * (w + ch)$
                     (o + ch)$ = (o + ch)$ + term
         // The kept positions move on: the last `kept` of the old ones and these rows.
         keep: = F32$@::mixed.arena.alloc(kept * c * 4)

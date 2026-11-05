@@ -109,6 +109,12 @@ impl Ast_node
         r.reject_write_to_const_element(c)!
         if !c.place_denies_write(r)
             return
+        if c.is_slice_descriptor_field(r)
+            c.err(r,
+                "cannot write to a slice's '.ptr' or '.len'. Both are read-only, since the bounds \
+                    check trusts them. Make a new slice instead: 's = s.sub(start, len)', or a \
+                    literal 'T[]::{ .ptr = p, .len = n }'")
+            throw .analysis_failed
         // An element reached through `at_ref` is read-only, and the report says so in those terms.
         if sub: = read_only_subscript(c, r)
             recv: = sub.get_postfix_receiver()

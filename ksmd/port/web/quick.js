@@ -408,6 +408,9 @@ function ksmdQuick(ks) {
   ks.placeHooks.push(sync);
   ks.rendered.push(sync);
 
+  ks.handle("quick-choose", () => choose(), { looks: true });
+  ks.handle(["color", "fill"], (name) => openPalette(name, null));
+
   ks.quick = { offer, choose, palette: (part) => openPalette(part, null), sync, render };
   render();
 }

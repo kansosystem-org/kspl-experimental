@@ -9,7 +9,8 @@
 // ==========================================
 // Usage:
 //     kssrv <port> <root> [--local] [--page=<file>] [--idle=<seconds>]
-//                         [--cert=<chain.pem> --key=<key.pem>]
+//                         [--builder=<program>] [--cert=<chain.pem> --key=<key.pem>]
+// `--builder` needs `--local`; it answers `POST /api/build`.
 // A port of 0 lets the system choose a free one; the line "listening on" names it.
 // ==========================================
 import "kssrv/api"
@@ -88,6 +89,9 @@ priv const INDEX_NAME: U8[] = "index.html" //<
     //< the file looked for when the root itself is requested
 
 priv const US_PER_S: I64 = 1000000I64 //< what `--idle`'s seconds are measured against
+priv const MAX_IDLE_S: I64 = 604800I64 //< the longest `--idle` taken: one week [s]
+    //< **A bound keeps `idle_s * US_PER_S` in range**: past it the product wraps, and the server
+    //< would stop at once. A week is longer than any page stays away and still comes back.
 
 priv const FLUSH_GAP_US: I64 = 200000I64 //<
     //< The interval (microseconds) at which the buffered log is flushed
@@ -101,25 +105,34 @@ priv const FLUSH_GAP_US: I64 = 200000I64 //<
 priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from the extension
     //< An unknown extension is not guessed but given `application/octet-stream`: a receiver trusts
     //< a wrong type (misread as HTML, a script runs).
-    if path.ends_with(".html") || path.ends_with(".htm")
+    //< **The extension's letter case does not count**: a camera on Windows names its files
+    //< `PHOTO.JPG`, and a browser downloads a page or refuses a module sent as octet-stream.
+    $ext: U8[] = ""
+    if dot: = path.rfind_char('.')
+        ext = path.sub_from(dot)
+    if ext.equals_ignore_case(".html") || ext.equals_ignore_case(".htm")
         return "text/html; charset=utf-8"
-    if path.ends_with(".css")
+    if ext.equals_ignore_case(".css")
         return "text/css; charset=utf-8"
-    if path.ends_with(".js")
+    if ext.equals_ignore_case(".js") || ext.equals_ignore_case(".mjs")
         return "text/javascript; charset=utf-8"
-    if path.ends_with(".json")
+    if ext.equals_ignore_case(".json")
         return "application/json"
-    if path.ends_with(".txt") || path.ends_with(".md")
+    if ext.equals_ignore_case(".txt") || ext.equals_ignore_case(".md")
         return "text/plain; charset=utf-8"
-    if path.ends_with(".svg")
+    if ext.equals_ignore_case(".svg")
         return "image/svg+xml"
-    if path.ends_with(".png")
+    if ext.equals_ignore_case(".png")
         return "image/png"
-    if path.ends_with(".jpg") || path.ends_with(".jpeg")
+    if ext.equals_ignore_case(".jpg") || ext.equals_ignore_case(".jpeg")
         return "image/jpeg"
-    if path.ends_with(".ico")
+    if ext.equals_ignore_case(".gif")
+        return "image/gif"
+    if ext.equals_ignore_case(".webp")
+        return "image/webp"
+    if ext.equals_ignore_case(".ico")
         return "image/vnd.microsoft.icon"
-    if path.ends_with(".wasm")
+    if ext.equals_ignore_case(".wasm")
         return "application/wasm"
     return "application/octet-stream"
 
@@ -354,6 +367,12 @@ priv fn head_decided(c: conn.Conn$@): Bool //<
 
 priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf` as can be sent
     //< False means close.
+    // Caution: **Send a file's head with the start of its body, in one write.** Written alone, the
+    // head waits for its ACK before the body may go (Nagle's rule), and the client delays that ACK
+    // by about 40 ms: every file on a kept connection then took 40 ms.
+    if c.sent == 0 && c.file_left > 0 && c.outbuf.len < IO_CHUNK
+        if !refill_from_file(c, IO_CHUNK - c.outbuf.len)
+            return false
     $refills: Sz = 0
     for
         for c.sent < c.outbuf.len
@@ -368,7 +387,7 @@ priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf`
         c.sent = 0
         if c.file_left == 0
             break
-        if !refill_from_file(c)
+        if !refill_from_file(c, IO_CHUNK)
             return false
         // Caution: **Cap the chunks per notification**, or one fast download makes everyone else
         // wait. **Stop with a chunk queued**: an empty `outbuf` is not watched for writable, so
@@ -392,12 +411,13 @@ priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf`
     c.inbuf.clear()
     return true
 
-priv fn refill_from_file(c: conn.Conn$@): Bool //< moves the file's next chunk into `outbuf`
+priv fn refill_from_file(c: conn.Conn$@, room: Sz): Bool //<
+    //< Moves the file's next chunk, at most `room` bytes, into `outbuf`
     //< False means close: the read failed, or the file ended before the length the head named (it
     //< shrank since the stat). **The client then sees the connection close short**, which tells it
     //< the body is cut. Padding it out would hand over bytes that are not the file.
     $chunk: U8[IO_CHUNK] = ::{}
-    want: = math.min(c.file_left, IO_CHUNK)
+    want: = math.min(c.file_left, math.min(room, IO_CHUNK))
     n: = c.file.read(U8$[]::{ .ptr = chunk[0]@, .len = want }) catch _e
         return false
     if n == 0
@@ -714,6 +734,12 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         return 2
     port_text: = cli.rest.get(0)
     root: = cli.rest.get(1)
+    // Caution: **Refuse a wait that cannot mean what was written.** 0 or less would read as
+    // "stay up", the opposite of asking it to stop; too large would wrap and stop it at once.
+    if cli.saw("--idle") && (idle_s < 1I64 || idle_s > MAX_IDLE_S)
+        if ln: = lg.at(.error)
+            ln.s("--idle must be 1 to \{MAX_IDLE_S\} seconds; leave it out to stay up: \{idle_s\}")
+        return 1
     // Caution: **Do not start at all unless the named page is a file it can serve.** A 404 later
     // leaves "the page is blank" with no visible reason, and a folder would be a second root (the
     // same section of the agreement). Serving asks `conn.regular_file_size` too, so the two agree.

@@ -9,6 +9,7 @@
 //   _sent: = ln.flush();   // add CR LF at the end and queue it
 // ==========================================
 import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/watchdog"
 import "std/buf" { Buf_writer }
 import "std/str" as _str
 import "std/strfmt" as _strfmt // `\{}` on a number, and its `:02x` / `:03`
@@ -104,6 +105,22 @@ fn say(ln: Line$@, tag: U8[], detail: U8[]) //< prints progress as one line (`[t
     ln.str(" ")
     ln.str(detail)
     _sent: = ln.flush()
+
+fn say_restart(ln: Line$@, tag: U8[], why: watchdog.Reset_reason) //<
+    //< Says why the chip started, and the panic left by the run before, if any
+    //< **A watchdog restart is the only trace of a hang**: the run that hung could print nothing.
+    if why == watchdog.Reset_reason.watchdog
+        say(ln, tag, "restarted by the watchdog: the program had stopped answering")
+    else if why == watchdog.Reset_reason.other
+        say(ln, tag, "restarted by a reboot (boot ROM or debugger)")
+    switch take_panic_record()
+    case .some(info)
+        ln.reset()
+        ln.str(tag)
+        ln.str(" the run before panicked: ")
+        ln.str(info.msg)
+        _sent: = ln.flush()
+    case .none {}
 
 fn can_flush(): Bool //< whether one line fits in the send queue
     //< Caution: **Ask before `flush`**, which discards a line that does not fit. A waiter calls

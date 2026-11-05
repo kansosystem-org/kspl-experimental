@@ -62,9 +62,18 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     await load(start);
     const label = () => js("document.activeElement.getAttribute('aria-label')");
     const chosen = (r, c) => js(`document.activeElement.matches('#doc td.chosen[data-r="${r}"][data-c="${c}"] > .cell-catch')`);
+    // Excel's two modes: a cell opened to edit keeps the arrow keys for its text, and a cell
+    // typed into takes its text and moves on.
     await openCell('#doc td[data-r="0"][data-c="0"]');
     await press("ArrowRight");
-    check(await chosen(0, 1), "Right at the end of an open cell's text moves on to the next cell");
+    check(await label() === "Cell A1", "Right at the end of a cell opened to edit stays in its text");
+    await press("ArrowDown");
+    check(await label() === "Cell A1", "and so does Down");
+    await press("Escape");
+    await type("q");
+    await press("ArrowRight");
+    check(await chosen(0, 1), "Right in a cell typed into takes the text and moves to the next cell");
+    await menu("undo");
     await press("ArrowLeft");
     check(await chosen(0, 0), "and Left on a chosen cell moves back");
     await press("F2");
@@ -155,7 +164,8 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(await js(`getComputedStyle(document.querySelector('#doc th.name')).backgroundColor !==
       getComputedStyle(document.querySelector('#doc th.letter')).backgroundColor`),
       "the heading row of names looks apart from the column letters");
-    await load(start);
+    const wide = start.replace(':::table name="t"', ':::table name="t" char_widths="40,"');
+    await load(wide);
     const px = (c) => js(`document.querySelectorAll("#doc th.letter")[${c}].getBoundingClientRect().width`);
     const before = await px(0);
     const edge = await js(`(() => {
@@ -179,18 +189,41 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     })()`);
     check(fitted < before && fitted >= widest, "a double-click on a column's border fits the column " +
       "to its widest value", `${before} -> ${fitted}, widest ${widest}`);
-    check(/ widths="/.test(await source()), "and the widths are saved, as a drag saves them");
+    check(/ char_widths="\d+(\.\d)?,"/.test(await source()), "and the width is saved in characters, as a drag saves it",
+      await source());
     await menu("undo");
     const cell = await js(`(() => {
       const r = document.querySelector('#doc td[data-r="0"][data-c="0"]').getBoundingClientRect();
       return [r.right - 2, r.top + r.height / 2];
     })()`);
     await doubleClickAt(cell[0], cell[1]);
-    check(await until(`/ widths="/.test(ksmd.source())`, 3000),
+    check(await until(`!ksmd.source().includes('char_widths="40,"')`, 3000),
       "a double-click on the border between two cells fits the column too");
   },
 
   // The quick access bar, looks on text and cells, and copying and pasting cells as Excel does.
+  // A cell of several lines: its box shows every line, a typed line break turns Wrap text on.
+  async cellLines() {
+    const long = "srv/documents/output/a-very-long-folder-name-without-any-space-in-it";
+    await load(`${H}:::table name="t"\n| "a" | "b" |\n| "first line\\n${long}" | "x" |\n:::\n`);
+    await openCell('#doc td[data-r="0"][data-c="0"]');
+    const box = () => js(`(() => { const i = document.activeElement;
+      return [i.scrollTop, i.scrollHeight - i.clientHeight]; })()`);
+    const [top, hidden] = await box();
+    check(top === 0 && hidden <= 1, "an open cell's box shows every line, the first included");
+    await press("Escape");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press("F2");
+    await press("Enter", ALT);
+    await type("y");
+    await press("Enter");
+    check(await js(`document.querySelector('#doc td[data-r="0"][data-c="1"]').classList.contains("wrap")`),
+      "a line break typed into a cell turns its Wrap text on");
+    await menu("undo");
+    check(!await js(`document.querySelector('#doc td[data-r="0"][data-c="1"]').classList.contains("wrap")`),
+      "and one undo takes back the text and the wrapping together");
+  },
+
   async quickBar() {
     const pasteInto = (selector, text) => js(`(() => {
       const data = new DataTransfer();
@@ -359,6 +392,14 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(await js("document.querySelectorAll('#doc .in-range').length") === 4,
       "a drag across cells chooses the range between them, as in a spreadsheet");
     check(await js("!document.querySelector('#doc .cell-input')"), "and leaves no cell open");
+    // A press in an open cell's text, dragged past the cell's edge, selects its text as in a
+    // spreadsheet's edit mode: the cell stays open and no range is chosen.
+    await openCell('#doc td[data-r="0"][data-c="1"]');
+    await dragTo('#doc .cell-input', '#doc td[data-r="1"][data-c="2"]');
+    check(await js("!!document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"] .cell-input')") &&
+      await js("document.querySelectorAll('#doc .in-range').length") <= 1,
+    "a drag from an open cell's text past its edge keeps the cell open, choosing no range");
+    await press("Escape");
     await rightClick('#doc td[data-r="0"][data-c="0"]');
     check(await js("!!document.querySelector('.menu.context .sub > .sub-name')"),
       "the right-click menu holds Number format as a flyout");

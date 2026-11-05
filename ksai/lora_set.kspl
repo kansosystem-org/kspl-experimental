@@ -61,11 +61,11 @@ priv fn lora_load_from(out: Lora<|F32|>$@, s: st.Safetensors, i: Sz, group: U8[]
     // Caution: **Check the shapes before reading the scale.** A scale of shape `[0]` is a valid
     // empty tensor whose data starts at the end of the file. So a read of its one value goes past
     // the buffer (or reads the neighbouring tensor). A and B must chain
-    // (`[in, rank]` · `[rank, out]`) and fit the base layer. Otherwise the first forward pass
-    // stops on a matmul mismatch naming nothing.
+    // (`[in, rank]` · `[rank, out]`) with a rank of 1 or more, and fit the base layer. Otherwise
+    // the first forward pass stops on a matmul mismatch naming nothing.
     if sc.size != 1
         throw .shape_mismatch(name)
-    if a.shape.len != 2 || lb.shape.len != 2 || a.shape[1] != lb.shape[0]
+    if a.shape.len != 2 || lb.shape.len != 2 || a.shape[1] != lb.shape[0] || a.shape[1] < 1
         throw .shape_mismatch(name)
     if a.shape[0] != want.in_dim || lb.shape[1] != want.out_dim
         throw .shape_mismatch(name)

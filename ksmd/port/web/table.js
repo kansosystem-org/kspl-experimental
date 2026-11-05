@@ -2,16 +2,14 @@
 // it (its formula, number or text), and the value is calculated again once the edit is taken.
 // A table is not editable text: the document's selection stops at its edges, and a cell edits in
 // an input of its own. Arrow keys past the first or last row leave the table for the gap there.
-// Dragging the edge between two column letters, or Alt+Left and Alt+Right in a cell, resizes the
-// columns: the table's widths change in one step, and its cells do not change. A double-click on a
-// column's border fits that column to its widest value.
+// Column widths and row heights, and the edges that change them, are `sizes.js`.
 // Each name in the heading row carries the arrow that opens its column's filter (`filter.js`).
 // Ctrl+; types today's date into a cell, and Ctrl+: the time, as Excel does.
 // Shift+click, and Shift with an arrow key, choose a range of cells from the chosen one
 // (`range.js`).
 // A right-click on a cell, a row number or a column letter opens the table's menu (`menu.js`).
 // While a formula is typed, a press on a cell can write its reference instead (`point.js`).
-// Groups of rows show beside the row numbers (`outline.js`).
+// Groups of rows show beside the row numbers, and groups of columns above the letters (`outline.js`).
 "use strict";
 
 function ksmdTable(ks) {
@@ -25,9 +23,6 @@ function ksmdTable(ks) {
     return s;
   };
 
-  // A number as a person reads it: at most 15 significant digits, as spreadsheets show them.
-  const shown = (n) => String(Number(n.toPrecision(15)));
-
   function cellEl(tag, row, column, value) {
     const el = document.createElement(tag);
     el.dataset.r = String(row);
@@ -37,9 +32,7 @@ function ksmdTable(ks) {
       if (value[0] === 1) el.className = "number";
       if (value[0] === 5) el.className = "date";
       if (value[0] === 3) el.className = "error";
-      // A number in a column with a number format comes with the text the format shows.
-      el.textContent = value.length > 2 ? value[2] :
-        value.length > 1 ? (value[0] === 1 ? shown(value[1]) : value[1]) : "";
+      el.textContent = ks.filter.shown(value);
     }
     return el;
   }
@@ -53,6 +46,7 @@ function ksmdTable(ks) {
     wrap.u = b.u;
     // A table shown from an included file: its place is in that file's model, not this one's.
     wrap.included = !!b.included;
+    wrap.merged = b.mg;
     wrap.rowIds = b.ri;
     wrap.colIds = b.ci;
     wrap.values = b.rows;
@@ -63,11 +57,19 @@ function ksmdTable(ks) {
     name.textContent = b.name;
     name.title = "Rename the table";
     wrap.appendChild(name);
+    // The caption stands above the table, its number drawn before it (`settings.js`).
+    if (b.cap) {
+      const cap = document.createElement("div");
+      cap.className = "table-caption";
+      cap.textContent = b.cap;
+      wrap.appendChild(cap);
+    }
     const table = document.createElement("table");
-    wrap.weights = b.w;
+    wrap.widths = b.w;
     wrap.heights = b.h;
     wrap.filterEntries = b.fl;
-    if (b.w.length > 0) showWidths(table, b.w);
+    // A hidden group's columns take no width (`sizes.js`).
+    wrap.foldedColumns = ks.outline.foldedColumns(b.cg, b.names.length);
     const head = document.createElement("thead");
     const lettersRow = document.createElement("tr");
     const namesRow = document.createElement("tr");
@@ -77,13 +79,6 @@ function ksmdTable(ks) {
       const th = document.createElement("th");
       th.className = "letter";
       th.textContent = letters(c);
-      if (c < b.names.length - 1) {
-        const edge = document.createElement("span");
-        edge.className = "col-edge";
-        edge.dataset.edge = String(c);
-        edge.title = "Drag to share the width of the two columns beside this edge anew";
-        th.appendChild(edge);
-      }
       lettersRow.appendChild(th);
       const name = cellEl("th", -1, c, [2, n]);
       name.className = "name";
@@ -110,12 +105,11 @@ function ksmdTable(ks) {
       number.textContent = String(r + 1);
       tr.appendChild(number);
       row.forEach((value, c) => tr.appendChild(cellEl("td", r, c, value)));
-      if (b.h[r] > 0) tr.style.height = `${b.h[r]}pt`;
       body.appendChild(tr);
     });
     table.appendChild(body);
     wrap.appendChild(table);
-    for (const [r, c, color, fill, size, align] of b.looks) {
+    for (const [r, c, color, fill, size, align, wraps] of b.looks) {
       const el = wrap.querySelector(`[data-r="${r}"][data-c="${c}"]`);
       if (!el) continue;
       if (color) el.style.color = color;
@@ -123,114 +117,43 @@ function ksmdTable(ks) {
       if (color || fill) el.classList.add("looked");
       if (size) el.style.fontSize = `${size / 2}pt`;
       if (align) el.style.textAlign = align;
+      if (wraps) el.classList.add("wrap");
     }
+    // A cell's link holds its text, and opens as a prose link does: on Ctrl+press, or a press
+    // while read-only (`view.js`). A plain press chooses the cell, so it can be edited.
+    wrap.links = new Map();
+    for (const [r, c, to] of b.links) {
+      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (!el) continue;
+      wrap.links.set(`${r} ${c}`, to);
+      const a = document.createElement("a");
+      a.href = to;
+      a.className = "cell-link";
+      a.title = `${to}\nCtrl+click opens it in a new tab`;
+      a.append(...el.childNodes);
+      el.appendChild(a);
+    }
+    // A choice's colours first, so a column's rule stands over them.
+    ks.choices.mark(wrap, b.ch, b.rc);
     ks.rules.paint(wrap, b.ru);
     ks.outline.draw(wrap, b.g);
-    ks.choices.mark(wrap, b.ch);
+    ks.outline.drawColumns(wrap, b.cg);
     ks.notes.mark(wrap, b.notes);
     ks.filter.apply(wrap);
+    ks.sizes.decorate(wrap, b.h);
     return wrap;
   }
 
-  // Shows weights as the columns' widths: each column takes its weight's share of the table.
-  function showWidths(table, weights) {
-    let cols = table.querySelector("colgroup");
-    if (!cols) {
-      cols = document.createElement("colgroup");
-      table.insertBefore(cols, table.firstChild);
-    }
-    cols.textContent = "";
-    cols.appendChild(document.createElement("col"));
-    const sum = weights.reduce((a, x) => a + x, 0);
-    for (const weight of weights) {
-      const col = document.createElement("col");
-      col.style.width = `${(100 * weight) / sum}%`;
-      cols.appendChild(col);
-    }
-  }
-
-  // The most a column's weight can be, as the reader takes it.
-  const MAX_WEIGHT = 10000;
-  // Each column's width on the page in pixels, read from the row of column letters.
-  const pixels = (wrap) => Array.from(wrap.querySelector("table").tHead.rows[0].cells).slice(1)
-    .map((th) => th.getBoundingClientRect().width);
-  // A table's weights, or for a table without any, weights made from its columns on the page.
-  function weightsOf(wrap, px) {
-    if (wrap.weights.length > 0) return wrap.weights;
-    const total = px.reduce((a, x) => a + x, 0);
-    return px.map((p) => Math.max(1, Math.round((1000 * p) / total)));
-  }
-
-  // The weights after the edge right of column `left` moves `dx` pixels: the two columns beside it
-  // share their width anew, and every other column keeps its weight. All weights are first
-  // multiplied by one whole number, so the two columns have about 1,000 steps to share; the
-  // writer divides the weights by their greatest common divisor again.
-  function moved(base, px, left, dx) {
-    const pair = base[left] + base[left + 1];
-    const k = Math.max(1, Math.min(Math.floor(MAX_WEIGHT / Math.max(...base)), Math.ceil(1000 / pair)));
-    const out = base.map((w) => w * k);
-    const both = pair * k;
-    const share = (px[left] + dx) / (px[left] + px[left + 1]);
-    out[left] = Math.min(both - 1, MAX_WEIGHT, Math.max(1, both - MAX_WEIGHT, Math.round(both * share)));
-    out[left + 1] = both - out[left];
-    return out;
-  }
-
-  // Moves the edge right of column `left` by `dx` pixels, as one action.
-  function resize(block, left, dx) {
-    const wrap = ks.view.blocks()[block];
-    const px = pixels(wrap);
-    const weights = moved(weightsOf(wrap, px), px, left, dx);
-    return ks.act("ksmd_web_set_widths", block, ks.put(weights.join(",")));
-  }
-
-  // A table with one column has no width to share: a change of a column's width says so and does
-  // nothing. True for such a table.
-  function soleColumn(columns) {
-    if (columns >= 2) return false;
-    ks.say("A table with one column takes the whole width.");
-    return true;
-  }
-
-  // Alt+Right makes a cell's column wider and Alt+Left narrower, by a twentieth of the table. The
-  // width comes from the column on its right, or from the one on its left for the last column.
-  function widen(block, column, wider) {
-    const columns = size(block).columns;
-    if (soleColumn(columns)) return;
-    const last = column === columns - 1;
-    const step = ks.view.blocks()[block].querySelector("table").getBoundingClientRect().width / 20;
-    resize(block, last ? column - 1 : column, wider !== last ? step : -step);
-  }
-
-  // A drag of an edge shows the new widths as the mouse moves, and takes them as one action when
-  // the button is let go. A press that does not move changes nothing.
-  function drag(e, edge) {
-    e.preventDefault();
-    take();
-    const wrap = edge.closest(".table");
-    const block = blockOf(wrap);
-    const left = Number(edge.dataset.edge);
-    const px = pixels(wrap);
-    const base = weightsOf(wrap, px);
-    const table = wrap.querySelector("table");
-    const x0 = e.clientX;
-    wrap.classList.add("resizing");
-    const move = (m) => showWidths(table, moved(base, px, left, m.clientX - x0));
-    const up = (u) => {
-      document.removeEventListener("mousemove", move);
-      document.removeEventListener("mouseup", up);
-      wrap.classList.remove("resizing");
-      if (u.clientX !== x0) {
-        ks.act("ksmd_web_set_widths", block, ks.put(moved(base, px, left, u.clientX - x0).join(",")));
-      } else if (wrap.weights.length > 0) {
-        showWidths(table, wrap.weights);
-      } else {
-        const cols = table.querySelector("colgroup");
-        if (cols) cols.remove();
-      }
-    };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
+  // Measures each table's row numbers, so its first column stays in sight just right of them
+  // (`--first-left` in `tools.css`). Every width is read first, then every one is set, so the page
+  // is laid out once. A table an include shows is measured too: it scrolls sideways as well.
+  function pin() {
+    const wraps = Array.from(ks.root.querySelectorAll(".b.table"));
+    const widths = wraps.map((wrap) => {
+      const corner = wrap.querySelector("thead tr:first-child > th:first-child");
+      return corner ? corner.getBoundingClientRect().width : 0;
+    });
+    wraps.forEach((wrap, i) => wrap.style.setProperty("--first-left", `${widths[i]}px`));
   }
 
   const blockOf = (el) => ks.view.blocks().indexOf(el.closest(".table"));
@@ -250,23 +173,60 @@ function ksmdTable(ks) {
     while (hiddenRow(block, r)) r += by;
     return r;
   }
+  // The next column a person sees from `column`, one way, passing over a hidden group's columns;
+  // the column itself where none shows that way.
+  function stepColumn(block, column, by) {
+    const wrap = ks.view.blocks()[block];
+    const hidden = wrap.foldedColumns || [];
+    let c = column + by;
+    while (c >= 0 && c < hidden.length && hidden[c]) c += by;
+    return c < 0 || c >= size(block).columns ? column : c;
+  }
 
   // The cell being edited: { block, row, column, input, before } or null.
   let open = null;
-  // The table and cell the row and column commands act on.
-  ks.cell = null;
+  // The chosen cell: the table and cell the row and column commands act on, as
+  // { block, row, column }, or null. This file alone keeps it, and another changes it through
+  // `ks.table.chooseCell`, so a choice comes from one door. A plain write to `ks.cell` throws.
+  let cell = null;
+  Object.defineProperty(ks, "cell", {
+    get: () => cell,
+    set: () => {
+      throw new Error("ks.cell is kept by table.js: call ks.table.chooseCell");
+    },
+  });
+  const chooseCell = (c) => {
+    cell = c;
+  };
 
   // Chooses a cell, or with `opening` opens it to edit, as a spreadsheet's double-click or F2 does,
   // the caret at the end. With `whole`, all of its text is selected, so what is typed replaces it.
   // With `typed`, the box that holds the chosen cell's focus becomes the input, keeping what was
   // typed or is being composed in it (`catcher` in `range.js`).
+  // The element a cell's box is: an input where its column has choices, else a text area.
+  function boxKind(el) {
+    const wrap = el.closest(".table");
+    const list = Number(el.dataset.r) >= 0 && wrap && wrap.choices && wrap.choices[Number(el.dataset.c)];
+    return list && list.length > 0 ? "input" : "textarea";
+  }
+  // A cell's box as tall as its text, the lines its column's width breaks it into counted too.
+  // Caution: **Count what shows, not the line breaks.** A box as tall as its breaks scrolled a
+  // wrapped line out of sight above the caret, so the first line seemed gone.
+  function fitLines(input) {
+    if (input.tagName !== "TEXTAREA") return;
+    input.rows = 1;
+    input.style.height = "auto";
+    if (!input.isConnected) return;
+    input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
+  }
+
   function edit(el, opening = true, whole = false, typed = null) {
     if (open && open.input.parentNode === el) return;
     take();
     const block = blockOf(el);
     const row = Number(el.dataset.r);
     const column = Number(el.dataset.c);
-    ks.cell = { block, row, column };
+    chooseCell({ block, row, column });
     ks.setPlace("cell");
     // A chosen cell takes keys, copies and a range's sum; read-only only ever chooses.
     if (ks.readOnly || !opening) {
@@ -274,21 +234,32 @@ function ksmdTable(ks) {
       ks.range.focus();
       return;
     }
-    const input = typed || document.createElement("input");
+    // A text area, so a cell's line breaks stay while it is edited; Alt+Enter types one. A column
+    // with choices takes one line, and keeps an input, which alone offers a list as one types.
+    const input = typed || document.createElement(boxKind(el));
     input.className = "cell-input";
     input.readOnly = false;
-    // An input asks for about 20 characters of width; given none, opening a cell moves no column.
-    input.size = 1;
+    // A box asks for about 20 characters of width; given one, opening a cell moves no column.
+    if (input.tagName === "TEXTAREA") input.cols = 1;
+    else input.size = 1;
     input.setAttribute("aria-label", row < 0 ? `Name of column ${letters(column)}` :
       `Cell ${letters(column)}${row + 1}`);
     input.title = "Alt+Right makes this column wider, and Alt+Left narrower. Shift+F10 opens the table menu";
     const before = ks.cellText(block, row, column);
     if (!typed) input.value = before;
-    open = { block, row, column, input, before, nodes: Array.from(el.childNodes).filter((n) => n !== input) };
+    fitLines(input);
+    input.addEventListener("input", () => fitLines(input));
+    // **Two modes, as Excel's.** Typing into a chosen cell enters it: an arrow key takes the text
+    // and moves to the next cell. A double-click or F2 edits it: the arrow keys move the caret
+    // inside the text, and F2 turns entering into editing.
+    const entering = !!typed || whole;
+    open = { block, row, column, input, before, entering,
+      nodes: Array.from(el.childNodes).filter((n) => n !== input) };
     // Caution: **Leave a typed box where it stands.** Moved, it loses the focus, and an input
     // method its composition.
     for (const n of open.nodes) n.remove();
     if (!typed) el.appendChild(input);
+    fitLines(input);
     input.addEventListener("keydown", keys);
     if (row >= 0) ks.choices.attach(el.closest(".table"), column, input);
     ks.range.collapse();
@@ -377,7 +348,7 @@ function ksmdTable(ks) {
       // The cell stays open, so each press moves the edge one more step.
       e.preventDefault();
       take();
-      widen(block, column, e.key === "ArrowRight");
+      ks.sizes.widen(block, column, e.key === "ArrowRight");
       moveTo(block, row, column, true);
       return;
     }
@@ -394,6 +365,15 @@ function ksmdTable(ks) {
       ks.menus.openContext(r.left, r.bottom);
       return;
     }
+    if (e.key === "F2" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      open.entering = false;
+      return;
+    }
+    const arrow = e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" ||
+      e.key === "ArrowRight";
+    // Editing, an arrow key, with Shift or Ctrl or neither, works on the text alone; Alt keeps its own.
+    if (arrow && !open.entering && !e.altKey) return;
     const shifted = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
     if (e.shiftKey && shifted[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // Shift and an arrow key choose a range from this cell, as in a spreadsheet. Left and Right
@@ -408,8 +388,16 @@ function ksmdTable(ks) {
       return;
     }
     let to = null;
+    // Alt+Enter types a line break inside the cell, as in a spreadsheet; Enter moves down.
+    if (e.key === "Enter" && e.altKey && !e.ctrlKey && !e.metaKey && open.input.tagName === "TEXTAREA") {
+      e.preventDefault();
+      const input = open.input;
+      input.setRangeText("\n", input.selectionStart, input.selectionEnd, "end");
+      fitLines(input);
+      return;
+    }
     if (e.key === "Enter") to = [stepRow(block, row, 1), column];
-    else if (e.key === "Tab") to = [row, column + (e.shiftKey ? -1 : 1)];
+    else if (e.key === "Tab") to = [row, stepColumn(block, column, e.shiftKey ? -1 : 1)];
     else if (e.key === "ArrowUp") to = [stepRow(block, row, -1), column];
     else if (e.key === "ArrowDown") to = [stepRow(block, row, 1), column];
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey && !e.ctrlKey &&
@@ -423,9 +411,9 @@ function ksmdTable(ks) {
       const edge = input.selectionStart === input.selectionEnd &&
         input.selectionStart === (left ? 0 : len);
       if (!all && !edge) return;
-      const next = column + (left ? -1 : 1);
+      const next = stepColumn(block, column, left ? -1 : 1);
       e.preventDefault();
-      if (next < 0 || next >= size(block).columns) return;
+      if (next === column) return;
       to = [row, next];
     } else if (e.key === "Escape") {
       // The edit is dropped and the cell stays chosen, as in a spreadsheet; a second Esc leaves
@@ -455,7 +443,7 @@ function ksmdTable(ks) {
       const t = !number && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
       return t !== text || /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
     };
-    const value = (v) => (!v || v.length < 2 ? "" : v[0] === 1 ? shown(v[1]) : String(v[1]));
+    const value = (v) => (v ? ks.filter.plain(v) : "");
     const lines = [wrap.names.map((n) => field(n)).join(",")];
     for (const row of wrap.values) {
       lines.push(row.map((v) => field(value(v), !!v && v[0] === 1)).join(","));
@@ -503,104 +491,6 @@ function ksmdTable(ks) {
     return ks.act("ksmd_web_cell_currency", block, r.r1, r.c1, r.r2, r.c2, typed);
   }
 
-  // Fits a column to its widest value on one line: the other columns share what is left in the
-  // proportions they have now, and the table keeps its width. It is one action, as a drag is.
-  function fit(block, column) {
-    const wrap = ks.view.blocks()[block];
-    const px = pixels(wrap);
-    if (soleColumn(px.length)) return null;
-    const total = px.reduce((a, x) => a + x, 0);
-    const cells = Array.from(wrap.querySelectorAll(`[data-c="${column}"]`));
-    let widest = 0;
-    for (const el of cells) {
-      const probe = document.createElement("span");
-      probe.className = "measure";
-      probe.textContent = el.querySelector(".cell-input") ? el.querySelector(".cell-input").value : el.textContent;
-      el.appendChild(probe);
-      const style = getComputedStyle(el);
-      const pad = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) +
-        parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
-      widest = Math.max(widest, probe.getBoundingClientRect().width + pad + 2);
-      probe.remove();
-    }
-    const least = 48;
-    const width = Math.max(least, Math.min(widest, total - least * (px.length - 1)));
-    const others = total - px[column];
-    const out = px.map((p, c) => (c === column ? width : (p * (total - width)) / others));
-    const weights = out.map((p) => Math.max(1, Math.round((1000 * p) / total)));
-    return ks.act("ksmd_web_set_widths", block, ks.put(weights.join(",")));
-  }
-
-  // Column width…, as Excel's dialog: the chosen columns each take a share of the table's width,
-  // in percent, and the other columns share what is left in the proportions they have. A share is
-  // the one width that holds on every page, since a table fills the width it is given.
-  function askWidth(block) {
-    const wrap = ks.view.blocks()[block];
-    const px = pixels(wrap);
-    if (soleColumn(px.length)) return null;
-    const r = ks.range.rect();
-    const total = px.reduce((a, x) => a + x, 0);
-    const now = Math.round((100 * px[r.c1]) / total);
-    const typed = window.prompt("Column width, in percent of the table's width (1 to 99)", String(now));
-    if (typed === null) return null;
-    const share = Number(typed.trim());
-    const count = r.c2 - r.c1 + 1;
-    if (!/^\d+(\.\d)?$/.test(typed.trim()) || share < 1 || share > 99) {
-      ks.say("A column's width is a percent of the table's width from 1 to 99, such as 25, with at most one decimal place.");
-      return null;
-    }
-    // With every column chosen, nothing is left to share: their widths must add to the whole.
-    if (count === px.length && Math.abs(share * count - 100) > 1e-9) {
-      ks.say(`All ${count} columns are chosen, so their widths add to 100%. Choose fewer columns to give some of them ${share}% each.`);
-      return null;
-    }
-    if (share * count > 100 - (px.length - count)) {
-      ks.say(`The ${count} chosen columns cannot take ${share}% each: the other columns need 1% each at least. Widths from 1 to 99 fit.`);
-      return null;
-    }
-    // Weights in steps of a hundredth of a percent, which the writer then divides by their
-    // greatest common divisor.
-    const own = Math.round(share * 100);
-    const left = 10000 - own * count;
-    const others = px.reduce((a, x, c) => (c >= r.c1 && c <= r.c2 ? a : a + x), 0);
-    const weights = px.map((p, c) => (c >= r.c1 && c <= r.c2 ? own : Math.max(1, Math.round((left * p) / others))));
-    return ks.act("ksmd_web_set_widths", block, ks.put(weights.join(",")));
-  }
-
-  // Row height…, as Excel's dialog: the chosen rows take a least height in points, the unit of a
-  // font's size. A row still grows where its text needs more room, so no value is ever cut off.
-  // The names row takes the height its text needs. Rows a filter or a closed group hides keep
-  // theirs, as Excel changes only the rows it shows.
-  function askHeight(block) {
-    const r = ks.range.rect();
-    const wrap = ks.view.blocks()[block];
-    const rows = [];
-    for (let row = Math.max(0, r.r1); row <= r.r2; row++) if (!hiddenRow(block, row)) rows.push(row);
-    if (rows.length === 0) {
-      ks.say("The names row takes the height its text needs. Choose data rows to give them a height.");
-      return null;
-    }
-    const now = wrap.heights[rows[0]] || "";
-    const typed = window.prompt("Row height, in points (6 to 409). Leave it empty for the height the text needs",
-      String(now));
-    if (typed === null) return null;
-    const t = typed.trim();
-    if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 6 || Number(t) > 409)) {
-      ks.say("A row's height is a whole number of points from 6 to 409, or empty for the height its text needs.");
-      return null;
-    }
-    return ks.act("ksmd_web_set_heights", block, ks.put(rows.join(",")), t === "" ? 0 : Number(t));
-  }
-
-  // The column whose right border a press stands on, within a few pixels; -1 when none.
-  function borderAt(e, el) {
-    const r = el.getBoundingClientRect();
-    const column = el.classList.contains("letter") ? el.cellIndex - 1 : Number(el.dataset.c);
-    if (e.clientX >= r.right - 5) return column;
-    if (e.clientX <= r.left + 5) return column - 1;
-    return -1;
-  }
-
   // Marks the cell the table commands act on, while no cell is open.
   function choose(block, row, column) {
     ks.range.set(block, row, column, null);
@@ -613,21 +503,6 @@ function ksmdTable(ks) {
   ks.root.addEventListener("mousedown", (e) => {
     // A table shown from an included file edits in that file's own tab.
     if (!e.target.closest || e.target.closest(".include")) return;
-    const edge = e.target.closest(".col-edge");
-    if (edge && e.detail >= 2) {
-      e.preventDefault();
-      return fit(blockOf(edge), Number(edge.dataset.edge));
-    }
-    if (edge) return drag(e, edge);
-    const bordered = e.target.closest(".table [data-r], .table th.letter");
-    if (bordered && e.detail >= 2 && e.button === 0) {
-      const column = borderAt(e, bordered);
-      if (column >= 0) {
-        e.preventDefault();
-        take();
-        return fit(blockOf(bordered), column);
-      }
-    }
     // The second press of a double-click opens the cell the first chose, wherever it lands now:
     // choosing can take an empty line above the table away, and the table moves under the pointer.
     if (e.detail >= 2 && e.button === 0 && pressed && !open) {
@@ -698,6 +573,61 @@ function ksmdTable(ks) {
     ks.menus.openContext(e.clientX, e.clientY);
   });
 
+  // Asks for a table's caption; an empty answer takes it away.
+  function askCaption(block) {
+    const wrap = ks.view.blocks()[block];
+    const cap = wrap.querySelector(".table-caption");
+    const typed = window.prompt("Caption, shown above the table. Leave it empty for none.",
+      cap ? cap.textContent : "");
+    if (typed === null) return null;
+    return ks.act("ksmd_web_table_caption", block, ks.put(typed.trim()));
+  }
+
+  // Asks for the chosen cell's link; an empty answer takes it away.
+  function askLink() {
+    const c = ks.cell;
+    const wrap = ks.view.blocks()[c.block];
+    const now = wrap.links.get(`${c.row} ${c.column}`) || "https://";
+    const to = window.prompt("Link the cell's text to an https:, http: or mailto: address. Leave it " +
+      "empty to take the link away.", now);
+    if (to === null) return null;
+    return ks.act("ksmd_web_cell_link", c.block, c.row, c.column, ks.put(to.trim()));
+  }
+
+  // Whether a table is left out of print and PDF.
+  const leftOut = (block) => ks.view.blocks()[block].classList.contains("print-hidden");
+
+  // The commands on a table's rows and columns, and on the table as a whole. While rows of the
+  // table are cut, Insert row above inserts them instead, and Insert column left the columns
+  // (`CUT_FORMS` in `commands.js`). A filter stays, and shows a new row until it is chosen again
+  // (`filter.js`).
+  const LINES = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0],
+    "column-left": [2, 0], "column-right": [2, 1], "column-remove": [3, 0] };
+  const editLines = (name, c) => {
+    const rows = name.startsWith("row-");
+    if (name in CUT_FORMS && ks.cut.waiting(c.block, rows)) return ks.cut.insert(c.block, rows);
+    const [what, after] = LINES[name];
+    return ks.act("ksmd_web_table_edit", c.block, what, (rows ? Math.max(c.row, 0) : c.column) + after);
+  };
+  ks.handle(["row-above", "row-below", "row-remove"], editLines,
+    { table: true, repeat: true, when: (c) => c.row >= 0 });
+  ks.handle(["column-left", "column-right", "column-remove"], editLines, { table: true, repeat: true });
+  ks.handle("table-rename", (_, c) => rename(c.block), { table: true });
+  ks.handle("table-caption", (_, c) => askCaption(c.block), { table: true });
+  ks.handle("table-csv", (_, c) => csv(c.block), { table: true, looks: true });
+  ks.handle("table-print", (_, c) => ks.act("ksmd_web_invisible", c.block, leftOut(c.block) ? 0 : 1),
+    { table: true, repeat: true });
+  ks.handle("table-chart", (_, c) => ks.act("ksmd_web_insert_chart", c.block), { table: true });
+  ks.handle("table-remove", (_, c) => {
+    chooseCell(null);
+    return ks.view.removeBlock("ksmd_web_remove_table", c.block);
+  }, { table: true });
+  // A currency asks for its code, so Repeat leaves it out.
+  ks.handle(["format-none", "format-number", "format-grouped", "format-percent", "format-more",
+    "format-fewer", "format-date", "format-date-slash"], (name, c) => format(c.block, name),
+  { table: true, repeat: true });
+  ks.handle("format-currency", (name, c) => format(c.block, name), { table: true });
+
   ks.table = {
     render,
     take,
@@ -705,11 +635,6 @@ function ksmdTable(ks) {
     rename,
     csv,
     format,
-    fit,
-    askWidth,
-    askHeight,
-    // Makes a column wider or narrower by a step, as Alt+Right and Alt+Left do.
-    widen,
     range: () => ks.range.rect(),
     // Opens a cell to edit, or leaves the table past its first or last row; with `whole`, what is
     // typed replaces its text.
@@ -725,6 +650,16 @@ function ksmdTable(ks) {
     choose: (block, row, column) => moveTo(block, row, column, false),
     // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
     step: (block, row, dr) => stepRow(block, row, dr),
+    pin,
+    leftOut,
+    // Sets the chosen cell, { block, row, column }, or null for none.
+    chooseCell,
+    askLink,
+    askCaption,
+    // The element a chosen cell's box is (`catcher` in `range.js`).
+    boxKind,
+    // The column `dc` steps from `column`, passing over the columns a group hides.
+    stepColumn: (block, column, dc) => stepColumn(block, column, dc),
     // The cell being edited, whose row a filter keeps in sight: { block, row, input } or null.
     editing: () => (open ? { block: open.block, row: open.row, input: open.input } : null),
     // The open cell's text where it differs from the cell's own, not yet taken into the

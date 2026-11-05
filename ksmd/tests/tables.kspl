@@ -189,53 +189,57 @@ priv fn widths()
     defer arena: = Arena(64 * 1024)
     before: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1 |\n:::\n"
     $ed: = opened(before, arena)
-    resized(ed@, "300,450,750", arena)
-    saves("widths are saved divided by their greatest common divisor", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"2,3,5\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
-            =A1+B1 |\n:::\n")
+    resized(ed@, "120,85,0", arena)
+    saves("widths are saved in characters, empty for a column that fits its text", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"12,8.5,\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 \
+            | =A1+B1 |\n:::\n")
     verdict.check("the cells and their values stay", value(ed@, 0, 0, 2, arena) == 3.0, "")
     last: = ed.history.done[ed.history.done.len - 1]@
     verdict.check("the step records the widths alone, and no copy of the table",
         last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
-    resized(ed@, "1,1,2", arena)
+    resized(ed@, "10,10,20", arena)
     ed.undo()
     saves("undo gives the widths before back", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"2,3,5\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
-            =A1+B1 |\n:::\n")
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"12,8.5,\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 \
+            | =A1+B1 |\n:::\n")
     ed.undo()
     saves("and the table that had none", ed@, arena, before)
     ed.redo()
     ed.redo()
     saves("redo sets them again", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,1,2\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,1,2\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
             =A1+B1 |\n:::\n")
     changed(ed@, 0, .remove_column, 0)
     changed(ed@, 0, .insert_column, 2)
     saves("a column's width goes with it, and a new last column takes the width before it", ed@,
         arena,
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2,2\"\n| \"b\" | \"c\" | \"\" |\n| 2 | =#REF!+A1 \
-            | |\n:::\n")
-    wrong_widths(ed@, "two widths for three columns are refused", "1,2", arena)
-    wrong_widths(ed@, "a width over 10,000 is refused", "1,10001,1", arena)
-    wrong_widths(ed@, "a width of 0 is refused", "1,0,1", arena)
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,2,2\"\n| \"b\" | \"c\" | \"\" |\n| 2 | \
+            =#REF!+A1 | |\n:::\n")
+    resized(ed@, "0,0,0", arena)
+    saves("widths that all fit their text take the attribute away", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"b\" | \"c\" | \"\" |\n| 2 | =#REF!+A1 | |\n:::\n")
+    wrong_widths(ed@, "two widths for three columns are refused", "10,20", arena)
+    wrong_widths(ed@, "a width over 255 characters is refused", "10,2551,10", arena)
+    wrong_widths(ed@, "a width under half a character is refused", "10,4,10", arena)
 
-priv fn wrong_widths(ed: Editor$@, what: U8[], weights: U8[], arena: Arena$@) //<
+priv fn wrong_widths(ed: Editor$@, what: U8[], tenths: U8[], arena: Arena$@) //<
     //< Giving block 0's table these widths is refused, and changes nothing
     before: = written(ed.doc@, arena)
-    list: = weights_of(weights, arena)
+    list: = tenths_of(tenths, arena)
     ed.set_widths(0, list@) catch e
         verdict.check(what,
-            e.message().find_str("whole number").is_some() &&
+            e.message().find_str("0.5 to 255 characters").is_some() &&
             written(ed.doc@, arena).equals(before), e.message())
         return
     verdict.check(what, false, "the action was taken")
 
-priv fn resized(ed: Editor$@, weights: U8[], arena: Arena$@) //< gives block 0's table these widths
-    list: = weights_of(weights, arena)
+priv fn resized(ed: Editor$@, tenths: U8[], arena: Arena$@) //<
+    //< gives block 0's table these widths, in tenths of a character
+    list: = tenths_of(tenths, arena)
     ed.set_widths(0, list@) catch e
-        verdict.check(weights, false, e.message())
+        verdict.check(tenths, false, e.message())
 
-priv fn weights_of(text: U8[], arena: Arena$@): List<|Sz|> //< the weights `1,2,1` names
+priv fn tenths_of(text: U8[], arena: Arena$@): List<|Sz|> //< the widths `120,85,0` names
     $list: = List<|Sz|>(arena)
     for part in text.split(',', arena)
         list.push(part.to_count(100000) catch 0)
@@ -363,14 +367,28 @@ priv fn looks()
     ed.set_look(0, 0, 0, 0, 0, .size, "100") catch
         refused_look = true
     verdict.check("a size outside 6 to 72 points is refused", refused_look, "")
+    ed.set_look(0, 0, 0, 1, 0, .wrap, "on") catch e
+        verdict.check("setting wrap", false, e.message())
+    wrapped: =
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 {wrap=\"on\"} | 2 |\n| 3 \
+            {wrap=\"on\"} | 4 |\n:::\n"
+    saves("wrap is set on each chosen cell, as Excel's Wrap Text", ed@, arena, wrapped)
+    ed.set_look(0, 0, 0, 0, 0, .wrap, "") catch e
+        verdict.check("clearing wrap", false, e.message())
+    verdict.check("an empty value stops a cell wrapping",
+        written(ed.doc@, arena).find_str("| 1 | 2 |").is_some(), "")
+    $refused_wrap: = false
+    ed.set_look(0, 0, 0, 0, 0, .wrap, "yes") catch
+        refused_wrap = true
+    verdict.check("wrap other than on is refused", refused_wrap, "")
 
 priv fn pasting_whole()
     defer arena: = Arena(64 * 1024)
     copy: =
-        ":::table name=\"t\" widths=\"1,2\" filter=\",above:1\"\n| \"a\" | \"b\" |\n| 1 | \
+        ":::table name=\"t\" char_widths=\"1,2\" filter=\",above:1\"\n| \"a\" | \"b\" |\n| 1 | \
             =t.A1+u.A1 |\n:::\n"
     pasted: =
-        ":::table name=\"t_2\" widths=\"1,2\" filter=\",above:1\"\n| \"a\" | \"b\" |\n| 1 | \
+        ":::table name=\"t_2\" char_widths=\"1,2\" filter=\",above:1\"\n| \"a\" | \"b\" |\n| 1 | \
             =t_2.A1+u.A1 |\n:::\n"
     before: = arena.text().s("%ksmd 1\n\nText\n\n").s(copy).take()
     $ed: = opened(before, arena)

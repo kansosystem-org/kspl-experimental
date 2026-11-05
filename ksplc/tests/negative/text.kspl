@@ -302,3 +302,32 @@ enum Shape
 
 fn main()
     io.out().s("\{Shape.circle(3)\}\n")
+// ==== case interp_result
+//< A result written in an interpolation as it stands is refused, naming how to take it apart
+//< Its variant's name is all an enum's interpolation writes, so `ok` or `err` would stand where
+//< the value or the error belongs. A failable method call there reached clang as broken C.
+// EXPECT: interp_result.kspl:19:24: error: 'I32!interp_result.E' cannot be written in '\{…\}' as it stands. It is a result
+// EXPECT: 'x!' passes the error on to the caller, and 'x catch <value>' uses a value in its place
+import "std/io"
+
+enum E
+    bad
+
+struct Port
+    n: I32
+
+impl Port
+    fn get(r: Self@): I32!E //< the port, or why there is none
+        return r.n
+
+fn show(p: Port@)
+    io.out().s("port=\{p.get()\}\n")
+// ==== case interp_option
+//< An optional written in an interpolation as it stands is refused, naming how to take it apart
+//< `some` or `none` would stand where the value belongs.
+// EXPECT: interp_option.kspl:8:21: error: 'I32?' cannot be written in '\{…\}' as it stands. It is an optional
+// EXPECT: 'if v: = x' runs only where x holds one, and 'x.unwrap_or(<value>)' uses a value in its place
+import "std/io"
+
+fn show(x: I32?)
+    io.out().s("x=\{x\}\n")

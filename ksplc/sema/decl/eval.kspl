@@ -8,6 +8,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/literal" as base_literal
+import "ksplc/sema/decl/access" as _sema_decl_access // `check_field_visibility`
 import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/name" as sema_decl_name
@@ -373,6 +374,8 @@ impl Ast_node
         if r.children.len >= 2
             op: = r.get_unary_op().text
             target: = r.get_unary_target()
+            if op.equals("-") || op.equals("~")
+                refuse_variant_operand(r, c, op, target)!
             // A negated literal folds as one value, or I64's minimum could not be written.
             negated_literal: = op.equals("-") && target.kind_id == .k_integer
             val: =
@@ -412,8 +415,11 @@ impl Ast_node
             case .none
                 return r.eval_unknown(c, depth)!
         if r.children.len >= 3
-            left: = r.get_binary_left().eval_constexpr_internal(c, depth + 1)!
             op: = r.get_binary_op().text
+            if computes_number(op)
+                refuse_variant_operand(r, c, op, r.get_binary_left())!
+                refuse_variant_operand(r, c, op, r.get_binary_right())!
+            left: = r.get_binary_left().eval_constexpr_internal(c, depth + 1)!
             right: = r.get_binary_right().eval_constexpr_internal(c, depth + 1)!
 
             // Caution: Take the width and the sign from **the operands' types** (fold_type),
@@ -609,6 +615,14 @@ impl Ast_node
         if type_id == 0
             throw .not_constant
         offset: = c.field_offset_of(type_id, field.text, r)!
+        // **Naming a field is reaching it**, as a read is: with its offset, a `priv` field was
+        // written through a cast pointer from outside its file. A backend asking
+        // field_offset_of for its layout names no field, so the check stands here.
+        if def: = c.env
+            .get_struct_def(c.env.base_type_name(c.env.get_clean_real_type(type_id)))
+            for f in def.fields_list
+                if f.name.equals(field.text)
+                    c.check_field_visibility(f, r)
         c.record_folded(type_id, .field_offset(field.text), offset, r)
         return I64::offset
 
@@ -744,6 +758,28 @@ impl Ast_node
                 return t_node.type_id
         return unknown
 
+    priv fn names_variant(r: Self$@, c: Sema_ctx$@): Bool //<
+        //< Whether the node, parentheses aside, is a simple enum's variant (`E.a`, `.a`)
+        if r == null
+            return false
+        switch r.kind_id
+        case .k_expr_primary
+            return r.get_primary_inner_expr().names_variant(c)
+        case .k_enum_init, .k_implicit_enum, .k_expr_implicit_dot
+            return true
+        case .k_identifier, .k_expr_path, .k_type_path, .k_expr_postfix, .k_method_access
+            // A cast (`I32::E.a`) is a number, whatever it casts.
+            if r.kind_id == .k_expr_postfix && !r.postfix_op_text().equals(".")
+                return false
+            if sym_ptr: = r.resolve_ref_symbol(c)
+                switch sym_ptr.kind
+                case .enum_variant
+                    return true
+                default {}
+            return false
+        default
+            return false
+
     priv fn resolve_ref_symbol(r: Self$@, c: Sema_ctx$@): Sema_symbol$@? //<
         //< The symbol this reference names, or none
         //< It is read as any value's name is (read_written_name in name.kspl). A copy of the
@@ -796,3 +832,24 @@ impl Ast_node
             if expr_node != null && expr_node.kind_id != .k_empty
                 return .some(decl_node)
         return .none
+
+priv fn computes_number(op: U8[]): Bool //< whether a binary operator computes a number
+    for cmp in U8[][]::{ "==", "!=", "<", ">", "<=", ">=", "&&", "||" }
+        if op.equals(cmp)
+            return false
+    return true
+
+priv fn refuse_variant_operand(r: Ast_node$@, c: Sema_ctx$@, op: U8[], operand: Ast_node$@):
+    Void!Sema_error //<
+        //< It stops a fold where an operator that computes a number is given an enum's variant
+        //< **The rule of the bodies holds in a fold too** (`refuses_enum_operand` in
+        //< `../body/binary.kspl`): a tag is written `b = I32::E.a + 1`, never `E.a + 1`. The
+        //< declaration walk folds tags before any body is checked, so the fold asks itself.
+    if !operand.names_variant(c)
+        return
+    if !c.suppress_errors
+        c.clear_scratch()
+            .s("Operator '\{op\}' cannot be applied to an enum's variant. A variant names a choice, \
+                not a number. For arithmetic, cast it to the enum's base type first (as 'I32::E.a')")
+        c.err(r, c.scratch.slice())
+    throw .not_constant

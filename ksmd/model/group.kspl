@@ -1,9 +1,11 @@
-//< A table's groups of rows, which show and hide together, as the `groups` attribute saves them
-//< A group names its first and last data row by place, not by identity. Like a column's width, it
-//< is part of the table's layout, so a sort or a moved row leaves it where it stands. A row
-//< inserted inside a group joins it; a group whose rows are all removed goes.
+//< A table's groups of rows and of columns, which show and hide together, as `groups` saves them
+//< A group names its first and last data row, or column, by place, not by identity. Like a
+//< column's width, it is part of the table's layout, so a sort or a moved row leaves it where it
+//< stands. A line inserted inside a group joins it; a group whose lines are all removed goes. The
+//< rows' groups and the columns' groups are two lists, and each follows the rules below alone.
 //< Groups nest: one holds another whole, or the two share no row. Two groups that stand side by
 //< side stay two groups.
+import "ksmd/base/marker" { write_column }
 import "ksmd/model/model" { Group, MAX_DEPTH, Table }
 import "std/chars"
 import "std/ds" { List }
@@ -12,8 +14,10 @@ import "std/str" { Str_builder }
 import "std/strnum"
 
 enum Group_fault //< why a list of groups cannot be saved
-    not_rows //< an entry is not `rows N`, `rows N-M` or either with ` closed`, or names no data row
-    out_of_order //< the entries are not from the top, an outer group before the groups it holds
+    not_rows //< an entry is not `rows N`, `rows N-M`, `columns B`, `columns B-D` or one with
+        //< ` closed`, or it names no data row or column
+    out_of_order //< the entries are not from the top, then from the left, an outer group before
+        //< the groups it holds
     crosses //< two groups share some rows but not all of the smaller one's
     twice //< two groups hold the same rows
     too_deep //< a row stands in more than `MAX_DEPTH` groups
@@ -72,41 +76,47 @@ fn innermost(groups: List<|Group|>@, first: Sz, last: Sz): Sz? //<
         found = .some(i)
     return found
 
-fn after_insert(t: Table$@, at: Sz, count: Sz) //<
-    //< Follows `count` data rows inserted before the row at `at`
-    for i in Range.asc(t.groups.len)
-        if t.groups[i].first >= at
-            t.groups[i].first += count
-        if t.groups[i].last >= at
-            t.groups[i].last += count
+fn after_insert(groups: List<|Group|>$@, at: Sz, count: Sz) //<
+    //< Follows `count` lines inserted before the line at `at`
+    for i in Range.asc(groups.len)
+        if groups[i].first >= at
+            groups[i].first += count
+        if groups[i].last >= at
+            groups[i].last += count
 
-fn after_remove(t: Table$@, at: Sz) //<
-    //< Follows the data row at `at` removed: a group left with no row goes, and of two groups
-    //< left holding the same rows the outer one stays
+fn after_remove(groups: List<|Group|>$@, at: Sz) //<
+    //< Follows the line at `at` removed: a group left with no line goes, and of two groups left
+    //< holding the same lines the outer one stays
     $i: Sz = 0
-    for i < t.groups.len
-        $g: = t.groups[i]
+    for i < groups.len
+        $g: = groups[i]
         if g.first > at
             g.first -= 1
         gone: = g.first == at && g.last == at
         if g.last >= at && !gone
             g.last -= 1
         if gone ||
-            i > 0 && t.groups[i - 1].first == g.first && t.groups[i - 1].last == g.last
-            t.groups.remove_at(i)
+            i > 0 && groups[i - 1].first == g.first && groups[i - 1].last == g.last
+            groups.remove_at(i)
             continue
-        t.groups[i] = g
+        groups[i] = g
         i += 1
 
-fn read_groups(text: U8[], rows: Sz, groups: List<|Group|>$@): Void!Group_fault //<
-    //< Adds the groups `rows 2-4, rows 6-9 closed` names, in the writer's order
-    //< A row is numbered from 1, as a formula names it; a group of one row is `rows 3`.
+fn read_groups(text: U8[], t: Table$@): Void!Group_fault //<
+    //< Adds the groups `rows 2-4, rows 6-9 closed, columns B-D` names, in the writer's order
+    //< A row is numbered from 1 and a column lettered, as a formula names them. The rows' entries
+    //< come first, so one set of groups has one spelling.
     $start: Sz = 0
     for start <= text.len
         $end: = start
         for end < text.len && text[end] != ','
             end += 1
-        g: = entry(text.sub(start, end - start), rows) catch
+        piece: = text.sub(start, end - start)
+        columns: = piece.starts_with("columns ")
+        if !columns && t.column_groups.len > 0
+            throw .out_of_order
+        groups: = t.column_groups@ if columns else t.groups@
+        g: = entry(piece, t.columns.len if columns else t.rows.len, columns) catch
             throw .not_rows
         if groups.len > 0 && !comes_first(groups[groups.len - 1], g)
             if groups[groups.len - 1].first == g.first &&
@@ -119,13 +129,17 @@ fn read_groups(text: U8[], rows: Sz, groups: List<|Group|>$@): Void!Group_fault 
         if !text.starts_with(", ", end)
             throw .not_rows
         start = end + 2
-    if f: = fault_of(groups)
+    if f: = fault_of(t.groups@)
+        throw f
+    if f: = fault_of(t.column_groups@)
         throw f
 
-priv fn entry(text: U8[], rows: Sz): Group!Group_fault //< one entry: `rows 2-4`, maybe ` closed`
-    if !text.starts_with("rows ")
+priv fn entry(text: U8[], lines: Sz, columns: Bool): Group!Group_fault //<
+    //< One entry: `rows 2-4` or `columns B-D`, maybe with ` closed`
+    word: = "columns " if columns else "rows "
+    if !text.starts_with(word)
         throw .not_rows
-    $body: = text.sub_from(5)
+    $body: = text.sub_from(word.len)
     closed: = body.ends_with(" closed")
     if closed
         body = body.sub(0, body.len - 7)
@@ -134,27 +148,55 @@ priv fn entry(text: U8[], rows: Sz): Group!Group_fault //< one entry: `rows 2-4`
         if body[i] == '-'
             dash = i
             break
-    // One form only: a number written with a leading zero is refused, as the writer never writes
-    // it.
-    if body.starts_with("0") || body.starts_with("0", dash + 1)
-        throw .not_rows
-    first: = body.sub(0, dash).to_count(rows) catch
-        throw .not_rows
+    first: = place_of(body.sub(0, dash), lines, columns)!
     $last: = first
     if dash < body.len
-        last = body.sub_from(dash + 1).to_count(rows) catch
-            throw .not_rows
+        last = place_of(body.sub_from(dash + 1), lines, columns)!
         if last <= first
             throw .not_rows
-    return Group::{ .first = first - 1, .last = last - 1, .closed = closed }
+    return Group::{ .first = first, .last = last, .closed = closed }
 
-fn write_groups(groups: List<|Group|>@, out: Str_builder$@) //< the value `read_groups` reads
-    for i in Range.asc(groups.len)
-        g: = groups[i]
+priv fn place_of(text: U8[], lines: Sz, columns: Bool): Sz!Group_fault //<
+    //< The place a row number or column letters name, from 0; one past `lines` is refused
+    // One form only: a number written with a leading zero is refused, as the writer never writes
+    // it.
+    if !columns
+        if text.starts_with("0")
+            throw .not_rows
+        n: = text.to_count(lines) catch
+            throw .not_rows
+        return n - 1
+    $n: Sz = 0
+    for c in text
+        if !c.is_upper() || n > lines
+            throw .not_rows
+        n = n * 26 + Sz::(c - 'A') + 1
+    if n == 0 || n > lines
+        throw .not_rows
+    return n - 1
+
+fn write_groups(t: Table@, out: Str_builder$@) //< the value `read_groups` reads
+    for i in Range.asc(t.groups.len)
         if i > 0
             out.s(", ")
-        out.s("rows \{g.first + 1\}")
-        if g.last > g.first
-            out.s("-\{g.last + 1\}")
-        if g.closed
-            out.s(" closed")
+        write_entry(t.groups[i], false, out)
+    for i in Range.asc(t.column_groups.len)
+        if i > 0 || t.groups.len > 0
+            out.s(", ")
+        write_entry(t.column_groups[i], true, out)
+
+priv fn write_entry(g: Group, columns: Bool, out: Str_builder$@) //< `rows 2-4` or `columns B-D`
+    out.s("columns " if columns else "rows ")
+    write_place(g.first, columns, out)
+    if g.last > g.first
+        out.c('-')
+        write_place(g.last, columns, out)
+    if g.closed
+        out.s(" closed")
+
+priv fn write_place(at: Sz, columns: Bool, out: Str_builder$@) //<
+    //< a row's number or a column's letters
+    if columns
+        write_column(at, out)
+    else
+        out.s("\{at + 1\}")

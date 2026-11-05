@@ -82,7 +82,10 @@ CC        := clang
 CFLAGS    := -std=c99 -Wall -g -O0
 # Caution: **Keep the shipped options apart**: the generated C is rebuilt twice per fix, so
 # `CFLAGS` stays `-O0`; this side builds the same C once. **Keep `-g`**: only it locates a crash.
-SHIP_CFLAGS := -std=c99 -w -g -O2
+SHIP_CFLAGS := -std=c99 -w -g -O2 -fno-strict-aliasing
+# **`-fno-strict-aliasing` goes with every optimized build of ksplc's C.** KSPL lets two pointer
+# types reach one address (`U32$@::p`), and C's strict aliasing would let `-O2` read a value from
+# before a store through the other type. ksplc passes it itself (`ksplc info exe-flags`).
 # System libraries go in LDLIBS, placed after the sources: GNU ld resolves from the left, so an -l
 # in CFLAGS (before the sources in every link recipe) is passed by and fails the link.
 # It copies ksplc's own link rules (`ksplc info link-libs`); `make test-link-rules` compares them.
@@ -222,6 +225,8 @@ endif
 # Cuts unreferenced functions and data at the link, **not on win32** (PE's linker drops none, so it
 # would only grow the exe). `BOOT_CFLAGS` comes first: the chain's build asks its compiler for them.
 BOOT_CFLAGS := $(CFLAGS)
+# ksplc's C read as KSPL reads a pointer cast (the reason is at SHIP_CFLAGS); `kspl_build` is -O3.
+CFLAGS += -fno-strict-aliasing
 ifneq ($(PLATFORM),win32)
     CFLAGS += -ffunction-sections -fdata-sections $(GC_SECTIONS_FLAG)
 endif

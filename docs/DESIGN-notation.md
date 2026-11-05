@@ -199,6 +199,8 @@ Caution: **Where the spelling is the same but the behavior differs, the specific
 
 **A file saved with Windows line ends (`\r\n`) compiles to exactly the same program as one saved with `\n`.** Every `\r\n` becomes `\n` where the source enters (`to_lf` in [`../ksplc/parse/source_fix.kspl`](../ksplc/parse/source_fix.kspl)). The BOM and the shebang (`#!` line) are handled there too. A `"""` text keeps its bytes, so otherwise one source would be two programs, and both checkouts would build and disagree.
 
+**A carriage return alone is refused, wherever it stands.** A line end must mean one thing to every reader of the file. An editor, and the protocol a language server speaks to it, end a line at a lone `\r`. Read by the compiler as content, every line below it would have two numbers. A comment would hide code that the editor shows on a line of its own, and a rename would edit the wrong lines. Read as a third line end, it would give one thing a third spelling. A text that must hold the byte writes `\r`.
+
 **Writing it back is the other half.** `ksplc fmt` writes `\r\n` back where the file used it, as it does the BOM ("The formatting settings" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). So a Windows checkout does not show every line as changed.
 
 ```mermaid

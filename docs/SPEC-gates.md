@@ -25,7 +25,7 @@ CI runs the gates in one job for each of Linux, macOS and Windows (`.github/work
 
 A green run with a job unticked covers only the jobs that ran. A scheduled run runs every job (`inputs` is empty).
 
-**Every job in `.github/workflows/ci.yml` and `.github/workflows/release.yml` states `timeout-minutes:`.** Without one, GitHub waits 360 minutes, so one hung test bills six hours of the runner (sixty on macOS). Each value is about three times the job's longest recent run, so a slow runner or the image's rebuild still fits. Raise it when a job's runs grow toward it. **Each value in `ci.yml` also stays above a gate's own cap (below) by about the time the job's other gates take.** So a hung gate is stopped and named before the job is cancelled. That rule, not the factor of three, sets the macOS job's value.
+**Every job in `.github/workflows/ci.yml` and `.github/workflows/release.yml` states `timeout-minutes:`.** Without one, GitHub waits 360 minutes, so one hung test bills six hours of the runner (sixty on macOS). Each value is about three times the job's longest recent run, so a slow runner or the image's rebuild still fits. Raise it when a job's runs grow toward it. **Each value in `ci.yml` also stays above a gate's own cap (below) by about the time the job's other gates take.** So a hung gate is stopped and named before the job is cancelled. On macOS, where a minute costs ten times, the job passes a smaller cap rather than taking a larger value.
 
 Caution: **When adding a job, give it `timeout-minutes:` too.** One left out falls back to the 360 minutes silently.
 
@@ -278,7 +278,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 12**: `ksplc/tests/suite/ast_cache_test.kspl` has no platform branch. It checks that the C matches with and without the cache, and that a changed source rebuilds. A corrupted entry must be discarded, and old generations must not pile up.
   * **Check "changing only the contents rebuilds it" by rewriting the file at the same path.** A copy under another name changes the key's file name, so a key that ignores the contents would pass too.
 * **note 14**: `test-broken-pipe` checks POSIX's handling of SIGPIPE. **Windows has nothing to check**: a write to a closed named pipe merely fails. The suite reads the C compiler's target triple (`-dumpmachine`) and prints a `SKIP` line there. Only its check "a launched child holds SIGPIPE's default" reads `/proc/self/status`, so it runs only on Linux.
-  * Note: The decision's canonical source is "Writing when nobody is left to read it" in `ksplc/gen/runtime/hosted.c`.
+  * Note: The decision's canonical source is "Writing when nobody is left to read it" in `ksplc/gen/runtime/hosted_io.c`.
 * **note 15**: `make test-blas` runs ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`. It needs libopenblas, which the windows-ucrt64 and macOS runners lack. **`make lint` cannot replace it**, since only a real build shows whether the FFI is right: argument order, types, the library linked. So this is also where a library named by `##link` is seen linked.
 * **note 16**: `tests/tools/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's hardware, which would mislead elsewhere.
   * The verdict rests on the peak memory and the exact sizes of `Ast_node` and its list of children. The build time is only recorded, as a ratio to the baseline (`tests/tools/perf_guard.kspl` says why).

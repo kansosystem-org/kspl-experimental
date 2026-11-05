@@ -1,0 +1,197 @@
+//< `ksplc clean`, and the cache folders another user could have written
+//< **What the cache holds is built into the user's programs**, so a folder another user could
+//< write is refused, the cache folder and each folder inside it alike. `clean` removes only what
+//< it made. Not a suite; `../suite/cli_test.kspl` runs it.
+import "ksplc/tests/support/cli_emit" { cli, ok_case, ng_case }
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+const CACHE_ENV: U8[] = "KSPLC_CACHE_DIR" //<
+    //< The environment variable naming the disk cache's directory
+    //< It is cache_env_name in `ksplc/base/cache.kspl`.
+
+fn cache_root(arena: Arena$@): U8[] //< the cache directory for this suite only
+    //< `info cache-dir` and `clean` point here.
+    return fs.join(harness.tmp_dir(), "cli_cache", arena)
+
+priv fn case_clean(arena: Arena$@)
+    ok_case("clean", U8[][]::{ "clean" }, cache_root(arena))
+    // A word after it would change nothing, so it is refused (Principle 5 in
+    // docs/DESIGN-principles.md).
+    ng_case("clean: a subject after it is turned away", U8[][]::{ "clean", "cache" },
+        "usage: ksplc clean\n")
+
+// Names the cleaning takes as its own (64 hexadecimal digits, a `ksplc run` slot's).
+priv const PLANTED_NAME: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+priv const SLOT_NAME: U8[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where none can be made
+    //< Windows has no `ln -s`, and `mklink` needs privileges, so the case becomes a `skip` there.
+    r: =
+        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
+        return false
+    return r.exited_with(0) && fs.is_link(at)
+
+priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
+    //< `clean` removes a link planted in the cache, never what it points at
+    //< Whoever can write a shared cache folder could otherwise plant `run/<hex>`, or `obj` inside a
+    //< slot, pointing at a home folder. The next cleaning would empty it.
+    name: = "clean: a link in the cache leaves its target alone"
+    victim: = harness.sandbox("cli_victim")
+    kept: = fs.join(victim, "kept.txt", arena)
+    io.write_file(kept, "kept\n") catch
+        verdict.check(name, false, "the victim's file cannot be written")
+        return
+    run: = fs.join(cache_root(arena), "run", arena)
+    slot: = fs.join(run, SLOT_NAME, arena)
+    fs.mkdir_all(slot) catch
+        verdict.check(name, false, "the slot cannot be made")
+        return
+    if !plant_link(fs.join(run, PLANTED_NAME, arena), victim, arena) ||
+        !plant_link(fs.join(slot, "obj", arena), victim, arena)
+        verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
+        return
+    r: = cli(U8[][]::{ "clean" })
+    survived: = fs.exists(kept)
+    removed: = !fs.exists(slot)
+    why: = arena.text()
+        .s("exit \{r.code.unwrap_or(-1)\}, target file kept: \{survived\}, slot removed: \
+            \{removed\}\n\{r.out\}").take()
+    verdict.check(name, r.exited_with(0) && survived && removed, why)
+
+priv fn hand_over(dir: U8[]): Bool //<
+    //< Gives `dir` to user 65534 (`nobody`), and whether that worked
+    //< **Only root can hand a folder over**, so a user who is not tries `sudo -n`, which never
+    //< waits for a password.
+    if harness.run(U8[][]::{ "chown", "65534", dir }).exited_with(0)
+        return true
+    return harness.run(U8[][]::{ "sudo", "-n", "chown", "65534", dir }).exited_with(0)
+
+priv fn case_cache_others_can_write(arena: Arena$@) //<
+    //< A cache folder everyone can write is refused by `ksplc run`, and skipped by a compile
+    //< Whoever can write it could plant a normalized AST carrying inline assembly, or a built
+    //< program, and the next build would take it in. Windows's permissions are an ACL, not read
+    //< here.
+    name_run: = "cache: ksplc run refuses a cache folder everyone can write"
+    name_cc: = "cache: a compile warns and goes on without such a cache folder"
+    if sys.is_windows()
+        verdict.skip_check(name_run, "Windows's permissions are an ACL, which ksplc does not read")
+        return
+    dir: = harness.sandbox("cli_shared")
+    shared: = fs.join(dir, "cache", arena)
+    fs.mkdir(shared) catch
+        verdict.check(name_run, false, "the cache folder cannot be made")
+        return
+    if !harness.run(U8[][]::{ "chmod", "777", shared }).exited_with(0)
+        verdict.skip_check(name_run, "`chmod` cannot open the folder to everyone here")
+        return
+    src: = fs.join(dir, "hi.kspl", arena)
+    io.write_file(src, "fn main(): I32\n  return 0\n") catch
+        verdict.check(name_run, false, "the program cannot be written")
+        return
+    sys.set_env(CACHE_ENV, shared) catch
+        verdict.check(name_run, false, "the cache cannot be pointed at the folder")
+        return
+    ran: = harness.ksplc(U8[][]::{ "run", src })
+    built: = harness.ksplc(U8[][]::{ src, fs.join(dir, "hi.c", arena) })
+    name_foreign: = "cache: ksplc run refuses a cache folder another user owns"
+    foreign: = fs.join(dir, "theirs", arena)
+    fs.mkdir(foreign) catch {}
+    handed: = hand_over(foreign)
+    $theirs: = verdict.Run_out::{ .code = .some(0), .out = "" }
+    if handed
+        sys.set_env(CACHE_ENV, foreign)
+            catch panic("the cache cannot be pointed at the other folder")
+        theirs = harness.ksplc(U8[][]::{ "run", src })
+    // Caution: **Point it back before checking**, or every case after this one runs refused.
+    sys.set_env(CACHE_ENV, cache_root(arena)) catch panic("the cache cannot be pointed back")
+    verdict.check(name_run,
+        !ran.exited_with(0) && ran.out.find_str("chmod go-w").is_some(), ran.out)
+    verdict.check(name_cc,
+        built.exited_with(0) && built.out.find_str("not using the cache").is_some(), built.out)
+    if !handed
+        // Caution: **Required where `KANSO_REQUIRE_CHOWN=1`**, which the repository sets where its
+        // image gives the user sudo without a password: a skip there would never run the case.
+        harness.require_or_skip(name_foreign, "KANSO_REQUIRE_CHOWN",
+            "neither `chown` nor `sudo -n chown` can hand a folder to another user here (it takes \
+                root, or sudo without a password)")
+        return
+    verdict.check(name_foreign,
+        !theirs.exited_with(0) &&
+        theirs.out.find_str("belongs to another user").is_some(), theirs.out)
+
+priv fn only_entry(dir: U8[], arena: Arena$@): U8[] //< the one entry in dir; empty unless one
+    names: = fs.read_dir(dir, arena) catch
+        return ""
+    if names.len != 1
+        return ""
+    return fs.join(dir, names[0], arena)
+
+priv fn case_cache_inner_folder_others_can_write(arena: Arena$@) //<
+    //< A folder inside the cache that another user could have written is refused, as the root is
+    //< **The root alone is not enough.** A slot planted while the root could be written stays once
+    //< the root is mended, and `ksplc run` would run the program in it (`refused_inside` in
+    //< `ksplc/base/cache.kspl`).
+    name_slot: = "cache: ksplc run refuses a slot everyone can write"
+    name_gen: = "cache: a compile goes on without an AST cache folder everyone can write"
+    name_foreign: = "cache: ksplc run refuses a slot another user owns"
+    if sys.is_windows()
+        verdict.skip_check(name_slot, "Windows's permissions are an ACL, which ksplc does not read")
+        return
+    dir: = harness.sandbox("cli_inner")
+    root: = fs.join(dir, "cache", arena)
+    src: = fs.join(dir, "hi.kspl", arena)
+    io.write_file(src, "fn main(): I32\n  return 0\n") catch
+        verdict.check(name_slot, false, "the program cannot be written")
+        return
+    sys.set_env(CACHE_ENV, root) catch
+        verdict.check(name_slot, false, "the cache cannot be pointed at the folder")
+        return
+    first: = harness.ksplc(U8[][]::{ "run", src })
+    slot: = only_entry(fs.join(root, "run", arena), arena)
+    gen: = only_entry(fs.join(root, "ast", arena), arena)
+    $opened: =
+        first.exited_with(0) && slot.len > 0 && gen.len > 0 &&
+        harness.run(U8[][]::{ "chmod", "777", slot, gen }).exited_with(0)
+    $ran: = verdict.Run_out::{ .code = .some(0), .out = "" }
+    $built: = verdict.Run_out::{ .code = .some(1), .out = "" }
+    if opened
+        ran = harness.ksplc(U8[][]::{ "run", src })
+        built = harness.ksplc(U8[][]::{ src, fs.join(dir, "hi.c", arena) })
+        opened = harness.run(U8[][]::{ "chmod", "755", slot, gen }).exited_with(0)
+    handed: = opened && hand_over(slot)
+    $theirs: = verdict.Run_out::{ .code = .some(0), .out = "" }
+    if handed
+        theirs = harness.ksplc(U8[][]::{ "run", src })
+    // Caution: **Point it back before checking**, or every case after this one runs refused.
+    sys.set_env(CACHE_ENV, cache_root(arena)) catch panic("the cache cannot be pointed back")
+    if !opened
+        verdict.check(name_slot, false,
+            arena.text().s("the first run made no slot to open, or `chmod` failed\n").s(first.out)
+            .take())
+        return
+    verdict.check(name_slot,
+        !ran.exited_with(0) && ran.out.find_str("rm -r").is_some(), ran.out)
+    verdict.check(name_gen,
+        built.exited_with(0) && built.out.find_str("not using the cache").is_some(), built.out)
+    if !handed
+        harness.require_or_skip(name_foreign, "KANSO_REQUIRE_CHOWN",
+            "neither `chown` nor `sudo -n chown` can hand a folder to another user here (it takes \
+                root, or sudo without a password)")
+        return
+    verdict.check(name_foreign,
+        !theirs.exited_with(0) &&
+        theirs.out.find_str("belongs to another user").is_some(), theirs.out)
+
+fn run(arena: Arena$@) //< it runs every case here
+    case_clean(arena)
+    case_clean_keeps_link_targets(arena)
+    case_cache_others_can_write(arena)
+    case_cache_inner_folder_others_can_write(arena)

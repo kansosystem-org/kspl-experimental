@@ -122,6 +122,51 @@ fn show(n: F64, f: Number_format, out: Str_builder$@) //< writes a finite number
     if f.kind == .percent
         out.c('%')
 
+const SHOWN_DIGITS: Sz = 15 //< the most significant digits a number shows without a format
+    //< Spreadsheets show 15, so the F64 just above 0.3 that `0.1 + 0.2` gives shows as 0.3.
+
+fn show_plain(n: F64, out: Str_builder$@) //< writes a finite number as it shows without a format
+    //< Its digits are rounded to `SHOWN_DIGITS`, then written as JavaScript writes a number:
+    //< `100000000000000000000`, `0.000001`, `1e+21` and `1e-7`, and never `.0` after a whole
+    //< number. **The page writes every number through this** (`ksmd/port/web/view.kspl`), so a
+    //< cell and `text(A1, "")` show the same digits.
+    $d: = digits_of(-n if n < 0.0 else n)
+    cut(d@, SHOWN_DIGITS)
+    for d.count > 0 && d.digits[d.count - 1] == '0'
+        d.count -= 1
+    if d.count == 0
+        out.c('0')
+        return
+    if n < 0.0
+        out.c('-')
+    if d.point >= d.count && d.point <= 21
+        for i in Range.asc(d.point)
+            out.c(d.at(i))
+    else if d.point > 0 && d.point <= 21
+        for i in Range.asc(d.count)
+            if i == d.point
+                out.c('.')
+            out.c(d.at(i))
+    else if d.point > -6 && d.point <= 0
+        out.s("0.")
+        for _ in Range.asc(-d.point)
+            out.c('0')
+        for i in Range.asc(d.count)
+            out.c(d.at(i))
+    else
+        out.c(d.at(0))
+        if d.count > 1
+            out.c('.')
+            for i in Range(1, d.count, 1)
+                out.c(d.at(i))
+        exponent: = d.point - 1
+        out.s("e+" if exponent > 0 else "e-").s("\{exponent if exponent > 0 else -exponent\}")
+
+fn round_digits(n: F64, digits: Sz): F64? //<
+    //< A finite number rounded to `digits` significant digits as `show` rounds; none if too large
+    d: = digits_of(-n if n < 0.0 else n)
+    return round_places(n, digits - d.point)
+
 fn round_places(n: F64, places: Sz): F64? //<
     //< A finite number rounded to `places` decimal places as `show` rounds; none if too large
     //< A negative `places` rounds to tens, hundreds and on: `round_places(1250.0, -2)` is 1300.

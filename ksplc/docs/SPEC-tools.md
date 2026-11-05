@@ -70,6 +70,8 @@ clang main.c -o main
 ksplc --to=llvm main.kspl main.ll
 ```
 
+**A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. A write the disk refuses fails the compile with `io/write_failed`. A device named as the output (`/dev/null`) is written where it is.
+
 ### 2.2 Choosing the language of the output (`--to`)
 
 `--to` names the language of the output, and so the backend that writes it.
@@ -170,6 +172,7 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--pkg-src-dir=<DIR>` | where to look for the **source** of a package other than `std` ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)). |
 | `--split=<N>` | splits the generated C into N translation units to compile in parallel (the default 1 is no split) ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). |
 | `--program` | says the output becomes a program, so an input with no `main` is refused with a diagnostic rather than left to the linker. `ksplc run` and `ksplc build` pass it to the compile they start. It cannot be combined with `--library`. |
+| `--closed=<package>` | refuses, in the files of `<package>`, every way to C: `extern` in either direction, `##link`, the `__kspl_` built-ins, `#section`, `#naked`, `#interrupt` and `#raw_address`. Those reach the C compiler, the assembler and the linker, which the package rules do not watch. It is for code the build does not trust, such as a page's own functions; the standard library and the other packages stay open. A package no file of the compile is in is refused. |
 | `--library=<FILE>` | builds a library, whose `extern` functions alone are visible outside it, and writes its interface to `<FILE>`; it can be repeated ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
 | `--emit-libs=<FILE>` | on success, writes the libraries the program names with `##link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
@@ -181,7 +184,7 @@ This table lists every option of a compile. Most have a section of their own, li
 
 **Standard output holds only what was asked for, and every line about the run goes to standard error.** What is asked for is a program's own output under `ksplc run`, `info`'s answer, `fmt`'s text, `doc`'s Markdown, `explain`'s text and `--help`'s usage. Everything else is about the run:
 
-* a refused command line: the reason, then the usage, and exit code 1;
+* a refused command line: the reason, then the usage, and exit code 1. A subcommand left out or misspelled gets one line instead, naming the likely command (`ksplc hello.kspl` names `ksplc run hello.kspl`) and `--help`;
 * a compile's diagnostics, its summary (`Finished with 1 error(s), 0 warning(s).`) and the line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`);
 * an error with no diagnostic before it (a file that cannot be read);
 * `--stats`'s report, and the folder `ksplc clean` emptied.
@@ -268,7 +271,9 @@ It is passed in the environment variable `KSPL_SCRIPT` (`SCRIPT_ENV_NAME` in `st
 
 **The libraries linked** follow from the OS and the C compiler's target triple (`x86_64-linux-gnu`, say), as `ksplc info link-libs` answers. The libraries the program names (`##link`) go before them, after the objects ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). Changing only those relinks without rebuilding any object.
 
-**The executable's build options** are two: removing the unreferenced sections, and asking for a stack size on Windows. `ksplc info exe-flags` gives the same answer. Without the stack size, Windows's linker default of 1MB runs out before the depth that "12. Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) guarantees.
+**The executable's build options** are three: `-fno-strict-aliasing`, removing the unreferenced sections, and asking for a stack size on Windows. `ksplc info exe-flags` gives the same answer. Every compile of the generated C takes the first, the objects `ksplc run` caches included.
+* **`-fno-strict-aliasing`**: KSPL allows a cast between pointer types and between slices of one element size ("6.4 Type conversion (`::`) and implicit casts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A store through one type must then be seen by a read through the other. Without the flag, C's optimizer may assume the two never meet, and at `-O2` the read can keep the value from before the store. The LLVM backend makes no such assumption, so with it both backends give one answer at every level.
+* **The stack size**: without it, Windows's linker default of 1MB runs out before the depth that "12. Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) guarantees.
 
 **Where the cache lives**: deleting the cache folder is always safe. Of the places below, the first that is set wins:
 
@@ -282,6 +287,8 @@ It is passed in the environment variable `KSPL_SCRIPT` (`SCRIPT_ENV_NAME` in `st
 `ksplc info cache-dir` prints it and `ksplc clean` removes it.
 
 **A cache folder another user (or group) could write is refused** on POSIX, since whoever could plant a file there could run code as you. `ksplc run` and `ksplc clean` stop and name the fix (`chmod go-w <folder>`, or `KSPLC_CACHE_DIR` set to a folder of your own). A compile says `not using the cache` once and goes on without it. A folder ksplc made itself never trips this.
+
+**The folders inside it are judged the same way**: each kind's folder (`run`, `ast`, `fmt`), each generation and each script's slot. One that another user could have written may already hold a planted file, so the fix named is to remove it, not `chmod`. `ksplc run` stops; a compile goes on without the cache.
 
 **The size**: each script has one slot (the executable, the shared header, the objects), keyed by the script's path from the root and `ksplc`'s identity. Making a new slot keeps the 64 most recently used and every slot used within the last hour, and removes the rest.
 
@@ -420,6 +427,8 @@ On success, `--emit-deps=<FILE>` writes one line per source the compile read to 
 * every file an `embed` read (its bytes are in the output);
 * every `ksplc.cfg` read, since a `[package]` decides where the sources are read from ([§6.4](#64-a-package-that-names-itself-package));
 * **each `ksplc.cfg` looked for and not found**, with 64 `-` in place of the digest. One placed there later is read instead of the one further up ([§6.2](#62-the-search-and-the-range-it-applies-to)), so its appearing has to count as a change.
+
+**Each digest is of the bytes the compile read**, not of the file as it stands when the list is written. A file saved during the compile then shows as changed on the next comparison. Where one file was read twice with different bytes, no list is written.
 
 **It decides rebuilds**: `ksplc run` uses it to judge whether its cache still holds ([§2.5](#25-running-as-a-script-ksplc-run)), and the repository's `make test-deps` compares it with the dependencies the Makefile lists.
 
@@ -1032,7 +1041,7 @@ It gives callers one verdict ksplc makes internally, **so callers need not copy 
 | :-- | :-- |
 | `std-dir` | the resolved standard library directory ([§2.9.1](#291-locating-the-standard-library---std-dir)). Only this subject takes a `--std-dir=`, answering what that setting would resolve to; on any other subject the option is refused, as it would change nothing. |
 | `link-libs` | the libraries needed to link the artifact (`-lm -lpthread` and the like), judged from the OS and the target triple. **The libraries the program itself names are not among them**: the compile writes those ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
-| `exe-flags` | the options ksplc itself passes to `CC` when building an executable (removing unreferenced sections, the stack size requested on Windows). Without them it still builds, but under changed conditions, so a script building an executable passes both subjects. |
+| `exe-flags` | the options ksplc itself passes to `CC` when building an executable (`-fno-strict-aliasing`, removing unreferenced sections, the stack size requested on Windows). Without them it still builds, but under changed conditions, so a script building an executable passes both subjects. |
 | `cache-dir` | the disk cache's location (the normalized AST, `ksplc run`'s build results and the texts `ksplc fmt` already formats). The default is the OS's cache area, which cannot otherwise be found from outside. |
 | `keywords` | the reserved words gathered automatically from the grammar ([§7.3](#73-ksplc-info-keywords-the-list-of-reserved-words)). |
 | `package` | the package the current folder belongs to: its name on the first line, what it `uses` on the second ([§6.4](#64-a-package-that-names-itself-package)). **It can answer two empty lines**: outside every package there is nothing to name. |

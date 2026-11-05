@@ -2,9 +2,12 @@
 //< `choices=",Open|In progress|Done,"` holds one entry per column, empty for a column that takes
 //< any value; inside an entry, `|` separates the choices. A typed value equals a choice without
 //< regard to case, and the cell then holds the choice as the list spells it.
-//< A choice is 1 to 100 bytes of text, with no control character, `,`, `|`, `"` or `\`, and no
-//< space at either end. A column holds at most 50, and no two equal without regard to case.
+//< A choice is 1 to 100 bytes of text, with no control character, `,`, `|`, `;`, `"` or `\`, and
+//< no space at either end. A column holds at most 50, and no two equal without regard to case.
+//< A choice can take colours after `;`, as a rule writes them: `Done;fill:#c6efce`. A cell that
+//< holds it shows them, and so does its whole row where the table colours rows by that column.
 import "ksmd/base/marker" { compare_text }
+import "ksmd/model/rule" { Colours, colours_of, write_colours }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -22,17 +25,27 @@ fn is_entry(entry: U8[]): Bool //< whether a column's entry holds choices that c
     for i in Range.asc(entry.len + 1)
         if i < entry.len && entry[i] != '|'
             continue
-        one: = entry.sub(start, i - start)
+        piece: = entry.sub(start, i - start)
+        one: = name_of(piece)
         if one.len == 0 || one.len > MAX_CHOICE || !is_choice_text(one) ||
             one.trim_spaces().len != one.len
             return false
+        if one.len < piece.len
+            defer scratch: = Arena(256)
+            c: = colours_of(piece.sub_from(one.len + 1), scratch) catch
+                return false
+            // The colours stand as the writer writes them, in lower case.
+            defer $again: = Str_builder()
+            write_colours(c, again@)
+            if !again.slice().equals(piece.sub_from(one.len + 1))
+                return false
         // No two choices equal without regard to case.
         $j: Sz = 0
         for j < start
             $k: = j
             for k < entry.len && entry[k] != '|'
                 k += 1
-            if compare_text(entry.sub(j, k - j), one) == 0
+            if compare_text(name_of(entry.sub(j, k - j)), one) == 0
                 return false
             j = k + 1
         count += 1
@@ -48,11 +61,34 @@ fn choice_of(entry: U8[], typed: U8[]): U8[]? //<
     for i in Range.asc(entry.len + 1)
         if i < entry.len && entry[i] != '|'
             continue
-        one: = entry.sub(start, i - start)
+        one: = name_of(entry.sub(start, i - start))
         if one.len > 0 && compare_text(one, typed) == 0
             return .some(one)
         start = i + 1
     return .none
+
+fn name_of(piece: U8[]): U8[] //< a choice's text, without the colours after its `;`
+    if at: = piece.find_char(';')
+        return piece.sub(0, at)
+    return piece
+
+fn colours_in(piece: U8[], arena: Arena$@): Colours //< a choice's colours; both empty for none
+    if at: = piece.find_char(';')
+        if c: = colours_of(piece.sub_from(at + 1), arena)
+            return c
+    return Colours::{ .color = "", .fill = "" }
+
+fn lowered(entry: U8[], arena: Arena$@): U8[] //<
+    //< The entry with its colours' hex digits in lower case, as the writer keeps them
+    out: = arena.text()
+    $colour: = false
+    for c in entry
+        if c == '|'
+            colour = false
+        if c == ';'
+            colour = true
+        out.c(c.to_lower() if colour else c)
+    return out.take()
 
 fn entry_of(list: U8[], arena: Arena$@): U8[]? //<
     //< The entry a person typed as `Open, In progress, Done`: each choice trimmed, joined by `|`
@@ -69,7 +105,7 @@ fn entry_of(list: U8[], arena: Arena$@): U8[]? //<
             out.c('|')
         out.s(one)
         start = i + 1
-    entry: = out.take()
+    entry: = lowered(out.take(), arena)
     if !is_entry(entry)
         return .none
     return .some(entry)
@@ -86,8 +122,8 @@ fn write_choices(choices: List<|U8[]|>@, out: Str_builder$@) //< the value `choi
             out.c(',')
         out.s(choices[i])
 
-priv fn is_choice_text(text: U8[]): Bool //< no control character, `,`, `|`, `"` or `\`
+priv fn is_choice_text(text: U8[]): Bool //< no control character, `,`, `|`, `;`, `"` or `\`
     for c in text
-        if c < 0x20U8 || c == 0x7FU8 || c == ',' || c == '|' || c == '"' || c == '\\'
+        if c < 0x20U8 || c == 0x7FU8 || c == ',' || c == '|' || c == ';' || c == '"' || c == '\\'
             return false
     return true

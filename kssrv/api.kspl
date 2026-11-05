@@ -56,13 +56,15 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
         .set("heap_bytes", b.int_val(heap_used_bytes())).build()
     queue_json(c, 200, val, keep)
 
-fn path_or_refuse(c: conn.Conn$@, query: U8[], root: U8[], need_name: Bool): U8[]? //<
-    //< The path that a query's `?path=` names under the root, the root joined in, or none
-    //< None means a 400 or a 403 is queued. An empty path is the root itself. A dot name is let
-    //< through, as `kssrv/docs/DESIGN-server.md` says at "`/api/` does not go through static
-    //< serving".
-    //< Caution: **Check the value after the decode, but keep a leading `/`.** Only a URL's path
-    //< opens with one. So here `/etc/passwd` is an absolute path, refused, never under the root.
+fn path_or_refuse(c: conn.Conn$@, query: U8[], root: U8[], need_name: Bool, dots: fs.Dot_names):
+    U8[]? //<
+        //< The path that a query's `?path=` names under the root, the root joined in, or none
+        //< None means a 400 or a 403 is queued. An empty path is the root itself. A write refuses a
+        //< dot name through `dots` ("`/api/` does not go through static serving" in
+        //< `kssrv/docs/DESIGN-server.md`).
+        //< Caution: **Check the value after the decode, but keep a leading `/`.** Only a URL's path
+        //< opens with one. So here `/etc/passwd` is an absolute path, refused, never under the
+        //< root.
     params: = url.parse_query(query, c.arena) catch _e
         queue_json_error(c, 400)
         return .none
@@ -71,7 +73,7 @@ fn path_or_refuse(c: conn.Conn$@, query: U8[], root: U8[], need_name: Bool): U8[
         // The root itself is not a file; this endpoint needs a name.
         queue_json_error(c, 400)
         return .none
-    path: = fs.join_under(root, rel, .allowed, c.arena) catch _why
+    path: = fs.join_under(root, rel, dots, c.arena) catch _why
         queue_json_error(c, 403)
         return .none
     return .some(path)
@@ -91,10 +93,14 @@ fn url_rel(path: U8[]): U8[] //< a URL's path as a path under the root
 // the body.
 // ==========================================
 fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request@, root: U8[], keep: Bool)
-    path: U8[] = path_or_refuse(c, t.query, root, true) catch
+    // Caution: **A write never reaches a dot name.** A write to `.git/config` can set a command
+    // that the next `git status` runs. A read of a dot name is let through.
+    reads: = req.method.equals("GET")
+    dots: fs.Dot_names = .allowed if reads else .refused(U8[][]::{})
+    path: U8[] = path_or_refuse(c, t.query, root, true, dots) catch
         return
     // Only GET and PUT come here (`ROUTES`).
-    if req.method.equals("GET")
+    if reads
         queue_get_file(c, path, keep)
         return
     if expected: = req.headers.find("X-Kanso-If-Content")
@@ -165,7 +171,7 @@ fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< Caution: **Do not return the content**, or it arrives by two paths (the file endpoint reads
     //< it). **Nothing is missed**: it returns "how things are now", not "how many times it
     //< changed", so it catches up however many changes happen in between.
-    target: U8[] = path_or_refuse(c, query, root, false) catch
+    target: U8[] = path_or_refuse(c, query, root, false, .allowed) catch
         return
     info: = fs.stat(target) catch _e
         queue_json_error(c, 404)
@@ -185,7 +191,7 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< name (`.git`, `.ksmd-workspace`). So is anything neither a folder nor an ordinary file.
     //< At most `MAX_LISTED` names come back; `more` says that others stand there.
     // **No link check here**: `path_or_refuse` refused any below the root, and a root can be one.
-    folder: U8[] = path_or_refuse(c, query, root, false) catch
+    folder: U8[] = path_or_refuse(c, query, root, false, .allowed) catch
         return
     if !fs.is_dir(folder)
         queue_json_error(c, 404)
@@ -296,7 +302,7 @@ fn queue_api_build(c: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
     if ctx.builder.len == 0
         queue_json_error(c, 404)
         return
-    path: U8[] = path_or_refuse(c, query, ctx.root, true) catch
+    path: U8[] = path_or_refuse(c, query, ctx.root, true, .allowed) catch
         return
     if conn.regular_file_size(path).is_none()
         queue_json_error(c, 404)
@@ -310,11 +316,16 @@ fn queue_api_build(c: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
         shown.find("path").unwrap_or("") }, "", BUILD_MS, MAX_BUILT, c.arena) catch
         queue_json_error(c, 500)
         return
-    if got.exited_with(0)
+    // Caution: **A module cut at the cap is no module**: sent with 200, the page would fail to
+    // load it with no reason given.
+    if got.exited_with(0) && !got.output_cut
         conn.queue_response(c, 200, "application/wasm", got.stdout_data, keep)
         return
-    why: =
-        got.text(c.arena) if got.exit_code.is_some() else "the build took longer than 60 s"
+    $why: = "the build took longer than 60 s"
+    if !got.exited_with(0) && got.exit_code.is_some()
+        why = got.text(c.arena)
+    else if got.output_cut
+        why = "the built module is larger than 16 MiB"
     $b: = Json_builder(c.arena)
     val: = b.obj().set("error", b.str_val(why)).set("status", b.int_val(422)).build()
     queue_json(c, 422, val, false)

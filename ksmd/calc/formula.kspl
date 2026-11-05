@@ -4,7 +4,7 @@
 //< the identities back into the coordinates the rows and columns have now.
 //< Caution: **Read a formula only through `token_at` and `next`.** Binding, writing and
 //< calculating then agree on where each reference starts and ends.
-import "ksmd/base/marker" { is_decimal, quoted_end }
+import "ksmd/base/marker" { is_decimal, quoted_end, write_column }
 import "ksmd/model/model" { Cell, Corner, Document, Piece, Table }
 import "std/chars"
 import "std/ds" { List }
@@ -31,6 +31,7 @@ enum Token_kind
     minus
     times
     divide
+    join //< `&`, joining text
     equal //< `=`
     unequal //< `<>`
     less //< `<`
@@ -51,6 +52,7 @@ struct Token
     piece: Sz //< a bound reference's piece in `Table.pieces`; -1 for a reference in a text piece
     table: U8[] //< the table's name as written before a reference, quotes included; or empty
     range: Bool //< whether a reference names a rectangle
+    whole: Bool //< whether it names whole columns, as `map.D` or `map.D:F`, and not a cell
     from: Address
     to: Address //< a range's other corner
 
@@ -58,7 +60,7 @@ impl Token
     fn new(kind: Token_kind, start: Sz, end: Sz): Token //< a token that is not a reference yet
         no: = Address::{ .row = 0, .column = 0, .fixed_row = false, .fixed_column = false }
         return Token::{ .kind = kind, .start = start, .end = end, .text = "", .piece = -1,
-            .table = "", .range = false, .from = no, .to = no }
+            .table = "", .range = false, .whole = false, .from = no, .to = no }
 
 struct Cursor //< how far `next` has read a formula's pieces
     piece: Sz //< which piece of the run
@@ -91,6 +93,10 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
                 t = reference_from(text, i, spot)
                 t.table = text.sub(i, j - i)
                 return t
+            if spot: = column_at(text, j + 1)
+                t = columns_from(text, i, spot)
+                t.table = text.sub(i, j - i)
+                return t
         t.kind = .name
         t.end = j
         t.text = text.sub(i, j - i)
@@ -104,6 +110,10 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
         if close + 1 < text.len && text[close + 1] == '.'
             if spot: = address_at(text, close + 2)
                 t = reference_from(text, i, spot)
+                t.table = text.sub(i, close + 1 - i)
+                return t
+            if spot: = column_at(text, close + 2)
+                t = columns_from(text, i, spot)
                 t.table = text.sub(i, close + 1 - i)
                 return t
         t.kind = .text
@@ -138,12 +148,12 @@ fn next(t: Table@, cell: Cell, cur: Cursor$@): Token //<
                 return tok
             cur.piece += 1
             cur.at = 0
-        case .cell, .range
+        case .cell, .range, .columns
             cur.piece += 1
             cur.at = 0
             $tok: = Token(.reference, 0, 0)
             tok.piece = index
-            tok.range = p.kind == .range
+            tok.range = p.kind != .cell
             return tok
     return Token(.end, 0, 0)
 
@@ -225,6 +235,8 @@ fn write_formula(doc: Document@, t: Table@, cell: Cell, at: Positions@, rows: Sz
             out.s(p.text)
         case .cell, .range
             write_reference(doc, p, at, rows, columns, out)
+        case .columns
+            write_columns(doc, p, at, columns, out)
 
 priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, columns: Sz,
     out: Str_builder$@) //<
@@ -259,21 +271,34 @@ priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, col
     out.c(':')
     write_address(b, out)
 
+priv fn write_columns(doc: Document@, p: Piece@, at: Positions@, columns: Sz, out: Str_builder$@) //<
+    //< `name.D`, or `name.D:F` from the left column to the right one
+    $a: = at.column_place(p.table, p.from, columns)
+    $b: = at.column_place(p.table, p.to, columns)
+    if a.column < 0 || b.column < 0
+        out.s(BROKEN)
+        return
+    write_table_name(doc.tables[p.table].name, out)
+    out.c('.')
+    if a.column > b.column
+        other: = a
+        a = b
+        b = other
+    write_letters(a, out)
+    if a.column != b.column
+        out.c(':')
+        write_letters(b, out)
+
 fn write_address(a: Address, out: Str_builder$@) //< `$A$1`: letters for the column, then the row
-    if a.fixed_column
-        out.c('$')
-    $letters: U8[8] = ::{}
-    $len: Sz = 0
-    $n: = a.column + 1
-    for n > 0
-        letters[len] = U8::((n - 1) % 26) + 'A'
-        len += 1
-        n = (n - 1) / 26
-    for i in Range.desc(len)
-        out.c(letters[i])
+    write_letters(a, out)
     if a.fixed_row
         out.c('$')
     out.s("\{a.row + 1\}")
+
+priv fn write_letters(a: Address, out: Str_builder$@) //< `$A`: the column's letters
+    if a.fixed_column
+        out.c('$')
+    write_column(a.column, out)
 
 struct Positions //< where each row and column stands, by its identity, in every table
     //< It is built from the document, and a table's lists can be put in its place to measure an
@@ -315,6 +340,16 @@ impl Positions
         slot: = at.starts[u] + id
         return at.slots[slot]
 
+    fn column_place(at: Self@, u: Sz, c: Corner, columns: Sz): Address //<
+        //< Where a corner's column stands, shifted unless it has `$`; column -1 outside the table
+        $a: = Address::{ .row = 0, .column = at.of(u, c.column), .fixed_row = false,
+            .fixed_column = c.fixed_column }
+        if !c.fixed_column
+            a.column += columns
+        if a.column < 0 || a.column >= at.columns[u]
+            a.column = -1
+        return a
+
     fn place(at: Self@, u: Sz, c: Corner, rows: Sz, columns: Sz): Address //<
         //< Where a corner stands, shifted on each axis without `$`; row -1 outside the table
         $a: = Address::{ .row = at.of(u, c.row), .column = at.of(u, c.column),
@@ -334,6 +369,11 @@ priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
         u = find_written(doc, tok.table) catch
             return .none
     t: = doc.tables[u]@
+    if tok.whole
+        if tok.from.column >= t.columns.len || tok.to.column >= t.columns.len
+            return .none
+        return .some(Piece::{ .kind = .columns, .text = "", .table = u, .named = true,
+            .from = column_corner(t, tok.from), .to = column_corner(t, tok.to) })
     if !inside(t, tok.from) || tok.range && !inside(t, tok.to)
         return .none
     return .some(Piece::{ .kind = .range if tok.range else .cell, .text = "", .table = u,
@@ -385,6 +425,10 @@ priv fn corner(t: Table@, a: Address): Corner
     return Corner::{ .row = t.rows[a.row], .column = t.columns[a.column],
         .fixed_row = a.fixed_row, .fixed_column = a.fixed_column }
 
+priv fn column_corner(t: Table@, a: Address): Corner //< a whole column's corner: its row unused
+    return Corner::{ .row = 0, .column = t.columns[a.column], .fixed_row = false,
+        .fixed_column = a.fixed_column }
+
 priv fn no_corner(): Corner
     return Corner::{ .row = 0, .column = 0, .fixed_row = false, .fixed_column = false }
 
@@ -399,6 +443,40 @@ priv fn reference_from(text: U8[], start: Sz, spot: Spot): Token //<
             t.to = other.address
             t.end = other.end
     return t
+
+priv fn columns_from(text: U8[], start: Sz, spot: Spot): Token //<
+    //< Whole columns from `start`: one, or a run when `:` and other letters follow at once
+    $t: = Token(.reference, start, spot.end)
+    t.range = true
+    t.whole = true
+    t.from = spot.address
+    t.to = spot.address
+    if spot.end < text.len && text[spot.end] == ':'
+        if other: = column_at(text, spot.end + 1)
+            t.to = other.address
+            t.end = other.end
+    return t
+
+priv fn column_at(text: U8[], from: Sz): Spot? //<
+    //< A whole column at `from`: `$`, then capital letters that no row number or other name
+    //< character follows
+    $i: = from
+    $a: = Address::{ .row = 0, .column = 0, .fixed_row = false, .fixed_column = false }
+    if i < text.len && text[i] == '$'
+        a.fixed_column = true
+        i += 1
+    letters: = i
+    $column: Sz = 0
+    for i < text.len && text[i].is_upper()
+        column = capped(column * 26 + Sz::(text[i] - 'A') + 1)
+        i += 1
+    if i == letters
+        return .none
+    if i < text.len &&
+        (text[i].is_digit() || text[i].is_lower() || text[i] == '_' || text[i] == '$')
+        return .none
+    a.column = column - 1
+    return .some(Spot::{ .address = a, .end = i })
 
 priv fn address_at(text: U8[], from: Sz): Spot? //<
     //< A cell address at `from`: `$`, capital letters, `$`, then a row number without a leading 0
@@ -459,6 +537,8 @@ priv fn operator(c: U8): Token_kind
         return .times
     case '/'
         return .divide
+    case '&'
+        return .join
     case '='
         return .equal
     case '<'

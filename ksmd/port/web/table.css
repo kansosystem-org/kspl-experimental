@@ -1,0 +1,532 @@
+/* ksmd page: the table look: the heading that stays in sight, cells, the column letters and row
+   numbers, a chosen cell and range, the filter's panel and the open cell's box. */
+/* A table scrolls with the page, and its heading rows stay in sight under the header while the
+   rest of the table passes beneath. So the document has one scroll, and no box inside it holds
+   the wheel. A table wider than the page reaches past it, and the page scrolls sideways. */
+.table {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Its layer stands above the rows and under the header, which stands above it. The table is a
+   layer of its own, so the heading and the cells that stay in sight order only among its cells. */
+.table thead {
+  position: sticky;
+  top: var(--top-height, 0px);
+  z-index: 2;
+}
+
+/* The line under the names stays with them while the rows pass beneath. */
+.table thead th {
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.table-name {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.table table {
+  border-collapse: collapse;
+}
+
+/* Each column is as wide as `sizes.js` sets it, and the table as wide as its columns, so no text
+   wraps. A cell's line breaks show, as typed with Alt+Enter. A text runs on over the empty cells
+   to its right; a cell marked `clip` cuts it at its own edge. */
+.table table {
+  table-layout: fixed;
+}
+
+/* Text that runs on past the last column is cut at the table's right edge; only the frame of a
+   whole table chosen stands a little past it. */
+.table table {
+  clip-path: inset(-100vh -4px -100vh -100vw);
+}
+
+.table td,
+.table th.name {
+  white-space: pre;
+}
+
+.table td.clip,
+.table th.name {
+  overflow-x: clip;
+}
+
+/* Wrap text, as Excel's: the cell's text breaks into lines at its column's width, a word too long
+   for the column inside the word, and its row grows to show them unless it has a height. */
+.table td.wrap,
+.table th.name.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A number or a date wider than its column shows `###`, as in Excel, and its value shows when
+   the cell is opened. */
+.table td.narrow {
+  font-size: 0 !important;
+}
+
+.table td.narrow:not(:has(.cell-input, .cell-fit))::before,
+.table td.narrow > .cell-fit::before {
+  content: "###";
+  font-size: var(--cell-size);
+}
+
+.table td.narrow:has(.cell-input) {
+  font-size: var(--cell-size) !important;
+}
+
+/* A row given a height holds each cell's content in a box that tall, which cuts what is taller.
+   The box leaves room for the cell's padding and line. */
+.table tr.sized > * > .cell-fit {
+  height: max(0px, calc(var(--row-height) - 5px));
+  overflow-y: clip;
+}
+
+.table th,
+.table td {
+  border: 1px solid var(--line);
+  padding: var(--cell-pad);
+  line-height: var(--cell-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+/* The column letters stay a target a pointer hits, though their text is small. */
+.table thead tr:first-child {
+  height: var(--target);
+}
+
+.table th.letter,
+.table th.row-number,
+.table thead tr > th:first-child {
+  background: var(--soft);
+  color: var(--muted);
+  font-weight: normal;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* The row numbers take only the room their digits need, which `sizes.js` measures. */
+.table th.row-number,
+.table thead tr > th:first-child {
+  white-space: nowrap;
+}
+
+/* The heading row holds the columns' names, so it looks apart from the column letters above it. */
+.table th.name {
+  position: relative;
+  padding-right: 22px;
+  background: var(--heading);
+  border-bottom: 2px solid var(--muted);
+}
+
+.table th.name[data-empty]::before {
+  content: "Name";
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.table th.name[data-empty]:has(.cell-input)::before {
+  content: none;
+}
+
+/* The arrow that opens a column's sort and filter panel; a narrowed column's arrow is marked. */
+.filter-arrow {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  transform: translateY(-50%);
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.filter-arrow:hover {
+  border-color: var(--line);
+  background: var(--paper);
+}
+
+.filter-arrow.on {
+  color: var(--mark);
+  border-bottom: 2px solid var(--mark);
+}
+
+.table th.name:has(.cell-input) .filter-arrow,
+.include .filter-arrow {
+  display: none;
+}
+
+/* The panel under a column's heading: sorting, search, the values, a condition, OK and Cancel. */
+.filter-panel {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 17rem;
+  padding: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 14px;
+}
+
+.filter-panel button,
+.filter-panel input,
+.filter-panel select {
+  font: inherit;
+}
+
+.filter-sorts {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-sorts button {
+  text-align: left;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  color: var(--ink);
+}
+
+.filter-sorts button:hover:not(:disabled) {
+  background: var(--soft);
+}
+
+.filter-sorts button:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.filter-values {
+  display: flex;
+  flex-direction: column;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+}
+
+.filter-values label {
+  white-space: nowrap;
+}
+
+.filter-values label[hidden] {
+  display: none;
+}
+
+/* A whole table chosen: a frame around it, as around a chosen range. */
+.table.whole-table table {
+  outline: 2px solid var(--mark);
+  outline-offset: 1px;
+}
+
+/* The tree of a column's dates: each level indented under its year or month. */
+.tree-row {
+  display: flex;
+  align-items: center;
+}
+
+.tree-twist {
+  width: 1.4em;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+
+.tree-kids {
+  padding-left: 1.4em;
+}
+
+.tree-kids[hidden],
+.date-tree [role="treeitem"][hidden] {
+  display: none;
+}
+
+.filter-capped {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.filter-panel details {
+  display: flex;
+  gap: 4px;
+}
+
+.filter-panel details[open] select,
+.filter-panel details[open] input {
+  margin: 4px 4px 0 0;
+}
+
+.filter-ends {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* The right edge of a column letter and the bottom edge of a row number, which a drag moves. */
+.table th.letter {
+  position: relative;
+}
+
+.col-edge {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+}
+
+/* The row's edge stands inside its own number: the next row's number stands over anything below. */
+.row-edge {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 5px;
+  cursor: row-resize;
+  z-index: 1;
+}
+
+.col-edge:hover,
+.row-edge:hover,
+.resizing .col-edge {
+  background: var(--mark);
+  opacity: 0.4;
+}
+
+.include .col-edge,
+.include .row-edge {
+  display: none;
+}
+
+/* Where a dragged row's bottom will stand, with the height it will take. */
+.row-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--mark);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.row-guide::after {
+  content: attr(data-height);
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  padding: 0 4px;
+  background: var(--paper);
+  color: var(--mark);
+  font-size: 12px;
+}
+
+/* A table that prints smaller than it shows says so beside its name (`sizes.js`). */
+.print-scale {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.table td.number,
+.table td.date {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.table td.error {
+  color: var(--error);
+}
+
+.palette {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 13px;
+}
+
+.palette .none {
+  font: inherit;
+  text-align: left;
+}
+
+.palette .swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 20px);
+  gap: 4px;
+}
+
+.palette .swatches button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.palette .more-colours input {
+  vertical-align: middle;
+}
+
+/* The cells of a range chosen with Shift+click. */
+/* A cell with a colour or a fill of its own; its inline style overrides one of these two. */
+.table td.looked {
+  background-color: var(--look-paper);
+  color: var(--look-ink);
+}
+
+.table td.in-range,
+.table th.in-range {
+  box-shadow: inset 0 0 0 9999px var(--range);
+}
+
+.table td.chosen,
+.table th.chosen {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* Rows or columns cut and waiting to be inserted: a dashed frame round them, as Excel's moving
+   border (`cut.js`). The cells a formula's pointing names: a solid one (`point.js`). Each cell
+   draws the edges of the frame it stands on. Paper never shows either. */
+@media screen {
+  .table .cut,
+  .table .pointed {
+    position: relative;
+  }
+
+  .table .cut::after,
+  .table .pointed::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 0 dashed var(--mark);
+    pointer-events: none;
+  }
+
+  .table .pointed::after {
+    border-style: solid;
+  }
+
+  .table .cut-top::after,
+  .table .point-top::after {
+    border-top-width: 2px;
+  }
+
+  .table .cut-bottom::after,
+  .table .point-bottom::after {
+    border-bottom-width: 2px;
+  }
+
+  .table .cut-left::after,
+  .table .point-left::after {
+    border-left-width: 2px;
+  }
+
+  .table .cut-right::after,
+  .table .point-right::after {
+    border-right-width: 2px;
+  }
+}
+
+/* What a table's filter shows, with the button that shows every row again. */
+.filter-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.filter-note button {
+  font: inherit;
+  margin-left: 4px;
+}
+
+/* Measures a cell's value on one line, to fit its column. */
+.measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+/* The box that holds a chosen cell's focus, so an input method is on from the first key. It covers
+   the cell, so a composition's window opens there, and shows nothing (`catcher` in `range.js`). */
+.table .chosen {
+  position: relative;
+}
+
+.cell-catch {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cell-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  line-height: inherit;
+  border: 1px solid var(--mark);
+  padding: 2px 4px;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+/* A table's caption above it, after its number where headings are numbered (`settings.js`). */
+.table-caption {
+  font-weight: 600;
+  text-align: center;
+  margin: 2px 0;
+}
+
+.table-caption[data-number]::before,
+.figure figcaption[data-number]::before {
+  content: attr(data-number) " ";
+}
+
+/* A repeated value in a merged column (`merge.js`): its text and the line above it go, so the
+   cells read as one. A chosen or open cell shows its value again. */
+.table td.merged-repeat {
+  border-top-style: hidden;
+  color: transparent;
+}
+
+.table td.merged-repeat.chosen,
+.table td.merged-repeat:has(.cell-input) {
+  color: inherit;
+}

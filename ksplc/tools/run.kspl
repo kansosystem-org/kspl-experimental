@@ -41,6 +41,14 @@ priv const RUN_CFLAGS: U8[] = "-std=c99" //< the flags used to compile the gener
     //< For scripts, build speed comes first.
 priv const RUN_OPT_FLAG: U8[] = "-O0"
 
+priv const NO_STRICT_ALIASING: U8[] = "-fno-strict-aliasing" //<
+    //< The flag that lets two pointer types reach one address, as KSPL allows
+    //< Without it, C's optimizer may read a value from before a store through the other type
+    //< (`-fno-strict-aliasing` in ksplc/docs/SPEC-tools.md says why). The LLVM backend assumes
+    //< nothing of the kind, so with it both backends give one answer at every level.
+    //< Caution: **Pass it on every compile of the generated C**, at `-O0` too: a `--cflags=-O2`
+    //< would otherwise part from it.
+
 priv const RUN_SECTION_FLAGS: U8[][2] = ::{ "-ffunction-sections", "-fdata-sections" } //<
     //< The compiler flags that let the link-time removal (append_dead_strip_flag) work
     //< Caution: **Always pass them together with the removal.** It drops whole sections, and
@@ -63,6 +71,7 @@ priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is c
     //< the command alone would reuse objects compiled without it.
     list.push(RUN_CFLAGS)
     list.push(RUN_OPT_FLAG)
+    list.push(NO_STRICT_ALIASING)
     append_section_flags(list)
 
 priv fn append_flags_key(h: Str_builder$@) //< the compile flags as the cache keys spell them
@@ -160,7 +169,9 @@ fn append_exe_flags(list: List<|U8[]|>$@, arena: Arena$@) //<
     //< It appends to list the options passed when building an executable from the artifact
     //< Caution: **Do not mix them with the libraries (append_link_libs)**, without which the link
     //< fails. Without these it still builds, but grows and dies of stack exhaustion on Windows.
-    //< This is the list `info exe-flags` shows (so the build does not copy the decision).
+    //< This is the list `info exe-flags` shows (so the build does not copy the decision). It holds
+    //< NO_STRICT_ALIASING too, so a build that compiles with this list reads pointers as KSPL does.
+    list.push(NO_STRICT_ALIASING)
     append_section_flags(list)
     append_dead_strip_flag(list, arena)
     append_stack_flag(list, arena)
@@ -236,7 +247,7 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>@) //<
         defer $file_path: = Str_builder()
         base_locate.append_file_path(import_path, file_path@)
         if !append_dep_line(file_path.slice(), out@)
-            return // where a file cannot be read, no deps file is written (an incomplete list is a lie)
+            return // where a file has no digest, no deps file is written (an incomplete list is a lie)
     // **So are the embedded files** — their bytes are in the output (`note_embedded` in
     // `../base/locate.kspl`).
     for embedded in base_locate.embedded_read()
@@ -258,10 +269,14 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>@) //<
     io.write_file(deps_path, out.slice()) catch {}
 
 priv fn append_dep_line(path: U8[], out: Str_builder$@): Bool //<
-    //< It adds the deps line for path (`<64 hex digits> <path>`); false where it cannot be read
-    digest: = file_hash(path) catch
+    //< It adds the deps line for path (`<64 hex digits> <path>`); false where it has no digest
+    //< Caution: **Write the digest taken when the file was read** (`base_cache.note_read`), never
+    //< read the file again. Saved during the build, it would give the new bytes' digest, and the
+    //< old build would pass as theirs.
+    digest: = base_cache.read_digest(path)
+    if digest.len == 0
         return false
-    out.s(U8[]::digest).c(' ').s(path).c('\n')
+    out.s(digest).c(' ').s(path).c('\n')
     return true
 
 priv fn exit_mkdir_failed(what: U8[], path: U8[], e: fs.Fs_error) //<
@@ -482,6 +497,14 @@ priv fn commit_path(from: U8[], to: U8[]): Bool //<
             return false
     return true
 
+priv fn sync_to_disk(path: U8[]): Bool //< whether the file the linker wrote is on the disk now
+    //< Opened to append, so nothing is changed: Windows flushes only a file opened for writing.
+    defer $file: = io.open(path, "ab") catch
+        return false
+    file.sync_to_disk() catch
+        return false
+    return true
+
 priv fn aside_name(path: U8[], out: Str_builder$@): U8[] //< a name no file in the slot has
     //< The slot's lock is held, so no other run is choosing one at the same moment.
     $n: Sz = 0
@@ -551,7 +574,7 @@ priv fn run_program(script: U8[], given: U8[]?, script_args: List<|U8[]|>$@) //<
     // The lock covers the check below and the build; a run waiting here finds the build done.
     $lock: = hold_slot(fs.join(slot.dir, "lock", arena))
     // --- tier 1: where every input is the same as in the last run, the build is skipped entirely ---
-    if !(slot.cacheable && fs.exists(slot.exe) && deps_are_fresh(slot.deps, arena))
+    if !(slot.cacheable && exe_is_recorded(slot@, arena) && deps_are_fresh(slot.deps, arena))
         rebuild_in_slot(slot@, script, given, arena)
     lock.free()
     sys.exit(exec_program(script, slot.exe, script_args, arena))
@@ -562,10 +585,11 @@ priv struct Run_slot //< a script's place in the run cache, and the paths a buil
     exe: U8[]
     deps: U8[]
     objs: U8[] //<
-        //< The record of what prog.exe was linked from (the objects, then the libraries)
+        //< The record of the last link: prog.exe's size, then what it was linked from (the
+        //< objects, then the libraries)
         //< All objects existing does not mean the executable was built from them (a compile passed
         //< and a link failed). Skipping the link then **runs the previous binary as a
-        //< success**.
+        //< success**. The size catches a program a crash left empty or cut (`exe_is_recorded`).
     new_exe: U8[] //<
         //< The executable before the commit, renamed onto `exe` once the build succeeds
         //< Caution: Keep the extension at the end (not `prog.c.new`). The C compiler picks the
@@ -589,6 +613,12 @@ priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
     is_new_slot: = !fs.is_dir(dir)
     fs.mkdir_all(dir) catch e
         exit_mkdir_failed("cache directory", dir, e)
+    // **The slot holds the program run next**, so it and the folder above it are judged as the
+    // root is (`refused_inside` in `../base/cache.kspl`).
+    for inside in U8[][]::{ runs_dir, dir }
+        why: = base_cache.refused_inside(inside, arena)
+        if why.len > 0
+            base_cache.exit_refused("ksplc run", why)
     // Caution: **Mark it used every time.** The sweep removes the least recently used, so if a hit
     // left no mark, the most-used slot would go first.
     base_cache.touch_dir(dir, arena)
@@ -625,11 +655,15 @@ priv fn rebuild_in_slot(slot: Run_slot@, script: U8[], given: U8[]?, arena: Aren
     for lib in named_libs
         want_objs.s(lib).c('\n')
     // All objects exist and the executable was built from exactly this set: no link either.
-    have_objs: = io.read_file(slot.objs, null) catch ""
-    linked_from_same: = have_objs.len > 0 && have_objs.equals(want_objs.slice())
-    if have_objs.len > 0
-        dealloc(Void$@::have_objs.ptr)
-    if !(all_cached && linked_from_same && fs.exists(slot.exe))
+    defer $want_record: = Str_builder()
+    $linked_from_same: = append_exe_size(slot.exe, want_record@)
+    if linked_from_same
+        want_record.s(want_objs.slice())
+        have_objs: = io.read_file(slot.objs, null) catch ""
+        linked_from_same = have_objs.len > 0 && have_objs.equals(want_record.slice())
+        if have_objs.len > 0
+            dealloc(Void$@::have_objs.ptr)
+    if !(all_cached && linked_from_same)
         build_and_link(slot, units@, named_libs@, want_objs.slice(), arena)
     // The exe now matches this run's input, so the deps are updated. Without them (write_deps_file
     // writes none where a file cannot be read) the old deps are removed, and tier 1 simply misses.
@@ -732,13 +766,43 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
         fs.remove_path(slot.new_exe) catch {}
         fs.remove_path(slot.new_deps) catch {}
         sys.exit(link_code)
-    if !commit_path(slot.new_exe, slot.exe)
+    // Caution: **Put the program on the disk before the rename.** Renamed first, a power cut can
+    // leave prog.exe empty or cut on some file systems, with the rename kept.
+    if !sync_to_disk(slot.new_exe) || !commit_path(slot.new_exe, slot.exe)
         io.err().s("ksplc run: cannot update the cache: \{slot.exe\}\n")
         sys.exit(1)
     // Caution: **Write it after swapping the executable.** Written first, a failed swap leaves a
     // false record "built from this set", so the next run skips the link and runs the old one.
-    io.write_file(slot.objs, want_objs) catch
+    defer $record: = Str_builder()
+    if !append_exe_size(slot.exe, record@)
         fs.remove_path(slot.objs) catch {}
+        return
+    record.s(want_objs)
+    io.write_file(slot.objs, record.slice()) catch
+        fs.remove_path(slot.objs) catch {}
+
+priv const EXE_SIZE_HEAD: U8[] = "size " //< what opens the first line of the link's record
+
+priv fn append_exe_size(exe: U8[], out: Str_builder$@): Bool //<
+    //< It appends the record's first line, `size <bytes>`, for the program now at `exe`
+    //< False where no regular file stands there.
+    info: = fs.stat(exe) catch _e
+        return false
+    if info.kind != fs.File_kind.file
+        return false
+    out.s(EXE_SIZE_HEAD).s("\{info.size\}\n")
+    return true
+
+priv fn exe_is_recorded(slot: Run_slot@, arena: Arena$@): Bool //<
+    //< Whether prog.exe has the size the last link recorded
+    //< **A crash can leave the program empty or cut** after its rename. Run as it is, an empty one
+    //< exits 0 having done nothing, every time. A program whose size differs is built again.
+    defer $want: = Str_builder()
+    if !append_exe_size(slot.exe, want@)
+        return false
+    have: = io.read_file(slot.objs, arena) catch
+        return false
+    return have.starts_with(want.slice())
 
 // ==========================================
 // Building one executable (`ksplc build <input> <output>`)

@@ -23,7 +23,7 @@ KSPL_LINK void kspl_io_set_stdio_binary(void);
 KSPL_LINK __attribute__((noreturn)) void kspl_bounds_fail(int64_t idx, int64_t len, const char* file, int line);
 KSPL_LINK __attribute__((noreturn)) void kspl_div_fail(const char* file, int line);
 KSPL_LINK __attribute__((noreturn)) void kspl_shift_fail(int64_t amount, int64_t width, int amount_unsigned, const char* file, int line);
-KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, const char* enum_name, const char* file, int line);
+KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, int value_unsigned, const char* enum_name, const char* file, int line);
 
 /* The generated main calls it when `main` returns an error: it prints the line and gives the exit
  * status (the reason for each is in hosted.c). */
@@ -48,10 +48,10 @@ static inline KSPL_UNUSED KSPL_NORETURN void kspl_shift_breach(int64_t amount, i
     kspl_shift_fail(amount, width, amount_unsigned, file, line);
 }
 
-static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, const char* enum_name,
-    const char* file, int line)
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, int value_unsigned,
+    const char* enum_name, const char* file, int line)
 {
-    kspl_tag_fail(value, enum_name, file, line);
+    kspl_tag_fail(value, value_unsigned, enum_name, file, line);
 }
 
 /* std/libc.kspl's `get_stdin` / `get_stdout` / `get_stderr` (the substance is in hosted.c). genc

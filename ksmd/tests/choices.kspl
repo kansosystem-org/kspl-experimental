@@ -14,6 +14,7 @@ fn run()
     reading()
     typing()
     columns()
+    colours()
 
 priv fn reading()
     defer arena: = Arena(64 * 1024)
@@ -21,7 +22,11 @@ priv fn reading()
     ed: = opened(text, arena)
     saves("choices read and save unchanged", ed@, arena, text)
     for bad in U8[][]::{ " choices=\"Open\"", " choices=\",Open||Done\"", " choices=\",Open|open\"",
-        " choices=\",Open | Done\"", " choices=\",\"" }
+        " choices=\",Open | Done\"", " choices=\",\"", " choices=\",Open;Done\"",
+        " choices=\",Open;fill:red\"", " choices=\",Open;\"", " choices=\",Open;fill:#ffffff;x\"",
+        " choices=\",Open;fill:#ffffff color:#000000\"", " color_rows=\"B\"",
+        " choices=\",Open\" color_rows=\"A\"", " choices=\",Open\" color_rows=\"C\"",
+        " choices=\",Open\" color_rows=\"b\"" }
         refused(arena.text().s(OPEN).s(bad).s(ROWS).take(), bad)
 
 priv fn typing()
@@ -77,3 +82,42 @@ priv fn with_row(attributes: U8[], row: U8[], arena: Arena$@): U8[] //< and this
 priv fn set(ed: Editor$@, row: Sz, column: Sz, text: U8[])
     ed.set_cell(0, row, column, text) catch e
         verdict.check(text, false, e.message())
+
+// A choice's colours, the rows coloured by a column's choices, and setting that with its undo.
+priv fn colours()
+    defer arena: = Arena(64 * 1024)
+    coloured: = " choices=\",Open;color:#9c0006 fill:#ffc7ce|Done;fill:#c6efce\" color_rows=\"B\""
+    text: = with(coloured, arena)
+    ed: = opened(text, arena)
+    saves("a choice's colours and color_rows read and save unchanged", ed@, arena, text)
+    $upper: = opened(with(" choices=\",Open;fill:#C6EFCE\"", arena), arena)
+    saves("a choice's colours are saved in lower case", upper@, arena,
+        with(" choices=\",Open;fill:#c6efce\"", arena))
+    set(upper@, 0, 1, "open")
+    saves("a typed choice takes the list's spelling, without its colours", upper@, arena,
+        with_row(" choices=\",Open;fill:#c6efce\"", "| \"Write\" | \"Open\" |", arena))
+    $rows: = opened(with(" choices=\",Open;fill:#c6efce\"", arena), arena)
+    rows.set_row_colors(0, 1) catch e
+        verdict.check("colouring rows by a column", false, e.message())
+    saves("rows coloured by column B", rows@, arena,
+        with(" choices=\",Open;fill:#c6efce\" color_rows=\"B\"", arena))
+    rows.undo()
+    saves("undo takes the rows' colours away", rows@, arena,
+        with(" choices=\",Open;fill:#c6efce\"", arena))
+    rows.redo()
+    saves("redo colours them again", rows@, arena,
+        with(" choices=\",Open;fill:#c6efce\" color_rows=\"B\"", arena))
+    rows.set_row_colors(0, 0) catch e
+        verdict.check("a column without choices colours no row",
+            e.message().find_str("Only a column with choices").is_some(), e.message())
+    rows.edit_table(0, .insert_column, 0) catch e
+        verdict.check("inserting a column", false, e.message())
+    moved: = arena.text().s(OPEN).s(" choices=\",,Open;fill:#c6efce\" color_rows=\"C\"")
+        .s("\n| \"\" | \"task\" | \"status\" |\n| | \"Write\" | \"Open\" |\n:::\n").take()
+    saves("color_rows follows its column", rows@, arena, moved)
+    rows.edit_table(0, .remove_column, 2) catch e
+        verdict.check("removing a column", false, e.message())
+    saves("removing the column takes color_rows away", rows@, arena,
+        arena.text().s(OPEN).s("\n| \"\" | \"task\" |\n| | \"Write\" |\n:::\n").take())
+    rows.undo()
+    saves("undo brings both back", rows@, arena, moved)

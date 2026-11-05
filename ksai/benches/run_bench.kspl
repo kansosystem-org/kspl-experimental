@@ -64,7 +64,8 @@ priv fn build_train(stem: U8[], define: U8[], src: U8[], arena: Arena$@): U8[] /
     //< Builds `bench_train.kspl` as `OUT_DIR/{stem}.exe`, with `define` (empty for none)
     //< Returns the program's path, or empty if a build fails.
     //< The libraries the program needs are the ones `--emit-libs` wrote, passed to clang as a
-    //< response file (`@`), so none is repeated here.
+    //< response file (`@`), so none is repeated here. `-fno-strict-aliasing` is ksplc's own
+    //< (`ksplc info exe-flags`): KSPL lets two pointer types reach one address.
     c: = fs.join(OUT_DIR, arena.text().s(stem).s(".c").take(), arena)
     libs: = fs.join(OUT_DIR, arena.text().s(stem).s(".libs").take(), arena)
     exe: = fs.join(OUT_DIR, arena.text().s(stem).s(".exe").take(), arena)
@@ -76,7 +77,7 @@ priv fn build_train(stem: U8[], define: U8[], src: U8[], arena: Arena$@): U8[] /
     argv.push(src)
     argv.push(c)
     if build(argv.slice(), arena) &&
-        build(U8[][]::{ "clang", "-std=c99", "-O3", c,
+        build(U8[][]::{ "clang", "-std=c99", "-O3", "-fno-strict-aliasing", c,
         arena.text().c('@').s(libs).take(), "-lm", "-o", exe }, arena)
         return exe
     return ""

@@ -1,0 +1,36 @@
+//< How near one name is to another, for a message that offers the name the writer likely meant
+//< **Near is at most one edit per three characters**, so a short name allows one: more would offer
+//< an unrelated name as the meaning. A field misspelled in code and a subcommand misspelled on the
+//< command line are judged by this one rule.
+import "std/math"
+
+priv const MAX_NEAR_NAME: Sz = 64 //< the longest name compared, in bytes
+
+fn near_enough(written: U8[]): Sz //< the edit count a name must stay under to count as near
+    return math.max(written.len, 3) / 3 + 1
+
+fn edit_distance(a: U8[], b: U8[]): Sz //<
+    //< How many single-byte edits turn `a` into `b`
+    //< An edit is an insertion, a deletion, a substitution or a swap of two neighbours (`totla`
+    //< for `total` is one). A name longer than max_near_name counts as far from everything.
+    if a.len > MAX_NEAR_NAME || b.len > MAX_NEAR_NAME
+        return MAX_NEAR_NAME
+    $before: Sz[MAX_NEAR_NAME + 1] = ::{} // the row for a's byte before the last
+    $last: Sz[MAX_NEAR_NAME + 1] = ::{}
+    $row: Sz[MAX_NEAR_NAME + 1] = ::{}
+    for j in Range.asc(b.len + 1)
+        row[j] = j
+    for i in Range.asc(a.len)
+        before = last
+        last = row
+        row[0] = i + 1
+        for j in Range.asc(b.len)
+            $cost: = last[j] + (0 if a[i] == b[j] else 1)
+            if last[j + 1] + 1 < cost
+                cost = last[j + 1] + 1
+            if row[j] + 1 < cost
+                cost = row[j] + 1
+            if i > 0 && j > 0 && a[i] == b[j - 1] && a[i - 1] == b[j] && before[j - 1] + 1 < cost
+                cost = before[j - 1] + 1
+            row[j + 1] = cost
+    return row[b.len]

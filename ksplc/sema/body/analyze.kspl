@@ -9,7 +9,9 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
 import "ksplc/base/locate" as base_locate
+import "ksplc/sema/decl/resolve" as _sema_decl_resolve // `resolve_type_in_own_file`
 import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/flow/track" as sema_flow_track
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -19,8 +21,13 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // testing and slicing single characters
-import "std/ds" { List }
-import "std/str"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+struct C_symbol_seen //< one declaration of a C symbol, for `check_c_symbols_agree`
+    sym: Sema_symbol$@
+    signature: U8[] //< its type as C sees it, aliases resolved, compared between declarations
+    shown: U8[] //< the same as KSPL spells it, for the message
 
 impl Sema_ctx
     fn check_one_main(r: Self$@) //< checks that there is only one entry point
@@ -138,6 +145,95 @@ impl Sema_ctx
             "'--library' builds a library from its 'extern' functions. This program publishes none, \
                 so callers could access nothing. Write 'extern' before the functions its callers \
                 use")
+
+    fn check_c_symbols_agree(r: Self$@) //<
+        //< Refuses one C symbol declared with two signatures, naming both places
+        //< **Each `extern` names C's symbol as it stands**, so two files that declare or publish
+        //< one name declare one symbol. The C backend's output would then fail in the C compiler,
+        //< at a line of the generated C, and LLVM IR would call it with the wrong types without a
+        //< word. Types are compared as C sees them: an alias is its target.
+        if r.suppress_errors
+            return
+        $seen: = Map<|U8[], C_symbol_seen|>(base_core.arena)
+        for e in r.symtab.by_fqn.items()
+            sym: = e.value
+            if sym.node == null || !(sym.flags.is_ext || sym.flags.is_export) ||
+                sym.flags.is_method || sym.flags.is_generated_instance
+                continue
+            switch sym.kind
+            case .function, .variable, .constant {}
+            default
+                continue
+            here: = r.c_signature(sym)
+            if first: = seen.get(sym.name)
+                if first.sym.node != sym.node && !first.signature.equals(here.signature)
+                    r.report_c_symbol_clash(sym, here, first)
+                continue
+            seen.set(sym.name, here)
+
+    priv fn c_signature(r: Self$@, sym: Sema_symbol$@): C_symbol_seen //<
+        //< sym's type as C sees it, read in its own file: a canonical spelling, and the one shown
+        $canonical: = Str_builder()
+        $shown: = Str_builder()
+        defer
+            canonical.free()
+            shown.free()
+        $variadic: = false
+        switch sym.kind
+        case .function(v)
+            variadic = v
+            canonical.s("fn(")
+            shown.s("fn(")
+            $n: Sz = 0
+            params: = sym.node.get_fn_params()
+            if params != null
+                for p in base_ast_ext.Param_cursor(params, false)
+                    t: = p.get_decl_type_node()
+                    $id: = I32::sema_type_env.Builtin_type_id.unknown
+                    if t != null
+                        id = t.resolve_type_in_own_file(r) catch id
+                    r.spell_c_type(id, n, canonical@, shown@)
+                    n += 1
+            if variadic
+                canonical.s(", ...")
+                shown.s(", ..." if n > 0 else "...")
+            canonical.s("): ")
+            shown.s("): ")
+        default {}
+        r.spell_c_type(sym.type_id, 0, canonical@, shown@)
+        return C_symbol_seen::{ .sym = sym,
+            .signature = base_core.arena.dup_str(canonical.slice()),
+            .shown = base_core.arena.dup_str(shown.slice()) }
+
+    priv fn spell_c_type(r: Self$@, id: I32, at: Sz, canonical: Str_builder$@,
+        shown: Str_builder$@) //< appends one type, its alias resolved, to both spellings
+        real: = r.env.get_real_type(id)
+        if at > 0
+            canonical.s(", ")
+            shown.s(", ")
+        canonical.s(r.env.get_str(real))
+        shown.s(r.env.display(real))
+
+    priv fn report_c_symbol_clash(r: Self$@, sym: Sema_symbol@, here: C_symbol_seen,
+        first: C_symbol_seen) //<
+            //< Reports the two declarations at the later of the two, naming the other
+            //< **The later is decided by file and offset**, so the report does not depend on the
+            //< order the table was filled in.
+        $at: = here
+        $other: = first
+        if sym.node.loc.file().compare(first.sym.node.loc.file()) < 0 ||
+            (sym.node.loc.file().equals(first.sym.node.loc.file()) &&
+            sym.node.loc.offset < first.sym.node.loc.offset)
+            at = first
+            other = here
+        file: = base_diag.shown_file(other.sym.node.loc.file())
+        line: = r.line_of(other.sym.node.loc)
+        r.clear_scratch()
+            .s("the C symbol '\{sym.name\}' is declared here as '\{at.shown\}', and as \
+                '\{other.shown\}' at \{file\}:\{line\}. C has one symbol of that name, so the \
+                declarations must agree. Make them the same, or declare it in one file and import \
+                that file")
+        r.err(at.sym.node, r.scratch.slice())
 
     fn check_unused_symbols(r: Self$@) //<
         //< [W0206] checks **every file the compile read** for unused names

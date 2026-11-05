@@ -184,7 +184,8 @@ impl Sema_ctx
                 // An unresolved type (Unknown, a generic parameter) is not compared.
                 if bi != unknown && bp != unknown &&
                     (bi != bp ||
-                    r.env.is_pointer(rp.type_id) != r.env.is_pointer(ip.type_id))
+                    r.env.is_pointer(rp.type_id) != r.env.is_pointer(ip.type_id) ||
+                    r.pointee_is_const(rp.type_id) != r.pointee_is_const(ip.type_id))
                     defer $kind: = Str_builder()
                     kind.s("argument \{param_ordinal\}")
                     kind_slice: = kind.slice()
@@ -236,10 +237,36 @@ impl Sema_ctx
             return false
         bi: = r.env.trait_cmp_base(req_m.type_id, real_trait, real_target)
         bp: = r.env.trait_cmp_base(impl_m.type_id, real_target, real_target)
-        if bi == unknown || bp == unknown || bi == bp
+        if bi == unknown || bp == unknown
+            return true
+        // **A value cannot stand for a pointer**, for the reason a `Self` return needs one: the
+        // thunk would hand out the address of a value that dies with the call. The other way, the
+        // thunk reads through the pointer (build_thunk_body in lower/vtable.kspl).
+        if bi == bp && r.env.is_pointer(req_m.type_id) &&
+            !r.env.is_pointer(impl_m.type_id)
+            r.clear_scratch()
+                .s("method '\{req_m.name\}' of interface '\{r.env.display(real_trait)\}' returns \
+                    '\{r.env.display(req_m.type_id)\}', a pointer, but this implementation returns \
+                    the value '\{r.env.display(impl_m.type_id)\}'. A call through the interface \
+                    would receive the address of a value that ends with the call. Return a pointer \
+                    to storage that outlives the call, or make the interface return the value")
+            r.err(err_node, r.scratch.slice())
+            return false
+        // **A read-only pointer cannot stand for a writable one**: the caller writes through what
+        // the trait promised (`s.get()$ = 7`), into memory the implementation handed out as
+        // read-only. The other way only narrows what the caller may do.
+        if bi == bp &&
+            !(r.pointee_is_const(impl_m.type_id) && r.env.is_pointer(req_m.type_id) &&
+            !r.pointee_is_const(req_m.type_id))
             return true
         r.report_sig_mismatch(req_m.name, "return", req_m.type_id, impl_m.type_id, err_node)
         return false
+
+    priv fn pointee_is_const(r: Self@, type_id: I32): Bool //<
+        //< Whether type_id is a pointer to read-only memory (`T@`, not `T$@`)
+        //< trait_cmp_base strips the pointer with its `const`, so this is asked apart.
+        real: = r.env.get_real_type(type_id)
+        return r.env.is_pointer(real) && r.env.is_const(r.env.strip_ptr(real))
 
     fn verify_trait_implementation(r: Self$@, target_id: I32, trait_id: I32, err_node: Ast_node$@):
         Bool
@@ -403,6 +430,27 @@ impl Sema_ctx
             return resolved
         return t_node.type_id if t_node.type_id != 0 else fallback_id
 
+    priv fn refuse_unopened_operand(r: Self$@, real_type: I32, shown: U8[], op: U8[],
+        err_node: Ast_node$@): Bool //<
+            //< Refuses a Result or an Option as an operator's operand; false for any other type
+            //< **The usual cause is a call whose value was not taken out**, so the message names
+            //< the ways to take it out, not an `impl` the writer has no reason to add.
+        $what: U8[] = ""
+        if r.env.is_result(real_type)
+            what =
+                "a result: it holds an error where the call failed. Take the value out where it is \
+                    made: 'g()!' passes the error on to the caller, and 'g() catch <value>' uses a \
+                    value in its place"
+        else if r.env.is_option(real_type)
+            what =
+                "an optional: it may hold no value. Take the value out first: 'if v: = x' runs only \
+                    where x holds one, and 'x.unwrap_or(<value>)' uses a value in its place"
+        if what.len == 0
+            return false
+        r.clear_scratch().s("operator '\{op\}' cannot take '\{shown\}'. It is \{what\}")
+        r.err(err_node, r.scratch.slice())
+        return true
+
     priv fn check_operator_trait(r: Self$@, type_id: I32, trait_name: U8[], err_prefix: U8[],
         op: U8[], err_node: Ast_node$@): Op_trait_status
         base_id: = r.env.strip_ptr(type_id)
@@ -436,6 +484,8 @@ impl Sema_ctx
                 default {}
             if !is_builtin && !is_simple_enum
                 shown: = r.env.display(base_id)
+                if r.refuse_unopened_operand(real_type, shown, op, err_node)
+                    return .error
                 r.clear_scratch()
                     .s("\{err_prefix\} '\{op\}' requires '\{shown\}' to implement '\{trait_name\}' \
                         interface")

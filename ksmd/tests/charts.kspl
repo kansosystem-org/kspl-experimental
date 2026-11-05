@@ -1,8 +1,8 @@
 //< Charts: how `:::chart` reads and saves, how it follows its table, and inserting and setting one
-import "ksmd/edit/edit"
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_tables"
+import "ksmd/edit/moving"
 import "ksmd/tests/support" { opened, refused, saves, written }
 import "std/chars"
 import "std/ds" { List }
@@ -19,6 +19,7 @@ fn run()
     following()
     editing()
     names()
+    by_rows()
 
 priv fn reading()
     defer arena: = Arena(64 * 1024)
@@ -66,7 +67,7 @@ priv fn editing()
     values.push(2)
     values.push(1)
     settings: = Chart_settings::{ .table = 0, .kind = .line, .labels = 0, .values = values,
-        .title = "Both" }
+        .title = "Both", .by_rows = false, .from = 0, .to = 0 }
     ed.set_chart(1, settings@) catch e
         verdict.check("setting a chart", false, e.message())
     set: =
@@ -98,7 +99,7 @@ priv fn names()
             |\n:::\n\n:::chart table=\"t\" kind=\"bar\" labels=\"a\" values=\"x\"\n:::\n", arena)
     before: = written(twice.doc@, arena)
     $moved: = true
-    edit.move_columns(twice.doc@, 0, 2, 1, 0) catch
+    moving.move_columns(twice.doc@, 0, 2, 1, 0) catch
         moved = false
     verdict.check("a column does not move before a drawn column of the same name",
         !moved && written(twice.doc@, arena).equals(before), "")
@@ -123,3 +124,52 @@ priv fn lost(ed: Editor$@, what: U8[], column: Sz, name: U8[], text: U8[], arena
 
 priv fn doc_with(chart: U8[], arena: Arena$@): U8[] //< the table `t`, then a chart clause
     return arena.text().s("%ksmd 1\n\n").s(TABLE).s("\n").s(chart).take()
+
+// A chart by rows: each named row a series, its points the columns from `from` to `to`.
+priv const PLAN: U8[] =
+    "%ksmd 1\n\n:::table name=\"plan\"\n| \"item\" | \"hours\" | \"Oct\" | \"Nov\" | \"Dec\" |\n| \
+        \"plan\" | 9 | 2 | 5 | 9 |\n| \"done\" | | 1 | 4 | |\n:::\n\n"
+
+priv fn by_rows()
+    defer arena: = Arena(64 * 1024)
+    chart: =
+        ":::chart table=\"plan\" kind=\"line\" labels=\"item\" values=\"plan,done\" by=\"rows\" \
+            from=\"Oct\" to=\"Dec\" title=\"Burn-up\"\n:::\n"
+    text: = arena.text().s(PLAN).s(chart).take()
+    $ed: = opened(text, arena)
+    saves("a chart by rows reads and saves unchanged", ed@, arena, text)
+    ed.set_cell(0, -1, 2, "October") catch e
+        verdict.check("renaming a column", false, e.message())
+    oct: = PLAN.find_str("\"Oct\"").unwrap_or(0)
+    renamed: = arena.text().s(PLAN.sub(0, oct)).s("\"October\"").s(PLAN.sub_from(oct + 5))
+        .s(":::chart table=\"plan\" kind=\"line\" labels=\"item\" values=\"plan,done\" by=\"rows\" \
+            from=\"October\" to=\"Dec\" title=\"Burn-up\"\n:::\n").take()
+    saves("its first column follows a new name", ed@, arena, renamed)
+    for bad in U8[][]::{ "by=\"columns\" from=\"Oct\" to=\"Dec\"", "by=\"rows\" from=\"Oct\"",
+        "by=\"rows\" to=\"Dec\"", "from=\"Oct\" to=\"Dec\"", "to=\"Dec\"",
+        "by=\"rows\" from=\"\" to=\"Dec\"" }
+        refused(arena.text().s(PLAN)
+            .s(":::chart table=\"plan\" kind=\"line\" labels=\"item\" values=\"plan\" ").s(bad)
+            .s("\n:::\n").take(), bad)
+    $values: = List<|Sz|>(arena)
+    values.push(1)
+    values.push(0)
+    $plain: =
+        opened(arena.text().s(PLAN)
+        .s(":::chart table=\"plan\" kind=\"bar\" labels=\"item\" values=\"hours\"\n:::\n").take(),
+        arena)
+    settings: = Chart_settings::{ .table = 0, .kind = .line, .labels = 0, .values = values,
+        .title = "", .by_rows = true, .from = 2, .to = 4 }
+    plain.set_chart(1, settings@) catch e
+        verdict.check("setting a chart by rows", false, e.message())
+    set_by_rows: = arena.text().s(PLAN)
+        .s(":::chart table=\"plan\" kind=\"line\" labels=\"item\" values=\"done,plan\" by=\"rows\" \
+            from=\"Oct\" to=\"Dec\"\n:::\n").take()
+    saves("the editor sets a chart by rows, naming the rows by their text", plain@, arena,
+        set_by_rows)
+    $empty_row: = List<|Sz|>(arena)
+    empty_row.push(1)
+    nameless: = Chart_settings::{ .table = 0, .kind = .line, .labels = 1, .values = empty_row,
+        .title = "", .by_rows = true, .from = 2, .to = 4 }
+    plain.set_chart(1, nameless@) catch
+        verdict.check("a row with no text in the labels column cannot be named", true, "")

@@ -2,8 +2,8 @@
  * with an OS).
  *
  * **The substance half is split per subject.** This side holds the includes and the shared
- * small pieces alone. hosted_proc / hosted_thread / hosted_fs / hosted_spawn / hosted_net
- * join behind it **in that order** to make one translation unit. write_impl in
+ * small pieces alone. hosted_io / hosted_proc / hosted_thread / hosted_fs / hosted_spawn /
+ * hosted_net join behind it **in that order** to make one translation unit. write_impl in
  * ksplc/gen/runtime.kspl holds the order.
  * **The standard for splitting is the
  * subject on std's side.** Cut by line count, reading one subject means going back and forth
@@ -54,9 +54,15 @@ KSPL_LINK __attribute__((noreturn)) void kspl_shift_fail(int64_t amount, int64_t
             (long long)amount, (long long)width, file, line);
     }
 }
-KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, const char* enum_name, const char* file, int line)
+KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, int value_unsigned, const char* enum_name, const char* file, int line)
 {
-    kspl_check_fail("panic: enum %s has no tag %lld at %s:%d\n", enum_name, (long long)value, file, line);
+    if (value_unsigned) {
+        kspl_check_fail("panic: enum %s has no tag %llu at %s:%d\n", enum_name,
+            (unsigned long long)value, file, line);
+    } else {
+        kspl_check_fail("panic: enum %s has no tag %lld at %s:%d\n", enum_name, (long long)value,
+            file, line);
+    }
 }
 
 /* The largest number a failure's exit status passes on as it is; any other gives 1. A POSIX shell
@@ -466,9 +472,18 @@ KSPL_LINK int64_t kspl_file_size(void* stream) {
     return end < 0 ? -1 : end;
 }
 
+/* The check that standard output was written whole ("Standard output that could not be written
+ * fails the exit" in hosted_io.c). */
+static void kspl_check_stdout_at_exit(void);
+
 /* Lines the console's output and input code pages up with UTF-8, and on Windows sets how an
  * abort() ends (kspl_end_on_abort). The generated main calls it once before kspl_main
- * (emit_main_function in gen/c/root.kspl).
+ * (emit_main_function in gen/c/root.kspl). It also registers the check of standard output at
+ * exit, on every OS.
+ *
+ * Caution: **Register the check of standard output first.** atexit runs the last registered
+ * first, so the check runs last. It can end the process at once, and the code pages are put back
+ * before that.
  *
  * Caution: **A KSPL string literal is a run of UTF-8 bytes.** Windows's CRT hands it to
  * WriteConsoleA, which reads it in the console's code page (under CP932 `ソースを整形する`
@@ -507,6 +522,7 @@ static void kspl_end_on_abort(int sig) {
     TerminateProcess(GetCurrentProcess(), 0xC0000409u);
 }
 KSPL_LINK void kspl_io_init_console(void) {
+    atexit(kspl_check_stdout_at_exit);
     UINT out = GetConsoleOutputCP();
     UINT in = GetConsoleCP();
     signal(SIGABRT, kspl_end_on_abort);
@@ -518,7 +534,10 @@ KSPL_LINK void kspl_io_init_console(void) {
     atexit(kspl_restore_console_cp);
 }
 #else
-KSPL_LINK void kspl_io_init_console(void) {}
+#include <stdlib.h> /* atexit */
+KSPL_LINK void kspl_io_init_console(void) {
+    atexit(kspl_check_stdout_at_exit);
+}
 #endif
 
 /* Joins the console the program was started from, where the program has none of its own. The
@@ -552,65 +571,6 @@ KSPL_LINK void kspl_io_attach_console(void) {}
 #endif
 
 /* ============================================================
- * Writing when nobody is left to read it (SIGPIPE)
- *
- * POSIX sends a SIGPIPE where a write goes to a pipe or socket whose reader has closed. The
- * default handling **ends the process**. Left bare, a program is dragged down merely because its
- * partner has gone. It **puts nothing out**, so not one clue to the cause appears anywhere.
- *
- * **The decision: ignore it and return it to the writer as EPIPE.** Every writing call
- * returns a failure as a value (`kspl_proc_send` returns -2, `kspl_net_send` send's return value).
- * So the side receiving it can treat it as a refusal.
- *
- * Caution: **But do not let the output vanish unnoticed.** Where standard output is joined to
- * `head`, Unix's promise is **to finish quietly**. Merely ignored, the program runs on with its
- * output silently thrown away (a common complaint). So **where a write sees EPIPE,
- * the default is put back and the signal sent again** (kspl_io_broken_pipe below; the same shape
- * as Go).
- *
- * Caution: **Do not carry it over to a child.** The ignoring setting **is inherited** across
- * execve. So a child (`git`, `clang`, a shell's pipeline) stops dying too, and `yes | head -1`
- * never ends. It is put back after the fork and before the exec (kspl_child_restore_signals below,
- * called by kspl_proc_start in hosted_spawn.c).
- * ============================================================ */
-#ifndef _WIN32
-#include <signal.h>
-/* No include after this section is leaned on (the preamble comes first). */
-#include <errno.h> /* the EPIPE judgement below */
-
-/* Caution: **Make it take effect before `main`.** Called from the generated `main`, it would miss
- * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspl). Both join this runtime.
- * **A library leaves the signal to the program that links it** (KSPL_LIBRARY). Its handling is
- * process-wide, and that program has chosen it for its own writes. */
-#if !defined(KSPL_LIBRARY)
-__attribute__((constructor)) static void kspl_sigpipe_init(void) {
-    signal(SIGPIPE, SIG_IGN);
-}
-#endif
-
-/* Puts it back to the default on the child's side, after the fork and before the exec
- * (the caution above). */
-static void kspl_child_restore_signals(void) {
-    signal(SIGPIPE, SIG_DFL);
-}
-
-/* In a library a failed write stays a failure: ending the process is the program's choice. */
-KSPL_LINK void kspl_io_broken_pipe(void) {
-#if !defined(KSPL_LIBRARY)
-    /* Caution: **Do nothing for anything but EPIPE.** A write also comes out short on a full disk
-     * or a removed device. Killing the process there takes away the refusal returned as a
-     * value. */
-    if (errno != EPIPE) return;
-    signal(SIGPIPE, SIG_DFL);
-    raise(SIGPIPE);
-#endif
-}
-#else
-/* Windows has no SIGPIPE. A write to a closed named pipe merely returns a failure. */
-KSPL_LINK void kspl_io_broken_pipe(void) {}
-#endif
-
-/* ============================================================
  * A crash says what happened (SIGSEGV / SIGBUS, Windows's access violation and stack overflow)
  *
  * Left to the OS, a program touching memory it must not ends **without a word**. A shell prints
@@ -630,6 +590,9 @@ KSPL_LINK void kspl_io_broken_pipe(void) {}
  * it starts. A thread that C code starts has none, and its overflow can end with 139 and no line.
  * ============================================================ */
 #if !defined(KSPL_LIBRARY)
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #define KSPL_CRASH_STACK_SIZE 65536
 /* One crash line, built with no allocation and no stdio (either can be what broke). */
 typedef struct {

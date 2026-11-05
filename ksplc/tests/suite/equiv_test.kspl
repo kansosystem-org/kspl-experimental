@@ -3,7 +3,8 @@
 //< It builds the same program (`tests/prog/equiv.kspl`) on the C and the LLVM backend, runs both
 //< and checks that their standard output agrees. The C is built under clang and gcc both, where
 //< both are installed. Each fills in what C leaves open (an evaluation order) its own way. It is
-//< built once more with C's traps for a misaligned access and a signed overflow.
+//< built once more with C's traps for a misaligned access and a signed overflow, and at `-O2`
+//< under each compiler, where C's own assumptions (strict aliasing) could change the answer.
 //< Caution: **Link through the harness's function.** List the libraries yourself, and the two
 //< builds run under different conditions (Windows's stack size and the like). That shows as "a
 //< difference between the backends' output". The source is passed as a **relative path**
@@ -30,6 +31,12 @@ priv const TRAP_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0",
         //< A trap needs no sanitizer library, so every C compiler the suite runs on can build it.
         //< **At `-O0` a misaligned store or an `int` overflow still answers right.** So only a trap
         //< shows that the C is undefined. A word store to a `#packed` field faults on a Cortex-M0.
+
+priv const OPT_CFLAGS: U8[][_] = ::{ "-std=c99", "-O2" } //<
+    //< The level a program ships at (`ksplc build`), where the optimizer acts on C's assumptions
+    //< A store through one pointer type and a read through another (`pun_word` in
+    //< `tests/prog/equiv_shapes.kspl`) keep the old value at `-O2` unless the build passes ksplc's
+    //< `-fno-strict-aliasing` (`info exe-flags`, which the harness adds).
 
 priv const TRAP_PROBE: U8[] =
     """static int words[2];
@@ -213,6 +220,7 @@ fn main(): I32
     verdict.check("there is no binary literal in the generated C", lits.len == 0, found.take())
     check_for_in_index(gen_text, arena)
     check_traps(work, c_gen, c.out, arena)
+    check_level(harness.cc(), c_gen, fs.join(work, "c_o2.exe", arena), c.out, arena)
     alt_cc: = other_cc()
     // **Mandatory where `KANSO_REQUIRE_BOTH_CC=1`** (set on Linux, whose image holds both).
     if alt_cc.len == 0
@@ -228,6 +236,7 @@ fn main(): I32
             alt: = run_built(alt_exe, arena)
             verdict.check("the C output agrees under gcc and clang", c.out.equals(alt.out),
                 first_diff(c.out, alt.out, arena))
+        check_level(alt_cc, c_gen, fs.join(work, "c_alt_o2.exe", arena), c.out, arena)
     l: =
         build_run(true, fs.join(work, "l.ll", arena), fs.join(work, "l.exe", arena),
         U8[][]::harness_build.LLVM_CFLAGS, arena)
@@ -238,6 +247,16 @@ fn main(): I32
         first_diff(c.out, l.out, arena))
     check_packed_ir(fs.join(work, "l.ll", arena), arena)
     return harness.finish()
+
+priv fn check_level(cc: U8[], c_gen: U8[], exe: U8[], want: U8[], arena: Arena$@) //<
+    //< The C built by cc at `-O2` prints what the `-O0` build does
+    b: = harness_build.build_exe_with(cc, U8[][]::{ c_gen }, exe, U8[][]::OPT_CFLAGS)
+    name: = arena.text().s("the C output agrees at -O0 and -O2 under ").s(cc).take()
+    if !b.exited_with(0)
+        verdict.check(name, false, b.out)
+        return
+    got: = run_built(exe, arena)
+    verdict.check(name, got.out.equals(want), first_diff(want, got.out, arena))
 
 priv fn check_for_in_index(text: U8[], arena: Arena$@) //<
     //< Every index a `for … in` counts with is an `Sz`, as wide as the length it is held below

@@ -1,6 +1,6 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down what happens on a write with nobody to receive it
-//< The behaviour itself is in `ksplc/gen/runtime/hosted.c`.
+//< The behaviour itself is in `ksplc/gen/runtime/hosted_io.c`.
 //< **POSIX ends the process when a write goes to a pipe the reader has closed** (SIGPIPE's
 //< default). A server sees clients leave, so by default it **vanishes without printing anything**
 //< when one goes, and nothing points at the cause.
@@ -113,6 +113,24 @@ fn main()
 
 """
 
+// The probe that writes one line and ends with 0: by `sys.exit` where it is given an argument, by
+// returning from `main` otherwise.
+priv const ONE_LINE_SRC: U8[] =
+    """import "std/io"
+import "std/sys"
+
+fn main(): I32
+  io.out().s("one line\n")
+  if sys.args().len > 1
+    sys.exit(0)
+
+  return 0
+
+"""
+
+priv const REFUSED_LINE: U8[] = "standard output could not be written" //<
+    //< What the runtime writes where standard output was refused (`kspl_check_stdout_at_exit`)
+
 priv const SIGPIPE_BIT: U8[] = "1000" //< the mark for ignoring SIGPIPE (number 13)
     //< `SigIgn` in `/proc/<pid>/status` is 64 hex digits.
 
@@ -171,6 +189,33 @@ priv fn check_head(name: U8[], src: U8[], how: U8[], work: U8[], arena: Arena$@)
             \{piped.code.unwrap_or(-1)\}").take()
     verdict.check(arena.text().s("once the destination goes it ends without writing it all \{how\}")
         .take(), !fs.exists(cut_mark), left)
+    // The check of standard output at exit keeps quiet for a closed pipe.
+    verdict.check(arena.text().s("a closed pipe ends it without a word \{how\}").take(),
+        piped.out.find_str(REFUSED_LINE).is_none(), piped.out)
+
+priv fn check_refused_stdout(work: U8[], arena: Arena$@) //<
+    //< Checks that standard output refused for another reason than a closed pipe fails the exit
+    //< `/dev/full` refuses every write as a full disk does.
+    exe: = build("oneline", ONE_LINE_SRC, work, arena)
+    if exe.len == 0
+        return
+    // The positive control: the same probe, written whole, ends with 0 and no line.
+    fine: = harness
+        .run(U8[][]::{ "/bin/sh", "-c",
+        arena.text().s("'\{exe\}' > /dev/null").take() })
+    verdict.check("standard output written whole ends with the program's code",
+        fine.exited_with(0) && fine.out.find_str(REFUSED_LINE).is_none(), fine.out)
+    name: = "standard output refused fails the exit with one line"
+    if !fs.exists("/dev/full")
+        verdict.skip_check(name, "this OS has no /dev/full")
+        return
+    for how in U8[][]::{ "", " exit" }
+        r: = harness
+            .run(U8[][]::{ "/bin/sh", "-c",
+            arena.text().s("'\{exe\}'\{how\} > /dev/full").take() })
+        by: U8[] = "sys.exit" if how.len > 0 else "return"
+        verdict.check(arena.text().s("\{name\} (by \{by\})").take(),
+            r.exited_with(1) && r.out.find_str(REFUSED_LINE).is_some(), r.out)
 
 priv fn check_child_default(work: U8[], arena: Arena$@) //<
     //< Checks that a started child keeps SIGPIPE's default
@@ -194,7 +239,7 @@ fn main(): I32 //<
     //< runtime it carries. **The test builds the current `ksplc`** (`harness_build`).
     arena: = harness.begin(64 * 1024 * 1024)
     // **On Windows there is nothing to test**: no SIGPIPE, and a write to a closed named pipe
-    // returns a failure (hosted.c's Windows branch).
+    // returns a failure (hosted_io.c's Windows branch).
     if harness.cc_target().find_str("windows").is_some() ||
         harness.cc_target().find_str("mingw").is_some()
         verdict.skip_check("writing when nobody is left to read it", "Windows has no SIGPIPE")
@@ -204,4 +249,5 @@ fn main(): I32 //<
     check_head("loud", LOUD_SRC, "(a string per call)", work, arena)
     check_head("loud_bytes", LOUD_BYTES_SRC, "(a byte per call)", work, arena)
     check_child_default(work, arena)
+    check_refused_stdout(work, arena)
     return harness.finish()

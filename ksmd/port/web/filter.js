@@ -62,10 +62,12 @@ function ksmdFilter(ks) {
     return conds.size > 0 ? conds : null;
   }
   // A cell's value as the table shows it, and how it sorts: numbers, dates, text, false and true,
-  // errors, then blanks. A number in a column with a number format carries the text the format
-  // shows, third. A date is written `2026-10-23`, so its text sorts by day.
-  const shownText = (v) => (v.length > 2 ? v[2] :
-    v.length > 1 ? (v[0] === 1 ? String(Number(v[1].toPrecision(15))) : v[1]) : "");
+  // errors, then blanks. A number carries the text it shows third, written by the engine, so the
+  // page has no rule of its own for a number's digits. A date is written `2026-10-23`, so its
+  // text sorts by day; a date in a column with a date format carries that text third.
+  const shownText = (v) => (v.length > 2 ? v[2] : v.length > 1 ? String(v[1]) : "");
+  // The text without the column's format: a number in a column with a format carries it fourth.
+  const plainText = (v) => (v[0] === 1 && v.length > 3 ? v[3] : shownText(v));
   const group = (v) => [5, 0, 2, 4, 3, 1][v[0]];
   function compare(a, b) {
     if (group(a) !== group(b)) return group(a) - group(b);
@@ -120,6 +122,8 @@ function ksmdFilter(ks) {
     for (const arrow of wrap.querySelectorAll(".filter-arrow")) {
       arrow.classList.toggle("on", !!conds && conds.has(Number(arrow.dataset.c)));
     }
+    // Merged columns compare the rows that show now.
+    ks.merge.paint(wrap);
     let note = wrap.querySelector(".filter-note");
     if (!conds) {
       if (note) note.remove();
@@ -203,7 +207,7 @@ function ksmdFilter(ks) {
     ks.table.take();
     const wrap = ks.view.blocks()[block];
     const heading = wrap.querySelector(`th.name[data-c="${column}"]`);
-    ks.cell = { block, row: -1, column };
+    ks.table.chooseCell({ block, row: -1, column });
     const conds = condsOf(wrap);
     const cond = conds && conds.get(column);
     const el = document.createElement("div");
@@ -517,9 +521,20 @@ function ksmdFilter(ks) {
     if (all) clearAll(ks.view.blocks().indexOf(all.closest(".table")));
   });
 
+  // Sorting stands here too: the column's panel offers it first, as Excel's does.
+  ks.handle(["sort-up", "sort-down"],
+    (name, c) => ks.act("ksmd_web_sort", c.block, c.column, name === "sort-down" ? 1 : 0),
+    { table: true, repeat: true });
+  ks.handle("filter-column", (_, c) => open(c.block, c.column), { table: true, looks: true });
+  ks.handle("filter-value", (_, c) => ks.filter.only(c.block, c.row, c.column),
+    { table: true, looks: true, when: (c) => c.row >= 0 });
+  ks.handle("filter-clear", (_, c) => clearAll(c.block),
+    { table: true, looks: true, when: (c) => ks.filter.on(c.block) });
+
   ks.filter = {
     apply,
     shown: shownText,
+    plain: plainText,
     open,
     clearAll,
     // Shows only the rows whose value in the column is the value of that cell.

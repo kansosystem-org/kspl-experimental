@@ -476,6 +476,7 @@ sequenceDiagram
 * **The program runs outside the lock**, or a long-running script would stop every other run of it.
 * **Not a fresh name per entry, renamed in.** Here the working names are fixed and the objects swept, so a lock around the build is the smaller change.
 * **The executable is renamed over, never removed first**, so a run that starts it in between meets no gap. Windows refuses to replace a running program, so that one is renamed aside, and the next build removes it.
+* **The executable is put on the disk before the rename, and its size is recorded after it** (`prog.objs`, read by `exe_is_recorded`). A power cut can leave a name on an empty or cut file. An empty program would run as nothing and exit 0 on every later run. A program whose size differs from the record is built again.
 
 **A program with no file (`ksplc run -`, `--eval=`) reaches the child compile on its standard input**, under the input `-` (`subproc.spawn_feed` in `generate_c`). As an argument, it would meet the command line's limit (32,767 characters on Windows).
 

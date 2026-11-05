@@ -82,8 +82,8 @@ static inline KSPL_UNUSED KSPL_NORETURN void kspl_bounds_breach(int64_t idx, int
 static inline KSPL_UNUSED KSPL_NORETURN void kspl_div_breach(const char* file, int line);
 static inline KSPL_UNUSED KSPL_NORETURN void kspl_shift_breach(int64_t amount, int64_t width,
     int amount_unsigned, const char* file, int line);
-static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, const char* enum_name,
-    const char* file, int line);
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, int value_unsigned,
+    const char* enum_name, const char* file, int line);
 
 /* **One unsigned comparison**: a negative index becomes larger than any length. As two signed
  * ones inside a loop, the check led LLVM 22 at -O1 to make the loop's end test constant. */
@@ -115,16 +115,18 @@ static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width
 }
 
 /* A cast to an enum from a number: the value must be one of the enum's `count` tags. The tags come
- * as an array, so the cast's operand is evaluated once. */
-static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* tags, int64_t count,
-    const char* enum_name, const char* file, int line)
+ * as an array, so the cast's operand is evaluated once. `value_unsigned` says the operand is a
+ * `U64`: one above INT64_MAX arrives negative here, so it matches no tag (every tag fits `I64`),
+ * and a stop prints it unsigned. */
+static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, int value_unsigned,
+    const int64_t* tags, int64_t count, const char* enum_name, const char* file, int line)
 {
-    int64_t i = 0;
+    int64_t i = (value_unsigned && value < 0) ? count : 0;
     while (i < count && tags[i] != value) {
         i++;
     }
     if (i == count) {
-        kspl_tag_breach(value, enum_name, file, line);
+        kspl_tag_breach(value, value_unsigned, enum_name, file, line);
     }
     return value;
 }

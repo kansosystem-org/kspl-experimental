@@ -1,0 +1,66 @@
+//< That ksplc refuses arithmetic, bit operations and shifts on a simple enum
+//< Unstopped it breaks in silence: `E.big + E.one` does not wrap, `a / z` **falls on SIGFPE**
+//< with no `panic:` line, a wide shift goes unchecked, and the result is a value that is no
+//< variant, which `variant_name` cannot name. The comparisons stay; a compound assignment, the
+//< unary `-` and `~`, and an enum on the right side are refused too. The cast to the base type
+//< (`I32::e`) is the way to compute, and the checked cast back makes an enum again.
+
+// EXPECT: Operator '+' cannot be applied to the enum 'ksplc.tests.negative.enum_arithmetic.E'
+// EXPECT: Operator '-' cannot be applied to the enum
+// EXPECT: Operator '*' cannot be applied to the enum
+// EXPECT: Operator '/' cannot be applied to the enum
+// EXPECT: Operator '%' cannot be applied to the enum
+// EXPECT: Operator '&' cannot be applied to the enum
+// EXPECT: Operator '|' cannot be applied to the enum
+// EXPECT: Operator '^' cannot be applied to the enum
+// EXPECT: Operator '<<' cannot be applied to the enum
+// EXPECT: Operator '>>' cannot be applied to the enum
+// EXPECT: Operator '+=' cannot be applied to the enum
+// EXPECT: Operator '~' cannot be applied to the enum
+// EXPECT: cannot be applied to the enum 'ksplc.tests.negative.enum_arithmetic.Small'
+// EXPECT: cast it to its base type first ('U8::e')
+// EXPECT-NOT: enum_arithmetic.kspl:55
+// EXPECT-NOT: enum_arithmetic.kspl:56
+// EXPECT-NOT: enum_arithmetic.kspl:57
+// EXPECT: enum_arithmetic.kspl:65:14: error: Operator '+' cannot be applied to an enum's variant
+// EXPECT-NOT: enum_arithmetic.kspl:66
+enum E
+    z = 0
+    big = 2147483647
+    one = 1
+
+enum Small: U8
+    a = 200
+    b = 10
+
+fn main(): I32
+    z: = E.z
+    big: = E.big
+    one: = E.one
+    a: = big + one
+    b: = big - one
+    c: = big * one
+    d: = big / z
+    e: = big % z
+    f: = big & one
+    g: = big | one
+    h: = big ^ one
+    i: = one << big
+    j: = 1 >> big
+    $k: = one
+    k += one
+    m: = -one
+    n: = ~one
+    s: = Small.a + Small.b
+    ok: = big > one && big != z && one <= big && z < one && z >= z && one == one
+    sum: = I32::big + I32::one
+    back: = E::(I32::one - 1)
+    _all: =
+        I32::a + I32::b + I32::c + I32::d + I32::e + I32::f + I32::g + I32::h + I32::i + I32::j +
+        I32::k + I32::m + I32::n + I32::s + I32::ok + sum + I32::back
+    return _all
+
+enum Tagged // a tag computes from a sibling through the cast, never on the variant itself
+    first = 1
+    second = Tagged.first + 1
+    third = I32::Tagged.first + 2

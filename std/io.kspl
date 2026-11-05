@@ -59,7 +59,7 @@ impl File_stream
         return read_into(r.stream, buf)!
 
     pub fn sync(r: Self$@): Void!Io_error //< flushes buffered data and reports a failure
-        //< It does not mean the data reached the disk: `fs.replace_file` is what puts a file there.
+        //< It does not mean the data reached the disk: `sync_to_disk()` waits for that.
         //< `Writer.flush()` returns `Self$@` for chaining, so only this method can report a
         //< failure, **an earlier write's included**. A write the stream refused (a full disk) is
         //< kept on it. A flush with nothing left to write would report success.
@@ -70,9 +70,23 @@ impl File_stream
         if libc.ferror(r.stream) != 0
             throw .write_failed("")
 
+    pub fn sync_to_disk(r: Self$@): Void!Io_error //< `sync()`, then a wait until it is on the disk
+        //< Once it returns, a power cut does not lose what was written. **Open the file for
+        //< writing**: Windows refuses this on a file opened only to read. The price is a wait for
+        //< the disk, so call it only where a later step relies on the data being there (a rename
+        //< that makes the file the one in use).
+        if r.stream == null
+            throw .invalid_arg
+        if kspl_stream_sync_disk(r.stream) != 0
+            throw .write_failed("")
+
 priv struct Std_stream //< standard output or error, which the whole program shares
     //< **Nothing closes it**, so it is not a `File_stream`, whose owner closes it. It has no
     //< `free()`, so no caller can close the stream every other part of the program writes to.
+    //< **A write refused to standard output fails the program's exit**: the runtime checks the
+    //< stream as the program ends, and ends with 1 and a line on standard error (a full disk under
+    //< `prog > out.txt`). A closed pipe still ends it quietly ("Writing to a closed pipe returns an
+    //< error value" in std/docs/DESIGN-system.md).
     stream: Void$@ //< the C library's `FILE *`, taken on first use
 
 impl Std_stream: Writer //< what `out()` and `err()` hand out
@@ -268,10 +282,12 @@ extern fn kspl_fopen_cstr(path_cstr: U8@, mode_cstr: U8@): Void$@ //<
 extern fn kspl_io_broken_pipe(): Void //<
     //< Ends the program quietly when a write failed because nothing is reading
     //< The definition and the rule are in "Writing when nobody is left to read it" in
-    //< `ksplc/gen/runtime/hosted.c`.
+    //< `ksplc/gen/runtime/hosted_io.c`. It also keeps the reason for the check of standard output
+    //< at exit.
     //< Caution: **Always call it after a write.** The runtime ignores SIGPIPE, so without it
     //< **nobody notices that the output's destination is gone** (`prog | head -1` keeps
     //< running, its writes silently discarded).
+extern fn kspl_stream_sync_disk(stream: Void$@): I32 //< flushes a stream onto the disk; 0 = done
 extern fn kspl_file_size(stream: Void$@): I64 //< an open stream's size in bytes
     //< -1 when the size cannot be read. After a seek that succeeded the position is back at the
     //< start. A stream that cannot seek (a pipe) stays where it was, so reading on is still

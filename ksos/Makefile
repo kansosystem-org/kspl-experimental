@@ -74,10 +74,11 @@ test:
 # --- The toolchain for Cortex-M (cross compiling for an ARM Cortex-M3) ---
 # One section per symbol, so --gc-sections drops the uncalled libc references that `ksai` carries.
 # The machine is named once, to clang and to ksplc alike: ksplc lays the sizes it folds out for it,
-# and the C it writes makes clang check each against its own.
+# and the C it writes makes clang check each against its own. `-fno-strict-aliasing` is ksplc's own
+# (`ksplc info exe-flags`): KSPL lets two pointer types reach one address, which `-Os` would ignore.
 CM_MACHINE := thumbv7m-none-eabi
 CM_CC := clang --target=$(CM_MACHINE) -mcpu=cortex-m3 -ffreestanding -Wall -Os \
-    -ffunction-sections -fdata-sections
+    -fno-strict-aliasing -ffunction-sections -fdata-sections
 # Soft float and 64-bit integer division (`__aeabi_uldivmod`, ...): arm-none-eabi's libgcc (nofp).
 # Caution: **It must not fall to empty**: the link then fails on `__aeabi_uldivmod` and names no
 # missing toolchain. It stops when ksos-cm* runs, not on evaluation (which `make test` does too).
@@ -318,7 +319,7 @@ CM0_OUT := $(OUT)/ksos_cm0
 
 CM0_MACHINE := thumbv6m-none-eabi
 CM0_CC   := clang --target=$(CM0_MACHINE) -mcpu=cortex-m0plus -ffreestanding -Wall -Os \
-    -ffunction-sections -fdata-sections
+    -fno-strict-aliasing -ffunction-sections -fdata-sections
 LIBGCC_CM0 := $(shell arm-none-eabi-gcc -mcpu=cortex-m0plus -mthumb -print-libgcc-file-name 2>/dev/null)
 CM0_OBJS := $(CM0_OUT)/startup.o $(CM0_OUT)/switch.o $(CM0_OUT)/ksos_port_cm.o $(CM0_OUT)/semihost.o
 
@@ -482,6 +483,8 @@ $(foreach d,$(KSOS_LINK_NRF51_DEMOS),$(eval $(call ksos_linkcheck_rule,$(d),$$(N
 # (`__Thumbv6MABSLongThunk_*`) sits near the caller, in RAM; names opening with `_` are dropped.
 # **Add a function here once you give it `.ram_text`**, or its window stays unchecked while green;
 # each entry is `<the ELF's path>:<the symbol name's end>`.
+# Caution: **A disassembly that fails or holds no instruction fails the check**; only `grep`'s "no
+# match" means "no `bl`". Otherwise a missing `objdump` passes.
 RAMTEXT_WINDOWS := \
 	$(RP2040_OUT)/link_rp2040_board_probe.elf:rp2040_flash_in_window \
 	$(RP2040_OUT)/link_rp2040_board_probe.elf:rp2040_ws2812_send_window
@@ -490,6 +493,7 @@ RAM_ORIGIN := 0x20000000
 test-ksos-ramtext: export RAMTEXT_MISSING_MSG := ERROR: a window function with a tight deadline is not in the ELF (fix this check too when you rename one):
 test-ksos-ramtext: export RAMTEXT_FLASH_MSG := ERROR: a window function is outside RAM. Check .ram_text in link.ld:
 test-ksos-ramtext: export RAMTEXT_CALL_MSG := ERROR: a function on the flash is called directly from inside a window (bl). What can be called inside a window is only a ROM function through a function pointer:
+test-ksos-ramtext: export RAMTEXT_DUMP_MSG := ERROR: the disassembly of a window function failed or holds no instruction, so its calls cannot be checked. Check OBJDUMP and the ELF:
 test-ksos-ramtext: export RAMTEXT_OK_MSG := RESULT: ALL PASS (every window with a tight deadline sits in RAM and calls nothing on the flash directly)
 test-ksos-ramtext: ksos-linkcheck-rp2040_board_probe
 	@set -o pipefail; \
@@ -504,9 +508,16 @@ test-ksos-ramtext: ksos-linkcheck-rp2040_board_probe
 		if [ $$((0x$$addr)) -lt $$(($(RAM_ORIGIN))) ]; then \
 			printf '%s %s 0x%s\n' "$$RAMTEXT_FLASH_MSG" "$$sym" "$$addr" >&2; exit 1; \
 		fi; \
-		direct=`$(OBJDUMP) -d --section=.data --start-address=0x$$addr \
-			--stop-address=$$((0x$$addr + 0x$$size)) $$elf \
-			| grep -cE '\bbl[[:space:]]' || true`; \
+		dis=`$(OBJDUMP) -d --section=.data --start-address=0x$$addr \
+			--stop-address=$$((0x$$addr + 0x$$size)) $$elf` || dis=; \
+		insns=`printf '%s\n' "$$dis" | grep -cE '^[[:space:]]*[0-9a-f]+:[[:space:]]'`; \
+		if [ "$${insns:-0}" = "0" ]; then \
+			printf '%s %s\n' "$$RAMTEXT_DUMP_MSG" "$$sym" >&2; exit 1; \
+		fi; \
+		direct=`printf '%s\n' "$$dis" | grep -cE '\bbl[[:space:]]'`; \
+		if [ $$? -gt 1 ]; then \
+			printf '%s %s\n' "$$RAMTEXT_DUMP_MSG" "$$sym" >&2; exit 1; \
+		fi; \
 		if [ "$$direct" != "0" ]; then \
 			printf '%s %s %s\n' "$$RAMTEXT_CALL_MSG" "$$sym" "$$direct" >&2; exit 1; \
 		fi; \

@@ -5,6 +5,7 @@
 import "ksai/grad" as _grad // `grad_matmul_input_into` on Tensor
 import "ksai/lora_set" { Lora_widths, Qkv_lora }
 import "ksai/nn"
+import "ksai/nn_grad" as _nn_grad // `backward_seq_grads` on Embedding
 import "ksai/optim"
 import "ksai/safetensors" { Safetensors }
 import "ksai/sampler"
@@ -109,6 +110,22 @@ fn grad_small_out(arena: Arena$@)
     dy.grad_matmul_input_into(w, out)
     io.out().s("must not get here\n")
 
+// ==========================================
+// embed-grads-past-tokens / embed-grads-past-dx: an embedding's gradient over more positions than
+// the tokens or `dx` hold must stop. Taken, it reads past the list and adds that into the table.
+// ==========================================
+fn embed_grads(tokens: Sz, rows: Sz, arena: Arena$@) //< three positions, over 4-wide rows
+    emb: = nn.Embedding<|F32|>(5, 4, arena)
+    ids: = I32$@::arena.alloc(tokens * sizeof(I32))
+    for i in Range.asc(tokens)
+        (ids + i)$ = 1
+    shape: Sz[2] = ::{ rows, 4 }
+    dx: = Tensor<|F32|>(Sz[]::shape, arena)
+    dx.fill(0.5)
+    io.out().s("about to sum 3 positions over \{tokens\} tokens and \{rows\} rows\n")
+    _dw: = emb.backward_seq_grads(I32$[]::{ .ptr = ids, .len = tokens }, 3, dx)
+    io.out().s("must not get here\n")
+
 fn main(): I32
     argv: = sys.args()
     which: = argv.get(1) if argv.len == 2 else ""
@@ -155,10 +172,15 @@ fn main(): I32
         gqa_past_cache(arena)
     else if which.equals("grad-small-out")
         grad_small_out(arena)
+    else if which.equals("embed-grads-past-tokens")
+        embed_grads(2, 3, arena)
+    else if which.equals("embed-grads-past-dx")
+        embed_grads(3, 2, arena)
     else
         // **An unknown name must not pass**: it says no reason, so its check fails.
         io.err().s("usage: stops <which>, one of: argmax-empty-logits\n")
             .s("  tensor-shape-product-overflow tensor-add-shape-mismatch updater-weight-count\n")
             .s("  gqa-uneven-heads\n").s("  gqa-odd-head-dim gqa-past-cache grad-small-out\n")
+            .s("  embed-grads-past-tokens embed-grads-past-dx\n")
         return 2
     return 0

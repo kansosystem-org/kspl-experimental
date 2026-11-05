@@ -238,7 +238,7 @@ priv trait Shrink
 
 impl U8[]: Shrink
   fn shrink(r: Self$@)
-    r.len -= 1
+    r$ = U8[]::{ .ptr = r.ptr, .len = r.len - 1 }
 
 priv fn shrink_it(s: Shrink)
   s.shrink()
@@ -262,7 +262,7 @@ priv trait Shrink
 
 impl U8[]: Shrink
   fn shrink(r: Self$@)
-    r.len -= 1
+    r$ = U8[]::{ .ptr = r.ptr, .len = r.len - 1 }
 
 priv fn shrink_it(s: Shrink)
   s.shrink()
@@ -598,3 +598,88 @@ priv fn first(buf: U8$[]): U8
 fn main(): I32
   $a: U8[2] = ::{ 1, 2 }
   return I32::first(U8$[]::a)
+// ==== case operator_receiver_writes_read_only
+//< An operator whose method takes `Self$@` is refused on an operand that method may not write
+//< An operator passes its left operand as a method call passes its receiver ("Which operation
+//< takes which place" in docs/SPEC-programming-language.md). Asked by the call alone, `CV + CV`
+//< wrote a `const` in `.rodata`, and `-a`, `a == b` and a generic's `x == y` changed an immutable
+//< local. On a `$` local it passes.
+// EXPECT: operator_receiver_writes_read_only.kspl:41:8: error: cannot apply '+' to a read-only operand
+// EXPECT: operator_receiver_writes_read_only.kspl:43:10: error: cannot apply '-' to a read-only operand
+// EXPECT: operator_receiver_writes_read_only.kspl:44:9: error: cannot apply '+' to a temporary object
+// EXPECT: operator_receiver_writes_read_only.kspl:38:10: error: cannot apply '==' to a read-only operand
+// EXPECT: Finished with 4 error(s)
+priv struct V
+  n: I32
+
+impl V: Add<|V, V|>
+  fn add(r: Self$@, rhs: V): V
+    r.n += 1
+    return V::{ .n = r.n + rhs.n }
+
+impl V: Neg<|V|>
+  fn neg(r: Self$@): V
+    r.n = 0
+    return V::{ .n = 0 }
+
+impl V: Eq<|V|>
+  fn eq(r: Self$@, other: V): Bool
+    r.n = 0
+    return other.n == 0
+
+  fn ne(r: Self@, other: V): Bool
+    return r.n != other.n
+
+priv const CV: V = ::{ .n = 1 }
+
+priv fn make(): V
+  return V::{ .n = 2 }
+
+priv fn same<|T: Eq<|T|>|>(a: T, b: T): Bool
+  return a == b
+
+fn main(): I32
+  x: = CV + CV
+  a: V = ::{ .n = 1 }
+  _b: = -a
+  _c: = make() + a
+  $m: V = ::{ .n = 1 }
+  _d: = m + a
+  _e: = same(a, a)
+  return x.n
+// ==== case other_file_const_written
+//< Another file's `const` is read-only however it is named
+//< Reached through an import's alias (`mem.SZ_MAX`) or a name an import's braces select, its root
+//< was looked up by the head of the name alone. That found the alias or nothing, so `x@` became a
+//< writable pointer and an out parameter wrote `.rodata`. Where the file declares it, the same
+//< `@` was refused already. No hint asks for a `$` on another file's declaration.
+// EXPECT: other_file_const_written.kspl:17:8: error: expected 'Sz$@', but got 'Sz@'
+// EXPECT: other_file_const_written.kspl:18:8: error: expected 'Sz$@', but got 'Sz@'
+// EXPECT: Finished with 2 error(s)
+// EXPECT-NOT: is a writable pointer only where
+import "std/mem"
+import "std/bignat" { BIGNAT_LIMBS }
+
+priv fn bump(p: Sz$@)
+  p$ += 1
+
+fn main(): I32
+  bump(mem.SZ_MAX@)
+  bump(BIGNAT_LIMBS@)
+  return 0
+// ==== case pointer_argument_spelled
+//< An argument a writable pointer is expected for shows how to write it
+//< A value given gets `n@`. A read-only `n@` gets the rule: `n@` is writable only where `n` is
+//< declared with `$`, whatever the parameter expects.
+// EXPECT: pointer_argument_spelled.kspl:13:8: error: expected 'I32$@', but got 'I32'
+// EXPECT: Hint: pass its address: 'n@'.
+// EXPECT: pointer_argument_spelled.kspl:14:8: error: expected 'I32$@', but got 'I32@'
+// EXPECT: Hint: 'n@' is a writable pointer only where 'n' is declared with '$', as in '$n: = 0'.
+priv fn bump(p: I32$@)
+  p$ += 1
+
+fn main(): I32
+  n: I32 = 0
+  bump(n)
+  bump(n@)
+  return n

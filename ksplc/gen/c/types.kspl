@@ -165,8 +165,8 @@ impl Ast_node
         // just as at the call (`vtable->` in gen/c/expr.kspl).
         cg.nm(r.find_text(.k_identifier)).s(")(")
         param_list: = r.get_fn_params()
+        $is_first: = true
         if param_list != null
-            $is_first: = true
             for pi in Range.asc(param_list.children.len)
                 item: = param_list.get_child(pi)
                 is_rest: = item.kind_id == .k_literal && item.text.equals("...")
@@ -179,6 +179,10 @@ impl Ast_node
                     cg.s("...")
                 else
                     item.emit_vtable_param(cg, pi)
+        // Caution: **Write the `void` for a method that takes nothing** (a trait's `fn dtype():
+        // U8[]`), as emit_param_list does: `f()` declares no prototype in C.
+        if is_first
+            cg.s("void")
         cg.s(");\n")
 
     fn emit_impl_decl(r: Ast_node$@, cg: Genc_ctx$@)

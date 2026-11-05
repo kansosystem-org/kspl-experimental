@@ -4,6 +4,7 @@
 //< two apart: the C, a raw text's bytes, what `ksplc fmt` writes back (`to_lf` in
 //< `../../parse/source_fix.kspl`).
 import "ksplc/tests/support/harness"
+import "std/chars"
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
@@ -119,3 +120,36 @@ fn check_crlf_fmt(work: U8[], arena: Arena$@)
     _same: = verdict.check("formatting hands the file back the terminator it came with",
         got.equals(want),
         arena.text().s("wrote \{got.len\} bytes / read \{want.len\} bytes").take())
+
+// **A carriage return alone is refused, wherever it stands** ("2. Lexical structure" in
+// `docs/SPEC-programming-language.md`). An editor ends a line there and the compiler would not,
+// so a comment would hide the code the editor shows below it. Each source below holds one, and the
+// refusal must name its line and column as written.
+const LONE_CR_COMMENT: U8[] = "fn main(): I32\n    // note\r    return 1\n    return 0\n" //<
+    //< A lone `\r` in a comment, at line 2, column 12 (the language server's line 1, character 11)
+priv const LONE_CR_SRCS: U8[][_] = ::{ LONE_CR_COMMENT,
+    "fn main(): I32\n    s: = \"a\rb\"\n    return I32::s.len\n", "fn main(): I32\r    return 0\n" }
+priv const LONE_CR_WHERE: U8[][_] = ::{ "in a comment", "in a string", "in code" }
+priv const LONE_CR_AT: U8[][_] = ::{ "lone_cr.kspl:2:12:", "lone_cr.kspl:2:12:",
+    "lone_cr.kspl:1:15:" }
+
+fn check_lone_cr(work: U8[], arena: Arena$@)
+    at: = fs.join(work, "lone_cr.kspl", arena)
+    gen: = fs.join(work, "lone_cr.c", arena)
+    for i in Range.asc(LONE_CR_SRCS.len)
+        name: = arena.text().s("a lone carriage return ").s(LONE_CR_WHERE[i])
+            .s(" is refused at its line and column").take()
+        io.write_file(at, LONE_CR_SRCS[i]) catch
+            _bad: = verdict.check(name, false, "the source cannot be written")
+            return
+        r: = harness.ksplc(U8[][]::{ at, gen })
+        _ok: = verdict.check(name,
+            !r.exited_with(0) && r.out.find_str("carriage return").is_some() &&
+            r.out.find_str(LONE_CR_AT[i]).is_some(), r.out)
+    // The formatter reads through the same check, so it refuses rather than write a file back.
+    io.write_file(at, LONE_CR_COMMENT) catch
+        _bad: = verdict.check("fmt refuses a lone carriage return", false, at)
+        return
+    f: = harness.ksplc_bare(U8[][]::{ "fmt", at })
+    _ok: = verdict.check("fmt refuses a lone carriage return",
+        !f.exited_with(0) && f.out.find_str("carriage return").is_some(), f.out)

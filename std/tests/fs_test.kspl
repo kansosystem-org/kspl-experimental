@@ -37,6 +37,11 @@ fn test_fs_ops()
     info: = fs.stat(f1) catch panic("stat should succeed for an existing file")
     assert(info.size == 5 && info.kind == fs.File_kind.file,
         "a.txt metadata should report size=5, a file")
+    // The nanosecond time is the same moment as `stat`'s whole seconds, only finer.
+    ns: = fs.mtime_ns(f1) catch panic("mtime_ns should succeed for an existing file")
+    assert(ns / 1000000000 == info.mtime, "mtime_ns should fall within stat's mtime second")
+    assert(fs.mtime_ns("out/tmp/kspl_test_debug_fs_dir/none.txt").is_err(),
+        "mtime_ns should fail where nothing stands")
     dir_info: = fs.stat(tmp_dir) catch panic("stat should succeed for an existing directory")
     assert(dir_info.kind == fs.File_kind.dir, "a directory's metadata should report a directory")
 
@@ -360,11 +365,13 @@ fn test_fs_path_guard()
     // stays_under keeps paths under the root (is_safe_relative is its text-only half).
     // Caution: **Do not count an absent path as "a link".** If it counted, code writing a file
     // about to be created (a server's PUT, for example) could write nothing.
-    // Refusing a real link is not tested here. `fs` has no way to create one, so that test belongs
-    // to whoever serves files and creates links of its own.
+    // A real link is refused in `tree_test.kspl` (`test_fs_link_on_path`), which makes one with
+    // `ln -s`; `fs` has no way to make one. An empty root is the current folder, as `.` is.
     assert(fs.stays_under(".", "a/b.txt"), "an absent path is treated as staying under")
     assert(!fs.stays_under(".", "../x"), "pointing outside by path does not stay under")
     assert(!fs.stays_under(".", ""), "empty does not stay under (in step with is_safe_relative)")
+    assert(fs.stays_under("", "a/b.txt"), "under an empty root, an absent path stays under too")
+    assert(!fs.stays_under("", "../x"), "and pointing outside by path does not")
     // Caution: **Create the file it checks.** A repository file exists only when run from the root;
     // from std's own folder this line would pass as the absent case above.
     fs.mkdir_all("out/tmp/kspl_test_path_guard")
@@ -372,6 +379,8 @@ fn test_fs_path_guard()
     write_probe_file("out/tmp/kspl_test_path_guard/present.txt")
     assert(fs.stays_under(".", "out/tmp/kspl_test_path_guard/present.txt"),
         "an existing ordinary file stays under")
+    assert(fs.stays_under("", "out/tmp/kspl_test_path_guard/present.txt"),
+        "and under an empty root too")
     fs.remove_path("out/tmp/kspl_test_path_guard/present.txt") catch {}
 
     // Over the limit, walk must return too_deep rather than crash, so the caller can report it.
@@ -436,7 +445,8 @@ fn test_fs_hidden_on_path(arena: Arena$@) //<
 fn test_fs_join_under_refusals(arena: Arena$@) //<
     //< That `join_under` refuses each form a path from outside can take to reach what it should not
     //< **Every form is refused on every OS**, so this Linux run holds for Windows too: the forms
-    //< Windows reads specially (`\`, `GIT~1`, `x.`, `CON`, `*`) are refused here as text.
+    //< Windows reads specially (`\`, `GIT~1`, `x.`, `CON`, `*`) are refused here as text. `.link`
+    //< needs a real link: `test_fs_link_on_path` in `tree_test.kspl` refuses one.
     verdict
         .start("[Fs] join_under refuses every form that could leave the root or reach a hidden \
             name...")

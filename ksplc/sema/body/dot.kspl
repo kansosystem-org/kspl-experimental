@@ -9,6 +9,7 @@ import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
+import "ksplc/base/near" as base_near
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
@@ -25,7 +26,6 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
-import "std/math"
 import "std/str" { Str_builder }
 
 priv fn refuse_variant_list(c: Sema_ctx$@, node: Ast_node$@, enum_id: I32, member: U8[]): Bool //<
@@ -536,53 +536,23 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
                 import is not cyclic.")
     c.err(member_node, c.scratch.slice())
 
-priv const MAX_NEAR_NAME: Sz = 64 //< the longest name nearest_field compares, in bytes
-
 priv fn nearest_field(c: Sema_ctx@, recv_id: I32, name: U8[]): U8[] //<
     //< The receiver's field whose name is nearest to `name`, or empty where none is near enough
-    //< **Near is at most one edit per three characters** (`edit_distance`), so a short name
-    //< allows one: more would offer an unrelated field as the meaning. On a tie the field
-    //< declared first wins.
+    //< Near is `near_enough` in `ksplc/base/near.kspl`. On a tie the field declared first wins.
     entry: = c.env.id_to_type.get(c.env.get_clean_real_type(c.env.strip_ptr(recv_id)))
     if entry == null
         return ""
     $best: U8[] = ""
-    $best_cost: = math.max(name.len, 3) / 3 + 1
+    $best_cost: = base_near.near_enough(name)
     switch entry.info
     case .struct_type(def)
         for field in def.fields_list
-            cost: = edit_distance(name, field.name)
+            cost: = base_near.edit_distance(name, field.name)
             if cost < best_cost
                 best = field.name
                 best_cost = cost
     default {}
     return best
-
-priv fn edit_distance(a: U8[], b: U8[]): Sz //<
-    //< How many single-byte edits turn `a` into `b`
-    //< An edit is an insertion, a deletion, a substitution or a swap of two neighbours (`totla`
-    //< for `total` is one). A name longer than max_near_name counts as far from everything.
-    if a.len > MAX_NEAR_NAME || b.len > MAX_NEAR_NAME
-        return MAX_NEAR_NAME
-    $before: Sz[MAX_NEAR_NAME + 1] = ::{} // the row for a's byte before the last
-    $last: Sz[MAX_NEAR_NAME + 1] = ::{}
-    $row: Sz[MAX_NEAR_NAME + 1] = ::{}
-    for j in Range.asc(b.len + 1)
-        row[j] = j
-    for i in Range.asc(a.len)
-        before = last
-        last = row
-        row[0] = i + 1
-        for j in Range.asc(b.len)
-            $cost: = last[j] + (0 if a[i] == b[j] else 1)
-            if last[j + 1] + 1 < cost
-                cost = last[j + 1] + 1
-            if row[j] + 1 < cost
-                cost = row[j] + 1
-            if i > 0 && j > 0 && a[i] == b[j - 1] && a[i - 1] == b[j] && before[j - 1] + 1 < cost
-                cost = before[j - 1] + 1
-            row[j + 1] = cost
-    return row[b.len]
 
 priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32) //<
     //< Refuses a method named through a value without being called (`p.m`)

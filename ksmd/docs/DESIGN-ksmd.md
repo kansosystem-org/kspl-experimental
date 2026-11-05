@@ -22,7 +22,7 @@ Files use UTF-8. The first line is exactly `%ksmd 1`; an unsupported version is 
 
 A file holding only the version marker is an empty document. A blank line separates blocks. Within a paragraph, a source newline becomes one space, and a backslash right before a newline is a hard line break. The writer puts a paragraph on one source line except for hard breaks.
 
-A clause starts at column one with `:::`, its kind and its attributes. A line holding only `:::` closes it. Clauses do not nest in version 1. The kinds are `table`, `include`, `image` and `chart`; an unknown kind is an error. Attributes are unique `name=value` pairs separated by spaces; an unknown or a repeated attribute is an error. Strings use JSON quoting and escapes, and numbers are decimal. There are no implicit attributes, positional arguments or short forms. A style cannot change a block's kind.
+A clause starts at column one with `:::`, its kind and its attributes. A line holding only `:::` closes it. Clauses do not nest in version 1. The kinds are `table`, `include`, `image`, `chart`, `diagram`, `functions` and `document`; an unknown kind is an error. Attributes are unique `name=value` pairs separated by spaces; an unknown or a repeated attribute is an error. Strings use JSON quoting and escapes, and numbers are decimal. There are no implicit attributes, positional arguments or short forms. A style cannot change a block's kind.
 
 **A new attribute stays in version 1, and a ksmd older than the attribute refuses the file.** Its reader refuses an unknown attribute, naming the line and column, so it never opens such a file and saves it without the attribute. A version step would add nothing to that refusal: the older reader refuses `%ksmd 2` as well. It would cost a second reader to keep, and every file written since would carry the new number. The format is not yet a published specification, so version 1 still grows. A version step comes with a change an older reader would read wrongly rather than refuse.
 
@@ -51,7 +51,7 @@ These reading rules settle cases the notation leaves open:
 * Only a run of three with no mark open has two readings. Strong emphasis goes outside, unless the next run on the line can close only the other order (`***a** b*`).
 * A code span ends at the next run of exactly as many backticks. One space at each end is dropped when both ends have one. The writer chooses the shortest run that the code does not hold.
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
-* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`. A table row outside a table clause is refused.
+* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `char_widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`. A table row outside a table clause is refused.
 * Any clause may take `invisible="printing"`, written last, which leaves its block out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). It has one value, so a misspelt one is refused.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one.
@@ -105,6 +105,7 @@ Typing inserts literal text: `#`, `*` or `:::` does not change structure. Format
 | `fill` | `"#fff2cc"` | The background's colour |
 | `size` | `14`, `10.5` | The font size in points, from 6 to 72, whole or ending in `.5`. The page offers 9, 10, 11, 12, 14, 18 and 24 |
 | `align` | `"left"`, `"center"`, `"right"` | A cell's or a paragraph's alignment |
+| `wrap` | `"on"` | A cell's text breaks into lines at its column's width, as Excel's Wrap Text. Left out, the text stays on its lines |
 
 * **Values are written as attributes are**: strings in JSON quotes, numbers bare. The writer writes the parts in that fixed order, and colours in lower case. A look with no part is refused.
 * **A table cell writes its look after its value**: `| 120 {color="#c00000"} |`. An empty cell can carry a look alone: `| {fill="#fff2cc"} |`. A `{` inside quoted text is text.
@@ -128,6 +129,33 @@ Typing inserts literal text: `#`, `*` or `:::` does not change structure. Format
 * **No threads, replies or names.** These serve several people working on one file at once ("What the file lifecycle leaves out" below).
 * **A note stays with its cell or paragraph** through a new value, a sort and a moved row. A paragraph split in two keeps it on the part before the split.
 
+## The document's own settings
+
+**A `:::document` clause sets what holds for the whole document**: the paper, the printed header and footer, and the numbers of headings and captions. It stands first in its source, before every other block, and once:
+
+```text
+:::document paper="A3" orientation="landscape" header="[Confidential]" footer="No.EXAMPLE-0001 ({page}/{pages})" numbers=2 table_label="表" figure_label="図"
+:::
+```
+
+| Attribute | Sets | Left out |
+| :-- | :-- | :-- |
+| `paper` | `A3`, `A4`, `A5`, `B4`, `B5`, `letter` or `legal` | The browser's paper |
+| `orientation` | `"landscape"` | Portrait |
+| `header` | The text in the middle of each printed page's header | The document's name |
+| `footer` | The text at the left of each printed page's footer | Nothing |
+| `numbers` | The heading level that numbering starts at, 1 to 6, unquoted | No numbers |
+| `table_label`, `figure_label` | The word before a table's or an image's number | `Table`, `Figure` |
+
+* **Every attribute is optional, but the clause sets at least one.** Portrait has no spelling, so one setting has one form.
+* **A header or a footer is 1 to 200 bytes of text.** `{page}` and `{pages}` stand for the page's number and the count of pages, and are the only braces it holds.
+* **Headings number themselves from the level `numbers` names**: 1, 1.1, 1.1.1. With `numbers=2`, a level-1 heading stays a title without a number. A number is shown, never written into the heading's text, so an inserted section moves every later number at once.
+* **A table's `caption` and an image's caption take a number by chapter**, such as `表 4-12`, where headings are numbered. The chapter is the heading at the level numbering starts at, and each chapter counts from 1 again.
+* **A link whose text is `#` is a reference: `[#](#運用モード)`.** It shows the number of the heading, table or image its place names, so `[#](#運用モード)項` reads "4.1.1項". The place is a heading's text, a table's name or caption, or an image's caption. Without numbers, it shows that name, and a name that finds nothing shows `#?`.
+* **Only the opened document's clause counts.** An included file's own clause is read, and changes nothing where it is included.
+
+`ksmd/syntax/settings.kspl` reads, checks and writes the clause, and `ksmd/edit/editor_settings.kspl` sets it as one step of undo.
+
 ## Tables and calculations
 
 A table clause requires `name="budget"`. A name is 1 to 255 bytes of any text but control characters, such as `Q1 sales`, unique within one source file. A table has a header row of quoted strings, outside the cell addresses, followed by data rows.
@@ -146,7 +174,7 @@ Text cells need quotes, so numeric-looking identifiers and a leading `=` are una
 
 Addresses start at `A1`, the first data cell. `$A$1`, `$A1` and `A$1` fix axes when copying formulas. Within one source, `budget.D1` names a cell in another table. Cross-file formulas are excluded, including references into an include.
 
-A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `sum_if`, `count_if`, `average_if`, `lookup`, `today`, `date`, `year`, `month` and `day`. It also holds the six base functions of "Hexadecimal and binary" below. Function names are lowercase. Multiplication and division bind before addition and subtraction, and both before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. A document can add functions of its own, written in KSPL ("Your own functions").
+A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges and whole columns. It holds parentheses, unary minus, `+`, `-`, `*`, `/`, `&`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `round_down`, `round_up`, `sum_if`, `count_if`, `average_if`, `sum_product`, `lookup`, `today`, `date`, `year`, `month` and `day`. It also holds the six base functions of "Hexadecimal and binary" below, `mod` and `power`, and the text functions of "Text" below. Function names are lowercase. Multiplication and division bind before addition and subtraction. Both bind before `&`, and `&` before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. A document can add functions of its own, written in KSPL ("Your own functions").
 
 An empty cell is zero in arithmetic. The rules for values and errors are "Values and errors" below, and for dates "Dates" below.
 
@@ -156,6 +184,7 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 * A cell is capital column letters, then a row number from 1 without a leading zero: `D1`, `AA12`. A `$` before either part fixes that part for copying.
 * `budget.D1` names a cell of another table in the same source, with no space around the `.`. A name that is not plain (a lowercase letter, then lowercase letters, digits and `_`) stands in JSON quotes: `"Q1 sales".D1`.
 * A range is two cells joined by `:` without spaces: `D1:D3`. A table's name stands once, before the range: `budget.D1:D3`. The corners can come in either order, and the writer saves the upper left first.
+* **A table's name and column letters alone name the whole column: `map.D`.** It takes every data row, never the names row, and rows added later. `map.D:F` names whole columns side by side. The table's name is always written, even for the formula's own table.
 * `#REF!` stands where a reference lost its row or column. The reader and writer keep it, and it calculates as `#REF!`.
 * **Text stands in JSON quotes, with JSON's escapes:** `"Pens"`, `"say \"hi\""`. Quotes followed at once by `.` and a cell name a table instead.
 * **`and`, `or`, `not`, `true` and `false` are words.** A `|` splits a table row unless it stands in quotes, so the symbols `||` and `|` cannot serve.
@@ -207,7 +236,7 @@ pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax
 
 | What | Holds |
 | :-- | :-- |
-| Building | The local server's builder, named when the server starts. The build is closed: the file may use `std` and ksmd's calculation files, and a path to anything else fails it |
+| Building | The local server's builder, named when the server starts. The build is closed: the file may use `std` and ksmd's calculation files, and a path to anything else fails it. So does any way to C (`extern`, `##link`, assembler text), which ksplc refuses under `--closed` |
 | Running | A worker apart from the page, with its own memory and no way to the files, the network or the page |
 | Time | 2 seconds per call; past it the cell shows `#TIME!`, and the worker starts afresh |
 | A panic or a fault | The cell shows `#STOPPED!`, and the worker starts afresh |
@@ -230,6 +259,8 @@ A cell's value is empty, a number, text, `true` or `false`, or an error. A formu
 * **The branch not taken must still read**, so a slip shows at once: `if(true, 1, 2 +)` is `#SYNTAX!`.
 * **`round(x, places)` changes the value, where a number format changes only what shows.** It rounds the shortest decimal digits of the number, half away from zero, so `round(2.675, 2)` is the F64 nearest to 2.68.
 * **`places` is a whole number from -15 to 15; anything else is `#NUM!`.** `round(1250, -2)` is 1300.
+* **`round_down` cuts toward zero and `round_up` away from it**, taking `places` as `round` does. They cut the 15 significant digits a person reads, so `round_down(0.1 + 0.2, 1)` is 0.3.
+* **Only those 15 digits are rounded first**, so `round_down(0.99999999, 0)` is 0 and `round_up(1.0000001, 0)` is 2.
 * **A reference alone as a function argument is a set of cells.** The function leaves out the set's empty cells, text, and `true` and `false`. Any other argument calculates as arithmetic, so `sum(A1+0)` with text in A1 is `#VALUE!`.
 * **`min`, `max` and `average` of no numbers are `#EMPTY!`, not 0**, while `sum` and `count` of none are 0. A zero would hide that a column holds no data yet.
 * **An error in a referenced cell carries into every formula that uses it, `count` included.**
@@ -242,7 +273,7 @@ Each error has its own mark, since each is fixed differently.
 | :-- | :-- |
 | `#VALUE!` | A value of the wrong kind: text or `true` and `false` in arithmetic, a number or text as a condition, or two kinds ordered |
 | `#DIV/0!` | A division by zero |
-| `#NUM!` | A number or a result too large for an F64, or `round`'s places not a whole number from -15 to 15 |
+| `#NUM!` | A result too large: a number past an F64, or text past 32,767 bytes. Or a value out of a function's range: `round`'s places, a text position or a count |
 | `#REF!` | A reference to no cell: `#REF!`, a cell outside its table, or a table name this source does not hold |
 | `#CYCLE!` | The cell depends on itself, directly or through other cells |
 | `#EMPTY!` | `min`, `max`, `average` or `average_if` of no numbers |
@@ -269,6 +300,14 @@ Each error has its own mark, since each is fixed differently.
 * **The values on a row are read only where the condition holds,** as `if` reads only the branch it takes. An error on a row left out does not show. A total row inside its own range is no cycle when the condition leaves it out.
 * **Errors carry row by row from the top:** first the condition's, then the values' on that row from the left, `count_if` included.
 
+### The sum of products
+
+**`sum_product(a, b)` multiplies each cell of `a` by the cell of `b` beside it, and adds the products.** `=sum_product(D1:D9, E1:E9) / sum(D1:D9)` is the average of E weighted by D, such as a progress rate weighted by hours.
+
+* **`a` and `b` are ranges of one column, or of one row, as long as each other.** Any other shape is `#SHAPE!`.
+* **A pair is left out unless both its cells hold numbers**, as `sum` leaves out text and empty cells.
+* **An error in either range is the result**, the first in order.
+
 ### Finding a value by its key
 
 **`lookup(key, keys, values, otherwise)` gives the value beside the first key that equals `key`**, an exact-match lookup. `=lookup(A1, prices.A1:A50, prices.B1:B50, 0)` finds a price by its code.
@@ -289,6 +328,34 @@ Each error has its own mark, since each is fixed differently.
 * **A whole number stands for its decimal digits** where text is read, so `=bin_to_dec(1010)` is 10. An empty cell is 0.
 
 **Why a sign by default:** a negative number written as a fixed run of digits surprises a reader who wanted a sign. A fixed width also limits which numbers convert. So the width is the reader's choice, up to 53 bits.
+
+### Text
+
+**`mid`, `left`, `right`, `len` and `find` take Excel's names and its order of arguments, counted from 1**, so a formula carries over. `=mid("1234 5678", 6, 4)` is `"5678"`.
+
+| Function | Gives |
+| :-- | :-- |
+| `mid(text, start, count)` | `count` characters from the `start`th |
+| `left(text, count)`, `right(text, count)` | The first or the last `count` characters |
+| `len(text)` | How many characters the text holds |
+| `find(part, text)` | Where `part` first stands, from 1, or 0 where it does not |
+| `value(text)` | The number the text writes in decimal: `value(" 12.5 ")` is 12.5 |
+| `substitute(text, old, new)` | The text with every `old` replaced by `new`, from the left; case counts |
+| `text(value, format)` | A number or a date written as a column's format shows it: `text(E2, "date:yyyy/mm/dd")` |
+| `a & b` | The two texts joined |
+
+* **A position counts characters, not bytes**, so `mid("かんそ", 2, 1)` is `"ん"`.
+* **A start below 1 or a negative count is `#NUM!`.** A count past the end takes what there is, and a start past it gives empty text.
+* **`find` gives 0 where the part is missing, not an error.** `if(find("/", A1) > 0, …)` then reads without a second function to catch the error. Case counts: `find("a", "A")` is 0.
+* **A number is not text, here as in arithmetic.** `mid(255, 1, 1)` and `"No. " & 5` are `#VALUE!`; `dec_to_hex` writes a number as text. An empty cell is empty text.
+* **`text` is the one way from a number or a date to text**, so `&` can join it. Its format is an entry of `formats` ("Number formats" below).
+* **An empty format writes a number as the page shows it without a format**: at most 15 significant digits, so `text(0.1 + 0.2, "")` is `"0.3"`.
+* **Text that `&` or a function gives is at most 32,767 bytes; a longer result is `#NUM!`.** Spreadsheets cap a cell's text at 32,767 characters. The count is in UTF-8 bytes, as for every other limit here.
+* **The length is found before the text is made.** So a formula that doubles its text down 27 rows stops at the cap, and takes no more memory.
+* **A line break in text is written `\n`**, with JSON's escapes: `substitute(A1, "\n", ", ")` puts a line's parts on one line.
+* **`value` is the one way from text to a number.** Text that writes no decimal number, `"0x10"` among it, is `#VALUE!`; `hex_to_dec` reads hexadecimal.
+
+**`mod(x, y)` takes the sign of `y`**, so `mod(-1, 72)` is 71 and a count wraps round as a clock does. **`power(x, y)` is `x` to the power `y`**; a result with no real number, such as `power(-1, 0.5)`, is `#NUM!`.
 
 ### Number formats
 
@@ -333,11 +400,21 @@ Each error has its own mark, since each is fixed differently.
 ```
 
 * **A typed value equals a choice without regard to case, and the cell holds the choice as the list spells it.** Any other value is refused, typed, pasted, filled or copied; an empty cell is allowed.
-* **A choice is 1 to 100 bytes of text, with no `,`, `|`, `"` or `\`, and no space at either end.** A column holds at most 50, and no two equal without regard to case.
+* **A choice is 1 to 100 bytes of text, with no `,`, `|`, `;`, `"` or `\`, and no space at either end.** A column holds at most 50, and no two equal without regard to case.
 * **A list belongs to a column**, as a format does. A cell that already holds another value keeps it, and the page marks it.
 * **Only a list.** Number ranges, dates and formula conditions are left out, and so is a list taken from another table.
+* **A choice can take colours after `;`, as a rule writes them**: `Done;fill:#c6efce` or `Open;color:#9c0006 fill:#ffc7ce`. A cell that holds the choice shows them.
+* **`color_rows="C"` colours each whole row by the choice its column C holds**, so the rows of an issue list show their state at a glance. Only a column with choices can colour rows, and a column's colour rule stands over a row's colours.
+* **`color_rows` follows its column as a reference does**, and goes with it when the column is removed or loses its list.
 
 `ksmd/model/choice.kspl` reads, writes and checks an entry. `edit.set_choices` sets a column's list as one step of undo, and `edit.set_cell` keeps to it.
+
+### A link in a cell
+
+**A text cell can link its text, written in its braces after its note: `| "Results" {link="https://example.com/r"} |`.** The page shows the text as a link.
+
+* **The link takes the rules of a link in the text**: `https:`, `http:`, `mailto:` or a `#` place, with no space or bracket.
+* **Only a text cell holds a link**, since the link names what the text says. A cell given a number, a date or a formula loses its link; new text keeps it.
 
 ### Colouring cells by their value
 
@@ -350,33 +427,48 @@ Each error has its own mark, since each is fixed differently.
 * **An entry is a condition, `;`, then the colours.** `<5` is below 5, `>5` above 5, `=5` or `=Done` equal to it, and `empty` an empty cell. `color:` is the text's colour and `fill:` the background's, one or both.
 * **The rule reads each cell's calculated value**, and compares text without regard to case.
 * **The rule's colours stand over the cell's own look** while the rule holds.
-* **One rule per column, and only these conditions**, so no order between rules is needed. Colour scales, data bars, icon sets and formula conditions are left out.
+* **`scale;from:#ffffff to:#ffef9c` is a colour scale.** The least number takes the first fill and the greatest the second, with the numbers between in between. A large workload stands out at a glance.
+* **The columns that hold the same scale share one least and one greatest number.** So a block of months compares as one, as a scale over a range does in a spreadsheet. A cell that holds no number is not filled.
+* **One rule per column, and only these conditions**, so no order between rules is needed. Data bars, icon sets and formula conditions are left out.
 * **A rule belongs to a column**, as a format does, and moves with it.
 
 `ksmd/model/rule.kspl` reads and writes an entry, and `edit.set_rule` sets a column's rule as one step of undo.
 
-### Groups of rows
+### Captions and merged columns
 
-**Data rows can be grouped, and a group's rows hide and show together, as a spreadsheet's outline does.** The table's `groups` attribute saves each group, and whether it is hidden:
+**A table's `caption` stands above it**: `:::table name="modes" caption="運用モード一覧"`. A caption is 1 to 200 bytes of text with no braces, numbered where the document numbers headings ("The document's own settings" above).
+
+**`merge="A,B"` shows a value repeated down a column once, as merged cells look in a word processor.** Each cell still holds its value, so a sort, a filter and a range work as before; only the look changes.
+
+* **A value merges with the shown row above when it shows the same text.** A column merges on a row only where every merged column left of it merges too. So a group's rows stay inside the group above them.
+* **The columns are named by letters from the left, each once.** They follow their columns as a reference does, and a removed column leaves the list.
+* **Rows a filter or a group hides do not count**, so what shows reads as merged.
+
+### Groups of rows and columns
+
+**Data rows can be grouped, and a group's rows hide and show together, as a spreadsheet's outline does. Columns group the same way.** The table's `groups` attribute saves each group, and whether it is hidden:
 
 ```text
-:::table name="budget" groups="rows 2-4, rows 6-9 closed, rows 7"
+:::table name="budget" groups="rows 2-4, rows 6-9 closed, rows 7, columns C-H closed"
 ```
 
 * **An entry names data rows as a formula numbers them, from 1.** `rows 2-4` is rows 2 to 4, and `rows 7` one row. ` closed` marks a group whose rows are hidden.
-* **The entries stand from the top, an outer group before the groups it holds,** separated by `, `.
+* **A column entry names columns by their letters**: `columns C-H`, or `columns C` for one.
+* **The rows' entries stand from the top, then the columns' from the left, an outer group before the groups it holds.** They are separated by `, `.
+* **The rules below hold for the groups of columns as for those of rows**, each list alone. A column inserted inside a group joins it, and so on.
 * **A group holds another group whole, or shares no row with it.** Groups nest at most 8 deep. Two groups never hold the same rows, and two side by side stay two.
 * **A group belongs to the table's layout, as a width does, so it names rows by place.** A sort or a moved row leaves the groups where they stand. A row inserted inside a group joins it. A removed row leaves it, and a group whose rows are all removed goes.
 * **Hidden rows still count in a formula**, as with a filter.
 * **Whether a group is hidden is saved in the file, unlike a filter.** Hiding detail is the shape the writer gives the table, while a filter answers one question for the moment.
 
-`ksmd/model/group.kspl` reads, writes and checks the groups. `edit.group_rows`, `edit.ungroup_rows` and `edit.show_group` are each one step of undo. Ungrouping takes away the smallest group that holds the chosen rows.
+`ksmd/model/group.kspl` reads, writes and checks the groups. `edit.group_lines`, `edit.ungroup_lines` and `edit.show_group` are each one step of undo. Ungrouping takes away the smallest group that holds the chosen rows.
 
 ### How references follow edits
 
-Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert and remove a row or a column, move a block of rows or columns, set a cell and copy a cell. `ksmd/edit/sort.kspl` sorts the rows.
+Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. Calculated values are never stored in the model. `ksmd/edit/edit.kspl` holds the operations: insert and remove a row or a column, set a cell and copy a cell. `ksmd/edit/moving.kspl` moves a block of rows, columns or cells, and `ksmd/edit/sort.kspl` sorts the rows.
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
+* **A whole column holds no row.** Rows inserted, removed or moved anywhere only change how many it takes. Its column follows as a range's does; a moved block of cells leaves it alone.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
 * **A sort moves each row with its identity.** A formula keeps naming the cells it named before, so `=B1*C1` in row 1 still names its own row after the sort.
 * **Removal turns a reference to the removed line into `#REF!`.** A range's corner on that line moves one line toward the other corner. A range with no line left becomes `#REF!`.
@@ -396,6 +488,7 @@ Calculation (`ksmd/calc/calc.kspl`) reads the model and one input: the date the 
 * **A chain deeper than 256 steps is set aside, and its deepest cell calculates first.** A step is a cell or a level of a formula. So a running total down 10,000 rows calculates without exhausting the stack.
 * **After an edit, the whole source calculates again.** The table limits bound that cost; a partial recalculation waits for a measured need.
 * **A condition of `sum_if`, `count_if` or `average_if` calculates once for each row of its values.**
+* **A function's arguments are kept only while it runs.** So `=sum(t.A)` on each of 3,000 rows keeps no copy of column A for each row; only the results stay.
 
 ### Dates
 
@@ -438,6 +531,14 @@ These were weighed and left out, so one way to write each thing stays:
 ```
 
 * **`table`, `kind`, `labels` and `values` are required, and `title` is not.** `kind` is `bar` or `line`; `values` names 1 to 8 columns, separated by `,`.
+* **`by="rows"` draws rows instead, as a burn-up chart of a plan whose months stand across.** `values` then names rows by their text in the `labels` column, and the columns from `from` to `to` are the points:
+
+```text
+:::chart table="plan" kind="line" labels="item" values="plan total,done total" by="rows" from="Oct" to="Mar"
+:::
+```
+
+* **A row is found by its text when the chart is drawn**, the first row that holds it. `from` and `to` are held by identity, as the other columns are.
 * **Only bars and lines**, the charts people make most.
 * **A chart holds its table and columns by identity, as a formula's references do**, and the writer writes the names they have now.
 * **A name that names nothing is kept as written, and the chart says what is missing.** Nothing is lost when a column is removed and put back.
@@ -447,9 +548,57 @@ These were weighed and left out, so one way to write each thing stays:
 
 `ksmd/syntax/chart.kspl` reads and writes the clause, and finds its table and columns. `ksmd/edit/editor_charts.kspl` makes and changes charts. A changed chart is a new entry that its block points at, so undo swaps the block back.
 
+### Shapes drawn over an image or a chart
+
+**Rectangles, arrows and lines can be drawn over an image or a chart, to point at a part of it.** Each shape is a `draw` line in the clause's body, with attributes as a clause's:
+
+```text
+:::image src="build.png" alt="The build window"
+draw shape="rect" from="120,40" to="420,120" text="Press Build here"
+draw shape="arrow" from="460,200" to="430,110" color="#1f5fbf"
+:::
+```
+
+* **`shape` is `rect`, `arrow` or `line`, and `from` and `to` are its two ends.** A rectangle's are two corners; an arrow points at `to`.
+* **A point is in the picture's own pixels, from its upper left corner.** So a shape stays on what it points at however wide the page shows the picture. A chart's frame is 640 by 300 pixels.
+* **A coordinate is a whole number from 0 to 20,000**, written without a leading zero.
+* **`color` is `#` and six lowercase hexadecimal digits.** Left out, the shape takes the page's red.
+* **Only a rectangle holds `text`: one line of 1 to 200 bytes**, written at its upper left corner on a white ground.
+* **One image or chart holds at most 100 shapes.**
+* **The picture itself never changes.** The shapes are a layer over it in the source, so they can be moved or taken away later, and a diff shows them.
+* **A shape belongs to its picture, never to the page.** No shape floats over the text, so none loses its place when the text or the rows above it change.
+
+`ksmd/syntax/drawing.kspl` reads and writes the lines. `ksmd/edit/editor_drawings.kspl` changes them: new drawings make a new image or chart entry, so undo swaps the block back.
+
+### Diagrams
+
+**A `:::diagram` clause holds a drawing area of shapes and the arrows between them.** A chart of screens and the keys that move between them is one:
+
+```text
+:::diagram size="800,400" caption="Moving between screens"
+box id="menu" at="40,40" size="200,120" text="MENU\n1.SET\n2.END" font="mono"
+diamond id="ask" at="320,60" size="120,80" text="Save?"
+note id="tip" at="320,200" size="160,50" text="Yes saves"
+arrow from="menu" to="ask" text="[OK] pressed"
+line from="tip" to="ask" via="380,180"
+:::
+```
+
+* **A shape is `box`, `diamond`, `start`, `end`, `group` or `note`.** A start is a filled dot and an end a ringed one. A group is a dashed frame whose text is its title.
+* **Each shape names itself with `id`, and an arrow or a line names the two shapes it joins.** So a moved shape keeps its arrows, and a diff shows a moved shape as one changed line.
+* **`at` and `size` place a shape in the diagram's own pixels, inside `size`**, which runs from 50 to 20,000 each way.
+* **A shape's `text` may hold lines, written `\n`.** `font="mono"` gives it a fixed-width font, for a screen's mock-up. `color` and `fill` are `#` and six lowercase hexadecimal digits.
+* **An arrow's `text` is one line, and `via` lists up to 20 points it bends at.** Its ends meet the shapes' borders, wherever the shapes stand.
+* **The shapes come first, then the arrows and lines**, so an arrow names only shapes already read. One diagram holds at most 1,000 shapes and 2,000 arrows and lines.
+* **`caption` is numbered as an image's is** ("Page setup, numbers and references" in [`DESIGN-page.md`](DESIGN-page.md)), and a reference can name it.
+
+**The layout is the author's, not computed.** A diagram drawn to a hand-made plan keeps that plan. A tool that lays a diagram out itself moves every box when one is added. The price is that a large diagram is placed by hand.
+
+`ksmd/syntax/diagram.kspl` reads and writes the clause. `ksmd/edit/editor_diagrams.kspl` changes it whole: a changed diagram is a new entry, so undo swaps the block back.
+
 ## Includes and images
 
-An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption`; its body is empty. Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
 
 Links may use `https`, `http`, `mailto`, or a document fragment; other schemes are refused. Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -514,13 +663,17 @@ Links may use `https`, `http`, `mailto`, or a document fragment; other schemes a
 
 The model is an ordered block tree of paragraphs, headings, lists, code, tables, charts, images and includes. Tables own rectangular cells, not child blocks. Editing identities belong to the model and need not appear in source.
 
-The table's `widths` attribute, when present, is a quoted comma-separated list of integer weights from 1 to 10,000, one per column. The writer divides them by their greatest common divisor, and layout divides each weight by their sum.
+**The table's `char_widths` attribute gives a column a width in characters**, as a quoted list with one entry per column: `char_widths="12,,8.5"`. An entry is 0.5 to 255, Excel's limit, with at most one decimal place. An empty entry is a column that fits its text. The attribute stands only while some column has a width.
 
-**The table's `heights` attribute gives a row a least height in points**, as a quoted list with one entry per data row: `heights=",30,,"`. An entry is a whole number from 6 to 409, Excel's limit, or empty for a row the text sizes. The attribute stands only while some row has a height.
+* **A character is the width of the digit 0 in the table's font**, as Excel's column width and CSS's unit `ch` count it. The model keeps tenths of a character, so a width is a whole number.
+* **The table is as wide as its columns, not as wide as the window.** A person who sets a column's width in a spreadsheet expects it to stay, and expects no text to wrap when the window narrows. A wider table makes the page scroll sideways.
+* **The older `widths="1,2,1"` gave weights, each column's share of the table's width.** The reader still takes it, and turns the shares into a table of 80 characters, half a character at least. The writer writes `char_widths` only, so a file saved once has the new form. Giving both attributes is refused.
 
-* **A height is a least height: a row grows where its text needs more room.** A spreadsheet that cuts the text off at the row's edge hides a value from the reader.
+**The table's `heights` attribute gives a row a height in points**, as a quoted list with one entry per data row: `heights=",30,,"`. An entry is a whole number from 6 to 409, Excel's limit, or empty for a row that fits its lines. The attribute stands only while some row has a height.
+
+* **A height is exact: text taller than the row is cut, as in Excel.** A person who makes a row lower means it. A double-click on the row's edge fits it to its lines again ("Column widths and row heights" in [`DESIGN-page.md`](DESIGN-page.md)).
 * **The model keeps each height by the row's identity**, so a sort, a moved row and an inserted row leave it on its row. A removed row's height comes back with an undo.
-* **Points are the unit of a font's size**, which the look already uses ("Looks" above), and of Excel's row height. A table's column widths stay weights, since the table fills the width of the page or paper.
+* **Points are the unit of a font's size**, which the look already uses ("Looks" above), and of Excel's row height.
 
 **The table's `filter` attribute keeps which rows the page shows**, as a quoted list with one entry per column (`ksmd/model/filter.kspl`):
 
@@ -687,6 +840,7 @@ Initial limits are safety bounds, not performance claims. Apply them before allo
 | List nesting or inline nesting | 16 levels each |
 | One table | 256 columns, 10,000 data rows, 100,000 cells including the header |
 | One formula | 4,096 UTF-8 bytes and 64 expression levels |
+| Text that `&` or a function gives | 32,767 UTF-8 bytes; past it, `#NUM!` |
 | `round`'s places | -15 to 15 |
 | Include depth | 16 files on the active stack |
 | Assembled view | 64 MiB of source text and 200,000 blocks, counting repeated instances |

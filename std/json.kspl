@@ -19,7 +19,7 @@ pub enum Value //< one JSON value, of any of the seven kinds
     float_val(f: F64) //< a number with a point or an exponent, kept separate so nothing rounds
     str_val(s: U8[]) //< a string, already unescaped
     array_val(a: Array) //< an array; read its elements through `arr_list` and `get_at`
-    obj_val(o: Object) //< an object; read its members through `get` and `find`
+    obj_val(o: Object) //< an object; read its members through `get`, `find` and `obj_keys`
 
 priv struct Node
     val: Value
@@ -35,12 +35,12 @@ priv struct Member
     val: Value
     next: Member$@
 
-pub struct Object //< an object's members, reachable only through `get` and `find`
+pub struct Object //< an object's members, reachable only through `get`, `find` and `obj_keys`
     //< `Value.obj_val`'s payload.
     //< Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub
     //< enum`'s payload (`switch v case .obj_val(head)`). The priv list would then leak out ("Why a
     //< narrow type cannot stand where visibility is wide" in docs/DESIGN-programming-language.md).
-    //< Reading an object goes through `get(key)` and `find(key)`.
+    //< Reading an object goes through `get(key)` and `find(key)`; `obj_keys` lists the keys.
     priv head: Member$@
 
 priv fn append_node(head: Node$@$@, tail: Node$@$@, node: Node$@) //<
@@ -513,6 +513,25 @@ impl Value
                 curr = curr.next
         default {}
         return out
+    pub fn obj_keys( //< an object's keys as a list, in the order the text gave them
+        //< **The one way to walk an object**: each key then reads its value through `get` or
+        //< `find`, so the members' own chain stays hidden (`Object`). Any other kind gives an
+        //< empty list.
+        //< Caution: When arena is null it allocates on the global heap, so the caller frees it with
+        //< a `defer` (the same convention as `List.new`).
+        r: Self,
+        arena: Arena$@, //< the arena for the list; null means the global heap, freed by the caller
+    ): List<|U8[]|>
+        $out: = List<|U8[]|>(arena)
+        switch r
+        case .obj_val(o)
+            $curr: = o.head
+            for curr != null
+                out.push(curr.key)
+                curr = curr.next
+        default {}
+        return out
+
     pub fn dump( //< writes the value as JSON text
         //< **Indentation is only for files a person reads.** For data exchange keep it at 0: the
         //< whitespace is waste to the peer.

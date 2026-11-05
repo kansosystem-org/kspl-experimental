@@ -1,5 +1,6 @@
 //< Tests of `std/subproc`'s bounds: every wait on a child ends at its timeout
 import "std/chars" // `ends_with`
+import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
@@ -234,6 +235,23 @@ fn test_beside_child_writes_its_file(ksplc: U8[], arena: Arena$@) //< ksplc runs
     assert(got.find_str("to out").is_some() && got.find_str("to err").is_some(),
         "both outputs stand in the one file")
     verdict.pass("the child's two outputs reached its file, and its wait gave 0.")
+
+fn test_many_arguments(arena: Arena$@) //<
+    //< A child starts with 300 arguments, more than the 256 a fixed array once held
+    //< Past that array the start failed as `spawn_failed`, with no reason given. The OS's own
+    //< limit on the total size is the only one now.
+    verdict.start("[Sys] a child with 300 arguments starts and gets every one...")
+    if sys.is_windows()
+        verdict.skip("it hands over POSIX-specific executable paths")
+        return
+    $argv: = List<|U8[]|>(arena)
+    argv.push_all(U8[][]::{ "/bin/sh", "-c", "echo $#", "sh" })
+    for _i in Range.asc(300)
+        argv.push("x")
+    r: = subproc.run_capture(argv.slice(), "", 60000, 4096, arena) catch
+        panic("a child with 300 arguments must start")
+    assert(r.exited_with(0) && r.stdout_data.equals("300\n"), "the child counts all 300 arguments")
+    verdict.pass("A child with 300 arguments started and counted every one.")
 
 fn test_run_many_frees_slots_early(arena: Arena$@) //<
     //< A job that ends early frees its slot for the next, while an earlier job still runs

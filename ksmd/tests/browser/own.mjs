@@ -1,6 +1,7 @@
 // The served page's own functions: a `:::functions` clause, its file built by the local server's
-// builder and run in a worker. An answer, text, too many arguments, a function that never ends,
-// and a file the build refuses, each shown where a person looks: the cell and the clause's box.
+// builder and run in a worker. An answer, text, too many arguments, a function that never ends, a
+// panic, a file the build refuses, and one that reaches outside its build, each shown where a
+// person looks: the cell and the clause's box.
 // Insert, Include is here too: it picks or starts a file through the same dialog.
 // `own(t)` takes `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
@@ -24,12 +25,17 @@ pub fn forever(n: F64): F64 //< never ends
     for x == x
         x += 1.0
     return x
+
+pub fn boom(n: F64): F64 //< stops with a panic
+    if n > 0.0
+        panic("boom")
+    return n
 `;
 // A name ksmd already has, which the build refuses.
 const TAKEN = "pub fn sum(x: F64): F64\n    return x\n";
 const SHEET = `${H}:::functions path="mine.kspl"\n:::\n\n:::table name="t"\n| "a" | "b" |\n` +
   "| 100 | =tax(A1) |\n| \"kanso\" | =greet(A2) |\n| 2 | =tax(A3, 0.5, 9) |\n" +
-  "| 1 | =forever(A4) |\n:::\n";
+  "| 1 | =forever(A4) |\n| 3 | =boom(A5) |\n:::\n";
 const REFUSED = `${H}:::functions path="taken.kspl"\n:::\n`;
 const PLAIN = `${H}Text.\n`;
 
@@ -43,12 +49,33 @@ export function own({ tab, idle, said }) {
         verdict.skip("no builder was given, so a document's own functions are not checked");
         return;
       }
+      // **A build the server killed leaves its scratch folder**, so the next build removes one
+      // older than the server's limit, and leaves a younger one, which a build may still use.
+      const scratch = path.join(path.dirname(path.resolve(ctx.builder)), "tmp");
+      const left = (name) => {
+        const own = path.join(scratch, name, "own");
+        fs.mkdirSync(own, { recursive: true });
+        fs.writeFileSync(path.join(own, "functions.kspl"), MINE);
+        return path.join(scratch, name);
+      };
+      const stale = left("own-build-stale-test");
+      const young = left("own-build-young-test");
+      const past = new Date(Date.now() - 120000);
+      fs.utimesSync(stale, past, past);
+      const before = fs.readdirSync(scratch).filter((n) => n.startsWith("own-build-"));
       fs.writeFileSync(path.join(ctx.root, "mine.kspl"), MINE);
       fs.writeFileSync(path.join(ctx.root, "sheet.ksmd"), SHEET);
       const d = await tab(ctx, "?doc=sheet.ksmd");
       check(await d.until("document.querySelector('#doc .functions .functions-state')" +
         ".textContent.startsWith('A formula can call')", 60000),
       "the clause's box names the functions its file gives", await box(d));
+      check(!fs.existsSync(stale) && fs.existsSync(young),
+        "a build removes a scratch folder older than the server's limit, and keeps a younger one",
+        fs.readdirSync(scratch).join(" "));
+      const after = fs.readdirSync(scratch).filter((n) => n.startsWith("own-build-"));
+      check(after.every((n) => before.includes(n)), "a build removes its own scratch folder",
+        after.join(" "));
+      fs.rmSync(young, { recursive: true, force: true });
       check(await d.until(`document.querySelector('#doc td[data-r="0"][data-c="1"]').textContent === "110"`),
         "a cell shows a person's function's answer", await cell(d, 0));
       check(await cell(d, 1) === "hello, kanso", "a function's text shows in its cell", await cell(d, 1));
@@ -56,6 +83,14 @@ export function own({ tab, idle, said }) {
         "too many arguments is a formula that does not read, as for ksmd's own", await cell(d, 2));
       check(await d.until(`document.querySelector('#doc td[data-r="3"][data-c="1"]').textContent === "#TIME!"`,
         15000), "a function that never ends shows #TIME! once its time is up", await cell(d, 3));
+      check(await d.until(`document.querySelector('#doc td[data-r="4"][data-c="1"]').textContent === "#STOPPED!"`,
+        15000), "a function that panics shows #STOPPED!", await cell(d, 4));
+      // The worker that stopped starts afresh, so the next call still answers.
+      await d.click('#doc td[data-r="0"][data-c="0"]');
+      await d.type("200");
+      await d.press("Enter");
+      check(await d.until(`document.querySelector('#doc td[data-r="0"][data-c="1"]').textContent === "220"`,
+        15000), "after a panic, a later call answers from a new worker", await cell(d, 0));
       await ctx.browser.closeTab(d.page);
 
       fs.writeFileSync(path.join(ctx.root, "taken.kspl"), TAKEN);
@@ -86,6 +121,49 @@ export function own({ tab, idle, said }) {
         ".textContent === 'A formula can call: twice.'", 60000),
       "and the clause's box lists the function the new file gives", await box(p));
       await ctx.browser.closeTab(p.page);
+    },
+
+    // The build is closed: a functions file that embeds a file beside it, imports another
+    // package or hands the assembler text is refused at its clause, and the file outside never
+    // reaches the page.
+    async closedBuild(ctx) {
+      if (!ctx.builder) {
+        verdict.skip("no builder was given, so the closed build is not checked");
+        return;
+      }
+      const secret = "KSMD-SECRET-7f3a91";
+      fs.mkdirSync(path.join(ctx.root, "closed"), { recursive: true });
+      fs.writeFileSync(path.join(ctx.root, "secret.txt"), secret);
+      // Each case: the file's name, its text, what the build's refusal says, and what the check says.
+      const cases = [
+        ["embed", 'embed "../secret.txt" as secret //< a file outside the build\n\n' +
+          "pub fn leak(n: F64): F64 //< the secret's length\n    return n + F64::(secret.len)\n",
+        "climbs out of the package", "an embed of a file outside the build"],
+        ["import", 'import "kssrv/api"\n\npub fn other(n: F64): F64 //< uses another package\n    return n\n',
+          "does not say it uses 'kssrv'", "an import of another package"],
+        // **The assembler's `.include` reads any file**, and its error quotes the file's lines.
+        ["asm", "pub fn peek(n: F64): F64 //< asks the assembler for a file outside the build\n" +
+          `    __kspl_asm_volatile(".include \\"${path.resolve(ctx.root, "secret.txt").replace(/\\/g, "/")}\\"")\n` +
+          "    return n\n",
+        "cannot be written in the package 'own'", "assembler text that includes a file outside the build"],
+      ];
+      for (const [name, text, why, what] of cases) {
+        fs.writeFileSync(path.join(ctx.root, `closed/${name}.kspl`), text);
+        fs.writeFileSync(path.join(ctx.root, `closed/${name}.ksmd`), `${H}:::functions path="${name}.kspl"\n:::\n`);
+        const d = await tab(ctx, `?doc=closed/${name}.ksmd`);
+        const refused = await d.until("!!document.querySelector('#doc .functions .functions-state.problem')", 60000);
+        const shown = await box(d);
+        check(refused && shown.includes(`closed/${name}.kspl`) && shown.includes(why),
+          `a functions file with ${what} is refused at its clause, naming the file and why`, shown);
+        const answer = await d.js(`fetch("/api/build?path=${encodeURIComponent(`closed/${name}.kspl`)}",
+          { method: "POST", headers: { Authorization: "Bearer " + sessionStorage.getItem("ksmd.token") } })
+          .then((r) => r.text())`);
+        check(!(await d.js("document.documentElement.outerHTML")).includes(secret) && !answer.includes(secret),
+          "and nothing of the file outside reaches the page", answer);
+        await ctx.browser.closeTab(d.page);
+      }
+      fs.rmSync(path.join(ctx.root, "closed"), { recursive: true, force: true });
+      fs.rmSync(path.join(ctx.root, "secret.txt"), { force: true });
     },
 
     async includeInsert(ctx) {

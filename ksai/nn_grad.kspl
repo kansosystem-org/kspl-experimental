@@ -206,11 +206,17 @@ impl<|T|> nn.Embedding<|T|>
         //< `dx.arena`.
         r: Self@,
         tokens: I32$[], //< which row each position adds into; a token outside the vocabulary stops it
-        count: Sz, //< how many positions to use, counted from the start
+        count: Sz, //< how many positions to use, from the start; at most the tokens and dx's rows
         dx: Tensor<|T|>, //< the gradient of each position's output, one row each
     ): Tensor<|T|>
         dim: = r.weight.shape[1]
         vocab_size: = r.weight.shape[0]
+        // Caution: **Check `count` against both lists before a row is read.** Past either, the
+        // loop reads memory outside it and adds that into the table with no error.
+        assert(count >= 0 && count <= tokens.len,
+            "Embedding.backward_seq_grads: count is past the tokens")
+        assert(dx.shape.len > 0 && dx.shape[dx.shape.len - 1] == dim && count * dim <= dx.size,
+            "Embedding.backward_seq_grads: dx does not hold `count` rows of the table's width")
         dw: = Tensor<|T|>(r.weight.shape, dx.arena)
         dw.fill(0.0)
         for i in Range.asc(count)

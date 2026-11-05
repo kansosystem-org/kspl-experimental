@@ -8,7 +8,7 @@
 //< | :-- | :-- |
 //< | A value | its kind's and its error's names as texts, its truth (one byte), its number (an F64's eight bytes), its text |
 //< | A call | the function's name as text, the count of arguments (four bytes), then each argument |
-//< | An argument | 0 then a value; or 1, the count of cells (four bytes), then each cell's value |
+//< | An argument | 0 then a value; or 1, then 1 for a range or 0 for one cell, the count of cells (four bytes), then each cell's value |
 //< | An answer | a value, then 1 where the arguments did not fit the function's parameters, else 0 |
 import "ksmd/calc/args" { Raw_arg }
 import "ksmd/calc/value" { Calc_error, Value, Value_kind, empty }
@@ -46,6 +46,9 @@ pub fn put_call(out: Writer, name: U8[], args: Raw_arg[]) //< a call to `name`
             put_value(out, a.value)
             continue
         out.c(1U8)
+        // A range of one cell, `f(A1:A1)`, holds as many cells as a cell does; only this tells
+        // them apart.
+        out.c(1U8 if a.range else 0U8)
         put_u32(out, a.cells.len)
         for v in a.cells
             put_value(out, v)
@@ -90,13 +93,16 @@ pub fn read_call(data: U8[], arena: Arena$@): Call!Wire_error //< the call the b
             continue
         if tag != 1U8
             throw .unknown
+        range: = r.byte()!
+        if range > 1U8
+            throw .unknown
         cells: = r.count()!
         $vs: = List<|Value|>(arena)
         for _c in Range.asc(cells)
             vs.push(r.value()!)
         args
             .push(Raw_arg::{ .value = empty(), .cells = vs.slice(), .is_cells = true,
-            .range = cells != 1, .piece = -1 })
+            .range = range == 1U8, .piece = -1 })
     return Call::{ .name = name, .args = args.slice() }
 
 pub fn read_answer(data: U8[]): Answer!Wire_error //< the answer the bytes hold

@@ -95,8 +95,9 @@ function ksmdView(ks) {
   function render(b) {
     const el = shape(b);
     el.classList.toggle("print-hidden", !!b.iv);
-    const remove = ["g", "i", "n"].includes(b.k) && el.querySelector(".block-remove");
+    const remove = ["g", "i", "n", "x"].includes(b.k) && el.querySelector(".block-remove");
     if (remove) remove.before(printButton(!!b.iv));
+    if (b.k === "g" || b.k === "i") ks.drawings.attach(el, b);
     return el;
   }
 
@@ -163,7 +164,10 @@ function ksmdView(ks) {
         place.setAttribute("role", "img");
         place.setAttribute("aria-label", b.alt || b.src);
         place.textContent = `Image: ${b.src}`;
-        el.appendChild(place);
+        // The picture and the shapes drawn over it share one box (`drawings.js`).
+        const picture = unit("div", "picture");
+        picture.appendChild(place);
+        el.appendChild(picture);
         // Where files are fetched, `file.js` shows the pixels in place of the path.
         if (b.to !== undefined && !b.wait) {
           el.dataset.to = b.to;
@@ -182,6 +186,10 @@ function ksmdView(ks) {
       }
       case "f":
         return functionsBox(b);
+      case "s":
+        return ks.settings.render(b);
+      case "x":
+        return ks.diagram.render(b);
       default:
         return include(b);
     }
@@ -319,14 +327,17 @@ function ksmdView(ks) {
 
   // A link opens in a tab of its own, on Ctrl+click (Cmd+click on a Mac), and in Read-only on a
   // plain click too, as in Word. **It never leads this tab away**: the unsaved edits and the
-  // token live here. A link to a `#place` names no place the page can go to.
+  // token live here. A link to a `#place` goes to the heading, table or image of that name.
   ks.root.addEventListener("click", (e) => {
     const a = e.target.closest && e.target.closest("a[href]");
     if (!a) return;
     e.preventDefault();
     if (!(e.ctrlKey || e.metaKey || ks.readOnly)) return;
     if (a.getAttribute("href").startsWith("#")) {
-      ks.say(`The link names a place, ${a.getAttribute("href")}, and the page cannot go to it.`);
+      // A heading, a table or an image it names: the page goes there.
+      const to = ks.settings.target(a.getAttribute("href"));
+      if (to) to.scrollIntoView({ block: "start" });
+      else ks.say(`No heading, table or image named ${a.getAttribute("href").slice(1)} stands in the document.`);
       return;
     }
     window.open(a.href, "_blank", "noopener,noreferrer");
@@ -476,6 +487,10 @@ function ksmdView(ks) {
       const old = blocks()[i];
       if (old) old.replaceWith(render(b));
     }
+    ks.settings.apply();
+    // The widths are laid out before the first column is pinned beside the row numbers.
+    ks.sizes.layAll();
+    ks.table.pin();
   }
 
   ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,

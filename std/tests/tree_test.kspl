@@ -191,8 +191,31 @@ fn test_fs_write_tree()
     fs.write_tree(dir, U8[][]::{ "one.txt" }, U8[][]::{ "1", "2" }, arena) catch
         uneven = true
     assert(uneven, "names and contents of different counts must be refused")
+    // POSIX alone: there `\` is a byte of a name, which std/fs would split into two folders.
+    if !sys.is_windows()
+        assert(refused_as_invalid_tree(dir, "sep\\name.txt") &&
+            !fs.exists(fs.join(dir, "sep", arena)),
+            "a name holding \\ on POSIX is refused, and no folder is made for it")
+        $mkdir_refused: = false
+        fs.mkdir_all(fs.join(dir, "x\\y", arena)) catch e
+            mkdir_refused = is_invalid_path(e)
+        assert(mkdir_refused && !fs.exists(fs.join(dir, "x", arena)),
+            "mkdir_all refuses \\ on POSIX, and makes no folder for its first part")
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is written with its levels made, and a name climbing out writes nothing.")
+
+priv fn refused_as_invalid_tree(dir: U8[], rel: U8[]): Bool //<
+    //< whether `write_tree` refuses one name as `invalid_path`
+    fs.write_tree(dir, U8[][]::{ rel }, U8[][]::{ "x" }, null) catch e
+        return is_invalid_path(e)
+    return false
+
+priv fn is_invalid_path(e: fs.Fs_error): Bool //< whether the error is `invalid_path`
+    switch e
+    case .invalid_path
+        return true
+    default
+        return false
 
 priv fn runnable(path: U8[], arena: Arena$@): Bool //< whether `test -x` says it can be started
     return sys_test.ran_to_zero(U8[][]::{ "test", "-x", path }, arena)
@@ -204,11 +227,13 @@ fn test_fs_copy_tree()
     from: = fs.join(dir, "from", arena)
     fs.write_tree(from, U8[][]::{ "a.txt", "sub/b.txt", "skipme/c.txt" },
         U8[][]::{ "a", "b", "c" }, arena) catch panic("the tree to copy must be writable")
+    fs.mkdir(fs.join(from, "empty", arena)) catch panic("the empty folder must be makeable")
     to: = fs.join(dir, "made/on/the/way/to", arena)
     fs.copy_tree(from, to, fs_test.skip_skipme, arena) catch panic("copy_tree should copy the tree")
     assert(holds(fs.join(to, "a.txt", arena), "a") &&
         holds(fs.join(to, "sub/b.txt", arena), "b"), "every file keeps its place and its contents")
     assert(!fs.exists(fs.join(to, "skipme", arena)), "a directory skip_dir names is not copied")
+    assert(fs.is_dir(fs.join(to, "empty", arena)), "an empty folder is copied too")
     $refused: = false
     fs.copy_tree(from, to, fs_test.skip_skipme, arena) catch
         refused = true
@@ -236,8 +261,23 @@ fn test_fs_copy_tree()
         assert(!runnable(fs.join(with_mode, "a.txt", arena), arena),
             "a copied file without one gains none")
         check_mode_from_first_byte(dir, arena)
+        check_backslash_names(dir, arena)
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is copied whole to a new place, and a place that stands is refused.")
+
+priv fn check_backslash_names(dir: U8[], arena: Arena$@) //<
+    //< On POSIX a file `a` and a file `a\b` beside it are copied as the two files they are
+    //< A parent read back from the text made `a\b`'s copy ask for a folder `a`, where the file
+    //< `a` already stood, and the copy failed.
+    from: = fs.join(dir, "backslash", arena)
+    fs.mkdir(from) catch panic("the folder must be makeable")
+    io.write_file(fs.join(from, "a", arena), "plain") catch panic("a must be writable")
+    io.write_file(fs.join(from, "a\\b", arena), "joined") catch panic("a\\b must be writable")
+    to: = fs.join(dir, "backslash_copy", arena)
+    fs.copy_tree(from, to, fs.skip_none, arena) catch
+        panic("copy_tree should copy a name holding \\ as one name")
+    assert(holds(fs.join(to, "a", arena), "plain") &&
+        holds(fs.join(to, "a\\b", arena), "joined"), "both files keep their own names")
 
 struct Mode_watch //< what the thread watching a copy as it is written reads and reports
     path: U8[]
@@ -376,6 +416,44 @@ fn test_fs_walk_links() //<
     assert(!fs.exists(fs.join(copy, "away/secret.txt", arena)) &&
         !fs.exists(fs.join(copy, "leak.txt", arena)), "a copy takes nothing from outside the tree")
     verdict.pass("a walk and a copy stay inside the tree, and two links to `.` end at once.")
+
+fn test_fs_link_on_path() //<
+    //< A link on the way out of the root is refused, the root given or empty
+    //< **An empty root is the current folder.** Checked as `/` and the path, the steps named the
+    //< file system's top, where nothing stands, and a link under the current folder went through.
+    verdict.start("[Fs] a link on the way out of the root, under a root given or empty...")
+    defer arena: = Arena(64 * 1024)
+    root: = fs.mkdir_unique("out/tmp", "kspl_test_link_on_path_", arena) catch
+        panic("the root cannot be made")
+    outside: = fs.mkdir_unique("out/tmp", "kspl_test_link_outside_", arena) catch
+        panic("the place outside cannot be made")
+    io.write_file(fs.join(outside, "secret.txt", arena), "s\n") catch
+        panic("secret.txt cannot be written")
+    away: = fs.absolute(outside, arena) catch panic("the outside has no absolute path")
+    if !made_link(away, fs.join(root, "esc", arena), arena)
+        fs_test.clear_tree_best_effort(root, arena)
+        fs_test.clear_tree_best_effort(outside, arena)
+        verdict.skip("a link cannot be made with `ln -s` in this environment")
+        return
+    // From the current folder, the root's own path is the path under an empty root.
+    whole: = fs.join(root, "esc/secret.txt", arena)
+    given: = refused_as_link(root, "esc/secret.txt", arena)
+    empty: = refused_as_link("", whole, arena)
+    kept_given: = fs.stays_under(root, "esc/secret.txt")
+    kept_empty: = fs.stays_under("", whole)
+    plain: = fs.stays_under("", fs.join(root, "plain.txt", arena))
+    fs_test.clear_tree_best_effort(root, arena)
+    fs_test.clear_tree_best_effort(outside, arena)
+    assert(given && empty, "join_under refuses the link as .link, the root given or empty")
+    assert(!kept_given && !kept_empty, "stays_under says the link leaves, the root given or empty")
+    assert(plain, "a path with no link under an empty root stays under")
+    verdict.pass("A link on the way is refused under a root given and under an empty root.")
+
+priv fn refused_as_link(root: U8[], rel: U8[], arena: Arena$@): Bool //<
+    //< whether `join_under` refuses the path as `.link`
+    _joined: = fs.join_under(root, rel, .allowed, arena) catch why
+        return why == .link
+    return false
 
 priv fn sys_suffix(path: U8[]): U8[] //< the last name of a path, to keep the copy's place apart
     $at: = path.len

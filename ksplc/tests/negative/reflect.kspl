@@ -288,3 +288,25 @@ fn case_passing(): Sz
 fn main()
     _s: = case_plain() + case_specialization() + case_method() + case_field_through_type() +
         case_offsetof() + case_passing() + by_name.len
+// ==== case offsetof_priv_field
+//< `offsetof` names a field only where the field is visible
+//< With its offset, a cast pointer wrote another file's `priv` field from outside.
+// EXPECT: offsetof_priv_field.kspl:8:15: error: cannot access symbol 'handle'
+// EXPECT: Finished with 1 error(s)
+import "std/net"
+
+fn main(): I32
+  return I32::offsetof(net.Tcp_stream, handle)
+// ==== case reflect_derive_priv_field
+//< A field table is derived only where every field is visible
+//< The table reads and writes every field, so derived in another file it handed `std/reflect` a
+//< `priv` field to set (`json_struct.into_struct`).
+// EXPECT: reflect_derive_priv_field.kspl:9:1: error: 'Reflectable' cannot be derived here: field 'handle' is not visible in this file
+// EXPECT: Finished with 1 error(s)
+import "std/net"
+import "std/reflect"
+
+impl net.Tcp_stream: reflect.Reflectable {}
+
+fn main(): I32
+  return 0

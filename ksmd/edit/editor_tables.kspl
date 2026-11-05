@@ -11,6 +11,7 @@ import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
 import "ksmd/edit/editor" { Editor, Pos, Refused, end_block, replace }
 import "ksmd/edit/history" { Transaction, begin, capture, is_empty, record_tables, swap }
+import "ksmd/edit/moving"
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
 import "ksmd/edit/sort" { Sort_key, sort_rows }
@@ -34,10 +35,10 @@ enum Table_edit //< a row or column edit a page asks for, at a row or column of 
     insert_column //< an empty column before column `at`; at the count, after the last
     remove_column
 
-enum Group_edit //< what a page asks of the rows from one data row to another
+enum Group_edit //< what a page asks of the rows, or columns, from one to another
     group //< makes them a group
     ungroup //< takes away the smallest group that holds them
-    hide //< hides the rows of that group
+    hide //< hides the lines of that group
     show //< shows them again
 
 impl Editor
@@ -174,17 +175,17 @@ impl Editor
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
         if rows
-            edit.move_rows(ed.doc@, u, first, count, at) catch why
+            moving.move_rows(ed.doc@, u, first, count, at) catch why
                 throw .table(why)
         else
-            edit.move_columns(ed.doc@, u, first, count, at) catch why
+            moving.move_columns(ed.doc@, u, first, count, at) catch why
                 throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn move_cells(ed: Self$@, block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, to_row: Sz,
         to_column: Sz): Void!Refused //<
             //< Moves the `height` by `width` cells at `top`, `left` to stand from `to_row`,
-            //< `to_column`, as one step: what a paste after a cut does (`edit.move_cells`)
+            //< `to_column`, as one step: what a paste after a cut does (`moving.move_cells`)
             //< The table grows rows and columns where the cells reach past it, as a paste grows it.
             //< A refusal changes nothing.
         u: = ed.table_of(block)!
@@ -202,7 +203,7 @@ impl Editor
             edit.insert_columns(ed.doc@, u, columns, to_column + width - columns, ed.arena) catch why
                 ed.put_tables_back(before@)
                 throw .table(why)
-        edit.move_cells(ed.doc@, u, top, left, height, width, to_row, to_column) catch why
+        moving.move_cells(ed.doc@, u, top, left, height, width, to_row, to_column) catch why
             ed.put_tables_back(before@)
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
@@ -212,11 +213,18 @@ impl Editor
         //< Text after `=` is a formula, a number as JSON writes one is a number, and nothing is an
         //< empty cell. Quoted text is text, so `"12"` is the text 12. Anything else is text as
         //< typed.
+        //< **A line break typed into a cell that held none turns Wrap text on**, in the same step,
+        //< as Excel does: unwrapped, the lines after it run past the column and are cut.
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
+        had_break: = ed.cell_text(u, row, column, scratch).find_char('\n').is_some()
         before: = capture(ed.doc@, scratch)
         ed.put_typed(u, row, column, text, scratch) catch why
             throw .table(why)
+        if !had_break && text.find_char('\n').is_some()
+            edit.set_look(ed.doc@, u, row, column, .wrap, "on", ed.arena) catch why
+                ed.put_tables_back(before@)
+                throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn put_typed(ed: Self$@, u: Sz, row: Sz, column: Sz, text: U8[], scratch: Arena$@):
@@ -382,12 +390,13 @@ impl Editor
             _gone: = ed.doc.tables.pop()
         ed.change = was
 
-    fn set_widths(ed: Self$@, block: Sz, weights: List<|Sz|>@): Void!Refused //<
-        //< Gives the columns of the table a block shows their relative widths, as one step
+    fn set_widths(ed: Self$@, block: Sz, widths: List<|Sz|>@): Void!Refused //<
+        //< Gives the columns of the table a block shows their widths in tenths of a character, 0
+        //< where a column fits its text, as one step
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
-        edit.set_widths(ed.doc@, u, weights) catch why
+        edit.set_widths(ed.doc@, u, widths) catch why
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
@@ -413,7 +422,7 @@ impl Editor
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_heights(ed: Self$@, block: Sz, rows: Sz[], points: Sz): Void!Refused //<
-        //< Gives each data row listed a least height in points, as one step
+        //< Gives each data row listed a height in points, 0 for none, as one step
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
@@ -421,21 +430,22 @@ impl Editor
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
-    fn group_rows(ed: Self$@, block: Sz, first: Sz, last: Sz, what: Group_edit): Void!Refused //<
-        //< Groups or ungroups the data rows from `first` to `last`, or hides or shows a group, as
-        //< one step: a group and whether it is hidden are saved in the file
+    fn group_lines(ed: Self$@, block: Sz, columns: Bool, first: Sz, last: Sz, what: Group_edit):
+        Void!Refused //<
+            //< Groups or ungroups the data rows, or the columns, from `first` to `last`, or hides or
+            //< shows a group, as one step: a group and whether it is hidden are saved in the file
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
         switch what
         case .group
-            edit.group_rows(ed.doc@, u, first, last) catch why
+            edit.group_lines(ed.doc@, u, columns, first, last) catch why
                 throw .table(why)
         case .ungroup
-            edit.ungroup_rows(ed.doc@, u, first, last) catch why
+            edit.ungroup_lines(ed.doc@, u, columns, first, last) catch why
                 throw .table(why)
         case .hide, .show
-            edit.show_group(ed.doc@, u, first, last, what == .show) catch why
+            edit.show_group(ed.doc@, u, columns, first, last, what == .show) catch why
                 throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
@@ -472,12 +482,49 @@ impl Editor
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
+    fn set_caption(ed: Self$@, block: Sz, caption: U8[]): Void!Refused //<
+        //< Gives a block's table a caption, or takes it away with empty text, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_caption(ed.doc@, u, caption, ed.arena) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn set_merged(ed: Self$@, block: Sz, column: Sz, on: Bool): Void!Refused //<
+        //< Shows a column's repeated values once, or each again, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_merged(ed.doc@, u, column, on) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn set_row_colors(ed: Self$@, block: Sz, column: Sz): Void!Refused //<
+        //< Colours a block's table's rows by the choice a column holds, or none with -1, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_row_colors(ed.doc@, u, column) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
     fn set_cell_note(ed: Self$@, block: Sz, row: Sz, column: Sz, note: U8[]): Void!Refused //<
         //< Gives a cell of a block's table a note, or resolves it with empty text, as one step
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
         edit.set_note(ed.doc@, u, row, column, note, ed.arena) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn set_cell_link(ed: Self$@, block: Sz, row: Sz, column: Sz, link: U8[]): Void!Refused //<
+        //< Gives a text cell of a block's table a link, or takes it away with empty text, as one
+        //< step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_link(ed.doc@, u, row, column, link, ed.arena) catch why
             throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 

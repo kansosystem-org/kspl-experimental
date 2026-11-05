@@ -31,6 +31,8 @@ These marks appear in examples from the first chapter on. Each is defined in the
 
 **Source code is encoded in UTF-8, throughout.** A byte that begins no well-formed UTF-8 sequence stops the compile at its line and column. An overlong form and a surrogate's encoding are such bytes too. The rule holds in a comment or a string as anywhere else. A byte that is not text is written as a number (`0xFFU8`), and a character as itself or with `\uXXXX` ([2.3.3](#233-writing-a-code-point-with-uxxxx)).
 
+**A line ends with `\n` or `\r\n`, and with nothing else.** A carriage return (`\r`) with no line feed right after it stops the compile at its line and column. This holds wherever it stands, in a comment or a string too. Line ends are the file's spelling, not the program's ([2.3](#23-literals)).
+
 ### 2.1 Comments
 
 KSPL has one kind of comment: `//` to the end of the line. A comment opening with `//<` documents the thing on its own line, and tools show it.
@@ -347,7 +349,7 @@ flowchart LR
 
 1. **Slice (`T[]`)**:
 
-* **Definition**: a view onto a memory region that something else owns: a *fat pointer*, a pointer and a length together. It has two read-only fields: `.ptr`, a raw pointer to the first element (`T@`), and `.len`, the element count (`Sz`).
+* **Definition**: a view onto a memory region that something else owns: a *fat pointer*, a pointer and a length together. It has two read-only fields: `.ptr`, a raw pointer to the first element (`T@`), and `.len`, the element count (`Sz`). A write to either, or a writable address of either, is a compile error, since the bounds check trusts them. A new slice is made whole instead (`s = s.sub(1)`, or a literal `T[]::{ .ptr = p, .len = n }`).
 * **The only spelling**: it is `std/lang`'s `Slice<|$T|>`, but `Slice<|T|>` written as a type is a compile error naming `T[]` (`T$[]` for writable elements), an `impl`'s target included.
 * **Safety**: every read or write by index is checked against the range at run time.
 * **Constraint**: there is no slicing syntax (`arr[start .. end]`). `std/chars`'s `sub(start, len)` / `sub_from(start)` / `sub_mut(start, len)` return zero-copy views. They are generic methods on `impl<|T|> T[]`, so an `I32[]` and a `U8[][]` are sliced alike.
@@ -456,10 +458,10 @@ An enum is a type whose value is one of a fixed list of variants. It comes in tw
 
 | Kind | What it is | `==` |
 | :-- | :-- | :-- |
-| **Simple enum** | Only picks one of several. Its value can be handled like an integer | Compares like an integer |
+| **Simple enum** | Only picks one of several. Its value is carried as its base type, an integer | Compares like an integer |
 | **Tagged union** | Its variants can each carry different data (a *payload*). A hidden number, the tag, records which variant a value holds (Rust's `enum`; C's `union` plus a tag) | None built in (below) |
 
-A tag value written by hand (`ok = 0`) can be any expression fixed at compile time: a number, a constant's name, a cast, a character or a `sizeof`. It can also name another variant through its enum (`b = E.a + 1`; a bare `a` is a compile error). A variant with none written takes the previous variant's tag plus one (the first takes 0).
+A tag value written by hand (`ok = 0`) can be any expression fixed at compile time: a number, a constant's name, a cast, a character or a `sizeof`. It can also name another variant through its enum, cast to the base type for arithmetic as everywhere else (`b = I32::E.a + 1`; `E.a + 1` and a bare `a` are compile errors). A variant with none written takes the previous variant's tag plus one (the first takes 0).
 
 * **On a tagged union the base type is the tag's own type** (`enum E: U8` holds a one-byte tag before its payload).
 * **Every tag fits the enum's base type**, a counted one included: `b` after `a = 255` in an `enum E: U8` is a compile error, as is `a = 300`. A base type wider than `I32` holds tags past it (`enum E: U32` with `a = 0x80000000`).
@@ -500,7 +502,14 @@ On a type with a hand-written `fmt`, that one wins (only `variant_name` is synth
 
 **Generic enums** declare type parameters `<|T|>` as a struct does. One copy of the code is built per filled-in type (monomorphization). A value is built with `Tree<|I32|>.leaf(0)` and taken apart with `switch`.
 
-**A tagged union has no built-in `==`.** A simple enum compares like an integer. On an enum whose variants carry data, `==` and `!=` are refused unless it implements `Eq` ("Its variants carry data, so it has no built-in '=='. Take it apart with 'switch'"). To ask which variant a value is, `switch` on it, or compare `variant_name()`.
+**A simple enum takes the comparisons and no arithmetic.** `==` `!=` `<` `<=` `>` `>=` compare its tags as its base type does (`a = 200` is above `b = 10` in an `enum E: U8`). Every operator that computes a number is a compile error on it, on either side:
+* `+` `-` `*` `/` `%`, `&` `|` `^`, `<<` `>>`;
+* the unary `-` and `~`;
+* the compound assignments of those (`e += …`).
+
+To compute, cast to the base type first (`I32::e + 1`). The checked cast `E::n` makes the result a variant again ([6.4](#64-type-conversion--and-implicit-casts)).
+
+**A tagged union has no built-in `==`.** On an enum whose variants carry data, `==` and `!=` are refused unless it implements `Eq` ("Its variants carry data, so it has no built-in '=='. Take it apart with 'switch'"). To ask which variant a value is, `switch` on it, or compare `variant_name()`.
 
 **Null safety (`T?`, that is `Option<|T|>`)**: `std/lang`'s `Option<|T|>` (`some(value: T)` / `none`), written `T?` ([3.2](#32-derived-types)), expresses "the value can be absent" with a type, not with a raw pointer's `null`. Its contents come out only through `switch`, and a `switch` missing a case is a compile error ([7.1](#71-branching)). So the `.none` case cannot be forgotten.
 
@@ -590,6 +599,7 @@ Under `\{x\}`, a type with no hand-written `fmt` comes out as follows.
 | `F32` `F64` | **The shortest round trip**: the fewest digits that read back as the same value, with `.0` even for an integral value (`1.5` / `0.1` / `100.0` / `0.30000000000000004`). An `F32` is shortest at `F32`'s width (`0.1F32` gives `0.1`). Exponential below 10^-6 and at or above 10^21 (`1.5e-7` / `1e+21`; JSON's boundaries). `.N` fixes the digit count |
 | `U8[]` (a string) | The contents as-is |
 | `enum` | The variant's name (a hand-written `fmt` wins; a variant built with its payload in place is refused, [3.4](#34-enums-enum)) |
+| `T!E` / `T?` | A compile error: take the value out first, with `x!`, `x catch <value>`, `if v: = x` or `x.unwrap_or(<value>)` ([8.3](#83-error-handling)). Its variant's name alone would hide the value and the error |
 
 **An unsigned value with its top bit set also comes out correctly in decimal** (`4294967295` for `U32`, `18446744073709551615` for `U64`).
 
@@ -953,7 +963,7 @@ The initialization rules differ with where a variable is declared:
 
 **Without an initializer, a top-level (global) variable is zero-initialized** at program start, as in C's BSS section. An initializer must have a value fixed at compile time, for a `const` and a `$` variable alike. Each part of an initializer is one of the following:
 
-* **A number the compiler computes**: an integer, `Bool`, character, scalar enum or floating-point part, folded by the rules in [6.8](#68-integer-arithmetic-folding-overflow-division-shifts). It may use every operator, a conditional, a cast, `sizeof`, `offsetof` and another `const`'s name.
+* **A number the compiler computes**: an integer, `Bool`, character, scalar enum or floating-point part, folded by the rules in [6.8](#68-integer-arithmetic-folding-overflow-division-shifts). It may use every operator its operands take, a conditional, a cast, `sizeof`, `offsetof` and another `const`'s name.
 * **A shape kept as written**: a compound literal (`::{ … }`), a string, `null`, a function, or an anonymous function without captures. A tagged union's variant, a trait value and another `const` of such a shape count too.
 * **A fixed address**: `g@` of a global `g`, or of a field or a constant index inside one (`g.a[2]@`). A slice over such an array (`T[]::table`) or over an array literal (`T[]::{ … }`) counts too. So does a pointer cast of an address, or of an integer on a declaration marked `#raw_address` (`U32@::0x4000_0000`; [6.4](#64-type-conversion--and-implicit-casts)).
 * **A conditional whose condition folds**, standing for the branch it picks.
@@ -1139,8 +1149,8 @@ For `impl Type: Trait`, the compiler checks that the block has every method the 
 | What is compared | What must hold |
 | :-- | :-- |
 | **The method** | It is present and takes the same number of parameters, the receiver included |
-| **Each parameter after the receiver** | The same type, `Self` replaced by the target type. By value and by pointer (`@`) differ, since these arguments are not converted at the call |
-| **The return type** | The same underlying type. A value against a pointer is allowed |
+| **Each parameter after the receiver** | The same type, `Self` replaced by the target type. By value and by pointer (`@`) differ, since these arguments are not converted at the call. So do `T@` and `T$@`: the caller passes what the trait promises |
+| **The return type** | The same underlying type. A pointer where the trait returns a value is allowed: the thunk reads through it. A value where the trait returns a pointer is a compile error, for the reason given for `Self` below. So is a `T@` where the trait returns a `T$@` |
 | **A return of `Self`** | The implementation returns a pointer (`Self$@`); anything else is a compile error |
 
 **When the return is `Self`, the implementation returns a pointer** (`Self$@`), as every implementation of `std/io`'s `Writer` does. A call through a trait value goes through a *thunk*, which repacks the return into a trait value. That needs an address that stays valid, and a returned value would leave it pointing at a temporary. To return one's own type by value, use a type argument instead of `Self` (the shape of `trait Cast<|Output|>`).
@@ -1236,6 +1246,7 @@ impl Baseline: reflect.Reflectable {} // the compiler assembles the table and fi
 * **The types covered are the integers (`I8` / `I16` / `I32` / `I64` / `U8` / `U16` / `U32` / `U64` / `Sz`), `F32` / `F64` / `Bool` / `U8[]`, and a nested `struct` built from them**, with their `List<|T|>` and `T?`. In JSON, a nested `struct` is a nested object and a `List<|T|>` an array. A `T?` at `.none` writes no key, an absent key reads as `.none`, and an explicit `null` is refused.
   * A type holding any other field **is a compile error naming that field**, nested and contained types included. That covers a container of containers (`List<|List<|T|>|>`), an option holding a container or an option, a non-`struct` type, and a generic type.
   * **A field that `#packed` leaves under-aligned is a compile error naming that field** ([10](#10-compiler-directives-and-attributes)). The table's reader reaches each field through a pointer of its type, which promises that type's alignment.
+* **It is derived only in a file where every field is visible** ([3.3](#33-structs-struct)). The table reads and writes each field, so another file's `priv` field is a compile error naming that field.
 * **Nothing is synthesized on an `impl` with a body written.** Write `fields()` yourself to change the key mapping, or to hold a type not covered.
 * **Conformance is matched by fully qualified name** (the trait's full path, `std.reflect.Reflectable`). A `trait Reflectable` declared in your own file does not make derivation work.
 
@@ -1268,7 +1279,7 @@ The table lists every operator and its *precedence*. A smaller number binds more
 
 The same text compiles in both languages and only the answer changes, so write the grouping with parentheses. The warning `ksplc explain W0108` reports such a comparison.
 
-**An operator applies to numbers, `Bool`, simple enums and pointers.** A simple enum is one whose variants carry no data. Any other operand is refused at translation time, on either side of the operator:
+**An operator applies to numbers, `Bool`, simple enums and pointers.** A simple enum is one whose variants carry no data, and it takes the comparisons alone ([3.4](#34-enums-enum)). Any other operand is refused at translation time, on either side of the operator:
 
 * A struct, a tagged union or a trait value takes an operator only through a trait in `std/lang` that it implements ([6.1.1](#611-operator-overloading)).
 * An array takes no operator. Apply the operator to the elements one at a time (`a[i]`).
@@ -1653,7 +1664,7 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
 
 **It differs from adding up the fields' sizes.** A field is placed at a position rounded up to its own alignment, so padding can go before it. `#packed` stops the padding, and `#align(N)` changes the struct's alignment.
 
-**It can be written only on a `struct`.** `offsetof(E, a)` on an enum is a compile error, as is a name absent from the target type's fields.
+**It can be written only on a `struct`.** `offsetof(E, a)` on an enum is a compile error, as is a name absent from the target type's fields. **It names a field only where the field is visible** ([3.3](#33-structs-struct)), since a field's offset gives a way to write it.
 
 ```kspl
 priv struct Row
@@ -2341,7 +2352,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
 
 **Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check, so it refuses only what one function's code shows:
 
-* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`).
+* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. A field that no frame pointer set, and a number, pass.
 * **A store of a written address into a global or behind a pointer is allowed** (`g = x@`), for a place cleared before the function returns. One the compiler makes is refused there as well.
 * **A local's storage ends with its block**, and so does a temporary's, such as a closure or a run of elements. So a pointer the compiler makes cannot be stored into a local of an outer block: in `inner:`, `c = fn(x: I32; n: I32): I32 { … }` is refused where `c` is declared outside `inner`. A written address stored so is the writer's, as above, and reading through it after the block ends is a dangling pointer.
 
@@ -2534,6 +2545,7 @@ flowchart TD
    * **Any other package** is found in a folder of its name under the current directory, or where the compiler is told packages are.
    * **A package that names itself imports only itself, `std`, and what it lists under `uses`** in the same section (`uses = ksai ksdb`). Importing any other package is a compile error at that `import`.
    * **A path never climbs out of a package read from a place of its own.** That is a package that names itself, or one found where packages are told to be. A `..` past its top folder is a compile error at that line, for an `import` and an `embed` alike: `"ksdb/../x"`, or `"../../x"` from its file one folder down. That place need not be at the package's name, so the folder above it holds none of its files.
+   * **A path never passes through a link inside such a package, or inside the standard library.** A link can lead out of the package. So a link on any step below the top folder is a compile error at that line, for an `import` and an `embed` alike. The top folder itself can be a link, and so can the folders above it: a checkout linked into place still builds.
 3. **Relative to the importing file**: every other path, one with no `/` (`"context"`) or beginning with `.` (`"./x"`, `"../x"`, `".lib/x"`), resolves against the importing file's directory.
 
 **An absolute path is none of the three, and a compile error** at that line, for an `import` and an `embed` alike. It begins with `/` or `\` (`"//host/share/x"` included) or with a drive (`"C:/x"`). It is refused before anything is opened, since on Windows opening another machine's path already offers it the user's credentials.
@@ -2646,6 +2658,8 @@ Caution: The blanket impl and type arguments on a non-generic type are refused w
 | `pub` (from anywhere) | Any file |
 
 From narrowest to widest, the levels are `priv`, unmarked, `pub`.
+
+**A generic's body sees its type argument's members as the file that started the instantiation sees them.** The type argument passes through, so `std/ds`'s `List<|Cell|>` calls the `equals` of a `priv struct Cell` in the file that wrote `List<|Cell|>`. It reaches no further: a generic called on `Rc<|I32|>` cannot call its `priv` `release`, nor one called on another file's type read a `priv` field. Where a generic calls another, the file of the outermost call counts.
 
 **The visibility rules at positions where a value leaves**: a type narrower than the position cannot be written there (a compile error). The positions are a function's return, a `struct`'s field, and the type annotation of a top-level declaration (`const` / `var`). Otherwise code that cannot name the type could still receive and use the value.
 
@@ -2948,6 +2962,8 @@ The grammar does not limit nesting, but the compiler spends its own stack on eac
 | A generic's type arguments | 64 | `List<\|List<\|…I32…\|>\|>` |
 | A chain of typedefs | 256 | `typedef A256 = A255; … typedef A1 = I32;` |
 | A chain of references between constants | 256 | `const C256 = C255; … const C1 = C0;` |
+
+**A type's postfix steps are counted once its typedefs are expanded.** `typedef B = A@` has the steps of `A` plus one, so a chain of typedefs cannot build a type deeper than one written out.
 
 **A chain of references between constants is measured where its value must be fixed at translation time** (an array length, an enum tag, `#align`).
 

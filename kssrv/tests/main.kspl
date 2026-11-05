@@ -35,10 +35,10 @@ priv const PAGE_BODY: U8[] = "<title>outside page</title>\n"
 
 // The files served. `console.js` is the file that could not be served if the device-name check
 // used a partial match.
-priv const DOC_RELS: U8[][6] = ::{ "index.html", "style.css", "sub/one.txt", "sub/index.html",
-    "a+b c.txt", "console.js" }
-priv const DOC_BODIES: U8[][6] = ::{ "root index\n", "body{}\n", "one\n", "sub index\n",
-    "plus and space\n", "// console\n" }
+priv const DOC_RELS: U8[][8] = ::{ "index.html", "style.css", "sub/one.txt", "sub/index.html",
+    "a+b c.txt", "console.js", "LOUD.HTML", "mod.mjs" }
+priv const DOC_BODIES: U8[][8] = ::{ "root index\n", "body{}\n", "one\n", "sub index\n",
+    "plus and space\n", "// console\n", "loud\n", "// module\n" }
 priv const LINK_ESCAPES: U8[][4] = ::{ "/link.txt", "/dlink/secret.txt", "/dlink/",
     "/bk%5Csl/secret.txt" } //<
         //< The paths that reach outside the root through a link inside it
@@ -426,6 +426,20 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
     if c_b: = outward.child
         $bad_b: = c_b
         bad_b.kill()
+    // **A wait of 0 or less would read as "stay up"**, and one too large would wrap and stop it at
+    // once; each is refused at the start.
+    for wait in U8[][]::{ "0", "-5", "9300000000000" }
+        out_i: = fs.join(tmp, "kssrv-idle-bad.out", arena)
+        err_i: = fs.join(tmp, "kssrv-idle-bad.err", arena)
+        idle_bad: =
+            start_server(exe, root, out_i, err_i,
+            U8[][]::{ arena.text().s("--idle=\{wait\}").take() }, arena)
+        said_idle: = read_log(out_i, err_i, arena)
+        verdict.check(arena.text().s("--idle=\{wait\} does not come up").take(),
+            !idle_bad.child.is_some() && said_idle.find_str("--idle must be").is_some(), said_idle)
+        if c_i: = idle_bad.child
+            $bad_i: = c_i
+            bad_i.kill()
     // **Nor a FIFO**: its read would wait for a writer that never comes.
     fifo: = fs.join(tmp, "ui/page.fifo", arena)
     if !make_fifo(fifo, arena)
@@ -482,6 +496,43 @@ priv fn serve_local_and_check(at: Placed, arena: Arena$@) //<
         fifo_save_case(srv.port, got.token, at.root, arena) catch e2
             srv.failed("--local answers the save checked against a FIFO", e2.reason(), arena)
         srv.stop()
+    build_cut_case(at, arena)
+
+priv const BUILT_PAST_CAP: U8[] = "#!/bin/sh\nhead -c 16777217 /dev/zero\n" //<
+    //< A builder whose module is one byte past the 16 MiB that `/api/build` keeps
+
+priv fn build_cut_case(at: Placed, arena: Arena$@) //< a module past the cap is refused, not sent
+    //< **Sent with 200, a cut module would fail in the page with no reason given.**
+    name: = "a module past the cap is refused, not sent cut"
+    if sys.is_windows()
+        verdict.skip_check(name,
+            "the builder here is a shell script, which Windows does not start as a program")
+        return
+    builder: = fs.join(at.tmp, "big_builder.sh", arena)
+    io.write_file(builder, BUILT_PAST_CAP) catch
+        verdict.check(name, false, "the builder cannot be placed")
+        return
+    _mode: = local.mode_column(builder, "755", arena)
+    io.write_file(fs.join(at.root, "mine.kspl", arena), "") catch
+        verdict.check(name, false, "the source cannot be placed")
+        return
+    started: =
+        bring_up_local(at, "kssrv-build",
+        U8[][]::{ arena.text().s("--builder=\{builder\}").take() },
+        "it comes into a state where it can answer with --builder",
+        "--builder puts the token out too", arena)
+    if got: = started
+        $srv: = got.srv
+        auth: = client.bearer_head(got.token, arena)
+        built: =
+            client.post_json(srv.port, "/api/build?path=mine.kspl", auth, "", 60000, arena) catch e
+            srv.failed(name, e.reason(), arena)
+            srv.stop()
+            return
+        verdict.check(name,
+            built.status == 422 && built.body.find_str("larger than").is_some(),
+            client.shown(built, arena))
+        srv.stop()
 
 priv fn serve_linked_and_check(at: Placed, arena: Arena$@) //<
     //< Checks that a root reached through a link is served, its listing included
@@ -534,6 +585,52 @@ priv fn run_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     serve_cases(port, arena)!
     api_cases(port, root, arena)!
     keepalive_cases(port, arena)!
+    kept_file_cases(port, arena)!
+
+priv const KEPT_ROUNDS: Sz = 10 //< how many answers one kept connection asks for in turn
+priv const KEPT_FILE_RATIO: I64 = 5I64 //<
+    //< how many times the same files on new connections they may take
+    //< **Far above what they take** (about as long or less: a new connection costs a connect too)
+    //< and **far below the fault**: a file whose head went out alone waited about 40 ms for the
+    //< client's delayed ACK, against a few ms for ten files on new connections.
+
+priv fn kept_round_us(port: I32, target: U8[], body: U8[], whole: Bool$@, arena: Arena$@):
+    I64!client.Http_end //<
+        //< How long `KEPT_ROUNDS` answers for `target` take on one kept connection [us]
+        //< `whole` turns false if one answer is not `body` with a 200.
+    defer $c: = client.Conn.open(port)!
+    started: = sys.mono_us()
+    for _i in Range.asc(KEPT_ROUNDS)
+        c.send(client.raw("GET", target, "", "", arena))!
+        got: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+        if got.status != 200 || body.len > 0 && !got.body.equals(body)
+            whole$ = false
+    return sys.mono_us() - started
+
+priv fn fresh_round_us(port: I32, target: U8[], body: U8[], whole: Bool$@, arena: Arena$@):
+    I64!client.Http_end //<
+        //< How long `KEPT_ROUNDS` answers for `target` take, each on a connection of its own [us]
+        //< **A new connection's first answer waits for no ACK**: nothing it sent is unacknowledged
+        //< yet. So it pays the file's cost alone, which the kept connection pays too.
+    started: = sys.mono_us()
+    for _i in Range.asc(KEPT_ROUNDS)
+        got: = client.get(port, target, "Connection: close\r\n", arena)!
+        if got.status != 200 || !got.body.equals(body)
+            whole$ = false
+    return sys.mono_us() - started
+
+priv fn kept_file_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< Files asked for one after another on one kept connection come at once, not 40 ms apart
+    //< **Measured against the same files, each on a new connection, in the same run.** Both pay
+    //< what opening a file costs, which on Windows is many times an answer held in memory; only
+    //< the kept connection can meet the delayed ACK.
+    $whole: = true
+    fresh_us: = fresh_round_us(port, "/sub/one.txt", "one\n", whole@, arena)!
+    kept_us: = kept_round_us(port, "/sub/one.txt", "one\n", whole@, arena)!
+    verdict.check("files asked for in turn each come whole", whole, "")
+    verdict.check("files asked for in turn on one connection come as fast as on new connections",
+        kept_us <= (fresh_us + 1I64) * KEPT_FILE_RATIO,
+        arena.text().s("one connection \{kept_us\} us, new connections \{fresh_us\} us").take())
 
 // --- static serving, percent-decoding, escaping outside the root ---
 priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end
@@ -544,6 +641,16 @@ priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end
     ctype: = client.header(slash.head, "content-type")
     verdict.check("the Content-Type is chosen from the extension",
         ctype.starts_with("text/html"), ctype)
+    // **The extension's letter case does not count**, and a module script is JavaScript: sent as
+    // octet-stream, a browser downloads the one and refuses the other.
+    loud: = client.get(port, "/LOUD.HTML", "", arena)!
+    loud_type: = client.header(loud.head, "content-type")
+    verdict.check("an extension in capitals gets its Content-Type",
+        loud_type.starts_with("text/html"), loud_type)
+    module: = client.get(port, "/mod.mjs", "", arena)!
+    module_type: = client.header(module.head, "content-type")
+    verdict.check("a .mjs module is sent as JavaScript",
+        module_type.starts_with("text/javascript"), module_type)
     sub: = client.get(port, "/sub", "", arena)!
     ok4: = sub.status == 200 && sub.body.equals("sub index\n")
     d5: = client.shown(sub, arena)

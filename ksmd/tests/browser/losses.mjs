@@ -1,7 +1,8 @@
 // The served page, at each place where unsaved edits could be lost or a file overwritten: a
 // document the reader refuses, a file changed while a save waits, a reload, a step the source
-// limits refuse, a cell value the editor refuses, a draft the browser cannot hold, and leaving
-// the page with nothing held. `losses(t)` takes `served.mjs`'s helpers, and returns its sections.
+// limits refuse, a cell value the editor refuses, a draft the browser cannot hold, leaving the
+// page with nothing held, and a key typed while a draft is written. `losses(t)` takes
+// `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
 import path from "path";
 import { CTRL, verdict } from "./drive.mjs";
@@ -249,6 +250,58 @@ export function losses({ tab, idle, said, noticed, choose, typeAtEnd, openInDial
       await idle(e);
       fs.writeFileSync(path.join(ctx.root, "top.ksmd"), before);
       await ctx.browser.closeTab(e.page);
+    },
+
+    // A key typed while the page holds the edits aside, just before it opens another document, is
+    // in the draft. The draft's first write is held, and the key is typed meanwhile.
+    async typedWhileHeld(ctx) {
+      const d = await tab(ctx, "?doc=top.ksmd");
+      await typeAtEnd(d, 1, " Mine.");
+      await held(d);
+      await d.js(`window.heldDraft = null;
+        const was = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, "oncomplete");
+        Object.defineProperty(IDBTransaction.prototype, "oncomplete", { configurable: true,
+          get() { return was.get.call(this); },
+          set(f) {
+            if (window.heldDraft !== null || this.mode !== "readwrite") {
+              was.set.call(this, f);
+              return;
+            }
+            was.set.call(this, (...a) => { window.heldDraft = () => f(...a); });
+          } });
+        true;`);
+      const button = (name) => `Array.from(document.querySelectorAll('#browse .browse-list button'))
+        .find((b) => b.textContent === ${JSON.stringify(name)})`;
+      await d.menu("file-open");
+      await d.until(`!!${button("parts")}`);
+      await d.js(`${button("parts")}.click()`);
+      await d.until(`!!${button("notes.ksmd")}`);
+      await d.js(`${button("notes.ksmd")}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+      await d.until("window.heldDraft !== null");
+      await typeAtEnd(d, 1, " Late.");
+      await d.js("window.heldDraft()");
+      await idle(d);
+      const drafts = await d.js(`new Promise((done) => {
+        const o = indexedDB.open("ksmd", 1);
+        o.onsuccess = () => {
+          const r = o.result.transaction("drafts").objectStore("drafts").getAll();
+          r.onsuccess = () => done(JSON.stringify(r.result.filter((x) => x.path === "top.ksmd").map((x) => x.text)));
+        };
+      })`);
+      check(await d.js("document.querySelector('.menubar .doc-name').textContent") === "parts/notes.ksmd" &&
+        JSON.parse(drafts).some((t) => t.includes(" Mine. Late.\n")),
+      "text typed while the edits are held aside, before another document opens, is in the draft", drafts);
+      await d.js(`new Promise((done) => {
+        const o = indexedDB.open("ksmd", 1);
+        o.onsuccess = () => {
+          const t = o.result.transaction("drafts", "readwrite");
+          const s = t.objectStore("drafts");
+          const r = s.getAll();
+          r.onsuccess = () => { for (const x of r.result) if (x.path === "top.ksmd") s.delete(x.key); };
+          t.oncomplete = () => done(true);
+        };
+      })`);
+      await ctx.browser.closeTab(d.page);
     },
   };
 }

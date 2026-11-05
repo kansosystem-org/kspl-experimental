@@ -6,18 +6,22 @@
 //< Text escapes only what would otherwise be markup: `\`, `*`, backticks, `[` and `]`, and a block
 //< marker that starts a paragraph's line.
 //< A clause writes its attributes in a fixed order, its quoted values with JSON escapes, and a
-//< table's column weights divided by their greatest common divisor. A table's `formats` stands
-//< only while a column has one. A formula's references take the coordinates of their cells now.
+//< table's column widths as `char_widths`, the form an older `widths` is read into. A table's
+//< `formats` stands only while a column has one. A formula's references take the coordinates of
+//< their cells now.
 import "ksmd/base/attribute" { write_invisible }
-import "ksmd/base/marker" { is_list_marker, run_of, run_of_digits, starts_block }
+import "ksmd/base/marker" { is_list_marker, run_of, run_of_digits, starts_block, write_column }
 import "ksmd/calc/formula" { Positions, write_formula }
 import "ksmd/model/choice" { has_choices, write_choices }
 import "ksmd/model/format" { write_format }
 import "ksmd/model/group" { write_groups }
 import "ksmd/model/look" { is_plain, plain_look, write_braces }
-import "ksmd/model/model" { Block, Cell, Document, Inline, Table }
+import "ksmd/model/model" { Block, Cell, Document, Inline, Table, UNBOUND }
 import "ksmd/model/rule" { has_rule, write_rule }
 import "ksmd/syntax/chart" { write_chart }
+import "ksmd/syntax/diagram" { write_diagram }
+import "ksmd/syntax/drawing" { write_drawings }
+import "ksmd/syntax/settings" { write_settings }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -62,7 +66,7 @@ priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@
     if b.align != .none || b.note.len > 0
         $aligned: = plain_look()
         aligned.align = b.align
-        write_braces(aligned, b.note, out)
+        write_braces(aligned, b.note, "", out)
         out.c('\n')
     switch b.kind
     case .paragraph
@@ -107,7 +111,12 @@ priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@
         out.s("\n:::\n")
     case .chart
         write_chart(doc, doc.charts[b.first]@, b.invisible, out)
+        write_drawings(doc.charts[b.first].drawings@, out)
         out.s(":::\n")
+    case .document
+        write_settings(doc.settings[b.first], out)
+    case .diagram
+        write_diagram(doc.diagrams[b.first]@, b.invisible, out)
     case .functions
         out.s(":::functions")
         write_attribute("path", b.text, out)
@@ -120,22 +129,27 @@ priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@
         if image.caption.len > 0
             write_attribute("caption", image.caption, out)
         write_invisible(b.invisible, out)
-        out.s("\n:::\n")
+        out.c('\n')
+        write_drawings(image.drawings@, out)
+        out.s(":::\n")
 
 priv fn write_table(doc: Document@, t: Table@, invisible: Bool, at: Positions@,
     out: Str_builder$@) //<
         //< The opening line, the header and each data row, then the closing line
     out.s(":::table")
     write_attribute("name", t.name, out)
-    if t.weights.len > 0
-        $divisor: Sz = 0
-        for weight in t.weights
-            divisor = gcd(divisor, weight)
-        out.s(" widths=\"")
-        for c in Range.asc(t.weights.len)
+    if t.caption.len > 0
+        write_attribute("caption", t.caption, out)
+    if t.widths.len > 0
+        out.s(" char_widths=\"")
+        for c in Range.asc(t.widths.len)
             if c > 0
                 out.c(',')
-            out.s("\{t.weights[c] / divisor\}")
+            w: = t.widths[c]
+            if w > 0
+                out.s("\{w / 10\}")
+            if w % 10 > 0
+                out.s(".\{w % 10\}")
         out.c('"')
     write_heights(t, out)
     if has_format(t)
@@ -149,6 +163,12 @@ priv fn write_table(doc: Document@, t: Table@, invisible: Bool, at: Positions@,
         out.s(" choices=\"")
         write_choices(t.choices@, out)
         out.c('"')
+    if t.row_colors != UNBOUND
+        out.s(" color_rows=\"")
+        for c in Range.asc(t.columns.len)
+            if t.columns[c] == t.row_colors
+                write_column(c, out)
+        out.c('"')
     if has_rule(t.rules@)
         out.s(" rules=\"")
         for c in Range.asc(t.rules.len)
@@ -156,9 +176,20 @@ priv fn write_table(doc: Document@, t: Table@, invisible: Bool, at: Positions@,
                 out.c(',')
             write_rule(t.rules[c], out)
         out.c('"')
-    if t.groups.len > 0
+    if t.merged.len > 0
+        out.s(" merge=\"")
+        $first: = true
+        for c in Range.asc(t.columns.len)
+            for id in t.merged
+                if id == t.columns[c]
+                    if !first
+                        out.c(',')
+                    first = false
+                    write_column(c, out)
+        out.c('"')
+    if t.groups.len + t.column_groups.len > 0
         out.s(" groups=\"")
-        write_groups(t.groups@, out)
+        write_groups(t, out)
         out.c('"')
     write_filter(t, out)
     write_invisible(invisible, out)
@@ -183,11 +214,11 @@ priv fn write_cell(doc: Document@, t: Table@, cell: Cell, at: Positions@, out: S
     case .formula
         out.c('=')
         write_formula(doc, t, cell, at, 0, 0, out)
-    plain: = is_plain(cell.look) && cell.note.len == 0
+    plain: = is_plain(cell.look) && cell.note.len == 0 && cell.link.len == 0
     if !plain
         if cell.kind != .empty
             out.c(' ')
-        write_braces(cell.look, cell.note, out)
+        write_braces(cell.look, cell.note, cell.link, out)
     if cell.kind != .empty || !plain
         out.c(' ')
     out.c('|')
@@ -242,9 +273,6 @@ priv fn has_format(t: Table@): Bool //< whether any column has a number format
 priv fn write_attribute(name: U8[], value: U8[], out: Str_builder$@) //< ` name="value"`
     out.c(' ').s(name).s("=\"").escape_and_append(value).c('"')
 
-priv fn gcd(a: Sz, b: Sz): Sz
-    return a if b == 0 else gcd(b, a % b)
-
 priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, paragraph: Bool, lead: U8[],
     out: Str_builder$@) //<
         //< In a paragraph, a text that starts a line is kept from reading as a block marker
@@ -284,7 +312,7 @@ priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, paragraph: Bool, le
             if opened.color.len > 0
                 $l: = plain_look()
                 l.color = opened.color
-                write_braces(l, "", out)
+                write_braces(l, "", "", out)
         line_start = node.kind == .hard_break
 
 priv fn is_blank_end(node: Inline): Bool //< a hard break, or text of spaces alone

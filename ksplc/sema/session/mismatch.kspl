@@ -1,0 +1,66 @@
+//< The notes a type mismatch adds when its two types suggest what the writer meant
+//< `report_type_mismatch` in `ctx.kspl` writes the message, and each function here appends one
+//< note to it, or nothing where its case does not fit. **A note goes in the error's own text**,
+//< not a separate hint: a hint shows only under lint, and misses a writer stuck in a build.
+import "ksplc/base/ast" { Ast_node, is_anon_env_type }
+import "ksplc/base/ast_ext" as _base_ast_ext // `get_postfix_receiver`
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_path_name`
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as _sema_type_query // `strip_ptr`, `strip_const_deep`
+import "std/str" { Str_builder }
+
+fn closure_capture_note(env: sema_type_env.Env$@, actual_id: I32, out: Str_builder$@) //<
+    //< Explains a closure's environment struct appearing in a type mismatch
+    //< **Without this note the user sees a type name they never wrote, `_anon_env_1`.** Two
+    //< cases reach here: a captured closure (the field is `Callable1<|…|>`, but the environment
+    //< struct itself is passed) and a receiving `Callable` whose type arguments differ.
+    base_id: = env.strip_const_deep(env.strip_ptr(actual_id))
+    if !is_anon_env_type(env.get_str(base_id))
+        return
+    out
+        .s("\n  Hint: a closure's type is its synthesized environment, which conforms only to the \
+            exact 'Callable' in its signature. Check that the receiving parameter's type arguments \
+            match. A closure cannot capture another closure. Pass it as a parameter instead.")
+
+fn address_hint(env: sema_type_env.Env$@, node: Ast_node$@, expected_id: I32, actual_id: I32,
+    out: Str_builder$@) //<
+        //< Says how to write the pointer expected, where a value or a read-only `x@` was given
+        //< **A writer from C or Rust has no word for KSPL's spelling**: `x@` is the address, and
+        //< it is writable only where `x` is declared with `$`, whatever the position expects.
+    if !env.is_pointer(expected_id)
+        return
+    pointee: = env.strip_ptr(expected_id)
+    want: = env.get_real_type(env.strip_const_deep(pointee))
+    if !env.is_pointer(actual_id)
+        if env.get_real_type(env.strip_const_deep(actual_id)) == want
+            out.s("\n  Hint: pass its address: '\{plain_or_x(written_name(node))\}@'.")
+        return
+    if pointee != env.strip_const_deep(pointee) ||
+        env.get_real_type(env.strip_const_deep(env.strip_ptr(actual_id))) != want
+        return
+    // **Only for a name declared in this file**: another file's declaration is out of reach.
+    of: = node.get_postfix_receiver() if node.kind_id == .k_expr_postfix else null
+    name: = written_name(of)
+    if name.len == 0 || !declared_here(of)
+        return
+    out
+        .s("\n  Hint: '\{name\}@' is a writable pointer only where '\{name\}' is declared with '$', \
+            as in '$\{name\}: = 0'. The declaration alone decides it.")
+
+priv fn written_name(n: Ast_node$@): U8[] //<
+    //< The one name n is written as, for a hint to repeat; empty where n is anything else
+    //< **A plain name reaches here as a path of one segment** once sema has read it.
+    if n != null && n.kind_id == .k_identifier
+        return n.text
+    if n != null && n.kind_id == .k_expr_path && n.children.len == 1
+        return n.get_path_name()
+    return ""
+
+priv fn declared_here(n: Ast_node$@): Bool //< whether the name n writes is declared in n's file
+    $def: = n.def_node
+    if def == null && n.children.len == 1
+        def = n.get_child(0).def_node
+    return def != null && def.loc.file_id == n.loc.file_id
+
+priv fn plain_or_x(name: U8[]): U8[] //< the name, or `x` standing for the expression written
+    return name if name.len > 0 else "x"

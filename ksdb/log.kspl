@@ -177,17 +177,25 @@ impl Log
         // Caution: **Do not stop at a region that is not erased.** A half-written record can remain
         // in a sector beyond `tail`'s, which `open` does not check. Skip it; when nothing fits any
         // more, throw `full`.
+        // **`tail` moves only past what cannot be used, or after the write.** Moved on the way to
+        // `full`, it would refuse every later record that still fits.
+        $at: = r.tail
         $found: = false
         for !found
             // If the record would span two sectors, try again from the start of the next one.
-            if r.store.sector_base(r.tail) != r.store.sector_base(r.tail + span - 1)
-                r.tail = r.store.next_sector(r.tail)
-            if r.tail + span > r.store.capacity
+            if r.store.sector_base(at) != r.store.sector_base(at + span - 1)
+                at = r.store.next_sector(at)
+            if at + span > r.store.capacity
                 throw .full
-            if is_erased(r.store, r.tail, span)
+            // **Entering a sector, check all of the rest of it, as `open` does.** An erase cut by
+            // a power loss can leave a sector's start erased and an old record after it.
+            need: =
+                r.store.next_sector(at) - at if at == r.store.sector_base(at) else span
+            if is_erased(r.store, at, need)
                 found = true
             else
-                r.tail = r.store.next_sector(r.tail)
+                at = r.store.next_sector(at)
+                r.tail = at
         $head: U8[HEADER_SIZE] = ::{}
         hv: = U8$[]::head
         hv.put_u16_le(LEN_AT, U16::payload.len)
@@ -198,11 +206,11 @@ impl Log
         // the header stays erased, so the scan sees an empty slot and the partial write never
         // counts.
         if payload.len > 0
-            if !r.store.program_at(r.tail + HEADER_SIZE, payload)
+            if !r.store.program_at(at + HEADER_SIZE, payload)
                 throw .write_failed
-        if !r.store.program_at(r.tail, U8[]::head)
+        if !r.store.program_at(at, U8[]::head)
             throw .write_failed
-        r.tail += span
+        r.tail = at + span
 
     pub fn reset(r: Self$@): Void!Ksdb_error //< erases the whole medium; the records are lost
         //< Use it before a device's first write, and after someone has copied the records off a

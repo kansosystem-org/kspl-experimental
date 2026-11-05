@@ -254,6 +254,57 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await saves("undo takes each step back", table("rows 2-4"));
     },
 
+    // Shapes drawn over a chart: a drag with Rectangle draws one in the chart's frame, a press
+    // chooses it, Delete takes it away, and each is a step of undo.
+    async drawings() {
+      const start = `${H}:::table name="t"\n| "item" | "n" |\n| "a" | 1 |\n:::\n\n` +
+        ':::chart table="t" kind="bar" labels="item" values="n"\n';
+      const with_ = (lines) => `${start}${lines}:::\n`;
+      await load(with_('draw shape="arrow" from="600,280" to="400,100" color="#1f5fbf"\n'));
+      check(await js("document.querySelectorAll('#doc .chart svg.drawings g.drawing polygon').length") === 1,
+        "an arrow written in the file shows with its head");
+      // The frame is 640 by 300: a drag from a quarter to a half of the picture's width and height.
+      const at = await js("JSON.stringify((({ left, top, width, height }) => [left, top, width, height])" +
+        "(document.querySelector('#doc .chart svg.drawings').getBoundingClientRect()))");
+      const [left, top, width, height] = JSON.parse(at);
+      const spot = (fx, fy) => ({ x: left + width * fx, y: top + height * fy });
+      const mouse = async (type, p) => page("Input.dispatchMouseEvent",
+        { type, x: p.x, y: p.y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+      await click('#doc .chart .draw-tools button[data-shape="rect"]');
+      await mouse("mousePressed", spot(0.25, 0.25));
+      await mouse("mouseMoved", spot(0.4, 0.4));
+      await mouse("mouseReleased", spot(0.5, 0.5));
+      await saves("a drag with Rectangle draws one, in the chart's own frame",
+        with_('draw shape="arrow" from="600,280" to="400,100" color="#1f5fbf"\n' +
+          'draw shape="rect" from="160,75" to="320,150"\n'));
+      await press("Delete");
+      await saves("the new shape is chosen, and Delete takes it away",
+        with_('draw shape="arrow" from="600,280" to="400,100" color="#1f5fbf"\n'));
+      await menu("undo");
+      const both = with_('draw shape="arrow" from="600,280" to="400,100" color="#1f5fbf"\n' +
+        'draw shape="rect" from="160,75" to="320,150"\n');
+      await saves("undo brings it back", both);
+      // A press on the rectangle's top edge chooses it.
+      const chooseRect = async () => {
+        for (const type of ["mousePressed", "mouseReleased"]) await mouse(type, spot(0.375, 0.25));
+        await settle();
+      };
+      const chosen = () => js("document.querySelectorAll('#doc .chart g.drawing-chosen').length");
+      await chooseRect();
+      await press("f", CTRL);
+      await type("ab");
+      await press("Backspace");
+      check(await chosen() === 1 && await js("document.activeElement.value") === "a",
+        "with a shape chosen, Backspace in a field acts in the field", await js("document.activeElement.value"));
+      await saves("and leaves the shape", both);
+      await press("Escape");
+      await chooseRect();
+      await press("z", CTRL);
+      await press("y", CTRL);
+      await saves("Ctrl+Z and Ctrl+Y with a shape chosen change the document", both);
+      check(await chosen() === 0, "and a change lets the chosen shape go, as another can then stand at its place");
+    },
+
     // A table downloads as CSV: names, then calculated values, quoted where a value needs it.
     async csv() {
       await load(`${H}:::table name="Q1 sales" formats=",grouped:2"\n| "item" | "cost" |\n` +
@@ -290,6 +341,8 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const offered = await js("(() => { const i = document.querySelector('#doc .cell-input'); " +
         "return Array.from(document.getElementById(i.getAttribute('list')).options, (o) => o.value).join('|'); })()");
       check(offered === "Open|Done", "an open cell of the column offers its choices", offered);
+      check(await js("document.querySelector('#doc .cell-input').tagName") === "INPUT",
+        "in a box of one line, the only kind a browser offers a list in");
       await type("done");
       await press("Enter");
       await saves("a typed choice takes the list's spelling", table(' choices=",Open|Done"',
@@ -307,6 +360,17 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       browser.answerPrompts(null);
       await saves("Choices... sets the column's list from a line of commas", table(' choices=",Open|Done|Later"',
         '| "Write" | "Maybe" |\n| "Read" | "Done" |\n'));
+      // A choice whose text holds `=` reads back as itself, from the line the prompt offers.
+      const odd = ' choices=",1+1=2|a=red|Done;color:#006100 fill:#c6efce"';
+      await load(table(odd, '| "Read" | |\n'));
+      await js("window.__prompt = window.prompt; window.prompt = (_, offered) => (window.__offered = offered) + ', Later'");
+      await click('#doc td[data-r="0"][data-c="1"]');
+      await menu("column-choices");
+      await js("window.prompt = window.__prompt");
+      check(await js("window.__offered") === "1+1=2, a=red=none, Done=green",
+        "Choices... offers each choice so that it reads back", await js("window.__offered"));
+      await saves("and the line offered, with one choice added, keeps every choice", table(odd.replace(/"$/, '|Later"'),
+        '| "Read" | |\n'));
     },
 
     // A column's colour rule: the cells that meet it take its colours, and the panel sets it.
@@ -334,6 +398,17 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         "and the cells follow it at once", `${await fill(0)} ${await fill(1)}`);
       await menu("undo");
       await saves("one undo gives the rule before back", table(' rules=",<0;color:#9c0006 fill:#ffc7ce"'));
+      const [low, high] = [' rules=",scale;from:#eeeeee to:#63be7b"', ' rules=",scale;from:#ffffff to:#123456"'];
+      for (const [from, value, to, what] of [[' rules=",<0;color:#123456"', "1", ' rules=",<1;color:#123456"',
+        "the panel keeps colours it does not offer, where only the value changes"], [low, "", low,
+        "and a scale's least colour, where nothing changes"], [high, "", high, "and a scale's greatest colour"]]) {
+        await load(table(from));
+        await click('#doc td[data-r="1"][data-c="1"]');
+        await menu("column-rule");
+        if (value) await js(`document.querySelector('.rule-panel .rule-value').value = '${value}'`);
+        await click(".rule-panel .rule-apply");
+        check(await js("ksmd.source()") === table(to) && await text("#status") === "", what, await text("#status"));
+      }
     },
 
     // A typed date is a date: it shows as typed, adds days in a formula, and the handle goes on.

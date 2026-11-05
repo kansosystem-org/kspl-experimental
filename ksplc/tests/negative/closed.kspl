@@ -1,0 +1,52 @@
+//< `--closed=` refuses every way to C in the files of the package it names
+//< **A page's own functions are built this way** (`ksmd/port/own_build.kspl`). Assembler text, a C
+//< symbol or a library name reach the C compiler, the assembler and the linker: the assembler's
+//< `.include` reads any file on the machine. This fixture stands in the package `ksplc`, so it
+//< closes itself. The standard library it imports stays open: `std/io` declares C's functions.
+// ARGS: --closed=ksplc
+// EXPECT: closed.kspl:23:1: error: '##link' cannot be written in the package 'ksplc'. The build closes it (--closed=ksplc)
+// EXPECT: closed.kspl:25:8: error: 'extern' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:27:8: error: 'extern' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:29:1: error: '#section' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:33:1: error: '#raw_address' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:35:12: error: '__kspl_read_volatile' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:37:1: error: '#naked' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:39:5: error: '__kspl_asm_volatile' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:41:1: error: '#interrupt' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:45:8: error: 'extern' cannot be written in the package 'ksplc'
+// EXPECT: closed.kspl:50:5: error: '__kspl_write_volatile' cannot be written in the package 'ksplc'
+// EXPECT: its files stay inside KSPL, so they reach no C symbol, linker or assembler
+// EXPECT: Finished with 11 error(s)
+// EXPECT-NOT: std/io.kspl
+import "std/io"
+
+##link("m")
+
+extern fn cos(x: F64): F64 //< a C function brought in
+
+extern $shared: I32 = 0 //< a variable published to C
+
+#section(".data") #noinline
+fn placed(): I32 //< a function placed in a named section
+    return 1
+
+#raw_address
+fn peek(): U32 //< a register read by its address
+    return __kspl_read_volatile(U32@::0x1000)
+
+#naked
+fn bare() //< a body left to the assembler
+    __kspl_asm_volatile(".include \"secret.txt\"")
+
+#interrupt
+fn on_irq() //< an interrupt handler
+    return
+
+extern fn published(): I32 //< a function published to C
+    return 2
+
+fn main(): I32
+    $cell: U32 = 0
+    __kspl_write_volatile(cell@, 1U32)
+    io.out().s("closed\n")
+    return I32::cos(0.0) + placed() + published()

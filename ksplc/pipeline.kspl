@@ -24,6 +24,7 @@ import "ksplc/parse/load" as parse_load
 // Where the extension methods check_one_main / check_main_signature / check_library_shape live
 // (imported explicitly).
 import "ksplc/sema/body/analyze" as sema_body_analyze
+import "ksplc/sema/body/closed" as _sema_body_closed // `check_closed_package`
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/infer" as sema_body_infer
 import "ksplc/sema/decl/collect" as sema_decl_collect
@@ -35,6 +36,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "ksplc/source_checks"
 import "std/ds" { List, Map }
+import "std/fs"
 import "std/io"
 import "std/mem" { Arena_headroom }
 import "std/str" { Str_builder }
@@ -47,10 +49,11 @@ fn emit_runtime(out_path: U8[]): Void!Compile_error //<
     //< runtime" in ksplc/docs/DESIGN-backends.md). **The contents change with `--freestanding`**,
     //< so emit it with the same options as the generated C it links with. **No analysis runs at
     //< all.**
-    defer $out_file: = io.open(out_path, "w") catch e
-        throw .io(e)
+    defer $staged: = Staged_outputs()
+    defer $out_file: = staged.open(out_path)!
     gen_runtime.write_unit(out_file@)
-    out_file.flush()
+    staged.close(out_file@, out_path)!
+    staged.commit()!
 
 fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head: Arena_headroom,
     peak_heap: Sz) //<
@@ -133,6 +136,57 @@ enum Compile_error
         //< code generation failed, as on an unreadable embed; the diagnostic is already printed
     fmt_failed //<
         //< `ksplc fmt` failed on some files (diagnostics printed); the rest are formatted first.
+
+struct Staged_outputs //< the files a compile writes, under temporary names until all are whole
+    //< **A failed or killed compile leaves the older outputs as they were**, so `make` never takes
+    //< a cut file as up to date. Each file is written beside its target and renamed onto it once
+    //< every file was written whole ("Basic use" in ksplc/docs/SPEC-tools.md).
+    //< Caution: **The data is not forced onto the disk before the rename.** A compile can run
+    //< again, so a power cut costs one rebuild; a wait for the disk would slow every build.
+    tmps: List<|U8[]|> //< each file's temporary name, on the arena; emptied by `commit`
+    paths: List<|U8[]|> //< the target each one is renamed onto, in the same order
+
+impl Staged_outputs
+    fn new(): Staged_outputs
+        return Staged_outputs::{ .tmps = List<|U8[]|>(base_core.arena),
+            .paths = List<|U8[]|>(base_core.arena) }
+
+    fn open(r: Self$@, path: U8[]): io.File_stream!Compile_error //< opens the file for `path`
+        //< Caution: **Write a device or a FIFO where it is** (`/dev/null` named as the output).
+        //< A rename would put a plain file in place of its name.
+        info: = fs.stat(path) catch _e
+            return r.open_beside(path)
+        if info.kind == fs.File_kind.other
+            return io.open(path, "w") catch
+                throw .io(.write_failed(path))
+        return r.open_beside(path)
+
+    priv fn open_beside(r: Self$@, path: U8[]): io.File_stream!Compile_error
+        tmp: = base_core.arena.text().s(path).s(".tmp\{Sz::sys.mono_us() | 1\}").take()
+        file: = io.open(tmp, "w") catch
+            throw .io(.write_failed(path))
+        r.tmps.push(tmp)
+        r.paths.push(path)
+        return file
+
+    fn close(_r: Self$@, file: io.File_stream$@, path: U8[]): Void!Compile_error //<
+        //< It closes one file `open` gave, failing where any of its data was refused
+        //< A full disk refuses a write without a word until this point.
+        file.sync() catch
+            throw .io(.write_failed(path))
+        file.free()
+
+    fn commit(r: Self$@): Void!Compile_error //< renames every file onto its target
+        for i in Range.asc(r.tmps.len)
+            fs.rename_path(r.tmps.get(i), r.paths.get(i)) catch
+                throw .io(.write_failed(r.paths.get(i)))
+            r.tmps.set(i, "")
+
+impl Staged_outputs: Manual_free
+    fn free(r: Self$@) //< removes the temporary files `commit` did not rename
+        for tmp in r.tmps
+            if tmp.len > 0
+                fs.remove_path(tmp) catch {}
 
 struct Compiler
     base_parser: kspeg.Target$@
@@ -269,6 +323,8 @@ impl Compiler
         sema.check_one_main()
         sema.check_main_signature()
         sema.check_library_shape(r.root_file)
+        sema.check_closed_package(r.root_file)
+        sema.check_c_symbols_agree()
         sema.check_type_layouts(r.root_file)
         t4: = sys.mono_us()
         sema_session_prof.prof.layouts_us = t4 - t_constraints
@@ -301,31 +357,35 @@ impl Compiler
         base_stats.stages.lower = base_stats.end_stage(t3, t4)
 
         $codegen_failed: = false
+        defer $staged: = Staged_outputs()
         switch base_core.config.target
         case .c
             units: = base_core.unit_count_or_one()
             if units > 1
-                codegen_failed = r.emit_c_units(out_path, units)!
+                codegen_failed = r.emit_c_units(staged@, out_path, units)!
             else
-                codegen_failed = r.emit_c_part(out_path, gen_c_ctx.WHOLE_OUTPUT)!
+                codegen_failed = r.emit_c_part(staged@, out_path, gen_c_ctx.WHOLE_OUTPUT)!
         case .llvm
-            defer $out_file: = io.open(out_path, "w") catch e
-                throw .io(e)
+            defer $out_file: = staged.open(out_path)!
             defer cg: = Genllvm_ctx(out_file@, r.sema, r.source_map)
             gen_llvm_module.run(r.root_file, cg, r.root_file.loc.file())
             cg.flush()
+            staged.close(out_file@, out_path)!
             codegen_failed = cg.had_error
+        // A failed generation leaves the older output in place: its temporary files go at free.
         if codegen_failed
             throw .codegen
+        staged.commit()!
 
         base_stats.stages.backend = base_stats.end_stage(t4, sys.mono_us())
 
-    fn emit_c_units(r: Self$@, out_path: U8[], units: Sz): Bool!Compile_error //<
-        //< It writes the generated C split into several translation units
-        //< `out_path` gives only the `<stem>` (its last extension dropped); **no file of that name
-        //< is created**, and every `.c` is linked. It walks the AST units+1 times, a new Ctx per
-        //< walk. `<stem>.h`     … the shared header every unit `#include`s (types, prototypes,
-        //< extern) `<stem>.<i>.c` … unit i's definitions (i from 0 to units-1)
+    fn emit_c_units(r: Self$@, staged: Staged_outputs$@, out_path: U8[], units: Sz):
+        Bool!Compile_error //<
+            //< It writes the generated C split into several translation units
+            //< `out_path` gives only the `<stem>` (its last extension dropped); **no file of that
+            //< name is created**, and every `.c` is linked. It walks the AST units+1 times, a new
+            //< Ctx per walk. `<stem>.h`     … the shared header every unit `#include`s (types,
+            //< prototypes, extern) `<stem>.<i>.c` … unit i's definitions (i from 0 to units-1)
         stem: = sys.strip_last_ext(out_path)
         defer $path: = Str_builder()
         path.s(stem).s(".h")
@@ -338,7 +398,7 @@ impl Compiler
             .unit_index = 0, .shared_header = "" }
         // Caution: **Pass each path as an arena copy.** A failed open carries the path out in its
         // error, which main prints after this frame's `path` is freed (it read freed memory).
-        $failed: = r.emit_c_part(base_core.arena.dup_str(path.slice()), shared)!
+        $failed: = r.emit_c_part(staged, base_core.arena.dup_str(path.slice()), shared)!
 
         for i in Range.asc(units)
             path.len = 0
@@ -346,16 +406,17 @@ impl Compiler
             unit: = gen_c_ctx.Emit_split::{ .part = .unit, .unit_count = units, .unit_index = i,
                 .shared_header = header_name.slice() }
             failed =
-                r.emit_c_part(base_core.arena.dup_str(path.slice()), unit)! || failed
+                r.emit_c_part(staged, base_core.arena.dup_str(path.slice()), unit)! || failed
         return failed
 
-    fn emit_c_part(r: Self$@, path: U8[], split: gen_c_ctx.Emit_split): Bool!Compile_error //<
-        //< It writes one file of the generated C, the part `split` names
-        defer $out_file: = io.open(path, "w") catch e
-            throw .io(e)
+    fn emit_c_part(r: Self$@, staged: Staged_outputs$@, path: U8[], split: gen_c_ctx.Emit_split):
+        Bool!Compile_error //<
+            //< It writes one file of the generated C, the part `split` names, under a temporary name
+        defer $out_file: = staged.open(path)!
         defer cg: = Genc_ctx(out_file@, r.sema, r.source_map, split)
         gen_c_root.run(r.root_file, cg)
         cg.flush()
+        staged.close(out_file@, path)!
         failed: = cg.had_error
         return failed
 

@@ -1,0 +1,76 @@
+//< Shapes drawn over an image or a chart: their lines read and save unchanged, the reader refuses
+//< what it cannot read, and the editor changes them as one step of undo
+import "ksmd/edit/editor_drawings" // `set_drawings`
+import "ksmd/tests/support" { opened, refused, saves }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const IMAGE: U8[] = "%ksmd 1\n\n:::image src=\"a.png\" alt=\"A window\"\n"
+priv const CHART: U8[] =
+    "%ksmd 1\n\n:::table name=\"t\"\n| \"item\" | \"n\" |\n| \"a\" | 1 |\n:::\n\n:::chart \
+        table=\"t\" kind=\"bar\" labels=\"item\" values=\"n\"\n"
+priv const RECT: U8[] =
+    "draw shape=\"rect\" from=\"120,40\" to=\"420,120\" text=\"Press \\\"Build\\\"\"\n"
+priv const ARROW: U8[] = "draw shape=\"arrow\" from=\"460,200\" to=\"430,110\" color=\"#1f5fbf\"\n"
+
+fn run()
+    reading()
+    refusals()
+    editing()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    for body in U8[][]::{ "", RECT, ARROW, "draw shape=\"line\" from=\"0,0\" to=\"20000,20000\"\n" }
+        text: = arena.text().s(IMAGE).s(body).s(":::\n").take()
+        ed: = opened(text, arena)
+        saves(arena.text().s("an image's drawings read and save unchanged: \{body\}").take(), ed@,
+            arena, text)
+    chart: = arena.text().s(CHART).s(RECT).s(ARROW).s(":::\n").take()
+    ed: = opened(chart, arena)
+    saves("a chart's drawings read and save unchanged", ed@, arena, chart)
+
+priv fn refusals()
+    defer arena: = Arena(64 * 1024)
+    for body in U8[][]::{ "rect from=\"1,1\" to=\"2,2\"\n", "draw from=\"1,1\" to=\"2,2\"\n",
+        "draw shape=\"oval\" from=\"1,1\" to=\"2,2\"\n", "draw shape=rect from=\"1,1\" to=\"2,2\"\n",
+        "draw shape=\"rect\" from=\"1,1\"\n", "draw shape=\"rect\" from=\"1\" to=\"2,2\"\n",
+        "draw shape=\"rect\" from=\"-1,1\" to=\"2,2\"\n",
+        "draw shape=\"rect\" from=\"20001,1\" to=\"2,2\"\n",
+        "draw shape=\"rect\" from=\"01,1\" to=\"2,2\"\n",
+        "draw shape=\"rect\" from=\"1,1\" to=\"2,2\" color=\"red\"\n",
+        "draw shape=\"rect\" from=\"1,1\" to=\"2,2\" color=\"#C00000\"\n",
+        "draw shape=\"rect\" from=\"1,1\" to=\"2,2\" text=\"\"\n",
+        "draw shape=\"arrow\" from=\"1,1\" to=\"2,2\" text=\"x\"\n",
+        "draw shape=\"rect\" from=\"1,1\" to=\"2,2\" width=3\n" }
+        refused(arena.text().s(IMAGE).s(body).s(":::\n").take(), body)
+    refused(arena.text().s(IMAGE).s(RECT).take(), "a clause with drawings and no closing line")
+    defer $many: = Str_builder()
+    many.s(IMAGE)
+    for _ in Range.asc(101)
+        many.s(ARROW)
+    many.s(":::\n")
+    refused(arena.dup_str(many.slice()), "101 drawings")
+
+priv fn editing()
+    defer arena: = Arena(64 * 1024)
+    plain: = arena.text().s(IMAGE).s(":::\n").take()
+    $ed: = opened(plain, arena)
+    ed.set_drawings(0, arena.text().s(RECT).s(ARROW).take()) catch e
+        verdict.check("drawing over an image", false, e.message())
+    drawn: = arena.text().s(IMAGE).s(RECT).s(ARROW).s(":::\n").take()
+    saves("the editor gives an image its drawings", ed@, arena, drawn)
+    ed.set_drawings(0, "draw shape=\"oval\" from=\"1,1\" to=\"2,2\"") catch
+        verdict.check("drawings the reader would refuse are refused", true, "")
+    saves("and change nothing", ed@, arena, drawn)
+    ed.undo()
+    saves("undo takes the drawings away", ed@, arena, plain)
+    ed.redo()
+    saves("and redo brings them back", ed@, arena, drawn)
+    $chart: = opened(arena.text().s(CHART).s(":::\n").take(), arena)
+    chart.set_drawings(1, ARROW) catch e
+        verdict.check("drawing over a chart", false, e.message())
+    saves("the editor gives a chart its drawings", chart@, arena,
+        arena.text().s(CHART).s(ARROW).s(":::\n").take())
+    chart.set_drawings(0, ARROW) catch
+        verdict.check("a table takes no drawings", true, "")

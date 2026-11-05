@@ -97,6 +97,37 @@ priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the sq
     verdict.check("a squiggle points at the indentation notation's line and column",
         found && count == 1 && line == BAD_LINE && col == BAD_COL, seen)
 
+priv fn check_lone_cr(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+    //< A lone carriage return is reported at the place the editor shows it
+    //< **No line before it differs**, so the editor's line and character and the compiler's agree
+    //< there. No tree is made from the file, so nothing points at a line past it.
+    uri: = "file:///lone_cr.kspl"
+    c.notify("textDocument/didOpen",
+        lsp_client.did_open(uri, notation_crlf.LONE_CR_COMMENT, arena), lsp_client.SEND_MS, arena)
+        catch {}
+    $seen: = "no diagnostics arrived"
+    $ok: = false
+    for _k in Range.asc(8)
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
+            break
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
+            continue
+        p: = msg.val.get("params")
+        if !p.get("uri").as_str().unwrap_or("").ends_with("lone_cr.kspl")
+            continue
+        diags: = p.get("diagnostics").arr_list(arena)
+        seen = lsp_client.dump(p, arena)
+        if diags.len == 1
+            start: = diags.get(0).get("range").get("start")
+            ok =
+                start.get("line").as_int64().unwrap_or(-1I64) == 1I64 &&
+                start.get("character").as_int64().unwrap_or(-1I64) == 11I64 &&
+                diags.get(0).get("message").as_str().unwrap_or("").find_str("carriage return")
+                .is_some()
+        break
+    verdict.check("the language server reports a lone carriage return where the editor shows it",
+        ok, seen)
+
 priv fn check_hover(c: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
     //< Caution: **Check the content**; with the position drifted, something still comes back.
     got: = lsp_client.answer(c, "textDocument/hover",
@@ -555,6 +586,7 @@ fn main(): I32
 
     notation_crlf.check_crlf_raw_text(work, arena)
     notation_crlf.check_crlf_fmt(work, arena)
+    notation_crlf.check_lone_cr(work, arena)
     check_import(work, arena)
     check_import_spelt(work, arena)
     check_labelled_block_kept(work, arena)
@@ -584,5 +616,6 @@ fn main(): I32
     check_diagnostics(c@, arena)
     check_hover(c@, arena)
     check_definition(c@, arena)
+    check_lone_cr(c@, arena)
     notation_doc.run(c@, arena)
     return harness.finish()

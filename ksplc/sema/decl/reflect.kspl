@@ -8,6 +8,7 @@ import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/access" as _sema_decl_access // `is_field_visible_here`
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/name" as sema_decl_name
@@ -146,6 +147,16 @@ impl Sema_ctx
         for f in def_fields
             k: = r.field_kind_name(f.type_id)
             site: = f.node if f.node != null else impl_node
+            // **The table reads and writes every field**, so it is derived only where each one is
+            // visible. Derived in another file, it handed out a `priv` field to `std/reflect`.
+            if !r.is_field_visible_here(f)
+                r.clear_scratch()
+                    .s("'Reflectable' cannot be derived here: field '\{f.name\}' is not visible in \
+                        this file, and the table would read and write it. Derive it in the file \
+                        that declares the struct, or write the 'fields()' body by hand")
+                r.err(impl_node, r.scratch.slice())
+                ok = false
+                continue
             f_type: = f.node.find_child(.k_type_expr) if f.node != null else null
             // Caution: **Check for the container first.** As a plain struct, `List<|T|>` is walked
             // into `ptr` / `len` / `cap` / `arena` and rejected under a name the user did not

@@ -8,6 +8,7 @@ import "std/chars"
 import "std/ds" + { List, Map }
 import "std/io"
 import "std/mem" { Arena, dealloc }
+import "std/seq" // `List.order_by`, which sorts the markers once
 import "std/str" { Str_builder }
 import "std/strnum" // `to_count`
 
@@ -78,6 +79,11 @@ pub const TOKEN_USER_DEFINED: I32 = 4 //< a GGUF token type: a marker matched in
 priv struct Marker //< a marker `encode` replaces by its ID wherever its text appears
     text: U8[]
     id: I32
+
+priv struct Marker_step //< one step of `encode`'s work: a piece of text, or one marker's ID
+    text: U8[] //< the piece still to split, at the markers from `marker` on
+    marker: Sz //< the first marker still to look for; -1 when the step only appends `id`
+    id: I32 //< the ID to append, when `marker` is -1
 
 priv const GPT2_SHIFTED: Sz = 68 //< how many bytes GPT-2's mapping writes as U+0100 and above
 
@@ -220,13 +226,19 @@ impl Tokenizer
             r.merge_rank.set(key, r.next_rank)
         r.next_rank += 1
 
-    priv fn add_marker(r: Self$@, text: U8[], id: I32) //< a marker `encode` matches in any text
+    priv fn add_markers(r: Self$@, found: List<|Marker|>@) //< markers `encode` matches in any text
         //< Kept longest first, so a marker inside a longer one never splits it; equal lengths go
         //< by ID. That is llama.cpp's order.
-        $at: Sz = 0
-        for at < r.markers.len && r.markers[at].text.len >= text.len
-            at += 1
-        r.markers.insert(at, Marker::{ .text = r.arena.dup_str(text), .id = id })
+        //< **They are sorted once, all together.** Put in one at a time, n markers cost n² steps,
+        //< and a vocabulary can hold a hundred thousand of them. The sort keeps equal lengths in
+        //< their order, which is ID order, since `load_lists` reads the words in ID order.
+        for i in Range.asc(found.len)
+            r.markers.push(found[i])
+        longest_first: = fn(a: Marker@, b: Marker@; ): I32
+            if a.text.len == b.text.len
+                return 0
+            return -1 if a.text.len > b.text.len else 1
+        r.markers$ = r.markers.order_by(longest_first, r.arena)
 
     // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and
     // merges.txt "<id1> <id2> <merged_id>". They are loaded through `add_token`/`add_merge` into
@@ -269,6 +281,7 @@ impl Tokenizer
                 (types.len if types.len < tokens.len else tokens.len) + 1)
         shifted: = gpt2_shifted()
         defer $b: = Str_builder()
+        defer $found: = List<|Marker|>(null)
         for i in Range.asc(tokens.len)
             b.clear()
             if types[i] == TOKEN_NORMAL
@@ -284,7 +297,9 @@ impl Tokenizer
             if types[i] == TOKEN_USER_DEFINED
                 if tokens[i].len == 0
                     throw .broken("tokens", i + 1)
-                r.add_marker(tokens[i], I32::i)
+                found
+                    .push(Marker::{ .text = r.arena.dup_str(tokens[i]), .id = I32::i })
+        r.add_markers(found@)
         defer $left: = Str_builder()
         defer $right: = Str_builder()
         for i in Range.asc(merges.len)
@@ -352,30 +367,51 @@ impl Tokenizer
         arena: Arena$@, //< the arena the list of IDs is allocated from; nothing else is
     ): List<|I32|>$@
         tokens: = List<|I32|>.create(arena)
-        r.encode_part(text, 0, tokens)
+        r.encode_marked(text, tokens)
         return tokens
 
-    priv fn encode_part(r: Self$@, text: U8[], marker: Sz, out: List<|I32|>$@) //<
-        //< Splits the text at each `markers[marker]`, and the parts between at the next markers
+    priv fn encode_marked(r: Self@, text: U8[], out: List<|I32|>$@) //<
+        //< Splits the text at each marker, longest first, and merges the parts between by BPE
         //< The order (longest first) is llama.cpp's, so where two markers overlap the same one
-        //< wins.
-        if marker == r.markers.len
-            $i: Sz = 0
-            for i < text.len
-                end: = pretokenizer.chunk_end(text, i, r.split)
-                r.bpe_chunk(text.sub(i, end - i), out)
-                i = end
-            return
-        mark: = r.markers[marker]
-        $rest: = text
-        for
-            at: = rest.find_str(mark.text).unwrap_or(-1)
+        //< wins. A part is split at the first marker it holds, and its pieces at the next markers.
+        //< **A work list holds the pieces, not the call stack**: one call per marker would need a
+        //< stack as deep as the vocabulary has markers, and a text with none would still go that
+        //< deep. The list holds only the pieces still waiting, so it grows with the markers found.
+        defer $work: = List<|Marker_step|>(null)
+        work.push(Marker_step::{ .text = text, .marker = 0, .id = 0 })
+        for work.len > 0
+            step: = work[work.len - 1]
+            _done: = work.pop()
+            if step.marker < 0
+                out.push(step.id)
+                continue
+            if step.text.len == 0
+                continue
+            $m: = step.marker
+            $at: Sz = -1
+            for m < r.markers.len && at < 0
+                at = step.text.find_str(r.markers[m].text).unwrap_or(-1)
+                if at < 0
+                    m += 1
             if at < 0
-                r.encode_part(rest, marker + 1, out)
-                return
-            r.encode_part(rest.sub(0, at), marker + 1, out)
-            out.push(mark.id)
-            rest = rest.sub_from(at + mark.text.len)
+                r.bpe_text(step.text, out)
+                continue
+            mark: = r.markers[m]
+            // The last step pushed is the first taken, so the three go in reverse order.
+            work
+                .push(Marker_step::{ .text = step.text.sub_from(at + mark.text.len), .marker = m,
+                .id = 0 })
+            work.push(Marker_step::{ .text = "", .marker = -1, .id = mark.id })
+            work
+                .push(Marker_step::{ .text = step.text.sub(0, at), .marker = m + 1, .id = 0 })
+
+    priv fn bpe_text(r: Self@, text: U8[], out: List<|I32|>$@) //< a text with no marker, by BPE
+        //< It is split into chunks first, and no merge crosses a chunk.
+        $i: Sz = 0
+        for i < text.len
+            end: = pretokenizer.chunk_end(text, i, r.split)
+            r.bpe_chunk(text.sub(i, end - i), out)
+            i = end
 
     priv fn bpe_chunk(r: Self@, chunk: U8[], out: List<|I32|>$@) //<
         //< Merges one pre-split chunk by BPE, smallest rank first, and appends its token IDs to out

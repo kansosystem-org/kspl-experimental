@@ -6,6 +6,8 @@
 //< firmware, and the debug output" in ksos/docs/SPEC-board.md).
 //< **Beep only at the stages where the console cannot be used.** Beeping after enumeration says
 //< the same thing twice, which only annoys people nearby and helps tell nothing apart.
+//< **Every firmware that drives the motors starts them here** (`motors_up`), so none can leave
+//< out what stops the wheels in a panic.
 
 // ==========================================
 // What each beep count means is in "Stage 2b — USB CDC" in ksos/docs/HOWTO-bring-up.md.
@@ -15,12 +17,14 @@
 // stage then breaks the enumeration itself.
 // ==========================================
 import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/motor"
 import "ksos/demo/rp2040/common/buzzer"
 import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/clocks"
 import "ksos/drivers/rp2040/gpio"
 import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/watchdog"
 
 const STAGE_REPORT_INTERVAL_MS: U32 = 3000 //<
     //< The interval for reporting the stage reached while not yet enumerated
@@ -75,3 +79,33 @@ fn wait_configured(timeout_ms: U32): Bool //< waits until the host configures it
             beep(usb.current_stage())
     beep(2)
     return true
+
+// ---------------------------------------------------------
+// Guarding the wheels: every firmware that drives the motors
+// ---------------------------------------------------------
+// **The PWM keeps its last duty when the program stops deciding**, so the wheels keep turning.
+// `motors_up` covers a panic. The watchdog, which the firmware arms before its control loop,
+// covers a hang. Why both are needed is "The watchdog (`watchdog.kspl`)" in
+// ksos/docs/DESIGN-rtos.md.
+
+const CAR_WATCHDOG_MS: U32 = 1000 //< how long a car's control loop may go without a feed [ms]
+    //< **Longer than the longest step between two feeds**: a lap (100ms, stretched by IR frames
+    //< and a report line to about 300ms) and one Flash sector erase (at most 400ms). **Short enough
+    //< to stop quickly**: at the speed cap the car rolls well under a metre in a second.
+    //< **Both car firmwares use it.** A bench sequence whose steps are longer sets its own.
+
+priv fn stop_wheels(_msg: U8[]) //< the panic hook: the wheels stop before the program does
+    //< Caution: **A freestanding panic loops for ever, and the PWM keeps its last duty.** With no
+    //< hook a panic while driving leaves the car running with nothing deciding.
+    //< An index out of range or a division by zero stops in the runtime without calling this
+    //< hook. So a firmware must still refuse every input that could cause one.
+    motor.stop()
+
+fn motors_up(): Void!mmio.Driver_error //< starts the motors so that a panic stops them
+    //< It stops a watchdog left running, starts the motors stopped, then sets the panic hook.
+    //< Caution: **Arm the watchdog just before the control loop, and feed it only from there**, or
+    //< a hang leaves the wheels turning ("The watchdog (`watchdog.kspl`)" in
+    //< ksos/docs/DESIGN-rtos.md). Ask `watchdog.last_reset` before arming.
+    watchdog.disarm()
+    motor.init()!
+    panic_hook = stop_wheels

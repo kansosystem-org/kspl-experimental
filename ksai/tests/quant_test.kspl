@@ -1,6 +1,7 @@
 //< ksai's GGUF formats against llama.cpp's reference, and their products against llama.cpp's
 //< The reference files in `quant_data/` come from llama.cpp's Python package `gguf` and its C
 //< library (`tools/ai_assist/make_quant_fixtures.py`), so this test needs no Python.
+import "ksai/parallel"
 import "ksai/quant" + { Q8_input, Quant_error, Quant_format, Quant_matrix }
 import "ksai/quantize" as _quantize // `Quant_matrix.quantize`
 #cfg(!blas)
@@ -17,6 +18,7 @@ import "std/mem" + { Arena }
 import "std/prng"
 import "std/str"
 import "std/strfmt"
+import "std/sys"
 import "std/verdict"
 
 embed "ksai/tests/quant_data/f16.bin" as f16_file
@@ -503,6 +505,40 @@ fn test_quant_threads_give_the_same_bits(arena: Arena$@) //<
         .pass(arena.text().s("\{used\} threads and one write the same bits, as does one row alone")
         .take())
 
+priv fn count_span(job: Void$@, first: Sz, last: Sz) //< marks outputs [first, last) as written
+    out: = Sz$@::job
+    for i in Range(first, last, 1)
+        (out + i)$ += 1
+
+priv fn threads_split(cpus: Sz, out: Sz$@): Sz //< the threads a large split uses, under the cap
+    //< Each of `cpus * 64` outputs is marked once more, so a lost or doubled output shows.
+    return parallel.split(count_span, Void$@::out, cpus * 64, 1,
+        parallel.threads_for(1 << 20, 1 << 20, 1 << 20))
+
+fn test_parallel_threads_follow_the_cap(arena: Arena$@) //<
+    //< A cap past the CPU count gives the CPU count, and a cap raised later takes effect
+    //< Caution: **Lower the cap before the raise.** The pool once kept the size the cap had at its
+    //< first product, so a small cap first held every later product to it.
+    verdict.start("[Parallel] set_threads gives at most the CPUs, and a raised cap takes effect...")
+    cpus: = sys.cpu_count()
+    parallel.set_threads(cpus + 7)
+    assert(parallel.threads_for(1 << 20, 1 << 20, 1 << 20) == cpus,
+        "parallel: a cap past the CPU count gave more threads than CPUs")
+    out: = Sz$@::arena.alloc(cpus * 64 * sizeof(Sz))
+    for i in Range.asc(cpus * 64)
+        (out + i)$ = 0
+    parallel.set_threads(2)
+    small: = threads_split(cpus, out)
+    parallel.set_threads(0)
+    all: = threads_split(cpus, out)
+    for i in Range.asc(cpus * 64)
+        assert((out + i)$ == 2, "parallel: a split wrote an output other than once")
+    assert(small <= 2, "parallel: a split used more threads than the cap")
+    assert(all == cpus,
+        arena.text().s("parallel: a raised cap gave \{all\} of \{cpus\} threads").take())
+    verdict
+        .pass(arena.text().s("a cap of 2 gave \{small\} threads; no cap gave \{all\}").take())
+
 #cfg(!blas)
 fn check_matmul_threads(arena: Arena$@) //< ksai's F32 matmul: several threads write one's bits
     $rng: = prng.Prng(13)
@@ -545,6 +581,9 @@ fn test_quant_refuses_wrong_sizes(arena: Arena$@) //<
     expect_refused(Quant_matrix.from_bytes(.q8_0, 2, 0, b), .bad_shape, "no columns")
     expect_refused(Quant_matrix.from_bytes(.q4_k, 0x7FFFFFFF, 1 << 30, b), .size_mismatch,
         "rows times the row's bytes overflowing")
+    past_sz: = Sz::(1I64 << 62) // 2^62 numbers, whose 4 bytes each are past a 64-bit `Sz`
+    expect_refused(Quant_matrix.from_bytes(.f32, 1, past_sz, b), .bad_shape,
+        "one row's bytes overflowing")
     m: = Quant_matrix.from_bytes(.q8_0, 2, 32, b) catch panic("quant: a valid matrix was refused")
     $row: F32[32] = ::{}
     $short_row: F32[31] = ::{}

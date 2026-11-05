@@ -1,0 +1,90 @@
+//< The `ksplc run` case that saves an import while its build runs
+//< Not a suite; `../suite/run_test.kspl` runs it.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/run_case"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+
+priv const SLOW_FNS: Sz = 5000 //< how many functions the slow import holds
+    //< Enough that its build goes on for a while after the edit the next case makes.
+
+priv const SLOW_SCRIPT_SRC: U8[] =
+    """import "std/io"
+import "helper"
+import "slow"
+
+fn main(): I32
+  io.out().s("v=\{helper.value()\} \{slow.f7(0)\}\n")
+  return 0
+
+"""
+
+priv const STD_ONLY_SRC: U8[] =
+    """import "std/io"
+
+fn main(): I32
+  io.out().s("warm\n")
+  return 0
+
+"""
+
+priv fn slow_src(arena: Arena$@): U8[] //< an import with SLOW_FNS small functions
+    b: = arena.text()
+    for i in Range.asc(SLOW_FNS)
+        b.s("pub fn f\{i\}(x: I32): I32\n  return x + \{i\}\n\n")
+    return b.take()
+
+priv fn ast_entries(work: U8[], arena: Arena$@): Sz //< how many files the AST cache holds
+    $n: Sz = 0
+    top: = fs.join(work, "cache/ast", arena)
+    gens: = fs.read_dir(top, arena) catch
+        return 0
+    for g in gens
+        names: = fs.read_dir(fs.join(top, g, arena), arena) catch
+            continue
+        for name in names
+            if name.ends_with(".ksast")
+                n += 1
+    return n
+
+fn case_edit_during_build_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
+    //< A file saved while its build runs is built again on the next run
+    //< **The deps file must hold the digest of the bytes compiled** (`note_read` in
+    //< `ksplc/base/cache.kspl`). One taken from the disk after the build is the new bytes', and
+    //< every later run would print the old value until the next edit.
+    //< **The edit waits until the build has read the import**, seen as its entry in the AST
+    //< cache. A first script puts `std` there, so the build adds the script's entry, then the
+    //< import's, then spends a while on `slow.kspl`. A time to wait would differ per machine.
+    if !run_case.write_script(work, "s.kspl", SLOW_SCRIPT_SRC, 1, arena)
+        return run_case.failed("cannot place the material")
+    io.write_file(fs.join(work, "slow.kspl", arena), slow_src(arena)) catch
+        return run_case.failed("cannot place the slow import")
+    warm: = fs.join(work, "w.kspl", arena)
+    io.write_file(warm, STD_ONLY_SRC) catch
+        return run_case.failed("cannot place the first script")
+    warmed: = run_case.expect_out(run_case.run_script(warm, arena), "warm",
+        "the first script failed", arena)
+    if warmed.state != run_case.STATE_OK
+        return warmed
+    before: = ast_entries(work, arena)
+    s: = fs.join(work, "s.kspl", arena)
+    $child: =
+        subproc.spawn_redirect(harness.ksplc_argv(U8[][]::{ "run", s }), "",
+        fs.join(work, "first.out", arena), fs.join(work, "first.err", arena)) catch
+        return run_case.failed("the build cannot start")
+    for ast_entries(work, arena) < before + 2 && child.alive()
+        sys.sleep_ms(5)
+    if !child.alive()
+        return run_case.failed("the build ended before it was seen reading the import")
+    io.write_file(fs.join(work, "helper.kspl", arena), run_case.helper_src(2, arena)) catch
+        child.kill()
+        return run_case.failed("the import's target cannot be rewritten")
+    child.wait()
+    return run_case.expect_out(run_case.run_script(s, arena), "v=2 7",
+        "a file saved during the build was not built again", arena)

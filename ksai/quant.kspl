@@ -34,7 +34,8 @@ pub enum Quant_format //< how one row of a weight matrix is stored, each as GGUF
         //< the F16 `d`. A number is `d × scale × (q - 32)`.
 
 pub enum Quant_error //< why a quantized matrix or its product was refused
-    bad_shape //< a dimension is negative, or the columns do not fill whole blocks
+    bad_shape //<
+        //< a dimension is negative, the columns do not fill whole blocks, or a row's bytes overflow
     size_mismatch //< the bytes are not exactly the rows times the bytes of one row
     shape_mismatch //< a product's operand or result is not the shape the matrix needs
     out_of_bounds //< a row number outside the matrix
@@ -88,7 +89,9 @@ impl Quant_format
     ): Sz!Quant_error
         if cols <= 0 || cols % r.block_len() != 0
             throw .bad_shape
-        return cols / r.block_len() * r.block_bytes()
+        bytes: = (cols / r.block_len()).checked_mul(r.block_bytes()) catch
+            throw .bad_shape
+        return bytes
 
     fn input_block(r: Self): Sz //< the block an input row is rounded in; 0 keeps it F32
         //< llama.cpp rounds a K format's inputs to its Q8_K blocks of 256, and Q8_0's and Q5_0's to

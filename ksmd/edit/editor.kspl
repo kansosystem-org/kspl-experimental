@@ -17,7 +17,7 @@ import "ksmd/edit/region" { Settled, Spot, Style, Unit, blank_unit, fit, gap_spo
 import "ksmd/edit/styled" { Mark, Marks, Seg, cut, hard_break, has_mark, length, marks_before, plain,
     set_mark, text_seg, visible }
 import "ksmd/model/look" { is_note }
-import "ksmd/model/model" { Block, Block_kind, Document, Image, MAX_BLOCKS, MAX_NESTING }
+import "ksmd/model/model" { Block, Block_kind, Document, Drawing, Image, MAX_BLOCKS, MAX_NESTING }
 import "ksmd/syntax/clause" { names_kspl }
 import "ksmd/syntax/inline" { is_destination }
 import "ksmd/syntax/writer"
@@ -35,6 +35,7 @@ enum Refused //< why an action changed nothing
     not_noted //< a note stands on a paragraph or a heading, and holds 1 to 1,000 bytes
     not_whole //< no table, include or image stands at that place
     not_a_table //< the pasted text is no ksmd source of one table
+    not_a_diagram //< the diagram the page sent is not one a ksmd file holds
     stale //< the text or the cells to replace are no longer where they were found
     too_many_blocks //< a source holds at most 100,000 blocks
     too_large //< a source holds at most 8 MiB
@@ -53,6 +54,9 @@ impl Refused
             return "No table, include or image stands there."
         case .not_a_table
             return "The clipboard holds no table copied from ksmd, so nothing was pasted."
+        case .not_a_diagram
+            return "A diagram holds at most 1,000 shapes and 2,000 arrows, each inside its size, so \
+                this change was not made."
         case .not_noted
             return "A note stands on a paragraph, a heading or a table cell, and holds 1 to 1,000 \
                 bytes of text."
@@ -379,9 +383,12 @@ impl Editor
 
     fn insert_image(ed: Self$@, src: U8[], alt: U8[]): Void!Refused //<
         //< An image in place of the selection, as a divider is put in; `src` is from this source's
-        //< folder. The image keeps its place in `Document.images` after an undo, as a chart does.
-        image: = Image::{ .src = ed.arena.dup_str(src), .alt = ed.arena.dup_str(alt),
-            .caption = "" }
+        //< folder, and not empty, as the reader wants. The image keeps its place in
+        //< `Document.images` after an undo, as a chart does.
+        if src.len == 0
+            throw .no_read_back
+        image: = Image::{ .src = ed.arena.dup_str(src), .alt = ed.arena.dup_str(alt), .caption = "",
+            .drawings = List<|Drawing|>(ed.arena) }
         ed.doc.images.push(image)
         b: = Block::{ .kind = .image, .level = 0, .label = "", .text = "",
             .first = ed.doc.images.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
@@ -426,7 +433,7 @@ impl Editor
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
         ed.finish(tx, .other, false)!
 
-    priv fn insert_whole(ed: Self$@, b: Block): Void!Refused //<
+    fn insert_whole(ed: Self$@, b: Block): Void!Refused //<
         //< A whole block in place of the selection, with an empty paragraph on each side
         s: = ed.start_spot()
         e: = ed.end_spot()
@@ -870,4 +877,5 @@ priv fn shows_table(blocks: List<|Block|>@, u: Sz): Bool //< whether a block sho
 
 priv fn whole_kind(kind: Block_kind): Bool //<
     //< a block that a clause holds, which print can leave out
-    return kind == .table || kind == .chart || kind == .image || kind == .include
+    return kind == .table || kind == .chart || kind == .image || kind == .include ||
+        kind == .diagram

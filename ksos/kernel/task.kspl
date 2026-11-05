@@ -338,6 +338,7 @@ extern fn ksos_trampoline()
 priv fn wake_delayed_to(now: U64) //< makes ready every task that should wake by time now
     //< That covers both an expired delay and **the timeout of a task waiting with one**. A task
     //< woken by its timeout loses what it waited on. Its wake-and-recheck tells which it was.
+    $gave_up: = false
     for i in Range.asc(g_task_count)
         t: = g_tasks[i]
         // t == null: a deleted slot waiting for reuse (see find_task_slot).
@@ -349,6 +350,11 @@ priv fn wake_delayed_to(now: U64) //< makes ready every task that should wake by
             t.wait_obj = null
             t.deadline_set = false
             t.state = .ready
+            gave_up = true
+    // **A waiter that gave up lends nothing from now on.** Left to its own recheck, the holder
+    // would keep the priority while the waiter is deleted or suspended before it runs again.
+    if gave_up
+        relend_all()
 
 priv fn wakes_by_clock(t: Task$@): Bool //<
     //< Whether it is in a wait that ends by time (a delay, or blocked with a timeout)

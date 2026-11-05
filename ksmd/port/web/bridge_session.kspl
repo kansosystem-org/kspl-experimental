@@ -1,0 +1,204 @@
+//< What every action of the ksmd page's bridge shares: the memory, the open document, the input
+//< buffer and the result
+//< `bridge.kspl` holds the actions on the text and on files, `bridge_tables.kspl` those on tables
+//< and charts, and `bridge_own.kspl` a person's own functions. Each begins with `begin` or
+//< `ensure`, reads what the script wrote with `text_in`, and ends with `result` or `refused`.
+//< Caution: **Refuse an action before memory runs short**, not during it. The heap is a fixed
+//< buffer, and running out midway stops the page with the document half changed
+//< (`ksmd_js_gave_up`).
+import "ksmd/base/source" { Source }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/calc"
+import "ksmd/calc/value" { Value }
+import "ksmd/edit/editor" { Editor, Refused }
+import "ksmd/edit/editor"
+import "ksmd/edit/editor_looks" // `here`
+import "ksmd/edit/history" { Change }
+import "ksmd/files/assemble" { assemble_loaded }
+import "ksmd/files/fetched" { Fetched }
+import "ksmd/files/files" { parse }
+import "ksmd/port/web/view" { Inside }
+import "ksmd/port/web/view"
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" + { Arena, dealloc }
+import "std/str" { Str_builder }
+
+extern fn ksmd_js_gave_up(msg: U8@, msg_len: Sz) //<
+    //< Throws in the script with the reason the page stopped; it does not return
+
+const HEAP_BYTES: Sz = 128 * 1024 * 1024 //< the fixed buffer that stands in for a heap
+    //< wasm has neither libc nor malloc (`mem.init_freestanding_heap`). It is zero-filled static
+    //< memory, so its size does not grow the `.wasm` file.
+const RESERVE: Sz = 16 * 1024 * 1024 //< the free memory an action needs before it starts
+$heap: U8[128*1024*1024] = ::{}
+$ready: Bool = false
+$out: Str_builder$@ = null //< where an action's result is written
+$input: U8$@ = null //< where the script writes text for an action
+$input_cap: Sz = 0
+$session: Arena$@ = null //< holds the open document, its edits and its history
+$loading: Arena$@ = null //< a document being read; freed by `ksmd_web_recover` if reading stops
+$ed: Editor$@ = null
+$files: Arena$@ = null //< holds the document's path and what was fetched for its view
+$fetched: Fetched$@ = null //< null until the page names a path: no file is fetched then
+$doc_path: U8[] = "" //< the open document's path from the workspace root
+
+priv fn give_up(msg: U8[]) //< the panic hook: the reason goes to the script, which throws
+    ksmd_js_gave_up(msg.ptr, msg.len)
+
+fn ensure() //< sets up the heap, the output and an empty document, once
+    if ready
+        return
+    mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
+    out = mem.alloc_as<|Str_builder|>()
+    mem.init_at(out, Str_builder())
+    panic_hook = give_up
+    ready = true
+    first: = Arena(64 * 1024)
+    src: = Source("document.ksmd", "%ksmd 1\n") catch
+        panic("the empty document reads")
+    doc: = reader.read(src@, first) catch
+        panic("the empty document reads")
+    session = first
+    // No date yet: the page loads its first document, with the date, before it shows anything.
+    ed = session.create(editor.open(doc, "", session))
+
+extern fn ksmd_web_in(n: Sz): U8$@ //<
+    //< a buffer of at least `n` bytes for the script to write text into
+    ensure()
+    if n > input_cap
+        // Caution: **Forget the old buffer before asking for a new one.** A request that fails
+        // stops the page, and a freed buffer still named here would be written again.
+        release_all_input()
+        input = U8$@::mem.alloc(n)
+        input_cap = n
+    return input
+
+extern fn ksmd_web_out_ptr(): U8@ //<
+    //< the last result's bytes; ask after the action, as memory can move
+    return out.slice().ptr
+
+extern fn ksmd_web_out_len(): Sz
+    return out.slice().len
+
+priv const KEPT_INPUT: Sz = 1024 * 1024 //< the input buffer kept between actions
+    //< A source or an image's window can need more for one call; it is let go after it.
+
+fn release_input() //< lets go a large input buffer, so a load does not hold it twice
+    if input_cap > KEPT_INPUT
+        release_all_input()
+
+priv fn release_all_input() //< lets go the input buffer, whatever its size
+    if input != null
+        dealloc(Void$@::input)
+    input = null
+    input_cap = 0
+
+fn assembled(scratch: Arena$@): Inside$@ //<
+    //< The view of the open document as it is now, over what was fetched. Each file it lacks is
+    //< in `fetched.wanted`. Only a page that named a path calls it, so `fetched` is set.
+    defer $text: = Str_builder()
+    writer.write(ed.doc@, text@)
+    top: = parse(doc_path, scratch.dup_str(text.slice()), scratch) catch
+        panic("the editor's document reads back")
+    fetched.ask(scratch)
+    a: = assemble_loaded(fetched, top, scratch)
+    return scratch.create(Inside(a, fetched.asked, ed.today, ed.own, scratch))
+
+fn number(v: json.Value): Sz //<
+    //< a whole number written in; -2, a place that names nothing, if not
+    if n: = v.as_int()
+        return n
+    return -2
+
+fn begin(): Bool //< whether an action may start; it clears what the last one changed
+    ensure()
+    ed.change = Change.none(ed.doc@)
+    return mem.heap_used_bytes() + RESERVE <= HEAP_BYTES
+
+fn full(): Sz //< the refusal of an action for want of memory
+    return result(false,
+        "The editor's memory is used up, so the change was not made. Save the document, then open \
+            it again.")
+
+fn refused(e: Refused): Sz
+    return result(false, e.message())
+
+fn result(ok: Bool, why: U8[]): Sz //<
+    //< `{"ok","why","from","tail","blocks","tables","sel","here","changed","undo","redo"}`: the blocks
+    //< from `from` up to the `tail` unchanged at the end, and each other table when values may have
+    //< changed. `changed` is 1 when the document changed, so a host knows to save it.
+    return result_with(ok, why, false)
+
+fn result_with(ok: Bool, why: U8[], files: Bool): Sz //<
+    //< `result`, with each block that shows a fetched file among the tables when `files` is true
+    defer scratch: = Arena(64 * 1024)
+    out.clear()
+    n: = ed.doc.blocks.len
+    from: = ed.change.from if ed.change.from < n else n
+    to: = n - ed.change.tail if ed.change.tail < n - from else from
+    values: = values_for(from, to, scratch)
+    inside: =
+        assembled(scratch) if shows_files(from, to) || files && fetched != null else null
+    out.s("{\"ok\":").s("true" if ok else "false").s(",\"why\":\"").escape_and_append(why)
+    out.s("\",\"from\":\{from\},\"tail\":\{n - to\},\"blocks\":")
+    view.blocks(ed, from, to, values@, inside, out)
+    out.s(",\"tables\":")
+    if ed.change.tables
+        view.tables(ed, from, to, values@, inside if files else null, out)
+    else
+        out.s("[]")
+    out.s(",\"sel\":")
+    view.selection(ed, out)
+    out.s(",\"here\":")
+    here(out)
+    out.s(",\"changed\":").s("1" if ed.change.any else "0")
+    out.s(",\"undo\":").s("1" if ed.can_undo() else "0")
+    out.s(",\"redo\":").s("1" if ed.can_redo() else "0").c('}')
+    return out.slice().len
+
+fn here(out: Str_builder$@) //<
+    //< `{"k","l","o","c","a","m"}`: the first selected unit's kind, level, numbering, tick box and
+    //< alignment, and `[emphasis, strong, code]` as 0 or 1, for the quick access bar to show
+    h: = ed.here()
+    st: = h.style
+    kind: =
+        ("other" if h.whole else "paragraph" if st.kind == .paragraph
+        else "heading" if st.kind == .heading else "code" if st.kind == .code
+        else "list" if st.kind == .list else "quote" if st.kind == .quote else "other")
+    align: =
+        ("left" if st.align == .left else "center" if st.align == .center
+        else "right" if st.align == .right else "")
+    check: = 1 if st.check == .open else 2 if st.check == .done else 0
+    out
+        .s("{\"k\":\"\{kind\}\",\"l\":\{st.level\},\"o\":\{1 if st.ordered else 0\},\"c\":\{check\},")
+    out.s("\"a\":\"\{align\}\",\"m\":[\{1 if h.emphasis else 0\},\{1 if h.strong else 0\},")
+    out.s("\{1 if h.code else 0\}]}")
+
+priv fn values_for(from: Sz, to: Sz, scratch: Arena$@): Results //<
+    //< Every table's values when the result shows a table or a chart; typing in prose
+    //< calculates nothing
+    $shows: = ed.change.tables
+    for b in Range(from, to, 1)
+        kind: = ed.doc.blocks.get(b).kind
+        shows = shows || kind == .table || kind == .chart
+    if shows
+        return calc.calculate(ed.doc@, ed.today, scratch, ed.own)
+    return Results::{ .values = List<|Value|>(scratch), .starts = List<|Sz|>(scratch),
+        .columns = List<|Sz|>(scratch) }
+
+priv fn shows_files(from: Sz, to: Sz): Bool //< whether an include, image or functions file is there
+    if fetched == null
+        return false
+    for b in Range(from, to, 1)
+        kind: = ed.doc.blocks.get(b).kind
+        if kind == .include || kind == .image || kind == .functions
+            return true
+    return false
+
+fn text_in(len: Sz): U8[] //< the text the script wrote into the input buffer
+    if len <= 0 || input == null
+        return ""
+    return U8[]::{ .ptr = input, .len = len if len <= input_cap else input_cap }

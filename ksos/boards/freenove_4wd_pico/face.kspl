@@ -33,7 +33,7 @@ impl Look
         //< previous expression.
         look = l
         frame = 0
-        next_us = 0
+        shown = false
 
     priv fn frames_of(l: Self): Sz //< the frame count per expression
         switch l
@@ -141,7 +141,8 @@ priv $addr: U32 = 0
 priv $ready: Bool = false
 priv $look: Look = .off
 priv $frame: Sz = 0
-priv $next_us: U32 = 0
+priv $shown: Bool = false //< whether a frame of this expression was sent
+priv $last_us: U32 = 0 //< when the last frame was sent
 
 fn init(): Void!mmio.Driver_error //< starts I2C and the matrix
     //< `not_found` where no matrix answers on the bus.
@@ -203,10 +204,12 @@ fn show() //< keeps the face updated
     //< display RAM.
     if !ready
         return
-    now: = timer.now_us()
-    if next_us != 0 && now < next_us
+    // **Time since the last frame, not a deadline**: the microsecond count wraps every 71.6
+    // minutes, and a deadline past the wrap would send a frame on every call until it came.
+    if shown && timer.elapsed_us(last_us) < look.step_ms_of() * 1000
         return
-    next_us = now + look.step_ms_of() * 1000
+    last_us = timer.now_us()
+    shown = true
     n: = look.frames_of()
     if n == 0
         matrix.clear(addr) catch {}

@@ -127,12 +127,30 @@ impl Sema_ctx
             if r.index_stops_permission_walk(recv.type_id)
                 return false
             return r.place_denies_write(recv)
+        if r.is_slice_descriptor_field(node)
+            return true
         recv_tid: = recv.type_id
         if r.env.is_pointer(recv_tid)
             return r.env.is_const(r.env.strip_ptr(recv_tid))
         if op.equals("$")
             return true // `$` on a non-pointer: the type could not be followed
         return r.place_denies_write(recv)
+
+    fn is_slice_descriptor_field(r: Self$@, node: Ast_node$@): Bool //<
+        //< Whether node is a slice's `.ptr` or `.len`, which can be read and never written
+        //< The bounds check trusts `.len`, so a write to it (`s.len = 100000`) let a checked
+        //< subscript read past the memory. A new slice is made whole instead (`sub`, or a literal
+        //< `T[]::{ .ptr = p, .len = n }`).
+        if node == null || node.kind_id != .k_expr_postfix || node.children.len < 2
+            return false
+        op: = node.get_postfix_op()
+        member: = node.get_postfix_member()
+        recv: = node.get_postfix_receiver()
+        if op == null || !op.text.equals(".") || member == null || recv == null
+            return false
+        if !member.text.equals("len") && !member.text.equals("ptr")
+            return false
+        return r.env.is_slice(r.env.receiver_base_id(recv.type_id))
 
     fn address_is_readonly(r: Self$@, place: Ast_node$@): Bool //<
         //< Whether `place@` is a read-only pointer: the place must not be written through it
@@ -164,6 +182,12 @@ impl Sema_ctx
             return .none
         if op_node.text.equals("[") && r.env.const_elem_of(recv.type_id)
             return .some(recv)
+        // **Past a pointer or a slice, the receiver's elements are not what is written**: the
+        // memory it points at is, and its own type decides (`a[0]$ = 7` on `a: I32$@[2]` writes
+        // through the element's `$@`).
+        if op_node.text.equals("$") || r.env.is_pointer(recv.type_id) ||
+            (op_node.text.equals("[") && r.env.is_slice(recv.type_id))
+            return .none
         return r.const_elem_receiver(recv)
 
     fn binding_value_type(r: Self$@, type_id: I32, is_mut: Bool): I32 //<
@@ -293,7 +317,7 @@ impl Sema_ctx
             return true
         // Rule 3 does not apply where this level is a pointer: what is written is then **the
         // pointee**, which the type decides. **A slice is no exception**: a `Self$@` method on it
-        // writes the descriptor, which is the binding's own value (`s.len -= 1`). A method that
+        // writes the descriptor, which is the binding's own value (`r$ = r.sub(1)`). A method that
         // writes only the elements takes `Self@` (`fill` on `U8$[]`) and does not ask this ("The
         // two axes of mutability" in docs/SPEC-programming-language.md).
         if r.env.is_pointer(node.type_id)
@@ -323,6 +347,12 @@ impl Sema_ctx
         if node == null
             return .none
         if node.kind_id == .k_identifier || node.kind_id == .k_expr_path
+            // **A name is read as any value's** (read_written_name), so `lib.CB` through an import
+            // alias and a `CB` an import's braces select both reach the other file's `const`. Read
+            // by its head alone, they reached the alias or nothing, and `lib.CB.bump()` wrote ROM.
+            named: = r.read_written_name(node)
+            if named.sym != null && named.sym.kind.is_var_or_const()
+                return .some(named.sym)
             name: = node.get_path_or_ident_name()
             root: = name.fqn_head()
             if root.len == 0
@@ -355,6 +385,55 @@ impl Sema_ctx
                 first ('$w: = \{sym.name\}') and write to that")
         r.err(place, r.scratch.slice())
         return true
+
+    fn refuse_writing_receiver(r: Self$@, recv: Ast_node$@, method: Ast_node$@, op: U8[]) //<
+        //< Refuses a `Self$@` method on a receiver it may not write
+        //< A call (`x.m()`, op empty) and an operator (`x + y`, op `+`) take the receiver's address
+        //< alike, so both ask this one function ("Which operation takes which place" in
+        //< docs/SPEC-programming-language.md). Asked by the call alone, `CV + CV` wrote a `const`.
+        if recv == null
+            return
+        switch r.env.method_receiver_permission(method)
+        case .some(need)
+            if !need.ptr || !need.mut_ptr
+                return
+        case .none
+            return
+        // **A temporary is a copy**, so the caller never sees the write
+        // (`make_point().set_n(5)`: "called, nothing happened"). "A read-only location" does not
+        // describe it.
+        if r.env.receiver_is_copy(recv, recv.type_id)
+            r.clear_scratch()
+            if op.len == 0
+                r.scratch
+                    .s("cannot call a method that writes its receiver ('Self$@') on a temporary \
+                        object.")
+            else
+                r.scratch
+                    .s("cannot apply '\{op\}' to a temporary object: its method takes the operand \
+                        as 'Self$@' (writable).")
+            r.scratch
+                .s(" The write would affect a copy that is then discarded. Bind the object first \
+                    (`$x: = ...;`), or take the receiver as 'Self@' if the method does not write.")
+            r.err(recv, r.scratch.slice())
+            return
+        // **The same permission as an assignment**, or `v.n = 9` is refused while `v.bump()` or
+        // `v + w` writes (on `const` data, a write to ROM).
+        if !r.place_is_readonly(recv) || r.refuse_made_binding_write(recv)
+            return
+        r.clear_scratch()
+        if op.len == 0
+            r.scratch
+                .s("cannot call a method that takes a writable receiver ('Self$@') on a read-only \
+                    location.")
+        else
+            r.scratch
+                .s("cannot apply '\{op\}' to a read-only operand: its method takes the operand as \
+                    'Self$@' (writable).")
+        r.scratch
+            .s(" Make the binding mutable ('$x'), take the receiver as 'Self@' if the method does \
+                not write, or cast explicitly ('T$@::(...)') if the write is intended.")
+        r.err(recv, r.scratch.slice())
 
     fn refuse_interior_mutable_copy(r: Self$@, type_id: I32, name: U8[], loc: Ast_node$@) //<
         //< Refuses a binding the compiler makes (it holds a copy) of an `Interior_mutable` type
@@ -478,41 +557,55 @@ impl Sema_ctx
                 continue
             r.check_type_node_vis(child, owner_rank, position, owner, seen)
 
-    priv fn is_exempt_generic_reference(r: Self$@, sym: Sema_symbol$@, defined_in: U8[]): Bool //<
+    priv fn is_exempt_generic_reference(r: Self@, sym: Sema_symbol$@, defined_in: U8[]): Bool //<
         //< Whether the reference only looks like "a name from an outside file" because of a generic
-        //< A monomorphized template's type variable holds a type from the instantiating file.
+        //< A monomorphized template's body is read in its own file, while its type variable holds a
+        //< type from the file that instantiated it. **The type argument itself passes**, and so
+        //< does what the outermost instantiation's file sees: a generic's type arguments pass
+        //< through, but are no wider there than where they were named. `List<|Cell|>` in `std/ds`
+        //< so calls a `priv struct Cell`'s `equals`, while a generic called on `Rc<|I32|>` cannot
+        //< call its `priv` `release`, nor one called on `lib.S` read its `priv` field.
         //<
         //< Caution: **Stop every visibility-based diagnostic here** (the reason is at
         //< is_bound_generic_type).
         if r.is_bound_generic_type(sym)
             return true
-        for arg in r.generics.args
-            arg_base_id: = r.env.get_real_type(arg.bound_type_id)
-            clean_arg_str: = r.env.base_type_name(arg_base_id)
-            if clean_arg_str.len > 0
-                if sym.name.starts_with(clean_arg_str)
-                    if sym.name.len > clean_arg_str.len &&
-                        (sym.name.ptr + clean_arg_str.len)$ == '.'
-                        return true
-                arg_sym: = r.symtab.resolve(clean_arg_str).unwrap_or(null)
-                if arg_sym != null && arg_sym.get_defined_in().len > 0
-                    if defined_in.equals(arg_sym.get_defined_in())
-                        return true
-        return false
+        site_file: = r.outermost_instance_file()
+        if site_file.len == 0 || site_file.equals(r.file_name)
+            return false
+        return defined_in.equals(site_file) ||
+            r.vis_allows_from(sym.vis, defined_in, site_file)
+
+    priv fn outermost_instance_file(r: Self@): U8[] //<
+        //< The file of the call or type that started the chain of instantiations being analysed
+        //< Empty outside a generic's instance (the chain is the one instance_notes in
+        //< `../session/ctx.kspl` names).
+        $at: = r.generics.analysing
+        $file: U8[] = ""
+        for at >= 0 && at < r.generics.pending.len
+            p: = r.generics.pending.get(at)
+            if p.site != null && p.site.loc.file().len > 0
+                file = p.site.loc.file()
+            at = p.from
+        return file
 
     priv fn vis_allows_here(r: Self@, vis: sema_type_scope.Visibility, defined_in: U8[]): Bool //<
         //< Whether the visibility level makes that declaration visible in the file being analysed
-        //< **This is the one place that defines the three levels' meaning** (see "Structs
-        //< (`struct`)" in docs/SPEC-programming-language.md). A stale copy would let an invisible
-        //< name pass on one path.
+        return r.vis_allows_from(vis, defined_in, r.file_name)
+
+    priv fn vis_allows_from(_r: Self@, vis: sema_type_scope.Visibility, defined_in: U8[],
+        file: U8[]): Bool //<
+            //< Whether the visibility level makes that declaration visible in file
+            //< **This is the one place that defines the three levels' meaning** (see "Structs
+            //< (`struct`)" in docs/SPEC-programming-language.md). A stale copy would let an
+            //< invisible name pass on one path.
         if vis == sema_type_scope.Visibility.file_private
             return false
         if vis == sema_type_scope.Visibility.internal
-            return base_locate.package_of(defined_in)
-                .equals(base_locate.package_of(r.file_name))
+            return base_locate.package_of(defined_in).equals(base_locate.package_of(file))
         return true
 
-    fn is_symbol_visible_here(r: Self$@, sym: Sema_symbol$@): Bool //<
+    fn is_symbol_visible_here(r: Self@, sym: Sema_symbol$@): Bool //<
         //< Whether sym can be named from this position
         //< **It neither reports nor marks anything**, for asking without a diagnostic
         //< (sema/body/struct_literal.kspl, on the fields a `::{ … }` omitted).
@@ -576,7 +669,7 @@ impl Sema_ctx
                 .s("cannot access symbol '\{info.name\}'\n(defined in \{info.target_path\})")
             r.err(info.decl_node, r.scratch.slice())
 
-    fn is_field_visible_here(r: Self$@, field: Struct_field$@): Bool //<
+    fn is_field_visible_here(r: Self@, field: Struct_field$@): Bool //<
         //< is_symbol_visible_here for a struct field, which has no symbol of its own
         return r.is_symbol_visible_here(field_symbol(field))
 

@@ -2,6 +2,7 @@
 //< Each edit is checked against the source it saves, and that source must save again unchanged.
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
+import "ksmd/edit/moving"
 import "ksmd/model/model" { Cell_kind, Document, Piece_kind }
 import "ksmd/tests/support" { join, read, written }
 import "std/mem" { Arena }
@@ -12,8 +13,13 @@ priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
 priv const ROWS: U8[] = "| 1 | =A1 |\n| 2 | =A1+A2 |\n| 3 | =sum(A1:A3) |\n:::\n"
 priv const START: U8[] = "%ksmd 1\n\n"
 priv const ABC: U8[] =
-    ":::table name=\"t\" widths=\"1,2,3\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1+sum(A1:B1) \
-        |\n:::\n"
+    ":::table name=\"t\" char_widths=\"1,2,3\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
+        =A1+B1+sum(A1:B1) |\n:::\n"
+priv const SUMS: U8[] = //< table `t`'s rows, then a table `u` that sums its whole columns
+    "| 1 | |\n| 2 | |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =sum(t.A) + count(t.A:B) |\n:::\n"
+priv const T_SUMS: U8[] = //< the same with table `t`'s names row
+    ":::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | |\n| 2 | |\n:::\n\n:::table name=\"u\"\n| \"x\" \
+        |\n| =sum(t.A) + count(t.A:B) |\n:::\n"
 priv const U: U8[] = "\n:::table name=\"u\"\n| \"x\" |\n"
 
 fn run()
@@ -21,6 +27,7 @@ fn run()
     rows()
     removed_rows()
     columns()
+    whole_columns()
     copies()
     conditions()
     cells()
@@ -67,17 +74,17 @@ priv fn rows()
         "| 1 | |\n| 3 | =sum(A1:A3) |\n| 2 | |\n:::\n")
     defer arena: = Arena(64 * 1024)
     $doc: =
-        read("%ksmd 1\n\n:::table name=\"t\" widths=\"1,2\" groups=\"rows 1-2\"\n| \"a\" | \"b\" \
-            |\n| 1 | =A1 |\n| 2 | =sum(A1:A2) |\n:::\n", arena)
+        read("%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,2\" groups=\"rows 1-2\"\n| \"a\" | \
+            \"b\" |\n| 1 | =A1 |\n| 2 | =sum(A1:A2) |\n:::\n", arena)
     edit.insert_rows(doc@, 0, 1, 3, arena) catch
         panic("inserting three rows")
     edit.insert_columns(doc@, 0, 1, 2, arena) catch
         panic("inserting two columns")
     many: = written(doc@, arena)
     want: =
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2,2,2\" groups=\"rows 1-5\"\n| \"a\" | \"\" | \
-            \"\" | \"b\" |\n| 1 | | | =A1 |\n| | | | |\n| | | | |\n| | | | |\n| 2 | | | =sum(A1:A5) \
-            |\n:::\n"
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,2,2,2\" groups=\"rows 1-5\"\n| \"a\" | \"\" \
+            | \"\" | \"b\" |\n| 1 | | | =A1 |\n| | | | |\n| | | | |\n| | | | |\n| 2 | | | \
+            =sum(A1:A5) |\n:::\n"
     verdict.check("rows and columns inserted together do what each one alone does",
         many.equals(want), many)
 
@@ -95,19 +102,39 @@ priv fn removed_rows()
             |\n:::\n", .remove_row, 0,
         "| 2 | |\n| 3 | |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =t.A1 + t.$A$2 |\n:::\n")
 
+// Whole columns hold no row: rows removed, moved or added only change how many they take, and
+// the columns themselves follow as a range's do.
+priv fn whole_columns()
+    edited("whole columns are kept as written", HEAD, SUMS, .none, 0, SUMS)
+    edited("removing a row leaves whole columns whole", HEAD, SUMS, .remove_row, 0,
+        "| 2 | |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =sum(t.A) + count(t.A:B) |\n:::\n")
+    edited("a column inserted inside whole columns joins them", START, T_SUMS, .insert_column, 1,
+        ":::table name=\"t\"\n| \"a\" | \"\" | \"b\" |\n| 1 | | |\n| 2 | | |\n:::\n\n:::table \
+            name=\"u\"\n| \"x\" |\n| =sum(t.A) + count(t.A:C) |\n:::\n")
+    edited("removing the column of a whole column turns it into #REF!", START, T_SUMS,
+        .remove_column, 0,
+        ":::table name=\"t\"\n| \"b\" |\n| |\n| |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| \
+            =sum(#REF!) + count(t.A) |\n:::\n")
+    edited("a moved column takes its whole-column references along", START, T_SUMS, .move_column, 0,
+        ":::table name=\"t\"\n| \"b\" | \"a\" |\n| | 1 |\n| | 2 |\n:::\n\n:::table name=\"u\"\n| \
+            \"x\" |\n| =sum(t.B) + count(t.A:B) |\n:::\n")
+    edited("a whole column past the table stays text", HEAD, "| =sum(t.C) + 1 | |\n:::\n", .none, 0,
+        "| =sum(t.C) + 1 | |\n:::\n")
+
 priv fn columns()
     edited("inserting a column takes the width of the one it stands before", START, ABC,
         .insert_column, 1,
-        ":::table name=\"t\" widths=\"1,2,2,3\"\n| \"a\" | \"\" | \"b\" | \"c\" |\n| 1 | | 2 | \
+        ":::table name=\"t\" char_widths=\"1,2,2,3\"\n| \"a\" | \"\" | \"b\" | \"c\" |\n| 1 | | 2 | \
             =A1+C1+sum(A1:C1) |\n:::\n")
     edited("a column added after the last takes its width", START, ABC, .insert_column, 3,
-        ":::table name=\"t\" widths=\"1,2,3,3\"\n| \"a\" | \"b\" | \"c\" | \"\" |\n| 1 | 2 | \
+        ":::table name=\"t\" char_widths=\"1,2,3,3\"\n| \"a\" | \"b\" | \"c\" | \"\" |\n| 1 | 2 | \
             =A1+B1+sum(A1:B1) | |\n:::\n")
     edited("removing a column removes its name and width", START, ABC, .remove_column, 0,
-        ":::table name=\"t\" widths=\"2,3\"\n| \"b\" | \"c\" |\n| 2 | =#REF!+A1+sum(A1:A1) |\n:::\n")
+        ":::table name=\"t\" char_widths=\"2,3\"\n| \"b\" | \"c\" |\n| 2 | =#REF!+A1+sum(A1:A1) \
+            |\n:::\n")
     edited("a moved column takes its name, width and references along", START, ABC, .move_column, 0,
-        ":::table name=\"t\" widths=\"2,3,1\"\n| \"b\" | \"c\" | \"a\" |\n| 2 | =C1+A1+sum(A1:C1) | \
-            1 |\n:::\n")
+        ":::table name=\"t\" char_widths=\"2,3,1\"\n| \"b\" | \"c\" | \"a\" |\n| 2 | \
+            =C1+A1+sum(A1:C1) | 1 |\n:::\n")
     defer arena: = Arena(64 * 1024)
     $doc: = read("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =B1 |\n:::\n", arena)
     edit.insert_columns(doc@, 0, 1, 1, arena) catch
@@ -296,13 +323,13 @@ priv fn apply(doc: Document$@, change: Change, at: Sz, arena: Arena$@): Void!Edi
     case .remove_row
         edit.remove_row(doc, 0, at)!
     case .move_row
-        edit.move_rows(doc, 0, at, 1, rows)!
+        moving.move_rows(doc, 0, at, 1, rows)!
     case .insert_column
         edit.insert_columns(doc, 0, at, 1, arena)!
     case .remove_column
         edit.remove_column(doc, 0, at)!
     case .move_column
-        edit.move_columns(doc, 0, at, 1, columns)!
+        moving.move_columns(doc, 0, at, 1, columns)!
 
 priv fn refused_set(what: U8[], doc: Document$@, kind: Cell_kind, text: U8[], arena: Arena$@) //<
     //< Setting cell A1 of table 0 to `text` is refused as no value, and changes nothing

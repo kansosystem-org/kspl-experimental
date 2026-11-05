@@ -653,3 +653,32 @@ fn main(): I32
   x:
   x = 1
   return x
+// ==== case generic_body_reaches_hidden_member
+//< A generic body reaches its type argument's members only as far as its own file sees them
+//< It reaches what the file that started the instantiation sees, since a generic's type arguments
+//< pass through. Before, any member of the type argument and any name of its file passed. Called
+//< on `Rc<|I32|>`, `drop_twice` called the `priv` `release` twice: a use after free. `List<|Cell|>`
+//< in `std/ds` still calls the `equals` of this file's `priv struct Cell`.
+// EXPECT: generic_body_reaches_hidden_member.kspl:13:3: error: cannot access symbol 'release'
+// EXPECT: Finished with 1 error(s)
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/refcount" { Rc }
+
+priv fn drop_twice<|T|>(x: T@)
+  x.release()
+
+priv struct Cell
+  v: I32
+
+impl Cell
+  fn equals(r: Self@, other: Cell): Bool
+    return r.v == other.v
+
+fn main(): I32
+  defer arena: = Arena(4096)
+  rc: = Rc<|I32|>(7)
+  drop_twice(rc@)
+  $cells: = List<|Cell|>(arena)
+  cells.push(Cell::{ .v = 1 })
+  return 0 if cells.contains(Cell::{ .v = 1 }) else 1

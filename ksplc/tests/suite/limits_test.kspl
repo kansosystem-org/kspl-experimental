@@ -57,6 +57,24 @@ priv fn src_type_postfix(n: Sz, arena: Arena$@): U8[] //< `I32@@@...` n deep
         b.c('@')
     return b.s(" = null\n  return 0 if p == null else 1\n\n").take()
 
+priv fn src_slice_postfix(n: Sz, arena: Arena$@): U8[] //< `I32[][]...` n deep, as a parameter
+    b: = arena.text()
+    b.s("fn f(_x: I32")
+    for _i in Range.asc(n)
+        b.s("[]")
+    return b.s(")\n  return\n\nfn main(): I32\n  return 0\n").take()
+
+priv fn src_interp(n: Sz, arena: Arena$@): U8[] //<
+    //< A string holding a string in its interpolation, n deep, on one line and left open
+    //< **The reader that places each line's `;` walks it before the parser does**
+    //< (`../../parse/layout.kspl`). Walked by recursion, 100,000 levels overflowed the stack there,
+    //< and every tool crashed before the parser's depth limit could report it.
+    b: = arena.text()
+    b.s("import \"std/io\"\nfn main(): I32\n  io.out().s(\"")
+    for _i in Range.asc(n)
+        b.s("\\{\"")
+    return b.s("\n  return 0\n").take()
+
 priv fn src_struct(n: Sz, arena: Arena$@): U8[]
     b: = arena.text()
     b.s("priv struct S0 { v: I32; }\n")
@@ -166,7 +184,7 @@ priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@
 
 fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
-    io.out().s("# implementation limits: 13\n")
+    io.out().s("# implementation limits: 15\n")
     at_limit("block",
         arena.text().s("a block can be nested \{BLOCK_NESTING\} deep").take(),
         src_block(BLOCK_NESTING, arena), arena)
@@ -209,4 +227,10 @@ fn main(): I32
     // Which one depends on the stack a build of ksplc spends per level. Both name depth.
     too_deep("deep_block", "a block nested far past the guarantee is refused as a depth",
         src_block(BLOCK_NESTING * 5, arena), "nesting too deep", arena)
+    // Both were once a crash: the stack overflowed before any depth guard was met.
+    too_deep("deep_postfix", "a type's postfix steps far past the guarantee are refused as a depth",
+        src_slice_postfix(5000, arena), "type nesting too deep", arena)
+    too_deep("deep_interp",
+        "strings nested in interpolations far past any limit are refused as a depth",
+        src_interp(100000, arena), "nesting too deep", arena)
     return harness.finish()

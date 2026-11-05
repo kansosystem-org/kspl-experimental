@@ -178,7 +178,19 @@ priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
         upcast_node.add_child(call_node)
         stmt_ret.add_child(upcast_node)
     else if !is_void
-        stmt_ret.add_child(call_node)
+        $ret_value: = call_node
+        // **An implementation may return a pointer where the trait returns a value** ("Checking
+        // trait conformance" in docs/SPEC-programming-language.md): the thunk reads through it.
+        // Passed on as it is, the C compiler only warned, and the caller took an address for a
+        // number.
+        if target.ret_id != 0 && c.env.is_pointer(target.ret_id) &&
+            !c.env.is_pointer(req_m.type_id)
+            deref_ret: = Ast_node(.k_expr_postfix, "$", loc)
+            deref_ret.type_id = c.env.get_clean_real_type(c.env.strip_ptr(target.ret_id))
+            deref_ret.add_child(call_node)
+            deref_ret.add_child(Ast_node(.k_literal, "$", loc))
+            ret_value = deref_ret
+        stmt_ret.add_child(ret_value)
     else
         block.add_child(Ast_node(.k_stmt_expr, "expr", loc).add_child(call_node))
     block.add_child(stmt_ret)

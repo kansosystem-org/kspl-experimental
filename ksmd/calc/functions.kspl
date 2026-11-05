@@ -7,13 +7,16 @@
 //< opened. They stay in `ksmd/calc/calc.kspl`.
 //< Caution: **Change a signature here, then run `make ksmd-functions`**, which writes the table
 //< again; `make debug-ksmd` fails while the two differ.
-import "ksmd/base/dates" { day_of, ymd_of }
+import "ksmd/base/dates" { day_of, write_date, write_date_with, ymd_of }
 import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
-import "ksmd/calc/value" { Calc_error, Value, date_value, number }
-import "ksmd/model/format" { round_places }
+import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value, number }
+import "ksmd/model/format" { SHOWN_DIGITS, format_of, round_digits, round_places, show, show_plain }
+import "std/chars" // `next_codepoint`, `count_codepoints`
+import "std/math"
 import "std/mem" { Arena }
-import "std/str" // `text`
+import "std/str" { Str_builder } // and `text`, `find_str`
 import "std/strfmt" as _strfmt // `\{}` of a whole number
+import "std/strnum" // `to_f64`
 
 // **What a person's own functions use is public, so [I0402] is off here.** Their file stands in
 // their own workspace, outside this package, and calls these; the lint sees only ksmd's own uses.
@@ -81,20 +84,179 @@ priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
         return date_value(I64::best)
     return number(best)
 
+pub fn mod(x: F64, y: F64): F64!Calc_error //<
+    //< what is left of `x` after dividing by `y`, with the sign of `y`: `mod(-1, 72)` is 71
+    //< So a count of minutes wraps round a clock. A division by zero is `#DIV/0!`, and a quotient
+    //< past 2^53, whose remainder an F64 no longer holds, is `#NUM!`.
+    if y == 0.0
+        throw .division
+    q: = x / y
+    if q >= 9007199254740992.0 || q <= -9007199254740992.0
+        throw .not_finite
+    $times: = F64::(I64::q)
+    if times > q
+        times -= 1.0
+    return x - y * times
+
+pub fn power(x: F64, y: F64): F64!Calc_error //< `x` to the power `y`; no real answer is `#NUM!`
+    return math.pow(x, y)
+
+// ==========================================
+// Text ("Text" in `ksmd/docs/DESIGN-ksmd.md`)
+// ==========================================
+// A position counts characters from 1, not bytes, so Japanese text cuts where it reads. A count
+// or a position below its least is `#NUM!`; one past the end takes what there is.
+
+pub fn len(t: U8[]): I64 //< how many characters the text holds
+    return t.count_codepoints()
+
+pub fn left(t: U8[], count: I64): U8[]!Calc_error //< the first `count` characters
+    return t.sub(0, offset_of(t, count, 0)!)
+
+pub fn right(t: U8[], count: I64): U8[]!Calc_error //< the last `count` characters
+    if count < 0
+        throw .not_finite
+    skip: = I64::t.count_codepoints() - count
+    return t.sub_from(offset_of(t, skip if skip > 0 else 0, 0)!)
+
+pub fn mid(t: U8[], start: I64, count: I64): U8[]!Calc_error //<
+    //< `count` characters from the `start`th, the first being 1
+    if start < 1
+        throw .not_finite
+    from: = offset_of(t, start - 1, 0)!
+    return t.sub(from, offset_of(t, count, from)! - from)
+
+pub fn find(part: U8[], t: U8[]): I64 //<
+    //< where `part` first stands in `t`, in characters from 1; 0 where it does not
+    //< Case counts: `find("a", "A")` is 0.
+    if at: = t.find_str(part)
+        return I64::t.sub(0, at).count_codepoints() + 1
+    return 0
+
+pub fn value(v: Value): F64!Calc_error //<
+    //< the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is
+    //< **The one way from text to a number**, since arithmetic never reads text. Any other text,
+    //< `true`/`false` or a date is `#VALUE!`; an empty cell is 0.
+    switch v.kind
+    case .number
+        return v.number
+    case .empty
+        return 0.0
+    case .text
+        return v.text.to_f64() catch
+            throw .wrong_kind
+    default
+        throw .wrong_kind
+
+pub fn substitute(t: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]!Calc_error //<
+    //< `t` with every `old` in it replaced by `new`, from the left and without overlaps
+    //< Case counts, as in `find`; an empty `old` leaves `t` as it is. A result past `MAX_TEXT`
+    //< bytes is `#NUM!`, measured before the text is made.
+    if old.len == 0
+        return t
+    $length: = t.len
+    $at: Sz = 0
+    for at < t.len
+        if t.starts_with(old, at)
+            // A growing text is checked at each step, so the count cannot overflow a 32-bit `Sz`.
+            length += new.len - old.len
+            if new.len > old.len && length > MAX_TEXT
+                throw .not_finite
+            at += old.len
+        else
+            at += 1
+    if length > MAX_TEXT
+        throw .not_finite
+    out: = arena.text()
+    at = 0
+    for at < t.len
+        if t.starts_with(old, at)
+            out.s(new)
+            at += old.len
+        else
+            out.c(t[at])
+            at += 1
+    return out.take()
+
+pub fn text(v: Value, format: U8[], arena: Arena$@): U8[]!Calc_error //<
+    //< a number or a date written as text, as a column's number format would show it
+    //< `text(E2, "date:yyyy/mm/dd")` is `"2026/06/18"`, and `text(0.25, "percent:0")` is `"25%"`.
+    //< **The one way from a number to text**, so `&` can join it. An empty `format` writes the
+    //< number as the page shows it without a format: `text(0.1 + 0.2, "")` is `"0.3"`. Text stays
+    //< as it is; a format that does not read, or `true`/`false`, is `#VALUE!`.
+    f: = format_of(format) catch
+        throw .wrong_kind
+    defer $out: = Str_builder()
+    switch v.kind
+    case .text
+        return v.text
+    case .empty
+        return ""
+    case .date
+        if f.kind == .slash_date
+            write_date_with(I64::v.number, '/', out@)
+        else
+            write_date(I64::v.number, out@)
+    case .number
+        if f.kind == .none || f.kind == .general || f.kind == .slash_date
+            show_plain(v.number, out@)
+        else
+            show(v.number, f, out@)
+    default
+        throw .wrong_kind
+    return arena.dup_str(out.slice())
+
+priv fn offset_of(t: U8[], count: I64, from: Sz): Sz!Calc_error //<
+    //< The byte `count` characters after the byte `from`, or the end; a negative count is `#NUM!`
+    if count < 0
+        throw .not_finite
+    $at: = from
+    for $n: I64 = 0; n < count && at < t.len; n += 1
+        at += t.next_codepoint(at)
+    return at
+
 // ==========================================
 // Rounding and dates
 // ==========================================
 
 pub fn round(x: F64, places: I64): F64!Calc_error //<
-    //< `x` rounded to `places` decimal places, half away from zero, as a number format rounds the
-    //< digits a person reads. `places` goes from -15 to 15; -2 rounds to hundreds.
+    //< `x` rounded to `places` decimal places, half away from zero; -2 rounds to hundreds
+    //< It rounds the digits a person reads, as a number format does. `places` goes from -15 to 15.
     if places < -MAX_ROUND || places > MAX_ROUND
         throw .not_finite
     return round_places(x, Sz::places) catch
         throw .not_finite
 
+pub fn round_down(x: F64, places: I64): F64!Calc_error //<
+    //< `x` cut to `places` decimal places, toward zero, as `round` takes its places
+    return cut(x, places, false)!
+
+pub fn round_up(x: F64, places: I64): F64!Calc_error //<
+    //< `x` taken to `places` decimal places, away from zero, as `round` takes its places
+    return cut(x, places, true)!
+
+priv fn cut(x: F64, places: I64, away: Bool): F64!Calc_error //<
+    //< `round_down` or `round_up`: the digits a person reads are cut, so 0.3 stays 0.3
+    // The scaled value is first rounded to the digits a number shows, so `round_down(0.1 + 0.2,
+    // 1)` is 0.3: the F64 just above 0.3 would cut to 0.3 anyway, and the one just below to 0.2.
+    // Only those digits are rounded, so `round_down(0.99999999, 0)` stays 0.
+    if places < -MAX_ROUND || places > MAX_ROUND
+        throw .not_finite
+    $scale: = 1.0
+    for _ in Range.asc(Sz::(places if places > 0 else -places))
+        scale *= 10.0
+    scaled: = x * scale if places >= 0 else x / scale
+    if scaled >= 9007199254740992.0 || scaled <= -9007199254740992.0
+        return x
+    near: = round_digits(scaled, SHOWN_DIGITS) catch
+        throw .not_finite
+    $kept: = F64::(I64::near)
+    if away && kept != near
+        kept += 1.0 if near > 0.0 else -1.0
+    return kept / scale if places >= 0 else kept * scale
+
 pub fn date(year: I64, month: I64, day: I64): Value!Calc_error //<
-    //< The day the three parts name, in the years 1 to 9999; any other is `#NUM!`
+    //< the day the three parts name, in the years 1 to 9999; any other is `#NUM!`
     d: = day_of(year, month, day) catch
         throw .not_finite
     return date_value(d)

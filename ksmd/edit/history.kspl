@@ -4,8 +4,8 @@
 //< only ever added, so a block swapped back still names valid nodes.
 //< A table edit is recorded by comparing each table with a copy made before the edit: cell by
 //< cell and piece by piece where the table keeps its shape, or the whole table otherwise. Column
-//< widths, formats, choices, rules and filters, and groups and heights of rows, changed alone are
-//< recorded alone, so a large table's cells are not copied.
+//< widths, formats, choices, rules and filters, groups, the column that colours whole rows, and
+//< heights of rows, changed alone are recorded alone, so a large table's cells are not copied.
 //< Caution: **Undo and redo strictly in order.** A swap restores the exact state its action started
 //< from only when every later action has been undone first.
 import "ksmd/edit/region" { Spot, Style }
@@ -48,13 +48,16 @@ struct Piece_swap //< another version of piece `index` of the table at `table`
     piece: Piece
 
 struct Columns_swap //< another version of the layout of the table at `table`
-    //< Its column weights, formats, choices, rules and filters, and its groups and heights of rows.
+    //< Its column widths, formats, choices, rules and filters, its groups of rows and of
+    //< columns, the column that colours whole rows, and its heights of rows.
     table: Sz
-    weights: List<|Sz|>
+    widths: List<|Sz|>
     formats: List<|Number_format|>
     choices: List<|U8[]|>
     rules: List<|Rule|>
     groups: List<|Group|>
+    column_groups: List<|Group|>
+    row_colors: Sz
     heights: List<|Row_height|>
     filters: List<|Column_filter|>
 
@@ -148,25 +151,31 @@ fn swap(doc: Document$@, tx: Transaction$@, undo: Bool, change: Change$@, scratc
         s.piece = here
     for i in Range.asc(tx.columns.len)
         s: = tx.columns[i]@
-        weights: = doc.tables[s.table].weights
+        widths: = doc.tables[s.table].widths
         formats: = doc.tables[s.table].formats
         choices: = doc.tables[s.table].choices
         rules: = doc.tables[s.table].rules
         groups: = doc.tables[s.table].groups
+        column_groups: = doc.tables[s.table].column_groups
+        row_colors: = doc.tables[s.table].row_colors
         heights: = doc.tables[s.table].heights
         filters: = doc.tables[s.table].filters
-        doc.tables[s.table].weights = s.weights
+        doc.tables[s.table].widths = s.widths
         doc.tables[s.table].formats = s.formats
         doc.tables[s.table].choices = s.choices
         doc.tables[s.table].rules = s.rules
         doc.tables[s.table].groups = s.groups
+        doc.tables[s.table].column_groups = s.column_groups
+        doc.tables[s.table].row_colors = s.row_colors
         doc.tables[s.table].heights = s.heights
         doc.tables[s.table].filters = s.filters
-        s.weights = weights
+        s.widths = widths
         s.formats = formats
         s.choices = choices
         s.rules = rules
         s.groups = groups
+        s.column_groups = column_groups
+        s.row_colors = row_colors
         s.heights = heights
         s.filters = filters
     if tx.tables.len + tx.cells.len + tx.pieces.len + tx.columns.len > 0
@@ -210,17 +219,20 @@ fn record_tables(doc: Document@, before: List<|Table|>@, tx: Transaction$@, aren
             if !same_piece(t.pieces[i]@, b.pieces[i]@)
                 tx.pieces
                     .push(Piece_swap::{ .table = u, .index = i, .piece = b.pieces[i] })
-        if !same_ids(t.weights@, b.weights@) || !same_formats(t.formats@, b.formats@) ||
+        if !same_ids(t.widths@, b.widths@) || !same_formats(t.formats@, b.formats@) ||
             !same_texts(t.choices@, b.choices@) || !same_rules(t.rules@, b.rules@) ||
-            !same_groups(t.groups@, b.groups@) || !same_heights(t.heights@, b.heights@) ||
+            !same_groups(t.groups@, b.groups@) ||
+            !same_groups(t.column_groups@, b.column_groups@) || t.row_colors != b.row_colors ||
+            !same_heights(t.heights@, b.heights@) ||
             !same_filters(t.filters@, b.filters@)
             tx.columns
-                .push(Columns_swap::{ .table = u, .weights = copied_ids(b.weights@, arena),
+                .push(Columns_swap::{ .table = u, .widths = copied_ids(b.widths@, arena),
                 .formats = copied_formats(b.formats@, arena),
                 .choices = copied_texts(b.choices@, arena),
                 .rules = copied_rules(b.rules@, arena),
                 .groups = copied_groups(b.groups@, arena),
-                .heights = copied_heights(b.heights@, arena),
+                .column_groups = copied_groups(b.column_groups@, arena),
+                .row_colors = b.row_colors, .heights = copied_heights(b.heights@, arena),
                 .filters = copied_filters(b.filters@, arena) })
 
 priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists copied into `arena`
@@ -234,11 +246,15 @@ priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists co
         c.columns.push(id)
     for p in t.pieces
         c.pieces.push(p)
-    c.weights = copied_ids(t.weights@, arena)
+    c.widths = copied_ids(t.widths@, arena)
     c.formats = copied_formats(t.formats@, arena)
     c.choices = copied_texts(t.choices@, arena)
     c.rules = copied_rules(t.rules@, arena)
     c.groups = copied_groups(t.groups@, arena)
+    c.column_groups = copied_groups(t.column_groups@, arena)
+    c.row_colors = t.row_colors
+    c.caption = t.caption
+    c.merged = copied_ids(t.merged@, arena)
     c.heights = copied_heights(t.heights@, arena)
     c.filters = copied_filters(t.filters@, arena)
     return c
@@ -342,11 +358,13 @@ priv fn copied_ids(ids: List<|Sz|>@, arena: Arena$@): List<|Sz|> //< the list co
 
 priv fn keeps_shape(t: Table@, b: Table@): Bool //<
     //< Whether a table has the rows, columns, name and cell count of its copy, and kept every piece
-    //< Its column weights, formats, choices and rules, and its groups, can differ: `Columns_swap`
-    //< records them.
-    return t.name.equals(b.name) && t.next_id == b.next_id && t.cells.len == b.cells.len &&
-        t.pieces.len >= b.pieces.len && same_ids(t.rows@, b.rows@) &&
-        same_ids(t.columns@, b.columns@)
+    //< Its column widths, formats, choices, rules and filters, its groups, the column that
+    //< colours its rows, and its heights of rows can differ: `Columns_swap` records them. A new
+    //< caption or merged columns, which change seldom, take a copy of the whole table.
+    return t.name.equals(b.name) && t.caption.equals(b.caption) &&
+        same_ids(t.merged@, b.merged@) && t.next_id == b.next_id &&
+        t.cells.len == b.cells.len && t.pieces.len >= b.pieces.len &&
+        same_ids(t.rows@, b.rows@) && same_ids(t.columns@, b.columns@)
 
 priv fn same_ids(a: List<|Sz|>@, b: List<|Sz|>@): Bool
     if a.len != b.len
@@ -358,7 +376,7 @@ priv fn same_ids(a: List<|Sz|>@, b: List<|Sz|>@): Bool
 
 priv fn same_cell(a: Cell, b: Cell): Bool
     return a.kind == b.kind && a.text.equals(b.text) && a.first == b.first && a.count == b.count &&
-        same_look(a.look, b.look) && a.note.equals(b.note)
+        same_look(a.look, b.look) && a.note.equals(b.note) && a.link.equals(b.link)
 
 priv fn same_piece(a: Piece@, b: Piece@): Bool
     return a.kind == b.kind && a.text.equals(b.text) && a.table == b.table && a.named == b.named &&

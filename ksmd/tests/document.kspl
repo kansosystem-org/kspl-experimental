@@ -256,9 +256,9 @@ priv fn clause_models()
     verdict.check("and is written back as it was read",
         back.equals("%ksmd 1\n\n:::functions path=\"mine.kspl\"\n:::\n"), back)
     t: = doc.tables[0]@
-    verdict.check("a table keeps its name, its size and its weights",
-        t.name.equals("budget") && t.columns.len == 2 && t.rows.len == 2 && t.weights.len == 2 &&
-        t.weights[0] == 2 && t.weights[1] == 1, "")
+    verdict.check("a table keeps its name and its size, and its older weights become characters",
+        t.name.equals("budget") && t.columns.len == 2 && t.rows.len == 2 && t.widths.len == 2 &&
+        t.widths[0] == 533 && t.widths[1] == 267, "")
     verdict.check("a header cell is text",
         t.cells[0].kind == Cell_kind.text && t.cells[0].text.equals("Item"), "")
     formula_at: = t.at(0, 1)
@@ -282,9 +282,15 @@ priv fn clause_saves()
     canonical("attributes take their fixed order and one space",
         "%ksmd 1\n\n:::image  caption=\"c\"   alt=\"b\" src=\"a.png\"\n:::\n",
         "%ksmd 1\n\n:::image src=\"a.png\" alt=\"b\" caption=\"c\"\n:::\n")
-    canonical("weights are divided by their greatest common divisor",
+    canonical("older weights are saved as shares of 80 characters",
         "%ksmd 1\n\n:::table name=\"t\" widths=\"20,40\"\n| \"a\" | \"b\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2\"\n| \"a\" | \"b\" |\n:::\n")
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"26.7,53.3\"\n| \"a\" | \"b\" |\n:::\n")
+    canonical("a share is half a character at least",
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,10000\"\n| \"a\" | \"b\" |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"0.5,80\"\n| \"a\" | \"b\" |\n:::\n")
+    canonical("widths in characters save as written",
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n")
     canonical("cells take one space on each side, and an empty cell one in all",
         "%ksmd 1\n\n:::table name=\"t\"\n|\"a\"|\"b\"|\"c\"|\"d\"|\n|\"x\"|  -1.5e3|=A1 + 1  \
             ||\n:::\n",
@@ -314,7 +320,12 @@ priv fn cell_looks()
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {align=\"middle\"} |\n:::\n",
         "align is \"left\", \"center\" or \"right\"", 4, 8)
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {bold=1} |\n:::\n",
-        "braces take color, fill, size, align, format and note", 4, 8)
+        "braces take color, fill, size, align, wrap, format, note and link", 4, 8)
+    canonical("wrap is written after the alignment, in the fixed order",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {wrap=\"on\" align=\"right\"} |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {align=\"right\" wrap=\"on\"} |\n:::\n")
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {wrap=1} |\n:::\n",
+        "wrap is \"on\", or leave it out", 4, 8)
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {} |\n:::\n",
         "a look in braces holds at least one attribute", 4, 7)
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=12} x |\n:::\n",
@@ -349,7 +360,8 @@ priv fn text_looks() //< text takes alignment alone, on a line of braces
 
 priv fn clause_refusals()
     refused("%ksmd 1\n\n:::graph\n:::\n",
-        "a clause is ':::table', ':::include', ':::image', ':::chart' or ':::functions'", 3, 4)
+        "a clause is ':::table', ':::include', ':::image', ':::chart', ':::diagram', ':::functions' \
+            or ':::document'", 3, 4)
     refused("%ksmd 1\n\n:::table\n| \"a\" |\n:::\n",
         "':::table' needs a name, as in name=\"budget\"", 3, 1)
     refused("%ksmd 1\n\n:::table name=\"a\\tb\"\n| \"a\" |\n:::\n",
@@ -358,8 +370,8 @@ priv fn clause_refusals()
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\n:::table name=\"t\"\n| \"a\" \
         |\n:::\n", "another table in this source has this name", 7, 10)
     refused("%ksmd 1\n\n:::table name=\"t\" size=\"2\"\n| \"a\" |\n:::\n",
-        "':::table' takes only name, widths, heights, formats, choices, rules, groups, filter and \
-            invisible", 3, 19)
+        "':::table' takes only name, caption, char_widths, widths, heights, formats, choices, \
+            color_rows, rules, groups, merge, filter and invisible", 3, 19)
     refused("%ksmd 1\n\n:::table name=\"t\" name=\"u\"\n| \"a\" |\n:::\n",
         "this attribute is given twice", 3, 19)
     refused("%ksmd 1\n\n:::table name=t\n| \"a\" |\n:::\n",
@@ -404,6 +416,18 @@ priv fn clause_refusals()
         "widths is a list of whole numbers from 1 to 10,000, separated by ','", 3, 19)
     refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1,,2\"\n| \"a\" | \"b\" |\n:::\n",
         "widths is a list of whole numbers from 1 to 10,000, separated by ','", 3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\"1\"\n| \"a\" | \"b\" |\n:::\n",
+        "char_widths has one entry per column, empty for none", 3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\",\"\n| \"a\" | \"b\" |\n:::\n",
+        "leave out char_widths when no column has a width", 3, 19)
+    for bad in U8[][]::{ "0.4", "256", "1.25", "1.", "x" }
+        defer $src: = Str_builder()
+        src.s("%ksmd 1\n\n:::table name=\"t\" char_widths=\"\{bad\},1\"\n| \"a\" | \"b\" |\n:::\n")
+        refused(src.slice(),
+            "a column's width is 0.5 to 255 characters, with at most one decimal place, or nothing",
+            3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,1\" widths=\"1,1\"\n| \"a\" | \"b\" \
+        |\n:::\n", "give char_widths or the older widths, not both", 3, 37)
     refused("%ksmd 1\n\n:::include path=\"a.ksmd\"\nx\n:::\n",
         "':::include' has no body. Close it on the next line", 4, 1)
     refused("%ksmd 1\n\n:::include\n:::\n", "':::include' needs a path, as in path=\"notes.ksmd\"",

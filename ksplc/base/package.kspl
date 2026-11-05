@@ -219,6 +219,18 @@ fn refused_use(importer: U8[], target: U8[]): U8[] //<
             ").s("section of \{base_locate.to_project_relative(decl.file)\})")
     return why.take()
 
+fn refused_link(target: U8[], source: Bool): U8[] //<
+    //< Why a file of a package is not read through the path that reaches it; empty where it is
+    //< **A link below the package's top folder is refused**, as a `..` is: it can lead out of the
+    //< package (`link_on_the_way` in `locate.kspl`). `source` is false for an embedded file.
+    link: = base_locate.link_on_the_way(target, source)
+    if link.len == 0
+        return ""
+    return base_core.arena.text()
+        .s("'\{target\}' is reached through the link '\{base_locate.to_project_relative(link)\}', ")
+        .s("which can lead out of its package. Put the file or folder itself in place of the link")
+        .take()
+
 fn here(): Package_decl //< the package the current folder is in (`ksplc info package`)
     top: = base_config_file.package_top(base_locate.cwd())
     if top.len == 0

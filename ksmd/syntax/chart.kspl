@@ -1,9 +1,13 @@
-//< A chart: a table's columns drawn as bars or lines, as the `:::chart` clause saves it
+//< A chart: a table's columns, or its rows, drawn as bars or lines, as the `:::chart` clause saves
+//< it
 //< `:::chart table="budget" kind="bar" labels="item" values="cost,tax" title="Spending"` names
 //< the table, the column whose values label the bars or points, and the columns to draw, by
 //< their names. The chart holds the table and the columns by identity, as a formula's references
 //< do, so a renamed or a moved column stays in the chart, and the writer writes the names they
 //< have now. A name that names nothing is kept as written, and the page says what is missing.
+//< `by="rows" from="Oct" to="Mar"` draws rows instead: `values` names rows by their text in the
+//< `labels` column, and the columns from `from` to `to` are the points, as a burn-up chart of a
+//< plan whose months stand across.
 import "ksmd/base/attribute" { write_invisible }
 import "ksmd/calc/formula" { find_table }
 import "ksmd/model/model" { Chart, Chart_kind, Document, MAX_SERIES, Table, UNBOUND }
@@ -39,8 +43,12 @@ fn bind_charts(doc: Document$@) //< finds each chart's table and columns by thei
         if c.table != UNBOUND
             t: = doc.tables[c.table]@
             c.labels = column_named(t, c.label_name)
-            for j in Range.asc(c.series_names.len)
-                c.series[j] = column_named(t, c.series_names[j])
+            if c.by_rows
+                c.from = column_named(t, c.from_name)
+                c.to = column_named(t, c.to_name)
+            else
+                for j in Range.asc(c.series_names.len)
+                    c.series[j] = column_named(t, c.series_names[j])
         doc.charts[i] = c
 
 fn column_at(t: Table@, id: Sz): Sz //< where the column of this identity stands, or `UNBOUND`
@@ -64,6 +72,11 @@ fn write_chart(doc: Document@, c: Chart@, invisible: Bool, out: Str_builder$@) /
         out
             .escape_and_append(name_of(doc, c, bound, c.series[j], c.series_names[j]))
     out.c('"')
+    if c.by_rows
+        out.s(" by=\"rows\" from=")
+        quoted(name_of(doc, c, bound, c.from, c.from_name), out)
+        out.s(" to=")
+        quoted(name_of(doc, c, bound, c.to, c.to_name), out)
     if c.title.len > 0
         out.s(" title=")
         quoted(c.title, out)
@@ -88,10 +101,22 @@ fn reads_back(doc: Document@, c: Chart@): Bool //<
     $names: = List<|U8[]|>(scratch)
     if !split_names(joined.take(), names@) || names.len != c.series.len
         return false
+    if c.by_rows
+        // A row is found by its name when drawn, so its name is all that must read back.
+        return found_again(t, c.from, name_of(doc, c, true, c.from, c.from_name)) &&
+            found_again(t, c.to, name_of(doc, c, true, c.to, c.to_name))
     for j in Range.asc(names.len)
         if !found_again(t, c.series[j], names[j])
             return false
     return true
+
+fn row_named(t: Table@, column: Sz, name: U8[]): Sz //<
+    //< The first data row whose text in the column at place `column` is `name`, or `UNBOUND`
+    for r in Range.asc(t.rows.len)
+        cell: = t.cells[t.at(r, column)]
+        if cell.kind == .text && cell.text.equals(name)
+            return r
+    return UNBOUND
 
 priv fn found_again(t: Table@, id: Sz, name: U8[]): Bool //<
     //< Whether a column, written by this name, is found again; a missing one stays missing

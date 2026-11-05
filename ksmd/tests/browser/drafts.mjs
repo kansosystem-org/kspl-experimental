@@ -97,6 +97,42 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
       await ctx.browser.closeTab(e.page);
     },
 
+    // A draft older than 30 days goes when a page starts; one of 29 days stays.
+    async prune(ctx) {
+      const d = await tab(ctx, "?doc=top.ksmd");
+      const store = (body) => d.js(`new Promise((done) => {
+        const o = indexedDB.open("ksmd", 1);
+        o.onsuccess = () => {
+          const t = o.result.transaction("drafts", "readwrite");
+          const s = t.objectStore("drafts");
+          let answer = true;
+          ${body}
+          t.oncomplete = () => {
+            o.result.close();
+            done(answer);
+          };
+        };
+      })`);
+      const day = 24 * 60 * 60 * 1000;
+      await store(`for (const [id, days] of [["young", 29], ["old", 31]]) {
+        s.put({ key: "prune-test\\nold.ksmd\\n" + id, root: "prune-test", path: "old.ksmd", id, text: "x",
+          cell: null, base: null, at: Date.now() - days * ${day} });
+      }`);
+      const left = () => store(`const r = s.getAll();
+        r.onsuccess = () => {
+          answer = r.result.filter((x) => x.root === "prune-test").map((x) => x.id).sort().join(" ");
+        };`);
+      check(await left() === "old young", "two drafts stand, 29 and 31 days old", await left());
+      await d.reload("document.documentElement.dataset.files === 'ready'");
+      for (let waited = 0; waited < 5000 && await left() !== "young"; waited += 100) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      check(await left() === "young", "a page that starts lets go the draft older than 30 days, and keeps the other",
+        await left());
+      await store(`s.delete("prune-test\\nold.ksmd\\nyoung");`);
+      await ctx.browser.closeTab(d.page);
+    },
+
     // An image's bytes and its URL go when another document opens.
     async letGo(ctx) {
       const d = await tab(ctx, "?doc=top.ksmd");

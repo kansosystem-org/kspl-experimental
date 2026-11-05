@@ -17,6 +17,7 @@ import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
 import "ksplc/sema/type/display" // `display`
+import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/str"
 
@@ -208,9 +209,13 @@ impl Ast_node
             c.s(".data, .len = \{c.env.array_len(expr_node.type_id)\} }")
         else if def: = sema_body_postfix.enum_cast_needs_check(c.sema, r)
             // The tags go as a compound literal array, so the operand is evaluated once.
+            // A `U64` above INT64_MAX arrives negative as an `int64_t`; the flag makes it no tag
+            // and prints it unsigned.
+            is_unsigned: = c.env.is_unsigned(c.env.scalar_repr_id(expr_node.type_id))
+            unsigned_flag: = "1" if is_unsigned else "0"
             c.s("(").t(target_id).s(")kspl_tag_check((int64_t)(")
             expr_node.emit_expr(c)
-            c.s("), (const int64_t[]){ ")
+            c.s("), ").s(unsigned_flag).s(", (const int64_t[]){ ")
             for i in Range.asc(def.variants_list.len)
                 if i > 0
                     c.s(", ")
@@ -243,6 +248,13 @@ impl Ast_node
             c.s("((").t(target_id).s(")((")
             expr_node.emit_expr(c)
             c.s(") ? 1 : 0))")
+        else if c.env.is_pointer(target_id) && c.env.is_integer(expr_node.type_id)
+            // **An integer becomes an address through `Sz`**, the pointer's width, widened by its
+            // own sign as genllvm widens it. A narrower one cast directly draws C's
+            // -Wint-to-pointer-cast.
+            c.s("((").t(target_id).s(")(").t(I32::sema_type_env.Builtin_type_id.size_type).s(")")
+            expr_node.emit_expr_prec(c, 13)
+            c.s(")")
         else
             c.s("(").t(target_id).s(")")
 

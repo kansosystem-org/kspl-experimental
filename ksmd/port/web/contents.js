@@ -30,7 +30,9 @@ function ksmdContents(ks) {
       const box = h.closest(".include");
       return box ? box.dataset.path : "";
     };
-    const key = heads.map((h) => `${h.tagName}\u0000${h.textContent}\u0000${from(h)}`).join("\u0001");
+    // A heading's number, where the document numbers headings (`settings.js`), stands before it.
+    const named = (h) => (h.dataset.number ? `${h.dataset.number} ${h.textContent}` : h.textContent);
+    const key = heads.map((h) => `${h.tagName}\u0000${named(h)}\u0000${from(h)}`).join("\u0001");
     if (key !== built) {
       built = key;
       list.textContent = "";
@@ -40,7 +42,7 @@ function ksmdContents(ks) {
         const a = document.createElement("a");
         a.href = "#";
         a.dataset.k = String(k);
-        a.textContent = h.textContent;
+        a.textContent = named(h);
         li.appendChild(a);
         const path = from(h);
         if (path) {
@@ -196,5 +198,7 @@ function ksmdContents(ks) {
   } catch (_) { /* storage is off: the panel starts hidden */ }
   show(stored, false);
 
-  ks.contents = { toggle: () => show(!shown(), true) };
+  ks.handle("contents", () => ks.contents.toggle(), { looks: true });
+
+  ks.contents = { toggle: () => show(!shown(), true), build };
 }

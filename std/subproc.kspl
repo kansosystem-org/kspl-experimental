@@ -89,8 +89,8 @@ priv fn fold_crlf_into(b: Writer, text: U8[]) //< appends text, with each `\r\n`
             continue
         b.c(text[i])
 
-priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
-    //< Appends one read's bytes to the builder (bytes beyond the cap are discarded)
+priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz, cut: Bool$@): Bool //<
+    //< Appends one read's bytes to the builder; bytes beyond the cap are discarded, setting `cut`
     //< Returns false if the stream closed or failed. `n == -1` means "nothing yet" at timeout 0; it
     //< is rare right after poll reported readable, and the stream stays open.
     if n == -1
@@ -101,6 +101,8 @@ priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
     take: = Sz::n if Sz::n < room else room
     if take > 0
         into.s(chunk.sub(0, take))
+    if take < Sz::n
+        cut$ = true
     return true
 
 pub struct Run_result //< the outcome of one run that started: how it ended, and what it wrote
@@ -118,6 +120,9 @@ pub struct Run_result //< the outcome of one run that started: how it ended, and
     pub output_lost: Bool //< an output could not be read back, so the two above can lack some.
         //< Only `run_many` collects through files, and only it sets this; read as empty, a lost
         //< output would pass for a child that wrote nothing.
+    pub output_cut: Bool //< an output passed the cap, so the two above lack its rest.
+        //< Caution: **Do not take a cut output for the whole one.** A file the child wrote, cut
+        //< short, still reads as a file and fails only where it is used.
 
 #cfg(!freestanding)
 pub fn run_capture( //< runs one child to the end and collects both its outputs
@@ -139,6 +144,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     defer $out: = Str_builder()
     defer $err: = Str_builder()
     $chunk: U8[4096] = ::{}
+    $cut: = false
     deadline: = sys.deadline_after_ms(timeout_ms)
     $until: = deadline // the deadline, or the end of the grace once the child has ended
     $out_open: = true
@@ -167,11 +173,12 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
             break // nothing left to watch (both streams were read to the end)
         if out_open && (mask & STDIO_OUT) != 0
             out_open =
-                take_into(out@, U8[]::chunk, kspl_proc_read(h, chunk[0]@, chunk.len, 0), output_cap)
+                take_into(out@, U8[]::chunk, kspl_proc_read(h, chunk[0]@, chunk.len, 0), output_cap,
+                cut@)
         if err_open && (mask & STDIO_ERR) != 0
             err_open =
                 take_into(err@, U8[]::chunk,
-                kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap)
+                kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap, cut@)
     // Caution: **Bound the wait after the pipes close too.** A child can close both and run on (a
     // daemon, or a grandchild holding nothing), and a bare wait would outlast every timeout.
     $exit_code: I32? = .none
@@ -186,6 +193,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         .stdout_data = arena.dup_str(out.slice()),
         .stderr_data = arena.dup_str(err.slice()),
         .output_lost = false,
+        .output_cut = cut,
     }
 
 priv const PIPE_GRACE_MS: I32 = 100 //< how long outputs are read once the child itself has ended
@@ -203,12 +211,16 @@ priv fn job_path(work_dir: U8[], index: Sz, ext: U8[], arena: Arena$@): U8[] //<
 
 // **Keep `#cfg(!freestanding)`.** A freestanding build has no `kspl_fopen_cstr`, and no `reap_job`.
 #cfg(!freestanding)
-priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[]? //<
+priv fn read_capped(path: U8[], cap: Sz, cut: Bool$@, arena: Arena$@): U8$[]? //<
     //< At most `cap` bytes of a job's output file, on the arena; none when it cannot be read
+    //< A longer file sets `cut`: one byte past the cap is read to tell.
     //< Caution: **Keep the cap** (`io.read_file_capped`): even a child that writes forever stops at
     //< it.
-    got: = io.read_file_capped(path, cap, arena) catch
+    got: = io.read_file_capped(path, cap + 1 if cap >= 0 else 0, arena) catch
         return .none
+    if got.len > cap
+        cut$ = true
+        return .some(U8$[]::got.sub(0, cap))
     return .some(U8$[]::got)
 
 // Starts one job; returns 0 on failure (the caller turns that into `Spawn_error.spawn_failed`).
@@ -256,14 +268,15 @@ priv fn ended_by(handle: I64, until_us: I64): I32?
 priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_dir: U8[],
     work: Arena$@, arena: Arena$@): Run_result
     code: = wait_until(handle, deadline_us)
-    out: = read_capped(job_path(work_dir, index, "out", work), output_cap, arena)
-    err: = read_capped(job_path(work_dir, index, "err", work), output_cap, arena)
+    $cut: = false
+    out: = read_capped(job_path(work_dir, index, "out", work), output_cap, cut@, arena)
+    err: = read_capped(job_path(work_dir, index, "err", work), output_cap, cut@, arena)
     // Caution: **Empty with no memory, not `""`.** `dealloc` frees a null pointer as nothing, but
     // it stops the program on a literal. So a caller that frees heap outputs frees these too.
     empty: = U8$[]::{ .ptr = null, .len = 0 }
     return Run_result::{ .exit_code = code, .stdout_data = out.unwrap_or(empty),
-        .stderr_data = err.unwrap_or(empty),
-        .output_lost = out.is_none() || err.is_none() }
+        .stderr_data = err.unwrap_or(empty), .output_lost = out.is_none() || err.is_none(),
+        .output_cut = cut }
 
 #cfg(!freestanding)
 priv struct Running_job //< a handle and its deadline; handle 0 means no child remains
@@ -397,6 +410,8 @@ pub enum Spawn_error //< why a child could not be started
         //< and a working directory or output file that cannot be opened. The other two are an
         //< argument holding a NUL and the OS refusing a new process. Telling them apart would need
         //< errno passed up from the C code (as with fs.Fs_error).
+        //< **The count of arguments has no cap of its own.** The OS limits their total size:
+        //< `ARG_MAX` on POSIX, and on Windows a command line of 32,767 UTF-16 units.
 
 pub fn spawn_wait( //< runs one child with the standard I/O inherited, and waits for it
     //< argv[0] is the executable's path or a name looked up in PATH alone. The current directory

@@ -1,0 +1,12 @@
+//< One C symbol declared in two files with two signatures
+//< **It imports this package's fixture** (`../extern_clash/peer.kspl`), so it compiles where it
+//< stands. Unrefused, the C compiler refuses the second declaration at a line of the generated C,
+//< and LLVM IR calls the function with the wrong type without a word.
+// EXPECT: extern_clash.kspl:9:8: error: the C symbol 'kspl_mono_us' is declared here as 'fn(): I32', and as 'fn(): I64' at
+// EXPECT: extern_clash/peer.kspl:5. C has one symbol of that name, so the declarations must agree
+import "ksplc/tests/extern_clash/peer"
+
+extern fn kspl_mono_us(): I32 //< the same symbol, with a narrower return type
+
+fn main(): I32
+    return kspl_mono_us() + I32::(peer.now() & 1I64)

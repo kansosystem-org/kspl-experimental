@@ -794,3 +794,66 @@ fn main()
   b: = wrapped_throw(1) catch
     fallback 0
   _x: = b if a.pred.call(2) else 0
+// ==== case trait_impl_pointer_permission
+//< An implementation keeps the permission on a pointer the trait gives or promises
+//< A parameter is the same type, so `I32$@` cannot stand for the trait's `I32@`: a call through
+//< the trait passes a read-only pointer, and the implementation wrote through it. A return of
+//< `I32@` where the trait promises `I32$@` let the caller write read-only memory. The other way,
+//< a writable pointer returned for a read-only one, only narrows what the caller may do.
+// EXPECT: method 'put': argument 1 type mismatch. The interface expects 'I32@'. The impl has 'I32$@'
+// EXPECT: method 'get': return type mismatch. The interface expects 'I32$@'. The impl has 'I32@'
+// EXPECT: method 'take': argument 1 type mismatch. The interface expects 'I32@'. The impl has 'I32$@'
+// EXPECT: Finished with 3 error(s)
+priv trait Sink
+  fn put(r: Self, p: I32@)
+
+priv trait Src
+  fn get(r: Self): I32$@
+
+priv trait Look
+  fn look(r: Self): I32@
+
+priv trait Conv<|X|>
+  fn take(r: Self, p: X): I32
+
+priv struct S
+  n: I32
+
+impl S: Sink
+  fn put(_r: Self@, p: I32$@)
+    p$ = 7
+
+impl S: Src
+  fn get(r: Self@): I32@
+    return r.n@
+
+impl S: Look
+  fn look(r: Self$@): I32$@
+    return r.n@
+
+impl S: Conv<|I32@|>
+  fn take(_r: Self@, p: I32$@): I32
+    p$ = 7
+    return 0
+
+fn main(): I32
+  return 0
+// ==== case trait_impl_returns_value_for_pointer
+//< An implementation cannot return a value where the trait returns a pointer
+//< A call through the trait would receive the address of a value that ends with the call, the
+//< reason a `Self` return needs a pointer. The thunk did not bridge it: the number came back as
+//< an address. The other way, a pointer returned for a value, the thunk reads through it.
+// EXPECT: method 'get' of interface 'trait_impl_returns_value_for_pointer.Src' returns 'I32$@', a pointer, but this implementation returns the value 'I32'
+// EXPECT: Finished with 1 error(s)
+priv trait Src
+  fn get(r: Self): I32$@
+
+priv struct S
+  n: I32
+
+impl S: Src
+  fn get(r: Self@): I32
+    return r.n + 1
+
+fn main(): I32
+  return 0

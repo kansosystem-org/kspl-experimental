@@ -30,6 +30,7 @@ import "ksos/drivers/rp2040/gpio"
 import "ksos/drivers/rp2040/ir_nec" as ir
 import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/watchdog"
 import "ksos/drivers/rp2040/ws2812"
 import "ksos/kernel/task" + { Task }
 import "std/mem" { Arena }
@@ -434,7 +435,8 @@ priv fn bring_up(): Void!mmio.Driver_error //< starts the peripherals
     // The rest are parts the car runs without. A failure leaves that part out. The report line
     // shows which (a still face, no LEDs, no console).
     adc.init() catch {}
-    motor.init() catch {}
+    // It also sets the panic hook that stops the wheels.
+    boot.motors_up() catch {}
     head.init()
     track.init()
     ir.init(board.IR_RECEIVER)
@@ -443,6 +445,8 @@ priv fn bring_up(): Void!mmio.Driver_error //< starts the peripherals
     usb.init() catch {}
 
 fn car_task(_arg: Void$@): Void
+    // Read why it started **before arming**, which leaves the mark again.
+    started_by: = watchdog.last_reset()
     bring_up() catch
         return
     $ln: = con.Line()
@@ -456,6 +460,8 @@ fn car_task(_arg: Void$@): Void
         boot.pump(10)
         waited += 10
     con.say(ln@, "[car]", "IR remote car - see ksos/docs/HOWTO-bring-up.md")
+    // It starts in manual mode, stopped, so after a watchdog restart it waits for a key.
+    con.say_restart(ln@, "[car]", started_by)
 
     if !records.claim(RECORD_MARKER)
         con.say(ln@, "[car]", "records unavailable - line mode will refuse")
@@ -482,7 +488,13 @@ fn car_task(_arg: Void$@): Void
     head.set_angle(servo_angle)
     timer.delay_ms(100)
 
+    // **Armed only here, where the wheels can first turn** (the reason is at `boot.motors_up`).
+    watchdog.arm(boot.CAR_WATCHDOG_MS) catch
+        con.say(ln@, "[car]", "FAILED to arm the watchdog")
+
     for
+        // **Fed once per lap, here in the loop**, not from an interrupt or a timer.
+        watchdog.feed()
         loops += 1
         switch mode
         case .manual { // **Nothing.** The remote issues the command (`manual_hold`).

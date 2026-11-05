@@ -339,3 +339,58 @@ fn main(): I32
   _k: = address_into_field()
   _xs: = upcast_kept_by_call(arena)
   return I32::ok_read_field()
+// ==== case frame_pointer_read_out_of_a_local
+//< A part read out of a local that points into the frame carries that pointer as the local does
+//< A field (`h.s`), a slice's `.ptr` and an element's address through the slice (`s[1]@`) all
+//< point where the local's pointer does, and so does a field set from a written `@` (`k.p`).
+//< Returned, each reads a dead frame. A number read out of the same local holds no pointer, so
+//< `ok_len` passes, and a field set from no frame pointer passes too (`ok_other_field`).
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:17:10: error: cannot return 'h': it was set from a slice or an interface value built from local storage
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:22:10: error: cannot return 's': it was set from a slice or an interface value built from local storage
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:27:10: error: cannot return 's': it was set from a slice or an interface value built from local storage
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:41:10: error: cannot return 'k': it was set from the address of local storage
+// EXPECT: Finished with 4 error(s)
+priv struct Holder
+  s: I32[]
+
+priv fn field_of_local(): I32[]
+  a: I32[4] = ::{ 1, 2, 3, 4 }
+  h: Holder = ::{ .s = I32[]::a }
+  return h.s
+
+priv fn ptr_of_slice(): I32@
+  a: I32[4] = ::{ 1, 2, 3, 4 }
+  s: = I32[]::a
+  return s.ptr
+
+priv fn element_address(): I32@
+  a: I32[4] = ::{ 1, 2, 3, 4 }
+  s: = I32[]::a
+  return s[1]@
+
+priv fn ok_len(): Sz
+  a: I32[4] = ::{ 1, 2, 3, 4 }
+  h: Holder = ::{ .s = I32[]::a }
+  return h.s.len
+
+priv struct Keep
+  p: I32@
+  s: U8[]
+
+priv fn address_field(): I32@
+  x: I32 = 5
+  k: Keep = ::{ .p = x@, .s = "kept" }
+  return k.p
+
+priv fn ok_other_field(): U8[]
+  x: I32 = 5
+  k: Keep = ::{ .p = x@, .s = "kept" }
+  return k.s
+
+fn main(): I32
+  _a: = address_field()
+  _o: = ok_other_field()
+  _f: = field_of_local()
+  _p: = ptr_of_slice()
+  _e: = element_address()
+  return I32::ok_len()

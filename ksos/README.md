@@ -121,6 +121,7 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/msgq_demo.kspl` | `make ksos-mq` | a message queue blocking when full |
 | `ksos/demo/posix/mutex_demo.kspl` | `make ksos-mutex` | exclusive holding with a mutex |
 | `ksos/demo/posix/mutex_nested_demo.kspl` | `make ksos-mutex-nested` | Two mutexes released in either order, with inheritance kept through the one still held |
+| `ksos/demo/posix/lend_timeout_demo.kspl` | `make ksos-lend-timeout` | A waiter that gives up at its timeout stops lending its priority in that tick, even when deleted before it runs again |
 | `ksos/demo/posix/wake_preempt_demo.kspl` | `make ksos-wake-preempt` | A higher-priority task woken by `give`, `unlock`, `send`, `set`, or `resume` runs before the waker continues, with no timer |
 | `ksos/demo/posix/wake_pass_on_demo.kspl` | `make ksos-wake-pass-on` | A woken waiter deleted or suspended before it runs passes the wake on |
 | `ksos/demo/posix/event_demo.kspl` | `make ksos-event` | Waiting for all or any bits. One `set` releases three waiters, each clearing the bit on exit |

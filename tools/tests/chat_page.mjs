@@ -105,10 +105,16 @@ const RENDER_CASES = [
   ["有給は**10日**です。\n- 一\n- 二", "<p>有給は<strong>10日</strong>です。</p><ul><li>一</li><li>二</li></ul>"],
 ];
 
-// Text a hostile or runaway model can write, each of which must read within HEAVY_MS and throw
-// nothing: marks that never close, deep quotes, brackets and parentheses that never close, a list
-// with many blank lines, and emphasis nested deep.
-const HEAVY_MS = 3000;
+// Text a hostile or runaway model can write, each of which must read throwing nothing, in at most
+// HEAVY_FACTOR times as long as plain text of the same length: marks that never close, deep
+// quotes, brackets and parentheses that never close, a list with many blank lines, and emphasis
+// nested deep. **Held to plain text, not to a fixed time**, so a slow or busy machine slows both
+// alike; a read that grows with the square of the length is thousands of times slower.
+// **The two take turns over HEAVY_ROUNDS rounds**, each kept at its fastest. HEAVY_FLOOR_MS keeps
+// a plain read near zero from making the ratio meaningless.
+const HEAVY_FACTOR = 50;
+const HEAVY_ROUNDS = 5;
+const HEAVY_FLOOR_MS = 5;
 const HEAVY = [
   ["unmatched marks", "\"*a \".repeat(33000)"],
   ["20,000 quote marks", "\">\".repeat(20000) + \" x\""],
@@ -149,11 +155,17 @@ async function main() {
       check(got === want, `Markdown read: ${JSON.stringify(text)}`, got);
     }
     for (const [what, expr] of HEAVY) {
-      const ms = await d.js(`(() => { const t = performance.now(); try { ksagentMarkdown.render(` +
-        `ksagentMarkdown.parse(${expr}), document.createElement('div')); } catch (e) { return -1; } ` +
-        "return performance.now() - t; })()");
-      check(ms >= 0 && ms < HEAVY_MS, `hostile Markdown reads in time, throwing nothing: ${what}`,
-        `${Math.round(ms)} ms`);
+      const got = await d.js(`(() => { const md = ksagentMarkdown; const hostile = ${expr}; ` +
+        "const plain = 'plain text '.repeat(Math.ceil(hostile.length / 11)).slice(0, hostile.length); " +
+        "const once = (s) => { const t = performance.now(); " +
+        "md.render(md.parse(s), document.createElement('div')); return performance.now() - t; }; " +
+        "let h = Infinity, p = Infinity; " +
+        `try { for (let i = 0; i < ${HEAVY_ROUNDS}; i++) { h = Math.min(h, once(hostile)); ` +
+        "p = Math.min(p, once(plain)); } } catch (e) { return null; } return [h, p]; })()");
+      const [hostileMs, plainMs] = got || [Infinity, 0];
+      check(got !== null && hostileMs <= HEAVY_FACTOR * (plainMs + HEAVY_FLOOR_MS),
+        `hostile Markdown reads in step with plain text, throwing nothing: ${what}`,
+        got ? `${hostileMs.toFixed(1)} ms, plain text ${plainMs.toFixed(1)} ms` : "it threw");
     }
     check(await d.js("ksagentMarkdown.render(ksagentMarkdown.parse('> '.repeat(12) + 'x'), " +
       "document.createElement('div')).querySelectorAll('blockquote').length") === 8,

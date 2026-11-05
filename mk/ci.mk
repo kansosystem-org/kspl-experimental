@@ -15,8 +15,9 @@ ci_make = $(if $(filter darwin,$(PLATFORM)),$(shell command -v gmake 2>/dev/null
 # `tools/ci_gates.kspl`), where otherwise the CI job's `timeout-minutes` cancels the whole job
 # naming no gate, and a local `make ci` waits for ever. 20 minutes is above a whole job's run and
 # below each job's `timeout-minutes` in `.github/workflows/ci.yml` by about the time the job's other
-# gates take ("How CI runs" in `docs/SPEC-gates.md`), so a hang is named first. A slower machine
-# raises it on the command line (`make ci CI_GATE_CAP=3600`).
+# gates take ("How CI runs" in `docs/SPEC-gates.md`), so a hang is named first. The macOS job
+# passes 600 there instead, as its minute costs ten times. A slower machine raises it on the
+# command line (`make ci CI_GATE_CAP=3600`).
 CI_GATE_CAP := 1200
 
 # --- `STOP=1`: end the round at the first gate that fails ---

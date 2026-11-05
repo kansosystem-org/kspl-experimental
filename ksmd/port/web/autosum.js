@@ -48,6 +48,9 @@ function ksmdAutosum(ks) {
     return ks.act("ksmd_web_paste_cells", r.block, target, r.c1, ks.put(JSON.stringify([row])));
   }
 
+  ks.handle(["autosum-sum", "autosum-average", "autosum-count", "autosum-max", "autosum-min"],
+    (name, c) => ks.autosum.run(name, c), { table: true });
+
   ks.autosum = {
     run(name, c) {
       const fn = FUNCTIONS[name];

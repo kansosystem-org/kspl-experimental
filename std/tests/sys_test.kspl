@@ -524,6 +524,18 @@ fn test_run_many(arena: Arena$@)
     after: = recovered.get(1) catch panic("the job after a failed start must start")
     assert(after.exited_with(0) && after.stdout_data.equals("aft"),
         "a zero slot count runs serially and keeps the output cap after a failed start")
+    // **A cut output says so**, or a file cut short passes for the whole one.
+    assert(after.output_cut, "an output past the cap is reported cut")
+    quick_whole: = rs.get(1) catch panic("the quick job must start")
+    assert(!quick_whole.output_cut, "an output within the cap is not reported cut")
+    one: =
+        subproc.run_capture(U8[][]::{ "/bin/echo", "after" }, "", verdict.DEFAULT_TIMEOUT_MS, 3,
+        arena) catch panic("the child must start")
+    assert(one.stdout_data.equals("aft") && one.output_cut, "run_capture reports its cut too")
+    whole: =
+        subproc.run_capture(U8[][]::{ "/bin/echo", "after" }, "", verdict.DEFAULT_TIMEOUT_MS, 16,
+        arena) catch panic("the child must start")
+    assert(!whole.output_cut, "and reports no cut for an output within the cap")
     empty: = subproc.run_many(Job[]::{}, 1, verdict.DEFAULT_TIMEOUT_MS, 16, work, arena)
     assert(empty.len == 0, "no jobs give no results")
 
@@ -563,7 +575,7 @@ fn test_run_many(arena: Arena$@)
         "the job behind it still runs")
     verdict
         .pass("confirmed the order stays the input's, the streams are separate, three jobs overlap, \
-            and a job past its limit is killed.")
+            an output past the cap is reported cut, and a job past its limit is killed.")
 
 // ==========================================
 // std/sys: run returns standard output unchanged and throws each of the three failures as its own

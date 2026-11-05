@@ -19,6 +19,10 @@ ksmd-web: $(STAGE1_EXE)
 ksmd-functions: $(STAGE1_EXE)
 	@$(call pkg_make,ksmd) functions OUT=../$(OUT_DIR)/ksmd
 
+## Run|ksmd-reference|Write the list of every command and its key in ksmd/docs/SPEC-editing-page.md from the page's own list (needs node)
+ksmd-reference:
+	node ksmd/port/web/reference.mjs
+
 ## Gates|test-ksmd-browser|Edit ksmd documents in a headless Chromium through real input events, and open and save files through kssrv --local
 test-ksmd-browser: $(STAGE1_EXE) $(KSSRV_EXE) $(KSMD_BUILDER_EXE)
 	@$(ksmd_make) test-browser KSSRV=../$(KSSRV_EXE) BUILDER=../$(KSMD_BUILDER_EXE)
@@ -182,5 +186,5 @@ install-desktop:
 	@exit 1
 endif
 
-.PHONY: ksmd ksmd-functions ksmd-web ksmd-open test-ksmd-browser measure-ksmd test-ksmd-open test-ksmd-desktop \
+.PHONY: ksmd ksmd-functions ksmd-reference ksmd-web ksmd-open test-ksmd-browser measure-ksmd test-ksmd-open test-ksmd-desktop \
 	install-desktop

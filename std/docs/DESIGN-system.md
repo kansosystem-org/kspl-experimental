@@ -179,7 +179,25 @@ Caution: **Do not stop at only ignoring it.** The output is then silently discar
 
 **Do not carry the ignoring setting over to a child.** It survives exec, so `git`, `clang` or a shell pipeline would not die either, and `yes | head -1` would never finish. The runtime restores it between the fork and the exec.
 
-The implementation is "Writing when nobody is left to read it" in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c). The check is `make test-broken-pipe`.
+The implementation is "Writing when nobody is left to read it" in [`../../ksplc/gen/runtime/hosted_io.c`](../../ksplc/gen/runtime/hosted_io.c). The check is `make test-broken-pipe`.
+
+### Standard output that cannot be written fails the exit
+
+**A program whose standard output was refused ends with 1 and one line on standard error**, even where `main` returned 0. A full disk under `prog > out.txt` refuses a write, and so does a removed device. A `Writer` call returns no failure, so without this the file stands empty or cut, and the caller takes it as whole.
+
+The runtime checks once, as the program ends: on a return from `main` and on `sys.exit`. It flushes standard output and asks the C stream whether any write failed.
+
+| How standard output ended | What the program does |
+| :-- | :-- |
+| Every write arrived | Ends with its own code |
+| A closed pipe (`prog \| head`) | Ends quietly, as the section above decides |
+| Any other refusal | Writes `[Kanso] Error: standard output could not be written (<reason>)` and ends with 1 |
+
+**Why at the end, not at each write**: a `Writer` call cannot return a failure, and a buffered write is refused only at a flush. One check at the end catches every write the program made. A panic and a crash do not reach it: their own line is already the failure.
+
+Caution: **The exit code becomes 1 even where the program chose another.** The check runs inside `exit`, after the code is given, and the C library has no way to read it there.
+
+The implementation is "Standard output that could not be written fails the exit" in [`../../ksplc/gen/runtime/hosted_io.c`](../../ksplc/gen/runtime/hosted_io.c). The check is `make test-broken-pipe`.
 
 ### Parallel children's output comes through files, not pipes
 
@@ -270,7 +288,7 @@ Left to Windows, a `cc.exe` in a cloned repository would run in place of the com
 
 ### A child that cannot start fails the start everywhere
 
-**Every function in `std/subproc` gives `spawn_failed` for a program that cannot start**, never an exit code. That covers a program that is missing or cannot run, and one that cannot be given its working directory or output files. `CreateProcessW` fails for each of those by itself. POSIX meets the failure in the forked child, after the fork has succeeded. So the child writes a byte on a pipe that the start already waits on, which closes by itself when `exec` succeeds (*close-on-exec*).
+**Every function in `std/subproc` gives `spawn_failed` for a program that cannot start**, never an exit code. That covers a program that is missing or cannot run, and one that cannot be given its working directory or output files. **A file named by its path that is not a program the OS can start fails too.** POSIX's `execvp` would hand such a file to `/bin/sh`, so a damaged or empty program would run as a shell script, or as nothing with exit 0. So a path with a `/` goes to `execv`, which refuses it. A bare name is looked up as `execvp` looks it up, as a shell does. `CreateProcessW` fails for each of those by itself. POSIX meets the failure in the forked child, after the fork has succeeded. So the child writes a byte on a pipe that the start already waits on, which closes by itself when `exec` succeeds (*close-on-exec*).
 
 ```mermaid
 sequenceDiagram
@@ -565,7 +583,7 @@ The part is 0600 while it is written, and takes its bits once its content is in.
 
 **The part's name is new on every call** (`<name>.<16 hex digits>.part`), and the creation decides that it is new. Two replacements at once each write their own part, and the later rename wins whole. A link planted at the name is not followed.
 
-**`io.write_file` and `fs.rename_path` wait for no disk**, since what a build writes is made again after a crash. A file that someone was told is saved goes through `replace_file`.
+**`io.write_file` and `fs.rename_path` wait for no disk**, since what a build writes is made again after a crash. A file that someone was told is saved goes through `replace_file`. A file written in pieces, or by another program, is flushed the same way with `File_stream.sync_to_disk()` before the caller renames it.
 
 What this gives up:
 

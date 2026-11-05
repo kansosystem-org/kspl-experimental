@@ -5,6 +5,9 @@
 //< the text's colour and `fill:` the background's; the rule's colours stand over the cell's own.
 //< Text compares without regard to case, as the filter compares it. A text in a rule has no `,`,
 //< `;`, `"` or `\`, and no space at either end.
+//< `scale;from:#ffffff to:#ffef9c` is a colour scale: each number's cell takes a fill between the
+//< two, from the least number to the greatest. The table's columns with the same scale share
+//< one least and one greatest, so a block of columns compares as one.
 import "ksmd/base/marker" { is_decimal }
 import "ksmd/model/look" { is_colour }
 import "std/chars"
@@ -20,12 +23,14 @@ enum Rule_kind
     above
     equal
     empty
+    scale //< a fill from `color` at the least number to `fill` at the greatest
 
 struct Rule //< one column's rule
     kind: Rule_kind
     value: U8[] //< what `below`, `above` and `equal` compare with, as written
     color: U8[] //< the text's colour while it holds, `#` and six hex digits in lower case; or empty
-    fill: U8[] //< the background's, the same way
+        //< For a scale, the fill at the least number.
+    fill: U8[] //< the background's, the same way; for a scale, the fill at the greatest number
 
 fn no_rule(): Rule
     return Rule::{ .kind = .none, .value = "", .color = "", .fill = "" }
@@ -38,6 +43,8 @@ fn rule_of(entry: U8[], arena: Arena$@): Rule? //<
         return .none
     condition: = entry.sub(0, semi)
     $r: = no_rule()
+    if condition.equals("scale")
+        return scale_of(entry.sub_from(semi + 1), arena)
     if condition.equals("empty")
         r.kind = .empty
     else if condition.starts_with("<") || condition.starts_with(">")
@@ -52,11 +59,24 @@ fn rule_of(entry: U8[], arena: Arena$@): Rule? //<
             return .none
     else
         return .none
-    // The colours: `color:#rrggbb`, then `fill:#rrggbb`, either or both, a space between.
-    $rest: = entry.sub_from(semi + 1)
+    c: = colours_of(entry.sub_from(semi + 1), arena) catch
+        return .none
+    r.color = c.color
+    r.fill = c.fill
+    return .some(r)
+
+struct Colours //< a text's colour and a background's, either of which may be empty
+    color: U8[]
+    fill: U8[]
+
+fn colours_of(text: U8[], arena: Arena$@): Colours? //<
+    //< `color:#rrggbb`, then `fill:#rrggbb`, either or both, a space between; in lower case
+    //< A rule's colours and a choice's are written so.
+    $c: = Colours::{ .color = "", .fill = "" }
+    $rest: = text
     if rest.starts_with("color:")
-        r.color = lower(rest.sub(6, 7) if rest.len >= 13 else "", arena)
-        if !is_colour(r.color)
+        c.color = lower(rest.sub(6, 7) if rest.len >= 13 else "", arena)
+        if !is_colour(c.color)
             return .none
         rest = rest.sub_from(13)
         if rest.len > 0
@@ -64,17 +84,39 @@ fn rule_of(entry: U8[], arena: Arena$@): Rule? //<
                 return .none
             rest = rest.sub_from(1)
     if rest.starts_with("fill:")
-        r.fill = lower(rest.sub(5, 7) if rest.len >= 12 else "", arena)
-        if !is_colour(r.fill)
+        c.fill = lower(rest.sub(5, 7) if rest.len >= 12 else "", arena)
+        if !is_colour(c.fill)
             return .none
         rest = rest.sub_from(12)
-    if rest.len > 0 || r.color.len == 0 && r.fill.len == 0
+    if rest.len > 0 || c.color.len == 0 && c.fill.len == 0
+        return .none
+    return .some(c)
+
+fn write_colours(c: Colours, out: Str_builder$@) //< what `colours_of` reads
+    if c.color.len > 0
+        out.s("color:").s(c.color)
+    if c.fill.len > 0
+        if c.color.len > 0
+            out.c(' ')
+        out.s("fill:").s(c.fill)
+
+priv fn scale_of(rest: U8[], arena: Arena$@): Rule? //< `from:#ffffff to:#ffef9c`, after `scale;`
+    if rest.len != 23 || !rest.starts_with("from:") || !rest.starts_with(" to:", 12)
+        return .none
+    $r: = no_rule()
+    r.kind = .scale
+    r.color = lower(rest.sub(5, 7), arena)
+    r.fill = lower(rest.sub(16, 7), arena)
+    if !is_colour(r.color) || !is_colour(r.fill)
         return .none
     return .some(r)
 
 fn write_rule(r: Rule, out: Str_builder$@) //< the entry `rule_of` reads; nothing for no rule
     switch r.kind
     case .none
+        return
+    case .scale
+        out.s("scale;from:").s(r.color).s(" to:").s(r.fill)
         return
     case .below
         out.c('<').s(r.value)
@@ -85,12 +127,7 @@ fn write_rule(r: Rule, out: Str_builder$@) //< the entry `rule_of` reads; nothin
     case .empty
         out.s("empty")
     out.c(';')
-    if r.color.len > 0
-        out.s("color:").s(r.color)
-    if r.fill.len > 0
-        if r.color.len > 0
-            out.c(' ')
-        out.s("fill:").s(r.fill)
+    write_colours(Colours::{ .color = r.color, .fill = r.fill }, out)
 
 fn has_rule(rules: List<|Rule|>@): Bool //< whether any column has a rule
     for r in rules
