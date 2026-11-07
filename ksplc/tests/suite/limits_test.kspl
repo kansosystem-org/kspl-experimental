@@ -75,6 +75,17 @@ priv fn src_interp(n: Sz, arena: Arena$@): U8[] //<
         b.s("\\{\"")
     return b.s("\n  return 0\n").take()
 
+priv fn src_interp_after_error(n: Sz, arena: Arena$@): U8[] //<
+    //< A syntax error on one line, then strings nested n deep in interpolations on the next
+    //< **The message of a syntax error walks every string in the text** (`parse_error_at` in
+    //< `../../parse/syntax_msg.kspl`), even past the error. Walked by recursion, 100,000 levels
+    //< overflowed the stack there.
+    b: = arena.text()
+    b.s("import \"std/io\"\nfn main(): I32\n  y: = = 1\n  io.out().s(\"")
+    for _i in Range.asc(n)
+        b.s("\\{\"")
+    return b.s("\n  return 0\n").take()
+
 priv fn src_struct(n: Sz, arena: Arena$@): U8[]
     b: = arena.text()
     b.s("priv struct S0 { v: I32; }\n")
@@ -169,7 +180,8 @@ priv fn at_limit(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
     verdict.check(name, b.code.unwrap_or(-1) == 0, b.out)
 
 priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@) //<
-    //< Checks that a chain too deep is rejected by a diagnostic that names the depth
+    //< Checks that a source too deep is rejected by a diagnostic holding `marker`, not a crash
+    //< The marker names the depth, or the place of an error found before the deep part.
     path: = write_src(slot, src, arena)
     if path.len == 0
         verdict.check(name, false, "cannot place the material")
@@ -184,7 +196,7 @@ priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@
 
 fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
-    io.out().s("# implementation limits: 15\n")
+    io.out().s("# implementation limits: 16\n")
     at_limit("block",
         arena.text().s("a block can be nested \{BLOCK_NESTING\} deep").take(),
         src_block(BLOCK_NESTING, arena), arena)
@@ -233,4 +245,7 @@ fn main(): I32
     too_deep("deep_interp",
         "strings nested in interpolations far past any limit are refused as a depth",
         src_interp(100000, arena), "nesting too deep", arena)
+    too_deep("deep_interp_after_error",
+        "a syntax error before strings nested far past any limit is reported where it stands",
+        src_interp_after_error(100000, arena), "p.kspl:3:", arena)
     return harness.finish()

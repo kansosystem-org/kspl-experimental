@@ -6,7 +6,7 @@ import "ksmd/calc/calc" + { Own_functions, Results }
 import "ksmd/calc/functions_table" as table
 import "ksmd/calc/glue"
 import "ksmd/calc/help" { FORMS, Help }
-import "ksmd/calc/value" { Value, empty, number, text }
+import "ksmd/calc/value" { Calc_error, Value, empty, number, text }
 import "ksmd/calc/wire" + { Wire_error }
 import "ksmd/model/format" { show_plain }
 import "ksmd/tests/support" { read }
@@ -21,6 +21,8 @@ fn run()
     taken()
     refused()
     asked()
+    held()
+    marked()
     wired()
     described()
     documented()
@@ -105,13 +107,46 @@ priv fn answer(ctx: Void$@, name: U8[], args: Raw_args$@): Value //<
 
 priv const OWN_HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n" //< table `t`
 
-priv fn own_results(rows: U8[], seen: Stand_in$@, arena: Arena$@): Results //<
-    //< The values of table `t` with these rows, the stand-in page answering `twice` and `later`
+priv fn own_results(rows: U8[], seen: Stand_in$@, arena: Arena$@, unknown: Calc_error): Results //<
+    //< The values of table `t` with these rows, the stand-in page answering `twice` and
+    //< `later`; a name it lacks gives `unknown`'s value
     doc: =
         read(arena.text().s(OWN_HEAD).s(rows).s(":::\n").take(), arena)
     own: = Own_functions::{ .names = U8[][]::{ "twice", "later", "picky", "sum" }, .ask = answer,
-        .ctx = Void$@::seen }
+        .ctx = Void$@::seen, .unknown = unknown }
     return calc.calculate(doc@, "2026-10-23", arena, own@)
+
+priv fn held() //< while a file's names are unknown, a name ksmd lacks says why, not `#SYNTAX!`
+    defer arena: = Arena(64 * 1024)
+    $seen: = Stand_in::{ .asked = 0 }
+    rows: = "| 4 | =tax(A1) |\n| 1 | =twice(A1) |\n| 2 | =if(true, 1, tax(A1)) |\n| 3 | =sum( |\n"
+    blocked: = own_results(rows, seen@, arena, .blocked)
+    verdict.check("before the person allows a file, a call it may give is #BLOCKED!",
+        blocked.at(0, 0, 1).error == .blocked &&
+        Calc_error.blocked.mark().equals("#BLOCKED!"), blocked.at(0, 0, 1).error.mark())
+    verdict.check("a function already known is still asked",
+        blocked.at(0, 1, 1).number == 8.0, "")
+    verdict.check("a branch not taken does not block", blocked.at(0, 2, 1).number == 1.0, "")
+    verdict.check("a formula that does not read is still #SYNTAX!",
+        blocked.at(0, 3, 1).error == .syntax, blocked.at(0, 3, 1).error.mark())
+    building: = own_results(rows, seen@, arena, .pending)
+    verdict.check("while a file builds, a call it may give waits",
+        building.at(0, 0, 1).error == .pending, building.at(0, 0, 1).error.mark())
+
+priv fn marked() //< the names of the person's functions a formula calls, as the page marks them
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read(arena.text().s(OWN_HEAD)
+        .s("| 1 | =twice(A1) + twice(A1) * later(2) |\n| 2 | =sum(A1) & \"twice(\" |\n").s(":::\n")
+        .take(), arena)
+    own: = Own_functions::{ .names = U8[][]::{ "twice", "later" }, .ask = answer, .ctx = null,
+        .unknown = .syntax }
+    t: = doc.tables[0]@
+    first: = own.called(t, t.cells[t.columns.len + 1], arena)
+    verdict.check("each name a formula calls is listed once, in its order",
+        first.len == 2 && first[0].equals("twice") && first[1].equals("later"), "")
+    second: = own.called(t, t.cells[2 * t.columns.len + 1], arena)
+    verdict.check("a name inside quoted text is no call", second.len == 0, "")
 
 priv fn asked() //< a formula calls a person's function by its name, and the page answers it
     defer arena: = Arena(64 * 1024)
@@ -119,7 +154,7 @@ priv fn asked() //< a formula calls a person's function by its name, and the pag
     r: =
         own_results("| 4 | =twice(A1) |\n| \"x\" | =twice(A2) |\n| 1 | =later(A1) + 1 |\n| 2 | \
             =if(false, twice(A1), 7) |\n| 3 | =sum(A1:A4) |\n| 5 | =unknown(1) |\n| 6 | =picky(A1) \
-            |\n", seen@, arena)
+            |\n", seen@, arena, .syntax)
     verdict.check("a person's function gives the cell its answer",
         r.at(0, 0, 1).kind == .number && r.at(0, 0, 1).number == 8.0, "")
     verdict.check("its arguments are converted by the rules every function follows",

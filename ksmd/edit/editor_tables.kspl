@@ -2,7 +2,7 @@
 //< their looks, sorting, pasting a grid, widths, number formats, choices, colour rules, groups of
 //< rows and names Each is one step of undo, recorded by comparing the tables with copies made
 //< before it.
-import "ksmd/base/dates" { is_date, typed_date, write_date }
+import "ksmd/base/dates" { date_of, is_date, write_date, ymd_of }
 import "ksmd/base/marker" { is_decimal }
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { calculate }
@@ -16,6 +16,7 @@ import "ksmd/edit/moving"
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
 import "ksmd/edit/sort" { Sort_key, sort_rows }
+import "ksmd/edit/typed" { Reading, is_web_address, value_of }
 import "ksmd/model/choice" { entry_of }
 import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, show_plain, shows_numbers }
@@ -26,10 +27,8 @@ import "ksmd/model/rule" { rule_of }
 import "ksmd/syntax/reader"
 import "std/chars"
 import "std/ds" { List }
-import "std/json"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
-import "std/strnum"
 
 enum Table_edit //< a row or column edit a page asks for, at a row or column of the table
     insert_row //< an empty row before row `at`; at the count of rows, after the last
@@ -226,22 +225,38 @@ impl Editor
 
     fn set_cell(ed: Self$@, block: Sz, row: Sz, column: Sz, text: U8[]): Void!Refused //<
         //< Puts what a person typed in a cell; row -1 is the names above the data rows
-        //< Text after `=` is a formula, a number as JSON writes one is a number, and nothing is an
-        //< empty cell. Quoted text is text, so `"12"` is the text 12. Anything else is text as
-        //< typed.
-        //< **A line break typed into a cell that held none turns Wrap text on**, in the same step,
-        //< as Excel does: unwrapped, the lines after it run past the column and are cut.
+        //< It reads as `value_of` does. **A line break typed into a cell that held none turns Wrap
+        //< text on**, in the same step, as Excel does. **What turns into a date or a link on its
+        //< own is a step of its own** (`Auto_entry`), so `Ctrl`+`Z` right after gives back the
+        //< text as typed, as Excel's AutoCorrect does.
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         had_break: = ed.cell_text(u, row, column, scratch).find_char('\n').is_some()
+        value: = value_of(text, ed.reading(), scratch)
+        dated: = row >= 0 && value.kind == .date && !is_date(text)
+        linked: = row >= 0 && ed.auto.links && value.kind == .text && is_web_address(text)
         before: = capture(ed.doc@, scratch)
-        ed.put_typed(u, row, column, text, scratch) catch why
-            throw .table(why)
+        if dated || linked
+            edit.set_cell(ed.doc@, u, row, column, .text, text, ed.arena) catch why
+                throw .table(why)
+        else
+            ed.put_typed(u, row, column, text, scratch) catch why
+                throw .table(why)
         if !had_break && text.find_char('\n').is_some()
             edit.set_look(ed.doc@, u, row, column, .wrap, "on", ed.arena) catch why
                 ed.put_tables_back(before@)
                 throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+        if !dated && !linked
+            return
+        turned: = capture(ed.doc@, scratch)
+        if dated
+            edit.set_cell(ed.doc@, u, row, column, .date, value.text, ed.arena) catch why
+                throw .table(why)
+        else
+            edit.set_link(ed.doc@, u, row, column, text, ed.arena) catch why
+                throw .table(why)
+        ed.close_table_step(turned@, begin(ed.selection(), ed.arena))!
 
     fn put_typed(ed: Self$@, u: Sz, row: Sz, column: Sz, text: U8[], scratch: Arena$@):
         Void!Edit_error //<
@@ -249,8 +264,14 @@ impl Editor
         if row < 0
             edit.set_name(ed.doc@, u, column, text, ed.arena)!
             return
-        value: = value_of(text, scratch)
+        value: = value_of(text, ed.reading(), scratch)
         edit.set_cell(ed.doc@, u, row, column, value.kind, value.text, ed.arena)!
+
+    priv fn reading(ed: Self@): Reading //< how this editor reads typed text now
+        $year: I64 = 0I64
+        if days: = date_of(ed.today)
+            year = ymd_of(days).year
+        return Reading::{ .dates = ed.auto.dates, .year = year }
 
     fn sort_table(ed: Self$@, block: Sz, column: Sz, descending: Bool): Void!Refused //<
         //< Orders the data rows of the table a block shows by one column's values, as one step
@@ -703,7 +724,8 @@ impl Editor
         case .number, .date
             return cell.text
         case .text
-            if value_of(cell.text, arena).kind == .text && !cell.text.starts_with("\"")
+            if value_of(cell.text, ed.reading(), arena).kind == .text &&
+                !cell.text.starts_with("\"")
                 return cell.text
             defer $out: = Str_builder()
             out.c('"').escape_and_append(cell.text).c('"')
@@ -798,10 +820,6 @@ priv fn free_name(doc: Document@, name: U8[], arena: Arena$@): U8[] //<
             return candidate
         n += 1
 
-struct Value //< what typed text puts in a cell
-    kind: Cell_kind
-    text: U8[] //< a formula without its `=`, a number as written, or the text
-
 priv fn pasted(text: U8[], arena: Arena$@): U8[] //<
     //< A pasted cell's text, with a number's thousands separators taken out: `-1,234.5` is
     //< `-1234.5`. Anything else stays as it was.
@@ -843,33 +861,3 @@ priv fn write_typed(v: calculated.Value, out: Str_builder$@) //<
         out.s("\"true\"" if v.boolean else "\"false\"")
     case .error
         out.c('"').s(v.error.mark()).c('"')
-
-fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed text
-    if typed.len == 0
-        return Value::{ .kind = .empty, .text = "" }
-    if typed[0] == '='
-        return Value::{ .kind = .formula, .text = typed.sub_from(1) }
-    if typed[0] == '"'
-        if text: = quoted(typed, arena)
-            return Value::{ .kind = .text, .text = text }
-    // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`.
-    if is_decimal(typed) && is_finite(typed)
-        return Value::{ .kind = .number, .text = typed }
-    if is_date(typed)
-        return Value::{ .kind = .date, .text = typed }
-    // A date typed with `/` is kept in the file's own form.
-    if day: = typed_date(typed)
-        defer $text: = Str_builder()
-        write_date(day, text@)
-        return Value::{ .kind = .date, .text = arena.dup_str(text.slice()) }
-    return Value::{ .kind = .text, .text = typed }
-
-priv fn is_finite(number: U8[]): Bool //< whether a number as JSON writes one is below infinity
-    value: = number.to_f64() catch
-        return false
-    return value - value == 0.0
-
-priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one
-    parsed: = json.parse(typed, arena) catch
-        return .none
-    return parsed.val.as_str()

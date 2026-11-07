@@ -89,7 +89,7 @@ export async function served(browser, pageFile, work, kssrv, builder) {
   try {
     // **The builder is named where it is given**, as the launcher names it.
     server = await start(kssrv, root, pageFile, path.join(work, "kssrv.log"),
-      builder ? [`--builder=${path.resolve(builder)}`] : []);
+      builder ? [`--builder=${path.resolve(builder)}`, `--allowed=${path.resolve(work, "allowed.txt")}`] : []);
   } catch (e) {
     check(false, "the local server starts", e.message);
     return;
@@ -761,7 +761,7 @@ const SECTIONS = {
   // An image pasted is written beside the document under a free name, and its clause goes in.
   async pasteImage(ctx) {
     fs.writeFileSync(path.join(ctx.root, "paste.ksmd"), `${H}Text.\n`);
-    fs.writeFileSync(path.join(ctx.root, "paste-image-1.png"), "taken");
+    fs.mkdirSync(path.join(ctx.root, "paste-images"), { recursive: true }); fs.writeFileSync(path.join(ctx.root, "paste-images/image-1.png"), "taken");
     const d = await tab(ctx, "?doc=paste.ksmd");
     await d.select(0, 0, 5);
     ctx.browser.answerPrompts("A dot");
@@ -774,17 +774,17 @@ const SECTIONS = {
     })()`);
     await idle(d);
     ctx.browser.answerPrompts(null);
-    const file = path.join(ctx.root, "paste-image-2.png");
-    check(fs.existsSync(file) && fs.readFileSync(file).equals(DOT) && ctx.disk("paste-image-1.png") === "taken",
-      "a pasted PNG is written beside the document, past a name already taken");
+    const file = path.join(ctx.root, "paste-images/image-2.png");
+    check(fs.existsSync(file) && fs.readFileSync(file).equals(DOT) && ctx.disk("paste-images/image-1.png") === "taken",
+      "a pasted PNG is written in the document's folder of images, past a name already taken");
     const source = await d.js("ksmd.source()");
-    check(source === `${H}Text.\n\n:::image src="paste-image-2.png" alt="A dot"\n:::\n`,
-      "its clause goes in after the caret's paragraph, with the description asked for", JSON.stringify(source));
-    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"paste-image-2.png\"] img'); " +
+    check(source === `${H}Text.\n\n:::image src="paste-images/image-2.png" alt=""\n:::\n`,
+      "its clause goes in after the caret's paragraph, asking for no description", JSON.stringify(source));
+    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"paste-images/image-2.png\"] img'); " +
       "return !!i && i.complete && i.naturalWidth === 1; })()"), "and the image shows at once");
     await ctx.browser.closeTab(d.page);
-    for (const name of ["paste.ksmd", "paste-image-1.png", "paste-image-2.png"]) {
-      fs.rmSync(path.join(ctx.root, name), { force: true });
+    for (const name of ["paste.ksmd", "paste-images"]) {
+      fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
     }
   },
 
@@ -806,19 +806,19 @@ const SECTIONS = {
     ctx.browser.answerPrompts("A chosen dot");
     ctx.browser.chooseFiles([picked]);
     await d.menu("image");
-    const file = path.join(ctx.root, "pick-image-1.png");
-    check(await d.until("ksmd.source().includes('pick-image-1.png')") && fs.existsSync(file) &&
+    const file = path.join(ctx.root, "pick-images/image-1.png");
+    check(await d.until("ksmd.source().includes('pick-images/image-1.png')") && fs.existsSync(file) &&
       fs.readFileSync(file).equals(DOT), "the image chosen is written beside the document",
     await said(d));
     ctx.browser.answerPrompts(null);
     ctx.browser.chooseFiles(null);
     const source = await d.js("ksmd.source()");
-    check(source === `${H}Text.\n\n:::image src="pick-image-1.png" alt="A chosen dot"\n:::\n`,
-      "its clause goes in after the caret's paragraph, with the description asked for", JSON.stringify(source));
-    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"pick-image-1.png\"] img'); " +
+    check(source === `${H}Text.\n\n:::image src="pick-images/image-1.png" alt=""\n:::\n`,
+      "its clause goes in after the caret's paragraph, asking for no description", JSON.stringify(source));
+    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"pick-images/image-1.png\"] img'); " +
       "return !!i && i.complete && i.naturalWidth === 1; })()"), "and the image shows at once");
     await ctx.browser.closeTab(d.page);
-    for (const name of ["pick.ksmd", "pick-image-1.png"]) fs.rmSync(path.join(ctx.root, name), { force: true });
+    for (const name of ["pick.ksmd", "pick-images"]) fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
   },
 
   // The editor's limit and the server's ceiling are two numbers; this ties them together.

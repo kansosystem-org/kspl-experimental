@@ -145,6 +145,14 @@ function ksmdView(ks) {
         segsInto(el, b.s);
         return el;
       }
+      // A blank line: an empty line of a paragraph's height, which Enter in a gap puts there. The
+      // caret stands before or after it, and Backspace or Delete takes it away, as a divider's.
+      case "e": {
+        const el = unit("div", "b blank");
+        el.contentEditable = "false";
+        el.appendChild(document.createElement("br"));
+        return el;
+      }
       case "d": {
         const el = unit("div", "b divider");
         el.contentEditable = "false";
@@ -163,6 +171,8 @@ function ksmdView(ks) {
         const place = unit("div", "image");
         place.setAttribute("role", "img");
         place.setAttribute("aria-label", b.alt || b.src);
+        el.dataset.alt = b.alt;
+        el.dataset.src = b.src;
         place.textContent = `Image: ${b.src}`;
         // The picture and the shapes drawn over it share one box (`drawings.js`).
         const picture = unit("div", "picture");
@@ -176,6 +186,11 @@ function ksmdView(ks) {
             place.textContent = `This image cannot be shown: ${problem(b)}`;
             place.classList.add("problem");
           }
+        }
+        // A width set on the image is its share of the text width (`images.js`).
+        if (b.w > 0) {
+          el.classList.add("sized");
+          el.style.setProperty("--image-width", `${b.w}%`);
         }
         if (b.cap) {
           const cap = document.createElement("figcaption");

@@ -33,7 +33,7 @@ The six kinds, what each holds, and how a document is named are "Document naming
 **A specification's reader needs a complete agreement without reading maintainer explanations.** So references go from design to specification ("What a SPEC can point at" in [`SPEC-documents.md`](SPEC-documents.md)), and the README connects the two reading paths. This gives up a direct link from each rule to its rationale.
 
 * **The reader is not marked per file.** A document serving two readers would need one label, and the argument would move to which one.
-* **The kind makes one misplacement visible**: facts about something outside Kanso in a document for whoever changes Kanso. A board's pin table belongs in [`../ksos/docs/SPEC-board.md`](../ksos/docs/SPEC-board.md), not in ksos's rationale.
+* **The kind makes one misplacement visible**: facts about something outside Kanso in a document for whoever changes Kanso. A board's pin table belongs in [`../lib/ksos/docs/SPEC-board.md`](../lib/ksos/docs/SPEC-board.md), not in ksos's rationale.
 
 **What the reader must already have is said where the kind cannot say it.** It stands in the first sentence of a `HOWTO-` or a `TUTORIAL-<topic>.md`, or in a README table's column where the documents differ ("Document naming" in [`SPEC-documents.md`](SPEC-documents.md)). The reader needs a checklist (a terminal, a toolchain, a board on the desk), not a persona.
 
@@ -163,12 +163,14 @@ flowchart LR
 
 ### Programs stand at the top, libraries under `lib/`
 
-**A package that builds a program stands at the repository's top. A library, a package that only other packages import, stands under `lib/`.** `std` is the one library at the top: it ships with the compiler, and `--std-dir` finds it by its own rule ("Locating the standard library" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+**A package that builds a program stands at the repository's top. A library, a package whose files another program imports, stands under `lib/`.** `std` is the one library at the top: it ships with the compiler, and `--std-dir` finds it by its own rule ("Locating the standard library" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 | Where | What stands there |
 | :-- | :-- |
-| The top | The programs (`ksplc/`, `kssrv/`, `ksos/`, `ksmd/`, `ksagent/`), `std/`, and the folders that serve the whole repository (`docs/`, `tests/`, `tools/`, `mk/`, `data/`) |
-| `lib/` | The libraries other packages import (`lib/ksai/`, `lib/ksdb/`, `lib/kspeg/`, `lib/kstls/`) |
+| The top | The programs (`ksplc/`, `kssrv/`, `ksmd/`, `ksagent/`), `std/`, and the folders that serve the whole repository (`docs/`, `tests/`, `tools/`, `mk/`, `data/`) |
+| `lib/` | The libraries (`lib/ksai/`, `lib/ksdb/`, `lib/kspeg/`, `lib/kstls/`, `lib/ksos/`) |
+
+**`ksos` is a library although no package here imports it.** A firmware imports its kernel, drivers and ports, and builds them into one image. Its demos are such firmware, kept inside it.
 
 **The folder does not change a name.** A library's files are still imported as `ksai/…`, since a package names itself ("A package names itself, and names what it uses" below). The compiler finds a library in the `lib/` beside `std`'s folder with nothing set. `make install` puts the same `lib/` beside the installed `std/`, so a program outside the repository imports `ksai/…` the same way. The release zip carries `std/` alone. A file in `lib/ksai/` owes a notice, and the zip holds no such file ("What recipients are owed: one table, held by a gate" below).
 
@@ -208,17 +210,17 @@ flowchart LR
 
 **Each package's entry point is `<package>/tests/all.kspl`, and its opening comment says what the package's tests inspect.** Its suite runs every function named `test_…` in the files it imports ("8.5 Tests: functions named `test_`, run by a suite" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Adding a test touches no list; adding a file of tests adds one import line.
 
-**The remaining boundary is closed by opening exactly one entry point as `pub`**: one function that runs everything, like `run_ksos` in `ksos/tests/all.kspl`. Do not add inspection interfaces here; each is one more contract outside the unit.
+**The remaining boundary is closed by opening exactly one entry point as `pub`**: one function that runs everything, like `run_ksos` in `lib/ksos/tests/all.kspl`. Do not add inspection interfaces here; each is one more contract outside the unit.
 
 #### Where an unneeded `pub` is reported
 
-**[I0402] can be enabled for `ksmd/`, `ksos/`, `ksagent/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `lib/ksdb/`, `lib/ksai/`, `lib/kstls/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. Read the header of `all.kspl` before adding.
+**[I0402] can be enabled for `ksmd/`, `lib/ksos/`, `ksagent/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `lib/ksdb/`, `lib/ksai/`, `lib/kstls/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. Read the header of `all.kspl` before adding.
 
 **The diagnostic is turned off in one file, with its reason beside the switch.** In `ksplc/tests/prog/equiv.kspl`, `main`'s error type is seen from outside as the entry point's.
 
 **Inside `tests/` itself it is the reverse.** No package imports that leaf, so a `pub` there has no user outside the unit, and the diagnostic is enabled (`tests/ksplc.cfg`). A `pub` inside the materials (`negative/`, `lint/`, and forms held in `"""…"""`) is not reported, since they are written to make a visibility diagnostic fire.
 
-**In `ksos/demo/`, a `pub` has no user outside the unit either, but the diagnostic cannot apply to the demo alone.** The configuration is found from the entry point's file. So it would also report the kernel's and drivers' `pub` names, which stay ("The guidance for adding an API or an implementation" in [`../ksos/docs/DESIGN-rtos.md`](../ksos/docs/DESIGN-rtos.md)). `make test-conventions` checks the demo's text instead.
+**In `lib/ksos/demo/`, a `pub` has no user outside the unit either, but the diagnostic cannot apply to the demo alone.** The configuration is found from the entry point's file. So it would also report the kernel's and drivers' `pub` names, which stay ("The guidance for adding an API or an implementation" in [`../lib/ksos/docs/DESIGN-rtos.md`](../lib/ksos/docs/DESIGN-rtos.md)). `make test-conventions` checks the demo's text instead.
 
 ### The published API is recorded in the repository
 
@@ -358,7 +360,7 @@ sequenceDiagram
 
 **The transport is built on what `std` already has.**
 
-* **No program is started, except one closed build.** Debugging and plugins serve a code editor, which the page is not. A started program reads beyond the root and reaches the network, with the token as the whole defence (Principle 1). A document's own functions need a build, and a page cannot build them alone. So the server may start one builder, named when it starts. That build reads only the file named, the standard library and the builder's own sources. The file's code also reaches no C symbol, linker or assembler, which would read past those (`--closed`). Its result runs in the browser's sandbox, not on the machine.
+* **No program is started, except one closed build.** Debugging and plugins serve a code editor, which the page is not. A started program reads beyond the root and reaches the network, with the token as the whole defence (Principle 1). A document's own functions need a build, and a page cannot build them alone. So the server may start one builder, named when it starts, and only for a file whose exact bytes the person allowed. That build reads only the file named, the standard library and the builder's own sources. The file's code also reaches no C symbol, linker or assembler, which would read past those (`--closed`). Its result runs in the browser's sandbox, not on the machine.
 * **`HEAD` is not carried.** Watching already returns the size and whether the file exists (Principle 6).
 * **The type is not guessed, and the encoding is UTF-8 only.** A wrong guess shows only where it misses.
 
@@ -483,7 +485,7 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 | Who uses it | Whoever changes the compiler | Whoever runs `make install`, and the release (`.github/workflows/release.yml`) |
 | Compared with the development build | — | It translates ksplc itself in roughly half the time, and is roughly half the size |
 
-**The generated C does not change by one byte.** `make self-host-ship` translates ksplc with the shipped build and compares the result with stage2's C, on Linux and in every platform's release build.
+**The generated C does not change by one byte.** `make self-host-ship` translates ksplc with the shipped build and compares the result with stage2's C, before every `make install` and in every platform's release build.
 
 **Only the C a person reads is tidied.** Clang-Format runs on the C of `make debug-file` and `make commit-seed`. The C the bootstrap and `make debug` leave is not tidied, since nobody reads it.
 
@@ -528,7 +530,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 
 **The shared jobs divide the compiler's extraction suites too**, so the heavy suites do not collect in one job ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). Each share repeats the bootstrap, since each job needs a compiler of its own. Every regression suite runs in exactly one job, and no job is added.
 
-**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race` and `test-sanitize` in the Linux job, and `test-ksmd-browser` in job a's Linux run. On a round that starts with nothing built, `self-host-ship` and self-host ×2 join them.
+**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race` and `test-sanitize` in the Linux job, and `test-ksmd-browser` in job a's Linux run. On a round that starts with nothing built, self-host ×2 joins them.
 
 **`-j` barely takes effect on GitHub's runners**, so a runner is effectively one core, and the only route to faster gates is less total work. The reproduction is `taskset -c 0 make -j1 test-suites`: `sys.cpu_count` follows the affinity, so the suites' own side-by-side runs drop to one as well.
 
@@ -537,9 +539,10 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 | self-host ×2 (C and LLVM) | **Do not attach `-B`.** It redoes even the seed's compilation, and `perf-log` then rebuilds C's stage1 wholesale. `self-host`'s own recipe emits the verification marker on an incremental build too; otherwise the runner (`Gate.verdict` in `tools/ci_gates.kspl`) would return "passed without verifying" |
 | perf-log | **Measure both times**: on an empty cache (cold), then on the same cache (warm). One alone leaves half unchecked. The cache sits in a dedicated location, so the shared cache is not erased |
 | test-suites | With the cores full, **the total amount of work** fixes it. **No job is added for them**: each job pays its own start-up and billing ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `SUITES` is kept longest first (the grounds are at `SUITES` in `mk/test.mk`) |
-| test-race / test-sanitize / self-host-ship | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer or at `-O2` |
+| test-race / test-sanitize | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer. `test-race` builds its programs side by side, then runs them side by side |
+| self-host-ship | **Not a CI gate.** `make install` runs it before it installs, and the release on each platform, so a difference only the shipped build shows is caught before anything ships. In CI it would pay an `-O2` build of ksplc in every round, and take cores from `test-race` |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
-| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)). **They run in job a's Linux run**, the shortest Linux job without them, and stay together there so those files are built once |
+| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone, as every gate does ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). **They run in job a's Linux run**, the shortest Linux job without them, and stay together there so those files are built once |
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, and a fine-grained name points straight at the cause. Only the same property inspected in two places can be merged.
 

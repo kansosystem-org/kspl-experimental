@@ -1,0 +1,49 @@
+//< The commands that put a whole block in place of the selection: a divider, an image, and a
+//< clause naming a file (`:::functions`, `:::include`)
+//< Each splits the text the caret stands in, as one step, through `insert_whole` in
+//< `editor.kspl`.
+import "ksmd/edit/editor" { Editor, Refused }
+import "ksmd/model/model" { Block, Block_kind, Drawing, Image }
+import "ksmd/syntax/clause" { names_kspl }
+import "std/ds" { List }
+
+impl Editor
+    fn insert_divider(ed: Self$@): Void!Refused //<
+        //< A divider in place of the selection, splitting the text the caret stands in, as one step
+        divider: = Block::{ .kind = .divider, .level = 0, .label = "", .text = "", .first = 0,
+            .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
+        ed.insert_whole(divider)!
+
+    fn insert_image(ed: Self$@, src: U8[], alt: U8[]): Void!Refused //<
+        //< An image in place of the selection, as a divider is put in; `src` is from this source's
+        //< folder, and not empty, as the reader wants. The image keeps its place in
+        //< `Document.images` after an undo, as a chart does.
+        if src.len == 0
+            throw .no_read_back
+        image: = Image::{ .src = ed.arena.dup_str(src), .alt = ed.arena.dup_str(alt), .caption = "",
+            .width = 0, .drawings = List<|Drawing|>(ed.arena) }
+        ed.doc.images.push(image)
+        b: = Block::{ .kind = .image, .level = 0, .label = "", .text = "",
+            .first = ed.doc.images.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
+            .invisible = false }
+        ed.insert_whole(b)!
+
+    fn insert_functions(ed: Self$@, path: U8[]): Void!Refused //<
+        //< A `:::functions` clause in place of the selection, as a divider is put in; `path` is from
+        //< this source's folder. A path the reader would refuse is refused here.
+        if !names_kspl(path)
+            throw .no_read_back
+        ed.insert_clause(.functions, path)!
+
+    fn insert_include(ed: Self$@, path: U8[]): Void!Refused //<
+        //< An `:::include` clause in place of the selection, as a divider is put in; `path` is from
+        //< this source's folder, and not empty, as the reader wants
+        if path.len == 0
+            throw .no_read_back
+        ed.insert_clause(.include, path)!
+
+    priv fn insert_clause(ed: Self$@, kind: Block_kind, path: U8[]): Void!Refused //<
+        //< A clause that names a file by its path, and holds nothing else, in place of the selection
+        b: = Block::{ .kind = kind, .level = 0, .label = "", .text = ed.arena.dup_str(path),
+            .first = 0, .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
+        ed.insert_whole(b)!

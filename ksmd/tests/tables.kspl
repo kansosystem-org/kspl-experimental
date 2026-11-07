@@ -27,6 +27,7 @@ fn run()
     widths()
     sorting()
     looks()
+    auto_entry()
     pasting()
     pasting_whole()
     kept_small()
@@ -429,6 +430,39 @@ priv fn looks()
     ed.set_look(0, 0, 0, 0, 0, .wrap, "yes") catch
         refused_wrap = true
     verdict.check("wrap other than on is refused", refused_wrap, "")
+
+priv fn one(cell: U8[], a: Arena$@): U8[] //< a source holding a table with one data cell
+    return a.text().s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n").s(cell).s("\n:::\n").take()
+
+priv fn auto_entry() //< a typed 11/6 is a date and an address a link, each undone alone, or off
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(one("| |", arena), arena)
+    set(ed@, 0, 0, 0, "11/6")
+    saves("a typed 11/6 is a date in the year the document opened", ed@, arena,
+        one("| 2026-11-06 |", arena))
+    ed.undo()
+    saves("Ctrl+Z right after gives back the text as typed", ed@, arena,
+        one("| \"11/6\" |", arena))
+    ed.undo()
+    saves("and a second one what the cell held before", ed@, arena, one("| |", arena))
+    set(ed@, 0, 0, 0, "2/30")
+    saves("a day that does not exist stays text", ed@, arena, one("| \"2/30\" |", arena))
+    set(ed@, 0, 0, 0, "https://example.com/a")
+    saves("a typed web address is text that links to it", ed@, arena,
+        one("| \"https://example.com/a\" {link=\"https://example.com/a\"} |", arena))
+    ed.undo()
+    saves("and Ctrl+Z right after takes the link alone away", ed@, arena,
+        one("| \"https://example.com/a\" |", arena))
+    ed.auto = ::{ .dates = false, .links = false }
+    set(ed@, 0, 0, 0, "11/6")
+    saves("turned off, 11/6 stays text", ed@, arena, one("| \"11/6\" |", arena))
+    set(ed@, 0, 0, 0, "2026/1/5")
+    saves("so does a date written with '/'", ed@, arena, one("| \"2026/1/5\" |", arena))
+    set(ed@, 0, 0, 0, "2026-01-05")
+    saves("the file's own form is a date still", ed@, arena, one("| 2026-01-05 |", arena))
+    set(ed@, 0, 0, 0, "https://example.com/b")
+    saves("and a web address stays plain text", ed@, arena,
+        one("| \"https://example.com/b\" |", arena))
 
 priv fn pasting_whole()
     defer arena: = Arena(64 * 1024)

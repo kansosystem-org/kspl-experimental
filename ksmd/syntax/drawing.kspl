@@ -13,7 +13,8 @@
 //< the same lines (`drawings_of`), so what it draws passes the reader's one set of rules.
 import "ksmd/base/attribute" { Attribute, find, read_attributes }
 import "ksmd/base/source" { Diagnostic, Line, Source }
-import "ksmd/model/model" { MAX_DRAWING_TEXT, MAX_DRAWINGS, MAX_SPOT, Drawing, Drawing_shape }
+import "ksmd/model/model" { MAX_DRAWING_TEXT, MAX_DRAWINGS, MAX_PEN_POINTS, MAX_SPOT, Drawing,
+    Drawing_shape }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -58,14 +59,19 @@ priv fn drawing_of(src: Source@, line: Line, arena: Arena$@): Drawing!Diagnostic
         read_attributes(src, line.text, WORD.len, line.text.len, line.offset, arena)!
     for a in attributes
         if !a.name.equals("shape") && !a.name.equals("from") && !a.name.equals("to") &&
-            !a.name.equals("color") && !a.name.equals("text")
-            throw src.diagnostic(a.offset, "a drawing takes only shape, from, to, color and text")
+            !a.name.equals("color") && !a.name.equals("text") && !a.name.equals("points")
+            throw src.diagnostic(a.offset,
+                "a drawing takes only shape, from, to, points, color and text")
     shape_at: = find(attributes, "shape") catch
         throw src.diagnostic(line.offset, "a drawing needs shape, from and to")
     shape: = shape_of(shape_at.value) catch
-        throw src.diagnostic(shape_at.offset, "shape is \"rect\", \"arrow\" or \"line\"")
+        throw src.diagnostic(shape_at.offset, SHAPES)
     if !shape_at.quoted
-        throw src.diagnostic(shape_at.offset, "shape is \"rect\", \"arrow\" or \"line\"")
+        throw src.diagnostic(shape_at.offset, SHAPES)
+    if shape == .pen
+        return pen_of(src, attributes, line)
+    if a: = find(attributes, "points")
+        throw src.diagnostic(a.offset, "only a pen line has points")
     from: = point_of(src, attributes, "from", line)!
     to: = point_of(src, attributes, "to", line)!
     $color: U8[] = ""
@@ -83,7 +89,48 @@ priv fn drawing_of(src: Source@, line: Line, arena: Arena$@): Drawing!Diagnostic
             throw src.diagnostic(a.offset, "only a rect holds text")
         text = a.value
     return Drawing::{ .shape = shape, .x1 = from.x, .y1 = from.y, .x2 = to.x, .y2 = to.y,
-        .color = color, .text = text }
+        .color = color, .text = text, .points = "" }
+
+priv const SHAPES: U8[] = "shape is \"rect\", \"arrow\", \"line\" or \"pen\"" //<
+    //< what the reader says of a shape it does not know
+
+priv fn pen_of(src: Source@, attributes: List<|Attribute|>, line: Line): Drawing!Diagnostic //<
+    //< A pen line: `points="10,20 14,25 …"`, 2 to 500 points, one space apart, and a colour
+    for name in U8[][]::{ "from", "to", "text" }
+        if a: = find(attributes, name)
+            throw src.diagnostic(a.offset, "a pen line has points and a color alone")
+    a: = find(attributes, "points") catch
+        throw src.diagnostic(line.offset, "a pen line needs points, as in points=\"10,20 14,25\"")
+    message: = "points are 2 to 500 points one space apart, each as \"120,40\""
+    if !a.quoted
+        throw src.diagnostic(a.offset, message)
+    $box: = Drawing::{ .shape = .pen, .x1 = MAX_SPOT, .y1 = MAX_SPOT, .x2 = 0, .y2 = 0, .color = "",
+        .text = "", .points = a.value }
+    $count: Sz = 0
+    $from: Sz = 0
+    for from <= a.value.len
+        end: =
+            from + a.value.sub_from(from).find_char(' ').unwrap_or(a.value.len - from)
+        pair: = a.value.sub(from, end - from)
+        comma: = pair.find_char(',') catch
+            throw src.diagnostic(a.offset, message)
+        x: = whole_of(pair.sub(0, comma)) catch
+            throw src.diagnostic(a.offset, message)
+        y: = whole_of(pair.sub_from(comma + 1)) catch
+            throw src.diagnostic(a.offset, message)
+        box.x1 = x if x < box.x1 else box.x1
+        box.y1 = y if y < box.y1 else box.y1
+        box.x2 = x if x > box.x2 else box.x2
+        box.y2 = y if y > box.y2 else box.y2
+        count += 1
+        from = end + 1
+    if count < 2 || count > MAX_PEN_POINTS
+        throw src.diagnostic(a.offset, message)
+    if c: = find(attributes, "color")
+        if !c.quoted || !is_color(c.value)
+            throw src.diagnostic(c.offset, "color is a colour as \"#c00000\", or leave it out")
+        box.color = c.value
+    return box
 
 priv struct Point
     x: Sz
@@ -124,6 +171,8 @@ priv fn shape_of(text: U8[]): Drawing_shape? //< `rect`, `arrow` or `line`
         return .some(.arrow)
     if text.equals("line")
         return .some(.line)
+    if text.equals("pen")
+        return .some(.pen)
     return .none
 
 priv fn is_color(text: U8[]): Bool //< `#` and six hexadecimal digits, as the writer keeps them
@@ -137,8 +186,11 @@ priv fn is_color(text: U8[]): Bool //< `#` and six hexadecimal digits, as the wr
 fn write_drawings(drawings: List<|Drawing|>@, out: Str_builder$@) //<
     //< Each drawing's line, as `read_drawings` reads it
     for m in drawings
-        out.s("draw shape=\"").s(m.shape.variant_name()).s("\" from=\"\{m.x1\},\{m.y1\}\" to=\"")
-            .s("\{m.x2\},\{m.y2\}\"")
+        out.s("draw shape=\"").s(m.shape.variant_name()).c('"')
+        if m.shape == .pen
+            out.s(" points=\"").s(m.points).c('"')
+        else
+            out.s(" from=\"\{m.x1\},\{m.y1\}\" to=\"\{m.x2\},\{m.y2\}\"")
         if m.color.len > 0
             out.s(" color=\"").s(m.color).c('"')
         if m.text.len > 0

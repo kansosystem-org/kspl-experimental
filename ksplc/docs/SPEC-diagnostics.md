@@ -423,10 +423,11 @@ A parameter that takes an arena has a default (`a: Arena$@ = null`). A call that
 * The type is read as resolved, so an arena behind a typedef or a pointer (`Arena@`, `Arena$@`) is found.
 
 ### [I0801] A second plain `impl` block in one file
-A file holds a second plain `impl` block (one naming no trait) for a type, which a reader who found the first misses. The information names the line of the first block.
+A file holds a second plain `impl` block for a type, which a reader who found the first misses. A plain block names no trait, or only traits with no methods (`impl T: Move_only`). The information names the line of the first block.
 * **Fix**: move the methods into the first block. A banner comment that headed a group can stay inside the block, above that group.
+* **An empty block naming a trait with no methods** (`impl T: Move_only {}`) beside the plain block: name the trait on the plain block's header instead (`impl T: Move_only`). Add it after a comma where the header names one already. Standing apart, it is missed by a reader of the plain block, who takes the type to have no such property.
 * **Not reported**:
-  * a block that names a trait (`impl T: Trait`), which holds that trait's methods ("5.3 Checking trait conformance" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md));
+  * a block that names a trait with methods (`impl T: Trait`), which holds that trait's methods ("5.3 Checking trait conformance" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md));
   * a block in another file than the first one;
   * a block for one instance of a generic type (`impl Box<|I32|>`) beside `impl<|T|> Box<|T|>`. Two blocks for the same instance, or two `impl<|T|> Box<|T|>`, are reported.
 

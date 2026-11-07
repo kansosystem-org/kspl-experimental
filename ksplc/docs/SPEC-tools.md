@@ -988,8 +988,8 @@ The search walks upward from the directory the compiled source is read from, tha
 
 ```
 ksplc.cfg            ← it applies where no nearer file stands
-ksos/ksplc.cfg        ← everything that applies under ksos/; the file above is not read there
-ksos/kernel/task.kspl
+lib/ksos/ksplc.cfg    ← everything that applies under lib/ksos/; the file above is not read there
+lib/ksos/kernel/task.kspl
 ```
 
 Caution: **An outer file's setting does not reach a folder that has its own file.** To keep it there, repeat it in that folder's file.
@@ -1008,7 +1008,7 @@ The check runs for every source read, so a typo shows even in a file with no fin
 
 ### 6.4 A package that names itself (`[package]`)
 
-A *package* is a top-level folder of code distributed as one unit, such as `std` or `ksos`. A `ksplc.cfg` holding `[package]` marks **a package's top folder**, and names the package.
+A *package* is a folder of code distributed as one unit, such as `std` or `lib/ksos`. A `ksplc.cfg` holding `[package]` marks **a package's top folder**, and names the package.
 
 ```
 [package]

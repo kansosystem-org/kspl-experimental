@@ -87,16 +87,6 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 
 A gate that did not run is never shown as `PASS`, and the round returns failure. A round the self-host's fall ended prints the same two lines with its own reason.
 
-### Two gates side by side
-
-**`race` and `selfhost_ship` start at the same time** (`Gate.beside` in `tools/ci_gates.kspl`). Each keeps about one core busy for about two minutes, and they write to different files. So a round on four cores ends that much sooner. Every other gate runs alone. **`ksmd_browser` stays alone**, since another gate's load can upset its browser timing.
-
-**Each gate of the pair is still judged alone**, with its own log, time cap, verdict and summary line. Its time counts from the common start. While the two run, their output goes only to their logs, shown in turn when both end.
-
-**The pair runs together only where the set runs both**: `make ci` on every platform, and `make ci-shard-linux`. **With `STOP=1`, a fall in the pair ends the round after both gates end**; the partner keeps its own verdict. **`make ci CI_SERIAL=1` runs each gate alone**, the pair included. If a fall goes away with it, the load is the cause. CI's jobs do not set it.
-
-To add a pair of gates that share no file, put the two rows next to each other, and let each name the other in `beside`. The runner refuses a pair whose rows are apart, do not name each other, or differ in `stops` or `early`.
-
 ## How the gates are arranged
 
 **Which gates run, and in which job, is one table: `GATES` in `tools/ci_gates.kspl`.** Each make target below only names its set, and the seed runs the table, so a compiler under check never decides what is checked.
@@ -134,7 +124,7 @@ flowchart TD
     LX --> T["the seed reads the table<br/>gates in tools/ci_gates.kspl"]
     WN --> T
     MC --> T
-    T --> G["the gates run one after another, one pair side by side;<br/>each ends with one RESULT line"]
+    T --> G["the gates run one after another;<br/>each ends with one RESULT line"]
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
 
@@ -152,11 +142,11 @@ flowchart TD
 
 **Do not remove `fail-fast: false`**: without it the first failing job cancels the rest, and their results are lost.
 
-**The gates run one after another, in the table's order**, except the pair in "Two gates side by side" above. Inside a gate whose `par` in `tools/ci_gates.kspl` is `parallel` or `synced`, the items run in parallel (`-j<jobs>`). `lint` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` each split into one target per item, so a failing item is named by its target.
+**The gates run one after another, in the table's order, each with the machine to itself.** Another gate's load would slow a gate that spreads its own work over the cores, such as `test-race`, and can upset a browser's timing. Inside a gate whose `par` in `tools/ci_gates.kspl` is `parallel` or `synced`, the items run in parallel (`-j<jobs>`). `lint` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` each split into one target per item, so a failing item is named by its target.
 
-**Every demo run of `test-ksos-posix` and `test-ksos-qemu` has a time cap** (`KSOS_RUN_CAP` in `ksos/Makefile`), past which it fails with `[FAIL] … it hung`. `test-ksos-posix` first checks that a run spinning for ever is stopped that way.
+**Every demo run of `test-ksos-posix` and `test-ksos-qemu` has a time cap** (`KSOS_RUN_CAP` in `lib/ksos/Makefile`), past which it fails with `[FAIL] … it hung`. `test-ksos-posix` first checks that a run spinning for ever is stopped that way.
 
-**Such a demo run passes only on three things at once** (`ksos_run_gate` in `ksos/Makefile`):
+**Such a demo run passes only on three things at once** (`ksos_run_gate` in `lib/ksos/Makefile`):
 
 * it exits with 0;
 * its log holds no failure mark (`[FAIL]`, `RESULT: SOME FAILED`);
@@ -164,7 +154,7 @@ flowchart TD
 
 The last catches a demo whose checks were never reached, such as a kernel bug that leaves a task waiting for ever.
 
-**Items that hold a fixed resource are listed as serial** (`KSOS_QEMU_SERIAL_DEMOS` / `KSOS_POSIX_SERIAL_DEMOS` in `ksos/Makefile`; their comments say which resources).
+**Items that hold a fixed resource are listed as serial** (`KSOS_QEMU_SERIAL_DEMOS` / `KSOS_POSIX_SERIAL_DEMOS` in `lib/ksos/Makefile`; their comments say which resources).
 
 ## What each platform runs
 
@@ -174,7 +164,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 |---|:---:|:---:|:---:|
 | self-host (the C backend) | ✅ | ✅ | ✅ |
 | test-seed-sum (the seed was re-baked after the last compiler change, by the record `make commit-seed` keeps in `ksplc/seed.sum`) | ✅ | ➖(note 26) | ➖(note 26) |
-| self-host-ship (the shipped `-O2` build emits stage2's C to the byte) | ✅ | ➖(note 20) | ➖(note 20) |
+| self-host-ship (the shipped `-O2` build emits stage2's C to the byte) | ➖(note 20) | ➖(note 20) | ➖(note 20) |
 | debug tests | ➖(note 27) | ✅ | ➖(note 27) |
 | debug-tools (the tests of `tools/`, the one folder of tests without a `Makefile`) | ✅ | ➖(note 27) | ➖(note 27) |
 | lint (every entry point; ksai's tests a second time with the `#cfg(blas)` branch on) | ✅ | ➖(note 26) | ➖(note 26) |
@@ -269,9 +259,9 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 3**: on macOS, `ld64` drops unused code with `-dead_strip` (`GC_SECTIONS_FLAG`), and Mach-O needs the "segment,section" form for `#section("...")` (`KSPL_SECTION` in `ksplc/gen/runtime/core.h`). **Such differences show only when a gate runs on real hardware.**
 * **note 4**: a program built by the LLVM backend holds no runtime; `ksplc emit-runtime` writes it as a separate C file to link with. A runtime of another ksplc version must not link silently. So the runtime ends with an empty function named after a hash of its source (`kspl_runtime_abi_` and 16 hex digits), which `main` calls first. The gate checks that a runtime with that function renamed fails to link. Each platform's own linker resolves the symbol, so each platform runs it.
 * **note 5**: `test-ksos-posix` runs demos of ksos's POSIX host port, which runs ksos's tasks inside one Linux process, switching with ucontext. **Nothing else exercises the host-side port layer or task liveness management.** It needs `<ucontext.h>`, which Windows lacks and macOS deprecates, so it is Linux-only.
-  * A demo joins its gate by its file alone (`KSOS_POSIX_TEMPLATED` in `ksos/Makefile`). `KSOS_CM_DEMOS`, `KSOS_NRF51_DEMOS` and `KSOS_RP2040_DEMOS` come from their folders the same way. `KSOS_CM0_DEMOS` is written by hand; its comment says which demos fit the Cortex-M0.
-* **note 6**: `test-ksos-link` links ksos's bare-metal demos under `ksos/demo/<port>/` (`demo_stems` in `ksos/Makefile`). It needs the `arm-none-eabi` toolchain, whose libgcc defines soft-float and 64-bit integer division. **`test-ksos-ramtext` runs first, as its prerequisite**, so the two are green or absent together. It checks that each window function sits in RAM rather than flash (`rp2040_flash_in_window`, `rp2040_ws2812_send_window`). Such a function must finish within a tight deadline, or run while flash cannot be read. In flash it links fine and freezes only on the real chip. The windows-ucrt64 runner holds no ARM toolchain, so there the gate says `SKIPPED`.
-* **note 7**: `test-ksos-qemu` runs ksos's bare-metal demos under `qemu-system-arm` on two boards. `mps2-an385` (a Cortex-M3) runs `ksos/port/cortex_m/`. `microbit` (a Cortex-M0) runs `ksos/port/cortex_m0/`, the CPU layer of the RP2040, which QEMU does not model. A demo ends QEMU by semihosting, which says only "it ended" or "it failed" (exit 1). The macOS and Windows runners have no qemu.
+  * A demo joins its gate by its file alone (`KSOS_POSIX_TEMPLATED` in `lib/ksos/Makefile`). `KSOS_CM_DEMOS`, `KSOS_NRF51_DEMOS` and `KSOS_RP2040_DEMOS` come from their folders the same way. `KSOS_CM0_DEMOS` is written by hand; its comment says which demos fit the Cortex-M0.
+* **note 6**: `test-ksos-link` links ksos's bare-metal demos under `lib/ksos/demo/<port>/` (`demo_stems` in `lib/ksos/Makefile`). It needs the `arm-none-eabi` toolchain, whose libgcc defines soft-float and 64-bit integer division. **`test-ksos-ramtext` runs first, as its prerequisite**, so the two are green or absent together. It checks that each window function sits in RAM rather than flash (`rp2040_flash_in_window`, `rp2040_ws2812_send_window`). Such a function must finish within a tight deadline, or run while flash cannot be read. In flash it links fine and freezes only on the real chip. The windows-ucrt64 runner holds no ARM toolchain, so there the gate says `SKIPPED`.
+* **note 7**: `test-ksos-qemu` runs ksos's bare-metal demos under `qemu-system-arm` on two boards. `mps2-an385` (a Cortex-M3) runs `lib/ksos/port/cortex_m/`. `microbit` (a Cortex-M0) runs `lib/ksos/port/cortex_m0/`, the CPU layer of the RP2040, which QEMU does not model. A demo ends QEMU by semihosting, which says only "it ended" or "it failed" (exit 1). The macOS and Windows runners have no qemu.
 * **note 10**: `ksplc/tests/suite/debug_line_test.kspl` has two tiers. The first, a text comparison of the generated C's `#line`, runs everywhere. **The second tier is Linux-only**: the `.kspl` name must survive in an executable built with `-g`. Compiling and linking in one command, macOS leaves the DWARF in the `.o` / `.dSYM`, and Windows (MSYS2) is unverified. The LLVM backend emits no debug information.
   * Before widening it, confirm **both directions** on the platform's real hardware: the name appears with `-g` and disappears without. Without that contrast the check goes green while inspecting nothing.
 * **note 11**: `ksplc/tests/suite/split_test.kspl` has no platform branch (`harness_build.build_exe` asks `ksplc info link-libs` for the libraries). Splitting is C-backend-only.
@@ -301,12 +291,13 @@ The suite a note names says what it checks in its opening comment; a note adds w
     | A thread never joined | A race in a build through the LLVM backend, or on a platform other than Linux |
   * **Two stress checks press on the hand-written protocols.** ksai's thread pool runs thousands of short rounds back to back. A watchdog fails with a message when no round ends for 10 s. The language server takes a burst of 40 edits with no wait between them. A lost wakeup in the pool is caught only in some runs: its window is a few microseconds.
   * **Each raced program is stopped after 180 s**, and the failure names it. A hang no longer waits out the 10-minute default.
+  * **The programs are built side by side, then run side by side**, the language server's session among them (`tests/support/race_lsp_session.kspl`). So the gate takes about as long as its longest build and its longest run, not their sum.
   * **std's tests are built with `KSPL_TEST_MARK_AFTER_OPEN`.** Linux then starts a child the macOS way: pipes are marked close-on-exec after opening, and starts take turns under a lock. That lock is raced too.
 * **note 18**: kstls's own `make test` links OpenSSL. kssrv links it too, for HTTPS, so the windows-ucrt64 job installs it with `tools/msys2-packages.txt`, and both packages' tests run there. The macOS runner lacks it, and runs neither package's tests (note 27).
 * **note 19**: `test-ship` builds both forms with the host's own toolchain, natively on ucrt64. **Elsewhere it also cross-builds them for Windows where `x86_64-w64-mingw32-gcc` is installed**, and runs them only under Wine.
   * **No CI job runs the check "the Windows programs run under Wine".** The Linux image leaves Wine out for its size. The Windows job builds natively, and macOS runs no `test-ship`.
   * **To run it by hand, put Wine on a Linux machine or in the dev container (the `wine` package on Debian and Ubuntu), then run `make test-ship`.** The check's two `pass` lines then stand where its `SKIP` line stood.
-* **note 20**: `self-host-ship` pays for one `-O2` build of ksplc, so CI runs it once, in `ci-shard-linux`. **The release runs it on each of its three platforms** (`.github/workflows/release.yml`).
+* **note 20**: **CI does not run `self-host-ship`.** `make install` runs it before it installs anything, and the release runs it on each of its three platforms (`.github/workflows/release.yml`). So a difference that only the shipped build shows is still caught before anything ships. Why it is not a CI gate is "Where CI's time goes, and what shrinks it" in [`DESIGN-repository.md`](DESIGN-repository.md).
 * **note 21**: std's and ksai's `test-fuzz` build what they fuzz with the address sanitizer where the C compiler holds it, and print which build they made. ksplc's fuzz runs the compiler unsanitized.
 * **note 22**: two of `cli`'s cases check that ksplc refuses a cache folder that others could plant entries in. Windows's permissions are an ACL, which ksplc does not read, so neither case runs there.
 * **note 23**: `test-ksmd-desktop` writes the entry and its MIME declaration, building nothing, and installs them into a scratch data folder as `make install-desktop` does. It also writes an entry for a probe program in a folder whose name holds a space, and starts it. `desktop-file-validate` accepts an Exec that splits at that space. macOS and Windows associate a file with a program another way.

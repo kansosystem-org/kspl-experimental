@@ -53,11 +53,6 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
     early: Bool //<
         //< With `--stop-at-first`, it runs right after the gates with `stops` (`run_order`)
         //< **For a gate that falls often and quickly**, so a round that stops at it ends sooner.
-    beside: U8[] //<
-        //< The gate it runs side by side with, by its log's name; empty for none (`steps`)
-        //< **For two gates that each keep about one core busy and share no file.** The two rows
-        //< stand next to each other, name each other, and agree on `stops` and `early`
-        //< (`pair_fault`). A set that runs only one of them runs it alone.
     linux_only: Bool //<
         //< Of the shared jobs (`a`, `b`), only the Linux one runs it
         //< **For a gate that `Shard.linux` would also suit**, put in a shared job because the Linux
@@ -164,6 +159,8 @@ const GATES: Gate[_] = ::{
         .fails = "ksplc/tests/suite/equiv_test.kspl#PACKED_IR_SAMPLE" },
     // **Linux alone**: it costs about a minute of four cores, and what it finds is in ksplc's C and
     // IR, the same on every system. A Windows minute counts double, a macOS one ten times.
+    // Caution: **Keep it out of job a.** There it came just before the browser gates, and on a
+    // two-core runner five served sections got no answer from the browser in 20 s.
     Gate::{ .log = "random_equiv", .args = "test-random-equiv", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false, .early = false,
         .fails = "ksplc/tests/suite/random_equiv_test.kspl#PLANTED" },
@@ -177,10 +174,10 @@ const GATES: Gate[_] = ::{
     // `mk/test.mk`; the validator's is set by its row, as `make ksmd` needs no validator.
     Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = .serial, .verdict = false,
         .shard = .linux, .macos = false, .stops = false, .early = false, .not_on = "win32",
-        .fails = "ksos/Makefile#test-ksos-cap" },
+        .fails = "lib/ksos/Makefile#test-ksos-cap" },
     Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = .serial, .verdict = false,
         .shard = .linux, .macos = false, .stops = false, .early = false,
-        .fails = "ksos/Makefile#test-ksos-cap" },
+        .fails = "lib/ksos/Makefile#test-ksos-cap" },
     // ksmd's page in Chromium, driven by real input events (`ksmd/tests/browser/main.mjs`).
     // **The browser gates run in job a's Linux run**, the shortest Linux job without them.
     // They stay together there, so the server and the page are built once.
@@ -207,18 +204,9 @@ const GATES: Gate[_] = ::{
     Gate::{ .log = "blas", .args = "test-blas", .par = .serial, .verdict = true, .shard = .linux,
         .macos = false, .stops = false, .early = false,
         .fails = "std/tests/verdict_test.kspl#FALLS_MAIN" },
-    // **Race and the shipped build run side by side** (`beside`): each keeps about one core busy
-    // for two minutes. Race writes under `out/tmp/race_*`. The shipped build writes stage2's whole
-    // C and `ksplc_ship.*` in `out/gen`, and `out/ksplc_ship.exe`. Both only read the stage1
-    // compiler, which the gates before them have built.
     Gate::{ .log = "race", .args = "test-race", .par = .serial, .verdict = true, .shard = .linux,
-        .macos = false, .stops = false, .early = false, .beside = "selfhost_ship",
+        .macos = false, .stops = false, .early = false,
         .fails = "tests/suite/race_test.kspl#RACY_SOURCE" },
-    // Needs no tool of the image's: it is here because Linux's minute costs least, and the release
-    // checks each platform's own (`.github/workflows/release.yml`). It pays one `-O2` build.
-    Gate::{ .log = "selfhost_ship", .args = "self-host-ship", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false, .beside = "race",
-        .fails = "ksplc/Makefile#compare-fires" },
     // The packages' own tests build in seconds at `-O0`; std's run, which starts children and
     // waits on sockets, is the longest part.
     Gate::{ .log = "sanitize", .args = "test-sanitize", .par = .serial, .verdict = true,
@@ -248,65 +236,6 @@ fn run_order(stop: Bool, arena: Arena$@): List<|Gate|> //<
             if at == part
                 out.push(g)
     return out
-
-struct Step //< the gates a round starts at once: one gate, or one with its partner (`Gate.beside`)
-    gates: List<|Gate|>
-
-fn steps(order: List<|Gate|>@, s: Set, platform: U8[], serial: Bool, arena: Arena$@):
-    List<|Step|> //<
-        //< The set's gates from `order`, a gate and its partner in one step where the set runs both
-        //< **`serial` (`CI_SERIAL=1`) gives every gate a step of its own**, as a round ran before.
-    $out: = List<|Step|>(arena)
-    $i: Sz = 0
-    for i < order.len
-        g: = order.get(i)
-        i += 1
-        if !s.runs(g, platform)
-            continue
-        $st: = List<|Gate|>(arena)
-        st.push(g)
-        if !serial && g.beside.len > 0 && i < order.len &&
-            order.get(i).log.equals(g.beside) && s.runs(order.get(i), platform)
-            st.push(order.get(i))
-            i += 1
-        out.push(Step::{ .gates = st })
-    return out
-
-fn ends_round(st: Step@, passed: List<|Bool|>@, stop: Bool): Gate? //<
-    //< The step's first fallen gate that ends the round: one with `stops`, or any with `stop`
-    //< **Every gate of a step has ended before this is asked**, so the partner of the gate that
-    //< fell has run and is judged, never listed as not run.
-    for i in Range.asc(st.gates.len)
-        g: = st.gates.get(i)
-        if !passed.get(i) && (g.stops || stop)
-            return .some(g)
-    return .none
-
-fn pair_fault(arena: Arena$@): U8[]? //<
-    //< Why a row's `beside` is wrong, if it is: its partner is the row next to it and names it back
-    //< **They agree on `stops` and `early`**, so the order of `--stop-at-first` keeps them next to
-    //< each other, and neither starts before a gate it builds on.
-    for i in Range.asc(GATES.len)
-        g: = GATES[i]
-        if g.beside.len == 0
-            continue
-        $p: Gate? = .none
-        if i + 1 < GATES.len && GATES[i + 1].log.equals(g.beside)
-            p = .some(GATES[i + 1])
-        else if i > 0 && GATES[i - 1].log.equals(g.beside)
-            p = .some(GATES[i - 1])
-        switch p
-        case .some(q)
-            if !q.beside.equals(g.log)
-                return .some(arena.text().s(g.beside).s(" does not name ").s(g.log).s(" back")
-                    .take())
-            if q.stops || g.stops || q.early != g.early
-                return .some(arena.text().s(g.log).s(" and ").s(q.log)
-                    .s(" differ in `early`, or one has `stops`").take())
-        case .none
-            return .some(arena.text().s(g.log).s("'s partner ").s(g.beside)
-                .s(" is not the row next to it").take())
-    return .none
 
 enum Set //< a set of gates one command runs, named as `make` names it
     ci //<
@@ -585,76 +514,29 @@ priv const OVER_CAP_HEAD: U8[] = "# gate " //< the cap's line, around the gate's
 priv const OVER_CAP_MID: U8[] = " ran over "
 priv const OVER_CAP_TAIL: U8[] = " s and was stopped"
 
-priv const POLL_MS: I32 = 100 //< how long one wait on a gate lasts while its partner runs too
-
-struct Capped //< one gate's command run under the cap, and how it ended (`run_capped_all`)
-    argv: U8[][]
-    name: U8[] //< the gate's log name, for the notices and the cap's line
-    log: U8[]
-    rc: I32 //< its exit code once it has ended: 127 where it could not start, 1 past its cap
-    took_us: I64 //< from the start to its own end
-
 fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I32 //<
-    //< Runs one gate's command to its end (`run_capped_all`): its exit code
-    $one: = Capped[1]::{ Capped::{ .argv = argv, .name = name, .log = log, .rc = 0,
-        .took_us = 0I64 } }
-    run_capped_all(Capped$[]::one, cap_s, started)
-    return one[0].rc
-
-fn run_capped_all(runs: Capped$[], cap_s: I64, started: I64) //<
-    //< Starts every gate's command at once and waits for each to end, naming those still running
-    //< **Each has the cap to itself**: past `cap_s`, it is stopped with all it started, and the
-    //< line saying so goes to the screen and the end of its log, where `causes` names it first.
-    //< Its output reaches the screen only where its command sends it there; it fails with 1.
-    defer arena: = Arena(4096)
-    $kids: = List<|subproc.Limited_child|>(arena)
-    $at: = List<|Sz|>(arena) //< which run each child is
-    for i in Range.asc(runs.len)
-        kid: =
-            subproc.spawn_limited(runs[i].argv, "", I32::(cap_s * 1000I64)) catch
-            runs[i].rc = 127
-            runs[i].took_us = sys.mono_us() - started
-            continue
-        kids.push(kid)
-        at.push(i)
-    $live: = kids.len
-    $ended: = List<|Bool|>(arena)
-    for _k in Range.asc(kids.len)
-        ended.push(false)
+    //< Runs one gate's command to its end, naming it while it runs: its exit code, 127 unstarted
+    //< **Its output reaches the screen as it comes**; the command itself copies it into `log`.
+    //< **Past `cap_s`, it is stopped with all it started.** The line saying so goes to the
+    //< screen and the end of `log`, where `causes` names it first. The gate then fails with 1.
+    $child: = subproc.spawn_limited(argv, "", I32::(cap_s * 1000I64)) catch
+        return 127
     $next: = started + NOTICE_US
-    for live > 0
-        for k in Range.asc(kids.len)
-            if ended.get(k)
-                continue
-            // One alone is waited on up to the next notice; with others each wait is short, so
-            // each end is seen, and timed, as it comes.
-            $wait_ms: = I32::((next - sys.mono_us() + 999I64) / 1000I64)
-            if live > 1 && wait_ms > POLL_MS
-                wait_ms = POLL_MS
-            if wait_ms < 0
-                wait_ms = 0
-            // Waited on only until it comes back ended or timed out, it is never reaped before.
-            r: = runs[at.get(k)]@
-            switch kids[k].wait(wait_ms).unwrap_or(.ended(1))
-            case .ended(code)
-                r.rc = code
-            case .running
-                continue
-            case .timed_out
-                r.rc = 1
-                over_cap(r.name, r.log, cap_s)
-            r.took_us = sys.mono_us() - started
-            ended.set(k, true)
-            live -= 1
-        now: = sys.mono_us()
-        if live > 0 && now >= next
-            for k in Range.asc(kids.len)
-                if !ended.get(k)
-                    r: = runs[at.get(k)]
-                    io.out().s("# still running \{r.name\}: \{(now - started) / 1000000I64\}s ")
-                        .s("(\{r.log\})\n")
-            io.out().flush()
-            next = now + NOTICE_US
+    for
+        // Waited on only until it comes back ended or timed out, it is never reaped before.
+        switch child.wait(I32::((next - sys.mono_us() + 999I64) / 1000I64)).unwrap_or(.ended(1))
+        case .ended(code)
+            return code
+        case .running
+            now: = sys.mono_us()
+            if now >= next
+                io.out()
+                    .s("# still running \{name\}: \{(now - started) / 1000000I64\}s (\{log\})\n")
+                    .flush()
+                next = now + NOTICE_US
+        case .timed_out
+            over_cap(name, log, cap_s)
+            return 1
 
 priv fn over_cap(name: U8[], log: U8[], cap_s: I64) //< says a gate was stopped at its cap
     defer $line: = Str_builder()

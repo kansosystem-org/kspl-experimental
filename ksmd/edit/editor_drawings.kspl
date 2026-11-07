@@ -4,12 +4,58 @@
 import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
 import "ksmd/edit/history" { begin }
 import "ksmd/edit/region" { Unit, gap_spot, whole_unit }
-import "ksmd/model/model" { Drawing }
+import "ksmd/model/model" { Block, Drawing }
 import "ksmd/syntax/drawing" { drawings_of }
 import "std/ds" { List }
 import "std/mem" { Arena }
 
 impl Editor
+    fn set_image_width(ed: Self$@, block: Sz, width: Sz): Void!Refused //<
+        //< Gives an image its share of the text width in percent, 1 to 100, or 0 to fit it, as one
+        //< step. The image takes a new entry, as for its drawings, so undo swaps the block back.
+        if block < 0 || block >= ed.doc.blocks.len || width < 0 || width > 100
+            throw .not_whole
+        $b: = ed.doc.blocks.get(block)
+        if b.kind != .image
+            throw .not_whole
+        $image: = ed.doc.images.get(b.first)
+        image.width = width
+        ed.doc.images.push(image)
+        b.first = ed.doc.images.len - 1
+        ed.put_whole(block, b)!
+
+    fn set_image_words(ed: Self$@, block: Sz, caption: Bool, text: U8[]): Void!Refused //<
+        //< Gives an image its caption, with `caption`, or else its alternate text, as one step
+        //< Empty text takes the caption away, or marks the image as one that only decorates. What
+        //< the reader would refuse, such as a line break, is refused, as every action's result is.
+        if block < 0 || block >= ed.doc.blocks.len
+            throw .not_whole
+        $b: = ed.doc.blocks.get(block)
+        if b.kind != .image
+            throw .not_whole
+        $image: = ed.doc.images.get(b.first)
+        if caption
+            image.caption = ed.arena.dup_str(text)
+        else
+            image.alt = ed.arena.dup_str(text)
+        ed.doc.images.push(image)
+        b.first = ed.doc.images.len - 1
+        ed.put_whole(block, b)!
+
+    fn set_image_src(ed: Self$@, block: Sz, src: U8[]): Void!Refused //<
+        //< Points an image at another file, as one step, once the page has moved its file there
+        //< `src` is from this source's folder, and not empty, as the reader wants.
+        if block < 0 || block >= ed.doc.blocks.len || src.len == 0
+            throw .not_whole
+        $b: = ed.doc.blocks.get(block)
+        if b.kind != .image
+            throw .not_whole
+        $image: = ed.doc.images.get(b.first)
+        image.src = ed.arena.dup_str(src)
+        ed.doc.images.push(image)
+        b.first = ed.doc.images.len - 1
+        ed.put_whole(block, b)!
+
     fn set_drawings(ed: Self$@, block: Sz, text: U8[]): Void!Refused //<
         //< Gives an image or a chart the drawings `text` writes, as its clause's `draw` lines, as
         //< one step. What the reader would refuse is refused here, so the file reads back.
@@ -31,6 +77,10 @@ impl Editor
             chart.drawings = drawings
             ed.doc.charts.push(chart)
             b.first = ed.doc.charts.len - 1
+        ed.put_whole(block, b)!
+
+    priv fn put_whole(ed: Self$@, block: Sz, b: Block): Void!Refused //<
+        //< Puts a whole block back in its place, changed, as one step
         defer scratch: = Arena(16 * 1024)
         s: = gap_spot(block)
         e: = gap_spot(block + 1)

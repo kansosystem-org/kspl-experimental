@@ -27,20 +27,13 @@ CI_GATE_CAP := 1200
 STOP ?= 0
 $(if $(filter 0 1,$(STOP)),,$(error STOP=$(STOP): only 0 or 1 is read))
 
-# --- `CI_SERIAL=1`: run every gate alone ---
-# A pair the table marks (`Gate.beside` in `tools/ci_gates.kspl`) otherwise runs side by side. Turn
-# it off when a gate of the pair fails only under the other's load, to see whether the load is the
-# cause ("Two gates side by side" in `docs/SPEC-gates.md`). Reads 0 or 1 alone.
-CI_SERIAL ?= 0
-$(if $(filter 0 1,$(CI_SERIAL)),,$(error CI_SERIAL=$(CI_SERIAL): only 0 or 1 is read))
-
 # `--platform`: a SKIP that platform's rows in `tools/ci_gates.kspl` do not expect fails its gate.
 # `--relaxed`: the switches a person turned off where the platform requires them (`mk/test.mk`).
 ci_run = ./$(SEED_EXE) run tools/ci.kspl --make='$(ci_make)' --jobs=$(TEST_JOBS) --platform=$(PLATFORM) \
   --relaxed='$(strip $(require_relaxed))' --cap=$(CI_GATE_CAP) \
-  $(if $(filter 1,$(STOP)),--stop-at-first) $(if $(filter 1,$(CI_SERIAL)),--serial)
+  $(if $(filter 1,$(STOP)),--stop-at-first)
 
-## Gates|ci|Every gate this host can run, the ones CI runs on Linux alone included; a missing tool's SKIP passes and is listed at the end; STOP=1 ends at the first failed gate; CI_SERIAL=1 runs each gate alone
+## Gates|ci|Every gate this host can run, the ones CI runs on Linux alone included; a missing tool's SKIP passes and is listed at the end; STOP=1 ends at the first failed gate
 ## Gates|ci-macos|Every gate run on macOS
 ci ci-macos: $(SEED_EXE)
 	@$(ci_run) $@

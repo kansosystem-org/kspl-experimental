@@ -31,7 +31,7 @@ pip install numpy torch transformers peft safetensors gguf llama-cpp-python jinj
 
 **The converted safetensors inherit the original model's license.** To distribute them, meet its conditions (the Qwen2.5 family is Apache-2.0, which requires attribution).
 
-The `lib/ksai/examples/llama_engine/mini_llama.safetensors` and `ksos/demo/cortex_m/pilot_policy.safetensors` in the repository are tiny models made here, not borrowed ones.
+The `lib/ksai/examples/llama_engine/mini_llama.safetensors` and `lib/ksos/demo/cortex_m/pilot_policy.safetensors` in the repository are tiny models made here, not borrowed ones.
 
 ## Checking against a real Qwen
 

@@ -97,7 +97,7 @@ $ curl -s localhost:8080/api/status
 | `local` | whether it is for local use |
 | `root` | the root's path, only for local use. Empty facing outward, where it would tell anyone the machine's layout |
 
-For local use only, the seven endpoints a page uses: `GET` and `PUT` on `/api/file`, and `GET /api/stat`, `GET /api/list`, `GET /api/here`, `POST /api/stop` and `POST /api/build`. What each takes and answers is set in "Only five things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
+For local use only, the endpoints a page uses: `GET` and `PUT` on `/api/file`, and `GET /api/stat`, `GET /api/list`, `POST /api/move`, `GET /api/here` and `POST /api/stop`. With a builder, also `GET`, `POST` and `DELETE` on `/api/allow`, and `POST /api/build`. What each takes and answers is set in "Only six things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 Anything else under `/api/`:
 
@@ -112,7 +112,7 @@ Anything else under `/api/`:
 
 Started with `--local`, the server lets a program on the same machine read and write files under the root, with the token it prints.
 
-**These endpoints are the protocol's, and their rules stand there.** They cover the token and its header, which paths are refused, and why there is no `HEAD`. They also cover the type a file comes back as, and how a write keeps the original whole. They are "Where it listens", "Only five things can be asked for" and "How it refuses" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
+**These endpoints are the protocol's, and their rules stand there.** They cover the token and its header, which paths are refused, and why there is no `HEAD`. They also cover the type a file comes back as, and how a write keeps the original whole. They are "Where it listens", "Only six things can be asked for" and "How it refuses" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 ```console
 $ ./out/kssrv.exe 8080 ./public --local

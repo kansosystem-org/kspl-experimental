@@ -11,7 +11,7 @@ const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source, openCell,
-  doubleClickAt }) {
+  doubleClickAt, rightClick }) {
   return {
   // Column widths and row heights, as a spreadsheet keeps them: a drag of a column letter's right
   // edge or of a row number's bottom edge, a double-click there, and Alt+Left and Alt+Right in a
@@ -277,6 +277,46 @@ export function sizes({ page, js, settle, until, press, click, drag, menu, load,
     check(await tall() === one, "and the row is one line tall again", String(await tall()));
     await load(`${H}:::table name="t" char_widths="10" heights="15"\n| "a" |\n| ${long} {wrap="on"} |\n:::\n`);
     check(await tall() <= 21, "a row with a height keeps it, and cuts the wrapped lines", String(await tall()));
+  },
+
+  // In a window shorter than the right-click menu, it scrolls, so its last item can still be
+  // reached, and a flyout opened from it stands whole in the window.
+  async shortMenu() {
+    // A paragraph stands first, so the first press moves no table up a line.
+    await load(`${H}Text.\n\n:::table name="t"\n| "a" | "b" | "c" |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n:::\n`);
+    await page("Emulation.setDeviceMetricsOverride", { width: 800, height: 400, deviceScaleFactor: 1, mobile: false });
+    // Each step waits for what it shows, as a busy machine lays the narrower window out late.
+    await until("window.innerHeight === 400", 3000);
+    await settle();
+    await click('#doc td[data-r="1"][data-c="0"]');
+    await until("!!document.querySelector('#doc td.chosen[data-r=\"1\"][data-c=\"0\"]')", 3000);
+    await rightClick('#doc td[data-r="1"][data-c="0"]');
+    if (!await until("!document.querySelector('.menu.context').hidden", 3000)) {
+      await page("Emulation.clearDeviceMetricsOverride", {});
+      check(false, "the right-click menu opens in a window 400 pixels tall");
+      return;
+    }
+    const short = await js(`(() => { const m = document.querySelector('.menu.context');
+      const r = m.getBoundingClientRect(); m.scrollTop = m.scrollHeight;
+      const subs = m.querySelectorAll(':scope > .sub'); const last = subs[subs.length - 1];
+      return [r.bottom <= innerHeight, m.scrollHeight > m.clientHeight,
+        last.getBoundingClientRect().bottom <= innerHeight]; })()`);
+    // The scroll's own event closes any flyout; wait the frames it takes, or a slow machine
+    // closes the flyout opened next.
+    await js("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
+    // Pointing at the name opens the flyout and never closes it, as a press would were a pointer
+    // already over it (on Windows the window's own pointer can be).
+    await js("(() => { const subs = document.querySelectorAll('.menu.context > .sub'); " +
+      "subs[subs.length - 1].firstElementChild.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); })()");
+    await settle();
+    short.push(await js(`(() => { const subs = document.querySelectorAll('.menu.context > .sub');
+      const f = subs[subs.length - 1].querySelector('.menu.flyout').getBoundingClientRect();
+      return f.height > 0 && f.top >= 0 && f.bottom <= innerHeight && f.right <= innerWidth; })()`));
+    await press("Escape");
+    await page("Emulation.clearDeviceMetricsOverride", {});
+    check(short.every((ok) => ok),
+      "in a window 400 pixels tall the right-click menu scrolls, its last item is reached, and its flyout fits",
+      JSON.stringify(short));
   },
 
   // A wide table keeps its row numbers and first column in sight while the page scrolls

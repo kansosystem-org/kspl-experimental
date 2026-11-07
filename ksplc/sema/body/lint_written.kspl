@@ -10,6 +10,7 @@ import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/lint_free" as sema_body_lint_free
 import "ksplc/sema/decl/name" as _sema_decl_name // `impl_target_fqn`
+import "ksplc/sema/decl/trait_default" as sema_decl_trait_default // `trait_decl_of`
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as _sema_session_import_table // `peek_file_alias`
 import "ksplc/sema/type/env" as sema_type_env
@@ -68,11 +69,19 @@ priv fn lint_split_impl(c: Sema_ctx$@, impl_node: Ast_node$@,
         //< docs/SPEC-programming-language.md.
         //< **The key is the file, the type's FQN and its written type arguments.** So every
         //< `impl<|T|> List<|T|>` counts as one, while `impl List<|I32|>` holds what only that
-        //< instance has and stands apart. A block that names a trait is not counted.
+        //< instance has and stands apart. **A block naming only a trait with no methods is a plain
+        //< block** (`impl X: Move_only`); a second, empty one is told to join the first's header.
     target: = impl_node.get_decl_type_node()
-    if target == null || impl_node.get_impl_trait_node().is_some() ||
-        impl_node.made_by_compiler()
+    if target == null || impl_node.made_by_compiler()
         return
+    $marker: U8[] = ""
+    if trait_node: = impl_node.get_impl_trait_node()
+        decl: = c.trait_decl_of(trait_node) catch
+            return
+        if sema_decl_trait_default.declares_methods(decl)
+            return
+        defer $named: = trait_node.extract_type_name()
+        marker = base_core.arena.dup_str(named.slice())
     fqn: = c.impl_target_fqn(impl_node)
     if fqn.len == 0
         return
@@ -82,11 +91,35 @@ priv fn lint_split_impl(c: Sema_ctx$@, impl_node: Ast_node$@,
     if first: = firsts.get(key)
         c.clear_scratch()
             .s("[I0801] '\{spelled.slice()\}' already has a plain 'impl' block in this file, at \
-                line \{c.line_of(first.loc)\}. Move these methods into that block, so the type's \
-                methods stand in one place.")
+                line \{c.line_of(first.loc)\}. ")
+        $first_marker: U8[] = ""
+        if !has_methods(first)
+            if t: = first.get_impl_trait_node()
+                defer $named: = t.extract_type_name()
+                first_marker = base_core.arena.dup_str(named.slice())
+        if first_marker.len > 0 && has_methods(impl_node)
+            c.scratch
+                .s("That block holds no method: name '\{first_marker\}' on this block's header \
+                    instead, after a comma where it names one already, and remove that block.")
+        else if marker.len > 0 && !has_methods(impl_node)
+            c.scratch
+                .s("Name '\{marker\}' on that block's header instead, after a comma where it names \
+                    one already, so a reader of that block sees the type is '\{marker\}'.")
+        else
+            c.scratch
+                .s("Move these methods into that block, so the type's methods stand in one place.")
         c.information(impl_node, c.scratch.slice())
+        // The block that holds the methods is the one a later trait is told to join.
+        if first_marker.len > 0 && has_methods(impl_node)
+            firsts.set(key, impl_node)
         return
     firsts.set(key, impl_node)
+
+priv fn has_methods(impl_node: Ast_node@): Bool //< whether the block holds a method
+    for m in impl_node.children
+        if m.kind_id == .k_decl_fn
+            return true
+    return false
 
 impl Ast_node
     priv fn lint_written_under(r: Self$@, c: Sema_ctx$@, shadows: List<|U8[]|>$@) //<

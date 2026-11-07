@@ -10,6 +10,7 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" // `arena.text()` and `trim_spaces`
+import "std/subproc"
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
@@ -19,54 +20,110 @@ struct Built //< an executable, or why it was not built
     why: U8[]
     deps: U8[] //< the sources it was compiled from, one whole path a line
 
-fn build( //< Compiles entry (from the folder dir) through ksplc, and links it with cflags into exe
-    //< **Both backends**: the C one, or `--to=llvm` where llvm is set, with the runtime `ksplc
-    //< emit-runtime` writes linked beside the IR. The libraries the program names (`##link`) are
-    //< linked too.
-    dir: U8[], //< the folder ksplc runs in, as the package's own `make test` runs it
-    entry: U8[], //< the program's source
-    exe: U8[], //< the executable to write; the files it is made from go beside it
-    cflags: U8[][], //< the sanitizer's options and the optimisation level
-    llvm: Bool, //< through the LLVM backend
-    marks: U8[], //<
+struct Order //< one program for `build_many`: the arguments `build` takes
+    dir: U8[] //< the folder ksplc runs in, as the package's own `make test` runs it
+    entry: U8[] //< the program's source
+    exe: U8[] //< the executable to write; the files it is made from go beside it
+    cflags: U8[][] //< the sanitizer's options and the optimisation level
+    llvm: Bool //< through the LLVM backend
+    marks: U8[] //<
         //< What `--sanitize=` names to the LLVM backend (`address`); empty names nothing
         //< **The IR is instrumented only where it is marked**: clang's `-fsanitize=` passes over
         //< an unmarked function. The C backend takes none, as its C compiler marks the C itself.
+
+fn build( //< Compiles entry (from the folder dir) through ksplc, and links it with cflags into exe
+    //< **Both backends**: the C one, or `--to=llvm` where llvm is set, with the runtime `ksplc
+    //< emit-runtime` writes linked beside the IR. The libraries the program names (`##link`) are
+    //< linked too. The arguments are `Order`'s.
+    dir: U8[],
+    entry: U8[],
+    exe: U8[],
+    cflags: U8[][],
+    llvm: Bool,
+    marks: U8[],
     arena: Arena$@,
 ): Built
-    gen: = arena.text().s(exe).s(".ll" if llvm else ".c").take()
-    libs: = arena.text().s(exe).s(".libs").take()
-    deps: = arena.text().s(exe).s(".deps").take()
-    $args: = List<|U8[]|>(arena)
-    args.push(arena.text().s("--emit-libs=").s(libs).take())
-    args.push(arena.text().s("--emit-deps=").s(deps).take())
-    if llvm
-        args.push("--to=llvm")
-        if marks.len > 0
-            args.push(arena.text().s("--sanitize=").s(marks).take())
-    args.push(entry)
-    args.push(gen)
-    made: = ksplc_harness.run_in(harness.ksplc_argv_anywhere(args.slice()), dir)
-    if !made.exited_with(0)
-        return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(made.out).take() }
-    $flags: = List<|U8[]|>(arena)
-    flags.push_all(cflags)
-    flags.push("-std=c99")
-    if llvm
-        flags.push_all(U8[][]::harness_build.LLVM_CFLAGS)
-    linked: = harness_build.build_listed_exe(gen, exe, flags.slice(), llvm, libs)
-    if !linked.exited_with(0)
-        return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
-    listed: = io.read_file(deps, null) catch
+    one: = Order[1]::{ Order::{ .dir = dir, .entry = entry, .exe = exe, .cflags = cflags,
+        .llvm = llvm, .marks = marks } }
+    return build_many(Order[]::one, arena).get(0)
+
+fn build_many(orders: Order[], arena: Arena$@): List<|Built|> //<
+    //< Builds each order as `build` does, side by side; one result per order, in order
+    //< **The translations run at once, then the links** (`verdict.run_children`). So a suite that
+    //< builds many programs waits about as long as the longest, not the sum.
+    //< Caution: **Give each order an exe of its own**: the files it is made from go beside it.
+    $out: = List<|Built|>(arena)
+    if orders.len == 0
+        return out
+    jobs_dir: = fs.join(sys.get_dir_name(orders[0].exe), "build_jobs", arena)
+    $made: = List<|subproc.Job|>(arena)
+    for o in orders
+        $args: = List<|U8[]|>(arena)
+        args
+            .push(arena.text().s("--emit-libs=").s(o.exe).s(".libs").take())
+        args
+            .push(arena.text().s("--emit-deps=").s(o.exe).s(".deps").take())
+        if o.llvm
+            args.push("--to=llvm")
+            if o.marks.len > 0
+                args.push(arena.text().s("--sanitize=").s(o.marks).take())
+        args.push(o.entry)
+        args.push(gen_of(o, arena))
+        made
+            .push(subproc.Job::{ .argv = harness.ksplc_argv_anywhere(args.slice()),
+            .cwd = o.dir })
+    translated: = verdict.run_children(made.slice(), jobs_dir, verdict.DEFAULT_TIMEOUT_MS, arena)
+    // Only the orders that translated are linked; `at` maps each link back to its order.
+    $links: = List<|subproc.Job|>(arena)
+    $at: = List<|Sz|>(arena)
+    for i in Range.asc(orders.len)
+        o: = orders[i]
+        if !translated.get(i).exited_with(0)
+            out
+                .push(Built::{ .why = arena.text().s("ksplc cannot compile it:\n")
+                .s(translated.get(i).out).take() })
+            continue
+        $flags: = List<|U8[]|>(arena)
+        flags.push_all(o.cflags)
+        flags.push("-std=c99")
+        if o.llvm
+            flags.push_all(U8[][]::harness_build.LLVM_CFLAGS)
+        j: = harness_build.listed_exe_job(gen_of(o, arena), o.exe, flags.slice(), o.llvm,
+            arena.text().s(o.exe).s(".libs").take())
+        if j.why.len > 0
+            out
+                .push(Built::{ .why = arena.text().s("it does not link:\n").s(j.why).take() })
+            continue
+        out.push(Built::{})
+        links.push(j.job)
+        at.push(i)
+    linked: = verdict.run_children(links.slice(), jobs_dir, verdict.DEFAULT_TIMEOUT_MS, arena)
+    for k in Range.asc(links.len)
+        i: = at.get(k)
+        if !linked.get(k).exited_with(0)
+            out.set(i,
+                Built::{ .why = arena.text().s("it does not link:\n").s(linked.get(k).out).take() })
+        else
+            out.set(i,
+                Built::{ .exe = orders[i].exe, .deps = deps_of(orders[i], arena) })
+    return out
+
+priv fn gen_of(o: Order, arena: Arena$@): U8[] //< the file ksplc writes for an order
+    return arena.text().s(o.exe).s(".ll" if o.llvm else ".c").take()
+
+priv fn deps_of(o: Order, arena: Arena$@): U8[] //<
+    //< The sources an order's program was compiled from, one whole path a line
+    //< A package's own files are listed from its folder; each path is made whole here.
+    listed: =
+        io.read_file(arena.text().s(o.exe).s(".deps").take(), null) catch
         fallback ""
-    // A package's own files are listed from its folder; each path is made whole here.
     whole: = arena.text()
     for line in listed.lines(arena)
         at: = line.find_char(' ').unwrap_or(0)
         if at > 0 // a space, with a name before it
             path: = line.sub_from(at + 1)
-            whole.s(path if sys.is_absolute(path) else fs.join(dir, path, arena)).c('\n')
-    return Built::{ .exe = exe, .deps = whole.take() }
+            whole.s(path if sys.is_absolute(path) else fs.join(o.dir, path, arena)).c('\n')
+    return whole.take()
 
 fn runs_with( //<
     //< Empty where the C compiler builds and runs a program with cflags; else what it said

@@ -13,6 +13,7 @@ import "std/io"
 import "std/json"
 import "std/mem" { Arena }
 import "std/net"
+import "std/sha256"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
@@ -51,13 +52,18 @@ priv fn url_of(out_path: U8[]): U8[] //< the URL a launcher put out, "" until a 
             return rest.sub(0, end)
     return ""
 
-priv fn ask(url: U8[], target: U8[], arena: Arena$@, method: U8[] = "GET"): http.Response$@? //<
-    //< The answer the server behind `url` gives `<method> target`, with the URL's token
+priv fn ask(url: U8[], target: U8[], arena: Arena$@, method: U8[] = "GET", content: U8[] = ""):
+    http.Response$@? //<
+        //< The answer the server behind `url` gives `<method> target`, with the URL's token
+        //< A `content` names the bytes a file holds (`X-Kanso-If-Content`).
     defer stream: =
         net.Tcp_stream.connect("127.0.0.1", aim.port_num(aim.port_in_url(url))) catch
         return .none
     bearer: = arena.text().s("Bearer ").s(aim.token_in_url(url)).take()
-    head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer).build()
+    $named: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer)
+    if content.len > 0
+        named = named.add("X-Kanso-If-Content", content)
+    head: = named.build()
     http.write_request(stream, method, target, head, "", ANSWER_WAIT_MS) catch
         return .none
     answer: =
@@ -179,8 +185,17 @@ priv fn check_marked(launcher: U8[], ws: U8[], work: U8[], arena: Arena$@): Run 
     // **An include that climbs with `../` stays inside the workspace**, so its file is served.
     verdict.check("the file its include climbs to is served",
         body_of(first.url, "/api/stat?path=top.ksmd", arena).starts_with("{"), first.url)
-    // **The server gets the builder beside it.** Copied here, it finds no ksplc to build with, so
-    // it answers with its own message: a server without it would answer 404.
+    // **The server gets the builder beside it, and a record of allowed files.** Once the file is
+    // allowed, the builder copied here finds no ksplc to build with, so it answers with its own
+    // message: a server without it would answer 404, and one with no record 403.
+    $hex: U8[sha256.HEX_LEN] = ::{}
+    sha256.write_hex(sha256.hash("%ksmd 1\n\nTop.\n"), U8$[]::hex)
+    $said_allow: U8[] = "(no answer)"
+    if allowed: =
+        ask(first.url, "/api/allow?path=top.ksmd", arena, "POST", arena.dup_str(U8[]::hex))
+        said_allow = arena.dup_str(allowed.body)
+    verdict.check("the launcher hands the server a record of the allowed files",
+        said_allow.find_str("true").is_some(), said_allow)
     $said_build: U8[] = "(no answer)"
     if built: = ask(first.url, "/api/build?path=top.ksmd", arena, "POST")
         said_build = arena.dup_str(built.body)

@@ -34,6 +34,14 @@ extern fn kspl_atomic_store(ptr: Sz$@, val: Sz)
 extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
 extern fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
 
+// How many threads `spawn` started that `free` has not waited for yet. `sys.set_env` reads it,
+// since the C library does not order a change of the environment against a thread reading it.
+// **No visibility mark**: std's own files read it, and nothing outside std.
+priv $running: Sz = 0
+
+fn threads_running(): Sz //< the threads started and not yet waited for, at this moment
+    return kspl_atomic_load(running@)
+
 priv fn require_handle(h: I64, err: Thread_error): I64!Thread_error //<
     //< Throws err when h, the handle an OS create call returned, is 0 (a failure)
     if h == 0
@@ -47,7 +55,7 @@ pub struct Thread //< one running OS thread, which `free()` waits for
     //< `defer _t: = Thread.spawn<|I64|>(work, n@) catch …`.
     priv handle: I64 //< the OS thread; 0 once joined, or in a zero value
 
-impl Thread
+impl Thread: Move_only //< a copy would wait for one OS thread twice
     pub fn spawn<|T|>( //< starts a function on a new OS thread
         //< Caution: **Only the type is checked, not whether the data is safe to share.** Threads
         //< that touch what `arg` points at race; change a shared value through a `Mutex<|T|>` or an
@@ -58,9 +66,9 @@ impl Thread
     ): Thread!Thread_error
         spawned: = kspl_thread_spawn(Thread_entry::Void$@::entry, Void$@::arg)
         h: = require_handle(spawned, .spawn_failed)!
+        kspl_atomic_add(running@, 1)
         return Thread::{ .handle = h }
 
-impl Thread: Move_only {} //< a copy would wait for one OS thread twice
 impl Thread: Manual_free //< `free()` is the one way to end it
     pub fn free(r: Self$@) //< waits for the thread to end
         //< A zero value, or one already ended, does nothing.
@@ -68,6 +76,7 @@ impl Thread: Manual_free //< `free()` is the one way to end it
             return
         kspl_thread_join(r.handle)
         r.handle = 0
+        kspl_atomic_add(running@, -1)
 
 // ============================ Raw_mutex ============================
 priv struct Raw_mutex //< the OS mutex itself (pthread_mutex_t / SRWLOCK)
@@ -75,7 +84,9 @@ priv struct Raw_mutex //< the OS mutex itself (pthread_mutex_t / SRWLOCK)
     //< cannot see a caller that forgets lock() and touches the data directly.
     priv handle: I64
 
-impl Raw_mutex
+impl Raw_mutex: Move_only //< copying it would destroy one OS object twice
+    //< `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a
+    //< pointer with `@`.
     fn new(): Raw_mutex!Thread_error
         h: = require_handle(kspl_mutex_create(), .mutex_create_failed)!
         return Raw_mutex::{ .handle = h }
@@ -86,10 +97,6 @@ impl Raw_mutex
     fn unlock(r: Self@)
         kspl_mutex_unlock(r.handle)
 
-impl Raw_mutex: Move_only { //< copying it would destroy one OS object twice
-    //< `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a
-    //< pointer with `@`.
-}
 impl Raw_mutex: Manual_free //< it owns an OS object and releases it with `free()`
     fn free(r: Self$@) //< destroys the OS mutex
         //< A Raw_mutex is a value stored in place, so there is no memory to free here.
@@ -105,7 +112,7 @@ pub struct Cond_var //< lets a thread wait, together with a lock, until a condit
     //< waiting for completion). Its owner destroys it with `free()`.
     priv handle: I64
 
-impl Cond_var
+impl Cond_var: Move_only //< copying it would destroy one OS object twice
     pub fn new(): Cond_var!Thread_error //< creates one through the OS
         h: = require_handle(kspl_cond_create(), .cond_create_failed)!
         return Cond_var::{ .handle = h }
@@ -146,7 +153,6 @@ impl Cond_var
     )
         kspl_cond_wake_all(r.handle, m.mutex.handle)
 
-impl Cond_var: Move_only {} //< copying it would destroy one OS object twice
 impl Cond_var: Manual_free //< it owns an OS object and releases it with `free()`
     pub fn free(r: Self$@) //< destroys the OS condition variable
         //< As with `Raw_mutex.free`, the value itself has no memory to free.
@@ -163,7 +169,7 @@ pub struct Mutex<|T|> //< a lock and the data it protects, kept together so neit
     priv mutex: Raw_mutex
     priv value: T
 
-impl<|T|> Mutex<|T|>
+impl<|T|> Mutex<|T|>: Interior_mutable //< lock() writes it through a read-only pointer
     pub fn new( //< creates a lock around a value
         value: T, //< the data the lock protects; the only way to reach it is `lock()`
     ): Mutex<|T|>!Thread_error
@@ -179,7 +185,6 @@ impl<|T|> Mutex<|T|>
     pub fn unlock(r: Self@) //< releases the lock
         r.mutex.unlock()
 
-impl<|T|> Mutex<|T|>: Interior_mutable {} //< lock() writes it through a read-only pointer
 impl<|T|> Mutex<|T|>: Manual_free //< it owns an OS object and releases it with `free()`
     pub fn free(r: Self$@) //< destroys the OS lock
         r.mutex.free()
@@ -190,7 +195,7 @@ pub struct Atomic_sz //< a shared counter or flag that changes without taking a 
     //< std/refcount. Its methods take a read-only pointer, so threads share one through an `Arc`.
     priv value: Sz
 
-impl Atomic_sz
+impl Atomic_sz: Interior_mutable //< its methods write it through a read-only pointer
     pub fn new(initial: Sz): Atomic_sz //< creates one holding the initial value
         return Atomic_sz::{ .value = initial }
 
@@ -216,5 +221,3 @@ impl Atomic_sz
     priv fn cell(r: Self@): Sz$@ //< the value as the atomic operations take it
         //< Every access is atomic, so the read-only receiver is cast here, once.
         return Sz$@::r.value@
-
-impl Atomic_sz: Interior_mutable {} //< its methods write it through a read-only pointer

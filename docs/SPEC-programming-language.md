@@ -1135,9 +1135,13 @@ impl Vector
 
 2. **A trait implementation**: written `impl Type: Trait`, such as `impl Vector: Drawable` for the trait of [5.1](#51-traits-trait).
 
-**A trait's methods are written in the block that names the trait.** Only a method inside `impl Vector: Drawable` counts toward that conformance. A `draw` written in `impl Vector`, or in another trait's block, is a compile error at the conformance block, naming the line where the method stands. A call (`v.draw()`) finds the method whichever block holds it. A trait with no methods takes an empty block (§5.3).
+**A trait's methods are written in the block that names the trait.** Only a method inside `impl Vector: Drawable` counts toward that conformance. A `draw` written in `impl Vector`, or in another trait's block, is a compile error at the conformance block, naming the line where the method stands. A call (`v.draw()`) finds the method whichever block holds it.
 
-**A file holds one plain `impl` block per type** (one naming no trait). `ksplc lint` reports a second `impl Vector` in the same file (I0801). Two cases are not a second block:
+**A block that names a trait holds only that trait's methods.** Another method in it is a compile error at that method: move it into the plain block. Without this, a misspelt method would pass, and the trait's default body would run in its place.
+
+**A trait with no methods is named on the plain block's header** (§5.3): `impl File_lock: Move_only`, whose block holds the type's own methods. A header names several such traits after commas: `impl Lock: Move_only, Interior_mutable`. A trait that declares a method cannot be named in such a list; it is met in a block of its own. A type with no methods of its own writes `impl Type: Move_only {}`.
+
+**A file holds one plain `impl` block per type**: one naming no trait, or only traits with no methods. `ksplc lint` reports a second `impl Vector` in the same file (I0801). It also reports `impl Vector: Move_only {}` standing apart from the plain block: the trait belongs on that block's header, where a reader looks first. Two cases are not a second block:
 
 * **A block in another file.** A file that adds methods to another file's type ([9.3](#93-adding-a-method-to-another-files-type)) holds one block of its own.
 * **A block for one instance of a generic type.** `impl Box<|I32|>` holds what only that instance has, so it stands apart from `impl<|T|> Box<|T|>`. Two `impl<|T|> Box<|T|>` blocks are one type split in two.
@@ -1177,7 +1181,7 @@ As a result, **a trait cannot declare that "this method does not rewrite the cal
 
 On a generic trait (such as `Add<|Rhs, Output|>`), a type argument not yet fixed at this check is left out of the comparison.
 
-**Marker traits (a `trait` with no methods)** mark that a type "has a certain property". Conformance is declared with an empty body, `impl Type: Marker {}`. The generic constraint `<|T: Marker|>` then makes passing a type without the property a compile error, at no run-time cost.
+**Marker traits (a `trait` with no methods)** mark that a type "has a certain property". Conformance is declared on the type's plain block, `impl Type: Marker` ([5.2](#52-implementations-impl-and-receivers)), or with an empty body, `impl Type: Marker {}`, where the type has no methods of its own. The generic constraint `<|T: Marker|>` then makes passing a type without the property a compile error, at no run-time cost.
 
 ### 5.4 Worked example: forbidding copies with `Move_only`
 
@@ -3035,8 +3039,7 @@ These shapes must not be written. The implementation need not diagnose them, and
 | A slice descriptor built by hand whose length passes the end of its memory | [6.2.1](#621-member-access-and-indexing-through-a-pointer) |
 | A read or write through `(p + i)$` outside the memory that `p` points into | [6.2.1](#621-member-access-and-indexing-through-a-pointer) |
 | `mem.copy` over two ranges that overlap. `mem.move` is the copy for overlapping ranges | `copy` in `std/mem.kspl` |
-| A read of heap memory that `mem.alloc` or `mem.alloc_as` handed out and nothing has written yet. `mem.zero` it, or write each field first | `alloc` in `std/mem.kspl` |
-| `sys.set_env` or `sys.unset_env` while another thread reads or changes the environment, or starts a child | `set_env` in `std/sys.kspl` |
+| `sys.set_env` or `sys.unset_env` while a thread that `Thread.spawn` did not start, such as a C library's own, reads the environment. While one `Thread.spawn` started still runs, they stop the program | `set_env` in `std/sys.kspl` |
 | A C function given a size larger than the memory behind it, or a value its C declaration does not describe | [11](#11-c-interoperability) |
 
 **What is fixed at translation time is not left undefined.** Of the shapes above, those whose value is visible at translation time are compile errors. These are a constant expression's overflow, a shift amount and a divisor ([6.8](#68-integer-arithmetic-folding-overflow-division-shifts)), and a cast to an enum ([6.4](#64-type-conversion--and-implicit-casts)). Of those fixed only at run time, only what [13. Conditions that stop execution at run time](#13-conditions-that-stop-execution-at-run-time) lists is checked.

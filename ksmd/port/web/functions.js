@@ -1,8 +1,9 @@
 // ksmd page: a person's own functions, written in KSPL. A `:::functions` clause names a `.kspl`
-// file; the local server builds it (`POST /api/build`), and a worker runs it, apart from the page
-// and with nothing but its own memory. **A calculation cannot wait for the worker**: a call with
-// no answer yet shows `…`. This script takes those calls, has the worker answer each, hands the
-// answers to the editor and shows the document again (`ksmd/port/web/bridge_own.kspl`).
+// file. **Nothing of it is built or run until the person allows its exact bytes**: the bar at the
+// top asks, and the server keeps the answer (`/api/allow`). The server then builds it (`POST
+// /api/build`), and a worker runs it, apart from the page and with nothing but its own memory. A
+// call with no answer yet shows `…`. This script takes those calls, has the worker answer each,
+// hands the answers to the editor and shows the document again (`bridge_own.kspl`).
 // Caution: **One call at a time, each with a time limit.** A function that never ends holds its
 // worker. Past `LIMIT_MS` the worker is ended, the cell shows #TIME!, and a new worker starts.
 "use strict";
@@ -41,9 +42,13 @@ onmessage = (e) => {
   let workerUrl = null;
 
   // Each functions file by its path from the root: { bytes, state, why, module, worker, names,
-  // help }, `help` being what a person reads of each function (`ksmd/calc/help.kspl`).
-  // `state` is "building", "ready" or "broken"; `bytes` are those the build was asked for.
+  // help }, `help` being what a person reads of each function (`ksmd/calc/help.kspl`). `state` is
+  // "checking", "asking" (not allowed yet), "building", "ready" or "broken"; `bytes` are those the
+  // page read last.
   const files = new Map();
+  const later = new Set(); // the files whose question the person put off ("Not now")
+  const todo = []; // the person's answers, each done in turn by `run`
+  const bar = document.querySelector(".own-ask");
   let sent = ""; // the names the editor holds, one per line
   let owner = new Map(); // each name, and the path of the file whose function it calls
   let busy = false;
@@ -95,11 +100,16 @@ onmessage = (e) => {
     });
   }
 
-  // Builds a file afresh: its module, then its names from a worker.
+  // Builds a file afresh: its module, then its names from a worker. **The server builds only
+  // bytes the person allowed**, so a 403 means the file changed since: it asks again.
   async function build(path, f) {
     f.state = "building";
     end(f);
     const got = await ks.local.build(path);
+    if (got.status === 403) {
+      f.state = "asking";
+      return;
+    }
     if (got.status !== 200) {
       f.state = "broken";
       f.why = got.why;
@@ -118,30 +128,91 @@ onmessage = (e) => {
     }
   }
 
+  // Asks the server whether the person allowed the file's bytes, and builds them only then.
+  async function check(path, f) {
+    f.state = "checking";
+    const got = await ks.local.allowed(path);
+    if (got.status !== 200) {
+      f.state = "broken";
+      f.why = got.why;
+    } else if (got.allowed) {
+      await build(path, f);
+    } else {
+      f.state = "asking";
+    }
+  }
+
+  // Allows the files that wait for it, each for the bytes the page read, and builds them. A file
+  // that changed on disk since is refused (409), and the page says to look again.
+  async function allow(paths) {
+    for (const path of paths) {
+      const f = files.get(path);
+      if (!f || f.state !== "asking" || !f.bytes) continue;
+      const got = await ks.local.allow(path, await ks.local.digest(f.bytes));
+      if (got.status === 409) {
+        ks.say(`${path} changed since the page read it. Choose the page again, then allow it.`);
+      } else if (got.status !== 200) {
+        ks.say(`${path} could not be allowed: ${got.why}`);
+      } else {
+        await build(path, f);
+      }
+    }
+  }
+
+  // Takes the allow back: the file is not built or run until the person allows it again.
+  async function disallow(path) {
+    const f = files.get(path);
+    if (!f) return;
+    const got = await ks.local.allow(path, null);
+    if (got.status !== 200) {
+      ks.say(`${path} is still allowed: ${got.why}`);
+      return;
+    }
+    end(f);
+    f.state = "asking";
+    f.names = [];
+    f.help = [];
+    // **The bar does not ask again at once**: the person has just answered. The box still offers it.
+    later.add(path);
+  }
+
   // The paths the view's clauses name, in order, each once.
   const named = () => [...new Set([...ks.root.querySelectorAll(".functions[data-to]")]
     .map((el) => el.dataset.to))];
 
-  // Builds what is new or changed on disk, forgets what no clause names, and hands the editor the
-  // names. True where the names changed, so the document shows again.
+  // What a call to a name no file gives shows while a file's names are unknown: 2 while the
+  // person has not allowed one (#BLOCKED!), 1 while one builds (`…`), else 0
+  // (`ksmd_web_own_names`).
+  function unknownState() {
+    const states = [...files.values()].map((f) => f.state);
+    if (states.includes("asking")) return 2;
+    return states.includes("building") || states.includes("checking") ? 1 : 0;
+  }
+
+  // Asks about what is new or changed on disk, forgets what no clause names, and hands the editor
+  // the names. True where the names changed, so the document shows again.
   async function follow() {
     const paths = named();
     for (const [path, f] of files) {
       if (paths.includes(path)) continue;
       end(f);
       files.delete(path);
+      later.delete(path);
     }
     for (const path of paths) {
       const bytes = ks.fetchedBytes(path);
       let f = files.get(path);
       if (f && same(f.bytes, bytes)) continue;
       if (!f) {
-        f = { state: "building", why: "", names: [], help: [], module: null, worker: null };
+        f = { state: "checking", why: "", names: [], help: [], module: null, worker: null };
         files.set(path, f);
       }
       f.bytes = bytes;
+      end(f);
+      f.names = [];
+      f.help = [];
       show();
-      await build(path, f);
+      await check(path, f);
     }
     owner = new Map();
     for (const path of paths) {
@@ -150,31 +221,54 @@ onmessage = (e) => {
       for (const n of f.names) if (!owner.has(n)) owner.set(n, path);
     }
     show();
+    const state = unknownState();
     const text = [...owner.keys()].join("\n");
-    if (text === sent) return false;
-    sent = text;
-    ks.call("ksmd_web_own_names", ks.put(text));
+    if (`${state}\n${text}` === sent) return false;
+    sent = `${state}\n${text}`;
+    ks.call("ksmd_web_own_names", ks.put(text), state);
     return true;
   }
 
-  // What each clause's box says: the names it gives, that it builds, or why it cannot be used.
+  // A button in a clause's box, which `ks.root`'s presses reach (`acted`).
+  function button(label, act, path) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `functions-${act}`;
+    b.dataset.to = path;
+    b.textContent = label;
+    return b;
+  }
+
+  // What each clause's box says: the names it gives, that it waits for an allow or builds, or why
+  // it cannot be used. Then the bar at the top, which asks about the files not allowed yet.
   function show() {
     for (const el of ks.root.querySelectorAll(".functions[data-to]")) {
-      const f = files.get(el.dataset.to);
+      const path = el.dataset.to;
+      const f = files.get(path);
       const state = el.querySelector(".functions-state");
       if (!f || !state) continue;
       state.classList.toggle("problem", f.state === "broken");
-      if (f.state === "building") state.textContent = "Building…";
+      if (f.state === "checking") state.textContent = "Checking whether these functions are allowed…";
+      else if (f.state === "asking") {
+        state.textContent = "These functions are not allowed yet. They run only if you allow them.";
+        state.appendChild(button("Allow", "allow", path));
+      } else if (f.state === "building") state.textContent = "Building…";
       else if (f.state === "broken") state.textContent = f.why;
       else {
-        const mine = f.names.filter((n) => owner.get(n) === el.dataset.to);
-        const hidden = f.names.filter((n) => owner.get(n) !== el.dataset.to);
+        const mine = f.names.filter((n) => owner.get(n) === path);
+        const hidden = f.names.filter((n) => owner.get(n) !== path);
         state.textContent = (f.names.length === 0 ? "It gives no functions." :
           `A formula can call: ${mine.join(", ")}.`) +
           (hidden.length === 0 ? "" :
             ` Another file above gives ${hidden.join(", ")} first, so this file's are not called.`);
+        state.appendChild(button("Stop allowing", "stop", path));
       }
     }
+    const asking = [...files].filter(([p, f]) => f.state === "asking" && !later.has(p))
+      .map(([p]) => p);
+    bar.hidden = asking.length === 0;
+    bar.querySelector(".own-ask-text").textContent = `This document has its own functions ` +
+      `(${asking.join(", ")}). They run only if you allow them.`;
   }
 
   // The name a call's bytes begin with: its length in four bytes, then its UTF-8.
@@ -207,7 +301,8 @@ onmessage = (e) => {
     }
   }
 
-  // Runs after each showing; a showing while it works makes it look once more.
+  // Runs after each showing; a showing while it works makes it look once more. An answer to the
+  // bar or a box waits in `todo` until the work before it ends, so two never change a file at once.
   async function run() {
     if (busy) {
       again = true;
@@ -217,21 +312,86 @@ onmessage = (e) => {
     try {
       do {
         again = false;
+        while (todo.length > 0) await todo.shift()();
         if (await follow()) ks.act("ksmd_web_render");
         await answer();
-      } while (again && !ks.stopped);
+      } while ((again || todo.length > 0) && !ks.stopped);
     } finally {
       busy = false;
     }
   }
+  const act = (f) => {
+    todo.push(f);
+    run();
+  };
 
   // What a person reads of each of the document's own functions a formula calls, marked `own`, in
   // the shape `ksmd_web_functions` gives ksmd's own (`suggest.js`).
   ks.ownFunctions = () => [...owner].flatMap(([name, path]) =>
     files.get(path).help.filter((h) => h.name === name).map((h) => ({ ...h, own: true })));
 
+  // What a cell that calls the document's own functions says: which, and from which file.
+  function uses(names) {
+    const by = new Map();
+    for (const n of names) {
+      const path = owner.get(n);
+      if (path) by.set(path, [...(by.get(path) || []), n]);
+    }
+    return `Uses ${[...by].map(([path, ns]) => `${ns.join(" and ")} from ${path}`).join(", ")} ` +
+      "(this document's own)";
+  }
+
+  // Marks a cell whose formula calls the document's own functions: a corner, and a tooltip that
+  // names them (`table.js`, after the notes, whose tooltip it adds to).
+  ks.ownMark = (wrap, list) => {
+    for (const [r, c, names] of list || []) {
+      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (!el) continue;
+      el.classList.add("uses-own");
+      el.dataset.own = names.join(" ");
+      el.title = el.title ? `${el.title}\n${uses(names)}` : uses(names);
+    }
+  };
+
+  // Why a cell shows #BLOCKED!: in short on the status bar, and whole on its tooltips.
+  const BLOCKED = "#BLOCKED!";
+  const BLOCKED_SHORT = "#BLOCKED!: this document's own functions are not allowed yet";
+  const BLOCKED_WHY = `${BLOCKED_SHORT}, so this call does not run. Allow them in the bar above ` +
+    "or in their box.";
+
+  // The status bar names what the chosen cell calls, or why it shows #BLOCKED!.
+  const said = document.querySelector(".status-own");
+  ks.status.also(() => {
+    const wrap = ks.inTable() && !ks.range.any() ? ks.view.blocks()[ks.cell.block] : null;
+    const el = wrap && wrap.querySelector(`td[data-r="${ks.cell.row}"][data-c="${ks.cell.column}"]`);
+    const blocked = el && el.classList.contains("error") && el.textContent === BLOCKED;
+    const text = !el ? "" : blocked ? BLOCKED_SHORT : el.dataset.own ? uses(el.dataset.own.split(" ")) : "";
+    said.hidden = text === "";
+    said.textContent = text;
+    said.title = blocked ? BLOCKED_WHY : text;
+  });
+
+  // The bar's and the boxes' answers. "Not now" leaves the files as they are: the bar asks again
+  // the next time the document opens, and each box still offers Allow.
+  bar.querySelector(".own-allow").addEventListener("click", () => act(() =>
+    allow([...files].filter(([p, f]) => f.state === "asking" && !later.has(p)).map(([p]) => p))));
+  bar.querySelector(".own-not-now").addEventListener("click", () => {
+    for (const [p, f] of files) if (f.state === "asking") later.add(p);
+    show();
+  });
+  ks.root.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".functions-allow, .functions-stop");
+    if (!b) return;
+    e.preventDefault();
+    const path = b.dataset.to;
+    act(() => (b.classList.contains("functions-allow") ? allow([path]) : disallow(path)));
+  });
+
   ks.rendered.push(() => {
     show();
+    for (const el of ks.root.querySelectorAll("td.error")) {
+      if (el.textContent === BLOCKED) el.title = BLOCKED_WHY;
+    }
     if (ks.local && (files.size > 0 || ks.root.querySelector(".functions[data-to]"))) run();
   });
 }

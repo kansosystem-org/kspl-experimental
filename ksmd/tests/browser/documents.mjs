@@ -3,12 +3,23 @@
 // driven through the browser's own input events, as `main.mjs` drives the rest, and checked by
 // the saved source and its undo.
 // `documents(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { CTRL, verdict } from "./drive.mjs";
+import { CTRL, SHIFT, verdict } from "./drive.mjs";
 
 const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
-export function documents({ js, press, click, menu, load, saves }) {
+export function documents({ page, js, press, click, menu, load, saves, source }) {
+  // A press at the first point, moves through the others with the button down, and a release at the
+  // last, with the modifier keys held throughout.
+  async function dragPath(points, modifiers = 0) {
+    const [x0, y0] = points[0];
+    await page("Input.dispatchMouseEvent", { type: "mousePressed", x: x0, y: y0, button: "left", clickCount: 1, modifiers });
+    for (const [x, y] of points.slice(1)) {
+      await page("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1, modifiers });
+    }
+    const [x1, y1] = points[points.length - 1];
+    await page("Input.dispatchMouseEvent", { type: "mouseReleased", x: x1, y: y1, button: "left", clickCount: 1, modifiers });
+  }
   return {
     // Ctrl+End and Ctrl+Home reach past a table or a chart that ends or starts the document, which
     // the browser's own caret cannot stand beside.
@@ -25,6 +36,87 @@ export function documents({ js, press, click, menu, load, saves }) {
       await press("Home", CTRL);
       await menu("divider");
       await saves("Ctrl+Home before a first table puts the caret before it", `${H}---\n\n${chart}\nText\n`);
+    },
+    // Blank lines: Enter after a paragraph, then Enter again, keeps a blank line, written as a
+    // line holding only `\`. It stays when the caret leaves, and Backspace after it takes it away.
+    async blankLines() {
+      await load(`${H}One line.\n\nNext part.\n`);
+      await click("#doc p");
+      await press("End");
+      await press("Enter");
+      await press("Enter");
+      await press("Enter");
+      await saves("Enter twice after a paragraph keeps two blank lines", `${H}One line.\n\n\\\n\n\\\n\nNext part.\n`);
+      await press("ArrowDown");
+      await saves("and they stay when the caret moves on", `${H}One line.\n\n\\\n\n\\\n\nNext part.\n`);
+      check(await js("document.querySelectorAll('#doc .blank').length") === 2, "the page shows each as an empty line");
+      await click("#doc p:last-of-type");
+      await press("Home");
+      await press("Backspace");
+      await saves("Backspace at the start of the text after one takes it away", `${H}One line.\n\n\\\n\nNext part.\n`);
+    },
+    // An image's width, as a share of the text width: Width… sets it, and two images whose widths
+    // fit stand side by side.
+    async imageWidths() {
+      const two = (a, b) => `${H}:::image src="a.png" alt="A"${a}\n:::\n\n:::image src="b.png" alt="B"${b}\n:::\n`;
+      await load(two("", ' width="45%"'));
+      await js("window.prompt = () => '45'");
+      await click("#doc > .figure .image-width");
+      await saves("Width… gives the image its share of the text width", two(' width="45%"', ' width="45%"'));
+      check(await js("(() => { const f = document.querySelectorAll('#doc > .figure'); " +
+        "const a = f[0].getBoundingClientRect(), b = f[1].getBoundingClientRect(); " +
+        "return Math.abs(a.top - b.top) < 2 && b.left >= a.right - 1; })()"),
+      "two images whose widths fit stand side by side");
+      await js("window.prompt = () => ''");
+      await click("#doc > .figure .image-width");
+      await saves("an empty answer fits the image to the text again", two("", ' width="45%"'));
+      await js("window.prompt = () => '150'");
+      await click("#doc > .figure .image-width");
+      await saves("a width past 100 is refused, and nothing changes", two("", ' width="45%"'));
+      await js("window.prompt = () => 'First'");
+      await click("#doc > .figure .image-caption");
+      await saves("Caption… gives the image a caption a reference can name", two(' caption="First"', ' width="45%"'));
+      await js("window.prompt = () => 'A dot'");
+      await click("#doc > .figure .image-alt");
+      await saves("and Alt text… its description", two(' caption="First"', ' width="45%"').replace('alt="A"', 'alt="A dot"'));
+    },
+    // The contents fold a heading's part away and back, and Alt folds every heading of that level.
+    async contentsFold() {
+      await load(`${H}# Office\n\n## Todo\n\n## Link\n\n# BAN\n\n## Clock\n\n### Pin\n\n# End\n`);
+      const was = await js("document.querySelector('.contents').hidden");
+      if (was) await menu("contents");
+      const shown = () => js("Array.from(document.querySelectorAll('.contents-list li')).filter((l) => !l.hidden)" +
+        ".map((l) => l.querySelector('a').textContent).join()");
+      check(await js("document.querySelectorAll('.contents-list .fold').length") === 3,
+        "each heading with headings under it has a fold button", String(await js("document.querySelectorAll('.contents-list .fold').length")));
+      await click(".contents-list li:nth-child(1) .fold");
+      check(await shown() === "Office,BAN,Clock,Pin,End", "pressed, it folds the headings under it away", await shown());
+      await click(".contents-list li:nth-child(1) .fold");
+      check(await shown() === "Office,Todo,Link,BAN,Clock,Pin,End", "pressed again, it unfolds them", await shown());
+      await js("document.querySelector('.contents-list li:nth-child(1) .fold').dispatchEvent(" +
+        "new MouseEvent('click', { bubbles: true, altKey: true }))");
+      check(await shown() === "Office,BAN,End", "with Alt, every heading of that level folds", await shown());
+      await js("document.querySelector('.contents-list li:nth-child(1) .fold').dispatchEvent(" +
+        "new MouseEvent('click', { bubbles: true, altKey: true }))");
+      if (was) await menu("contents");
+    },
+    // The pen draws a free line over a chart, kept as its points, and Shift keeps a rectangle square.
+    async penDrawing() {
+      const chart = `${H}:::table name="t"\n| "a" | "n" |\n| "x" | 1 |\n:::\n\n:::chart table="t" kind="bar" labels="a" values="n"\n`;
+      await load(`${chart}:::\n`);
+      const box = () => js("(() => { const r = document.querySelector('#doc .chart svg.drawings').getBoundingClientRect(); " +
+        "return [r.left, r.top, r.width, r.height]; })()");
+      const [x, y, w, h] = await box();
+      const at = (fx, fy) => [x + w * fx, y + h * fy];
+      await click('#doc .chart .draw-tools [data-shape="pen"]');
+      await dragPath([at(0.1, 0.2), at(0.2, 0.3), at(0.3, 0.25), at(0.4, 0.4)]);
+      const src = await source();
+      check(/draw shape="pen" points="\d+,\d+( \d+,\d+)+"/.test(src), "the pen keeps a free line as its points", src);
+      await click('#doc .chart .draw-tools [data-shape="rect"]');
+      await dragPath([at(0.5, 0.2), at(0.9, 0.3)], SHIFT);
+      const rect = (await source()).match(/draw shape="rect" from="(\d+),(\d+)" to="(\d+),(\d+)"/);
+      check(!!rect && Math.abs(Math.abs(rect[3] - rect[1]) - Math.abs(rect[4] - rect[2])) <= 1,
+        "with Shift held, a rectangle is a square", rect && rect[0]);
     },
     // Headings number themselves from the level the settings name, captions take a number by
     // chapter, and a link whose text is `#` shows the number of what it names.

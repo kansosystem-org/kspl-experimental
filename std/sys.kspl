@@ -10,6 +10,8 @@ import "std/libc"
 #cfg(!freestanding)
 import "std/mem" { dealloc }
 import "std/str"
+#cfg(!freestanding)
+import "std/thread" { threads_running }
 
 // ==========================================
 // Managing the process and its arguments
@@ -120,11 +122,13 @@ pub enum Env_error //< why an environment variable was not set or deleted
 // the environment it meant to change. Its failure then shows somewhere else.
 #cfg(!freestanding)
 pub fn set_env( //< sets an environment variable, which children inherit
-    //< Caution: **Not while another thread reads the environment** or starts a child: the C
-    //< library does not order them ("Undefined - no answer is fixed" in the language spec).
+    //< **It stops the program while a thread `Thread.spawn` started still runs**: the C library
+    //< does not order a change of the environment against another thread reading it. Set it
+    //< before the threads start, or after `free` has waited for them.
     name: U8[], //< the variable's name
     value: U8[], //< the value; empty is refused, since `unset_env` is what deletes
 ): Void!Env_error
+    refuse_with_threads("set_env")
     // **This is the only place that refuses.** Refusing in the per-OS layer would let one OS turn
     // it into "delete" as soon as only the other OS's layer was changed.
     if value.len == 0
@@ -144,11 +148,24 @@ pub fn set_env( //< sets an environment variable, which children inherit
 #cfg(!freestanding)
 pub fn unset_env(name: U8[]): Void!Env_error //<
     //< deletes an environment variable, which children inherit
-    //< Caution: **Not while another thread reads the environment**, as for `set_env`.
+    //< It stops the program while a thread still runs, as `set_env` does.
+    refuse_with_threads("unset_env")
     name_buf: = env_name_cstr(name)!
     defer dealloc(Void$@::name_buf)
     if !kspl_unset_env(name_buf)
         throw .refused
+
+#cfg(!freestanding)
+priv fn refuse_with_threads(what: U8[]) //< stops the program while another thread may read
+    //< **A stop, not an error to catch**: the race is in the program's order, which a retry cannot
+    //< mend.
+    if threads_running() > 0
+        defer $why: = str.Str_builder()
+        why.s("sys.").s(what)
+            .s(": a thread started with Thread.spawn still runs, and may read the ")
+            .s("environment as it changes. Change it before the threads start, or after free() ")
+            .s("has waited for them")
+        panic(why.slice())
 
 #cfg(!freestanding)
 priv fn env_name_cstr(name: U8[]): U8$@!Env_error //< the name as C takes it; the caller frees it

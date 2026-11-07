@@ -595,11 +595,11 @@ $(KSAGENT_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/ksagent)
 	@echo "# built -> $(KSAGENT_EXE) (try: ./$(KSAGENT_EXE) ask docs \"What is KSPL?\")"
 -include $(GEN_DIR)/ksagent.d
 
-# --- Kanso OS (RTOS): `ksos/Makefile`'s own targets, called here by the same names ---
+# --- Kanso OS (RTOS): `lib/ksos/Makefile`'s own targets, called here by the same names ---
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only
 # where things go and which ksplc builds them.
 # Caution: **Relative paths only**: the repository's place may hold what Windows's linker garbles.
-ksos_make = $(call pkg_make,ksos) OUT=../$(OUT_DIR) TEST_JOBS=$(TEST_JOBS)
+ksos_make = $(call pkg_make,ksos) OUT=../../$(OUT_DIR) TEST_JOBS=$(TEST_JOBS)
 
 ## Run|ksos|Run Kanso OS on a POSIX host
 ## Run|ksos-cm|Build for Cortex-M
@@ -611,11 +611,11 @@ ksos_make = $(call pkg_make,ksos) OUT=../$(OUT_DIR) TEST_JOBS=$(TEST_JOBS)
 ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ksos-posix: $(STAGE1_EXE)
 	@$(ksos_make) $@
 
-## Run|ksos-*|One POSIX host demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
-## Run|ksos-cm-*|One Cortex-M demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
-## Run|ksos-cm0-*|One Cortex-M demo on the Cortex-M0, under QEMU's micro:bit (listed in `ksos/README.md`)
-## Run|ksos-nrf51-*|One nRF51 demo, under QEMU's micro:bit (listed in `ksos/README.md`)
-## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-*|One POSIX host demo (the listing is in `lib/ksos/README.md`, the accounts in `lib/ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-cm-*|One Cortex-M demo (the listing is in `lib/ksos/README.md`, the accounts in `lib/ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-cm0-*|One Cortex-M demo on the Cortex-M0, under QEMU's micro:bit (listed in `lib/ksos/README.md`)
+## Run|ksos-nrf51-*|One nRF51 demo, under QEMU's micro:bit (listed in `lib/ksos/README.md`)
+## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `lib/ksos/README.md`, the accounts in `lib/ksos/docs/DESIGN-rtos.md`)
 ## Per-item|ksos-linkcheck-*|One target's worth of `test-ksos-link`
 ## Per-item|ksos-qemugate-*|One target's worth of `test-ksos-qemu`
 ## Per-item|ksos-posixgate-*|One target's worth of `test-ksos-posix`

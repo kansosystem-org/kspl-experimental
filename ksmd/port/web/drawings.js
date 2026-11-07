@@ -1,7 +1,9 @@
 // ksmd page: the shapes drawn over an image or a chart, as a layer over its picture. A shape
 // stands in the picture's own pixels (a chart's frame is 640 by 300), so it stays on what it
 // points at however wide the page shows the picture.
-// A person picks Rectangle, Arrow or Line in the picture's tools and drags across the picture. A
+// A person picks Rectangle, Arrow, Line or Pen in the picture's tools and drags across the picture;
+// Pen draws a free line where the pointer goes. With Shift held, a rectangle is a square, and a
+// line or an arrow keeps to a multiple of 45 degrees, as in Word. A
 // press on a shape chooses it: a drag moves it, Text… gives a rectangle its words, and Delete
 // takes it away. Each change sends the whole list as the clause's `draw` lines, so the file's
 // reader checks it, and it is one step of undo (`ksmd/edit/editor_drawings.kspl`).
@@ -14,7 +16,11 @@ function ksmdDrawings(ks) {
   const CHART = [640, 300];
   // The largest coordinate the file's reader takes (`MAX_SPOT` in `ksmd/model/model.kspl`).
   const MAX_SPOT = 20000;
-  const SHAPES = [["rect", "Rectangle"], ["arrow", "Arrow"], ["line", "Line"]];
+  const SHAPES = [["rect", "Rectangle"], ["arrow", "Arrow"], ["line", "Line"], ["pen", "Pen"]];
+  // The most points a pen line keeps (`MAX_PEN_POINTS` in `ksmd/model/model.kspl`), and the least
+  // distance in the picture's pixels between two it keeps, so a slow hand makes no needless points.
+  const MAX_POINTS = 500;
+  const STEP = 3;
   let tool = null; // { fig, shape } while a shape waits to be drawn
   let colour = COLOURS[0][0];
   // { block, index } of the chosen shape. Any change to the document lets it go, as the shape at
@@ -53,8 +59,9 @@ function ksmdDrawings(ks) {
 
   // Adds the layer, and the tools where the page edits, to a rendered image or chart.
   function attach(fig, b) {
-    fig.drawings = (b.dr || []).map(([shape, x1, y1, x2, y2, color, text]) =>
-      ({ shape, x1, y1, x2, y2, color, text }));
+    fig.drawings = (b.dr || []).map(([shape, x1, y1, x2, y2, color, text, points]) =>
+      ({ shape, x1, y1, x2, y2, color, text,
+        points: points ? points.split(" ").map((p) => p.split(",").map(Number)) : [] }));
     const pic = fig.querySelector(".picture");
     if (!pic) return;
     // The layer takes the focus while a shape is chosen (`choose`), never by Tab.
@@ -109,7 +116,10 @@ function ksmdDrawings(ks) {
     list.forEach((d, i) => {
       const g = node("g", { class: "drawing", "data-i": i });
       const stroke = d.color || COLOURS[0][0];
-      if (d.shape === "rect") {
+      if (d.shape === "pen") {
+        g.appendChild(node("polyline", { points: d.points.map((p) => p.join(",")).join(" "), stroke,
+          fill: "none", "stroke-width": 3 * k, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+      } else if (d.shape === "rect") {
         const x = Math.min(d.x1, d.x2);
         const y = Math.min(d.y1, d.y2);
         g.appendChild(node("rect", { x, y, width: Math.abs(d.x2 - d.x1), height: Math.abs(d.y2 - d.y1),
@@ -150,7 +160,8 @@ function ksmdDrawings(ks) {
 
   // The `draw` lines the file holds for these shapes.
   function lines(list) {
-    return list.map((d) => `draw shape="${d.shape}" from="${d.x1},${d.y1}" to="${d.x2},${d.y2}"` +
+    return list.map((d) => `draw shape="${d.shape}"` + (d.shape === "pen" ?
+      ` points="${d.points.map((p) => p.join(",")).join(" ")}"` : ` from="${d.x1},${d.y1}" to="${d.x2},${d.y2}"`) +
       (d.color ? ` color="${d.color}"` : "") + (d.text ? ` text=${JSON.stringify(d.text)}` : "") + "\n").join("");
   }
 
@@ -232,7 +243,7 @@ function ksmdDrawings(ks) {
     }
     const at = spot(fig, e);
     if (tool && tool.fig === fig) {
-      drag = { fig, start: at, shape: tool.shape };
+      drag = { fig, start: at, shape: tool.shape, points: tool.shape === "pen" ? [at] : null };
     } else {
       const g = e.target.closest("g.drawing");
       if (!g) {
@@ -249,27 +260,63 @@ function ksmdDrawings(ks) {
 
   // The shape a drag makes: a new one from where it started, or the chosen one moved. A new shape
   // in the first colour names none, as the file needs none.
-  const shapeOf = (d, at) => (d.index !== undefined ? moved(d.fig, d.fig.drawings[d.index], d.start, at) :
-    { shape: d.shape, x1: d.start[0], y1: d.start[1], x2: at[0], y2: at[1],
-      color: colour === COLOURS[0][0] ? "" : colour, text: "" });
+  const shapeOf = (d, at, square) => {
+    if (d.index !== undefined) return moved(d.fig, d.fig.drawings[d.index], d.start, at);
+    const color = colour === COLOURS[0][0] ? "" : colour;
+    if (d.shape === "pen") return penOf(d.points, color);
+    const [x2, y2] = square ? held(d.shape, d.start, at, bounds(d.fig)) : at;
+    return { shape: d.shape, x1: d.start[0], y1: d.start[1], x2, y2, color, text: "", points: [] };
+  };
+  // A pen line through its points, with the box round them, its points thinned to the most kept.
+  function penOf(points, color) {
+    const step = Math.ceil(points.length / MAX_POINTS);
+    const kept = points.filter((_, i) => i % step === 0 || i === points.length - 1);
+    const xs = kept.map((p) => p[0]);
+    const ys = kept.map((p) => p[1]);
+    return { shape: "pen", x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys),
+      color, text: "", points: kept };
+  }
+  // Where a drag ends with Shift held: a square's other corner, or a line's end on a multiple of
+  // 45 degrees, kept inside the picture.
+  function held(shape, from, to, [w, h]) {
+    const dx = to[0] - from[0];
+    const dy = to[1] - from[1];
+    const clamp = (v, hi) => Math.max(0, Math.min(hi, Math.round(v)));
+    if (shape === "rect") {
+      // The side shrinks to the room on both axes, so a square stays square at the picture's edge.
+      const sx = Math.sign(dx || 1);
+      const sy = Math.sign(dy || 1);
+      const room = Math.min(sx > 0 ? w - from[0] : from[0], sy > 0 ? h - from[1] : from[1]);
+      const side = Math.min(Math.max(Math.abs(dx), Math.abs(dy)), room);
+      return [from[0] + sx * side, from[1] + sy * side];
+    }
+    const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+    const len = Math.hypot(dx, dy);
+    return [clamp(from[0] + Math.cos(a) * len, w), clamp(from[1] + Math.sin(a) * len, h)];
+  }
   // A shape moved by the distance between two spots, kept inside `bounds`.
   function moved(fig, d, from, to) {
     const [w, h] = bounds(fig);
     const dx = Math.max(-Math.min(d.x1, d.x2), Math.min(w - Math.max(d.x1, d.x2), to[0] - from[0]));
     const dy = Math.max(-Math.min(d.y1, d.y2), Math.min(h - Math.max(d.y1, d.y2), to[1] - from[1]));
-    return { ...d, x1: d.x1 + dx, y1: d.y1 + dy, x2: d.x2 + dx, y2: d.y2 + dy };
+    return { ...d, x1: d.x1 + dx, y1: d.y1 + dy, x2: d.x2 + dx, y2: d.y2 + dy,
+      points: d.points.map(([x, y]) => [x + dx, y + dy]) };
   }
 
   ks.root.addEventListener("pointermove", (e) => {
     if (!drag) return;
     const at = spot(drag.fig, e);
+    if (drag.points) {
+      const last = drag.points[drag.points.length - 1];
+      if (Math.hypot(at[0] - last[0], at[1] - last[1]) >= STEP) drag.points.push(at);
+    }
     if (drag.index !== undefined) {
       const was = drag.fig.drawings;
       drag.fig.drawings = was.map((x, i) => (i === drag.index ? shapeOf(drag, at) : x));
       paint(drag.fig);
       drag.fig.drawings = was;
     } else {
-      paint(drag.fig, shapeOf(drag, at));
+      paint(drag.fig, shapeOf(drag, at, e.shiftKey));
     }
   });
 
@@ -278,7 +325,9 @@ function ksmdDrawings(ks) {
     const d = drag;
     drag = null;
     const at = spot(d.fig, e);
-    const far = Math.abs(at[0] - d.start[0]) + Math.abs(at[1] - d.start[1]) >= 4;
+    if (d.points) d.points.push(at);
+    const far = Math.abs(at[0] - d.start[0]) + Math.abs(at[1] - d.start[1]) >= 4 ||
+      (d.points && d.points.length > 2);
     if (!far) {
       paint(d.fig);
       return;
@@ -287,7 +336,7 @@ function ksmdDrawings(ks) {
       send(d.fig, d.fig.drawings.map((x, i) => (i === d.index ? shapeOf(d, at) : x)), d.index);
       return;
     }
-    const list = [...d.fig.drawings, shapeOf(d, at)];
+    const list = [...d.fig.drawings, shapeOf(d, at, e.shiftKey)];
     tool = null;
     send(d.fig, list, list.length - 1);
   });

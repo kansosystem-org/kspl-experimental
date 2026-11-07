@@ -848,5 +848,41 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       check(await js("!!document.querySelector('#doc td.chosen[data-r=\"1\"]')"), "and moves down");
     },
 
+    // AutoCorrect, as Excel's: a typed `11/6` becomes a date in this year, and a typed web address
+    // a link. `Ctrl`+`Z` right after gives back the text as typed, and each can be turned off.
+    async autoCorrect() {
+      const year = new Date().getFullYear();
+      const one = (cell) => `${H}:::table name="t"\n| "a" |\n${cell}\n:::\n`;
+      const typeIn = async (text) => {
+        await click('#doc td[data-r="0"][data-c="0"]');
+        await type(text);
+        await press("Enter");
+      };
+      await load(one("| |"));
+      await typeIn("11/6");
+      await saves("a typed 11/6 becomes a date in this year", one(`| ${year}-11-06 |`));
+      await menu("undo");
+      await saves("Ctrl+Z right after gives back the text as typed", one('| "11/6" |'));
+      await load(one("| |"));
+      await typeIn("https://example.com/a");
+      await saves("a typed web address becomes text that links to it",
+        one('| "https://example.com/a" {link="https://example.com/a"} |'));
+      await menu("undo");
+      await saves("and Ctrl+Z right after takes the link alone away", one('| "https://example.com/a" |'));
+      check(await js("document.querySelector('.menubar [data-cmd=\"auto-dates\"]').getAttribute('aria-checked')") ===
+        "true", "Edit, AutoCorrect shows both turned on at first");
+      await menu("auto-dates");
+      await menu("auto-links");
+      await load(one("| |"));
+      await typeIn("11/6");
+      await saves("turned off, a typed 11/6 stays text", one('| "11/6" |'));
+      await load(one("| |"));
+      await typeIn("https://example.com/a");
+      await saves("and a typed web address stays plain text", one('| "https://example.com/a" |'));
+      check(await js("localStorage.getItem('ksmd.autoDates')") === "0", "this browser keeps the choice");
+      await menu("auto-dates");
+      await menu("auto-links");
+    },
+
   };
 }

@@ -70,10 +70,11 @@ pub const LLVM_CFLAGS: U8[][_] = ::{ "-Wno-override-module", "-mllvm", "-fast-is
     //< answers differently from the C backend. `-Wno-override-module` silences the warning that the
     //< IR's target name differs from clang's default.
 
-struct Exe_job //< the command that builds an executable, to run beside others (`harness.run_all`)
+pub struct Exe_job //<
+    //< The command that builds an executable, to run beside others (`harness.run_all`)
     //< **Where why is not empty, the command could not be composed**, and why says what failed.
-    job: subproc.Job
-    why: U8[]
+    pub job: subproc.Job
+    pub why: U8[]
 
 priv fn failed_job(why: U8[]): Exe_job
     return Exe_job::{ .job = subproc.Job::{ .argv = U8[][]::{}, .cwd = "" }, .why = why }
@@ -166,9 +167,12 @@ pub fn build_listed_exe(gen: U8[], exe: U8[], cflags: U8[][], llvm: Bool, libs: 
         //< Links one generated file, and the libraries its `--emit-libs=` file libs names
         //< An empty libs names none. For the LLVM IR, cflags must hold `LLVM_CFLAGS`, as at
         //< `build_llvm_exe`.
-    j: =
-        build_job(harness.cc(), U8[][]::{ gen }, exe, cflags, llvm, true, libs, harness.arena())
-    return run_job(j)
+    return run_job(listed_exe_job(gen, exe, cflags, llvm, libs))
+
+pub fn listed_exe_job(gen: U8[], exe: U8[], cflags: U8[][], llvm: Bool, libs: U8[]): Exe_job //<
+    //< The command `build_listed_exe` runs, for a suite that links many at once
+    return build_job(harness.cc(), U8[][]::{ gen }, exe, cflags, llvm, true, libs,
+        harness.arena())
 
 struct Built //< whether it built, and the result of running it
     //< **Where built is false, out is the failure's explanation**, not the program's output.

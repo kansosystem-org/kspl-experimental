@@ -699,6 +699,16 @@ A lock kept in memory that the program allocated by hand is freed by hand too, b
 * **Not offered: a thread that is never waited for** (a *detached* thread). A thread that runs to the program's end, as a pool's worker does, keeps its `Thread` in a field that nothing frees.
 * Caution: **The entry still returns `Void$@`**, because the OS's thread entry has that shape. Return `null`; the value is not read.
 
+### The environment changes only while no spawned thread runs
+
+`sys.set_env` and `sys.unset_env` stop the program with a message while a thread that `Thread.spawn` started has not been waited for. `Thread` counts the threads it started and `free()` waited for.
+
+**Why**: the C library does not order a change of the environment against another thread reading it. A reader can then read memory the change has just freed, and the crash comes far from its cause. A lock inside `std` would cover only `std`'s own readers, not a C library's `getenv`.
+
+* **Set it before the threads start, or after `free()` has waited for them.**
+* **A pool's worker that runs to the program's end counts for good.** A program that starts such a pool sets the environment before it.
+* Caution: **A thread a C library starts is not counted.** Changing the environment while one runs is still undefined.
+
 ### A wakeup is given under the lock
 
 `Cond_var.signal(m)` and `broadcast(m)` take the lock the waiters take, and stop the program with a message when the calling thread does not hold it.

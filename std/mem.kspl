@@ -28,7 +28,7 @@ pub fn alloc_as<|T|>(): T$@ //< heap memory for one value, with no `sizeof` writ
     extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
     extern fn kspl_atomic_load(ptr: Sz$@): Sz
 
-// The counters for hosted builds (the libc.malloc version).
+// The counters for hosted builds (the libc.calloc version).
 // Caution: **Keep them priv, and touch them only through the atomic operations.** Only
 // heap_used_bytes and the functions next to it read them (freestanding counts elsewhere, so a
 // direct read would be written for each build). Threads allocate at once, and a plain `+=` loses
@@ -54,7 +54,8 @@ priv const ALLOC_OWNER_OFFSET: Sz = sizeof(Sz) //<
 
 #cfg(!freestanding)
 pub fn alloc( //< allocates raw bytes from the global heap
-    //< Caution: **The bytes are not zeroed**: reading one before writing it is undefined.
+    //< **The bytes are zeroed**, so a read before any write gives 0. Memory fresh from the OS
+    //< costs nothing more; a block the heap hands out again is cleared once.
     size: Sz, //< how many bytes to allocate
 ): Void$@ //< the bytes, freed with `dealloc`; running out of memory stops the program
     if size < 0
@@ -64,7 +65,7 @@ pub fn alloc( //< allocates raw bytes from the global heap
     // a few bytes, and the caller would write `size` of them.
     if alloc_size < size
         panic("alloc size is too large to add the header")
-    ptr: = libc.malloc(alloc_size)
+    ptr: = libc.calloc(1, alloc_size)
     if ptr == null
         panic("Out of memory")
     size_ptr: = Sz$@::ptr
@@ -90,7 +91,7 @@ priv fn raise_peak(now: Sz)
 // provided" link error.
 #cfg(freestanding)
 pub fn alloc( //< allocates raw bytes from the free-list heap, which must already be set up
-    //< Caution: **The bytes are not zeroed**, as for the hosted `alloc`.
+    //< **The bytes are zeroed**, as for the hosted `alloc`.
     size: Sz, //< how many bytes to allocate
 ): Void$@ //< the bytes, freed with `dealloc`; running out stops the program
     if _fh.ready
@@ -266,6 +267,8 @@ priv fn freestanding_heap_alloc(size: Sz): Void$@
     // above has read `cur.next` breaks the removed free block's links.
     cur.next = cur
     fh_unlock()
+    // Zeroed outside the lock: the block is this caller's alone now.
+    zero(fh_data_ptr(cur), size)
     return fh_data_ptr(cur)
 
 #cfg(freestanding)
@@ -314,7 +317,7 @@ priv fn freestanding_heap_dealloc(ptr: Void$@)
 // ============================ The heap's usage ============================ The only way to
 // ask how much of the global heap is in use now.
 // Caution: **Do not read the counter variables directly.** Where the counting happens differs by
-// build: the free-list allocator on freestanding, the libc.malloc wrapper on hosted.
+// build: the free-list allocator on freestanding, the libc.calloc wrapper on hosted.
 // **"How big is the whole heap" exists on one build only.**
 
 #cfg(freestanding)
@@ -336,7 +339,7 @@ pub fn heap_peak_used_bytes(): Sz //< the most bytes ever allocated at once
 pub fn heap_capacity_bytes(): Sz //< the size of the static buffer the heap uses
     return _fh.total
 
-// **It is not the allocation limit.** It shows whether `libc.malloc` was called at all during a
+// **It is not the allocation limit.** It shows whether `libc.calloc` was called at all during a
 // span, to verify work that should use only an arena.
 #cfg(!freestanding)
 pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up; never decreases

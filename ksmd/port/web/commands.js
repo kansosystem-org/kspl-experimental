@@ -9,7 +9,8 @@
 // Each command: [name, label, key]. The key is the one the page already acts on; the item shows it.
 const COMMANDS = [
   ["file-open", "Open…", "Ctrl+O"], ["file-save", "Save", "Ctrl+S"],
-  ["file-save-as", "Save as…", "Ctrl+Shift+S"], ["page-setup", "Page setup…"],
+  ["file-save-as", "Save as…", "Ctrl+Shift+S"], ["file-gather-images", "Gather images into a folder"],
+  ["page-setup", "Page setup…"],
   ["print", "Print or save as PDF…", "Ctrl+P"],
   ["undo", "Undo", "Ctrl+Z"], ["redo", "Redo", "Ctrl+Y"],
   ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["paste", "Paste", "Ctrl+V"],
@@ -19,7 +20,7 @@ const COMMANDS = [
   ["one-line", "One line per cell"],
   ["zoom-in", "Zoom in", "Ctrl+Alt+="], ["zoom-out", "Zoom out", "Ctrl+Alt+-"], ["zoom-reset", "Zoom 100%"],
   ["read-only", "Read-only"], ["quick-choose", "Quick access bar…"],
-  ["table", "Table"], ["diagram", "Diagram"], ["image", "Image…"], ["include", "Include…"], ["functions", "Functions…"], ["divider", "Divider"], ["link", "Link…", "Ctrl+K"],
+  ["table", "Table"], ["diagram", "Diagram"], ["image", "Image…"], ["include", "Include…"], ["functions", "Functions file…"], ["divider", "Divider"], ["link", "Link…", "Ctrl+K"],
   ["date", "Today's date", "Ctrl+;"], ["time", "Time now", "Ctrl+:"],
   ["insert-function", "Function…", "Shift+F3"],
   ["p", "Paragraph", "Ctrl+Alt+0"], ["h1", "Heading 1", "Ctrl+Alt+1"], ["h2", "Heading 2", "Ctrl+Alt+2"],
@@ -42,6 +43,7 @@ const COMMANDS = [
   ["column-choices", "Choices…"], ["column-rows", "Colour rows by this column"],
   ["column-merge", "Merge repeated values"],
   ["column-rule", "Colour by value…"],
+  ["auto-dates", "Turn typed dates into dates (11/6)"], ["auto-links", "Turn typed web addresses into links"],
   ["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"],
   ["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"],
   ["filter-column", "Filter this column…", "Alt+↓"], ["filter-value", "Show only rows with this value"],
@@ -97,8 +99,9 @@ const TABLE_GROUPS = [
 // The menu bar: each menu's name and its items. "-" is a line between groups, and [name, items] a
 // flyout. Every command stands in one of them, so the quick access bar's chooser lists them all.
 const MENUS = [
-  ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print"]],
-  ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "paste-values", "-", "find", "replace"]],
+  ["File", ["file-open", "file-save", "file-save-as", "file-gather-images", "-", "page-setup", "print"]],
+  ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "paste-values", "-", "find", "replace",
+    "-", ["AutoCorrect", ["auto-dates", "auto-links"]]]],
   ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "zoom-in", "zoom-out",
     "zoom-reset", "-", "read-only", "-", "quick-choose"]],
   ["Insert", ["table", "diagram", "image", "include", "functions", "divider", "link", "-", "date", "time", "insert-function", "-", "note"]],
@@ -113,6 +116,7 @@ const MENUS = [
 
 // How a View choice shows that it is on: a tick, or a dot among choices that exclude each other.
 const CHECKED = { contents: "menuitemcheckbox", "read-only": "menuitemcheckbox", "one-line": "menuitemcheckbox",
+  "auto-dates": "menuitemcheckbox", "auto-links": "menuitemcheckbox",
   "width-full": "menuitemradio", "width-reading": "menuitemradio" };
 
 // The quick access bar's tools that are not commands: two lists to choose a kind or a size from.

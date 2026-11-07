@@ -9,7 +9,7 @@
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/calc/args" { Raw_args }
 import "ksmd/calc/calc" { Own_functions }
-import "ksmd/calc/value" { Value }
+import "ksmd/calc/value" { Calc_error, Value }
 import "ksmd/calc/wire"
 import "ksmd/port/web/bridge_session" { ed, ensure, out, text_in }
 import "std/ds" { List }
@@ -19,6 +19,8 @@ import "std/str"
 const MAX_ANSWERS: Sz = 4096 //< the answers kept; past that, the next round forgets them all
 const MAX_QUEUE: Sz = 1024 //< the calls one round asks the worker; the rest wait for the next
 priv const TIME_LIMIT: I32 = 1 //< `ksmd_web_own_failed`'s reason for a call past the time limit
+priv const BUILDING: I32 = 1 //< `ksmd_web_own_names`'s state where a file builds
+priv const NOT_ALLOWED: I32 = 2 //< its state where the person has not allowed a file yet
 
 $memory: Arena$@ = null //< holds the names, the answers and the queue; freed when names change
 $own: Own_functions$@ = null //< what the editor's calculations ask; null where there are no names
@@ -31,8 +33,8 @@ $taken: List<|U8[]|>$@ = null //< the calls the script took this round, by their
 fn own_functions(): Own_functions@ //< what a new editor's calculations ask; null for none
     return own
 
-priv fn start_over(names: U8[][], calls: U8[][]) //<
-    //< Forgets every answer, and keeps `names` and the queued `calls`
+priv fn start_over(names: U8[][], calls: U8[][], unknown: Calc_error) //<
+    //< Forgets every answer, and keeps `names`, the queued `calls` and what an unknown name gives
     //< **Both are copied before the old memory is freed**: they may stand in it.
     fresh: = Arena(64 * 1024)
     $kept: = List<|U8[]|>(fresh)
@@ -44,7 +46,9 @@ priv fn start_over(names: U8[][], calls: U8[][]) //<
     if memory != null
         memory.free()
     memory = fresh
-    own = memory.create(Own_functions::{ .names = kept.slice(), .ask = ask, .ctx = null })
+    own = memory
+        .create(Own_functions::{ .names = kept.slice(), .ask = ask, .ctx = null,
+        .unknown = unknown })
     ed.own = own
     answers = memory.create(Keyed<|U8[]|>(memory))
     answered = 0
@@ -70,23 +74,26 @@ priv fn ask(_ctx: Void$@, name: U8[], args: Raw_args$@): Value //<
         queue.push(kept)
     return Value.failed(.pending)
 
-extern fn ksmd_web_own_names(len: Sz): Sz //<
+extern fn ksmd_web_own_names(len: Sz, state: I32): Sz //<
     //< Sets the functions a formula may call, one name per line in the input, and forgets every
-    //< answer; no names turns them off. Each document opened needs them again. The count kept.
+    //< answer. `state` is `BUILDING` or `NOT_ALLOWED` while a file's names are unknown, else 0;
+    //< no names in state 0 turns them off. Each document opened needs them again. The count kept.
     ensure()
     defer scratch: = Arena(4 * 1024)
     $names: = List<|U8[]|>(scratch)
     for line in text_in(len).lines(scratch)
         if line.len > 0
             names.push(line)
-    if names.len == 0
+    unknown: Calc_error =
+        .pending if state == BUILDING else .blocked if state == NOT_ALLOWED else .syntax
+    if names.len == 0 && unknown == .syntax
         if memory != null
             memory.free()
         memory = null
         own = null
         ed.own = null
         return 0
-    start_over(names.slice(), U8[][]::{})
+    start_over(names.slice(), U8[][]::{}, unknown)
     return names.len
 
 extern fn ksmd_web_own_take(): Sz //< takes the queue for one round; how many calls it holds
@@ -95,7 +102,7 @@ extern fn ksmd_web_own_take(): Sz //< takes the queue for one round; how many ca
         return 0
     // **Forget the answers between rounds**, not during one: the script still reads the calls.
     if answered >= MAX_ANSWERS
-        start_over(own.names, queue.slice())
+        start_over(own.names, queue.slice(), own.unknown)
     taken = queue
     queue = memory.create(List<|U8[]|>(memory))
     return taken.len

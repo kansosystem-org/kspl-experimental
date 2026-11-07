@@ -387,30 +387,67 @@ function ksmdFiles(ks, api) {
 
   // ---- An image pasted or dropped ----
 
-  // Writes the image beside the document under the first free name, `<name>-image-<n>.png`, and
-  // puts its clause at the caret. The write names no file, so a taken name is never written over.
+  // Writes the image in the document's own folder of images, `<name>-images/image-<n>.png`, under
+  // the first free name, and puts its clause at the caret. The server makes that folder on the
+  // first write. The write names no file, so a taken name is never written over.
   async function addImage(file) {
     const ext = { "image/png": "png", "image/jpeg": "jpg" }[file.type];
     if (!ext) return ks.say("Only a PNG or a JPEG image can go in a document.");
     if (doc.path === "") return ks.say("Save the document first, so the image has a folder to go in.");
     if (file.size > MAX_IMAGE) return ks.say("The image is larger than 8 MiB, which the local server takes.");
-    const alt = window.prompt("Describe the image for someone who cannot see it. Leave this empty if " +
-      "it only decorates.", "");
-    if (alt === null) return null;
+    // It goes in with no alternate text, as one that only decorates: Alt text… in its tools gives
+    // it words later, and Caption… a caption that a reference can name (`images.js`).
     const bytes = new Uint8Array(await file.arrayBuffer());
     const slash = doc.path.lastIndexOf("/");
     const stem = doc.path.slice(slash + 1).replace(/\.ksmd$/, "");
     for (let n = 1; n <= MAX_NAMES; n++) {
-      const name = `${stem}-image-${n}.${ext}`;
+      const name = `${stem}-images/image-${n}.${ext}`;
       const got = await local.write(doc.path.slice(0, slash + 1) + name, bytes, null);
       if (got.status === 409) continue;
       if (got.status !== 200) return ks.say(`The image was not saved. ${got.why}`);
       await fetchOne(doc.path.slice(0, slash + 1) + name, true);
       ks.sync();
       const s = ks.enc.encode(name);
-      return ks.act("ksmd_web_insert_image", s.length, ks.putBytes(s, ks.enc.encode(alt)) - s.length);
+      return ks.act("ksmd_web_insert_image", s.length, ks.putBytes(s) - s.length);
     }
     return ks.say(`The image was not saved: ${MAX_NAMES} images of this document stand there already.`);
+  }
+
+  // File ▸ Gather images into a folder: moves each image ksmd wrote beside the document, as
+  // `<name>-image-<n>.png` did before, into `<name>-images/image-<n>.png`, points the document at
+  // it, and saves. A move never replaces a file, so one standing there already stays where it was.
+  // **The save is part of it**: unsaved, the file on disk would name images that moved.
+  async function gatherImages() {
+    if (doc.path === "") return ks.say("Save the document first: its images are named after it.");
+    const slash = doc.path.lastIndexOf("/");
+    const dir = doc.path.slice(0, slash + 1);
+    const stem = doc.path.slice(slash + 1).replace(/\.ksmd$/, "");
+    const literal = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const made = new RegExp(`^${literal}-image-(\\d+)\\.(png|jpg)$`);
+    let moved = 0;
+    const kept = [];
+    const blocks = ks.view.blocks();
+    for (let block = 0; block < blocks.length; block++) {
+      const fig = blocks[block];
+      const src = fig.classList.contains("figure") ? (fig.dataset.src || "") : "";
+      const m = src.match(made);
+      if (!m) continue;
+      const to = `${stem}-images/image-${m[1]}.${m[2]}`;
+      const got = await local.move(dir + src, dir + to);
+      if (got.status !== 200) {
+        kept.push(`${src} (${got.status === 409 ? `${to} stands there already` : got.why})`);
+        continue;
+      }
+      const s = ks.enc.encode(to);
+      ks.act("ksmd_web_image_src", block, ks.putBytes(s));
+      await fetchOne(dir + to, true);
+      moved += 1;
+    }
+    if (moved > 0) await save();
+    const told = moved === 0 ? "No image beside the document needed moving." :
+      `Moved ${moved} image${moved === 1 ? "" : "s"} into ${stem}-images, and saved.`;
+    ks.say(kept.length === 0 ? told : `${told} Left where they were: ${kept.join(", ")}.`);
+    return null;
   }
 
   function showImages() {
@@ -789,6 +826,7 @@ function ksmdFiles(ks, api) {
     ks.fileCommand = (name) => {
       if (name === "file-open") openChosen();
       else if (name === "file-save-as") saveAs();
+      else if (name === "file-gather-images") one(() => gatherImages());
       else saveOrPlace();
       return null;
     };

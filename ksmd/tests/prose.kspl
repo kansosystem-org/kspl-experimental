@@ -15,6 +15,7 @@ fn run()
     composing_and_pasting()
     deleting()
     entering()
+    blank_lines()
     kinds()
     marks()
     looks()
@@ -157,6 +158,26 @@ priv fn entering()
     typed(start@, "Zero")
     saves("Enter at a block's start opens a gap before it", start@, arena,
         "%ksmd 1\n\nZero\n\nOne\n")
+
+priv fn blank_lines() //< Enter in a gap keeps a blank line; Backspace and Delete take it away
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nOne.\n\nTwo.\n", arena)
+    gap(ed@, 1)
+    entered(ed@, false)
+    saves("Enter in a gap puts a blank line there", ed@, arena, "%ksmd 1\n\nOne.\n\n\\\n\nTwo.\n")
+    entered(ed@, false)
+    saves("and the caret stays in a gap after it, so each press adds one", ed@, arena,
+        "%ksmd 1\n\nOne.\n\n\\\n\n\\\n\nTwo.\n")
+    at(ed@, 3, 0, 0)
+    removed(ed@, true)
+    saves("Backspace at the start of the text after one takes it away", ed@, arena,
+        "%ksmd 1\n\nOne.\n\n\\\n\nTwo.\n")
+    at(ed@, 0, 0, 4)
+    removed(ed@, false)
+    saves("Delete at the end of the text before one takes it away", ed@, arena,
+        "%ksmd 1\n\nOne.\n\nTwo.\n")
+    ed.undo()
+    saves("each is one step of undo", ed@, arena, "%ksmd 1\n\nOne.\n\n\\\n\nTwo.\n")
 
 priv fn kinds()
     defer arena: = Arena(64 * 1024)

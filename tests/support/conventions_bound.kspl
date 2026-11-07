@@ -119,7 +119,7 @@ priv fn check_sema_layers(arena: Arena$@)
 // that closes no cycle: a driver importing a board builds, and then serves that board alone.
 // ==========================================
 
-// Each folder, then the folders it may import, itself included (the run is in ksos/README.md).
+// Each folder, then the folders it may import, itself included (the run is in lib/ksos/README.md).
 // **`tests` is left out**: a test reaches whatever it checks.
 priv const KSOS_LAYERS: U8[][] = U8[][]::{ "kernel", "kernel", "net", "net", "drivers",
     "kernel drivers", "boards", "kernel drivers boards", "demo", "kernel net drivers boards demo",
@@ -137,13 +137,14 @@ priv const KSMD_LAYERS: U8[][] = U8[][]::{ "base", "base", "model", "base model"
     "base model calc", "syntax", "base model calc syntax", "files", "base model calc syntax files",
     "edit", "base model calc syntax edit", "port", "base model calc syntax files edit port" }
 
-priv fn check_layers(pkg: U8[], layers: U8[][], arena: Arena$@) //<
-    //< Each file under `<pkg>/<folder>/` imports from `<pkg>/` only the folders its row allows
+priv fn check_layers(dir: U8[], pkg: U8[], layers: U8[][], arena: Arena$@) //<
+    //< Each file under `<dir>/<folder>/` imports from `<pkg>/` only the folders its row allows
+    //< (`dir` is where the package stands, `pkg` the name its imports begin with)
     $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     prefix: = arena.text().s(pkg).s("/").take()
     for i in Range(0, layers.len, 2)
-        folder: = arena.text().s(prefix).s(layers[i]).s("/").take()
+        folder: = arena.text().s(dir).s("/").s(layers[i]).s("/").take()
         allowed: = layers[i + 1].split(' ', arena)
         for rel in harness
             .tracked_matching(U8[][]::{ arena.text().s(folder).s("*.kspl").take() })
@@ -161,7 +162,7 @@ priv fn check_layers(pkg: U8[], layers: U8[][], arena: Arena$@) //<
                     bad.push(arena.text().s(rel).s(" -> ").s(p).take())
     verdict.check_list(arena.text().s("a ").s(pkg).s(" folder imports only those below it").take(),
         seen, "files", bad@,
-        arena.text().s("the run is in ").s(pkg).s("/README.md").take())
+        arena.text().s("the run is in ").s(dir).s("/README.md").take())
 
 // ==========================================
 // The reference-direction table matches the list the check holds. **The canonical source is the
@@ -260,7 +261,7 @@ priv fn check_reference_arrows(arena: Arena$@)
 // from the entry point's file. So at a demo's entry point it names the kernel's and drivers' `pub`
 // too (those stay, as a promise to their users).
 // ==========================================
-priv const ENTRY_TREES: U8[][_] = ::{ "ksos/demo" }
+priv const ENTRY_TREES: U8[][_] = ::{ "lib/ksos/demo" }
 
 priv fn check_no_pub_in_entries(arena: Arena$@)
     $bad: = List<|U8[]|>(arena)
@@ -377,8 +378,8 @@ priv const HAND_LISTS: U8[][_] = ::{ "the parse layer's guide", "ksplc/README.md
     "ksplc/lsp/*.kspl", SKIP_NONE, "the formatter's guide", "ksplc/README.md", "ksplc/fmt/*.kspl",
     SKIP_NONE, "the tools layer's guide", "ksplc/README.md", "ksplc/tools/*.kspl", SKIP_NONE,
     "the base layer's guide", "ksplc/README.md", "ksplc/base/*.kspl", SKIP_NONE, "the tools' guide",
-    "tools/README.md", "tools/*.kspl", SKIP_NONE, "ksos's table of documents", "ksos/README.md",
-    "ksos/docs/*.md", SKIP_NONE, "std's table of documents", "std/README.md", "std/docs/*.md",
+    "tools/README.md", "tools/*.kspl", SKIP_NONE, "ksos's table of documents", "lib/ksos/README.md",
+    "lib/ksos/docs/*.md", SKIP_NONE, "std's table of documents", "std/README.md", "std/docs/*.md",
     SKIP_NONE, "ksplc's table of documents", "ksplc/README.md", "ksplc/docs/*.md", SKIP_NONE,
     "kspeg's table of documents", "lib/kspeg/README.md", "lib/kspeg/docs/*.md", SKIP_NONE,
     "ksai's table of documents", "lib/ksai/README.md", "lib/ksai/docs/*.md", SKIP_NONE,
@@ -425,9 +426,9 @@ priv fn check_hand_lists(arena: Arena$@) //<
 fn run(arena: Arena$@)
     check_sema_layers(arena)
     check_reference_arrows(arena)
-    check_layers("ksplc", KSPLC_LAYERS, arena)
-    check_layers("ksos", KSOS_LAYERS, arena)
-    check_layers("ksmd", KSMD_LAYERS, arena)
+    check_layers("ksplc", "ksplc", KSPLC_LAYERS, arena)
+    check_layers("lib/ksos", "ksos", KSOS_LAYERS, arena)
+    check_layers("ksmd", "ksmd", KSMD_LAYERS, arena)
     check_no_pub_in_entries(arena)
     check_wasm_boundary(arena)
     check_hand_lists(arena)

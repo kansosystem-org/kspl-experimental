@@ -17,8 +17,7 @@ import "ksmd/edit/region" { Settled, Spot, Style, Unit, blank_unit, fit, gap_spo
 import "ksmd/edit/styled" { Mark, Marks, Seg, cut, hard_break, has_mark, length, marks_before, plain,
     set_mark, text_seg, visible }
 import "ksmd/model/look" { is_note }
-import "ksmd/model/model" { Block, Block_kind, Document, Drawing, Image, MAX_BLOCKS, MAX_NESTING }
-import "ksmd/syntax/clause" { names_kspl }
+import "ksmd/model/model" { Block, Block_kind, Document, MAX_BLOCKS, MAX_NESTING }
 import "ksmd/syntax/inline" { is_destination }
 import "ksmd/syntax/writer"
 import "ksmd/syntax/writer" { blocks_size }
@@ -92,6 +91,7 @@ struct Editor
         //< It stays while the editor is open, so a value does not change while a person works.
     written: Sz //< how many bytes the document's source takes, as the writer writes it
     own: Own_functions@ //< a person's own functions, which the page sets; null where it has none
+    auto: edit.Auto_entry //< what typed text in a cell turns into on its own; the page sets it
 
 struct Pos //< a place in a work's units
     unit: Sz
@@ -117,7 +117,8 @@ fn open(doc: Document, today: U8[], arena: Arena$@): Editor //<
     return Editor::{ .doc = doc, .arena = arena, .history = new_history(arena), .anchor = start,
         .focus = start, .gap = paragraph_style(), .typing = plain(), .marked = false,
         .joinable = false, .change = Change.none(doc@), .today = today,
-        .written = writer.size(doc@), .own = null }
+        .written = writer.size(doc@), .own = null,
+        .auto = edit.Auto_entry::{ .dates = true, .links = true } }
 
 priv fn first_spot(doc: Document@): Spot //< the start of the first text, or the gap before all
     if doc.blocks.len > 0 && is_text_block(doc.blocks.get(0).kind)
@@ -188,10 +189,17 @@ impl Editor
             ed.delete_range(ed.start_spot(), ed.end_spot(), .other)!
             return
         p: = ed.focus
+        defer scratch: = Arena(16 * 1024)
+        // A blank line beside the caret goes, as an empty paragraph does in Word.
+        if blank: = ed.blank_beside(p, backward, scratch)
+            ed.remove_whole(blank)!
+            if !backward
+                ed.select(p, p)
+                ed.history.done[ed.history.done.len - 1].after = ed.selection()
+            return
         if p.place != .text
             ed.step_out_of_gap(p, backward)
             return
-        defer scratch: = Arena(16 * 1024)
         shown: = ed.text_at(p, scratch)
         if backward && p.offset > 0
             ed.delete_range(at_offset(p, previous_char(shown, p.offset)), p, .deleting)!
@@ -209,8 +217,17 @@ impl Editor
         //< Ends the line: a new block of the same kind, or a hard break in a paragraph with `hard`
         //< In code, a line break; at the end of code that already ends with an empty line, a gap
         //< after it. In an empty list item, the item moves one level out or leaves the list.
+        //< **In a gap, it puts a blank line there**, and the caret stays in the gap after it, so
+        //< each press adds one more. A gap alone keeps nothing, since it is only a place for the
+        //< caret.
         s: = ed.start_spot()
         e: = ed.end_spot()
+        if !hard && same_spot(s, e) && s.place == .block_gap
+            ed
+                .insert_whole(Block::{ .kind = .blank, .level = 0, .label = "", .text = "",
+                .first = 0, .count = 0, .offset = 0, .align = .none, .note = "",
+                .invisible = false })!
+            return
         defer scratch: = Arena(16 * 1024)
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         unit: = w.units[w.start.unit]@
@@ -374,46 +391,6 @@ impl Editor
         u.style.check = .open if u.style.check == .done else .done
         u.edited = true
         ed.restyle(w@, scratch)!
-
-    fn insert_divider(ed: Self$@): Void!Refused //<
-        //< A divider in place of the selection, splitting the text the caret stands in, as one step
-        divider: = Block::{ .kind = .divider, .level = 0, .label = "", .text = "", .first = 0,
-            .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
-        ed.insert_whole(divider)!
-
-    fn insert_image(ed: Self$@, src: U8[], alt: U8[]): Void!Refused //<
-        //< An image in place of the selection, as a divider is put in; `src` is from this source's
-        //< folder, and not empty, as the reader wants. The image keeps its place in
-        //< `Document.images` after an undo, as a chart does.
-        if src.len == 0
-            throw .no_read_back
-        image: = Image::{ .src = ed.arena.dup_str(src), .alt = ed.arena.dup_str(alt), .caption = "",
-            .drawings = List<|Drawing|>(ed.arena) }
-        ed.doc.images.push(image)
-        b: = Block::{ .kind = .image, .level = 0, .label = "", .text = "",
-            .first = ed.doc.images.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
-            .invisible = false }
-        ed.insert_whole(b)!
-
-    fn insert_functions(ed: Self$@, path: U8[]): Void!Refused //<
-        //< A `:::functions` clause in place of the selection, as a divider is put in; `path` is from
-        //< this source's folder. A path the reader would refuse is refused here.
-        if !names_kspl(path)
-            throw .no_read_back
-        ed.insert_clause(.functions, path)!
-
-    fn insert_include(ed: Self$@, path: U8[]): Void!Refused //<
-        //< An `:::include` clause in place of the selection, as a divider is put in; `path` is from
-        //< this source's folder, and not empty, as the reader wants
-        if path.len == 0
-            throw .no_read_back
-        ed.insert_clause(.include, path)!
-
-    priv fn insert_clause(ed: Self$@, kind: Block_kind, path: U8[]): Void!Refused //<
-        //< A clause that names a file by its path, and holds nothing else, in place of the selection
-        b: = Block::{ .kind = kind, .level = 0, .label = "", .text = ed.arena.dup_str(path),
-            .first = 0, .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
-        ed.insert_whole(b)!
 
     fn set_invisible(ed: Self$@, block: Sz, on: Bool): Void!Refused //<
         //< Leaves a table, a chart, an image or an include out of print and PDF, or puts it back
@@ -670,6 +647,23 @@ impl Editor
         if spot: = found
             to = spot
         ed.select(to, to)
+
+    priv fn blank_beside(ed: Self@, p: Spot, backward: Bool, scratch: Arena$@): Sz? //<
+        //< The blank line right before the caret (`backward`) or right after it, if one stands there
+        //< The caret stands in a gap beside it, or at the edge of the text beside it.
+        $at: Sz = -1
+        if p.place == .block_gap
+            at = p.block - 1 if backward else p.block
+        else if p.place == .text
+            b: = ed.doc.blocks.get(p.block)
+            last: = b.count - 1 if b.kind == .list else 0
+            if backward && p.offset == 0 && p.item == 0
+                at = p.block - 1
+            else if !backward && p.item == last && p.offset == ed.text_at(p, scratch).len
+                at = p.block + 1
+        if at < 0 || at >= ed.doc.blocks.len || ed.doc.blocks.get(at).kind != .blank
+            return .none
+        return .some(at)
 
     priv fn step_out_of_gap(ed: Self$@, p: Spot, backward: Bool) //<
         //< Backspace in a gap moves the caret to the end of the text before it; Delete, to the start

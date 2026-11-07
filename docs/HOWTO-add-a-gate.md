@@ -27,7 +27,7 @@
 
    A gate for Linux alone goes in `.linux`, unless that job would then end after the others. Then it goes in the shorter shared job, with `linux_only`.
 
-   The runner refuses at start a row no set runs, and `macos` with `par = .synced` (macOS's `make` has no `--output-sync`). Leave `beside` out unless the gate is one of a pair ("Two gates side by side" in [`SPEC-gates.md`](SPEC-gates.md)).
+   The runner refuses at start a row no set runs, and `macos` with `par = .synced` (macOS's `make` has no `--output-sync`).
 
    **Name its failure case** as `.fails = "<file>#<name>"`: an input its check must reject, which the gate runs. Without one, `make test-conventions` fails with "every gate names a failure case that holds" ("Every gate shows that it can fail" in [`SPEC-gates.md`](SPEC-gates.md)).
 3. **Name every SKIP it can print** in an `Expected_skip` row in the same file: the platforms that expect it, and a piece of its line. An unnamed SKIP fails the gate with "a SKIP no row of `expected_skips` holds". **A tool that Linux's image holds is required there instead**, through a switch in `REQUIRE_SWITCHES` in `mk/test.mk`. Its skip lines go in `switch_skips` ("The switches that require a tool" in [`SPEC-gates.md`](SPEC-gates.md)).

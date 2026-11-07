@@ -370,3 +370,28 @@ fn test_defer_declarations_on_each_exit()
     assert(looped == 129I64, "the loop's outer owner is freed only on function exit")
     verdict
         .pass("Normal exit, return, throw, propagation, break and continue preserve cleanup order.")
+
+// ==========================================
+// A header that names several traits with no methods: the block holds the type's own methods, and
+// the type meets each trait ("5.2 Implementations (`impl`) and receivers" in
+// `../../docs/SPEC-programming-language.md`).
+// ==========================================
+priv trait Listed_tag {}
+
+priv struct Listed_handle
+    v: I32
+
+impl Listed_handle: Move_only,
+Listed_tag
+    priv fn twice(r: Self@): I32
+        return r.v * 2
+
+priv fn tagged_twice<|T: Listed_tag|>(x: T@): I32 //< takes only a type that names `Listed_tag`
+    return x.twice()
+
+fn test_listed_traits_on_the_plain_block()
+    verdict.start("[impl] a header that names two traits with no methods test...")
+    h: = Listed_handle::{ .v = 21 }
+    assert(tagged_twice(h@) == 42,
+        "the second trait in the list is met, and the block's method runs")
+    verdict.pass("Both traits named on the plain block's header take effect.")

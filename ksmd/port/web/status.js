@@ -72,9 +72,13 @@ function ksmdStatus(ks) {
     const p = block && ks.pages ? ks.pages.at(block, row) : null;
     page.hidden = !p;
     if (p) {
-      page.textContent = `Page ${p.page} of ${p.pages}`;
+      // A table that prints smaller to fit the paper says so here, while the person works in it.
+      const small = block.classList.contains("table") && block.printScale < 100 ? block.printScale : 0;
+      page.textContent = `Page ${p.page} of ${p.pages}` + (small ? ` · this table prints at ${small}%` : "");
       page.title = `Page ${p.page} of ${p.pages} on ${p.paper}, as the print lays the document out. ` +
-        "The print dialog's own paper, margins or scale can change it.";
+        "The print dialog's own paper, margins or scale can change it." + (small ? " The table is wider " +
+        "than the paper, so print and PDF shrink it. Narrow its columns, or choose a wider paper or " +
+        "Landscape in File, Page setup…" : "");
     }
   }
 

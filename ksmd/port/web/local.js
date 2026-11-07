@@ -13,6 +13,9 @@ function ksmdLocal() {
   const WAIT_MS = 15000;
   // A build may take this long: the server's own limit (60 s), and the answer's way back.
   const BUILD_MS = 70000;
+  // What a server that builds no functions means, for the clause to show.
+  const NO_BUILDER = "This local server builds no functions. Open the document with ksmd, whose " +
+    "server builds them, or with a kssrv started with --builder and --allowed.";
 
   // Takes the token from the fragment's `t=` once, when the page starts. **Read it as name=value
   // pairs**: `#heart=1` holds no token. Text of another form never replaces the token kept.
@@ -117,14 +120,33 @@ function ksmdLocal() {
           { method: "POST", headers: head(), signal: AbortSignal.timeout(BUILD_MS) });
         if (got.ok) return { status: 200, bytes: new Uint8Array(await got.arrayBuffer()) };
         if (got.status === 422) return { status: 422, why: String((await got.json()).error) };
-        if (got.status === 404) {
-          return { status: 404, why: "This local server builds no functions. Open the document " +
-            "with ksmd, whose server builds them, or with a kssrv started with --builder." };
-        }
+        if (got.status === 404) return { status: 404, why: NO_BUILDER };
         return { status: got.status, why: reason(got.status) };
       } catch (e) {
         return { status: 0, why: e && e.name === "TimeoutError" ?
           `The build did not end within ${BUILD_MS / 1000} seconds.` : lost(e) };
+      }
+    },
+    // Whether the person allowed a functions file's bytes as it holds them now: { status: 200,
+    // allowed }, else { status, why }. **The server decides**, by the bytes it would build.
+    async allowed(path) {
+      try {
+        const got = await send(`/api/allow?path=${encodeURIComponent(path)}`);
+        if (got.ok) return { status: 200, allowed: (await got.json()).allowed === true };
+        return { status: got.status, why: got.status === 404 ? NO_BUILDER : reason(got.status) };
+      } catch (e) {
+        return { status: 0, why: lost(e) };
+      }
+    },
+    // Allows a functions file's bytes, named by their digest, or with `digest` null takes the
+    // allow back: { status, why }. A 409 means the file no longer holds those bytes.
+    async allow(path, digest) {
+      try {
+        const got = await send(`/api/allow?path=${encodeURIComponent(path)}`, digest === null ?
+          { method: "DELETE" } : { method: "POST", headers: { "X-Kanso-If-Content": digest } });
+        return { status: got.status, why: got.ok ? "" : reason(got.status) };
+      } catch (e) {
+        return { status: 0, why: lost(e) };
       }
     },
     // Whether anything stands at a path: true, false, or null where it could not be asked.
@@ -149,6 +171,17 @@ function ksmdLocal() {
       try {
         const got = await send(at(path), { method: "PUT", body: bytes,
           headers: { "X-Kanso-If-Content": expected === null ? "missing" : expected } });
+        return { status: got.status, why: got.ok ? "" : reason(got.status) };
+      } catch (e) {
+        return { status: 0, why: lost(e) };
+      }
+    },
+    // Renames a file under the root, never over another one. { status, why }; 409 means a file
+    // stands at `to` already, and nothing moved.
+    async move(from, to) {
+      try {
+        const got = await send(`/api/move?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          { method: "POST" });
         return { status: got.status, why: got.ok ? "" : reason(got.status) };
       } catch (e) {
         return { status: 0, why: lost(e) };

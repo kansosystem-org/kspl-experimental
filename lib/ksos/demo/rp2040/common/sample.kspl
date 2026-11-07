@@ -1,0 +1,216 @@
+//< The layout of one observation the car keeps, and the function that reads it back
+//< Only **how one is laid out** and **how it is read back**; the loop and the safety timeouts are
+//< the caller's (`lib/ksos/demo/rp2040/rp2040_car_pilot_probe.kspl`).
+//< **Only this file knows the layout.** Change `append` and `decode` together, or the value
+//< written and the value read silently drift apart.
+
+// ==========================================
+// The layout, `SAMPLE_BYTES` bytes: 0..2 the distance [mm], 2..4 the battery [mV], 4 the line (the
+// low three bits) plus the source (the top bit, set for a safety timeout), 5 lon, 6 lat and 7 rot,
+// each plus the offset.
+// ==========================================
+
+// How to use it:
+//   sample.append(kind_sample, sample.Sample::{ … });  // after driving the wheels
+//   sample.dump(ln, kind_sample);                      // print them all to the console
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/records"
+import "ksos/drivers/rp2040/watchdog"
+import "std/bytes"
+
+const SAMPLE_BYTES: Sz = 8 //< the size of one observation
+    //< Caution: **Do not exceed 8 bytes**, or a record grows from 16 to 20 bytes (the header plus
+    //< content rounded to four). The source is kept in the line byte's spare bits.
+priv const LINE_BITS_MASK: U8 = 0x07
+priv const BY_SAFETY_BIT: U8 = 0x80
+priv const DRIVE_BIAS: I32 = 128 //< the offset for storing lon/lat/rot in one byte each
+    //< Caution: **Do not store them signed** (-45 as 0xd3 reads back as 211).
+
+priv const DUMP_WAIT_MS: U32 = 50 //< the limit on waiting for one line to be queued [ms]
+    //< **Keep it finite**: with the Serial Monitor closed the queue never empties.
+
+enum Author //< who issued the command
+    //< **This is kept in the record**: at the speed cap the point-blank backing off and the
+    //< policy's own command give the same triple.
+    // The manoeuvre the in-car forward pass (the policy) returned.
+    policy
+    // The manoeuvre a safety timeout issued (the point-blank backing off, or a stop).
+    // **Do not imitate it when retraining**; the timeout stays, so it would be applied twice.
+    safety
+
+struct Sample //< one observation
+    //< Caution: **Keep the value the decision used and its command as one moment**, or the
+    //< condition cannot be matched against the result.
+    dist_mm: U32
+    bat_mv: U32
+    line: U32
+    lon: I32
+    lat: I32
+    rot: I32
+    // Who issued the command. **A record without the source bit reads as `policy`**; to tell them
+    // apart, change the marker and erase once.
+    by: Author
+
+// How many were saved, and why it gave up (non-empty means it gave up).
+// Caution: **Do not erase the region even when it is full**: the policy is there, and the next
+// start-up could not start. It gives up and says so.
+priv $saved: U32 = 0
+priv $stop_reason: U8[] = ""
+
+fn count(): U32 //< how many were saved
+    return saved
+
+fn stopped(): U8[] //< why it stopped saving records
+    //< Empty while it continues.
+    return stop_reason
+
+fn restart() //< saves from nothing again, once the record was erased
+    //< **A stop for `full` would otherwise outlive the erase** that made room, until a restart.
+    saved = 0
+    stop_reason = ""
+
+priv fn encode(v: U8$[], s: Sample) //< lays one out
+    d: = s.dist_mm if s.dist_mm <= 0xffffU32 else 0xffffU32
+    mv: = s.bat_mv if s.bat_mv <= 0xffffU32 else 0xffffU32
+    v.put_u16_le(0, U16::d)
+    v.put_u16_le(2, U16::mv)
+    bits: = U8::s.line
+    flag: U8 = BY_SAFETY_BIT if s.by == Author.safety else 0
+    v[4] = bits | flag
+    v[5] = U8::(s.lon + DRIVE_BIAS)
+    v[6] = U8::(s.lat + DRIVE_BIAS)
+    v[7] = U8::(s.rot + DRIVE_BIAS)
+
+priv fn decode(b: U8[]): Sample //< reads one back
+    return Sample::{
+        .dist_mm = b.get_u16_le(0),
+        .bat_mv = b.get_u16_le(2),
+        // Caution: Always mask the line; the source is in the byte's top bit.
+        .line = b[4] & LINE_BITS_MASK,
+        // **Subtract at I32 width** (Sample's field); in U8, `83 - 128` wraps to 211.
+        .lon = b[5] - DRIVE_BIAS,
+        .lat = b[6] - DRIVE_BIAS,
+        .rot = b[7] - DRIVE_BIAS,
+        .by = .safety if (b[4] & BY_SAFETY_BIT) != 0 else .policy,
+    }
+
+fn append(kind: U16, s: Sample) //< appends one
+    //< **Call it after driving the wheels**: interrupts stop for the write's several ms.
+    //< Caution: **It must be callable even when the record is unusable** (not opened, full, a
+    //< failed write): it returns silently, and driving is unaffected.
+    if !records.ok() || stop_reason.len > 0
+        return
+    $buf: U8[SAMPLE_BYTES] = ::{}
+    encode(U8$[]::buf, s)
+    records.append(kind, U8[]::buf) catch e
+        // Caution: Do not discard the reason; full is expected, a failed write is not.
+        stop_reason = e.variant_name()
+        return
+    saved += 1
+
+fn say_last(ln: con.Line$@, kind: U16) //< prints the newest one as one line
+    //< **This is the evidence that "the time series survived a power cut".**
+    $buf: U8[SAMPLE_BYTES] = ::{}
+    n: = records.read_last(kind, U8$[]::buf)
+    if n != SAMPLE_BYTES
+        return
+    v: = decode(U8[]::buf)
+    ln.reset()
+    ln.str("[car] last run ended at dist=")
+    ln.u32(v.dist_mm)
+    ln.str("mm bat=")
+    ln.u32_milli(v.bat_mv)
+    ln.str("V line=")
+    ln.u32(v.line)
+    ln.str(" drive=(")
+    ln.i32(v.lon)
+    ln.str(",")
+    ln.i32(v.lat)
+    ln.str(",")
+    ln.i32(v.rot)
+    ln.str(")")
+    // Say so when a safety timeout issued the last command; **the same triple means something
+    // different**.
+    if v.by == Author.safety
+        ln.str(" by safety")
+    _sent: = ln.flush()
+
+priv fn emit_line(ln: con.Line$@): Bool //< prints one line
+    //< Caution: **Wait for room before printing**; a line that does not fit is discarded (flush in
+    //< lib/ksos/demo/rp2040/common/console.kspl). true if it was printed.
+    //< **Each line feeds the watchdog once**: the whole dump takes seconds, and one line reads one
+    //< record and waits at most `DUMP_WAIT_MS`.
+    watchdog.feed()
+    for $waited: U32 = 0; !con.can_flush() && waited < DUMP_WAIT_MS; waited += 1
+        boot.pump(1)
+    return ln.flush()
+
+priv fn say_row(ln: con.Line$@, n: U32, v: Sample): Bool //< prints one as one line of CSV
+    //< Caution: **Keep the order in step with `dump`'s header line.** Always print the source.
+    ln.reset()
+    ln.str("[dump] ")
+    ln.u32(n)
+    ln.str(",")
+    ln.u32(v.dist_mm)
+    ln.str(",")
+    ln.u32(v.bat_mv)
+    ln.str(",")
+    ln.u32(v.line)
+    ln.str(",")
+    ln.i32(v.lon)
+    ln.str(",")
+    ln.i32(v.lat)
+    ln.str(",")
+    ln.i32(v.rot)
+    ln.str(",1" if v.by == Author.safety else ",0")
+    return emit_line(ln)
+
+fn dump(ln: con.Line$@, kind: U16) //< prints the whole record to the console
+    //< **Call it from the driving loop, with the wheels stopped** — it takes seconds and watches
+    //< neither sensors nor the remote.
+    //< Caution: **Give up as soon as one line could not be printed**, or with no reader it waits
+    //< silently for minutes. It says so.
+    if !records.ok()
+        // The only line printed, so it too waits for room.
+        ln.reset()
+        ln.str("[dump] no on-board records")
+        _said: = emit_line(ln)
+        return
+    lg: = records.handle()
+    ln.reset()
+    ln.str("[dump] begin used=")
+    ln.u32(U32::lg.used())
+    $ok: = emit_line(ln)
+    if ok
+        ln.reset()
+        ln.str("[dump] n,dist_mm,bat_mv,line,lon,lat,rot,safety")
+        ok = emit_line(ln)
+    $n: U32 = 0
+    $other: U32 = 0
+    $buf: U8[SAMPLE_BYTES] = ::{}
+    $it: = lg.iter()
+    for ok && it.next()
+        // Caution: Check both the kind and the length; the marker and the policy share the record.
+        if it.kind != kind || Sz::it.len != SAMPLE_BYTES
+            other += 1
+            ln.reset()
+            ln.str("[dump] skip kind=")
+            ln.u32(it.kind)
+            ln.str(" len=")
+            ln.u32(it.len)
+            ok = emit_line(ln)
+            continue
+        // The length was checked above to be exactly `buf`'s, so `too_small` cannot come.
+        _len: = it.read(U8$[]::buf) catch 0
+        n += 1
+        ok = say_row(ln, n, decode(U8[]::buf))
+    ln.reset()
+    ln.str("[dump] end samples=")
+    ln.u32(n)
+    ln.str(" other=")
+    ln.u32(other)
+    if !ok
+        // Say it ended partway; the count alone would read as "everything was printed".
+        ln.str(" CUT (console full)")
+    _sent: = emit_line(ln)

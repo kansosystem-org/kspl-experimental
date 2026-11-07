@@ -47,12 +47,15 @@ The page starts with an empty document. To open a source, run `ksmd.load(text)` 
 
 ## Write your own functions
 
-A document can call functions you write in KSPL, as it calls `sum`. They need the local server, so open the document through the launcher or a server started with `--builder` ("Your own functions" in the [design](docs/DESIGN-ksmd.md#your-own-functions)).
+A document can call functions you write in KSPL, as it calls `sum`. They need the local server, so open the document through the launcher or a server started with `--builder` and `--allowed` ("Your own functions" in the [design](docs/DESIGN-ksmd.md#your-own-functions)).
+
+**Nothing of a functions file is built or run until you allow that exact file.** A bar at the top of the page names the file, with Allow and Not now. The answer is kept for the file's present content, so a file that someone changes asks again.
 
 1. Open the document, and put the caret where the clause goes.
-2. Choose Insert ▸ Functions…, then pick a `.kspl` file in the workspace, or type a new name. A new file starts with one function, `twice`, to call and to copy.
-3. The clause's box lists the functions the file gives, such as "A formula can call: twice." A cell can then hold `=twice(A1)`.
-4. Edit the file in any text editor. When you come back to the page, it builds the file again.
+2. Choose Insert ▸ Functions file…, then pick a `.kspl` file in the workspace, or type a new name. A new file starts with one function, `twice`, to call and to copy.
+3. Choose Allow in the bar at the top, or in the clause's box.
+4. The clause's box lists the functions the file gives, such as "A formula can call: twice." A cell can then hold `=twice(A1)`.
+5. Edit the file in any text editor. When you come back to the page, it asks again, then builds the file again.
 
 Each `pub fn` in the file is a function a formula can call:
 
@@ -89,6 +92,9 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 
 * **The box shows the compiler's message** where the file does not build. Fix the file and save it; the page builds it again when you come back to it.
 * **`…`** in a cell: its answer has not come yet.
+* **`#BLOCKED!`** in a cell: it may call the document's own functions, which you have not allowed yet. Choose Allow in the bar or in the clause's box.
+* **A small blue corner at a cell's top left**: its formula calls the document's own functions. When you choose the cell, the status bar names them and their file.
+* **Stop allowing** in the clause's box takes the allow back. The cells show `#BLOCKED!` again, and nothing of the file runs until you allow it again.
 * **`#TIME!`**: the call ran past 2 seconds. **`#STOPPED!`**: it panicked.
 * **`#SYNTAX!`**: too many or too few arguments, as for ksmd's own functions.
 * **A name ksmd already has, such as `sum`, is refused**, and the box says so.

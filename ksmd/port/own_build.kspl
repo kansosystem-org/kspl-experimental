@@ -1,10 +1,10 @@
 //< Builds a person's own functions into the wasm the page's worker runs
-//<     own_build <file> <shown> [<ksplc> <sources>]
+//<     own_build <file> <shown> <digest> [<ksplc> <sources>]
 //< `<file>` is the person's `.kspl` file; `<shown>` is how messages name it, its path from the
-//< workspace. The wasm goes to standard output and exit 0; a failure is a message on standard
-//< error and exit 1, for the page to show at the `:::functions` clause. The local server runs it
-//< with two arguments, and it finds `ksplc` and ksmd's sources from its own place (`tools_near`).
-//< The server starts it on a page's request, so the build must read nothing else.
+//< workspace. `<digest>` is the SHA-256 of the bytes the person allowed: other bytes are not
+//< built. The wasm goes to standard output and exit 0; a failure is a message on standard error
+//< and exit 1, for the clause. The local server runs it with three arguments, and it finds
+//< `ksplc` and ksmd's sources from its own place (`tools_near`). It reads nothing else.
 //<
 //< The steps, in a scratch folder removed at the end:
 //<
@@ -25,6 +25,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
+import "std/sha256"
 import "std/str"
 import "std/sys"
 
@@ -63,12 +64,12 @@ struct Tools //< what a build runs
 fn main(): I32
     defer arena: = Arena(4 * 1024 * 1024)
     a: = sys.args()
-    if a.len != 3 && a.len != 5
-        io.err().s("usage: own_build <file> <shown> [<ksplc> <sources>]\n")
+    if a.len != 4 && a.len != 6
+        io.err().s("usage: own_build <file> <shown> <digest> [<ksplc> <sources>]\n")
         return 2
     $t: = Tools::{ .ksplc = "", .sources = "", .std = "" }
-    if a.len == 5
-        t = Tools::{ .ksplc = a.get(3), .sources = a.get(4), .std = "" }
+    if a.len == 6
+        t = Tools::{ .ksplc = a.get(4), .sources = a.get(5), .std = "" }
     else if found: = tools_near(arena)
         t = found
     else
@@ -76,7 +77,7 @@ fn main(): I32
             .s("ksmd cannot build functions here: ksplc or ksmd's sources are not installed beside \
                 \{sys.program_name()\}. Run `make install` again\n")
         return 1
-    wasm: = own_wasm(a.get(1), a.get(2), t, arena) catch why
+    wasm: = own_wasm(a.get(1), a.get(2), a.get(3), t, arena) catch why
         io.err().s(why)
         if why.len == 0 || why[why.len - 1] != '\n'
             io.err().c('\n')
@@ -109,8 +110,17 @@ fn tools_near(arena: Arena$@): Tools? //<
             return .some(t)
     return .none
 
-fn own_wasm(file: U8[], shown: U8[], t: Tools, arena: Arena$@): U8[]!U8[] //<
+fn own_wasm(file: U8[], shown: U8[], digest: U8[], t: Tools, arena: Arena$@): U8[]!U8[] //<
     //< The wasm of the functions in `file`, or why there is none, naming the file as `shown`
+    //< **Only bytes whose SHA-256 is `digest` are built**, read once, so a file that changed after
+    //< the person allowed it is refused.
+    source: = io.read_file(file, arena) catch
+        throw arena.text().s("cannot read \{shown\}\n").take()
+    $hex: U8[sha256.HEX_LEN] = ::{}
+    sha256.write_hex(sha256.hash(source), U8$[]::hex)
+    if !(U8[]::hex).equals(digest)
+        throw arena.text()
+            .s("\{shown\} changed after its functions were allowed. Allow them again\n").take()
     $buf: U8[4096] = ::{}
     exe: = sys.exe_path(U8$[]::buf).unwrap_or("")
     ends: = sys.deadline_after_ms(LIMIT_MS)
@@ -119,15 +129,14 @@ fn own_wasm(file: U8[], shown: U8[], t: Tools, arena: Arena$@): U8[]!U8[] //<
     work: = fs.mkdir_unique(base, PREFIX, arena) catch
         throw arena.text().s("cannot make a scratch folder in \{base\}\n").take()
     defer clean(work, arena)
-    got: = steps(file, shown, t, work, ends, arena) catch why
+    got: = steps(source, shown, t, work, ends, arena) catch why
         throw why.replace(PERSON, shown, arena)
     return got
 
-priv fn steps(file: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena: Arena$@):
+priv fn steps(source: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena: Arena$@):
     U8[]!U8[] //<
-        //< The build's steps in `work`; a message names the person's file as it stands there
-    source: = io.read_file(file, arena) catch
-        throw arena.text().s("cannot read \{shown\}\n").take()
+        //< The build's steps in `work` on the person's `source`; a message names their file as it
+        //< stands there
     fs.mkdir_all(fs.join(work, "own", arena)) catch
         throw arena.text().s("cannot write in \{work\}\n").take()
     put(work, "own/ksplc.cfg", PACKAGE, arena)!

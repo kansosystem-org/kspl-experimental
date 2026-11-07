@@ -187,6 +187,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdRules(ks);
     ksmdChart(ks);
     ksmdDrawings(ks);
+    ksmdImages(ks);
     ksmdDiagram(ks);
     ksmdSettings(ks);
     ksmdMerge(ks);
@@ -459,7 +460,7 @@ function ksmdCommands(ks) {
   }, { direct: true });
   ks.handle("undo", () => ks.act("ksmd_web_undo"));
   ks.handle("redo", () => ks.act("ksmd_web_redo"));
-  ks.handle(["file-open", "file-save", "file-save-as"],
+  ks.handle(["file-open", "file-save", "file-save-as", "file-gather-images"],
     (name) => (ks.fileCommand ? ks.fileCommand(name) : null), { looks: true });
   ks.handle("print", () => window.print(), { looks: true });
   ks.handle("read-only", () => ks.setReadOnly(!ks.readOnly), { looks: true });
@@ -645,6 +646,32 @@ function ksmdCommands(ks) {
     oneLine = localStorage.getItem("ksmd.oneLine") === "1";
   } catch (_) { /* a browser that keeps nothing wraps the text */ }
   ks.setOneLine(oneLine);
+
+  // AutoCorrect, as Excel's: a typed `11/6` becomes a date, and a typed web address a link. Each
+  // is on until a person turns it off, and the choice is this browser's own, as the width is.
+  // `Ctrl`+`Z` right after takes back the change alone (`set_cell` in
+  // `ksmd/edit/editor_tables.kspl`).
+  const auto = { "auto-dates": true, "auto-links": true };
+  const autoKeys = { "auto-dates": "ksmd.autoDates", "auto-links": "ksmd.autoLinks" };
+  ks.setAuto = (name, on) => {
+    auto[name] = on;
+    ks.w.ksmd_web_auto_entry(auto["auto-dates"] ? 1 : 0, auto["auto-links"] ? 1 : 0);
+    for (const el of document.querySelectorAll(`[data-cmd="${name}"]`)) {
+      el.setAttribute("aria-checked", String(on));
+    }
+    try {
+      localStorage.setItem(autoKeys[name], on ? "1" : "0");
+    } catch (_) { /* a browser that keeps nothing turns it on again next time */ }
+    return null;
+  };
+  for (const name of Object.keys(auto)) {
+    let on = true;
+    try {
+      on = localStorage.getItem(autoKeys[name]) !== "0";
+    } catch (_) { /* a browser that keeps nothing keeps it on */ }
+    ks.setAuto(name, on);
+  }
+  ks.handle(Object.keys(auto), (name) => ks.setAuto(name, !auto[name]), { looks: true });
 
   // The chosen cell, while its table still stands where it was chosen.
   const chosen = () => {

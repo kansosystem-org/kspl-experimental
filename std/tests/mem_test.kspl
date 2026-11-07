@@ -413,3 +413,27 @@ fn test_arc_get_mut_locks_weak()
     downgrade_waits_body()
     back_to(heap_before, "get_mut and a waiting downgrade leak nothing")
     verdict.pass("get_mut reads the strong count under the lock, and a downgrade waits for it.")
+
+// ==========================================
+// std/mem: what `alloc` hands out reads as 0, a block the heap hands out again included.
+// ==========================================
+priv struct Two_fields //< a value `alloc_as` hands out, read before anything writes it
+    a: I32
+    b: I64
+
+fn test_alloc_is_zeroed()
+    verdict
+        .start("[mem] alloc hands out zeroed bytes, a block given back and handed out again too...")
+    for _round in Range.asc(3)
+        p: = U8$@::alloc(4096)
+        $nonzero: Sz = 0
+        for i in Range.asc(4096)
+            if (p + i)$ != 0
+                nonzero += 1
+            (p + i)$ = 171
+        assert(nonzero == 0, "every byte mem.alloc hands out must be 0")
+        dealloc(Void$@::p)
+    v: = mem.alloc_as<|Two_fields|>()
+    assert(v.a == 0 && v.b == 0, "the fields of a value mem.alloc_as hands out must be 0")
+    dealloc(Void$@::v)
+    verdict.pass("alloc and alloc_as hand out zeroed memory, also after a free.")

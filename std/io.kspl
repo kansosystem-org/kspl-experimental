@@ -22,16 +22,7 @@ pub struct File_stream //< one open file to write to, read from and close
     //< Call `sync()!` before that to learn whether the written data arrived.
     pub stream: Void$@ //< the C `FILE *`; null once `free()` has closed it
 
-// Caution: **`free()` closes the `FILE *`**: a copy would keep it, and write into a closed stream.
-impl File_stream: Move_only {} //< copying it would close one file twice
-
 impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
-    priv fn live(r: Self$@): Void$@ //< the open `FILE *`; a freed stream stops the program
-        //< Caution: **Stop, never pick another destination.** A `Writer` cannot report a failure,
-        //< so a write after `free()` sent anywhere would be lost with the program going on.
-        if r.stream == null
-            panic("io: a File_stream was written after free()")
-        return r.stream
     pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the stream
         put_bytes(r.live(), val)
         return r
@@ -52,7 +43,8 @@ impl File_stream: Manual_free //< it owns the handle and releases it in `free()`
             _res: = libc.fclose(r.stream)
             r.stream = null
 
-impl File_stream
+// Caution: **`free()` closes the `FILE *`**: a copy would keep it, and write into a closed stream.
+impl File_stream: Move_only //< copying it would close one file twice
     pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error //< fills the buffer; 0 means the end
         if r.stream == null
             throw .invalid_arg
@@ -79,6 +71,12 @@ impl File_stream
             throw .invalid_arg
         if kspl_stream_sync_disk(r.stream) != 0
             throw .write_failed("")
+    priv fn live(r: Self$@): Void$@ //< the open `FILE *`; a freed stream stops the program
+        //< Caution: **Stop, never pick another destination.** A `Writer` cannot report a failure,
+        //< so a write after `free()` sent anywhere would be lost with the program going on.
+        if r.stream == null
+            panic("io: a File_stream was written after free()")
+        return r.stream
 
 priv struct Std_stream //< standard output or error, which the whole program shares
     //< **Nothing closes it**, so it is not a `File_stream`, whose owner closes it. It has no
@@ -88,6 +86,12 @@ priv struct Std_stream //< standard output or error, which the whole program sha
     //< `prog > out.txt`). A closed pipe still ends it quietly ("Writing to a closed pipe returns an
     //< error value" in std/docs/DESIGN-system.md).
     stream: Void$@ //< the C library's `FILE *`, taken on first use
+
+impl Std_stream
+    priv fn flush_if_stdout(r: Self$@) //< flushes when line buffering is on
+        //< Only stdout; stderr is unbuffered.
+        if r.stream == g_stdout.stream
+            r.flush()
 
 impl Std_stream: Writer //< what `out()` and `err()` hand out
     fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the stream
@@ -100,10 +104,6 @@ impl Std_stream: Writer //< what `out()` and `err()` hand out
         if line_buffered && val == '\n'
             r.flush_if_stdout()
         return r
-    priv fn flush_if_stdout(r: Self$@) //< flushes when line buffering is on
-        //< Only stdout; stderr is unbuffered.
-        if r.stream == g_stdout.stream
-            r.flush()
     fn flush(r: Self$@): Self$@ //< flushes buffered data; does not report a failure
         flush_or_stop(r.stream)
         return r

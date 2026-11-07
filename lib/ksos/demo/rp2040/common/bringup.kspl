@@ -1,0 +1,111 @@
+//< Brings a probe up on the real hardware
+//< This file alone keeps the order **clocks → GPIO → the buzzer → USB → waiting for enumeration**.
+//< It also keeps the signals along the way (the buzzer's beep count) and the waiting (while
+//< running USB). **The signal is the number of beeps.** The Serial Monitor cannot be opened until
+//< USB has finished enumerating. Until then the buzzer is the only window ("Flashing the
+//< firmware, and the debug output" in lib/ksos/docs/SPEC-board.md).
+//< **Beep only at the stages where the console cannot be used.** Beeping after enumeration says
+//< the same thing twice, which only annoys people nearby and helps tell nothing apart.
+//< **Every firmware that drives the motors starts them here** (`motors_up`), so none can leave
+//< out what stops the wheels in a panic.
+
+// ==========================================
+// What each beep count means is in "Stage 2b — USB CDC" in lib/ksos/docs/HOWTO-bring-up.md.
+// `poll_once` does nothing before USB is up, so a probe without USB beeps through here too.
+// Caution: **Keep USB running while it sounds** (`buzzer.tone` does). Each beep takes close to
+// 300ms, so pausing USB makes the host detach it as an unresponsive device. Trying to report the
+// stage then breaks the enumeration itself.
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/demo/rp2040/common/buzzer"
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/watchdog"
+
+const STAGE_REPORT_INTERVAL_MS: U32 = 3000 //<
+    //< The interval for reporting the stage reached while not yet enumerated
+
+fn pump(ms: U32) //< waits ms milliseconds while running USB
+    //< Caution: It is a polling design. The caller must keep calling `poll_once` through the wait.
+    //< Otherwise neither enumeration nor bringing the link up advances, and the send queue is not
+    //< drained either. Do not wait with a raw `timer.delay_ms`.
+    for $i: U32 = 0; i < ms; i += 1
+        usb.poll_once()
+        timer.delay_us(1000)
+
+fn beep(times: U32) //< beeps times times
+    for _i in Range.asc(Sz::times)
+        buzzer.tone(buzzer.BEEP_HZ, buzzer.BEEP_MS)
+        pump(200)
+
+fn clocks_and_gpio(): Void!mmio.Driver_error //<
+    //< Starts the clocks and GPIO, and gets ready to sound the buzzer
+    //< A failure means not even the buzzer can sound at this point (the silence tells you).
+    // Set up the clocks before anything else. USB needs 48MHz on clk_usb and the ADC on clk_adc.
+    // The TIMER's tick comes from here too (continue after a failure here and delay_us never
+    // returns).
+    clocks.init()!
+    gpio.init()!
+    gpio.init_out(board.BUZZER_PIN)
+
+fn usb_up(): Bool //< starts USB and beeps once
+    //< false means it has beeped nine times.
+    usb.init() catch
+        beep(9)
+        return false
+    beep(1)
+    return true
+
+fn wait_configured(timeout_ms: U32): Bool //< waits until the host configures it
+    //< Once configured, it beeps twice and returns true. If `timeout_ms` is 0, it never gives up.
+    //< The host can take dozens of seconds to enumerate. Even after a failure, unplugging and
+    //< replugging can retry it. If it gave up, it could not answer a host that attaches later.
+    //< Caution: **Firmware that works with no USB attached must use a finite timeout.** A start-up
+    //< on battery alone never gets configured.
+    $waited: U32 = 0
+    $since_report: U32 = 0
+    for !usb.is_configured()
+        if timeout_ms != 0 && waited >= timeout_ms
+            return false
+        pump(10)
+        waited += 10
+        since_report += 10
+        if since_report >= STAGE_REPORT_INTERVAL_MS
+            since_report = 0
+            beep(usb.current_stage())
+    beep(2)
+    return true
+
+// ---------------------------------------------------------
+// Guarding the wheels: every firmware that drives the motors
+// ---------------------------------------------------------
+// **The PWM keeps its last duty when the program stops deciding**, so the wheels keep turning.
+// `motors_up` covers a panic. The watchdog, which the firmware arms before its control loop,
+// covers a hang. Why both are needed is "The watchdog (`watchdog.kspl`)" in
+// lib/ksos/docs/DESIGN-rtos.md.
+
+const CAR_WATCHDOG_MS: U32 = 1000 //< how long a car's control loop may go without a feed [ms]
+    //< **Longer than the longest step between two feeds**: a lap (100ms, stretched by IR frames
+    //< and a report line to about 300ms) and one Flash sector erase (at most 400ms). **Short enough
+    //< to stop quickly**: at the speed cap the car rolls well under a metre in a second.
+    //< **Both car firmwares use it.** A bench sequence whose steps are longer sets its own.
+
+priv fn stop_wheels(_msg: U8[]) //< the panic hook: the wheels stop before the program does
+    //< Caution: **A freestanding panic loops for ever, and the PWM keeps its last duty.** With no
+    //< hook a panic while driving leaves the car running with nothing deciding.
+    //< An index out of range or a division by zero stops in the runtime without calling this
+    //< hook. So a firmware must still refuse every input that could cause one.
+    motor.stop()
+
+fn motors_up(): Void!mmio.Driver_error //< starts the motors so that a panic stops them
+    //< It stops a watchdog left running, starts the motors stopped, then sets the panic hook.
+    //< Caution: **Arm the watchdog just before the control loop, and feed it only from there**, or
+    //< a hang leaves the wheels turning ("The watchdog (`watchdog.kspl`)" in
+    //< lib/ksos/docs/DESIGN-rtos.md). Ask `watchdog.last_reset` before arming.
+    watchdog.disarm()
+    motor.init()!
+    panic_hook = stop_wheels

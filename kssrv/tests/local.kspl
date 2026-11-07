@@ -65,6 +65,7 @@ fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_e
     stat_cases(port, auth, arena)!
     list_cases(port, auth, root, arena)!
     write_cases(port, auth, root, arena)!
+    move_cases(port, auth, root, arena)!
     dot_cases(port, auth, root, arena)!
     link_cases(port, auth, root, arena)!
     conditional_cases(port, auth, arena)!
@@ -370,6 +371,35 @@ priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     out: = client.put_file(port, "/api/file?path=%2e%2e/secret.txt", auth, "x", arena)!
     client.expect_status("PUT refuses outside the root too", out, 403, arena)
 
+priv fn move_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< a write that makes its one missing folder, and a move that never replaces a file
+    made: = client.put_file(port, "/api/file?path=memo-images/image-1.png", auth, "png\n", arena)!
+    client.expect_status("a write makes the one folder its file goes in", made, 200, arena)
+    deep: = client.put_file(port, "/api/file?path=none/deeper/a.png", auth, "x", arena)!
+    client.expect_status("but not a tree of folders", deep, 500, arena)
+    io.write_file(fs.join(root, "memo-image-2.png", arena), "two\n") catch panic("root writable")
+    moved: = client.post_json(port, "/api/move?from=memo-image-2.png&to=memo-images/image-2.png",
+        auth, "", client.DEFAULT_TIMEOUT_MS, arena)!
+    back: = client.get(port, "/api/file?path=memo-images/image-2.png", auth, arena)!
+    verdict.check("a move renames the file into the folder",
+        moved.status == 200 && back.body.equals("two\n") &&
+        !fs.exists(fs.join(root, "memo-image-2.png", arena)), client.shown(moved, arena))
+    io.write_file(fs.join(root, "memo-image-3.png", arena), "three\n") catch panic("root writable")
+    over: = client.post_json(port, "/api/move?from=memo-image-3.png&to=memo-images/image-1.png",
+        auth, "", client.DEFAULT_TIMEOUT_MS, arena)!
+    kept: = client.get(port, "/api/file?path=memo-images/image-1.png", auth, arena)!
+    verdict.check("a move never replaces a file standing at its target",
+        over.status == 409 && kept.body.equals("png\n"), client.shown(over, arena))
+    gone: = client.post_json(port, "/api/move?from=nothing.png&to=memo-images/x.png", auth, "",
+        client.DEFAULT_TIMEOUT_MS, arena)!
+    client.expect_status("a move of an absent file is 404", gone, 404, arena)
+    dot: = client.post_json(port, "/api/move?from=memo-image-3.png&to=.hidden-image.png", auth, "",
+        client.DEFAULT_TIMEOUT_MS, arena)!
+    client.expect_status("a move to a dot name is refused", dot, 403, arena)
+    out: = client.post_json(port, "/api/move?from=memo-image-3.png&to=%2e%2e/out.png", auth, "",
+        client.DEFAULT_TIMEOUT_MS, arena)!
+    client.expect_status("a move out of the root is refused", out, 403, arena)
+
 priv const DOT_RELS: U8[][2] = ::{ ".git/config", ".hidden" } //< the dot names a write tries
 priv const DOT_BODIES: U8[][2] = ::{ "[core]\n", "hidden\n" } //< what each holds before
 
@@ -451,6 +481,8 @@ priv fn files_only_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Htt
     // `docs/SPEC-local-server.md`).
     built: = client.post_json(port, "/api/build?path=mine.kspl", auth, "", 10000, arena)!
     client.expect_status("with no builder named, /api/build is not there", built, 404, arena)
+    allowed: = client.get(port, "/api/allow?path=mine.kspl", auth, arena)!
+    client.expect_status("with no builder named, /api/allow is not there", allowed, 404, arena)
 
 priv fn early_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< refuses a head before its body

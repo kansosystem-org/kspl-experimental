@@ -55,7 +55,7 @@ fn test_the_comment_marker() //< the mark is per extension, empty where that one
     // An extension without a line mark gets an empty one (`.md` has no comments, `.ld` only `/*
     // */`).
     assert(path_kind.comment_marker("README.md").len == 0, ".md holds no mark")
-    assert(path_kind.comment_marker("ksos/port/cortex_m/link.ld").len == 0, ".ld holds no mark")
+    assert(path_kind.comment_marker("lib/ksos/port/cortex_m/link.ld").len == 0, ".ld holds no mark")
     verdict.pass("the mark is chosen per extension, and one with none returns empty.")
 
 fn test_the_block_marks() //< a block comment's ends are per extension, empty where it has none
@@ -108,6 +108,11 @@ fn test_the_extension_and_the_top_folder() //< the extension, and the top tier's
     assert(path_kind.top_of("ksplc/base/core.kspl").equals("ksplc"),
         "the top tier is up to the first separator")
     assert(path_kind.top_of("Makefile").len == 0, "a file directly under the root is empty")
+    assert(path_kind.group_of("lib/ksai/docs/DESIGN-learning.md").equals("lib/ksai"),
+        "a package under lib/ is a group of its own")
+    assert(path_kind.group_of("lib/README.md").equals("lib"), "a file directly under lib/ is lib's")
+    assert(path_kind.group_of("ksplc/base/core.kspl").equals("ksplc"),
+        "elsewhere the group is the top-level folder")
     verdict
         .pass("the extension is the dot after the last separator; the top tier runs to the first.")
 
@@ -123,7 +128,7 @@ fn test_the_role_of_a_file() //< functional, test, tooling or prose, from the pa
     assert(path_kind.role_of("tools/tests/repo_test.kspl") == .test, "tools/tests/ is a test")
     assert(path_kind.role_of("tools/ci.kspl") == .tooling, "tools/ is tooling")
     assert(path_kind.role_of("mk/test.mk") == .tooling, "a make file is tooling")
-    assert(path_kind.role_of("ksos/Makefile") == .tooling, "a package's Makefile is tooling")
+    assert(path_kind.role_of("lib/ksos/Makefile") == .tooling, "a package's Makefile is tooling")
     assert(path_kind.role_of(".gitignore") == .tooling, "a file at the root is tooling")
     assert(path_kind.role_of("docs/SPEC-gates.md") == .prose, "a document is prose")
     assert(path_kind.role_of("ksmd/examples/notes.ksmd") == .prose, "data with no mark is prose")
@@ -388,11 +393,6 @@ fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
     assert(p.find_str("#   lint: NO VERDICT").is_some(), "a gate cut short with an empty log fell")
     verdict.pass("where nothing names a cause, the log's last lines stand in.")
 
-priv const CHILD_SLEEP: U8[] = "sleep 30" //<
-    //< What a fake gate does past the cap of one second
-    //< **Keep it far beyond the cap**, so a stop at the cap and a wait for the child's end differ
-    //< by more than a busy machine adds.
-
 priv const BEATS: I32 = 300 //<
     //< How many marks the fake gate's own child leaves, a tenth of a second apart (30 s or more)
 
@@ -569,161 +569,3 @@ fn test_a_switch_turned_off_lets_its_own_skips_through() //<
     assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KANSO_REQUIRE_NOPE", a).unwrap_or("")
         .equals("KANSO_REQUIRE_NOPE"), "a switch no row names is found, so the round refuses it")
     verdict.pass("a switch turned off lets its own skips through, and nothing else.")
-
-// ==========================================
-// Two gates side by side (`Gate.beside`)
-// **A mistake here hides a fall or mixes two gates' answers.** A pair started one after the other
-// costs only time; a partner's fall laid on the other gate, or left out of the digest, goes green.
-// ==========================================
-
-priv fn logs_of(st: ci_gates.Step, arena: Arena$@): U8[] //< a step's gates by name, joined by `+`
-    b: = arena.text()
-    for i in Range.asc(st.gates.len)
-        b.s("" if i == 0 else "+").s(st.gates.get(i).log)
-    return b.take()
-
-priv fn pairs_in(s: ci_gates.Set, platform: U8[], serial: Bool, arena: Arena$@): U8[] //<
-    //< The set's steps of more than one gate, each `a+b `; checks the steps hold each gate once
-    order: = ci_gates.run_order(false, arena)
-    $want: Sz = 0
-    for g in order
-        if s.runs(g, platform)
-            want += 1
-    $got: Sz = 0
-    pairs: = arena.text()
-    for st in ci_gates.steps(order@, s, platform, serial, arena)
-        got += st.gates.len
-        if st.gates.len > 1
-            pairs.s(logs_of(st, arena)).c(' ')
-    assert(got == want, "the steps hold every gate the set runs, each once")
-    return pairs.take()
-
-fn test_the_pair_starts_together_only_where_both_run(arena: Arena$@) //<
-    //< Race and the shipped build share a step where the set runs both, and nowhere else
-    verdict.start("[tools/ci_gates] which gates start side by side test...")
-    assert(ci_gates.pair_fault(arena).is_none(), "each partner is the row next to it, named back")
-    for p in U8[][]::{ "linux", "win32", "darwin" }
-        assert(pairs_in(.ci, p, false, arena).equals("race+selfhost_ship "),
-            "a whole round starts the pair together on every host")
-    assert(pairs_in(.ci_shard_linux, "linux", false, arena).equals("race+selfhost_ship "),
-        "so does the Linux job's shard")
-    for s in ci_gates.SET_ORDER
-        assert(pairs_in(s, "linux", true, arena).len == 0, "the serial switch runs each gate alone")
-    for p in U8[][]::{ "linux", "win32", "darwin" }
-        assert(pairs_in(.ci_shard_a, p, false, arena).len == 0, "the shared shards hold none")
-        assert(pairs_in(.ci_shard_b, p, false, arena).len == 0, "the shared shards hold none")
-        assert(pairs_in(.ci_macos, p, false, arena).len == 0, "macOS's set holds none")
-    verdict.pass("the pair starts together where its set runs both, and the switch parts it.")
-
-priv fn meet(dir: U8[], own: U8[], other: U8[], then: U8[], arena: Arena$@): U8[] //<
-    //< A shell body that leaves the mark `own`, waits for the mark `other`, then runs `then`
-    //< It sleeps a second before `then`, so each gate's time is a second or more.
-    fs.remove_path(arena.text().s(dir).c('/').s(own).s(".in").take()) catch {}
-    return arena.text().s("touch \"\{dir\}/\{own\}.in\"; ")
-        .s("while [ ! -e \"\{dir\}/\{other\}.in\" ]; do sleep 0.02; done; sleep 1; ").s(then).take()
-
-priv fn fake_gate(dir: U8[], name: U8[], body: U8[], arena: Arena$@): ci_gates.Capped //<
-    //< A gate whose command runs `body` in the shell, its output into its own log
-    log: = arena.text().s(dir).c('/').s(name).s(".log").take()
-    // The words outlive this call, so they go on the arena, not in a literal on its frame.
-    $argv: = List<|U8[]|>(arena)
-    argv.push("/bin/sh")
-    argv.push("-c")
-    argv
-        .push(arena.text().s("{ ").s(body).s("; } > \"").s(log).s("\" 2>&1").take())
-    return ci_gates.Capped::{ .argv = argv.slice(), .name = name, .log = log, .rc = 0,
-        .took_us = 0I64 }
-
-fn test_a_pair_runs_side_by_side_and_is_judged_apart(arena: Arena$@) //<
-    //< Both start at once, each ends with its own code and time, and each is judged by its own log
-    //< **Each fake gate waits for the other's mark before it ends.** One after the other, the first
-    //< would wait until its cap stops it. A time alone cannot tell a busy machine from that.
-    verdict.start("[tools/ci_gates] two gates side by side test...")
-    if sys.is_windows()
-        verdict.skip("it hands over shell command lines")
-        return
-    dir: = "out/tmp/kspl_ci_pair"
-    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
-    $runs: = List<|ci_gates.Capped|>(arena)
-    passes: = meet(dir, "race", "selfhost_ship", "echo 'RESULT: ALL PASS'", arena)
-    runs.push(fake_gate(dir, "race", passes, arena))
-    falls: =
-        meet(dir, "selfhost_ship", "race", "echo 'FAIL ship: the shipped C differs'; exit 3", arena)
-    runs.push(fake_gate(dir, "selfhost_ship", falls, arena))
-    ci_gates.run_capped_all(runs.slice(), 20I64, sys.mono_us())
-    race: = runs.get(0)
-    ship: = runs.get(1)
-    assert(race.rc != 1 && ship.rc != 1, "both start together, so each finds the other's mark")
-    assert(race.rc == 0 && ship.rc == 3, "each gate keeps its own exit code")
-    assert(race.took_us >= 900000I64 && ship.took_us >= 900000I64,
-        "each gate's time is its own, from the start to its end")
-    $outs: = List<|Outcome|>(arena)
-    for c in runs
-        ended: = arena.text().s("\{c.rc\} \{c.took_us / 1000000I64\}\n").take()
-        outs
-            .push(sample(c.name, io.read_file(c.log, arena) catch "", ended, arena))
-    assert(outs.get(0).ok && !outs.get(1).ok, "the partner of a fallen gate still passes")
-    p: = summarised(outs@, arena)
-    // **Each line carries its gate's own time, in whole seconds.** A busy machine adds to it.
-    race_line: = arena.text().s("#   race           PASS \{race.took_us / 1000000I64\}s").take()
-    assert(p.find_str(race_line).is_some(), "each gate has its own line")
-    ship_line: = arena.text().s("#   selfhost_ship  FAIL \{ship.took_us / 1000000I64\}s").take()
-    assert(p.find_str(ship_line).is_some(), "the fallen one is marked so")
-    assert(p.find_str("#   selfhost_ship: FAIL ship: the shipped C differs").is_some(),
-        "the fall's cause is read from that gate's own log")
-    assert(p.find_str("#   race:").is_none(), "no cause is laid on the gate that passed")
-    fs.remove_path(dir) catch {}
-    verdict.pass("two gates started together, and each was judged by its own code and log.")
-
-fn test_a_partner_past_its_cap_is_stopped_alone(arena: Arena$@) //<
-    //< Each gate has the cap to itself: the one past it is stopped, the other ends on its own
-    verdict.start("[tools/ci_gates] a gate past its cap beside another test...")
-    if sys.is_windows()
-        verdict.skip("it hands over shell command lines")
-        return
-    dir: = "out/tmp/kspl_ci_pair_cap"
-    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
-    $runs: = List<|ci_gates.Capped|>(arena)
-    runs.push(fake_gate(dir, "race", CHILD_SLEEP, arena))
-    runs.push(fake_gate(dir, "selfhost_ship", "echo 'RESULT: ALL PASS'", arena))
-    // **A gate waited out would end with 0**, so its code shows it was stopped at the cap.
-    ci_gates.run_capped_all(runs.slice(), 1I64, sys.mono_us())
-    assert(runs.get(0).rc == 1, "the gate past its cap is stopped there, and fails")
-    // **Its time is its own if it ended before the one stopped at the cap.** Given the pair's end,
-    // it would be the later of the two.
-    assert(runs.get(1).rc == 0 && runs.get(1).took_us < runs.get(0).took_us,
-        "its partner ended on its own, and its time is its own")
-    held: = io.read_file(runs.get(0).log, arena) catch ""
-    assert(held.ends_with("# gate race ran over 1 s and was stopped\n"),
-        "the cap's line ends the stopped gate's log")
-    assert((io.read_file(runs.get(1).log, arena) catch "").find_str("ran over").is_none(),
-        "and not its partner's")
-    fs.remove_path(dir) catch {}
-    verdict.pass("the gate past its cap was stopped, and its partner ended as it would alone.")
-
-fn test_a_failing_partner_with_stop_ends_the_round_after_both(arena: Arena$@) //<
-    //< With `--stop-at-first`, a pair's fall ends the round once both have ended, naming the fallen
-    verdict.start("[tools/ci_gates] a fallen gate of a pair with STOP=1 test...")
-    order: = ci_gates.run_order(true, arena)
-    $pair: ci_gates.Step? = .none
-    for st in ci_gates.steps(order@, .ci, "linux", false, arena)
-        if st.gates.len > 1
-            pair = .some(st)
-    switch pair
-    case .some(st)
-        $passed: = List<|Bool|>(arena)
-        passed.push(true)
-        passed.push(false)
-        assert(ci_gates.ends_round(st@, passed@, true).unwrap_or(st.gates.get(0)).log
-            .equals("selfhost_ship"), "the partner that fell ends the round, the other having run")
-        assert(ci_gates.ends_round(st@, passed@, false).is_none(),
-            "without the switch the round goes on")
-        passed.set(0, false)
-        assert(ci_gates.ends_round(st@, passed@, true).unwrap_or(st.gates.get(1)).log.equals("race"),
-            "where both fell, the first in the table's order is named")
-        passed.set(0, true)
-        passed.set(1, true)
-        assert(ci_gates.ends_round(st@, passed@, true).is_none(), "a pair that passed ends nothing")
-    case .none
-        assert(false, "the stopping order keeps the pair in one step")
-    verdict.pass("a pair's fall ends a STOP=1 round after both ended, naming the gate that fell.")

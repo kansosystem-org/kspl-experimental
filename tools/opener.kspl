@@ -72,6 +72,7 @@ struct Where //< every path this run needs, found once, and what it opens
         //< Caution: **Do not throw it away** (when it cannot start, it says what is missing).
     page: U8[] //< the page returned for `/`; without it nothing opens
     builder: U8[] //< the program the server builds a page's own functions with, or empty
+    allowed: U8[] //< where the server records the functions files the person allowed
 
 fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
     //< Finds the server and the paths next to it, for what `app` opens
@@ -99,9 +100,10 @@ fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
                     .lock = fs.join(tmp, named(app, ".lock", arena), arena),
                     .browser = fs.join(tmp, named(app, ".browser.log", arena), arena),
                     .page = fs.join(fs.join(home, app.built, arena), app.page, arena),
-                    .builder = builder }
+                    .builder = builder,
+                    .allowed = fs.join(tmp, named(app, ".allowed", arena), arena) }
     return Where::{ .app = app, .server = "", .tmp = "", .state = "", .lock = "", .browser = "",
-        .page = "", .builder = "" }
+        .page = "", .builder = "", .allowed = "" }
 
 priv fn named(app: aim.App, tail: U8[], arena: Arena$@): U8[] //< a file name in `tmp/`
     return arena.text().s(app.files).s(tail).take()
@@ -418,9 +420,11 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
         .push_all(U8[][]::{ where.server, serve_at, root, "--local",
         arena.text().s("--page=\{where.page\}").take() })
     // **A builder only where one stands beside the server**: without it the page builds nothing,
-    // and says so at the clause.
+    // and says so at the clause. **The record of allowed files stands beside the server**, with
+    // this tool's other notes, not in a workspace that a colleague can write.
     if where.builder.len > 0
         told.push(arena.text().s("--builder=\{where.builder\}").take())
+        told.push(arena.text().s("--allowed=\{where.allowed\}").take())
     if !show_only
         told.push(arena.text().s("--idle=\{IDLE_HOLD\}").take())
     argv: = told.slice()

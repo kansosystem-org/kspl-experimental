@@ -9,8 +9,9 @@
 // ==========================================
 // Usage:
 //     kssrv <port> <root> [--local] [--page=<file>] [--idle=<seconds>]
-//                         [--builder=<program>] [--cert=<chain.pem> --key=<key.pem>]
-// `--builder` needs `--local`; it answers `POST /api/build`.
+//                         [--builder=<program> --allowed=<file>]
+//                         [--cert=<chain.pem> --key=<key.pem>]
+// `--builder` needs `--local` and `--allowed`; it answers `/api/allow` and `POST /api/build`.
 // A port of 0 lets the system choose a free one; the line "listening on" names it.
 // ==========================================
 import "kssrv/api"
@@ -702,6 +703,7 @@ priv struct Options //< the command line, read and checked
     cert: U8[] //< the PEM certificate chain for HTTPS, or empty for plain HTTP
     key: U8[] //< the PEM private key for HTTPS, or empty
     builder: U8[] //< the program that builds a page's own functions, or empty
+    allowed: U8[] //< the record of the functions files the person allowed, or empty
 
 priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     //< Reads the command line into `o` and checks it; the exit code of a failure, or 0
@@ -712,6 +714,7 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     $cert: U8[] = ""
     $key: U8[] = ""
     $builder: U8[] = ""
+    $allowed: U8[] = ""
     cli: = argparse.Parser
         .create("kssrv",
         "serves the files under <root>, and JSON under /api/; port 0 takes a free port", arena)
@@ -728,6 +731,8 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     cli.str_opt("--key", key@, "the PEM private key of --cert, unencrypted, readable by you alone")
     cli.str_opt("--builder", builder@,
         "build a page's own functions with this program, for /api/build (needs --local)")
+    cli.str_opt("--allowed", allowed@,
+        "record here which functions files the person allowed to build (goes with --builder)")
     cli.parse_or_exit()
     if cli.rest.len != 2
         cli.print_usage(io.err())
@@ -783,8 +788,20 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         if ln: = lg.at(.error)
             ln.s("the builder cannot be started: \{builder\}")
         return 1
+    // Caution: **A builder and its record of allowed files come together.** A builder alone would
+    // build any file a page names; a record alone would change nothing.
+    if (builder.len > 0) != (allowed.len > 0)
+        lg.say(.error,
+            "--builder and --allowed go together: the server builds only the files the person \
+                allowed, and --allowed records them")
+        return 1
+    folder: = sys.get_dir_name(allowed)
+    if allowed.len > 0 && folder.len > 0 && !fs.is_dir(folder)
+        if ln: = lg.at(.error)
+            ln.s("the folder of --allowed does not exist: \{folder\}")
+        return 1
     o$ = Options::{ .port = I32::port64, .root = root, .page = page, .local = local,
-        .idle_s = idle_s, .cert = cert, .key = key, .builder = builder }
+        .idle_s = idle_s, .cert = cert, .key = key, .builder = builder, .allowed = allowed }
     return 0
 
 priv fn listen(host: U8[], port: I32, lg: Log$@): net.Tcp_listener$@!net.Net_error //<
@@ -871,7 +888,7 @@ fn main(): I32
     // The "listening on" line `announce` prints names the port, which `kssrv/tests/start.kspl`
     // waits for. If you change the line, fix that file too.
     $ctx: conn.Ctx = ::{ .root = o.root, .lg = lg@, .token = token, .page = o.page,
-        .builder = o.builder }
+        .builder = o.builder, .allowed = o.allowed }
 
     conn.stats.started_s = sys.wall_seconds()
     announce(o@, host, port, token, lg@)

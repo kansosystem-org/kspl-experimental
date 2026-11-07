@@ -4,15 +4,20 @@
 //< `make test` runs it and passes the server it built and a working directory.
 //< **On Windows the firewall prompt appears every time, and that is normal.** kssrv listens on
 //< 0.0.0.0, so Windows Defender asks permission for incoming connections.
+import "kssrv/tests/build"
 import "kssrv/tests/client"
 import "kssrv/tests/guard"
 import "kssrv/tests/https"
+import "kssrv/tests/kept"
 import "kssrv/tests/local"
 import "kssrv/tests/memory"
+import "kssrv/tests/paths"
 import "kssrv/tests/start" { Running, bring_up, read_log, start_server }
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
+import "std/fuzz"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str"
@@ -21,13 +26,16 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
+priv const RUN_AS: U8[] = "ksplc run tests/main.kspl" //< how this file is started
 priv const USAGE: U8[] = "usage: ksplc run tests/main.kspl <kssrv> <work_dir> [<run>] | --runs" //<
     //< the arguments, in order (`make test` in `kssrv/Makefile` passes them)
     //< With a run's name, only that run goes, to reproduce one by hand. `--RUNS` prints the names,
     //< one a line. So whoever picks one does not have to read them out of this file.
+    //< `--seed=N` and `--trials=N` set the generated cases of the run `paths` (`fuzz.declare`).
+    //< `--asan` and `--require-asan` say how the server was built (`fuzz.declare_asan`).
 
-priv const RUNS: U8[][8] = ::{ "outward", "https", "local", "linked", "page", "idle", "stop",
-    "memory" } //<
+priv const RUNS: U8[][9] = ::{ "outward", "https", "local", "linked", "page", "idle", "stop",
+    "memory", "paths" } //<
         //< The server runs, each a process of its own on a free port the system chose
 priv const PAGE_REL: U8[] = "ui/app.html" //< the page placed outside the root
     //< **Not under the root** (that is the case being tested).
@@ -74,14 +82,26 @@ fn main(): I32
         for r in RUNS
             io.out().s(r).c('\n')
         return 0
-    if argv.len != 3 && argv.len != 4
+    $o: = fuzz.Options::{ .trials = paths.TRIALS, .seed = paths.SEED }
+    p: = argparse.Parser.create(RUN_AS, "starts kssrv and checks it from outside", arena)
+    p.positional("<kssrv> <work_dir> [<run>]")
+    fuzz.declare(p, o@)
+    $a: = fuzz.Sanitized::{ .asan = false, .required = false }
+    fuzz.declare_asan(p, a@)
+    p.parse() catch e
+        panic(arena.dup_str(arena.text().s("\{e\}\n").s(USAGE).take()))
+    if p.rest.len != 2 && p.rest.len != 3
         panic(arena.dup_str(USAGE))
-    only: = arena.dup_str(argv.get(3)) if argv.len == 4 else ""
+    only: = arena.dup_str(p.rest.get(2)) if p.rest.len == 3 else ""
     if only.len > 0 && !known_run(only)
         panic(arena
             .dup_str(arena.text().s("no run is named '").s(only).s("'\n").s(USAGE).take()))
-    exe: = arena.dup_str(argv.get(1))
-    tmp: = arena.dup_str(argv.get(2))
+    // **Whether the server is sanitized is told where the run `paths` goes alone**, as `make
+    // test-fuzz` runs it. The other runs take the server `make test` builds, plain.
+    if only.equals("paths")
+        fuzz.report_asan(a)
+    exe: = arena.dup_str(p.rest.get(0))
+    tmp: = arena.dup_str(p.rest.get(1))
     root: = fs.join(tmp, "www", arena)
     fs.mkdir_all(root) catch
         panic("the place for the distributed files cannot be made")
@@ -89,7 +109,7 @@ fn main(): I32
         panic("the distributed files cannot be placed")
     fs.write_tree(tmp, U8[][]::OUTSIDE_RELS, U8[][]::OUTSIDE_BODIES, arena) catch
         panic("the file outside the root cannot be placed")
-    at: = Placed::{ .exe = exe, .root = root, .tmp = tmp }
+    at: = Placed::{ .exe = exe, .root = root, .tmp = tmp, .cases = o }
     for r in RUNS
         if only.len == 0 || only.equals(r)
             serve_run(r, at, arena)
@@ -105,6 +125,7 @@ priv struct Placed //< what the runs start, and where they work
     exe: U8[]
     root: U8[]
     tmp: U8[]
+    cases: fuzz.Options //< the seed and the count of the run `paths`
 
 priv fn link_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Checks that a link from inside the root to outside it cannot be followed
@@ -193,6 +214,31 @@ priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server ru
         serve_stop_and_check(at, arena)
     else if name.equals("memory")
         serve_memory_and_check(at, arena)
+    else if name.equals("paths")
+        serve_paths_and_check(at, arena)
+
+priv fn serve_paths_and_check(at: Placed, arena: Arena$@) //<
+    //< Throws generated paths at the door alone, then at a server for local use on a root of their
+    //< own (`kssrv/tests/paths.kspl`)
+    sc: paths.Scratch = paths.place(at.tmp, arena) catch
+        verdict.check("the scratch root for generated paths is placed", false, at.tmp)
+        return
+    if sc.links.len == 0
+        verdict.skip_check("generated paths meet a link inside the root",
+            "a link cannot be made with `ln -s` in this environment")
+    again: = arena.text().s(RUN_AS).s(" \"").s(at.exe).s("\" \"").s(at.tmp).s("\" paths").take()
+    paths.door_cases(sc, at.cases, again, arena)
+    through: = Placed::{ .exe = at.exe, .root = sc.root, .tmp = at.tmp, .cases = at.cases }
+    started: =
+        bring_up_local(through, "kssrv-paths", U8[][]::{},
+        "it comes into a state where it can answer generated paths",
+        "the server for generated paths puts the token out", arena)
+    if got: = started
+        $srv: = got.srv
+        paths.server_cases(srv.port, got.token, sc, at.cases, again, arena) catch e
+            srv.failed("it goes on answering generated paths", e.reason(), arena)
+        srv.stop()
+    paths.after_cases(sc, arena)
 
 priv fn serve_memory_and_check(at: Placed, arena: Arena$@) //<
     //< Checks that the server's heap comes back to the same figure after clients that misbehave
@@ -426,6 +472,17 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
     if c_b: = outward.child
         $bad_b: = c_b
         bad_b.kill()
+    // **Nor a builder with no record of the files the person allowed**: it would build any file.
+    unrecorded: =
+        start_server(exe, root, out_b, err_b,
+        U8[][]::{ "--local", arena.text().s("--builder=\{exe\}").take() }, arena)
+    said_unrecorded: = read_log(out_b, err_b, arena)
+    verdict.check("a builder without --allowed does not come up",
+        !unrecorded.child.is_some() && said_unrecorded.find_str("go together").is_some(),
+        said_unrecorded)
+    if c_u: = unrecorded.child
+        $bad_u: = c_u
+        bad_u.kill()
     // **A wait of 0 or less would read as "stay up"**, and one too large would wrap and stop it at
     // once; each is refused at the start.
     for wait in U8[][]::{ "0", "-5", "9300000000000" }
@@ -496,42 +553,26 @@ priv fn serve_local_and_check(at: Placed, arena: Arena$@) //<
         fifo_save_case(srv.port, got.token, at.root, arena) catch e2
             srv.failed("--local answers the save checked against a FIFO", e2.reason(), arena)
         srv.stop()
-    build_cut_case(at, arena)
+    build_and_check(at, arena)
 
-priv const BUILT_PAST_CAP: U8[] = "#!/bin/sh\nhead -c 16777217 /dev/zero\n" //<
-    //< A builder whose module is one byte past the 16 MiB that `/api/build` keeps
-
-priv fn build_cut_case(at: Placed, arena: Arena$@) //< a module past the cap is refused, not sent
-    //< **Sent with 200, a cut module would fail in the page with no reason given.**
-    name: = "a module past the cap is refused, not sent cut"
+priv fn build_and_check(at: Placed, arena: Arena$@) //<
+    //< Starts it with a stand-in builder and a record of allowed files, and checks both endpoints
+    name: = "the endpoints of a page's own functions"
     if sys.is_windows()
         verdict.skip_check(name,
             "the builder here is a shell script, which Windows does not start as a program")
         return
-    builder: = fs.join(at.tmp, "big_builder.sh", arena)
-    io.write_file(builder, BUILT_PAST_CAP) catch
+    flags: U8[][] = build.placed(at.tmp, arena) catch
         verdict.check(name, false, "the builder cannot be placed")
         return
-    _mode: = local.mode_column(builder, "755", arena)
-    io.write_file(fs.join(at.root, "mine.kspl", arena), "") catch
-        verdict.check(name, false, "the source cannot be placed")
-        return
     started: =
-        bring_up_local(at, "kssrv-build",
-        U8[][]::{ arena.text().s("--builder=\{builder\}").take() },
+        bring_up_local(at, "kssrv-build", flags,
         "it comes into a state where it can answer with --builder",
         "--builder puts the token out too", arena)
     if got: = started
         $srv: = got.srv
-        auth: = client.bearer_head(got.token, arena)
-        built: =
-            client.post_json(srv.port, "/api/build?path=mine.kspl", auth, "", 60000, arena) catch e
+        build.cases(srv.port, got.token, at.root, at.tmp, arena) catch e
             srv.failed(name, e.reason(), arena)
-            srv.stop()
-            return
-        verdict.check(name,
-            built.status == 422 && built.body.find_str("larger than").is_some(),
-            client.shown(built, arena))
         srv.stop()
 
 priv fn serve_linked_and_check(at: Placed, arena: Arena$@) //<
@@ -542,8 +583,8 @@ priv fn serve_linked_and_check(at: Placed, arena: Arena$@) //<
         verdict.skip_check("a root that is a link is served",
             "a link cannot be made with `ln -s` in this environment")
         return
-    through: = Placed::{ .exe = at.exe, .root = fs.join(at.tmp, "www-link", arena),
-        .tmp = at.tmp }
+    through: = Placed::{ .exe = at.exe, .root = fs.join(at.tmp, "www-link", arena), .tmp = at.tmp,
+        .cases = at.cases }
     started: =
         bring_up_local(through, "kssrv-linked", U8[][]::{},
         "it comes into a state where it can answer on a root that is a link",
@@ -585,52 +626,7 @@ priv fn run_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     serve_cases(port, arena)!
     api_cases(port, root, arena)!
     keepalive_cases(port, arena)!
-    kept_file_cases(port, arena)!
-
-priv const KEPT_ROUNDS: Sz = 10 //< how many answers one kept connection asks for in turn
-priv const KEPT_FILE_RATIO: I64 = 5I64 //<
-    //< how many times the same files on new connections they may take
-    //< **Far above what they take** (about as long or less: a new connection costs a connect too)
-    //< and **far below the fault**: a file whose head went out alone waited about 40 ms for the
-    //< client's delayed ACK, against a few ms for ten files on new connections.
-
-priv fn kept_round_us(port: I32, target: U8[], body: U8[], whole: Bool$@, arena: Arena$@):
-    I64!client.Http_end //<
-        //< How long `KEPT_ROUNDS` answers for `target` take on one kept connection [us]
-        //< `whole` turns false if one answer is not `body` with a 200.
-    defer $c: = client.Conn.open(port)!
-    started: = sys.mono_us()
-    for _i in Range.asc(KEPT_ROUNDS)
-        c.send(client.raw("GET", target, "", "", arena))!
-        got: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
-        if got.status != 200 || body.len > 0 && !got.body.equals(body)
-            whole$ = false
-    return sys.mono_us() - started
-
-priv fn fresh_round_us(port: I32, target: U8[], body: U8[], whole: Bool$@, arena: Arena$@):
-    I64!client.Http_end //<
-        //< How long `KEPT_ROUNDS` answers for `target` take, each on a connection of its own [us]
-        //< **A new connection's first answer waits for no ACK**: nothing it sent is unacknowledged
-        //< yet. So it pays the file's cost alone, which the kept connection pays too.
-    started: = sys.mono_us()
-    for _i in Range.asc(KEPT_ROUNDS)
-        got: = client.get(port, target, "Connection: close\r\n", arena)!
-        if got.status != 200 || !got.body.equals(body)
-            whole$ = false
-    return sys.mono_us() - started
-
-priv fn kept_file_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
-    //< Files asked for one after another on one kept connection come at once, not 40 ms apart
-    //< **Measured against the same files, each on a new connection, in the same run.** Both pay
-    //< what opening a file costs, which on Windows is many times an answer held in memory; only
-    //< the kept connection can meet the delayed ACK.
-    $whole: = true
-    fresh_us: = fresh_round_us(port, "/sub/one.txt", "one\n", whole@, arena)!
-    kept_us: = kept_round_us(port, "/sub/one.txt", "one\n", whole@, arena)!
-    verdict.check("files asked for in turn each come whole", whole, "")
-    verdict.check("files asked for in turn on one connection come as fast as on new connections",
-        kept_us <= (fresh_us + 1I64) * KEPT_FILE_RATIO,
-        arena.text().s("one connection \{kept_us\} us, new connections \{fresh_us\} us").take())
+    kept.file_cases(port, arena)!
 
 // --- static serving, percent-decoding, escaping outside the root ---
 priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end

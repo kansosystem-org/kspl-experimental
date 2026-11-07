@@ -445,6 +445,7 @@ fn main(): I32
 // EXPECT: 'Plain: Closer' requires 'close'. Move 'fn close' (line
 // EXPECT: 'Twice: Sizer' requires 'size'. Move 'fn size' (line
 // EXPECT: 'Held<|T|>: Sizer' requires 'size'. Move 'fn size' (line
+// EXPECT: 'Shower' declares no method 'size'. A block that names a trait holds only that trait's methods
 // EXPECT-NOT: 'Own: Closer' requires
 // EXPECT-NOT: 'Own: Marker' requires
 priv trait Closer
@@ -854,6 +855,38 @@ priv struct S
 impl S: Src
   fn get(r: Self@): I32
     return r.n + 1
+
+fn main(): I32
+  return 0
+// ==== case trait_block_foreign_method
+//< A block that names a trait holds only that trait's methods
+//< A misspelt method would otherwise pass beside the trait's default body, which would run in its
+//< place.
+// EXPECT: 'Greet' declares no method 'helo'. A block that names a trait holds only that trait's methods. Move 'fn helo' into the type's plain block 'impl P'
+pub trait Greet
+  fn hello(r: Self): I32
+    return 1
+
+pub struct P
+  pub n: I32
+
+impl P: Greet
+  pub fn helo(_r: Self): I32
+    return 2
+
+fn main(): I32
+  p: = P::{ .n = 0 }
+  return p.hello()
+// ==== case listed_trait_with_methods
+//< A header names several traits only when none of them declares a method
+//< A trait with methods keeps a block of its own, so its methods are not mixed with the type's.
+// EXPECT: 'Manual_free' declares methods, so it is met in a block of its own
+pub struct P
+  pub n: I32
+
+impl P: Move_only, Manual_free
+  pub fn get(r: Self@): I32
+    return r.n
 
 fn main(): I32
   return 0

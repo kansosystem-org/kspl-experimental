@@ -23,6 +23,7 @@
 
 * **A menu opens on a press of its name, not on pointing.** While one menu is open, pointing at another name opens that one. A flyout opens on pointing, on a press, or with Right.
 * **Esc, a press outside and a chosen command close every menu**, and the focus goes back where it was. The arrow keys move through the menus and flyouts.
+* **A menu taller than the window scrolls**, so its last item can still be reached. A flyout stands against the window beside its name, so a scrolling menu does not cut it off, and scrolling closes it.
 * **Edit holds Cut and Copy, which run the browser's own cut and copy.** So each acts as its key does where the focus stands, and a touch screen without keys reaches them.
 * **Paste stands after them, and reads the clipboard through the browser, as Excel for the web does.** It hands what it read to the place the focus stands, as a paste with Ctrl+V would. So it acts as Ctrl+V does there, through the same code.
   * **A browser may ask the person first, or refuse.** Without Paste, a person whose mouse is in hand, or who has no keys, has no way to paste.
@@ -124,7 +125,7 @@
 
 **An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
-**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** Each takes a PNG or a JPEG, asks for its alternate text, and writes the file beside the document under the first free name (`<name>-image-<n>.png`). Its clause goes in at the caret. The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one.
+**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** Each takes a PNG or a JPEG, asks nothing, and writes the file in the document's folder of images under the first free name (`<name>-images/image-<n>.png`). File ▸ Gather images into a folder moves the images written beside it before. Its clause goes in at the caret. The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one.
 
 **A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
 
@@ -365,6 +366,23 @@
 * **Colour rows by this column, in the Look flyout, colours each row by the choice that column holds.** Pressed again on that column, it stops. A column's colour rule stands over a row's colours.
 * **A column with choices opens its cells in a box of one line**, the only box a browser offers a list in. Other cells open in a text area that keeps line breaks.
 
+## AutoCorrect: dates and links as they are typed
+
+**A typed `11/6` or `2026/1/5` becomes a date, and a typed `https:` or `http:` address becomes text that links to it**, as Excel does. Each saves a step that people do by hand often.
+
+* **Each can be turned off, under Edit ▸ AutoCorrect.** Sometimes `11/6` is a ratio or a part number, and an address is only to be read. The choices are this browser's own, as the width is: they are how a person types, not part of the document.
+* **`Ctrl`+`Z` right after gives back the text as typed**, as Excel's AutoCorrect does. The editor records the typed text and the change as two steps (`set_cell` in `ksmd/edit/editor_tables.kspl`). So a change made once against the person's wish costs one key, not a trip to the settings.
+* **`2026-10-23`, the file's own form, is a date even with the choice off**, as a number is a number. A value in quotes is text whatever it looks like.
+* **A paste reads dates by the same choice, and makes no link.** A pasted column of addresses is data to be read, and a link on each would be a surprise.
+
+## An image's width, caption and alternate text
+
+**A drag of the square at an image's lower right corner sets its width, and so does Width… in its tools** (`images.js`). The width is a share of the text width, and the status line shows it while the corner moves. Width… takes a number, as Column width… does, so the keyboard reaches it too.
+
+* **Caption… and Alt text… stand beside Width…** and ask for the image's words, as they stand. A caption is what a reference names (`[#](#caption)`), so an image that a reference needs takes one there.
+* **Images with widths that fit share a row**, laid out as inline blocks of their share. A paragraph or a gap between them starts a new row.
+* **The square is left out of print and while read-only**, as the drawing tools are.
+
 ## A link in a cell
 
 **Insert ▸ Link… on a chosen cell links the cell's text**, and an empty answer takes the link away. The text shows as a link. It opens in a new tab on Ctrl+press, or on a press while read-only, as a link in the text does. A plain press chooses the cell, so it can still be edited.
@@ -440,7 +458,7 @@
 * **A divider ends a page.** Its line still shows at the page's end.
 * **The page always prints light, and the author's fills and colours print as the page shows them.** The browser would otherwise leave background colours out.
 * **A table keeps its columns' widths on paper.** A table wider than the paper prints smaller, so all its columns fit, and no text wraps to fit the paper. The paper is the one File, Page setup… names, else A4.
-* **The page says when a table will print smaller.** While editing, "Prints at 72% to fit the paper" stands beside the table's name. Before a print, the status bar names each such table. A shrunk table is harder to read, so the person learns of it before the paper does.
+* **The status bar says when a table will print smaller**: "this table prints at 72%" follows the page while the person works in it. Before a print, the status bar names each such table. A shrunk table is harder to read, so the person learns of it before the paper does. A note beside the table's name said so once. It stood there all the time, so a person who knew found it in the way.
 * **The row numbers' column keeps its place with no width**, so no value moves under another column's name.
 
 **Each page has a header and a footer of the page's own**, drawn with the margin boxes of CSS (`@page` in `print.css`).
@@ -546,7 +564,9 @@
 **View, Contents shows the document's headings in a panel at the window's left**, each indented by its level.
 
 * **A press on a heading scrolls to it, and puts the caret at its start.** A heading from an included file only scrolls, and its file's path stands beside it.
-* **The heading being read is marked as the page scrolls**: the last one above the top of the reading area.
+* **The heading being read is marked as the page scrolls**: the last one above the top of the reading area. One folded away marks the heading it is folded under.
+* **A heading with headings under it folds them away, and back, by the ▸/▾ button before it**, as Word's navigation pane does. With Alt, every heading of that level folds or unfolds, so a long document shows its chapters alone.
+* **A fold lasts while the heading keeps its level and text**, through edits elsewhere. It is not kept in the file, nor in the browser's storage: it is how one reads now.
 * **The list follows every edit.** An action that changes no heading builds no list.
 * **Whether the panel shows is kept in the browser's storage, for each viewer.** Where storage is off, the panel starts hidden.
 * **The edge between the panel and the document drags to change the panel's width**, from 160 to 480 pixels. The document keeps at least 400 pixels beside it. Below 48rem the panel lies over the document instead.
@@ -593,6 +613,10 @@ sequenceDiagram
     participant P as page script
     participant S as local server
     participant W as worker
+    P->>S: is the clause's file allowed, as it stands?
+    S-->>P: no
+    Note over P: the bar asks; cells show #BLOCKED!
+    P->>S: allow these bytes (the person's press)
     P->>S: build the clause's file
     S-->>P: the module, or the build's message
     P->>W: start the module
@@ -609,7 +633,12 @@ sequenceDiagram
 * **A worker that ran past its time, or stopped, is ended and started afresh.** A module stopped part-way may hold half-changed memory.
 * **The worker gets the module and nothing else.** Its one import throws, so a panic reaches the page as `#STOPPED!`; it cannot reach the document, the files or the network.
 * **An answer is kept by its call's bytes**, the name and every argument. So the same call is answered at once, and an argument changed asks again. After 4,096 answers, all are forgotten between two rounds.
-* **A functions file is fetched as an image is**: the page asks whether it stands, and keeps its bytes. When those bytes change, it is built again.
+* **A functions file is fetched as an image is**: the page asks whether it stands, and keeps its bytes. When those bytes change, the page asks the server again whether they are allowed.
+* **The server answers whether a file is allowed, by the bytes it would build.** The page asks before every build, and builds nothing while the answer is no. A build refused with 403 means the file changed since, and the page asks the person again.
+* **An allow names the bytes the page read**, by their digest, as a conditional write does. Bytes changed on disk since are refused with 409, so the person never allows a content they were not shown.
+* **The person's answers wait their turn.** A press on Allow or Stop allowing waits until the work before it ends, so two steps never change one file at once.
+* **The bar asks once per opening.** Not now and Stop allowing keep it shut for that file while the page stays open; the clause's box still offers Allow.
+* **The corner mark comes from the editor**, which reads each formula as the calculator does (`Own_functions.called`). A function's name inside quoted text is no call, so it marks nothing.
 
 ## What the editing page does not do yet
 

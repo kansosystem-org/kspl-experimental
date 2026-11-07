@@ -6,6 +6,7 @@
 //< a C string** to `ksplc/gen/c/literal.kspl` (one per layer).
 import "std/chars"
 import "std/checked_int"
+import "std/ds" { List }
 import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -126,45 +127,77 @@ priv struct Literal_walk //< where walk_literal stopped, and what was open there
     end: Sz //< past the closing quote, or where the walk stopped
     open: Sz //< where the innermost interpolation still open there opens (its `\`), or -1
 
+priv fn raw_end(src: U8[], at: Sz): Sz //< past the closing `"""` of the raw string at `at`
+    $r: = at + 3
+    for r < src.len && !src.starts_with("\"\"\"", r)
+        r += 1
+    return src.len if r >= src.len else r + 3
+
 priv fn walk_literal(src: U8[], at: Sz, stop: Sz): Literal_walk //<
     //< It walks the literal at `at` up to its end or to `stop`, whichever comes first
     //< **literal_end and interpolation_open_at both read through here**, so the two never disagree
-    //< on what an interpolation spans.
+    //< on what an interpolation spans. A string inside an interpolation is walked to its end even
+    //< past `stop`; where it ends past `stop`, the walk stops at its start.
+    //< **It walks with a list, not by recursion.** Each level of strings inside interpolations
+    //< would spend the stack, and a syntax error in a file with 100,000 levels crashed every tool.
     if at >= src.len
         return Literal_walk::{ .end = src.len, .open = -1 }
     if src.starts_with("\"\"\"", at)
-        $r: = at + 3
-        for r < src.len && !src.starts_with("\"\"\"", r)
-            r += 1
-        return Literal_walk::{ .end = src.len if r >= src.len else r + 3, .open = -1 }
-    quote: = src[at]
+        return Literal_walk::{ .end = raw_end(src, at), .open = -1 }
+    // The literal at `at` is the outermost. `outer` holds the open interpolations of each string
+    // around the one walked now, outermost first. It is empty while the outermost is walked.
+    // Only a plain string opens an interpolation, so each string around is a plain one.
+    defer $outer: = List<|Sz|>(null)
+    $quote: = src[at] // the quote of the literal walked now
+    $depth: Sz = 0 // the interpolations open in the literal walked now
+    $inner_at: Sz = -1 // where the literal directly inside the outermost one starts
     $j: = at + 1
-    $depth: Sz = 0
     $opens: Sz[MAX_OPEN_INTERPOLATIONS] = ::{}
-    for j < src.len && j < stop
+    for j < src.len
+        if outer.len == 0 && j >= stop
+            break
         c: = src[j]
         if c == '\\'
             // **A `\{` opens an interpolation only inside a double quote**; in `'\{'` it is a
             // character.
             if quote == '"' && j + 1 < src.len && src[j + 1] == '{'
-                if depth < MAX_OPEN_INTERPOLATIONS
+                if outer.len == 0 && depth < MAX_OPEN_INTERPOLATIONS
                     opens[depth] = j
                 depth += 1
             else if depth > 0 && j + 1 < src.len && src[j + 1] == '}'
                 depth -= 1
             j += 2
             continue
+        $end: Sz = -1 // where a literal inside the outermost one ends, once it has
         if depth > 0 && (c == '"' || c == '\'')
-            inner: = literal_end(src, j)
-            if inner > stop
-                break
-            j = inner
+            if outer.len == 0
+                inner_at = j
+            if !src.starts_with("\"\"\"", j)
+                outer.push(depth)
+                quote = c
+                depth = 0
+                j += 1
+                continue
+            end = raw_end(src, j)
+        else if depth == 0 && (c == quote || (quote == '\'' && c == '\n'))
+            closed: = j + 1 if c == quote else j
+            if outer.len == 0
+                return Literal_walk::{ .end = closed, .open = -1 }
+            if d: = outer.pop()
+                depth = d
+            quote = '"'
+            end = closed
+        if end < 0
+            j += 1
             continue
-        if depth == 0 && c == quote
-            return Literal_walk::{ .end = j + 1, .open = -1 }
-        if depth == 0 && quote == '\'' && c == '\n'
-            return Literal_walk::{ .end = j, .open = -1 }
-        j += 1
+        if outer.len == 0 && end > stop
+            j = inner_at
+            break
+        j = end
+    if outer.len > 0
+        // The text ran out inside a literal within the outermost one, which ends there too.
+        depth = outer.get(0)
+        j = inner_at if src.len > stop else src.len
     open: = opens[depth - 1] if depth > 0 && depth <= MAX_OPEN_INTERPOLATIONS else -1
     return Literal_walk::{ .end = math.min(j, src.len), .open = open }
 

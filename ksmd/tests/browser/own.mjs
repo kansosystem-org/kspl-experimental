@@ -3,12 +3,21 @@
 // panic, a file the build refuses, and one that reaches outside its build, each shown where a
 // person looks: the cell and the clause's box.
 // Insert, Include is here too: it picks or starts a file through the same dialog.
-// `own(t)` takes `served.mjs`'s helpers, and returns its sections.
+// Each file is allowed first, as a person does at the bar (`trust.mjs` checks the question).
+// `own(t)` takes `served.mjs`'s helpers, and returns its sections and those of `trust.mjs`.
 import fs from "fs";
 import path from "path";
 import { SHIFT, verdict } from "./drive.mjs";
+import { trust } from "./trust.mjs";
 
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
+const read = (file) => {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (_) {
+    return null;
+  }
+};
 const H = "%ksmd 1\n\n";
 const MINE = `//< Functions for the test
 import "std/mem" { Arena }
@@ -38,8 +47,27 @@ const SHEET = `${H}:::functions path="mine.kspl"\n:::\n\n:::table name="t"\n| "a
   "| 1 | =forever(A4) |\n| 3 | =boom(A5) |\n:::\n";
 const REFUSED = `${H}:::functions path="taken.kspl"\n:::\n`;
 const PLAIN = `${H}Text.\n`;
+// Records, in the page, each focus, key, input and new table as it comes, in `window.__seen`.
+const RECORD = `(() => {
+  const seen = window.__seen = [];
+  const who = (t) => (t && (t.className || t.tagName)) || "none";
+  for (const k of ["focusin", "keydown", "beforeinput", "input"]) {
+    document.addEventListener(k, (e) => seen.push(k + ":" + (e.key || e.data || "") + "@" + who(e.target) +
+      (e.target && "value" in e.target ? "=" + e.target.value : "")), true);
+  }
+  new MutationObserver((list) => {
+    if (list.some((m) => [...m.addedNodes].some((n) => n.querySelector && n.querySelector("td"))))
+      seen.push("drawn");
+  }).observe(document.getElementById("doc"), { childList: true, subtree: true });
+})()`;
 
-export function own({ tab, idle, said }) {
+export function own(helpers) {
+  const { tab, idle, said } = helpers;
+  // Allows the open document's functions at the bar, once it asks.
+  const allow = async (d) => {
+    await d.until("!document.querySelector('.own-ask').hidden", 20000);
+    await d.click(".own-ask .own-allow");
+  };
   const cell = (d, r) => d.js(`document.querySelector('#doc td[data-r="${r}"][data-c="1"]').textContent`);
   const box = (d) => d.js("document.querySelector('#doc .functions .functions-state').textContent");
 
@@ -66,6 +94,7 @@ export function own({ tab, idle, said }) {
       fs.writeFileSync(path.join(ctx.root, "mine.kspl"), MINE);
       fs.writeFileSync(path.join(ctx.root, "sheet.ksmd"), SHEET);
       const d = await tab(ctx, "?doc=sheet.ksmd");
+      await allow(d);
       check(await d.until("document.querySelector('#doc .functions .functions-state')" +
         ".textContent.startsWith('A formula can call')", 60000),
       "the clause's box names the functions its file gives", await box(d));
@@ -95,16 +124,28 @@ export function own({ tab, idle, said }) {
       check(await d.until(`document.querySelector('#doc td[data-r="4"][data-c="1"]').textContent === "#STOPPED!"`,
         15000), "a function that panics shows #STOPPED!", await cell(d, 4));
       // The worker that stopped starts afresh, so the next call still answers.
+      // A failure says where the typed keys went: what the open cell held before Enter, where the
+      // focus stood, and the row as the document holds it. Twice on Windows the row came out
+      // empty or as text, which the worker alone cannot do.
+      // A failure also gives the record of where each key and each focus went, and when the table
+      // was drawn again: the third failure showed the first key alone lost, the box holding `00`.
+      await d.js(RECORD);
       await d.click('#doc td[data-r="0"][data-c="0"]');
       await d.type("200");
+      const typed = await d.js("JSON.stringify({ open: (document.querySelector('#doc .cell-input') || " +
+        "{ value: null }).value, focus: document.activeElement.className || document.activeElement.tagName, " +
+        "seen: window.__seen.join(' ') })");
       await d.press("Enter");
       check(await d.until(`document.querySelector('#doc td[data-r="0"][data-c="1"]').textContent === "220"`,
-        15000), "after a panic, a later call answers from a new worker", await cell(d, 0));
+        15000), "after a panic, a later call answers from a new worker",
+      `${await cell(d, 0)}; typed ${typed}; row ` +
+        await d.js("ksmd.source().split('\\n').find((l) => l.includes('=tax(A1)'))"));
       await ctx.browser.closeTab(d.page);
 
       fs.writeFileSync(path.join(ctx.root, "taken.kspl"), TAKEN);
       fs.writeFileSync(path.join(ctx.root, "refused.ksmd"), REFUSED);
       const r = await tab(ctx, "?doc=refused.ksmd");
+      await allow(r);
       check(await r.until("!!document.querySelector('#doc .functions .functions-state.problem')", 60000) &&
         (await box(r)).includes("taken.kspl") && (await box(r)).includes("`sum`"),
       "a file giving a name ksmd has is refused at its clause, naming the file and the name",
@@ -126,8 +167,10 @@ export function own({ tab, idle, said }) {
         "Insert, Functions starts a functions file beside the document", String(started));
       check(await p.js("ksmd.source()").then((s) => s.includes(':::functions path="functions.kspl"')),
         "and puts its clause at the caret", await p.js("ksmd.source()"));
+      await p.until("!!document.querySelector('#doc .functions .functions-allow')", 20000);
+      await p.click("#doc .functions .functions-allow");
       check(await p.until("(document.querySelector('#doc .functions .functions-state') || {})" +
-        ".textContent === 'A formula can call: twice.'", 60000),
+        ".textContent.startsWith('A formula can call: twice.')", 60000),
       "and the clause's box lists the function the new file gives", await box(p));
       await ctx.browser.closeTab(p.page);
     },
@@ -160,20 +203,26 @@ export function own({ tab, idle, said }) {
         fs.writeFileSync(path.join(ctx.root, `closed/${name}.kspl`), text);
         fs.writeFileSync(path.join(ctx.root, `closed/${name}.ksmd`), `${H}:::functions path="${name}.kspl"\n:::\n`);
         const d = await tab(ctx, `?doc=closed/${name}.ksmd`);
+        await allow(d);
         const refused = await d.until("!!document.querySelector('#doc .functions .functions-state.problem')", 60000);
         const shown = await box(d);
         check(refused && shown.includes(`closed/${name}.kspl`) && shown.includes(why),
           `a functions file with ${what} is refused at its clause, naming the file and why`, shown);
         const answer = await d.js(`fetch("/api/build?path=${encodeURIComponent(`closed/${name}.kspl`)}",
           { method: "POST", headers: { Authorization: "Bearer " + sessionStorage.getItem("ksmd.token") } })
-          .then((r) => r.text())`);
-        check(!(await d.js("document.documentElement.outerHTML")).includes(secret) && !answer.includes(secret),
-          "and nothing of the file outside reaches the page", answer);
+          .then((r) => r.text(), (e) => "no answer: " + e.message)`);
+        // Once on Windows the request got no answer at all. The server's last lines say why.
+        const log = answer.startsWith("no answer: ") ? ` | kssrv: ${(read(path.join(ctx.work, "kssrv.log")) || "")
+          .trim().split("\n").slice(-6).join(" / ")}` : "";
+        check(!(await d.js("document.documentElement.outerHTML")).includes(secret) && !answer.includes(secret) &&
+          !answer.startsWith("no answer: "), "and nothing of the file outside reaches the page", answer + log);
         await ctx.browser.closeTab(d.page);
       }
       fs.rmSync(path.join(ctx.root, "closed"), { recursive: true, force: true });
       fs.rmSync(path.join(ctx.root, "secret.txt"), { force: true });
     },
+
+    ...trust(helpers),
 
     async includeInsert(ctx) {
       fs.mkdirSync(path.join(ctx.root, "host/sub"), { recursive: true });

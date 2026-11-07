@@ -1,0 +1,708 @@
+//< Throws generated paths at the path checks and at `kssrv --local`, and checks what always holds
+//< For local use; not a suite; part of `kssrv/tests/main.kspl` (the run `paths`).
+//< **Each hole found in review so far was one form nobody had listed** (a short name, an empty
+//< step, a `\`). So this builds paths from many pieces at random and checks the outcome, not the
+//< form: nothing outside the root is reached, and no write lands on a dot name.
+//< **The same seed gives the same paths.** A failure prints the seed and the case, and the line
+//< that runs it again. `make test` replays one fixed seed; `make test-fuzz` runs more cases.
+//< Caution: **The Windows reading is checked on every OS.** The text checks do not depend on the
+//< OS, so a path that Windows would read as another name fails here on Linux too.
+import "kssrv/api"
+import "kssrv/tests/client"
+import "kssrv/tests/local"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/fuzz"
+import "std/io"
+import "std/mem" { Arena }
+import "std/prng" { Prng }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/url"
+import "std/verdict"
+
+const SEED: I64 = 20261107 //< the seed `make test` replays, so a regression fails the same way
+const TRIALS: I64 = 500 //< how many requests `make test` sends to the server
+priv const PURE_PER_TRIAL: Sz = 20 //< how many paths go to the door for each request sent
+    //< The door alone answers in microseconds, so it takes many more cases than the server.
+
+priv const SLOW_RATIO: I64 = 50I64 //<
+    //< how many times a plain path's time one generated path may take, at the door or the server
+    //< **Far above the noise and far below the fault**, as in `kssrv/tests/kept.kspl`. Thousands
+    //< of `/` once cost 19 ms a request, some 100 times a plain one.
+    //< **The bound grows with the path's steps**: the door asks the file system about each step,
+    //< so 800 steps cost 800 such calls. On Windows one call takes about 15 us, and such a path
+    //< took 12 ms against 55 us for a plain path of two steps.
+priv const PLAIN_REL: U8[] = "sub/b.txt" //< the plain path the door's time is matched against
+priv const SLOW_FLOOR_US: I64 = 5000I64 //< the bound when a plain path is too quick to measure
+priv const SLOW_TRIES: Sz = 3 //< how many times a slow case is measured; the fastest counts
+
+priv const OUTSIDE_MARK: U8[] = "OUTSIDE-ROOT-7f3a" //< what the file outside the root holds
+    //< No generated body holds it, so an answer that holds it read outside the root.
+priv const OUTSIDE_SIZE: Sz = 7777 //< the file's size, which no file under the root has
+    //< A `/api/stat` answer with this size statted the file outside.
+priv const OUTSIDE_ONLY: U8[] = "zz-outside-only.txt" //< a name that stands only outside the root
+    //< No piece names it, so a listing that holds it listed outside the root.
+
+priv const PLAIN: U8[][8] = ::{ "a.txt", "sub", "b.txt", "new.txt", "dir", "x", "data-1_2",
+    "%E3%81%8B%E3%82%93%E3%81%9D.txt" } //<
+        //< Names that are safe on every OS, percent-encoded; a path of these alone must be taken
+
+// Names that some OS reads as another name, a climb or a device, percent-encoded and in kinds.
+// **A path draws a kind first**, so a kind of few names comes up as often as one of many.
+// `%252e%252e` is the text `%2e%2e` after the server's one decode: a second decode would make it
+// `..`.
+priv const CLIMBS: U8[][_] = ::{ "..", ".", "", "...", ". .", "..%20", "%20..", "..%5C..",
+    "%252e%252e", "%252f", "%5C" }
+priv const DOTS: U8[][_] = ::{ ".git", ".env", ".well-known", ".x", "..git", ".git%5Cconfig" }
+priv const STANDING: U8[][_] = ::{ "up", "peek.txt", "secret.txt", "outside", "config", "dir",
+    "index.html", "UP", "Peek.TXT" } //< names that stand in the scratch tree, links among them
+priv const DEVICE_NAMES: U8[][_] = ::{ "CON", "nul.txt", "COM1", "lpt9.log", "CON%20.txt", "conin$",
+    "AUX.", "COM%C2%B9", "Con", "com0" }
+priv const SHORTS: U8[][_] = ::{ "ENV~1", "GIT~1", "a~1b", "~", "a~", "WELL-K~1", "UP~1",
+    "PEEK~1.TXT" }
+priv const TAILS: U8[][_] = ::{ "a.", "a%20", "a.%20", "a%09", "b.txt::$DATA", "a:b", ":", "c:",
+    "C:", ".git::$INDEX_ALLOCATION", "up:x" }
+priv const WILDS: U8[][_] = ::{ "*", "a?b", "%3C", "%3E", "%22", "|", "up*", ".gi?" }
+priv const BYTES: U8[][_] = ::{ "%00", "a%00.git", "%01", "%7F", "%0D%0A", "%C0%AE%C0%AE", "%C0%AF",
+    "%E0%80%AE", "%EF%BC%8E%EF%BC%8E", "%E2%80%8C.git", "%FF", "%E3%81%8B", "%5C%5Chost%5Cshare" }
+
+priv const KINDS_THAT_STAND: Sz = 3 //<
+    //< How many kinds `words` lists first whose names stand or climb: `CLIMBS`, `DOTS`, `STANDING`
+
+priv const STARTS: U8[][8] = ::{ "/", "//host/share/", "%5C%5C%3F%5CC%3A%5C", "%5C%5C.%5C", "C:",
+    "c:/", "C:%5C", "%5C" } //<
+        //< How a path can open as a root on some OS, percent-encoded
+
+priv const SEPS: U8[][5] = ::{ "//", "%5C", "///", "/%5C", "/./" } //<
+    //< What can stand between two names besides one `/`, percent-encoded
+
+priv const MOVES: U8[] = "moves" //<
+    //< The folder each move starts from or ends in, apart from the generated paths
+    //< **No piece names it**, so the files the moves leave do not slow the listings the cases ask
+    //< for.
+
+priv const SHOWN: U8[][1] = ::{ ".well-known" } //<
+    //< The dot name static serving shows; none stands in the scratch root, so a path through one
+    //< is still absent
+
+struct Scratch //< the folders a run of these checks makes, and what they hold
+    base: U8[] //< the folder that holds the two below
+    root: U8[] //< the root the server serves
+    outside: U8[] //< a folder beside the root, which nothing may reach
+    links: U8[][] //< the links under the root that were made; empty where none can be
+    folds_case: Bool //< the root's file system finds a name in either ASCII case (Windows, macOS)
+    before: U8[] //< what lies outside the root and on its dot names, before the checks
+
+struct Words //< the pieces, decoded once
+    plain: U8[][]
+    odd: U8[][][] //< the odd names, by kind
+    starts: U8[][]
+    seps: U8[][]
+
+struct Made //< one generated path
+    rel: U8[] //< the path as the server reads it, after its one decode
+    plain: Bool //< made of plain names and single `/` alone, so the door must take it
+
+// ==========================================
+// The scratch tree
+// ==========================================
+
+fn place(tmp: U8[], arena: Arena$@): Scratch? //<
+    //< Makes a fresh root beside a folder outside it, with dot names and links inside
+    //< None where the files cannot be made.
+    base: = fs.mkdir_unique(tmp, "paths-", arena) catch
+        return .none
+    root: = fs.join(base, "root", arena)
+    outside: = fs.join(base, "outside", arena)
+    secret: = arena.text().s(OUTSIDE_MARK)
+    for _i in Range.asc(OUTSIDE_SIZE - OUTSIDE_MARK.len)
+        secret.c('s')
+    fs.write_tree(outside, U8[][]::{ "secret.txt", OUTSIDE_ONLY },
+        U8[][]::{ secret.take(), "only\n" }, arena) catch
+        return .none
+    fs.write_tree(root,
+        U8[][]::{ "index.html", "a.txt", "sub/b.txt", ".git/config", ".env", "dir/x", "moves/m" },
+        U8[][]::{ "page\n", "a\n", "b\n", "[core]\n", "KEY=1\n", "x\n", "m\n" }, arena) catch
+        return .none
+    $links: = List<|U8[]|>(arena)
+    if local.make_link(root, "up", "../outside", arena)
+        links.push("up")
+    if local.make_link(root, "sub/peek.txt", "../../outside/secret.txt", arena)
+        links.push("sub/peek.txt")
+    // **A link is found by name as this disk finds it**: `UP` is the link `up` only where the
+    // disk folds case, whichever OS's reading the text is put to.
+    folds: = fs.exists(fs.join(root, "INDEX.HTML", arena))
+    $sc: = Scratch::{ .base = base, .root = root, .outside = outside, .links = links.slice(),
+        .folds_case = folds, .before = "" }
+    sc.before = snapshot(sc, arena)
+    return .some(sc)
+
+fn words(arena: Arena$@): Words //< the pieces, each decoded as the server decodes a query
+    $odd: = List<|U8[][]|>(arena)
+    for kind in U8[][][]::{ U8[][]::CLIMBS, U8[][]::DOTS, U8[][]::STANDING, U8[][]::DEVICES,
+        U8[][]::SHORTS, U8[][]::TAILS, U8[][]::WILDS, U8[][]::BYTES }
+        odd.push(decoded(kind, arena))
+    return Words::{ .plain = decoded(U8[][]::PLAIN, arena), .odd = odd.slice(),
+        .starts = decoded(U8[][]::STARTS, arena), .seps = decoded(U8[][]::SEPS, arena) }
+
+priv fn decoded(list: U8[][], arena: Arena$@): U8[][]
+    $out: = List<|U8[]|>(arena)
+    for one in list
+        out.push(url.decode_component(one, arena) catch panic("a piece is not well encoded"))
+    return out.slice()
+
+fn snapshot(sc: Scratch, arena: Arena$@): U8[] //<
+    //< What lies outside the root and on every dot name under it, as one text to compare
+    //< The listing of the folder that holds the root, the outside folder's files with their bytes,
+    //< and each dot name under the root with its bytes. A link is noted, never followed.
+    out: = arena.text()
+    for name in sorted_dir(sc.base, arena)
+        out.s("base ").s(name).c('\n')
+    for name in sorted_dir(sc.outside, arena)
+        bytes: = io.read_file(fs.join(sc.outside, name, arena), arena) catch "?"
+        out.s("outside ").s(name).s(" \{bytes.len\} ").s(bytes.sub(0, 32)).c('\n')
+    dot_entries(sc.root, "", false, out, arena)
+    return out.take()
+
+priv fn sorted_dir(dir: U8[], arena: Arena$@): U8[][]
+    $sorted: = List<|U8[]|>(arena)
+    names: = fs.read_dir(dir, arena) catch
+        sorted.push("(cannot be read)")
+        return sorted.slice()
+    sorted = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
+        return a.compare(b$);
+    }, arena)
+    return sorted.slice()
+
+priv fn dot_entries(dir: U8[], rel: U8[], in_dot: Bool, out: str.Arena_text$@, arena: Arena$@) //<
+    //< Notes every entry under `dir` that is a dot name or stands in one, with a file's bytes
+    for name in sorted_dir(dir, arena)
+        full: = fs.join(dir, name, arena)
+        at: =
+            (name if rel.len == 0
+            else arena.text().s(rel).c('/').s(name).take())
+        dot: = in_dot || name.starts_with(".")
+        if fs.is_link(full)
+            if dot
+                out.s("link ").s(at).c('\n')
+            continue
+        if fs.is_dir(full)
+            if dot
+                out.s("folder ").s(at).c('\n')
+            dot_entries(full, at, dot, out, arena)
+        else if dot
+            bytes: = io.read_file(full, arena) catch "?"
+            out.s("file ").s(at).c(' ').s(bytes).c('\n')
+
+// ==========================================
+// The generator
+// ==========================================
+
+priv fn pick(r: Prng$@, list: U8[][]): U8[] //< one of the list, at random
+    return list[r.below(list.len)]
+
+fn generate(r: Prng$@, w: Words@, arena: Arena$@): Made //< one path, built from the pieces
+    //< **Most paths hold one odd part among plain names**: a path with several is refused for the
+    //< first, and the rest go unchecked. Some hold none, and some hold many.
+    b: = arena.text()
+    // A long run of `/`, or a path of many steps: each cost time once.
+    if r.chance(2)
+        b.s(pick(r, w.plain))
+        for _i in Range.asc(r.below(6000) + 500)
+            b.c('/')
+        b.s(pick(r, w.plain))
+        return Made::{ .rel = b.take(), .plain = false }
+    if r.chance(2)
+        $plain: = true
+        for i in Range.asc(r.below(3000) + 200)
+            if i > 0
+                b.c('/')
+            if r.chance(1)
+                b.s(odd_name(r, w))
+                plain = false
+            else
+                b.s(pick(r, w.plain))
+        return Made::{ .rel = b.take(), .plain = plain }
+    steps: = r.below(4) + 1
+    many: = r.chance(20)
+    none: = !many && r.chance(20)
+    // Where the one odd part goes: a step's name, a separator, the start or a name's tail.
+    odd_at: = r.below(steps)
+    odd_how: = r.below(10)
+    $plain: = true
+    if many && r.chance(15) || !many && !none && odd_how == 9
+        b.s(pick(r, w.starts))
+        plain = false
+    for i in Range.asc(steps)
+        if i > 0
+            if many && r.chance(15) || !many && !none && odd_how == 8 && i == odd_at
+                b.s(pick(r, w.seps))
+                plain = false
+            else
+                b.c('/')
+        tail: = many && r.chance(10) || !many && !none && odd_how == 7 && i == odd_at
+        if many && r.chance(40) || !many && !none && odd_how < 7 && i == odd_at
+            b.s(odd_name(r, w))
+            plain = false
+        else if tail && r.chance(50)
+            // A name that stands, so the tail Windows drops leaves a link or a dot name.
+            b.s(pick(r, w.odd[r.below(KINDS_THAT_STAND)]))
+            plain = false
+        else
+            b.s(pick(r, w.plain))
+        // A name with a tail Windows drops or reads apart (`a.txt.`, `a.txt::$DATA`).
+        if tail
+            b.s(pick(r, U8[][]::{ ".", " ", "::$DATA", "~1", ":x", "\u3000" }))
+            plain = false
+    if r.chance(4)
+        b.c('/')
+        plain = false
+    return Made::{ .rel = b.take(), .plain = plain }
+
+priv fn odd_name(r: Prng$@, w: Words@): U8[] //< an odd name: a kind first, then one of it
+    return pick(r, w.odd[r.below(w.odd.len)])
+
+priv fn encoded(rel: U8[], r: Prng$@, arena: Arena$@): U8[] //<
+    //< The path as a request carries it: some bytes percent-encoded in either case, some not
+    //< Now and then a broken `%` stands in it, which the server must refuse with a 400.
+    b: = arena.text()
+    for c in rel
+        safe: = c.is_alnum() || c == '-' || c == '.' || c == '~'
+        if safe && !r.chance(10) || c == '/' && !r.chance(30)
+            b.c(c)
+            continue
+        b.c('%').c(hex_digit(c >> 4, r.chance(50))).c(hex_digit(c & 0x0FU8, r.chance(50)))
+    if r.chance(1)
+        b.s(pick(r, U8[][]::{ "%", "%G1", "%2" }))
+    return b.take()
+
+priv fn hex_digit(n: U8, upper: Bool): U8
+    if n < 10U8
+        return '0' + n
+    return (('A' if upper else 'a') + n) - 10U8
+
+fn shown(rel: U8[], arena: Arena$@): U8[] //< a path as a failure prints it: other bytes as `%XX`
+    b: = arena.text()
+    for c in rel
+        if c > ' ' && c < 0x7FU8 && c != '%'
+            b.c(c)
+        else
+            b.c('%').c(hex_digit(c >> 4, true)).c(hex_digit(c & 0x0FU8, true))
+    whole: = b.take()
+    if whole.len <= 160
+        return whole
+    return arena.text().s(whole.sub(0, 160)).s("... (\{rel.len\} bytes)").take()
+
+// ==========================================
+// What an OS reads a path as
+// **This is the model the door is held to**, written apart from it: it follows how each OS reads
+// the text, not the door's list of forms. The door may refuse more; it must refuse all that this
+// finds harmful.
+// ==========================================
+
+priv const DEVICES: U8[][6] = ::{ "con", "prn", "aux", "nul", "conin$", "conout$" }
+
+priv fn is_device(name: U8[]): Bool //< whether Windows opens the name as a device
+    base: = name.sub(0, name.find_char('.').unwrap_or(name.len)).trim_end()
+    for d in DEVICES
+        if base.equals_ignore_case(d)
+            return true
+    if base.len < 4 ||
+        !base.sub(0, 3).equals_ignore_case("com") &&
+        !base.sub(0, 3).equals_ignore_case("lpt")
+        return false
+    tail: = base.sub_from(3)
+    return tail.len == 1 && tail[0].is_digit() || tail.equals("\u00B9") ||
+        tail.equals("\u00B2") || tail.equals("\u00B3")
+
+priv fn only_dots_and_spaces(name: U8[]): Sz? //< how many dots, where nothing else stands in it
+    $dots: Sz = 0
+    for c in name
+        if c == '.'
+            dots += 1
+        else if c != ' '
+            return .none
+    return .some(dots)
+
+fn harm(rel: U8[], windows: Bool, dots_refused: Bool, sc: Scratch@, arena: Arena$@): U8[] //<
+    //< Why the path, read as POSIX or Windows reads it, would reach what the door keeps back
+    //< Empty where it would not. It reads a NUL as the end, as the C call does.
+    text: = rel.sub(0, rel.find_char(0U8).unwrap_or(rel.len))
+    if text.len == 0
+        return ""
+    if text[0] == '/' || windows && text[0] == '\\'
+        return "it opens at a root"
+    if windows && text.len >= 2 && text[1] == ':'
+        return "it opens with a drive"
+    $stack: = List<|U8[]|>(arena)
+    $start: Sz = 0
+    for start <= text.len
+        $end: = start
+        for end < text.len && text[end] != '/' && !(windows && text[end] == '\\')
+            end += 1
+        $name: = text.sub(start, end - start)
+        start = end + 1
+        if windows
+            // A `:` starts a stream of the name before it; a trailing `.` or space is dropped.
+            name = name.sub(0, name.find_char(':').unwrap_or(name.len))
+            // Caution: **A name of dots and spaces alone is taken as a climb**, before the trailing
+            // ones are dropped: dropped first, `..` would read as the folder itself.
+            if dots: = only_dots_and_spaces(name)
+                name = ".." if dots >= 2 else "."
+            else
+                for name.len > 0 &&
+                    (name[name.len - 1] == '.' || name[name.len - 1] == ' ')
+                    name = name.sub(0, name.len - 1)
+        if name.len == 0 || name.equals(".")
+            continue
+        if name.equals("..")
+            if stack.pop().is_none()
+                return "a `..` climbs out of the root"
+            continue
+        if windows
+            for i in Range.asc(name.len)
+                if name[i] == '~' && i + 1 < name.len && name[i + 1].is_digit()
+                    return "a short name can stand for any name, a dot name or a link included"
+            if is_device(name)
+                return "Windows opens the name as a device"
+        if dots_refused && name.starts_with(".")
+            return "it names a dot name"
+        stack.push(name)
+        joined: = "/".join(stack.slice(), arena)
+        for l in sc.links
+            if sc.folds_case && joined.equals_ignore_case(l) || joined.equals(l)
+                return "a link on the way leads out of the root"
+    return ""
+
+// ==========================================
+// The door alone: `fs.join_under`, as every file endpoint calls it
+// ==========================================
+
+struct Findings //< what one invariant found, for `verdict.check_list`
+    bad: List<|U8[]|>
+    seen: Sz
+
+priv fn note(f: Findings$@, keep: Arena$@, seed: I64, case_no: Sz, what: U8[], rel: U8[]) //<
+    //< Notes one finding with the seed and the case that give it again
+    f.bad
+        .push(keep.text().s("case \{case_no\} of seed \{seed\}: ").s(what).s(": ")
+        .s(shown(rel, keep)).take())
+
+priv fn findings(keep: Arena$@): Findings
+    return Findings::{ .bad = List<|U8[]|>(keep), .seen = 0 }
+
+priv fn timed_join(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@, us: I64$@): U8[]? //<
+    //< `fs.join_under`'s answer, none where it refuses, and how long it took
+    started: = sys.mono_us()
+    got: = fs.join_under(root, rel, dots, arena) catch
+        us$ = sys.mono_us() - started
+        return .none
+    us$ = sys.mono_us() - started
+    return .some(got)
+
+priv fn fastest_join_us(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@): I64 //<
+    //< The fastest of `SLOW_TRIES` calls of the door on the path [us]
+    $best: I64 = -1I64
+    for _try in Range.asc(SLOW_TRIES)
+        $us: I64 = 0I64
+        _got: = timed_join(root, rel, dots, arena, us@)
+        if best < 0I64 || us < best
+            best = us
+    return best
+
+priv fn bound_us( //< how long one generated path may take [us]
+    plain_us: I64, //< how long the plain path took
+    plain_steps: I64, //< how many steps the plain path has
+    rel: U8[], //< the generated path
+): I64
+    over: = (plain_us + 1I64) * SLOW_RATIO * per_plain(steps(rel), plain_steps)
+    return over if over > SLOW_FLOOR_US else SLOW_FLOOR_US
+
+priv fn per_plain(n: I64, plain_steps: I64): I64 //< how many plain paths' steps `n` steps make
+    //< At least one, so a short path keeps the plain path's bound.
+    whole: = (n + plain_steps - 1I64) / plain_steps
+    return whole if whole > 1I64 else 1I64
+
+priv fn steps(rel: U8[]): I64 //< how many names a path has; an empty step is no name
+    $n: I64 = 0I64
+    $start: Sz = 0
+    for start <= rel.len
+        end: = sys.segment_end(rel, start)
+        if end > start
+            n += 1I64
+        start = end + 1
+    return n
+
+fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
+    //< Sends many generated paths to `fs.join_under` with dot names refused and allowed
+    //< For each path the door takes, neither OS's reading may reach outside the root or, where
+    //< refused, a dot name. The door must take a path of plain names, and answer each path in a
+    //< time near a plain path's.
+    defer keep: = Arena(16 * 1024 * 1024)
+    $r: = Prng(U64::o.seed)
+    w: = words(keep)
+    n: = Sz::o.trials * PURE_PER_TRIAL
+    $harmful: = findings(keep)
+    $joined: = findings(keep)
+    $order: = findings(keep)
+    $plain: = findings(keep)
+    $slow: = findings(keep)
+    plain_us: = fastest_join_us(sc.root, PLAIN_REL, .refused(U8[][]::{}), arena)
+    $taken: Sz = 0
+    for case_no in Range.asc(n)
+        mark: = arena.save()
+        m: = generate(r@, w@, arena)
+        $hidden_us: I64 = 0I64
+        $shown_us: I64 = 0I64
+        hid: =
+            timed_join(sc.root, m.rel, .refused(U8[][]::{}), arena, hidden_us@)
+        all: = timed_join(sc.root, m.rel, .allowed, arena, shown_us@)
+        for which in Range.asc(2)
+            got: = hid if which == 0 else all
+            if path: = got
+                if which == 0
+                    taken += 1
+                for os_no in Range.asc(2)
+                    windows: = os_no == 1
+                    harmful.seen += 1
+                    why: = harm(m.rel, windows, which == 0, sc@, arena)
+                    if why.len > 0
+                        os: = "Windows" if windows else "POSIX"
+                        note(harmful@, keep, o.seed, case_no,
+                            arena.text().s("taken, yet as \{os\} reads it ").s(why).take(), m.rel)
+                // An empty path is the root itself.
+                want: =
+                    (sc.root if m.rel.len == 0
+                    else arena.text().s(sc.root).c('/').s(m.rel).take())
+                joined.seen += 1
+                if !path.equals(want)
+                    note(joined@, keep, o.seed, case_no, "taken, but joined as another path",
+                        m.rel)
+        order.seen += 1
+        if hid.is_some() && all.is_none()
+            note(order@, keep, o.seed, case_no,
+                "taken with dot names refused, refused with them allowed", m.rel)
+        // A path past the longest the OS takes is refused, however plain.
+        if m.plain && sc.root.len + 1 + m.rel.len <= fs.MAX_PATH_LEN
+            plain.seen += 1
+            if hid.is_none()
+                note(plain@, keep, o.seed, case_no, "refused, though made of plain names", m.rel)
+        slow.seen += 1
+        bound: = bound_us(plain_us, steps(PLAIN_REL), m.rel)
+        if hidden_us > bound || shown_us > bound
+            best: = fastest_join_us(sc.root, m.rel, .refused(U8[][]::{}), arena)
+            if best > bound
+                note(slow@, keep, o.seed, case_no,
+                    arena.text().s("\{best\} us against \{plain_us\} us for a plain path").take(),
+                    m.rel)
+        arena.restore(mark)
+    tail: = arena.text().s("to run it again: ").s(again)
+        .s(" --seed=\{o.seed\} --trials=\{o.trials\}").take()
+    verdict.check_list("the door takes no generated path that POSIX or Windows reads as outside the \
+        root, a device, or a refused dot name", harmful.seen, "readings", harmful.bad@, tail)
+    verdict.check_list("the door joins each path it takes to the root as written", joined.seen,
+        "paths taken", joined.bad@, tail)
+    verdict.check_list("the door refuses no path with dot names allowed that it takes with them \
+        refused", order.seen, "paths", order.bad@, tail)
+    verdict.check_list("the door takes every generated path of plain names", plain.seen,
+        "plain paths", plain.bad@, tail)
+    timely: = arena.text()
+        .s("the door answers each generated path within \{SLOW_RATIO\} times a plain path's time")
+        .take()
+    verdict.check_list(timely, slow.seen, "paths", slow.bad@, tail)
+    // **A run that takes almost nothing tests almost nothing.**
+    verdict.check("the door takes a share of the generated paths", taken * 10 >= n,
+        arena.text().s("\{taken\} of \{n\} taken").take())
+
+// ==========================================
+// The server: each endpoint that takes a path
+// ==========================================
+
+priv enum Ask //< which request a case sends
+    get_file
+    put_file
+    stat
+    list
+    move_from //< the generated path is moved to a new plain name
+    move_to //< a plain file is moved to the generated path
+    page //< static serving, with the token
+
+priv const ASKS: Ask[7] = ::{ .get_file, .put_file, .stat, .list, .move_from, .move_to, .page }
+
+priv struct Expect //< what the door says of a request, before it is sent
+    broken: Bool //< its `%` encoding is broken, so it must be refused with a 400
+    refused: Bool //< the door refuses a path it names
+    hidden: Bool //< the door refuses it only for a dot name (static serving's 404)
+    writes: Bool //< it writes or moves, so a 500 can come from the file system
+
+priv fn door_says(root: U8[], rel: U8[], dots: fs.Dot_names, e: Expect$@, arena: Arena$@) //<
+    //< Adds what the door says of one path to `e`
+    _got: = fs.join_under(root, rel, dots, arena) catch why
+        e.refused = true
+        if why == .hidden
+            e.hidden = true
+        return
+
+priv fn query_expect(root: U8[], query: U8[], names: U8[][], dots: fs.Dot_names, e: Expect$@,
+    arena: Arena$@) //<
+        //< What the door says of each named value of a query, decoded as the server decodes it
+    params: = url.parse_query(query, arena) catch
+        e.broken = true
+        return
+    for name in names
+        door_says(root, params.find(name).unwrap_or(""), dots, e, arena)
+
+priv fn send(port: I32, ask: Ask, target: U8[], auth: U8[], body: U8[], us: I64$@, arena: Arena$@):
+    client.Resp!client.Http_end //<
+        //< Sends one request, and puts how long its answer took into `us` [us]
+    started: = sys.mono_us()
+    $resp: client.Resp = ::{ .status = 0, .head = "", .body = "" }
+    switch ask
+    case .put_file
+        resp = client.put_file(port, target, auth, body, arena)!
+    case .move_from, .move_to
+        resp = client.post_json(port, target, auth, "", client.DEFAULT_TIMEOUT_MS, arena)!
+    default
+        resp = client.get(port, target, auth, arena)!
+    us$ = sys.mono_us() - started
+    return resp
+
+priv fn fastest_us(port: I32, ask: Ask, target: U8[], auth: U8[], arena: Arena$@):
+    I64!client.Http_end //<
+        //< The fastest of `SLOW_TRIES` answers to a plain request [us]
+    $best: I64 = -1I64
+    for _try in Range.asc(SLOW_TRIES)
+        $us: I64 = 0I64
+        _plain: = send(port, ask, target, auth, "plain\n", us@, arena)!
+        if best < 0I64 || us < best
+            best = us
+    return best
+
+fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@):
+    Void!client.Http_end //<
+        //< Sends generated paths to each endpoint that takes one, and checks every answer
+        //< A path the door refuses is a 400 or a 403 (static serving: a 404 for a dot name). A
+        //< path it takes is never a 403. Only a write the door took can be a 5xx. No answer holds
+        //< what lies outside the root.
+    defer keep: = Arena(16 * 1024 * 1024)
+    // Another seed than the door's, so the two parts do not draw the same paths.
+    $r: = Prng(U64::o.seed ^ 0x5DEECE66DU64)
+    w: = words(keep)
+    auth: = client.bearer_head(token, keep)
+    $agree: = findings(keep)
+    $faults: = findings(keep)
+    $leaks: = findings(keep)
+    $slow: = findings(keep)
+    // **A write is held to a plain write**: it waits for the disk, which a read never does.
+    read_us: = fastest_us(port, .get_file, "/api/file?path=a.txt", auth, arena)!
+    write_us: = fastest_us(port, .put_file, "/api/file?path=plain-write.txt", auth, arena)!
+    outside_size: = keep.text().s("\"size\":\{OUTSIDE_SIZE\}").take()
+    for case_no in Range.asc(Sz::o.trials)
+        mark: = arena.save()
+        m: = generate(r@, w@, arena)
+        ask: = ASKS[r.below(ASKS.len)]
+        coded: = encoded(m.rel, r@, arena)
+        $e: = Expect::{ .broken = false, .refused = false, .hidden = false, .writes = false }
+        $target: U8[] = ""
+        refused_dots: fs.Dot_names = .refused(U8[][]::{})
+        switch ask
+        case .get_file
+            target = arena.text().s("/api/file?path=").s(coded).take()
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, .allowed, e@, arena)
+        case .put_file
+            target = arena.text().s("/api/file?path=").s(coded).take()
+            e.writes = true
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, refused_dots, e@, arena)
+        case .stat
+            target = arena.text().s("/api/stat?path=").s(coded).take()
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, .allowed, e@, arena)
+        case .list
+            target = arena.text().s("/api/list?path=").s(coded).take()
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, .allowed, e@, arena)
+        case .move_from
+            target = arena.text().s("/api/move?from=").s(coded).s("&to=").s(MOVES)
+                .s("/moved-\{case_no\}.txt").take()
+            e.writes = true
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "from", "to" }, refused_dots, e@,
+                arena)
+        case .move_to
+            from: = arena.text().s(MOVES).s("/m-\{case_no\}.txt").take()
+            io.write_file(fs.join(sc.root, from, arena), "m\n") catch {}
+            target = arena.text().s("/api/move?from=").s(from).s("&to=").s(coded).take()
+            e.writes = true
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "from", "to" }, refused_dots, e@,
+                arena)
+        case .page
+            target = arena.text().c('/').s(coded).take()
+            page_expect(sc.root, target, e@, arena)
+        body: = arena.text().s("w\{case_no\}\n").take()
+        $took_us: I64 = 0I64
+        got: = send(port, ask, target, auth, body, took_us@, arena) catch why
+            note(faults@, keep, o.seed, case_no,
+                arena.text().s("no answer to ").s(target.sub(0, 40)).s(": ").s(why.reason()).take(),
+                m.rel)
+            throw why
+        status: = got.status
+        what: = arena.text().s("\{status\} for ").s(shown(target, arena)).take()
+        agree.seen += 1
+        if e.broken && status != 400 ||
+            !e.broken && e.refused && status != 400 && status != 403 &&
+            !(ask == Ask.page && e.hidden && status == 404) ||
+            !e.broken && !e.refused && status == 403
+            note(agree@, keep, o.seed, case_no, what, m.rel)
+        faults.seen += 1
+        if status >= 500 && !(e.writes && !e.refused && !e.broken)
+            note(faults@, keep, o.seed, case_no, what, m.rel)
+        leaks.seen += 1
+        if got.body.find_str(OUTSIDE_MARK).is_some() ||
+            got.body.find_str(OUTSIDE_ONLY).is_some() ||
+            ask == Ask.stat && got.body.find_str(outside_size).is_some()
+            note(leaks@, keep, o.seed, case_no, what, m.rel)
+        slow.seen += 1
+        plain_us: = write_us if ask == Ask.put_file else read_us
+        bound: = bound_us(plain_us, 1I64, m.rel)
+        if took_us > bound
+            $best: = took_us
+            for _try in Range.asc(SLOW_TRIES - 1)
+                $more_us: I64 = 0I64
+                _again: = send(port, ask, target, auth, body, more_us@, arena)!
+                if more_us < best
+                    best = more_us
+            if best > bound
+                note(slow@, keep, o.seed, case_no,
+                    arena.text().s(what).s(": \{best\} us against \{plain_us\} us").take(), m.rel)
+        arena.restore(mark)
+    tail: = arena.text().s("to run it again: ").s(again)
+        .s(" --seed=\{o.seed\} --trials=\{o.trials\}").take()
+    verdict.check_list("the server refuses a generated path as the door does, with a 400 or a 403",
+        agree.seen, "requests", agree.bad@, tail)
+    verdict.check_list("the server answers every generated path, and with a 5xx only for a write \
+        the door took", faults.seen, "requests", faults.bad@, tail)
+    verdict.check_list("no answer to a generated path holds a byte, a name or a size from outside \
+        the root", leaks.seen, "requests", leaks.bad@, tail)
+    timely: = arena.text()
+        .s("the server answers each generated path within \{SLOW_RATIO\} times a plain request's \
+            time").take()
+    verdict.check_list(timely, slow.seen, "requests", slow.bad@, tail)
+
+priv fn page_expect(root: U8[], target: U8[], e: Expect$@, arena: Arena$@) //<
+    //< What the door says of a static path, decoded and cut as the server cuts it
+    decoded: = url.decode_component(target, arena) catch
+        e.broken = true
+        return
+    rel: = api.url_rel(decoded)
+    // The page itself is answered without the door (`asks_for_page` in `kssrv/main.kspl`).
+    if rel.len == 0 || rel.equals("index.html")
+        return
+    door_says(root, rel, .refused(U8[][]::SHOWN), e, arena)
+
+fn after_cases(sc: Scratch, arena: Arena$@) //<
+    //< Checks that nothing outside the root, and no dot name under it, changed during the checks
+    now: = snapshot(sc, arena)
+    verdict.check("no generated request changed what lies outside the root or on a dot name",
+        now.equals(sc.before),
+        arena.text().s("before:\n").s(sc.before).s("\nafter:\n").s(now).take())

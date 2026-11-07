@@ -168,15 +168,26 @@ function ksmdMenus(ks) {
       for (const inner of menu.querySelectorAll(".sub.open")) showFlyout(inner, false);
       return;
     }
-    // A flyout with no room on the right opens to the left instead, and one with no room below
-    // moves up until it fits.
-    menu.classList.remove("flip");
-    menu.style.top = "";
+    // A flyout stands against the window beside its name, so a menu that scrolls in a short
+    // window does not cut it off (`fit`). With no room on the right it opens to the left, and with
+    // no room below it moves up until it fits.
+    const h = head.getBoundingClientRect();
+    menu.style.left = "0px";
+    menu.style.top = "0px";
     const r = menu.getBoundingClientRect();
-    if (r.right > window.innerWidth) menu.classList.add("flip");
-    if (r.bottom > window.innerHeight) {
-      menu.style.top = `${menu.offsetTop - Math.min(r.bottom - window.innerHeight, r.top)}px`;
-    }
+    const left = h.right + r.width <= window.innerWidth ? h.right : Math.max(0, h.left - r.width);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${Math.max(0, Math.min(h.top - 5, window.innerHeight - r.height))}px`;
+  }
+
+  // A menu taller than the room below its top scrolls, so its last item can still be reached.
+  // The limit is on the items' height, so the menu's own padding and border are taken off it.
+  function fit(menu) {
+    const s = getComputedStyle(menu);
+    const frame = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"]
+      .reduce((sum, k) => sum + parseFloat(s[k]), 0);
+    const room = window.innerHeight - menu.getBoundingClientRect().top - 4 - frame;
+    menu.style.maxHeight = `${Math.max(120, room)}px`;
   }
 
   function closeFlyouts(menu, except) {
@@ -188,6 +199,7 @@ function ksmdMenus(ks) {
     const menu = name.nextElementSibling;
     ks.enableTable();
     menu.hidden = false;
+    fit(menu);
     name.setAttribute("aria-expanded", "true");
     openName = name;
     if (focusFirst) {
@@ -200,6 +212,9 @@ function ksmdMenus(ks) {
     if (!openName) return;
     const menu = openName.nextElementSibling;
     closeFlyouts(menu, null);
+    // A menu scrolled down opens at its top the next time. Set here, as it closes: set as it
+    // opens, the scroll it makes would close the flyout a person opens next.
+    menu.scrollTop = 0;
     menu.hidden = true;
     openName.setAttribute("aria-expanded", "false");
     openName = null;
@@ -211,9 +226,11 @@ function ksmdMenus(ks) {
     remember();
     ks.enableTable();
     context.hidden = false;
+    context.style.maxHeight = "";
     const r = context.getBoundingClientRect();
     context.style.left = `${Math.max(0, Math.min(x, window.innerWidth - r.width))}px`;
     context.style.top = `${Math.max(0, Math.min(y, window.innerHeight - r.height))}px`;
+    fit(context);
     const first = items(context)[0];
     if (first) first.focus();
   }
@@ -222,6 +239,7 @@ function ksmdMenus(ks) {
   function shut(restore) {
     closeTop();
     closeFlyouts(context, null);
+    context.scrollTop = 0;
     context.hidden = true;
     if (restore) {
       const to = back && back.isConnected ? back : ks.root;
@@ -250,6 +268,13 @@ function ksmdMenus(ks) {
       else openTop(name, e.detail === 0);
     }
   });
+
+  // A menu that scrolls closes its flyouts, which stand against the window and would stay behind.
+  for (const holder of [bar, context]) {
+    holder.addEventListener("scroll", (e) => {
+      if (e.target.classList && e.target.classList.contains("menu")) closeFlyouts(e.target, null);
+    }, true);
+  }
 
   bar.addEventListener("mouseover", (e) => {
     const name = e.target.closest(".menu-name");

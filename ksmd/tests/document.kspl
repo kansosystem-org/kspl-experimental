@@ -59,6 +59,8 @@ priv fn canonical_saves()
         "﻿%ksmd 1\r\n\r\n\r\n#  Title  \r\n\r\n\r\nOne\r\n   two\r\n",
         "%ksmd 1\n\n# Title\n\nOne two\n")
     canonical("a hard break stays a hard break", "%ksmd 1\n\na  \\\n  b\n", "%ksmd 1\n\na\\\nb\n")
+    canonical("a line holding only a backslash is a blank line, kept as it is",
+        "%ksmd 1\n\na\n\n\\\n\n\\  \n\nb\n", "%ksmd 1\n\na\n\n\\\n\n\\\n\nb\n")
     canonical("headings keep their level", "%ksmd 1\n\n###### Six\n", "%ksmd 1\n\n###### Six\n")
     small_diff()
     canonical("a whitespace-only line separates blocks", "%ksmd 1\n\nA\n \t\nB\n",
@@ -331,6 +333,10 @@ priv fn cell_looks()
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=12} x |\n:::\n",
         "a look in braces ends its cell, with '}' last", 4, 7)
 
+priv fn written_width(width: U8[], arena: Arena$@): U8[] //< a source with an image this wide
+    return arena.text().s("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"").s(width)
+        .s("\"\n:::\n").take()
+
 priv fn text_looks() //< text takes alignment alone, on a line of braces
     canonical("a brace after brackets stays escaped, so it is not read as a colour",
         "%ksmd 1\n\n[a](#b)\\{x}\n", "%ksmd 1\n\n[a](#b)\\{x}\n")
@@ -444,6 +450,10 @@ priv fn clause_refusals()
         "':::functions' has no body. Close it on the next line", 4, 1)
     refused("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" caption=\"\"\n:::\n",
         "leave out an empty caption", 3, 29)
+    defer arena: = Arena(16 * 1024)
+    for wrong in U8[][]::{ "0%", "101%", "40", "40px", "4.5%" }
+        refused(written_width(wrong, arena),
+            "width is a share of the text width, \"1%\" to \"100%\", or leave it out", 3, 29)
     defer $wide: = Str_builder()
     wide.s("%ksmd 1\n\n:::table name=\"t\"\n")
     for _ in Range.asc(257)

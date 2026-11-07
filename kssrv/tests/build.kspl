@@ -1,0 +1,121 @@
+//< Tests the endpoints of a page's own functions: the record of allowed files, and the build
+//< For local use; not a suite; part of `kssrv/tests/main.kspl`, which starts the server with a
+//< stand-in builder (`BUILDER`) and a record of its own.
+//< **Nothing is built until the person allows that exact file** ("Building a page's own
+//< functions" in `docs/SPEC-local-server.md`). So each case asks the server directly, with the
+//< token, as a page that skipped its own question would.
+import "kssrv/tests/client"
+import "kssrv/tests/local"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/sha256"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const BUILDER: U8[] =
+    "#!/bin/sh\ncase \"$2\" in\nbig.kspl) head -c 16777217 /dev/zero ;;\n*) printf 'built %s' \
+        \"$3\" ;;\nesac\n" //<
+            //< A builder that answers with the digest it was handed, or for `big.kspl` a module one
+            //< byte past the 16 MiB that `/api/build` keeps
+
+priv const MINE: U8[] = "pub fn tax(price: F64): F64\n    return price * 1.1\n" //< allowed first
+priv const CHANGED: U8[] = "pub fn tax(price: F64): F64\n    return price * 9.9\n" //<
+    //< the same file after a colleague changed it
+
+priv const RECORD: U8[] = "kssrv-allowed.txt" //< the record of allowed files, in the work folder
+
+fn placed(tmp: U8[], arena: Arena$@): U8[][]? //<
+    //< Places the stand-in builder in `tmp`, and gives the options that name it and a fresh record
+    //< None where the builder cannot be placed.
+    builder: = fs.join(tmp, "stand_in_builder.sh", arena)
+    io.write_file(builder, BUILDER) catch
+        return .none
+    _mode: = local.mode_column(builder, "755", arena)
+    record: = fs.join(tmp, RECORD, arena)
+    fs.remove_path(record) catch {}
+    $flags: = List<|U8[]|>(arena)
+    flags.push(arena.text().s("--builder=\{builder\}").take())
+    flags.push(arena.text().s("--allowed=\{record\}").take())
+    return .some(flags.slice())
+
+priv fn digest(bytes: U8[], arena: Arena$@): U8[] //< the SHA-256 of `bytes` in lowercase hex
+    $hex: U8[sha256.HEX_LEN] = ::{}
+    sha256.write_hex(sha256.hash(bytes), U8$[]::hex)
+    return arena.dup_str(U8[]::hex)
+
+priv fn allow(port: I32, auth: U8[], path: U8[], content: U8[], arena: Arena$@):
+    client.Resp!client.Http_end //<
+        //< `POST /api/allow` for the file `path`, naming the bytes `content` as allowed
+    head: = arena.text().s(auth).s("X-Kanso-If-Content: ").s(content).s("\r\n").take()
+    target: = arena.text().s("/api/allow?path=").s(path).take()
+    return client.post_json(port, target, head, "", client.DEFAULT_TIMEOUT_MS, arena)
+
+priv fn build(port: I32, auth: U8[], path: U8[], arena: Arena$@): client.Resp!client.Http_end
+    target: = arena.text().s("/api/build?path=").s(path).take()
+    return client.post_json(port, target, auth, "", 60000, arena)
+
+priv fn allowed_now(port: I32, auth: U8[], arena: Arena$@): Bool!client.Http_end //<
+    //< What `GET /api/allow` says of `mine.kspl`
+    got: = client.get(port, "/api/allow?path=mine.kspl", auth, arena)!
+    return got.status == 200 && got.body.find_str("\"allowed\":true").is_some()
+
+fn cases(port: I32, token: U8[], root: U8[], tmp: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< Runs every check on a server started with the options `placed` gave for `tmp`
+    auth: = client.bearer_head(token, arena)
+    record: = fs.join(tmp, RECORD, arena)
+    mine: = fs.join(root, "mine.kspl", arena)
+    io.write_file(mine, MINE) catch
+        verdict.check("the functions file can be placed", false, mine)
+        return
+    // **Opening asks first**: a file nobody allowed is not built, even when asked directly.
+    verdict.check("a file nobody allowed is not allowed", !allowed_now(port, auth, arena)!, "")
+    refused: = build(port, auth, "mine.kspl", arena)!
+    verdict.check("the server refuses to build a file nobody allowed",
+        refused.status == 403 && refused.body.find_str("built").is_none(),
+        client.shown(refused, arena))
+    bare: = client.post_json(port, "/api/allow?path=mine.kspl", auth, "", 10000, arena)!
+    client.expect_status("an allow that names no content is refused", bare, 400, arena)
+    other: = allow(port, auth, "mine.kspl", digest(CHANGED, arena), arena)!
+    client.expect_status("an allow of bytes the file does not hold is refused", other, 409, arena)
+    outside: = allow(port, auth, "..%2fmine.kspl", digest(MINE, arena), arena)!
+    client.expect_status("an allow of a path outside the root is refused", outside, 403, arena)
+    put: = client.put_file(port, "/api/allow?path=mine.kspl", auth, "", arena)!
+    client.check_405("/api/allow takes GET, POST and DELETE", put, "GET, POST, DELETE", arena)
+    // **Allowing records the file's exact bytes**, and the builder is handed their digest.
+    ok: = allow(port, auth, "mine.kspl", digest(MINE, arena), arena)!
+    client.expect_status("the person allows the file's bytes", ok, 200, arena)
+    verdict.check("once allowed, the file is allowed", allowed_now(port, auth, arena)!, "")
+    built: = build(port, auth, "mine.kspl", arena)!
+    want: = arena.text().s("built ").s(digest(MINE, arena)).take()
+    verdict.check("an allowed file is built, the builder handed the allowed bytes' digest",
+        built.status == 200 && built.body.equals(want), client.shown(built, arena))
+    kept: = io.read_file(record, arena) catch ""
+    verdict.check("the record holds digests, not the file's name",
+        kept.len > 0 && kept.find_str("mine").is_none(), kept)
+    // **A changed file asks again**, as when a colleague edits it in a shared folder.
+    io.write_file(mine, CHANGED) catch {}
+    verdict.check("a changed file is not allowed", !allowed_now(port, auth, arena)!, "")
+    again: = build(port, auth, "mine.kspl", arena)!
+    client.expect_status("the server refuses to build a changed file", again, 403, arena)
+    // **Taking the allow back blocks the build again.**
+    _re: = allow(port, auth, "mine.kspl", digest(CHANGED, arena), arena)!
+    taken: = client.request(port,
+        client.raw("DELETE", "/api/allow?path=mine.kspl", auth, "", arena), 1,
+        client.DEFAULT_TIMEOUT_MS, false, arena)!
+    client.expect_status("the allow is taken back", taken.get(0), 200, arena)
+    verdict.check("a file whose allow was taken back is not allowed",
+        !allowed_now(port, auth, arena)!, "")
+    blocked: = build(port, auth, "mine.kspl", arena)!
+    client.expect_status("the server refuses to build it again", blocked, 403, arena)
+    // **A module cut at the cap is no module**: sent with 200, the page would fail to load it with
+    // no reason given.
+    io.write_file(fs.join(root, "big.kspl", arena), "") catch {}
+    _big: = allow(port, auth, "big.kspl", digest("", arena), arena)!
+    cut: = build(port, auth, "big.kspl", arena)!
+    verdict.check("a module past the cap is refused, not sent cut",
+        cut.status == 422 && cut.body.find_str("larger than").is_some(),
+        client.shown(cut, arena))

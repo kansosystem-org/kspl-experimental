@@ -11,20 +11,17 @@
 //< So a new one cannot stay outside the gate unseen.
 //< Its failure case: `tests/suite/race_test.kspl#RACY_SOURCE`, a race written on purpose.
 import "ksplc/tests/support/harness" as ksplc_harness
-import "ksplc/tests/support/jsonrpc_client"
-import "ksplc/tests/support/lsp_client"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/json" { Json_builder }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/harness_sanitizer" + { Built, Sample }
+import "tests/support/harness_sanitizer" + { Built, Order, Sample }
 
 // `-g` and the frame pointer keep a report's stack readable down to the `.kspl` line. The
 // optimisation level is each build's (`build`).
@@ -53,6 +50,7 @@ priv const REPORT_HEAD: U8[] = "WARNING: ThreadSanitizer:" //< the line that ope
 priv const RACE_LIMIT_MS: I32 = 180000 //< how long one raced program may run before it is killed
     //< **A hang is the failure a race often gives**, so it must end soon, naming the program. The
     //< longest run takes under half of it under the sanitizer, on a machine busy with the others.
+    //< The language server's session has it too (`race_lsp`).
 
 struct Left_out //< a file that starts threads and that no program here runs, with why
     path: U8[]
@@ -161,15 +159,16 @@ priv const REPORT_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "", .reports = 0 },
 }
 
-priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], define: U8[], arena: Arena$@): Built //<
-    //< Compiles entry (from the folder dir) to C and links it with the sanitizer into exe
-    //< `opt` is `opt_for_run` or `opt_for_build`; `define` is a `-D` for this build, or empty.
+priv fn order(dir: U8[], entry: U8[], exe: U8[], opt: U8[], define: U8[], arena: Arena$@): Order //<
+    //< The build of entry (from the folder dir) to C, linked with the sanitizer into exe
+    //< `opt` is `opt_for_run`, `opt_for_build` or `opt_for_spin`; `define` is a `-D`, or empty.
     $flags: = List<|U8[]|>(arena)
     flags.push_all(U8[][]::TSAN_CFLAGS)
     flags.push(opt)
     if define.len > 0
         flags.push(define)
-    return harness_sanitizer.build(dir, entry, exe, flags.slice(), false, "", arena)
+    return Order::{ .dir = dir, .entry = entry, .exe = exe, .cflags = flags.slice(), .llvm = false,
+        .marks = "" }
 
 priv fn aborts_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< A stopped run's stack, which the sanitizer logs on an abort (`handle_abort=1`), such as a
@@ -254,7 +253,8 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     io.write_file(src, RACY_SOURCE) catch
         verdict.check("a race written on purpose is reported", false, "cannot write it")
         return
-    b: = build(work, src, fs.join(work, "racy.exe", arena), OPT_FOR_RUN, "", arena)
+    o: = order(work, src, fs.join(work, "racy.exe", arena), OPT_FOR_RUN, "", arena)
+    b: = harness_sanitizer.build(o.dir, o.entry, o.exe, o.cflags, false, "", arena)
     if b.exe.len == 0
         verdict.check("a race written on purpose is reported", false, b.why)
         return
@@ -268,7 +268,88 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     verdict.check("a race written on purpose is reported", reports_in(log_dir, arena).len > 0,
         "the program built with the sanitizer ran and nothing was reported")
 
-priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+// ==========================================
+// The programs raced, built side by side before any runs
+// **The builds take longer than the runs**, so they go at once (`harness_sanitizer.build_many`).
+// Each check then takes its programs by name.
+// ==========================================
+
+struct Program //< one program the gate builds with the sanitizer
+    stem: U8[] //< its executable's name in the work folder, without `.exe`
+    pkg: U8[] //< the folder ksplc runs in, from the root; empty for the root itself
+    entry: U8[] //< its source, from the root
+    opt: U8[] //< `opt_for_run`, `opt_for_build` or `opt_for_spin`
+    define: U8[] //< a `-D` for this build, or empty
+
+// The longest builds stand first, so none of them starts last.
+priv const PROGRAMS: Program[_] = ::{
+    Program::{ .stem = "ksplc", .pkg = "", .entry = "ksplc/main.kspl", .opt = OPT_FOR_BUILD,
+        .define = "" },
+    Program::{ .stem = "ksai_6", .pkg = "lib/ksai", .entry = "lib/ksai/tests/main.kspl",
+        .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_5", .pkg = "lib/ksai", .entry = "lib/ksai/tests/examples_main.kspl",
+        .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "std_0", .pkg = "std", .entry = "std/tests/main.kspl", .opt = OPT_FOR_RUN,
+        .define = MARK_AFTER_OPEN },
+    Program::{ .stem = "ksagent", .pkg = "ksagent", .entry = "ksagent/tests/main.kspl",
+        .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_4", .pkg = "lib/ksai",
+        .entry = "lib/ksai/examples/chat_server/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksplc_0", .pkg = "ksplc", .entry = "ksplc/tests/main.kspl",
+        .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_2", .pkg = "lib/ksai",
+        .entry = "lib/ksai/examples/code_complete/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_0", .pkg = "lib/ksai",
+        .entry = "lib/ksai/examples/llama_engine/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_1", .pkg = "lib/ksai",
+        .entry = "lib/ksai/examples/qwen_infer/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "kstls", .pkg = "lib/kstls", .entry = "lib/kstls/tests/main.kspl",
+        .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_3", .pkg = "lib/ksai",
+        .entry = "lib/ksai/examples/car_pilot/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+    Program::{ .stem = "ksai_pool", .pkg = "lib/ksai",
+        .entry = "lib/ksai/tests/pool_stress_main.kspl", .opt = OPT_FOR_SPIN, .define = "" },
+    Program::{ .stem = "lsp_session", .pkg = "", .entry = "tests/support/race_lsp_session.kspl",
+        .opt = OPT_FOR_BUILD, .define = "" },
+}
+
+struct Builds //< every program of `PROGRAMS` built, in its order
+    all: List<|Built|>
+
+impl Builds
+    priv fn of(r: Self@, stem: U8[]): Built //< the build of the program named stem
+        for i in Range.asc(PROGRAMS.len)
+            if PROGRAMS[i].stem.equals(stem)
+                return r.all.get(i)
+        panic("race_test: a check names a program that `PROGRAMS` does not hold")
+
+    priv fn exes(r: Self@, name: U8[], stems: U8[][], arena: Arena$@): List<|U8[]|> //<
+        //< The executables of the programs named stems; empty, with check name failed, where one
+        //< did not build
+        $exes: = List<|U8[]|>(arena)
+        for stem in stems
+            b: = r.of(stem)
+            if b.exe.len == 0
+                verdict.check(name, false, b.why)
+                return List<|U8[]|>(arena)
+            exes.push(b.exe)
+        return exes
+
+priv fn build_programs(work: U8[], deps: Str_builder$@, arena: Arena$@): Builds //<
+    //< Builds every program of `PROGRAMS` at once; the sources of each that built go to deps
+    root: = harness.root()
+    $orders: = List<|Order|>(arena)
+    for p in PROGRAMS
+        exe: = fs.join(work, arena.text().s(p.stem).s(".exe").take(), arena)
+        dir: = fs.join(root, p.pkg, arena) if p.pkg.len > 0 else root
+        entry: = fs.join(root, p.entry, arena)
+        orders.push(order(dir, entry, exe, p.opt, p.define, arena))
+    all: = harness_sanitizer.build_many(orders.slice(), arena)
+    for b in all
+        deps.s(b.deps)
+    return Builds::{ .all = all }
+
+priv fn race_tests(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< The packages whose own tests start threads: std's, and ksplc's
     //< **Only these**: the other packages' tests start none (`check_covered` holds it), so the
     //< sanitizer's time on them would watch one thread. Each runs from its folder, as its own
@@ -276,9 +357,7 @@ priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
     //< **std's are built the way macOS opens a pipe** (`MARK_AFTER_OPEN`): its spawn lock is
     //< raced by them, and Linux's own way takes no lock.
     std_name: = "std's own tests run with no data race"
-    std_exes: =
-        build_all(std_name, "std", U8[][]::{ "std/tests/main.kspl" }, MARK_AFTER_OPEN, work, deps,
-        arena)
+    std_exes: = builds.exes(std_name, U8[][]::{ "std_0" }, arena)
     if std_exes.len > 0
         under: = ksplc_harness.ksplc_exe()
         argv: = harness_sanitizer.kept(U8[][]::{ std_exes.get(0), under }, arena)
@@ -287,8 +366,7 @@ priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
             .log_dir = fs.join(work, "std_log", arena),
             .env = harness_sanitizer.pkg_env(arena) })
     ksplc_name: = "ksplc's own tests run with no data race"
-    ksplc_exes: =
-        build_all(ksplc_name, "ksplc", U8[][]::{ "ksplc/tests/main.kspl" }, "", work, deps, arena)
+    ksplc_exes: = builds.exes(ksplc_name, U8[][]::{ "ksplc_0" }, arena)
     if ksplc_exes.len > 0
         runs
             .push(Raced::{ .name = ksplc_name,
@@ -297,33 +375,12 @@ priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
             .log_dir = fs.join(work, "ksplc_log", arena),
             .env = harness_sanitizer.pkg_env(arena) })
 
-priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], define: U8[], work: U8[],
-    deps: Str_builder$@, arena: Arena$@): List<|U8[]|> //<
-        //< Builds each entry (named from the root) in the package's folder; empty where one fails
-    $exes: = List<|U8[]|>(arena)
-    dir: = fs.join(harness.root(), pkg, arena)
-    for i in Range.asc(entries.len)
-        stem: = arena.text().s(sys.get_file_name(pkg)).s("_\{i\}.exe").take()
-        b: =
-            build(dir, fs.join(harness.root(), entries[i], arena), fs.join(work, stem, arena),
-            OPT_FOR_RUN, define, arena)
-        if b.exe.len == 0
-            verdict.check(name, false, b.why)
-            return List<|U8[]|>(arena)
-        deps.s(b.deps)
-        exes.push(b.exe)
-    return exes
-
-priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+priv fn race_ksai(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< ksai's examples, the tests that run them, and its unit tests (`lib/ksai/Makefile`'s `test`)
     //< code_complete trains on two threads there. The unit tests split products over threads.
     name: = "ksai's examples and their tests run with no data race"
-    exes: =
-        build_all(name, "lib/ksai",
-        U8[][]::{ "lib/ksai/examples/llama_engine/main.kspl",
-        "lib/ksai/examples/qwen_infer/main.kspl", "lib/ksai/examples/code_complete/main.kspl",
-        "lib/ksai/examples/car_pilot/main.kspl", "lib/ksai/examples/chat_server/main.kspl",
-        "lib/ksai/tests/examples_main.kspl", "lib/ksai/tests/main.kspl" }, "", work, deps, arena)
+    exes: = builds.exes(name,
+        U8[][]::{ "ksai_0", "ksai_1", "ksai_2", "ksai_3", "ksai_4", "ksai_5", "ksai_6" }, arena)
     if exes.len == 0
         return
     tmp: = fs.join(work, "ksai_work", arena)
@@ -340,35 +397,27 @@ priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena:
         .argv = harness_sanitizer.kept(U8[][]::{ exes.get(6) }, arena), .log_dir = log_dir,
         .env = harness_sanitizer.pkg_env(arena) })
 
-priv fn race_ksai_pool(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+priv fn race_ksai_pool(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< ksai's thread pool, given rounds back to back (`lib/ksai/tests/pool_stress_main.kspl`)
     //< **The programs above post a round now and then**, so the workers sleep between rounds, and
     //< the hand-over while they spin is not raced. A lost wakeup fails there with a message.
     name: = "ksai's thread pool hands over thousands of rounds with no data race"
-    dir: = fs.join(harness.root(), "lib/ksai", arena)
-    b: =
-        build(dir, fs.join(harness.root(), "lib/ksai/tests/pool_stress_main.kspl", arena),
-        fs.join(work, "ksai_pool.exe", arena), OPT_FOR_SPIN, "", arena)
-    if b.exe.len == 0
-        verdict.check(name, false, b.why)
+    exes: = builds.exes(name, U8[][]::{ "ksai_pool" }, arena)
+    if exes.len == 0
         return
-    deps.s(b.deps)
     runs
-        .push(Raced::{ .name = name, .dir = dir,
-        .argv = harness_sanitizer.kept(U8[][]::{ b.exe }, arena),
+        .push(Raced::{ .name = name, .dir = fs.join(harness.root(), "lib/ksai", arena),
+        .argv = harness_sanitizer.kept(U8[][]::{ exes.get(0) }, arena),
         .log_dir = fs.join(work, "ksai_pool_log", arena),
         .env = harness_sanitizer.pkg_env(arena) })
 
-priv fn race_kstls(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+priv fn race_kstls(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< kstls's tests (`lib/kstls/Makefile`'s `test`), where the libraries it binds link
     //< The TLS test serves its handshake from a second thread.
     //< **Only a link that fails can skip, and only where `KSTLS_REQUIRE_LIBS` is not `1`**, as in
     //< kstls's own `make test`. Linux's image holds OpenSSL, so there it fails.
     name: = "kstls's tests run with no data race"
-    dir: = fs.join(harness.root(), "lib/kstls", arena)
-    b: =
-        build(dir, fs.join(harness.root(), "lib/kstls/tests/main.kspl", arena),
-        fs.join(work, "kstls.exe", arena), OPT_FOR_RUN, "", arena)
+    b: = builds.of("kstls")
     if b.exe.len == 0
         if b.why.starts_with("it does not link")
             ksplc_harness.require_or_skip(name, "KSTLS_REQUIRE_LIBS",
@@ -376,178 +425,45 @@ priv fn race_kstls(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
         else
             verdict.check(name, false, b.why)
         return
-    deps.s(b.deps)
     runs
-        .push(Raced::{ .name = name, .dir = dir,
+        .push(Raced::{ .name = name, .dir = fs.join(harness.root(), "lib/kstls", arena),
         .argv = harness_sanitizer.kept(U8[][]::{ b.exe }, arena),
         .log_dir = fs.join(work, "kstls_log", arena),
         .env = harness_sanitizer.pkg_env(arena) })
 
-priv fn race_ksagent(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+priv fn race_ksagent(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< ksagent's tests (`ksagent/Makefile`'s `test`)
     //< Their stand-in model server answers from a second thread while the loop asks it.
     name: = "ksagent's tests run with no data race"
-    dir: = fs.join(harness.root(), "ksagent", arena)
-    b: =
-        build(dir, fs.join(harness.root(), "ksagent/tests/main.kspl", arena),
-        fs.join(work, "ksagent.exe", arena), OPT_FOR_RUN, "", arena)
-    if b.exe.len == 0
-        verdict.check(name, false, b.why)
+    exes: = builds.exes(name, U8[][]::{ "ksagent" }, arena)
+    if exes.len == 0
         return
-    deps.s(b.deps)
-    argv: = harness_sanitizer.kept(U8[][]::{ b.exe, fs.join(work, "ksagent_work", arena) }, arena)
+    argv: = harness_sanitizer.kept(U8[][]::{ exes.get(0),
+        fs.join(work, "ksagent_work", arena) }, arena)
     runs
-        .push(Raced::{ .name = name, .dir = dir, .argv = argv,
+        .push(Raced::{ .name = name, .dir = fs.join(harness.root(), "ksagent", arena), .argv = argv,
         .log_dir = fs.join(work, "ksagent_log", arena),
         .env = harness_sanitizer.pkg_env(arena) })
 
-// ==========================================
-// The language server, raced through a session
-// **Its supervisor reads the editor on a thread of its own** while the main loop pumps the worker,
-// restarts it and hands it the documents. No test program reaches that. So ksplc itself is built
-// with the sanitizer, and an editor's session is played to it. Its worker is the same build (the
-// supervisor starts its own executable), so both sides are watched.
-// ==========================================
-
-priv const LSP_DOCS: Sz = 4 //< how many documents the session opens
-priv const LSP_WAIT_MS: I32 = 60000 //< how long one answer may take under the sanitizer
-priv const LSP_EXIT_MS: I64 = 30000I64 //< how long the server may take to end after `exit`
-priv const LSP_BURST: Sz = 40 //< the edits sent at once, with no answer awaited in between
-
-priv fn lsp_text(fn_name: U8[], k: Sz, arena: Arena$@): U8[] //<
-    //< A document whose `main` calls a function named fn_name and k; the hovers ask at its call
-    return arena.text().s("fn ").s(fn_name).s("\{k\}(a: I32, b: I32): I32 //< adds\n")
-        .s("    return a + b\n\nfn main(): I32\n    return ").s(fn_name).s("\{k\}(1, 2)\n").take()
-
-struct Lsp_session //< the client playing the editor, the workspace, and what went wrong
-    c: jsonrpc_client.Client$@
-    top: U8[]
-    faults: List<|U8[]|>
-    deadline: I64 //< the `mono_us` reading past which nothing more is asked (`race_limit_ms`)
-
-impl Lsp_session
-    priv fn uri(r: Self@, k: Sz, arena: Arena$@): U8[]
-        return lsp_client.uri_of(r.top, arena.text().s("d\{k\}.kspl").take(), arena)
-
-    priv fn change(r: Self@, k: Sz, fn_name: U8[], version: Sz, arena: Arena$@) //<
-        //< a didChange of the whole text
-        $b: = Json_builder(arena)
-        td: = b.obj().set("uri", b.str_val(r.uri(k, arena)))
-            .set("version", b.int_val(version)).build()
-        change: = b.obj().set("text", b.str_val(lsp_text(fn_name, k, arena))).build()
-        params: = b.obj().set("textDocument", td)
-            .set("contentChanges", b.arr().push(change).build()).build()
-        r.c.notify("textDocument/didChange", params, lsp_client.SEND_MS, arena) catch {}
-
-    priv fn hover(r: Self$@, k: Sz, fn_name: U8[], when: U8[], arena: Arena$@) //<
-        //< A hover at document k's call, which must name fn_name and k
-        wait: = r.wait_ms()
-        if wait == 0
-            r.faults
-                .push(arena.text().s("a hover on d\{k\} ").s(when).s(" was not asked: the ")
-                .s("session ran past its \{RACE_LIMIT_MS / 1000\} s").take())
-            return
-        at: = lsp_client.at_pos(r.uri(k, arena), 4, 12, arena)
-        got: = lsp_client.answer(r.c, "textDocument/hover", at, wait, arena)
-        text: = lsp_client.hover_text(got)
-        want: = arena.text().s(fn_name).s("\{k\}").take()
-        if text.find_str(want).is_none()
-            said: = arena.text().s("a hover on d\{k\} ").s(when).s(" did not name `").s(want)
-                .s("`: '").s(text).s("'").take()
-            r.faults.push(lsp_client.why(r.c, said, arena))
-
-    priv fn wait_ms(r: Self@): I32 //< how long the next answer may take; 0 past the deadline
-        left: = (r.deadline - sys.mono_us()) / 1000I64
-        if left <= 0I64
-            return 0
-        return LSP_WAIT_MS if left > I64::LSP_WAIT_MS else I32::left
-
-    priv fn crash(r: Self@, arena: Arena$@) //< the worker's crash hook (`$/ksplTestCrash`)
-        $b: = Json_builder(arena)
-        r.c.notify("$/ksplTestCrash", b.obj().build(), lsp_client.SEND_MS, arena) catch {}
-
-priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< An editor's session with the server, returning what went wrong; empty where it all answered
-    //< **Each step gives the reading thread something to do beside the main loop.** A crash comes
-    //< with more messages at once, read while the worker is restarted and handed the documents.
-    //< In a pause, the main loop analyses the documents nobody asked for while the thread waits on
-    //< the input. In a burst, the two work on the inbox at once. On `exit` with the input still
-    //< open, the thread must stop by itself. **The whole session has `race_limit_ms`**, as a raced
-    //< program has.
-    $faults: = List<|U8[]|>(arena)
-    argv: =
-        sanitized(log_dir,
-        U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take() },
-        U8[][]::{ exe, "lsp" }, arena)
-    defer $c: = jsonrpc_client.spawn(argv, top) catch
-        faults.push("the server cannot be started")
-        return faults
-    $s: = Lsp_session::{ .c = c@, .top = top, .faults = faults,
-        .deadline = sys.mono_us() + I64::RACE_LIMIT_MS * 1000I64 }
-    $b: = Json_builder(arena)
-    _init: =
-        s.c.request("initialize", b.obj().build(), s.wait_ms(), arena) catch {}
-    s.c.notify("initialized", b.obj().build(), lsp_client.SEND_MS, arena) catch {}
-    for k in Range.asc(LSP_DOCS)
-        s.c
-            .notify("textDocument/didOpen",
-            lsp_client.did_open(s.uri(k, arena), lsp_text("add", k, arena), arena),
-            lsp_client.SEND_MS, arena) catch {}
-    for k in Range.asc(LSP_DOCS)
-        s.hover(k, "add", "before the crash", arena)
-    // The first document's request comes while the worker is remade; the others are analysed
-    // while the editor is silent.
-    s.crash(arena)
-    s.hover(0, "add", "right after the crash", arena)
-    sys.sleep_ms(500)
-    for k in Range.asc(LSP_DOCS)
-        s.hover(k, "add", "after the pause", arena)
-    // A burst while the worker is remade: edits and a request, read as they come.
-    s.crash(arena)
-    for k in Range.asc(LSP_DOCS)
-        s.change(k, "sum", 2, arena)
-    for k in Range.asc(LSP_DOCS)
-        s.hover(k, "sum", "after the edits", arena)
-    // A burst with no wait in between: the thread adds frames to the inbox while the main loop
-    // takes them out. The last edit of each document names it `late`.
-    for i in Range.asc(LSP_BURST)
-        name: = "late" if i >= LSP_BURST - LSP_DOCS else "mid"
-        s.change(i % LSP_DOCS, name, 3 + i, arena)
-    for k in Range.asc(LSP_DOCS)
-        s.hover(k, "late", "after the burst", arena)
-    _down: = s.c.request("shutdown", .null_val, s.wait_ms(), arena) catch {}
-    s.c.notify("exit", .null_val, lsp_client.SEND_MS, arena) catch {}
-    deadline: = sys.mono_us() + LSP_EXIT_MS * 1000I64
-    for s.c.alive() && sys.mono_us() < deadline
-        sys.sleep_ms(20)
-    if s.c.alive()
-        said: = "the server did not end after `exit` with its input still open"
-        s.faults.push(lsp_client.why(s.c, said, arena))
-    return s.faults
-
-priv fn race_lsp(work: U8[], deps: Str_builder$@, arena: Arena$@) //<
-    //< The language server through one session, its supervisor's reading thread included
+priv fn race_lsp(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<
+    //< The language server through one editor's session, its supervisor's reading thread included
+    //< **ksplc itself is built with the sanitizer**, and `tests/support/race_lsp_session.kspl`
+    //< plays the session to it. The session runs beside the other programs, under the same limit.
+    //< Its worker is the same build (the supervisor starts its own executable), so both sides are
+    //< watched.
     name: = "the language server runs an editor's session with no data race"
-    root: = harness.root()
-    b: =
-        build(root, fs.join(root, "ksplc/main.kspl", arena),
-        fs.join(work, "ksplc.exe", arena), OPT_FOR_BUILD, "", arena)
-    if b.exe.len == 0
-        verdict.check(name, false, b.why)
+    exes: = builds.exes(name, U8[][]::{ "ksplc", "lsp_session" }, arena)
+    if exes.len == 0
         return
-    deps.s(b.deps)
-    log_dir: = fs.join(work, "lsp_log", arena)
     top: = fs.join(work, "lsp_ws", arena)
-    fs.mkdir_all(log_dir) catch {}
     fs.mkdir_all(top) catch {}
-    faults: = play_lsp_session(b.exe, log_dir, top, arena)
-    races: = reports_in(log_dir, arena)
-    why: = arena.text().s(tallied(races@, arena))
-    for f in faults
-        why.s(f).c('\n')
-    if races.len > 0
-        why.s("the whole reports are in ").s(log_dir)
-    verdict.check(name, races.len == 0 && faults.len == 0, why.take())
+    argv: = harness_sanitizer.kept(U8[][]::{ exes.get(1), exes.get(0), top,
+        arena.text().s("\{RACE_LIMIT_MS\}").take() }, arena)
+    std_at: = arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take()
+    runs
+        .push(Raced::{ .name = name, .dir = top, .argv = argv,
+        .log_dir = fs.join(work, "lsp_log", arena),
+        .env = harness_sanitizer.kept(U8[][]::{ std_at }, arena) })
 
 priv fn check_covered(deps: U8[], arena: Arena$@) //<
     //< Every tracked source that starts a thread is compiled into a program above, or left out
@@ -587,12 +503,13 @@ fn main(): I32
     check_fires(work, arena)
     defer $deps: = Str_builder()
     $runs: = List<|Raced|>(arena)
-    race_tests(work, deps@, runs@, arena)
-    race_ksai(work, deps@, runs@, arena)
-    race_ksai_pool(work, deps@, runs@, arena)
-    race_kstls(work, deps@, runs@, arena)
-    race_ksagent(work, deps@, runs@, arena)
-    race_lsp(work, deps@, arena)
+    builds: = build_programs(work, deps@, arena)
+    race_tests(work, builds@, runs@, arena)
+    race_ksai(work, builds@, runs@, arena)
+    race_ksai_pool(work, builds@, runs@, arena)
+    race_kstls(work, builds@, runs@, arena)
+    race_ksagent(work, builds@, runs@, arena)
+    race_lsp(work, builds@, runs@, arena)
     run_all_raced(runs@, work, arena)
     check_covered(deps.slice(), arena)
     return ksplc_harness.finish()

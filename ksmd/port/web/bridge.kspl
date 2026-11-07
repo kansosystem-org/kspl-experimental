@@ -10,6 +10,7 @@
 import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
 import "ksmd/edit/editor" { Input }
 import "ksmd/edit/editor"
+import "ksmd/edit/editor_blocks" // `insert_divider`, `insert_image`, `insert_functions`, `insert_include`
 import "ksmd/edit/editor_diagrams" // `insert_diagram`, `set_diagram`
 import "ksmd/edit/editor_drawings" // `set_drawings`
 import "ksmd/edit/editor_looks"
@@ -23,9 +24,9 @@ import "ksmd/files/files" { Refusal, resolve_text }
 import "ksmd/files/image" { measure }
 import "ksmd/model/model" { Settings }
 import "ksmd/port/web/bridge_own" { own_functions } // a person's own functions, and their actions
-import "ksmd/port/web/bridge_session" { HEAP_BYTES, RESERVE, assembled, begin, doc_path, ed, ensure,
-    fetched, files, full, here, loading, number, out, refused, release_input, result, result_with,
-    session, text_in }
+import "ksmd/port/web/bridge_session" { HEAP_BYTES, RESERVE, assembled, auto, begin, doc_path, ed,
+    ensure, fetched, files, full, here, loading, number, out, refused, release_input, result,
+    result_with, session, text_in }
 import "ksmd/port/web/bridge_tables" as _tables // the table actions; this brings them into the wasm
 import "ksmd/port/web/moving"
 import "ksmd/syntax/reader"
@@ -66,6 +67,7 @@ extern fn ksmd_web_load(len: Sz, year: I32, month: I32, day: I32): I32 //<
         .create(editor.open(doc, date_text(year, month, day, session), session))
     // **The page's own functions stay**: the script changes them once it sees the new clauses.
     ed.own = own_functions()
+    ed.auto = auto
     release_input()
     out.s("{\"ok\":true}")
     return 1
@@ -316,6 +318,30 @@ extern fn ksmd_web_insert_image(src_len: Sz, alt_len: Sz): Sz //<
         return full()
     both: = text_in(src_len + alt_len)
     ed.insert_image(both.sub(0, src_len), both.sub_from(src_len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_image_width(block: Sz, width: Sz): Sz //<
+    //< Gives an image its share of the text width in percent, 1 to 100, or 0 to fit it
+    if !begin()
+        return full()
+    ed.set_image_width(block, width) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_image_words(block: Sz, caption: I32, len: Sz): Sz //<
+    //< Gives an image its caption (`caption` 1) or its alternate text (0); empty text takes it away
+    if !begin()
+        return full()
+    ed.set_image_words(block, caption != 0, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+extern fn ksmd_web_image_src(block: Sz, len: Sz): Sz //<
+    //< Points an image at another file, by its path from the document's folder
+    if !begin()
+        return full()
+    ed.set_image_src(block, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 

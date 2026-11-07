@@ -44,6 +44,13 @@ fn read_clause(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$
         doc.blocks[at].invisible = true
     return next
 
+fn percent_of(text: U8[]): Sz //< `40%` as 40: a whole number from 1 to 100 and `%`; 0 for none
+    if text.len < 2 || text.len > 4 || !text.ends_with("%")
+        return 0
+    n: = text.sub(0, text.len - 1).to_count(100) catch
+        return 0
+    return n
+
 priv fn invisible_of(src: Source@, attributes: List<|Attribute|>): Bool!Diagnostic //<
     //< Whether the clause holds `invisible="printing"`, which leaves its block out of print and PDF
     a: = find(attributes, "invisible") catch
@@ -68,8 +75,8 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             .count = 0, .offset = first.offset, .align = .none, .note = "", .invisible = false })
         return empty_body(src, first, "':::include' has no body. Close it on the next line")
     if kind.equals("image")
-        allow(src, attributes, U8[][]::{ "src", "alt", "caption", "invisible" },
-            "':::image' takes only src, alt, caption and invisible")!
+        allow(src, attributes, U8[][]::{ "src", "alt", "caption", "width", "invisible" },
+            "':::image' takes only src, alt, caption, width and invisible")!
         image_src: =
             required(src, first, attributes, "src", "':::image' needs src and alt")!
         alt: =
@@ -79,6 +86,12 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             caption = string_of(src, a)!
             if caption.len == 0
                 throw src.diagnostic(a.offset, "leave out an empty caption")
+        $width: Sz = 0
+        if a: = find(attributes, "width")
+            width = percent_of(string_of(src, a)!)
+            if width == 0
+                throw src.diagnostic(a.offset,
+                    "width is a share of the text width, \"1%\" to \"100%\", or leave it out")
         doc.blocks
             .push(Block::{ .kind = .image, .level = 0, .label = "", .text = "",
             .first = doc.images.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
@@ -86,7 +99,8 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
         $drawings: = List<|Drawing|>(arena)
         next: = read_drawings(src, first, drawings@, arena)!
         doc.images
-            .push(Image::{ .src = image_src, .alt = alt, .caption = caption, .drawings = drawings })
+            .push(Image::{ .src = image_src, .alt = alt, .caption = caption, .width = width,
+            .drawings = drawings })
         return next
     if kind.equals("chart")
         return read_chart(src, first, attributes, doc, arena)

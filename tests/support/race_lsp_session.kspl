@@ -1,0 +1,151 @@
+//< An editor's session played to the language server, for `tests/suite/race_test.kspl` to race
+//< **Its supervisor reads the editor on a thread of its own** while the main loop pumps the worker,
+//< restarts it and hands it the documents. No test program reaches that. So the race gate builds
+//< ksplc with the sanitizer and runs this program beside its other raced programs. The server
+//< finds std and its sanitizer's log folder in the environment it is started with.
+//< It prints what went wrong, one line each, and exits 1 where anything did.
+
+// ==========================================
+// Usage:
+//     race_lsp_session <ksplc built with the sanitizer> <workspace folder> <limit in ms>
+// ==========================================
+import "ksplc/tests/support/jsonrpc_client"
+import "ksplc/tests/support/lsp_client"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum"
+import "std/sys"
+
+priv const LSP_DOCS: Sz = 4 //< how many documents the session opens
+priv const LSP_WAIT_MS: I32 = 60000 //< how long one answer may take under the sanitizer
+priv const LSP_EXIT_MS: I64 = 30000I64 //< how long the server may take to end after `exit`
+priv const LSP_BURST: Sz = 40 //< the edits sent at once, with no answer awaited in between
+
+priv fn lsp_text(fn_name: U8[], k: Sz, arena: Arena$@): U8[] //<
+    //< A document whose `main` calls a function named fn_name and k; the hovers ask at its call
+    return arena.text().s("fn ").s(fn_name).s("\{k\}(a: I32, b: I32): I32 //< adds\n")
+        .s("    return a + b\n\nfn main(): I32\n    return ").s(fn_name).s("\{k\}(1, 2)\n").take()
+
+struct Lsp_session //< the client playing the editor, the workspace, and what went wrong
+    c: jsonrpc_client.Client$@
+    top: U8[]
+    faults: List<|U8[]|>
+    deadline: I64 //< the `mono_us` reading past which nothing more is asked
+    limit_s: I64 //< the whole session's limit, for the fault that names it
+
+impl Lsp_session
+    priv fn uri(r: Self@, k: Sz, arena: Arena$@): U8[]
+        return lsp_client.uri_of(r.top, arena.text().s("d\{k\}.kspl").take(), arena)
+
+    priv fn change(r: Self@, k: Sz, fn_name: U8[], version: Sz, arena: Arena$@) //<
+        //< a didChange of the whole text
+        $b: = Json_builder(arena)
+        td: = b.obj().set("uri", b.str_val(r.uri(k, arena)))
+            .set("version", b.int_val(version)).build()
+        change: = b.obj().set("text", b.str_val(lsp_text(fn_name, k, arena))).build()
+        params: = b.obj().set("textDocument", td)
+            .set("contentChanges", b.arr().push(change).build()).build()
+        r.c.notify("textDocument/didChange", params, lsp_client.SEND_MS, arena) catch {}
+
+    priv fn hover(r: Self$@, k: Sz, fn_name: U8[], when: U8[], arena: Arena$@) //<
+        //< A hover at document k's call, which must name fn_name and k
+        wait: = r.wait_ms()
+        if wait == 0
+            r.faults
+                .push(arena.text().s("a hover on d\{k\} ").s(when).s(" was not asked: the ")
+                .s("session ran past its \{r.limit_s\} s").take())
+            return
+        at: = lsp_client.at_pos(r.uri(k, arena), 4, 12, arena)
+        got: = lsp_client.answer(r.c, "textDocument/hover", at, wait, arena)
+        text: = lsp_client.hover_text(got)
+        want: = arena.text().s(fn_name).s("\{k\}").take()
+        if text.find_str(want).is_none()
+            said: = arena.text().s("a hover on d\{k\} ").s(when).s(" did not name `").s(want)
+                .s("`: '").s(text).s("'").take()
+            r.faults.push(lsp_client.why(r.c, said, arena))
+
+    priv fn wait_ms(r: Self@): I32 //< how long the next answer may take; 0 past the deadline
+        left: = (r.deadline - sys.mono_us()) / 1000I64
+        if left <= 0I64
+            return 0
+        return LSP_WAIT_MS if left > I64::LSP_WAIT_MS else I32::left
+
+    priv fn crash(r: Self@, arena: Arena$@) //< the worker's crash hook (`$/ksplTestCrash`)
+        $b: = Json_builder(arena)
+        r.c.notify("$/ksplTestCrash", b.obj().build(), lsp_client.SEND_MS, arena) catch {}
+
+priv fn play(exe: U8[], top: U8[], limit_ms: I64, arena: Arena$@): List<|U8[]|> //<
+    //< An editor's session with the server, returning what went wrong; empty where it all answered
+    //< **Each step gives the reading thread something to do beside the main loop.** A crash comes
+    //< with more messages at once, read while the worker is restarted and handed the documents.
+    //< In a pause, the main loop analyses the documents nobody asked for while the thread waits on
+    //< the input. In a burst, the two work on the inbox at once. On `exit` with the input still
+    //< open, the thread must stop by itself. **Questions stop `LSP_EXIT_MS` before the limit**, so
+    //< the wait for `exit` also ends within it.
+    $faults: = List<|U8[]|>(arena)
+    defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "lsp" }, top) catch
+        faults.push("the server cannot be started")
+        return faults
+    $s: = Lsp_session::{ .c = c@, .top = top, .faults = faults,
+        .deadline = sys.mono_us() + (limit_ms - LSP_EXIT_MS) * 1000I64,
+        .limit_s = limit_ms / 1000I64 }
+    $b: = Json_builder(arena)
+    _init: =
+        s.c.request("initialize", b.obj().build(), s.wait_ms(), arena) catch {}
+    s.c.notify("initialized", b.obj().build(), lsp_client.SEND_MS, arena) catch {}
+    for k in Range.asc(LSP_DOCS)
+        s.c
+            .notify("textDocument/didOpen",
+            lsp_client.did_open(s.uri(k, arena), lsp_text("add", k, arena), arena),
+            lsp_client.SEND_MS, arena) catch {}
+    for k in Range.asc(LSP_DOCS)
+        s.hover(k, "add", "before the crash", arena)
+    // The first document's request comes while the worker is remade; the others are analysed
+    // while the editor is silent.
+    s.crash(arena)
+    s.hover(0, "add", "right after the crash", arena)
+    sys.sleep_ms(500)
+    for k in Range.asc(LSP_DOCS)
+        s.hover(k, "add", "after the pause", arena)
+    // A burst while the worker is remade: edits and a request, read as they come.
+    s.crash(arena)
+    for k in Range.asc(LSP_DOCS)
+        s.change(k, "sum", 2, arena)
+    for k in Range.asc(LSP_DOCS)
+        s.hover(k, "sum", "after the edits", arena)
+    // A burst with no wait in between: the thread adds frames to the inbox while the main loop
+    // takes them out. The last edit of each document names it `late`.
+    for i in Range.asc(LSP_BURST)
+        name: = "late" if i >= LSP_BURST - LSP_DOCS else "mid"
+        s.change(i % LSP_DOCS, name, 3 + i, arena)
+    for k in Range.asc(LSP_DOCS)
+        s.hover(k, "late", "after the burst", arena)
+    _down: = s.c.request("shutdown", .null_val, s.wait_ms(), arena) catch {}
+    s.c.notify("exit", .null_val, lsp_client.SEND_MS, arena) catch {}
+    deadline: = sys.mono_us() + LSP_EXIT_MS * 1000I64
+    for s.c.alive() && sys.mono_us() < deadline
+        sys.sleep_ms(20)
+    if s.c.alive()
+        said: = "the server did not end after `exit` with its input still open"
+        s.faults.push(lsp_client.why(s.c, said, arena))
+    return s.faults
+
+fn main(): I32
+    defer arena: = Arena(1024 * 1024)
+    args: = sys.args()
+    if args.len != 4
+        io.err().s("usage: race_lsp_session <ksplc> <workspace folder> <limit in ms>\n")
+        return 2
+    limit_ms: = args.get(3).to_i64() catch
+        fallback 0I64
+    if limit_ms <= LSP_EXIT_MS
+        io.err().s("race_lsp_session: the limit must be over \{LSP_EXIT_MS\} ms\n")
+        return 2
+    faults: = play(args.get(1), args.get(2), limit_ms, arena)
+    for f in faults
+        io.out().s(f).c('\n')
+    return 0 if faults.len == 0 else 1

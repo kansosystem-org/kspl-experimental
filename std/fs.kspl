@@ -775,7 +775,7 @@ pub struct File_lock //< a lock on a file; another process that asks for it wait
     //< front.
     priv handle: I64 //< the runtime's handle; 0 once `free()` has released it
 
-impl File_lock
+impl File_lock: Move_only //< copying it would release one lock twice
     priv fn open(path: U8[]): I64!Fs_error //< opens the file for locking, creating it if missing
         check_path(path)!
         h: = kspl_lock_open(path.ptr, path.len)
@@ -800,7 +800,6 @@ impl File_lock
         //< first.
         return File_lock.held(File_lock.open(path)!, 0)
 
-impl File_lock: Move_only {} //< copying it would release one lock twice
 impl File_lock: Manual_free //< it owns its lock and releases it with `free()`
     pub fn free(r: Self$@) //< releases the lock and closes the file
         if r.handle != 0

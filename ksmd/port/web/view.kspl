@@ -1,12 +1,13 @@
 //< What the page shows of a document, written as JSON for the page's script to build HTML from
-//< A block is an object with a kind letter `k`: `p`, `h`, `c`, `l`, `q` quote, `d` divider, `t`,
-//< `g` chart, `i` and `n` include. A list item has its depth `d`, `o` 1 when numbered, and `x` 1
-//< or 2 for an open or a ticked box. Text is a list of segments `{"t":…,"m":…,"l":…}`: `m` adds 1
-//< for emphasis, 2 strong, 4 code; `l` is a link's destination; a hard break is `{"br":1}`. A cell
-//< is `[kind]` or `[kind, value]`: 0 empty, 1 number, 2 text, 3 an error's mark, 4 a truth value,
-//< 5 a date; a number adds its shown text (`cell`). A spot is `[place, block, item, offset]`:
-//< place 0 text, 1 a block's gap, 2 an item's. An include and an image add where their path leads
-//< (`to`) and any problem (`why`), and an include its file's blocks (`inside`).
+//< A block is an object with a kind letter `k`: `p`, `h`, `c`, `l`, `q` quote, `d` divider, `e`
+//< blank line, `t`, `g` chart, `i` and `n` include. A list item has its depth `d`, `o` 1 when
+//< numbered, and `x` 1 or 2 for an open or a ticked box. Text is a list of segments
+//< `{"t":…,"m":…,"l":…}`: `m` adds 1 for emphasis, 2 strong, 4 code; `l` is a link's destination; a
+//< hard break is `{"br":1}`. A cell is `[kind]` or `[kind, value]`: 0 empty, 1 number, 2 text, 3 an
+//< error's mark, 4 a truth value, 5 a date; a number adds its shown text (`cell`). A spot is
+//< `[place, block, item, offset]`: place 0 text, 1 a block's gap, 2 an item's. An include and an
+//< image add where their path leads (`to`) and any problem (`why`), and an include its file's
+//< blocks (`inside`).
 //< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
 import "ksmd/base/dates" { write_date, write_date_with }
 import "ksmd/base/keyed" { Keyed }
@@ -68,7 +69,7 @@ fn blocks(ed: Editor@, from: Sz, to: Sz, values: Results@, inside: Inside$@, out
         if b > from
             out.c(',')
         entry: = inside.top.get(b) if inside != null && b < inside.top.len else NONE
-        block(ed.doc@, b, values, out, scratch, inside, entry)
+        block(ed.doc@, b, values, out, scratch, inside, entry, ed.own)
     out.c(']')
 
 fn tables( //< each table and chart block outside `from` to `to`, as a JSON list
@@ -94,7 +95,7 @@ fn tables( //< each table and chart block outside `from` to `to`, as a JSON list
         first = false
         out.s("[\{b\},")
         entry: = inside.top.get(b) if inside != null && b < inside.top.len else NONE
-        block(ed.doc@, b, values, out, scratch, inside, entry)
+        block(ed.doc@, b, values, out, scratch, inside, entry, ed.own)
         out.c(']')
     out.c(']')
 
@@ -137,6 +138,8 @@ priv fn kind_letter(kind: Block_kind): U8[]
         return "q"
     case .divider
         return "d"
+    case .blank
+        return "e"
     case .functions
         return "f"
     case .document
@@ -145,8 +148,9 @@ priv fn kind_letter(kind: Block_kind): U8[]
         return "x"
 
 priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
-    inside: Inside$@, entry: Sz) //<
-        //< One block; `entry` is its entry in `inside`'s view, or `NONE`
+    inside: Inside$@, entry: Sz, own: Own_functions@) //<
+        //< One block; `entry` is its entry in `inside`'s view, or `NONE`; `own` the page's own
+        //< functions, or null
     x: = doc.blocks.get(b)
     out.s("{\"k\":\"").s(kind_letter(x.kind)).c('"')
     if x.invisible
@@ -186,11 +190,11 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
             out.s(",\"s\":")
             segs(units[0].segs@, out)
     case .table
-        table(doc, x.first, values, out)
+        table(doc, x.first, values, out, own, scratch)
     case .chart
         chart(doc, doc.charts[x.first]@, values, out)
         drawings(doc.charts[x.first].drawings@, out)
-    case .divider {}
+    case .divider, .blank {}
     case .image
         image: = doc.images.get(x.first)
         out.s(",\"src\":")
@@ -199,6 +203,7 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         text(image.alt, out)
         out.s(",\"cap\":")
         text(image.caption, out)
+        out.s(",\"w\":\{image.width\}")
         drawings(image.drawings@, out)
         if entry != NONE
             aim(inside, entry, out)
@@ -265,7 +270,7 @@ priv fn included(inside: Inside$@, entry: Sz, out: Str_builder$@, scratch: Arena
         if !first
             out.c(',')
         first = false
-        block(source.doc@, e.block, values@, out, scratch, inside, k)
+        block(source.doc@, e.block, values@, out, scratch, inside, k, inside.own)
     out.c(']')
 
 priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
@@ -292,10 +297,12 @@ priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
         out.c('}')
     out.c(']')
 
-priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
-    //< `"name"`, the columns' widths in tenths of a character `"w"`, the rows' heights `"h"`, the
-    //< columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`) and columns
-    //< (`"ci"`), the groups of rows (`"g"`) and of columns (`"cg"`), and each data row's values
+priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine: Own_functions@,
+    memory: Arena$@) //<
+        //< `"name"`, the columns' widths in tenths of a character `"w"`, the rows' heights `"h"`, the
+        //< columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`) and
+        //< columns (`"ci"`), the groups of rows (`"g"`) and of columns (`"cg"`), and each data
+        //< row's values. `"own"` names the page's own functions each cell's formula calls.
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
     text(t.name, out)
@@ -373,6 +380,24 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
         text(t.cells[i].note, out)
         out.c(']')
+    // Each cell whose formula calls the page's own functions, as [row, column, their names].
+    out.s("],\"own\":[")
+    $marked: = false
+    for i in Range.asc(t.cells.len)
+        if mine == null
+            break
+        names: = mine.called(t, t.cells[i], memory)
+        if names.len == 0
+            continue
+        if marked
+            out.c(',')
+        marked = true
+        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},[")
+        for k in Range.asc(names.len)
+            if k > 0
+                out.c(',')
+            text(names[k], out)
+        out.s("]]")
     // Each link as [row, column, destination].
     out.s("],\"links\":[")
     $linked: = false
@@ -476,7 +501,8 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
     out.s("]")
 
 priv fn drawings(list: List<|Drawing|>@, out: Str_builder$@) //<
-    //< `"dr"`: each shape drawn over an image or a chart, as [shape, x1, y1, x2, y2, colour, text]
+    //< `"dr"`: each shape drawn over an image or a chart, as [shape, x1, y1, x2, y2, colour, text,
+    //< points], `points` a pen line's `"x,y x,y"` and empty for any other shape
     out.s(",\"dr\":[")
     for i in Range.asc(list.len)
         d: = list[i]
@@ -488,6 +514,8 @@ priv fn drawings(list: List<|Drawing|>@, out: Str_builder$@) //<
         text(d.color, out)
         out.c(',')
         text(d.text, out)
+        out.c(',')
+        text(d.points, out)
         out.c(']')
     out.c(']')
 

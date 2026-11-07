@@ -1,0 +1,68 @@
+//< Tasks created and deleted on the heap from several tasks at once, under a fast tick
+//< Three tasks of one priority each create tasks with `create_dyn` and end them with `delete_dyn`.
+//< Either the new task deletes itself, or its creator deletes it. A tick every few
+//< microseconds cuts each of them anywhere in `lib/ksos/kernel/dynamic.kspl`. Every Task and stack
+//< must go back to the heap exactly once. A double free stops the run. A lost one shows in the
+//< heap's count at the end.
+import "ksos/kernel/dynamic" as dyn
+import "ksos/kernel/task" + { Task }
+import "std/mem"
+import "std/verdict"
+
+const CHURNERS: I32 = 3
+const ROUNDS: I32 = 2000
+const DYN_STACK: Sz = 16384
+
+$tcb_1: Task
+$tcb_2: Task
+$tcb_3: Task
+$stack_1: U8[65536]
+$stack_2: U8[65536]
+$stack_3: U8[65536]
+$g_done: I32 = 0
+
+fn ends_itself(_arg: Void$@): Void //< a task that deletes itself at once
+    Task.current().delete_dyn()
+
+fn waits_forever(_arg: Void$@): Void //< a task its creator deletes
+    for
+        Task.yield()
+
+const FULL_YIELDS: I32 = 1000 // the yields a full table may take to empty before it counts as a leak
+
+fn create_or_wait(entry: task.Task_fn, name: U8[]): Task$@ //< creates a task once a slot is free
+    //< **A full table is waited out, not a failure.** A task that ends itself frees its slot only
+    //< once it has run. Between ticks, a churner can create more of them than there are slots (the
+    //< faster the machine, the more). A slot lost for good still fails: the yields run out.
+    $yields: I32 = 0
+    for
+        switch Task.create_dyn(entry, null, 1, name, DYN_STACK)
+        case .some(t)
+            return t
+        case .none
+            yields += 1
+            assert(yields < FULL_YIELDS,
+                "dyn_race: a slot never came back, so a deleted task was not freed")
+            Task.yield()
+
+fn churn(_arg: Void$@): Void //< creates tasks and sees each one end, both ways, many times over
+    for _i in Range.asc(ROUNDS)
+        create_or_wait(ends_itself, "self")
+        create_or_wait(waits_forever, "other").delete_dyn()
+    g_done += 1
+
+fn main(): I32
+    verdict.start("[ksos] tasks created and deleted on the heap from three tasks under a fast tick")
+    before: = mem.heap_used_bytes()
+    tcb_1.create(U8$[]::stack_1, churn, null, 1, "churn 1")
+    tcb_2.create(U8$[]::stack_2, churn, null, 1, "churn 2")
+    tcb_3.create(U8$[]::stack_3, churn, null, 1, "churn 3")
+    task.enable_preemption(100) // a tick every 100 us, so every stretch of the work is cut somewhere
+    task.start_scheduler() // returns once every task is done
+    task.enable_preemption(1000000000) // no tick past this point
+    dyn.reap_pending()
+    assert(g_done == CHURNERS, "dyn_race: a churning task did not finish")
+    assert(mem.heap_used_bytes() == before,
+        "dyn_race: every Task and stack from create_dyn goes back to the heap")
+    verdict.pass("each Task and stack went back to the heap once, with no slot taken twice.")
+    return verdict.finish()

@@ -140,6 +140,7 @@ function ksmdTable(ks) {
     ks.outline.draw(wrap, b.g);
     ks.outline.drawColumns(wrap, b.cg);
     ks.notes.mark(wrap, b.notes);
+    if (ks.ownMark) ks.ownMark(wrap, b.own);
     ks.filter.apply(wrap);
     ks.sizes.decorate(wrap, b.h);
     return wrap;

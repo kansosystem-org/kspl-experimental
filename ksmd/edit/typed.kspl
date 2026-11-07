@@ -1,0 +1,57 @@
+//< How text typed into a table's cell is read: a formula, a number, a date, text, or nothing
+//< `set_cell` in `editor_tables.kspl` reads with it, by the switches of the editor's `Auto_entry`.
+import "ksmd/base/dates" { is_date, month_day, typed_date, write_date }
+import "ksmd/base/marker" { is_decimal }
+import "ksmd/model/model" { Cell_kind }
+import "ksmd/syntax/inline" { is_destination }
+import "std/chars"
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum"
+
+struct Value //< what typed text puts in a cell
+    kind: Cell_kind
+    text: U8[] //< a formula without its `=`, a number as written, or the text
+
+struct Reading //< how typed text is read, as the editor's `Auto_entry` sets it
+    dates: Bool //< whether `2026/10/23` and `11/6` become dates
+    year: I64 //< the year `11/6` falls in: the year the document was opened, 0 for none
+
+fn is_web_address(text: U8[]): Bool //< whether typed text is an `https:` or `http:` address alone
+    return (text.starts_with("https://") || text.starts_with("http://")) && is_destination(text)
+
+fn value_of(typed: U8[], read: Reading, arena: Arena$@): Value //< how `set_cell` reads typed text
+    if typed.len == 0
+        return Value::{ .kind = .empty, .text = "" }
+    if typed[0] == '='
+        return Value::{ .kind = .formula, .text = typed.sub_from(1) }
+    if typed[0] == '"'
+        if text: = quoted(typed, arena)
+            return Value::{ .kind = .text, .text = text }
+    // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`.
+    if is_decimal(typed) && is_finite(typed)
+        return Value::{ .kind = .number, .text = typed }
+    if is_date(typed)
+        return Value::{ .kind = .date, .text = typed }
+    if !read.dates
+        return Value::{ .kind = .text, .text = typed }
+    // A date typed with `/` is kept in the file's own form; `11/6` falls in `read.year`.
+    $day: = typed_date(typed)
+    if day.is_none() && read.year > 0I64
+        day = month_day(typed, read.year)
+    if d: = day
+        defer $text: = Str_builder()
+        write_date(d, text@)
+        return Value::{ .kind = .date, .text = arena.dup_str(text.slice()) }
+    return Value::{ .kind = .text, .text = typed }
+
+priv fn is_finite(number: U8[]): Bool //< whether a number as JSON writes one is below infinity
+    value: = number.to_f64() catch
+        return false
+    return value - value == 0.0
+
+priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one
+    parsed: = json.parse(typed, arena) catch
+        return .none
+    return parsed.val.as_str()

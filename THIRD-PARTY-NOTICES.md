@@ -8,7 +8,7 @@ Caution: **When you add a file that declares an origin, add it here too.** A sou
 
 * **A file carrying a license's own words is listed here.** Such words are an `SPDX-License-Identifier`, a `Copyright (c)` line or a license's grant. Code copied with its header brings its terms with it.
 * **Every file listed here exists**, so a rename cannot leave a notice pointing at nothing.
-* **A file owing a notice is outside what the release ships.** The release's zip holds `LICENSE.md` but not this file. So no such file may stand in what the zip takes (`RELEASED` in `tests/support/conventions_notice.kspl`). Today they stand under `ksos/`, `lib/ksai/` and `ksagent/`, which it does not take.
+* **A file owing a notice is outside what the release ships.** The release's zip holds `LICENSE.md` but not this file. So no such file may stand in what the zip takes (`RELEASED` in `tests/support/conventions_notice.kspl`). Today they stand under `lib/ksos/`, `lib/ksai/` and `ksagent/`, which it does not take.
 * **Every binary file is listed under "Binary files" with where it comes from.** A model's weights inherit the license of the model that they were converted from.
 
 ## Raspberry Pi pico-sdk / pico-examples (BSD-3-Clause)
@@ -23,18 +23,18 @@ The notice is here anyway because **it is cheaper than arguing over whether the 
 
 | File | What it originates from |
 | :-- | :-- |
-| `ksos/port/rp2040/boot2_generic_03h.S` | the order of the SSI settings and the exit handling in `boot_stage2/boot2_generic_03h.S` and `exit_from_boot2.S` |
-| `ksos/port/rp2040/pad_checksum.kspl` | how `boot_stage2/pad_checksum` applies the checksum |
-| `ksos/port/rp2040/elf2uf2.kspl` | the shape of `elf2uf2`'s output |
-| `ksos/drivers/rp2040/adc.kspl` | the register addresses and field positions in `regs/adc.h` and `regs/resets.h` |
-| `ksos/drivers/rp2040/clocks.kspl` | the values in the register headers, and the procedures in `xosc.c`, `pll.c` and `runtime_init_clocks.c` |
-| `ksos/drivers/rp2040/gpio.kspl` | the register addresses and field positions in `hardware_regs` |
-| `ksos/drivers/rp2040/i2c.kspl` | the values in `regs/i2c.h`, the derivation of the SCL divisor, and the initialization procedure |
-| `ksos/drivers/rp2040/pwm.kspl` | the register addresses and field positions in `regs/{pwm,resets,addressmap}.h` |
-| `ksos/drivers/rp2040/resets.kspl` | the procedure for waiting on the release |
-| `ksos/drivers/rp2040/rtc.kspl` | the values in the register headers, and the numbering of the days of the week |
-| `ksos/drivers/rp2040/timer.kspl` | the register addresses and field positions in `regs/{timer,addressmap}.h` |
-| `ksos/drivers/rp2040/usb_cdc.kspl` | the values in the register headers and `structs/usb_dpram.h`, and pico-examples' USB start-up procedure |
+| `lib/ksos/port/rp2040/boot2_generic_03h.S` | the order of the SSI settings and the exit handling in `boot_stage2/boot2_generic_03h.S` and `exit_from_boot2.S` |
+| `lib/ksos/port/rp2040/pad_checksum.kspl` | how `boot_stage2/pad_checksum` applies the checksum |
+| `lib/ksos/port/rp2040/elf2uf2.kspl` | the shape of `elf2uf2`'s output |
+| `lib/ksos/drivers/rp2040/adc.kspl` | the register addresses and field positions in `regs/adc.h` and `regs/resets.h` |
+| `lib/ksos/drivers/rp2040/clocks.kspl` | the values in the register headers, and the procedures in `xosc.c`, `pll.c` and `runtime_init_clocks.c` |
+| `lib/ksos/drivers/rp2040/gpio.kspl` | the register addresses and field positions in `hardware_regs` |
+| `lib/ksos/drivers/rp2040/i2c.kspl` | the values in `regs/i2c.h`, the derivation of the SCL divisor, and the initialization procedure |
+| `lib/ksos/drivers/rp2040/pwm.kspl` | the register addresses and field positions in `regs/{pwm,resets,addressmap}.h` |
+| `lib/ksos/drivers/rp2040/resets.kspl` | the procedure for waiting on the release |
+| `lib/ksos/drivers/rp2040/rtc.kspl` | the values in the register headers, and the numbering of the days of the week |
+| `lib/ksos/drivers/rp2040/timer.kspl` | the register addresses and field positions in `regs/{timer,addressmap}.h` |
+| `lib/ksos/drivers/rp2040/usb_cdc.kspl` | the values in the register headers and `structs/usb_dpram.h`, and pico-examples' USB start-up procedure |
 
 ```text
 Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
@@ -303,7 +303,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 | Name | Where it appears | What is not included |
 | :-- | :-- | :-- |
-| Freenove 4WD car kit | `ksos/boards/freenove_4wd_pico/` | The vendor material itself. **It is a rule not to copy it in** ("Where the facts come from" in [`ksos/docs/SPEC-board.md`](ksos/docs/SPEC-board.md)). Only hardware facts, such as pin numbers, are used, read from the official repository |
+| Freenove 4WD car kit | `lib/ksos/boards/freenove_4wd_pico/` | The vendor material itself. **It is a rule not to copy it in** ("Where the facts come from" in [`lib/ksos/docs/SPEC-board.md`](lib/ksos/docs/SPEC-board.md)). Only hardware facts, such as pin numbers, are used, read from the official repository |
 | Qwen | `lib/ksai/qwen.kspl`, `lib/ksai/examples/`, `lib/ksai/tools/` | The weights. Only the code that reads or converts them is present. **Whoever downloads and uses them follows Qwen's own license** |
 | Llama | `lib/ksai/examples/llama_engine/` | Meta's weights. The bundled `mini_llama.safetensors` is made here, with a vocabulary of 12 and two layers; only the shape is borrowed |
 | PyTorch / transformers / peft | `lib/ksai/tools/*.py`, `lib/ksai/examples/code_complete/*.py` | The packages themselves. The tools assume you install them on your own machine |
@@ -338,10 +338,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 | `lib/ksai/tests/quant_data/q8_0.bin` | Made here: seeded random numbers in GGUF's Q8_0 format, and their reference values from llama.cpp's Python package `gguf`, written by [`lib/ksai/tools/make_quant_fixtures.py`](lib/ksai/tools/make_quant_fixtures.py) | This repository's |
 | `lib/ksai/tests/qwen_data/tiny_qwen3.gguf` | Made here: seeded random weights of Qwen3's shape (2 blocks, 32 wide), written by [`lib/ksai/tools/make_qwen_fixtures.py`](lib/ksai/tools/make_qwen_fixtures.py) through llama.cpp's Python package `gguf`. It carries Qwen3-4B-Instruct-2507's chat template (its section above) | This repository's; the chat template Apache-2.0 |
 | `lib/ksai/tests/qwen_data/tiny_qwen35.gguf` | Made here: seeded random weights of Qwen3.5's shape (4 blocks, 32 wide, two of them delta nets), written by [`lib/ksai/tools/make_qwen35_fixtures.py`](lib/ksai/tools/make_qwen35_fixtures.py) through llama.cpp's Python package `gguf`. It carries Qwen3.5-9B's chat template (its section above) | This repository's; the chat template Apache-2.0 |
-| `ksos/demo/cortex_m/pilot_policy.safetensors` | Made here: the Edge AI car's piloting policy, trained on a PC by this repository's own code | This repository's |
+| `lib/ksos/demo/cortex_m/pilot_policy.safetensors` | Made here: the Edge AI car's piloting policy, trained on a PC by this repository's own code | This repository's |
 | `ksplc/tests/prog/embed_data/raw.bin` | Made here: sample bytes for the `embed` tests | This repository's |
 
 ## Further reading
 
 * [`LICENSE.md`](LICENSE.md) — the license for this repository as a whole.
-* [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `ksos/port/rp2040/` above compute their values. It also says how the values are confirmed. "🔧 The peripheral drivers" says what each driver originates from.
+* [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `lib/ksos/port/rp2040/` above compute their values. It also says how the values are confirmed. "🔧 The peripheral drivers" says what each driver originates from.

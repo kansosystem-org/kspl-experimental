@@ -100,13 +100,13 @@ A row counts only what actually ran.
 | **The standard library** (`std/`) | Files, time, environment variables, signals, hashing and randomness, thread synchronization, TCP, HTTP/1.1, asynchronous I/O, JSON, URLs, regular expressions, collection operations | No dependencies: it builds wherever the toolchain does |
 | **The bindings** (`lib/kstls/`) | TLS over OpenSSL: a client, and the server half kssrv uses | **Run on Linux** in CI. The Windows job runs the tests too; no run there has confirmed them yet |
 | **The AI engine** (`lib/ksai/`) | Tensor operations, inference, training by backpropagation, fine-tuning with low-rank adaptation (LoRA), tokenization and safetensors weight files | KSPL alone, with no external library, including continued training on the device |
-| **Kanso OS** (`ksos/`) | Cooperative and preemptive scheduling, mutual exclusion, waiting, a heap, memory-mapped I/O drivers, and a minimal ARP/IPv4/UDP/TCP stack | Ports for Cortex-M, Armv6-M, RP2040 and POSIX. **Runs on real RP2040 hardware** and in QEMU. Wireless is out of scope: its license does not fit this repository’s attribution. |
+| **Kanso OS** (`lib/ksos/`) | Cooperative and preemptive scheduling, mutual exclusion, waiting, a heap, memory-mapped I/O drivers, and a minimal ARP/IPv4/UDP/TCP stack | Ports for Cortex-M, Armv6-M, RP2040 and POSIX. **Runs on real RP2040 hardware** and in QEMU. Wireless is out of scope: its license does not fit this repository’s attribution. |
 | **Kanso Server** (`kssrv/`) | Serving static files (the car's policy file among them) over HTTP or HTTPS, and the file endpoints a local page uses | Many connections on one thread, in constant resident memory. HTTPS is checked on Linux alone |
-| **Edge AI** (AI on the device) | A policy trained on a PC runs on a microcontroller alone | **A closed loop on a palm-sized four-wheeled car** (a Freenove kit with a Raspberry Pi Pico W), deciding with the PC disconnected. Measured timings are under "What has been checked on real hardware" in [ksos](ksos/README.md). |
+| **Edge AI** (AI on the device) | A policy trained on a PC runs on a microcontroller alone | **A closed loop on a palm-sized four-wheeled car** (a Freenove kit with a Raspberry Pi Pico W), deciding with the PC disconnected. Measured timings are under "What has been checked on real hardware" in [ksos](lib/ksos/README.md). |
 | **The folder agent** (`ksagent/`) | Answers questions about a folder's files through a model server on the same machine, citing lines it checks | **Only against a stand-in model server**; no real model runs in CI |
 | **The document editor** (`ksmd/`) | Prose, lists, formatting, calculating tables with resizable columns, images and included files, in a `.ksmd` source a person can read. Opens and saves a folder's files through `kssrv --local`, and opens a document on a double-click. | Runs in a browser with wasm32. Browser tests drive headless Chromium on Linux. Other browsers, a real input method editor (IME) and screen readers are untested. The double-click was checked by hand on Windows only. [ksmd](ksmd/README.md) lists what works and its limits. |
 
-**The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("🤖 The AI on bare metal" in [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md)). [`ksos/docs/HOWTO-bring-up.md`](ksos/docs/HOWTO-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
+**The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("🤖 The AI on bare metal" in [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md)). [`lib/ksos/docs/HOWTO-bring-up.md`](lib/ksos/docs/HOWTO-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
 
 **Current work improves the existing parts** rather than adding features. [`docs/PLAN.md`](docs/PLAN.md) lists the remaining work by package.
 
@@ -130,7 +130,6 @@ A package is a folder built and shipped as one unit, and its row links to its `R
 | :--- | :--- |
 | **`ksplc/`** | The self-hosting compiler, the bootstrap seed (`seed.c`) and the canonical grammar `kspl.kspeg` ([entry point](ksplc/README.md) / [internal design](ksplc/docs/DESIGN-compiler.md)). |
 | **`std/`** | The standard library, which the compiler itself depends on; flat, with no folders ([file list](std/README.md) / [design policy](std/docs/DESIGN-core.md)). |
-| **`ksos/`** | Kanso OS, a lightweight real-time OS: one kernel on bare-metal microcontrollers and on Linux hosts ([introduction](ksos/README.md) / [design](ksos/docs/DESIGN-rtos.md) / [remaining work](docs/PLAN.md)). |
 | **`kssrv/`** | Kanso Server, which uses `std/net` and `std/http` ([introduction](kssrv/README.md) / [design](kssrv/docs/DESIGN-server.md)). |
 | **`ksmd/`** | The document editor: prose, calculating tables and included documents in its own `.ksmd` language, edited and saved through `kssrv --local` ([ksmd](ksmd/README.md)). |
 | **`ksagent/`** | Answers questions about the files in one folder through a model server on your machine, citing and checking its lines ([introduction](ksagent/README.md) / [design](ksagent/docs/DESIGN-agent.md)). |
@@ -139,6 +138,7 @@ A package is a folder built and shipped as one unit, and its row links to its `R
 | **`lib/kspeg/`** | A parser that directly executes a parsing expression grammar (PEG), KSPL’s grammar `ksplc/kspl.kspeg` included ([introduction](lib/kspeg/README.md) / [notation](lib/kspeg/docs/SPEC-notation.md)). |
 | **`lib/ksdb/`** | Kanso DataBase, a device database with no dependencies: an append-only record on flash that survives power loss ([introduction](lib/ksdb/README.md) / [design](lib/ksdb/docs/DESIGN-storage.md)). |
 | **`lib/kstls/`** | TLS over OpenSSL, a binding to an external C library, kept outside `std` so that `std` needs no other installation ([introduction](lib/kstls/README.md) / [design](lib/kstls/docs/DESIGN-bindings.md)). |
+| **`lib/ksos/`** | Kanso OS, a lightweight real-time OS: one kernel on bare-metal microcontrollers and on Linux hosts ([introduction](lib/ksos/README.md) / [design](lib/ksos/docs/DESIGN-rtos.md) / [remaining work](docs/PLAN.md)). |
 | **`data/`** | The large files that Git ignores and `make clean` keeps: the downloaded models, and the weights made here that take long to make again ([entry point](data/README.md)). |
 | **`docs/`** | Documents that cover the whole project, such as the [design rationale](docs/DESIGN-principles.md), [document rules](docs/SPEC-documents.md) and [remaining work](docs/PLAN.md). [`docs/README.md`](docs/README.md) lists their readers. |
 | **`tests/`** | The test suites for the language, the toolchain and the OS ([entry point](tests/README.md)). |
@@ -153,7 +153,7 @@ A package is a folder built and shipped as one unit, and its row links to its `R
 
 Kanso is published under the [MIT License](LICENSE.md).
 
-Note: **Some files under `ksos/`, `lib/ksai/` and `ksagent/` owe a notice to the work they follow.** Among them are the Raspberry Pi pico-sdk (BSD-3-Clause), llama.cpp (MIT) and zlib's puff (zlib License). [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) lists each file with its notice. It also covers third-party artifacts that are not bundled, including Qwen weights and vendor materials.
+Note: **Some files under `lib/ksos/`, `lib/ksai/` and `ksagent/` owe a notice to the work they follow.** Among them are the Raspberry Pi pico-sdk (BSD-3-Clause), llama.cpp (MIT) and zlib's puff (zlib License). [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) lists each file with its notice. It also covers third-party artifacts that are not bundled, including Qwen weights and vendor materials.
 
 ## 📖 Further reading
 

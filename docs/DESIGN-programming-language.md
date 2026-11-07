@@ -593,7 +593,15 @@ Omitting a parameter's type, and `Self` on a parameter **other than the receiver
 * **One place for each kind of method** (Principle 6). A banner comment heads each group inside the one plain block.
 * **The first rule is an error, and the second is a lint.** The first decides what a conformance is made of. A plain block split in two runs the same.
 
-**Two kinds of conformance keep an empty `{}`.** One is a trait with no methods (`Move_only`). The other is a trait whose methods the compiler writes into the block (`Reflectable`'s field table, a suite's `run`).
+**A trait's block holds only that trait's methods**, and another method there is an error. So the block answers its question completely, and a misspelt method cannot pass: without the rule, `fn helo` beside a trait's default `hello` compiled, and the default ran.
+
+**A trait with no methods is named on the plain block's header** (`impl File_lock: Move_only`). Such a trait states a property of the whole type, and the plain block is where a reader looks first. In a separate `impl File_lock: Move_only {}` further down, a reader of the plain block took the type to be copyable.
+
+* **A header names several such traits after commas.** A type with two properties would otherwise hide one of them again.
+* **A trait with methods keeps a block of its own**, and is refused in a list. In the plain block, its methods could not be told from the type's own.
+* **`ksplc lint` reports an empty block for such a trait beside the plain block** (I0801), so the tree keeps one form.
+
+**A trait whose methods the compiler writes keeps an empty `{}`** (`Reflectable`'s field table, a suite's `run`). So does a trait with no methods on a type with no methods of its own.
 
 **A call does not change**: `a.free()` finds the method whichever block holds it.
 
@@ -834,7 +842,7 @@ A closure lists the outer variables it uses after a `;`, with their types. It ca
 
 A chain such as `xs.where(…).select(…)` from `std/seq` can replace a hand-written loop over a `List` in ordinary code. **A chain adds no allocation** ("Iteration" in [`DESIGN-principles.md`](DESIGN-principles.md)); only `to_list` allocates, and `order_by` / `distinct` stay eager.
 
-Keep hand-written loops in `ksplc`'s inner loops (tens of thousands of runs per compilation), and in `std/`, `ksos/` and `lib/ksai/`. `lib/ksai/`, with `lib/ksai/examples/qwen_infer` and `lib/ksai/examples/llama_engine`, works per layer, token and element throughout.
+Keep hand-written loops in `ksplc`'s inner loops (tens of thousands of runs per compilation), and in `std/`, `lib/ksos/` and `lib/ksai/`. `lib/ksai/`, with `lib/ksai/examples/qwen_infer` and `lib/ksai/examples/llama_engine`, works per layer, token and element throughout.
 
 **Only a loop that filters, maps or counts a `List` is replaced.** A loop over a slice stays, since `std/seq` extends `List<|T|>`. So does one that uses the index itself, since `std/seq` has no variant passing a position.
 
@@ -1363,7 +1371,7 @@ flowchart LR
 | 1. **One description of each machine** (`MACHINES` in [`../ksplc/base/target.kspl`](../ksplc/base/target.kspl)) | With every reader taking it from one row, a fold cannot use one width while the layout uses another. A new machine is one row |
 | 2. **The C compiler checks every number ksplc folds**, at the source line that asked for it | ksplc's layout is a copy of the C compiler's, and a copy is tied to its original by a check (Principle 4). A `typedef` of negative size stops the build, naming the machine |
 | 3. **Only a folded number makes the C target-specific** | A `sizeof` left in a function body stays the C compiler's own. A program that folds nothing carries no check |
-| 4. **The machine is named to both, rather than read by ksplc from the C compiler** | ksplc translates without a C compiler at hand: the editor, `ksplc lint`, a build compiled elsewhere. A chip's build hands one triple to both (`CM_MACHINE` in [`../ksos/Makefile`](../ksos/Makefile)) |
+| 4. **The machine is named to both, rather than read by ksplc from the C compiler** | ksplc translates without a C compiler at hand: the editor, `ksplc lint`, a build compiled elsewhere. A chip's build hands one triple to both (`CM_MACHINE` in [`../lib/ksos/Makefile`](../lib/ksos/Makefile)) |
 | 5. **A machine ksplc does not know is refused, never approximated** | A guessed machine folds a size the C compiler then refuses, far from the cause. The message lists the known machines |
 
 **What is given up**:

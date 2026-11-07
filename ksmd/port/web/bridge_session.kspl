@@ -10,6 +10,7 @@ import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { Results }
 import "ksmd/calc/calc"
 import "ksmd/calc/value" { Value }
+import "ksmd/edit/edit" { Auto_entry }
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_looks" // `here`
@@ -41,9 +42,18 @@ $input_cap: Sz = 0
 $session: Arena$@ = null //< holds the open document, its edits and its history
 $loading: Arena$@ = null //< a document being read; freed by `ksmd_web_recover` if reading stops
 $ed: Editor$@ = null
+$auto: Auto_entry = ::{ .dates = true, .links = true } //<
+    //< what typed text turns into on its own, as the page last set it; each opened editor takes it
 $files: Arena$@ = null //< holds the document's path and what was fetched for its view
 $fetched: Fetched$@ = null //< null until the page names a path: no file is fetched then
 $doc_path: U8[] = "" //< the open document's path from the workspace root
+
+extern fn ksmd_web_auto_entry(dates: I32, links: I32) //<
+    //< Sets what typed text in a cell turns into on its own: dates (1) and links (1)
+    //< The open editor takes it at once, and each one opened later too.
+    auto = ::{ .dates = dates != 0, .links = links != 0 }
+    if ed != null
+        ed.auto = auto
 
 priv fn give_up(msg: U8[]) //< the panic hook: the reason goes to the script, which throws
     ksmd_js_gave_up(msg.ptr, msg.len)

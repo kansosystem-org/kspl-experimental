@@ -19,6 +19,32 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
   const docName = (d) => d.js("document.querySelector('.menubar .doc-name').textContent");
 
   return {
+    // File, Gather images into a folder moves the images ksmd wrote beside the document into its
+    // folder of images, points the document at them and saves, and never replaces a file.
+    async gatherImages(ctx) {
+      const png = fs.readFileSync(path.join(ctx.root, "pics/dot.png"));
+      fs.writeFileSync(path.join(ctx.root, "memo-image-1.png"), png);
+      fs.writeFileSync(path.join(ctx.root, "memo-image-2.png"), png);
+      fs.mkdirSync(path.join(ctx.root, "memo-images"), { recursive: true });
+      fs.writeFileSync(path.join(ctx.root, "memo-images/image-2.png"), "taken");
+      const img = (n) => `:::image src="memo-image-${n}.png" alt=""\n:::\n`;
+      fs.writeFileSync(path.join(ctx.root, "memo.ksmd"), `${H}Text.\n\n${img(1)}\n${img(2)}`);
+      const d = await tab(ctx, "?doc=memo.ksmd");
+      await d.menu("file-gather-images");
+      await idle(d);
+      const disk = fs.readFileSync(path.join(ctx.root, "memo.ksmd"), "utf8");
+      check(disk === `${H}Text.\n\n:::image src="memo-images/image-1.png" alt=""\n:::\n\n${img(2)}` &&
+        fs.existsSync(path.join(ctx.root, "memo-images/image-1.png")) &&
+        !fs.existsSync(path.join(ctx.root, "memo-image-1.png")),
+      "Gather images moves an image into the document's folder of images, and saves", disk);
+      check(fs.readFileSync(path.join(ctx.root, "memo-images/image-2.png"), "utf8") === "taken" &&
+        fs.existsSync(path.join(ctx.root, "memo-image-2.png")) && (await said(d)).includes("Left where they were"),
+      "an image whose place in the folder is taken stays, and the page says so", await said(d));
+      await ctx.browser.closeTab(d.page);
+      for (const name of ["memo.ksmd", "memo-image-2.png", "memo-images"]) {
+        fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
+      }
+    },
     async cellDraft(ctx) {
       fs.writeFileSync(path.join(ctx.root, "cells.ksmd"), CELLS);
       const d = await tab(ctx, "?doc=cells.ksmd");

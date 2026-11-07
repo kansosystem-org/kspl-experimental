@@ -522,8 +522,10 @@ pub fn spawn_beside( //< starts a helper that runs while this program does, its 
         throw .spawn_failed
     return Child::{ .handle = handle }
 
+// Caution: **The runtime frees the child's record at `wait` or `kill`**: a copy would keep the
+// freed handle, and its own `wait` would read freed memory.
 #cfg(!freestanding)
-impl Child
+impl Child: Move_only //< copying it would reap one child twice
     pub fn alive(r: Self@): Bool //< whether it is still running
         //< **The call that returns false also reaps the child.** It stays false after that.
         return kspl_proc_alive(r.handle)
@@ -541,11 +543,6 @@ impl Child
         //< It returns only once the child has stopped; after a `wait` or a `kill` it does nothing.
         kspl_proc_kill(r.handle)
         r.handle = 0
-
-// Caution: **The runtime frees the child's record at `wait` or `kill`**: a copy would keep the
-// freed handle, and its own `wait` would read freed memory.
-#cfg(!freestanding)
-impl Child: Move_only {} //< copying it would reap one child twice
 
 // ==========================================
 // A child with a time limit, writing where the starter writes
@@ -581,8 +578,9 @@ pub fn spawn_limited( //< starts a child that writes where the caller does, with
     return Limited_child::{ .handle = handle,
         .deadline_us = sys.deadline_after_ms(timeout_ms) }
 
+// The record is freed once a wait sees it end or stops it, as `Child`'s is at `wait`.
 #cfg(!freestanding)
-impl Limited_child
+impl Limited_child: Move_only //< copying it would reap one child twice
     pub fn wait( //< waits for it to end, for at most `wait_ms` and never past its limit
         //< **Past its limit the wait stops it**, with every process it started. After it has come
         //< back `ended` or `timed_out`, it is none at once: the child is reaped, and how it ended
@@ -601,10 +599,6 @@ impl Limited_child
         kspl_proc_kill(r.handle)
         r.handle = 0
         return .some(.timed_out)
-
-// The record is freed once a wait sees it end or stops it, as `Child`'s is at `wait`.
-#cfg(!freestanding)
-impl Limited_child: Move_only {} //< copying it would reap one child twice
 
 #cfg(!freestanding)
 pub struct Piped_child //< a child whose standard input and output are pipes, and its error too
@@ -638,8 +632,9 @@ pub fn spawn_piped_shared_err( //< starts a child as `spawn_piped` does, but sha
         throw .spawn_failed
     return Piped_child::{ .handle = handle }
 
+// The record is freed at `kill`, as `Child`'s is.
 #cfg(!freestanding)
-impl Piped_child
+impl Piped_child: Move_only //< copying it would reap one child twice
     pub fn write( //< writes all of it to standard input, or fails saying why it stopped
         //< **The timeout is required**, as a read's is: a child that stops reading fills the pipe,
         //< and the write would wait for it for good.
@@ -690,10 +685,6 @@ impl Piped_child
         //< A second call does nothing, and every other call then answers as for a child gone.
         kspl_proc_kill(r.handle)
         r.handle = 0
-
-// The record is freed at `kill`, as `Child`'s is.
-#cfg(!freestanding)
-impl Piped_child: Move_only {} //< copying it would reap one child twice
 
 // Turns the C return value (>0 a byte count / -1 a timeout / 0 EOF / anything else a failure)
 // into the result type.

@@ -115,7 +115,7 @@ priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< ksos's task entry points and `Link`'s implementations are **passed as function pointers with
     //< no call**.
     p: =
-        prepare_in_tree(c, "ksos/demo/rp2040/rp2040_board_probe.kspl", "fn probe_task(", arena)
+        prepare_in_tree(c, "lib/ksos/demo/rp2040/rp2040_board_probe.kspl", "fn probe_task(", arena)
     d8: = lsp_client.why(c, p.raw, arena)
     verdict.check("a function only handed as a function pointer can be a starting point too",
         p.found, d8)
@@ -203,7 +203,7 @@ priv fn query_once(exe: U8[], root: U8[], arena: Arena$@): Silence //<
     // **Only the name's last segment decides the weight**; a common one (`init`) hits an order of
     // magnitude more files than other queries.
     // Caution: **Do not swap in a light name**, or it goes green having measured nothing.
-    item: = b.obj().set("uri", b.str_val("ksos/drivers/ht16k33.kspl"))
+    item: = b.obj().set("uri", b.str_val("lib/ksos/drivers/ht16k33.kspl"))
         .set("data", b.str_val("ksos.drivers.ht16k33.init")).build()
     params: = b.obj().set("item", item).build()
     defer $frames: = Str_builder()
@@ -299,13 +299,13 @@ fn main(): I32
     // A process-lifetime table allocated from the per-request arena is freed under the worker after
     // a workspace query. The worker then crashes. The supervisor's null reads as "everything stops
     // working". Check that **content** comes back: a response arrives even after a crash.
-    a: = prepare_in_tree(c@, "ksos/drivers/ht16k33.kspl", "fn init(", arena)
+    a: = prepare_in_tree(c@, "lib/ksos/drivers/ht16k33.kspl", "fn init(", arena)
     d18: = lsp_client.why(c@, a.raw, arena)
     verdict.check("another document can be analysed after a workspace query too", a.found, d18)
 
     // A definition is identified by its data field alone (VS Code sends it back); a bare name would
     // list every file's `init` callers.
-    b2: = prepare_in_tree(c@, "ksos/drivers/rp2040/clocks.kspl", "fn init(", arena)
+    b2: = prepare_in_tree(c@, "lib/ksos/drivers/rp2040/clocks.kspl", "fn init(", arena)
     same_data: =
         a.found && b2.found &&
         a.item.get("data").as_str().unwrap_or("")

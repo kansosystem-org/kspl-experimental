@@ -71,6 +71,7 @@ These reading rules settle cases the notation leaves open:
 | Checklist item | `- [ ] ` before an open item, `- [x] ` before a ticked one | A bulleted item; it can stand among other bulleted items |
 | Quote | `> ` before each line | One paragraph; its lines join as a paragraph's do |
 | Divider | A line `---` | Nothing else on the line |
+| Blank line | A line `\` | Nothing else on the line; each such line is one empty line on the page |
 | Emphasis | `*text*` | No newline inside a mark |
 | Strong emphasis | `**text**` | No newline inside a mark |
 | Link | `[label](destination)` | Holds emphasis and inline code, not a link; spaces and parentheses in destinations are percent-encoded |
@@ -225,18 +226,39 @@ pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax
 ```
 
 * **The clause's box says what the file gives**: the names a formula can call. Or it says why the file cannot be used, in the compiler's own words.
-* **Insert ▸ Functions… puts the clause at the caret.** It picks a `.kspl` file in the workspace, or starts a new one holding one function to copy.
+* **Insert ▸ Functions file… puts the clause at the caret.** It picks a `.kspl` file in the workspace, or starts a new one holding one function to copy.
 * **A name ksmd has is refused**, so `sum` always means ksmd's `sum`. Where two files give one name, the first clause's is called.
-* **The file is built again when it changes on disk**, once the page looks again (on focus, as for an include).
+* **The file is built again when it changes on disk**, once the page looks again (on focus, as for an include). The person allows its new content first.
 * **A function returns a value only.** It cannot change the document, as a procedure in a spreadsheet's macros can. That was left for later.
 * **Inside a `sum_if` condition, a range reaches a person's function whole**, never one row's cell. ksmd's own functions read the row's cell there.
 
 **The page cannot wait for an answer**, so a cell whose answer has not come shows `…`, and the tables show again once it has. An answer comes back at once for the same call with the same arguments.
 
+**Nothing of a functions file is built or run until the person allows that exact file.** Opening a document whose file is not allowed builds nothing. A bar at the top names the file: "This document has its own functions (mine.kspl). They run only if you allow them.", with Allow and Not now.
+
+* **The allow holds for the file and its exact bytes.** The local server records the SHA-256 of the file's path and of its content. A file that changes, as when a colleague edits it in a shared folder, asks again.
+* **The server keeps the record, and the server enforces it.** It builds only a file whose present bytes are allowed, and hands the builder their digest, so bytes changed in between are not built. A page that skipped the question still gets nothing built. The record stands outside the workspace, where a document's folder cannot allow its own functions.
+* **The person's press on Allow is the one way an allow is made.** The page sends it with the token, and names the bytes it read. Bytes changed since are refused, and the page asks again.
+* **Not now puts the question off for this opening alone.** The bar asks again the next time the document opens. The clause's box keeps its own Allow.
+* **Stop allowing, in the clause's box, takes the allow back.** The cells show `#BLOCKED!` again.
+* **Until the file is allowed, a call to a name ksmd does not have shows `#BLOCKED!`.** The names a file gives are known only once it builds, so every unknown name may be one of them. Once every file is built, an unknown name is `#SYNTAX!`, as ever. While a file builds, such a call shows `…`.
+* **A cell whose formula calls the document's own functions has a small corner** in the mark's colour at its top left. A note's corner stands at the right, so a cell can show both. When the cell is chosen, the status bar names the functions and their file: "Uses tax from mine.kspl (this document's own)". The corner is not printed, since a printed page has no status bar to explain it.
+
+**Why ask before the build, though the result runs in a sandbox:** the run cannot reach the machine. The build, though, runs the compilers natively on the file. A build on opening would hand a crafted file to them before the person chose anything. Asking costs one press per file and per change.
+
+**Why a bar and not a dialog:** the document stays readable and editable while the question waits. Only the cells that call the file wait with it.
+
+**What is left out:**
+
+* **Allowing a whole folder.** A shared folder is where a file arrives unasked, so trusting the folder trusts every file a colleague puts there.
+* **A setting that turns the question off.** One press per file and per change is cheap, and a switch that removes the question removes it for every document.
+* **Trust kept in the browser alone.** The page is the less trusted side, so the server holds the record and refuses a build it has not seen allowed.
+
 **Where it runs, and its limits:**
 
 | What | Holds |
 | :-- | :-- |
+| Asking | Nothing is built before the person allows the file's exact bytes; the local server refuses any other build |
 | Building | The local server's builder, named when the server starts. The build is closed: the file may use `std` and ksmd's calculation files, and a path to anything else fails it. So does any way to C (`extern`, `##link`, assembler text), which ksplc refuses under `--closed` |
 | Running | A worker apart from the page, with its own memory and no way to the files, the network or the page |
 | Time | 2 seconds per call; past it the cell shows `#TIME!`, and the worker starts afresh |
@@ -280,6 +302,7 @@ Each error has its own mark, since each is fixed differently.
 | `#EMPTY!` | `min`, `max`, `average` or `average_if` of no numbers |
 | `#SHAPE!` | A range in the condition of `sum_if`, `count_if` or `average_if` that is not one column as tall as the values, or a condition with no range. It is fixed by changing a range, which no other mark asks for |
 | `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function or a condition, a missing bracket or operand, or more than 64 levels |
+| `#BLOCKED!` | A call to a name that ksmd does not have, while the person has not allowed the document's functions file ("Your own functions") |
 
 ### Totals by a condition
 
@@ -495,7 +518,7 @@ Calculation (`ksmd/calc/calc.kspl`) reads the model and one input: the date the 
 
 ### Dates
 
-**A date is a value of its own: a day, written `2026-10-23` and shown so.** A cell holding a bare `2026-10-23` is a date. A typed `2026-10-23`, `2026/10/23` or `2026/1/5` becomes one, kept as `2026-10-23`. A quoted `"2026-10-23"` stays text.
+**A date is a value of its own: a day, written `2026-10-23` and shown so.** A cell holding a bare `2026-10-23` is a date. A typed `2026-10-23`, `2026/10/23`, `2026/1/5` or `11/6` becomes one, kept as `2026-10-23`. `11/6` falls in the year the document was opened. A quoted `"2026-10-23"` stays text.
 
 * **A date plus or minus a whole number of days is a date, and a date minus a date is the days between them**: `=A1+7`, `=B1-A1`. Any other arithmetic on a date is `#VALUE!`, and a day outside the years 1 to 9999 is `#NUM!`.
 * **Dates compare with dates.** A date and text are unequal, and ordering them is `#VALUE!`, as for any two kinds.
@@ -553,7 +576,7 @@ These were weighed and left out, so one way to write each thing stays:
 
 ### Shapes drawn over an image or a chart
 
-**Rectangles, arrows and lines can be drawn over an image or a chart, to point at a part of it.** Each shape is a `draw` line in the clause's body, with attributes as a clause's:
+**Rectangles, arrows, lines and pen lines can be drawn over an image or a chart, to point at a part of it.** Each shape is a `draw` line in the clause's body, with attributes as a clause's:
 
 ```text
 :::image src="build.png" alt="The build window"
@@ -562,7 +585,9 @@ draw shape="arrow" from="460,200" to="430,110" color="#1f5fbf"
 :::
 ```
 
-* **`shape` is `rect`, `arrow` or `line`, and `from` and `to` are its two ends.** A rectangle's are two corners; an arrow points at `to`.
+* **`shape` is `rect`, `arrow`, `line` or `pen`.** For the first three, `from` and `to` are its two ends: a rectangle's are two corners, and an arrow points at `to`.
+* **A pen line is drawn by hand, and keeps its `points`**: `draw shape="pen" points="10,20 14,25 30,22"`, 2 to 500 points one space apart. It takes a `color`, and nothing else.
+* **The page keeps a pen line's points at least 3 pixels apart, and thins a long stroke to 500.** So a slow hand makes no needless points in the file.
 * **A point is in the picture's own pixels, from its upper left corner.** So a shape stays on what it points at however wide the page shows the picture. A chart's frame is 640 by 300 pixels.
 * **A coordinate is a whole number from 0 to 20,000**, written without a leading zero.
 * **`color` is `#` and six lowercase hexadecimal digits.** Left out, the shape takes the page's red.
@@ -601,7 +626,12 @@ line from="tip" to="ask" via="380,180"
 
 ## Includes and images
 
-An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption` and `width`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+
+**An image's `width` is its share of the text width: `width="40%"`, a whole number from 1 to 100.** Its height follows, so the picture keeps its shape. Without it, the image fits the text width as far as its pixels allow.
+
+* **A share, not pixels or centimetres**: the same file shows alike on any screen and on any paper. A narrower window narrows the image with the text.
+* **Images next to each other share a row while each has a width and the widths add up to 100% or less.** So pictures stand in a line of Word's text. Two screenshots at `45%` stand side by side, with no clause for a row.
 
 Links may use `https`, `http`, `mailto`, or a document fragment; other schemes are refused. Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -717,7 +747,12 @@ The KSPL model remains authoritative: the page turns editing into model actions,
 
 **Each action's result is written and read back before it is taken.** The action is refused, and changes nothing, if the reader refuses that source or reads other text or other marks. So the editor holds no second copy of a rule the reader holds. The comparison allows what the writer leaves out at a line's edge.
 
-**A block with no text leaves a gap**, since the format has no empty paragraph. Deleting a block's last character removes the block, and the caret stands in a gap where it stood. Typing in a gap makes a block of the kind the gap keeps. A gap can stand between any two blocks and at either end. An empty code block stays, since the format holds one.
+**A block with no text leaves a gap**: a place for the caret, which keeps nothing. Deleting a block's last character removes the block, and the caret stands in a gap where it stood. Typing in a gap makes a block of the kind the gap keeps. A gap can stand between any two blocks and at either end. An empty code block stays, since the format holds one.
+
+**A blank line is kept as a block of its own, written as a line holding only `\`.** Enter in a gap puts one there, as an empty paragraph stands in Word. The caret stays in the gap after it, so each press adds one more. Backspace or Delete beside it takes it away, as one step of undo.
+
+* **Why a block of its own, not an empty paragraph**: Markdown has no empty paragraph, since a blank line separates blocks. A paragraph's lone hard break, `\`, is the closest form a reader of Markdown knows.
+* **Why it holds no text**: typing in the gap beside it starts a paragraph there, so the blank line stays as it was.
 
 | Key | Where the caret stands | What happens |
 | :-- | :-- | :-- |
@@ -730,6 +765,8 @@ The KSPL model remains authoritative: the page turns editing into model actions,
 | Backspace | At the start of a list item | The item moves one level out; at the top level it becomes a paragraph |
 | Backspace | At the start of another block | The block joins the text block before it |
 | Delete | At the end of a block | The next text block joins it |
+| Enter | In a gap | A blank line goes there, and the caret stays in the gap after it |
+| Backspace or Delete | Beside a blank line, in a gap or at the edge of the text | The blank line goes |
 | Backspace or Delete | In a gap | The caret moves to the end of the text before it, or the start of the text after it |
 
 **A kind change keeps the text.** In a heading or a list item a hard break becomes a space, and in code the marks go. A paragraph made a list item joins a neighbouring list whose top level has the same marker. A nested item's marker follows the first item of its level.
@@ -819,10 +856,13 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **An image's format and size come from its file's header, before the browser decodes it.** `measure` in `ksmd/files/image.kspl` reads a PNG's IHDR chunk, or walks a JPEG's segments to its frame header. The bytes decide the format, not the file's name. The page passes the header in windows of 64 KiB, so a large file never fills the editor's memory.
 
-**An image pasted or dropped into the text is written beside the document, and its clause goes in after the caret's block.** Its name is the document's, then `-image-` and the first free number, such as `notes-image-2.png`.
+**An image pasted or dropped into the text is written in the document's folder of images, and its clause goes in after the caret's block.** That folder is the document's name and `-images`, beside it, and the image takes the first free number: `notes-images/image-2.png`.
+
+* **One folder per document**, so a folder of documents does not fill with their pictures, and each document's pictures can be told apart. The server makes the folder on the first write.
+* **File ▸ Gather images into a folder moves into it the images an older page wrote beside the document** (`notes-image-2.png`). It points the document at them, and saves. A move never replaces a file: one whose place is taken stays, and the page names it. The save is part of the command, as the file on disk would otherwise name images that moved.
 
 * **The write never replaces a file**: a name already taken goes on to the next number.
-* **The page asks for the alternate text first.** An empty answer marks the image as one that only decorates; Cancel puts nothing in.
+* **The page asks nothing as the image goes in.** It goes in with no alternate text, as one that only decorates. Alt text… in the image's tools gives it a description later, and Caption… a caption that a reference names. A question on every image was asked more often than it was answered, and put the work before the picture.
 * **It needs the local server and a document saved once**, for the image needs a folder to go in.
 * **Only PNG and JPEG go in, up to the server's 8 MiB.** An image never goes into a table cell.
 * **Undo takes the clause out, and the file stays**, as the Remove button leaves it.

@@ -2,6 +2,9 @@
 // Each heading is a link that scrolls to it, indented by its level. The heading being read is
 // marked as the page scrolls, and the list follows every edit. Headings shown from an included
 // file stand in their place, marked with their file's path.
+// A heading with headings under it folds them away and back with the button before it, as Word's
+// navigation pane does; Alt with the press folds or unfolds every heading of that level. A heading
+// stays folded through edits while its level and text stay.
 // Whether the panel shows, and how wide it is, are the viewer's choices, kept in this browser's
 // storage and never in the document: another reader of the file keeps their own.
 // The edge between the panel and the document drags, as VS Code's side bar does. Left and Right
@@ -19,6 +22,8 @@ function ksmdContents(ks) {
   let heads = [];
   // What the list was built from, so an edit that changes no heading builds nothing.
   let built = null;
+  // The folded headings, each by its level, its shown text and its file.
+  const folded = new Set();
 
   const shown = () => !panel.hidden;
 
@@ -32,13 +37,30 @@ function ksmdContents(ks) {
     };
     // A heading's number, where the document numbers headings (`settings.js`), stands before it.
     const named = (h) => (h.dataset.number ? `${h.dataset.number} ${h.textContent}` : h.textContent);
-    const key = heads.map((h) => `${h.tagName}\u0000${named(h)}\u0000${from(h)}`).join("\u0001");
+    const keys = heads.map((h) => `${h.tagName}\u0000${named(h)}\u0000${from(h)}`);
+    const key = keys.join("\u0001");
     if (key !== built) {
       built = key;
       list.textContent = "";
       heads.forEach((h, k) => {
         const li = document.createElement("li");
-        li.className = `level-${h.tagName[1]}`;
+        const level = Number(h.tagName[1]);
+        li.className = `level-${level}`;
+        li.dataset.level = String(level);
+        li.dataset.key = keys[k];
+        // A heading followed by a deeper one has headings under it, and a button to fold them.
+        const next = heads[k + 1];
+        if (next && Number(next.tagName[1]) > level) {
+          const fold = document.createElement("button");
+          fold.type = "button";
+          fold.className = "fold";
+          fold.title = "Fold or unfold the headings under it. With Alt, every heading of this level";
+          li.appendChild(fold);
+        } else {
+          const space = document.createElement("span");
+          space.className = "fold-space";
+          li.appendChild(space);
+        }
         const a = document.createElement("a");
         a.href = "#";
         a.dataset.k = String(k);
@@ -62,8 +84,41 @@ function ksmdContents(ks) {
         list.appendChild(li);
       }
     }
+    fold();
     current();
   }
+
+  // Hides each heading under a folded one, and shows each fold button's state.
+  function fold() {
+    let under = 0; // the level of the folded heading whose part the walk is in; 0 for none
+    for (const li of list.querySelectorAll("li[data-level]")) {
+      const level = Number(li.dataset.level);
+      if (under && level <= under) under = 0;
+      li.hidden = under > 0;
+      const button = li.querySelector(".fold");
+      const shut = folded.has(li.dataset.key);
+      if (button) {
+        button.setAttribute("aria-expanded", String(!shut));
+        button.setAttribute("aria-label", `${shut ? "Unfold" : "Fold"} ${li.querySelector("a").textContent}`);
+      }
+      if (!under && shut && button) under = level;
+    }
+  }
+
+  list.addEventListener("click", (e) => {
+    const button = e.target.closest(".fold");
+    if (!button) return;
+    const li = button.parentElement;
+    const shut = !folded.has(li.dataset.key);
+    const which = e.altKey ? list.querySelectorAll(`li[data-level="${li.dataset.level}"]`) : [li];
+    for (const one of which) {
+      if (!one.querySelector(".fold")) continue;
+      if (shut) folded.add(one.dataset.key);
+      else folded.delete(one.dataset.key);
+    }
+    fold();
+    current();
+  });
 
   // Marks the last heading above the top of the reading area: the one being read.
   function current() {
@@ -79,7 +134,10 @@ function ksmdContents(ks) {
       else hi = mid;
     }
     // Above the first heading, the first one is marked, so the list always shows a place.
-    const at = Math.max(lo - 1, 0);
+    // A heading folded away marks the one it is folded under, which shows.
+    let at = Math.max(lo - 1, 0);
+    while (at > 0 && list.querySelector(`a[data-k="${at}"]`) &&
+      list.querySelector(`a[data-k="${at}"]`).parentElement.hidden) at -= 1;
     for (const a of list.querySelectorAll("a[aria-current]")) a.removeAttribute("aria-current");
     const a = list.querySelector(`a[data-k="${at}"]`);
     if (!a) return;

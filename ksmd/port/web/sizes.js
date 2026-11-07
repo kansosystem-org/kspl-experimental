@@ -399,26 +399,14 @@ function ksmdSizes(ks) {
     return ks.pages.paper().width - parseFloat(doc.paddingLeft) - parseFloat(doc.paddingRight);
   }
 
-  // A table wider than the paper prints smaller, so all of its columns fit, and the page says so
-  // above it while editing. Paper leaves out the row numbers, so only the columns count.
+  // A table wider than the paper prints smaller, so all of its columns fit. The status bar says so
+  // while the person works in it (`status.js`). Paper leaves out the row numbers, so only the
+  // columns count.
   function scale(wrap, columns) {
     const room = printable();
     const by = columns > room ? Math.floor((100 * room) / columns) : 100;
     wrap.style.setProperty("--print-zoom", String(by / 100));
     wrap.printScale = by;
-    let note = wrap.querySelector(":scope > .print-scale");
-    if (by === 100) {
-      if (note) note.remove();
-      return;
-    }
-    if (!note) {
-      note = document.createElement("span");
-      note.className = "print-scale";
-      wrap.querySelector(".table-name").after(note);
-    }
-    note.textContent = `Prints at ${by}% to fit the paper`;
-    note.title = "The table is wider than the paper, so print and PDF shrink it. Narrow its " +
-      "columns, or choose a wider paper or Landscape in File, Page setup…";
   }
 
   // Lays out every table not yet laid out, then sets each table's print scale for the paper the

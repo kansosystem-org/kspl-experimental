@@ -1,6 +1,6 @@
 # The local server's protocol
 
-**This document sets the protocol between a page in a browser and a small program on the same machine, the *local server*.** The page asks it to read and write files, which a browser lets a page open only through a window a person chooses. The server also serves the page, so the same-origin rule does not block the requests. **It starts one program at most**: the builder named when it starts, closed to the one file it builds ("Building a page's own functions"). On a server that started others, every request a page can make would be running code.
+**This document sets the protocol between a page in a browser and a small program on the same machine, the *local server*.** The page asks it to read and write files, which a browser lets a page open only through a window a person chooses. The server also serves the page, so the same-origin rule does not block the requests. **It starts one program at most**: the builder named when it starts, closed to the one file it builds. It builds only a file whose exact bytes the person allowed ("Building a page's own functions"). On a server that started others, every request a page can make would be running code.
 
 **It describes no single implementation**: the server is meant to be replaceable, so only the rules live here.
 
@@ -75,9 +75,9 @@ The token goes nowhere else either:
 * **Do not take the token from the command line**; the server makes it from the OS's random source.
 * **Compare every byte**: stopping at the first differing byte lets the response time reveal the token byte by byte.
 
-## Only five things can be asked for
+## Only six things can be asked for
 
-A page can read and write files, watch whether a file changed, and list a folder. It can also keep the server running or stop it, and build its own functions.
+A page can read, write and move files, watch whether a file changed, and list a folder. It can also keep the server running or stop it, and build its own functions once the person allows them.
 
 **Do not add another endpoint that starts a program**, for debugging, completion or a plugin. Every one turns a request a page can make into running code. The build is the one exception, and only within the limits of "Building a page's own functions".
 
@@ -89,6 +89,11 @@ The page reads a file whole and writes a file whole, by its path under the root.
 | :-- | :-- |
 | `GET /api/file?path=<p>` | That byte sequence. 404 if absent |
 | `PUT /api/file?path=<p>` | Writes the body under that name. On success, `{"wrote":<byte count>}`. 403 if a step of the path starts with `.` |
+| `POST /api/move?from=<p>&to=<q>` | Renames the file `p` to `q`. On success, `{"moved":true}`. 404 if `p` is absent, 409 if `q` stands already, 403 if a step of either path starts with `.` |
+
+**A write or a move makes the one folder its file goes in, if that folder is missing.** The folder above it must stand already. So a page puts a document's images in a folder named for it, and never makes a tree of folders by mistake.
+
+**A move never replaces a file.** A target already standing is 409, and nothing moves. So a move cannot lose a file, as a write without a guard can.
 
 **A write never reaches a name that starts with `.`**, at any step of the path, such as `.git/config` or `.env`. A write to `.git/config` can set a command that the next `git status` runs. A read of such a name is answered as any other.
 
@@ -170,11 +175,23 @@ A page, or any program holding the token, can stop the server at once.
 
 A page whose document names a file of functions in KSPL asks the server to build it. The page then runs the result in the browser's sandbox, with no access to anything outside the page.
 
+**Nothing is built until the person allows that exact file.** The server keeps the allows, and refuses to build any other file, whatever the page asks.
+
 | Request | Response |
 | :-- | :-- |
-| `POST /api/build?path=<p>` | The built module, typed `application/wasm`. 422 with `{"error":<message>}` when the file does not build. 404 when the server has no builder, or no such file |
+| `GET /api/allow?path=<p>` | `{"allowed":true}` when the person allowed the bytes the file holds now, else `{"allowed":false}`. 404 when the server has no builder, or no such file |
+| `POST /api/allow?path=<p>` | Allows the bytes that `X-Kanso-If-Content` names, the 64-character lowercase SHA-256 digest of the file. `{"allowed":true}`. 409 when the file holds other bytes, 400 when the digest is missing or malformed |
+| `DELETE /api/allow?path=<p>` | Takes the allow back. `{"allowed":false}` |
+| `POST /api/build?path=<p>` | The built module, typed `application/wasm`. 403 with `{"error":<message>}` when the person has not allowed the bytes the file holds. 422 with `{"error":<message>}` when the file does not build. 404 when the server has no builder, or no such file |
+
+* **An allow holds for one file and its exact bytes.** A file whose bytes changed since is not allowed, so the page asks again.
+* **Only the person's own act on the page sends a POST.** The token keeps every other program out. Nothing a document holds makes the page send one.
+* **The record of allows stands outside the root**, in a file named when the server starts (`--allowed`). It holds the SHA-256 of each file's path and of its allowed bytes. A page, or a document's folder, cannot write it through the file endpoints.
+* **A record that cannot be read allows nothing.**
 
 **The server builds only through a builder named when it starts**, by whoever starts it, never by a request. With no builder named, the endpoint does not exist (404). A server facing outward has none.
+
+**The builder gets the digest of the allowed bytes**, and builds only bytes that match it. A file changed between the server's check and the builder's read is refused, not built.
 
 **The build is closed**: it reads the one file named, the standard library, and the sources the builder ships. A path in that file that climbs out of its folder, or names anything else, fails the build. **So does any way to C in it**: `extern`, `##link`, assembler text and the attributes that hand text to the C side. The assembler and the linker would otherwise read files the paths never name. So a request reads nothing the token does not already reach, and the result is code for the page's sandbox, not for the machine.
 
@@ -188,10 +205,10 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | :-- | :-- |
 | 400 | A malformed request (a `Host` given twice included), or a malformed `%XX` |
 | 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike). So a request without the token learns nothing of the names under the root |
-| 403 | It pointed outside the root, wrote to a name that starts with `.`, or named a `Host` other than the loopback |
+| 403 | It pointed outside the root, wrote to a name that starts with `.`, or named a `Host` other than the loopback. Or it asked to build a file whose bytes the person has not allowed |
 | 404 | A name that does not exist, an unknown endpoint, or a build with no builder named |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
-| 409 | The conditional write no longer matches the file, or its target is not a regular file |
+| 409 | The conditional write no longer matches the file, or its target is not a regular file. Or an allow names bytes the file does not hold |
 | 413 | The body exceeded the ceiling |
 | 422 | The file named for a build does not build; `error` holds the builder's message |
 | 500 | It could not be written or replaced |

@@ -283,6 +283,13 @@ Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means
 
 Caution: **Do not add a check of a path's parts here.** Each of the four Windows holes that kssrv once fixed alone was a form that one check missed. A form found later is added to `fs.join_under`, which ksagent shares.
 
+**A test made of generated paths holds the door to its outcome, not to a list of forms** (`kssrv/tests/paths.kspl`). Each hole so far was found by a review, never by a test, since each was a form nobody had listed. So the test builds paths at random from pieces each OS reads in its own way. It checks each path two ways:
+
+* **At the door alone**, against a model of how POSIX and Windows read the text, on every OS. The model follows each OS, not the door's list. So a form the door forgets fails, whichever rule it slips past.
+* **Through a running server**, where every answer must agree with the door. Afterwards nothing outside the root and no dot name under it may have changed.
+
+Both parts also hold each path to a plain path's time, as thousands of `/` once cost 19 ms a request.
+
 ### `/api/` does not go through static serving
 
 Everything under `/api/` is dispatched by the routing table alone, even over a directory named `api` under the root. **Every answer there is JSON, a refusal's included**, so a client of the API reads one form ("The JSON API" in [`SPEC-api.md`](SPEC-api.md)).
@@ -295,7 +302,7 @@ The counters `/api/status` returns sit in one `priv $stats`. On a one-thread ser
 
 ### No process is started, but the builder
 
-**kssrv starts no program on a request, except the builder that `--builder` names.** Only whoever starts kssrv names it, and only with `--local`; a request names only the file. The rule is "Only five things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "No program is started, except one closed build", inside "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
+**kssrv starts no program on a request, except the builder that `--builder` names.** Only whoever starts kssrv names it, and only with `--local`; a request names only the file. **The builder starts only for bytes the person allowed**, which the record named by `--allowed` holds. The page is the less trusted side, so the server checks the record itself before every build. The rule is "Only six things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "No program is started, except one closed build", inside "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 ## The log
 

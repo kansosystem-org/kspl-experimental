@@ -73,19 +73,19 @@ LINT_MAINS := $(shell { git ls-files; git ls-files --others --exclude-standard; 
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
 # Every ksplc suite stands on its harness, which the root's suites call too.
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
-LINT_TARGETS_OWN := ksplc/tests/main.kspl ksos/tests/main.kspl ksagent/tests/main.kspl \
+LINT_TARGETS_OWN := ksplc/tests/main.kspl lib/ksos/tests/main.kspl ksagent/tests/main.kspl \
 	tools/tests/main.kspl tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
 
 # The bare-metal demos, the page's wasm bridge and the fixed part of a person's own functions,
 # linted with `--freestanding`. They hold no `main`.
-LINT_TARGETS_FREE := $(wildcard ksos/demo/cortex_m/*.kspl) \
-	$(wildcard ksos/demo/rp2040/*.kspl) $(wildcard ksos/demo/nrf51/*.kspl) \
+LINT_TARGETS_FREE := $(wildcard lib/ksos/demo/cortex_m/*.kspl) \
+	$(wildcard lib/ksos/demo/rp2040/*.kspl) $(wildcard lib/ksos/demo/nrf51/*.kspl) \
 	ksmd/port/web/bridge.kspl ksmd/port/own/serve.kspl
 
-# The entries named by hand hold no `main`: libraries also linted on their own (`ksos/net/` and the
+# The entries named by hand hold no `main`: libraries also linted on their own (`lib/ksos/net/` and the
 # opener's two files), and every file of `ksplc/tests/prog/`, its helpers too. **`ksplc/main.kspl`
 # comes first**: its lint takes longest, so `make -j` starts it first.
-lint_named := ksplc/main.kspl ksos/net/mini_ipv4.kspl ksos/net/tcp_conn.kspl \
+lint_named := ksplc/main.kspl lib/ksos/net/mini_ipv4.kspl lib/ksos/net/tcp_conn.kspl \
 	tools/opener_aim.kspl tools/opener.kspl $(wildcard ksplc/tests/prog/*.kspl)
 LINT_TARGETS := $(lint_named) \
 	$(filter-out $(lint_named) $(LINT_TARGETS_OWN) $(LINT_TARGETS_FREE),$(LINT_MAINS))

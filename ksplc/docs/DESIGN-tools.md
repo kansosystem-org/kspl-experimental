@@ -518,7 +518,7 @@ Caution: **Set it from all three routes.** If the settings file's route does not
 
 **The format is INI**, not a new language for settings alone, nor KSPL syntax, which would need semantic analysis just to read the settings.
 
-**The nearest file applies whole** (SPEC-tools.md §6.2). So a folder where deliberately empty blocks are scattered, as under `ksos/`, needs one `ksplc.cfg` rather than `##lint(I0307 = off);` in every file.
+**The nearest file applies whole** (SPEC-tools.md §6.2). So a folder where deliberately empty blocks are scattered, as under `lib/ksos/`, needs one `ksplc.cfg` rather than `##lint(I0307 = off);` in every file.
 
 **Files do not merge**, so one file tells which settings govern a source. The cost is repetition in a nested folder; if that becomes common, the answer is an explicit `extends`, not the merge.
 

@@ -600,8 +600,8 @@ Object.assign(sections, tools({ browser, page, js, settle, until, press, type, s
 Object.assign(sections, tables({ page, js, settle, press, type, select, click, menu, load, saves,
   rightClick, openCell }));
 Object.assign(sections, sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source,
-  openCell, doubleClickAt }));
-Object.assign(sections, documents({ js, press, click, menu, load, saves }));
+  openCell, doubleClickAt, rightClick }));
+Object.assign(sections, documents({ page, js, press, click, menu, load, saves, source }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
 Object.assign(sections, formulaHelp({ page, js, settle, press, type, click, menu, load, saves }));
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));

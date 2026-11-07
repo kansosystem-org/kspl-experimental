@@ -25,10 +25,9 @@ pub struct Str_builder //< a growing buffer whose owner frees it with `free()`
     pub len: Sz //< how many bytes have been written
     pub cap: Sz //< how many bytes fit before it has to grow
 
-impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
+impl Str_builder
     pub fn new(): Str_builder //< an empty builder, which has allocated no memory yet
         return Str_builder::{ .ptr = null, .len = 0, .cap = 0 }
-
     #ends_views
     pub fn escape_and_append( //< writes a JSON string's contents; the caller writes the quotes
         //< Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC
@@ -82,12 +81,10 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
                     r.c(c)
             i += 1
         return r
-
     #ends_views
     pub fn clear(r: Self$@): Self$@ //< empties it, keeping the memory already allocated
         r.len = 0
         return r
-
     #ends_views
     pub fn drop_prefix( //< drops the leading bytes and moves the rest to the start
         //< For removing a message already read from a receive buffer, which can hold the start of
@@ -105,7 +102,47 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         mem.move(Void$@::r.ptr, Void$@::(r.ptr + n), rest) // the two ranges overlap
         r.len = rest
         return r
+    #ends_views
+    pub fn reserve( //< makes room in advance, so a long write does not grow step by step
+        r: Self$@,
+        new_cap: Sz, //< how many bytes must fit; a smaller value does nothing
+    )
+        if block: = r.grow(new_cap)
+            dealloc(Void$@::block)
+    priv fn grow(r: Self$@, new_cap: Sz): U8$@? //<
+        //< Makes room for new_cap bytes, and returns the old buffer for the caller to free
+        //< None when nothing was replaced. The caller frees it only after reading what it needs
+        //< from it.
+        if r.cap >= new_cap
+            return .none
+        $cap: Sz = 8 if r.cap == 0 else r.cap
+        for cap < new_cap
+            doubled: = cap * 2
+            if doubled <= cap
+                // cap*2 wraps near Sz's upper bound (it can become 0), so use new_cap as it is. The
+                // alloc that follows catches an absurdly large new_cap.
+                cap = new_cap
+                break
+            cap = doubled
 
+        new_ptr: = U8$@::alloc(cap)
+        if r.len > 0
+            mem.copy(Void$@::new_ptr, Void$@::r.ptr, r.len)
+        // Caution: **Decide by cap, not by ptr or len.** `free()` leaves ptr behind with cap 0, and
+        // an old buffer at len 0 still has to be freed.
+        old: U8$@? = .some(r.ptr) if r.cap > 0 else .none
+        r.ptr = new_ptr
+        r.cap = cap
+        return old
+    priv fn holds(r: Self@, s: U8[]): Bool //< whether `s` overlaps the memory this builder holds
+        at: = Sz::s.ptr
+        base: = Sz::r.ptr
+        return r.cap > 0 && s.len > 0 && at < base + r.cap && base < at + s.len
+    #gives_view
+    pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until the next change
+        return U8$[]::{ .ptr = r.ptr, .len = r.len }
+
+impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     #ends_views
     #inline
     pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
@@ -132,49 +169,6 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
 
     pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
         return r
-
-    #ends_views
-    pub fn reserve( //< makes room in advance, so a long write does not grow step by step
-        r: Self$@,
-        new_cap: Sz, //< how many bytes must fit; a smaller value does nothing
-    )
-        if block: = r.grow(new_cap)
-            dealloc(Void$@::block)
-
-    priv fn grow(r: Self$@, new_cap: Sz): U8$@? //<
-        //< Makes room for new_cap bytes, and returns the old buffer for the caller to free
-        //< None when nothing was replaced. The caller frees it only after reading what it needs
-        //< from it.
-        if r.cap >= new_cap
-            return .none
-        $cap: Sz = 8 if r.cap == 0 else r.cap
-        for cap < new_cap
-            doubled: = cap * 2
-            if doubled <= cap
-                // cap*2 wraps near Sz's upper bound (it can become 0), so use new_cap as it is. The
-                // alloc that follows catches an absurdly large new_cap.
-                cap = new_cap
-                break
-            cap = doubled
-
-        new_ptr: = U8$@::alloc(cap)
-        if r.len > 0
-            mem.copy(Void$@::new_ptr, Void$@::r.ptr, r.len)
-        // Caution: **Decide by cap, not by ptr or len.** `free()` leaves ptr behind with cap 0, and
-        // an old buffer at len 0 still has to be freed.
-        old: U8$@? = .some(r.ptr) if r.cap > 0 else .none
-        r.ptr = new_ptr
-        r.cap = cap
-        return old
-
-    priv fn holds(r: Self@, s: U8[]): Bool //< whether `s` overlaps the memory this builder holds
-        at: = Sz::s.ptr
-        base: = Sz::r.ptr
-        return r.cap > 0 && s.len > 0 && at < base + r.cap && base < at + s.len
-
-    #gives_view
-    pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until the next change
-        return U8$[]::{ .ptr = r.ptr, .len = r.len }
 
 impl Str_builder: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self$@, w: Writer): Writer //< writes its contents to `w`

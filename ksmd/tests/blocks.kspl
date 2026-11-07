@@ -2,9 +2,12 @@
 //< editor's actions on them
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor_blocks" // `insert_divider`, `insert_image`
+import "ksmd/edit/editor_drawings" // `set_image_width`
 import "ksmd/edit/region" { Style, paragraph_style, text_spot }
 import "ksmd/syntax/reader"
-import "ksmd/tests/support" { opened, saves }
+import "ksmd/tests/support" { opened, saves, written }
+import "std/chars"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -20,6 +23,9 @@ priv fn reading()
     same("a checklist, beside a plain item", "%ksmd 1\n\n- [ ] Buy pens\n- [x] Call Sam\n- Note\n",
         arena)
     same("a quote and a divider", "%ksmd 1\n\n> Less, but better.\n\n---\n\nAfter.\n", arena)
+    same("two images, each with its share of the text width",
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"A\" width=\"45%\"\n:::\n\n:::image src=\"b.png\" \
+            alt=\"B\" caption=\"Second\" width=\"100%\"\n:::\n", arena)
     same("a hard break inside a quote", "%ksmd 1\n\n> One\\\n> two\n", arena)
     saves_as("a quote's lines join as a paragraph's do", "%ksmd 1\n\n> One\n> two\n",
         "%ksmd 1\n\n> One two\n", arena)
@@ -90,6 +96,38 @@ priv fn quoting()
         refused = true
     verdict.check("an image with an empty src is refused, as the reader refuses it", refused, "")
     saves("and the refusal changes nothing", ed@, arena, "%ksmd 1\n\nWords.\n")
+    $pic: = opened("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\"\n:::\n", arena)
+    pic.set_image_width(0, 40) catch e
+        verdict.check("setting a width", false, e.message())
+    saves("an image takes its share of the text width", pic@, arena,
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
+    pic.set_image_width(0, 0) catch e
+        verdict.check("fitting it again", false, e.message())
+    saves("and 0 fits it to the text again", pic@, arena,
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\"\n:::\n")
+    pic.undo()
+    saves("each is one step of undo", pic@, arena,
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
+    pic.set_image_src(0, "a-images/image-1.png") catch e
+        verdict.check("pointing at another file", false, e.message())
+    verdict.check("an image is pointed at the file its image moved to",
+        written(pic.doc@, arena).find_str("src=\"a-images/image-1.png\"").is_some(), "")
+    pic.undo()
+    $too_wide: = false
+    pic.set_image_width(0, 101) catch
+        too_wide = true
+    verdict.check("a width past 100% is refused", too_wide, "")
+    pic.set_image_words(0, true, "The section viewer") catch e
+        verdict.check("a caption", false, e.message())
+    pic.set_image_words(0, false, "Sections by address") catch e
+        verdict.check("alternate text", false, e.message())
+    saves("an image takes a caption and alternate text later", pic@, arena,
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"Sections by address\" caption=\"The section \
+            viewer\" width=\"40%\"\n:::\n")
+    pic.set_image_words(0, true, "") catch e
+        verdict.check("no caption", false, e.message())
+    saves("and an empty caption takes it away", pic@, arena,
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"Sections by address\" width=\"40%\"\n:::\n")
 
 priv fn checks(): Style //< a checklist item's style, as the page asks for it
     $s: = paragraph_style()

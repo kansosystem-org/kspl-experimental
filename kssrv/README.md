@@ -25,10 +25,11 @@ The port and the root are **positional**; no environment variable fills either i
 | Option | What it does |
 | :-- | :-- |
 | (none) | Faces outward: any machine on the network can fetch the files |
-| `--local` | **Makes it a local server**, reachable from this machine only. Only then do the endpoints a local page uses exist (`/api/file`, `/api/stat`, `/api/list`, `/api/here`, `/api/stop`, and `/api/build` with `--builder`). It prints a token (a secret string) that every request but the page must carry |
+| `--local` | **Makes it a local server**, reachable from this machine only. Only then do the endpoints a local page uses exist (`/api/file`, `/api/stat`, `/api/list`, `/api/here`, `/api/stop`, and `/api/allow` and `/api/build` with `--builder`). It prints a token (a secret string) that every request but the page must carry |
 | `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** The server does not start when it names a folder, a FIFO or a device, or nothing. It can sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 | `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** It takes 1 to 604800 (one week); the server does not start on another value. Absent, it stays up ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
-| `--builder=<program>` | **Names the program that builds a page's own functions** for `POST /api/build`. It needs `--local`, and the server does not start when the program cannot be run. Absent, `/api/build` answers 404 ("Building a page's own functions" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
+| `--builder=<program>` | **Names the program that builds a page's own functions** for `POST /api/build`. It needs `--local` and `--allowed`, and the server does not start when the program cannot be run. Absent, `/api/allow` and `/api/build` answer 404 ("Building a page's own functions" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
+| `--allowed=<file>` | **Names the file that records which functions files the person allowed to build.** It goes with `--builder`, and its folder must stand. Caution: name a file outside `<root>`, or anyone who can write the root can allow their own file |
 | `--cert=<file>` | **Answers HTTPS on the port, with this PEM certificate chain**: the server's own certificate first, then each one that issued the one before it. It needs `--key`, and cannot go with `--local` |
 | `--key=<file>` | **The private key of `--cert`**, in PEM, with no passphrase, readable by this account alone ("Serve HTTPS" below) |
 
@@ -91,6 +92,8 @@ Idle, it uses no CPU. **What it holds on its heap comes back to the same figure*
 ## The tests
 
 **`make test` runs them from this folder** ([`kssrv/Makefile`](Makefile)). It needs a `ksplc`, a C compiler and OpenSSL 1.1.1 or later, which kssrv links for HTTPS through [kstls](../lib/kstls/README.md) (`libssl-dev` on Debian and Ubuntu). It builds the server, starts it again and again, and checks from outside what it answers ([`kssrv/tests/main.kspl`](tests/main.kspl)). kssrv names itself in [`kssrv/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs them the same way. `make` alone builds the server into this folder's `out/`.
+
+**The run `paths` throws generated paths at every endpoint that takes one** ([`kssrv/tests/paths.kspl`](tests/paths.kspl)). It checks that nothing outside the root is reached, and that no write lands on a dot name. `make test` replays one fixed seed. `make test-fuzz` sends ten times as many paths, and `FUZZ_ARGS="--seed=N --trials=N"` picks others. A failure prints the line that runs it again.
 
 **A failing check does not stop the run.** The closing `RESULT:` line is printed after every server the run started has stopped, so none is left on its port for the next run ([`std/verdict.kspl`](../std/verdict.kspl)).
 

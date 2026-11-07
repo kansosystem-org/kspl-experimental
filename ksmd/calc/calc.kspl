@@ -91,6 +91,10 @@ struct Own_functions //< a person's own functions, which a calculation asks the 
     names: U8[][] //< their names, as a formula calls them
     ask: Ask_fn
     ctx: Void$@ //< what `ask` is handed back
+    unknown: Calc_error //< what a call to a name no file gives is, while a file's names are unknown
+        //< `.blocked` while the person has not allowed a file, `.pending` while one builds, and
+        //< `.syntax` once every file's names are known. **A name is unknown until its file
+        //< builds**, so the first two hold for every name ksmd does not have.
 
 impl Own_functions
     fn has(r: Self@, name: U8[]): Bool //< whether a formula's `name` is one of them
@@ -98,6 +102,25 @@ impl Own_functions
             if one.equals(name)
                 return true
         return false
+
+    fn called(r: Self@, t: Table@, cell: Cell, arena: Arena$@): U8[][] //<
+        //< The names of these functions that a cell's formula calls, each once, in its order
+        //< **Read as the calculator reads it**: a name followed by `(`, and never text in quotes.
+        $cur: = Cursor::{ .piece = 0, .at = 0 }
+        $got: = List<|U8[]|>(arena)
+        $last: = Token(.end, 0, 0)
+        for
+            tok: = next(t, cell, cur@)
+            if tok.kind == .end
+                break
+            if tok.kind == .open && last.kind == .name && r.has(last.text)
+                $known: = false
+                for one in got
+                    known = known || one.equals(last.text)
+                if !known
+                    got.push(last.text)
+            last = tok
+        return got.slice()
 
 priv struct Spot //< a data cell, by its table and place
     table: Sz
@@ -442,6 +465,8 @@ impl Parser
             v: = p.c.own.ask(p.c.own.ctx, name, args@)
             p.wrong = p.wrong || args.misread
             return v
+        if p.c.own != null && p.c.own.unknown != .syntax
+            return empty() if p.skipping > 0 else Value.failed(p.c.own.unknown)
         p.wrong = true
         return Value.failed(.syntax)
 

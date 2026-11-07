@@ -4,7 +4,7 @@
 //< that the type writes outside the block that names the trait.
 //< **It runs in collect's Pass 1b, before generic instantiation** (the reason is at Pass 1b in
 //< `collect.kspl`).
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
@@ -33,6 +33,73 @@ impl Sema_ctx
             if t_node: = child.get_impl_trait_node()
                 r.set_current_file(child.loc.file())
                 r.copy_defaults_from_trait(child, t_node, impls)
+
+    fn split_listed_traits(r: Self$@, root: Ast_node$@) //<
+        //< Gives each trait after the first in `impl T: A, B` an empty block of its own
+        //< The rule is in "5.2 Implementations (`impl`) and receivers" of
+        //< docs/SPEC-programming-language.md. **A header names several traits only when none
+        //< declares a method**, so the block's methods stay the type's own, and every trait that
+        //< marks the type stands where a reader first looks. Each split block is made by the
+        //< compiler and stands at its trait's name, so a diagnostic on it lands there.
+        //< It runs after Pass 1, which registers the traits it looks up.
+        $i: Sz = 0
+        for i < root.children.len
+            top_node: = root.children.get(i)
+            i += 1
+            child: = top_node.unwrap_top_level()
+            if child.kind_id != .k_decl_impl
+                continue
+            listed: = listed_traits(child)
+            if listed.len < 2
+                continue
+            r.set_current_file(child.loc.file())
+            for t_node in listed
+                decl: = r.trait_decl_of(t_node).unwrap_or(null)
+                if decl != null && declares_methods(decl)
+                    defer $named: = t_node.extract_type_name()
+                    r.clear_scratch()
+                        .s("'\{named.slice()\}' declares methods, so it is met in a block of its \
+                            own, 'impl …: \{named.slice()\}'. A header names several traits only \
+                            when none of them declares a method")
+                    r.err(t_node, r.scratch.slice())
+            // The first trait stays on the written block; each other one leaves it.
+            first: = listed.get(0)
+            stays: = base_ast.new_ast_node_list()
+            for part in child.children
+                if part == first || !is_trait_path(part)
+                    stays.push(part)
+            child.children = stays
+            for k in Range(1, listed.len, 1)
+                t_node: = listed.get(k)
+                made: = child.clone()
+                kept: = base_ast.new_ast_node_list()
+                for part in made.children
+                    if part.kind_id != .k_decl_fn && part.kind_id != .k_decl_fn_proto &&
+                        !is_trait_path(part)
+                        kept.push(part)
+                made.children = kept
+                made.add_child(t_node.clone())
+                made.place_as_made(t_node.loc)
+                root.insert_child(i, made)
+                i += 1
+
+    fn trait_decl_of(r: Self$@, trait_node: Ast_node$@): Ast_node$@? //<
+        //< The declaration of the trait a written path names, or none where it names none
+        //< A generic's actual arguments are dropped: the template holds the default values.
+        //< **A generic trait is in the template table, not the symbol table**; if it is missed,
+        //< `Index_ref`'s default values are silently not copied.
+        //< It looks the symbol up by FQN, for the reason at copy_defaults_from_trait.
+        written: = r.read_written_type(trait_node)
+        $decl: Ast_node$@ = r.written_template(written)
+        if decl == null
+            if written.fqn.len == 0
+                return .none
+            t_sym: = r.symtab.resolve_fqn(written.fqn).unwrap_or(null)
+            if t_sym != null
+                decl = t_sym.node
+        if decl == null || decl.kind_id != .k_decl_trait
+            return .none
+        return .some(decl)
 
     priv fn impls_by_target(r: Self$@, root: Ast_node$@):
         Map<|U8[], List<|Ast_node$@|>$@|>$@ //<
@@ -64,18 +131,7 @@ impl Sema_ctx
             //< output; look up the symbol by FQN.
         defer $spelled: = trait_node.extract_type_name()
         full: = spelled.slice()
-        // A generic's actual arguments are dropped: the template holds the default values.
-        // **A generic trait is in the template table, not the symbol table**; if it is missed,
-        // `Index_ref`'s default values are silently not copied.
-        written: = r.read_written_type(trait_node)
-        $decl: Ast_node$@ = r.written_template(written)
-        if decl == null
-            if written.fqn.len == 0
-                return
-            t_sym: = r.symtab.resolve_fqn(written.fqn).unwrap_or(null)
-            if t_sym != null
-                decl = t_sym.node
-        if decl == null || decl.kind_id != .k_decl_trait
+        decl: = r.trait_decl_of(trait_node) catch
             return
         // Caution: **Get the implementing type's visibility first.** The copied body becomes that
         // type's method, so it must not be more visible than the type ("the visibility written on a
@@ -86,6 +142,7 @@ impl Sema_ctx
         // **Check before the copy**: a default copied into this block would hide a method the type
         // writes in another block, and the type would then hold two of that name.
         r.require_methods_in_block(impl_node, trait_node, decl, full, impls)
+        r.refuse_foreign_methods(impl_node, decl, full)
         r.copy_default_bodies(impl_node, decl, full, target_vis)
         for m in impl_node.children
             if m.kind_id != .k_decl_fn
@@ -117,6 +174,28 @@ impl Sema_ctx
                 if found: = method_named(other, name)
                     r.report_method_elsewhere(impl_node, trait_node, spelled, found)
                     break
+
+    priv fn refuse_foreign_methods(r: Self$@, impl_node: Ast_node$@, decl: Ast_node$@,
+        spelled: U8[]) //<
+            //< Refuses a method in the block that the trait it names does not declare
+            //< The rule is in "5.2 Implementations (`impl`) and receivers" of
+            //< docs/SPEC-programming-language.md. **A misspelt method would otherwise pass**: the
+            //< trait's default body would be copied in beside it, and run in its place. A trait
+            //< that declares no method is left out: its block holds the type's own methods.
+        if !declares_methods(decl)
+            return
+        for m in impl_node.children
+            if m.kind_id != .k_decl_fn || m.made_by_compiler()
+                continue
+            name: = m.get_decl_id_text()
+            if name.len == 0 || find_trait_method(decl, name).is_some()
+                continue
+            defer $target: = impl_node.get_decl_type_node().extract_type_name()
+            r.clear_scratch()
+                .s("'\{spelled\}' declares no method '\{name\}'. A block that names a trait holds \
+                    only that trait's methods. Move 'fn \{name\}' into the type's plain block 'impl \
+                    \{target.slice()\}', or spell it as the trait does")
+            r.err(m, r.scratch.slice())
 
     priv fn report_method_elsewhere(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@,
         spelled: U8[], found: Ast_node$@) //<
@@ -201,6 +280,30 @@ priv fn strip_visibility_keywords(node: Ast_node$@) //<
             node.children.remove_at(i)
             continue
         i += 1
+
+priv fn is_trait_path(n: Ast_node@): Bool //< whether a child of an impl is a trait it names
+    return n.kind_id == .k_expr_path || n.kind_id == .k_type_path || n.kind_id == .k_identifier
+
+priv fn listed_traits(impl_node: Ast_node$@): List<|Ast_node$@|> //<
+    //< The traits an impl's header names, in order: the children after its target type
+    $out: = List<|Ast_node$@|>(base_core.arena)
+    target: = impl_node.get_decl_type_node()
+    $after: = false
+    for c in impl_node.children
+        if c == target
+            after = true
+        else if after && is_trait_path(c)
+            out.push(c)
+        else if c.kind_id == .k_decl_fn
+            break
+    return out
+
+fn declares_methods(decl: Ast_node@): Bool //<
+    //< Whether that trait declares any method; a trait that declares none marks a type's property
+    for m in decl.children
+        if m.kind_id == .k_decl_fn || m.kind_id == .k_decl_fn_proto
+            return true
+    return false
 
 priv fn has_default_body(decl: Ast_node@): Bool //<
     //< Whether that trait declares any method with a default body

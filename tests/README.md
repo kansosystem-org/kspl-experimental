@@ -57,7 +57,7 @@ Each suite has a make target, `make test-<name>`, and its opening comment says w
 
 **Suites that check only the compiler live in ksplc's folder** ([`ksplc/README.md`](../ksplc/README.md)), and `make test-<name>` runs them from here too ("What stays in the root tests folder" in [`tests/docs/DESIGN-suites.md`](docs/DESIGN-suites.md)).
 
-**Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-ksai-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken inputs, made from valid *seeds*, to find one that crashes it.
+**Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-ksai-fuzz` / `test-kssrv-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken inputs, made from valid *seeds*, to find one that crashes it.
 
 ## The tools in tests/tools
 
@@ -72,7 +72,7 @@ Other packages' material is run by their own `Makefile`:
 
 | Folder | How it is called |
 |---|---|
-| `ksos/tests/` | [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI): the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs |
+| `lib/ksos/tests/` | [`lib/ksos/Makefile`](../lib/ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI): the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs |
 | `ksmd/tests/browser/` | [`ksmd/Makefile`](../ksmd/Makefile) (`make test-ksmd-browser` from here): ksmd's checks on its page in a browser |
 
 ## Files near the limit and how they split

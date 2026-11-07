@@ -34,7 +34,7 @@
 | Menu bar | Every command: File, Edit, View, Insert, Format and Table |
 | Quick access bar | One row of the tools you chose. View ▸ Quick access bar… chooses them; a right-click on a command adds it or takes it off |
 | Status bar | One line at the foot, which says where you work (The status bar below) |
-| View ▸ Contents | The headings at the window's left; a press on one scrolls to it |
+| View ▸ Contents | The headings at the window's left; a press on one scrolls to it. The ▸/▾ before a heading folds the headings under it; with `Alt`, every heading of its level |
 | View ▸ Full width, Reading width | The document fills the window, or keeps lines about 50 characters long |
 | View ▸ One line per cell | Every table row shows one line; a cell shows whole while it is edited |
 | View ▸ Read-only | The page takes no edit. Finding, filters, printing and links still work |
@@ -44,6 +44,7 @@
 | Part | What it shows or does |
 | :-- | :-- |
 | The chosen cell | Its address and what was typed in it, as `C2  =hex_to_dec(B2)`; a range shows `C2:D5`. Its tooltip holds a long formula whole |
+| The document's own functions | Which ones the chosen cell calls, as `Uses tax from mine.kspl (this document's own)`; or why it shows `#BLOCKED!` |
 | Message | What the last action said, until the next one |
 | Filter | `5 of 120 rows shown` while a filter hides rows of the chosen table |
 | Page | The printed page the caret or the chosen cell stands on, as `Page 3 of 12` |
@@ -77,6 +78,7 @@
 | Align a paragraph or a heading | Format ▸ Align left, Centre, Align right. Pressed again, it is taken off |
 | Take colours and alignment away | Format ▸ Clear format. The kind of block and the marks stay |
 | Part the document | Insert ▸ Divider. On paper a divider ends a page |
+| Leave a blank line | `Enter` on an empty line between two blocks. Each press adds one; `Backspace` after it, or `Delete` before it, takes it away |
 | Type today's date or the time | Insert ▸ Today's date (`Ctrl`+`;`), Time now (`Ctrl`+`:`) |
 | Note a paragraph | Insert ▸ Note… (`Shift`+`F2`). An empty note resolves it |
 | Find and replace | Edit ▸ Find… (`Ctrl`+`F`), Replace… (`Ctrl`+`H`). `Enter` and `F3` go to the next match |
@@ -84,9 +86,20 @@
 
 **A paste takes the clipboard's plain text.** Where the clipboard also held formatting, the page says it was not kept. Rows of tab-separated values pasted into text make a table.
 
-**An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks for its alternate text. The file is written beside the document, so the document needs a file first.
+**An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks nothing. The file is written in a folder named for the document, such as `OfficeMemo-images/image-1.png`, so the document needs a file first. File ▸ Gather images into a folder moves images that stand beside the document into that folder, and saves. Caption… in the image's tools gives it a caption, which a reference can name. Alt text… gives it a description for someone who cannot see it.
 
 **Insert ▸ Include… shows another document's blocks in place.** Its Edit button opens that document in a tab of its own.
+
+**Insert ▸ Functions file… adds the document's own functions, written in KSPL.** Nothing of the file is built or run until you allow it.
+
+| To | Do |
+| :-- | :-- |
+| Let the document's own functions run | Allow, in the bar at the top or in the clause's box |
+| Leave them off for now | Not now; the bar asks again when the document next opens |
+| Take the allow back | Stop allowing, in the clause's box |
+
+* **The allow holds for the file's present content.** A file changed since asks again.
+* **A cell whose formula calls them has a small blue corner at its top left.** The status bar names the functions and their file.
 
 ## Tables
 
@@ -114,8 +127,13 @@
 | :-- | :-- |
 | `12`, `-3.5`, `1e3` | A number |
 | `2026-10-23` | A date |
+| `2026/10/23`, `2026/1/5`, `11/6` | A date, while Edit ▸ AutoCorrect ▸ Turn typed dates into dates is on. `11/6` falls in the year the document was opened. The file keeps `2026-11-06` |
 | `=B1*C1` | A formula ("Formulas" below) |
+| `"11/6"`, in quotes | Text, whatever it looks like |
+| `https://example.com` | Text that links to that address, while Edit ▸ AutoCorrect ▸ Turn typed web addresses into links is on |
 | Anything else, `1,234.5` and `true` among it | Text |
+
+**Right after a typed value turns into a date or a link, `Ctrl`+`Z` gives back the text as you typed it.** A second `Ctrl`+`Z` gives back what the cell held before. The two AutoCorrect choices are this browser's own, and both start on.
 
 ### Copying, moving and filling
 
@@ -236,6 +254,7 @@
 | `#EMPTY!` | `min`, `max` or an average of no numbers |
 | `#SHAPE!` | Ranges of shapes that do not match, as in `sum_if` |
 | `#SYNTAX!` | The formula does not read |
+| `#BLOCKED!` | It may call the document's own functions, which you have not allowed yet |
 
 ### Functions that decide what they calculate
 
@@ -290,7 +309,9 @@
 
 **Table ▸ Table ▸ Insert chart puts a bar chart of the table after it.** Its Edit button sets bars or lines, series in columns or rows, the labels, the columns drawn and a title.
 
-**An image and a chart have the tools Rectangle, Arrow, Line, a colour, Text… and Delete.** Drag across the picture to draw; press a shape to choose it and drag to move it.
+**An image and a chart have the tools Rectangle, Arrow, Line, Pen, a colour, Text… and Delete.** Drag across the picture to draw; press a shape to choose it and drag to move it. Pen draws where the pointer goes. With `Shift` held, a rectangle is a square, and a line or an arrow keeps to a multiple of 45 degrees.
+
+**To change an image's size, drag the square at its lower right corner, or press Width… and type a percent of the text width.** An empty answer fits it to the text again. **To show two images side by side, give each a width that adds up to 100% or less, such as 45% each.**
 
 ## Diagrams
 
@@ -330,7 +351,7 @@
 
 * **Paper shows the document alone**: no menus, bars, letters, row numbers or buttons.
 * **Rows a filter or a group hides stay hidden on paper.**
-* **A table wider than the paper prints smaller.** While you edit, "Prints at 72% to fit the paper" stands beside its name.
+* **A table wider than the paper prints smaller.** While you work in it, the status bar says so: "Page 2 of 5 · this table prints at 72%".
 * **Each page's header holds the time of the print and the document's name**; the footer holds the page's number.
 * **A chart, an image, an include or a diagram is left out of print by its Leave out of print button.** A table is left out by the Table flyout's item.
 
@@ -356,6 +377,7 @@
 | Open… | `Ctrl`+`O` |
 | Save | `Ctrl`+`S` |
 | Save as… | `Ctrl`+`Shift`+`S` |
+| Gather images into a folder |  |
 | Page setup… |  |
 | Print or save as PDF… | `Ctrl`+`P` |
 
@@ -371,6 +393,8 @@
 | Paste values | `Ctrl`+`Shift`+`V` |
 | Find… | `Ctrl`+`F` |
 | Replace… | `Ctrl`+`H` |
+| AutoCorrect ▸ Turn typed dates into dates (11/6) |  |
+| AutoCorrect ▸ Turn typed web addresses into links |  |
 
 ### View
 
@@ -394,7 +418,7 @@
 | Diagram |  |
 | Image… |  |
 | Include… |  |
-| Functions… |  |
+| Functions file… |  |
 | Divider |  |
 | Link… | `Ctrl`+`K` |
 | Today's date | `Ctrl`+`;` |
