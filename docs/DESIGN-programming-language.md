@@ -184,7 +184,7 @@ C's answer, converting to the unsigned side, makes `-1 < 1u` false. A third, wid
 
 ```kspl
 priv fn f(): Shape!Err
-    p: = mem.alloc_as<|Sq|>()
+    p: = mem.new(Sq::{})
     return p // the Sq$@ -> Shape upcast works inside a Result too
 ```
 

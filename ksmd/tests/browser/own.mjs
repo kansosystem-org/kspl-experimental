@@ -140,6 +140,22 @@ export function own(helpers) {
         15000), "after a panic, a later call answers from a new worker",
       `${await cell(d, 0)}; typed ${typed}; row ` +
         await d.js("ksmd.source().split('\\n').find((l) => l.includes('=tax(A1)'))"));
+      // **A cell open while its table is drawn again keeps what is typed.** A call that runs past
+      // its time is answered while the person types in another cell, and the answer draws the
+      // table again between two keys. The box went with the old table on Windows: the keys typed
+      // before were lost, and the next one opened the cell afresh.
+      await d.click('#doc td[data-r="3"][data-c="0"]');
+      await d.type("5");
+      await d.press("Enter");
+      await d.click('#doc td[data-r="0"][data-c="0"]');
+      await d.type("3");
+      const mark = await d.js("window.__seen.length");
+      const drawn = await d.until(`window.__seen.slice(${mark}).includes("drawn")`, 15000);
+      await d.type("00");
+      await d.press("Enter");
+      check(drawn && await d.until(`document.querySelector('#doc td[data-r="0"][data-c="1"]').textContent === "330"`,
+        15000), "a cell open while its table is drawn again keeps what was typed, the caret after it",
+      `drawn ${drawn}; ${await cell(d, 0)}; seen ${await d.js("window.__seen.slice(-12).join(' ')")}`);
       await ctx.browser.closeTab(d.page);
 
       fs.writeFileSync(path.join(ctx.root, "taken.kspl"), TAKEN);

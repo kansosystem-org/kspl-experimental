@@ -2338,7 +2338,7 @@ An arena is one large block of memory that hands out pieces of itself and lets a
 
 **`mem.dealloc` frees only memory that `mem.alloc` itself gave out, and nothing else.** The ownership methods of §8.4 handle the same `T$@`, so the origin cannot be told from the type. Three things must not be passed to it:
 
-* A pointer from an arena (`arena.alloc_as<|T|>()` / `arena.create(v)`); an arena is let go all at once with `Arena.free()`.
+* A pointer from an arena (`arena.create(v)`); an arena is let go all at once with `Arena.free()`.
 * A pointer to the **inside** of an allocation: `rc.get()`, the address of a field or an array element.
 * Static or automatic memory: a static buffer handed to `Arena.from_buffer`, the address of a local variable.
 
@@ -2403,7 +2403,7 @@ Caution: **No row of this table stops a program at run time.** Keeping each view
 | `Str_builder.slice` | A write (`s`, `c`, `escape_and_append`, interpolation into it) that grows the builder, or `reserve` | The bytes move to a new block |
 | The same | `drop_prefix` or `clear` | The bytes move to the start, or the next write overwrites them |
 | The same | `Str_builder.free` | The block is freed |
-| Memory an `Arena` gave out (`alloc`, `alloc_as`, `create`, `dup_str`, `arena.text()…take()`) | `Arena.restore` to a mark saved before it, or `Arena.reset` | The arena gives the memory out again, so the view reads another value's bytes |
+| Memory an `Arena` gave out (`alloc`, `create`, `dup_str`, `arena.text()…take()`) | `Arena.restore` to a mark saved before it, or `Arena.reset` | The arena gives the memory out again, so the view reads another value's bytes |
 | The same | `Arena.free` | The chunks are freed |
 | The pointer that `Rc.get` returns | The last owner of that `Rc<\|T\|>` going: released, or given another value | The value is taken apart and freed ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)) |
 | The pointer that `Mutex.lock` returns | `Mutex.unlock` | The memory stays, but another thread can now write it: a data race ([8.6](#86-what-orders-memory-between-threads)) |
@@ -3039,6 +3039,7 @@ These shapes must not be written. The implementation need not diagnose them, and
 | A slice descriptor built by hand whose length passes the end of its memory | [6.2.1](#621-member-access-and-indexing-through-a-pointer) |
 | A read or write through `(p + i)$` outside the memory that `p` points into | [6.2.1](#621-member-access-and-indexing-through-a-pointer) |
 | `mem.copy` over two ranges that overlap. `mem.move` is the copy for overlapping ranges | `copy` in `std/mem.kspl` |
+| A read of raw bytes that `mem.alloc` or `Arena.alloc` handed out before anything wrote them. A typed value comes from `mem.new` or `Arena.create`, which write it | `alloc` in `std/mem.kspl` |
 | `sys.set_env` or `sys.unset_env` while a thread that `Thread.spawn` did not start, such as a C library's own, reads the environment. While one `Thread.spawn` started still runs, they stop the program | `set_env` in `std/sys.kspl` |
 | A C function given a size larger than the memory behind it, or a value its C declaration does not describe | [11](#11-c-interoperability) |
 

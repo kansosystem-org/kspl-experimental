@@ -34,6 +34,9 @@ struct Stub //< one stand-in server and what it saw
         //< **It stands for a model that writes slowly**, so ksagent can stop it midway.
     worker: thread.Thread
     asked: thread.Atomic_sz //< 1 once the asker has returned, so no request is still to come
+    sent: thread.Atomic_sz //< the bytes of the last reply that went out before the client left
+        //< **A count, not a time**: a test reads it after `finish` to know how far the stream got
+        //< before it was stopped, however slowly the machine ran.
 
 fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that gives these replies
     return start_editing(replies, "", "", arena)
@@ -51,7 +54,8 @@ fn start_dripping(replies: U8[][], edit_path: U8[], edit_body: U8[], drip_ms: I3
     s: = arena
         .create(Stub::{ .listener = listener, .port = port, .replies = replies,
         .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = edit_path,
-        .edit_body = edit_body, .drip_ms = drip_ms, .asked = thread.Atomic_sz(0) })
+        .edit_body = edit_body, .drip_ms = drip_ms, .asked = thread.Atomic_sz(0),
+        .sent = thread.Atomic_sz(0) })
     s.bodies = List<|U8[]|>(s.own)
     s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
     return s
@@ -78,22 +82,24 @@ extern fn serve(s: Stub$@): Void$@ //<
         if i == 0 && s.edit_path.len > 0
             fs.replace_file(s.edit_path, s.edit_body, .kept) catch {}
         s.bodies.push(body)
-        drip(conn, s.replies[i], s.drip_ms)
+        s.sent.store(drip(conn, s.replies[i], s.drip_ms))
         conn.free()
     return null
 
-priv fn drip(conn: net.Tcp_stream@, reply: U8[], drip_ms: I32) //<
+priv fn drip(conn: net.Tcp_stream@, reply: U8[], drip_ms: I32): Sz //<
     //< Writes a reply whole, or in pieces `drip_ms` apart until the client stops reading it
+    //< It returns how many bytes went out; a reply written at once counts as sent whole.
     if drip_ms == 0
         conn.write_all(reply) catch {}
-        return
+        return reply.len
     $at: Sz = 0
     for at < reply.len
         n: = DRIP_PIECE if reply.len - at > DRIP_PIECE else reply.len - at
         conn.write_all(reply.sub(at, n)) catch
-            return
+            return at
         at += n
         sys.sleep_ms(drip_ms)
+    return at
 
 priv const DRIP_PIECE: Sz = 48 //< the bytes of one piece a dripping stand-in writes
 

@@ -11,6 +11,12 @@
  * argv into the OS's shape. Waiting, reading and stopping are hosted_proc.c. The rendezvous is
  * assembled on the KSPL side.
  * ============================================================ */
+/* Why the last start on this thread failed: the OS's error number (errno on POSIX, GetLastError on
+ * Windows), or -1 where none was given. 0 after a start that succeeded. std/subproc.kspl reads it
+ * after a start returned 0, so a tool can say why (kspl_proc_start_error). */
+static KSPL_PER_THREAD I32 kspl_start_error = 0;
+KSPL_LINK I32 kspl_proc_start_error(void) { return kspl_start_error; }
+
 #ifndef _WIN32
 #include <fcntl.h> /* open / O_*. No include after this section is leaned on */
 #include <pthread.h>
@@ -82,7 +88,8 @@ static pthread_mutex_t kspl_spawn_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Ends a forked child that could not reach its exec. It tells the parent by a byte on `done` (the
  * write end of kspl_proc_start's exec_p). Only async-signal-safe calls, as after any fork. */
 static void kspl_child_fail(int done) {
-    char why = 1;
+    /* The byte is the failing call's errno, which the parent keeps (kspl_start_error). */
+    char why = (char)((errno > 0 && errno < 256) ? errno : 1);
     while (write(done, &why, 1) < 0 && errno == EINTR) {}
     _exit(127);
 }
@@ -105,6 +112,7 @@ static void kspl_child_fail(int done) {
  * The start then returns 0, as Windows's CreateProcessW fails for the same causes. */
 KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, const U8 *cwd_ptr, Sz cwd_len,
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
+    kspl_start_error = 0;
     char cwd_path[4096], out_path[4096], err_path[4096];
     if (cwd_len > 0 && !kspl_to_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path))) return 0;
     if (out_len > 0 && !kspl_to_cstr(out_ptr, out_len, out_path, sizeof(out_path))) return 0;
@@ -176,6 +184,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
         int held = !group || kspl_group_swap(0, pid);
         while ((got = read(exec_p[0], &why, 1)) < 0 && errno == EINTR) {}
         if (got > 0 || !held) {
+            kspl_start_error = got > 0 ? (I32)(unsigned char)why : -1;
             if (got <= 0) kill(-pid, SIGKILL);
             while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
             if (group && held) (void)kspl_group_swap(pid, 0);
@@ -192,6 +201,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     h->code = -1; h->reaped = 0; h->out_eof = 0; h->err_eof = 0; h->group = group;
     return (I64)(intptr_t)h;
 fail:
+    if (kspl_start_error == 0) kspl_start_error = errno > 0 ? (I32)errno : -1;
     kspl_close_pipe_pair(in_p); kspl_close_pipe_pair(out_p); kspl_close_pipe_pair(err_p);
     kspl_close_pipe_pair(exec_p);
     free(argv_arr);
@@ -467,6 +477,7 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
  * own standard handles are closed right after CreateProcess, or they leak per start. */
 KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, const U8 *cwd_ptr, Sz cwd_len,
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
+    kspl_start_error = 0;
     wchar_t cwd_path[KSPL_WPATH_CAP], out_path[KSPL_WPATH_CAP], err_path[KSPL_WPATH_CAP];
     /* The working directory alone does not go through kspl_path_to_wide. The OS keeps a process's
      * current directory under MAX_PATH unless the program opts in (SetCurrentDirectoryW's limit). */
@@ -564,6 +575,10 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     h->code = -1; h->reaped = 0; h->out_eof = 0; h->err_eof = 0; h->job = job;
     return (I64)(intptr_t)h;
 fail:
+    if (kspl_start_error == 0) {
+        DWORD e = GetLastError();
+        kspl_start_error = e != 0 ? (I32)e : -1;
+    }
     if (in_r != NULL) CloseHandle(in_r);
     if (in_w != NULL) CloseHandle(in_w);
     if (out_r != NULL) CloseHandle(out_r);
@@ -738,21 +753,32 @@ KSPL_LINK const U8 *kspl_get_env(const U8 *name) {
     {
         wchar_t *wname = kspl_win_wide_dup((const char *)name);
         wchar_t *wbuf = NULL;
-        DWORD n = wname != NULL ? GetEnvironmentVariableW(wname, NULL, 0) : 0;
-        DWORD got = 0;
+        DWORD n = 1;
+        DWORD got;
+        int found = 0;
         char *text;
         kspl_env_held *e;
-        /* Sized on demand: n counts the NUL. A value growing in between answers a larger n. */
-        while (n > 0) {
+        /* Sized on demand: a short buffer answers the size the value needs, counting the NUL. A
+         * value growing in between answers a larger one.
+         * Caution: **A return of 0 means both "empty" and "absent".** Only the last error tells
+         * them apart. Read as absent, a variable set to "" would be missing on Windows alone. */
+        while (wname != NULL) {
             wbuf = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
-            got = wbuf != NULL ? GetEnvironmentVariableW(wname, wbuf, n) : 0;
-            if (got < n) break;
+            if (wbuf == NULL) break;
+            SetLastError(ERROR_SUCCESS);
+            got = GetEnvironmentVariableW(wname, wbuf, n);
+            if (got == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) break;
+            if (got < n) {
+                wbuf[got] = 0;
+                found = 1;
+                break;
+            }
             free(wbuf);
             wbuf = NULL;
             n = got;
         }
         free(wname);
-        text = (wbuf != NULL && got > 0) ? kspl_win_utf8_dup(wbuf) : NULL;
+        text = found ? kspl_win_utf8_dup(wbuf) : NULL;
         free(wbuf);
         if (text == NULL) return NULL;
         AcquireSRWLockExclusive(&kspl_env_lock);

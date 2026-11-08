@@ -272,14 +272,15 @@ fn test_a_removed_question_stops_its_answer(work: U8[], arena: Arena$@)
     slow: = stub.streamed_call("", "answer", leave_args("Ten days, after six months.", arena),
         arena)
     s: = stub.start_dripping(U8[][]::{ slow }, ask, "", 100, arena)
-    started: = sys.mono_us()
     wrote: = watch_one(s, root, ask, arena)
-    seconds: = (sys.mono_us() - started) / 1000000I64
-    full: = I64::(slow.len / 48 + 1) / 10I64
     recorded: = io.read_file(files.chat_path(ask, arena), arena) catch
         fallback ""
-    verdict.check("the stream stops before it ends", wrote && seconds < full,
-        arena.text().s("\{seconds\} s of \{full\} s").take())
+    // **Counted in the bytes the stand-in sent, not in seconds**: ksagent looks at the ask file at
+    // each piece, while the stand-in waits between two. It stops after a few pieces; one that does
+    // not stop takes three quarters of the reply. A busy machine slows both sides alike.
+    sent: = s.sent.load()
+    verdict.check("the stream stops before half of it is sent", wrote && sent < slow.len / 2,
+        arena.text().s("\{sent\} of \{slow.len\} bytes sent").take())
     verdict.check("the turn is recorded as stopped, saying why",
         recorded.find_str("\"state\":\"stopped\"").is_some() &&
         recorded.find_str("the question is no longer in its ask file").is_some(), recorded)

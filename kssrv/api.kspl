@@ -45,7 +45,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
     // so nothing leaks.
     // **The root is told only for local use**, to the holder of the token. Facing outward, its
     // absolute path would tell anyone who asks how this machine's folders are laid out.
-    val: = b.obj().set("root", b.str_val(ctx.root if ctx.is_local() else ""))
+    $val: = b.obj().set("root", b.str_val(ctx.root if ctx.is_local() else ""))
         .set("local", b.bool_val(ctx.is_local()))
         .set("conditional_writes", b.bool_val(ctx.is_local()))
         .set("uptime_s", b.int_val(sys.wall_seconds() - conn.stats.started_s))
@@ -54,8 +54,12 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
         .set("connections_open", b.int_val(conn.stats.connections_open))
         .set("connections_refused", b.int_val(conn.stats.connections_refused))
         .set("max_connections", b.int_val(conn.MAX_CONNS))
-        .set("heap_bytes", b.int_val(heap_used_bytes())).build()
-    queue_json(c, 200, val, keep)
+        .set("heap_bytes", b.int_val(heap_used_bytes()))
+    // Caution: **The file-system lookups are told only for local use.** Facing outward, the count
+    // a request adds would tell how many of a path's steps stand, which a 404 keeps back.
+    if ctx.is_local()
+        val = val.set("fs_lookups", b.int_val(fs.lookups()))
+    queue_json(c, 200, val.build(), keep)
 
 fn path_or_refuse(c: conn.Conn$@, query: U8[], root: U8[], need_name: Bool, dots: fs.Dot_names):
     U8[]? //<

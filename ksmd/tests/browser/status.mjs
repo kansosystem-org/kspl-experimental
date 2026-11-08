@@ -11,7 +11,7 @@ const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const FENCE = "```";
 
 export function statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
-  rightClick, openCell, drag }) {
+  rightClick, openCell, drag, resize }) {
   const text = (part) => js(`(() => { const el = document.querySelector(".status-bar ${part}"); ` +
     "return el && !el.hidden && getComputedStyle(el).display !== 'none' ? el.textContent : null; })()");
   const cell = (r, c) => `#doc [data-r="${r}"][data-c="${c}"]`;
@@ -195,11 +195,14 @@ export function statusBar({ page, js, settle, until, press, type, select, click,
       await until(`document.querySelector('.status-page').textContent !== "Page 1 of ${all}"`, 3000);
       const later = await text(".status-page");
       check(/^Page \d+ of \d+$/.test(later) && Number(later.split(" ")[1]) > 1, "the page moves with the caret", later);
-      await click(cell(0, 0));
-      const top = await text(".status-page");
       await click(cell(79, 0));
       await shows(".status-page", `Page ${all} of ${all}`, "a chosen cell shows the page its row prints on, the last here");
-      check(top !== `Page ${all} of ${all}`, "a row above prints on an earlier page", top);
+      // The bar changes on the next frame, so the wait is for the last page to go: the value
+      // still shown from the cell before would fail the check.
+      await click(cell(0, 0));
+      await until(`document.querySelector('.status-page').textContent !== "Page ${all} of ${all}"`, 3000);
+      const top = await text(".status-page");
+      check(/^Page \d+ of \d+$/.test(top) && Number(top.split(" ")[1]) < all, "a row above prints on an earlier page", top);
     },
 
     // A filter's count: how many rows of the chosen table show.
@@ -221,12 +224,11 @@ export function statusBar({ page, js, settle, until, press, type, select, click,
     // One line on a phone, with the figures and a message kept; the dark scheme's colours.
     async statusNarrow() {
       await load(`${H}Some text.\n`);
-      await page("Emulation.setDeviceMetricsOverride", { width: 375, height: 700, deviceScaleFactor: 1, mobile: false });
-      await js("window.dispatchEvent(new Event('resize'))");
+      await resize(375, 700);
       const narrow = await js("[document.querySelector('.status-bar').getBoundingClientRect().height, " +
         "getComputedStyle(document.querySelector('.status-zoom')).display, " +
         "getComputedStyle(document.querySelector('.figures')).display, document.documentElement.scrollWidth]");
-      await page("Emulation.clearDeviceMetricsOverride", {});
+      await resize();
       check(narrow[0] === 28 && narrow[1] === "none" && narrow[2] !== "none" && narrow[3] <= 375,
         "at a phone's width the bar keeps one line and the figures, drops the zoom, and the page does not scroll sideways",
         JSON.stringify(narrow));

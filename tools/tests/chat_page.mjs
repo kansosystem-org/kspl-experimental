@@ -49,7 +49,11 @@ function startOpener(exe, root, modelPort) {
       { stdio: ["ignore", "pipe", "pipe"], detached: true });
     const log = fs.createWriteStream(path.join(work, "opener.log"));
     let seen = "";
-    const timer = setTimeout(() => reject(new Error(`no URL in 20 s: ${seen}`)), 20000);
+    // A launcher that printed no URL is ended, with what it started, before the failure is told.
+    const timer = setTimeout(() => {
+      stopTree(child);
+      reject(new Error(`no URL in 20 s: ${seen}`));
+    }, 20000);
     const take = (chunk) => {
       log.write(chunk);
       seen += chunk;
@@ -133,9 +137,11 @@ async function main() {
   fs.writeFileSync(path.join(root, "規程/休暇.md"), KYUKA);
   const model = await standIn({ replies: REPLIES });
   const child = await startOpener(place(opener, work), root, model.port);
-  const browser = await launch(browserBin, path.join(work, "browser"));
   const disk = (f) => { try { return fs.readFileSync(path.join(root, f), "utf8"); } catch (_) { return ""; } };
+  // From here the launcher runs, so every way out ends it, a browser that fails to start included.
+  let browser = null;
   try {
+    browser = await launch(browserBin, path.join(work, "browser"));
     const d = driver(browser.page);
     // **The page's words follow the browser's language** (`ja` in `ksagent/page/chat.html`), and
     // these checks read the English ones. A browser takes its language from the OS: on a Japanese
@@ -341,7 +347,7 @@ async function main() {
       await d.js("document.getElementById('notice').textContent"));
     check(browser.page.errors.length === 0, "the page threw nothing", browser.page.errors.join("; "));
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
     stopTree(child);
     model.server.close();
   }

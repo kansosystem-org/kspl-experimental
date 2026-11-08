@@ -26,6 +26,8 @@ ksmd-reference:
 ## Gates|test-ksmd-browser|Edit ksmd documents in a headless Chromium through real input events, and open and save files through kssrv --local
 test-ksmd-browser: $(STAGE1_EXE) $(KSSRV_EXE) $(KSMD_BUILDER_EXE)
 	@$(ksmd_make) test-browser KSSRV=../$(KSSRV_EXE) BUILDER=../$(KSMD_BUILDER_EXE)
+# Where the browser's whole log is copied when it never answers (`launch` in ksmd/tests/browser/cdp.mjs).
+test-ksmd-browser: export KANSO_BROWSER_LOG := $(abspath $(LOG_DIR))/browser/test-ksmd-browser.log
 
 ## Run|measure-ksmd|Time opening, editing and saving ksmd documents from a typical one to a large one, in KSPL and in a headless Chromium
 measure-ksmd: $(STAGE1_EXE) $(KSSRV_EXE)

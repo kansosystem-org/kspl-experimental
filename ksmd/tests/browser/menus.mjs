@@ -140,8 +140,25 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(await js("!document.querySelector('.filter-panel')"), "Esc closes the panel and changes nothing");
     check(await visible() === 1, "so the rows stay as they were");
     await click('#doc td[data-r="0"][data-c="0"]');
+    // What the menu was when each press landed, so a failure says which step went wrong.
+    await js(`window.pressed = [];
+      window.pressedStop = new AbortController();
+      for (const kind of ["contextmenu", "click"]) {
+        document.addEventListener(kind, (e) => {
+          const on = e.target.closest ? e.target.closest("[data-cmd], [data-r]") : null;
+          window.pressed.push(kind + " on " + (!on ? e.target.nodeName : on.dataset.cmd ||
+            "cell " + on.dataset.r + "," + on.dataset.c) + " (the right-click menu " +
+            (document.querySelector(".menu.context").hidden ? "shut" : "open") + " before it)");
+        }, { capture: true, signal: window.pressedStop.signal });
+      }
+      true`);
+    const chosenRow = await js("(document.querySelector('#doc .chosen') || {}).dataset?.r ?? 'none'");
     await menu("row-below");
-    check(await visible() === 2, "a new row keeps the filter, and shows, so it can be typed in");
+    const shownRows = await visible();
+    const rows = await js("document.querySelectorAll('#doc tbody tr').length");
+    const pressed = await js("window.pressedStop.abort(); window.pressed.join('; ')");
+    check(shownRows === 2, "a new row keeps the filter, and shows, so it can be typed in",
+      `${shownRows} of ${rows} rows show; row ${chosenRow} was chosen; ${pressed}`);
     await menu("undo");
     check(await visible() === 1, "and one undo takes the row away");
     await click(".filter-note .filter-clear");

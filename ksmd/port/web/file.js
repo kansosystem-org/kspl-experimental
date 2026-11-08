@@ -266,7 +266,7 @@ function ksmdFiles(ks, api) {
   // Fetches what the view lacks, then shows again only the blocks that show a file, and the tables
   // and charts. The rest stays as the open showed it.
   async function fill() {
-    if (await fetchWanted() > 0) ks.act("ksmd_web_render_files");
+    if (await fetchWanted() > 0) ks.redraw("ksmd_web_render_files");
   }
 
   // Asks the server for one file, and hands its answer to the editor. A refused path comes back
@@ -307,7 +307,7 @@ function ksmdFiles(ks, api) {
       shown.delete(path);
       changed = true;
     }
-    if (changed || pictures.size !== images.size) ks.act("ksmd_web_render_files");
+    if (changed || pictures.size !== images.size) ks.redraw("ksmd_web_render_files");
   }
 
   // Reads an image's size from its header, a window at a time, before the browser decodes it.
@@ -395,6 +395,12 @@ function ksmdFiles(ks, api) {
     if (!ext) return ks.say("Only a PNG or a JPEG image can go in a document.");
     if (doc.path === "") return ks.say("Save the document first, so the image has a folder to go in.");
     if (file.size > MAX_IMAGE) return ks.say("The image is larger than 8 MiB, which the local server takes.");
+    // **It goes where it was pasted or dropped**, read before any wait: the person may meanwhile
+    // put the caret elsewhere or open a cell, and the image went there.
+    ks.flush();
+    const s = window.getSelection();
+    const a = s.rangeCount > 0 ? ks.view.spotAt(s.anchorNode, s.anchorOffset) : null;
+    const f = s.rangeCount > 0 ? ks.view.spotAt(s.focusNode, s.focusOffset) : null;
     // It goes in with no alternate text, as one that only decorates: Alt text… in its tools gives
     // it words later, and Caption… a caption that a reference can name (`images.js`).
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -406,7 +412,8 @@ function ksmdFiles(ks, api) {
       if (got.status === 409) continue;
       if (got.status !== 200) return ks.say(`The image was not saved. ${got.why}`);
       await fetchOne(doc.path.slice(0, slash + 1) + name, true);
-      ks.sync();
+      if (a && f) ks.select(a, f);
+      else ks.sync();
       const s = ks.enc.encode(name);
       return ks.act("ksmd_web_insert_image", s.length, ks.putBytes(s) - s.length);
     }

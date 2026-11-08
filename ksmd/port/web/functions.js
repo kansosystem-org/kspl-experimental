@@ -297,7 +297,7 @@ onmessage = (e) => {
           ks.call("ksmd_web_own_failed", i, got.time ? TIME_LIMIT : STOPPED);
         }
       }
-      ks.act("ksmd_web_render");
+      ks.redraw("ksmd_web_render");
     }
   }
 
@@ -313,7 +313,7 @@ onmessage = (e) => {
       do {
         again = false;
         while (todo.length > 0) await todo.shift()();
-        if (await follow()) ks.act("ksmd_web_render");
+        if (await follow()) ks.redraw("ksmd_web_render");
         await answer();
       } while ((again || todo.length > 0) && !ks.stopped);
     } finally {

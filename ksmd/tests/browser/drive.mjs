@@ -38,6 +38,41 @@ export function driver(page) {
 
   const settle = () => js("new Promise((r) => setTimeout(r, 20))");
 
+  // Waits until the page has drawn `n` frames, for a step it takes on the next frame.
+  const frames = (n = 2) => js(`new Promise((r) => { let left = ${n}; ` +
+    "const next = () => (--left === 0 ? r(true) : requestAnimationFrame(next)); requestAnimationFrame(next); })");
+
+  // The window's size before the first change, which `resize()` gives back.
+  let own = null;
+
+  // Gives the window the size of a smaller screen, or with no size its own again, and returns once
+  // the page has had its `resize` event.
+  // Caution: **The new size holds in the page at once, but its `resize` event comes with the next
+  // frame**, and the page acts on that event: an open menu closes. A step taken before the event
+  // meets that, so the wait is for the event, not for the size. A size that does not change gives
+  // no event, so then two frames are waited out.
+  async function resize(width, height) {
+    const now = await js("[innerWidth, innerHeight]");
+    if (own === null) own = now;
+    const want = width === undefined ? own : [width, height];
+    const changes = now[0] !== want[0] || now[1] !== want[1];
+    if (changes) {
+      await js("window.resized = false; addEventListener('resize', () => { window.resized = true; }, " +
+        "{ once: true }); true");
+    }
+    if (width === undefined) {
+      await page("Emulation.clearDeviceMetricsOverride", {});
+      own = null;
+    } else {
+      await page("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    }
+    if (!changes) {
+      await frames();
+    } else if (!await until("window.resized === true", 5000)) {
+      throw new Error(`the page had no resize event in 5 s after the window became ${want[0]} by ${want[1]}`);
+    }
+  }
+
   // Waits until an expression holds, up to `ms`; a page still loading counts as not holding.
   async function until(expression, ms = 10000) {
     for (let waited = 0; waited < ms; waited += 50) {
@@ -169,9 +204,10 @@ export function driver(page) {
     }
   }
 
-  // A press of the right button at an element's middle, which opens a context menu.
+  // A press of the right button at an element's middle, which opens a context menu. The element is
+  // scrolled into sight first, as for `click`.
   async function rightClick(selector) {
-    const [x, y] = await middle(selector);
+    const [x, y] = await sighted(selector);
     for (const type of ["mousePressed", "mouseReleased"]) {
       await page("Input.dispatchMouseEvent", { type, x, y, button: "right", clickCount: 1 });
     }
@@ -236,6 +272,6 @@ export function driver(page) {
     await clickAt(at[0], at[1]);
   }
 
-  return { page, js, settle, until, reload, press, type, select, click, clickBelow, drag, menu, point,
+  return { page, js, settle, frames, resize, until, reload, press, type, select, click, clickBelow, drag, menu, point,
     doubleClickAt, rightClick, dragTo, openCell };
 }

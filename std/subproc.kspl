@@ -35,6 +35,7 @@ extern fn kspl_proc_kill(handle: I64)
 extern fn kspl_proc_wait(handle: I64): I32
 extern fn kspl_proc_alive(handle: I64): Bool
 extern fn kspl_proc_ended(handle: I64, code: I32$@): Bool //< whether it ended; the code into `code`
+extern fn kspl_proc_start_error(): I32 //< the OS's error number for this thread's last failed start
 
 priv const STDIO_IN: I32 = 1 //< `kspl_proc_start`'s `stdio`
     //< Caution: The values must match the C code (hosted_spawn.c).
@@ -405,13 +406,18 @@ pub fn run( //< runs one child and returns its standard output; any failure is t
 // ==========================================
 
 pub enum Spawn_error //< why a child could not be started
-    spawn_failed //< it could not start, and it cannot say why.
+    spawn_failed //< it could not start; `start_error` gives the OS's own number for why.
         //< The causes are the same on every OS. Three are no such program, no permission to run it,
         //< and a working directory or output file that cannot be opened. The other two are an
-        //< argument holding a NUL and the OS refusing a new process. Telling them apart would need
-        //< errno passed up from the C code (as with fs.Fs_error).
+        //< argument holding a NUL and the OS refusing a new process.
         //< **The count of arguments has no cap of its own.** The OS limits their total size:
         //< `ARG_MAX` on POSIX, and on Windows a command line of 32,767 UTF-16 units.
+
+#cfg(!freestanding)
+pub fn start_error(): I32 //< the OS's error number for this thread's last start that failed
+    //< `errno` on POSIX, `GetLastError` on Windows; -1 where the OS gave none, and 0 after a start
+    //< that succeeded. **Read it right after the start fails**: the next start replaces it.
+    return kspl_proc_start_error()
 
 pub fn spawn_wait( //< runs one child with the standard I/O inherited, and waits for it
     //< argv[0] is the executable's path or a name looked up in PATH alone. The current directory

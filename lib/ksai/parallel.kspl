@@ -164,11 +164,10 @@ priv fn start_pool(): Pool$@? //< the pool, with no worker yet; `grow` starts th
         round.free()
         wake.free()
         return .none
-    // Every field is written: heap memory comes back holding whatever was there before.
-    p: = mem.alloc_as<|Pool|>()
-    p$ = Pool::{ .round = round, .wake = wake, .done = done, .next = Atomic_sz(0),
+    p: = mem
+        .new(Pool::{ .round = round, .wake = wake, .done = done, .next = Atomic_sz(0),
         .busy = Atomic_sz(0), .posted = Atomic_sz(0), .left = Atomic_sz(0), .workers = 0,
-        .stuck = false }
+        .stuck = false })
     return .some(p)
 
 #cfg(!freestanding)
@@ -177,10 +176,8 @@ priv fn grow(p: Pool$@, want: Sz) //< starts workers until the pool has `want` o
     //< takes effect. It never shrinks: a worker a round does not ask for waits.
     //< Only the caller holding `busy` calls it. So no round runs, and `workers` has one writer.
     for p.workers < want && !p.stuck
-        seat: = mem.alloc_as<|Pool_seat|>()
-        seat.pool = p
-        seat.index = p.workers
-        seat.seen = p.posted.load()
+        seat: = mem
+            .new(Pool_seat::{ .pool = p, .index = p.workers, .seen = p.posted.load() })
         seat.thread = Thread.spawn<|Pool_seat|>(ksai_pool_worker, seat) catch
             mem.dealloc(Void$@::seat)
             p.stuck = true

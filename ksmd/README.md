@@ -199,7 +199,7 @@ flowchart BT
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
 | [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |
 | [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
-| [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server, and `measure.mjs` times it |
+| [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server (started by `kssrv.mjs`), and `measure.mjs` times it |
 
 ## Files near the limit and how they split
 

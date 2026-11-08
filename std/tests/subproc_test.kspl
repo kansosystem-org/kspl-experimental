@@ -491,3 +491,21 @@ fn test_limit_reaches_a_starters_own_group(ksplc: U8[], arena: Arena$@) //< kspl
     fs.remove_path(pid_file) catch {}
     assert(!alive, "the starter's own grouped child is stopped with the limited child")
     verdict.pass("The limit's SIGTERM reached the starter, which passed it on to its own group.")
+
+fn test_start_error_names_the_cause(arena: Arena$@) //<
+    //< A start that fails leaves the OS's own number, and the next start that succeeds clears it
+    //< A missing program is 2 on both kinds of OS: `ENOENT` on POSIX, `ERROR_FILE_NOT_FOUND` on
+    //< Windows. So one test holds both.
+    verdict
+        .start("[Sys] a failed start leaves the OS's number for why, and a good one clears it...")
+    missing: = fs.join("out/tmp", "kspl-no-such-program", arena)
+    started: = subproc.spawn_wait(U8[][]::{ missing }, "") catch
+        fallback -1
+    assert(started == -1, "a program that is not there must not start")
+    assert(subproc.start_error() == 2, "the OS's number for a missing program is 2")
+    self: = sys.args()[0]
+    _r: =
+        subproc.run_capture(U8[][]::{ self, "--no-such-option-at-all" }, "", 60000, 4096, arena)
+        catch panic("this program must start again")
+    assert(subproc.start_error() == 0, "a start that succeeded leaves no error")
+    verdict.pass("a missing program gave 2, and the next good start gave 0.")

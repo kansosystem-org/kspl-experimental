@@ -297,7 +297,7 @@ C, C++ and Java read `0755` as octal (493), while Rust and Swift read it as deci
 | :-- | :-- | :-- |
 | Importing a file | `as` only to rename; unmarked when the name stays | lint [I0310] |
 | Iterating n times | `for x in Range.asc(n)`, or `for x in xs` where the index only reads the element; a C-style loop only when the body changes the index or the bound | lint [I0314], silent where it cannot tell |
-| Heap allocation | `alloc_as<\|T\|>()` / `arena.alloc_as<\|T\|>()` / `heap_alloc_as<\|T\|>()`; `alloc(<byte count>)` for raw bytes only | `alloc_as` in `std/mem.kspl` |
+| Heap allocation | A typed value with its value: `mem.new(v)` / `arena.create(v)`; `alloc(<byte count>)` for raw bytes only | `new` in `std/mem.kspl` |
 | Boolean conjunction and disjunction | `&&` / `\|\|`; `&` / `\|` when both sides must be evaluated. `*` / `+` over `_Bool` are rejected | `make test-negative` and `ksplc/tests/lang_limits_test.kspl` |
 
 #### Iteration

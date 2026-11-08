@@ -158,7 +158,7 @@ pacman -S --needed git
 pacman -S --needed $(sed 's/#.*//' tools/msys2-packages.txt)
 ```
 
-**To check everything this PC can with `make ci`, add [`tools/msys2-packages-full.txt`](../tools/msys2-packages-full.txt) the same way.** Each of its lines says which gate needs it.
+**To check everything this PC can with `make ci`, add [`tools/msys2-packages-full.txt`](../tools/msys2-packages-full.txt) the same way.** Each of its lines says which gate needs it. It holds Python and `numpy` too, for the self-tests of the tools written in Python.
 
 ```sh
 pacman -S --needed $(sed 's/#.*//' tools/msys2-packages-full.txt)

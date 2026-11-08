@@ -48,5 +48,7 @@ test-ksagent-chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EX
 	    exit 1; fi; \
 	  echo "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"; exit 0; fi; \
 	node tools/tests/chat_page.mjs "$$b" "$(KSAGENT_CHAT_EXE)" "$(KSAGENT_CHAT_WORK)/page"
+# Where the browser's whole log is copied when it never answers (`launch` in ksmd/tests/browser/cdp.mjs).
+test-ksagent-chat: export KANSO_BROWSER_LOG := $(abspath $(LOG_DIR))/browser/test-ksagent-chat.log
 
 .PHONY: chat model-server test-ksagent-chat

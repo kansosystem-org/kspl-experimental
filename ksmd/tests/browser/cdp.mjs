@@ -131,13 +131,26 @@ export async function launch(binary, work) {
 
   // The first call is where a browser that never speaks the protocol shows, for example where a
   // policy forbids remote debugging; what the browser printed says why, so the failure carries it.
+  // The whole log is also copied to `KANSO_BROWSER_LOG` where the gate names one, under `out/log/`:
+  // the work folder is not kept with a CI run, and the last lines may not hold the cause.
   let targetId;
   try {
     ({ targetId } = await send("Target.createTarget", { url: "about:blank" }));
   } catch (e) {
     child.kill("SIGKILL");
+    let where = path.join(work, "browser.log");
+    const kept = process.env.KANSO_BROWSER_LOG;
+    if (kept) {
+      try {
+        fs.mkdirSync(path.dirname(kept), { recursive: true });
+        fs.copyFileSync(where, kept);
+        where = kept;
+      } catch (copy) {
+        where += `; it could not be copied to ${kept}: ${copy.message}`;
+      }
+    }
     const said = distinct(fs.readFileSync(path.join(work, "browser.log"), "utf8"));
-    throw new Error(`${e.message}. The browser printed this (${path.join(work, "browser.log")}):\n` +
+    throw new Error(`${e.message}. The browser printed this (all of it: ${where}):\n` +
       (said.slice(-20).join("\n") || "(nothing)"));
   }
   const page = await attach(targetId);

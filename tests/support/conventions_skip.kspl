@@ -2,7 +2,8 @@
 //< **A SKIP no row holds fails its gate on the platform that prints it** (`expected_skips`). A
 //< reason printed only on Windows or macOS is first seen by that platform's round. This check
 //< reads each reason where it is written, so a new one gets its row in the same change.
-//< **It reads the forms in `FORMS` and the make files' lines.** A SKIP written another way is
+//< **It reads the forms in `FORMS`, in KSPL and in the browser tests' scripts (`.mjs`), and the
+//< SKIP lines of the make files and the C harnesses.** A SKIP written another way is
 //< still printed, and goes unread (Principle 8 in `docs/DESIGN-principles.md`).
 import "std/chars"
 import "std/ds" { List }
@@ -47,7 +48,7 @@ struct Held_by_none //< a reason no platform's round lets through, on purpose
 
 const HELD_BY_NONE: Held_by_none[_] = ::{
     Held_by_none::{ .says = " is absent (put it in this environment and it runs)",
-        .why = "pytools runs in the Linux round alone, whose image holds every module it needs" },
+        .why = "every module pytools needs is in the Linux image and in Windows's full list" },
     Held_by_none::{ .says = "desktop-file-validate is not installed",
         .why = "the ksmd_desktop gate runs on Linux alone, and its row requires the tool" },
     Held_by_none::{ .says = "update-mime-database is not installed",
@@ -58,6 +59,10 @@ const HELD_BY_NONE: Held_by_none[_] = ::{
         .why = "the ksmd_desktop gate runs on Linux alone, and its row requires the tool" },
     Held_by_none::{ .says = "a .desktop entry is started on Linux alone",
         .why = "the ksmd_desktop gate runs on Linux alone; `make ksmd` prints it elsewhere" },
+    Held_by_none::{ .says = "no kssrv was given",
+        .why = "the root's test-ksmd-browser always passes it; only ksmd's own run can lack it" },
+    Held_by_none::{ .says = "no builder was given",
+        .why = "the root's test-ksmd-browser always passes it; only ksmd's own run can lack it" },
 }
 
 // ==========================================
@@ -366,6 +371,10 @@ priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<
 fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
     //< The reasons the calls of `FORMS` in one KSPL source print
     s: = read_source(src, arena)
+    return reasons_of(path, s@, arena)
+
+priv fn reasons_of(path: U8[], s: Source@, arena: Arena$@): List<|Reason|> //<
+    //< The reasons the calls of `FORMS` in a source already read print
     code: = s.code
     $out: = List<|Reason|>(arena)
     for f in FORMS
@@ -382,9 +391,94 @@ fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
                 continue
             args: = args_of(code, pos + needle.len - 1, arena)
             if args.len > f.reason_at
-                for r in read_at(path, s@, args.get(f.reason_at), pos, arena)
+                for r in read_at(path, s, args.get(f.reason_at), pos, arena)
                     out.push(r)
     return out
+
+// ==========================================
+// A browser test's script (`.mjs`), read the same way
+// Its strings take three quotes. A template's `${…}` cuts it as `\{…\}` cuts a KSPL literal; the
+// script has no constant read as its text, so every interpolation cuts.
+// Caution: **A regular expression is read as code.** A quote inside one opens a string. A `"` or
+// `'` blanks no more than its own line; a backtick would blank on to the next backtick.
+// ==========================================
+
+priv fn js_hole_end(src: U8[], from: Sz): Sz //<
+    //< The offset of the `}` closing a `${` whose text opens at `from`, or the end
+    $depth: Sz = 1
+    $i: = from
+    for i < src.len
+        if src[i] == '{'
+            depth += 1
+        else if src[i] == '}'
+            depth -= 1
+            if depth == 0
+                return i
+        i += 1
+    return src.len
+
+priv fn js_literal_at(src: U8[], at: Sz, arena: Arena$@): Lit //<
+    //< The string opening at `at` with `"`, `'` or a backtick
+    quote: = src[at]
+    $parts: = List<|U8[]|>(arena)
+    $holes: = List<|U8[]|>(arena)
+    $cur: = arena.text()
+    $i: = at + 1
+    for i < src.len && src[i] != quote
+        if src[i] == '\n' && quote != '`'
+            break
+        if quote == '`' && src.starts_with("${", i)
+            parts.push(cur.take())
+            cur = arena.text()
+            j: = js_hole_end(src, i + 2)
+            holes.push(src.sub(i + 2, j - i - 2).trim_spaces())
+            i = j + 1
+            continue
+        if src[i] != '\\' || i + 1 >= src.len
+            cur.c(src[i])
+            i += 1
+            continue
+        e: = src[i + 1]
+        if e == 'n'
+            parts.push(cur.take())
+            cur = arena.text()
+            holes.push("")
+        else if e != '\n'
+            cur.c(e)
+        i += 2
+    parts.push(cur.take())
+    return Lit::{ .at = at, .end = i + 1, .parts = parts, .holes = holes }
+
+fn read_js_source(src: U8[], arena: Arena$@): Source //< a script read as `read_source` reads KSPL
+    b: = arena.text()
+    $lits: = List<|Lit|>(arena)
+    $i: Sz = 0
+    for i < src.len
+        $to: = i
+        c: = src[i]
+        if src.starts_with("//", i)
+            to = to_line_end(src, i)
+        else if src.starts_with("/*", i)
+            to = math.min(src.len,
+                i + 4 + src.sub_from(i + 2).find_str("*/").unwrap_or(src.len))
+        if to == i && (c == '"' || c == '\'' || c == '`')
+            lit: = js_literal_at(src, i, arena)
+            lits.push(lit)
+            to = math.min(src.len, lit.end)
+            b.c('"')
+            blank(b, src, i + 1, to)
+        else if to == i
+            b.c(c)
+            to = i + 1
+        else
+            blank(b, src, i, to)
+        i = to
+    return Source::{ .code = b.take(), .lits = lits, .consts = List<|U8[]|>(arena) }
+
+fn js_reasons(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
+    //< The reasons the calls of `FORMS` in one browser test's script print
+    s: = read_js_source(src, arena)
+    return reasons_of(path, s@, arena)
 
 // ==========================================
 // The make files' SKIP lines
@@ -541,6 +635,27 @@ priv const C_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "// prints SKIP x: a reason no row names\n", .hits = false },
 }
 
+priv const MJS_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "    verdict.skip(\"a reason no row names\");\n", .hits = true },
+    Sample::{ .text = "    verdict.skip(\"Windows has no FIFO a path names\");\n", .hits = false },
+    Sample::{ .text = "    verdict.skip('so the check is not run: no ARM toolchain');\n",
+        .hits = false },
+    Sample::{ .text = "    verdict.skip(`${tool}: node is not installed`);\n", .hits = false },
+    Sample::{ .text = "    verdict.skip(`node ${how} is not installed`);\n", .hits = true },
+    Sample::{ .text = "    verdict.skip(why);\n", .hits = true },
+    Sample::{ .text = "    // verdict.skip(\"a reason no row names\");\n", .hits = false },
+    Sample::{ .text = "    /* verdict.skip(\"a reason no row names\"); */\n", .hits = false },
+    Sample::{ .text =
+        "    const child = `verdict.skip(\"a reason no row names\")`;\n    verdict.skip(\"no ARM \
+            toolchain\");\n", .hits = false },
+    Sample::{ .text = "    const q = 'it\\'s \"so\"'; verdict.skip(\"a reason no row names\");\n",
+        .hits = true },
+}
+
+priv fn misses_mjs(text: U8[], arena: Arena$@): Bool
+    reasons: = js_reasons("sample.mjs", text, arena)
+    return unheld("sample.mjs", reasons@, U8[][]::SAMPLE_ROWS, arena).len > 0
+
 priv fn misses_c(text: U8[], arena: Arena$@): Bool
     reasons: = c_reasons(text, arena)
     return unheld("harness.c", reasons@, U8[][]::SAMPLE_ROWS, arena).len > 0
@@ -560,7 +675,7 @@ priv fn check_reasons_held(arena: Arena$@) //<
     $seen: Sz = 0
     $used: = List<|U8[]|>(arena)
     $files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-    for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile", "*.c" })
+    for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile", "*.c", "*.mjs" })
         files.push(rel)
     for rel in files
         src: = harness.read_under_root(rel)
@@ -569,6 +684,8 @@ priv fn check_reasons_held(arena: Arena$@) //<
             reasons = make_reasons(src, arena)
         else if rel.ends_with(".c")
             reasons = c_reasons(src, arena)
+        else if rel.ends_with(".mjs")
+            reasons = js_reasons(rel, src, arena)
         else
             reasons = reasons_in(rel, src, arena)
         seen += reasons.len
@@ -608,4 +725,6 @@ fn run(arena: Arena$@) //< this section's entry point
         Sample[]::MAKE_SAMPLES, "make_samples", misses_make, arena)
     scan.check_samples("the reading of a C harness's SKIP lines fires on its samples",
         Sample[]::C_SAMPLES, "c_samples", misses_c, arena)
+    scan.check_samples("the reading of a browser test's SKIP reasons fires on its samples",
+        Sample[]::MJS_SAMPLES, "mjs_samples", misses_mjs, arena)
     check_reasons_held(arena)

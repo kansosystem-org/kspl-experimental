@@ -29,16 +29,16 @@ const TRIALS: I64 = 500 //< how many requests `make test` sends to the server
 priv const PURE_PER_TRIAL: Sz = 20 //< how many paths go to the door for each request sent
     //< The door alone answers in microseconds, so it takes many more cases than the server.
 
-priv const SLOW_RATIO: I64 = 50I64 //<
-    //< how many times a plain path's time one generated path may take, at the door or the server
-    //< **Far above the noise and far below the fault**, as in `kssrv/tests/kept.kspl`. Thousands
-    //< of `/` once cost 19 ms a request, some 100 times a plain one.
-    //< **The bound grows with the path's steps**: the door asks the file system about each step,
-    //< so 800 steps cost 800 such calls. On Windows one call takes about 15 us, and such a path
-    //< took 12 ms against 55 us for a plain path of two steps.
-priv const PLAIN_REL: U8[] = "sub/b.txt" //< the plain path the door's time is matched against
-priv const SLOW_FLOOR_US: I64 = 5000I64 //< the bound when a plain path is too quick to measure
-priv const SLOW_TRIES: Sz = 3 //< how many times a slow case is measured; the fastest counts
+priv const LOOKUPS_PER_STEP: I64 = 4I64 //<
+    //< how many file-system lookups (`fs.lookups`) one name of a path may cost, door or server
+    //< **A path's cost is counted, not timed**: a count is the same on every machine. The door
+    //< asks whether each step is a link and what its long name is, so its lookups grow with the
+    //< names. Thousands of `/` once cost one lookup each, some 19 ms a request.
+priv const LOOKUPS_PER_REQUEST: I64 = 24I64 //< what a request may look up besides its path's names
+    //< The endpoint's own work: the file's `stat`, a write's folder, a move's second path, a
+    //< folder's index.
+priv const LOOKUPS_PER_LISTED: I64 = 8I64 //< what a listing may look up for each name it reads
+    //< Each name goes through the door, and is asked whether it is a folder or a file.
 
 priv const OUTSIDE_MARK: U8[] = "OUTSIDE-ROOT-7f3a" //< what the file outside the root holds
     //< No generated body holds it, so an answer that holds it read outside the root.
@@ -395,37 +395,18 @@ priv fn note(f: Findings$@, keep: Arena$@, seed: I64, case_no: Sz, what: U8[], r
 priv fn findings(keep: Arena$@): Findings
     return Findings::{ .bad = List<|U8[]|>(keep), .seen = 0 }
 
-priv fn timed_join(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@, us: I64$@): U8[]? //<
-    //< `fs.join_under`'s answer, none where it refuses, and how long it took
-    started: = sys.mono_us()
+priv fn counted_join(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@, n: I64$@): U8[]? //<
+    //< `fs.join_under`'s answer, none where it refuses, and how many lookups it made
+    before: = fs.lookups()
     got: = fs.join_under(root, rel, dots, arena) catch
-        us$ = sys.mono_us() - started
+        n$ = fs.lookups() - before
         return .none
-    us$ = sys.mono_us() - started
+    n$ = fs.lookups() - before
     return .some(got)
 
-priv fn fastest_join_us(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@): I64 //<
-    //< The fastest of `SLOW_TRIES` calls of the door on the path [us]
-    $best: I64 = -1I64
-    for _try in Range.asc(SLOW_TRIES)
-        $us: I64 = 0I64
-        _got: = timed_join(root, rel, dots, arena, us@)
-        if best < 0I64 || us < best
-            best = us
-    return best
-
-priv fn bound_us( //< how long one generated path may take [us]
-    plain_us: I64, //< how long the plain path took
-    plain_steps: I64, //< how many steps the plain path has
-    rel: U8[], //< the generated path
-): I64
-    over: = (plain_us + 1I64) * SLOW_RATIO * per_plain(steps(rel), plain_steps)
-    return over if over > SLOW_FLOOR_US else SLOW_FLOOR_US
-
-priv fn per_plain(n: I64, plain_steps: I64): I64 //< how many plain paths' steps `n` steps make
-    //< At least one, so a short path keeps the plain path's bound.
-    whole: = (n + plain_steps - 1I64) / plain_steps
-    return whole if whole > 1I64 else 1I64
+priv fn path_bound(rel: U8[]): I64 //< how many lookups the door may make for a path
+    //< Its names', and one more: a long name that cannot be read is asked whether anything stands.
+    return LOOKUPS_PER_STEP * (steps(rel) + 1I64)
 
 priv fn steps(rel: U8[]): I64 //< how many names a path has; an empty step is no name
     $n: I64 = 0I64
@@ -440,8 +421,8 @@ priv fn steps(rel: U8[]): I64 //< how many names a path has; an empty step is no
 fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
     //< Sends many generated paths to `fs.join_under` with dot names refused and allowed
     //< For each path the door takes, neither OS's reading may reach outside the root or, where
-    //< refused, a dot name. The door must take a path of plain names, and answer each path in a
-    //< time near a plain path's.
+    //< refused, a dot name. The door must take a path of plain names, and look up no more for
+    //< each path than its names call for.
     defer keep: = Arena(16 * 1024 * 1024)
     $r: = Prng(U64::o.seed)
     w: = words(keep)
@@ -451,16 +432,15 @@ fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
     $order: = findings(keep)
     $plain: = findings(keep)
     $slow: = findings(keep)
-    plain_us: = fastest_join_us(sc.root, PLAIN_REL, .refused(U8[][]::{}), arena)
     $taken: Sz = 0
     for case_no in Range.asc(n)
         mark: = arena.save()
         m: = generate(r@, w@, arena)
-        $hidden_us: I64 = 0I64
-        $shown_us: I64 = 0I64
+        $hidden_n: I64 = 0I64
+        $shown_n: I64 = 0I64
         hid: =
-            timed_join(sc.root, m.rel, .refused(U8[][]::{}), arena, hidden_us@)
-        all: = timed_join(sc.root, m.rel, .allowed, arena, shown_us@)
+            counted_join(sc.root, m.rel, .refused(U8[][]::{}), arena, hidden_n@)
+        all: = counted_join(sc.root, m.rel, .allowed, arena, shown_n@)
         for which in Range.asc(2)
             got: = hid if which == 0 else all
             if path: = got
@@ -492,13 +472,11 @@ fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
             if hid.is_none()
                 note(plain@, keep, o.seed, case_no, "refused, though made of plain names", m.rel)
         slow.seen += 1
-        bound: = bound_us(plain_us, steps(PLAIN_REL), m.rel)
-        if hidden_us > bound || shown_us > bound
-            best: = fastest_join_us(sc.root, m.rel, .refused(U8[][]::{}), arena)
-            if best > bound
-                note(slow@, keep, o.seed, case_no,
-                    arena.text().s("\{best\} us against \{plain_us\} us for a plain path").take(),
-                    m.rel)
+        bound: = path_bound(m.rel)
+        if hidden_n > bound || shown_n > bound
+            note(slow@, keep, o.seed, case_no,
+                arena.text().s("\{hidden_n\} and \{shown_n\} lookups against \{bound\}").take(),
+                m.rel)
         arena.restore(mark)
     tail: = arena.text().s("to run it again: ").s(again)
         .s(" --seed=\{o.seed\} --trials=\{o.trials\}").take()
@@ -510,10 +488,8 @@ fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
         refused", order.seen, "paths", order.bad@, tail)
     verdict.check_list("the door takes every generated path of plain names", plain.seen,
         "plain paths", plain.bad@, tail)
-    timely: = arena.text()
-        .s("the door answers each generated path within \{SLOW_RATIO\} times a plain path's time")
-        .take()
-    verdict.check_list(timely, slow.seen, "paths", slow.bad@, tail)
+    verdict.check_list("the door's file-system lookups for each generated path grow with its names \
+        alone", slow.seen, "paths", slow.bad@, tail)
     // **A run that takes almost nothing tests almost nothing.**
     verdict.check("the door takes a share of the generated paths", taken * 10 >= n,
         arena.text().s("\{taken\} of \{n\} taken").take())
@@ -556,10 +532,8 @@ priv fn query_expect(root: U8[], query: U8[], names: U8[][], dots: fs.Dot_names,
     for name in names
         door_says(root, params.find(name).unwrap_or(""), dots, e, arena)
 
-priv fn send(port: I32, ask: Ask, target: U8[], auth: U8[], body: U8[], us: I64$@, arena: Arena$@):
-    client.Resp!client.Http_end //<
-        //< Sends one request, and puts how long its answer took into `us` [us]
-    started: = sys.mono_us()
+priv fn send(port: I32, ask: Ask, target: U8[], auth: U8[], body: U8[], arena: Arena$@):
+    client.Resp!client.Http_end //< sends one request
     $resp: client.Resp = ::{ .status = 0, .head = "", .body = "" }
     switch ask
     case .put_file
@@ -568,26 +542,27 @@ priv fn send(port: I32, ask: Ask, target: U8[], auth: U8[], body: U8[], us: I64$
         resp = client.post_json(port, target, auth, "", client.DEFAULT_TIMEOUT_MS, arena)!
     default
         resp = client.get(port, target, auth, arena)!
-    us$ = sys.mono_us() - started
     return resp
 
-priv fn fastest_us(port: I32, ask: Ask, target: U8[], auth: U8[], arena: Arena$@):
-    I64!client.Http_end //<
-        //< The fastest of `SLOW_TRIES` answers to a plain request [us]
-    $best: I64 = -1I64
-    for _try in Range.asc(SLOW_TRIES)
-        $us: I64 = 0I64
-        _plain: = send(port, ask, target, auth, "plain\n", us@, arena)!
-        if best < 0I64 || us < best
-            best = us
-    return best
+priv fn lookups_now(port: I32, auth: U8[], arena: Arena$@): I64!client.Http_end //<
+    //< The server's file-system lookups so far (`fs_lookups` in `/api/status`); -1 where not told
+    st: = client.get(port, "/api/status", auth, arena)!
+    return client.doc_of(st, arena).get("fs_lookups").as_int64().unwrap_or(-1I64)
+
+priv fn listed_names(root: U8[], rel: U8[], arena: Arena$@): I64 //<
+    //< How many names a listing of the folder `rel` reads; 0 where the door refuses it
+    folder: = fs.join_under(root, rel, .allowed, arena) catch
+        return 0I64
+    names: = fs.read_dir(folder, arena) catch
+        return 0I64
+    return names.len
 
 fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@):
     Void!client.Http_end //<
         //< Sends generated paths to each endpoint that takes one, and checks every answer
         //< A path the door refuses is a 400 or a 403 (static serving: a 404 for a dot name). A
         //< path it takes is never a 403. Only a write the door took can be a 5xx. No answer holds
-        //< what lies outside the root.
+        //< what lies outside the root. Each request looks up no more than its names call for.
     defer keep: = Arena(16 * 1024 * 1024)
     // Another seed than the door's, so the two parts do not draw the same paths.
     $r: = Prng(U64::o.seed ^ 0x5DEECE66DU64)
@@ -597,9 +572,10 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
     $faults: = findings(keep)
     $leaks: = findings(keep)
     $slow: = findings(keep)
-    // **A write is held to a plain write**: it waits for the disk, which a read never does.
-    read_us: = fastest_us(port, .get_file, "/api/file?path=a.txt", auth, arena)!
-    write_us: = fastest_us(port, .put_file, "/api/file?path=plain-write.txt", auth, arena)!
+    // **A request's lookups are the count it adds**: the client sends one request at a time, and
+    // asking for the status looks nothing up.
+    $before: = lookups_now(port, auth, arena)!
+    verdict.check("the server tells its file-system lookups", before >= 0I64, "")
     outside_size: = keep.text().s("\"size\":\{OUTSIDE_SIZE\}").take()
     for case_no in Range.asc(Sz::o.trials)
         mark: = arena.save()
@@ -640,8 +616,11 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
             target = arena.text().c('/').s(coded).take()
             page_expect(sc.root, target, e@, arena)
         body: = arena.text().s("w\{case_no\}\n").take()
-        $took_us: I64 = 0I64
-        got: = send(port, ask, target, auth, body, took_us@, arena) catch why
+        // A listing reads the folder, which the test's writes keep filling.
+        listed: =
+            (listed_names(sc.root, m.rel, arena)
+            if ask == Ask.list && !e.broken && !e.refused else 0I64)
+        got: = send(port, ask, target, auth, body, arena) catch why
             note(faults@, keep, o.seed, case_no,
                 arena.text().s("no answer to ").s(target.sub(0, 40)).s(": ").s(why.reason()).take(),
                 m.rel)
@@ -662,19 +641,14 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
             got.body.find_str(OUTSIDE_ONLY).is_some() ||
             ask == Ask.stat && got.body.find_str(outside_size).is_some()
             note(leaks@, keep, o.seed, case_no, what, m.rel)
+        after: = lookups_now(port, auth, arena)!
+        made: = after - before
+        before = after
         slow.seen += 1
-        plain_us: = write_us if ask == Ask.put_file else read_us
-        bound: = bound_us(plain_us, 1I64, m.rel)
-        if took_us > bound
-            $best: = took_us
-            for _try in Range.asc(SLOW_TRIES - 1)
-                $more_us: I64 = 0I64
-                _again: = send(port, ask, target, auth, body, more_us@, arena)!
-                if more_us < best
-                    best = more_us
-            if best > bound
-                note(slow@, keep, o.seed, case_no,
-                    arena.text().s(what).s(": \{best\} us against \{plain_us\} us").take(), m.rel)
+        bound: = path_bound(m.rel) + LOOKUPS_PER_REQUEST + LOOKUPS_PER_LISTED * listed
+        if made > bound
+            note(slow@, keep, o.seed, case_no,
+                arena.text().s(what).s(": \{made\} lookups against \{bound\}").take(), m.rel)
         arena.restore(mark)
     tail: = arena.text().s("to run it again: ").s(again)
         .s(" --seed=\{o.seed\} --trials=\{o.trials\}").take()
@@ -684,10 +658,8 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
         the door took", faults.seen, "requests", faults.bad@, tail)
     verdict.check_list("no answer to a generated path holds a byte, a name or a size from outside \
         the root", leaks.seen, "requests", leaks.bad@, tail)
-    timely: = arena.text()
-        .s("the server answers each generated path within \{SLOW_RATIO\} times a plain request's \
-            time").take()
-    verdict.check_list(timely, slow.seen, "requests", slow.bad@, tail)
+    verdict.check_list("the server's file-system lookups for each generated request grow with its \
+        path's names alone", slow.seen, "requests", slow.bad@, tail)
 
 priv fn page_expect(root: U8[], target: U8[], e: Expect$@, arena: Arena$@) //<
     //< What the door says of a static path, decoded and cut as the server cuts it

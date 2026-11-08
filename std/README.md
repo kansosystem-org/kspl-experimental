@@ -67,8 +67,8 @@ std's own tests live here, in no listing above. Their entry point is `run_std` i
 
 | Name | Where the returned thing goes | What is returned | Examples |
 | --- | --- | --- | --- |
-| `alloc*` | It only allocates, **leaving the content uninitialized** | A pointer | `mem.alloc` / `Arena.alloc_as<\|T\|>` |
-| `new*` | **Anywhere but the arena handed over** (the caller's variable, or the heap) | A value, or a pointer for what goes on the heap (`Arena.new`) | `List<\|T\|>.new` / `Rc<\|T\|>.new` |
+| `alloc*` | It only allocates, **leaving the content uninitialized** | A pointer | `mem.alloc` / `Arena.alloc` |
+| `new*` | **Anywhere but the arena handed over** (the caller's variable, or the heap) | A value, or a pointer for what goes on the heap (`Arena.new`, `mem.new`) | `List<\|T\|>.new` / `Rc<\|T\|>.new` / `mem.new` |
 | `create*` | **The arena handed over** (as an argument or as the receiver) | A pointer into it | `Arena.create<\|T\|>` / `List<\|T\|>.create` |
 
 The same arena, given to `new` and to `create`:

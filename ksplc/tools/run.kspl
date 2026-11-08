@@ -13,6 +13,7 @@ import "ksplc/base/config_file" as base_config_file
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/tools/libs" as tools_libs
+import "ksplc/tools/run_start" as tools_run_start
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -460,14 +461,6 @@ priv fn append_child_ksplc(list: List<|U8[]|>$@, arena: Arena$@) //<
         list
             .push(arena.text().s("--pkg-src-dir=").s(base_locate.pkg_src_dir()).take())
 
-priv fn spawn_or_exit(list: List<|U8[]|>$@, what: U8[], cwd: U8[]): I32 //<
-    //< It starts list as argv and returns the exit code
-    //< Where starting itself fails, it reports and exits. Where `cwd` is empty it inherits ksplc's
-    //< working directory (the same convention as spawn_wait).
-    return subproc.spawn_wait(list.slice(), cwd) catch
-        io.err().s("ksplc: failed to start \{what\}\n")
-        sys.exit(1)
-
 priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena: Arena$@): I32 //<
     //< It starts the already-built program, passing the script's arguments unchanged
     //< The script's own path goes in an environment variable (script_env_name in std/sys.kspl;
@@ -481,7 +474,7 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     $argv: = List<|U8[]|>(arena)
     argv.push(exe)
     argv.push_all(script_args.slice())
-    return spawn_or_exit(argv@, exe, "")
+    return tools_run_start.spawn_or_exit(argv@, exe, "")
 
 priv fn commit_path(from: U8[], to: U8[]): Bool //<
     //< It moves the cache's working file onto the final name
@@ -700,7 +693,7 @@ priv fn generate_c(slot: Run_slot@, script: U8[], given: U8[]?, arena: Arena$@):
                 io.err().s("ksplc: the compiling ksplc stopped reading the program part way\n")
             sys.exit(1)
     else
-        code = spawn_or_exit(ksplc_argv@, "ksplc", "")
+        code = tools_run_start.spawn_or_exit(ksplc_argv@, "ksplc", "")
     if code != 0
         fs.remove_path(slot.new_c) catch {}
         fs.remove_path(slot.new_deps) catch {}
@@ -762,7 +755,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
     append_link_libs(link_argv@, arena)
     append_dead_strip_flag(link_argv@, arena)
     append_stack_flag(link_argv@, arena)
-    link_code: = spawn_or_exit(link_argv@, cc_name(), slot.dir)
+    link_code: = tools_run_start.spawn_or_exit(link_argv@, cc_name(), slot.dir)
     if link_code != 0
         io.err().s("ksplc run: linking failed\n")
         fs.remove_path(slot.new_exe) catch {}
@@ -842,7 +835,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     gen.push(arena.text().s("--emit-libs=").s(libs_path).take())
     gen.push(input)
     gen.push(c_path)
-    code: = spawn_or_exit(gen@, "ksplc", "")
+    code: = tools_run_start.spawn_or_exit(gen@, "ksplc", "")
     if code != 0
         sys.exit(code)
     $named_libs: = List<|U8[]|>(arena)
@@ -869,7 +862,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     append_exe_flags(cc@, arena)
     cc.push("-o")
     cc.push(output)
-    cc_code: = spawn_or_exit(cc@, cc_name(), "")
+    cc_code: = tools_run_start.spawn_or_exit(cc@, cc_name(), "")
     if cc_code != 0
         io.err().s("ksplc build: the C compiler failed on \{c_path\}\n")
     sys.exit(cc_code)

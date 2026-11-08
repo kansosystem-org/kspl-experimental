@@ -75,13 +75,61 @@ function ksmdStart(root, bar, status, wasmBytes) {
     }
 
     // Runs one action and shows its result; returns the result, or null when the page stopped.
-    ks.act = (name, ...args) => {
+    ks.act = (name, ...args) => run(name, false, args);
+
+    // Shows the document again for work that ended later: a document's own function answering,
+    // an include or image fetched again. **It leaves alone what the person is doing.** The caret
+    // goes back into the document only where the focus is there: put back while the person typed
+    // in the find bar, Insert Function or Save As, it took the focus, and the next keys went into
+    // the text. The status bar keeps its words, unless the showing fails. During an input
+    // method's composition it waits until the composition ends: moving the box being composed in
+    // ends the composition, and what was composed went in twice.
+    let composing = false;
+    let waiting = null;
+    ks.redraw = (name) => {
+      if (composing) {
+        waiting = waiting === "ksmd_web_render" ? waiting : name;
+        return null;
+      }
+      return run(name, true, []);
+    };
+    document.addEventListener("compositionstart", () => {
+      composing = true;
+    }, true);
+    // It listens as the composition's own commit does, after it, so the commit's turn comes first
+    // (`flush` in `input.js`).
+    document.addEventListener("compositionend", () => {
+      composing = false;
+      if (!waiting) return;
+      const name = waiting;
+      waiting = null;
+      setTimeout(() => {
+        ks.flush();
+        ks.redraw(name);
+      }, 0);
+    });
+    // A caret not put back is put back once the text has the focus again, as the find bar's Esc
+    // gives it, unless the person already put one there.
+    // Caution: **Only the text's own focus puts it back.** A focus inside the document, on a
+    // drawing's shapes or a cell's box, lost it to the caret, and drawing on an image hung.
+    let unplaced = false;
+    root.addEventListener("focus", () => {
+      if (!unplaced) return;
+      unplaced = false;
+      const s = window.getSelection();
+      if (s.rangeCount > 0 && root.contains(s.focusNode)) return;
+      if (ks.sel && !ks.inTable()) ks.view.showSelection(ks.sel);
+    });
+
+    function run(name, quiet, args) {
       if (ks.stopped) return null;
       // Read-only takes every action that changes the document; showing it again is no change.
       if (ks.readOnly && !["ksmd_web_render", "ksmd_web_render_files", "ksmd_web_selection"].includes(name)) {
         ks.say("The page is read-only. View, Read-only turns editing on again.");
         return null;
       }
+      const here = document.activeElement;
+      const inDocument = !here || here === document.body || root.contains(here);
       let r;
       try {
         r = JSON.parse(ks.out(w[name](...args)));
@@ -95,9 +143,10 @@ function ksmdStart(root, bar, status, wasmBytes) {
       for (const f of ks.rendered) f();
       // A table that went takes the place with it, and the person works in the text again.
       if (ks.where === "cell" && !ks.inTable()) ks.setPlace("text");
-      ks.view.showSelection(r.sel);
+      unplaced = quiet && !inDocument;
+      if (!unplaced) ks.view.showSelection(r.sel);
       ks.sel = r.sel;
-      ks.say(r.ok ? "" : r.why);
+      if (!quiet || !r.ok) ks.say(r.ok ? "" : r.why);
       // The menu and the quick access bar can each hold Undo and Redo.
       ks.canUndo = r.undo === 1;
       ks.canRedo = r.redo === 1;
@@ -109,7 +158,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
         if (api.onchange) api.onchange();
       }
       return r;
-    };
+    }
 
     ks.select = (a, f) => {
       w.ksmd_web_select(a[0], a[1], a[2], a[3], f[0], f[1], f[2], f[3]);

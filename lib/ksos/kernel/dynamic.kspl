@@ -108,7 +108,7 @@ impl Task
         reap_pending()
         // Allocated before a slot is taken, so the heap is never entered with interrupts held off
         // here: a full table gives them straight back.
-        tcb: = heap.heap_alloc_as<|Task|>()
+        tcb: = Task$@::heap.heap_alloc(sizeof(Task))
         stack: = U8$@::heap.heap_alloc(stack_size)
         // Caution: **Record it before create.** A new task that outranks the caller runs inside
         // create, and a delete_dyn it calls there must find its entry.
@@ -161,11 +161,11 @@ impl Task
 
 // ============================ The semaphore, mutex and event ============================
 // None of these structs owns a buffer, so creating and destroying only wrap
-// heap_alloc_as/heap_free. Do not destroy one that a task still waits on or holds.
+// heap_alloc/heap_free. Do not destroy one that a task still waits on or holds.
 
 impl sync.Sem
     fn init_dyn(initial: I32): sync.Sem$@
-        s: = heap.heap_alloc_as<|sync.Sem|>()
+        s: = sync.Sem$@::heap.heap_alloc(sizeof(sync.Sem))
         s.init(initial)
         return s
     fn destroy_dyn(r: Self$@)
@@ -173,7 +173,7 @@ impl sync.Sem
 
 impl sync.Mutex
     fn init_dyn(): sync.Mutex$@
-        m: = heap.heap_alloc_as<|sync.Mutex|>()
+        m: = sync.Mutex$@::heap.heap_alloc(sizeof(sync.Mutex))
         m.init()
         return m
     fn destroy_dyn(r: Self$@)
@@ -181,7 +181,7 @@ impl sync.Mutex
 
 impl sync.Event
     fn init_dyn(): sync.Event$@
-        e: = heap.heap_alloc_as<|sync.Event|>()
+        e: = sync.Event$@::heap.heap_alloc(sizeof(sync.Event))
         e.init()
         return e
     fn destroy_dyn(r: Self$@)
@@ -196,7 +196,7 @@ impl<|T|> sync.Queue<|T|>
         // overflow, so test with it.
         assert(sizeof(T) > 0 && cap <= MAX_QUEUE_BYTES / sizeof(T),
             "Queue.init_dyn: needs sizeof(T) > 0 and cap * sizeof(T) within Sz")
-        q: = heap.heap_alloc_as<|sync.Queue<|T|>|>()
+        q: = sync.Queue<|T|>$@::heap.heap_alloc(sizeof(sync.Queue<|T|>))
         buf: = T$@::heap.heap_alloc(cap * sizeof(T))
         q.init(buf, cap)
         return q

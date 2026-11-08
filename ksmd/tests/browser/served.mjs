@@ -3,16 +3,17 @@
 // an included file edited in a tab of its own, images, and the refusals. Every check that writes
 // compares the bytes on disk. Drafts and many tabs are `drafts.mjs`; each way the page could lose
 // edits is `losses.mjs`.
-// The server is the one the repository builds; it is started on port 0 and stopped by asking it.
-import { spawn } from "child_process";
+// The server is the one the repository builds; it is started on port 0 and stopped by asking it
+// (`kssrv.mjs`).
 import fs from "fs";
-import http from "http";
 import path from "path";
 import zlib from "zlib";
 import { CTRL, driver, verdict } from "./drive.mjs";
+import { request, start } from "./kssrv.mjs";
 import { drafts } from "./drafts.mjs";
 import { losses } from "./losses.mjs";
 import { own } from "./own.mjs";
+import { redraws } from "./redraws.mjs";
 
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
@@ -133,60 +134,6 @@ function snapshot(root) {
   };
   walk(root);
   return out.join("\n");
-}
-
-// Starts kssrv on the root, and reads the URL it prints: the port and the token. `more` holds
-// further options, such as `--idle=<seconds>`.
-export function start(kssrv, root, pageFile, logFile, more = []) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(kssrv, ["0", root, "--local", `--page=${path.resolve(pageFile)}`, ...more],
-      { stdio: ["ignore", "pipe", "pipe"] });
-    let seen = "";
-    const log = fs.createWriteStream(logFile);
-    const timer = setTimeout(() => reject(new Error(`no URL in 10 s: ${seen}`)), 10000);
-    const take = (chunk) => {
-      log.write(chunk);
-      seen += chunk;
-      const m = /http:\/\/127\.0\.0\.1:(\d+)\/#t=([A-Za-z0-9_-]+)/.exec(seen);
-      if (!m) return;
-      clearTimeout(timer);
-      const port = Number(m[1]);
-      const token = m[2];
-      resolve({
-        port, token, child,
-        url: (query = "") => `http://127.0.0.1:${port}/${query}#t=${token}`,
-        async stop() {
-          await request(port, "POST", "/api/stop", { Authorization: `Bearer ${token}` });
-          await Promise.race([new Promise((r) => child.on("exit", r)),
-            new Promise((r) => setTimeout(r, 5000))]);
-          child.kill("SIGKILL");
-        },
-      });
-    };
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", take);
-    child.stderr.on("data", take);
-    child.on("error", (e) => reject(e));
-  });
-}
-
-// One raw request, so a check can send a Host or no token as another program would.
-function request(port, method, target, headers = {}, body = null) {
-  return new Promise((resolve) => {
-    const length = body ? { "Content-Length": body.length } : {};
-    const req = http.request({ host: "127.0.0.1", port, method, path: target,
-      headers: { Host: `127.0.0.1:${port}`, ...length, ...headers } }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (c) => {
-        body += c;
-      });
-      res.on("end", () => resolve({ status: res.statusCode, body }));
-    });
-    req.on("error", () => resolve({ status: 0, body: "" }));
-    req.end(body ?? undefined);
-  });
 }
 
 // A new tab on the page, once it has opened what its address names. `script` runs in the page
@@ -610,9 +557,11 @@ const SECTIONS = {
     "Save as opens a dialog on the document's folder: its folders, then its documents",
     await shown());
     await press("parts");
-    check(await shown() === ".. notes.ksmd" && (await d.js(
-      "document.querySelector('#browse .browse-where').textContent")) === "Workspace / parts",
-    "a press on a folder opens it, and the path to it shows above", await shown());
+    // The folder's list comes by a request to the server, so the check waits for it.
+    const where = "document.querySelector('#browse .browse-where').textContent";
+    check(await d.until("Array.from(document.querySelectorAll('#browse .browse-list button'), (b) => b.textContent)" +
+      `.join(' ') === '.. notes.ksmd' && ${where} === 'Workspace / parts'`, 5000),
+    "a press on a folder opens it, and the path to it shows above", `${await shown()} | ${await d.js(where)}`);
     await d.js("document.querySelector('#browse .browse-name').value = 'copy'");
     await pressOk();
     // An include's or an image's path is read from the document's folder, so each is written
@@ -897,4 +846,4 @@ const SECTIONS = {
 };
 
 const helpers = { tab, idle, said, noticed, choose, typeAtEnd, start, openInDialog };
-Object.assign(SECTIONS, drafts(helpers), losses(helpers), own(helpers));
+Object.assign(SECTIONS, drafts(helpers), losses(helpers), own(helpers), redraws(helpers));

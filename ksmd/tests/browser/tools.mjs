@@ -8,7 +8,7 @@ const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
-  saves, dragTo, rightClick, openCell, drag, doubleClickAt }) {
+  saves, dragTo, rightClick, openCell, drag, doubleClickAt, resize }) {
   const text = (selector) => js(`document.querySelector(${JSON.stringify(selector)}).textContent`);
   const found = () => text(".find-count");
   const inRange = () => js("Array.from(document.querySelectorAll('#doc .in-range'))" +
@@ -880,15 +880,13 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await page("Page.reload", {});
       await until("document.documentElement.dataset.ready === '1'");
       check(await wide() === 480, "a page opened again keeps the width", String(await wide()));
-      await page("Emulation.setDeviceMetricsOverride", { width: 800, height: 900, deviceScaleFactor: 1, mobile: false });
-      await settle();
+      await resize(800, 900);
       const body = () => js("Math.round(document.getElementById('doc').getBoundingClientRect().width)");
       check(await body() >= 400, "in a narrower window the document keeps 400 pixels",
         `${await wide()} ${await body()}`);
       await drag(edge, 2000);
       check(await body() >= 400, "and a drag cannot take them", `${await wide()} ${await body()}`);
-      await page("Emulation.clearDeviceMetricsOverride", {});
-      await settle();
+      await resize();
       const [x, y] = await js(`(() => { const r = document.querySelector("${edge}").getBoundingClientRect();
         return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
       await doubleClickAt(x, y);

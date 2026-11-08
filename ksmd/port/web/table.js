@@ -294,8 +294,11 @@ function ksmdTable(ks) {
     // A blur of an input already closed, as a resize closes and opens its cell, takes nothing. A
     // value the model refuses stays: the person may have only pressed a menu or a dialog. A cell
     // held for the Insert Function dialog stays open (`catalog.js`).
+    // A blur while the table is drawn again takes nothing either: the box comes back (`redrawn`).
     input.addEventListener("blur", () => {
-      if (open && open.input === input && !open.held) take("stay");
+      if (open && open.input === input && !open.held && !carrying && document.activeElement !== input) {
+        take("stay");
+      }
     });
     if (typed) return;
     input.focus();
@@ -341,6 +344,57 @@ function ksmdTable(ks) {
     }
     ks.say(r.why);
     return false;
+  }
+
+  // Whether the page is drawing the open cell's table again (`redrawn`).
+  let carrying = false;
+  // Runs `draw`, which shows tables again, and puts the open cell's box, with its text, caret and
+  // focus, into the same cell of the table drawn again.
+  // **A table drawn again while a cell is open keeps what is being typed.** The answers of a
+  // document's own functions arrive while a person may be typing in a cell (`functions.js`), and
+  // the box went with the old table: the keys typed so far were lost, and the next key opened the
+  // cell afresh.
+  function redrawn(draw) {
+    if (!open) return draw();
+    const o = open;
+    // **The open cell's table is found again by what it is, not by its place**: a block drawn
+    // before it, such as a pasted image, moves it down.
+    const was = o.input.closest(".table");
+    const focused = document.activeElement === o.input;
+    const { selectionStart: from, selectionEnd: to, selectionDirection: way } = o.input;
+    carrying = true;
+    try {
+      draw();
+    } finally {
+      carrying = false;
+    }
+    if (open !== o) return;
+    const blocks = ks.view.blocks();
+    const wrap = o.input.isConnected ? o.input.closest(".table") :
+      blocks.find((b) => was && b.u === was.u && b.classList.contains("table") && !b.included);
+    const block = wrap ? blocks.indexOf(wrap) : -1;
+    const el = o.input.isConnected || block < 0 ? null : find(block, o.row, o.column);
+    // A cell the drawing took away takes its box with it.
+    if (block < 0 || (!o.input.isConnected && !el)) {
+      open = null;
+      ks.refs.detach();
+      return;
+    }
+    const moved = block !== o.block;
+    if (moved && cell && cell.block === o.block) cell = { ...cell, block };
+    o.block = block;
+    if (o.input.isConnected) {
+      if (moved && o.row >= 0) ks.refs.attach(o.input, o.block);
+      return;
+    }
+    o.nodes = Array.from(el.childNodes);
+    for (const n of o.nodes) n.remove();
+    el.appendChild(o.input);
+    fitLines(o.input);
+    if (o.row >= 0) ks.refs.attach(o.input, o.block);
+    if (!focused) return;
+    o.input.focus({ preventScroll: true });
+    o.input.setSelectionRange(from, to, way);
   }
 
   function moveTo(block, row, column, opening = false, whole = false) {
@@ -686,6 +740,7 @@ function ksmdTable(ks) {
     stepColumn: (block, column, dc) => stepColumn(block, column, dc),
     // The cell being edited, whose row a filter keeps in sight: { block, row, input } or null.
     editing: () => (open ? { block: open.block, row: open.row, input: open.input } : null),
+    redrawn,
     // The open cell's text where it differs from the cell's own, not yet taken into the
     // document: { block, row, column, text } or null.
     pending: () => (open && open.input.value !== open.before ?

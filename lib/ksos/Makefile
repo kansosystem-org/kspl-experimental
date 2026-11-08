@@ -94,68 +94,92 @@ define require_arm_toolchain
 	@if [ -z "$(1)" ]; then printf '%s\n' "$$ARM_TOOLCHAIN_HINT" >&2; exit 1; fi
 endef
 
-# --- The time cap on every demo run, POSIX and QEMU alike ---
+# --- The time caps on every demo run, POSIX and QEMU alike ---
 # **Every run of a demo goes through `ksos_capped`**: a kernel bug that leaves a task spinning
 # stalls the run, and with no cap the gate (and `make ci` with it) waits for ever without a
-# word. A run that hits its cap prints the `[FAIL] ... it hung` line the gates read
+# word. A run that hits a cap prints the `[FAIL] ... it hung` line the gates read
 # (`ksos_run_gate`), rather than ending on `timeout`'s silent 124.
-# **One default for every run.** Measured under load (every demo 10 times, 8 at once beside 16 busy
-# loops on 4 cores; and 3 times, 4 at once beside 2 busy loops pinned to one core), the slowest run
-# took under 7 s (the slowest POSIX one, `ksos-task-manager`, 4.2 s), so 30 s is more than four
-# times the slowest. A slower machine raises it on the command line
-# (`make test-ksos-posix KSOS_RUN_CAP=120`).
-# A run that needs another cap sets `ksos_run_cap_<its target>` next to this, saying why.
+# **CPU time stops a spinning run** (`ulimit -t`): a busy runner stretches the clock threefold,
+# and a run's CPU time hardly at all. **The clock stops only a run blocked on nothing**, which
+# spends no CPU time: a task left waiting for ever, or a board asleep in QEMU.
+# **One default of each for every run.** Measured under load (every demo 10 times, 8 at once beside
+# 16 busy loops on 4 cores; and 3 times, 4 at once beside 2 busy loops pinned to one core), the
+# slowest run took under 7 s of clock (the slowest POSIX one, `ksos-task-manager`, 4.2 s). Its CPU
+# time is less, so 30 s of CPU is more than four times the slowest on any machine. The clock's
+# 300 s leaves room for the slowest platform, and stays below the gate's own cap.
+# A run raises either on the command line (`make test-ksos-posix KSOS_RUN_CAP=120`).
+# A run that needs other caps sets `ksos_run_cap_<its target>` or `ksos_run_wall_<its target>`
+# next to these, saying why.
 KSOS_RUN_CAP := 30
+KSOS_WALL_CAP := 300
 ksos_cap = $(or $(ksos_run_cap_$@),$(KSOS_RUN_CAP))
+ksos_wall = $(or $(ksos_run_wall_$@),$(KSOS_WALL_CAP))
 
-# $(call ksos_capped,<command>): the shell words that run it under the cap. On hitting the cap they
+# $(call ksos_capped,<command>): the shell words that run it under the caps. On hitting one they
 # print the line the gates read and exit 1; otherwise they leave its exit status in `rc`.
+# **Only the soft CPU limit is set**, so the kernel stops the run with SIGXCPU (152), which names
+# the cap; at a hard limit it would send SIGKILL, as `timeout -k` does. No core file is written.
+# **Where the system has no CPU-time limit, only the clock stops a run**: MSYS2 on Windows cannot
+# set one (`ulimit: cpu time: cannot modify limit`). `test-ksos-qemu` says so once, in a SKIP line
+# (`KSOS_NO_CPU_CAP_MSG`), and `test-ksos-cap` still checks the CPU cap where the system has one.
 define ksos_capped
-echo "timeout -k 2 $(ksos_cap) $(1)"; rc=0; timeout -k 2 $(ksos_cap) $(1) || rc=$$?; \
-    if [ "$$rc" = 124 ]; then \
-		echo "[FAIL] $@ did not finish in $(ksos_cap)s: it hung (timeout killed it)"; exit 1; \
+echo "timeout -k 2 $(ksos_wall) $(1) (CPU time $(ksos_cap) s)"; rc=0; \
+    (ulimit -c 0; ulimit -S -t $(ksos_cap) 2>/dev/null; exec timeout -k 2 $(ksos_wall) $(1)) || rc=$$?; \
+    if [ "$$rc" = 152 ]; then \
+		echo "[FAIL] $@ did not finish in $(ksos_cap)s of CPU time: it hung spinning (SIGXCPU stopped it)"; exit 1; \
+    elif [ "$$rc" = 124 ]; then \
+		echo "[FAIL] $@ did not finish in $(ksos_wall)s: it hung waiting (timeout killed it)"; exit 1; \
     elif [ "$$rc" = 137 ]; then \
 		echo "[FAIL] $@ was killed with SIGKILL (forced timeout cleanup or an external kill)"; exit 1; fi
 endef
-# $(call ksos_capped_run,<command>): a recipe line that runs it under the cap and ends with its
+# $(call ksos_capped_run,<command>): a recipe line that runs it under the caps and ends with its
 # exit status.
 ksos_capped_run = @$(call ksos_capped,$(1)); exit $$rc
 
-# The cap's own check (`test-ksos-posix` runs it first): a run that spins for ever must end at its
-# cap, print the hung line, and fail its gate. Its cap is 1 s, so the check costs a second rather
-# than the default's 30; the outer `timeout` only keeps the check from hanging where the cap is lost.
+# The caps' own check (`test-ksos-posix` runs it first). A run that spins for ever must end at its
+# CPU cap, and one blocked for ever at its clock cap. Each prints its hung line and fails its gate.
+# Their caps are 1 s, so the check costs seconds rather than the defaults; the outer `timeout`
+# only keeps the check from hanging where a cap is lost.
 ksos_run_cap_cap-check-spin := 1
 cap-check-spin:
 	$(call ksos_capped_run,sh -c 'while :; do :; done')
 
-ksos_run_cap_cap-check-stubborn := 1
-cap-check-stubborn:
-	$(call ksos_capped_run,sh -c 'trap "" TERM; while :; do :; done')
+ksos_run_wall_cap-check-blocked := 1
+cap-check-blocked:
+	$(call ksos_capped_run,sh -c 'sleep 600')
 
-test-ksos-cap: export CAP_LOST_MSG := [FAIL] the cap did not stop a run that spins for ever (the check's own 20 s bound ended it)
-test-ksos-cap: export CAP_PASSED_MSG := [FAIL] the gate passed a run that spins for ever
+# It ignores both the CPU cap's signal and the clock cap's TERM, so only `timeout -k` ends it.
+ksos_run_cap_cap-check-stubborn := 1
+ksos_run_wall_cap-check-stubborn := 1
+cap-check-stubborn:
+	$(call ksos_capped_run,sh -c 'trap "" TERM XCPU; while :; do :; done')
+
+test-ksos-cap: export CAP_LOST_MSG := [FAIL] the cap did not stop a run that hangs for ever (the check's own 20 s bound ended it)
+test-ksos-cap: export CAP_PASSED_MSG := [FAIL] the gate passed a run that hangs for ever
 test-ksos-cap: export CAP_SILENT_MSG := [FAIL] a run stopped at its cap did not say that it hung:
-test-ksos-cap: export CAP_OK_MSG := RESULT: ALL PASS (a run that spins for ever ended at its $(ksos_run_cap_cap-check-spin) s cap, said that it hung, and failed its gate
+test-ksos-cap: export CAP_OK_MSG := RESULT: ALL PASS (a run that spins for ever ended at its $(ksos_run_cap_cap-check-spin) s CPU cap, one blocked for ever at its $(ksos_run_wall_cap-check-blocked) s clock cap; each said that it hung, and failed its gate
 test-ksos-cap:
-	@rm -f $(KSOS_LOG_DIR)/cap_cap-check-spin.log
-	@start=$$(date +%s); rc=0; \
-	timeout 20 $(MAKE) --no-print-directory ksos-capgate-cap-check-spin >/dev/null 2>&1 || rc=$$?; \
-	took=$$(( $$(date +%s) - start )); \
-	if [ "$$rc" = 124 ]; then printf '%s\n' "$$CAP_LOST_MSG"; exit 1; fi; \
-	if [ "$$rc" = 0 ]; then printf '%s\n' "$$CAP_PASSED_MSG"; exit 1; fi; \
-	if ! grep -q '^\[FAIL\] cap-check-spin did not finish in $(ksos_run_cap_cap-check-spin)s: it hung' \
-		$(KSOS_LOG_DIR)/cap_cap-check-spin.log; then \
-		printf '%s %s\n' "$$CAP_SILENT_MSG" "$(KSOS_LOG_DIR)/cap_cap-check-spin.log"; exit 1; fi; \
-	printf '%s, in %s s)\n' "$$CAP_OK_MSG" "$$took"
+	@start=$$(date +%s); \
+	for run in "spin:did not finish in $(ksos_run_cap_cap-check-spin)s of CPU time: it hung" \
+		"blocked:did not finish in $(ksos_run_wall_cap-check-blocked)s: it hung"; do \
+		name=$${run%%:*}; said=$${run#*:}; log="$(KSOS_LOG_DIR)/cap_cap-check-$$name.log"; \
+		rm -f "$$log"; rc=0; \
+		timeout 20 $(MAKE) --no-print-directory ksos-capgate-cap-check-$$name >/dev/null 2>&1 || rc=$$?; \
+		if [ "$$rc" = 124 ]; then printf '%s: cap-check-%s\n' "$$CAP_LOST_MSG" "$$name"; exit 1; fi; \
+		if [ "$$rc" = 0 ]; then printf '%s: cap-check-%s\n' "$$CAP_PASSED_MSG" "$$name"; exit 1; fi; \
+		if ! grep -qF "[FAIL] cap-check-$$name $$said" "$$log"; then \
+			printf '%s %s\n' "$$CAP_SILENT_MSG" "$$log"; exit 1; fi; \
+	done; \
+	printf '%s, in %s s)\n' "$$CAP_OK_MSG" "$$(( $$(date +%s) - start ))"
 	@rc=0; timeout 10 $(MAKE) --no-print-directory ksos-capgate-cap-check-stubborn \
 		>$(KSOS_LOG_DIR)/stubborn-check.log 2>&1 || rc=$$?; \
 	if [ "$$rc" = 0 ] || [ "$$rc" = 124 ] || \
 		! grep -q '^\[FAIL\] cap-check-stubborn was killed with SIGKILL' \
 		$(KSOS_LOG_DIR)/stubborn-check.log; then \
 		cat $(KSOS_LOG_DIR)/stubborn-check.log; exit 1; fi; \
-	echo "RESULT: ALL PASS (a run ignoring TERM was forcibly killed and failed its gate)"
+	echo "RESULT: ALL PASS (a run ignoring TERM and the CPU cap's signal was forcibly killed and failed its gate)"
 
-.PHONY: cap-check-spin cap-check-stubborn test-ksos-cap
+.PHONY: cap-check-spin cap-check-blocked cap-check-stubborn test-ksos-cap
 
 # --- Kanso OS (RTOS): the portable core plus the port layer ------------------------
 POSIX_PORT_SRC := port/posix/ksos_port_posix.c
@@ -571,10 +595,11 @@ ksos-$(1)gate-$(2):
 	$$(call ksos_run_gate,$(2),$(1))
 endef
 $(foreach t,$(KSOS_QEMU_PARALLEL_DEMOS),$(eval $(call ksos_gate_rule,qemu,$(t))))
-# The cap's own check (`test-ksos-cap`) runs its spin through the same gate recipe.
+# The caps' own check (`test-ksos-cap`) runs its hangs through the same gate recipe.
 $(eval $(call ksos_gate_rule,cap,cap-check-spin))
+$(eval $(call ksos_gate_rule,cap,cap-check-blocked))
 $(eval $(call ksos_gate_rule,cap,cap-check-stubborn))
-.PHONY: ksos-capgate-cap-check-spin ksos-capgate-cap-check-stubborn
+.PHONY: ksos-capgate-cap-check-spin ksos-capgate-cap-check-blocked ksos-capgate-cap-check-stubborn
 KSOS_QEMU_GATE_TARGETS := $(addprefix ksos-qemugate-,$(KSOS_QEMU_PARALLEL_DEMOS))
 
 # $(call ksos_run_gate,<target>,<log prefix>), shared by test-ksos-qemu and test-ksos-posix.
@@ -598,6 +623,7 @@ define ksos_run_gate
 endef
 export KSOS_NO_PASS_MSG := printed no RESULT: ALL PASS line, so nothing says its checks ran
 # Said once where the emulator is missing, in place of one `Error 127` for each demo.
+export KSOS_NO_CPU_CAP_MSG := SKIP test-ksos-qemu: the CPU-time cap on each run: this system cannot set one (ulimit -t), so only the clock's $(KSOS_WALL_CAP) s cap stops a run that hangs
 export QEMU_MISSING_MSG := FAIL test-ksos-qemu: qemu-system-arm is not on PATH (Debian/Ubuntu: apt install qemu-system-arm; MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-qemu)
 
 ifeq ($(strip $(LIBGCC_CM)),)
@@ -607,6 +633,7 @@ test-ksos-qemu:
 else
 test-ksos-qemu: $(CM_OBJS) $(NRF51_LINK_OBJS)
 	@command -v qemu-system-arm >/dev/null 2>&1 || { printf '%s\n' "$$QEMU_MISSING_MSG" >&2; exit 1; }
+	@(ulimit -S -t $(KSOS_RUN_CAP)) 2>/dev/null || printf '%s\n' "$$KSOS_NO_CPU_CAP_MSG"
 	@echo "# [test-ksos-qemu] $(words $(KSOS_QEMU_DEMOS)) demos on qemu-system-arm (parallel $(words $(KSOS_QEMU_PARALLEL_DEMOS)) / serial $(words $(KSOS_QEMU_SERIAL_DEMOS)))"
 	$(MAKE) -j$(TEST_JOBS) $(KSOS_QEMU_GATE_TARGETS)
 	$(foreach t,$(KSOS_QEMU_SERIAL_DEMOS),$(call ksos_run_gate,$(t),qemu)$(nl))

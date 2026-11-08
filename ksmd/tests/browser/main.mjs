@@ -36,7 +36,7 @@ const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const browser = await launch(binary, work);
 const page = browser.page;
 const { js, settle, until, press, type, select, click, clickBelow, drag, menu, point, doubleClickAt,
-  rightClick, dragTo, openCell } = driver(page);
+  rightClick, dragTo, openCell, frames, resize } = driver(page);
 
 async function load(source) {
   const r = await js(`ksmd.load(${JSON.stringify(source)})`);
@@ -596,17 +596,17 @@ const sections = {
 Object.assign(sections, menus({ browser, js, until, press, type, select, click, clickBelow, menu,
   point, rightClick, doubleClickAt, dragTo, load, saves, source, openCell }));
 Object.assign(sections, tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
-  saves, dragTo, rightClick, openCell, drag, doubleClickAt }));
+  saves, dragTo, rightClick, openCell, drag, doubleClickAt, resize }));
 Object.assign(sections, tables({ page, js, settle, press, type, select, click, menu, load, saves,
   rightClick, openCell }));
 Object.assign(sections, sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source,
-  openCell, doubleClickAt, rightClick }));
+  openCell, doubleClickAt, rightClick, frames, resize }));
 Object.assign(sections, documents({ page, js, press, click, menu, load, saves, source }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
 Object.assign(sections, formulaHelp({ page, js, settle, press, type, click, menu, load, saves }));
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
 Object.assign(sections, statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
-  rightClick, openCell, drag }));
+  rightClick, openCell, drag, resize }));
 
 try {
   const opened = await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });

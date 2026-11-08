@@ -159,14 +159,14 @@ The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory manageme
 
 **A container on the heap needs its `free()`. One in an arena needs it only when its elements hold ARC values**, since the arena releases no element's count. An element that owns something (a `List` of `Str_builder`s) is freed by its owner before the container.
 
-### Heap memory comes zeroed
+### A typed value is made with its value
 
-`mem.alloc` and `mem.alloc_as` hand out bytes that read as 0, on the hosted heap and the freestanding one.
+**A typed value on the heap or in an arena is made with its value**: `mem.new(v)` and `Arena.create(v)` allocate and write it. No field can be read before it is written. `mem.alloc` and `Arena.alloc` stay for raw bytes, which they hand out as the heap left them.
 
-**Why**: a read before any write gave whatever the block last held. No sanitizer reports that, since the bytes lie inside the block, so the program ran on with old data and could leak it. Zeroed memory turns that read into a fixed 0.
+**Why not zeroed memory**: a forgotten write would read as 0, which often looks valid. The program runs on with a wrong value, and no tool can flag a read the language defines. Zeroing also costs time in proportion to the block. A microcontroller has no OS to hand out zeroed pages, and under a sanitizer it made CI's runs miss their limits.
 
-* **The cost falls on reused blocks only.** The hosted heap takes `calloc`, which gets fresh pages from the OS already zeroed. A block the heap hands out again is cleared once.
-* **An arena's memory is not covered.** An arena hands out parts of its chunks, and a reset hands the same bytes out again ("What invalidates a view" in the language specification).
+* **Raw bytes read before any write are undefined** ("Undefined - no answer is fixed" in the language specification).
+* **The address sanitizer fills fresh heap bytes with a pattern** (`0xbe`, the first 4 KiB of a block by default). A forgotten write then shows as an odd value in the sanitizer gates, not as a plausible 0.
 
 ### A null arena is the heap, for every function
 

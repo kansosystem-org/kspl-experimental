@@ -185,7 +185,7 @@ CI coverage differs by port, so deleting a demo can remove a check:
 | `lib/ksos/demo/nrf51/` | runs every one under QEMU (`make test-ksos-qemu`) | not needed (QEMU's chip only) |
 | `lib/ksos/demo/rp2040/` | links only (`make test-ksos-link`); QEMU has no RP2040 | a person flashes it |
 
-Every demo run by `make test-ksos-posix` or `make test-ksos-qemu` has a time limit, `KSOS_RUN_CAP` in `lib/ksos/Makefile`. A hung demo fails with `[FAIL] ksos-<demo> did not finish in <N>s: it hung (timeout killed it)`. On a slow machine, raise it with `make test-ksos-posix KSOS_RUN_CAP=120`.
+Every demo run by `make test-ksos-posix` or `make test-ksos-qemu` has two time limits in `lib/ksos/Makefile`. `KSOS_RUN_CAP` limits its CPU time, which stops a demo that spins. `KSOS_WALL_CAP` limits the clock, which stops one that waits for ever. Windows has no CPU-time limit, so there only the clock stops a demo. A hung demo fails with `[FAIL] ksos-<demo> did not finish in <N>s`, then what stopped it. On a slow machine, raise them with `make test-ksos-posix KSOS_RUN_CAP=120 KSOS_WALL_CAP=900`.
 
 Keep one demo per feature: combined, a failure hides which feature broke.
 

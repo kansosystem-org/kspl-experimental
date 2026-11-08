@@ -106,7 +106,8 @@ priv struct Srv //< what the server's thread is handed, and what it saw
     second: Bool //< whether a read with no wait gave the second record
     drained: Bool //< whether `buffered` was false after it
 
-priv const SRV_WAIT_MS: I32 = 10000 //< how long the server's thread waits on its socket
+priv const SRV_WAIT_MS: I32 = 120000 //< how long either side waits on its socket, with a handshake
+    //< **No check here is about the time**, so it is set far past any run, as in `tls_test.kspl`.
 priv const PING: U8[] = "ping"
 priv const PONG: U8[] = "pong"
 priv const QUIET_MS: I32 = 200 //< how long the socket must stay unready with a record held
@@ -186,7 +187,7 @@ fn test_tls_server_talks_to_the_client()
     defer p.listener.free()
     port: = p.listener.port() catch panic("a bound socket knows its port")
     $t: = spawn_srv(p@)
-    s: = tls.Tls_stream.connect("localhost", port)
+    s: = tls.Tls_stream.connect("localhost", port, SRV_WAIT_MS)
         catch panic("the client should verify the server half's certificate and connect")
     sent: = s.write(PING) catch panic("the client's write should succeed")
     assert(sent == PING.len, "the ping should go out whole")

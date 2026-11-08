@@ -96,6 +96,7 @@ $ curl -s localhost:8080/api/status
 | `heap_bytes` | the bytes the server holds on its heap |
 | `local` | whether it is for local use |
 | `root` | the root's path, only for local use. Empty facing outward, where it would tell anyone the machine's layout |
+| `fs_lookups` | how many times the server has asked the file system what stands at a path (`fs.lookups`), only for local use. Absent facing outward, where the count one request adds would tell which of its steps stand |
 
 For local use only, the endpoints a page uses: `GET` and `PUT` on `/api/file`, and `GET /api/stat`, `GET /api/list`, `POST /api/move`, `GET /api/here` and `POST /api/stop`. With a builder, also `GET`, `POST` and `DELETE` on `/api/allow`, and `POST /api/build`. What each takes and answers is set in "Only six things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 

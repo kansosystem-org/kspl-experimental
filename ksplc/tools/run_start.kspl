@@ -1,0 +1,69 @@
+//< Starting a program for `ksplc run` and `ksplc build`, and saying why a start failed
+//< The OS's number and its meaning go in the message, and on Windows a file another program holds
+//< is tried again. Split from `run.kspl` for length.
+import "std/ds" { List }
+import "std/io"
+import "std/subproc"
+import "std/sys"
+
+priv const START_TRIES: Sz = 10 //< starts tried while Windows says the file is held
+priv const START_WAIT_MS: I32 = 200 //< the wait between two of them
+
+fn spawn_or_exit(list: List<|U8[]|>$@, what: U8[], cwd: U8[]): I32 //<
+    //< It starts list as argv and returns the exit code
+    //< Where starting itself fails, it says why, in the OS's number and words, and exits. Where
+    //< `cwd` is empty it inherits ksplc's working directory (the same convention as spawn_wait).
+    //< **On Windows a file held by another program is tried again for two seconds.** A virus
+    //< scanner holds a program just built while it checks it, and the start then fails with
+    //< "in use" or "access denied" although nothing is wrong.
+    $code: I32 = 0
+    for try in Range.asc(START_TRIES)
+        got: = subproc.spawn_wait(list.slice(), cwd) catch
+            code = subproc.start_error()
+            if !held_by_another(code) || try + 1 == START_TRIES
+                break
+            sys.sleep_ms(START_WAIT_MS)
+            continue
+        return got
+    e: = io.err()
+    e.s("ksplc: failed to start \{what\}")
+    if code > 0
+        e.s(" (").s("Windows error" if sys.is_windows() else "errno").s(" \{code\}")
+        why: = start_failure(code)
+        if why.len > 0
+            e.s(": ").s(why)
+        e.c(')')
+    e.c('\n')
+    sys.exit(1)
+
+priv fn held_by_another(code: I32): Bool //< whether a start failed as Windows fails on a held file
+    //< 32 is a sharing violation, 5 a refusal of access; a scanner holding the file gives either.
+    return sys.is_windows() && (code == 32 || code == 5)
+
+priv fn start_failure(code: I32): U8[] //<
+    //< what the OS's number for a failed start means; empty if unknown
+    if sys.is_windows()
+        switch code
+        case 2
+            return "the file is not there"
+        case 3
+            return "a folder on its path is not there"
+        case 5
+            return "access was refused (a security program may hold or block it)"
+        case 32
+            return "another program holds the file (often a virus scanner)"
+        case 225
+            return "Windows Security found a threat in it and blocked it"
+        case 1260
+            return "a policy on this computer blocks it"
+        default
+            return ""
+    switch code
+    case 2
+        return "no such file"
+    case 8
+        return "not a program this system can run"
+    case 13
+        return "permission denied"
+    default
+        return ""

@@ -76,6 +76,34 @@ fn test_env_set_unset()
         .pass("an empty value was refused and nothing changed, and unset_env is the only route for \
             deleting.")
 
+// ==========================================
+// std/sys: a variable set to the empty text reads as that text, not as unset, on every OS.
+// Windows's API answers 0 for both, so a reader that looks at the count alone loses the variable.
+// ==========================================
+
+// The child that says what it reads for the variable its parent set to the empty text.
+priv const EMPTY_ENV_SRC: U8[] =
+    """import "std/io"
+import "std/sys"
+
+fn main()
+  if v: = sys.get_env("KSPL_TEST_ENV_EMPTY")
+    io.out().s("set to [").s(v).s("]\n")
+  else
+    io.out().s("unset\n")
+"""
+
+fn test_env_empty(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< **`set_env` refuses the empty text**, so `env NAME=` gives it to the child instead.
+    verdict.start("[Sys] reading an environment variable set to the empty text...")
+    src: = child_path("empty_env", EMPTY_ENV_SRC, arena)
+    r: =
+        subproc.run_capture(U8[][]::{ "env", "KSPL_TEST_ENV_EMPTY=", ksplc, "run", src }, "",
+        300000, 4096, arena) catch panic("`env` must start the child")
+    assert(r.exited_with(0), "the child must run")
+    assert(r.stdout_data.equals("set to []\n"), "a variable set to the empty text reads as set")
+    verdict.pass("A variable set to the empty text reads as the empty text, not as unset.")
+
 // Caution: **Do not rely on the absolute value** of the monotonic clock; it has no fixed origin.
 // The test reads only "it does not go back" and "it advances once work is done". **Handle an
 // environment with no clock separately** (`timing_available()`), or the test fails there.

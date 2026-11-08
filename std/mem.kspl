@@ -15,12 +15,15 @@ pub const SZ_MAX: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the large
     //< `Sz` is as wide as a pointer, so its largest value differs by target. The shift keeps all
     //< bits but the sign bit, so the value is right on a 32-bit and a 64-bit target alike.
 
-pub fn alloc_as<|T|>(): T$@ //< heap memory for one value, with no `sizeof` written by hand
-    //< Caution: Do not write it out as `T$@::alloc(sizeof(T))` in the caller
-    //< (docs/DESIGN-principles.md's "One means to one purpose"). Nothing catches a mismatch between
-    //< the two types. `alloc(<byte count>)` remains for raw bytes (`U8$@::alloc(n + 1)`), which no
-    //< type describes.
-    return T$@::alloc(sizeof(T))
+pub fn new<|T|>( //< heap memory for one value, holding that value
+    //< **A typed value is made with its value**, so no field can be read before it is written.
+    //< `Arena.create` is the same for an arena. `alloc(<byte count>)` remains for raw bytes
+    //< (`U8$@::alloc(n + 1)`), which no type describes.
+    value: T, //< what the memory holds from the start
+): T$@ //< the value's place, freed with `dealloc`
+    ptr: = T$@::alloc(sizeof(T))
+    init_at(ptr, value)
+    return ptr
 
 // The two more atomic operations the hosted counters need, declared as `std/thread.kspl` does.
 // Freestanding never calls them: an Armv6-M core has none (`ksplc/gen/runtime/core.c`).
@@ -28,7 +31,7 @@ pub fn alloc_as<|T|>(): T$@ //< heap memory for one value, with no `sizeof` writ
     extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
     extern fn kspl_atomic_load(ptr: Sz$@): Sz
 
-// The counters for hosted builds (the libc.calloc version).
+// The counters for hosted builds (the libc.malloc version).
 // Caution: **Keep them priv, and touch them only through the atomic operations.** Only
 // heap_used_bytes and the functions next to it read them (freestanding counts elsewhere, so a
 // direct read would be written for each build). Threads allocate at once, and a plain `+=` loses
@@ -54,8 +57,9 @@ priv const ALLOC_OWNER_OFFSET: Sz = sizeof(Sz) //<
 
 #cfg(!freestanding)
 pub fn alloc( //< allocates raw bytes from the global heap
-    //< **The bytes are zeroed**, so a read before any write gives 0. Memory fresh from the OS
-    //< costs nothing more; a block the heap hands out again is cleared once.
+    //< Caution: **The bytes are as the heap left them**: reading one before writing it is
+    //< undefined. A typed value comes from `create`, which writes it. Under the address sanitizer
+    //< fresh bytes hold its fill pattern, so such a read shows in tests.
     size: Sz, //< how many bytes to allocate
 ): Void$@ //< the bytes, freed with `dealloc`; running out of memory stops the program
     if size < 0
@@ -65,7 +69,7 @@ pub fn alloc( //< allocates raw bytes from the global heap
     // a few bytes, and the caller would write `size` of them.
     if alloc_size < size
         panic("alloc size is too large to add the header")
-    ptr: = libc.calloc(1, alloc_size)
+    ptr: = libc.malloc(alloc_size)
     if ptr == null
         panic("Out of memory")
     size_ptr: = Sz$@::ptr
@@ -91,7 +95,7 @@ priv fn raise_peak(now: Sz)
 // provided" link error.
 #cfg(freestanding)
 pub fn alloc( //< allocates raw bytes from the free-list heap, which must already be set up
-    //< **The bytes are zeroed**, as for the hosted `alloc`.
+    //< Caution: **The bytes are as the heap left them**, as for the hosted `alloc`.
     size: Sz, //< how many bytes to allocate
 ): Void$@ //< the bytes, freed with `dealloc`; running out stops the program
     if _fh.ready
@@ -267,8 +271,6 @@ priv fn freestanding_heap_alloc(size: Sz): Void$@
     // above has read `cur.next` breaks the removed free block's links.
     cur.next = cur
     fh_unlock()
-    // Zeroed outside the lock: the block is this caller's alone now.
-    zero(fh_data_ptr(cur), size)
     return fh_data_ptr(cur)
 
 #cfg(freestanding)
@@ -317,7 +319,7 @@ priv fn freestanding_heap_dealloc(ptr: Void$@)
 // ============================ The heap's usage ============================ The only way to
 // ask how much of the global heap is in use now.
 // Caution: **Do not read the counter variables directly.** Where the counting happens differs by
-// build: the free-list allocator on freestanding, the libc.calloc wrapper on hosted.
+// build: the free-list allocator on freestanding, the libc.malloc wrapper on hosted.
 // **"How big is the whole heap" exists on one build only.**
 
 #cfg(freestanding)
@@ -339,7 +341,7 @@ pub fn heap_peak_used_bytes(): Sz //< the most bytes ever allocated at once
 pub fn heap_capacity_bytes(): Sz //< the size of the static buffer the heap uses
     return _fh.total
 
-// **It is not the allocation limit.** It shows whether `libc.calloc` was called at all during a
+// **It is not the allocation limit.** It shows whether `libc.malloc` was called at all during a
 // span, to verify work that should use only an arena.
 #cfg(!freestanding)
 pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up; never decreases
@@ -529,7 +531,8 @@ impl Arena
         // so the arena would never grow, and `free` would leave this struct behind as a buffer's
         // would.
         assert(chunk_size > 0, "Arena.new: chunk_size must be above 0")
-        ptr: = alloc_as<|Arena|>()
+        // Raw bytes with all three fields written below; inside `impl Arena`, `new` names this one.
+        ptr: = Arena$@::alloc(sizeof(Arena))
         ptr.head = null
         ptr.default_chunk_size = chunk_size
         ptr.resets = 0
@@ -563,7 +566,7 @@ impl Arena
     #gives_view
     pub fn alloc( //< allocates bytes; a fixed buffer that runs out panics instead of growing
         //< **A null arena is the global heap**, and the caller frees the bytes with `dealloc`.
-        //< Caution: **Keep this the one place an arena hands out memory**: `alloc_as`, `create`,
+        //< Caution: **Keep this the one place an arena hands out memory**: `create`,
         //< `dup_str` and `text` come here, so every std function taking an arena honours `null`.
         r: Self$@, //< the arena, or null for the global heap
         size: Sz, //< how many bytes to allocate
@@ -702,16 +705,11 @@ impl Arena
         return Arena_headroom::{ .free = free, .step = r.next_chunk_cap(0) }
 
     #gives_view
-    pub fn alloc_as<|T|>(r: Self$@): T$@ //< arena memory for one value, with no `sizeof` written
-        //< With a null arena, heap memory the caller frees with `dealloc`.
-        return T$@::r.alloc(sizeof(T))
-
-    #gives_view
     pub fn create<|T|>( //< allocates room for one value and writes it there
         r: Self$@, //< the arena, or null for the heap, freed with `dealloc`
         init_val: T, //< the value to write
     ): T$@
-        ptr: = r.alloc_as<|T|>()
+        ptr: = T$@::r.alloc(sizeof(T))
         init_at(ptr, init_val)
         return ptr
 impl Arena: Manual_free //< it owns its resources and releases them with `free()`.

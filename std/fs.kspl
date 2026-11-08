@@ -81,6 +81,23 @@ pub const MAX_PATH_LEN: Sz = 4095 //< the longest path passed to the OS; a longe
     //< Caution: **Never truncate a longer path and pass it on.** The caller would get **the result
     //< of an operation on a different path** (a remove that deletes something else).
 
+// The lookups counted, declared as `std/thread.kspl` declares them.
+extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
+extern fn kspl_atomic_load(ptr: Sz$@): Sz
+
+// Caution: **Touch the count only through the atomic operations.** Threads look paths up at once,
+// and a plain `+=` loses some.
+priv $lookups_made: Sz = 0
+
+pub fn lookups(): Sz //< how many times this process has asked the OS what stands at a path
+    //< **Each `stat`, `is_link`, `long_name` and `read_dir` counts one**, and so does each function
+    //< built on them (`exists`, `is_dir`, `join_under`). A test holds a path's cost to its steps by
+    //< this count, which is the same on every machine; a time is not.
+    return kspl_atomic_load(lookups_made@)
+
+priv fn count_lookup() //< counts one lookup (`lookups`)
+    kspl_atomic_add(lookups_made@, 1)
+
 priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot take as a path
     //< It checks only the length and an inner NUL, which C reads as the end (each operation checks
     //< whether the path exists). The runtime refuses both as well; this names the cause.
@@ -89,6 +106,7 @@ priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot tak
 
 pub fn stat(path: U8[]): File_info!Fs_error //< what the OS reports about a path, following links
     check_path(path)!
+    count_lookup()
     $size: I64 = 0
     $kind: I32 = 0
     $mtime: I64 = 0
@@ -160,6 +178,7 @@ pub fn is_link(path: U8[]): Bool //< whether it is a link, without following it
     //< paths call this).
     check_path(path) catch
         return true
+    count_lookup()
     return kspl_is_link(path.ptr, path.len) != 0
 
 priv const MAX_NAME_BYTES: Sz = 765 //< the longest name in UTF-8: Windows's 255 UTF-16 units
@@ -172,6 +191,7 @@ pub fn long_name( //< the name the file system keeps for a path's last segment
     arena: Arena$@, //< where the name goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< fails as `not_found` where nothing stands at the path
     check_path(path)!
+    count_lookup()
     $buf: U8[MAX_NAME_BYTES] = ::{}
     n: = kspl_long_name(path.ptr, path.len, (U8$[]::buf).ptr, buf.len)
     if n < 0
@@ -271,6 +291,7 @@ pub fn read_dir( //< one directory's entries, without descending
     arena: Arena$@, //< where the names go; null uses the global heap and the caller frees each
 ): List<|U8[]|>!Fs_error //< the bare names, in no fixed order; fails if it cannot be opened
     check_path(path)!
+    count_lookup()
     h: = kspl_dir_open(path.ptr, path.len)
     if h == 0
         throw .not_found

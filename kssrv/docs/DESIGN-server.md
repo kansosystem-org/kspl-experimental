@@ -288,7 +288,9 @@ Caution: **Do not add a check of a path's parts here.** Each of the four Windows
 * **At the door alone**, against a model of how POSIX and Windows read the text, on every OS. The model follows each OS, not the door's list. So a form the door forgets fails, whichever rule it slips past.
 * **Through a running server**, where every answer must agree with the door. Afterwards nothing outside the root and no dot name under it may have changed.
 
-Both parts also hold each path to a plain path's time, as thousands of `/` once cost 19 ms a request.
+**Both parts also count each path's file-system lookups** (`fs.lookups`), as thousands of `/` once cost one lookup each, 19 ms a request. The door may make a few for each name in the path, never one for each `/`. The server's count comes from `fs_lookups` in `/api/status`, read before and after each request. A listing also reads its folder, so it may make a few more for each name there.
+
+**A count, not a time.** A time bound failed on Windows while the code was right: a busy runner or a virus scanner made one request 50 times slower than another. A count is the same on every machine.
 
 ### `/api/` does not go through static serving
 

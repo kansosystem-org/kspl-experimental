@@ -47,9 +47,14 @@ priv const MARK_AFTER_OPEN: U8[] = "-DKSPL_TEST_MARK_AFTER_OPEN" //<
     //< lock, from the first pipe to the fork. Linux opens it marked and takes none. Without this,
     //< no gate races that lock: the race gate runs on Linux alone.
 priv const REPORT_HEAD: U8[] = "WARNING: ThreadSanitizer:" //< the line that opens one report
-priv const RACE_LIMIT_MS: I32 = 180000 //< how long one raced program may run before it is killed
-    //< **A hang is the failure a race often gives**, so it must end soon, naming the program. The
-    //< longest run takes under half of it under the sanitizer, on a machine busy with the others.
+priv const RACE_CPU_S: U8[] = "300" //< the CPU time one raced program may use, in seconds
+    //< **A hang is the failure a race often gives**, so it must end, naming the program. **CPU
+    //< time, not the clock, judges a spinning one**: a busy runner stretches the clock threefold,
+    //< and the CPU time hardly at all. The longest run takes 40 s of CPU (measured on two CPUs).
+priv const RACE_LIMIT_MS: I32 = 600000 //< the clock time one raced program may take
+    //< **Only for a program blocked on nothing**, which spends no CPU time. The slowest run takes
+    //< about 150 s on CI's runner. The gate's own cap (`CI_GATE_CAP` in `mk/ci.mk`) leaves room
+    //< for it beside the build, so a hang is named here.
     //< The language server's session has it too (`race_lsp`).
 
 struct Left_out //< a file that starts threads and that no program here runs, with why
@@ -159,11 +164,14 @@ priv const REPORT_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "", .reports = 0 },
 }
 
-priv fn order(dir: U8[], entry: U8[], exe: U8[], opt: U8[], define: U8[], arena: Arena$@): Order //<
-    //< The build of entry (from the folder dir) to C, linked with the sanitizer into exe
-    //< `opt` is `opt_for_run`, `opt_for_build` or `opt_for_spin`; `define` is a `-D`, or empty.
+priv fn order(dir: U8[], entry: U8[], exe: U8[], opt: U8[], define: U8[], watched: Bool,
+    arena: Arena$@): Order //<
+        //< The build of entry (from the folder dir) to C, linked with the sanitizer into exe
+        //< `opt` is `opt_for_run`, `opt_for_build` or `opt_for_spin`; `define` is a `-D`, or empty.
+        //< Where `watched` is false, the sanitizer is left out (`Program.watched`).
     $flags: = List<|U8[]|>(arena)
-    flags.push_all(U8[][]::TSAN_CFLAGS)
+    if watched
+        flags.push_all(U8[][]::TSAN_CFLAGS)
     flags.push(opt)
     if define.len > 0
         flags.push(define)
@@ -191,10 +199,13 @@ struct Raced //< one sanitized run: the check it reports to, where it runs, and 
     env: U8[][] //< `NAME=value` pairs for this run alone
 
 priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[][] //<
-    //< argv as a raced run starts it: under `RACE_STACK_KIB`, its logs in log_dir, env set
+    //< argv as a raced run starts it: under `RACE_STACK_KIB` and `RACE_CPU_S`, its logs in log_dir,
+    //< env set
     $out: = List<|U8[]|>(arena)
     out
-        .push_all(U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", RACE_STACK_KIB, "env" })
+        .push_all(U8[][]::{ "sh", "-c",
+        "ulimit -s \"$0\" && ulimit -t \"$1\" && shift && exec \"$@\"", RACE_STACK_KIB, RACE_CPU_S,
+        "env" })
     out
         .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena))
         .s(":handle_abort=1").take())
@@ -232,8 +243,8 @@ priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
             if runs.get(j).name.equals(name) && !outs.get(j).exited_with(0)
                 ended = false
                 exe: = sys.get_file_name(runs.get(j).argv[0])
-                why.s("`").s(exe).s("` did not end with 0 (a run is killed after ")
-                    .s("\{RACE_LIMIT_MS / 1000\} s)")
+                why.s("`").s(exe).s("` did not end with 0 (a run is killed past ").s(RACE_CPU_S)
+                    .s(" s of CPU time, or \{RACE_LIMIT_MS / 1000\} s in all)")
                 if races.len == 0
                     why.s(", and left no report:\n").s(outs.get(j).out)
                 why.c('\n')
@@ -253,7 +264,8 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     io.write_file(src, RACY_SOURCE) catch
         verdict.check("a race written on purpose is reported", false, "cannot write it")
         return
-    o: = order(work, src, fs.join(work, "racy.exe", arena), OPT_FOR_RUN, "", arena)
+    o: =
+        order(work, src, fs.join(work, "racy.exe", arena), OPT_FOR_RUN, "", true, arena)
     b: = harness_sanitizer.build(o.dir, o.entry, o.exe, o.cflags, false, "", arena)
     if b.exe.len == 0
         verdict.check("a race written on purpose is reported", false, b.why)
@@ -274,43 +286,54 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
 // Each check then takes its programs by name.
 // ==========================================
 
-struct Program //< one program the gate builds with the sanitizer
+struct Program //< one program the gate builds, with the sanitizer where it is watched
     stem: U8[] //< its executable's name in the work folder, without `.exe`
     pkg: U8[] //< the folder ksplc runs in, from the root; empty for the root itself
     entry: U8[] //< its source, from the root
     opt: U8[] //< `opt_for_run`, `opt_for_build` or `opt_for_spin`
     define: U8[] //< a `-D` for this build, or empty
+    watched: Bool //<
+        //< whether the sanitizer is linked in; false only for a program that starts no thread
+        //< **car_pilot is one**: a test of ksai runs it, so it is built, but it trains on one
+        //< thread. Watched, it took 60 s of that test's 103 s here, and on a CI runner the test
+        //< passed its limit.
 
 // The longest builds stand first, so none of them starts last.
 priv const PROGRAMS: Program[_] = ::{
     Program::{ .stem = "ksplc", .pkg = "", .entry = "ksplc/main.kspl", .opt = OPT_FOR_BUILD,
-        .define = "" },
+        .define = "", .watched = true },
     Program::{ .stem = "ksai_6", .pkg = "lib/ksai", .entry = "lib/ksai/tests/main.kspl",
-        .opt = OPT_FOR_RUN, .define = "" },
+        .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_5", .pkg = "lib/ksai", .entry = "lib/ksai/tests/examples_main.kspl",
-        .opt = OPT_FOR_RUN, .define = "" },
+        .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "std_0", .pkg = "std", .entry = "std/tests/main.kspl", .opt = OPT_FOR_RUN,
-        .define = MARK_AFTER_OPEN },
+        .define = MARK_AFTER_OPEN, .watched = true },
     Program::{ .stem = "ksagent", .pkg = "ksagent", .entry = "ksagent/tests/main.kspl",
-        .opt = OPT_FOR_RUN, .define = "" },
+        .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_4", .pkg = "lib/ksai",
-        .entry = "lib/ksai/examples/chat_server/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+        .entry = "lib/ksai/examples/chat_server/main.kspl", .opt = OPT_FOR_RUN, .define = "",
+        .watched = true },
     Program::{ .stem = "ksplc_0", .pkg = "ksplc", .entry = "ksplc/tests/main.kspl",
-        .opt = OPT_FOR_RUN, .define = "" },
+        .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_2", .pkg = "lib/ksai",
-        .entry = "lib/ksai/examples/code_complete/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+        .entry = "lib/ksai/examples/code_complete/main.kspl", .opt = OPT_FOR_RUN, .define = "",
+        .watched = true },
     Program::{ .stem = "ksai_0", .pkg = "lib/ksai",
-        .entry = "lib/ksai/examples/llama_engine/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+        .entry = "lib/ksai/examples/llama_engine/main.kspl", .opt = OPT_FOR_RUN, .define = "",
+        .watched = true },
     Program::{ .stem = "ksai_1", .pkg = "lib/ksai",
-        .entry = "lib/ksai/examples/qwen_infer/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+        .entry = "lib/ksai/examples/qwen_infer/main.kspl", .opt = OPT_FOR_RUN, .define = "",
+        .watched = true },
     Program::{ .stem = "kstls", .pkg = "lib/kstls", .entry = "lib/kstls/tests/main.kspl",
-        .opt = OPT_FOR_RUN, .define = "" },
+        .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_3", .pkg = "lib/ksai",
-        .entry = "lib/ksai/examples/car_pilot/main.kspl", .opt = OPT_FOR_RUN, .define = "" },
+        .entry = "lib/ksai/examples/car_pilot/main.kspl", .opt = OPT_FOR_RUN, .define = "",
+        .watched = false },
     Program::{ .stem = "ksai_pool", .pkg = "lib/ksai",
-        .entry = "lib/ksai/tests/pool_stress_main.kspl", .opt = OPT_FOR_SPIN, .define = "" },
+        .entry = "lib/ksai/tests/pool_stress_main.kspl", .opt = OPT_FOR_SPIN, .define = "",
+        .watched = true },
     Program::{ .stem = "lsp_session", .pkg = "", .entry = "tests/support/race_lsp_session.kspl",
-        .opt = OPT_FOR_BUILD, .define = "" },
+        .opt = OPT_FOR_BUILD, .define = "", .watched = true },
 }
 
 struct Builds //< every program of `PROGRAMS` built, in its order
@@ -343,10 +366,12 @@ priv fn build_programs(work: U8[], deps: Str_builder$@, arena: Arena$@): Builds 
         exe: = fs.join(work, arena.text().s(p.stem).s(".exe").take(), arena)
         dir: = fs.join(root, p.pkg, arena) if p.pkg.len > 0 else root
         entry: = fs.join(root, p.entry, arena)
-        orders.push(order(dir, entry, exe, p.opt, p.define, arena))
+        orders.push(order(dir, entry, exe, p.opt, p.define, p.watched, arena))
     all: = harness_sanitizer.build_many(orders.slice(), arena)
-    for b in all
-        deps.s(b.deps)
+    // An unwatched program's sources count as covered by no program (`check_covered`).
+    for i in Range.asc(all.len)
+        if PROGRAMS[i].watched
+            deps.s(all.get(i).deps)
     return Builds::{ .all = all }
 
 priv fn race_tests(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Arena$@) //<

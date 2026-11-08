@@ -9,7 +9,7 @@ import path from "path";
 import { pathToFileURL } from "url";
 import { launch } from "./cdp.mjs";
 import { ALT, driver } from "./drive.mjs";
-import { start } from "./served.mjs";
+import { start } from "./kssrv.mjs";
 
 const [binary, pageFile, work, folder, kssrv] = process.argv.slice(2);
 const RUNS = 5;

@@ -11,7 +11,7 @@ const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source, openCell,
-  doubleClickAt, rightClick }) {
+  doubleClickAt, rightClick, frames, resize }) {
   return {
   // Column widths and row heights, as a spreadsheet keeps them: a drag of a column letter's right
   // edge or of a row number's bottom edge, a double-click there, and Alt+Left and Alt+Right in a
@@ -284,18 +284,23 @@ export function sizes({ page, js, settle, until, press, click, drag, menu, load,
   async shortMenu() {
     // A paragraph stands first, so the first press moves no table up a line.
     await load(`${H}Text.\n\n:::table name="t"\n| "a" | "b" | "c" |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n:::\n`);
-    await page("Emulation.setDeviceMetricsOverride", { width: 800, height: 400, deviceScaleFactor: 1, mobile: false });
+    // The window's `resize` event closes an open menu, so the menu is opened only after it.
+    await resize(800, 400);
     // Each step waits for what it shows, as a busy machine lays the narrower window out late.
-    await until("window.innerHeight === 400", 3000);
-    await settle();
     await click('#doc td[data-r="1"][data-c="0"]');
     await until("!!document.querySelector('#doc td.chosen[data-r=\"1\"][data-c=\"0\"]')", 3000);
     await rightClick('#doc td[data-r="1"][data-c="0"]');
     if (!await until("!document.querySelector('.menu.context').hidden", 3000)) {
-      await page("Emulation.clearDeviceMetricsOverride", {});
+      await resize();
       check(false, "the right-click menu opens in a window 400 pixels tall");
       return;
     }
+    // The menu opens under the pointer, so the pointer first moves off it to one side: when the
+    // menu scrolls under a pointer, the browser points at another item, and that closes the
+    // flyout opened below.
+    const [offX, offY] = await js(`(() => { const r = document.querySelector('.menu.context').getBoundingClientRect();
+      return [r.right + 20 < innerWidth ? r.right + 20 : Math.max(1, r.left - 20), r.top + 10]; })()`);
+    await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: offX, y: offY });
     const short = await js(`(() => { const m = document.querySelector('.menu.context');
       const r = m.getBoundingClientRect(); m.scrollTop = m.scrollHeight;
       const subs = m.querySelectorAll(':scope > .sub'); const last = subs[subs.length - 1];
@@ -303,7 +308,7 @@ export function sizes({ page, js, settle, until, press, click, drag, menu, load,
         last.getBoundingClientRect().bottom <= innerHeight]; })()`);
     // The scroll's own event closes any flyout; wait the frames it takes, or a slow machine
     // closes the flyout opened next.
-    await js("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
+    await frames();
     // Pointing at the name opens the flyout and never closes it, as a press would were a pointer
     // already over it (on Windows the window's own pointer can be).
     await js("(() => { const subs = document.querySelectorAll('.menu.context > .sub'); " +
@@ -313,7 +318,7 @@ export function sizes({ page, js, settle, until, press, click, drag, menu, load,
       const f = subs[subs.length - 1].querySelector('.menu.flyout').getBoundingClientRect();
       return f.height > 0 && f.top >= 0 && f.bottom <= innerHeight && f.right <= innerWidth; })()`));
     await press("Escape");
-    await page("Emulation.clearDeviceMetricsOverride", {});
+    await resize();
     check(short.every((ok) => ok),
       "in a window 400 pixels tall the right-click menu scrolls, its last item is reached, and its flyout fits",
       JSON.stringify(short));

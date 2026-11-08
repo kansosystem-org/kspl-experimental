@@ -45,7 +45,7 @@ A loop builds a number digit by digit and never checks a limit, so a long input 
 * **Fix**: compare the variable against the permitted ceiling, and treat exceeding it as an error (see `parse_number` in `std/json.kspl` and `content_length` in `std/jsonrpc.kspl`).
 
 ### [W0104] A pointer from an arena handed to a free
-A pointer from `arena.alloc()` / `arena.alloc_as<|T|>()` / `arena.create<|T|>()` is passed to `mem.dealloc()`. An arena's memory is freed all at once, not piece by piece.
+A pointer from `arena.alloc()` / `arena.create(v)` is passed to `mem.dealloc()`. An arena's memory is freed all at once, not piece by piece.
 * **Only the free function counts**: the method form (`x.free()`) releases `x`'s contents, and is not reported.
 * **Only a binding that is never reassigned is tracked.**
 * The verdict goes by the receiver's type (`std.mem.Arena` itself), so another type with a method of the same name is not caught.

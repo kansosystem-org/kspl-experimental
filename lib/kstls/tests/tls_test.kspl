@@ -132,6 +132,10 @@ priv enum Tls_seen //< how a connection to the test's peer ended
 priv fn listen_on(): net.Tcp_listener$@ //< a listener on a port of the loopback the OS chose
     return net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
 
+priv const HANDSHAKE_BUDGET_MS: I32 = 120000 //< every handshake's budget in these tests
+    //< **No check here is about the handshake's time**, so the budget is set far past any run: on
+    //< a busy runner under the sanitizer, `connect`'s default 10 s ran out first.
+
 priv fn connect_to_peer(ctx: tls.SSL_CTX$@, act: Peer_act, host: U8[]): Tls_seen //<
     //< Starts a peer answering with `ctx`, connects to it by `host`, and says how it went
     listener: = listen_on()
@@ -139,12 +143,17 @@ priv fn connect_to_peer(ctx: tls.SSL_CTX$@, act: Peer_act, host: U8[]): Tls_seen
     $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = act }
     $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
     $seen: = Tls_seen.connected
-    s: = tls.Tls_stream.connect(host, port) catch e
+    // **A budget that cannot decide the outcome**: these tests judge which error a refusal gives.
+    // Under a sanitizer on a busy runner, the default 10 s ran out first, and the timeout read as
+    // the wrong error.
+    s: = tls.Tls_stream.connect(host, port, HANDSHAKE_BUDGET_MS) catch e
         switch e
         case .handshake_failed
             seen = .handshake_failed
         case .cert_verify_failed
             seen = .cert_verify_failed
+        case .handshake_timed_out
+            panic("the handshake passed its budget, so which error it would give is not known")
         default
             seen = .other
         fallback null
@@ -171,7 +180,7 @@ impl Peer_act
         $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = r }
         $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@)
             catch panic("thread spawn failed")
-        s: = tls.Tls_stream.connect("localhost", port)
+        s: = tls.Tls_stream.connect("localhost", port, HANDSHAKE_BUDGET_MS)
             catch panic("a certificate the trusted CA issued for this host should connect")
         sent: = s.write(PING) catch panic("the client's write should succeed")
         assert(sent == 4, "the client's ping should go out whole")
@@ -234,7 +243,7 @@ fn test_tls_ip_address_is_checked_as_an_address()
     port: = listener.port() catch panic("a bound socket knows its port")
     $peer: = Tls_peer::{ .listener = listener, .ctx = own, .act = .gone }
     $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
-    s: = tls.Tls_stream.connect("127.0.0.1", port)
+    s: = tls.Tls_stream.connect("127.0.0.1", port, HANDSHAKE_BUDGET_MS)
         catch panic("a certificate whose SAN names the address asked for should connect")
     // Caution: **Wait for the peer before closing.** At TLS 1.3 the client's handshake ends before
     // the peer's, which still sends its session tickets. A close then resets the connection on
@@ -293,7 +302,7 @@ fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     port: = listener.port() catch panic("a bound socket knows its port")
     $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = .gone }
     $t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
-    s: = tls.Tls_stream.connect("localhost", port)
+    s: = tls.Tls_stream.connect("localhost", port, HANDSHAKE_BUDGET_MS)
         catch panic("a certificate the trusted CA issued for this host should connect")
     t.free()
     // **This program ignores SIGPIPE, as every KSPL program does. The program a library is

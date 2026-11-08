@@ -2,7 +2,7 @@
 //< The known holes: each way to break memory or threads that a probe found, and its verdict today
 //< **This pins what KSPL does about each shape**: ksplc refuses it, a sanitizer reports it, the
 //< program stops at run time, or it runs on silently (a hole the specification names). The
-//< programs and their verdicts are `MEM` and `SYNC` in `../support/holes_*.kspl`.
+//< programs and their verdicts are `MEM`, `HEAP` and `SYNC` in `../support/holes_*.kspl`.
 //< **A verdict that changes fails, either way**: a lost refusal is a regression, and a closed hole
 //< asks for its row and the specification's text to change too.
 //< Its failure case: `tests/support/holes_mem.kspl#p04e_arena_from_buffer`, a hole that must stay
@@ -20,6 +20,7 @@ import "std/subproc"
 import "std/verdict"
 import "tests/support/harness"
 import "tests/support/harness_sanitizer"
+import "tests/support/holes_heap"
 import "tests/support/holes_mem" + { Hole, Verdict }
 import "tests/support/holes_sync"
 
@@ -144,6 +145,10 @@ fn main(): I32
     spec: = harness.read_under_root(SPEC)
     $runs: = List<|Run|>(arena)
     for h in holes_mem.MEM
+        if h.verdict == Verdict.hole
+            check_spec_names(h, spec, arena)
+        compile_or_refuse(work, h, false, runs@, arena)
+    for h in holes_heap.HEAP
         if h.verdict == Verdict.hole
             check_spec_names(h, spec, arena)
         compile_or_refuse(work, h, false, runs@, arena)

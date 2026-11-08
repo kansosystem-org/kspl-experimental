@@ -500,6 +500,8 @@ Note: **A child's working directory stays under 260**, since the OS keeps a proc
 
 Caution: **Do not check the path's parts again in the caller.** A second check drifts from this one. Two programs here once each fixed the same Windows hole four times, one form at a time. A form found later is added here once.
 
+**`fs.lookups()` counts each time the process asks the OS what stands at a path**: a `stat`, a link check, a long name or a listing. So a test holds the door's cost to the path's names by a count, which is the same on every machine. A time is not.
+
 `stays_under` keeps the milder text rule (`sys.is_safe_relative`) for a path that the program's user writes, such as a file named on the command line. There a `\` separates on Windows, and an empty step is a slip.
 
 ### A path stays under the root by refusal, not comparison

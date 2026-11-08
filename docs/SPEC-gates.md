@@ -144,7 +144,7 @@ flowchart TD
 
 **The gates run one after another, in the table's order, each with the machine to itself.** Another gate's load would slow a gate that spreads its own work over the cores, such as `test-race`, and can upset a browser's timing. Inside a gate whose `par` in `tools/ci_gates.kspl` is `parallel` or `synced`, the items run in parallel (`-j<jobs>`). `lint` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` each split into one target per item, so a failing item is named by its target.
 
-**Every demo run of `test-ksos-posix` and `test-ksos-qemu` has a time cap** (`KSOS_RUN_CAP` in `lib/ksos/Makefile`), past which it fails with `[FAIL] … it hung`. `test-ksos-posix` first checks that a run spinning for ever is stopped that way.
+**Every demo run of `test-ksos-posix` and `test-ksos-qemu` has two time caps** in `lib/ksos/Makefile`. CPU time stops a run that spins (`KSOS_RUN_CAP`), and the clock one blocked on nothing (`KSOS_WALL_CAP`). Past either, it fails with `[FAIL] … it hung`. `test-ksos-posix` first checks that a run spinning for ever, and one blocked for ever, are stopped that way. **Windows has no CPU-time limit**, so there the clock alone stops a run, and `test-ksos-qemu` says so in one SKIP line.
 
 **Such a demo run passes only on three things at once** (`ksos_run_gate` in `lib/ksos/Makefile`):
 
@@ -235,6 +235,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | `test-ship`'s Windows half, in `test-extract` (note 19) | `x86_64-w64-mingw32-gcc` and its `ar` (`gcc-mingw-w64-x86-64-win32`), and Wine to run the result | `KANSO_REQUIRE_MINGW`, for the cross compiler alone. The image leaves Wine out for its size | That the shipped libraries build and link for Windows, static and DLL. A green Linux run has not run them |
 | `test-ksmd-desktop` (note 23) | `desktop-file-validate`, `update-desktop-database` (`desktop-file-utils`), `update-mime-database` (`shared-mime-info`), `gio` (`libglib2.0-bin`) | The gate's row sets `KSMD_REQUIRE_DESKTOP=1` | The part whose tool is missing |
 | `test-layout-targets`'s wasm32 run (note 24) | `wasm-ld`, `node` and clang's wasm32 builtins (`libclang-rt-<version>-dev-wasm32`) | No switch: the image holds them | The wasm32 run; the C checks for every machine still run |
+| `pytools`, in `test-suites-text` | `python3`, and `numpy` for ksai's weight tools | No switch: no row holds its SKIP, so every round that lacks `numpy` fails | The Python tools' self-tests. Without `python3` they fail rather than skip |
 | `test-vscode`'s run of the extension's client side | `node` | No switch: the image holds it | That run; the checks on the extension's files still run |
 | std's two tests over the IPv6 loopback (`std/tests/net_test.kspl`) | `::1` on the loopback | No switch (below) | Those two tests. The macOS and Windows runners have `::1` |
 
@@ -290,7 +291,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
     | Two `Mutex` locks taken in opposite orders, even where the two never overlapped in the run | A wait that never ends, such as a lost wakeup. It does not check liveness |
     | A thread never joined | A race in a build through the LLVM backend, or on a platform other than Linux |
   * **Two stress checks press on the hand-written protocols.** ksai's thread pool runs thousands of short rounds back to back. A watchdog fails with a message when no round ends for 10 s. The language server takes a burst of 40 edits with no wait between them. A lost wakeup in the pool is caught only in some runs: its window is a few microseconds.
-  * **Each raced program is stopped after 180 s**, and the failure names it. A hang no longer waits out the 10-minute default.
+  * **Each raced program is stopped past 300 s of CPU time, or 600 s in all**, and the failure names it. CPU time judges a spinning hang, since a busy runner barely changes it. The clock judges only a program blocked on nothing ("No fixed time bound in a test" below).
   * **The programs are built side by side, then run side by side**, the language server's session among them (`tests/support/race_lsp_session.kspl`). So the gate takes about as long as its longest build and its longest run, not their sum.
   * **std's tests are built with `KSPL_TEST_MARK_AFTER_OPEN`.** Linux then starts a child the macOS way: pipes are marked close-on-exec after opening, and starts take turns under a lock. That lock is raced too.
 * **note 18**: kstls's own `make test` links OpenSSL. kssrv links it too, for HTTPS, so the windows-ucrt64 job installs it with `tools/msys2-packages.txt`, and both packages' tests run there. The macOS runner lacks it, and runs neither package's tests (note 27).
@@ -353,6 +354,9 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **An upper bound compares with a time measured in the same run**, as a ratio, so a busy machine slows both sides alike.
 * **Or the test checks an order instead of a time.** For example, a child that sleeps for 30 s is still running when the call returns, so the call did not wait for the child's end.
 * **A hang is the suite's time limit's to stop**, not a bound inside the test.
+* **A limit that stops a hang counts CPU time where it can.** A busy runner stretches the clock threefold, and a program's CPU time hardly at all. The clock then stops only a program blocked on nothing, with room for the slowest platform. The race gate does so (note 17).
+* **A check that one input costs no more than another counts work where the code can count it**, such as steps or system calls. A count is the same on every machine; a time is not.
+* **A budget that the check is not about cannot decide it.** A handshake's time budget in a test of which error comes back is set far past any run.
 * **A wait's own cap is no verdict**: a `for` that polls until a deadline may stop there, and the check is on what arrived.
 * **Time itself is the perf gate's** (`perf-log`), which records it and judges only memory.
 

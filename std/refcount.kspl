@@ -8,7 +8,7 @@
 // `Ref_counted` in `std/lang.kspl`, not by where this type lives. **`Arena` is in
 // `std/mem.kspl`** (`ksplc` hard-codes the name `std.mem.Arena`).
 // ==========================================
-import "std/mem" { alloc_as, dealloc, init_at, drop_at }
+import "std/mem" { alloc, dealloc, init_at, drop_at }
 
 // ============================ Rc<T> ============================
 
@@ -18,7 +18,9 @@ priv struct Control<|T|> //< the storage shared by the single-thread and atomic 
     value: T
 
 priv fn new_control<|T|>(value: T): Control<|T|>$@
-    c: = alloc_as<|Control<|T|>|>()
+    // Raw bytes with every field written below: `init_at` moves the value in, so its counts are
+    // not taken twice, as a literal holding it would.
+    c: = Control<|T|>$@::alloc(sizeof(Control<|T|>))
     c.strong = 1
     c.weak = 1
     init_at(c.value@, value)

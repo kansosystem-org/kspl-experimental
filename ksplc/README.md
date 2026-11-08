@@ -226,6 +226,7 @@ What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ks
 | [`explain.kspl`](tools/explain.kspl) | Prints a diagnostic code's section of the diagnostics specification (`ksplc/docs/SPEC-diagnostics.md`) | `ksplc explain` |
 | [`run.kspl`](tools/run.kspl) | Compiles, links and runs a program in one command | `ksplc run` |
 | [`libs.kspl`](tools/libs.kspl) | The libraries a program names with `##link`: written by a compile, read back for the link | `--emit-libs=`, `ksplc run`, `ksplc build` |
+| [`run_start.kspl`](tools/run_start.kspl) | Starts a built program; says why a start failed, and on Windows tries a held file again | `ksplc run`, `ksplc build` |
 
 ```sh
 make lint   # the static analysis alone; zero down to hints is a pass

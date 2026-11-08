@@ -494,15 +494,18 @@ function ksmdView(ks) {
   // follows once the page has found the chosen cell again (`ks.act`).
   function apply(r) {
     removeGap();
-    const all = blocks();
-    const end = all.length - r.tail;
-    const next = all[end] || null;
-    for (let i = r.from; i < end; i++) all[i].remove();
-    for (const b of r.blocks) ks.root.insertBefore(render(b), next);
-    for (const [i, b] of r.tables) {
-      const old = blocks()[i];
-      if (old) old.replaceWith(render(b));
-    }
+    // An open cell keeps its box in the table drawn again (`redrawn` in `table.js`).
+    ks.table.redrawn(() => {
+      const all = blocks();
+      const end = all.length - r.tail;
+      const next = all[end] || null;
+      for (let i = r.from; i < end; i++) all[i].remove();
+      for (const b of r.blocks) ks.root.insertBefore(render(b), next);
+      for (const [i, b] of r.tables) {
+        const old = blocks()[i];
+        if (old) old.replaceWith(render(b));
+      }
+    });
     ks.settings.apply();
     // The widths are laid out before the first column is pinned beside the row numbers.
     ks.sizes.layAll();
