@@ -536,12 +536,25 @@ fn test_start_error_names_the_cause(arena: Arena$@) //<
         fallback -1
     assert(bare == -1, "a bare name on no PATH must not start")
     assert(subproc.start_error() == 2, "the OS's number for a bare name on no PATH is 2")
+    // **A start refused before the OS is asked leaves a number too.** An argument or a working
+    // directory holding a NUL once returned with none, and the failure read as a success.
+    nul_arg: = subproc.spawn_wait(U8[][]::{ "/bin/echo", "a\u0000b" }, "") catch
+        fallback -1
+    assert(nul_arg == -1, "an argument holding a NUL must not start")
+    assert(subproc.start_error() != 0, "an argument holding a NUL leaves a number")
+    nul_dir: =
+        subproc.spawn_wait(U8[][]::{ "/bin/echo", "a" }, "out\u0000tmp") catch
+        fallback -1
+    assert(nul_dir == -1, "a working directory holding a NUL must not start")
+    assert(subproc.start_error() != 0, "a working directory holding a NUL leaves a number")
     self: = sys.args()[0]
     _r: =
         subproc.run_capture(U8[][]::{ self, "--no-such-option-at-all" }, "", 60000, 4096, arena)
         catch panic("this program must start again")
     assert(subproc.start_error() == 0, "a start that succeeded leaves no error")
-    verdict.pass("a missing program and a bare name on no PATH gave 2, and a good start gave 0.")
+    verdict
+        .pass("a missing program and a bare name on no PATH gave 2, a NUL gave a number, and a good \
+            start gave 0.")
 
 // ==========================================
 // The Windows command line: what a child on Windows is handed, and what a batch file is refused

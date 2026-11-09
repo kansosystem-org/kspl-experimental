@@ -173,6 +173,19 @@ export function losses({ tab, idle, said, noticed, choose, typeAtEnd, openInDial
       await idle(d);
       check(await d.js(`!!${open} && ${open}.value`) === LONG && ctx.disk("long.ksmd") === CELLS,
         "File, Save in the menu leaves the text in its cell as well", await said(d));
+      // A press on another cell leaves the cell open and owned: Esc there still drops the text.
+      await d.click('#doc td[data-r="0"][data-c="1"]');
+      await d.settle();
+      check(await d.js(`!!${open} && ${open}.value`) === LONG &&
+        await d.js(`document.activeElement === ${open}`),
+      "a press on another cell leaves the text in its open cell, with the focus", await said(d));
+      await d.press("Escape");
+      await d.settle();
+      check(await d.js(`!${open}`), "and Esc in it drops the text", await said(d));
+      await d.openCell('#doc td[data-r="0"][data-c="0"]');
+      await d.js(`(() => { const i = ${open}; i.value = ${JSON.stringify(LONG)}; ` +
+        "i.dispatchEvent(new Event('input', { bubbles: true })); })()");
+      await held(d);
       // Ctrl+O opens the dialog; File, Open would first take the cell, and so does nothing.
       await d.press("o", CTRL);
       const later = "Array.from(document.querySelectorAll('#browse .browse-list button'))" +

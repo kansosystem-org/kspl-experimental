@@ -286,8 +286,9 @@ priv fn parser_cells(ctx: Void$@, piece: Sz): Value[] //<
         for column in Range(area.columns.low, area.columns.high + 1, 1)
             v: = p.read(Spot::{ .table = area.table, .row = row, .column = column })
             xs.push(v)
-            // Past the limit, the rest of a range of 100,000 cells is not walked either.
-            if v.kind == .error && v.error == .read_limit
+            // Past the limit, or in a pass set aside, the rest of a range of 100,000 cells is not
+            // walked either.
+            if p.c.deferring || (v.kind == .error && v.error == .read_limit)
                 return xs.slice()
     return xs.slice()
 
@@ -638,6 +639,10 @@ impl Parser
         //< A cell's value; an error in it becomes that cell's, so a reason can be followed back
         //< A cycle keeps its own reason: every cell on it shows `#CYCLE!` for the same cause. So
         //< does `#LIMIT!`, which every formula past the limit shows (`MAX_READS`).
+        // **A pass set aside reads nothing, and counts nothing**: its results are dropped, and a
+        // range read on each row of a deep chain counted the whole range again in every pass.
+        if p.c.deferring
+            return Value.failed(.cycle)
         if p.c.results.reads >= p.c.most_reads
             p.c.past_limit = true
             return Value.failed(.read_limit)

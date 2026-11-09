@@ -722,7 +722,9 @@ function ksmdRange(ks) {
       if (type === "copy") ks.pasting.copy(e.clipboardData, rect(), text);
       if (whole()) {
         e.clipboardData.setData("text/html", html(ks.cell.block));
-        e.clipboardData.setData(KSMD_TYPE, ks.out(ks.w.ksmd_web_block_source(ks.cell.block)));
+        const source = ks.out(ks.w.ksmd_web_block_source(ks.cell.block));
+        e.clipboardData.setData(KSMD_TYPE, source);
+        ks.pasting.copyTable(text, source);
         if (type === "cut") removeTable();
         return;
       }

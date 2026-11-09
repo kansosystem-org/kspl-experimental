@@ -22,12 +22,12 @@ The one flag `--local` sets three things together, and the body cap follows it, 
 | :-- | :-- | :-- |
 | The address it listens on | `127.0.0.1` only (the *loopback*: this machine alone) | every address (`0.0.0.0`) |
 | A token needed on each request | yes (a secret string made at start-up) | no |
-| The file endpoints (`/api/file`, `/api/stat`) | exist | answer **404** |
+| The endpoints for local use: every one but `/api/status` (the rows of `ROUTES` in `kssrv/api.kspl` that reach `.local`) | exist | answer **404** |
 | The cap on a request's body | large: files are written back through it | small: each connection holds its part-read body |
 
-**They are not separate options.** Made separate, "facing outward, no token needed, file endpoints open" becomes writable, and a combination that can be written is written eventually.
+**They are not separate options.** Made separate, "facing outward, no token needed, endpoints for local use open" becomes writable, and a combination that can be written is written eventually.
 
-**Facing outward, the file endpoints answer 404 rather than 401.** A 401 would tell the client that a token would open something.
+**Facing outward, the endpoints for local use answer 404 rather than 401.** A 401 would tell the client that a token would open something.
 
 How the token is made, passed on and compared is "How the token gets across" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 

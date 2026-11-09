@@ -420,7 +420,7 @@ function ksmdMenus(ks) {
     shut(false);
     // An open cell's text goes in first, while it has the focus: taken as the focus left it, the
     // table drawn again gave the focus to the chosen cell, away from the menu bar.
-    ks.table.take("stay");
+    ks.table.take();
     const now = document.activeElement;
     back = now && now !== document.body ? now : ks.root;
     const name = names.querySelector('.menu-name[tabindex="0"]') || tops()[0];

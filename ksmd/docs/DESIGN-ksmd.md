@@ -426,7 +426,8 @@ The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `
 * **The whole text must match.** So `"B*"` means "starts with B", `"*B"` means "ends with B", and `like("ab", "a")` is `false`.
 * **Case does not count, as the filter and the sort compare text.** That rule folds only the letters A to Z: `like("pens", "PENS")` is `true`, but `like("É", "é")` is `false`.
 * **`?` counts characters, not bytes**, as `mid` and `len` do: `like("かんそ", "か?そ")` is `true`.
-* **A number or `true`/`false` as either argument is `#VALUE!`**, as for the other text functions. An empty cell is empty text, which only `""` or `*` matches.
+* **A number or a date as the text matches no pattern, so `like` is `false` for it.** A code column often mixes numbers with text, and `sum_if(B, like(A, "INV-*"))` then adds the matching rows instead of being `#VALUE!` for the whole column. A number is never turned into text to be matched.
+* **`true`/`false` as the text, and anything but text as the pattern, are `#VALUE!`**, as for the other text functions. An empty cell is empty text, which only `""` or `*` matches.
 * **Inside a `sum_if` condition, a range in `like` reads its cell on each row**, as every ksmd function does there.
 * **The work is at most the text's characters times the pattern's bytes.** The matcher goes back only to the last `*` passed. So a pattern such as `"*a*a*a*b"` cannot take exponential time.
 

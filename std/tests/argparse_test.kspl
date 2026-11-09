@@ -418,6 +418,21 @@ priv fn check_commands(arena: Arena$@)
             default {}
         assert(saw_multi, "argparse: giving two commands is refused")
 
+    // **After a command's name, a name is an operand where one is due.** A script or a file
+    // named like a command once made the line "two commands".
+    script_args: = List<|U8[]|>.create(arena)
+    for line in U8[][][]::{ U8[][]::{ "run", "fmt", "x" },
+        U8[][]::{ "build", "run", "out" } }
+        op: = argparse.Parser.create("t", "", arena)
+        op.positional("<input> [output]")
+        op.subcommand("fmt", "")
+        op.subcommand("build", "")
+        op.subcommand_trailing("run", "", script_args)
+        op.parse_list(argv_of(line, arena))
+            catch panic("argparse: an operand named like a command was refused")
+        assert(op.command.unwrap_or("").equals(line[0]) && op.rest.len > 0 &&
+            op.rest.get(0).equals(line[1]), "argparse: a name after the command is its operand")
+
 // ==========================================
 // A command that takes "one subject + an uninterpreted remainder".
 // ==========================================

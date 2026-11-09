@@ -14,6 +14,8 @@
 | `ksmd` (the document editor) | Read or write a file outside its workspace, write unintentionally, or run a script in the page, depending on an opened document's contents |
 | `kssrv` (the server), on a crafted request | Serve or list a file outside its root, or read or write out of range |
 | `kssrv` under `--local` | Answer `/api/` without the token |
+| `ksagent` (the folder assistant), on a crafted `.docx` or `.xlsx` | Read or write out of range in its own zip and inflate readers |
+| `ksagent`'s chat page | Run a script in the page from a file's or an answer's contents, or give another site its token, which reads and writes the folder |
 | A document's own functions (`kssrv --builder`, and ksmd's worker) | Build or run any of a document's own code before the person allows that exact file: its path and its bytes. Read a file outside the closed build, or run anything on the machine but the build. Or, from the worker, reach the page, the files or the network |
 
 **Nothing of a document's own code is built or run until you allow that exact file.** A build or a run of bytes not allowed is in scope, whatever asked for it.

@@ -439,6 +439,7 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         srv.stop()
     else
         return
+    linked_index_and_check(exe, tmp, page, arena)
     // **Naming a missing page must stop the start**; a later 404 leaves a blank page unexplained
     // (the same section of the agreement).
     refused("naming a page that is not there does not come up", exe, root, tmp,
@@ -474,6 +475,37 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         return
     refused("naming a FIFO as the page does not come up", exe, root, tmp,
         U8[][]::{ arena.text().s("--page=\{fifo\}").take() }, "not a pipe or a device", arena)
+
+priv fn linked_index_and_check(exe: U8[], tmp: U8[], page: U8[], arena: Arena$@) //<
+    //< Checks that a link at the root's `index.html` does not stop the page named (`--page`)
+    //< The page replaces that index, so the server neither serves nor checks it. **The root is a
+    //< root of its own**, so the link reaches no other run.
+    root: = fs.join(tmp, "page-linked-root", arena)
+    fs.mkdir_all(root) catch
+        verdict.check("a root for the linked index can be made", false, root)
+        return
+    if !fs.is_link(fs.join(root, "index.html", arena)) &&
+        !local.make_link(root, "index.html", "../secret.txt", arena)
+        verdict.skip_check("--page: a link at the root's index.html does not stop the page",
+            "a link cannot be made with `ln -s` in this environment")
+        return
+    started: =
+        bring_up(exe, root, tmp, "kssrv-page-linked",
+        U8[][]::{ arena.text().s("--page=\{page\}").take() },
+        "it comes into a state where it can answer with a link at the root's index", arena)
+    if got: = started
+        $srv: = got
+        linked_index_cases(srv.port, arena) catch e
+            srv.failed("--page answers with a link at the root's index", e.reason(), arena)
+        srv.stop()
+
+priv fn linked_index_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< The answers to `/` and `/index.html` with a link at the root's index
+    for target in U8[][]::{ "/", "/index.html" }
+        r: = client.get(port, target, "", arena)!
+        nm: = arena.text().s("--page: a link at the root's index.html does not stop the page: ")
+            .s(target).take()
+        verdict.check(nm, r.status == 200 && r.body.equals(PAGE_BODY), client.shown(r, arena))
 
 priv fn page_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< The answers when `--page` is given

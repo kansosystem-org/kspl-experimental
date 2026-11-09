@@ -279,9 +279,13 @@ fn token_matches(given: U8[], want: U8[]): Bool //<
         diff |= given[i] ^ want[i]
     return diff == 0U8
 
-fn authorized(req: http.Request@, token: U8[]): Bool
+fn authorized(req: http.Request@, token: U8[]): Bool //<
+    //< Whether the `Authorization` header holds the `Bearer` scheme and the token `token`
+    //< **The scheme is compared ignoring case** (RFC 9110, section 11.1), so a client that writes
+    //< `bearer` is not refused.
     if given: = req.headers.find("Authorization")
-        if !given.starts_with(BEARER)
+        if given.len < BEARER.len ||
+            !given.sub(0, BEARER.len).equals_ignore_case(BEARER)
             return false
         return token_matches(given.sub_from(BEARER.len), token)
     return false

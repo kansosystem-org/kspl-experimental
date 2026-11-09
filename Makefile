@@ -442,7 +442,7 @@ include mk/help.mk
 ## Build-and-install|clean|Remove `out/` and each package's `out/`
 clean:
 	$(stop_ksmd_servers)
-	@rm -rf "$(OUT_DIR)" $(wildcard */out)
-	@echo "Cleaned $(OUT_DIR) $(wildcard */out)"
+	@rm -rf "$(OUT_DIR)" $(wildcard */out lib/*/out)
+	@echo "Cleaned $(OUT_DIR) $(wildcard */out lib/*/out)"
 
 endif

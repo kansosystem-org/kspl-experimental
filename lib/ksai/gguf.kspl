@@ -276,8 +276,11 @@ impl Gguf
             for _k in Range.asc(count)
                 _s: = c.text(key)!
         else
-            // `count` is at most the bytes left, so the product stays well inside `Sz`.
-            c.skip(count * w, key)!
+            // **The product is checked.** `count` is at most the bytes left, but times a width of
+            // up to 8 it can pass a 32-bit `Sz`. A product past `Sz` is past the file's end too.
+            n: = count.checked_mul(w) catch
+                throw .truncated(key)
+            c.skip(n, key)!
         if r.kv_index.get(key).is_some()
             throw .duplicate(key)
         r.kv_index.set(key, r.kvs.len)

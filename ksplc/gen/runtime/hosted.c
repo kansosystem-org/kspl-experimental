@@ -154,7 +154,11 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
  * Caution: **Mark it in the call that opens it** (SOCK_CLOEXEC, accept4, pipe2, O_CLOEXEC,
  * WSA_FLAG_NO_HANDLE_INHERIT). Marked afterwards, a child started from another thread in between
  * takes the copy. Only where the OS has no such call (a socket or a pipe on macOS, an accepted
- * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-core.md.
+ * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-system.md.
+ * Caution: **On macOS a socket can still reach a child.** A start on another thread can fork
+ * between a socket's open or accept and its mark: the starts take turns only over their pipes
+ * (hosted_spawn.c). Why that is accepted is "A child holds only the streams it is handed" in the
+ * same document.
  * ============================================================ */
 #ifndef _WIN32
 #include <errno.h>

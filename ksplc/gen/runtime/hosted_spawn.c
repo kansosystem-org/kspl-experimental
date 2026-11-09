@@ -199,6 +199,16 @@ static void kspl_child_fail(int done) {
     _exit(127);
 }
 
+/* Copies a path for kspl_proc_start as kspl_to_cstr does; an empty one is left unused and passes.
+ * Where it fails, errno says why: ENAMETOOLONG where it does not fit, EINVAL where it holds a
+ * NUL. */
+static int kspl_start_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap) {
+    if (len <= 0) return 1;
+    if (kspl_to_cstr(ptr, len, out, out_cap)) return 1;
+    errno = (size_t)len >= (size_t)out_cap ? ENAMETOOLONG : EINVAL;
+    return 0;
+}
+
 /* Starts one child (the one function; the section heading says why). The KSPL side
  * (std/subproc.kspl) holds the combinations.
  *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone),
@@ -219,24 +229,30 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
     kspl_start_error = 0;
     char cwd_path[4096], out_path[4096], err_path[4096];
-    if (cwd_len > 0 && !kspl_to_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path))) return 0;
-    if (out_len > 0 && !kspl_to_cstr(out_ptr, out_len, out_path, sizeof(out_path))) return 0;
-    if (err_len > 0 && !kspl_to_cstr(err_ptr, err_len, err_path, sizeof(err_path))) return 0;
-    /* Freed in the parent once the fork is past; the child's copy goes with its exec. */
-    char **argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);
-    if (argv_arr == NULL) return 0;
+    char **argv_arr = NULL;
+    kspl_proc_t *h = NULL;
+    int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};
+    /* Caution: **Every failure goes to `fail` with errno set**, as the Windows half sets
+     * kspl_start_error before each return. A bare `return 0` leaves it 0, and start_error in
+     * std/subproc.kspl then says the start succeeded. */
+    if (!kspl_start_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path)) ||
+        !kspl_start_cstr(out_ptr, out_len, out_path, sizeof(out_path)) ||
+        !kspl_start_cstr(err_ptr, err_len, err_path, sizeof(err_path))) {
+        goto fail;
+    }
+    /* Freed in the parent once the fork is past; the child's copy goes with its exec. A failed
+     * malloc sets ENOMEM itself, so EINVAL stands only for an argument run that does not split. */
+    errno = EINVAL;
+    argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);
+    if (argv_arr == NULL) goto fail;
     int one_file = (out_len > 0 && out_len == err_len && memcmp(out_ptr, err_ptr, (size_t)out_len) == 0);
     int pipe_in = (stdio & 1) != 0;
     int pipe_out = (stdio & 2) != 0 && out_len == 0;
     int pipe_err = (stdio & 4) != 0 && err_len == 0;
     int group = (stdio & 16) != 0;
 
-    kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
-    if (h == NULL) {
-        free(argv_arr);
-        return 0;
-    }
-    int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};
+    h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
+    if (h == NULL) goto fail; /* errno is ENOMEM */
     kspl_spawn_take();
     if ((pipe_in && kspl_pipe_cloexec(in_p) != 0) || (pipe_out && kspl_pipe_cloexec(out_p) != 0) ||
         (pipe_err && kspl_pipe_cloexec(err_p) != 0) || kspl_pipe_cloexec(exec_p) != 0) {

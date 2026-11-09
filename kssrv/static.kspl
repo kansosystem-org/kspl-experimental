@@ -146,22 +146,25 @@ fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) //<
     // `..` or an absolute path). The agreement is "Where it listens" in
     // `docs/SPEC-local-server.md`.
     is_page: = asks_for_page(decoded)
-    $served: U8[] = ""
-    switch path_to_rel(decoded, ctx.root, is_page, c.arena)
-    case .ok(path)
-        served = path
-    case .rejected
-        // A path let through could return a file outside the root, or one Windows reads as
-        // another name. A 403, not a 404: the form was refused, and whether the name exists is not
-        // checked.
-        conn.queue_error(c, 403)
-        return
-    case .hidden
-        conn.queue_error(c, 404)
-        return
-
-    // A directory has already become its index (`/docs` and `/docs/` alike) in `path_to_rel`.
-    target_path: = ctx.page if ctx.page.len > 0 && is_page else served
+    // A directory becomes its index (`/docs` and `/docs/` alike) in `path_to_rel`.
+    $target_path: U8[] = ""
+    if is_page && ctx.page.len > 0
+        // **The named page replaces the root's index, so that index is not checked.** Checked, a
+        // link standing at `index.html` in the root refused the page with a 403.
+        target_path = ctx.page
+    else
+        switch path_to_rel(decoded, ctx.root, is_page, c.arena)
+        case .ok(path)
+            target_path = path
+        case .rejected
+            // A path let through could return a file outside the root, or one Windows reads as
+            // another name. A 403, not a 404: the form was refused, and whether the name exists is
+            // not checked.
+            conn.queue_error(c, 403)
+            return
+        case .hidden
+            conn.queue_error(c, 404)
+            return
 
     $size: Sz = 0
     if found: = conn.regular_file_size(target_path)

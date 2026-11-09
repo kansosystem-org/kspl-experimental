@@ -299,7 +299,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
       // `line` and `column` name the place.
       load(source) {
         // Text in a cell still open that the editor refuses would be lost, so nothing opens then.
-        if (!ks.table.take("stay")) {
+        if (!ks.table.take()) {
           const why = "the text in the open cell cannot go in. Change it, or press Esc to drop it";
           ks.say(`This document cannot be opened: ${why}.`);
           return { ok: false, why };
@@ -339,7 +339,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
       // that the editor refuses stays there, and is not in it.
       source() {
         ks.flush();
-        ks.table.take("stay");
+        ks.table.take();
         return ks.out(w.ksmd_web_source());
       },
       // The most bytes one source can hold: an open reads no more, and a save writes no more.
@@ -532,6 +532,7 @@ function ksmdCommands(ks) {
       }
       data.setData("text/plain", ks.cut.text());
     }
+    ks.pasting.restore(data);
     const e = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
     const send = () => at.dispatchEvent(e);
     // An input takes the text where no handler took the paste, as the browser's own paste puts it.
@@ -545,7 +546,7 @@ function ksmdCommands(ks) {
   // chosen cell, and says so where none is chosen.
   const command = (name, h) => {
     ks.flush();
-    if (!ks.table.take("stay")) return null;
+    if (!ks.table.take()) return null;
     if (!h.table) return h.run(name);
     const c = chosen();
     if (!c) {

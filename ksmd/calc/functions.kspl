@@ -196,7 +196,7 @@ pub fn like( //<
     //< stand for `*`, `?` and `~` themselves; any other `~` is `#VALUE!`. Case does not count, as
     //< the filter compares text. So `like(A1, "INV-*")` asks whether `A1` starts with `INV-`.
     //< For example, `like("Pens", "p?n*")` is `true`.
-    t: U8[], //< the text
+    t: Value, //< the text; a number or a date is `false`, and `true`/`false` is `#VALUE!`
     pattern: U8[], //< the pattern, such as `"INV-*"`; any other character stands for itself
 ): Bool!Calc_error
     // Each `~` escapes a wildcard or itself; checked first, so the answer never hangs on the text.
@@ -205,6 +205,19 @@ pub fn like( //<
             if i + 1 == pattern.len || !is_wild(pattern[i + 1])
                 throw .wrong_kind
             i += 1
+    // **A number matches no pattern**, so `sum_if(B, like(A, "INV-*"))` passes over the rows
+    // whose code is a number instead of being `#VALUE!` for the whole column.
+    switch t.kind
+    case .number, .date
+        return false
+    case .text
+        return matches(t.text, pattern)
+    case .empty
+        return matches("", pattern)
+    default
+        throw .wrong_kind
+
+priv fn matches(t: U8[], pattern: U8[]): Bool //< whether `t` matches a pattern checked by `like`
     // **One `*` is kept to go back to, the last one passed.** A later `*` matches whatever an
     // earlier one would, so going back further finds nothing new. The work is then at most the
     // text's characters times the pattern's bytes, never exponential.

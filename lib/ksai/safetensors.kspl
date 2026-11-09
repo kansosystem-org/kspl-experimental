@@ -228,15 +228,15 @@ impl Safetensors_writer
         //< `__metadata__` is safetensors' standard optional table of strings, for what a reader
         //< needs in order to use the weights (a preprocessing constant, the format's version).
         //< finish writes them all at the end.
-        //< Caution: **Do not pass a name containing `"` or `\`.** This does no JSON escaping (nor
-        //< does add, which writes tensor names).
+        //< **The name and the value are escaped as JSON strings**, so a `"` or a `\` in them reads
+        //< back as written.
         r: Self$@,
         key: U8[], //< the entry's name
         value: U8[], //< its value, written as text
     )
         if r.meta.len > 0
             r.meta.s(",")
-        r.meta.s("\"\{key\}\":\"\{value\}\"")
+        r.meta.c('"').escape_and_append(key).s("\":\"").escape_and_append(value).c('"')
     pub fn add( //< appends one more tensor; its position in the file follows the order added
         r: Self$@,
         name: U8[], //< the tensor's name, written into the header
@@ -246,11 +246,13 @@ impl Safetensors_writer
         nbytes: = t.size * sizeof(F32)
         if r.count > 0
             r.head.s(",")
-        r.head.s("\"\{name\}\":{\"dtype\":\"F32\",\"shape\":[")
+        // The name is escaped as a JSON string, so a `"` or a `\` in it reads back as written.
+        r.head.c('"').escape_and_append(name).s("\":{\"dtype\":\"F32\",\"shape\":[")
         for j in Range.asc(t.shape.len)
             if j > 0
                 r.head.s(",")
-            r.head.s("\{I32::t.shape[j]\}")
+            // **Each dimension at its full width**: an I32 would cut one above 2^31-1.
+            r.head.s("\{t.shape[j]\}")
         // data_offsets can exceed 2GB, so it is written as I64 (an I32 overflows on a large model).
         r.head.s("],\"data_offsets\":[\{start\},\{start + nbytes\}]}")
         r.data.s(U8$[]::{ .ptr = U8$@::t.data, .len = nbytes })

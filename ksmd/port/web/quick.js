@@ -84,7 +84,7 @@ function ksmdQuick(ks) {
     face.setAttribute("aria-label", part === "color" ? "Font colour" : "Fill colour");
     face.appendChild(ksmdIcon(part));
     const more = ks.button("▾", "more", part === "color" ? "Choose the font colour" : "Choose the fill colour",
-      () => (ks.popup.isOpen(palette) ? closePalette() : openPalette(part, s)));
+      () => openPalette(part, s));
     more.setAttribute("aria-haspopup", "true");
     s.append(face, more);
     return s;

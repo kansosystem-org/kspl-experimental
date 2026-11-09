@@ -195,6 +195,12 @@ priv fn refusal_cases(port: I32, token: U8[], arena: Arena$@): Void!client.Http_
     longer: = client.bearer_head(arena.text().s(token).c('x').take(), arena)
     extra: = client.get(port, "/api/file?path=sub/one.txt", longer, arena)!
     client.expect_status("--local refuses characters appended behind the token", extra, 401, arena)
+    // **The scheme's name is compared ignoring case** (RFC 9110, section 11.1); the token is not.
+    for scheme in U8[][]::{ "bearer", "BEARER" }
+        head: = arena.text().s("Authorization: ").s(scheme).c(' ').s(token).s("\r\n").take()
+        r: = client.get(port, "/api/status", head, arena)!
+        nm: = arena.text().s("--local takes the scheme in another case: ").s(scheme).take()
+        client.expect_status(nm, r, 200, arena)
 
 priv fn status_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< what `/api/status` declares

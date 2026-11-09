@@ -237,7 +237,12 @@ function ksmdTable(ks) {
 
   function edit(el, opening = true, whole = false, typed = null, composing = false) {
     if (open && open.input.parentNode === el) return;
-    take();
+    // Caution: **A cell whose text the model refuses stays open, and no other cell opens.** Its box
+    // stood on with nothing owning it: Esc did not drop it, and the draft did not hold its text.
+    if (!take()) {
+      open.input.focus();
+      return;
+    }
     const block = blockOf(el);
     const row = Number(el.dataset.r);
     const column = Number(el.dataset.c);
@@ -307,7 +312,7 @@ function ksmdTable(ks) {
     // A blur while the table is drawn again takes nothing either: the box comes back (`redrawn`).
     input.addEventListener("blur", () => {
       if (open && open.input === input && !open.held && !carrying && document.activeElement !== input) {
-        take("stay");
+        take();
       }
     });
     if (typed) return;
@@ -317,10 +322,9 @@ function ksmdTable(ks) {
   }
 
   // Takes the open cell's text into the model; the table is then shown again with its values.
-  // A value the model refuses shows the cell's value again, unless `keep` says what to do:
-  // "focus" opens the cell again with the text, to be put right as a spreadsheet keeps it, and
-  // "stay" leaves the input as it stands, where the focus may have gone elsewhere, unless it has
-  // left the page. Then the result is false. Either way the page says why.
+  // **A value the model refuses stays open in its cell**, so the draft holds it, and the result is
+  // false. The input stands as it is, where the focus may have gone elsewhere. With "focus", the
+  // cell opens again with the text and the focus. An input that left the page takes nothing.
   function take(keep = "") {
     if (!open) return true;
     const o = open;
@@ -343,8 +347,8 @@ function ksmdTable(ks) {
     // Caution: **A table whose values did not change is not drawn again**, as `=1+2` typed over a
     // 3 leaves it. Its box then stood on in the cell, and the next cell opened beside it.
     if (r && r.ok && o.input.isConnected) shut();
-    if (!keep || !r || r.ok) return true;
-    if (keep === "stay") {
+    if (!r || r.ok) return true;
+    if (keep !== "focus") {
       if (!o.input.isConnected) return true;
       open = o;
       if (o.row >= 0) ks.refs.attach(o.input, o.block);

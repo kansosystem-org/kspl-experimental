@@ -72,6 +72,18 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
         "its formulas, formats and widths", pasted);
       await menu("undo");
       await saves("and one undo takes it out", start);
+      // The browser's own Paste reads only the clipboard's text, so the page finds its last whole
+      // table by it.
+      await js(`Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+        readText: async () => window.__clip.plain } })`);
+      await click("#doc > p");
+      await select(0, 0, 2);
+      await menu("paste");
+      await settle();
+      await saves("Edit, Paste puts the same table too, though it reads only the text", pasted);
+      await js("delete navigator.clipboard");
+      await menu("undo");
+      await saves("and one undo takes that out", start);
       await click('#doc td[data-r="0"][data-c="0"]');
       await press("a", CTRL);
       await press("a", CTRL);

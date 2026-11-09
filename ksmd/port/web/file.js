@@ -211,7 +211,7 @@ function ksmdFiles(ks, api) {
   // Caution: **Wait for nothing before `api.load`.** Each caller has just found that the page holds
   // no unsaved edits. A key typed during a wait would be overwritten, and no draft would hold it.
   async function take(path, bytes, base, after = "") {
-    const cellTaken = ks.table.take("stay");
+    const cellTaken = ks.table.take();
     if (cellTaken) placeEditor(path);
     const max = limit();
     const said = api.load(bytes.length > max + 1 ? bytes.subarray(0, max + 1) : bytes);

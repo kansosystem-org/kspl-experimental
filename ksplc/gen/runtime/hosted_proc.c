@@ -337,6 +337,13 @@ KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) 
     return 0;
 }
 
+/* What a failed peek or read of a pipe means: 0 (EOF) where the writer closed it, else -2.
+ * Caution: **A failed call is not EOF by itself**, as on the POSIX side. Read as 0, any other
+ * error would say the partner died while it lives. */
+static I32 kspl_pipe_failed(void) {
+    return GetLastError() == ERROR_BROKEN_PIPE ? 0 : -2;
+}
+
 /* >0: the bytes read, -1: out of time, 0: EOF (the partner died), -2: an error
  * A Windows anonymous pipe cannot wait for readable, so it peeks and sleeps 1 ms while empty. */
 static I32 kspl_proc_read_end(HANDLE pipe, U8 *buf, Sz cap, I32 timeout_ms) {
@@ -345,11 +352,12 @@ static I32 kspl_proc_read_end(HANDLE pipe, U8 *buf, Sz cap, I32 timeout_ms) {
     if (pipe == NULL) return -2; /* A stream not joined by a pipe */
     for (;;) {
         DWORD avail = 0;
-        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL)) return 0; /* disconnected = dead */
+        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL)) return kspl_pipe_failed();
         if (avail > 0) {
             DWORD got = 0;
             DWORD want = ((DWORD)cap < avail) ? (DWORD)cap : avail;
-            if (!ReadFile(pipe, buf, want, &got, NULL) || got == 0) return 0;
+            if (!ReadFile(pipe, buf, want, &got, NULL)) return kspl_pipe_failed();
+            if (got == 0) return 0;
             return (I32)got;
         }
         if ((DWORD)(GetTickCount() - start) >= (DWORD)timeout_ms) return -1;
@@ -440,7 +448,8 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
 
 /* The same contract as the POSIX side.
    Caution: It peeks and sleeps as kspl_proc_read_end does. A stream whose peek failed has its
- * bit raised as closed (a read then returns 0 = EOF). */
+ * bit raised, so the read that follows reports it: 0 (EOF) for a closed pipe, -2 for any other
+ * failure. */
 KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     timeout_ms = kspl_wait_ms(timeout_ms);
     if (handle == 0) return -1;

@@ -149,6 +149,12 @@ export function statusBar({ page, js, settle, until, press, type, select, click,
       await click(".zoom-level");
       await click('.status-menu [role=menuitemradio]:first-child');
       await shows(".zoom-level", "200%", "the level's menu sets a step");
+      await click(".zoom-level");
+      await click(".zoom-level");
+      check(await js("!document.querySelector('.status-menu')"), "a second press on the level closes its menu");
+      await click(".figures");
+      await click(".figures");
+      check(await js("!document.querySelector('.status-menu')"), "and so does one on the figures");
       const edge = () => js("document.querySelector('#doc th.letter').getBoundingClientRect().width");
       const wide = await edge();
       await drag('#doc .col-edge[data-edge="0"]', 60);

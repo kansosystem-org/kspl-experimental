@@ -84,12 +84,18 @@ function ksmdPopup(ks) {
   // "menu" or "dialog". `how` holds:
   // - `at` and `above`: where it stands (`place`); `part`, what scrolls where it does not fit.
   // - `from`: the button that opened it, whose `aria-expanded` follows it. A press on it is not
-  //   outside, so the button itself can close it; so is a press on what `keep` matches.
+  //   outside; so is a press on what `keep` matches. Opened again from it, the pop-up closes.
   // - `focus`: what takes the focus as it opens; a menu's ticked item or first item by default.
   // - `back`: what gives the focus back as it closes; by default, where the focus was.
   // - `onClose`: what runs as it closes.
   // `close(true)` gives the focus back; Esc and Tab in a menu do so, and a press outside does not.
   function popup(el, role, how = {}) {
+    // **A second press on the button a pop-up stands open from closes it**, as a menu bar's menu
+    // does. Each button that opened one asked first whether it was open, and some did not.
+    if (open && how.from && open.how.from === how.from) {
+      open.close(false);
+      return null;
+    }
     if (open) open.close(false);
     const was = document.activeElement;
     el.setAttribute("role", role);

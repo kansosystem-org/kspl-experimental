@@ -428,6 +428,7 @@ impl Parser
         // subcommand_trailing's rest, pushed once its target has arrived.
         $trail: List<|U8[]|>$@ = null
         $operands_only: = false // after `--`
+        $named: = false // a command was chosen by its name
         for arg in argv
             // Caution: Make this check before every other one: after the target, not even `--help`
             // can be interpreted (it would take the script's own).
@@ -443,9 +444,14 @@ impl Parser
             // lone `-` is positional and means "standard input". After `--`, not even a command's
             // name is read as one.
             if operands_only || !arg.starts_with("-") || arg.equals("-")
-                if !operands_only
+                // **After a command's name, a name is an operand where one is due**: `ksplc run
+                // fmt` runs a script named `fmt`, and `ksplc build run out` builds a file named
+                // `run`. Where none is due, a second name is still refused as a second command.
+                operand_due: = named && (trail != null || r.takes_positional)
+                if !operands_only && !operand_due
                     if c: = r.find_cmd(arg)
                         r.set_command(c.name)!
+                        named = true
                         if c.trailing != null
                             trail = c.trailing
                         continue

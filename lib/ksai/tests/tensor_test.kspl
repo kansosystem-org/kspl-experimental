@@ -429,6 +429,27 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
 
     verdict.pass("a differing form, a differing dtype and a range disagreement are all refused.")
 
+fn test_safetensors_escapes_names(arena: Arena$@) //<
+    //< That a `"` or a `\` in a tensor's name or in a metadata entry reads back as written
+    //< Written unescaped, either one made a header that the reader refused as invalid.
+    verdict.start("[Safetensors] a quote and a backslash in names and metadata round trip...")
+    shape: Sz[1] = ::{ 2 }
+    w: = Tensor<|F32|>(Sz[]::shape, arena)
+    w.fill(F32::1.5)
+    name: = "a\"b\\c"
+    $writer: = ai_st.Safetensors_writer()
+    writer.set_meta("k\"\\", "v\\\"")
+    writer.add(name, w)
+    defer $bytes: = writer.finish()
+    st: = ai_st.Safetensors.load_from_bytes(bytes.slice(), arena) catch
+        panic("a file with a quote and a backslash in its names has to be readable")
+    got: = st.get_tensor<|F32|>(name, arena) catch
+        panic("the tensor has to be found by its name as written")
+    assert(got.size == 2 && (got.data + 1)$ == F32::1.5, "the tensor keeps its values")
+    meta: = st.metadata().get("__metadata__").get("k\"\\").as_str().unwrap_or("")
+    assert(meta.equals("v\\\""), "the metadata entry reads back as written")
+    verdict.pass("")
+
 fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
     verdict.start("[Safetensors] reading a dimension and a misaligned weight as written...")
     // **A dimension past 32 bits is refused**: read as I32, `4294967297` became 1, and the file was

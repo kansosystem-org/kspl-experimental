@@ -397,7 +397,12 @@ What this gives up:
 
 **`std/io`'s `open` takes C11's mode letters alone** (`r`, `w`, `a`, then `+`, `b`, and `x` after `w`), and refuses any other. It builds the open flags itself to give the mark. A letter that one C library reads and another skips would mean two things.
 
-**What this gives up**: on POSIX, a descriptor that a foreign C library opens without the mark still reaches a child. Closing everything in the child would cost a walk over every possible descriptor per start, which is slow where the limit is high.
+**What this gives up**:
+
+* On POSIX, a descriptor that a foreign C library opens without the mark still reaches a child. Closing everything in the child would cost a walk over every possible descriptor per start, which is slow where the limit is high.
+* **On a POSIX system other than Linux, such as macOS, a socket can still reach a child.** The turns cover only the starts' pipes. A socket opened or accepted on one thread is marked right after. A start on another thread can fork between the two calls.
+  * What it costs: the child holds that socket until it ends. Until then, its peer does not see the connection close, or a closed listener's port cannot be bound again.
+  * Why it is accepted: the window is two calls wide, and only a start on another thread at that moment meets it. To close it, every socket open and accept would have to take its turn with the starts. A server's accept waits for a connection, so it would hold up every start in the process for as long.
 
 **A batch file (`.bat` / `.cmd`) refuses an argument that holds `"`, `%`, `!` or a line break.** Windows hands a batch file to `cmd.exe`, which parses the command line again. There, `\"` means nothing, so a `"` closes the quoting and the rest runs as a command, and `%` and `!` expand inside quotes. An escape would depend on settings the parent cannot see (delayed expansion is a registry switch). Without those characters, `cmd.exe` takes `&|<>^()` inside quotes as they are.
 

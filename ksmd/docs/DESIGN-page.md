@@ -28,8 +28,9 @@
 * **Paste stands after them, and reads the clipboard through the browser, as Excel for the web does.** It hands what it read to the place the focus stands, as a paste with Ctrl+V would. So it acts as Ctrl+V does there, through the same code.
   * **A browser may ask the person first, or refuse.** Without Paste, a person whose mouse is in hand, or who has no keys, has no way to paste.
   * **Where the browser refuses, or cannot read the clipboard, the page says "Press Ctrl+V to paste." and changes nothing.** A cut that waits in the page still moves, since it needs nothing from the clipboard.
-  * **The browser hands a page only plain text and HTML.** So a whole table copied from ksmd pastes from the menu as tab-separated rows, and whole with Ctrl+V.
+  * **The browser hands a page only plain text and HTML.** So a whole table copied in another page pastes from the menu as tab-separated rows, and whole with Ctrl+V.
   * **Cells copied in the same page still paste from the menu with their formulas.** The page keeps its last copy of cells, and finds it by the clipboard's text ("Copying and pasting cells" below).
+  * **A whole table copied or cut in the same page pastes from the menu as the same table.** The page keeps the last one in the same way, and finds it by its rows' text.
 * **Paste values stands after Paste, and pastes as Ctrl+Shift+V does.**
 
 **A table command that cannot act is disabled, not hidden**, so the menu does not change shape.

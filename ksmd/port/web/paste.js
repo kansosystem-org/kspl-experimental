@@ -75,6 +75,24 @@ function ksmdPaste(ks) {
     copied = { text, own };
   }
 
+  // The last whole table this page copied or cut: { text, source }, its rows as text and its own
+  // source, or null.
+  let table = null;
+
+  // Keeps a whole table copied or cut, `source`, beside its rows as text.
+  function copyTable(text, source) {
+    table = { text, source };
+  }
+
+  // Puts back the whole table a paste lost, where it read only the clipboard's text, as Edit,
+  // Paste does: the text of the last whole table copied gives that table's source again.
+  function restore(data) {
+    const text = data.getData("text/plain");
+    if (table && text && !data.getData(KSMD_TYPE) && plain(text) === plain(table.text)) {
+      data.setData(KSMD_TYPE, table.source);
+    }
+  }
+
   // Lines of text as the clipboard may hand them back: line breaks as LF, and no break at the end.
   const plain = (t) => t.replace(/\r\n/g, "\n").replace(/\n$/, "");
 
@@ -175,7 +193,7 @@ function ksmdPaste(ks) {
     if (!put(o.copy, o.block, o.r1, o.c1, o.r2, o.c2, asValues)) hide();
   }
 
-  button.addEventListener("click", () => (ks.popup.isOpen(menu) ? shut() : open()));
+  button.addEventListener("click", open);
   menu.addEventListener("keydown", (e) => {
     const letter = CHOICES.findIndex(([, , l]) => l.toLowerCase() === e.key.toLowerCase());
     if (letter < 0) return;
@@ -216,7 +234,7 @@ function ksmdPaste(ks) {
     }, 0);
   }, true);
 
-  ks.pasting = { copy, paste,
+  ks.pasting = { copy, copyTable, restore, paste,
     // Whether the paste under way puts the values alone.
     values: () => values,
     // Runs `f`, a paste the page starts itself, so that it puts the values alone.

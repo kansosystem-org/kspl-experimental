@@ -29152,7 +29152,12 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_impl[] =
     " * WSA_FLAG_NO_HANDLE_INHERIT). Marked afterwards, a child started from another thread in betwee"
     "n\n"
     " * takes the copy. Only where the OS has no such call (a socket or a pipe on macOS, an accepted\n"
-    " * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-core.md.\n"
+    " * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-system.md.\n"
+    " * Caution: **On macOS a socket can still reach a child.** A start on another thread can fork\n"
+    " * between a socket's open or accept and its mark: the starts take turns only over their pipes\n"
+    " * (hosted_spawn.c). Why that is accepted is \"A child holds only the streams it is handed\" in "
+    "the\n"
+    " * same document.\n"
     " * ============================================================ */\n"
     "#ifndef _WIN32\n"
     "#include <errno.h>\n"
@@ -30515,6 +30520,13 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_proc[] =
     "    return 0;\n"
     "}\n"
     "\n"
+    "/* What a failed peek or read of a pipe means: 0 (EOF) where the writer closed it, else -2.\n"
+    " * Caution: **A failed call is not EOF by itself**, as on the POSIX side. Read as 0, any other\n"
+    " * error would say the partner died while it lives. */\n"
+    "static I32 kspl_pipe_failed(void) {\n"
+    "    return GetLastError() == ERROR_BROKEN_PIPE \? 0 : -2;\n"
+    "}\n"
+    "\n"
     "/* >0: the bytes read, -1: out of time, 0: EOF (the partner died), -2: an error\n"
     " * A Windows anonymous pipe cannot wait for readable, so it peeks and sleeps 1 ms while empty. *"
     "/\n"
@@ -30524,12 +30536,12 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_proc[] =
     "    if (pipe == NULL) return -2; /* A stream not joined by a pipe */\n"
     "    for (;;) {\n"
     "        DWORD avail = 0;\n"
-    "        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL)) return 0; /* disconnected = dead "
-    "*/\n"
+    "        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL)) return kspl_pipe_failed();\n"
     "        if (avail > 0) {\n"
     "            DWORD got = 0;\n"
     "            DWORD want = ((DWORD)cap < avail) \? (DWORD)cap : avail;\n"
-    "            if (!ReadFile(pipe, buf, want, &got, NULL) || got == 0) return 0;\n"
+    "            if (!ReadFile(pipe, buf, want, &got, NULL)) return kspl_pipe_failed();\n"
+    "            if (got == 0) return 0;\n"
     "            return (I32)got;\n"
     "        }\n"
     "        if ((DWORD)(GetTickCount() - start) >= (DWORD)timeout_ms) return -1;\n"
@@ -30625,7 +30637,8 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_proc[] =
     "\n"
     "/* The same contract as the POSIX side.\n"
     "   Caution: It peeks and sleeps as kspl_proc_read_end does. A stream whose peek failed has its\n"
-    " * bit raised as closed (a read then returns 0 = EOF). */\n"
+    " * bit raised, so the read that follows reports it: 0 (EOF) for a closed pipe, -2 for any other\n"
+    " * failure. */\n"
     "KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {\n"
     "    timeout_ms = kspl_wait_ms(timeout_ms);\n"
     "    if (handle == 0) return -1;\n"
@@ -32499,6 +32512,17 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_spawn[] =
     "    _exit(127);\n"
     "}\n"
     "\n"
+    "/* Copies a path for kspl_proc_start as kspl_to_cstr does; an empty one is left unused and passe"
+    "s.\n"
+    " * Where it fails, errno says why: ENAMETOOLONG where it does not fit, EINVAL where it holds a\n"
+    " * NUL. */\n"
+    "static int kspl_start_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap) {\n"
+    "    if (len <= 0) return 1;\n"
+    "    if (kspl_to_cstr(ptr, len, out, out_cap)) return 1;\n"
+    "    errno = (size_t)len >= (size_t)out_cap \? ENAMETOOLONG : EINVAL;\n"
+    "    return 0;\n"
+    "}\n"
+    "\n"
     "/* Starts one child (the one function; the section heading says why). The KSPL side\n"
     " * (std/subproc.kspl) holds the combinations.\n"
     " *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone),\n"
@@ -32526,12 +32550,23 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_spawn[] =
     "        I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {\n"
     "    kspl_start_error = 0;\n"
     "    char cwd_path[4096], out_path[4096], err_path[4096];\n"
-    "    if (cwd_len > 0 && !kspl_to_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path))) return 0;\n"
-    "    if (out_len > 0 && !kspl_to_cstr(out_ptr, out_len, out_path, sizeof(out_path))) return 0;\n"
-    "    if (err_len > 0 && !kspl_to_cstr(err_ptr, err_len, err_path, sizeof(err_path))) return 0;\n"
-    "    /* Freed in the parent once the fork is past; the child's copy goes with its exec. */\n"
-    "    char **argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);\n"
-    "    if (argv_arr == NULL) return 0;\n"
+    "    char **argv_arr = NULL;\n"
+    "    kspl_proc_t *h = NULL;\n"
+    "    int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};\n"
+    "    /* Caution: **Every failure goes to `fail` with errno set**, as the Windows half sets\n"
+    "     * kspl_start_error before each return. A bare `return 0` leaves it 0, and start_error in\n"
+    "     * std/subproc.kspl then says the start succeeded. */\n"
+    "    if (!kspl_start_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path)) ||\n"
+    "        !kspl_start_cstr(out_ptr, out_len, out_path, sizeof(out_path)) ||\n"
+    "        !kspl_start_cstr(err_ptr, err_len, err_path, sizeof(err_path))) {\n"
+    "        goto fail;\n"
+    "    }\n"
+    "    /* Freed in the parent once the fork is past; the child's copy goes with its exec. A failed\n"
+    "     * malloc sets ENOMEM itself, so EINVAL stands only for an argument run that does not split."
+    " */\n"
+    "    errno = EINVAL;\n"
+    "    argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);\n"
+    "    if (argv_arr == NULL) goto fail;\n"
     "    int one_file = (out_len > 0 && out_len == err_len && memcmp(out_ptr, err_ptr, (size_t)out_le"
     "n) == 0);\n"
     "    int pipe_in = (stdio & 1) != 0;\n"
@@ -32539,12 +32574,8 @@ static const uint8_t kspl_embed_data_kspl_ksplc_gen_runtime_rt_hosted_spawn[] =
     "    int pipe_err = (stdio & 4) != 0 && err_len == 0;\n"
     "    int group = (stdio & 16) != 0;\n"
     "\n"
-    "    kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));\n"
-    "    if (h == NULL) {\n"
-    "        free(argv_arr);\n"
-    "        return 0;\n"
-    "    }\n"
-    "    int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};\n"
+    "    h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));\n"
+    "    if (h == NULL) goto fail; /* errno is ENOMEM */\n"
     "    kspl_spawn_take();\n"
     "    if ((pipe_in && kspl_pipe_cloexec(in_p) != 0) || (pipe_out && kspl_pipe_cloexec(out_p) != 0)"
     " ||\n"
@@ -67031,11 +67062,12 @@ static const KSPL_UNUSED Slice_U8 kspl_lit_920 = KSPL_STR_INIT("--help");
 Result_Void_std_argparse_Argument_error kspl_std_argparse_Parser_parse_list(std_argparse_Parser *r, KSPL_UNUSED const std_ds_List_Slice_U8_Const *__k_shadow0_argv) {
   std_ds_List_Slice_U8_Const *trail = null;
   Bool operands_only = false;
+  Bool named = false;
   KSPL_UNUSED const std_ds_List_Slice_U8_Const *const *__k_for_coll1 = &__k_shadow0_argv;
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 arg = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_908, (Sz)431)));
+      const Slice_U8 arg = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_908, (Sz)432)));
       if (trail != null && r->rest->len > (Sz)0) {
         kspl_std_ds_List_Slice_U8_Const_push(trail, arg);
         goto _mir_label_1;
@@ -67052,7 +67084,8 @@ Result_Void_std_argparse_Argument_error kspl_std_argparse_Parser_parse_list(std_
       }
 
       if (operands_only || !kspl_Slice_U8_Const_starts_with(arg, kspl_lit_555, (Sz)0) || kspl_Slice_U8_Const_equals(arg, kspl_lit_555)) {
-        if (!operands_only) {
+        Bool operand_due = named && (trail != null || r->takes_positional);
+        if (!operands_only && !operand_due) {
           KSPL_UNUSED Option_std_argparse_Cmd_Ptr __k_tmp3 = kspl_std_argparse_Parser_find_cmd(r, arg);
           switch (__k_tmp3.tag) {
           case kspl_Option_std_argparse_Cmd_Ptr_some: {
@@ -67063,6 +67096,7 @@ Result_Void_std_argparse_Argument_error kspl_std_argparse_Parser_parse_list(std_
               return (Result_Void_std_argparse_Argument_error){.tag = kspl_Result_Void_std_argparse_Argument_error_err, .payload.err = {.error = __k_tmp4.payload.err.error}};
             }
 
+            named = true;
             if (c->trailing != null) {
               trail = c->trailing;
             }
@@ -67168,7 +67202,7 @@ Result_Void_std_argparse_Argument_error kspl_std_argparse_Parser_parse_list(std_
     for (; __k_for_idx2 < __k_for_coll2.len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp14 = kspl_Range_get(&__k_for_coll2, __k_for_idx2);
       Sz i = __k_tmp14;
-      std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)488);
+      std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)494);
       Bool applies = o->scope.len == (Sz)0 || kspl_priv_std_argparse_has_word(o->scope, chosen);
       if (o->seen && !applies) {
         KSPL_START_TRACE();
@@ -67224,7 +67258,7 @@ Bool kspl_std_argparse_Parser_lists_forms(std_argparse_Parser *r) {
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)516);
+      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)522);
       if (c->is_default || c->form.len > (Sz)0) {
         return true;
       }
@@ -67245,7 +67279,7 @@ void kspl_std_argparse_Parser_print_forms(std_argparse_Parser *r, Writer out) {
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)524);
+      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)530);
       if (c->hidden) {
         goto _mir_label_1;
       }
@@ -67308,7 +67342,7 @@ void kspl_std_argparse_Parser_print_scopes(std_argparse_Parser *r, Writer out) {
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      limited = limited || kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)560)->scope.len > (Sz)0;
+      limited = limited || kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)566)->scope.len > (Sz)0;
     }
   }
   if (!limited) {
@@ -67322,7 +67356,7 @@ void kspl_std_argparse_Parser_print_scopes(std_argparse_Parser *r, Writer out) {
     for (; __k_for_idx2 < __k_for_coll3.len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp6 = kspl_Range_get(&__k_for_coll3, __k_for_idx2);
       Sz i = __k_tmp6;
-      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)567);
+      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)573);
       if (c->hidden) {
         goto _mir_label_4;
       }
@@ -67336,7 +67370,7 @@ void kspl_std_argparse_Parser_print_scopes(std_argparse_Parser *r, Writer out) {
         for (; __k_for_idx3 < __k_for_coll2.len; __k_for_idx3 = (Sz)((size_t)(__k_for_idx3) + (size_t)((Sz)1))) {
           KSPL_UNUSED Sz __k_tmp11 = kspl_Range_get(&__k_for_coll2, __k_for_idx3);
           Sz j = __k_tmp11;
-          std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, j, kspl_lit_908, (Sz)572);
+          std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, j, kspl_lit_908, (Sz)578);
           if (o->scope.len > (Sz)0 && kspl_priv_std_argparse_has_word(o->scope, c->name)) {
             KSPL_UNUSED Writer __k_tmp12 = ((out).vtable->c((out).obj, 32));
             (void)(((__k_tmp12).vtable->s((__k_tmp12).obj, o->name)));
@@ -67354,7 +67388,7 @@ void kspl_std_argparse_Parser_print_scopes(std_argparse_Parser *r, Writer out) {
     for (; __k_for_idx4 < __k_for_coll4.len; __k_for_idx4 = (Sz)((size_t)(__k_for_idx4) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp15 = kspl_Range_get(&__k_for_coll4, __k_for_idx4);
       Sz i = __k_tmp15;
-      std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)578);
+      std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)584);
       KSPL_UNUSED std_argparse_Kind __k_tmp16 = o->kind;
       switch (__k_tmp16.tag) {
       case kspl_std_argparse_Kind_command: {
@@ -67390,7 +67424,7 @@ void kspl_std_argparse_Parser_print_options(std_argparse_Parser *r, Writer out) 
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)596);
+      std_argparse_Cmd *c = kspl_std_ds_List_std_argparse_Cmd_at(r->cmds, i, kspl_lit_908, (Sz)602);
       if (c->hidden || c->is_default) {
         goto _mir_label_1;
       }
@@ -67422,7 +67456,7 @@ void kspl_std_argparse_Parser_print_options(std_argparse_Parser *r, Writer out) 
     for (; __k_for_idx2 < __k_for_coll2.len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp9 = kspl_Range_get(&__k_for_coll2, __k_for_idx2);
       Sz i = __k_tmp9;
-      std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)606);
+      std_argparse_Opt *o = kspl_std_ds_List_std_argparse_Opt_at(r->opts, i, kspl_lit_908, (Sz)612);
       Slice_U8 suffix = kspl_lit_5;
       KSPL_UNUSED std_argparse_Kind __k_tmp10 = o->kind;
       switch (__k_tmp10.tag) {
@@ -163147,7 +163181,11 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
  * Caution: **Mark it in the call that opens it** (SOCK_CLOEXEC, accept4, pipe2, O_CLOEXEC,
  * WSA_FLAG_NO_HANDLE_INHERIT). Marked afterwards, a child started from another thread in between
  * takes the copy. Only where the OS has no such call (a socket or a pipe on macOS, an accepted
- * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-core.md.
+ * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-system.md.
+ * Caution: **On macOS a socket can still reach a child.** A start on another thread can fork
+ * between a socket's open or accept and its mark: the starts take turns only over their pipes
+ * (hosted_spawn.c). Why that is accepted is "A child holds only the streams it is handed" in the
+ * same document.
  * ============================================================ */
 #ifndef _WIN32
 #include <errno.h>
@@ -164477,6 +164515,13 @@ KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) 
   return 0;
 }
 
+/* What a failed peek or read of a pipe means: 0 (EOF) where the writer closed it, else -2.
+ * Caution: **A failed call is not EOF by itself**, as on the POSIX side. Read as 0, any other
+ * error would say the partner died while it lives. */
+static I32 kspl_pipe_failed(void) {
+  return GetLastError() == ERROR_BROKEN_PIPE ? 0 : -2;
+}
+
 /* >0: the bytes read, -1: out of time, 0: EOF (the partner died), -2: an error
  * A Windows anonymous pipe cannot wait for readable, so it peeks and sleeps 1 ms while empty. */
 static I32 kspl_proc_read_end(HANDLE pipe, U8 *buf, Sz cap, I32 timeout_ms) {
@@ -164487,11 +164532,13 @@ static I32 kspl_proc_read_end(HANDLE pipe, U8 *buf, Sz cap, I32 timeout_ms) {
   for (;;) {
     DWORD avail = 0;
     if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL))
-      return 0; /* disconnected = dead */
+      return kspl_pipe_failed();
     if (avail > 0) {
       DWORD got = 0;
       DWORD want = ((DWORD)cap < avail) ? (DWORD)cap : avail;
-      if (!ReadFile(pipe, buf, want, &got, NULL) || got == 0)
+      if (!ReadFile(pipe, buf, want, &got, NULL))
+        return kspl_pipe_failed();
+      if (got == 0)
         return 0;
       return (I32)got;
     }
@@ -164593,7 +164640,8 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
 
 /* The same contract as the POSIX side.
    Caution: It peeks and sleeps as kspl_proc_read_end does. A stream whose peek failed has its
- * bit raised as closed (a read then returns 0 = EOF). */
+ * bit raised, so the read that follows reports it: 0 (EOF) for a closed pipe, -2 for any other
+ * failure. */
 KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
   timeout_ms = kspl_wait_ms(timeout_ms);
   if (handle == 0)
@@ -166529,6 +166577,18 @@ static void kspl_child_fail(int done) {
   _exit(127);
 }
 
+/* Copies a path for kspl_proc_start as kspl_to_cstr does; an empty one is left unused and passes.
+ * Where it fails, errno says why: ENAMETOOLONG where it does not fit, EINVAL where it holds a
+ * NUL. */
+static int kspl_start_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap) {
+  if (len <= 0)
+    return 1;
+  if (kspl_to_cstr(ptr, len, out, out_cap))
+    return 1;
+  errno = (size_t)len >= (size_t)out_cap ? ENAMETOOLONG : EINVAL;
+  return 0;
+}
+
 /* Starts one child (the one function; the section heading says why). The KSPL side
  * (std/subproc.kspl) holds the combinations.
  *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone),
@@ -166549,28 +166609,32 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
                               I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
   kspl_start_error = 0;
   char cwd_path[4096], out_path[4096], err_path[4096];
-  if (cwd_len > 0 && !kspl_to_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path)))
-    return 0;
-  if (out_len > 0 && !kspl_to_cstr(out_ptr, out_len, out_path, sizeof(out_path)))
-    return 0;
-  if (err_len > 0 && !kspl_to_cstr(err_ptr, err_len, err_path, sizeof(err_path)))
-    return 0;
-  /* Freed in the parent once the fork is past; the child's copy goes with its exec. */
-  char **argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);
+  char **argv_arr = NULL;
+  kspl_proc_t *h = NULL;
+  int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};
+  /* Caution: **Every failure goes to `fail` with errno set**, as the Windows half sets
+   * kspl_start_error before each return. A bare `return 0` leaves it 0, and start_error in
+   * std/subproc.kspl then says the start succeeded. */
+  if (!kspl_start_cstr(cwd_ptr, cwd_len, cwd_path, sizeof(cwd_path)) ||
+      !kspl_start_cstr(out_ptr, out_len, out_path, sizeof(out_path)) ||
+      !kspl_start_cstr(err_ptr, err_len, err_path, sizeof(err_path))) {
+    goto fail;
+  }
+  /* Freed in the parent once the fork is past; the child's copy goes with its exec. A failed
+   * malloc sets ENOMEM itself, so EINVAL stands only for an argument run that does not split. */
+  errno = EINVAL;
+  argv_arr = kspl_argv_split(argv_buf, argv_buf_len, argc);
   if (argv_arr == NULL)
-    return 0;
+    goto fail;
   int one_file = (out_len > 0 && out_len == err_len && memcmp(out_ptr, err_ptr, (size_t)out_len) == 0);
   int pipe_in = (stdio & 1) != 0;
   int pipe_out = (stdio & 2) != 0 && out_len == 0;
   int pipe_err = (stdio & 4) != 0 && err_len == 0;
   int group = (stdio & 16) != 0;
 
-  kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
-  if (h == NULL) {
-    free(argv_arr);
-    return 0;
-  }
-  int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};
+  h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
+  if (h == NULL)
+    goto fail; /* errno is ENOMEM */
   kspl_spawn_take();
   if ((pipe_in && kspl_pipe_cloexec(in_p) != 0) || (pipe_out && kspl_pipe_cloexec(out_p) != 0) ||
       (pipe_err && kspl_pipe_cloexec(err_p) != 0) || kspl_pipe_cloexec(exec_p) != 0) {

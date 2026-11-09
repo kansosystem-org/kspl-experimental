@@ -294,6 +294,26 @@ priv fn chains()
     c: = calc.calculate(cycle@, TODAY, arena)
     failure("a cycle through 1,000 cells", c@, 0, 999, 0, .cycle)
     failure("every cell of it", c@, 0, 0, 0, .cycle)
+    upward_sums()
+
+// A chain read upward goes past `MAX_DEPTH`, and is set aside. **A pass set aside reads nothing**:
+// it counted the column each row sums again, and 10,000 rows reached the read limit.
+priv fn upward_sums()
+    defer arena: = Arena(1024 * 1024)
+    rows: Sz = 600
+    defer $up: = Str_builder()
+    up.s(HEAD)
+    for row in Range(1, rows + 1, 1)
+        if row < rows
+            up.s("| 1 | =B\{row + 1\}+sum(A) |\n")
+        else
+            up.s("| 1 | =sum(A) |\n")
+    up.s(":::\n")
+    doc: = read(up.slice(), arena)
+    r: = calc.calculate(doc@, TODAY, arena)
+    number("a chain up 600 rows, each summing its column", r@, 0, 0, 1, 360000.0)
+    verdict.check("reads each cell once, and the chain a few times more",
+        r.reads <= rows * rows + 4 * rows, arena.text().s("\{r.reads\}").take())
 
 priv const NAMES: Sz = 2000 //< the tables named in `many_names`
 priv const SHARED_BITS: U32 = 12 //< the lowest bits of their hash (`hash` in `std/str`), all zero
