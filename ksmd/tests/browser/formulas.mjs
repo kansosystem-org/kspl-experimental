@@ -332,7 +332,8 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       check(await js(`document.querySelector('${cellAt(0, 1)}').textContent`) === "21",
         "which calculates from the other tables");
 
-      // A column's name or letter writes the whole column, with the table's name, its own too.
+      // A column's name or letter writes the whole column: with the table's name in another
+      // table, and bare in the formula's own, as a cell is.
       const name = (table, c) => `#doc .table[data-name=${JSON.stringify(table)}] th.name[data-c="${c}"]`;
       const letter = (table, c) => `#doc .table[data-name=${JSON.stringify(table)}] th.letter:nth-child(${c + 2})`;
       const press1 = async (selector) => {
@@ -349,12 +350,27 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
         await box());
       await type(")+sum(");
       await press1(name("t", 0));
-      check(await box() === "=sum(map.A:B)+sum(t.A", "the formula's own column is written with its table's name",
+      check(await box() === "=sum(map.A:B)+sum(A", "the formula's own column is written without its table's name",
         await box());
       await type(")");
       await press("Enter");
       check(await js(`document.querySelector('${cellAt(1, 1)}').textContent`) === "20",
         "and the whole columns calculate");
+    },
+
+    // `name(t.B)` shows the column's name, and follows it when the name is typed again.
+    async columnName() {
+      const named = TABLE.replace("| 3 |", "| =name(t.B) |");
+      await load(TABLE);
+      await start(0, 2, "=name(t.B)");
+      await press("Enter");
+      await saves("name is saved as typed", named);
+      check(await cellText(js, 0, 2) === "b", "and the cell shows the column's name", await cellText(js, 0, 2));
+      await click('#doc th.name[data-c="1"]');
+      await type("Kind");
+      await press("Enter");
+      await saves("a name typed over the column's name replaces it", named.replace('"b"', '"Kind"'));
+      check(await cellText(js, 0, 2) === "Kind", "and the cell shows the new name", await cellText(js, 0, 2));
     },
 
     // Copy formula puts the chosen cell's formula as typed on the clipboard, where Copy gives its
@@ -382,6 +398,54 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
         TABLE.replace("| 3 |", "| =0x100000 |").replace("| 6 |", "| =hex_to_dec(0x10) |"));
       check(await cellText(js, 1, 2) === "#SYNTAX!", "and does not read, never giving 22",
         await cellText(js, 1, 2));
+    },
+
+    // `like` in a condition: its tip shows how it is written, and each row's code is matched
+    // against the pattern without regard to case.
+    async wildcards() {
+      const codes = `${H}:::table name="t"\n| "code" | "n" | "sum" |\n| "INV-1" | 3 | |\n` +
+        `| "Pens" | 4 | |\n| "inv-22" | 5 | |\n:::\n`;
+      await load(codes);
+      await start(0, 2, "=sum_if(B, like(");
+      const t = await tip();
+      check(!!t && t[0] === "like(t, pattern)" && t[1] === "t",
+        "the tip of like shows its arguments, the text in bold", JSON.stringify(t));
+      await type("A, \"inv-*\"))");
+      await press("Enter");
+      await saves("the formula with like is saved as typed",
+        codes.replace("| 3 | |", "| 3 | =sum_if(B, like(A, \"inv-*\")) |"));
+      check(await cellText(js, 0, 2) === "8", "and adds the rows whose code starts with INV-, in any case",
+        await cellText(js, 0, 2));
+    },
+
+    // **An error says why it stands**: on the cell's tooltip, and on the status bar while the
+    // cell is chosen. The calculator gives the reason; the page only shows it.
+    async errorReason() {
+      const why = "#SYNTAX!: hex_to_dec reads digits as text: 0x100000 is already the number 1048576. " +
+        "Write =0x100000, or hex_to_dec(\"100000\")";
+      await load(`${H}:::table name="t"\n| "a" | "b" |\n| =hex_to_dec(0x100000) | =A1 |\n| 1 | 2 |\n:::\n`);
+      check(await cellText(js, 0, 0) === "#SYNTAX!", "the hex literal given as digit text does not read",
+        await cellText(js, 0, 0));
+      const title = (c) => js(`document.querySelector('${cellAt(0, c)}').title`);
+      check(await title(0) === why, "the error's tooltip says why", await title(0));
+      check(await title(1) === "#SYNTAX!: A1 shows #SYNTAX!",
+        "an error carried from another cell names that cell", await title(1));
+      const bar = () => js("(() => { const s = document.querySelector('.status-why'); " +
+        "return s.hidden ? '' : s.textContent; })()");
+      await click(cellAt(0, 0));
+      await until("!document.querySelector('.status-why').hidden");
+      check(await bar() === why, "the status bar says why while the cell is chosen", await bar());
+      // One line is about as tall as the chosen cell's part beside it; two would be twice as tall.
+      const tall = await js("(() => { const s = document.querySelector('.status-why'); " +
+        "const line = document.querySelector('.status-cell').getBoundingClientRect().height; " +
+        "return [s.title === s.textContent, s.getBoundingClientRect().height, line]; })()");
+      check(tall[0] && tall[1] < 1.5 * tall[2], "it keeps to one line, and its tooltip holds it whole",
+        JSON.stringify(tall));
+      await click(cellAt(0, 1));
+      await until("document.querySelector('.status-why').textContent === '#SYNTAX!: A1 shows #SYNTAX!'");
+      await press("ArrowDown");
+      await settle();
+      check(await bar() === "", "a cell with no error shows no reason", await bar());
     },
 
     async copyFormula() {

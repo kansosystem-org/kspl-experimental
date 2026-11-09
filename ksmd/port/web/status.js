@@ -1,6 +1,8 @@
 // ksmd page: the status bar at the window's foot. From the left it shows the chosen cell's address
-// and what was typed in it, a message, how many rows a filter shows, and the printed page the caret
-// stands on (`pages.js`). At the right stand the figures (`figures.js`) and the zoom (`zoom.js`).
+// and what was typed in it, why it shows an error, the note on that cell or on the paragraph at the
+// caret, a message, how many rows a filter shows, and the printed page the caret stands on
+// (`pages.js`). At the right stand the figures (`figures.js`) and the zoom (`zoom.js`).
+// A range chosen is also said to a screen reader (`said`): the focus stays on its first cell.
 // The bar keeps one line: a message pushes the page and the filter aside, and a narrow window
 // drops items in the order `page.css` gives.
 // Everything here only reads the page. It changes neither the document nor the selection.
@@ -12,6 +14,9 @@ function ksmdStatus(ks) {
   const cellBox = part("cell");
   const address = part("address");
   const content = part("content");
+  const why = part("why");
+  const note = part("note");
+  const said = part("said");
   const filter = part("filter");
   const page = part("page");
   const updates = [];
@@ -34,6 +39,8 @@ function ksmdStatus(ks) {
   function showCell(wrap) {
     if (!wrap) {
       cellBox.hidden = true;
+      why.hidden = true;
+      if (said.textContent !== "") said.textContent = "";
       return;
     }
     const c = ks.cell;
@@ -51,9 +58,36 @@ function ksmdStatus(ks) {
     if (address.textContent !== where) address.textContent = where;
     if (content.textContent !== shown) content.textContent = shown;
     cellBox.hidden = false;
-    const said = text === "" ? `Cell ${where}` : `Cell ${where}: ${text}`;
-    cellBox.title = said;
-    cellBox.setAttribute("aria-label", said);
+    // Why a chosen error stands, as its tooltip says it (`table.js`). One line: an ellipsis cuts
+    // a long reason, and the part's tooltip holds it whole.
+    const one = !ks.range.any() && !ks.range.lines();
+    const el = one ? wrap.querySelector(`td[data-r="${c.row}"][data-c="${c.column}"]`) : null;
+    const reason = (el && el.dataset.why) || "";
+    why.hidden = reason === "";
+    if (why.textContent !== reason) why.textContent = reason;
+    why.title = reason;
+    const full = text === "" ? `Cell ${where}` : `Cell ${where}: ${text}`;
+    cellBox.title = full;
+    cellBox.setAttribute("aria-label", full);
+    // A range is said once each time it changes; one cell says nothing here, since its box
+    // already says its value and address.
+    const range = one ? "" : `${where} chosen`;
+    if (said.textContent !== range) said.textContent = range;
+  }
+
+  // The note on the chosen cell, or on the paragraph or heading at the caret: a red corner or a bar
+  // marks it, and pointing shows it. Here it shows also for a person who works with keys.
+  function showNote(wrap, block) {
+    let text = "";
+    if (wrap && !ks.range.any() && !ks.range.lines()) {
+      text = ks.notes.of(wrap, ks.cell.row, ks.cell.column);
+    } else if (!wrap && block && block.dataset.note) {
+      text = block.dataset.note;
+    }
+    const shown = text === "" ? "" : `Note: ${text}`;
+    note.hidden = shown === "";
+    if (note.textContent !== shown) note.textContent = shown;
+    note.title = shown;
   }
 
   // The top-level element the caret stands in, or the chosen cell's table; null outside the
@@ -90,7 +124,9 @@ function ksmdStatus(ks) {
     const f = wrap && wrap.filterShown;
     filter.hidden = !f;
     if (f) filter.textContent = `${f.shown} of ${f.all} rows shown`;
-    showPage(blockNow());
+    const block = blockNow();
+    showPage(block);
+    showNote(wrap, block);
     for (const f2 of updates) f2();
   }
 
@@ -109,28 +145,20 @@ function ksmdStatus(ks) {
   document.addEventListener("selectionchange", schedule);
   for (const type of ["input", "keyup", "focusin", "mouseup"]) document.addEventListener(type, schedule, true);
 
-  // A small menu that opens from the bar, above it: the figures to show, or the zoom's steps.
-  // `items` are [label, checked, act]; `radio` makes the ticks exclude each other. Up and Down move,
-  // Enter and Space press, and Esc, Tab or a press elsewhere close it, the focus back on `from`.
-  let menu = null;
-  function closeMenu(refocus) {
-    if (!menu) return;
-    const from = menu.from;
-    menu.remove();
-    menu = null;
-    from.setAttribute("aria-expanded", "false");
-    if (refocus) from.focus();
-  }
+  // A small menu that opens from the bar, above it: the figures to show, or the zoom's steps
+  // (`ks.popup`). `items` are [label, checked, act, aside]; `radio` makes the ticks exclude each
+  // other, and `stays` keeps the menu open after a press, so several can be ticked in turn.
   function popup(from, label, items, radio, stays) {
-    closeMenu(false);
-    menu = document.createElement("div");
+    const menu = document.createElement("div");
     menu.className = "menu status-menu";
-    menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", label);
-    menu.from = from;
     for (const [text, on, act, aside] of items) {
-      const b = document.createElement("button");
-      b.type = "button";
+      const b = ks.button("", null, null, () => {
+        act();
+        if (!stays) return ks.popup.close(menu, true);
+        b.setAttribute("aria-checked", String(b.getAttribute("aria-checked") !== "true"));
+        return null;
+      });
       b.setAttribute("role", radio ? "menuitemradio" : "menuitemcheckbox");
       b.setAttribute("aria-checked", String(on));
       const name = document.createElement("span");
@@ -143,37 +171,10 @@ function ksmdStatus(ks) {
         value.textContent = aside;
         b.appendChild(value);
       }
-      b.addEventListener("click", () => {
-        act();
-        if (!stays) return closeMenu(true);
-        b.setAttribute("aria-checked", String(b.getAttribute("aria-checked") !== "true"));
-        return null;
-      });
       menu.appendChild(b);
     }
-    menu.addEventListener("keydown", (e) => {
-      const list = Array.from(menu.children);
-      const k = list.indexOf(document.activeElement);
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        list[(k + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length].focus();
-      } else if (e.key === "Escape" || e.key === "Tab") {
-        e.preventDefault();
-        closeMenu(true);
-      }
-    });
-    document.body.appendChild(menu);
-    const r = from.getBoundingClientRect();
-    const w = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(0, Math.min(r.left, window.innerWidth - w.width - 4))}px`;
-    menu.style.top = `${Math.max(0, r.top - w.height - 2)}px`;
-    from.setAttribute("aria-expanded", "true");
-    (menu.querySelector('[aria-checked="true"]') || menu.firstElementChild).focus();
+    ks.popup(menu, "menu", { at: from, above: true, from, back: () => from.focus() });
   }
-  document.addEventListener("mousedown", (e) => {
-    if (menu && !menu.contains(e.target) && e.target !== menu.from) closeMenu(false);
-  }, true);
-  window.addEventListener("resize", () => closeMenu(false));
 
   ks.status = {
     update: schedule,

@@ -32,21 +32,16 @@ model-server: $(KSSRV_EXE) $(KSAGENT_CHAT_EXE)
 # takes llama-server's and chat_server's place. **Then the whole path a question takes**: the page
 # in a headless Chromium, the launcher with `--show`, kssrv, `ksagent watch` and a stand-in model
 # server (`tools/tests/chat_page.mjs`). The browser is the one ksmd's checks take; with none,
-# `KSMD_REQUIRE_BROWSER` decides between a failure and a SKIP of the second half.
+# Without a browser, the second half fails or is a SKIP, as `browser-verdict` in ksmd/Makefile decides.
 KSAGENT_CHAT_WORK := $(TMP_DIR)/ksagent_chat_test
 
 ## Gates|test-ksagent-chat|Start, reuse and stop the launcher's model server; then ask on ksagent's chat page in a headless Chromium: an answer growing, checked, stopped, Markdown shown safely, and Japanese
 test-ksagent-chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 	@rm -rf "$(KSAGENT_CHAT_WORK)"; \
 	node tools/tests/chat_launch.mjs "$(KSAGENT_CHAT_EXE)" "$(KSAGENT_CHAT_WORK)/launch" || exit 1; \
+	$(MAKE) -s --no-print-directory -C ksmd browser-verdict || exit 1; \
 	b="$$($(MAKE) -s --no-print-directory -C ksmd browser-path)"; \
-	if [ -z "$$b" ]; then \
-	  if [ "$(KSMD_REQUIRE_BROWSER)" = 1 ]; then \
-	    echo "RESULT: SOME FAILED (1) -> no browser found, and KSMD_REQUIRE_BROWSER=1 requires one." \
-	      "On a machine without one, KSMD_REQUIRE_BROWSER=0 makes this a SKIP;" \
-	      "such a round is not CI's verdict"; \
-	    exit 1; fi; \
-	  echo "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"; exit 0; fi; \
+	[ -n "$$b" ] || exit 0; \
 	node tools/tests/chat_page.mjs "$$b" "$(KSAGENT_CHAT_EXE)" "$(KSAGENT_CHAT_WORK)/page"
 # Where the browser's whole log is copied when it never answers (`launch` in ksmd/tests/browser/cdp.mjs).
 test-ksagent-chat: export KANSO_BROWSER_LOG := $(abspath $(LOG_DIR))/browser/test-ksagent-chat.log

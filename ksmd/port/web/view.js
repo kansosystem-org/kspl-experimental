@@ -102,13 +102,8 @@ function ksmdView(ks) {
   }
 
   function printButton(left) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "block-print";
-    b.textContent = left ? "Put back in print" : "Leave out of print";
-    b.title = left ? "Show this block in print and PDF again" :
-      "Keep this block while editing, and leave it out of print and PDF";
-    return b;
+    return ks.button(left ? "Put back in print" : "Leave out of print", "block-print", left ?
+      "Show this block in print and PDF again" : "Keep this block while editing, and leave it out of print and PDF");
   }
 
   function shape(b) {
@@ -168,9 +163,14 @@ function ksmdView(ks) {
         const el = unit("figure", "b figure");
         el.contentEditable = "false";
         el.appendChild(removeButton("Remove this image from the document; the image file stays"));
+        // Alt text names the image to a screen reader. An image with none only decorates, as Alt
+        // text… says when it asks, so it is read as nothing: its file's name tells a listener
+        // nothing of what it shows. The words standing in for it here are read as they show.
         const place = unit("div", "image");
-        place.setAttribute("role", "img");
-        place.setAttribute("aria-label", b.alt || b.src);
+        if (b.alt) {
+          place.setAttribute("role", "img");
+          place.setAttribute("aria-label", b.alt);
+        }
         el.dataset.alt = b.alt;
         el.dataset.src = b.src;
         place.textContent = `Image: ${b.src}`;
@@ -187,13 +187,11 @@ function ksmdView(ks) {
             place.classList.add("problem");
           }
         }
-        // A width set on the image is its share of the text width, and a scale its share of its
-        // own size, which `file.js` shows once it has read the image's pixels (`images.js`).
+        // A width set on the image is its share of the text width (`images.js`).
         if (b.w > 0) {
           el.classList.add("sized");
           el.style.setProperty("--image-width", `${b.w}%`);
         }
-        if (b.sc > 0) el.dataset.scale = b.sc;
         if (b.cap) {
           const cap = document.createElement("figcaption");
           cap.textContent = b.cap;
@@ -258,12 +256,8 @@ function ksmdView(ks) {
       why.textContent = `This include cannot be shown: ${problem(b)}`;
       el.appendChild(why);
     } else if (b.to !== undefined && b.inside !== undefined) {
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "include-open";
+      const open = ks.button(`Edit ${b.to}`, "include-open", "Opens the included file in a tab of its own");
       open.dataset.to = b.to;
-      open.textContent = `Edit ${b.to}`;
-      open.title = "Opens the included file in a tab of its own";
       head.appendChild(open);
       const inside = unit("div", "inside");
       for (const nb of b.inside) inside.appendChild(render({ ...nb, included: true }));
@@ -274,12 +268,7 @@ function ksmdView(ks) {
 
   // The button that removes a whole include or image block, which no text selection reaches.
   function removeButton(title) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "block-remove";
-    b.textContent = "Remove";
-    b.title = title;
-    return b;
+    return ks.button("Remove", "block-remove", title);
   }
 
   // A press on a checklist item's box, left of its text, ticks it or takes the tick away.
@@ -492,8 +481,18 @@ function ksmdView(ks) {
     s.setBaseAndExtent(a.node, a.offset, f.node, f.offset);
   }
 
+  // A block drawn from its JSON, which it keeps, so `apply` can tell whether it shows the same.
+  function drawn(b, json = JSON.stringify(b)) {
+    const el = render(b);
+    el.drawnFrom = json;
+    return el;
+  }
+
   // Puts an action's result on the page: the changed blocks and the other tables. The selection
   // follows once the page has found the chosen cell again (`ks.act`).
+  // **A table whose JSON is the one it was drawn from stays as it is.** An edit to one table sends
+  // every table, since its values can reach them all. Drawing and laying out each again would take
+  // most of an edit's time in a document of many tables, and change nothing on the page.
   function apply(r) {
     removeGap();
     // An open cell keeps its box in the table drawn again (`redrawn` in `table.js`).
@@ -502,10 +501,11 @@ function ksmdView(ks) {
       const end = all.length - r.tail;
       const next = all[end] || null;
       for (let i = r.from; i < end; i++) all[i].remove();
-      for (const b of r.blocks) ks.root.insertBefore(render(b), next);
+      for (const b of r.blocks) ks.root.insertBefore(drawn(b), next);
       for (const [i, b] of r.tables) {
         const old = blocks()[i];
-        if (old) old.replaceWith(render(b));
+        const json = JSON.stringify(b);
+        if (old && old.drawnFrom !== json) old.replaceWith(drawn(b, json));
       }
     });
     ks.settings.apply();
@@ -514,6 +514,6 @@ function ksmdView(ks) {
     ks.table.pin();
   }
 
-  ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,
+  ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len, u16At,
     removeButton, removeBlock, caretIntoSight };
 }

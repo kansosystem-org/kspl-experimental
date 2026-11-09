@@ -213,10 +213,8 @@ function ksmdFind(ks) {
       ks.range.set(m.block, m.row, m.column, null);
       const el = cellOf(m);
       if (el) el.focus({ preventScroll: true });
-    } else if (back && back.isConnected) {
-      back.focus({ preventScroll: true });
     } else {
-      ks.root.focus({ preventScroll: true });
+      ks.focusBack(back);
     }
     back = null;
   }

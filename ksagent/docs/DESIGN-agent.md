@@ -176,6 +176,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **The chat file repeats the question's text**, so it is a whole record alone. What was asked stands beside what was answered, even after the ask file changes.
 * **ksagent replaces the chat file as a whole** (`fs.replace_file`), so a power cut leaves the old file or the new one. An append in place can leave half a line, and the next append lands on it.
 * **ksagent reads the chat file again just before it writes**, so a line a person changed by hand meanwhile is checked, never buried.
+* **An ask file or a chat file that is a link gets no answer.** Followed, a chat file's link would have the file it names read, and its text written into the folder with the answer.
 * **One `watch` runs per folder.** It holds a lock (`.ksagent.lock` in the root), and a second `watch` refuses to start. Two would answer one question and both write its chat file.
 * **A `watch` on a folder inside or around a watched one refuses too**, naming the folder watched. It looks for a held lock above and below its root as it starts.
 * **A turn the chat file already records is not written again.** Written twice, its id would stand twice, and the chat file would be refused.

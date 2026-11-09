@@ -233,12 +233,17 @@ impl Ast_node
         lctx.fb.label = label_catch
         lctx.fb.label_used = false
         lctx.fb.depth = lctx.cleanup_stack.len
+        // The substitute and each `fallback` declare their arrays at one level.
+        outer_lasting: = lctx.lasting_decls
+        lasting: = lctx.open_lasting(!u.is_void)
+        lctx.fb.lasting = lasting
 
         lctx.relocating += 1
         if target_block != null
             target_block.lower(lctx)
         discard: = lower_substitute(target_expr, lctx, !u.is_void)
         lctx.relocating -= 1
+        lctx.close_lasting(outer_lasting, lasting)
 
         is_label_used: = lctx.fb.label_used
         lctx.fb = old_fb
@@ -305,7 +310,10 @@ impl Ast_node
         //< The value goes into the temporary the catch chain set up (`lctx.fb`). The cleanups down
         //< to the chain's depth run before the jump.
         expr_node: = r.get_fallback_expr()
+        outer_lasting: = lctx.lasting_decls
+        lctx.lasting_decls = lctx.fb.lasting
         discard: = lower_substitute(expr_node, lctx, lctx.fb.target.len > 0)
+        lctx.lasting_decls = outer_lasting
 
         r.morph(.k_empty, "")
         r.type_id = I32::sema_type_env.Builtin_type_id.void_type
@@ -475,7 +483,28 @@ impl Ast_node
             r.order_call_operands(lctx, ops@)
             r.hoist_method_receiver(lctx)
         r.lower_default(lctx)
+        if op_text.equals("::")
+            r.lower_lasting_array(lctx)
         ops.finish(lctx)
+
+    priv fn lower_lasting_array(r: Self$@, lctx: Lowering_ctx$@) //<
+        //< A slice made of an array literal, where the slice leaves the block it is built in
+        //< The array goes into a temporary declared at `lasting_decls`, and the slice points into
+        //< that. Written in place, it would be a C compound literal, whose storage ends with the
+        //< branch's block: a read after the branch is undefined (gcc reuses that stack slot).
+        if lctx.lasting_decls == null || !lctx.sema.env.is_slice(r.type_id)
+            return
+        arr: = r.get_postfix_receiver()
+        if arr.kind_id != .k_struct_literal || !lctx.sema.env.is_array(arr.type_id)
+            return
+        loc: = arr.loc
+        tmp_name: = lctx.gen_tmp_name()
+        slot_id: = lctx.sema.env.copy_value_type(arr.type_id)
+        lctx.lasting_decls
+            .push(lctx.build_let_decl(tmp_name, slot_id, Ast_node.build_empty(loc), loc))
+        lctx.pre_stmts
+            .push(Ast_node.build_assign_stmt(Ast_node.build_ident(tmp_name, slot_id, loc), arr, loc))
+        r.set_child(0, Ast_node.build_ident(tmp_name, arr.type_id, loc))
 
     priv fn hoist_index_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It copies a subscript's slice receiver with a side effect into a temporary
@@ -620,11 +649,14 @@ impl Ast_node
 
         cond_node.lower(lctx)
 
+        outer_lasting: = lctx.lasting_decls
+        lasting: = lctx.open_lasting(!is_void)
         then_block: = lower_into_block(lctx, true_node, loc)
         append_result_or_expr(then_block, tmp_name, type_id, true_node, is_void, loc)
 
         else_block: = lower_into_block(lctx, false_node, loc)
         append_result_or_expr(else_block, tmp_name, type_id, false_node, is_void, loc)
+        lctx.close_lasting(outer_lasting, lasting)
 
         lctx.pre_stmts.push(Ast_node.build_if_stmt(cond_node, then_block, else_block, loc))
 

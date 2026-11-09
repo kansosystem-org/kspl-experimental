@@ -254,6 +254,26 @@ priv fn mid(): Void!Er
 
 fn main(): Void!Er
     mid()!
+// ==== case main_fails_with_frames_past_ten
+//< Each frame line of a failing `main` names its module, its function and its position
+//< A private function loses `kspl_priv_` and its module's prefix. A module in a folder
+//< (`std/fs`) is written with dots, whichever separator its path holds on the OS. The numbers
+//< past 9 take one space less, which the marks cannot check: they drop the leading spaces.
+// EXPECT: [Kanso] Error: main() failed with not_found
+// EXPECT: 0: main at main_fails_with_frames_past_ten.kspl:
+// EXPECT: 9: main_fails_with_frames_past_ten.deep at main_fails_with_frames_past_ten.kspl:
+// EXPECT: 11: main_fails_with_frames_past_ten.deep at main_fails_with_frames_past_ten.kspl:
+// EXPECT: 12: std.fs.stat at
+// EXPECT-NOT: kspl_
+import "std/fs"
+
+priv fn deep(n: I32): Void!fs.Fs_error
+    if n == 0
+        fs.stat("/a path that is not there/x")!
+    deep(n - 1)!
+
+fn main(): Void!fs.Fs_error
+    deep(10)!
 // ==== case prng_below_zero
 //< `Prng.below(0)` must stop: [0, 0) holds no number, and any answer would be out of it
 // EXPECT: Prng.below: n must be at least 1

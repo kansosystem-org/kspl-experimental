@@ -590,6 +590,10 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, c
     //< From the path's tail, the type and prefix of the first node with a type ID or definition
     for $idx: = path.len; idx > 0; idx -= 1
         p: = path.get(idx - 1)
+        // **A name in an array's length is a value, not the array type around it**: borrowed,
+        // `ADDR_TEXT_MAX` of `U8[net.ADDR_TEXT_MAX]` read `ADDR_TEXT_MAX: U8$[46]`.
+        if idx < path.len && is_length_of(p, path.get(idx))
+            break
         if p.type_id != 0
             ctx.type_id = p.type_id
             if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
@@ -617,6 +621,11 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, c
                 continue
         ctx.def_node = p
         break
+
+priv fn is_length_of(p: Ast_node$@, child: Ast_node@): Bool //<
+    //< Whether child is the length written in p, an array type's postfix (`[N]` or `$[N]`)
+    return p.kind_id == .k_type_postfix && p.text.strip_prefix("$").starts_with("[") &&
+        p.children.len > 0 && p.get_child(0) == child
 
 priv fn build_hover_def_code(state: Doc_state$@, ctx: Hover_ctx$@, def_code: Str_builder$@)
     if ctx.def_node == null

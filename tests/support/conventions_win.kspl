@@ -15,10 +15,12 @@ import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
 // ==========================================
-// 8. A test does not cut a child's output into lines by hand **Only on Windows is a `\r` left at
-// the end of the cut text**.
+// 8. A test under the root's `tests/` does not cut a child's output into lines by hand **Only on
+// Windows is a `\r` left at the end of the cut text**.
 // Note: Two functions split lines (`line_after` in `tests/support/harness_text.kspl`, `lines`
 // in `std/str`). Both drop a `\r` at a line's end.
+// **It covers the root's `tests/` alone.** The other packages cannot import `harness_text`. Their
+// cuts mostly wait for a line's end, which `lines` cannot tell, or cut text made in the process.
 // ==========================================
 
 priv const HAND_CUT: U8[] = "find_char('\\n')"
@@ -42,8 +44,8 @@ priv fn check_line_cut(arena: Arena$@)
             if cuts_by_hand(line, arena)
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: it cuts into lines by hand").take())
-    verdict.check_list("a test does not cut a child's output into lines by hand", seen, "lines",
-        bad@,
+    verdict.check_list("a test under tests/ does not cut a child's output into lines by hand", seen,
+        "lines", bad@,
         "go through harness's line_after or std/str's lines (a \\r is left at the cut text's end)")
 
 // ==========================================

@@ -542,3 +542,53 @@ fn test_start_error_names_the_cause(arena: Arena$@) //<
         catch panic("this program must start again")
     assert(subproc.start_error() == 0, "a start that succeeded leaves no error")
     verdict.pass("a missing program and a bare name on no PATH gave 2, and a good start gave 0.")
+
+// ==========================================
+// The Windows command line: what a child on Windows is handed, and what a batch file is refused
+// `cmd.exe` reads a batch file's line again by its own rules. **These answers are checked on
+// every OS**, since the rules touch no OS (`kspl_win_line_for` in
+// `ksplc/gen/runtime/hosted_spawn.c`).
+// ==========================================
+extern fn kspl_win_line_for(argv_buf: U8@, argv_buf_len: Sz, argc: I32, cmd: U8$@, cmd_cap: I32):
+    Bool
+
+priv const WIN_LINE_CAP: Sz = 1024 //< room for every line below, with the builder's own margin
+
+priv fn win_line(argv: U8[][], arena: Arena$@): U8[] //<
+    //< The Windows command line for argv, argv[0] being the program; empty where it is refused
+    defer $run: = str.Str_builder()
+    for a in argv
+        run.s(a).c(0U8)
+    $buf: U8[WIN_LINE_CAP] = ::{}
+    if !kspl_win_line_for(run.ptr, run.len, I32::argv.len, buf@, I32::WIN_LINE_CAP)
+        return ""
+    $n: Sz = 0
+    for n < WIN_LINE_CAP && buf[n] != 0U8
+        n += 1
+    return arena.dup_str((U8$[]::buf).sub(0, n))
+
+fn test_win_line_batch(arena: Arena$@) //<
+    //< A batch file's argument stays inside its quotes, or the start is refused
+    verdict.start("[Sys] the line a batch file is started with on Windows...")
+    bat: = "C:\\t\\x.bat"
+    kept: = win_line(U8[][]::{ bat, "a&calc" }, arena)
+    assert(kept.equals("\"C:\\t\\x.bat\" \"a&calc\""), "`&` must stay inside the quotes")
+    // Each of these would end the quoting, expand, or end the command in `cmd.exe`.
+    for bad in U8[][6]::{ "a\"&calc", "%PATH%", "!x!", "a\nb", "a\rb", "\"" }
+        assert(win_line(U8[][]::{ bat, bad }, arena).len == 0,
+            "a batch file must be refused an argument cmd.exe reads as a command")
+    // Windows drops a name's trailing dots and spaces, and reads its letters in either case.
+    for name in U8[][5]::{ "C:\\t\\x.bat.", "C:\\t\\X.BAT", "C:\\t\\x.CmD", "C:\\t\\x.bat ",
+        "x.cmd" }
+        assert(win_line(U8[][]::{ name, "%PATH%" }, arena).len == 0,
+            "each spelling of a batch file's name counts as a batch file")
+    // A program that is no batch file takes them all, quoted by the C runtime's rules.
+    exe: = win_line(U8[][]::{ "C:\\t\\x.exe", "a\"b", "%PATH%" }, arena)
+    assert(exe.equals("\"C:\\t\\x.exe\" \"a\\\"b\" \"%PATH%\""), "a program's line differs")
+    other: = win_line(U8[][]::{ "C:\\t\\x.batch", "!x!" }, arena)
+    assert(other.equals("\"C:\\t\\x.batch\" \"!x!\""), "`.batch` is no batch file")
+    // The backslashes before the closing quote are doubled for a batch file too. It mostly hands
+    // `%1` on to a program, which reads two before a quote as one backslash.
+    tail: = win_line(U8[][]::{ bat, "C:\\d\\" }, arena)
+    assert(tail.equals("\"C:\\t\\x.bat\" \"C:\\d\\\\\""), "a trailing backslash is doubled")
+    verdict.pass("a batch file's arguments stay quoted or are refused, under each spelling of it.")

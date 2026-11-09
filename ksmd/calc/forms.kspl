@@ -1,0 +1,287 @@
+//< The forms the calculator reads itself, beside the reader in `calc.kspl`: `lookup`,
+//< `sum_product`, `name`, and the three conditional totals `sum_if`, `count_if` and `average_if`
+//< Each chooses which of its arguments are calculated, or reads a range cell by cell, so none is
+//< an ordinary function of `functions.kspl`. `FORMS` in `help.kspl` lists them.
+import "ksmd/calc/calc" { Parser, Row_reading, Spot }
+import "ksmd/calc/functions" as fns
+import "ksmd/calc/help" { FORMS }
+import "ksmd/calc/value" { Calc_error, Value, Why, empty, equal_keys, number, text }
+import "std/ds" { List }
+
+fn parser_row(ctx: Void$@, piece: Sz): Value //< `Row_fn` for the parser reading a condition
+    p: = Parser$@::ctx
+    return p.row_of(piece)
+
+priv fn has_error(xs: List<|Value|>@): Bool //< whether an error was taken
+    for i in Range.asc(xs.len)
+        if xs.get(i).kind == .error
+            return true
+    return false
+
+enum Fold_kind //< what `sum_if`, `count_if` or `average_if` makes of its values
+    sum
+    count
+    average
+
+impl Parser
+    fn lookup(p: Self$@): Value //<
+        //< `lookup(key, keys, values, otherwise)` after its `(`: the value beside the first key
+        //< that equals `key`
+        //< `keys` and `values` are ranges of one column, or of one row, as long as each other. Text
+        //< equals text without regard to case, as the filter and the sort compare it. Where no key
+        //< equals it, the result is `otherwise`, which is calculated only then, as `if` does. A key
+        //< cell holding an error is passed over, but `#CYCLE!` before the match is the result.
+        key: = p.expression()
+        p.expect(.comma)
+        keys: = p.range_piece()
+        p.expect(.comma)
+        values: = p.range_piece()
+        p.expect(.comma)
+        if p.skipping > 0 || p.wrong
+            _skipped: = p.branch(false)
+            return empty()
+        $found: Value? = .none
+        $broken: = Value.failed(.syntax)
+        $failed: = false
+        if key.kind == .error
+            broken = key
+            failed = true
+        a: = p.area_of(keys)
+        b: = p.area_of(values)
+        if !failed && (a.is_none() || b.is_none())
+            broken = Value.because(.reference, .no_cell, "", -1)
+            failed = true
+        if !failed
+            ka: = a.unwrap_or(empty_area())
+            va: = b.unwrap_or(empty_area())
+            if !same_line(ka, va)
+                broken = Value.because(.shape, .not_aligned, "", -1)
+                failed = true
+            else
+                for i in Range.asc(length_of(ka))
+                    v: = p.read(spot_in(ka, i))
+                    // A key on a cycle carries it, so every cell on the cycle shows `#CYCLE!`.
+                    // A key past the read limit ends the walk too: every later key is one.
+                    if v.kind == .error && (v.error == .cycle || v.error == .read_limit)
+                        broken = v
+                        failed = true
+                        break
+                    if equal_keys(key, v)
+                        found = .some(p.read(spot_in(va, i)))
+                        break
+        otherwise: = p.branch(!failed && found.is_none())
+        if failed
+            return broken
+        if v: = found
+            return v
+        return otherwise
+
+    fn sum_product(p: Self$@): Value //<
+        //< `sum_product(a, b)` after its `(`: each cell of `a` times the cell of `b` beside it, added
+        //< The two ranges are one column, or one row, as long as each other, as `lookup`'s are. A
+        //< pair whose cells are not both numbers is left out, as `sum` leaves out text; an empty
+        //< cell is left out too. An error in either range is the result, the first in order.
+        first: = p.range_piece()
+        p.expect(.comma)
+        second: = p.range_piece()
+        if p.skipping > 0 || p.wrong
+            return empty()
+        a: = p.area_of(first) catch
+            return Value.because(.reference, .no_cell, "", -1)
+        b: = p.area_of(second) catch
+            return Value.because(.reference, .no_cell, "", -1)
+        if !same_line(a, b)
+            return Value.because(.shape, .not_aligned, "", -1)
+        $total: = 0.0
+        for i in Range.asc(length_of(a))
+            x: = p.read(spot_in(a, i))
+            y: = p.read(spot_in(b, i))
+            if x.kind == .error
+                return x
+            if y.kind == .error
+                return y
+            if x.kind == .number && y.kind == .number
+                total += x.number * y.number
+        return number(total)
+
+    fn column_name(p: Self$@): Value //<
+        //< `name(column)` after its `(`: one whole column's name, as text, as the names row holds it
+        //< **Any other argument does not read**, as a value where `lookup` needs a range does not.
+        //< The column is read through its piece, so the name follows the column as it moves.
+        if p.tok.kind == .broken
+            p.advance()
+            return Value.because(.reference, .lost_reference, "", -1)
+        if p.tok.kind != .reference || !p.one_column()
+            p.fail(.not_a_column, "", -1)
+            return Value.failed(.syntax)
+        index: = p.tok.piece
+        p.advance()
+        if p.skipping > 0
+            return empty()
+        area: = p.area_of(index) catch
+            return Value.because(.reference, .no_cell, "", -1)
+        return text(p.c.doc.tables[area.table].cells[area.columns.low].text)
+
+    priv fn one_column(p: Self@): Bool //< whether the next token, a reference, is one whole column
+        if p.tok.piece < 0
+            return p.tok.whole && p.tok.from.column == p.tok.to.column
+        piece: = p.t.pieces[p.tok.piece]@
+        return piece.kind == .columns && piece.from.column == piece.to.column
+
+    priv fn range_piece(p: Self$@): Sz //< the piece of a reference argument; -1 where it is not one
+        if p.tok.kind != .reference && p.tok.kind != .broken
+            p.fail(.missing, "a range", 1)
+            return -1
+        piece: = p.tok.piece
+        p.advance()
+        return piece
+
+    fn conditional(p: Self$@, kind: Fold_kind): Value //<
+        //< `sum_if(values, condition)` after its `(`, or `count_if` or `average_if`
+        //< The values are a cell or a range. The condition is calculated once for each of their
+        //< rows, with each range in it read as its cell on that row. The values on a row are read
+        //< only where the condition is `true`, as `if` reads only the branch it takes. The values
+        //< taken go to `sum`, `count` or `average`, which a formula calls by name too.
+        if p.tok.kind != .reference && p.tok.kind != .broken
+            p.fail(.missing, "a range", 1)
+            return Value.failed(.syntax)
+        values: = p.tok.piece
+        p.advance()
+        p.expect(.comma)
+        mark: = p.c.scratch.save()
+        $xs: = List<|Value|>(p.c.scratch)
+        $area: = empty_area()
+        if found: = p.area_of(values)
+            area = found
+        else
+            xs.push(Value.because(.reference, .no_cell, "", -1))
+        outer: = p.rows
+        p.rows = Row_reading::{ .inside = true, .count = area.rows.high - area.rows.low + 1,
+            .row = 0, .ranged = false, .shaped = true }
+        cur: = p.cur
+        tok: = p.tok
+        // Read once without calculating, to check every range's shape first.
+        p.skipping += 1
+        _shape: = p.expression()
+        p.skipping -= 1
+        if !has_error(xs@) && !(p.rows.ranged && p.rows.shaped)
+            why: = Why.condition_shape if p.rows.ranged else Why.condition_no_range
+            xs.push(Value.because(.shape, why, "", -1))
+        if p.skipping == 0
+            for row in Range.asc(p.rows.count)
+                // **The first error ends it**: the rows below are not read, as their values
+                // could not change the result.
+                if has_error(xs@) || p.wrong || p.c.deferring
+                    break
+                p.cur = cur
+                p.tok = tok
+                p.rows.row = row
+                holds: = p.condition(p.expression())
+                if holds.kind == .error
+                    xs.push(holds)
+                else if holds.boolean
+                    p.take_row(xs@, area, area.rows.low + row)
+        p.rows = outer
+        v: = kind.fold(xs.slice())
+        p.c.scratch.restore(mark)
+        return v
+
+    fn area_of(p: Self@, index: Sz): Area? //<
+        //< The cells a reference's piece names; none for -1, a reference to no cell or `#REF!`
+        if index < 0
+            return .none
+        piece: = p.t.pieces[index]
+        u: = piece.table
+        at: = p.c.at@
+        columns: =
+            ordered(at.of(u, piece.from.column), at.of(u, piece.to.column))
+        // Whole columns take every data row the table has now, rows added later among them.
+        if piece.kind == .columns
+            return .some(Area::{ .table = u,
+                .rows = Span::{ .low = 0, .high = at.rows[u] - 1 }, .columns = columns })
+        return .some(Area::{ .table = u,
+            .rows =
+            ordered(at.of(u, piece.from.row), at.of(u, piece.to.row)), .columns = columns })
+
+    priv fn take_row(p: Self$@, xs: List<|Value|>$@, area: Area, row: Sz) //<
+        //< The numbers, dates and errors of the area's cells on one row, from the left
+        for column in Range(area.columns.low, area.columns.high + 1, 1)
+            v: = p.read(Spot::{ .table = area.table, .row = row, .column = column })
+            if v.kind == .number || v.kind == .date || v.kind == .error
+                xs.push(v)
+
+    fn row_of(p: Self$@, piece: Sz): Value //<
+        //< A range in a condition, by its piece: its cell on the row read now
+        //< It must be one column wide and as tall as the values; else the result is `#SHAPE!`.
+        p.rows.ranged = true
+        area: = p.area_of(piece) catch
+            return Value.because(.reference, .no_cell, "", -1)
+        if area.columns.low != area.columns.high ||
+            area.rows.high - area.rows.low + 1 != p.rows.count
+            p.rows.shaped = false
+            return Value.because(.shape, .condition_shape, "", -1)
+        if p.skipping > 0
+            return empty()
+        return p
+            .read(Spot::{ .table = area.table, .row = area.rows.low + p.rows.row,
+            .column = area.columns.low })
+
+impl Fold_kind
+    priv fn fold(k: Self, xs: Value[]): Value //<
+        //< The function this kind names, on `xs`; an error is the first value that holds it
+        r: = k.folded(xs) catch e
+            for x in xs
+                if x.kind == .error && x.error == e
+                    return x
+            return Value.because(e, .in_function, FORMS[k.form()].name, -1)
+        return number(r)
+
+    priv fn form(k: Self): Sz //< the place of the function this kind names in `FORMS`
+        switch k
+        case .sum
+            return 2
+        case .count
+            return 3
+        case .average
+            return 4
+
+    priv fn folded(k: Self, xs: Value[]): F64!Calc_error
+        switch k
+        case .sum
+            return fns.sum(xs)!
+        case .count
+            return fns.count(xs)!
+        case .average
+            return fns.average(xs)!
+
+struct Span //< two places in order
+    low: Sz
+    high: Sz
+
+struct Area //< the rectangle of cells a reference names, by their places
+    table: Sz
+    rows: Span
+    columns: Span
+
+priv fn empty_area(): Area
+    return Area::{ .table = 0, .rows = Span::{ .low = 0, .high = 0 },
+        .columns = Span::{ .low = 0, .high = 0 } }
+
+priv fn length_of(a: Area): Sz //< how many cells a line of one row or one column holds
+    return a.rows.high - a.rows.low + a.columns.high - a.columns.low + 1
+
+priv fn same_line(a: Area, b: Area): Bool //<
+    //< Whether both are one column, or both one row, and hold as many cells
+    a_column: = a.columns.low == a.columns.high
+    b_column: = b.columns.low == b.columns.high
+    a_row: = a.rows.low == a.rows.high
+    b_row: = b.rows.low == b.rows.high
+    return (a_column && b_column || a_row && b_row) && length_of(a) == length_of(b)
+
+priv fn spot_in(a: Area, i: Sz): Spot //< the `i`th cell of a line, from its top or its left
+    if a.columns.low == a.columns.high
+        return Spot::{ .table = a.table, .row = a.rows.low + i, .column = a.columns.low }
+    return Spot::{ .table = a.table, .row = a.rows.low, .column = a.columns.low + i }
+
+priv fn ordered(a: Sz, b: Sz): Span
+    return Span::{ .low = a, .high = b } if a <= b else Span::{ .low = b, .high = a }

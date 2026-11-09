@@ -35,7 +35,7 @@ function ksmdFiles(ks, api) {
   let choosing = false; // whether the dialog is open
   let sources = new Map(); // each included source's path, and what the server answered for it
   let images = new Map(); // each image's path, and its bytes
-  const shown = new Map(); // each image's path, and what its clause shows: { url, w } or { why }
+  const shown = new Map(); // each image's path, and what its clause shows: { url } or { why }
 
   // Open and Save stand in the File menu only where the local server opens files; Print always does.
   // The quick access bar shows them where the menu does.
@@ -83,10 +83,7 @@ function ksmdFiles(ks, api) {
     box.textContent = "";
     let taken = false;
     for (const [label, act] of choices) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = label;
-      b.addEventListener("click", () => {
+      const b = ks.button(label, null, null, () => {
         if (taken) return;
         taken = true;
         box.textContent = "";
@@ -324,7 +321,7 @@ function ksmdFiles(ks, api) {
         continue;
       }
       if (r.why) return { why: r.why };
-      return { url: URL.createObjectURL(new Blob([bytes], { type: r.t })), w: r.w };
+      return { url: URL.createObjectURL(new Blob([bytes], { type: r.t })) };
     }
     return { why: "this image's header is too long to read. Save the image again" };
   }
@@ -333,7 +330,7 @@ function ksmdFiles(ks, api) {
 
   // What a new functions file starts with: one function to call, and how to write more.
   const STARTER = "//< Functions this document's formulas call. Each `pub fn` is one, by its name:\n" +
-    "//< =twice(A1) calls the one below. ksmd's README, \"Write your own functions\", says more.\n\n" +
+    "//< =twice(A1) calls the one below. \"Your own functions\" in ksmd/docs/SPEC-editing-page.md says more.\n\n" +
     "pub fn twice(x: F64): F64 //< the number doubled\n    return x * 2.0\n";
 
   // A path from the root, written from the folder `from` (no slash at either end).
@@ -434,10 +431,8 @@ function ksmdFiles(ks, api) {
       }
       const img = document.createElement("img");
       img.src = s.url;
-      img.alt = place.getAttribute("aria-label") || "";
-      // A scale is a share of the image's own pixels, one to one CSS pixel at 100%. Its height
-      // follows, and the stylesheet's max-width keeps it within the text.
-      if (fig.dataset.scale) img.style.width = `${(s.w * Number(fig.dataset.scale)) / 100}px`;
+      // An image with no alt text only decorates (`view.js`), so `alt=""` leaves it unread.
+      img.alt = fig.dataset.alt || "";
       place.replaceWith(img);
     }
   }

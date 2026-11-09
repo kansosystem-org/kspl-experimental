@@ -20,6 +20,9 @@ priv const PUT_BODY: U8[] = "かんそ\nwritten\n" //< the body written back
     //< **Include something outside ASCII.** If anything on the way treats the bytes as a string,
     //< only this shows it.
 
+const PAGE_BODY: U8[] = "<title>local page</title>\n" //< the page each `--local` run names
+    //< It stands outside the root, so the root's own `index.html` ("root index") never answers `/`.
+
 priv const CEILING: Sz = 8 * 1024 * 1024 //< the protocol's ceiling on a written file
     //< It is the number "Files" in `docs/SPEC-local-server.md` sets, which a page relies on, so
     //< the check holds the server to the protocol rather than to its own constant.
@@ -101,9 +104,15 @@ priv fn token_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     // **The page itself needs no token.** The page is how the token is passed on,
     // so requiring one there leaves no way to pass it.
     page: = client.get(port, "/", "", arena)!
-    ok1: = page.status == 200 && page.body.equals("root index\n")
+    ok1: = page.status == 200 && page.body.equals(PAGE_BODY)
     verdict.check("even on --local the page is handed out without a token", ok1,
         client.shown(page, arena))
+    guarded("the page", page, arena)
+    // **The root's own index never stands in for the page**: an HTML file there would get the
+    // token from the URL the server prints.
+    named: = client.get(port, "/index.html", "", arena)!
+    verdict.check("--local answers /index.html with the named page, not the root's index",
+        named.status == 200 && named.body.equals(PAGE_BODY), client.shown(named, arena))
     // **Every other file needs the token.** From the token's origin, an HTML file in the root could
     // read it. And any program on this machine could read the root. The page reads its pictures
     // through `/api/file`.
@@ -112,6 +121,7 @@ priv fn token_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
         nm_o: = arena.text().s("--local hands out no file but the page without a token: ").s(target)
             .take()
         client.expect_status(nm_o, other, 401, arena)
+        guarded(target, other, arena)
     // **Without the token, a link answers as every other name does.** Resolved before the token is
     // checked, a link answers 403 and any other name 401. A client without the token then learns
     // which names under the root are links.
@@ -128,6 +138,15 @@ priv fn token_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     verdict.check("--local hands out a file under the root to the token",
         with_token.status == 200 && with_token.body.equals("one\n"),
         client.shown(with_token, arena))
+
+priv fn guarded(what: U8[], r: client.Resp, arena: Arena$@) //<
+    //< Checks that a local answer refuses every frame, sends no referrer, and says nosniff
+    //< ("What guards the page in the browser" in `docs/SPEC-local-server.md`)
+    verdict.check(arena.text().s("--local refuses frames and referrers, and says nosniff: ").s(what)
+        .take(),
+        client.header(r.head, "content-security-policy").equals("frame-ancestors 'none'") &&
+        client.header(r.head, "referrer-policy").equals("no-referrer") &&
+        client.header(r.head, "x-content-type-options").equals("nosniff"), r.head)
 
 priv fn host_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< the `Host` a request names
@@ -294,6 +313,11 @@ priv fn list_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!clie
         capped.status == 200 && capped.body.ends_with("\"more\":true}"),
         client.shown(capped, arena))
 
+fn digest(bytes: U8[], arena: Arena$@): U8[] //< the SHA-256 of `bytes` in lowercase hex
+    $hex: U8[sha256.HEX_LEN] = ::{}
+    sha256.write_hex(sha256.hash(bytes), U8$[]::hex)
+    return arena.dup_str(U8[]::hex)
+
 priv fn conditional_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< A stale writer and a second creator must leave the first writer's bytes intact.
     path: = "/api/file?path=conditional.txt"
@@ -302,9 +326,8 @@ priv fn conditional_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Ht
     client.expect_status("conditional creation succeeds once", first, 200, arena)
     second: = client.put_file(port, path, missing, "overwrite", arena)!
     client.expect_status("conditional creation refuses an existing file", second, 409, arena)
-    $hex: U8[sha256.HEX_LEN] = ::{}
-    sha256.write_hex(sha256.hash("original"), U8$[]::hex)
-    expected: = arena.text().s(auth).s("X-Kanso-If-Content: ").s(U8[]::hex).s("\r\n").take()
+    expected: = arena.text().s(auth).s("X-Kanso-If-Content: ").s(digest("original", arena))
+        .s("\r\n").take()
     saved: = client.put_file(port, path, expected, "winner", arena)!
     client.expect_status("matching content allows the write", saved, 200, arena)
     stale: = client.put_file(port, path, expected, "loser", arena)!

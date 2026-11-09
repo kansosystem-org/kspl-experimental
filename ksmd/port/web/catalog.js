@@ -57,13 +57,8 @@ function ksmdCatalog(ks) {
     note.setAttribute("role", "status");
     const buttons = document.createElement("div");
     buttons.className = "fx-buttons";
-    const insert = document.createElement("button");
-    insert.type = "button";
-    insert.className = "fx-insert";
-    insert.textContent = "Insert";
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
+    const insert = ks.button("Insert", "fx-insert");
+    const cancel = ks.button("Cancel");
     buttons.append(insert, cancel);
     d.append(title, find, body, note, buttons);
     document.body.appendChild(d);
@@ -252,10 +247,8 @@ function ksmdCatalog(ks) {
       box.focus();
       if (!inserted) box.setSelectionRange(caret[0], caret[1]);
       ks.suggest.refresh();
-    } else if (chosenCell()) {
-      ks.range.focus();
     } else {
-      ks.root.focus();
+      ks.focusBack(null);
     }
   }
 

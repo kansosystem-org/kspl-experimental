@@ -842,31 +842,6 @@ const SECTIONS = {
     fs.rmSync(path.join(ctx.root, "wideimg.ksmd"), { force: true });
   },
 
-  // An image's scale is a share of its own pixels, and the text's width stops it.
-  async scaledImage(ctx) {
-    fs.writeFileSync(path.join(ctx.root, "pics/gray.png"), grayPng(400, 100));
-    fs.writeFileSync(path.join(ctx.root, "scaled.ksmd"), `${H}:::image src="pics/gray.png" alt="Gray"\n:::\n`);
-    const d = await tab(ctx, "?doc=scaled.ksmd");
-    const img = "document.querySelector('#doc .figure .picture img')";
-    const shownWidth = () => d.js(`${img}.getBoundingClientRect().width`);
-    await d.until(`!!${img} && ${img}.complete && ${img}.naturalWidth === 400`, 15000);
-    await d.js("window.prompt = () => '50'");
-    await d.click("#doc > .figure .image-scale");
-    await d.until(`!!${img} && ${img}.complete && ${img}.getBoundingClientRect().width < 300`, 15000);
-    const half = await shownWidth();
-    check((await d.js("ksmd.source()")).includes(' scale="50%"') && Math.abs(half - 200) < 1,
-      "Scale… at 50 shows the picture at half its own width", `${half} | ${await d.js("ksmd.source()")}`);
-    await d.js("window.prompt = () => '400'");
-    await d.click("#doc > .figure .image-scale");
-    await d.until(`!!${img} && ${img}.getBoundingClientRect().width > 300`, 15000);
-    const text = await d.js("(() => { const doc = document.getElementById('doc'), s = getComputedStyle(doc); " +
-      "return doc.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight); })()");
-    const wide = await shownWidth();
-    check(Math.abs(wide - text) < 1 && wide < 1600, "at 400 it stops at the text's width", `${wide} ${text}`);
-    await ctx.browser.closeTab(d.page);
-    fs.rmSync(path.join(ctx.root, "pics/gray.png"), { force: true });
-    fs.rmSync(path.join(ctx.root, "scaled.ksmd"), { force: true });
-  },
 };
 
 const helpers = { tab, idle, said, noticed, choose, typeAtEnd, start, openInDialog };

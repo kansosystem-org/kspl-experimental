@@ -51,7 +51,7 @@ const COMMANDS = [
   ["filter-column", "Filter this column…", "Alt+↓"], ["filter-value", "Show only rows with this value"],
   ["filter-clear", "Show all rows"],
   ["format-none", "General: as calculated", "Ctrl+Shift+~"], ["format-number", "Number: 1234.50"],
-  ["format-grouped", "Thousands: 1,234.50", "Ctrl+Shift+!"], ["format-percent", "Percent: 12%", "Ctrl+Shift+%"],
+  ["format-grouped", "Thousands: 1,235", "Ctrl+Shift+!"], ["format-percent", "Percent: 12%", "Ctrl+Shift+%"],
   ["format-currency", "Currency…", "Ctrl+Shift+$"], ["format-more", "More decimal places"],
   ["format-fewer", "Fewer decimal places"], ["format-date", "Date: 2026-10-26"],
   ["format-date-slash", "Date: 2026/10/26"],

@@ -39,12 +39,24 @@
 | View ▸ One line per cell | Every table row shows one line; a cell shows whole while it is edited |
 | View ▸ Read-only | The page takes no edit. Finding, filters, printing and links still work |
 
+**Every part works with keys alone:**
+
+| To | Do |
+| :-- | :-- |
+| Reach the menu bar | `F10`. `F10` again, or `Esc`, gives the focus back where it was |
+| Move along the menu bar or the quick access bar | `←` and `→`; `Home` and `End` go to the first and last. Each bar is one stop of `Tab` |
+| Open a menu from its name | `↓`, `Enter` or `Space`; `↑` opens it on its last item |
+| Move in a menu | `↑` and `↓`, `Home` and `End`; `→` opens a flyout and `←` closes it |
+| Close a panel, such as Page setup | `Esc` or Cancel. The focus goes back where it was before the panel opened |
+
 ### The status bar
 
 | Part | What it shows or does |
 | :-- | :-- |
 | The chosen cell | Its address and what was typed in it, as `C2  =hex_to_dec(B2)`; a range shows `C2:D5`. Its tooltip holds a long formula whole |
-| The document's own functions | Which ones the chosen cell calls, as `Uses tax from mine.kspl (this document's own)`; or why it shows `#BLOCKED!` |
+| Why it shows an error | The mark and its reason, as `#VALUE!: B7 holds text, which arithmetic cannot use`. Its tooltip holds a long reason whole |
+| The document's own functions | Which ones the chosen cell calls, as `Uses tax from mine.kspl (this document's own)` |
+| Note | The note on the chosen cell, or on the paragraph or heading at the caret, as `Note: Count again` |
 | Message | What the last action said, until the next one |
 | Filter | `5 of 120 rows shown` while a filter hides rows of the chosen table |
 | Page | The printed page the caret or the chosen cell stands on, as `Page 3 of 12` |
@@ -86,7 +98,7 @@
 
 **A paste takes the clipboard's plain text.** Where the clipboard also held formatting, the page says it was not kept. Rows of tab-separated values pasted into text make a table.
 
-**An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks nothing. The file is written in the document's data folder, such as `OfficeMemo-data/image-1.png`, so the document needs a file first. Caption… in the image's tools gives it a caption, which a reference can name. Alt text… gives it a description for someone who cannot see it.
+**An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks nothing. The file is written in the document's data folder, such as `OfficeMemo-data/image-1.png`, so the document needs a file first. Caption… in the image's tools gives it a caption, which a reference can name. Alt text… gives it a description for someone who cannot see it. A screen reader passes over an image with none, as decoration.
 
 **Insert ▸ Include… shows another document's blocks in place.** Its Edit button opens that document in a tab of its own.
 
@@ -102,17 +114,24 @@
 
 | To | Do |
 | :-- | :-- |
-| Choose a cell | Press on it. `Enter`, `Tab` and the arrow keys move the choice |
+| Choose a cell | Press on it. `Enter` moves the choice down and `Tab` right, and with `Shift` up and left. The arrow keys move it too |
+| Go to the edge of the values | `Ctrl`+an arrow key: to the last value before an empty cell, or over empty cells to the next value |
+| Go to a row's first or last cell | `Home`, `End` |
+| Go to the first data cell or the last cell | `Ctrl`+`Home`, `Ctrl`+`End` |
+| Add a row at the end | `Tab` in the last cell. `Tab` past a row's last cell goes on to the next row's first |
 | Edit a cell | Press twice, or press `F2`: the arrow keys then move the caret inside the cell. Typing on a chosen cell replaces its value, and an arrow key then moves to the next cell |
-| Take the edit | `Enter`, `Tab`, or a press elsewhere. `Esc` drops it |
+| Take the edit | `Enter`, `Tab`, or a press elsewhere. `Shift`+`Enter` takes it and moves up. `Esc` drops it |
+| Give back the value you typed over | `Esc` or `Ctrl`+`Z`, while the cell you typed into is still open |
 | Type a line break in a cell | `Alt`+`Enter` |
 | Leave the table | `Esc`, a press in the text, or an arrow key past the first or last row. An arrow key puts the caret on the text after the table, or before it |
-| Choose a range | `Shift`+press, `Shift`+an arrow key, or a drag across cells |
-| Choose whole rows or columns | Press on their row numbers or column letters |
+| Choose a range | `Shift`+press, `Shift` with any key that moves the choice, or a drag across cells |
+| Choose whole rows or columns | Press on their row numbers or column letters. `Shift`+`Space` chooses the rows of the chosen cells, and `Ctrl`+`Space` their columns |
 | Choose the whole table | `Ctrl`+`A` twice, the corner left of the letters, or Table ▸ Table ▸ Select table |
 | Clear the chosen cells | `Delete` or `Backspace`. On the whole table, they remove it |
 
 **A right-click on a cell, a row number or a column letter opens the table's menu there.** `Shift`+`F10` opens it from an open cell.
+
+**A screen reader reads a table as a grid.** A chosen cell says its value and address, such as `6, C1`, then its formula, the reason for its error, its note and its link. A range says how far it reaches.
 
 **What you type in a cell is read as one of four kinds of value:**
 
@@ -185,12 +204,12 @@
 | Colour a cell's text or its ground | The quick access bar's Font colour and Fill colour, on the chosen cells |
 | Set a cell's font size | Format ▸ Font size |
 | Format numbers | Table ▸ Number format: General, Number, Thousands, Percent, Currency…, Date, and more or fewer decimal places |
-| Offer a column's values as a list | Table ▸ Columns ▸ Choices…, such as `Open=red, Done=green`. Colours are red, yellow, green, blue, orange, purple and gray |
+| Offer a column's values as a list | Table ▸ Choices…, such as `Open=red, Done=green`. Colours are red, yellow, green, blue, orange, purple and gray |
 | Colour each row by a column's choice | Table ▸ Look ▸ Colour rows by this column |
 | Colour cells by their value | Table ▸ Look ▸ Colour by value…: below, above, equal to, empty, or a colour scale |
 | Show a repeated value once, as merged | Table ▸ Look ▸ Merge repeated values |
 | Show a value centred across empty cells to its right | Choose the cells, then Format ▸ Centre across columns, or Table ▸ Look ▸ Centre across columns |
-| Write a note on a cell | Table ▸ Note ▸ Note… (`Shift`+`F2`); a red corner marks it |
+| Write a note on a cell | Table ▸ Note… (`Shift`+`F2`); a red corner marks it |
 | Link a cell's text | Insert ▸ Link… on the chosen cell. `Ctrl`+press opens it |
 
 **A number format on columns chosen by their letters becomes the column's own**, which new rows follow. On cells, it is theirs alone.
@@ -217,7 +236,8 @@
 | `D1:D9` | A range of cells |
 | `budget.D1`, `budget.D1:D9` | Cells of the table named `budget` in the same document |
 | `"Q1 sales".D1` | Cells of a table whose name is not plain lowercase |
-| `map.D`, `map.D:F` | Whole columns, every data row, rows added later included |
+| `D`, `D:F` | Whole columns of the formula's own table, every data row, rows added later included |
+| `map.D`, `map.D:F` | Whole columns of the table named `map` |
 | `+ - * /` | Arithmetic |
 | `&` | Two texts joined |
 | `= <> < <= > >=` | Comparisons, giving `true` or `false` |
@@ -228,6 +248,10 @@
 **While a formula is typed, each reference shows in a colour of its own, with a frame of that colour round the cells it names.** The first is blue and the second red, then purple, green, orange, teal, magenta and brown. The same cells written twice keep one colour. A reference to another table is framed in that table; one that names no cell stays plain. The colours go when the cell closes.
 
 **While a formula is typed, a press on a cell writes its reference**, and a drag writes a range. `F4` turns the reference at the caret from `D1` to `$D$1`, `D$1`, `$D1`, then `D1` again. AutoSum (`Alt`+`=`) writes `=sum(…)` over the column above the chosen cell, or the row left of it.
+
+**`name(D)` gives a column's name as text**, as its names row holds it, and changes when the name changes. `name(map.D)` gives the name of a column of the table `map`. While a formula is typed, a press on a column's letter or name writes that whole column: `D` in the formula's own table, `map.D` in another.
+
+**`like(A1, "INV-*")` asks whether a text matches a pattern**: `*` stands for any characters, `?` for one, and case does not count. `=sum_if(D, like(A, "INV-*"))` adds column D on the rows whose A starts with `INV-`. Write `~*`, `~?` or `~~` for a `*`, `?` or `~` itself.
 
 | To | Do |
 | :-- | :-- |
@@ -241,6 +265,19 @@
 
 **Kinds never turn into each other.** Text in arithmetic is `#VALUE!`, even text that looks like a number. An empty cell is 0, empty text or `false`, as the other side needs.
 
+**Point at a cell that shows an error, or choose it, to see why.** Its tooltip and the status bar give the reason in words, and what to write instead where that is clear:
+
+| The cell holds | The reason says |
+| :-- | :-- |
+| `=hex_to_dec(0x100000)` | `hex_to_dec reads digits as text: 0x100000 is already the number 1048576. Write =0x100000, or hex_to_dec("100000")` |
+| `=B7+1`, with text in B7 | `B7 holds text, which arithmetic cannot use` |
+| `=foo(1)` | `no function is called foo` |
+| `=sum_if(D1:D9)` | `the arguments do not fit sum_if. Write sum_if(values, condition)` |
+| `=A3*2`, where A3 shows `#DIV/0!` | `A3 shows #DIV/0!`; choose A3 to see its own reason |
+
+The reason is worked out each time the table is calculated. It is not saved in the file.
+
+
 | Mark | The cause |
 | :-- | :-- |
 | `#VALUE!` | A value of the wrong kind |
@@ -252,6 +289,7 @@
 | `#SHAPE!` | Ranges of shapes that do not match, as in `sum_if` |
 | `#SYNTAX!` | The formula does not read. A literal such as `0x10` written as the digits of `hex_to_dec`, `bin_to_dec`, `hex_to_bin` or `bin_to_hex` does not read either: write `=0x10`, or `hex_to_dec("10")` |
 | `#BLOCKED!` | It may call the document's own functions, which you have not allowed yet |
+| `#LIMIT!` | The document's formulas read more than 500 million cell values, so this cell was not calculated |
 
 ### Your own functions
 
@@ -318,7 +356,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 
 ### Functions that decide what they calculate
 
-**These functions choose which arguments are calculated**, so the calculator reads them itself. Their list is written from `ksmd/calc/help.kspl`.
+**These functions choose which arguments are calculated, or read a column itself**, so the calculator reads them itself. Their list is written from `ksmd/calc/help.kspl`.
 
 | Function | What it gives | For example |
 | :-- | :-- | :-- |
@@ -329,6 +367,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | `average_if(values, condition)` | the average of the numbers of `values` on the rows where the condition holds | `average_if(D1:D9, B1:B9 = "Pens")` |
 | `lookup(key, keys, values, otherwise)` | the value beside the first key that equals `key`, else `otherwise` | `lookup("Pens", B1:B9, D1:D9, 0)` |
 | `sum_product(a, b)` | each cell of `a` times the cell of `b` beside it, added | `sum_product(C1:C9, D1:D9)` |
+| `name(column)` | the column's name, as text, as the names row holds it | `name(B)` |
 
 ### Functions by name
 
@@ -349,6 +388,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | `hex_to_dec(digits, [width])` | the number hexadecimal digits name | `hex_to_dec("100000")` is `1048576` |
 | `left(t, count)` | the first `count` characters | `left("pencil", 3)` is `pen` |
 | `len(t)` | how many characters the text holds | `len("pencil")` is `6` |
+| `like(t, pattern)` | whether the whole text matches the pattern, `*` and `?` standing for any characters | `like("Pens", "p?n*")` is `true` |
 | `max(xs…)` | the greatest; of dates alone, the latest date | `max(3, -1, 7)` is `7` |
 | `mid(t, start, count)` | `count` characters from the `start`th, the first being 1 | `mid("pencil", 2, 3)` is `enc` |
 | `min(xs…)` | the least; of dates alone, the earliest date | `min(3, -1, 7)` is `-1` |
@@ -371,7 +411,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 
 **An image and a chart have the tools Rectangle, Arrow, Line, Pen, a colour, Text… and Delete.** Drag across the picture to draw; press a shape to choose it and drag to move it. Pen draws where the pointer goes. With `Shift` held, a rectangle is a square, and a line or an arrow keeps to a multiple of 45 degrees.
 
-**To change an image's size, drag the square at its lower right corner, or press Width… and type a percent of the text width.** **To size it by its own pixels, press Scale… and type a percent of its own size, 1 to 400**, such as 50 for half. The image stays within the text. A width takes the place of a scale, and a scale takes the place of a width. An empty answer to either fits the image to the text again. **To show two images side by side, give each a width that adds up to 100% or less, such as 45% each.**
+**To change an image's size, drag the square at its lower right corner, or press Width… and type a percent of the text width.** An empty answer fits it to the text again. **To show two images side by side, give each a width that adds up to 100% or less, such as 45% each.**
 
 ## Diagrams
 
@@ -423,6 +463,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | A table | 10,000 data rows, 100,000 cells |
 | A formula | 4,096 bytes, 64 levels of nesting |
 | A text a formula makes | 32,767 bytes |
+| The cell values all formulas read, each time the document calculates | 500 million. Past it, each formula not yet calculated shows `#LIMIT!` |
 | A diagram | 1,000 shapes, 2,000 arrows and lines |
 | The editor's memory | 128 MiB. Past it, the page asks you to save and open the document again |
 
@@ -552,7 +593,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | Filter ▸ Show all rows |  |
 | Number format ▸ General: as calculated | `Ctrl`+`Shift`+`~` |
 | Number format ▸ Number: 1234.50 |  |
-| Number format ▸ Thousands: 1,234.50 | `Ctrl`+`Shift`+`!` |
+| Number format ▸ Thousands: 1,235 | `Ctrl`+`Shift`+`!` |
 | Number format ▸ Percent: 12% | `Ctrl`+`Shift`+`%` |
 | Number format ▸ Currency… | `Ctrl`+`Shift`+`$` |
 | Number format ▸ More decimal places |  |
@@ -582,4 +623,4 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | Table ▸ Leave out of print |  |
 | Table ▸ Remove table |  |
 
-**A table's right-click menu holds Cut, Copy and Paste, then the Table menu's groups.** They are Rows, Columns, Look, Size, Fill, Sort, Filter, Number format, Group, AutoSum, Note, Table.
+**A table's right-click menu holds Cut, Copy, Copy formula, Paste and Paste values, then the Table menu's groups.** They are Rows, Columns, Look, Size, Fill, Sort, Filter, Number format, Group, AutoSum, Note, Table.

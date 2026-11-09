@@ -10,13 +10,16 @@ function ksmdNotes(ks) {
   function mark(wrap, notes) {
     wrap.notes = new Map();
     for (const [r, c, text] of notes) {
-      wrap.notes.set(`${r}:${c}`, text);
+      wrap.notes.set(`${r} ${c}`, text);
       const el = wrap.querySelector(`[data-r="${r}"][data-c="${c}"]`);
       if (!el) continue;
       el.classList.add("has-note");
       el.title = `Note: ${text}`;
     }
   }
+
+  // The note on a cell of a rendered table, or "". Notes are kept by "row column", as links are.
+  const noteOf = (wrap, row, column) => (wrap.notes && wrap.notes.get(`${row} ${column}`)) || "";
 
   // Marks a paragraph or a heading that holds a note.
   function markBlock(el, note) {
@@ -31,7 +34,7 @@ function ksmdNotes(ks) {
     if (ks.where === "cell" && ks.cell) {
       const wrap = ks.view.blocks()[ks.cell.block];
       if (wrap && wrap.classList.contains("table") && ks.cell.row >= 0) {
-        return { cell: ks.cell, now: (wrap.notes && wrap.notes.get(`${ks.cell.row}:${ks.cell.column}`)) || "" };
+        return { cell: ks.cell, now: noteOf(wrap, ks.cell.row, ks.cell.column) };
       }
     }
     const s = window.getSelection();
@@ -63,5 +66,5 @@ function ksmdNotes(ks) {
 
   ks.handle(["note", "note-resolve"], (name) => ask(name === "note-resolve"));
 
-  ks.notes = { mark, markBlock };
+  ks.notes = { mark, markBlock, of: noteOf };
 }

@@ -272,7 +272,8 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
                 continue
             if shown.len == 0
                 shown = shown_path(rel, full, path, arena)
-            kept: = arena.dup_str(cut(lines.get(i).trim_spaces(), HIT_TEXT_BYTES))
+            said: = lines.get(i).trim_spaces()
+            kept: = arena.dup_str(said.utf8_head(HIT_TEXT_BYTES))
             hit: = Hit::{ .path = shown, .line = i + 1, .text = kept, .held = held }
             if held == words.len
                 whole.push(hit)
@@ -463,10 +464,10 @@ priv fn fits(sent: Sz, room: Sz): Bool //< whether `sent` bytes fit in `room`, b
 priv fn cut_sent(text: U8[], max: Sz): U8[] //<
     //< At most `max` bytes of the text, cut at a character's start, that take at most `max` bytes
     //< in a request
-    $kept: = cut(text, max)
+    $kept: = text.utf8_head(max)
     for sent_len(kept) > max
         over: = sent_len(kept) - max
-        kept = cut(kept, kept.len - over if over < kept.len else 0)
+        kept = kept.utf8_head(kept.len - over if over < kept.len else 0)
     return kept
 
 // ==========================================
@@ -486,11 +487,3 @@ priv fn holds_ignoring_case(line: U8[], lower_needle: U8[]): Bool //<
         if same
             return true
     return false
-
-fn cut(text: U8[], max: Sz): U8[] //< at most `max` bytes, cut at a character's start
-    if text.len <= max
-        return text
-    $end: = max
-    for end > 0 && (text[end] & 0xC0U8) == 0x80U8
-        end -= 1
-    return text.sub(0, end)

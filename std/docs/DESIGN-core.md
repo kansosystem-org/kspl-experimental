@@ -356,7 +356,7 @@ The rule is `docs/SPEC-programming-language.md` 7.2, the reasoning `docs/DESIGN-
 | Eager: returns a `List` | `str.split` / `json.Value.arr_list` / `fs.read_dir`, and each `std/seq` operation that needs the whole (`order_by` / `distinct`) | Nothing: the work is done on return |
 | Lazy: a chain | Only `where` / `select` | `for x in`, `to_list(arena)` or `count()` |
 
-**A function that returns elements in order and can allocate them all is eager, and returns a `List`.** A `List` is walked by index, so it is not given `Iter`, which would win over the index. The eager side allocates more, so only code that tolerates a slowdown can rely on it. Which code that is, `std/` included, is for `docs/DESIGN-principles.md` 8.3 to say.
+**A function that returns elements in order and can allocate them all is eager, and returns a `List`.** A `List` is walked by index, so it is not given `Iter`, which would win over the index. **A walk of a chain that a value already holds is an `Iter`** (`http.Headers.each`, `url.Query.each`, `json.Value.obj_members`). It hands out each link where it stands, so it allocates nothing and takes no arena. The eager side allocates more, so only code that tolerates a slowdown can rely on it. Which code that is, `std/` included, is for `docs/DESIGN-principles.md` 8.3 to say.
 
 **`order_by` is the one sort, and it is stable**: equal keys keep their order. So an answer built from a sorted list is the same on every run, and sorts by two keys compose. Its algorithm is described at `order_by` in `std/seq.kspl`. There is no unstable variant: its one gain, a sort in place, does not suit operations that return a new list anyway.
 

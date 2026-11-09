@@ -94,7 +94,7 @@ impl Progress
             r.written = 0
             r.from_call = from_call
             r.text.clear()
-        text = whole_chars(text)
+        text = text.utf8_complete()
         // The not-found marker shows nothing, in plain text as in a call: ksagent says it itself.
         if is_not_found_start(text)
             text = ""
@@ -404,15 +404,3 @@ priv fn simple_escape(e: U8): U8 //< the character a one-letter JSON escape stan
         return 12U8
     default
         return e
-
-priv fn whole_chars(t: U8[]): U8[] //< the text up to a last UTF-8 character still arriving
-    $back: Sz = 1
-    for back <= 3 && back <= t.len
-        c: = t[t.len - back]
-        if (c & 0xC0U8) == 0xC0U8
-            width: = 2 if c < 0xE0U8 else (3 if c < 0xF0U8 else 4)
-            return t.sub(0, t.len - back) if width > back else t
-        if (c & 0xC0U8) != 0x80U8
-            return t
-        back += 1
-    return t

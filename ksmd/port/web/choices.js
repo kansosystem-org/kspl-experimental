@@ -4,7 +4,7 @@
 // A choice can carry colours, as a tag does in Notion or Airtable: the cell that holds it shows
 // them, and so does its whole row where the table colours rows by that column (`color_rows`). A
 // column's colour rule still stands over them (`rules.js`, painted after).
-// The list is saved in the file (`choices` on the table); Table, Columns, Choices... sets it.
+// The list is saved in the file (`choices` on the table); Table, Choices... sets it.
 "use strict";
 
 // The colours a choice can take by name, as Excel's ready-made styles pair a text and a fill.

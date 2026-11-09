@@ -1,7 +1,7 @@
 #!/usr/bin/env -S ksplc run
 //< The way to redirect a child's standard output and standard error to named files
 //< `spawn_redirect` in `std/subproc`, and a long argument and environment value reaching a child
-//< whole.
+//< whole. Also which failed starts `ksplc run` tries again.
 //< Caution: **Do not check only "it does not fail"** — the check is that **both streams remain**.
 //< | Environment | How it breaks when the same path is passed twice |
 //< | :-- | :-- |
@@ -9,6 +9,7 @@
 //< | POSIX | it does not fail, but **the positions are independent** so one overwrites the other |
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_build"
+import "ksplc/tools/run_start"
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -80,6 +81,7 @@ priv fn ran(exe: U8[], out_path: U8[], err_path: U8[]): U8[] //<
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
+    check_held_codes()
     run_output_flush(arena)
     work: = fs.join(harness.tmp_dir(), "spawn", arena)
     fs.mkdir_all(work) catch
@@ -299,3 +301,13 @@ priv fn run_output_flush(arena: Arena$@) //< the output kept on an abnormal exit
         "    io.set_line_buffered()\n", CRASH, true, "", arena)
     check_bytes(arena)
     check_prompt(arena)
+
+priv fn check_held_codes() //<
+    //< Which failed starts `ksplc run` tries again: a file another program holds, on Windows alone
+    //< **Both answers are checked on every OS.** On POSIX 32 and 5 are `EPIPE` and `EIO`, no hold.
+    for code in I32[3]::{ 32, 5, 33 }
+        verdict.check("Windows tries a start again while another program holds the file",
+            run_start.held_by_another_on(code, true), "")
+        verdict.check("POSIX never takes the same number for a held file",
+            !run_start.held_by_another_on(code, false), "")
+    verdict.check("a missing file is not tried again", !run_start.held_by_another_on(2, true), "")

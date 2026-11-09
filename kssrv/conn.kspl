@@ -120,7 +120,7 @@ struct Conn
     // for `IDLE_CONN_US` is dropped (`sweep_done` in `kssrv/main.kspl`), a holding one excepted.
     moved_us: I64
     // When the first byte of the request still arriving came, on the monotonic clock; 0 while no
-    // request is partly read. **A request must arrive whole within `request_time_us`**, however
+    // request is partly read. **A request must arrive whole within `REQUEST_TIME_US`**, however
     // its bytes trickle in (`sweep_done` in `kssrv/main.kspl`).
     request_since_us: I64
     // How long `inbuf` must be before the request in it is parsed again; 0 until its head ends.
@@ -142,6 +142,7 @@ struct Conn
     tls: Tls_session$@
     tls_closed: Bool //< whether its close_notify is queued (`https.close_notify`)
     accepted_us: I64 //< when it was accepted, on the monotonic clock; the handshake counts from it
+    local: Bool //< whether the server is for local use (`--local`), which adds headers (`guarded`)
 
 struct Conn_table //< the connection table
     //< Caution: **Put the array in a struct's field.** `@` on an array makes a pointer to the first
@@ -164,7 +165,7 @@ fn regular_file_size(path: U8[]): Sz? //<
         return .none
     return .some(Sz::info.size)
 
-fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
+fn conn_new(stream: net.Tcp_stream$@, serial: I64, local: Bool): Rc<|Conn|>
     fresh: Conn = ::{
         .stream = stream,
         .arena = Arena(CONN_ARENA_CHUNK),
@@ -173,6 +174,7 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
         .serial = serial,
         .moved_us = sys.mono_us(),
         .accepted_us = sys.mono_us(),
+        .local = local,
     }
     return Rc<|Conn|>(fresh)
 
@@ -294,11 +296,29 @@ priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool, allow: U8[]): http.Heade
     //< The headers every answer carries; the length is the builder's to add
     //< `allow` non-empty adds `Allow`, which a 405 must carry (RFC 9110 §15.5.6): without it the
     //< client cannot tell which method would have been taken.
-    $b: = http.headers(c.arena).add("Content-Type", ctype)
-        .add("Connection", "keep-alive" if keep else "close")
+    $b: = guarded(c, http.headers(c.arena).add("Content-Type", ctype)).add("Connection",
+        "keep-alive" if keep else "close")
     if allow.len > 0
         b = b.add("Allow", allow)
     return b.build()
+
+// **Every answer says that its type is the one named**, so a browser never runs a file as a type it
+// guessed. Caution: **Facing outward, add nothing more**: framing and the referrer are a public
+// site's own choice ("Headers on every answer" in `kssrv/docs/SPEC-api.md`).
+priv const NOSNIFF: U8[] = "nosniff"
+
+// **A local answer also refuses every frame and sends no referrer.** The page holds the token and
+// writes files, so another site must not frame it and lure a press. No script policy is sent:
+// only the page knows what it runs, so a page sets one in a `<meta>`.
+priv const FRAMES: U8[] = "frame-ancestors 'none'"
+
+priv fn guarded(c: Conn@, b: http.Header_builder): http.Header_builder //<
+    //< `b` with the headers that guard the answer: `NOSNIFF` always, and `FRAMES` with no referrer
+    //< for local use
+    $out: = b.add("X-Content-Type-Options", NOSNIFF)
+    if c.local
+        out = out.add("Content-Security-Policy", FRAMES).add("Referrer-Policy", "no-referrer")
+    return out
 
 priv fn unbuilt(c: Conn$@) //< gives up an answer the builder refused, closing without sending
     //< A CRLF in a header or similar is this server's mistake, not the client's. The builder left
@@ -311,7 +331,8 @@ fn queue_stream_head(c: Conn$@) //<
     //< `GET /api/here` sends this and nothing more.
     //< Caution: **Do not make it `keep-alive`.** With no length, only the close tells the client
     //< where the response ends.
-    head: = http.headers(c.arena).add("Content-Type", "application/octet-stream")
+    head: = guarded(c,
+        http.headers(c.arena).add("Content-Type", "application/octet-stream"))
         .add("Connection", "close").build()
     // **Do not write it with the function that sets a length.** `format_response` fills in
     // `Content-Length: 0`, and a client that follows the protocol then reads not one byte of the

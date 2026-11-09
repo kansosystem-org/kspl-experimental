@@ -270,7 +270,12 @@ priv fn reusable(root: U8[], state_path: U8[]): U8[] //<
     //< Returns the URL of a server in the note that can reach this document
     //< **Only a server for the same folder** (kssrv refuses anything outside its root). **The port
     //< is not compared**; the port named is only where a new server starts looking (`free_port`).
-    body: = io.read_file(state_path, null) catch
+    //< A note that stands but cannot be read is said on standard error. A new server then starts,
+    //< so the document still opens.
+    body: = read_note(state_path) catch
+        io.err()
+            .s("\{sys.program_name()\}: cannot read the note of servers, so none is reused: \
+                \{state_path\}\n")
         return ""
     count: = aim.state_count(body)
     for i in Range.asc(count)

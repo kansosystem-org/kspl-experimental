@@ -23,9 +23,7 @@ function ksmdRefs(ks) {
   function read(text) {
     const out = ks.out(ks.w.ksmd_web_references(block, ks.put(text)));
     if (!out) return [];
-    const bytes = ks.enc.encode(text);
-    const dec = new TextDecoder();
-    const units = (n) => dec.decode(bytes.slice(0, n)).length;
+    const units = (n) => ks.view.u16At(text, n);
     return JSON.parse(out).map(([from, to, u, ra, ca, rb, cb, whole]) => {
       const r1 = Math.min(ra, rb);
       const r2 = Math.max(ra, rb);

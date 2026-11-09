@@ -57,6 +57,7 @@ SECTIONS
      * the previous panic by its magic value. */
     .noinit_panic (NOLOAD) : {
         . = ALIGN(4);
+        _panic_rec_start = .; /* where `cortex_m_panic_record_bounds.kspl` plants records */
         *(.noinit_panic)
     } > RAM
 }

@@ -333,7 +333,7 @@ priv fn cell_looks()
         "a look in braces ends its cell, with '}' last", 4, 7)
 
 priv fn sized(name: U8[], value: U8[], arena: Arena$@): U8[] //<
-    //< A source with an image that takes this attribute, `width` or `scale`
+    //< A source with an image that takes this attribute, `width` or the refused `scale`
     return arena.text().s("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" ").s(name).s("=\"").s(value)
         .s("\"\n:::\n").take()
 
@@ -452,11 +452,9 @@ priv fn clause_refusals()
     for wrong in U8[][]::{ "0%", "101%", "40", "40px", "4.5%" }
         refused(sized("width", wrong, arena),
             "width is a share of the text width, \"1%\" to \"100%\", or leave it out", 3, 29)
-    for wrong in U8[][]::{ "0%", "401%", "1000%", "50", "50px", "-5%" }
-        refused(sized("scale", wrong, arena),
-            "scale is a share of the image's own size, \"1%\" to \"400%\", or leave it out", 3, 29)
-    refused(sized("width", "40%\" scale=\"50%", arena),
-        "an image takes a width or a scale, not both. Keep one of them", 3, 41)
+    refused(sized("scale", "50%", arena),
+        "':::image' no longer takes scale. Give its size as a share of the text width with width",
+        3, 29)
     defer $wide: = Str_builder()
     wide.s("%ksmd 1\n\n:::table name=\"t\"\n")
     for _ in Range.asc(257)

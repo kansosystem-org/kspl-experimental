@@ -20,16 +20,17 @@ pub typedef Panic_hook = fn(msg: U8[]): Void //<
     //< The default, `null`, stops execution without printing a message.
 pub $panic_hook: Panic_hook = Panic_hook::null
 
-priv const PANIC_MSG_CAP: Sz = 128 //<
+const PANIC_MSG_CAP: Sz = 128 //<
     //< The maximum number of message bytes stored in a panic record
     //< The port's linker script reserves `.noinit_panic` as RAM that startup does not zero.
-    //< After a warm reset without power loss, `take_panic_record()` can read the record.
+    //< After a warm reset without power loss, `take_panic_record()` in `std/panic_record` reads
+    //< the record, an import of a firmware's own, so no other program carries the reading.
     //< Recording a panic does not trigger a reset. The caller must arrange one, for example with a
     //< watchdog.
-priv const PANIC_STACK_WORDS: Sz = 16
-priv const PANIC_MAGIC: U32 = 0x4B505244 // ASCII "KPRD"
+const PANIC_STACK_WORDS: Sz = 16
+const PANIC_MAGIC: U32 = 0x4B505244 // ASCII "KPRD"
 
-priv struct _Panic_record
+struct _Panic_record
     magic: U32
     msg_len: Sz
     msg: U8[PANIC_MSG_CAP]
@@ -38,7 +39,7 @@ priv struct _Panic_record
     stack: Sz[PANIC_STACK_WORDS]
 #cfg(freestanding)
 #section(".noinit_panic")
-priv $_panic_rec: _Panic_record = ::{}
+$_panic_rec: _Panic_record = ::{}
 
 // Caution: Keep `#cfg(freestanding)`. Every program includes `lang`.
 // On a hosted target, this declaration would conflict with a runtime definition of the same name.
@@ -63,30 +64,6 @@ priv fn record_panic(msg: U8[])
     for i in Range.asc(words)
         (stack_dst + i)$ = (sp_ptr + i)$
     _panic_rec.magic = PANIC_MAGIC
-
-pub struct Panic_info //< information about a panic from the previous run
-    //< The stack fragment is separate because a fixed-length array cannot be returned by value.
-    //< Read each word with `panic_stack_word()`, using `0 <= index < stack_len`.
-    pub msg: U8$[] //< the panic's message
-    pub sp: Sz //< the stack pointer when it happened
-    pub stack_len: Sz //< how many words of the stack were kept, read with `panic_stack_word`
-
-// Reading clears the record so the next startup does not report it again.
-#cfg(freestanding)
-pub fn take_panic_record(): Panic_info? //< the previous run's panic, if present
-    if _panic_rec.magic != PANIC_MAGIC
-        return .none
-    info: = Panic_info::{ .msg = U8$[]::{ .ptr = _panic_rec.msg[0]@, .len = _panic_rec.msg_len },
-        .sp = _panic_rec.sp, .stack_len = _panic_rec.stack_len }
-    _panic_rec.magic = 0
-    return .some(info)
-
-#cfg(freestanding)
-pub fn panic_stack_word( //< one word from the saved stack
-    index: Sz, //< which word, below `Panic_info.stack_len`
-): Sz //< the word; an `index` out of range is not caught
-    base: = _panic_rec.stack[0]@
-    return (base + index)$
 
 // Caution: **Write output directly with libc.** Using `io` would add the whole library to `lang`.
 // Interpolation requires `str`, so this function writes the caller's message without formatting it.

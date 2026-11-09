@@ -112,3 +112,36 @@ static void kspl_check_stdout_at_exit(void) {
         err != 0 ? " (" : "", err != 0 ? strerror(err) : "", err != 0 ? ")" : "");
     _exit(1);
 }
+
+/* ============================================================
+ * The modes std/io's open takes
+ *
+ * kspl_fopen_cstr (hosted_fs.c and hosted_fs_win.c) opens a file on each OS from the one answer
+ * below, so a mode cannot mean one thing on POSIX and another on Windows.
+ * ============================================================ */
+/* What an open asks of the file for a mode, in KSPL_OPEN_* bits; -1 where std/io's open does not
+ * take the mode. It takes `r`, `w` or `a`, then any of `+` and `b`, and `x` after `w` alone (C11).
+ * Caution: **Refuse any other letter, on both sides**, so a mode means one thing everywhere.
+ * glibc skips a letter it does not know, while Windows reads `t`, `N` and `ccs=` as its own.
+ * **Both sides open by these bits**, so `r+` creates nothing and `wx` replaces nothing on either.
+ * It touches no OS and is not static, so std's tests check every mode on every OS (io_test). */
+#define KSPL_OPEN_READ 1
+#define KSPL_OPEN_WRITE 2
+#define KSPL_OPEN_CREATE 4 /* create the file where it is missing */
+#define KSPL_OPEN_TRUNCATE 8 /* empty the file where it exists */
+#define KSPL_OPEN_APPEND 16 /* every write goes to the end */
+#define KSPL_OPEN_NEW 32 /* fail where the file exists */
+KSPL_LINK I32 kspl_fopen_plan(const U8 *mode_cstr) {
+    const char *mode = (const char *)mode_cstr;
+    I32 plan;
+    if (mode[0] == 'r') plan = KSPL_OPEN_READ;
+    else if (mode[0] == 'w') plan = KSPL_OPEN_WRITE | KSPL_OPEN_CREATE | KSPL_OPEN_TRUNCATE;
+    else if (mode[0] == 'a') plan = KSPL_OPEN_WRITE | KSPL_OPEN_CREATE | KSPL_OPEN_APPEND;
+    else return -1;
+    for (const char *p = mode + 1; *p != '\0'; p++) {
+        if (*p == '+') plan |= KSPL_OPEN_READ | KSPL_OPEN_WRITE;
+        else if (*p == 'x' && mode[0] == 'w') plan |= KSPL_OPEN_NEW;
+        else if (*p != 'b') return -1;
+    }
+    return plan;
+}

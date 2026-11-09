@@ -2,7 +2,7 @@
 //< The editing page shows it as a formula is typed and in its Insert Function dialog, and the
 //< reference lists it (`ksmd/docs/SPEC-editing-page.md`). **An ordinary function's entry comes
 //< from its signature and doc comments**: `ksmd/calc/glue.kspl` writes it into the function table.
-//< The seven forms that `ksmd/calc/calc.kspl` reads itself have no signature, so their entries
+//< The eight forms that `ksmd/calc/calc.kspl` reads itself have no signature, so their entries
 //< stand here, and the calculator takes their names from here too.
 import "std/json" { Json_builder }
 import "std/mem" { Arena }
@@ -74,16 +74,28 @@ const FORMS: Help[_] = ::{
         .summary = "each cell of `a` times the cell of `b` beside it, added",
         .detail = "A pair that is not two numbers is left out.",
         .example = "sum_product(C1:C9, D1:D9)", .gives = "" },
+    Help::{ .name = "name", .group = "Conditions and lookup",
+        .args = Arg[]::{ Arg::{ .name = "column",
+        .meaning = "one whole column, such as B, or map.E for a column of table map" } },
+        .summary = "the column's name, as text, as the names row holds it",
+        .detail =
+        "Where column E of `map` is named Type, `name(map.E)` is `Type`. So `sum_if(map.D, map.E = \
+            name(B))` adds the rows whose E holds the name of this table's B.",
+        .example = "name(B)", .gives = "" },
 } //< the forms `Parser.function` in `ksmd/calc/calc.kspl` reads before the table, in its order
 
 fn call_form(h: Help@, arena: Arena$@): U8[] //< `name(a, [b], xs…)`, as the reference writes it
-    t: = arena.text()
-    t.s(h.name).c('(')
+    defer $t: = Str_builder()
+    write_call_form(h, t@)
+    return arena.dup_str(t.slice())
+
+fn write_call_form(h: Help@, out: Str_builder$@) //< `call_form`, written into `out`
+    out.s(h.name).c('(')
     for i in Range.asc(h.args.len)
         a: = h.args[i]
-        t.s(", " if i > 0 else "").s("[" if a.optional else "").s(a.name)
+        out.s(", " if i > 0 else "").s("[" if a.optional else "").s(a.name)
             .s("…" if a.rest else "").s("]" if a.optional else "")
-    return t.c(')').take()
+    out.c(')')
 
 fn write_json(lists: Help[][], out: Str_builder$@) //<
     //< Every entry of the lists, as one JSON array the page reads

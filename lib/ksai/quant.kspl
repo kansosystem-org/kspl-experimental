@@ -2,7 +2,7 @@
 //< **The bytes are GGUF's, byte for byte**: ggml's `block_q5_0`, `block_q8_0` and the K blocks
 //< `block_q3_K` to `block_q6_K`, and rows of F32, F16 and BF16. So a tensor read from a GGUF file
 //< is used as it stands. A product decodes one block at a time and multiplies it at once, and makes
-//< no F32 copy of the matrix. Making these formats from F32 is `lib/ksai/quantize.kspl`. The
+//< no F32 copy of the matrix. ksai does not make weights in these formats from F32. The
 //< reasons are "Weights stay in GGUF's formats" in `lib/ksai/docs/DESIGN-learning.md`.
 import "ksai/parallel"
 import "ksai/tensor" { Tensor }
@@ -39,7 +39,6 @@ pub enum Quant_error //< why a quantized matrix or its product was refused
     size_mismatch //< the bytes are not exactly the rows times the bytes of one row
     shape_mismatch //< a product's operand or result is not the shape the matrix needs
     out_of_bounds //< a row number outside the matrix
-    no_quantizer //< there is no quantizer for that format here; only Q8_0 and Q4_K have one
 
 const QK8_0: Sz = 32 //< the numbers in one Q8_0 block
 const QK_K: Sz = 256 //< the numbers in one K block, Q3_K to Q6_K
@@ -394,9 +393,9 @@ priv fn round_q8_k(x: F32@, q: I16$@, d: F32$@) //< 256 numbers as llama.cpp's Q
 priv fn round_q8_0(x: F32@, q: I16$@, d: F32$@) //< 32 numbers as llama.cpp's Q8_0 block on x86
     //< ggml's `quantize_row_q8_0` for AVX, which the CPU backend runs on x86: each number becomes
     //< `x × 127 / max`, rounded to the nearest whole number with halves to even. The scale
-    //< `max / 127` is kept as an F16, as the block stores it. This is not the reference quantizer
-    //< that makes Q8_0 weights (`ksai/quantize`), which multiplies by `1 / d` and rounds halves
-    //< away from 0; llama.cpp itself uses both.
+    //< `max / 127` is kept as an F16, as the block stores it. This is not ggml's reference
+    //< quantizer that makes Q8_0 weights, which multiplies by `1 / d` and rounds halves away from
+    //< 0; llama.cpp itself uses both.
     $amax: F32 = 0.0
     for i in Range.asc(QK8_0)
         v: = (x + i)$

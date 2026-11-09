@@ -20,51 +20,6 @@ Every package keeps a plain text list of the names it publishes, its *API record
 
 **A file that cannot be read on its own stops the record.** A record missing a file would show every entry in it as removed.
 
-## Explaining a make target
-
-**`make explain T=<target>` says what one target is made of, in one screen** (`tools/make_explain.kspl`, with `tools/make_settings.kspl` and `tools/make_db.kspl`). The build is the root `Makefile`, the files in `mk/` and the packages' own Makefiles. A target's recipe names variables that other files define, and those name more. Without this command, a person follows each name by hand, file by file.
-
-The answer has five parts, in this order:
-
-1. Where the rule is written (`file:line`), and its `##` line from `make help`.
-2. Each prerequisite: how the rule writes it, where it is made, and whether make would remake it now.
-3. The commands, filled in for the settings given.
-4. Every variable the recipe and the prerequisites read: its value, its operator, where it is set. A value made of variables is followed below it, one level at a time.
-5. The settings it takes on the command line: the value given or the default, what leaving each out does, and who reads it.
-
-**`T=<folder>:<target>` explains a package's own Makefile** as `make -C <folder> <target>` reads it. The settings typed beside it (`make explain T=chat MODEL=x.gguf`) are explained as given.
-
-| Decision | Why |
-| :-- | :-- |
-| **Every value and place comes from make itself**: its database (`make -p`), `make -n`, and `--eval` | A hand-written description drifts from the make files. Make's own answer cannot, whatever a make file does |
-| **No recipe line runs: every target's shell is one that does nothing** (`--eval='%: override SHELL := true'`) | Make runs a line holding `$(MAKE)`, or starting with `+`, even under `-n` and `-q`, so a look at a gate ran the whole gate. The shell is set per target, so a `$(shell)` read while make parses still runs, and the values stay the build's. It is marked `override`: a value on make's command line beats a target's own one, and the tool hands on the person's settings. Without it, `make explain T=<target> SHELL=/bin/sh` runs those lines |
-| **Make is run with its messages in English** (`LC_MESSAGES=C`, no `LC_ALL` or `LANGUAGE`) | A make in a Japanese locale writes the database's comments in Japanese, and every target then reads as unknown. The character set stays the person's: under `LC_ALL=C` it is ASCII, and the root make file warns of that. The messages make prints are fixed text in this language alone |
-| **The make files are read only for what the database leaves out** | The database names no line for a rule without a recipe, writes `?=` as `=`, and records no line in a branch not taken |
-| **A rule line read from the files is kept only where the database holds its prerequisites** | Reading alone cannot tell which `ifeq` branch make took. Make's record of the prerequisites can |
-| **The commands are `make -n` with the prerequisites taken as made** (`-o`) | Its own recipe stays on the screen. The prerequisites' builds would bury it, and each is explained by its own `make explain` |
-| **Each prerequisite gets one line, with its state from one `make -pqk`** | The line answers whether asking for the target builds that prerequisite first, without printing its commands |
-| **A file that is there is shown as if its first prerequisite had changed** (`-W`), decided from the database | With its prerequisites taken as made, `make -n` remakes only a phony target or a missing file, and prints nothing for the rest. Make's words for that ("is up to date") are not read |
-| **A simple variable is followed through the line that sets it** (`BOOT_CFLAGS := $(CFLAGS)`) | Its value is already expanded, so the value alone hides the names it was made of |
-| **Every line that sets a variable is listed, with the conditionals around it** | The database names only the line that took effect. A setting such as `LLVM=1` acts through an `ifeq` around another line |
-| **A recursive variable's current value is asked of make only where expanding cannot act** | Expanding a value that holds `$(shell)` or `$(error)`, in either bracket, would run a command or stop make. Such a value is shown as written |
-| **A setting is a name it reads that is unset, set with `?=`, given, or taken from the environment** | These are the names a person is meant to set. A plain `=` or `:=` in a make file is the build's own value |
-| **Where a setting is handed to a program, the program and its source are named, and its `--help` tells the rest** | Make only passes the value on. What the program does with it, and its own default, are the program's to say |
-| **A setting given that the target never reads is named, with the nearest name it reads** | A misspelt `MODLE=x` otherwise changes nothing, and nothing says so (Principle 5 in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)) |
-| **An unknown target is refused, with the nearest names** | "No rule to make target" alone leaves the person to search the files again |
-| **The seed runs it** | A compiler broken by the change at hand does not stop the explanation of how to rebuild it |
-| **Only GNU make 4 or later is asked**; any other make is refused by name | The database's format and `--eval` are GNU make's. macOS's own make is 3.81, so the target passes gmake where it is installed |
-| **The calling make's flags are not handed on**, only its settings | Its `-n` would stop every answer, and its `-j` hands on a jobserver the tool cannot use |
-| **The answer is plain text, one form for a person and a model alike** | A second format would be a second thing to keep right, and a model reads the text as it stands |
-
-**What it gives up**:
-
-* **A rule made by `$(eval)` is placed by its recipe's line alone.** A target name built by a function, such as `$($(x))`, is not found in the make files.
-* **A value that would run a command when expanded is shown as written**, not as make would expand it. In the commands, a `$(shell)` gives nothing, and a line under them says so.
-* **A target that sets its own `SHELL` keeps it**, as make lets a target's own value win. Its `$(MAKE)` lines would then run. The repository's make files set none.
-* **A double-colon (`::`) target is not explained.** Make runs each of its rules on its own. The database is read as one entry per target, so only the last rule would be shown. The tool says so and names each rule's line instead. The repository's make files have none.
-* **A sub-make's own target is not followed.** The answer names the sub-make, and `T=<folder>:<target>` explains that target.
-* **It asks make several times**, each a parse of the whole build. That takes a few seconds, and runs any `$(shell)` the make files run at parse time.
-
 ## The desktop opener
 
 Double-clicking a `.ksmd` document runs ksmd's opener, [`../ksmd.kspl`](../ksmd.kspl). It makes sure a local kssrv server is running for the document's workspace, then makes the browser open the document's page. It chooses only the folder to serve and the port to start from; the rest is [`../opener.kspl`](../opener.kspl). ksagent's chat opener shares it ("Opening the chat page" below). The steps that tie the file type to it are "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md#opening-a-ksmd-document-on-a-double-click).

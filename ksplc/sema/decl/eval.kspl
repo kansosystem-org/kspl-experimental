@@ -811,8 +811,16 @@ impl Ast_node
         // Caution: Link a resolved declaration to def_node. An annotation's array size (`a:
         // I32[n]`) is resolved only here; unlinked, [W0207] "unused" fires wrongly and the LSP
         // cannot jump to it.
-        if r.def_node == null && (r.kind_id == .k_identifier || r.kind_id == .k_expr_path)
+        // **A `.` chain is linked too, at its last name** (`net.ADDR_TEXT_MAX`), as an analysed
+        // path is (`resolve_path.kspl`). Unlinked, a hover there named the array type around it.
+        member_access: = r.is_member_access()
+        if r.def_node == null &&
+            (r.kind_id == .k_identifier || r.kind_id == .k_expr_path || member_access)
             r.def_node = decl_node
+            if member_access
+                member: = r.get_postfix_member()
+                if member != null && member.def_node == null
+                    member.def_node = decl_node
         return .some(decl_node)
 
     fn const_init_expr(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<

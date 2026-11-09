@@ -93,12 +93,7 @@ function ksmdChart(ks) {
     el.chart = b;
     const bar = document.createElement("div");
     bar.className = "chart-buttons";
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "chart-edit";
-    edit.textContent = "Edit";
-    edit.title = "Choose the kind of chart, its labels, the columns drawn and its title";
-    bar.appendChild(edit);
+    bar.appendChild(ks.button("Edit", "chart-edit", "Choose the kind of chart, its labels, the columns drawn and its title"));
     bar.appendChild(ks.view.removeButton("Remove this chart; its table stays"));
     el.appendChild(bar);
     if (b.title) {

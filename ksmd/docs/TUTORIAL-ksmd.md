@@ -105,7 +105,7 @@ arrow from="s1" to="s2"
 :::
 ```
 
-Where you moved a box, its `at` differs.
+Each box's `at` and `size` follow your drag, so your numbers differ from these.
 
 ## 8. Print it, or save a PDF
 

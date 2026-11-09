@@ -23,7 +23,7 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 | `seed_sum.kspl` | Records which compiler source `ksplc/seed.c` was taken from (`make commit-seed`), and checks the tree still holds it (`make test-seed-sum`). |
 | `repo_stat.kspl` / `repo_stat_path.kspl` | Writes the repository's size as one page of text, over the files git tracks or does not ignore. It totals functional code, test code, tooling and prose apart. |
 | `ci.kspl` / `ci_gates.kspl` | The CI's gate table and runner. `make ci` runs every gate the host can answer, and `make ci-summary` asks for the job's summary page. How the gates are read is in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). |
-| `make_explain.kspl` / `make_settings.kspl` / `make_db.kspl` | Says what one make target is made of (`make explain T=<target>`): its rule, prerequisites, commands filled in, variables and settings, all asked of make. `make_settings.kspl` runs make and names who receives each setting; `make_db.kspl` reads make's database and make files. Its design is "Explaining a make target" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). |
+| `make_db.kspl` | Reads make's database and the make files' own lines. The root's checks of the make names in documents and of the make files' text use it. |
 | `msys2-packages.txt` | The MSYS2 UCRT64 packages CI's Windows job needs. CI, the release's Windows build (`.github/actions/msys2-ucrt64/`) and "The environment for each platform" in [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) all read this one list. |
 | **Editing and debugging** | |
 | `ksmd.kspl` | Opens one `.ksmd` document in ksmd, the document editor (`make ksmd-open`, `make ksmd`), serving its workspace on that workspace's own port. `--list`, `--stop=<folder>` and `--stop-all` tend its servers. Its design is "The desktop opener" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). |
@@ -33,7 +33,7 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 | `kspl_lldb.py` | The LLDB pretty printer: it shows slices, `Result`s and structs in readable form while debugging. |
 | **Folders** | |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
-| `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tour page. `repo_test.kspl` covers the file statistics and the CI's sets. `ksmd_aim_test.kspl` covers the rules of ksmd's opener. `make_explain_test.kspl` holds `make explain`'s answers to `make -pn` and `make -n`, on real targets and a fixture of its own. `all.kspl` runs them; `main.kspl` gives them a `main` for `make debug-tools`. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
+| `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tour page. `repo_test.kspl` covers the file statistics and the CI's sets. `ksmd_aim_test.kspl` covers the rules of ksmd's opener. `all.kspl` runs them; `main.kspl` gives them a `main` for `make debug-tools`. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
 | `docs/` | The design ("Further reading" below). |
 
 ## Further reading
@@ -42,5 +42,5 @@ Every document here is for whoever changes Kanso's own tools.
 
 | Document | What it holds |
 | :-- | :-- |
-| [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) | Why the tools are built the way they are: the API record, `make explain`, the desktop opener, the chat page's opener. |
+| [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) | Why the tools are built the way they are: the API record, the desktop opener, the chat page's opener. |
 | [`../docs/DESIGN-principles.md`](../docs/DESIGN-principles.md) | The Development Principles, and why a leaf (a folder such as `tools/` that only points upward at the packages) points only upward. |

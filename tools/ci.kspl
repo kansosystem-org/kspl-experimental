@@ -211,7 +211,13 @@ priv fn judge_gate(g: Gate, r: Round, exit: I32, sec: I64, arena: Arena$@): Bool
                 .s(odd).c('\n')
     defer $end: = Str_builder()
     end.s("\{rc\} \{sec\} \{r.platform\}\n")
-    io.write_file(ci_gates.end_path(g.log, arena), end.slice()) catch {}
+    // A missing `.end` already counts as fallen in the summary (`ci_gates.outcomes`). Say why here,
+    // or that gate falls there with no cause named.
+    end_at: = ci_gates.end_path(g.log, arena)
+    io.write_file(end_at, end.slice()) catch
+        io.out()
+            .s("# \{g.log\}: its end file cannot be written, so the summary counts it as fallen: ")
+            .s(end_at).c('\n')
     if rc != 0
         annotate(g, said, rc, j@, arena)
     return rc == 0

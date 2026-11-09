@@ -336,21 +336,13 @@ priv fn http_failure(e: http.Http_error): Model_error //< what a failure of `std
 priv fn refusal_detail(body: U8[], arena: Arena$@): U8[] //<
     //< What a refusal says: its JSON `error.message` or `error`, or the start of its body
     doc: = json.parse(body, arena) catch
-        return cut_detail(body)
+        return body.utf8_head(DETAIL_BYTES)
     err: = doc.val.get("error")
     if text: = err.as_str()
-        return cut_detail(text)
+        return text.utf8_head(DETAIL_BYTES)
     if text: = err.get("message").as_str()
-        return cut_detail(text)
-    return cut_detail(body)
-
-priv fn cut_detail(text: U8[]): U8[] //< at most `DETAIL_BYTES` of a text, at a character's start
-    if text.len <= DETAIL_BYTES
-        return text
-    $end: = DETAIL_BYTES
-    for end > 0 && (text[end] & 0xC0U8) == 0x80U8
-        end -= 1
-    return text.sub(0, end)
+        return text.utf8_head(DETAIL_BYTES)
+    return body.utf8_head(DETAIL_BYTES)
 
 fn parse_reply(body: U8[], arena: Arena$@): Reply!Model_error //<
     //< The text and the tool calls of `choices[0].message`

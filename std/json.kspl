@@ -19,7 +19,7 @@ pub enum Value //< one JSON value, of any of the seven kinds
     float_val(f: F64) //< a number with a point or an exponent, kept separate so nothing rounds
     str_val(s: U8[]) //< a string, already unescaped
     array_val(a: Array) //< an array; read its elements through `arr_list` and `get_at`
-    obj_val(o: Object) //< an object; read its members through `get`, `find` and `obj_keys`
+    obj_val(o: Object) //< an object; read its members through `get`, `find` and `obj_members`
 
 priv struct Node
     val: Value
@@ -30,18 +30,29 @@ pub struct Array //< an array's elements, reachable only through `arr_list` and 
     //< holding a `Node$@` would hand every `switch` a pointer that is null for `[]`.
     priv head: Node$@
 
-priv struct Member
-    key: U8[]
-    val: Value
-    next: Member$@
+pub struct Member //< one member of an object, as `Value.obj_members` hands it out
+    pub key: U8[] //< the member's name, already unescaped
+    pub val: Value //< the member's value
+    priv next: Member$@ //< the member after this one; null after the last
 
-pub struct Object //< an object's members, reachable only through `get`, `find` and `obj_keys`
+pub struct Object //< an object's members, reachable only through `get`, `find` and `obj_members`
     //< `Value.obj_val`'s payload.
     //< Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub
     //< enum`'s payload (`switch v case .obj_val(head)`). The priv list would then leak out ("Why a
     //< narrow type cannot stand where visibility is wide" in docs/DESIGN-programming-language.md).
-    //< Reading an object goes through `get(key)` and `find(key)`; `obj_keys` lists the keys.
+    //< Reading one member goes through `get(key)` and `find(key)`; `obj_members` walks them all.
     priv head: Member$@
+
+pub struct Member_seq //< walks an object's members one at a time, in the order the text gave them
+    priv at: Member$@
+
+impl Member_seq: Iter<|Member@|> //< so a `for` drives it
+    pub fn next(r: Self$@): Member@? //< the next member, or nothing after the last
+        m: = r.at
+        if m == null
+            return .none
+        r.at = m.next
+        return .some(m)
 
 priv fn append_node(head: Node$@$@, tail: Node$@$@, node: Node$@) //<
     //< The append shared by Array_builder.push and parse_array
@@ -513,24 +524,18 @@ impl Value
                 curr = curr.next
         default {}
         return out
-    pub fn obj_keys( //< an object's keys as a list, in the order the text gave them
-        //< **The one way to walk an object**: each key then reads its value through `get` or
-        //< `find`, so the members' own chain stays hidden (`Object`). Any other kind gives an
-        //< empty list.
-        //< Caution: When arena is null it allocates on the global heap, so the caller frees it with
-        //< a `defer` (the same convention as `List.new`).
+    pub fn obj_members( //< walks an object's members, each key with its value, in the text's order
+        //< **The one way to walk an object** (`for m in v.obj_members()`, then `m.key` and
+        //< `m.val`). It allocates nothing. Any other kind yields no member.
+        //< Caution: **Do not walk the keys and then `get` each one.** `get` is a linear scan, so
+        //< that walk is quadratic: a few MB of keys from outside take minutes.
         r: Self,
-        arena: Arena$@, //< the arena for the list; null means the global heap, freed by the caller
-    ): List<|U8[]|>
-        $out: = List<|U8[]|>(arena)
+    ): Member_seq
         switch r
         case .obj_val(o)
-            $curr: = o.head
-            for curr != null
-                out.push(curr.key)
-                curr = curr.next
+            return Member_seq::{ .at = o.head }
         default {}
-        return out
+        return Member_seq::{ .at = null }
 
     pub fn dump( //< writes the value as JSON text
         //< **Indentation is only for files a person reads.** For data exchange keep it at 0: the
@@ -577,8 +582,7 @@ impl Value
             out.c(']')
         case .obj_val(o)
             out.c('{')
-            $m: = o.head
-            for m != null
+            for m in r.obj_members()
                 if m != o.head
                     out.c(',')
                 write_break(out, indent, depth + 1)
@@ -586,7 +590,6 @@ impl Value
                 if indent > 0
                     out.c(' ')
                 m.val.dump_at(out, indent, depth + 1)
-                m = m.next
             if o.head != null
                 write_break(out, indent, depth)
             out.c('}')
@@ -594,7 +597,7 @@ impl Value
         //< **Absent reads as `null`**, so a path stays one line (`v.get("a").get("b").as_str()`);
         //< where absent and `null` differ, ask `find`. A key names one member.
         //< **It is a linear scan.** Calling it for a list of names the peer chose makes one request
-        //< O(members x names).
+        //< O(members x names); to read every member, walk `obj_members`.
         r: Self,
         key: U8[], //< the member's name
     ): Value
@@ -606,14 +609,9 @@ impl Value
         r: Self,
         key: U8[], //< the member's name
     ): Value?
-        switch r
-        case .obj_val(o)
-            $m: = o.head
-            for m != null
-                if m.key.equals(key)
-                    return .some(m.val)
-                m = m.next
-        default {}
+        for m in r.obj_members()
+            if m.key.equals(key)
+                return .some(m.val)
         return .none
 
     pub fn get_at( //< an array's element, for reading a path; `null_val` past the end
@@ -745,19 +743,15 @@ priv fn same_members(a_head: Member$@, b_head: Member$@): Bool //<
     //< Whether two objects hold the same members in any order, a repeated key counted each time
     if count_members(a_head, null) != count_members(b_head, null)
         return false
-    $m: = a_head
-    for m != null
+    for m in Member_seq::{ .at = a_head }
         if count_members(a_head, m) != count_members(b_head, m)
             return false
-        m = m.next
     return true
 
 priv fn count_members(head: Member$@, like: Member@): Sz //<
     //< How many members of the list hold the same key and value as `like`; null counts them all
     $n: Sz = 0
-    $m: = head
-    for m != null
+    for m in Member_seq::{ .at = head }
         if like == null || (m.key.equals(like.key) && m.val.equals(like.val))
             n += 1
-        m = m.next
     return n

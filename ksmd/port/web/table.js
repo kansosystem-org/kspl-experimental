@@ -52,12 +52,7 @@ function ksmdTable(ks) {
     wrap.colIds = b.ci;
     wrap.values = b.rows;
     wrap.names = b.names;
-    const name = document.createElement("button");
-    name.type = "button";
-    name.className = "table-name";
-    name.textContent = b.name;
-    name.title = "Rename the table";
-    wrap.appendChild(name);
+    wrap.appendChild(ks.button(b.name, "table-name", "Rename the table"));
     // The caption stands above the table, its number drawn before it (`settings.js`).
     if (b.cap) {
       const cap = document.createElement("div");
@@ -65,7 +60,12 @@ function ksmdTable(ks) {
       cap.textContent = b.cap;
       wrap.appendChild(cap);
     }
+    // A grid, as a spreadsheet is to a screen reader: its rows, its column letters, names and row
+    // numbers as headers, and the chosen cells selected (`mark` in `range.js`).
     const table = document.createElement("table");
+    table.setAttribute("role", "grid");
+    table.setAttribute("aria-label", b.name);
+    table.setAttribute("aria-multiselectable", "true");
     wrap.widths = b.w;
     wrap.heights = b.h;
     wrap.filterEntries = b.fl;
@@ -79,19 +79,17 @@ function ksmdTable(ks) {
     b.names.forEach((n, c) => {
       const th = document.createElement("th");
       th.className = "letter";
+      th.scope = "col";
       th.textContent = letters(c);
       lettersRow.appendChild(th);
       const name = cellEl("th", -1, c, [2, n]);
       name.className = "name";
+      name.scope = "col";
       if (n === "") name.dataset.empty = "1";
-      const arrow = document.createElement("button");
-      arrow.type = "button";
-      arrow.className = "filter-arrow";
+      const arrow = ks.button("\u25BE", "filter-arrow", "Sort and filter this column");
       arrow.dataset.c = String(c);
       arrow.tabIndex = -1;
-      arrow.title = "Sort and filter this column";
       arrow.setAttribute("aria-label", `Sort and filter column ${letters(c)}`);
-      arrow.textContent = "\u25BE";
       name.appendChild(arrow);
       namesRow.appendChild(name);
     });
@@ -103,6 +101,8 @@ function ksmdTable(ks) {
       const tr = document.createElement("tr");
       const number = document.createElement("th");
       number.className = "row-number";
+      number.scope = "row";
+      number.setAttribute("role", "rowheader");
       number.textContent = String(r + 1);
       tr.appendChild(number);
       row.forEach((value, c) => tr.appendChild(cellEl("td", r, c, value)));
@@ -142,6 +142,14 @@ function ksmdTable(ks) {
     ks.outline.draw(wrap, b.g);
     ks.outline.drawColumns(wrap, b.cg);
     ks.notes.mark(wrap, b.notes);
+    // Why each error stands, as the calculator says it: on the cell's tooltip, after any note,
+    // and on the status bar while the cell is chosen (`status.js`).
+    for (const [r, c, why] of b.err) {
+      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (!el) continue;
+      el.dataset.why = `${el.textContent}: ${why}`;
+      el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
+    }
     if (ks.ownMark) ks.ownMark(wrap, b.own);
     ks.filter.apply(wrap);
     ks.sizes.decorate(wrap, b.h);
@@ -318,17 +326,23 @@ function ksmdTable(ks) {
     const o = open;
     open = null;
     ks.refs.detach();
-    if (o.input.value === o.before) {
+    // Puts the cell's own content back in place of its box.
+    const shut = () => {
       const el = o.input.parentNode;
-      if (el) {
-        el.textContent = "";
-        el.append(...o.nodes);
-        // The row kept in sight while it was edited goes, if the filter does not show it.
-        ks.filter.apply(el.closest(".table"));
-      }
+      if (!el) return;
+      el.textContent = "";
+      el.append(...o.nodes);
+      // The row kept in sight while it was edited goes, if the filter does not show it.
+      ks.filter.apply(el.closest(".table"));
+    };
+    if (o.input.value === o.before) {
+      shut();
       return true;
     }
     const r = ks.act("ksmd_web_set_cell", o.block, o.row, o.column, ks.put(o.input.value));
+    // Caution: **A table whose values did not change is not drawn again**, as `=1+2` typed over a
+    // 3 leaves it. Its box then stood on in the cell, and the next cell opened beside it.
+    if (r && r.ok && o.input.isConnected) shut();
     if (!keep || !r || r.ok) return true;
     if (keep === "stay") {
       if (!o.input.isConnected) return true;
@@ -407,6 +421,24 @@ function ksmdTable(ks) {
     if (el) edit(el, opening, whole);
   }
 
+  // Tab moves to the next column, and past a row's last to the next row's first, as in an Excel
+  // table and a Word table; Shift+Tab goes back, and stops at the first cell. Tab past the last
+  // cell adds a row and moves into it, as both do, so a list grows without the menu. One undo
+  // takes the row away.
+  function tab(block, row, column, back) {
+    const by = back ? -1 : 1;
+    const next = stepColumn(block, column, by);
+    if (next !== column) return moveTo(block, row, next);
+    const r = stepRow(block, row, by);
+    const s = size(block);
+    const start = stepColumn(block, back ? s.columns : -1, by);
+    if (r < -1) return null;
+    if (r < s.rows) return moveTo(block, r, start);
+    const added = ks.act("ksmd_web_table_edit", block, 0, s.rows, 1, ks.put(""));
+    if (!added || !added.ok) return null;
+    return moveTo(block, s.rows, start);
+  }
+
   // Leaves the table for the text after it, or before it (`select_beside` in
   // `ksmd/edit/editor.kspl`), and scrolls only as far as the caret needs.
   // Caution: **Focus the document without a scroll.** A focused document jumps to its top.
@@ -472,8 +504,13 @@ function ksmdTable(ks) {
       fitLines(input);
       return;
     }
-    if (e.key === "Enter") to = [stepRow(block, row, 1), column];
-    else if (e.key === "Tab") to = [row, stepColumn(block, column, e.shiftKey ? -1 : 1)];
+    // Shift+Enter takes the text and moves up, as Shift+Tab moves left, as in Excel.
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (take("focus")) tab(block, row, column, e.shiftKey);
+      return;
+    }
+    if (e.key === "Enter") to = [stepRow(block, row, e.shiftKey ? -1 : 1), column];
     else if (e.key === "ArrowUp") to = [stepRow(block, row, -1), column];
     else if (e.key === "ArrowDown") to = [stepRow(block, row, 1), column];
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey && !e.ctrlKey &&
@@ -491,9 +528,11 @@ function ksmdTable(ks) {
       e.preventDefault();
       if (next === column) return;
       to = [row, next];
-    } else if (e.key === "Escape") {
+    } else if (e.key === "Escape" || (open.entering && (e.ctrlKey || e.metaKey) && !e.altKey &&
+      !e.shiftKey && e.key.toLowerCase() === "z")) {
       // The edit is dropped and the cell stays chosen, as in a spreadsheet; a second Esc leaves
-      // the table.
+      // the table. Ctrl+Z in a cell typed into does the same: the box held nothing before the
+      // first key, so the browser's own undo emptied the cell rather than giving its value back.
       open.input.value = open.before;
       take();
       choose(block, row, column);
@@ -549,7 +588,7 @@ function ksmdTable(ks) {
     const r = ks.range.rect();
     const rows = size(block).rows;
     const whole = r.r1 <= 0 && r.r2 === rows - 1 && (r.r2 > r.r1 || r.r1 < 0);
-    const kinds = { "format-none": "", "format-number": "number:2", "format-grouped": "grouped:2",
+    const kinds = { "format-none": "", "format-number": "number:2", "format-grouped": "grouped:0",
       "format-percent": "percent:0", "format-date": "", "format-date-slash": "date:yyyy/mm/dd" };
     if (name in kinds) {
       if (whole) return ks.act("ksmd_web_column_format", block, r.c1, r.c2, ks.put(kinds[name]));
@@ -670,6 +709,31 @@ function ksmdTable(ks) {
     return ks.act("ksmd_web_cell_link", c.block, c.row, c.column, ks.put(to.trim()));
   }
 
+  // What a screen reader says of a chosen cell: its value and address as its name, as a
+  // spreadsheet's cell is read, and its formula, its error's reason, its note and its link as
+  // its description. A sighted person reads these on the cell, its corner and the status bar.
+  function describe(el) {
+    const wrap = el.closest(".table");
+    const row = Number(el.dataset.r);
+    const column = Number(el.dataset.c);
+    const block = blockOf(el);
+    if (row < 0) {
+      const name = wrap.names[column];
+      return { name: `${name === "" ? "empty" : name}, name of column ${letters(column)}`, description: "" };
+    }
+    const v = wrap.values[row] && wrap.values[row][column];
+    const shown = v ? ks.filter.shown(v) : "";
+    const typed = block >= 0 && !wrap.included ? ks.cellText(block, row, column) : "";
+    const more = [];
+    if (typed.startsWith("=")) more.push(`Formula ${typed}`);
+    if (el.dataset.why) more.push(el.dataset.why);
+    const note = ks.notes.of(wrap, row, column);
+    if (note) more.push(`Note: ${note}`);
+    const link = wrap.links && wrap.links.get(`${row} ${column}`);
+    if (link) more.push(`Link to ${link}`);
+    return { name: `${shown === "" ? "empty" : shown}, ${letters(column)}${row + 1}`, description: more.join(". ") };
+  }
+
   // Whether a table is left out of print and PDF.
   const leftOut = (block) => ks.view.blocks()[block].classList.contains("print-hidden");
 
@@ -717,9 +781,6 @@ function ksmdTable(ks) {
     render,
     take,
     letters,
-    rename,
-    csv,
-    format,
     range: () => ks.range.rect(),
     // Opens a cell to edit, or leaves the table past its first or last row; with `whole`, what is
     // typed replaces its text.
@@ -733,6 +794,7 @@ function ksmdTable(ks) {
     },
     // Chooses a cell, or leaves the table past its first or last row.
     choose: (block, row, column) => moveTo(block, row, column, false),
+    tab,
     // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
     step: (block, row, dr) => stepRow(block, row, dr),
     pin,
@@ -740,9 +802,9 @@ function ksmdTable(ks) {
     // Sets the chosen cell, { block, row, column }, or null for none.
     chooseCell,
     askLink,
-    askCaption,
     // The element a chosen cell's box is (`catcher` in `range.js`).
     boxKind,
+    describe,
     // The column `dc` steps from `column`, passing over the columns a group hides.
     stepColumn: (block, column, dc) => stepColumn(block, column, dc),
     // The cell being edited, whose row a filter keeps in sight: { block, row, input } or null.

@@ -90,7 +90,7 @@ The gemm declarations name their library with `##link("openblas")`, inside their
 
 The C compiler turns the kernels' loops into SIMD instructions (one instruction on several numbers), and `make test-simd` checks it. A large `matmul` splits its columns over the CPU's cores (`lib/ksai/parallel.kspl`), with the same bits for any thread count. Why both work so is in [`lib/ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 
-### Quantized weights: `lib/ksai/quant.kspl`, `lib/ksai/quantize.kspl`
+### Quantized weights: `lib/ksai/quant.kspl`
 
 A 9B model's weights take about 36 GB as 32-bit floats, more than most machines hold. Quantized weights keep each number in 3 to 8 bits, with one scale for each block of 32 or 256 numbers. A 9B model then takes 4 to 6 GB.
 
@@ -111,7 +111,6 @@ A file in llama.cpp's "Q4_K_M" mix holds mostly `q4_k` and some `q6_k` weights, 
 - `Quant_matrix.from_bytes` checks the sizes against the bytes before anything reads them, and refuses a wrong size by name (`Quant_error`).
 - `dequantize_row` decodes one row to F32, for example a token's embedding.
 - `mul_mat` multiplies the matrix by F32 inputs, one block at a time, with no F32 copy of the matrix. It splits its rows over the CPU's cores.
-- `Quant_matrix.quantize` in `lib/ksai/quantize.kspl` makes Q8_0 or Q4_K from F32, as llama.cpp's own quantizer does. Only a program that converts weights needs it.
 
 The tests compare every format and product with llama.cpp, through small reference files in [`tests/quant_data/`](tests/quant_data/). [`lib/ksai/tools/make_quant_fixtures.py`](tools/make_quant_fixtures.py) writes them.
 
@@ -166,16 +165,15 @@ Both `_grad` and `_train` files contain backward operations. `_grad` contains fu
 | `lib/ksai/safetensors.kspl` | Reads and writes weights in the standard safetensors format: `Safetensors_writer` (`add`, `set_meta`, `finish`) and `load_from_bytes`. `get_tensor` borrows aligned elements or copies misaligned ones into the supplied arena |
 | `lib/ksai/sampler.kspl` | Chooses a token from scores. `argmax` selects the highest score. `sample` uses temperature, top-k, and top-p |
 | `lib/ksai/lora.kspl` | `Lora` supports low-rank adaptation (LoRA), which trains small added matrices instead of all model weights. `save_raw` and `load_raw` use raw bytes with no dependencies |
-| `lib/ksai/lora_set.kspl` | Groups `Qkv_lora` and `Mlp_lora` adapters per block and defines their names in safetensors. `load_set_from` and `save_set_into` use a parsed `Safetensors` |
-| `lib/ksai/model_file.kspl` | Provides path operations such as `load_safetensors`, `load_gguf` and `save_qkv_lora_set` using the modules above |
+| `lib/ksai/model_file.kspl` | Provides the path operations `load_safetensors`, `save_safetensors` and `load_gguf`, using the modules above |
 
 Use `map_into` to load weights into a model. The reference from `ksplc doc ksai/safetensors` explains its checks and those omitted by `get_tensor`.
 
-Use the standard format in `lib/ksai/lora_set.kspl` to exchange results between environments. Use `Lora.save_raw` only to save and reload in the same environment; it requires no JSON or allocation.
+`Lora.save_raw` saves one adapter, and `load_raw` reads it back, with no JSON and no allocation. The bytes hold no shapes, so read them back only where the shapes are known.
 
 Within the library, only `lib/ksai/model_file.kspl` and `lib/ksai/tokenizer.kspl` import `std/io`, so code that uses only tensors pays nothing for files. `Tokenizer.load` reads a vocabulary by path, and `model_file` also imports `std/fs` to replace whole model files.
 
-Without a filesystem, use `embed` to include bytes in the program at build time. Load weights with `load_from_bytes`, then `load_set_from`. Load the vocabulary and merges with `Tokenizer.load_text`.
+Without a filesystem, use `embed` to include bytes in the program at build time. Load weights with `load_from_bytes`, then `map_into`. Load the vocabulary and merges with `Tokenizer.load_text`.
 
 ## Pitfalls
 

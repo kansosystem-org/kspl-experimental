@@ -8,6 +8,10 @@ import fs from "fs";
 import path from "path";
 
 const CALL_LIMIT_MS = 20000;
+// **The first call waits for the browser to start, so it only stops a hang.** Under a full run's
+// load, Chromium in CI's image once took past the call limit to answer at all, and the gate failed
+// with no page check run. A browser that exits fails the call at once instead.
+const START_LIMIT_MS = 120000;
 
 // Each message of a browser's log once, at its last place, with how often it came. A browser can
 // repeat one message every second (Chrome on Windows, where its updater refuses it), which would
@@ -42,6 +46,9 @@ export async function launch(binary, work) {
   const child = spawn(binary, args, { stdio: ["ignore", log, log, "pipe", "pipe"] });
   const toBrowser = child.stdio[3];
   const fromBrowser = child.stdio[4];
+  // A browser that ended closes its pipe, and a write then fails. That end is told by `gone`, with
+  // the browser's log, so the pipe's own error would only stop node without saying why.
+  toBrowser.on("error", () => {});
   let next = 1;
   const waiting = new Map();
   const listeners = [];
@@ -66,15 +73,15 @@ export async function launch(binary, work) {
   });
   const gone = new Promise((resolve) => child.on("exit", resolve));
 
-  function send(method, params = {}, sessionId = undefined) {
+  function send(method, params = {}, sessionId = undefined, limit = CALL_LIMIT_MS) {
     const id = next++;
     const message = { id, method, params };
     if (sessionId) message.sessionId = sessionId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         waiting.delete(id);
-        reject(new Error(`${method} got no answer in ${CALL_LIMIT_MS} ms`));
-      }, CALL_LIMIT_MS);
+        reject(new Error(`${method} got no answer in ${limit} ms`));
+      }, limit);
       waiting.set(id, { resolve, reject, timer });
       toBrowser.write(JSON.stringify(message) + "\0");
     });
@@ -135,7 +142,13 @@ export async function launch(binary, work) {
   // the work folder is not kept with a CI run, and the last lines may not hold the cause.
   let targetId;
   try {
-    ({ targetId } = await send("Target.createTarget", { url: "about:blank" }));
+    const ended = gone.then((code) => {
+      throw new Error(`the browser ended (exit ${code}) before it answered`);
+    });
+    // The browser ends normally at the close too, after this race; that end is no failure.
+    ended.catch(() => {});
+    ({ targetId } = await Promise.race([
+      send("Target.createTarget", { url: "about:blank" }, undefined, START_LIMIT_MS), ended]));
   } catch (e) {
     child.kill("SIGKILL");
     let where = path.join(work, "browser.log");

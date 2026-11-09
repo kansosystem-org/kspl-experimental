@@ -111,6 +111,10 @@ const ksagentMarkdown = (() => {
   // **Quotes, lists and emphasis nest at most this deep**; deeper, they read as text. A reply of
   // 20,000 `>` would otherwise nest the reader as deep, and overflow the browser's stack.
   const MAX_NEST = 8;
+  // **A table holds at most this many columns**; a header with more reads as text. Each row is
+  // filled out to the header's width, so a header of N `|` over N short rows would make N² cells:
+  // 90 KB of text would run the tab out of memory.
+  const MAX_COLUMNS = 64;
 
   function item(line) {
     const m = ITEM.exec(line);
@@ -163,7 +167,8 @@ const ksagentMarkdown = (() => {
         out.push({ t: "blockquote", c: blocks(inner, depth + 1) });
       } else if (item(line)) {
         i = list(lines, i, out, depth);
-      } else if (line.includes("|") && i + 1 < lines.length && isDelimiter(lines[i + 1])) {
+      } else if (line.includes("|") && i + 1 < lines.length && isDelimiter(lines[i + 1]) &&
+        cells(line).length <= MAX_COLUMNS) {
         i = table(lines, i, out);
       } else {
         const c = [];

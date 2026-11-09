@@ -50,6 +50,7 @@ Caution: **Do not inspect only the last level**: a link on a folder would pass u
 
 * **Naming it is the launching person's judgment.** Without `--local` that file is served to other machines, so it is a choice as weighty as choosing the root.
 * **Do not start up when the named file does not exist**: a later 404 leaves nobody able to tell why the page is blank.
+* **Do not start a local server without a named page.** Otherwise the root's own `index.html` answers `/`, and the URL with the token opens it. Any file a person put in the root would then hold the token and every file in the root.
 
 **The server checks the Host and token after reading the headers, before waiting for the body.** Only GET or HEAD for the page with no body needs no token. Syntax and size errors can be refused before authorization.
 
@@ -74,6 +75,14 @@ The token goes nowhere else either:
 * **Do not hand it over in a cookie**; it travels in `Authorization: Bearer`.
 * **Do not take the token from the command line**; the server makes it from the OS's random source.
 * **Compare every byte**: stopping at the first differing byte lets the response time reveal the token byte by byte.
+
+### What guards the page in the browser
+
+**Every answer refuses to be framed by any page, and tells the browser to send no referrer.** The server sends `Content-Security-Policy: frame-ancestors 'none'` and `Referrer-Policy: no-referrer`, with `X-Content-Type-Options: nosniff`.
+
+* **Framing is refused** because the page writes files. Another site could show it in a frame, hidden under its own buttons, and turn a person's press into a save.
+* **No referrer leaves**, so a link the page opens does not tell another site which file was open.
+* **The server sets no policy for the page's scripts.** Only the page knows what it runs, so a page sets that policy itself in a `<meta>` element. Such a policy holds also when the page opens from a file.
 
 ## Only five things can be asked for
 

@@ -11,12 +11,13 @@
 //     kssrv <port> <root> [--local] [--page=<file>] [--idle=<seconds>]
 //                         [--builder=<program> --allowed=<file>]
 //                         [--cert=<chain.pem> --key=<key.pem>]
-// `--builder` needs `--local` and `--allowed`; it answers `/api/allow` and `POST /api/build`.
-// A port of 0 lets the system choose a free one; the line "listening on" names it.
+// `--local` needs `--page`. `--builder` needs `--local` and `--allowed`; it answers `/api/allow`
+// and `POST /api/build`. A port of 0 lets the system choose a free one; "listening on" names it.
 // ==========================================
 import "kssrv/api"
 import "kssrv/conn"
 import "kssrv/https"
+import "kssrv/static"
 import "std/argparse"
 import "std/chars" // single-character tests and slicing
 import "std/fs"
@@ -47,7 +48,7 @@ priv fn log_new(): Log //< makes the run's logger: the standard output, down to 
     return Log(io.out(), .information, NAME)
 
 priv const LISTENER_TOKEN: Sz = conn.MAX_CONNS //< the token given to the listening socket
-    //< It cannot collide with a slot number (0..max_conns-1).
+    //< It cannot collide with a slot number (0..MAX_CONNS-1).
 
 priv const MAX_REQUEST_BODY: Sz = 64 * 1024 //< the cap allowed on one request's body
     //< **Only local use accepts a large one**, for writing a document back. The outward-facing cap
@@ -72,22 +73,19 @@ priv const LINGER_US: I64 = 5000000I64 //<
 
 priv const IDLE_CONN_US: I64 = 30000000I64 //<
     //< How long a connection may pass no byte either way before it is dropped
-    //< Without it a client that connects and goes quiet holds one of the `max_conns` slots for
+    //< Without it a client that connects and goes quiet holds one of the `MAX_CONNS` slots for
     //< good, and that many such clients shut everyone out. A page's hold (`GET /api/here`) is quiet
     //< by design and is not dropped.
 
 priv const REQUEST_TIME_US: I64 = 30000000I64 //<
     //< How long one request may take to arrive whole, from its first byte to its last
     //< Caution: **The idle timer alone does not bound it.** It restarts on every byte. So a client
-    //< sending one byte every few seconds holds its slot for good. `max_conns` such clients
+    //< sending one byte every few seconds holds its slot for good. `MAX_CONNS` such clients
     //< shut everyone out (Slowloris). The bodies taken are small (`MAX_REQUEST_BODY`), so a client
     //< that can send at all sends one well within it.
 
 priv const POLL_TIMEOUT_MS: I32 = 1000 //< `wait()`'s wait time
     //< It returns even with no connection, so a request to stop is noticed.
-
-priv const INDEX_NAME: U8[] = "index.html" //<
-    //< the file looked for when the root itself is requested
 
 priv const US_PER_S: I64 = 1000000I64 //< what `--idle`'s seconds are measured against
 priv const MAX_IDLE_S: I64 = 604800I64 //< the longest `--idle` taken: one week [s]
@@ -98,170 +96,6 @@ priv const FLUSH_GAP_US: I64 = 200000I64 //<
     //< The interval (microseconds) at which the buffered log is flushed
     //< **It goes out at this interval rather than per line** (the reason is in the loop below).
     //< Caution: **Keep it short enough for a person to wait out**, or an idle server's log lags.
-
-// ==========================================
-// Resolving a static file
-// ==========================================
-
-priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from the extension
-    //< An unknown extension is not guessed but given `application/octet-stream`: a receiver trusts
-    //< a wrong type (misread as HTML, a script runs).
-    //< **The extension's letter case does not count**: a camera on Windows names its files
-    //< `PHOTO.JPG`, and a browser downloads a page or refuses a module sent as octet-stream.
-    $ext: U8[] = ""
-    if dot: = path.rfind_char('.')
-        ext = path.sub_from(dot)
-    if ext.equals_ignore_case(".html") || ext.equals_ignore_case(".htm")
-        return "text/html; charset=utf-8"
-    if ext.equals_ignore_case(".css")
-        return "text/css; charset=utf-8"
-    if ext.equals_ignore_case(".js") || ext.equals_ignore_case(".mjs")
-        return "text/javascript; charset=utf-8"
-    if ext.equals_ignore_case(".json")
-        return "application/json"
-    if ext.equals_ignore_case(".txt") || ext.equals_ignore_case(".md")
-        return "text/plain; charset=utf-8"
-    if ext.equals_ignore_case(".svg")
-        return "image/svg+xml"
-    if ext.equals_ignore_case(".png")
-        return "image/png"
-    if ext.equals_ignore_case(".jpg") || ext.equals_ignore_case(".jpeg")
-        return "image/jpeg"
-    if ext.equals_ignore_case(".gif")
-        return "image/gif"
-    if ext.equals_ignore_case(".webp")
-        return "image/webp"
-    if ext.equals_ignore_case(".ico")
-        return "image/vnd.microsoft.icon"
-    if ext.equals_ignore_case(".wasm")
-        return "application/wasm"
-    return "application/octet-stream"
-
-priv enum Rel_path //< what a percent-decoded path names under the root
-    ok(path: U8[]) //< the file to serve, the root joined in, on the arena
-    // A path not accepted as a name under the root (a `..` step, a NUL, a Windows device name or
-    // short name, a link in an intermediate folder: everything `fs.join_under` refuses).
-    rejected
-    hidden //< a name in it starts with a dot (`fs.join_under`'s `hidden`): answered as absent
-
-priv const SHOWN_DOT_NAMES: U8[][_] = ::{ ".well-known" } //< the one dot folder served (RFC 8615)
-    //< Certificate issuance (ACME) and other discovery read under it, so hiding it would break
-    //< them.
-
-priv fn asks_for_page(decoded: U8[]): Bool //<
-    //< Whether a decoded path names the page: the root itself, or `index.html` in it
-    //< **Decided from the text alone.** So a caller can ask it before looking at anything under the
-    //< root (the reason is at the token's check in `accept_head`).
-    $rest: = decoded
-    for rest.len > 0 && rest[0] == '/'
-        rest = rest.sub_from(1)
-    return rest.len == 0 || rest.equals(INDEX_NAME)
-
-priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): Rel_path
-    // **The page is the root's index file and nothing else** (`asks_for_page`). Otherwise a folder
-    // standing at that name would have its own index served as the page, without the token.
-    if is_page
-        return under(root, INDEX_NAME, arena)
-    // The root itself is the page, so the path is never empty here.
-    t: = api.url_rel(decoded)
-    // Caution: **Check the name that is served, not the one asked for.** A folder gives its index.
-    // Checked before the index is added, a link at a folder's index would serve its target for the
-    // folder's own path. Yet the server refuses the index asked for by name.
-    got: = under(root, t, arena)
-    switch got
-    case .ok(path)
-        if fs.is_dir(path)
-            return under(root, arena.text().s(t).c('/').s(INDEX_NAME).take(), arena)
-    default {}
-    return got
-
-priv fn under(root: U8[], rel: U8[], arena: Arena$@): Rel_path //< `rel` checked and joined
-    // Caution: **Do not serve a name starting with a dot.** A root that is a checkout or holds
-    // settings has `.git/` and `.env`, and anyone the server faces could read them. Answered as
-    // absent (404), so a probe learns nothing of what is there.
-    path: =
-        fs.join_under(root, rel, .refused(U8[][]::SHOWN_DOT_NAMES), arena) catch why
-        return .hidden if why == .hidden else .rejected
-    return .ok(path)
-
-priv fn names_this_server(req: http.Request@): Bool //<
-    //< Whether the `Host` header names this machine's loopback, as the token's URL does
-    //< **The port is not compared**: a re-pointed page always sends its own name, so the name alone
-    //< tells it apart. `http.parse_request` refuses a second `Host`, so the one found is the only
-    //< one.
-    host: = req.headers.find("Host").unwrap_or("")
-    name: = host.sub(0, host.find_char(':').unwrap_or(host.len))
-    return name.equals(LOCAL_HOST) || name.equals_ignore_case("localhost")
-
-// ==========================================
-// Static files
-// ==========================================
-
-priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) //<
-    //< Builds the response to one complete request
-    conn.stats.requests += 1I64
-    // **Every request shows someone is still there.** Stamped per endpoint, the next endpoint added
-    // would forget it.
-    conn.used_us = sys.mono_us()
-    is_head: = req.method.equals("HEAD")
-    is_get: = req.method.equals("GET")
-    keep_alive: = !req.wants_close()
-    t: = conn.split_target(req.target)
-    // **Under `/api/` every answer is JSON, a refusal's included**: an API client reads one form.
-    is_api: = t.path.starts_with(api.API_PREFIX)
-    if is_api
-        api.queue_api(c, t, req, ctx, keep_alive)
-        return
-    // Static serving is GET/HEAD only (the API's POST branched off before this).
-    if !is_get && !is_head
-        conn.queue_error(c, 405, "GET, HEAD")
-        return
-
-    // **Use `decode_component`**, which keeps a `+`: a space written as `+` is a query's
-    // convention, not a path's (see std/url.kspl). The decode happens only once.
-    decoded: = url.decode_component(t.path, c.arena) catch _e
-        conn.queue_error(c, 400)
-        return
-    // **Only the named page may be outside the root** (`--page`). Only `/` and `/index.html` are
-    // replaced, and **the client cannot choose it with a string it wrote** (`path_to_rel` refuses a
-    // `..` or an absolute path). The agreement is "Where it listens" in
-    // `docs/SPEC-local-server.md`.
-    is_page: = asks_for_page(decoded)
-    $served: U8[] = ""
-    switch path_to_rel(decoded, ctx.root, is_page, c.arena)
-    case .ok(path)
-        served = path
-    case .rejected
-        // A path let through could return a file outside the root, or one Windows reads as
-        // another name. A 403, not a 404: the form was refused, and whether the name exists is not
-        // checked.
-        conn.queue_error(c, 403)
-        return
-    case .hidden
-        conn.queue_error(c, 404)
-        return
-
-    // A directory has already become its index (`/docs` and `/docs/` alike) in `path_to_rel`.
-    target_path: = ctx.page if ctx.page.len > 0 && is_page else served
-
-    $size: Sz = 0
-    if found: = conn.regular_file_size(target_path)
-        size = found
-    else
-        conn.queue_error(c, 404)
-        return
-
-    ctype: = content_type_for(target_path)
-    if is_head
-        // A HEAD's Content-Length names the real length; 0 would read as "an empty file".
-        conn.queue_to_head(c, 200, ctype, size, keep_alive)
-        return
-
-    // The stat found it, so an open that fails is the server's fault, not a missing name.
-    file: = io.open(target_path, "rb") catch _e
-        conn.queue_error(c, 500)
-        return
-    conn.queue_file(c, ctype, file, size, keep_alive)
 
 // ==========================================
 // How one connection is driven
@@ -285,13 +119,13 @@ priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool /
     target: = conn.split_target(req.target)
     is_api: = target.path.starts_with(api.API_PREFIX)
     $status: I32 = 0
-    if !names_this_server(req)
+    if !static.names_this_server(req)
         status = 403
     else if !api.authorized(req, ctx.token)
         decoded: = url.decode_component(target.path, c.arena) catch target.path
         page: =
             !is_api && (req.method.equals("GET") || req.method.equals("HEAD")) &&
-            asks_for_page(decoded) && req.body_length == 0
+            static.asks_for_page(decoded) && req.body_length == 0
         if !page
             status = 401
     if status == 0
@@ -333,7 +167,7 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
         c.arena.restore(base)
         return
     c.answers_head = req.method.equals("HEAD")
-    queue_for_request(c, req, ctx)
+    static.queue_for_request(c, req, ctx)
     // Caution: Drop only what the finished parse used. Emptied completely, the start of the next
     // request that came in the same read is lost.
     c.inbuf.drop_prefix(req.consumed)
@@ -596,7 +430,7 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
             ln
                 .s("conn #\{conn.stats.connections_total\} from \{who\}:\{p.port\} (open \
                     \{conn.stats.connections_open\})")
-        t.slots[slot] = conn.conn_new(stream, conn.stats.connections_total)
+        t.slots[slot] = conn.conn_new(stream, conn.stats.connections_total, !outward)
         fresh: = t.slots[slot].get()
         fresh.peer = host
         fresh.peer_len = p.host_len
@@ -630,7 +464,7 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener@, t: 
 priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
     //< Clears away the connections that are done: nothing left to send, or lingered their time
     //< A connection is done in three cases. Its peer stopped sending and nothing is left to send or
-    //< answer. It lingered its full time (`linger_us`). Or it passed nothing for `idle_conn_us`.
+    //< answer. It lingered its full time (`LINGER_US`). Or it passed nothing for `IDLE_CONN_US`.
     //< **This is needed because such a connection is not watched for reading** (the reason is at
     //< `rebuild_interests`).
     for i in Range.asc(conn.MAX_CONNS)
@@ -675,14 +509,13 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
 priv const ANY_HOST: U8[] = "0.0.0.0" //< the address listened on
     //< **Local use listens on the loopback only.** It is built so that it cannot be reached from
     //< outside ("Where it listens" in `docs/SPEC-local-server.md`).
-priv const LOCAL_HOST: U8[] = "127.0.0.1"
 
 priv const TOKEN_BYTES: Sz = 24 //< the token's byte count
     //< Caution: **Make it long enough that brute force cannot find it**: it is what makes knowing
     //< the address alone not enough to make requests.
 
 priv fn make_token(out: U8$[]): Bool //< makes one token and fills `out`
-    //< `out` needs `token_bytes * 2` bytes.
+    //< `out` needs `TOKEN_BYTES * 2` bytes.
     //< Caution: **Do not take it as a parameter.** The command line is visible through `ps` to
     //< anyone on the same machine, so a token passed in has already leaked. **Use a
     //< cryptographically secure random source** (`std/rand` reads the OS's).
@@ -719,7 +552,8 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         .create("kssrv",
         "serves the files under <root>, and JSON under /api/; port 0 takes a free port", arena)
     cli.positional("<port> <root>")
-    cli.flag("--local", local@, "serve 127.0.0.1 only, make a token, open the file endpoints")
+    cli.flag("--local", local@,
+        "serve 127.0.0.1 only, make a token, open the file endpoints (needs --page)")
     cli.str_opt("--page", page@,
         "answer / and /index.html with this file (it may sit outside <root>)")
     // **Absent means it stays up.** Facing outward, there is no page to hold it. So a server given
@@ -779,6 +613,13 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         lg.say(.error,
             "--local serves this machine alone, where HTTPS adds nothing: drop --cert and --key, or \
                 --local")
+        return 1
+    // Caution: **Do not serve a local page from the root.** Its URL carries the token, so any HTML
+    // file standing at the root's `index.html` would get the token and every file endpoint.
+    if local && page.len == 0
+        lg.say(.error,
+            "--local needs --page: the root's own index.html would receive the token. Name the page \
+                file with --page=<file>")
         return 1
     // **A builder runs programs on the files under the root**, so only for the holder of the token.
     if builder.len > 0 && !local
@@ -877,7 +718,7 @@ fn main(): I32
         if h != null
             h.server.free()
 
-    host: = LOCAL_HOST if o.local else ANY_HOST
+    host: = static.LOCAL_HOST if o.local else ANY_HOST
     defer listener: = listen(host, o.port, lg@) catch
         return 1
     // **Ask the listener for its port**: for a 0, only it knows the one the system chose.

@@ -101,6 +101,35 @@ fn test_seq_two_element_types(arena: Arena$@) //<
     verdict
         .pass("Two chains of differing element types do not tread on each other's type arguments.")
 
+fn test_seq_chains_on_a_chain(arena: Arena$@) //<
+    //< `where` and `select` on a chain that already holds a `where` or a `select`
+    //< Each step changes the element type where it can (`I32`, `I64`, `Bool`), so a step that
+    //< took the wrong type argument does not compile or gives other values.
+    verdict.start("[Seq] where and select added to a chain of where and select test...")
+    $nums: = List<|I32|>(arena)
+    for i in Range.asc(6)
+        nums.push(I32::i + 1)
+    twice_kept: = nums.where(fn(x: I32@; ): Bool {
+        return x$ % 2 == 0;
+    }).where(fn(x: I32@; ): Bool {
+        return x$ > 2;
+    }).to_list(arena)
+    assert(twice_kept.len == 2 && twice_kept.get(0) == 4 && twice_kept.get(1) == 6,
+        "where().where() keeps what meets both conditions: 4 and 6")
+    tens: = fn(x: I32; ): I64
+        return I64::x * 10
+    kept_tens: = nums.select(tens).where(fn(v: I64@; ): Bool {
+        return v$ > 25;
+    }).to_list(arena)
+    assert(kept_tens.len == 4 && kept_tens.get(0) == 30 && kept_tens.get(3) == 60,
+        "select().where() tests the converted values: 30 to 60")
+    big: = nums.select(tens).select(fn(v: I64; ): Bool {
+        return v > 45;
+    }).to_list(arena)
+    assert(big.len == 6 && !big.get(3) && big.get(4) && big.get(5),
+        "select().select() passes the first conversion's values to the second")
+    verdict.pass("where and select on a chain see the elements the chain gives.")
+
 struct Seq_tagged //< a key to sort by, and its position before sorting
     key: I32
     was: Sz

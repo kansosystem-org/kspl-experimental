@@ -45,7 +45,7 @@ export function body() {
     out.push("");
   }
   const groups = TABLE_GROUPS.map(([name]) => name).join(", ");
-  out.push("**A table's right-click menu holds Cut, Copy and Paste, then the Table menu's groups.** " +
+  out.push("**A table's right-click menu holds Cut, Copy, Copy formula, Paste and Paste values, then the Table menu's groups.** " +
     `They are ${groups}.`, "");
   return out.join("\n");
 }

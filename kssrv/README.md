@@ -11,7 +11,7 @@ make kssrv                              # -> out/kssrv.exe
 mkdir -p public                         # the folder to serve; the repository has none
 echo '<h1>Hello</h1>' > public/index.html
 ./out/kssrv.exe 8080 ./public           # serves ./public on 0.0.0.0:8080
-./out/kssrv.exe 8080 ./public --local   # 127.0.0.1:8080. Prints a token and opens the file endpoints
+./out/kssrv.exe 8080 ./public --local --page=ui/app.html   # 127.0.0.1:8080. Prints a token, opens the file endpoints
 ./out/kssrv.exe 8080 ./docs --page=ui/app.html   # `/` is returned as this file
 ./out/kssrv.exe 8443 ./public --cert=cert.pem --key=key.pem   # HTTPS on 0.0.0.0:8443
 ```
@@ -25,7 +25,7 @@ The port and the root are **positional**; no environment variable fills either i
 | Option | What it does |
 | :-- | :-- |
 | (none) | Faces outward: any machine on the network can fetch the files |
-| `--local` | **Makes it a local server**, reachable from this machine only. Only then do the endpoints a local page uses exist (`/api/file`, `/api/stat`, `/api/list`, `/api/here`, `/api/stop`, and `/api/allow` and `/api/build` with `--builder`). It prints a token (a secret string) that every request but the page must carry |
+| `--local` | **Makes it a local server**, reachable from this machine only. Only then do the endpoints a local page uses exist (`/api/file`, `/api/stat`, `/api/list`, `/api/here`, `/api/stop`, and `/api/allow` and `/api/build` with `--builder`). It prints a token (a secret string) that every request but the page must carry. **It needs `--page`**: the token's URL opens the page, and a file the root holds must not get it |
 | `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** The server does not start when it names a folder, a FIFO or a device, or nothing. It can sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 | `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** It takes 1 to 604800 (one week); the server does not start on another value. Absent, it stays up ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 | `--builder=<program>` | **Names the program that builds a page's own functions** for `POST /api/build`. It needs `--local` and `--allowed`, and the server does not start when the program cannot be run. Absent, `/api/allow` and `/api/build` answer 404 ("Building a page's own functions" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
@@ -67,7 +67,8 @@ To take the passphrase off a key, run `openssl pkey -in locked.pem -out key.pem`
 
 | File | What it holds |
 | :-- | :-- |
-| [`kssrv/main.kspl`](main.kspl) | The command line and the accept loop (the loop that takes new connections and serves the open ones). Also static serving, and the one logger that a run writes through |
+| [`kssrv/main.kspl`](main.kspl) | The command line and the accept loop (the loop that takes new connections and serves the open ones). Also the one logger that a run writes through |
+| [`kssrv/static.kspl`](static.kspl) | Static serving: which file a request names under the root, and the answer that returns it |
 | [`kssrv/conn.kspl`](conn.kspl) | One connection's state, and how a response is queued |
 | [`kssrv/api.kspl`](api.kspl) | The endpoints under `/api/` and their routing table |
 | [`kssrv/https.kspl`](https.kspl) | The checks on the certificate and key at start, and each connection's bytes through TLS |
@@ -96,12 +97,6 @@ Idle, it uses no CPU. **What it holds on its heap comes back to the same figure*
 **The run `paths` throws generated paths at every endpoint that takes one** ([`kssrv/tests/paths.kspl`](tests/paths.kspl)). It checks that nothing outside the root is reached, and that no write lands on a dot name. `make test` replays one fixed seed. `make test-fuzz` sends ten times as many paths, and `FUZZ_ARGS="--seed=N --trials=N"` picks others. A failure prints the line that runs it again.
 
 **A failing check does not stop the run.** The closing `RESULT:` line is printed after every server the run started has stopped, so none is left on its port for the next run ([`std/verdict.kspl`](../std/verdict.kspl)).
-
-## Files near the limit and how they split
-
-How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).
-
-* [`kssrv/main.kspl`](main.kspl): **static serving** moves to a new `static.kspl` beside it. That is the section "Resolving a static file" and `queue_for_request`. The accept loop calls three names across the cut: `queue_for_request`, `asks_for_page` and `names_this_server`. The command line, the connection's driving and the loop stay.
 
 ## Further reading
 

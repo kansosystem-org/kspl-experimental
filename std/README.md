@@ -41,7 +41,7 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | What is used | How many come along |
 | --- | ---: |
 | `lang` + `libc` alone | 2 |
-| `bytes` `math` `checked_int` `mem` `reflect` `ring` `prng` `bignat` `log` `stack_limit` `suite` `thread` | 3 |
+| `bytes` `math` `checked_int` `mem` `reflect` `ring` `prng` `bignat` `log` `stack_limit` `suite` `thread` `panic_record` | 3 |
 | `chars` | 3 (4 on a freestanding build, one with no operating system under it, where `mem` supplies `memcmp`) |
 | `buf` | 4 |
 | `strfmt` `strnum` `sha256` | 5 (6 on a freestanding build, through `chars`) |
@@ -100,8 +100,8 @@ Where the arena goes among the parameters, and when a function takes one, is "A 
 
 How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). What follows is std's plan and the constraints of std alone.
 
-* [`std/strfmt.kspl`](strfmt.kspl): **the exact assembly of decimal digits from a binary value** moves to a new `strfmt_digits.kspl` under `std/`. That is `Binary_float` and the decomposition, the loop that runs `Bignat` and emits one digit at a time, the carry, and fixing the digit count.
-  * The cut lies between making the digits and writing them out. `write_float` / `write_float32` stay, since moving them too would make both files need `Writer`.
+* [`std/fs.kspl`](fs.kspl): **the lock on a file** moves to a new `filelock.kspl` under `std/`. That is `File_lock` with its `impl` blocks and the three `kspl_lock_*` declarations. Only `Fs_error` and `check_path` cross the cut, and `check_path` opens from `priv` to the package. The five files that use `File_lock` change one import each.
+  * Do not move the writing and copying of a tree instead. It is larger, but about forty files that call `write_tree`, `replace_file` or `mkdir_unique` would then need two imports.
 
 **Name a new file with a word no value uses.** `rc.kspl` for the reference-counting handles would make its alias collide with the variable name `rc`, hence [`std/refcount.kspl`](refcount.kspl).
 

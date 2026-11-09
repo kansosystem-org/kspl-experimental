@@ -11,6 +11,7 @@
 // top is found with `..` folded ("A path's `..` is resolved by its spelling" in
 // `../../../docs/DESIGN-repository.md`).
 // ==========================================
+import "ksplc/base/core" as _base_core // `strip_file_uri_on`
 import "ksplc/base/locate" as base_locate
 import "ksplc/tests/support/harness"
 import "std/chars"
@@ -70,9 +71,23 @@ priv fn check_drive_letter() //<
     posix: = base_locate.rest_under_drive("c:/w/src/a.kspl", "C:/w", false)
     verdict.check("with no drives, `c:` and `C:` are two folders", posix.len == 0, posix)
 
+priv fn check_file_uri() //<
+    //< An editor's `file:` URI names a path that opens with its drive on Windows alone
+    //< **Both answers are checked on every OS**, through the parameter that says the OS is Windows.
+    for uri in U8[][2]::{ "file:///c%3A/w/a.kspl", "file:///c:/w/a.kspl" }
+        win: = uri.strip_file_uri_on(true)
+        verdict.check("on Windows a URI's drive opens the path", win.equals("c:/w/a.kspl"), win)
+        posix: = uri.strip_file_uri_on(false)
+        verdict.check("elsewhere `/c:` is a folder under the root",
+            posix.equals("/c:/w/a.kspl"), posix)
+    spaced: = "file:///home/a%20b/x.kspl".strip_file_uri_on(true)
+    verdict.check("a path with no drive keeps its `/` on Windows",
+        spaced.equals("/home/a b/x.kspl"), spaced)
+
 fn main(): I32
     arena: = harness.begin(1 << 22)
     check_drive_letter()
+    check_file_uri()
     dir: = harness.sandbox("filepath")
     rel_c: = arena.text().s("\{dir\}/rel.c").take()
     abs_entry: = fs.absolute(REL_ENTRY, arena) catch

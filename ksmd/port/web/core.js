@@ -220,6 +220,30 @@ function ksmdStart(root, bar, status, wasmBytes) {
       ks.root.focus({ preventScroll: true });
       if (ks.sel) ks.view.showSelection(ks.sel);
     };
+    // Gives the focus back to `from`, where it was before a panel, a menu or a bar took it, as a
+    // dialog does. Where `from` is gone, as a cell the table drew again since, the chosen cell
+    // takes it, or else the text with its caret where the model holds it.
+    ks.focusBack = (from) => {
+      if (from && from !== document.body && from !== ks.root && from.isConnected) {
+        from.focus({ preventScroll: true });
+      } else if (ks.inTable()) {
+        ks.range.focus();
+      } else {
+        ks.root.focus({ preventScroll: true });
+        if (ks.sel) ks.view.showSelection(ks.sel);
+      }
+    };
+    // A button of the page's own: its name, its class, its tooltip and what a press does. Each
+    // part left out, as null or "", is not set.
+    ks.button = (label, cls, title, onClick) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      if (label) b.textContent = label;
+      if (cls) b.className = cls;
+      if (title) b.title = title;
+      if (onClick) b.addEventListener("click", onClick);
+      return b;
+    };
     // The header's height, under which a table's frozen heading and a heading scrolled to stand.
     const top = document.querySelector(".top");
     if (top && window.ResizeObserver) {
@@ -229,6 +253,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
     }
     ksmdHandlers(ks);
     ksmdPanels(ks);
+    ksmdPopup(ks);
     ksmdView(ks);
     ksmdTable(ks);
     ksmdSizes(ks);
@@ -376,19 +401,13 @@ function ksmdHandlers(ks) {
 
 // The small panels that set a column's rule, a chart and the page setup (`ks.panel`). Each has
 // Apply and Cancel at its end. Escape or a press outside closes it, as a press outside a menu does.
+// Apply, Cancel and Escape give the focus back where it was before the panel opened, as a dialog
+// does; left on the panel that went, it fell to the page's body, and the next key went nowhere.
 function ksmdPanels(ks) {
   const open = new Set();
   document.addEventListener("mousedown", (e) => {
     for (const p of open) if (!p.el.contains(e.target)) p.close();
   }, true);
-  const button = (label, cls, run) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    if (cls) b.className = cls;
-    b.addEventListener("click", run);
-    return b;
-  };
   // A panel of class `cls` (`rule-panel`), named `label` for a screen reader. Making it closes
   // the open panel of its class. `show` adds Apply (`rule-apply`) and Cancel, and puts it on the
   // page. Apply closes it, then runs `onApply`, which can still read the panel's fields.
@@ -398,11 +417,19 @@ function ksmdPanels(ks) {
     el.className = cls;
     el.setAttribute("role", "dialog");
     el.setAttribute("aria-label", label);
+    const from = document.activeElement;
     const p = { el, close: () => { el.remove(); open.delete(p); } };
-    p.apply = button("Apply", cls.replace(/-panel$/, "-apply"), () => { p.close(); onApply(); });
-    const cancel = button("Cancel", "", () => p.close());
+    const back = () => {
+      p.close();
+      ks.focusBack(from);
+    };
+    p.apply = ks.button("Apply", cls.replace(/-panel$/, "-apply"), null, () => { back(); onApply(); });
+    const cancel = ks.button("Cancel", null, null, back);
     el.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") p.close();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      back();
     });
     p.show = () => {
       el.append(p.apply, cancel);

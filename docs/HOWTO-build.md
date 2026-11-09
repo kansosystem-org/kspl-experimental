@@ -78,18 +78,6 @@ make debug-std                     # std only (an order of magnitude less to bui
 
 Note: After changing one package, `make debug-<name>` answers sooner. **It does not narrow what must be confirmed**: every package builds on `std/`, so run `make ci` before pushing ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)).
 
-### What a target does (`make explain`)
-
-**`make explain T=<target>` says what one target is made of, so you do not follow its variables through the make files by hand.** `make help` lists the targets; this command explains one of them.
-
-```sh
-make explain T=chat                    # the root build's target `chat`
-make explain T=chat MODEL=x.gguf       # the same, with that setting given
-make explain T=ksmd:test               # ksmd's own Makefile, as `make -C ksmd test`
-```
-
-It prints where the rule is written and each prerequisite with its state. Then come the commands filled in, as `make -n` shows them for this target alone. Last come every variable it reads, with its value and the line that sets it, and the settings it takes. An unknown name is refused with the nearest names. It needs GNU make 4 or later; on macOS, install it with `brew install make`. Why it works this way is "Explaining a make target" in [`../tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md).
-
 ### Putting `ksplc` on the PATH (`make install`, optional)
 
 **`make install` copies the compiler, its standard library and the libraries under `lib/` to where your shell finds them, so `ksplc` works from any folder.** The development scripts (`tools/repo_stat.kspl` and others) then run directly, through their `#!/usr/bin/env -S ksplc run` line. In Windows's native shell, that *shebang* does nothing ("Running a program" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md)).

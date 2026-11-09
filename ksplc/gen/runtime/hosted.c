@@ -2,9 +2,9 @@
  * with an OS).
  *
  * **The substance half is split per subject.** This side holds the includes and the shared
- * small pieces alone. hosted_io / hosted_proc / hosted_thread / hosted_fs / hosted_spawn /
- * hosted_net join behind it **in that order** to make one translation unit. write_impl in
- * ksplc/gen/runtime.kspl holds the order.
+ * small pieces alone. hosted_io / hosted_proc / hosted_thread / hosted_fs / hosted_fs_win /
+ * hosted_spawn / hosted_spawn_win / hosted_net join behind it **in that order** to make one
+ * translation unit. write_impl in ksplc/gen/runtime.kspl holds the order.
  * **The standard for splitting is the
  * subject on std's side.** Cut by line count, reading one subject means going back and forth
  * between two files.

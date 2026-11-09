@@ -161,6 +161,12 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   padding: 2px 8px;
 }
 
+/* The menus' names stand in a menu bar of their own, before the document's name (`menu.js`). */
+.menu-names {
+  display: flex;
+  flex-wrap: wrap;
+}
+
 .top-menu {
   position: relative;
 }
@@ -182,7 +188,17 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   border-color: var(--line);
 }
 
-/* A drop-down menu, a flyout and the right-click menu: one column of commands. */
+/* A name the keys reached is marked as a focused item is, so F10 shows where the focus went. */
+.menu-name:focus-visible {
+  background: var(--mark);
+  border-color: var(--mark);
+  color: var(--paper);
+  outline: none;
+}
+
+/* A drop-down menu, a flyout and the right-click menu: one column of commands. A menu taller than
+   the window scrolls (`fit` in `popup.js`), a flyout too: each stands against the window, so a
+   scroll cuts off no flyout of its own. */
 .menu {
   position: absolute;
   top: 100%;
@@ -196,6 +212,7 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   border: 1px solid var(--line);
   border-radius: 6px;
   box-shadow: 0 4px 16px var(--shadow);
+  overflow-y: auto;
 }
 
 .menu[hidden],
@@ -221,10 +238,23 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
 }
 
 .menu button:hover:not(:disabled),
-.menu button:focus-visible,
 .menu .sub.open > .sub-name {
   background: var(--soft);
   outline: none;
+}
+
+/* The item the keys reached stands out from the menu at 4.5 to 1 or more, in both schemes: the
+   mark's colour, with the paper's colour on it. The soft ground a pointer gives stands at about
+   1.1 to 1, too faint to find the focus by. */
+.menu button:focus-visible {
+  background: var(--mark);
+  color: var(--paper);
+  outline: none;
+}
+
+.menu button:focus-visible kbd,
+.menu .sub-name:focus-visible::after {
+  color: inherit;
 }
 
 .menu button:disabled {
@@ -285,12 +315,8 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
   position: fixed;
 }
 
-/* A menu taller than the window scrolls (`fit` in `menu.js`). Its items keep their height: as a
-   column's items, they would shrink to the limit instead, and squeeze together. */
-.menu:not(.flyout) {
-  overflow-y: auto;
-}
-
+/* A menu's items keep their height when the menu scrolls: as a column's items, they would shrink
+   to the limit instead, and squeeze together. */
 .menu > * {
   flex-shrink: 0;
 }
@@ -378,7 +404,7 @@ body.read-only :is(.block-remove, .block-print, .chart-edit, .fill-handle, .col-
 }
 
 /* An image given a width takes that share of the text width, and its height follows
-   (`imagesize.js`). Images side by side that each have one share a row while their widths fit. */
+   (`images.js`). Images side by side that each have one share a row while their widths fit. */
 .doc .figure.sized {
   display: inline-block;
   box-sizing: border-box;
@@ -468,9 +494,10 @@ body.read-only .figure .size-handle {
   white-space: nowrap;
 }
 
-/* The status bar: one line at the window's foot (`status.js`). From the left: the chosen cell, a
-   message, the filter's count and the printed page; at the right the figures and the zoom. A long
-   text is cut with an ellipsis, and its tooltip holds it whole. */
+/* The status bar: one line at the window's foot (`status.js`). From the left: the chosen cell, why
+   it shows an error, a message, the filter's count and the printed page; at the right the figures
+   and the zoom. A long text is cut with an ellipsis, and its tooltip holds it whole. */
+
 .status-bar {
   position: fixed;
   bottom: 0;
@@ -521,10 +548,29 @@ body.read-only .figure .size-handle {
   cursor: text;
 }
 
-/* Which of the document's own functions the chosen cell calls, or why it shows #BLOCKED!. */
-.status-own {
+/* Why the chosen cell shows an error, cut with an ellipsis; its tooltip holds it whole. */
+.status-why {
   max-width: 40%;
   color: var(--ink);
+}
+
+/* Which of the document's own functions the chosen cell calls, and the note on the chosen cell or
+   on the paragraph at the caret. */
+.status-own,
+.status-note {
+  max-width: 40%;
+  color: var(--ink);
+}
+
+/* The range just chosen, said to a screen reader alone: the focus stays on the range's first cell,
+   so nothing else says how far it reaches (`status.js`). */
+.status-bar .status-said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* The message takes the room left, and grows first. */
@@ -575,7 +621,8 @@ body.read-only .figure .size-handle {
 }
 
 /* A narrow window drops items in this order: the zoom and the page first; then the filter's count,
-   the chosen cell and what it calls. The message and the figures stay. */
+   the chosen cell, why it shows an error, what it calls and its note. The message and the figures
+   stay. */
 @media (max-width: 48rem) {
   .status-bar :is(.status-zoom, .status-page) {
     display: none;
@@ -583,7 +630,7 @@ body.read-only .figure .size-handle {
 }
 
 @media (max-width: 32rem) {
-  .status-bar :is(.status-filter, .status-cell, .status-own) {
+  .status-bar :is(.status-filter, .status-cell, .status-why, .status-own, .status-note) {
     display: none;
   }
 }

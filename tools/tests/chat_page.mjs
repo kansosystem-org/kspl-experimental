@@ -111,9 +111,10 @@ const RENDER_CASES = [
 
 // Text a hostile or runaway model can write, each of which must read throwing nothing, in at most
 // HEAVY_FACTOR times as long as plain text of the same length: marks that never close, deep
-// quotes, brackets and parentheses that never close, a list with many blank lines, and emphasis
-// nested deep. **Held to plain text, not to a fixed time**, so a slow or busy machine slows both
-// alike; a read that grows with the square of the length is thousands of times slower.
+// quotes, brackets and parentheses that never close, a list with many blank lines, emphasis
+// nested deep, and a table as wide as it is long. **Held to plain text, not to a fixed time**, so a
+// slow or busy machine slows both alike; a read that grows with the square of the length is
+// thousands of times slower.
 // **The two take turns over HEAVY_ROUNDS rounds**, each kept at its fastest. HEAVY_FLOOR_MS keeps
 // a plain read near zero from making the ratio meaningless.
 const HEAVY_FACTOR = 50;
@@ -126,6 +127,7 @@ const HEAVY = [
   ["open link targets", "\"[a](\".repeat(20000)"],
   ["blank lines in a list", "\"- a\\n\" + \"\\n\".repeat(30000) + \"  b\""],
   ["deep emphasis", "\"*_\".repeat(10000) + \"x\" + \"_*\".repeat(10000)"],
+  ["a table as wide as it is long", "\"|\".repeat(3000) + \"\\n-|\\n\" + \"|\\n\".repeat(3000)"],
 ];
 
 async function main() {
@@ -176,6 +178,14 @@ async function main() {
     check(await d.js("ksagentMarkdown.render(ksagentMarkdown.parse('> '.repeat(12) + 'x'), " +
       "document.createElement('div')).querySelectorAll('blockquote').length") === 8,
       "quotes nest 8 deep, and the rest reads as text");
+    // A table's columns stop at MAX_COLUMNS in `ksagent/page/chat.html`: a row has that many cells.
+    const columns = (n) => d.js("(() => { const md = ksagentMarkdown; " +
+      `const s = '|' + ' a |'.repeat(${n}) + '\\n|' + ' - |'.repeat(${n}) + '\\n| 1 |'; ` +
+      "const t = md.render(md.parse(s), document.createElement('div')).querySelector('table'); " +
+      "return t ? t.rows[1].cells.length : 0; })()");
+    check(await columns(64) === 64, "a table of 64 columns is a table, its short row filled out",
+      await columns(64));
+    check(await columns(65) === 0, "a header of 65 columns reads as text", await columns(65));
 
     // **A check of what the page shows waits for it** (`d.until`): the page reads its files on its
     // own beat, so a reading taken once can fall before the change it checks. What holds only for

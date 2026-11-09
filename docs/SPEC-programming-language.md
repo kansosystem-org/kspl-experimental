@@ -648,7 +648,7 @@ Note: **For a `0x`, or a digit count fixed regardless of the type, use `strfmt.h
 
 **`0` and `,` are not written together**: zeros among the groups have no shared reading (`0001,234` or `0,001,234`). It is a compile error that says to drop the `0` or the `,`.
 
-**A file writing a specifier imports `std/strfmt`**, since a specifier desugars to a method `std/strfmt` adds to the number types ("An extension method requires the import" in [9.3](#93-adding-a-method-to-another-files-type)). Without the import, the error names the item as written: `format spec: writing 'x' / 'X' calls 'fmt_hex' in 'std/strfmt', which this file does not import`. A plain `\{x\}` calls `put` in `std/lang` and needs no import.
+**A file writing a specifier imports `std/strfmt`**, since a specifier desugars to a method `std/strfmt` adds to the number types ("An extension method requires the import" in [9.3](#93-adding-a-method-to-another-files-type)). Without the import, the error names the item as written: `format spec: writing 'x' / 'X' calls 'fmt_hex' in 'std/strfmt'. This file does not import 'std/strfmt'`. Its note gives the `import` line to add. A plain `\{x\}` calls `put` in `std/lang` and needs no import.
 
 The expansion runs before types are fixed, so an interpolation with a specifier becomes **a method call that does not look at the type**. Ordinary method resolution then picks the implementation, in four ways by what was written:
 

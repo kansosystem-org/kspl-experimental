@@ -20,7 +20,7 @@ fn spawn_or_exit(list: List<|U8[]|>$@, what: U8[], cwd: U8[]): I32 //<
     for try in Range.asc(START_TRIES)
         got: = subproc.spawn_wait(list.slice(), cwd) catch
             code = subproc.start_error()
-            if !held_by_another(code) || try + 1 == START_TRIES
+            if !held_by_another_on(code, sys.is_windows()) || try + 1 == START_TRIES
                 break
             sys.sleep_ms(START_WAIT_MS)
             continue
@@ -36,9 +36,12 @@ fn spawn_or_exit(list: List<|U8[]|>$@, what: U8[], cwd: U8[]): I32 //<
     e.c('\n')
     sys.exit(1)
 
-priv fn held_by_another(code: I32): Bool //< whether a start failed as Windows fails on a held file
-    //< 32 is a sharing violation, 5 a refusal of access; a scanner holding the file gives either.
-    return sys.is_windows() && (code == 32 || code == 5)
+fn held_by_another_on(code: I32, windows: Bool): Bool //<
+    //< Whether a start failed as Windows fails on a held file; never elsewhere
+    //< 32 is a sharing violation, 5 a refusal of access, 33 a lock violation. A scanner holding the
+    //< file gives one of them. **The runtime's rename tries the same three again** (`kspl_win_move`
+    //< in `ksplc/gen/runtime/hosted_fs_win.c`). On POSIX, 32 and 5 are `EPIPE` and `EIO`, no hold.
+    return windows && (code == 32 || code == 5 || code == 33)
 
 priv fn start_failure(code: I32): U8[] //<
     //< what the OS's number for a failed start means; empty if unknown
@@ -52,6 +55,8 @@ priv fn start_failure(code: I32): U8[] //<
             return "access was refused (a security program may hold or block it)"
         case 32
             return "another program holds the file (often a virus scanner)"
+        case 33
+            return "another program has locked part of the file"
         case 225
             return "Windows Security found a threat in it and blocked it"
         case 1260

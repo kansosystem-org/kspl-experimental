@@ -4,10 +4,11 @@
 //< to them by the rules in `ksmd/calc/args.kspl`. **What a person reads of each comes from here
 //< too**: its summary, each parameter's `//<`, a sentence "For example, `f(…)` is `…`.", and the
 //< divider above it, which names its group. `if`, `sum_if`, `today` and the other forms stay in
-//< `ksmd/calc/calc.kspl`, and their entries in `ksmd/calc/help.kspl`.
+//< `ksmd/calc/calc.kspl` and `ksmd/calc/forms.kspl`, and their entries in `ksmd/calc/help.kspl`.
 //< Caution: **Change a signature or its comments here, then run `make ksmd-functions`**, which
 //< writes the table again; `make debug-ksmd` fails while the two differ.
 import "ksmd/base/dates" { day_of, write_date, write_date_with, ymd_of }
+import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
 import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value, number }
 import "ksmd/model/format" { SHOWN_DIGITS, format_of, round_digits, round_places, show, show_plain }
@@ -188,6 +189,59 @@ pub fn find( //<
     if at: = t.find_str(part)
         return I64::t.sub(0, at).count_codepoints() + 1
     return 0
+
+pub fn like( //<
+    //< whether the whole text matches the pattern, `*` and `?` standing for any characters
+    //< `*` stands for any run of characters, none too, and `?` for exactly one. `~*`, `~?` and `~~`
+    //< stand for `*`, `?` and `~` themselves; any other `~` is `#VALUE!`. Case does not count, as
+    //< the filter compares text. So `like(A1, "INV-*")` asks whether `A1` starts with `INV-`.
+    //< For example, `like("Pens", "p?n*")` is `true`.
+    t: U8[], //< the text
+    pattern: U8[], //< the pattern, such as `"INV-*"`; any other character stands for itself
+): Bool!Calc_error
+    // Each `~` escapes a wildcard or itself; checked first, so the answer never hangs on the text.
+    for $i: Sz = 0; i < pattern.len; i += 1
+        if pattern[i] == '~'
+            if i + 1 == pattern.len || !is_wild(pattern[i + 1])
+                throw .wrong_kind
+            i += 1
+    // **One `*` is kept to go back to, the last one passed.** A later `*` matches whatever an
+    // earlier one would, so going back further finds nothing new. The work is then at most the
+    // text's characters times the pattern's bytes, never exponential.
+    $at: Sz = 0 // in `t`
+    $p: Sz = 0 // in `pattern`
+    $star: Sz = -1 // the pattern's byte after the last `*`; -1 before any
+    $star_at: Sz = 0 // where in `t` that `*` began to match
+    for at < t.len
+        step: = t.next_codepoint(at)
+        if p < pattern.len && pattern[p] == '*'
+            p += 1
+            star = p
+            star_at = at
+        else if p < pattern.len && one_matches(t.sub(at, step), pattern, p)
+            at += step
+            p += 2 if pattern[p] == '~' else pattern.next_codepoint(p)
+        else if star >= 0
+            star_at += t.next_codepoint(star_at)
+            at = star_at
+            p = star
+        else
+            return false
+    for p < pattern.len && pattern[p] == '*'
+        p += 1
+    return p == pattern.len
+
+priv fn is_wild(c: U8): Bool //< whether a `~` before `c` makes it stand for itself in `like`
+    return c == '*' || c == '?' || c == '~'
+
+priv fn one_matches(c: U8[], pattern: U8[], p: Sz): Bool //<
+    //< Whether the character `c` matches the one the pattern holds at byte `p`, which is no `*`
+    //< Case does not count: `compare_text`, which the filter and the sort use, decides.
+    if pattern[p] == '?'
+        return true
+    if pattern[p] == '~'
+        return c.len == 1 && c[0] == pattern[p + 1]
+    return compare_text(c, pattern.sub(p, pattern.next_codepoint(p))) == 0
 
 pub fn value( //<
     //< the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is

@@ -30,6 +30,8 @@ pub enum Calc_error //< why a cell has no value; each is fixed differently
     stopped //< a person's own function stopped, by a panic or a fault: `#STOPPED!`
     blocked //< a call that may be the document's own, whose file the person has not allowed yet:
         //< `#BLOCKED!`
+    read_limit //< the formulas read `MAX_READS` cell values, and this cell was not calculated:
+        //< `#LIMIT!`
 
 impl Calc_error
     pub fn mark(e: Self): U8[] //< what the cell shows
@@ -58,6 +60,48 @@ impl Calc_error
             return "#STOPPED!"
         case .blocked
             return "#BLOCKED!"
+        case .read_limit
+            return "#LIMIT!"
+
+pub enum Why //< what made an error, beyond its kind; `ksmd/calc/reason.kspl` writes it for a person
+    //< **A value keeps this tag and its detail, not a sentence**, so a large table of errors makes
+    //< no text. For an error, `Value.number` and `Value.text` hold the detail named here.
+    plain //< nothing beyond what the error's kind says
+    from_cell //< the error of another cell, carried: `number` is that cell's place in `Results`
+    text_in_arithmetic //< `number` is the place of the cell that holds the text, or -1
+    truth_in_arithmetic //< `true` or `false` in arithmetic; `number` is its cell's place, or -1
+    date_arithmetic //< a date in arithmetic other than adding or taking away whole days
+    not_a_condition //< a number, text or a date where true or false is needed; `number` its cell
+    kinds_ordered //< two values of different kinds put in order
+    joined_kind //< `&` with a number, a date or a truth value; `number` its cell's place, or -1
+    divide_by_zero //< `number` is the place of the cell that holds the divisor, or -1
+    too_large //< a number past an F64
+    text_too_long //< text past `MAX_TEXT` bytes
+    day_out_of_range //< a date past the years 1 to 9999
+    lost_reference //< `#REF!` written in the formula: its row or column was removed
+    no_cell //< a reference to no cell: outside its table, or a table this source does not hold
+    not_aligned //< two ranges that are not one column, or one row, of the same length
+    condition_shape //< a range in a condition not one column as tall as the values
+    condition_no_range //< a condition with no range in it
+    in_function //< an error the function `text` found in its own work
+    own_function //< an error of the document's own function `text`
+    wants_number //< argument `number` of the function `text` takes a number
+    wants_whole //< argument `number` of the function `text` takes a whole number
+    wants_truth //< argument `number` of the function `text` takes `true` or `false`
+    wants_text //< argument `number` of the function `text` takes text
+    unknown_function //< no function is called `text`
+    bare_word //< the word `text` stands alone: it is no function, cell or value
+    arguments //< the arguments do not fit the function `text`
+    not_a_column //< `name` given anything but one whole column
+    digit_literal //< a literal in a base, `text`, given as the digit text of a function in
+        //< `READ_DIGITS`: `number` is that function's place in the list
+    bad_token //< `text` reads as nothing a formula holds; empty for a byte that starts nothing
+    range_alone //< a range outside a function or a condition
+    missing //< `text` is missing, such as `)`; `number` is 1 where a `,` or a `)` stood instead
+    unexpected //< `text` stands where a value is needed; empty at the formula's end
+    two_comparisons //< `a < b < c`
+    too_deep //< more than `MAX_LEVELS` levels
+    trailing //< `text` follows a whole formula, with no operator before it
 
 pub enum Value_kind //< a formula's value is never empty: an empty cell's value as a formula's is 0
     empty
@@ -70,13 +114,22 @@ pub enum Value_kind //< a formula's value is never empty: an empty cell's value 
 pub struct Value //< the small fields first, so they share one word
     pub kind: Value_kind
     pub boolean: Bool //< true for `true`; false for the other kinds
-    pub error: Calc_error //< an error's reason; `.syntax` for the other kinds
+    pub error: Calc_error //< an error's kind; `.syntax` for the other kinds
+    pub why: Why //< what made an error; `.plain` for the other kinds
     pub number: F64 //< a number's value, or a date's day; 0 for the other kinds
     pub text: U8[] //< a text's bytes; empty for the other kinds
 
 impl Value
-    pub fn failed(e: Calc_error): Value //< the value of a cell that has none, for this reason
-        return Value::{ .kind = .error, .number = 0.0, .text = "", .boolean = false, .error = e }
+    pub fn failed(e: Calc_error): Value //< the value of a cell that has none, of this kind
+        return Value.because(e, .plain, "", -1)
+
+    pub fn because(e: Calc_error, why: Why, detail: U8[], at: Sz): Value //<
+        //< An error and what made it: `detail` and `at` are the text and the number `why` names
+        return Value::{ .kind = .error, .number = F64::at, .text = detail, .boolean = false,
+            .error = e, .why = why }
+
+    pub fn at(v: Self): Sz //< an error's number as `Why` names it: a place, or -1
+        return Sz::v.number
 
 fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the key looked for
     if key.kind != cell.kind
@@ -110,7 +163,7 @@ fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
         return number(a.number * b.number)
     default {}
     if b.number == 0.0
-        return Value.failed(.division)
+        return Value.because(.division, .divide_by_zero, "", -1)
     return number(a.number / b.number)
 
 pub fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
@@ -118,8 +171,12 @@ pub fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or t
     switch v.kind
     case .empty
         return number(0.0)
-    case .text, .boolean, .date
-        return Value.failed(.wrong_kind)
+    case .text
+        return Value.because(.wrong_kind, .text_in_arithmetic, "", -1)
+    case .boolean
+        return Value.because(.wrong_kind, .truth_in_arithmetic, "", -1)
+    case .date
+        return Value.because(.wrong_kind, .date_arithmetic, "", -1)
     case .number, .error
         return v
 
@@ -128,7 +185,7 @@ pub fn truth(v: Value): Value //< a value as a condition: empty is false, a numb
     case .empty
         return boolean(false)
     case .number, .text, .date
-        return Value.failed(.wrong_kind)
+        return Value.because(.wrong_kind, .not_a_condition, "", -1)
     case .boolean, .error
         return v
 
@@ -147,7 +204,7 @@ fn joined(x: Value, y: Value, arena: Arena$@): Value //<
     if b.kind == .error
         return b
     if a.text.len + b.text.len > MAX_TEXT
-        return Value.failed(.not_finite)
+        return Value.because(.not_finite, .text_too_long, "", -1)
     if a.text.len == 0
         return b
     if b.text.len == 0
@@ -161,7 +218,7 @@ priv fn as_text(v: Value): Value //< a value as one side of `&`: text, or an err
     case .empty
         return text("")
     default
-        return Value.failed(.wrong_kind)
+        return Value.because(.wrong_kind, .joined_kind, "", -1)
 
 fn compare(x: Value, y: Value, op: Token_kind): Value //<
     //< Two values compared; the left error comes first
@@ -176,7 +233,7 @@ fn compare(x: Value, y: Value, op: Token_kind): Value //<
     if a.kind != b.kind
         if op == .equal || op == .unequal
             return boolean(op == .unequal)
-        return Value.failed(.wrong_kind)
+        return Value.because(.wrong_kind, .kinds_ordered, "", -1)
     $order: I32 = 0
     switch a.kind
     case .number, .date
@@ -234,12 +291,12 @@ priv fn date_arithmetic(x: Value, y: Value, op: Token_kind): Value //<
         at = b.number
         days = a.number
     else
-        return Value.failed(.wrong_kind)
+        return Value.because(.wrong_kind, .date_arithmetic, "", -1)
     if days != F64::(I64::days) || days > 4000000.0 || days < -4000000.0
-        return Value.failed(.wrong_kind)
+        return Value.because(.wrong_kind, .date_arithmetic, "", -1)
     day: = I64::at + I64::days
     if !in_range(day)
-        return Value.failed(.not_finite)
+        return Value.because(.not_finite, .day_out_of_range, "", -1)
     return date_value(day)
 
 pub fn date_value(day: I64): Value //< a date; the caller keeps the day in the years 1 to 9999
@@ -248,12 +305,13 @@ pub fn date_value(day: I64): Value //< a date; the caller keeps the day in the y
 
 fn number_of(text: U8[]): Value //< a number written in decimal; one too large is an error
     n: = text.to_f64() catch
-        return Value.failed(.not_finite)
+        return Value.because(.not_finite, .too_large, "", -1)
     return number(n)
 
 pub fn number(n: F64): Value //< a number; an infinity or a NaN is an error
     if n - n != 0.0
-        return Value.failed(.not_finite)
+        return Value.because(.not_finite, .too_large, "", -1)
+
     return Value::{ .kind = .number, .number = n, .text = "", .boolean = false, .error = .syntax }
 
 pub fn text(s: U8[]): Value

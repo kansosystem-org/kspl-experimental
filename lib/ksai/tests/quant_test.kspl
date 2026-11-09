@@ -3,7 +3,6 @@
 //< library (`lib/ksai/tools/make_quant_fixtures.py`), so this test needs no Python.
 import "ksai/parallel"
 import "ksai/quant" + { Q8_input, Quant_error, Quant_format, Quant_matrix }
-import "ksai/quantize" as _quantize // `Quant_matrix.quantize`
 #cfg(!blas)
 import "ksai/tensor" + { Tensor } // `matmul_split`, which a BLAS build does not have
 #cfg(blas)
@@ -84,60 +83,6 @@ priv fn tensor_of(xs: F32[], rows: Sz, cols: Sz, arena: Arena$@): Tensor<|F32|> 
     mem.copy(Void$@::t.data, Void$@::xs.ptr, rows * cols * 4)
     return t
 
-fn test_quant_q8_0_quantizes_as_ggml(arena: Arena$@) //<
-    //< Q8_0 made from F32 is the reference's bytes exactly
-    verdict.start("[Quant] F32 to Q8_0 writes the bytes ggml's reference quantizer writes...")
-    c: = case_of(q8_0_file, .q8_0, arena)
-    src: = tensor_of(c.inputs, c.rows, c.cols, arena)
-    m: = Quant_matrix.quantize(src, .q8_0, arena) catch e
-        io.err().s("\{e\}\n")
-        panic("quant: quantize to Q8_0 failed")
-    got: = m.bytes()
-    assert(got.len == c.encoded.len, "quant: Q8_0's length differs")
-    for i in Range.asc(got.len)
-        if got[i] != c.encoded[i]
-            io.err().s("Q8_0 byte \{i\}: \{got[i]:x\} for \{c.encoded[i]:x\}\n")
-        assert(got[i] == c.encoded[i], "quant: a Q8_0 byte differs from the reference")
-    verdict
-        .pass(arena.text().s("\{got.len\} bytes match, the all-zero block and the ties included")
-        .take())
-
-fn test_quant_q4_k_round_trip(arena: Arena$@) //<
-    //< Q4_K made from F32 decodes to within a step of each number
-    //< `gguf` has no Q4_K quantizer, and the decoder is checked against it above. So each number
-    //< must come back within one step of its group: the group's range over 15.
-    verdict.start("[Quant] F32 to Q4_K and back stays within one step of each group...")
-    c: = case_of(q4_k_file, .q4_k, arena)
-    src: = tensor_of(c.inputs, c.rows, c.cols, arena)
-    m: = Quant_matrix.quantize(src, .q4_k, arena) catch e
-        io.err().s("\{e\}\n")
-        panic("quant: quantize to Q4_K failed")
-    back: = F32$[]::{ .ptr = F32$@::arena.alloc(c.cols * 4), .len = c.cols }
-    $sq_err: F64 = 0.0
-    $sq_val: F64 = 0.0
-    for i in Range.asc(c.rows)
-        m.dequantize_row(i, back) catch panic("quant: a Q4_K row was refused")
-        for g in Range.asc(c.cols / 32)
-            $lo: F64 = 0.0
-            $hi: F64 = 0.0
-            for k in Range(g * 32, g * 32 + 32, 1)
-                v: = F64::c.inputs[i * c.cols + k]
-                lo = math.min(lo, v)
-                hi = math.max(hi, v)
-            step: = (hi - lo) / 15.0
-            for k in Range(g * 32, g * 32 + 32, 1)
-                v: = F64::c.inputs[i * c.cols + k]
-                err: = math.abs(F64::back[k] - v)
-                sq_err += err * err
-                sq_val += v * v
-                assert(err <= step + 1.0e-6, "quant: a Q4_K number is off by more than a step")
-    rel: = math.sqrt(sq_err / sq_val)
-    // About 4.5 bits a number: a tenth of the signal is already a broken fit.
-    assert(rel < 0.1, "quant: Q4_K's error is larger than 4 bits allow")
-    verdict
-        .pass(arena.text()
-        .s("each number within a step; the error is \{(rel * 100.0):.1\}% of the signal").take())
-
 // ==========================================
 // The products: a quantized matrix times F32 inputs, against the same numbers decoded first.
 // ==========================================
@@ -149,15 +94,13 @@ priv fn random_tensor(rows: Sz, cols: Sz, rng: prng.Prng$@, arena: Arena$@): Ten
     return t
 
 priv fn matrix_in(format: Quant_format, src: Tensor<|F32|>, arena: Arena$@): Quant_matrix //<
-    //< The weights in a format, made the way each format can be made here
+    //< The weights in a format: `src` itself for a float format, and reference blocks otherwise
     rows: = src.shape[0]
     cols: = src.shape[1]
-    if format == .q8_0 || format == .q4_k
-        return Quant_matrix.quantize(src, format, arena) catch panic("quant: quantize failed")
     row_len: = format.row_bytes(cols) catch panic("quant: a test shape fails its blocks")
     bytes: = U8$@::arena.alloc(rows * row_len)
     if format != .f32 && format != .f16 && format != .bf16
-        // Random blocks with no quantizer here: the reference file's, tiled over the rows.
+        // ksai makes no blocks from F32: the reference file's blocks, tiled over the rows.
         c: = case_of(reference_file(format), format, arena)
         for i in Range.asc(rows * row_len)
             (bytes + i)$ = c.encoded[i % c.encoded.len]
@@ -180,8 +123,12 @@ priv fn matrix_in(format: Quant_format, src: Tensor<|F32|>, arena: Arena$@): Qua
         catch panic("quant: a test matrix was refused")
 
 priv fn reference_file(format: Quant_format): U8[] //<
-    //< the decoding reference of a format with no quantizer
+    //< the decoding reference of a block format
     switch format
+    case .q8_0
+        return q8_0_file
+    case .q4_k
+        return q4_k_file
     case .q3_k
         return q3_k_file
     case .q5_k
@@ -191,7 +138,7 @@ priv fn reference_file(format: Quant_format): U8[] //<
     case .q5_0
         return q5_0_file
     default
-        panic("quant: a format with a quantizer here, or a float one, has no tiled reference")
+        panic("quant: a float format has no tiled reference")
 
 priv const PRODUCT_TOL: F64 = 1.0e-5 //< the error allowed, as a share of Σ|w × x|.
     //< The F32 sums run in 16 lanes over a few hundred numbers, which bounds the rounding near
@@ -603,10 +550,6 @@ fn test_quant_refuses_wrong_sizes(arena: Arena$@) //<
     misshapen: = m.mul_mat_into(random_tensor(1, 32, rng@, arena),
         Tensor<|F32|>(Sz[]::out_shape, arena))
     assert(refused<|Void|>(misshapen, .shape_mismatch), "quant: a misshapen result was taken")
-    q6: = Quant_matrix.quantize(random_tensor(2, 256, rng@, arena), .q6_k, arena)
-    assert(refused<|Quant_matrix|>(q6, .no_quantizer), "quant: Q6_K was made with no quantizer")
-    odd: = Quant_matrix.quantize(random_tensor(2, 96, rng@, arena), .q4_k, arena)
-    assert(refused<|Quant_matrix|>(odd, .bad_shape), "quant: 96 numbers were cut into blocks of 256")
     verdict.pass(arena.text().s("each wrong size fails with its own name").take())
 
 priv fn expect_refused(r: Quant_matrix!Quant_error, want: Quant_error, what: U8[]) //<

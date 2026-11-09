@@ -133,7 +133,8 @@ impl Ast_node
         old_in_fn_body: = lctx.in_fn_body
         lctx.in_fn_body = true
 
-        lctx.fb = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
+        lctx.fb = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0,
+            .lasting = null }
         lctx.cleanup_stack = List<|List<|Ast_node$@|>$@|>.create(base_core.arena)
         lctx.jump_stack = List<|Jump_ctx|>.create(base_core.arena)
 
@@ -178,6 +179,8 @@ impl Ast_node
         lctx.cleanup_stack.push(cleanup_scope)
         outer_relocating: = lctx.relocating
         lctx.relocating = 0
+        outer_lasting: = lctx.lasting_decls
+        lctx.lasting_decls = null
 
         // It flushes the releases pushed for this scope. They are the arguments' for a function
         // body (the first block under decl_fn), and an arm's bindings for a switch arm.
@@ -209,6 +212,7 @@ impl Ast_node
         r.children = new_children
         lctx.cleanup_stack.len -= 1
         lctx.relocating = outer_relocating
+        lctx.lasting_decls = outer_lasting
 
     fn wrap_stmt_with_break_label(r: Ast_node$@, inner_kind: base_ast_kinds.Ast_kind,
         inner_text: U8[], loc: base_ast.Loc, brk_label: U8[], needs_label: Bool) //<

@@ -129,7 +129,7 @@ flowchart LR
 | :-- | :-- |
 | **It cannot ask.** | What it needs is written down, or can be had from a command, never held in someone's head |
 | **KSPL is in no model's training.** | A model falls back on the habits of Rust, Swift and C. So what KSPL leaves out, and what to write instead, has to stand where a model reads it |
-| **Its context is short, and costs.** | One precise piece on request beats a document read whole. `ksplc explain <code>` prints one diagnostic's section ("Explanations come from the specification, and only codes have one" in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md)). `make explain T=<target>` prints what one make target is made of. An instruction file carries only what cannot be read from the code |
+| **Its context is short, and costs.** | One precise piece on request beats a document read whole. `ksplc explain <code>` prints one diagnostic's section ("Explanations come from the specification, and only codes have one" in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md)). An instruction file carries only what cannot be read from the code |
 | **It believes what it reads.** | A stale pointer or a copied fact misleads it with confidence. So what it reads is generated from the canonical source and held by a check (Principle 4) |
 
 **A document that restates a canonical source loses value**, since a model restates on demand and the copy goes stale. One that holds a decision and its grounds, a rule, or a comparison gains value. So no second, hand-written copy of a document is made "for AI"; where a model needs another shape, it is generated from the same source.
@@ -455,8 +455,6 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 
 **One invocation keeps one build dependency graph.** The logging wrapper forwards the build goals together to one child make, so parallel goals share their prerequisites and one log under `OUT_DIR`. `clean` is forwarded separately without a log, because it removes that directory.
 
-**What a target is made of is asked of make, not written down.** `make explain T=<target>` reads make's own database and `make -n`. It prints the rule's place, the prerequisites, the filled-in commands, each variable with the line that sets it, and the settings. A hand-written map of the make files would drift from them ("Explaining a make target" in [`../tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)).
-
 ### What goes where in `out/`
 
 **The top of `out/` holds only the programs a person runs, and folders.** A person finds a program there by the name a document gives. Every other output goes into the folder for its kind:
@@ -530,7 +528,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 
 **The shared jobs divide the compiler's extraction suites too**, so the heavy suites do not collect in one job. The split is in "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md). Each share repeats the bootstrap, since each job needs a compiler of its own. That costs less than one more job.
 
-**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race`, `test-sanitize` and `test-ksmd-browser`. On a round that starts with nothing built, self-host ×2 joins them.
+**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build, largest first: `test-ksmd-browser`, the debug build through LLVM (`LLVM=1 debug`), `test-sanitize` and `test-race`. On a round that starts with nothing built, self-host ×2 joins them.
 
 **`-j` barely takes effect on GitHub's runners**, so a runner is effectively one core, and the only route to faster gates is less total work. The reproduction is `taskset -c 0 make -j1 test-suites`: `sys.cpu_count` follows the affinity, so the suites' own side-by-side runs drop to one as well.
 
@@ -542,7 +540,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 | test-race / test-sanitize | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer. `test-race` builds its programs side by side, then runs them side by side |
 | self-host-ship | **Not a CI gate.** `make install` runs it before it installs, and the release on each platform, so a difference only the shipped build shows is caught before anything ships. In CI it would pay an `-O2` build of ksplc in every round, and take cores from `test-race` |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
-| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone, as every gate does ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). **The three stay together in one Linux job** (`Gate.linux_only` in `tools/ci_gates.kspl`), so those files are built once |
+| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in `mk/programs.mk`; the page's in `ksmd/Makefile`). The browser's checks run alone, as every gate does ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). **The three stay together in one Linux job** (`Gate.linux_only` in `tools/ci_gates.kspl`), so those files are built once |
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, and a fine-grained name points straight at the cause. Only the same property inspected in two places can be merged.
 

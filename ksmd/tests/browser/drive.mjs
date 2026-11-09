@@ -23,6 +23,16 @@ export const check = (ok, what, detail) => verdict.check(ok, what, detail);
 // The selector of the document's first cell at data row `r` and column `c`.
 export const cellAt = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
 // The text that cell shows, read through a tab's `js`.
+// Where the keys go: the chosen cell as "row:column", the document as "doc", or else the focused
+// element's name, class or tag.
+export const focusOf = (js) => js(`(() => {
+  let a = document.activeElement;
+  if (a.id === "doc") return "doc";
+  if (a.matches(".cell-catch")) a = a.parentElement;
+  if (a.matches("#doc td.chosen, #doc th.chosen")) return a.dataset.r + ":" + a.dataset.c;
+  return a.getAttribute("aria-label") || a.className || a.tagName;
+})()`);
+
 export const cellText = (js, r, c) => js(`document.querySelector('${cellAt(r, c)}').textContent`);
 // Which data rows show, from the top, as 1 for shown and 0 for hidden: every table's rows in the
 // document, or those of the table `within` selects.

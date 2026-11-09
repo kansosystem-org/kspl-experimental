@@ -2,6 +2,12 @@
 # mk/test.mk — running the tests (debug / test-suites / test-simd and others)
 # Taken in by the root Makefile; the rule for including is in the header of its `include mk/ci.mk`.
 # ==================================================================
+# A blank line, parting the lines a `$(foreach)` lists in a recipe.
+define nl
+
+
+endef
+
 ## Local-cycle|debug|Run the tests `tests/debug/main.kspl` calls, in one executable
 # It builds through `debug-file`, as `debug-tools` below does, so the two builds cannot differ.
 debug: $(STAGE1_EXE)
@@ -9,6 +15,7 @@ debug: $(STAGE1_EXE)
 	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tests/debug/main.kspl OUT_STEM=test_debug \
 		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
 	./$(TEST_DIR)/test_debug.exe
+.PHONY: debug debug-file
 
 # --- Building a single file for debugging (VS Code's F5) ---
 # Caution: **The output's name agrees with launch.json's `${fileBasenameNoExtension}.exe`**, or F5
@@ -58,8 +65,9 @@ endif
 # Nobody reads this target's C, so it is not tidied: **`C_FMT=:`**, as an empty one would run the C.
 C_FMT_OFF := C_FMT=:
 
-# **The `make explain` tests run the make that `make explain` runs** (`ci_make`): found by its name,
-# make can be another one, such as MSYS2's UCRT64 make, which the root make file refuses.
+# **The tests that start make run the make that runs the build** (`ci_make`; `make_argv` in
+# `tests/support/harness.kspl`): found by its name, make can be another one, such as MSYS2's UCRT64
+# make, which the root make file refuses.
 # **`:=`, so the `$(shell)` in `ci_make` runs once**: an exported `=` is expanded again for the
 # environment of every recipe line. `mk/ci.mk`, included before this file, defines `ci_make`.
 export KANSO_MAKE := $(ci_make)
@@ -323,6 +331,8 @@ test-freestanding-math: $(STAGE1_EXE)
 	$(CC) -std=c99 -O2 tests/freestanding/harness.c $(TMP_DIR)/fm_probe.o -lm \
 		$(GC_SECTIONS_FLAG) -o $(TMP_DIR)/fm_test.exe
 	./$(TMP_DIR)/fm_test.exe
+
+.PHONY: test-llvm-abi test-freestanding-math test-simd
 
 # --- Whether ksai's hot loops auto-vectorize at -O3, with no hand-written SIMD intrinsic ---
 # **Each loop is checked at its own place**, found by the comment on the line before it naming

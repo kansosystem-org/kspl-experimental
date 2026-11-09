@@ -4,7 +4,7 @@
 import "ksmd/calc/args" { First_error, Raw_args }
 import "ksmd/calc/functions" as fns
 import "ksmd/calc/help" { Arg, Help }
-import "ksmd/calc/value" { Value, empty, number, text }
+import "ksmd/calc/value" { Value, boolean, empty, number, text }
 import "std/str" // `equals`
 
 fn call(name: U8[], a: Raw_args$@): Value? //<
@@ -35,6 +35,8 @@ fn call(name: U8[], a: Raw_args$@): Value? //<
         return .some(call_left(a))
     if name.equals("len")
         return .some(call_len(a))
+    if name.equals("like")
+        return .some(call_like(a))
     if name.equals("max")
         return .some(call_max(a))
     if name.equals("mid")
@@ -68,9 +70,9 @@ fn call(name: U8[], a: Raw_args$@): Value? //<
     return .none
 
 const NAMES: U8[][_] = ::{ "average", "bin_to_dec", "bin_to_hex", "count", "date", "day",
-        "dec_to_bin", "dec_to_hex", "find", "hex_to_bin", "hex_to_dec", "left", "len", "max", "mid",
-        "min", "mod", "month", "power", "right", "round", "round_down", "round_up", "substitute",
-        "sum", "text", "value", "year",
+        "dec_to_bin", "dec_to_hex", "find", "hex_to_bin", "hex_to_dec", "left", "len", "like",
+        "max", "mid", "min", "mod", "month", "power", "right", "round", "round_down", "round_up",
+        "substitute", "sum", "text", "value", "year",
 } //< every function this table calls, by its name
 
 const HELP: Help[_] = ::{
@@ -164,6 +166,19 @@ const HELP: Help[_] = ::{
         .args = Arg[]::{ Arg::{ .name = "t", .meaning = "the text", .optional = false,
         .rest = false } }, .summary = "how many characters the text holds", .detail = "",
         .example = "len(\"pencil\")", .gives = "6" },
+    Help::{ .name = "like", .group = "Text",
+        .args = Arg[]::{ Arg::{ .name = "t", .meaning = "the text", .optional = false,
+        .rest = false },
+        Arg::{ .name = "pattern",
+        .meaning = "the pattern, such as `\"INV-*\"`; any other character stands for itself",
+        .optional = false, .rest = false } },
+        .summary =
+        "whether the whole text matches the pattern, `*` and `?` standing for any characters",
+        .detail =
+        "`*` stands for any run of characters, none too, and `?` for exactly one. `~*`, `~?` and \
+            `~~` stand for `*`, `?` and `~` themselves; any other `~` is `#VALUE!`. Case does not \
+            count, as the filter compares text. So `like(A1, \"INV-*\")` asks whether `A1` starts \
+            with `INV-`.", .example = "like(\"Pens\", \"p?n*\")", .gives = "true" },
     Help::{ .name = "max", .group = "Numbers",
         .args = Arg[]::{ Arg::{ .name = "xs",
         .meaning = "the numbers or dates, cells or ranges to compare", .optional = false,
@@ -481,6 +496,22 @@ priv fn call_len(a: Raw_args$@): Value //< `len(…)`
         return Value.failed(first.error)
     r: = fns.len(p_t)
     return number(F64::r)
+
+priv fn call_like(a: Raw_args$@): Value //< `like(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_t: = a.text() catch e
+        first.take(e)
+        fallback ""
+    p_pattern: = a.text() catch e
+        first.take(e)
+        fallback ""
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.like(p_t, p_pattern) catch e
+        return Value.failed(e)
+    return boolean(r)
 
 priv fn call_max(a: Raw_args$@): Value //< `max(…)`
     p_xs: = a.rest()

@@ -6,8 +6,8 @@
 // ==========================================
 // Listing a directory and reading metadata (kspl_dir_*/kspl_path_info/kspl_mkdir) use entirely
 // different APIs on POSIX and Windows. So the per-OS glue code is in
-// ksplc/gen/runtime/hosted_fs.c. The LLVM builds link the same C runtime, so the result does
-// not change with the backend.
+// ksplc/gen/runtime/hosted_fs.c and hosted_fs_win.c. The LLVM builds link the same C runtime, so
+// the result does not change with the backend.
 // ==========================================
 import "std/chars"
 import "std/ds" { List }
@@ -145,7 +145,7 @@ pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is se
 priv const RUN_EXTS: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
     //< The extensions that can be started on Windows
     //< **A bare program name is looked up with the same list** (`kspl_win_run_exts` in
-    //< `ksplc/gen/runtime/hosted_spawn.c`); change both together.
+    //< `ksplc/gen/runtime/hosted_spawn_win.c`); change both together.
     //< Caution: **Do not read `PATHEXT`**: whoever can change it can get something else started
     //< (**do not trust a path the environment points to**, as with `PATH`).
 
@@ -158,7 +158,16 @@ pub fn can_run(path: U8[]): Bool //< whether it can actually be started on this 
         return false
     if !sys.is_windows()
         return is_executable(path)
-    ext: = sys.last_ext(path)
+    return runs_by_extension(path)
+
+fn runs_by_extension(path: U8[]): Bool //<
+    //< Whether Windows starts a file of this name: its extension is one of `RUN_EXTS`
+    //< It touches no OS, so a test checks it on every OS. **Trailing dots and spaces are dropped
+    //< first**, as Windows drops them, so `x.bat.` is a batch file (`kspl_win_is_batch` agrees).
+    $name: = path
+    for name.len > 0 && (name[name.len - 1] == '.' || name[name.len - 1] == ' ')
+        name = name.sub(0, name.len - 1)
+    ext: = sys.last_ext(name)
     for e in RUN_EXTS
         if ext.equals_ignore_case(e)
             return true
@@ -637,15 +646,6 @@ priv const MAX_PART_STEM: Sz = 233 //<
     //< The file system's limit on one name is 255 bytes. The temporary adds `.`, 16 hex digits
     //< and `.part`.
 
-priv fn utf8_head(name: U8[], max: Sz): U8[] //< the longest start of `name` within `max` bytes
-    //< **It does not cut through a UTF-8 sequence**, so the result is still valid text.
-    if name.len <= max
-        return name
-    $n: = max
-    for n > 0 && (name[n] & 0xC0) == 0x80
-        n -= 1
-    return name.sub(0, n)
-
 priv fn random_name( //< a path under `dir` whose name holds 16 random hex digits
     dir: U8[],
     before: U8[], //< the start of the name
@@ -728,7 +728,7 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
     dir: = sys.get_dir_name(path)
     name: = sys.get_file_name(path)
     defer $work: = mem.scratch(null)
-    stem: = work.arena.text().s(utf8_head(name, MAX_PART_STEM)).s(".").take()
+    stem: = work.arena.text().s(name.utf8_head(MAX_PART_STEM)).s(".").take()
     for _try in Range.asc(MAX_UNIQUE_TRIES)
         part_path: = random_name(dir, stem, ".part", work.arena)!
         check_path(part_path)!

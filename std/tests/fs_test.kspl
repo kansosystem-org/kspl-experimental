@@ -80,7 +80,7 @@ fn test_fs_wide_path() //<
     //< That the file operations work in a folder whose path contains a space and non-ASCII
     //< **Only this test covers it.** The folder in the section above is ASCII, so `std/fs`'s
     //< functions never pass through **the code that copies a path for the OS's wide API**. On
-    //< Windows every function goes through `kspl_win_to_wide` (`ksplc/gen/runtime/hosted_fs.c`).
+    //< Windows every function goes through `kspl_win_to_wide` (`ksplc/gen/runtime/hosted.c`).
     //< This test checks the functions themselves. The compiler's own suites test a program run
     //< through `ksplc run` from such a folder.
     verdict.start("[Fs] file operations in a place holding a space and non-ASCII...")
@@ -138,7 +138,7 @@ fn test_fs_past_max_path() //<
     //< That every function works on a path longer than Windows's 260 characters
     //< **On Linux it works anyway.** The target is a Windows runner, where a path passed unchanged
     //< stops at 260 while a C compiler still accepts it (`kspl_path_to_wide` in
-    //< `ksplc/gen/runtime/hosted_fs.c`). The tree is built through a relative path, which is
+    //< `ksplc/gen/runtime/hosted_fs_win.c`). The tree is built through a relative path, which is
     //< resolved before the long-path prefix is added. It is read back through the absolute one.
     verdict.start("[Fs] file operations on a path longer than Windows's 260 characters...")
     defer arena: = Arena(8192)
@@ -632,3 +632,31 @@ fn test_fs_lies_under() //< whether a path lies inside a folder, by its steps
     drives: = fs.lies_under_on("C:\\w", "D:\\w\\x", true, arena)
     assert(!drives, "another drive is never inside")
     verdict.pass("A path lies inside by its steps: `/` and `\\` alike on Windows, case ignored.")
+
+fn test_fs_runs_by_extension() //< which names Windows starts, by their extension
+    //< **Checked on every OS**, since the answer touches no OS. `can_run` asks it on Windows.
+    verdict.start("[Fs] which names Windows starts...")
+    for name in U8[][7]::{ "a.exe", "d/A.EXE", "x.Com", "x.bat", "x.CMD", "x.bat.", "x.cmd " }
+        assert(fs.runs_by_extension(name), "a name with a program's extension is started")
+    for name in U8[][5]::{ "a", "a.ps1", "a.exe.txt", "a.batch", "a.exe/x" }
+        assert(!fs.runs_by_extension(name), "a name with no program's extension is not started")
+    verdict
+        .pass("The four extensions start a file in either case, trailing dots and spaces dropped.")
+
+fn test_fs_bare_drive() //< a bare drive (`C:`) is that drive's working folder, listed as joined
+    //< `fs.join("C:", n)` gives `C:n`, a name in the working folder of drive C. **A listing of `C:`
+    //< must show that folder too**, not the drive's root. Only Windows has drives.
+    verdict.start("[Fs] listing a bare drive...")
+    if !sys.is_windows()
+        verdict.pass("Only Windows has drives; elsewhere `C:` is a plain name.")
+        return
+    defer arena: = Arena(64 * 1024)
+    $buf: U8[4096] = ::{}
+    here: = sys.cwd(U8$[]::buf) catch panic("the working directory should be readable")
+    drive: = here.sub(0, 2)
+    $by_drive: = fs.read_dir(drive, arena) catch panic("a bare drive must be listed")
+    $by_dot: = fs.read_dir(".", arena) catch panic("the working folder must be listed")
+    assert(by_drive.len == by_dot.len, "a bare drive lists the working folder, not the root")
+    for name in by_dot.slice()
+        assert(by_drive.slice().contains(name), "a bare drive lists the working folder's names")
+    verdict.pass("A bare drive lists that drive's working folder, as joining onto it names.")

@@ -71,6 +71,5 @@ function ksmdZoom(ks) {
   ks.zoom = {
     // The level as a factor: 1.25 for 125%.
     factor: () => now / 100,
-    set,
   };
 }

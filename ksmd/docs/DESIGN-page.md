@@ -12,7 +12,7 @@
 
 **The selection is two model spots.** A spot names a block, a list item and a UTF-8 offset into its text, or a gap. The page maps between spots and places on the page at each action, and keeps no place across one.
 
-**Only the blocks an action changed are rendered again.** A table edit shows every table again, since a value can depend on another table.
+**Only the blocks an action changed are rendered again.** A table edit sends every table, since a value can depend on another table. The page draws again only a table whose JSON differs from the JSON it was drawn from. In a document of many tables, drawing and laying out the others again would take most of an edit's time, and change nothing that shows.
 
 **The menu bar holds every command: File, Edit, View, Insert, Format and Table.** Each item shows its icon, its name and its shortcut. One list in `ksmd/port/web/commands.js` gives each command its name, key and icon, and builds the menus, the right-click menu and the quick access bar. Open and Save stand in File only where the local server opens files.
 
@@ -34,7 +34,7 @@
 
 **A table command that cannot act is disabled, not hidden**, so the menu does not change shape.
 
-**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, but keeps a chosen range it falls inside, and whole rows or columns chosen. Shift+F10 or the menu key in an open cell opens it too. Cut, Copy, Paste and Paste values stand first, as in Excel's cell menu; the two pastes share one row. The Table menu's commands follow (`TABLE_GROUPS` in `ksmd/port/web/commands.js`). Rows, Columns and Note stand in the menu itself, and the other groups are flyouts, so the menu fits a window 600 pixels tall.
+**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, but keeps a chosen range it falls inside, and whole rows or columns chosen. Shift+F10 or the menu key in an open cell opens it too. Cut, Copy, Copy formula, Paste and Paste values stand first, as in Excel's cell menu. The two copies share one row, and so do the two pastes. The Table menu's commands follow (`TABLE_GROUPS` in `ksmd/port/web/commands.js`). Rows, Columns and Note stand in the menu itself, and the other groups are flyouts, so the menu fits a window 600 pixels tall.
 
 **A command's key stands beside its item, and the same list runs it from a cell**, so the two keys cannot differ.
 
@@ -91,7 +91,7 @@
 
 **Shift+click chooses a range of cells from the chosen one, and so does a drag across cells** ("Ranges of cells" below). Once the drag reaches another cell, the open cell closes unchanged, and the range follows the pointer until the button comes up.
 
-**The Number format group sets the format of the chosen cells in one step**, or of columns chosen whole by their letters. Currency asks for a code, and takes no places for JPY and KRW and two for every other code. The filter panel lists and matches the text a format shows. So a change of format takes the filter of each column it reaches away, in the same step: its entries would match no row.
+**The Number format group sets the format of the chosen cells in one step**, or of columns chosen whole by their letters. Currency asks for a code, and takes no places for JPY and KRW and two for every other code. **Thousands takes no places** (`1,235`): it is chosen for counts, such as sizes in bytes, where places only add zeros. Excel's own key gives two; More decimal places adds them. The filter panel lists and matches the text a format shows. So a change of format takes the filter of each column it reaches away, in the same step: its entries would match no row.
 
 **Three ways choose a whole table: Ctrl+A twice in a cell, the corner left of its column letters, and Select table.** Select table stands in the Table flyout. The first Ctrl+A chooses the data cells, as in Excel, and the second adds the names. A frame shows round the table. Only these three choose it whole: in a table with no data rows, a press on a name chooses that cell alone.
 
@@ -134,6 +134,41 @@
 **Opened from a file, the page reaches no file: a host opens and saves through two calls.** `ksmd.load(source)` opens a source, or names the line and column it refuses. `ksmd.source()` returns the canonical source to save, and `ksmd.onchange` learns of each change.
 
 **The editor's memory is a fixed 128 MiB.** An action that starts with less than 16 MiB free is refused, and the page asks the person to save and open the document again. The document and its whole history stay in that memory until another document opens.
+
+## Keys alone, and a screen reader
+
+**Every part of the page works with keys alone, and a screen reader reads a table as a grid.** Each choice below follows the spreadsheets' keys and WAI-ARIA's patterns, so a person brings what they already know.
+
+**A table is a `grid`, on the HTML table the page already draws.** Its letters and names are column headers, its row numbers row headers, and its cells grid cells. The cells of the chosen range carry `aria-selected`. Nothing is drawn twice for a screen reader: the grid is the table a person sees.
+
+* **The focus stands in a text box over the chosen cell** ("Ranges of cells" below gives why). So that box's name is what a screen reader says: the cell's value and address, such as `6, C1`. Its description holds the formula, the error's reason, the note and the link. A name of `Cell C1` alone left a listener to open each cell to learn its value.
+* **A range is said through a hidden live region in the status bar**, such as `B1:C2 chosen`, each time it changes. The focus stays on the range's first cell, so nothing else says how far a range reaches. One cell says nothing there, since its box already says it.
+
+**F10 puts the focus on the menu bar, as in Windows's programs and LibreOffice.** F10 again, or Esc, gives it back where it was, and an open cell's text goes in first. Alt alone is left to the browser: Firefox shows its own menu bar on it, and Chrome and Edge on Windows focus their own menu. Shift+F10 still opens the table's menu.
+
+* **The menus' names stand in a `menubar` of their own**, apart from the document's name and its saved state, which are not menus. Each name is a `menuitem`.
+* **The menu bar and the quick access bar are each one stop of Tab.** The arrow keys move along them, as WAI-ARIA's menu bar and toolbar have it. The stop is the item the focus left last. Fifteen stops in the quick access bar made the document far to reach.
+* **Home and End go to the first and last item**, in a bar and in a menu. Up on a menu's name opens it on its last item.
+* **Every small pop-up takes its keys and its place from one file** (`popup.js`). They are the status bar's menus, Paste Options, the quick access bar's menu and palette, and a column's filter. Each menu moves by Up, Down, Home and End. Esc closes any of them and gives the focus back, and each keeps off the window's bottom edge.
+* **The item the keys reach takes the mark's colour, with the paper's colour on it.** It stands out from the menu at 4.5 to 1 or more, in both schemes. The soft ground a pointer gives stands at about 1.1 to 1, too faint to find the focus by.
+
+**Esc, Cancel and Apply in a side panel give the focus back where it was before the panel opened**, as a dialog does. Page setup, Colour by value and a chart's panel are such panels. Left on the panel that went, the focus fell to the page's body, and the next key went nowhere.
+
+**A chosen cell takes the spreadsheets' keys for moving:**
+
+* **Ctrl and an arrow key go to the edge of the values.** From a value with a value beside it, they go to the last value before an empty cell. Else they go over empty cells to the next value, or to the table's edge.
+  * The names count as the row above the first, as a heading row does in a sheet.
+  * Hidden rows and columns are passed over, as the arrow keys pass them.
+* **Home and End go to the row's first and last column.** A table ends at its last column, so End needs no Excel's End mode.
+* **Ctrl+Home goes to the first data cell, and Ctrl+End to the last row's last cell.** The names stand frozen above the rows, and Excel's Ctrl+Home goes to the first cell under a frozen heading.
+* **Shift with any of them reaches there as a range**, from the range's far corner, as in Excel.
+* **Shift+Space chooses the rows of the chosen cells, and Ctrl+Space their columns**, as in Excel. In an open cell, Ctrl+Space still opens the list of functions.
+
+**In an open cell, Shift+Enter takes the text and moves up**, as Shift+Tab moves left.
+
+**Tab past a row's last cell goes to the next row's first.** Past the table's last cell it adds a row, as an Excel table and a Word table do. A list then grows without the menu, and one undo takes the row away. Shift+Tab goes back, and stops at the first cell.
+
+**Esc or Ctrl+Z in a cell typed into gives back the value it held**, and the cell stays chosen. The box held nothing before the first key, so the browser's own undo emptied the cell instead. In a cell opened to edit, Ctrl+Z stays the browser's own, on the text.
 
 ## Column widths and row heights
 
@@ -205,7 +240,7 @@
 **While a formula is typed, a press on a cell writes its reference at the caret, and a drag writes a range.** Excel calls this point mode (`ksmd/port/web/point.js`). Typing `=sum(`, then a drag from A1 to A2, gives `=sum(A1:A2`.
 
 * **It acts only where a reference can go.** The cell's text starts with `=`, and the caret stands after `=`, `(`, `,`, `:`, an operator (`+ - * / & = < >`), or the word `and`, `or` or `not`. Inside quoted text it does not act.
-* **A press on a column's letter or name writes the whole column**, and a drag across them columns side by side: `map.D`, `map.D:F`. The table's name is always written, as a whole column needs it, even in the formula's own table. The name's filter arrow keeps its own press.
+* **A press on a column's letter or name writes the whole column**, and a drag across them columns side by side: `D`, `D:F`. In another table the table's name stands first, as for a cell: `map.D`, `map.D:F`. The name's filter arrow keeps its own press.
 * **Only data cells and column headings are pointed at.** A press on a row number or outside every table ends the edit as before. So does a press where no reference can go, such as after a number.
 * **A cell of another table is written with that table's name**: a press gives `map.D3`, and a drag `map.D3:D5`. A name that is not plain stands in quotes, as a typed one does. A range stays in one table, as a written one must.
 * **A table shown from an included file is not pointed at.** No formula reaches into another file, so a press there ends the edit.
@@ -291,7 +326,7 @@
 * **A reference to a moved cell follows it, wherever its formula stands**, as in Excel. A formula moved keeps pointing at the same cells.
 * **A range follows when it moves whole.** A range moved in part stays where it is. Excel moves each corner of a range on its own. So a range's end cell moved inside it drops cells from a sum, without a word.
 * **A reference to a cell written over becomes `#REF!`, as in Excel**, and so does a range whose two corners were written over. The value it named is gone.
-* **Whole columns cut by their letters take a whole-column reference with them**, so `=sum(t.A)` follows column A's cells to C, as Excel moves `A:A` to `C:C`. A block of some rows leaves such a reference alone, since the reference names every row.
+* **Whole columns cut by their letters take a whole-column reference with them**, so `=sum(A)` follows column A's cells to C, as Excel moves `A:A` to `C:C`. A block of some rows leaves such a reference alone, since the reference names every row.
 * **Whole columns also take their settings: width, number format, choices, colour rule, filter, merging and row colours**, as Excel's paste of whole columns does (`move_cells` in `ksmd/edit/moving.kspl`). The columns written over lose their own, and the columns left behind keep none. Otherwise a filter left on an empty column would hide every row. Whole rows likewise take their heights.
 * **The move is one step of undo, and the moved cells stay chosen at their new place.** The table grows rows and columns where the cells reach past it, as a paste of rows grows it.
 * **A move is refused whole when a formula would grow past 4,096 bytes**, or when the table would pass its limits. Nothing changes then, and the page says why.
@@ -360,6 +395,8 @@
 
 **A cell with a note has a red corner, and a paragraph or a heading with one has a bar at its left.** Pointing at it shows the note.
 
+* **The status bar shows the note too, while its cell is chosen or the caret stands in its paragraph.** A person who works with keys never points, so pointing alone left the note unread. A cell's note also goes with its name to a screen reader.
+
 * **Insert, Note asks for the note of the chosen cell, or of the paragraph the caret stands in.** An empty answer resolves it.
 * **The table's right-click menu holds Note… and Resolve note.** Each change is one step of undo.
 
@@ -390,6 +427,7 @@
 **A drag of the square at an image's lower right corner sets its width, and so does Width… in its tools** (`images.js`). The width is a share of the text width, and the status line shows it while the corner moves. Width… takes a number, as Column width… does, so the keyboard reaches it too.
 
 * **Caption… and Alt text… stand beside Width…** and ask for the image's words, as they stand. A caption is what a reference names (`[#](#caption)`), so an image that a reference needs takes one there.
+* **An image with no alt text is decoration, and a screen reader passes over it** (`alt=""`). Alt text… says so when it asks. Read by its file's name, as before, it told a listener nothing of what it shows.
 * **Images with widths that fit share a row**, laid out as inline blocks of their share. A paragraph or a gap between them starts a new row.
 * **The square is left out of print and while read-only**, as the drawing tools are.
 
@@ -508,14 +546,19 @@
 
 ## The status bar
 
-**The status bar is one line at the window's foot that says where the person works** (`status.js`). From the left it shows the chosen cell, a message, a filter's count and the printed page where the caret stands. The figures and the zoom stand at the right.
+**The status bar is one line at the window's foot that says where the person works** (`status.js`). From the left it shows the chosen cell and why it shows an error. Then come a message, a filter's count and the printed page where the caret stands. The figures and the zoom stand at the right.
 
 * **The chosen cell shows its address and what was typed in it**, such as `C2  =hex_to_dec(B2)`. A value shows its typed text, and a column's name cell shows `C name` and the name. A range shows its address alone: `C2:D5`, or `A:D` from the names to the last row. While the cell is open, the bar shows its text as it is typed. The bar cuts a long formula with `…`, and its tooltip and its accessible name hold the whole text.
+* **A chosen cell that shows an error shows why after it**, as `#VALUE!: B7 holds text, which arithmetic cannot use`. The cell's tooltip holds the same words, after any note. A mark alone makes the person guess, or look it up in the reference.
+  * **The calculator writes the reason; the page only shows it** (`write_reason` in `ksmd/calc/reason.kspl`, sent with each table as `err`). So `#BLOCKED!` has no words of its own in the page's script: its reason comes the same way.
+  * **The bar cuts a long reason with `…`**, and the part's tooltip holds it whole. A reason in two lines would push the bar's other parts out of the window.
+  * **An error carried from another cell names that cell**, as `A3 shows #DIV/0!`. Choosing A3 shows its own reason, so the person follows the chain to the cell to fix.
 * **The bar names no cell mode.** The open cell shows its mode by how it acts. A cell typed into moves on with the arrow keys, and one opened by F2 moves its caret ("Input, menus and tables" above). A mode named in the bar tells the person nothing that the next key does not show.
 * **The bar names no section.** View ▸ Contents marks the heading being read ("The contents" below), and shows its place among the others, which one name cannot.
 * **A message stands in the middle until the next action.** The page and the filter's count step aside for it, and its tooltip holds a message the bar cuts.
 * **A filter's count shows while a cell of a filtered table is chosen**, as `5 of 120 rows shown`. A table no filter narrows shows none.
-* **The bar keeps one line.** A narrow window drops the zoom and the page first. A phone's width then drops the filter's count and the chosen cell. The message and the figures stay.
+* **The bar keeps one line.** A narrow window drops the zoom and the page first. A phone's width then drops the filter's count, the chosen cell and its reason. The message and the figures stay.
+
 * **Only the parts a person presses are buttons**: the figures, and the zoom's −, level and +. Tab from the text reaches them. The other parts are text that a screen reader reads, and only the message is announced as it changes.
 
 ### The figures
@@ -659,5 +702,6 @@ sequenceDiagram
 * Find has no whole-word search and no regular expressions. It does not search table names.
 * A browser without the highlight API (`CSS.highlights`) marks no match in text. The current match still scrolls into sight, and the count still shows.
 * It never trims the undo history. A long session can use up the editor's memory, and the page then asks the person to save and open the document again.
-* The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked.
+* Choosing a diagram's shape, drawing one and joining two take the pointer. The arrow keys only move a shape already chosen.
+* The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked. What a screen reader is given is checked by the page's names, roles and states.
 * A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves, and hide the page by script.

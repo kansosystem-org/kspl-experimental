@@ -162,6 +162,20 @@ fn test_str_ops(arena: Arena$@)
     assert((U8[]::cut).next_codepoint(0) == 2,
         "next_codepoint: a sequence cut off at the end goes to the length left")
     assert("a".next_codepoint(1) == 0, "next_codepoint: a position past the end is 0")
+    // "aあい" is a, then e3 81 82, then e3 81 84: seven bytes.
+    assert("aあい".utf8_head(9).equals("aあい"), "utf8_head: a text within the cap stays whole")
+    assert("aあい".utf8_head(4).equals("aあ"), "utf8_head: a cut at a character's end keeps it")
+    assert("aあい".utf8_head(6).equals("aあ"),
+        "utf8_head: a cut inside a character drops the whole character")
+    assert("aあい".utf8_head(2).equals("a"), "utf8_head: a cut after the lead byte drops it too")
+    assert("あ".utf8_head(0).len == 0, "utf8_head: a cap of 0 gives empty")
+    assert("aあ".utf8_complete().equals("aあ"), "utf8_complete: a whole text stays whole")
+    assert((U8[]::cut).utf8_complete().len == 0,
+        "utf8_complete: a character with only its first 2 of 3 bytes is held back")
+    half: U8[3] = ::{ 'a', 0xe3U8, 0x81U8 }
+    assert((U8[]::half).utf8_complete().equals("a"),
+        "utf8_complete: only the last character still arriving is held back")
+    assert("".utf8_complete().len == 0, "utf8_complete: empty stays empty")
     verdict
         .pass("Replacing, trimming, joining, splitting lines and sub-views work as expected, \
             boundaries included.")

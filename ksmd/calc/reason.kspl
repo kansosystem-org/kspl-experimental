@@ -1,0 +1,238 @@
+//< Why a cell shows an error, in plain words, for the page's tooltip and status bar
+//< **The calculator keeps a tag and a detail with each error** (`Why` in `ksmd/calc/value.kspl`):
+//< a cell's place, a function's name or the text written. This file writes the sentence from them,
+//< only for a cell the page shows, so calculating a large table makes no text. The reason is not
+//< saved and is not part of the value: a comparison or a function reads only the error's kind.
+import "ksmd/base/marker" { write_column }
+import "ksmd/calc/bases" { READ_DIGITS, literal }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/formula" { write_table_name }
+import "ksmd/calc/functions_table" { HELP }
+import "ksmd/calc/help" { FORMS, Help, write_call_form }
+import "ksmd/calc/value" { Calc_error, Value }
+import "ksmd/model/model" { Document }
+import "std/chars" // `sub_from`
+import "std/str" { Str_builder }
+import "std/str"
+
+fn write_reason(v: Value, home: Sz, doc: Document@, r: Results@, out: Str_builder$@) //<
+    //< Why the error `v` of a cell of table `home` stands, as a person reads it after its mark
+    //< Every error has one: an error with no detail is told by its kind.
+    at: = v.at()
+    switch v.why
+    case .plain
+        out.s(plain(v.error))
+    case .from_cell
+        cell(at, home, doc, r, out)
+        out.s(" waits for an answer" if v.error == .pending else " shows ")
+        if v.error != .pending
+            out.s(v.error.mark())
+    case .text_in_arithmetic
+        if named(at, home, doc, r, out, " holds text, which arithmetic cannot use")
+            return
+        out.s("arithmetic cannot use text, even text that looks like a number. value() reads ")
+            .s("a number from text")
+    case .truth_in_arithmetic
+        if named(at, home, doc, r, out, " holds true or false, which arithmetic cannot use")
+            return
+        out.s("arithmetic cannot use true or false")
+    case .date_arithmetic
+        out.s("a date takes only whole days added or taken away, or another date taken away")
+    case .not_a_condition
+        if named(at, home, doc, r, out, " holds no true or false, which a condition needs")
+            return
+        out.s("a condition takes only true or false, not a number, text or a date")
+    case .kinds_ordered
+        out.s("values of two kinds cannot be put in order; = and <> compare them")
+    case .joined_kind
+        if named(at, home, doc, r, out, " holds no text, and & joins only text")
+            return
+        out.s("& joins only text. text() writes a number as text")
+    case .divide_by_zero
+        if named(at, home, doc, r, out, ", the divisor, is 0 or empty")
+            return
+        out.s("the divisor is 0")
+    case .too_large
+        out.s("the number is too large for a cell")
+    case .text_too_long
+        out.s("the text would pass 32,767 bytes")
+    case .day_out_of_range
+        out.s("the date falls outside the years 1 to 9999")
+    case .lost_reference
+        out.s("a reference lost its cell, when its row or column was removed")
+    case .no_cell
+        out.s("a reference names no cell: the cell is outside its table, or the table does not ")
+            .s("exist")
+    case .not_aligned
+        out.s("the two ranges must both be one column, or both one row, of the same length")
+    case .condition_shape
+        out.s("each range in the condition must be one column as tall as the values")
+    case .condition_no_range
+        out.s("the condition holds no range, so it would be the same on every row")
+    case .in_function
+        in_function(v, out)
+    case .own_function
+        own_function(v, out)
+    case .wants_number, .wants_whole, .wants_truth, .wants_text
+        wants(v, out)
+    case .unknown_function
+        out.s("no function is called ").s(v.text)
+    case .bare_word
+        out.s(v.text).s(" is no function, cell or value. Text goes in quotes, as \"").s(v.text)
+            .c('"')
+    case .arguments
+        out.s("the arguments do not fit ").s(v.text)
+        if h: = help_of(v.text)
+            out.s(". Write ")
+            write_call_form(h@, out)
+    case .not_a_column
+        out.s("name takes one whole column, as name(B), or name(map.B) for one of another table")
+    case .digit_literal
+        digit_literal(v, out)
+    case .bad_token
+        if v.text.len > 0
+            out.s(v.text).s(" does not read as a number")
+        else
+            out.s("a character here starts nothing a formula reads, or a quote is not closed")
+    case .range_alone
+        out.s("a range stands only in a function, as sum(A1:A9), or in a condition")
+    case .missing
+        out.s("a " if v.text.len == 1 else "").s(v.text).s(" is missing")
+    case .unexpected
+        if v.text.len == 0
+            out.s("the formula ends where a value is needed")
+        else
+            out.s(v.text).s(" stands where a value is needed")
+    case .two_comparisons
+        out.s("two comparisons in a row do not read. Join them with and, as A1 < B1 and B1 < C1")
+    case .too_deep
+        out.s("the formula nests more than 64 levels")
+    case .trailing
+        if v.text.equals(")")
+            out.s("a ) has no ( before it")
+        else
+            out.s("an operator is missing before ").s(v.text)
+
+priv fn plain(e: Calc_error): U8[] //< what an error of this kind means, with no detail
+    switch e
+    case .wrong_kind
+        return "a value is of the wrong kind for its place"
+    case .division
+        return "a division by zero"
+    case .not_finite
+        return "a result is too large, or a value is outside a function's range"
+    case .reference
+        return "a reference names no cell"
+    case .cycle
+        return "the cell depends on itself, directly or through other cells"
+    case .no_numbers
+        return "there are no numbers to work on"
+    case .shape
+        return "a range in the condition does not fit the values"
+    case .syntax
+        return "the formula does not read"
+    case .pending
+        return "the answer of this document's own function has not come yet"
+    case .time_limit
+        return "this document's own function ran past its time"
+    case .stopped
+        return "this document's own function stopped, by a panic or a fault"
+    case .blocked
+        return "this document's own functions are not allowed yet, so this call does not run. Allow \
+            them in the bar above or in their box"
+    case .read_limit
+        return "the formulas read more than 500 million cell values, so this cell was not \
+            calculated. A range over a whole column on every row reads the most"
+
+priv fn in_function(v: Value, out: Str_builder$@) //< an error a function found in its own work
+    out.s(v.text)
+    switch v.error
+    case .wrong_kind
+        out.s(" was given a value of the wrong kind")
+    case .not_finite
+        out.s(": the result is too large, or a value is outside the range it takes")
+    case .no_numbers
+        out.s(" found no numbers")
+    case .division
+        out.s(" divides by zero")
+    default
+        out.s(" gives ").s(v.error.mark())
+
+priv fn own_function(v: Value, out: Str_builder$@) //< an error of the document's own function
+    out.s(v.text)
+    switch v.error
+    case .pending
+        out.s(" has not answered yet: this document's own functions are still building or running")
+    case .time_limit
+        out.s(", this document's own function, ran past its time")
+    case .stopped
+        out.s(", this document's own function, stopped by a panic or a fault")
+    case .blocked
+        out.s(" may be this document's own function. Those are not allowed yet, so this call ")
+            .s("does not run. Allow them in the bar above or in their box")
+    default
+        out.s(", this document's own function, gives ").s(v.error.mark())
+
+priv fn wants(v: Value, out: Str_builder$@) //< an argument its parameter refused
+    out.s("argument \{v.at()\} of ").s(v.text).s(" takes ")
+    switch v.why
+    case .wants_whole
+        out.s("a whole number up to 2^53")
+    case .wants_truth
+        out.s("true or false")
+    case .wants_text
+        out.s("text")
+    default
+        out.s("a number")
+
+priv fn digit_literal(v: Value, out: Str_builder$@) //<
+    //< A literal in a base given as digit text: the number it already is, and what to write
+    name: =
+        READ_DIGITS[v.at()] if v.at() >= 0 && v.at() < READ_DIGITS.len else "this function"
+    out.s(name).s(" reads digits as text: ").s(v.text).s(" is already the number ")
+    if n: = literal(v.text)
+        out.s("\{n\}")
+    // The prefix fits the function where both name the same base: `0x` and `hex_`.
+    hex: = v.text.len > 1 && v.text[1] == 'x'
+    fits: = name.starts_with("hex" if hex else "bin")
+    out.s(". Write ")
+    if fits && name.ends_with("_to_dec")
+        out.c('=').s(v.text).s(", or ")
+    if !fits
+        out.s("its digits in quotes")
+        return
+    out.s(name).s("(\"")
+    for c in v.text.sub_from(2)
+        if c != '_'
+            out.c(c)
+    out.s("\")")
+
+priv fn named(at: Sz, home: Sz, doc: Document@, r: Results@, out: Str_builder$@, rest: U8[]): Bool //<
+    //< Writes the cell at place `at`, then `rest`; false, writing nothing, where `at` is -1
+    if at < 0
+        return false
+    cell(at, home, doc, r, out)
+    out.s(rest)
+    return true
+
+priv fn cell(at: Sz, home: Sz, doc: Document@, r: Results@, out: Str_builder$@) //<
+    //< A cell by its place in `r`, as a formula in table `home` names it: `B7`, or `costs.B7`
+    $u: Sz = 0
+    for u + 1 < r.starts.len && r.starts[u + 1] <= at
+        u += 1
+    columns: = r.columns[u] if r.columns[u] > 0 else 1
+    if u != home && u < doc.tables.len && doc.tables[u].name.len > 0
+        write_table_name(doc.tables[u].name, out)
+        out.c('.')
+    i: = at - r.starts[u]
+    write_column(i % columns, out)
+    out.s("\{i / columns + 1\}")
+
+priv fn help_of(name: U8[]): Help? //< what a person reads of the function `name`, or none
+    for h in FORMS
+        if h.name.equals(name)
+            return .some(h)
+    for h in HELP
+        if h.name.equals(name)
+            return .some(h)
+    return .none

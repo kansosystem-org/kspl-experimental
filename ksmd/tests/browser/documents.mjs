@@ -78,22 +78,6 @@ export function documents({ page, js, press, click, menu, load, saves, source })
       await click("#doc > .figure .image-alt");
       await saves("and Alt text… its description", two(' caption="First"', ' width="45%"').replace('alt="A"', 'alt="A dot"'));
     },
-    // An image's scale, as a share of its own size: Scale… sets it in place of a width, and asks
-    // with the scale it has. `served.mjs` checks the width it shows.
-    async imageScale() {
-      const one = (a) => `${H}:::image src="a.png" alt="A"${a}\n:::\n`;
-      await load(one(' width="45%"'));
-      await js("window.prompt = () => '50%'");
-      await click("#doc > .figure .image-scale");
-      await saves("Scale… gives the image a share of its own size, in place of its width", one(' scale="50%"'));
-      await js("window.prompt = () => '401'");
-      await click("#doc > .figure .image-scale");
-      await saves("a scale past 400 is refused, and nothing changes", one(' scale="50%"'));
-      await js("window.prompt = (q, now) => { window.asked = now; return ''; }");
-      await click("#doc > .figure .image-scale");
-      check(await js("window.asked") === "50", "Scale… asks with the scale the image has", String(await js("window.asked")));
-      await saves("an empty answer fits the image to the text again", one(""));
-    },
     // The contents fold a heading's part away and back, and Alt folds every heading of that level.
     async contentsFold() {
       await load(`${H}# Office\n\n## Todo\n\n## Link\n\n# BAN\n\n## Clock\n\n### Pin\n\n# End\n`);

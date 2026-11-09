@@ -3,8 +3,10 @@
 // opens that one. Inside a menu, a flyout opens on pointing and on focus. A press elsewhere, Esc
 // and a chosen command close every menu, through `shut`.
 // The arrow keys move through a menu: Up and Down between items, Right into a flyout or on to the
-// next menu, Left back out, and Left and Right along a row of items. Enter and Space press the item
-// that has the focus.
+// next menu, Left back out, and Left and Right along a row of items. Home and End go to the first
+// and last. Enter and Space press the item that has the focus.
+// F10 puts the focus on the menu bar, and again takes it back. The bar is one stop of Tab: Left
+// and Right move along its names, and Down, Enter or Space open one (WAI-ARIA's menu bar).
 // The menu bar holds every command, each with its icon (`MENUS` in `commands.js`). The table's
 // commands stand in its Table menu and in the right-click menu alike, from one list,
 // `TABLE_GROUPS`; the right-click menu holds Cut, Copy, Paste and Paste values above them.
@@ -107,15 +109,22 @@ function ksmdMenus(ks) {
     }
   }
 
-  // The menu bar's menus stand before the document's name. File's own commands show only where
-  // the local server opens files (`file.js`).
-  const before = bar.firstChild;
+  // The menu bar's menus stand before the document's name, in a menu bar of their own: the name
+  // and the saved state are not menus. File's own commands show only where the local server opens
+  // files (`file.js`).
+  const names = document.createElement("div");
+  names.className = "menu-names";
+  names.setAttribute("role", "menubar");
+  names.setAttribute("aria-label", "Menu");
+  bar.insertBefore(names, bar.firstChild);
   for (const [name, entries] of MENUS) {
     const top = document.createElement("div");
     top.className = "top-menu";
     const head = document.createElement("button");
     head.type = "button";
     head.className = "menu-name";
+    head.setAttribute("role", "menuitem");
+    head.tabIndex = -1;
     head.setAttribute("aria-haspopup", "menu");
     head.setAttribute("aria-expanded", "false");
     head.textContent = name;
@@ -134,8 +143,18 @@ function ksmdMenus(ks) {
     }
     top.appendChild(head);
     top.appendChild(menu);
-    bar.insertBefore(top, before);
+    names.appendChild(top);
   }
+  // The names in sight, in order.
+  const tops = () => Array.from(names.querySelectorAll(".top-menu:not([hidden]) > .menu-name"));
+  // One name takes Tab's stop, the one the focus left last, so Tab reaches the bar once.
+  function rove(name) {
+    for (const el of names.querySelectorAll(".menu-name")) el.tabIndex = el === name ? 0 : -1;
+  }
+  rove(tops()[0]);
+  names.addEventListener("focusin", (e) => {
+    if (e.target.classList.contains("menu-name")) rove(e.target);
+  });
 
   const context = document.createElement("div");
   context.className = "menu context";
@@ -157,6 +176,9 @@ function ksmdMenus(ks) {
       el.classList.contains("menu-row") ? Array.from(el.children) : [el]))
     .filter((el) => el.tagName === "BUTTON" && !el.disabled && !el.hidden);
 
+  // Every menu keeps off the window's bottom edge, and scrolls where it would pass it (`ks.popup`).
+  const { fit, bottom, MARGIN } = ks.popup;
+
   function showFlyout(sub, on) {
     const head = sub.firstElementChild;
     const menu = sub.lastElementChild;
@@ -169,31 +191,25 @@ function ksmdMenus(ks) {
       return;
     }
     // A flyout stands against the window beside its name, so a menu that scrolls in a short
-    // window does not cut it off (`fit`). With no room on the right it opens to the left, and with
-    // no room below it moves up until it fits.
+    // window does not cut it off (`ks.popup.fit`). With no room on the right it opens to the
+    // left, and with no room below it moves up until it fits. **One taller than the window
+    // scrolls**, as a top menu does: moved up alone, it ran past the bottom.
     const h = head.getBoundingClientRect();
+    menu.style.maxHeight = "";
     menu.style.left = "0px";
     menu.style.top = "0px";
     const r = menu.getBoundingClientRect();
     const left = h.right + r.width <= window.innerWidth ? h.right : Math.max(0, h.left - r.width);
     menu.style.left = `${left}px`;
-    menu.style.top = `${Math.max(0, Math.min(h.top - 5, window.innerHeight - r.height))}px`;
-  }
-
-  // A menu taller than the room below its top scrolls, so its last item can still be reached.
-  // The limit is on the items' height, so the menu's own padding and border are taken off it.
-  function fit(menu) {
-    const s = getComputedStyle(menu);
-    const frame = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"]
-      .reduce((sum, k) => sum + parseFloat(s[k]), 0);
-    const room = window.innerHeight - menu.getBoundingClientRect().top - 4 - frame;
-    menu.style.maxHeight = `${Math.max(120, room)}px`;
+    menu.style.top = `${Math.max(MARGIN, Math.min(h.top - 5, bottom() - r.height))}px`;
+    fit(menu);
   }
 
   function closeFlyouts(menu, except) {
     for (const sub of menu.querySelectorAll(":scope > .sub")) if (sub !== except) showFlyout(sub, false);
   }
 
+  // Opens a top menu; `focusFirst` puts the focus on its first item, or with "last" on its last.
   function openTop(name, focusFirst) {
     if (openName && openName !== name) closeTop();
     const menu = name.nextElementSibling;
@@ -202,8 +218,10 @@ function ksmdMenus(ks) {
     fit(menu);
     name.setAttribute("aria-expanded", "true");
     openName = name;
+    rove(name);
     if (focusFirst) {
-      const first = items(menu)[0];
+      const list = items(menu);
+      const first = focusFirst === "last" ? list[list.length - 1] : list[0];
       if (first) first.focus();
     }
   }
@@ -226,11 +244,7 @@ function ksmdMenus(ks) {
     remember();
     ks.enableTable();
     context.hidden = false;
-    context.style.maxHeight = "";
-    const r = context.getBoundingClientRect();
-    context.style.left = `${Math.max(0, Math.min(x, window.innerWidth - r.width))}px`;
-    context.style.top = `${Math.max(0, Math.min(y, window.innerHeight - r.height))}px`;
-    fit(context);
+    ks.popup.place(context, { x, y });
     const first = items(context)[0];
     if (first) first.focus();
   }
@@ -241,10 +255,8 @@ function ksmdMenus(ks) {
     closeFlyouts(context, null);
     context.scrollTop = 0;
     context.hidden = true;
-    if (restore) {
-      const to = back && back.isConnected ? back : ks.root;
-      to.focus();
-    }
+    // An open cell the menu's command took is gone, and the chosen cell takes the keys again.
+    if (restore) ks.focusBack(back);
     back = null;
   }
 
@@ -329,21 +341,24 @@ function ksmdMenus(ks) {
       }
       return;
     }
-    const tops = Array.from(bar.querySelectorAll(".top-menu:not([hidden]) > .menu-name"));
+    const all = tops();
     const step = (k) => {
-      const at = tops.indexOf(openName || name);
-      const next = tops[(at + k + tops.length) % tops.length];
+      const at = all.indexOf(openName || name);
+      const next = all[(at + k + all.length) % all.length];
       if (openName) openTop(next, true);
       else next.focus();
     };
     if (name) {
-      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         remember();
-        openTop(name, true);
+        openTop(name, e.key === "ArrowUp" ? "last" : true);
       } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
         e.preventDefault();
         step(e.key === "ArrowRight" ? 1 : -1);
+      } else if (e.key === "Home" || e.key === "End") {
+        e.preventDefault();
+        all[e.key === "Home" ? 0 : all.length - 1].focus();
       }
       return;
     }
@@ -351,12 +366,8 @@ function ksmdMenus(ks) {
     if (!menu) return;
     const list = items(menu);
     const at = list.indexOf(el);
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const k = e.key === "ArrowDown" ? 1 : -1;
-      const next = list[(at + k + list.length) % list.length];
-      if (next) next.focus();
-    } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && el.parentElement.classList.contains("menu-row")) {
+    if (ks.popup.move(e, list)) return;
+    if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && el.parentElement.classList.contains("menu-row")) {
       // Left and Right move along a row of items, as Up and Down do.
       e.preventDefault();
       const next = list[at + (e.key === "ArrowRight" ? 1 : -1)];
@@ -390,6 +401,30 @@ function ksmdMenus(ks) {
     e.preventDefault();
     e.stopPropagation();
     shut(true);
+  }, true);
+
+  // F10 puts the focus on the menu bar's name the focus left last, as in Windows's programs and
+  // LibreOffice; pressed in the bar or a menu, it closes the menu and gives the focus back. Alt
+  // alone is left to the browser, whose own menu it opens. Shift+F10 opens the right-click menu.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "F10" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    // A dialog open, as Save as, keeps the focus: the page behind it takes none.
+    if (document.querySelector("dialog[open]")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const a = document.activeElement;
+    if (a && a.closest && (a.closest(".menu-names") || (a.closest(".menu") && (openName || !context.hidden)))) {
+      shut(true);
+      return;
+    }
+    shut(false);
+    // An open cell's text goes in first, while it has the focus: taken as the focus left it, the
+    // table drawn again gave the focus to the chosen cell, away from the menu bar.
+    ks.table.take("stay");
+    const now = document.activeElement;
+    back = now && now !== document.body ? now : ks.root;
+    const name = names.querySelector('.menu-name[tabindex="0"]') || tops()[0];
+    if (name) name.focus();
   }, true);
 
   // A press anywhere outside the open menus closes them.

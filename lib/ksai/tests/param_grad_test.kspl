@@ -424,11 +424,11 @@ fn test_lora_finetune(arena: Arena$@)
         .s("with the body left frozen, only the low-rank difference is trained and the loss falls ")
         .s("(loss \{loss0\} -> \{loss_final\})").take())
 // ==========================================
-// On-device learning with Self-Attention + Qkv_lora: train_forward_lora/backward_lora checked
-// numerically. The base (wq/wk/wv/wo) is frozen, and only the LoRA's A and B are trained.
+// On-device learning with Self-Attention + LoRA on Q and V: train_forward_lora/backward_lora
+// checked numerically. The base (wq/wk/wv/wo) is frozen, and only the LoRA's A and B are trained.
 // ==========================================
 fn test_attention_lora_grad(arena: Arena$@)
-    verdict.start("[Attn+LoRA] frozen base + Qkv_lora backward numerical gradient check (F64)...")
+    verdict.start("[Attn+LoRA] frozen base + Q/V LoRA backward numerical gradient check (F64)...")
     seqn: Sz = 3
     d: Sz = 4
     $att: = ai_nn.Self_attention<|F64|>(d, seqn, arena)
@@ -475,16 +475,16 @@ fn test_attention_lora_grad(arena: Arena$@)
     drift_abs: = math.abs(drift)
     assert(drift_abs < 1.0e-9, "Attn+LoRA: base wq must stay frozen during LoRA training")
     said: = arena.text()
-        .s("the backward pass of an Attention with Qkv_lora inserted matches numerical \
+        .s("the backward pass of an Attention with LoRA on Q and V matches numerical \
             differentiation ").s("(F64) (Σout \{before\} -> \{after\})").take()
     verdict.pass(said)
 // ==========================================
-// Transformer_block + Qkv_lora/Mlp_lora: the block version of the Attn+LoRA check. The whole block
+// Transformer_block + LoRA: the block version of the Attn+LoRA check. The whole block
 // is frozen, and only the LoRA on Attention's Q/V and the MLP's fc1/fc2 is trained.
 // ==========================================
 fn test_block_lora_grad(arena: Arena$@)
     verdict
-        .start("[Block+LoRA] frozen base + Qkv_lora/Mlp_lora backward numerical gradient check \
+        .start("[Block+LoRA] frozen base + Q/V/fc1/fc2 LoRA backward numerical gradient check \
             (F64)...")
     seqn: Sz = 3
     d: Sz = 4
@@ -548,12 +548,11 @@ fn test_block_lora_grad(arena: Arena$@)
     assert(norm_drift < 1.0e-9, "Block+LoRA: attention_norm must stay frozen")
     assert(fc1_drift < 1.0e-9, "Block+LoRA: ffn.fc1 must stay frozen")
     said: = arena.text()
-        .s("the backward pass of a Transformer_block with Qkv_lora/Mlp_lora inserted matches \
-            numerical ").s("differentiation (F64) (Σout \{before\} -> \{after\})").take()
+        .s("the backward pass of a Transformer_block with LoRA on Q/V/fc1/fc2 matches numerical ")
+        .s("differentiation (F64) (Σout \{before\} -> \{after\})").take()
     verdict.pass(said)
 // ==========================================
-// Persisting a LoRA adapter (save_raw/load_raw). save_set_into/load_set_from (safetensors+JSON) go
-// through Str_builder and so require the global heap. An arena-only build cannot use that heap.
+// Persisting a LoRA adapter (save_raw/load_raw), with no heap: an arena-only build has none.
 // ==========================================
 fn test_lora_raw_persist()
     verdict.start("[LoRA] save_raw/load_raw: the raw-byte persistence round trip test...")

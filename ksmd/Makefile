@@ -13,10 +13,10 @@ SHELL := bash
 
 KSPLC ?= ksplc
 OUT ?= out
-# Where the page is written: `ksmd.html` with its scripts, its style and its wasm beside it.
+# Where the page is written: one file, `ksmd.html`, with its style, its scripts and its wasm (as base64) inside.
 WEB ?= $(OUT)/web
 
-.PHONY: test functions web web-tools test-browser measure browser-path
+.PHONY: test functions web web-tools test-browser measure browser-path browser-verdict
 
 # **The function table is checked first**: a signature changed in `calc/functions.kspl` without
 # `make ksmd-functions` would otherwise show only as a formula reading its arguments wrongly.
@@ -116,14 +116,19 @@ KSMD_REQUIRE_BROWSER ?=
 # package, so it is passed in; from the root, `make test-ksmd-browser` builds it and passes it.
 KSSRV ?=
 
-test-browser: web
-	@echo "# CHECKING the ksmd page in a browser"
+# What a gate that drives a page does without a browser: nothing where one is found; otherwise it
+# fails where `KSMD_REQUIRE_BROWSER` is 1, and prints a SKIP line where it is not. One recipe for
+# every such gate; the root's `test-ksagent-chat` calls it too.
+browser-verdict:
 	@if [ -z "$(KSMD_BROWSER)" ]; then \
 	  if [ "$(KSMD_REQUIRE_BROWSER)" = 1 ]; then \
 	    echo "RESULT: SOME FAILED (1) -> no browser found, and KSMD_REQUIRE_BROWSER=1 requires one." \
 	      "On a machine without one, KSMD_REQUIRE_BROWSER=0 makes this a SKIP;" \
 	      "such a round is not CI's verdict"; exit 1; fi; \
 	  echo "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"; fi
+
+test-browser: web browser-verdict
+	@echo "# CHECKING the ksmd page in a browser"
 	$(if $(KSMD_BROWSER),node tests/browser/main.mjs "$(KSMD_BROWSER)" "$(WEB_PAGE)" "$(OUT)/browser" $(if $(KSSRV),"$(KSSRV)" $(if $(BUILDER),"$(BUILDER)")))
 
 # ==========================================

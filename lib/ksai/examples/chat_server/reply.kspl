@@ -65,7 +65,7 @@ fn read_text( //< what a generated text says so far: its thinking, its content a
     thinking: Bool, //< whether the prompt ended inside the model's thinking
     arena: Arena$@,
 ): Parsed
-    t: = text if done else text.sub(0, whole_chars(text))
+    t: = text if done else text.utf8_complete()
     defer $raw: = Str_builder()
     $r: = Reading::{ .t = t, .done = done, .kind = kind, .tools = tools, .raw = raw@,
         .calls = List<|Call_out|>(arena), .arena = arena }
@@ -176,19 +176,6 @@ priv fn safe_end(t: U8[], from: Sz, a: U8[], b: U8[]): Sz //<
         if a.starts_with(tail) || b.starts_with(tail)
             return t.len - n
         n -= 1
-    return t.len
-
-priv fn whole_chars(t: U8[]): Sz //< the length up to a last UTF-8 character still arriving
-    //< A piece cut inside a character would reach the client as U+FFFD, and the next piece too.
-    $back: Sz = 1
-    for back <= 3 && back <= t.len
-        c: = t[t.len - back]
-        if (c & 0xC0U8) == 0xC0U8
-            width: = 2 if c < 0xE0U8 else (3 if c < 0xF0U8 else 4)
-            return t.len - back if width > back else t.len
-        if (c & 0xC0U8) != 0x80U8
-            return t.len
-        back += 1
     return t.len
 
 // ==========================================

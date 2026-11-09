@@ -110,6 +110,7 @@ flowchart BT
 | [calc/value.kspl](calc/value.kspl) | A value a formula calculates, and the arithmetic and comparisons between values |
 | [calc/bases.kspl](calc/bases.kspl) | Whole numbers written in hexadecimal or binary, and read back |
 | [calc/calc.kspl](calc/calc.kspl) | Calculates every table cell, apart from the document |
+| [calc/forms.kspl](calc/forms.kspl) | The forms the calculator reads itself, beside its reader: `lookup`, `sum_product`, `name` and the three conditional totals |
 | [calc/functions.kspl](calc/functions.kspl) | The functions a formula calls by name, as ordinary KSPL functions: `sum`, `round`, `date`, the base conversions, the text functions and the rest |
 | [calc/args.kspl](calc/args.kspl) | How a function receives its arguments: what each parameter type takes |
 | [calc/glue.kspl](calc/glue.kspl) | Writes the table that calls a file's functions, from their signatures, and what a person reads of each from their doc comments |
@@ -154,7 +155,10 @@ flowchart BT
 
 How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).
 
-No file stands near the limit now.
+* [`edit/edit.kspl`](edit/edit.kspl): **the settings of a table that leave its cells in place** move to a new `table_settings.kspl` under `ksmd/edit/`. That is `set_look` through `step_places`: looks, groups, choices, rules, the caption, merged columns, notes, links, widths, heights and number formats. They call only `table_at` and `Edit_error`, which stay. Inserting, removing, setting and copying cells stay, with the helpers that keep references attached.
+* [`edit/editor.kspl`](edit/editor.kspl): **the actions on one whole block** move into `editor_blocks.kspl` beside it, which holds the other whole-block actions. That is `set_block_note`, `toggle_check`, `set_invisible`, `insert_whole`, `remove_block` and `remove_whole`. Typing, erasing, Enter, marks and the history stay, with `finish` and `commit`, which the moved actions call across the cut.
+* [`tests/calculation.kspl`](tests/calculation.kspl): **the tests of single functions** move to a new `calc_functions.kspl` under `ksmd/tests/`. That is `rounding` through `lookups`. `run` calls them there, and the case helpers from `cases_with` down stay, opened from `priv` where a moved test calls them.
+* [`tests/browser/tools.mjs`](tests/browser/tools.mjs): **the sections on the page as a whole** move to a new `page.mjs` beside it: `print`, `readOnly`, `dark`, `touch`, `contents` and `contentsWidth`. It returns its sections as `keyboard.mjs` does, and `main.mjs` joins them. The tools over a range of cells stay.
 
 ## Further reading
 

@@ -336,8 +336,8 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     const short = await js(`(() => { const m = document.querySelector('.menu.context');
       const r = m.getBoundingClientRect(); m.scrollTop = m.scrollHeight;
       const subs = m.querySelectorAll(':scope > .sub'); const last = subs[subs.length - 1];
-      return [r.bottom <= innerHeight, m.scrollHeight > m.clientHeight,
-        last.getBoundingClientRect().bottom <= innerHeight]; })()`);
+      return [r.bottom <= innerHeight - 8, m.scrollHeight > m.clientHeight,
+        last.getBoundingClientRect().bottom <= innerHeight - 8]; })()`);
     // The scroll's own event closes any flyout; wait the frames it takes, or a slow machine
     // closes the flyout opened next.
     await frames();
@@ -348,12 +348,43 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     await settle();
     short.push(await js(`(() => { const subs = document.querySelectorAll('.menu.context > .sub');
       const f = subs[subs.length - 1].querySelector('.menu.flyout').getBoundingClientRect();
-      return f.height > 0 && f.top >= 0 && f.bottom <= innerHeight && f.right <= innerWidth; })()`));
+      return f.height > 0 && f.top >= 0 && f.bottom <= innerHeight - 8 && f.right <= innerWidth; })()`));
     await press("Escape");
     await resize();
     check(short.every((ok) => ok),
       "in a window 400 pixels tall the right-click menu scrolls, its last item is reached, and its flyout fits",
       JSON.stringify(short));
+
+    // **A flyout taller than the window scrolls, and keeps off its bottom edge**, as Number
+    // format did not in a short window: moved up alone, it ran past the bottom.
+    await resize(800, 200);
+    // The window is restored however the check ends, or every later section runs in it.
+    try {
+    await click('#doc td[data-r="1"][data-c="0"]');
+    await until("!!document.querySelector('#doc td.chosen[data-r=\"1\"][data-c=\"0\"]')", 3000);
+    await rightClick('#doc td[data-r="1"][data-c="0"]');
+    await until("!document.querySelector('.menu.context').hidden", 3000);
+    await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: 790, y: 5 });
+    const head = "Array.from(document.querySelectorAll('.menu.context .sub-name'))" +
+      ".find((b) => b.querySelector('.label').textContent === 'Number format')";
+    // The scroll's own event closes any flyout, so the name is pointed at once it has come.
+    await js(`${head}.scrollIntoView({ block: 'nearest' })`);
+    await frames();
+    await js(`${head}.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`);
+    await settle();
+    const tall = await js(`(() => { const head = Array.from(document.querySelectorAll('.menu.context .sub-name'))
+      .find((b) => b.querySelector('.label').textContent === 'Number format'); const f = head.parentElement.querySelector('.menu.flyout');
+      const r = f.getBoundingClientRect();
+      f.scrollTop = f.scrollHeight; const last = f.lastElementChild.getBoundingClientRect();
+      return [r.height > 0, r.top >= 0, r.bottom <= innerHeight - 8, f.scrollHeight > f.clientHeight,
+        last.bottom <= innerHeight - 8]; })()`);
+    await press("Escape");
+    check(tall.every((ok) => ok),
+      "in a window 200 pixels tall the Number format flyout scrolls to its last item and ends 8 pixels above the bottom",
+      JSON.stringify(tall));
+    } finally {
+      await resize();
+    }
   },
 
   // A wide table keeps its row numbers and first column in sight while the page scrolls
@@ -378,6 +409,36 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     check(await js("localStorage.getItem('ksmd.oneLine')") === "1", "and this browser keeps the choice");
     await menu("one-line");
     check(await tall() === wrapped, "pressed again, the rows show their lines as before");
+  },
+
+  // The room the paper leaves for a table is measured with an element put on the page, which
+  // lays it out. An edit measures it once for all the tables. Measured for each one, after the
+  // last one's print scale is written, it would lay the whole document out once for each table.
+  async paperMeasured() {
+    const table = (n) => `:::table name="t${n}"\n| "a" |\n| 1 |\n:::\n`;
+    const measured = async (tables) => {
+      await load(H + Array.from({ length: tables }, (_, n) => table(n)).join("\n"));
+      await js(`(() => {
+        if (window.watch) window.watch.disconnect();
+        window.watch = new MutationObserver(() => {});
+        window.watch.observe(document.body, { childList: true });
+        ksmd.onchange = () => {
+          window.probes = window.watch.takeRecords().flatMap((m) => [...m.addedNodes])
+            .filter((n) => n.style && n.style.visibility === "hidden").length;
+        };
+      })()`);
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await type("7");
+      await js("window.probes = null; window.watch.takeRecords(); true");
+      await press("Enter");
+      await until("window.probes !== null");
+      await js("ksmd.onchange = null; window.watch.disconnect(); true");
+      return js("window.probes");
+    };
+    const one = await measured(1);
+    const four = await measured(4);
+    check(one > 0 && four === one, "an edit measures the paper as often with four tables as with one",
+      `${one} with one table, ${four} with four`);
   },
   };
 }

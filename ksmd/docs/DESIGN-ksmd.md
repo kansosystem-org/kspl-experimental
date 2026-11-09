@@ -52,7 +52,7 @@ These reading rules settle cases the notation leaves open:
 * Only a run of three with no mark open has two readings. Strong emphasis goes outside, unless the next run on the line can close only the other order (`***a** b*`).
 * A code span ends at the next run of exactly as many backticks. One space at each end is dropped when both ends have one. The writer chooses the shortest run that the code does not hold.
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
-* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `char_widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`, `width`, `scale`. A table row outside a table clause is refused.
+* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `char_widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`, `width`. A table row outside a table clause is refused.
 * Any clause may take `invisible="printing"`, written last, which leaves its block out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). It has one value, so a misspelt one is refused.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one.
@@ -180,7 +180,7 @@ Text cells need quotes, so numeric-looking identifiers and a leading `=` are una
 
 Addresses start at `A1`, the first data cell. `$A$1`, `$A1` and `A$1` fix axes when copying formulas. Within one source, `budget.D1` names a cell in another table. Cross-file formulas are excluded, including references into an include.
 
-A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges and whole columns. It holds parentheses, unary minus, `+`, `-`, `*`, `/`, `&`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `round_down`, `round_up`, `sum_if`, `count_if`, `average_if`, `sum_product`, `lookup`, `today`, `date`, `year`, `month` and `day`. It also holds the six base functions of "Hexadecimal and binary" below, `mod` and `power`, and the text functions of "Text" below. Function names are lowercase. Multiplication and division bind before addition and subtraction. Both bind before `&`, and `&` before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. A document can add functions of its own, written in KSPL ("Your own functions").
+A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges and whole columns. It holds parentheses, unary minus, `+`, `-`, `*`, `/`, `&`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `round_down`, `round_up`, `sum_if`, `count_if`, `average_if`, `sum_product`, `lookup`, `name`, `today`, `date`, `year`, `month` and `day`. It also holds the six base functions of "Hexadecimal and binary" below, `mod` and `power`, and the text functions of "Text" below. Function names are lowercase. Multiplication and division bind before addition and subtraction. Both bind before `&`, and `&` before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. A document can add functions of its own, written in KSPL ("Your own functions").
 
 An empty cell is zero in arithmetic. The rules for values and errors are "Values and errors" below, and for dates "Dates" below.
 
@@ -191,13 +191,32 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 * A cell is capital column letters, then a row number from 1 without a leading zero: `D1`, `AA12`. A `$` before either part fixes that part for copying.
 * `budget.D1` names a cell of another table in the same source, with no space around the `.`. A name that is not plain (a lowercase letter, then lowercase letters, digits and `_`) stands in JSON quotes: `"Q1 sales".D1`.
 * A range is two cells joined by `:` without spaces: `D1:D3`. A table's name stands once, before the range: `budget.D1:D3`. The corners can come in either order, and the writer saves the upper left first.
-* **A table's name and column letters alone name the whole column: `map.D`.** It takes every data row, never the names row, and rows added later. `map.D:F` names whole columns side by side. The table's name is always written, even for the formula's own table.
+* **Column letters alone name the whole column: `D`.** It takes every data row, never the names row, and rows added later. `D:F` names whole columns side by side. `map.D` and `map.D:F` name whole columns of another table.
+* **A whole column without a table's name is a column of the formula's own table, as a cell is.** So a copy into another table names that table's column, and the own table needs no name. A `$` fixes the column for copying: `$D`.
+* **Letters with a row number on one side of `:` only do not read**: `D:F9` and `D1:F` are neither a range nor columns. Letters just before `(` do not read either, since a function's name is lowercase.
 * `#REF!` stands where a reference lost its row or column. The reader and writer keep it, and it calculates as `#REF!`.
 * **Text stands in JSON quotes, with JSON's escapes:** `"Pens"`, `"say \"hi\""`. Quotes followed at once by `.` and a cell name a table instead.
 * **`and`, `or`, `not`, `true` and `false` are words.** A `|` splits a table row unless it stands in quotes, so the symbols `||` and `|` cannot serve.
 * **A comparison takes one step: `1 < A1 < 9` does not read.** Write `1 < A1 and A1 < 9`.
 * Spaces and tabs can stand between tokens. A function takes one or more arguments, separated by `,`.
 * A formula nests at most 64 levels. The formula itself is one level, and each bracket, function, unary minus and `not` adds one.
+
+### A column's name in a formula
+
+**`name(E)` gives the name of a whole column, as text**, exactly as the names row holds it. An empty name gives empty text. So a condition can compare with a column's title: `sum_if(map.D, map.E = name(B))`.
+
+* **The argument is one whole column, written as everywhere else**: `name(B)` in the formula's own table, `name(map.B)` for a column of the table `map`.
+* **Any other argument does not read, and the cell shows `#SYNTAX!`**: a cell, a range, columns side by side, a number or text. The reason names the two forms that read. The kind of argument shows in the formula itself, as for the ranges of `lookup`. A column that is gone is `#REF!`.
+* **It follows the column as every reference does**, through an insert, a removal, a cut and paste and Insert cut columns.
+* **A new name shows at once.** Every edit calculates every cell again, a rename of a column too, so each `name` of it changes in every table.
+* **While a formula is typed, a press on a column's letter or name writes the whole column**, which is the argument `name` takes.
+* A function a document adds cannot take the name `name`, as no function ksmd has can be taken ("Your own functions").
+
+**Why a function:** a person who compares with a column's title today types that title again, in a data cell or in the formula. The copy goes stale when the name changes. With `name`, the title is written once, and the formula follows the column wherever it moves.
+
+**Why not a row 0, as `B0`:** a range such as `B0:B9` would then mix the name with the values. Every function that reads a range would have to leave the name out again. A function that takes only a whole column cannot mix them.
+
+**Why not Excel's way:** Excel gives a column's title only through a table's own references, written as `Table1[[#Headers],[Col]]`. Those name the column by its title, so the formula must already hold the text it asks for. ksmd names a column by its letters, which follow the column.
 
 ### How a function is written
 
@@ -210,8 +229,8 @@ pub fn round(x: F64, places: I64): F64!Calc_error
 * **One set of rules converts every argument** (`ksmd/calc/args.kspl`). An `F64` takes a number, and an empty cell is 0; text there is `#VALUE!`. An `I64` takes a whole number, and a fraction is `#NUM!`. A `Value[]`, last, takes the arguments left, a range alone giving its numbers. A `T?`, last, may be left out.
 * **An argument holding an error is the result**, the leftmost first, and the function is not called. An error the function throws (`!Calc_error`) is the cell's mark.
 * **The table that calls them is written from their signatures** (`ksmd/calc/glue.kspl`, `make ksmd-functions`). So a function is added by writing it, and nothing else names it.
-* **Seven forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, `sum_product` pairs two ranges' cells, and `today` reads the date the document opened. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
-* **What a person reads of a function is written beside it, in its doc comments.** The first line says what it gives, each parameter's line what that argument takes, and a sentence "For example, `f(…)` is `…`." shows a call. The divider above it names its group. `make ksmd-functions` refuses a function that leaves one out, and a test calculates every example. The seven forms have their entries in `ksmd/calc/help.kspl`, which the calculator takes their names from. The page's help while a formula is typed and the reference's lists both come from there.
+* **Eight forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, and `sum_product` pairs two ranges' cells. `today` reads the date the document opened, and `name` reads a column's name. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
+* **What a person reads of a function is written beside it, in its doc comments.** The first line says what it gives, each parameter's line what that argument takes, and a sentence "For example, `f(…)` is `…`." shows a call. The divider above it names its group. `make ksmd-functions` refuses a function that leaves one out, and a test calculates every example. The eight forms have their entries in `ksmd/calc/help.kspl`, which the calculator takes their names from. The page's help while a formula is typed and the reference's lists both come from there.
 
 **Why ordinary functions**: a person reads how `sum` works in the language they write, and its rules for arguments are the ones any function follows.
 
@@ -309,6 +328,19 @@ Each error has its own mark, since each is fixed differently.
 | `#SHAPE!` | A range in the condition of `sum_if`, `count_if` or `average_if` that is not one column as tall as the values, or a condition with no range. It is fixed by changing a range, which no other mark asks for |
 | `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function or a condition, a missing bracket or operand, or more than 64 levels. Or a literal in a base that is bad, past 2^53, or written as digit text |
 | `#BLOCKED!` | A call to a name that ksmd does not have, while the person has not allowed the document's functions file ("Your own functions") |
+| `#LIMIT!` | The calculation read 500 million cell values, and this formula was not finished then. It is fixed by reading fewer cells, which no other mark asks for |
+
+**Every error also says why it stands, in words.** A mark names only the kind, and `#SYNTAX!` alone has a dozen causes. The page shows the reason on the cell's tooltip and on the status bar ("The status bar" in `ksmd/docs/DESIGN-page.md`).
+
+* **A reason names what went wrong, and what to write instead where that is clear.** `=hex_to_dec(0x100000)` says that the literal is already the number 1048576, and offers `=0x100000` or `hex_to_dec("100000")`.
+* **A reason names the cell or the function it is about**: `B7 holds text, which arithmetic cannot use`, `argument 1 of round takes a number`, `no function is called foo`.
+* **An error carried from another cell names that cell, not its cause**: `A3 shows #DIV/0!`. A chain of formulas then leads, one cell at a time, to the cell to fix. A cycle keeps its own reason, since every cell on it shows the same cause.
+* **A formula that does not read gives its first fault from the left**, as the first error comes first.
+* **The reason is not part of the value.** A comparison, a function and an error carried on read only the kind, so they act as before. Nothing of it is saved in the file.
+* **An error keeps a tag and a detail, not a sentence** (`Why` in `ksmd/calc/value.kspl`). The detail is a cell's place or a piece of the formula's text, which the value already has room for. So a table of 100,000 errors grows by no byte and makes no text while it calculates.
+* **The sentence is written only for a table the page shows** (`ksmd/calc/reason.kspl`), and only for its errors.
+* **Every tag with every kind writes words.** A test walks them all, and a second test checks that every error a formula meets carries a tag. A new place that makes an error without one fails there.
+
 
 ### Totals by a condition
 
@@ -374,16 +406,7 @@ Each error has its own mark, since each is fixed differently.
 
 **`mid`, `left`, `right`, `len` and `find` take Excel's names and its order of arguments, counted from 1**, so a formula carries over. `=mid("1234 5678", 6, 4)` is `"5678"`.
 
-| Function | Gives |
-| :-- | :-- |
-| `mid(text, start, count)` | `count` characters from the `start`th |
-| `left(text, count)`, `right(text, count)` | The first or the last `count` characters |
-| `len(text)` | How many characters the text holds |
-| `find(part, text)` | Where `part` first stands, from 1, or 0 where it does not |
-| `value(text)` | The number the text writes in decimal: `value(" 12.5 ")` is 12.5 |
-| `substitute(text, old, new)` | The text with every `old` replaced by `new`, from the left; case counts |
-| `text(value, format)` | A number or a date written as a column's format shows it: `text(E2, "date:yyyy/mm/dd")` |
-| `a & b` | The two texts joined |
+The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `substitute` and `text`, and `a & b` joins two texts. What each one gives, with its arguments, is in "Functions by name" in [`SPEC-editing-page.md`](SPEC-editing-page.md).
 
 * **A position counts characters, not bytes**, so `mid("かんそ", 2, 1)` is `"ん"`.
 * **A start below 1 or a negative count is `#NUM!`.** A count past the end takes what there is, and a start past it gives empty text.
@@ -395,6 +418,23 @@ Each error has its own mark, since each is fixed differently.
 * **The length is found before the text is made.** So a formula that doubles its text down 27 rows stops at the cap, and takes no more memory.
 * **A line break in text is written `\n`**, with JSON's escapes: `substitute(A1, "\n", ", ")` puts a line's parts on one line.
 * **`value` is the one way from text to a number.** Text that writes no decimal number, `"0x10"` among it, is `#VALUE!`; `hex_to_dec` reads hexadecimal.
+
+**`like(text, pattern)` matches text against a pattern with the wildcards of a spreadsheet's criteria.** `=sum_if(D, like(A, "INV-*"))` adds column D on the rows where A starts with `INV-`.
+
+* **`*` stands for any run of characters, none included, and `?` for exactly one character.** Any other character stands for itself.
+* **`~*`, `~?` and `~~` stand for `*`, `?` and `~` themselves.** Any other `~`, one at the end of the pattern included, is `#VALUE!`.
+* **The whole text must match.** So `"B*"` means "starts with B", `"*B"` means "ends with B", and `like("ab", "a")` is `false`.
+* **Case does not count, as the filter and the sort compare text.** That rule folds only the letters A to Z: `like("pens", "PENS")` is `true`, but `like("É", "é")` is `false`.
+* **`?` counts characters, not bytes**, as `mid` and `len` do: `like("かんそ", "か?そ")` is `true`.
+* **A number or `true`/`false` as either argument is `#VALUE!`**, as for the other text functions. An empty cell is empty text, which only `""` or `*` matches.
+* **Inside a `sum_if` condition, a range in `like` reads its cell on each row**, as every ksmd function does there.
+* **The work is at most the text's characters times the pattern's bytes.** The matcher goes back only to the last `*` passed. So a pattern such as `"*a*a*a*b"` cannot take exponential time.
+
+**Why Excel's wildcards:** a criterion such as `"ABC*"` in a spreadsheet's `SUMIF` becomes `like(A, "ABC*")`, with the same `*`, `?` and `~`. Excel's wildcards also ignore case and match the whole text, so a formula carried over keeps its answer.
+
+**Why a function, not wildcards in every comparison:** in a spreadsheet, a criterion's `*` and `?` are wildcards without a sign. A key that holds a `*` then matches more rows than intended. In ksmd, `=` never reads a wildcard, and a wildcard works only where `like` is written.
+
+**Why a `~` before another character is refused:** what a spreadsheet does with it is not clearly documented. An error shows at once, where a wrong match may never be noticed.
 
 **`mod(x, y)` takes the sign of `y`**, so `mod(-1, 72)` is 71 and a count wraps round as a clock does. **`power(x, y)` is `x` to the power `y`**; a result with no real number, such as `power(-1, 0.5)`, is `#NUM!`.
 
@@ -550,12 +590,12 @@ Each row and column of a table holds an identity that the source does not show. 
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
 * **A whole column holds no row.** Rows inserted, removed or moved anywhere only change how many it takes. Its column follows as a range's does.
-* **A moved block of cells moves a whole column only when the block holds every data row.** So a column cut by its letter and pasted on another takes `t.A` with it, as Excel moves `A:A`. A whole column written over by such a block becomes `#REF!`, and a block of some rows leaves it alone.
+* **A moved block of cells moves a whole column only when the block holds every data row.** So a column cut by its letter and pasted on another takes `A` and `t.A` with it, as Excel moves `A:A`. A whole column written over by such a block becomes `#REF!`, and a block of some rows leaves it alone.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
 * **A sort moves each row with its identity.** A formula keeps naming the cells it named before, so `=B1*C1` in row 1 still names its own row after the sort.
 * **Removal turns a reference to the removed line into `#REF!`.** A range's corner on that line moves one line toward the other corner. A range with no line left becomes `#REF!`.
 * **`$` acts only on copying.** A copy shifts each part without `$` by the distance copied, and a part with `$` keeps its row or column. A shift outside the table gives `#REF!`.
-* **A reference without a table's name names a cell of the table that holds the formula.** So a copy into another table names a cell there.
+* **A reference without a table's name names a cell or a whole column of the table that holds the formula.** So a copy into another table names a cell or a column there. The writer keeps it without the name, also after a move.
 * **A paste of cells copied in the page moves their formulas by the same rule.** The copy carries each formula as typed, and the place it was copied from. So the paste works from the text, in another table or another document (`shift_formula` in `ksmd/calc/formula.kspl`). A reference to a table that document lacks stays as written.
 * **A reference that names no cell stays as written,** such as `Z9` in a four-column table. It attaches once that cell exists: after an insertion, and when the source is read again.
 * **A reference straight after a number, as in `1A1`, never attaches.** That formula does not read, and a moved column could join the two into one number (`1E1`).
@@ -569,7 +609,11 @@ Calculation (`ksmd/calc/calc.kspl`) reads the model and one input: the date the 
 * **A cell reached again while it calculates is a cycle.** Every cell on the cycle shows `#CYCLE!`, and the error carries into the cells that use them.
 * **Only what is calculated is followed.** A cell named in a branch `if` does not take, or on the side `and` or `or` skips, is not reached. So `=if(A1 > 0, B1, 0)` in B1 is a cycle while A1 is above 0, and 0 otherwise.
 * **A chain deeper than 256 steps is set aside, and its deepest cell calculates first.** A step is a cell or a level of a formula. So a running total down 10,000 rows calculates without exhausting the stack.
-* **After an edit, the whole source calculates again.** The table limits bound that cost; a partial recalculation waits for a measured need.
+* **After an edit, the whole source calculates again.** The read limit below bounds that cost; a partial recalculation waits for a measured need.
+* **One calculation reads at most 500 million cell values** (`MAX_READS` in `ksmd/calc/calc.kspl`). Past it, each formula not yet finished shows `#LIMIT!`, and a formula finished before keeps its value.
+  * Why: the table limits alone do not bound the work. A range read on every row multiplies it, so a crafted file within 8 MiB can read billions of values, at about 100 ns each.
+  * Why 500 million: the largest ordinary shapes measured read far less. A table of 10,000 rows with each row's share of a column's total reads 100 million. With a `sum_if` over a whole column on each row, it reads 205 million.
+  * The reason names the limit, so the person knows the values are not wrong but unfinished. Like `#CYCLE!`, the error keeps its own reason as it carries.
 * **A condition of `sum_if`, `count_if` or `average_if` calculates once for each row of its values.**
 * **A function's arguments are kept only while it runs.** So `=sum(t.A)` on each of 3,000 rows keeps no copy of column A for each row; only the results stay.
 
@@ -683,18 +727,13 @@ line from="tip" to="ask" via="380,180"
 
 ## Includes and images
 
-An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption`, and `width` or `scale`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption` and `width`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
 
 **An image's `width` is its share of the text width: `width="40%"`, a whole number from 1 to 100.** Its height follows, so the picture keeps its shape. Without it, the image fits the text width as far as its pixels allow.
 
 * **A share, not pixels or centimetres**: the same file shows alike on any screen and on any paper. A narrower window narrows the image with the text.
 * **Images next to each other share a row while each has a width and the widths add up to 100% or less.** So pictures stand in a line of Word's text. Two screenshots at `45%` stand side by side, with no clause for a row.
-
-**An image's `scale` is its share of its own size: `scale="50%"`, a whole number from 1 to 400.** At `100%`, one pixel of the image is one CSS pixel. Its height follows, and the image is never wider than the text.
-
-* **A scale follows the picture, not the window.** The text width changes with the window, so a width cannot hold "half of this screenshot". A scale keeps a picture at the size that its own pixels give, on any window, as Word's Scale and Typora's zoom do.
-* **A clause holds a width or a scale, never both.** Each is a way to size the image, so the reader refuses the two together, and the message says to keep one. Setting one in the editor takes the other away.
-* **Only a width shares a row.** A width is a share of the text, so the widths add up; a scale gives no share to add.
+* **The older `scale="50%"`, a share of the image's own size, is refused.** The message names `width`. An image has one way to be sized, so a clause never holds two sizes that disagree.
 
 Links may use `https`, `http`, `mailto`, or a document fragment; other schemes are refused. Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -805,7 +844,7 @@ The KSPL model remains authoritative: the page turns editing into model actions,
 
 **A removed table keeps its place in the document's list of tables, emptied and with no name.** Blocks and references name a table by its place, so taking it out would renumber every later table. A reference to it from another table becomes text as written, and calculates as `#REF!`. Removing a table's block by any action empties its table.
 
-**A cell edits as the text a person types.** Text after `=` is a formula, and a number as JSON writes one is a number. A quoted JSON string is text, so `"12"` is the text 12. Nothing makes the cell empty, and anything else is text as typed. A number too large for a cell, as `1e400`, stays the text typed, as Excel keeps it. An `=` with nothing after it is refused as an empty formula. A cell's editor shows text that would read as another kind in quotes.
+**A cell edits as the text a person types.** Text after `=` is a formula, and a number as JSON writes one is a number. A date as the file writes one, `2026-10-23`, is a date. While the page's AutoCorrect for dates is on, `2026/10/23` and `11/6` are dates too, and the file keeps the `-` form ("Choosing and editing cells" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). A quoted JSON string is text, so `"12"` is the text 12. Nothing makes the cell empty, and anything else is text as typed. A number too large for a cell, as `1e400`, stays the text typed, as Excel keeps it. An `=` with nothing after it is refused as an empty formula. A cell's editor shows text that would read as another kind in quotes.
 
 ## Undo and redo
 
@@ -826,7 +865,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 | Only this machine reaches the server | The server listens on the loopback alone, and refuses a request that names another host |
 | Another page or program cannot drive it | The server makes a new token at each start. The page moves it from the address into the tab's storage, and sends it in a header |
 | A path stays inside the workspace | The page applies the workspace's text rules (`resolve_text` in `ksmd/files/files.kspl`). The server refuses a link and a path out of its root |
-| No file appears by itself | Opening, viewing and drafts write nothing. A save writes the open document's own path, or a new path where no file stands. Save As replaces another file only after a second press, and only while that file still holds what it held when chosen |
+| No file is replaced by itself | Opening, viewing and drafts write nothing. A save writes the open document's own path, or a new path where no file stands. Save As replaces another file only after a second press, and only while that file still holds what it held when chosen. A new image, and a file that Insert starts, are written at once, never over a file that stands ("Images" below) |
 
 ### Opening
 
@@ -866,7 +905,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **The browser keeps drafts per address, the server's port included.** So a launcher keeps one port per workspace ("Opening a document from the desktop" below). A server started by hand needs the same port each time.
 
-**Nothing is written beside the document.** A lock file that a crash leaves behind blocks the next open, and the comparison of bytes at each save makes a lock unnecessary.
+**No lock file is written beside the document.** A lock file that a crash leaves behind blocks the next open, and the comparison of bytes at each save makes a lock unnecessary. Two actions write a new file at once without a save, never over one that stands. An image goes into the data folder under a free name ("Images" below). Insert ▸ Include… and Insert ▸ Functions file… write a starter file where the dialog chose, by default the data folder.
 
 ### Opening a document from the desktop
 
@@ -916,6 +955,7 @@ Initial limits are safety bounds, not performance claims. Apply them before allo
 | One formula | 4,096 UTF-8 bytes and 64 expression levels |
 | Text that `&` or a function gives | 32,767 UTF-8 bytes; past it, `#NUM!` |
 | `round`'s places | -15 to 15 |
+| Cell values read in one calculation | 500 million; past it, `#LIMIT!` |
 | Include depth | 16 files on the active stack |
 | Assembled view | 64 MiB of source text and 200,000 blocks, counting repeated instances |
 | One decoded image | 16 million pixels |
@@ -950,7 +990,7 @@ What the figures show, as orders of magnitude:
 These are known limits, not yet worked on:
 
 * A key press in a document of tens of thousands of blocks takes over 100 ms.
-* An edit in a table of 10,000 rows takes over a second, as the page shows every table again.
+* An edit in a table of 10,000 rows takes over a second, as the page draws and lays out that whole table again.
 * So the served page does not reach the limits above: a document of 6.2 MB does not open, and one of 4.3 MB does.
 
 ## Acceptance examples and next work

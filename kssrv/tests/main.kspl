@@ -12,7 +12,7 @@ import "kssrv/tests/kept"
 import "kssrv/tests/local"
 import "kssrv/tests/memory"
 import "kssrv/tests/paths"
-import "kssrv/tests/start" { Running, bring_up, read_log, start_server }
+import "kssrv/tests/start" { Running, bring_up, refused }
 import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
@@ -270,8 +270,15 @@ priv fn bring_up_local( //< starts kssrv with `--local`, and checks that it put 
     said: U8[], //< the check that it put the token out
     arena: Arena$@,
 ): Local_run? //< the server and its token, or none once a check has failed
+    // **A local server serves a named page**, never the root's own index (`--page`).
+    page: = fs.join(at.tmp, "local-page.html", arena)
+    io.write_file(page, local.PAGE_BODY) catch
+        verdict.check(what, false,
+            arena.text().s("the page cannot be placed: ").s(page).take())
+        return .none
     $all: = List<|U8[]|>(arena)
     all.push("--local")
+    all.push(arena.text().s("--page=\{page\}").take())
     for f in flags
         all.push(f)
     started: = bring_up(at.exe, at.root, at.tmp, name, all.slice(), what, arena)
@@ -434,87 +441,39 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         return
     // **Naming a missing page must stop the start**; a later 404 leaves a blank page unexplained
     // (the same section of the agreement).
-    gone: = fs.join(tmp, "ui/no-such-page.html", arena)
-    out2: = fs.join(tmp, "kssrv-page-missing.out", arena)
-    err2: = fs.join(tmp, "kssrv-page-missing.err", arena)
-    missing: =
-        start_server(exe, root, out2, err2,
-        U8[][]::{ arena.text().s("--page=\{gone\}").take() }, arena)
-    told: = read_log(out2, err2, arena)
-    verdict.check("naming a page that is not there does not come up",
-        !missing.child.is_some() && told.find_str("no such page").is_some(), told)
-    if c2: = missing.child
-        $bad: = c2
-        bad.kill()
+    refused("naming a page that is not there does not come up", exe, root, tmp,
+        U8[][]::{ arena.text().s("--page=\{fs.join(tmp, "ui/no-such-page.html", arena)\}").take() },
+        "no such page", arena)
     // **Nor must naming a folder**: it would be a second root that the refusals do not cover, and
     // `/` would answer 404 with nobody told why.
-    out3: = fs.join(tmp, "kssrv-page-folder.out", arena)
-    err3: = fs.join(tmp, "kssrv-page-folder.err", arena)
-    folder: =
-        start_server(exe, root, out3, err3,
-        U8[][]::{ arena.text().s("--page=\{fs.join(tmp, "ui", arena)\}").take() }, arena)
-    said_folder: = read_log(out3, err3, arena)
-    verdict.check("naming a folder as the page does not come up",
-        !folder.child.is_some() && said_folder.find_str("not a folder").is_some(), said_folder)
-    if c3: = folder.child
-        $bad3: = c3
-        bad3.kill()
+    refused("naming a folder as the page does not come up", exe, root, tmp,
+        U8[][]::{ arena.text().s("--page=\{fs.join(tmp, "ui", arena)\}").take() }, "not a folder",
+        arena)
     // **A builder runs a program on files under the root**, so a server facing outward has none.
-    out_b: = fs.join(tmp, "kssrv-builder-outward.out", arena)
-    err_b: = fs.join(tmp, "kssrv-builder-outward.err", arena)
-    outward: =
-        start_server(exe, root, out_b, err_b,
-        U8[][]::{ arena.text().s("--builder=\{exe\}").take() }, arena)
-    said_outward: = read_log(out_b, err_b, arena)
-    verdict.check("a builder without --local does not come up",
-        !outward.child.is_some() &&
-        said_outward.find_str("--builder needs --local").is_some(), said_outward)
-    if c_b: = outward.child
-        $bad_b: = c_b
-        bad_b.kill()
+    refused("a builder without --local does not come up", exe, root, tmp,
+        U8[][]::{ arena.text().s("--builder=\{exe\}").take() }, "--builder needs --local", arena)
+    // **A local server without a named page would serve the root's own index**, and the URL it
+    // prints gives that file the token.
+    refused("--local without --page does not come up", exe, root, tmp, U8[][]::{ "--local" },
+        "--local needs --page", arena)
     // **Nor a builder with no record of the files the person allowed**: it would build any file.
-    unrecorded: =
-        start_server(exe, root, out_b, err_b,
-        U8[][]::{ "--local", arena.text().s("--builder=\{exe\}").take() }, arena)
-    said_unrecorded: = read_log(out_b, err_b, arena)
-    verdict.check("a builder without --allowed does not come up",
-        !unrecorded.child.is_some() && said_unrecorded.find_str("go together").is_some(),
-        said_unrecorded)
-    if c_u: = unrecorded.child
-        $bad_u: = c_u
-        bad_u.kill()
-    build.refused_inside(exe, root, out_b, err_b, arena)
+    refused("a builder without --allowed does not come up", exe, root, tmp,
+        U8[][]::{ "--local", arena.text().s("--page=\{page\}").take(),
+        arena.text().s("--builder=\{exe\}").take() }, "go together", arena)
+    build.refused_inside(exe, root, tmp, page, arena)
     // **A wait of 0 or less would read as "stay up"**, and one too large would wrap and stop it at
     // once; each is refused at the start.
     for wait in U8[][]::{ "0", "-5", "9300000000000" }
-        out_i: = fs.join(tmp, "kssrv-idle-bad.out", arena)
-        err_i: = fs.join(tmp, "kssrv-idle-bad.err", arena)
-        idle_bad: =
-            start_server(exe, root, out_i, err_i,
-            U8[][]::{ arena.text().s("--idle=\{wait\}").take() }, arena)
-        said_idle: = read_log(out_i, err_i, arena)
-        verdict.check(arena.text().s("--idle=\{wait\} does not come up").take(),
-            !idle_bad.child.is_some() && said_idle.find_str("--idle must be").is_some(), said_idle)
-        if c_i: = idle_bad.child
-            $bad_i: = c_i
-            bad_i.kill()
+        refused(arena.text().s("--idle=\{wait\} does not come up").take(), exe, root, tmp,
+            U8[][]::{ arena.text().s("--idle=\{wait\}").take() }, "--idle must be", arena)
     // **Nor a FIFO**: its read would wait for a writer that never comes.
     fifo: = fs.join(tmp, "ui/page.fifo", arena)
     if !make_fifo(fifo, arena)
         verdict.skip_check("naming a FIFO as the page does not come up",
             "a FIFO cannot be made with `mkfifo` in this environment")
         return
-    out4: = fs.join(tmp, "kssrv-page-fifo.out", arena)
-    err4: = fs.join(tmp, "kssrv-page-fifo.err", arena)
-    piped: =
-        start_server(exe, root, out4, err4,
-        U8[][]::{ arena.text().s("--page=\{fifo\}").take() }, arena)
-    said_fifo: = read_log(out4, err4, arena)
-    verdict.check("naming a FIFO as the page does not come up",
-        !piped.child.is_some() && said_fifo.find_str("not a pipe or a device").is_some(), said_fifo)
-    if c4: = piped.child
-        $bad4: = c4
-        bad4.kill()
+    refused("naming a FIFO as the page does not come up", exe, root, tmp,
+        U8[][]::{ arena.text().s("--page=\{fifo\}").take() }, "not a pipe or a device", arena)
 
 priv fn page_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< The answers when `--page` is given
@@ -638,6 +597,11 @@ priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end
     ctype: = client.header(slash.head, "content-type")
     verdict.check("the Content-Type is chosen from the extension",
         ctype.starts_with("text/html"), ctype)
+    // **Facing outward, only `nosniff` is added**: framing and the referrer are the site's choice.
+    verdict.check("facing outward, an answer says nosniff and sets no frame or referrer policy",
+        client.header(slash.head, "x-content-type-options").equals("nosniff") &&
+        client.header(slash.head, "content-security-policy").len == 0 &&
+        client.header(slash.head, "referrer-policy").len == 0, slash.head)
     // **The extension's letter case does not count**, and a module script is JavaScript: sent as
     // octet-stream, a browser downloads the one and refuses the other.
     loud: = client.get(port, "/LOUD.HTML", "", arena)!

@@ -67,23 +67,11 @@ priv fn frame_depth(c: Sema_ctx@, depth: I32): I32 //<
 
 priv fn storage_depth(c: Sema_ctx$@, node: Ast_node$@): I32 //<
     //< The depth of the block whose end ends node's storage, where is_frame_storage holds
-    //< A name's is its declaration's. A field or an element follows its receiver, as in
-    //< is_frame_storage. Anything else, such as a struct literal or a closure, is a temporary
-    //< of the block the statement stands in.
-    $at: = node
-    for at != null
-        if at.is_path_or_ident()
-            sym: = c.read_written_name(at).sym
-            if sym == null || sym.flags.is_global
-                break
-            return frame_depth(c, sym.scope_depth)
-        if at.kind_id == .k_expr_primary && at.children.len > 0
-            at = at.get_primary_inner_expr()
-            continue
-        op: = at.postfix_op_text() if at.kind_id == .k_expr_postfix else ""
-        if at.kind_id != .k_method_access && !op.equals(".") && !op.starts_with("[")
-            break
-        at = at.get_postfix_receiver()
+    //< A name's is its declaration's. A field or an element follows its receiver (storage_local),
+    //< as in is_frame_storage. Anything else, such as a struct literal or a closure, is a
+    //< temporary of the block the statement stands in.
+    if sym: = storage_local(c, node)
+        return frame_depth(c, sym.scope_depth)
     return frame_depth(c, I32::c.symtab.scope_stack.len)
 
 priv enum Frame_escape //< what a value leaving the frame carries of the frame's memory
@@ -547,7 +535,7 @@ priv fn add_one_points_at(sym: Sema_symbol$@, at: Sema_symbol$@) //<
     sym.frame_points_at.push(at)
 
 priv fn storage_local(c: Sema_ctx$@, node: Ast_node$@): Sema_symbol$@? //<
-    //< The local whose storage node lies in, following fields and elements as storage_depth does
+    //< The local whose storage node lies in, following a field or an element to its receiver
     //< None where node lies in no local of this frame (a temporary, a global).
     $at: = node
     for at != null

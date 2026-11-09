@@ -661,12 +661,12 @@ Caution: **Mind the current.** One element uses close to 60mA at most, so eight 
 
 ## 🌐 The network stack
 
-It is the smallest ARP/IPv4/UDP/TCP stack that lets the car talk to a PC: no fragmentation, no IP options, no routing table. It runs on an Ethernet link (on the real RP2040, USB CDC-NCM). `make ksos-rp2040-net` runs ARP/TCP/HTTP on the car.
+It is the smallest ARP/IPv4/TCP stack that lets the car talk to a PC: no fragmentation, no IP options, no routing table. It runs on an Ethernet link (on the real RP2040, USB CDC-NCM). `make ksos-rp2040-net` runs ARP/TCP/HTTP on the car.
 
 ```mermaid
 flowchart TD
     demo[a demo] --> tcp["net/tcp_conn.kspl<br/>one TCP connection"]
-    tcp --> ip["net/mini_ipv4.kspl<br/>builds and parses ARP, IPv4, UDP, TCP bytes"]
+    tcp --> ip["net/mini_ipv4.kspl<br/>builds and parses ARP, IPv4, TCP bytes"]
     tcp --> link["Link<br/>three function pointers"]
     link --> ncm[USB CDC-NCM on the RP2040]
     link --> fake[a fake link in a host test]
@@ -675,7 +675,7 @@ flowchart TD
 ### How the bytes are assembled
 
 * **The fields are written into and read out of the bytes directly in network byte order** (big endian). `put_u16_be` and the rest in `std/bytes` spell out the position, the width and the endianness per call.
-* **The UDP checksum is 0** (IPv4 allows leaving it out). The IP and TCP checksums are RFC 1071's one's-complement sum. TCP includes the pseudo header, so `checksum16_step`/`checksum16_finish` let the sum span several regions. The receiver does not check the checksum; an outside test harness recomputes the sender's independently.
+* The IP and TCP checksums are RFC 1071's one's-complement sum. TCP includes the pseudo header, so `checksum16_step`/`checksum16_finish` let the sum span several regions. The receiver does not check the checksum; an outside test harness recomputes the sender's independently.
 * **What ARP resolved (the gateway's MAC) is held by the caller**, not by `mini_ipv4.kspl`, which holds no hidden global state. The TCP sequence and ACK numbers are the caller's too.
 
 **The TCP is the smallest implementation**: a single connection with a fixed 20-byte header and no options. It has no retransmit timer, no congestion control, no handling of reordering and no concurrent connections. It is extended only as far as real use needs.

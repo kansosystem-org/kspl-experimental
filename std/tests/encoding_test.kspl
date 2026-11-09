@@ -587,14 +587,27 @@ fn test_json_large_object_repeats(arena: Arena$@) //<
     verdict.check("a syntax error before a repeat is the error reported",
         repeat_at(src.slice(), arena) == -2, "")
 
-    // A large object with no repeat keeps every member, the last one included.
+    // A large object with no repeat keeps every member, in order, the last one included. The walk
+    // goes through obj_members: a walk of the keys that read each value with `get` was quadratic.
+    // The check is the result, not the time, so a slow machine cannot fail it.
+    n: Sz = 20000
     src.clear()
-    members_to(src@, 20000)
+    members_to(src@, n)
     src.c('}')
     doc: = json.parse(src.slice(), arena) catch panic("json: 20000 distinct keys must parse")
-    verdict.check("a large object with no repeat keeps every member",
-        doc.val.get("k19999").as_int().unwrap_or(-1) == 19999 &&
-        doc.val.get("k0").as_int().unwrap_or(-1) == 0, "")
+    $i: Sz = 0
+    $wrong: Sz = 0
+    defer $want: = Str_builder()
+    for m in doc.val.obj_members()
+        want.clear()
+        want.s("k\{i\}")
+        if !m.key.equals(want.slice()) || m.val.as_int64().unwrap_or(-1) != I64::i
+            wrong += 1
+        i += 1
+    want.clear()
+    want.s("\{i\} members, \{wrong\} out of place")
+    verdict.check("a large object with no repeat keeps every member, in the order written",
+        i == n && wrong == 0, want.slice())
     verdict.pass("a large object refuses the first repeat in the text, before any later error.")
 // ==========================================
 // std/json: writing out with indentation.
@@ -656,16 +669,23 @@ fn test_json_indent(arena: Arena$@) //<
         .pass("The default stays on one line, and indentation gives the same strings as other \
             implementations.")
 
-fn test_json_obj_keys(arena: Arena$@) //< std/json: an object's keys, in the order written
-    verdict.start("[Json] an object's keys list in the order the text gave them test...")
+fn test_json_obj_members(arena: Arena$@) //< std/json: an object's members, in the order written
+    verdict.start("[Json] an object's members walk in the order the text gave them test...")
     doc: = json.parse("{\"b\": 1, \"a\": {\"x\": 2}, \"c\": []}", arena) catch
         panic("the object parses")
-    keys: = doc.val.obj_keys(arena)
-    assert(keys.len == 3 && keys.get(0).equals("b") && keys.get(1).equals("a") &&
-        keys.get(2).equals("c"), "each key once, in the order written")
-    assert(doc.val.get(keys.get(1)).obj_keys(arena).len == 1, "a nested object lists its own")
+    defer $text: = Str_builder()
+    for m in doc.val.obj_members()
+        text.s(m.key).c('=')
+        m.val.dump(text@)
+        text.c(';')
+    verdict.check("each key once with its own value, in the order written",
+        text.slice().equals("b=1;a={\"x\":2};c=[];"), text.slice())
+    $inner: Sz = 0
+    for m in doc.val.get("a").obj_members()
+        inner += 1 if m.key.equals("x") && m.val.as_int().unwrap_or(0) == 2 else 100
+    assert(inner == 1, "a nested object walks its own members")
     empty: = json.parse("{}", arena) catch panic("an empty object parses")
-    assert(empty.val.obj_keys(arena).len == 0, "an empty object lists nothing")
+    assert(empty.val.obj_members().count() == 0, "an empty object yields no member")
     list: = json.parse("[1, 2]", arena) catch panic("an array parses")
-    assert(list.val.obj_keys(arena).len == 0, "a value of another kind lists nothing")
-    verdict.pass("obj_keys walks an object as arr_list walks an array.")
+    assert(list.val.obj_members().count() == 0, "a value of another kind yields no member")
+    verdict.pass("obj_members walks an object, each key with its value.")

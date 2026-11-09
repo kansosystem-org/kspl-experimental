@@ -58,21 +58,11 @@ Each thread works out whole sequences' gradients on its own arena (a block of me
 
 **A step's memory stays taken for the next** (`Arena.reset`). An arena wound back to empty returns its chunks to the OS. Taking them again page by page costs a large share of each step, more so with several threads.
 
-## LoRA keeps the adapter apart from bundle reading and writing
+## LoRA keeps the adapter free of file formats
 
-LoRA (low-rank adaptation) fine-tunes a model by training small added matrices, called adapters, instead of the whole model. Three files hold it, each heavier than the one before.
+LoRA (low-rank adaptation) fine-tunes a model by training small added matrices, called adapters, instead of the whole model. **[`lora.kspl`](../lora.kspl) holds only the adapter `Lora`, and imports nothing for a file format.** [`nn.kspl`](../nn.kspl) uses `Lora`, so `json`, `safetensors`, `bytes` and `strnum` stay out of the inference path.
 
-| File | What it holds | What it brings in |
-| :-- | :-- | :-- |
-| [`lora.kspl`](../lora.kspl) | Only the adapter `Lora` | Nothing for formats |
-| [`lora_set.kspl`](../lora_set.kspl) | The per-block bundle (`Qkv_lora` / `Mlp_lora`) and its safetensors layout | A `Safetensors` (the weights format) |
-| [`model_file.kspl`](../model_file.kspl) | Loading and saving by file path | `std/io`, `std/fs` |
-
-**The split follows what the signatures import.** [`nn.kspl`](../nn.kspl) uses only `Lora`. In one file with the bundle, it would bring the weight format and JSON parsing along. Split, `json` / `safetensors` / `bytes` / `strnum` drop out of the inference path.
-
-**Do not move the code that takes a `Safetensors` into [`model_file.kspl`](../model_file.kspl)**, which imports `std/io` and `std/fs`. Bare metal (a chip with no operating system and no file system) passes an `embed`ed byte sequence through `Safetensors.load_from_bytes` to `lora_set`. Requiring `std/io` there would close that path.
-
-**`Lora.save_raw` / `load_raw` are the smallest format, for a place with no heap.** The safetensors path resolves names through `Str_builder`, which needs the global heap, and a bare-metal probe has only `Arena.from_buffer`. So one adapter goes out as raw bytes.
+**`Lora.save_raw` / `load_raw` are the smallest format, for a place with no heap.** A bare-metal probe has only `Arena.from_buffer`, so one adapter goes out as raw bytes, with no names and no shapes.
 
 ## The attention mechanisms are split by the head count
 
@@ -175,8 +165,6 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 | A plain sum of the same whole numbers, each read straight from its block | The same bits |
 | llama.cpp's `vec_dot` functions on the same blocks | Within 1e-5 of the sum of the products' sizes; only the order of F32 sums differs |
 | The F32 product of the decoded weights with the unrounded inputs | Within 0.6 of an input step times the sum of the weights' sizes, the rounding's own bound |
-
-**The quantizers follow the ones llama.cpp uses without an importance matrix** (`quantize_row_q8_0_ref` and `quantize_row_q4_K_ref`), in [`quantize.kspl`](../quantize.kspl), apart from the decoding that every program needs. Q8_0's bytes equal the reference's in the tests. `gguf` has no Q4_K quantizer, so the test holds each number within one step of its group instead. Only these two formats have a quantizer, since converting a model needs no other.
 
 ## Products split their outputs over the cores
 
@@ -302,7 +290,6 @@ The tests run a tiny Qwen3.5 model against an F64 computation of the same graph,
 | `encode`'s IDs and `decode`'s text | The arena the caller passes | The caller knows when it is done with them, and frees or resets that arena |
 | `decode_one`'s text | Nowhere: it is the vocabulary's own bytes | Printing each generated token allocates nothing |
 | A chunk's merging | Working lists on the heap, freed before `encode` returns | No working memory outlives the call |
-| An adapter file's bytes (`load_qkv_lora_set` in [`model_file.kspl`](../model_file.kspl)) | The caller's required arena | All views share one file copy and are released together |
 
 **The result is not written into a buffer of the caller's fixed size.** How many IDs a text becomes is known only after merging, so a short buffer means encoding the whole text again. An arena grows as the result does, and freeing it is one call.
 
@@ -317,13 +304,12 @@ The tests run a tiny Qwen3.5 model against an F64 computation of the same graph,
 | `Safetensors.get_tensor`, aligned bytes | arena | borrowed from the file |
 | `Safetensors.get_tensor`, misaligned bytes | arena | an aligned copy on the arena |
 | `Quant_matrix.from_bytes` | none: a value | borrowed from the caller's bytes |
-| `Quant_matrix.quantize` | none: a value | on the arena passed |
 
 **Only constructors make these descriptors.** A tensor's arena and a parsed weights file's representation are not public fields; tensor elements stay open to numerical kernels. Copying a view does not extend the arena's or the file's lifetime.
 
 **A parsed header lives on the supplied arena.** `model_file.load_safetensors` reads the file straight into the arena, so the file is held once and never on the heap.
 
-**Replacement checks precede assignment.** `map_into` leaves the destination intact when the shape differs. **An adapter read from a file must fit its base layer**: `load_set_from` refuses an A or B that does not match `Lora_widths`, with `shape_mismatch(label)`. Otherwise an adapter for another model would stop the first forward pass, on a mismatch that names neither the adapter nor the file.
+**Replacement checks precede assignment.** `map_into` leaves the destination intact when the shape differs.
 
 ## A byte sequence from outside is assumed to be broken
 

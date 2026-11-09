@@ -1,5 +1,3 @@
-import "ksai/lora" { Lora }
-import "ksai/lora_set" { Lora_widths, Qkv_lora }
 import "ksai/model_file" as ai_file
 import "ksai/safetensors" as ai_st
 import "ksai/tensor" + { Tensor }
@@ -203,7 +201,7 @@ fn test_view_rows(arena: Arena$@) //< a view of rows from any row, and a rejecti
 // ==========================================
 // The round trip of writing safetensors out then reading it back.
 // Caution: **Send reading and writing through one path.** A check on one side passes where both
-// are wrong the same way (the format is also shared with lib/ksai/tools/safetensors_io.py).
+// are wrong the same way.
 // ==========================================
 fn test_safetensors_roundtrip(arena: Arena$@)
     verdict.start("[Safetensors] the write-out then read-back round trip test...\n")
@@ -229,7 +227,7 @@ fn test_safetensors_roundtrip(arena: Arena$@)
             "safetensors roundtrip must preserve every element bit-for-bit")
 
     verdict.pass("not one element is garbled over the header length, header and data round trip.")
-fn test_model_file_leaves_no_heap(arena: Arena$@) //<
+fn test_model_file_leaves_no_heap() //<
     //< That a model file is read once, into its arena, and leaves nothing on the heap
     //< **The bytes, refused or not, belong to the arena passed in.** Read onto the heap first, a
     //< load holds the file twice at its peak. Left there, a server that reloads files grows by a
@@ -270,47 +268,6 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
     assert(refused, "a header length past the file's end is refused")
     assert(mem.heap_used_bytes() == heap_before, "freeing the arena frees a refused file too")
 
-    path: = "out/tmp/kspl_test_debug_adapters.safetensors"
-    shape: Sz[2] = ::{ 2, 2 }
-    a: = Tensor<|F32|>(Sz[]::shape, arena)
-    a.fill(F32::0.25)
-    one: = Lora<|F32|>::{ .a = a, .b = a, .scale = F32::2.0 }
-    $set: = Qkv_lora<|F32|>::{ .q = one, .v = one }
-    ai_file.save_qkv_lora_set<|F32|>(set@, 1, path, arena)
-        catch panic("save_qkv_lora_set should succeed for a writable out/ path")
-    fits: = Lora_widths::{ .in_dim = 2, .out_dim = 2 }
-    own: = Arena(4096)
-    got: = ai_file.load_qkv_lora_set<|F32|>(path, 1, fits, fits, own) catch
-        panic("load_qkv_lora_set should read back the set just written")
-    assert(got.q.scale == F32::2.0 && got.v.a.data$ == F32::0.25, "the set reads back as written")
-    own.free()
-    assert(mem.heap_used_bytes() == heap_before, "freeing the arena frees the whole adapter set")
-    short: = Arena(4096)
-    $missing: = false
-    _none: = ai_file.load_qkv_lora_set<|F32|>(path, 2, fits, fits, short) catch
-        missing = true
-        fallback Qkv_lora<|F32|>$@::null
-    short.free()
-    assert(missing, "a block the file lacks is refused")
-    assert(mem.heap_used_bytes() == heap_before, "a set refused halfway must not stay on the heap")
-    // **An adapter for another model is refused when read, naming it.** Let through, it stops the
-    // first forward pass on a matmul mismatch that names neither the adapter nor the file.
-    for wrong in Range.asc(4)
-        // Each of A's rows and B's columns, on each adapter in turn.
-        wide: = Lora_widths::{ .in_dim = 3 if wrong % 2 == 0 else 2,
-            .out_dim = 3 if wrong % 2 == 1 else 2 }
-        q: = wide if wrong < 2 else fits
-        v: = fits if wrong < 2 else wide
-        foreign: = Arena(4096)
-        $named: U8[] = ""
-        _foreign: = ai_file.load_qkv_lora_set<|F32|>(path, 1, q, v, foreign) catch e
-            switch e
-            case .shape_mismatch(label)
-                named = label
-            default {}
-            fallback Qkv_lora<|F32|>$@::null
-        foreign.free()
-        assert(named.equals("q" if wrong < 2 else "v"), "an adapter that does not fit is refused")
     verdict.pass("")
 // ==========================================
 // The range a file declares for itself (`data_offsets` and `shape`) is not trusted.
@@ -473,8 +430,7 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     verdict.pass("a differing form, a differing dtype and a range disagreement are all refused.")
 
 fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
-    verdict
-        .start("[Safetensors] reading a dimension, a misaligned weight and an adapter as written...")
+    verdict.start("[Safetensors] reading a dimension and a misaligned weight as written...")
     // **A dimension past 32 bits is refused**: read as I32, `4294967297` became 1, and the file was
     // taken for a shape another reader refuses.
     refuses("a dimension past 32 bits has to be refused",
@@ -495,21 +451,6 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
     assert(Sz::got.data % sizeof(F32) == 0, "a misaligned weight is handed over aligned")
     assert(got.size == 1 && got.data$ == F32::1.0, "the copied weight keeps its value")
 
-    // **An adapter's scale must hold one value.** Shape `[0]` is a valid empty tensor whose data
-    // starts at the file's end, so reading the scale went past the buffer.
-    empty_scale: =
-        blob_of("{\"blocks.0.attn.q.lora_a\":{\"dtype\":\"F32\",\"shape\":[2,1],\"data_offsets\":[0,8]},\"blocks.0.attn.q.lora_b\":{\"dtype\":\"F32\",\"shape\":[1,2],\"data_offsets\":[8,16]},\"blocks.0.attn.q.lora_scale\":{\"dtype\":\"F32\",\"shape\":[0],\"data_offsets\":[16,16]}}",
-        16, arena)
-    st_l: = ai_st.Safetensors.load_from_bytes(empty_scale, arena) catch
-        panic("a file with an empty scale has to be readable as a file")
-    $refused: = false
-    fits: = Lora_widths::{ .in_dim = 2, .out_dim = 2 }
-    Qkv_lora<|F32|>.load_set_from(st_l, 1, fits, fits, arena) catch e
-        switch e
-        case .shape_mismatch
-            refused = true
-        default {}
-    assert(refused, "an adapter whose scale holds no value is refused as a shape mismatch")
     verdict.pass("")
 
 fn test_empty_tensor_operations(arena: Arena$@)

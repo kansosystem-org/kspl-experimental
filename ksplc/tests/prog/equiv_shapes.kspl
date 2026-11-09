@@ -2,8 +2,8 @@
 //< The evaluation order, tagged unions in arrays and globals, nested `#align(N)` and `#packed`
 //< layout, 16-bit products, globals naming globals, locals named as a C symbol, casts from
 //< floating point to an integer, comparisons whose answer is fixed, and `^` between two numbers.
-//< Each is a function that `equiv.kspl`'s `main` calls with the builder, with the declarations it
-//< alone reads.
+//< Also a slice of an array literal that a branch built, read after the branch. Each is a function
+//< that `equiv.kspl`'s `main` calls with the builder, with the declarations it alone reads.
 import "std/libc"
 import "std/mem"
 import "std/str" { Str_builder }
@@ -592,3 +592,51 @@ fn parted_lines(b: Str_builder$@) //< each shape's answer, one line
     b.s("parted=\{w\}/\{word\}/\{zeroed\}/\{Ord_u8.high.kept() > Ord_u8.low.kept()\}/")
         .s("\{Ord_u16.high.kept() > Ord_u16.low.kept()\}/\{PK.a\}/\{PK.b\}/\{pk_var.b\}/")
         .s("\{Sz::addr_of(-16)\}\n")
+
+// ==========================================
+// A slice of an array literal built in a branch, read after it
+// ==========================================
+
+priv const SOME_WORDS: U8[][_] = ::{ "kept", "list" }
+
+priv enum Words_error //< why `words_if` gives no words
+    odd
+
+priv fn words_if(n: I32): U8[][]!Words_error //< a slice of a constant where n is even
+    if n % 2 != 0
+        throw .odd
+    return U8[][]::SOME_WORDS
+
+#noinline
+priv fn stack_churn(n: I32): I32 //< fills a frame of its own, as a later call reuses the stack
+    $buf: I32[64] = ::{}
+    for i in Range.asc(64)
+        buf[i] = n * I32::i + 7
+    $sum: I32 = 0
+    for v in buf
+        sum += v
+    return sum
+
+priv fn words_line(b: Str_builder$@, label: U8[], words: U8[][]) //< one line: the label, each word
+    b.s(label).c('=')
+    for w in words
+        b.s(w).c(',')
+    b.c('\n')
+
+fn branch_array_lines(b: Str_builder$@, n: I32, name: U8[]) //<
+    //< Each value a branch builds from an array literal, read after other calls
+    //< **Its storage must outlive the branch.** Each array is a C compound literal; inside the
+    //< branch's block, gcc at `-O2` reuses its stack once the block ends.
+    picked: =
+        (U8[][]::{ "attrib", "+r", name } if n > 0 else U8[][]::{ "chmod", "444", name })
+    nested: =
+        (U8[][]::{ "a", name } if n > 1
+        else (U8[][]::{ "b", name } if n > 0 else U8[][]::{ "c" }))
+    substituted: = words_if(n) catch U8[][]::{ "instead", name }
+    fell: = words_if(n) catch
+        fallback U8[][]::{ "fell", "back", name }
+    b.s("churn=\{stack_churn(n)\}\n")
+    words_line(b, "picked", picked)
+    words_line(b, "nested", nested)
+    words_line(b, "substituted", substituted)
+    words_line(b, "fell", fell)

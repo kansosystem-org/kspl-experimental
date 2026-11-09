@@ -481,9 +481,9 @@ Note: One difference remains. POSIX renames a directory over an empty one, while
 
 **A long path that names a short one goes in its resolved form**, with no prefix. Windows measures the path as written, so a folder's name followed by thousands of `/` fails, though it names that folder.
 
-**The prefix goes on in the one place where a path becomes UTF-16 for the OS**, so no function can miss it. The path is resolved first, and the form never comes back to KSPL (Rust's `fs::canonicalize` returns it, which not every tool reads). The rules are at `kspl_path_to_wide` in `ksplc/gen/runtime/hosted_fs.c`.
+**The prefix goes on in the one place where a path becomes UTF-16 for the OS**, so no function can miss it. The path is resolved first, and the form never comes back to KSPL (Rust's `fs::canonicalize` returns it, which not every tool reads). The rules are at `kspl_path_to_wide` in `ksplc/gen/runtime/hosted_fs_win.c`.
 
-Note: **A child's working directory stays under 260**, since the OS keeps a process's current directory within MAX_PATH unless the program opts in. `kspl_proc_start` in `ksplc/gen/runtime/hosted_spawn.c` passes the directory as it is.
+Note: **A child's working directory stays under 260**, since the OS keeps a process's current directory within MAX_PATH unless the program opts in. `kspl_proc_start` in `ksplc/gen/runtime/hosted_spawn_win.c` passes the directory as it is.
 
 ### A path from outside goes through one door
 
@@ -921,5 +921,7 @@ KSPL holds no option to loosen these. A loose reader lets the sender's broken ou
 **A read of a kind returns an option**: `as_str(): U8[]?`, `as_bool(): Bool?`, `as_int(): I32?`, `as_int64(): I64?`, `as_f64(): F64?`. A value of another kind, `null` and an absent member all give `.none`, while `""`, `false` and 0 are values. A reader that takes a default writes it once, with the option's own `unwrap_or`, so there is no default parameter on each read.
 
 **A path reads an absent member as `null`.** `get(key)` and `get_at(index)` return `null_val` where there is none, so `msg.get("params").get("uri").as_str()` stays one line, and the read at the end gives `.none`. Only `find(key): Value?` tells an absent member from a `null` one; a `has_key` beside it would be a second way.
+
+**An object is walked once, each key with its value** (`for m in v.obj_members()`, then `m.key` and `m.val`). `get` is a linear scan, so a walk of the keys that then calls `get` for each key is quadratic. A safetensors header or a request body holds keys from outside, and a few MB of them took minutes. The walk hands out the members where they stand, so it allocates nothing and takes no arena. It is the one way to walk an object: a separate list of the keys would only offer the quadratic walk again.
 
 **An array's chain is hidden as an object's is.** `array_val` carries a `json.Array` whose chain is private, read through `arr_list` and `get_at`. A payload that held the first node would hand every `switch` a pointer that is null for `[]`.

@@ -76,15 +76,13 @@ const X509_V_OK: I32 = 0 //< X509_V_OK
 const SSL_ERROR_WANT_READ: I32 = 2 //< SSL_ERROR_WANT_READ: it waits for the peer's bytes
 const SSL_ERROR_ZERO_RETURN: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
 
-// SSL_read takes the length as a C int, so a buf.len of 2^31 or more would become negative in the
-// cast. Partial I/O is already the contract (the caller loops), so clamping breaks nothing.
+// OpenSSL takes a length as a C int, so a length of 2^31 or more would become negative in the
+// cast. A longer input is refused, not cut.
 const MAX_TLS_IO_LEN: Sz = 2147483647 // I32::MAX
 
-fn clamp_tls_io_len(len: Sz): Sz
-    return math.min(len, MAX_TLS_IO_LEN)
-
 const IO_CHUNK: Sz = 16 * 1024 //< the most one move between the socket and OpenSSL carries
-    //< One TLS record's plaintext at most, so one `write` encrypts no more than it sends.
+    //< One TLS record's plaintext at most. So one `write` encrypts no more than it sends, and one
+    //< read asks for no more than one record gives. Partial I/O is the contract: the caller loops.
 
 pub enum Tls_error //< why a secure connection could not be opened or used
     connect_failed //< the underlying TCP connection failed
@@ -316,7 +314,7 @@ impl Tls_stream
         for
             ERR_clear_error()
             n: =
-                SSL_read(r.ssl, Void$@::buf.ptr, I32::clamp_tls_io_len(buf.len))
+                SSL_read(r.ssl, Void$@::buf.ptr, I32::math.min(buf.len, IO_CHUNK))
             if n > 0
                 return Sz::n
             // Caution: **Only the peer's close_notify is an end.** A TCP connection dropped without

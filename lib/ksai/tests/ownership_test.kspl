@@ -1,5 +1,4 @@
 //< Arena lifetimes of tensors, file headers and borrowed weight views
-import "ksai/lora_set" { Lora_widths, Mlp_lora, Qkv_lora }
 import "ksai/safetensors" { Safetensors, Safetensors_writer }
 import "ksai/tensor" { Tensor }
 import "std/bytes" as _bytes
@@ -103,75 +102,12 @@ priv fn sharing_tensors(arena: Arena$@) //< two tensors over one byte are refuse
         assert(refused == header.equals(SHARING),
             "tensors sharing a byte are refused at load, and tensors side by side are read")
 
-priv fn adapters(arena: Arena$@)
-    dims: Sz[2] = ::{ 1, 1 }
-    matrix: = Tensor<|F32|>(Sz[]::dims, arena)
-
-    matrix.fill(F32::2.0)
-    empty_dims: Sz[1] = ::{ 0 }
-    empty: = Tensor<|F32|>(Sz[]::empty_dims, arena)
-
-    for group in U8[][]::{ "attn", "mlp" }
-        first: = "q" if group.equals("attn") else "fc1"
-        for broken in Range.asc(3)
-            $writer: = Safetensors_writer()
-            defer $key: = Str_builder()
-            for part in U8[][]::{ "a", "b", "scale" }
-                if broken == 0 && !part.equals("a")
-                    continue
-                key.clear().s("blocks.0.\{group\}.\{first\}.lora_\{part\}")
-                t: = empty if broken == 1 && part.equals("scale") else matrix
-                writer.add(key.slice(), t)
-            defer $bytes: = writer.finish()
-            file: = Safetensors.load_from_bytes(bytes.slice(), arena)
-                catch panic("the incomplete adapter has a valid file header")
-
-            $refused: = false
-            fits: = Lora_widths::{ .in_dim = 1, .out_dim = 1 }
-            if group.equals("attn")
-                Qkv_lora<|F32|>.load_set_from(file, 1, fits, fits, arena) catch
-                    refused = true
-            else
-                Mlp_lora<|F32|>.load_set_from(file, 1, fits, fits, arena) catch
-                    refused = true
-            assert(refused, "missing B, an empty scale and a missing second adapter are refused")
-
-priv fn rank_zero_adapter(arena: Arena$@) //<
-    //< An adapter of rank 0 is refused at load, by name, and not at its first forward pass
-    a_dims: Sz[2] = ::{ 1, 0 }
-    b_dims: Sz[2] = ::{ 0, 1 }
-    one: Sz[1] = ::{ 1 }
-    scale: = Tensor<|F32|>(Sz[]::one, arena)
-    scale.fill(F32::1.0)
-    $writer: = Safetensors_writer()
-    defer $key: = Str_builder()
-    for name in U8[][]::{ "q", "v" }
-        key.clear().s("blocks.0.attn.\{name\}.lora_a")
-        writer.add(key.slice(), Tensor<|F32|>(Sz[]::a_dims, arena))
-        key.clear().s("blocks.0.attn.\{name\}.lora_b")
-        writer.add(key.slice(), Tensor<|F32|>(Sz[]::b_dims, arena))
-        key.clear().s("blocks.0.attn.\{name\}.lora_scale")
-        writer.add(key.slice(), scale)
-    defer $bytes: = writer.finish()
-    file: = Safetensors.load_from_bytes(bytes.slice(), arena)
-        catch panic("the rank-0 adapter has a valid file header")
-    fits: = Lora_widths::{ .in_dim = 1, .out_dim = 1 }
-    $named: U8[] = ""
-    Qkv_lora<|F32|>.load_set_from(file, 1, fits, fits, arena) catch e
-        switch e
-        case .shape_mismatch(n)
-            named = n
-        default {}
-    assert(named.equals("q"), "an adapter of rank 0 is refused as a shape mismatch, by name")
-
 fn test_ownership()
     verdict.start("[Ownership] tensors and headers share an explicit arena lifetime...")
     before: = mem.heap_used_bytes()
     arena: = Arena(4096)
     tensors(arena)
     weights(arena)
-    adapters(arena)
-    rank_zero_adapter(arena)
     sharing_tensors(arena)
     for header in U8[][]::{ "{\"w\":{\"dtype\":\"F32\",\"shape\":[-1],\"data_offsets\":[0,24]}}",
         "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[0,8]}}",
@@ -179,4 +115,4 @@ fn test_ownership()
         refused_header(header, arena)
     arena.free()
     assert(mem.heap_used_bytes() == before, "the arena releases all tensor and header storage")
-    verdict.pass("empty tensors, borrowed and copied weights, refused reads and partial adapters")
+    verdict.pass("empty tensors, borrowed and copied weights, and refused reads")

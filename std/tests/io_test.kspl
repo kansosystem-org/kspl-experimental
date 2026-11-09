@@ -94,6 +94,45 @@ fn test_io_stream_writes(arena: Arena$@) //<
     assert(got.equals(want), "the file must hold each write as it was written")
     verdict.pass("each byte, a NUL included, and each number's digits and separators land.")
 
+fn test_io_sync_to_disk(arena: Arena$@) //<
+    //< sync_to_disk succeeds on an open stream and refuses a freed one or an earlier refused write
+    verdict.start("[Io] sync_to_disk on an open, a freed and a refused stream...")
+    fs.mkdir_all("out/tmp") catch panic("out/tmp must be creatable")
+    path: = "out/tmp/kspl_test_sync_to_disk.txt"
+    $w: = io.open(path, "wb") catch panic("the file must open")
+    w.s("on the disk")
+    w.sync_to_disk() catch panic("an open stream's data must reach the disk")
+    got: = io.read_file_capped(path, 64, arena) catch panic("the file must be readable")
+    assert(got.equals("on the disk"), "the file must hold what was written before the sync")
+    w.free()
+    // A use after `free()` does not compile; a stream with no file is what `free()` leaves.
+    $closed: = io.File_stream::{ .stream = null }
+    $freed: = false
+    closed.sync_to_disk() catch e
+        switch e
+        case .invalid_arg
+            freed = true
+        default
+            panic("a freed stream should fail as invalid_arg")
+    closed.free()
+    assert(freed, "sync_to_disk must refuse a freed stream")
+    full: = "/dev/full"
+    if !fs.exists(full)
+        verdict.skip("a refused write needs /dev/full, which only Linux has")
+        return
+    // A write wider than the stream's buffer is refused at once; only the error mark tells.
+    $wf: = io.open(full, "wb") catch panic("/dev/full must open for writing")
+    defer $wide: = Str_builder()
+    for _i in Range.asc(1 << 16)
+        wide.c('x')
+    wf.s(wide.slice())
+    $refused: = false
+    wf.sync_to_disk() catch
+        refused = true
+    wf.free()
+    assert(refused, "sync_to_disk must report a write the stream refused before it")
+    verdict.pass("an open stream syncs, and a freed one or a refused write is reported.")
+
 fn test_io_write_refused_at_close() //< a write the device refuses only at the flush is a failure
     verdict.start("[Io] write_file to a device that is always full...")
     // Caution: **A short write fits the stream's buffer**, so `fwrite` accepts it; the refusal
@@ -166,3 +205,28 @@ fn test_io_write_after_free(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
         "io: a File_stream was written after free()", arena)
     assert(named, "a write after free() must stop the program with the reason")
     verdict.pass("a write to a freed file stream stops the program instead of going elsewhere.")
+
+extern fn kspl_fopen_plan(mode_cstr: U8@): I32 //< what an open asks for a mode (`hosted_io.c`)
+    //< Bits: 1 read, 2 write, 4 create, 8 empty it, 16 write at the end, 32 fail where it exists.
+    //< **Both OSes open by this one answer**, so its table is checked here on every OS.
+
+priv fn open_plan(mode: U8[]): I32 //< `kspl_fopen_plan`'s answer for mode
+    cstr: = mode.to_cstr().unwrap_or(null)
+    if cstr == null
+        return -2
+    defer dealloc(Void$@::cstr)
+    return kspl_fopen_plan(cstr)
+
+fn test_io_open_modes() //< what each mode asks of the file, on Windows and on POSIX alike
+    verdict.start("[Io] what each mode asks of an open...")
+    // `r+` never creates a file, and `wx` never empties one. Windows opens by the same bits as
+    // POSIX: `CREATE_NEW` for 32, `CREATE_ALWAYS` for 8, `OPEN_ALWAYS` for 4, else `OPEN_EXISTING`.
+    modes: U8[][15] = ::{ "r", "rb", "r+", "rb+", "r+b", "w", "wb", "w+", "wx", "wbx", "w+x", "a",
+        "ab", "a+", "ab+" }
+    plans: I32[15] = ::{ 1, 1, 3, 3, 3, 14, 14, 15, 46, 46, 47, 22, 22, 23, 23 }
+    for i in Range.asc(modes.len)
+        assert(open_plan(modes[i]) == plans[i], "a mode asks the open for other bits")
+    // A letter C11 does not give, or `x` after `r` or `a`, is refused on both OSes.
+    for bad in U8[][8]::{ "", "x", "rx", "ax", "rt", "wN", "w,ccs=UTF-8", "b" }
+        assert(open_plan(bad) == -1, "a mode outside C11's set must be refused")
+    verdict.pass("each mode asks for the same bits on every OS, and a foreign letter is refused.")

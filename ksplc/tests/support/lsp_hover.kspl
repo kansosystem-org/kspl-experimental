@@ -23,11 +23,18 @@ import "std/verdict"
 // ==========================================
 priv const MARKS_SRC: U8[] =
     """import "std/ds" { List }
+import "std/net"
 
 priv struct Pair
     a: U8
+    host: U8[net.ADDR_TEXT_MAX]
+    keys: List<|U8[net.ADDR_TEXT_MAX]|>
 
 fn sum(words: List<|U8[]|>$@, x: U8): I32
+    const SLOTS: Sz = 4
+    $slots: U8[SLOTS] = ::{}
+    $host: U8[net.ADDR_TEXT_MAX] = ::{}
+    width: = sizeof(U8[SLOTS])
     $more: = List<|U8[]|>(null)
     ns: = List<|I32|>(null)
     defer more.free()
@@ -84,6 +91,28 @@ priv const NAMED_SPOTS: Spot[_] = ::{ //< the positions on a name, and a piece o
     // **A function C calls by its own name says so**, as it is written (`extern`).
     Spot::{ .line = "    return y", .needle = "on_ready", .step = 1,
         .name = "a function published to C", .want = "extern fn" },
+    // **A name in an array's length is the constant**, not the array type around it:
+    // `ADDR_TEXT_MAX` read `ADDR_TEXT_MAX: U8$[46]`, the declaration's type.
+    Spot::{ .line = "    $slots", .needle = "SLOTS", .step = 1,
+        .name = "a local constant in an array's length", .want = "SLOTS: Sz" },
+    Spot::{ .line = "    $host", .needle = "ADDR_TEXT_MAX", .step = 1,
+        .name = "a module's constant in an array's length", .want = "ADDR_TEXT_MAX: Sz" },
+    Spot::{ .line = "    host: U8", .needle = "ADDR_TEXT_MAX", .step = 1,
+        .name = "a module's constant in a field's array length", .want = "ADDR_TEXT_MAX: Sz" },
+    Spot::{ .line = "    keys: List", .needle = "ADDR_TEXT_MAX", .step = 1,
+        .name = "a module's constant in a type argument's array length",
+        .want = "ADDR_TEXT_MAX: Sz" },
+    Spot::{ .line = "    width: = sizeof", .needle = "SLOTS", .step = 1,
+        .name = "a constant in the length of a size's type", .want = "SLOTS: Sz" },
+}
+
+priv const JUMP_SPOTS: Spot[_] = ::{ //<
+    //< the names in an array's length a jump starts from; `want` is the line it lands on, empty
+    //< for std/net's
+    Spot::{ .line = "    $slots", .needle = "SLOTS", .step = 1,
+        .name = "a local constant in an array's length", .want = "    const SLOTS" },
+    Spot::{ .line = "    $host", .needle = "ADDR_TEXT_MAX", .step = 1,
+        .name = "a module's constant in an array's length" },
 }
 
 priv fn hover_at(c: jsonrpc_client.Client$@, spot: Spot, arena: Arena$@):
@@ -115,6 +144,23 @@ fn check_hover_marks(c: jsonrpc_client.Client$@, arena: Arena$@)
         text: = lsp_client.hover_text(got)
         verdict.check(label, text.find_str(spot.want).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+    check_length_jumps(c, arena)
+
+priv fn check_length_jumps(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+    //< A jump from a name in an array's length lands on the constant, here and in another module
+    for spot in JUMP_SPOTS
+        label: = arena.text().s("a jump from ").s(spot.name).s(" lands on it").take()
+        col: = col_in_line(MARKS_SRC, spot.line, spot.needle, arena) + spot.step
+        pos: = lsp_client.at_pos(MARKS_URI, decl_line(MARKS_SRC, spot.line, arena), col, arena)
+        res: = lsp_client.answer(c, "textDocument/definition", pos, lsp_client.READ_MS, arena)
+            .get("result")
+        uri: = res.get("uri").as_str().unwrap_or("").replace("\\", "/", arena)
+        line: = res.get("range").get("start").get("line").as_int().unwrap_or(-1)
+        landed: =
+            (uri.equals(MARKS_URI) && line == I32::decl_line(MARKS_SRC, spot.want, arena)
+            if spot.want.len > 0 else uri.ends_with("/net.kspl"))
+        at: = arena.text().s("'").s(uri).s(":\{line\}'").take()
+        verdict.check(label, landed, lsp_client.why(c, at, arena))
 
 // ==========================================
 // What a hover says on a value. **A literal shows the type it took in its place, and no name**:

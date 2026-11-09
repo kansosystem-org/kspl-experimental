@@ -119,6 +119,33 @@ fn test_a_fifo_is_passed_over_not_read(work: U8[], arena: Arena$@)
         arena.text().s("\{s.bodies.len\} asked").take())
     stub.release(s)
 
+fn test_a_chat_file_that_is_a_link_is_not_followed(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a chat file that is a link is neither read nor written")
+    // **The file it names holds a conversation that reads well**, so only the refusal of the link
+    // keeps the question from being answered and the text from being copied into the folder.
+    root: = stub.folder(work, "linked-chat", arena)
+    ask: = fs.join(root, "talk.ask.jsonl", arena)
+    target: = arena.text().s(root).s("-chat.jsonl").take()
+    io.write_file(target, "") catch panic("the file the link names can be written")
+    if !agent_test.make_link(root, "talk.chat.jsonl",
+        arena.text().s("../").s(sys.get_file_name(target)).take(), arena)
+        verdict.skip("a link cannot be made with `ln -s` in this environment")
+        return
+    io.write_file(ask, asked(1, arena)) catch panic("the ask file can be written")
+    $replies: = not_found(1, arena)
+    s: = stub.start(replies.slice(), arena)
+    job: = agent_test.job_at(s.port, root, arena)
+    defer keep: = Arena(64 * 1024)
+    $seen: = List<|watch.Seen|>(keep)
+    watch.look(job, seen@, keep)
+    stub.finish(s)
+    named: = io.read_file(target, arena) catch
+        fallback "?"
+    verdict.check("nothing is asked, the link stays, and the file it names is unchanged",
+        s.bodies.len == 0 && fs.is_link(files.chat_path(ask, arena)) && named.len == 0,
+        arena.text().s("\{s.bodies.len\} asked; the file it names holds: ").s(named).take())
+    stub.release(s)
+
 fn test_a_turn_another_watch_recorded_is_not_written_again(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a question another watch recorded meanwhile is not recorded twice")
     root: = stub.folder(work, "twice", arena)

@@ -2,10 +2,10 @@
 // open cell holds text that starts with `=`, and its caret stands where a reference can go, a press
 // on a data cell writes that cell's reference at the caret, and a drag writes a range. A cell of
 // another table of the document is written with its table's name: `map.D3`. A press on a column's
-// letter or name writes the whole column, its table's name always written: `map.D`. The cell stays
-// open. Pointing again replaces the reference just written, until the text
-// changes otherwise. Anywhere else, a press ends the edit as before (`table.js`). F4 in such a cell
-// turns the `$` of the reference at the caret, as Excel's does.
+// letter or name writes the whole column, as a cell is written: `D`, or `map.D` in another table.
+// The cell stays open. Pointing again replaces the reference just written, until the text changes
+// otherwise. Anywhere else, a press ends the edit as before (`table.js`). F4 in such a cell turns
+// the `$` of the reference at the caret, as Excel's does.
 "use strict";
 
 function ksmdPoint(ks) {
@@ -43,18 +43,18 @@ function ksmdPoint(ks) {
   // quotes, as `write_table_name` in `ksmd/calc/formula.kspl` writes it.
   const tableName = (name) => (/^[a-z][a-z0-9_]*$/.test(name) ? name : JSON.stringify(name));
 
-  // A cell's reference, `B3`, or a range's, `A1:B3`, its upper left corner first. A cell of
-  // another table has that table's name before it, once for a range: `map.D1:D3`. Whole columns
-  // always have it, as a formula writes them: `map.D`, `map.D:F`.
+  // A cell's reference, `B3`, or a range's, `A1:B3`, its upper left corner first; whole columns
+  // are `B` or `A:B`. A reference into another table has that table's name before it, once for a
+  // range: `map.D1:D3`, `map.D:F`.
   function reference(a, b) {
     const letter = (column) => ks.table.letters(column);
     const c1 = Math.min(a.column, b.column);
     const c2 = Math.max(a.column, b.column);
-    if (a.whole) return `${tableName(a.table)}.${letter(c1)}${c1 === c2 ? "" : `:${letter(c2)}`}`;
+    const named = a.own ? "" : `${tableName(a.table)}.`;
+    if (a.whole) return named + letter(c1) + (c1 === c2 ? "" : `:${letter(c2)}`);
     const cell = (row, column) => `${letter(column)}${row + 1}`;
     const r1 = Math.min(a.row, b.row);
     const r2 = Math.max(a.row, b.row);
-    const named = a.own ? "" : `${tableName(a.table)}.`;
     return named + (r1 === r2 && c1 === c2 ? cell(r1, c1) : `${cell(r1, c1)}:${cell(r2, c2)}`);
   }
 
@@ -85,7 +85,7 @@ function ksmdPoint(ks) {
     const wrap = el.closest(".table");
     const own = ks.view.blocks().indexOf(wrap) === open.block;
     const whole = el.tagName === "TH";
-    if ((!own || whole) && !wrap.dataset.name) return null;
+    if (!own && !wrap.dataset.name) return null;
     // A letter's column is its place in its row, after the corner cell.
     const column = el.dataset.c !== undefined ? Number(el.dataset.c) : el.cellIndex - 1;
     return { row: whole ? -1 : Number(el.dataset.r), column, table: wrap.dataset.name, own, whole };
@@ -134,14 +134,13 @@ function ksmdPoint(ks) {
     if (!open || open.input !== target || !target.value.startsWith("=")) return false;
     const input = target;
     // The editor counts in bytes, and the input in UTF-16 units.
-    const bytes = (text) => ks.enc.encode(text).length;
-    const from = bytes(input.value.slice(0, input.selectionStart));
-    const to = bytes(input.value.slice(0, input.selectionEnd));
+    const from = ks.view.u8len(input.value.slice(0, input.selectionStart));
+    const to = ks.view.u8len(input.value.slice(0, input.selectionEnd));
     const len = ks.put(input.value);
     const out = ks.out(ks.w.ksmd_web_cycle_fixed(from, to, len));
     if (!out) return true;
     const got = JSON.parse(out);
-    const end = new TextDecoder().decode(ks.enc.encode(got.text).slice(0, got.at)).length;
+    const end = ks.view.u16At(got.text, got.at);
     const start = input.selectionStart === input.selectionEnd ? end : input.selectionStart;
     input.value = got.text;
     input.setSelectionRange(start, end);

@@ -8,7 +8,9 @@ import fs from "fs";
 import path from "path";
 import { CTRL, H, SHIFT, check } from "./drive.mjs";
 
-const PART = (n) => `${H}Part ${n}.\n`;
+// The part holds a table, so each change to it shows a table again: a table whose values stay
+// is not drawn again (`apply` in `ksmd/port/web/view.js`).
+const PART = (n) => `${H}Part ${n}.\n\n:::table name="p"\n| "n" |\n| ${n} |\n:::\n`;
 const DOC = `${H}First paragraph.\n\n:::include path="redraw-part.ksmd"\n:::\n\n:::table name="t"\n` +
   "| \"a\" | \"b\" |\n| 1 | =A1*2 |\n| 2 | =A2*2 |\n:::\n\nLast paragraph.\n";
 // Counts each table drawn again, in `window.__drawn`.
@@ -90,7 +92,7 @@ export function redraws({ tab }) {
       // the composition, and what was composed went in twice ("かん漢素"). The showing waits until
       // the composition ends.
       d = await open();
-      await d.openCell('#doc td[data-r="0"][data-c="0"]');
+      await d.openCell('#doc .table[data-name="t"] td[data-r="0"][data-c="0"]');
       await d.until("!!document.querySelector('#doc .cell-input')");
       await d.js("document.querySelector('#doc .cell-input').select()");
       await d.page("Input.imeSetComposition", { text: "かん", selectionStart: 2, selectionEnd: 2 });
@@ -122,7 +124,7 @@ export function redraws({ tab }) {
         document.getElementById("doc").dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
       })()`);
       await d.until("!!window.__go", 10000);
-      await d.openCell('#doc td[data-r="0"][data-c="0"]');
+      await d.openCell('#doc .table[data-name="t"] td[data-r="0"][data-c="0"]');
       await d.until("!!document.querySelector('#doc .cell-input')");
       await d.js("document.querySelector('#doc .cell-input').select()");
       await d.type("12");
@@ -141,7 +143,7 @@ export function redraws({ tab }) {
         JSON.stringify(lines));
       await ctx.browser.closeTab(d.page);
       for (let i = 1; i <= n; i++) fs.rmSync(path.join(ctx.root, `redraw-${i}.ksmd`), { force: true });
-      fs.rmSync(path.join(ctx.root, `redraw-${n}-images`), { recursive: true, force: true });
+      fs.rmSync(path.join(ctx.root, `redraw-${n}-data`), { recursive: true, force: true });
       fs.rmSync(part, { force: true });
     },
   };

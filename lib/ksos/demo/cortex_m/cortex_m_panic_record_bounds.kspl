@@ -1,0 +1,54 @@
+//< A panic record whose lengths pass its buffers is refused, not read past its end
+//< RAM that startup does not zero can hold a record from older firmware, or a flipped bit. Its
+//< magic value is then valid, but a length can be past the buffer. The demo writes such records
+//< itself at `_panic_rec_start` (`port/cortex_m/link.ld`), with no panic and no reset.
+//< Caution: **The offsets below copy `_Panic_record`'s layout in `std/lang.kspl`**, on a 32-bit
+//< target. The last check plants a valid record, so a layout that moves fails there.
+import "ksos/demo/common/semihost_console" as con
+import "std/panic_record" { take_panic_record }
+
+extern $_panic_rec_start: U8
+
+const MAGIC: U32 = 0x4B505244 // `PANIC_MAGIC` in `std/lang.kspl`
+const MSG_CAP: U32 = 128 // `PANIC_MSG_CAP`
+const STACK_WORDS: U32 = 16 // `PANIC_STACK_WORDS`
+
+// Caution: **Reach the record through an address read back as an integer.** A pointer made
+// from `_panic_rec_start` names another object to the C compiler than lang's record. It then
+// assumes that the writes here cannot change what `take_panic_record()` reads.
+$g_base: Sz = 0
+
+#raw_address
+fn word_at(offset: Sz): U32$@ //< the record's 32-bit field at this byte offset
+    return U32$@::(__kspl_read_volatile(g_base@) + offset)
+
+fn plant(msg_len: U32, stack_len: U32) //< writes a record with these lengths and a valid magic
+    word_at(4)$ = msg_len
+    word_at(8 + Sz::MSG_CAP + 4)$ = stack_len
+    word_at(0)$ = MAGIC
+
+fn refused(msg_len: U32, stack_len: U32): Bool //< whether a record with these lengths is refused
+    plant(msg_len, stack_len)
+    switch take_panic_record()
+    case .some
+        return false
+    case .none
+        return true
+
+extern fn ksos_main()
+    con.puts("=== Cortex-M panic record with lengths past its buffers ===\n")
+    __kspl_write_volatile(g_base@, Sz::_panic_rec_start@)
+    con.check("the layout's offsets assume a 32-bit Sz", sizeof(Sz) == 4)
+    con.check("a message length past its buffer is refused", refused(MSG_CAP + 1, 0))
+    con.check("a length with a flipped high bit is refused", refused(0x8000_0005, 0))
+    con.check("a stack length past its buffer is refused", refused(5, STACK_WORDS + 1))
+    con.check("a refused record has its magic cleared", word_at(0)$ == 0)
+    plant(5, 2)
+    switch take_panic_record()
+    case .some(info)
+        con.check("a record that fits is taken whole",
+            info.msg.len == 5 && info.stack_len == 2)
+    case .none
+        con.check("a record that fits is taken", false)
+    con.print_summary("Cortex-M panic record bounds")
+    con.exit()

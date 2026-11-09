@@ -11,24 +11,23 @@ These Python tools convert a borrowed model into the files ksai reads, and write
 | `check_qwen_tokenizer.py` / `tokenize_lists.kspl` | Compare ksai's tokenizer with llama.cpp's on a GGUF model, text by text (below). `tokenize_lists.kspl` loads the GGUF file's lists through `Tokenizer.load_lists` and prints each text's IDs. |
 | `qwen_gguf_check.py` | Runs ksai's Qwen model (`lib/ksai/benches/bench_qwen.kspl`) and llama.cpp on the same GGUF file and compares them ("Checking against llama.cpp" below). |
 | `make_qwen_fixtures.py` / `make_qwen35_fixtures.py` | Write the tiny Qwen3 and Qwen3.5 models and the chat-template cases that ksai's tests read (`lib/ksai/tests/qwen_data/`), with llama.cpp's packages as the reference. |
-| `safetensors_io.py` | Writes safetensors, for `examples/code_complete/lora_finetune_external.py`. |
 | `make_quant_fixtures.py` | Writes the reference files that ksai's GGUF formats are tested against (`lib/ksai/tests/quant_data/`), from llama.cpp's `gguf` package and C library. |
 | `gguf_quant_check.py` | Takes a few real tensors of each format out of GGUF files, for checking ksai's decoding by hand (`lib/ksai/benches/README.md`). |
 
 ## The outside packages needed
 
-**They are not needed to build.** They serve only the Python tools here and `examples/code_complete/lora_finetune_external.py`; the repository builds and passes `make ci` without them.
+**They are not needed to build.** They serve only the Python tools here; the repository builds and passes `make ci` without them.
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install numpy torch transformers peft safetensors gguf llama-cpp-python jinja2
+pip install numpy transformers gguf llama-cpp-python jinja2
 ```
 
 ### How borrowed models are handled
 
 **You bring the borrowed model's weights yourself: they are not in this repository.** [`data/README.md`](../../../data/README.md) names the files to get. Only the procedures that read or tune them are distributed here, so the [MIT](../../../LICENSE.md) notice does not cover the model.
 
-**Weights made from a borrowed model inherit its license**, such as the adapters `lora_finetune_external.py` writes. To distribute them, meet its conditions (the Qwen2.5 family is Apache-2.0, which requires attribution).
+**Weights made from a borrowed model inherit its license.** To distribute them, meet its conditions (the Qwen2.5 family is Apache-2.0, which requires attribution).
 
 The `lib/ksai/examples/llama_engine/mini_llama.safetensors` and `lib/ksos/demo/cortex_m/pilot_policy.safetensors` in the repository are tiny models made here, not borrowed ones.
 

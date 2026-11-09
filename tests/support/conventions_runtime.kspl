@@ -224,6 +224,8 @@ priv fn check_reactor_bits(arena: Arena$@)
 // ==========================================
 priv const STDIO_KSPL: U8[] = "std/subproc.kspl"
 priv const STDIO_C: U8[] = "ksplc/gen/runtime/hosted_spawn.c"
+priv const STDIO_C_WIN: U8[] = "ksplc/gen/runtime/hosted_spawn_win.c" //<
+    //< the Windows half, the only reader of bit 8 (no window)
 
 priv fn check_stdio_bits(arena: Arena$@)
     $ours: = List<|U8[]|>(arena)
@@ -234,8 +236,9 @@ priv fn check_stdio_bits(arena: Arena$@)
                 scan.push_unique(ours@,
                     rest.sub(0, rest.find_char(' ').unwrap_or(rest.len)))
     $theirs: = List<|U8[]|>(arena)
-    for b in scan.find_all(harness.read_under_root(STDIO_C), "(stdio & ", ")", arena)
-        scan.push_unique(theirs@, b)
+    for path in U8[][]::{ STDIO_C, STDIO_C_WIN }
+        for b in scan.find_all(harness.read_under_root(path), "(stdio & ", ")", arena)
+            scan.push_unique(theirs@, b)
     $bad: = List<|U8[]|>(arena)
     scan.diff_into(ours@, theirs@, STDIO_KSPL, STDIO_C, bad@, arena)
     scan.diff_into(theirs@, ours@, STDIO_C, STDIO_KSPL, bad@, arena)

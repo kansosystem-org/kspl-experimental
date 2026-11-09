@@ -13,6 +13,7 @@ import "ksmd/base/dates" { write_date, write_date_with }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/calc/calc" { Own_functions, Results }
 import "ksmd/calc/calc"
+import "ksmd/calc/reason" { write_reason }
 import "ksmd/calc/value" { Value }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/region" { Spot, Style, Unit, gather }
@@ -203,7 +204,7 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         text(image.alt, out)
         out.s(",\"cap\":")
         text(image.caption, out)
-        out.s(",\"w\":\{image.width\},\"sc\":\{image.scale\}")
+        out.s(",\"w\":\{image.width\}")
         drawings(image.drawings@, out)
         if entry != NONE
             aim(inside, entry, out)
@@ -302,7 +303,8 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine:
         //< `"name"`, the columns' widths in tenths of a character `"w"`, the rows' heights `"h"`, the
         //< columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`) and
         //< columns (`"ci"`), the groups of rows (`"g"`) and of columns (`"cg"`), and each data
-        //< row's values. `"own"` names the page's own functions each cell's formula calls.
+        //< row's values. `"own"` names the page's own functions each cell's formula calls, and
+        //< `"err"` says why each error stands.
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
     text(t.name, out)
@@ -398,6 +400,24 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine:
                 out.c(',')
             text(names[k], out)
         out.s("]]")
+    // Each error as [row, column, why]. The sentence is made here, for a table shown, and never
+    // while calculating (`write_reason`).
+    out.s("],\"err\":[")
+    defer $why: = Str_builder()
+    $failed: = false
+    for r in Range.asc(t.rows.len)
+        for c in Range.asc(t.columns.len)
+            v: = values.at(u, r, c)
+            if v.kind != .error
+                continue
+            if failed
+                out.c(',')
+            failed = true
+            why.clear()
+            write_reason(v, u, doc, values, why@)
+            out.s("[\{r\},\{c\},")
+            text(why.slice(), out)
+            out.c(']')
     // Each link as [row, column, destination].
     out.s("],\"links\":[")
     $linked: = false

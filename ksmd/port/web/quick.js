@@ -7,6 +7,8 @@
 // The tools press the same commands as the menus (`commands.js`). Two of them are split: the face
 // applies the colour shown on it, and the arrow opens a palette. The fill and size tools act on
 // table cells, so they are pressed only while a cell is the place.
+// The bar is one stop of Tab, as WAI-ARIA's toolbar is: Left and Right move along its tools, Home
+// and End go to the first and last, and Up and Down stay with a list.
 "use strict";
 
 // Office's standard colours, as a palette shows them first.
@@ -63,10 +65,8 @@ function ksmdQuick(ks) {
   // item is.
   function button(name) {
     const { label, key } = COMMAND.get(name);
-    const b = document.createElement("button");
-    b.type = "button";
+    const b = ks.button("", null, key ? `${label} (${key})` : label);
     b.dataset.cmd = name;
-    b.title = key ? `${label} (${key})` : label;
     b.setAttribute("aria-label", label);
     b.appendChild(ksmdIcon(name));
     const twin = ks.bar.querySelector(`[data-cmd="${name}"]`);
@@ -78,21 +78,14 @@ function ksmdQuick(ks) {
     const s = document.createElement("span");
     s.className = "split";
     s.dataset.colour = part;
-    const face = document.createElement("button");
-    face.type = "button";
-    face.className = "apply";
-    face.title = part === "color" ? "Font colour of the selected text or the chosen table cells" :
-      "Fill colour of the chosen table cells";
+    const face = ks.button("", "apply", part === "color" ?
+      "Font colour of the selected text or the chosen table cells" : "Fill colour of the chosen table cells",
+    () => ks.applyLook(part, current[part]));
     face.setAttribute("aria-label", part === "color" ? "Font colour" : "Fill colour");
     face.appendChild(ksmdIcon(part));
-    face.addEventListener("click", () => ks.applyLook(part, current[part]));
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "more";
+    const more = ks.button("▾", "more", part === "color" ? "Choose the font colour" : "Choose the fill colour",
+      () => (ks.popup.isOpen(palette) ? closePalette() : openPalette(part, s)));
     more.setAttribute("aria-haspopup", "true");
-    more.title = part === "color" ? "Choose the font colour" : "Choose the fill colour";
-    more.textContent = "▾";
-    more.addEventListener("click", () => (palette ? closePalette() : openPalette(part, s)));
     s.append(face, more);
     return s;
   }
@@ -157,6 +150,7 @@ function ksmdQuick(ks) {
     }
     paint();
     sync();
+    rove();
   }
 
   // Each split tool's face shows the colour it applies.
@@ -167,6 +161,38 @@ function ksmdQuick(ks) {
       }
     }
   }
+
+  // The one tool Tab stops at: the one the focus left last, while it can be pressed, else the
+  // first that can. Fifteen stops in a row made the document far to reach by Tab.
+  const tools = () => Array.from(bar.querySelectorAll("button, select")).filter((el) => !el.disabled);
+  const keyOf = (el) => (el ? `${el.dataset.cmd || el.dataset.quick || ""}|${el.className}|${
+    el.closest(".split") ? el.closest(".split").dataset.colour : ""}` : "");
+  let stop = "";
+  function rove() {
+    const list = tools();
+    const at = list.find((el) => keyOf(el) === stop) || list[0];
+    for (const el of bar.querySelectorAll("button, select")) el.tabIndex = el === at ? 0 : -1;
+  }
+  // A tool greyed out, or pressable again, moves the stop as it changes.
+  new MutationObserver(rove).observe(bar, { subtree: true, childList: true, attributeFilter: ["disabled"] });
+  bar.addEventListener("focusin", (e) => {
+    stop = keyOf(e.target);
+    rove();
+  });
+  bar.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    const list = tools();
+    const at = list.indexOf(e.target);
+    if (at < 0) return;
+    let next = null;
+    if (e.key === "ArrowRight") next = list[(at + 1) % list.length];
+    else if (e.key === "ArrowLeft") next = list[(at - 1 + list.length) % list.length];
+    else if (e.key === "Home") next = list[0];
+    else if (e.key === "End") next = list[list.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
+  });
 
   bar.addEventListener("mousedown", (e) => {
     // A tool must not take the selection away from the document or the cell.
@@ -183,44 +209,31 @@ function ksmdQuick(ks) {
     offer(el.dataset.cmd || el.dataset.colour || el.dataset.quick, e.clientX, e.clientY);
   });
 
-  // The palette of one colour: the standard colours, none, and any colour. It opens under its
-  // split tool, or under the Format menu where the bar holds none.
+  // The palette of one colour (`ks.popup`): the standard colours, none, and any colour. It opens
+  // under its split tool, or under the Format menu where the bar holds none.
   let palette = null;
-  function closePalette() {
-    if (palette) palette.remove();
-    palette = null;
-  }
+  const closePalette = () => ks.popup.close(palette);
   function openPalette(part, under) {
-    closePalette();
     const at = under || bar.querySelector(`.split[data-colour="${part}"]`) ||
       Array.from(ks.bar.querySelectorAll(".menu-name")).find((el) => el.textContent === "Format");
     palette = document.createElement("div");
     palette.className = "palette";
-    palette.setAttribute("role", "dialog");
     palette.setAttribute("aria-label", part === "color" ? "Font colour" : "Fill colour");
     const pick = (value) => {
-      closePalette();
+      ks.popup.close(palette, true);
       if (value) {
         current[part] = value;
         paint();
       }
       ks.applyLook(part, value);
     };
-    const none = document.createElement("button");
-    none.type = "button";
-    none.className = "none";
-    none.textContent = part === "color" ? "Automatic" : "No fill";
-    none.addEventListener("click", () => pick(""));
-    palette.appendChild(none);
+    palette.appendChild(ks.button(part === "color" ? "Automatic" : "No fill", "none", null, () => pick("")));
     const swatches = document.createElement("div");
     swatches.className = "swatches";
     for (const c of QUICK_COLOURS) {
-      const b = document.createElement("button");
-      b.type = "button";
+      const b = ks.button("", null, c, () => pick(c));
       b.style.backgroundColor = c;
-      b.title = c;
       b.setAttribute("aria-label", c);
-      b.addEventListener("click", () => pick(c));
       swatches.appendChild(b);
     }
     palette.appendChild(swatches);
@@ -235,69 +248,39 @@ function ksmdQuick(ks) {
     palette.addEventListener("mousedown", (e) => {
       if (e.target.tagName === "BUTTON") e.preventDefault();
     });
-    document.body.appendChild(palette);
-    const r = at.getBoundingClientRect();
-    palette.style.left = `${Math.max(0, Math.min(r.left, window.innerWidth - palette.offsetWidth - 4))}px`;
-    palette.style.top = `${r.bottom + window.scrollY}px`;
+    const from = under ? under.querySelector(".more") : null;
+    ks.popup(palette, "dialog", { at, from, focus: swatches.firstElementChild });
   }
-  document.addEventListener("mousedown", (e) => {
-    if (palette && !palette.contains(e.target) && !(e.target.closest && e.target.closest(".split .more"))) {
-      closePalette();
-    }
-  }, true);
-  document.addEventListener("keydown", (e) => {
-    if (palette && e.key === "Escape") closePalette();
-  });
 
-  // The small menu a right-click on a command opens: add it to the bar, or take it off, and on the
-  // bar move it left or right.
+  // The small menu a right-click on a command opens (`ks.popup`): add it to the bar, or take it
+  // off, or choose the tools. A menu it was opened from closes first, and gives the focus back.
   let offered = null;
-  function shutOffer() {
-    if (offered) offered.remove();
-    offered = null;
-  }
   function offer(name, x, y) {
-    shutOffer();
     if (!placed.has(name)) return;
-    ks.menus.shut(false);
+    ks.menus.shut(true);
     const choices = !chosen.includes(name) ? [["Add to quick access bar", () => set([...chosen, name])]] :
       [["Remove from quick access bar", () => set(chosen.filter((n) => n !== name))]];
     choices.push(["Choose tools…", choose]);
     offered = document.createElement("div");
     offered.className = "menu context quick-offer";
-    offered.setAttribute("role", "menu");
     offered.setAttribute("aria-label", labelOf(name));
     for (const [text, act] of choices) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.setAttribute("role", "menuitem");
-      b.textContent = text;
-      b.addEventListener("click", () => {
-        shutOffer();
+      const b = ks.button(text, null, null, () => {
+        ks.popup.close(offered, true);
         act();
       });
+      b.setAttribute("role", "menuitem");
       offered.appendChild(b);
     }
     offered.addEventListener("mousedown", (e) => e.preventDefault());
-    offered.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") shutOffer();
-    });
-    document.body.appendChild(offered);
-    const r = offered.getBoundingClientRect();
-    offered.style.left = `${Math.max(0, Math.min(x, window.innerWidth - r.width))}px`;
-    offered.style.top = `${Math.max(0, Math.min(y, window.innerHeight - r.height))}px`;
-    offered.firstElementChild.focus();
+    ks.popup(offered, "menu", { at: { x, y } });
   }
-  document.addEventListener("mousedown", (e) => {
-    if (offered && !offered.contains(e.target)) shutOffer();
-  }, true);
-  window.addEventListener("blur", shutOffer);
+  window.addEventListener("blur", () => ks.popup.close(offered));
 
   // The chooser: every command, menu by menu, each with a box that puts it on the bar or takes it
   // off at once. Reset brings back the tools every page starts with.
   let dialog = null;
   function choose() {
-    shutOffer();
     if (!dialog) dialog = chooser();
     for (const box of dialog.querySelectorAll("input[type=checkbox]")) box.checked = chosen.includes(box.value);
     dialog.showModal();
@@ -340,17 +323,11 @@ function ksmdQuick(ks) {
     }
     const buttons = document.createElement("div");
     buttons.className = "quick-buttons";
-    const reset = document.createElement("button");
-    reset.type = "button";
-    reset.textContent = "Reset";
-    reset.addEventListener("click", () => {
+    const reset = ks.button("Reset", null, null, () => {
       set(QUICK_DEFAULT.slice());
       for (const box of d.querySelectorAll("input[type=checkbox]")) box.checked = chosen.includes(box.value);
     });
-    const close = document.createElement("button");
-    close.type = "button";
-    close.textContent = "Close";
-    close.addEventListener("click", () => d.close());
+    const close = ks.button("Close", null, null, () => d.close());
     buttons.append(reset, close);
     d.append(title, note, groups, buttons);
     d.addEventListener("close", () => ks.root.focus());

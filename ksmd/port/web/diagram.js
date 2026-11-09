@@ -77,10 +77,7 @@ function ksmdDiagram(ks) {
   }
 
   function button(label, title, data) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    b.title = title;
+    const b = ks.button(label, null, title);
     Object.assign(b.dataset, data);
     return b;
   }
@@ -112,17 +109,8 @@ function ksmdDiagram(ks) {
       ["caption", "Caption…", "Write the words under the diagram, numbered as a figure's"]]) {
       bar.appendChild(button(label, title, { act }));
     }
-    bar.appendChild(removeButton());
+    bar.appendChild(ks.view.removeButton("Remove this diagram from the document"));
     return bar;
-  }
-
-  function removeButton() {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "block-remove";
-    b.textContent = "Remove";
-    b.title = "Remove this diagram from the document";
-    return b;
   }
 
   // Where a shape's border meets the line from its middle towards `p`.

@@ -76,6 +76,11 @@ The steps, one by one:
   * Caution: **Count everything Lower hoists as acting** (`&&`, a conditional, `catch`, `!`, a user operator). Hoisted, it runs ahead of the expression around it.
   * **Only inside a function body.** A temporary moved out of a top-level initializer would land at file scope.
   * `tests/suite/equiv_test.kspl` builds `tests/prog/equiv.kspl`'s C under gcc as well as clang, since only the two together show an order C left open.
+* **A slice that a branch makes from an array literal points into a temporary at the statement's level** (`lower_lasting_array` in `lower/expr.kspl`).
+  * The branches are a ternary's, a catch's substitute and a `fallback`. Each assigns its value inside a block of its own.
+  * Written in place, the array is a C compound literal, and C ends its life with that block. A read after the branch is then undefined.
+  * clang keeps such storage for the whole function, so only gcc shows it. Built by mingw's gcc at `-O1`, std's tests reused that stack and stopped with "Out of memory".
+  * Where the branch is inside another branch, the outer one's level holds it (`lasting_decls` in `lower/ctx.kspl`). `branch_array_lines` in `tests/prog/equiv_shapes.kspl` reads each shape after the branch.
 * **Verifying the types (`lower/verify.kspl`)** ends the order. One pass confirms that `x$`'s and `x@`'s types agree in pointer depth (`x@` takes an address, `x$` reads through a pointer). A mismatch stops with an ICE.
   * **It is needed because lower sets types by hand** (`make_ptr` / `strip_ptr` and so on, in over twenty places). A mistake would otherwise break only on Win64 (["Stores and arguments are emitted at 'the receiver's type'"](DESIGN-backends.md#stores-and-arguments-are-emitted-at-the-receivers-type)).
   * Caution: **Keep it at the end of the order.** At the end of `lower_root.run` it would miss the types vtable and abi write. With one `make_ptr` line dropped from `lower/abi.kspl`, only the end catches it.

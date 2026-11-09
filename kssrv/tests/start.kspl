@@ -100,6 +100,25 @@ fn bring_up( //< starts kssrv with its logs under `dir`, and checks that it came
             .err_log = err_log })
     return .none
 
+fn refused( //< checks that kssrv does not start with `flags`, and says `why`
+    name: U8[], //< the check, as its line names it
+    exe: U8[],
+    root: U8[],
+    dir: U8[], //< where its logs go
+    flags: U8[][],
+    why: U8[], //< a piece of the error line it must print
+    arena: Arena$@,
+)
+    out_log: = fs.join(dir, "refused.out", arena)
+    err_log: = fs.join(dir, "refused.err", arena)
+    started: = start_server(exe, root, out_log, err_log, flags, arena)
+    if c: = started.child
+        $up: = c
+        up.kill()
+        verdict.check(name, false, "it started")
+        return
+    verdict.check(name, started.why.find_str(why).is_some(), started.why)
+
 impl Running
     fn log(r: Self@, arena: Arena$@): U8[] //< the ends of its two logs (`read_log`)
         return read_log(r.out_log, r.err_log, arena)

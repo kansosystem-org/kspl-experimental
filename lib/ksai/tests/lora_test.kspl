@@ -1,10 +1,8 @@
-//< LoRA adapters at inference, and a block's set of adapters through a safetensors file
+//< LoRA adapters at inference
 import "ksai/attention_train" as _attn_train // Self_attention's train_forward_lora
 import "ksai/block_train" as _block_train // Transformer_block's train_forward_lora
 import "ksai/lora" { Lora }
-import "ksai/lora_set" { Lora_widths, Mlp_lora }
 import "ksai/nn" as ai_nn
-import "ksai/safetensors" as ai_st
 import "ksai/tensor" { Tensor }
 import "std/math"
 import "std/mem" { Arena }
@@ -145,51 +143,3 @@ fn test_gqa_forward_lora_matches_merged_weights(arena: Arena$@) //<
     assert(largest_gap(got, want) < 1.0e-9,
         "Gqa_attention.forward_lora must give the output of the merged weights")
     verdict.pass("every row agrees, with the adapters on Q and V")
-
-// ==========================================
-// A block's feed-forward adapters through a safetensors file and back.
-// ==========================================
-priv fn same_lora(a: Lora<|F32|>, b: Lora<|F32|>): Bool //< A, B and scale equal, bit for bit
-    if a.scale != b.scale || a.a.size != b.a.size || a.b.size != b.b.size
-        return false
-    for i in Range.asc(a.a.size)
-        if (a.a.data + i)$ != (b.a.data + i)$
-            return false
-    for i in Range.asc(a.b.size)
-        if (a.b.data + i)$ != (b.b.data + i)$
-            return false
-    return true
-
-priv fn f32_adapter(in_dim: Sz, out_dim: Sz, seed: Sz, rng: prng.Prng$@, arena: Arena$@):
-    Lora<|F32|> //<
-        //< An adapter whose B and scale differ from every other adapter's
-    l: = Lora<|F32|>(in_dim, out_dim, 2, F64::seed, rng, arena)
-    for i in Range.asc(l.b.size)
-        (l.b.data + i)$ = F32::(0.01 * F64::(i + 1) + 0.1 * F64::seed)
-    return l
-
-fn test_mlp_lora_set_round_trip(arena: Arena$@) //<
-    //< `Mlp_lora.save_set_into` writes what `Mlp_lora.load_set_from` reads back, layer by layer
-    verdict.start("[LoRA] Mlp_lora.save_set_into then load_set_from gives every adapter back...")
-    n_layers: Sz = 2
-    $rng: = prng.Prng(19U64)
-    adapters: = Mlp_lora<|F32|>$@::arena.alloc(n_layers * sizeof(Mlp_lora<|F32|>))
-    for i in Range.asc(n_layers)
-        (adapters + i)$ = Mlp_lora<|F32|>::{ .fc1 =
-            f32_adapter(4, 6, 2 * i + 1, rng@, arena),
-            .fc2 = f32_adapter(6, 4, 2 * i + 2, rng@, arena) }
-    $w: = ai_st.Safetensors_writer()
-    Mlp_lora<|F32|>.save_set_into(adapters, n_layers, w@, arena)
-    defer $bytes: = w.finish()
-    file: = ai_st.Safetensors.load_from_bytes(bytes.slice(), arena)
-        catch panic("the adapters just written have to be readable as a file")
-    fc1: = Lora_widths::{ .in_dim = 4, .out_dim = 6 }
-    fc2: = Lora_widths::{ .in_dim = 6, .out_dim = 4 }
-    loaded: = Mlp_lora<|F32|>.load_set_from(file, n_layers, fc1, fc2, arena)
-        catch panic("the adapters just written have to be readable as adapters")
-    for i in Range.asc(n_layers)
-        assert(same_lora((adapters + i).fc1, (loaded + i).fc1),
-            "Mlp_lora: a layer's fc1 adapter must come back as written")
-        assert(same_lora((adapters + i).fc2, (loaded + i).fc2),
-            "Mlp_lora: a layer's fc2 adapter must come back as written")
-    verdict.pass("both layers' fc1 and fc2 come back bit for bit")

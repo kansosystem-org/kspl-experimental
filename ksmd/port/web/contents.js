@@ -51,11 +51,7 @@ function ksmdContents(ks) {
         // A heading followed by a deeper one has headings under it, and a button to fold them.
         const next = heads[k + 1];
         if (next && Number(next.tagName[1]) > level) {
-          const fold = document.createElement("button");
-          fold.type = "button";
-          fold.className = "fold";
-          fold.title = "Fold or unfold the headings under it. With Alt, every heading of this level";
-          li.appendChild(fold);
+          li.appendChild(ks.button("", "fold", "Fold or unfold the headings under it. With Alt, every heading of this level"));
         } else {
           const space = document.createElement("span");
           space.className = "fold-space";

@@ -141,9 +141,9 @@ def q5_0_case(rng, out_dir):
 
 
 def q4_k_case(rng, out_dir):
-    """Random Q4_K blocks decoded by `gguf`, and F32 inputs for ksai's own quantizer.
+    """Random Q4_K blocks decoded by `gguf`, and F32 inputs that no test reads.
 
-    `gguf` has no Q4_K quantizer, so the test bounds the error of ksai's against these inputs.
+    The file keeps the inputs, so that its bytes stay the same.
     """
     rows, cols = 2, 2 * QK_K
     encoded = random_blocks(rng, rows * cols // QK_K, 144, [0, 2])

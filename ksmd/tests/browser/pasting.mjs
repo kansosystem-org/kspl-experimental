@@ -127,8 +127,14 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       await click(cellAt(1, 2));
       await paste();
       await ctrl();
-      check(await checked() === "Keep formulas" && await js("!document.querySelector('.paste-menu').hidden"),
+      check(await checked() === "Keep formulas" && await js("!!document.querySelector('.paste-menu')"),
         "Ctrl pressed alone opens the menu, as in Excel");
+      const at = () => js("document.activeElement.dataset.values");
+      await press("End");
+      const end = await at();
+      await press("Home");
+      check(end === "1" && await at() === "0", "End goes to Values only, and Home back to Keep formulas",
+        `${end} ${await at()}`);
       await press("v");
       await saves("and V there chooses Values only", rows("31 | \"1F\" |", "| |"));
       await ctrl();

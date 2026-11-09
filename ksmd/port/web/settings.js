@@ -116,11 +116,7 @@ function ksmdSettings(ks) {
     const text = document.createElement("span");
     text.className = "settings-text";
     text.textContent = `Page setup: ${said.join(", ")}`;
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "settings-edit";
-    edit.textContent = "Edit";
-    edit.title = "Change the paper, the printed header and footer, and the numbers";
+    const edit = ks.button("Edit", "settings-edit", "Change the paper, the printed header and footer, and the numbers");
     el.append(text, edit, ks.view.removeButton("Take the page setup away"));
     return el;
   }

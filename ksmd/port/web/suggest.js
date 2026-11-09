@@ -185,12 +185,8 @@ function ksmdSuggest(ks) {
     const foot = document.createElement("div");
     foot.className = "fx-chosen";
     foot.textContent = signature(chosen);
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "fx-more";
+    const more = ks.button("All functions… (Shift+F3)", "fx-more", null, () => ks.command("insert-function"));
     more.tabIndex = -1;
-    more.textContent = "All functions… (Shift+F3)";
-    more.addEventListener("click", () => ks.command("insert-function"));
     list.append(foot, more);
     list.hidden = false;
     hideTip();
@@ -227,13 +223,8 @@ function ksmdSuggest(ks) {
     tip.textContent = "";
     const line = document.createElement("div");
     line.className = "fx-signature";
-    const name = document.createElement("button");
-    name.type = "button";
-    name.className = "fx-link";
+    const name = ks.button(f.name, "fx-link", "Read about this function (Shift+F3)", () => ks.catalog.open(f.name));
     name.tabIndex = -1;
-    name.title = "Read about this function (Shift+F3)";
-    name.textContent = f.name;
-    name.addEventListener("click", () => ks.catalog.open(f.name));
     line.append(name, "(");
     f.args.forEach((a, i) => {
       if (i > 0) line.append(", ");

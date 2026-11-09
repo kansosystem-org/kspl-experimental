@@ -137,25 +137,10 @@ ksai/lora	Lora<|T|>.backward_grads	pub fn backward_grads(r: Self$@, $x: Tensor<|
 ksai/lora	Lora<|T|>.forward	pub fn forward(r: Self$@, $x: Tensor<|T|>): Tensor<|T|>	the delta (x·A·B) * scale, which the caller adds to the base output. The result is allocated on `x`'s arena.
 ksai/lora	Lora<|T|>.load_raw	pub fn load_raw(src: Void$@, in_dim: Sz, out_dim: Sz, rank: Sz, arena: Arena$@): Lora<|T|>	rebuilds the adapter from what `save_raw` wrote, given the shapes again
 ksai/lora	Lora<|T|>.new	pub fn new(in_dim: Sz, out_dim: Sz, rank: Sz, alpha: F64, rng: prng.Prng$@, arena: Arena$@): Lora<|T|>	an adapter whose delta starts at zero, so the base output is untouched at first
-ksai/lora	Lora<|T|>.raw_size	pub fn raw_size(r: Self@): Sz	how many bytes `save_raw` writes. The bundle (`save_set_into` / `load_set_from` in `ksai/lora_set`) builds its tensor names, and a saved file, in `Str_builder`s on the global heap. **On bare metal, call `mem.init_freestanding_heap()` first**, or an arena-only build panics. This is the smallest heap-free format: A's and B's raw bytes and `scale` back to back, for an embedded target's flash or NVRAM. Restoring assumes the caller knows the shapes.
+ksai/lora	Lora<|T|>.raw_size	pub fn raw_size(r: Self@): Sz	how many bytes `save_raw` writes. This is the smallest heap-free format: A's and B's raw bytes and `scale` back to back, for an embedded target's flash or NVRAM. Restoring assumes the caller knows the shapes.
 ksai/lora	Lora<|T|>.save_raw	pub fn save_raw(r: Self$@, dest: Void$@)	copies A, B and `scale` out contiguously, without using the heap
-ksai/lora_set	Lora_widths	pub struct Lora_widths	the widths of the base layer an adapter read from a file is added to. The file's A has to be `[in_dim, rank]` and its B `[rank, out_dim]`. Take them from the base layer's weights (`Linear.weights.shape`), so that what is checked is what it meets.
-ksai/lora_set	Lora_widths.in_dim	pub in_dim: Sz	the base layer's input width
-ksai/lora_set	Lora_widths.out_dim	pub out_dim: Sz	the base layer's output width
-ksai/lora_set	Mlp_lora	pub struct Mlp_lora<|T|>	one block's feed-forward adapters, the counterpart of `Qkv_lora`. The adapters on the MLP's fc1/fc2, used with Qkv_lora when the feed-forward part is also tuned on the device.
-ksai/lora_set	Mlp_lora.fc1	pub fc1: Lora<|T|>	the adapter on the widening layer
-ksai/lora_set	Mlp_lora.fc2	pub fc2: Lora<|T|>	the adapter on the narrowing layer
-ksai/lora_set	Mlp_lora<|T|>.load_set_from	pub fn load_set_from(s: st.Safetensors, n_layers: Sz, fc1: Lora_widths, fc2: Lora_widths, arena: Arena$@): Mlp_lora<|T|>$@!st.Safetensors_error	reads every block's feed-forward adapters in one call. The names read are "blocks.{i}.mlp.{fc1,fc2}.lora_{a,b,scale}". It takes an already parsed Safetensors, not a path (the same as `Qkv_lora.load_set_from`).
-ksai/lora_set	Mlp_lora<|T|>.save_set_into	pub fn save_set_into(adapters: Mlp_lora<|T|>$@, n_layers: Sz, w: st.Safetensors_writer$@, arena: Arena$@)	the inverse of `load_set_from`: writes every block's adapters. The same shape as `Qkv_lora.save_set_into`.
-ksai/lora_set	Qkv_lora	pub struct Qkv_lora<|T|>	one block's attention adapters, on Q and V as in the paper. **Several models share this shape**, so it is defined once here.
-ksai/lora_set	Qkv_lora.q	pub q: Lora<|T|>	the adapter on the query projection
-ksai/lora_set	Qkv_lora.v	pub v: Lora<|T|>	the adapter on the value projection
-ksai/lora_set	Qkv_lora<|T|>.load_set_from	pub fn load_set_from(s: st.Safetensors, n_layers: Sz, q: Lora_widths, v: Lora_widths, arena: Arena$@): Qkv_lora<|T|>$@!st.Safetensors_error	reads every block's attention adapters in one call. The names read are "blocks.{i}.attn.{q,v}.lora_{a,b,scale}". It takes a parsed Safetensors, not a path (the reason is in this file's header); on bare metal, pass `embed`ed bytes through `Safetensors.load_from_bytes` first.
-ksai/lora_set	Qkv_lora<|T|>.save_set_into	pub fn save_set_into(adapters: Qkv_lora<|T|>$@, n_layers: Sz, w: st.Safetensors_writer$@, arena: Arena$@)	the inverse of `load_set_from`: writes every block's adapters. The caller prepares the `Safetensors_writer` (as with `load_set_from`), and its `finish()` produces the bytes; for a quick local save, `Lora.save_raw` is lighter.
 ksai/model_file	load_gguf	pub fn load_gguf(path: U8[], arena: Arena$@): Gguf!Gguf_error	reads and parses a GGUF model file into the caller's arena. **The file is read once, straight into the arena, and its tensors are used where they lie.** So the peak memory is the file's size, plus the lists of keys and tensors. Free or reset the arena after every matrix and value read from the file is no longer used.
-ksai/model_file	load_qkv_lora_set	pub fn load_qkv_lora_set<|T|>(path: U8[], n_layers: Sz, q: lora_set.Lora_widths, v: lora_set.Lora_widths, arena: Arena$@): lora_set.Qkv_lora<|T|>$@!st.Safetensors_error	reads every block's attention adapters directly from a file. The names read are "blocks.{i}.attn.{q,v}.lora_*". The file's bytes are read into the required arena: freeing it releases the whole set, including a partially loaded set.
 ksai/model_file	load_safetensors	pub fn load_safetensors(path: U8[], arena: Arena$@): st.Safetensors!st.Safetensors_error	reads and parses a model file into the caller's arena. The file and parsed header share the arena lifetime. Free or reset the arena after all tensors borrowing its weights are no longer used.
-ksai/model_file	save_qkv_lora_set	pub fn save_qkv_lora_set<|T|>(adapters: lora_set.Qkv_lora<|T|>$@, n_layers: Sz, path: U8[], arena: Arena$@): Void!st.Safetensors_error	the inverse of `load_qkv_lora_set`: writes adapters to a file
 ksai/model_file	save_safetensors	pub fn save_safetensors(w: st.Safetensors_writer$@, path: U8[]): Void!st.Safetensors_error	writes what a writer has collected as a model file. **A crash or a power cut midway leaves the old file or the new**, never a model cut short. `finish` builds the whole file in memory, then hands it to `fs.replace_file`.
 ksai/nn	Embedding	pub struct Embedding<|T|>	the table that maps a token number to a vector
 ksai/nn	Embedding.weight	pub weight: Tensor<|T|>	one row per token, each as long as the model's width
@@ -274,7 +259,6 @@ ksai/pretokenizer	chunk_end	pub fn chunk_end(text: U8[], start: Sz, rule: Split_
 ksai/quant	Q8_input:Manual_free	impl Q8_input: Manual_free	it owns its memory and gives it back with `free()`
 ksai/quant	Quant_error	pub enum Quant_error	why a quantized matrix or its product was refused
 ksai/quant	Quant_error.bad_shape	bad_shape	a dimension is negative, the columns do not fill whole blocks, or a row's bytes overflow
-ksai/quant	Quant_error.no_quantizer	no_quantizer	there is no quantizer for that format here; only Q8_0 and Q4_K have one
 ksai/quant	Quant_error.out_of_bounds	out_of_bounds	a row number outside the matrix
 ksai/quant	Quant_error.shape_mismatch	shape_mismatch	a product's operand or result is not the shape the matrix needs
 ksai/quant	Quant_error.size_mismatch	size_mismatch	the bytes are not exactly the rows times the bytes of one row
@@ -300,7 +284,6 @@ ksai/quant	Quant_matrix.from_bytes	pub fn from_bytes(format: Quant_format, rows:
 ksai/quant	Quant_matrix.mul_mat	pub fn mul_mat(r: Self@, x: Tensor<|F32|>): Tensor<|F32|>!Quant_error	the product with F32 inputs, in a tensor on the input's arena. Output `[t, i]` is the dot product of row `i` with input row `t`, as ggml's `ggml_mul_mat` gives. One input row is the matrix-vector product.
 ksai/quant	Quant_matrix.mul_mat_into	pub fn mul_mat_into(r: Self@, x: Tensor<|F32|>, out: Tensor<|F32|>): Void!Quant_error	the product with F32 inputs, written into a tensor the caller owns. Large products split their rows over the CPU's cores (`ksai/parallel`). Any thread count writes the same bits, so the result does not depend on the machine.
 ksai/quant	Quant_matrix.rows	pub fn rows(r: Self@): Sz	how many rows (outputs) it has
-ksai/quantize	Quant_matrix.quantize	pub fn quantize(src: Tensor<|F32|>, format: Quant_format, arena: Arena$@): Quant_matrix!Quant_error	the F32 matrix in Q8_0 or Q4_K, its bytes on the given arena. Caution: **The result is lossy.** Q8_0 keeps about 8 bits of each number and Q4_K about 4.5. Other formats throw `.no_quantizer`.
 ksai/qwen	Qwen	pub struct Qwen	a Qwen model, its weights borrowed from a parsed GGUF file
 ksai/qwen	Qwen.cfg	pub cfg: Qwen_config	the settings read from the file
 ksai/qwen	Qwen.context	pub context: Sz	the positions the cache holds; a prompt and its answer must fit

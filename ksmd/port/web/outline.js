@@ -93,15 +93,11 @@ function ksmdOutline(ks) {
 
   // A button that hides or shows the lines from `first` to `last`.
   function toggle(first, last, closed, title) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "outline-toggle";
+    const b = ks.button(closed ? "+" : "−", "outline-toggle", title);
     b.tabIndex = -1;
     b.dataset.from = String(first);
     b.dataset.to = String(last);
     b.dataset.closed = String(closed);
-    b.textContent = closed ? "+" : "−";
-    b.title = title;
     b.setAttribute("aria-label", title);
     b.setAttribute("aria-expanded", String(!closed));
     return b;

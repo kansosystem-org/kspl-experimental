@@ -25,7 +25,7 @@ struct Address //< a cell by its place, counted from 0: `A1` is row 0, column 0
 enum Token_kind
     number //< decimal, as a cell's number without its sign, or in a base: `0xFF`, `0b_0111`
     name //< a lowercase name not followed by `.` and a cell address: a function's name or a word
-    reference //< a cell or a range: `D1`, `budget.D1`, `"Q1 sales".D1`, `D1:D3`
+    reference //< a cell, a range or whole columns: `D1`, `budget.D1`, `"Q1 sales".D1`, `D1:D3`, `D`
     text //< text in JSON quotes not followed by `.` and a cell address: `"Pens"`
     broken //< `#REF!`
     plus
@@ -53,7 +53,7 @@ struct Token
     piece: Sz //< a bound reference's piece in `Table.pieces`; -1 for a reference in a text piece
     table: U8[] //< the table's name as written before a reference, quotes included; or empty
     range: Bool //< whether a reference names a rectangle
-    whole: Bool //< whether it names whole columns, as `map.D` or `map.D:F`, and not a cell
+    whole: Bool //< whether it names whole columns, as `D`, `map.D` or `D:F`, and not a cell
     from: Address
     to: Address //< a range's other corner
 
@@ -134,6 +134,11 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
         return t
     if spot: = address_at(text, i)
         return reference_from(text, i, spot)
+    // Letters with no row number are a whole column of the formula's own table, as `D1` is its
+    // cell. Letters before `(` stay a byte that starts nothing: a function's name is lowercase.
+    if spot: = column_at(text, i)
+        if spot.end == text.len || text[spot.end] != '('
+            return columns_from(text, i, spot)
     if text.starts_with(BROKEN, i)
         return Token(.broken, i, i + BROKEN.len)
     if (c == '<' || c == '>') && i + 1 < text.len &&
@@ -380,14 +385,15 @@ priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, col
     write_address(b, out)
 
 priv fn write_columns(doc: Document@, p: Piece@, at: Positions@, columns: Sz, out: Str_builder$@) //<
-    //< `name.D`, or `name.D:F` from the left column to the right one
+    //< `[name.]D`, or `[name.]D:F` from the left column to the right one
     $a: = at.column_place(p.table, p.from, columns)
     $b: = at.column_place(p.table, p.to, columns)
     if a.column < 0 || b.column < 0
         out.s(BROKEN)
         return
-    write_table_name(doc.tables[p.table].name, out)
-    out.c('.')
+    if p.named
+        write_table_name(doc.tables[p.table].name, out)
+        out.c('.')
     if a.column > b.column
         other: = a
         a = b
@@ -488,8 +494,9 @@ priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
     if tok.whole
         if tok.from.column >= t.columns.len || tok.to.column >= t.columns.len
             return .none
-        return .some(Piece::{ .kind = .columns, .text = "", .table = u, .named = true,
-            .from = column_corner(t, tok.from), .to = column_corner(t, tok.to) })
+        return .some(Piece::{ .kind = .columns, .text = "", .table = u,
+            .named = tok.table.len > 0, .from = column_corner(t, tok.from),
+            .to = column_corner(t, tok.to) })
     if !inside(t, tok.from) || tok.range && !inside(t, tok.to)
         return .none
     return .some(Piece::{ .kind = .range if tok.range else .cell, .text = "", .table = u,
@@ -669,3 +676,44 @@ priv fn operator(c: U8): Token_kind
         return .comma
     default {}
     return .bad
+
+fn spelled(tok: Token): U8[] //< how a token is written, for a reason a person reads (`Why`)
+    //< A number, a name or text as written; an operator or a bracket as its sign. A reference
+    //< bound to a cell holds no text, and the formula's end none.
+    if tok.text.len > 0
+        return tok.text
+    switch tok.kind
+    case .plus
+        return "+"
+    case .minus
+        return "-"
+    case .times
+        return "*"
+    case .divide
+        return "/"
+    case .join
+        return "&"
+    case .equal
+        return "="
+    case .unequal
+        return "<>"
+    case .less
+        return "<"
+    case .less_equal
+        return "<="
+    case .greater
+        return ">"
+    case .greater_equal
+        return ">="
+    case .open
+        return "("
+    case .close
+        return ")"
+    case .comma
+        return ","
+    case .broken
+        return BROKEN
+    case .reference
+        return "a reference"
+    case .number, .name, .text, .bad, .end
+        return ""

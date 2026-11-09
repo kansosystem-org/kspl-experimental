@@ -273,15 +273,13 @@ priv fn encoded(rel: U8[], r: Prng$@, arena: Arena$@): U8[] //<
         if safe && !r.chance(10) || c == '/' && !r.chance(30)
             b.c(c)
             continue
-        b.c('%').c(hex_digit(c >> 4, r.chance(50))).c(hex_digit(c & 0x0FU8, r.chance(50)))
+        hi: = c >> 4
+        lo: = c & 0x0FU8
+        b.c('%').c(hi.to_hex_upper() if r.chance(50) else hi.to_hex_lower())
+        b.c(lo.to_hex_upper() if r.chance(50) else lo.to_hex_lower())
     if r.chance(1)
         b.s(pick(r, U8[][]::{ "%", "%G1", "%2" }))
     return b.take()
-
-priv fn hex_digit(n: U8, upper: Bool): U8
-    if n < 10U8
-        return '0' + n
-    return (('A' if upper else 'a') + n) - 10U8
 
 fn shown(rel: U8[], arena: Arena$@): U8[] //< a path as a failure prints it: other bytes as `%XX`
     b: = arena.text()
@@ -289,7 +287,7 @@ fn shown(rel: U8[], arena: Arena$@): U8[] //< a path as a failure prints it: oth
         if c > ' ' && c < 0x7FU8 && c != '%'
             b.c(c)
         else
-            b.c('%').c(hex_digit(c >> 4, true)).c(hex_digit(c & 0x0FU8, true))
+            b.c('%').c((c >> 4).to_hex_upper()).c((c & 0x0FU8).to_hex_upper())
     whole: = b.take()
     if whole.len <= 160
         return whole
@@ -660,7 +658,7 @@ priv fn page_expect(root: U8[], target: U8[], e: Expect$@, arena: Arena$@) //<
         e.broken = true
         return
     rel: = api.url_rel(decoded)
-    // The page itself is answered without the door (`asks_for_page` in `kssrv/main.kspl`).
+    // The page itself is answered without the door (`asks_for_page` in `kssrv/static.kspl`).
     if rel.len == 0 || rel.equals("index.html")
         return
     door_says(root, rel, .refused(U8[][]::SHOWN), e, arena)

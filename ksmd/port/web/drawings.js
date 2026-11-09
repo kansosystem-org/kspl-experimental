@@ -74,11 +74,8 @@ function ksmdDrawings(ks) {
     const bar = document.createElement("div");
     bar.className = "draw-tools";
     for (const [shape, label] of SHAPES) {
-      const b = document.createElement("button");
-      b.type = "button";
+      const b = ks.button(label, null, `Draw a ${label.toLowerCase()} over the picture: drag across it`);
       b.dataset.shape = shape;
-      b.textContent = label;
-      b.title = `Draw a ${label.toLowerCase()} over the picture: drag across it`;
       bar.appendChild(b);
     }
     const pick = document.createElement("select");
@@ -88,11 +85,8 @@ function ksmdDrawings(ks) {
     bar.appendChild(pick);
     for (const [name, label, title] of [["text", "Text…", "Write words inside the chosen rectangle"],
       ["delete", "Delete", "Take the chosen shape away"]]) {
-      const b = document.createElement("button");
-      b.type = "button";
+      const b = ks.button(label, null, title);
       b.dataset.act = name;
-      b.textContent = label;
-      b.title = title;
       bar.appendChild(b);
     }
     return bar;

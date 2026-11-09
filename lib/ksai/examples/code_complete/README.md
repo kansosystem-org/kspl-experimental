@@ -43,13 +43,8 @@ flowchart LR
 | `make_fim.kspl` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source compiles, so the middle is the correct completion by definition. |
 | `eval_fim.kspl` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `code_complete.exe` as its own process. |
 | `train_bpe.kspl` | Derives the BPE vocabulary and merges from the corpus into `out/code_complete/tokenizer/`, which `Tokenizer.load` in `lib/ksai/tokenizer.kspl` reads. It splits the corpus by the tokenizer's own rule (`chunk_end` in `lib/ksai/pretokenizer.kspl`), so every merge it learns can apply. |
-| `lora_finetune_external.py` | Fine-tunes a LoRA (a small set of added weights) outside KSPL, on a GPU machine, and writes safetensors in the KSPL convention. `--help` lists its options. |
 
 The tests stand with ksai's. `lib/ksai/tests/code_complete_test.kspl` checks the counting and how the oracle reads a verdict. `lib/ksai/tests/examples_main.kspl` runs the model, and the oracle on a real compiler.
-
-### The outside packages needed
-
-**`lora_finetune_external.py` needs `torch`, `transformers`, `peft` and `safetensors`**, and a machine with a GPU. It writes its weights through ksai's `tools/safetensors_io.py`. The other outside packages, and how a borrowed model is handled, are in [`lib/ksai/tools/README.md`](../../tools/README.md).
 
 ## Further reading
 

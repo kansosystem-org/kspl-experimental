@@ -4,7 +4,7 @@
 //< repository. The client is `kstls/tls`, which verifies the certificate against a test CA.
 import "kssrv/tests/client"
 import "kssrv/tests/local" // `mode_column`, for a key file others can read
-import "kssrv/tests/start" { Running, bring_up, start_server }
+import "kssrv/tests/start" { Running, bring_up, refused }
 import "kstls/tests/cert" { Test_ca, Test_cert, Validity, VALID_NOW }
 import "kstls/tests/records" { Record_client }
 import "kstls/tls"
@@ -241,25 +241,6 @@ priv fn stalled_case(port: I32, srv: Running@, arena: Arena$@) //<
     verdict.check("a client stuck in its handshake is closed once its time is up",
         closed && said && waited_s >= HANDSHAKE_S - 1I64,
         arena.text().s("after \{waited_s\} s\n").s(srv.log(arena)).take())
-
-priv fn refused( //< checks that kssrv does not start with `flags`, and says `why`
-    name: U8[], //< the check, as its line names it
-    exe: U8[],
-    root: U8[],
-    dir: U8[], //< where its logs go
-    flags: U8[][],
-    why: U8[], //< a piece of the error line it must print
-    arena: Arena$@,
-)
-    out_log: = fs.join(dir, "refused.out", arena)
-    err_log: = fs.join(dir, "refused.err", arena)
-    started: = start_server(exe, root, out_log, err_log, flags, arena)
-    if c: = started.child
-        $up: = c
-        up.kill()
-        verdict.check(name, false, "it started")
-        return
-    verdict.check(name, started.why.find_str(why).is_some(), started.why)
 
 priv fn warned( //< checks that kssrv starts with `flags`, and warns of `why`
     name: U8[],

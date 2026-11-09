@@ -1,0 +1,43 @@
+//< Reading the crash record that a freestanding panic left in RAM, after a warm reset
+//< `panic` in `std/lang` writes the record to `.noinit_panic`, RAM that startup does not zero. A
+//< firmware that reports the last run's crash imports this file to read it once. **The reading
+//< stands apart from `std/lang`**, which goes into every program: no other program carries it.
+
+pub struct Panic_info //< information about a panic from the previous run
+    //< The stack fragment is separate because a fixed-length array cannot be returned by value.
+    //< Read each word with `panic_stack_word()`, using `0 <= index < stack_len`.
+    pub msg: U8$[] //< the panic's message
+    pub sp: Sz //< the stack pointer when it happened
+    pub stack_len: Sz //< how many words of the stack were kept, read with `panic_stack_word`
+
+#cfg(freestanding)
+priv fn panic_lengths_fit(msg_len: Sz, stack_len: Sz): Bool //<
+    //< Whether a record's two lengths fit its buffers
+    //< Caution: **Refuse the whole record, do not cut the lengths.** RAM that startup does not zero
+    //< can hold a record of another layout (older firmware) or a flipped bit. Then its other
+    //< fields are not to be trusted either.
+    //< `Sz` is signed: a flipped top bit makes a length negative, so check both ends.
+    return msg_len >= 0 && msg_len <= lang.PANIC_MSG_CAP && stack_len >= 0 &&
+        stack_len <= lang.PANIC_STACK_WORDS
+
+// Reading clears the record so the next startup does not report it again.
+#cfg(freestanding)
+pub fn take_panic_record(): Panic_info? //< the previous run's panic, if present
+    if lang._panic_rec.magic != lang.PANIC_MAGIC
+        return .none
+    // A valid magic with lengths past the buffers would give a view that reads past `msg`.
+    if !panic_lengths_fit(lang._panic_rec.msg_len, lang._panic_rec.stack_len)
+        lang._panic_rec.magic = 0
+        return .none
+    info: = Panic_info::{ .msg = U8$[]::{ .ptr = lang._panic_rec.msg[0]@,
+        .len = lang._panic_rec.msg_len }, .sp = lang._panic_rec.sp,
+        .stack_len = lang._panic_rec.stack_len }
+    lang._panic_rec.magic = 0
+    return .some(info)
+
+#cfg(freestanding)
+pub fn panic_stack_word( //< one word from the saved stack
+    index: Sz, //< which word, below `Panic_info.stack_len`
+): Sz //< the word; an `index` out of range is not caught
+    base: = lang._panic_rec.stack[0]@
+    return (base + index)$

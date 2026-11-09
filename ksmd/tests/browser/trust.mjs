@@ -59,9 +59,11 @@ export function trust({ tab }) {
         await d.js("window.__asked.join(' ')"));
       check(await direct(d) === 403, "the server refuses to build it, even when the page asks directly");
       await d.click(B1);
-      check(await d.until("!document.querySelector('.status-own').hidden") &&
-        (await status(d)).includes("not allowed yet"), "the status bar says why the cell is blocked",
-      await status(d));
+      const why = () => d.js("document.querySelector('.status-why').textContent");
+      check(await d.until("!document.querySelector('.status-why').hidden") &&
+        (await why()).startsWith("#BLOCKED!: tax may be this document's own function"),
+      "the status bar says why the cell is blocked", await why());
+
       await d.js("document.querySelector('.own-ask .own-allow').focus()");
       check(await d.js("document.activeElement.classList.contains('own-allow') && " +
         "document.querySelector('.own-ask').getAttribute('aria-label') !== null"),

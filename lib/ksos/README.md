@@ -65,7 +65,7 @@ The kernel allocates no memory and needs no `malloc`: the caller supplies tasks,
 | `lib/ksos/kernel/` | The scheduler and the synchronizing primitives, with neither hardware nor libc |
 | `lib/ksos/port/` | One folder per architecture and OS: the context switch, the timer and the boot |
 | `lib/ksos/drivers/` | Drivers reading and writing a microcontroller's registers directly |
-| `lib/ksos/net/` | A minimal network stack (ARP, IPv4, UDP, TCP) |
+| `lib/ksos/net/` | A minimal network stack (ARP, IPv4, TCP) |
 | `lib/ksos/boards/` | Connections between components on a board |
 | `lib/ksos/demo/` | The demos, one firmware each; the POSIX and Cortex-M ones are tests too |
 | `lib/ksos/tests/` | The unit tests, the USB descriptors read as text, and elf2uf2 (which makes firmware files for real chips) |
@@ -166,6 +166,7 @@ Each runs on QEMU's `mps2-an385` (a Cortex-M3). Those that fit 16 KB of RAM and 
 | `lib/ksos/demo/cortex_m/cortex_m_isr_give.kspl` | `make ksos-cm-isr-give` | `make ksos-cm0-isr-give` | Two gives in one handler: the woken tasks run as it returns, highest first, and PendSV saves the task really running |
 | `lib/ksos/demo/cortex_m/cortex_m_stack_guard.kspl` | `make ksos-cm-stack-guard` | `make ksos-cm0-stack-guard` | A damaged canary panics at the next preempting switch (panic = pass) |
 | `lib/ksos/demo/cortex_m/cortex_m_panic_probe.kspl` | `make ksos-cm-panic-probe` | `make ksos-cm0-panic-probe` | a panic's crash record read back across a real soft reset (AIRCR, which Armv6-M has too) |
+| `lib/ksos/demo/cortex_m/cortex_m_panic_record_bounds.kspl` | `make ksos-cm-panic-record-bounds` | — | A crash record whose lengths pass its buffers is refused, not read past its end |
 | `lib/ksos/demo/cortex_m/cortex_m_heap_probe.kspl` | `make ksos-cm-heap-probe` | — | The freestanding heap and `Arc<T>` with no OS; 120 tasks reuse the port's 33 contexts |
 | `lib/ksos/demo/cortex_m/cortex_m_ai_probe.kspl` | `make ksos-cm-ai-probe` | — | `ksai` inference (a whole `Transformer_block`) on bare metal, matching the host's numbers |
 | `lib/ksos/demo/cortex_m/cortex_m_ai_train_probe.kspl` | `make ksos-cm-ai-train-probe` | — | On-device LoRA training, with `Lora.save_raw` and `load_raw` |
@@ -229,11 +230,11 @@ These components support embedded devices. They are optional for a first reading
 
 - `lib/ksos/drivers/` accesses memory-mapped (MMIO) registers directly: GPIO, PWM, clocks, ADC, I2C, USB CDC, and others.
 
-- `lib/ksos/net/` provides a minimal network stack: `lib/ksos/net/tcp_conn.kspl` implements TCP above `lib/ksos/net/mini_ipv4.kspl` (ARP, IPv4, and UDP without fragmentation).
+- `lib/ksos/net/` provides a minimal network stack: `lib/ksos/net/tcp_conn.kspl` implements TCP above `lib/ksos/net/mini_ipv4.kspl` (ARP and IPv4, without fragmentation).
 
 - `ksai` runs beside a control loop without `malloc`, as the Cortex-M AI demos show. [ksai](../ksai/README.md) introduces the engine.
 
-- A freestanding panic saves a crash record in `.noinit_panic`, RAM that the linker scripts (`lib/ksos/port/*/link.ld`) reserve without zeroing. After a warm reset, `take_panic_record` in `std/lang.kspl` reads the record once. `make ksos-cm-panic-probe` tests a watchdog reset, a panic, and a soft reset (`system_reset()` in `lib/ksos/drivers/cortex_m/scs.kspl`).
+- A freestanding panic saves a crash record in `.noinit_panic`, RAM that the linker scripts (`lib/ksos/port/*/link.ld`) reserve without zeroing. After a warm reset, `take_panic_record` in `std/panic_record.kspl` reads the record once. It refuses a record whose lengths pass its buffers (`make ksos-cm-panic-record-bounds`). `make ksos-cm-panic-probe` tests a watchdog reset, a panic, and a soft reset (`system_reset()` in `lib/ksos/drivers/cortex_m/scs.kspl`).
 
 ## Pitfalls
 

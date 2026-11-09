@@ -1,0 +1,138 @@
+//< Why a cell shows an error: the reason the calculator keeps, as the page's tooltip writes it
+import "ksmd/calc/calc" { MAX_READS, Results }
+import "ksmd/calc/calc"
+import "ksmd/calc/reason" { write_reason }
+import "ksmd/calc/value" { Calc_error, Value, Why }
+import "ksmd/model/model" { Document }
+import "ksmd/tests/support" { join, read }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/str"
+import "std/verdict"
+
+priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+
+fn run()
+    named_reasons()
+    syntax_reasons()
+    every_kind_has_a_reason()
+    every_error_says_more_than_its_kind()
+
+priv fn named_reasons() //< the reasons the person meets most, each naming what went wrong
+    defer arena: = Arena(64 * 1024)
+    source: =
+        join(HEAD,
+        "| =hex_to_dec(0x100000) | =hex_to_dec(0b101) |\n| \"x\" | =A2+1 |\n| =1/0 | =5/A4 |\n| | \
+            =A3+1 |\n| =B4*2 | =#REF!+1 |\n| =foo(1) | =sum_if(A1:A2) |\n| =round(1) | \
+            =round(\"x\", 2) |\n| =len(5) | =u.A1 |\n| =2 & 3 | =if(A2, 1, 2) |\n| =sum(A3:A4) | \
+            =min(A2) |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =1/0 |\n:::\n", arena)
+    doc: = read(source, arena)
+    r: = calc.calculate(doc@, "2026-10-23", arena)
+    says(doc@, r@, 0, 0,
+        "hex_to_dec reads digits as text: 0x100000 is already the number 1048576. Write =0x100000, \
+            or hex_to_dec(\"100000\")")
+    says(doc@, r@, 0, 1,
+        "hex_to_dec reads digits as text: 0b101 is already the number 5. Write its digits in quotes")
+    says(doc@, r@, 1, 1, "A2 holds text, which arithmetic cannot use")
+    says(doc@, r@, 2, 0, "the divisor is 0")
+    says(doc@, r@, 2, 1, "A4, the divisor, is 0 or empty")
+    says(doc@, r@, 3, 1, "A3 shows #DIV/0!")
+    says(doc@, r@, 4, 0, "B4 shows #DIV/0!")
+    says(doc@, r@, 4, 1, "a reference lost its cell, when its row or column was removed")
+    says(doc@, r@, 5, 0, "no function is called foo")
+    says(doc@, r@, 5, 1, "the arguments do not fit sum_if. Write sum_if(values, condition)")
+    says(doc@, r@, 6, 0, "the arguments do not fit round. Write round(x, places)")
+    says(doc@, r@, 6, 1, "argument 1 of round takes a number")
+    says(doc@, r@, 7, 0, "argument 1 of len takes text")
+    says(doc@, r@, 7, 1, "u.A1 shows #DIV/0!")
+    says(doc@, r@, 8, 0, "& joins only text. text() writes a number as text")
+    says(doc@, r@, 8, 1, "A2 holds no true or false, which a condition needs")
+    says(doc@, r@, 9, 0, "A3 shows #DIV/0!")
+    says(doc@, r@, 9, 1, "min found no numbers")
+
+priv fn syntax_reasons() //< a formula that does not read says where
+    defer arena: = Arena(64 * 1024)
+    source: =
+        join(HEAD,
+        "| =pens | =1+ |\n| =(1 | =1 2 |\n| =A1:A2 | =1 < 2 < 3 |\n| =if(true, 1) | =1) |\n| =A5 | \
+            =name(B1) |\n:::\n", arena)
+    doc: = read(source, arena)
+    r: = calc.calculate(doc@, "2026-10-23", arena)
+    says(doc@, r@, 0, 0, "pens is no function, cell or value. Text goes in quotes, as \"pens\"")
+    says(doc@, r@, 0, 1, "the formula ends where a value is needed")
+    says(doc@, r@, 1, 0, "a ) is missing")
+    says(doc@, r@, 1, 1, "an operator is missing before 2")
+    says(doc@, r@, 2, 0, "a range stands only in a function, as sum(A1:A9), or in a condition")
+    says(doc@, r@, 2, 1,
+        "two comparisons in a row do not read. Join them with and, as A1 < B1 and B1 < C1")
+    says(doc@, r@, 3, 0, "the arguments do not fit if. Write if(condition, then, else)")
+    says(doc@, r@, 3, 1, "a ) has no ( before it")
+    says(doc@, r@, 4, 0, "the cell depends on itself, directly or through other cells")
+    says(doc@, r@, 4, 1,
+        "name takes one whole column, as name(B), or name(map.B) for one of another table")
+    few: = read(join(HEAD, "| 1 | =A1 + A1 |\n:::\n", arena), arena)
+    limited: = calc.calculate(few@, "2026-10-23", arena, null, 1)
+    says(few@, limited@, 0, 1,
+        "the formulas read more than 500 million cell values, so this cell was not calculated. A \
+            range over a whole column on every row reads the most")
+    verdict.check("the read limit's reason names the limit", MAX_READS == 500000000,
+        arena.text().s("\{MAX_READS\}").take())
+
+priv fn every_kind_has_a_reason() //<
+    //< Each tag with each kind of error, with a detail and without, writes a reason
+    //< **A new tag or kind written with no sentence fails here**, as the page would show nothing.
+    defer arena: = Arena(64 * 1024)
+    doc: = read(join(HEAD, "| 1 | 2 |\n:::\n", arena), arena)
+    r: = calc.calculate(doc@, "2026-10-23", arena)
+    defer $out: = Str_builder()
+    defer $which: = Str_builder()
+    for why in Why.variants()
+        for e in Calc_error.variants()
+            for detail in Range.asc(2)
+                v: = Value.because(e, why, "f" if detail == 1 else "", detail - 1)
+                out.clear()
+                write_reason(v, 0, doc@, r@, out@)
+                if out.slice().len == 0
+                    which.s(why.variant_name()).c(' ').s(e.variant_name()).c(' ')
+    verdict.check("every tag and kind of error writes a reason", which.slice().len == 0,
+        which.slice())
+
+priv fn every_error_says_more_than_its_kind() //<
+    //< **Every error the calculator makes carries a tag**, beyond the kind; a cycle and the read
+    //< limit alone need none. An error made with `Value.failed` in a new place fails here. A1 holds
+    //< text, which the others read; every other cell is an error.
+
+    defer arena: = Arena(64 * 1024)
+    source: =
+        join(HEAD,
+        "| \"x\" | =A1*2 |\n| =true+1 | =A1 & 1 |\n| =date(2026, 1, 1) * 2 | =A1 < 1 |\n| =1e308*10 \
+            | =lookup(1, A1:A2, B1:B3, 0) |\n| =sum_if(B1:B2, A1:A3 = 1) | =sum_if(B1:B2, 1 = 1) \
+            |\n| =Z99 | =nope.A1 |\n| =round(1, 99) | =round(1.5, 1.5) |\n| =not 1 | =max() |\n| \
+            =hex_to_dec(\"G\") | =sum_product(A1:A2, B1:B3) |\n| =mid(\"abc\", 0, 1) | \
+            =average_if(B1:B2, A1:A2 = \"y\") |\n:::\n", arena)
+    doc: = read(source, arena)
+    r: = calc.calculate(doc@, "2026-10-23", arena)
+    $bare: = 0
+    $errors: = 0
+    defer $which: = Str_builder()
+    for row in Range.asc(doc.tables[0].rows.len)
+        for column in Range.asc(2)
+            v: = r.at(0, row, column)
+            if v.kind != .error
+                continue
+            errors += 1
+            if v.why == .plain && v.error != .cycle
+                bare += 1
+                which.s("\{row\},\{column\} ")
+    verdict.check("every error the calculator makes says what made it", bare == 0 && errors == 19,
+        which.slice())
+
+priv fn says(doc: Document@, r: Results@, row: Sz, column: Sz, want: U8[]) //<
+    //< The cell of table `t` shows an error, for the reason `want`
+    v: = r.at(0, row, column)
+    defer $got: = Str_builder()
+    if v.kind == .error
+        write_reason(v, 0, doc, r, got@)
+    else
+        got.s("no error: ").s(v.kind.variant_name())
+    verdict.check(want, got.slice().equals(want), got.slice())

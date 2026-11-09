@@ -143,11 +143,7 @@ function ksmdFilter(ks) {
       wrap.insertBefore(note, wrap.querySelector("table"));
     }
     note.textContent = `Showing ${shown} of ${rows.length} rows. `;
-    const all = document.createElement("button");
-    all.type = "button";
-    all.className = "filter-clear";
-    all.textContent = "Show all rows";
-    note.appendChild(all);
+    note.appendChild(ks.button("Show all rows", "filter-clear"));
   }
 
   // What `seen` holds for a table now, `shown` still to fill: the rows it holds that it did not
@@ -176,17 +172,23 @@ function ksmdFilter(ks) {
   }
 
   // Choosing a filter applies it to every row, those kept as they were too, as Excel's Reapply
-  // does.
+  // does. The kept rows are forgotten before the action, and the table is filtered after it.
+  // Caution: **Filter the table here, not only where it is drawn.** The same filter chosen again
+  // changes no JSON, so the table is not drawn again (`apply` in `view.js`).
   function reapply(wrap) {
     const was = seen.get(wrap.u);
     if (was) was.kept = new Map();
+  }
+  function refilter(block, r) {
+    if (r && r.ok) apply(ks.view.blocks()[block]);
+    return r;
   }
 
   // Sets one column's condition, or none: in the file as one step, or in Read-only for the viewer.
   function set(block, column, cond) {
     const wrap = ks.view.blocks()[block];
     reapply(wrap);
-    if (!ks.readOnly) return ks.act("ksmd_web_set_filter", block, column, ks.put(entryOf(cond)));
+    if (!ks.readOnly) return refilter(block, ks.act("ksmd_web_set_filter", block, column, ks.put(entryOf(cond))));
     const conds = new Map(condsOf(wrap) || []);
     if (cond) conds.set(column, cond);
     else conds.delete(column);
@@ -198,28 +200,15 @@ function ksmdFilter(ks) {
   function clearAll(block) {
     const wrap = ks.view.blocks()[block];
     reapply(wrap);
-    if (!ks.readOnly) return ks.act("ksmd_web_set_filter", block, -1, ks.put(""));
+    if (!ks.readOnly) return refilter(block, ks.act("ksmd_web_set_filter", block, -1, ks.put("")));
     viewed.set(wrap.dataset.name, new Map());
     apply(wrap);
     return null;
   }
 
-  // The panel open now: { el, block, column } or null.
+  // The panel open now (`ks.popup`): { el, block, column } or null.
   let panel = null;
-
-  function close() {
-    if (!panel) return;
-    panel.el.remove();
-    panel = null;
-  }
-
-  function button(label, cls) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    if (cls) b.className = cls;
-    return b;
-  }
+  const close = () => panel && ks.popup.close(panel.el);
 
   // Opens the panel under a column's heading cell.
   function open(block, column) {
@@ -232,14 +221,13 @@ function ksmdFilter(ks) {
     const cond = conds && conds.get(column);
     const el = document.createElement("div");
     el.className = "filter-panel";
-    el.setAttribute("role", "dialog");
     el.setAttribute("aria-label", `Filter column ${ks.table.letters(column)}`);
 
     const sorts = document.createElement("div");
     sorts.className = "filter-sorts";
-    const up = button("Sort ascending (A to Z, 0 to 9)");
-    const down = button("Sort descending");
-    const clear = button("Clear filter from this column");
+    const up = ks.button("Sort ascending (A to Z, 0 to 9)");
+    const down = ks.button("Sort descending");
+    const clear = ks.button("Clear filter from this column");
     clear.disabled = !cond;
     sorts.append(up, down, clear);
     el.appendChild(sorts);
@@ -331,8 +319,8 @@ function ksmdFilter(ks) {
 
     const ends = document.createElement("div");
     ends.className = "filter-ends";
-    const ok = button("OK", "filter-ok");
-    const cancel = button("Cancel");
+    const ok = ks.button("OK", "filter-ok");
+    const cancel = ks.button("Cancel");
     ends.append(ok, cancel);
     el.appendChild(ends);
 
@@ -405,7 +393,7 @@ function ksmdFilter(ks) {
       close();
       set(block, column, null);
     });
-    cancel.addEventListener("click", close);
+    cancel.addEventListener("click", () => ks.popup.close(el, true));
     const take = () => {
       if (!takes()) return;
       if (condition()) {
@@ -423,26 +411,18 @@ function ksmdFilter(ks) {
     };
     ok.addEventListener("click", take);
     el.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-        heading.focus();
-      } else if (e.key === "Enter" && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
+      if (e.key === "Enter" && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
         e.preventDefault();
         take();
       }
     });
 
-    document.body.appendChild(el);
-    const r = heading.getBoundingClientRect();
-    const w = el.getBoundingClientRect();
-    el.style.left = `${Math.max(0, Math.min(r.left, window.innerWidth - w.width - 4))}px`;
-    el.style.top = `${r.bottom + window.scrollY}px`;
-    // Near the window's bottom, the value list grows shorter, so OK stays in sight.
-    const over = el.getBoundingClientRect().bottom - window.innerHeight + 4;
-    if (over > 0) list.style.maxHeight = `${Math.max(80, list.getBoundingClientRect().height - over)}px`;
-    panel = { el, block, column };
-    search.focus();
+    // Near the window's bottom, the value list grows shorter, so OK stays in sight. Esc and
+    // Cancel give the focus back to the heading cell, which the panel chose.
+    const p = { el, block, column };
+    ks.popup(el, "dialog", { at: heading, part: list, keep: ".filter-arrow", focus: search,
+      back: () => ks.range.focus(), onClose: () => { if (panel === p) panel = null; } });
+    panel = p;
   }
 
   // Opens or folds a year or a month of the date tree.
@@ -466,9 +446,7 @@ function ksmdFilter(ks) {
       n.dataset.key = key;
       const row = document.createElement("div");
       row.className = "tree-row";
-      const twist = document.createElement("button");
-      twist.type = "button";
-      twist.className = "tree-twist";
+      const twist = ks.button("", "tree-twist");
       twist.tabIndex = -1;
       twist.setAttribute("aria-label", label);
       const box = document.createElement("label");
@@ -520,11 +498,6 @@ function ksmdFilter(ks) {
     return tree;
   }
 
-  // A press outside the panel closes it, as Cancel does.
-  document.addEventListener("mousedown", (e) => {
-    if (panel && !panel.el.contains(e.target) && !(e.target.closest && e.target.closest(".filter-arrow"))) close();
-  }, true);
-
   ks.root.addEventListener("mousedown", (e) => {
     const arrow = e.target.closest && e.target.closest(".filter-arrow");
     if (!arrow || arrow.closest(".include")) return;
@@ -555,8 +528,6 @@ function ksmdFilter(ks) {
     apply,
     shown: shownText,
     plain: plainText,
-    open,
-    clearAll,
     // Shows only the rows whose value in the column is the value of that cell.
     only: (block, row, column) => {
       const v = ks.view.blocks()[block].values[row][column];

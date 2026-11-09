@@ -29,18 +29,15 @@ function ksmdPaste(ks) {
   button.appendChild(ksmdIcon("paste"));
   button.insertAdjacentHTML("beforeend", '<span class="arrow" aria-hidden="true">▾</span>');
   button.hidden = true;
+  // The menu the button opens (`ks.popup`). The letter of a choice chooses it, as in Excel.
   const menu = document.createElement("div");
   menu.className = "menu paste-menu";
-  menu.setAttribute("role", "menu");
   menu.setAttribute("aria-label", "Paste options");
-  menu.hidden = true;
   // Each choice: whether it puts values, its name, its key there, and the key that pastes so.
   const CHOICES = [[false, "Keep formulas", "F", "Ctrl+V"], [true, "Values only", "V", "Ctrl+Shift+V"]];
   for (const [kind, label, letter, key] of CHOICES) {
-    const b = document.createElement("button");
-    b.type = "button";
+    const b = ks.button("", null, null, () => choose(kind));
     b.setAttribute("role", "menuitemradio");
-    b.setAttribute("aria-checked", "false");
     b.setAttribute("aria-keyshortcuts", letter);
     b.dataset.values = kind ? "1" : "0";
     b.appendChild(ksmdIcon(kind ? "paste-values" : "paste"));
@@ -55,10 +52,9 @@ function ksmdPaste(ks) {
     const kbd = document.createElement("kbd");
     kbd.textContent = key;
     b.appendChild(kbd);
-    b.addEventListener("click", () => choose(kind));
     menu.appendChild(b);
   }
-  document.body.append(button, menu);
+  document.body.append(button);
 
   // The cells a copy carries for a paste in ksmd, as JSON, or "" outside a table. A hidden row
   // is left out, and `rows` says the row each line was copied from, so each formula shifts from
@@ -145,7 +141,6 @@ function ksmdPaste(ks) {
     button.style.left = `${box.right + window.scrollX + 2}px`;
     button.style.top = `${box.bottom + window.scrollY + 2}px`;
     button.hidden = false;
-    for (const b of menu.children) b.setAttribute("aria-checked", String((b.dataset.values === "1") === offer.values));
   }
 
   function hide() {
@@ -154,22 +149,15 @@ function ksmdPaste(ks) {
     shut();
   }
 
+  // The menu opens with the kind pasted ticked and in focus; closed by a key, it gives the focus
+  // back to the pasted cells.
   function open() {
     if (!offer) return;
-    const box = button.getBoundingClientRect();
-    menu.style.left = `${box.left + window.scrollX}px`;
-    menu.style.top = `${box.bottom + window.scrollY + 2}px`;
-    menu.hidden = false;
-    button.setAttribute("aria-expanded", "true");
-    menu.querySelector('[aria-checked="true"]').focus();
+    for (const b of menu.children) b.setAttribute("aria-checked", String((b.dataset.values === "1") === offer.values));
+    ks.popup(menu, "menu", { at: button, from: button, back: () => ks.range.focus() });
   }
 
-  function shut() {
-    const was = !menu.hidden;
-    menu.hidden = true;
-    button.setAttribute("aria-expanded", "false");
-    return was;
-  }
+  const shut = () => ks.popup.close(menu);
 
   // Switches the paste the button stands for to the other kind: an undo, then that paste, so the
   // result is one step again.
@@ -187,21 +175,13 @@ function ksmdPaste(ks) {
     if (!put(o.copy, o.block, o.r1, o.c1, o.r2, o.c2, asValues)) hide();
   }
 
-  button.addEventListener("click", () => (menu.hidden ? open() : shut()));
+  button.addEventListener("click", () => (ks.popup.isOpen(menu) ? shut() : open()));
   menu.addEventListener("keydown", (e) => {
-    const items = Array.from(menu.children);
-    const at = items.indexOf(document.activeElement);
     const letter = CHOICES.findIndex(([, , l]) => l.toLowerCase() === e.key.toLowerCase());
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
-    } else if (letter >= 0) {
-      choose(CHOICES[letter][0]);
-    } else if (e.key === "Escape" || e.key === "Tab") {
-      shut();
-      ks.range.focus();
-    } else return;
+    if (letter < 0) return;
     e.preventDefault();
     e.stopPropagation();
+    choose(CHOICES[letter][0]);
   });
 
   // Any change to the document takes the button away, as does a press or a key elsewhere: a

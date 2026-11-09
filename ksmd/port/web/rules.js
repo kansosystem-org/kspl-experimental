@@ -2,7 +2,7 @@
 // one rule per column, comparing each cell's value with one value, or finding the empty cells. A
 // cell that meets it takes the rule's colours over its own. A colour scale fills each number's
 // cell from white to a colour, and the columns that share one scale compare as one block. The rule is saved in the file (`rules`
-// on the table); Table, Columns, Colour by value... sets it in a small panel.
+// on the table); Table, Look, Colour by value... sets it in a small panel.
 "use strict";
 
 // Excel's ready-made styles, which a person picks from rather than choosing two colours.

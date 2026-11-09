@@ -231,11 +231,8 @@ onmessage = (e) => {
 
   // A button in a clause's box, which `ks.root`'s presses reach (`acted`).
   function button(label, act, path) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = `functions-${act}`;
+    const b = ks.button(label, `functions-${act}`);
     b.dataset.to = path;
-    b.textContent = label;
     return b;
   }
 
@@ -353,22 +350,16 @@ onmessage = (e) => {
     }
   };
 
-  // Why a cell shows #BLOCKED!: in short on the status bar, and whole on its tooltips.
-  const BLOCKED = "#BLOCKED!";
-  const BLOCKED_SHORT = "#BLOCKED!: this document's own functions are not allowed yet";
-  const BLOCKED_WHY = `${BLOCKED_SHORT}, so this call does not run. Allow them in the bar above ` +
-    "or in their box.";
-
-  // The status bar names what the chosen cell calls, or why it shows #BLOCKED!.
+  // The status bar names what the chosen cell calls. Why a cell shows #BLOCKED! is the
+  // calculator's to say, as for every error (`status.js`).
   const said = document.querySelector(".status-own");
   ks.status.also(() => {
     const wrap = ks.inTable() && !ks.range.any() ? ks.view.blocks()[ks.cell.block] : null;
     const el = wrap && wrap.querySelector(`td[data-r="${ks.cell.row}"][data-c="${ks.cell.column}"]`);
-    const blocked = el && el.classList.contains("error") && el.textContent === BLOCKED;
-    const text = !el ? "" : blocked ? BLOCKED_SHORT : el.dataset.own ? uses(el.dataset.own.split(" ")) : "";
+    const text = el && el.dataset.own ? uses(el.dataset.own.split(" ")) : "";
     said.hidden = text === "";
     said.textContent = text;
-    said.title = blocked ? BLOCKED_WHY : text;
+    said.title = text;
   });
 
   // The bar's and the boxes' answers. "Not now" leaves the files as they are: the bar asks again
@@ -389,9 +380,7 @@ onmessage = (e) => {
 
   ks.rendered.push(() => {
     show();
-    for (const el of ks.root.querySelectorAll("td.error")) {
-      if (el.textContent === BLOCKED) el.title = BLOCKED_WHY;
-    }
-    if (ks.local && (files.size > 0 || ks.root.querySelector(".functions[data-to]"))) run();
+    if (ks.local
+ && (files.size > 0 || ks.root.querySelector(".functions[data-to]"))) run();
   });
 }

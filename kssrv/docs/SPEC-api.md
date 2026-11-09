@@ -11,7 +11,7 @@ The endpoints a page opened in a browser uses are set one level up, in [`../../d
 | Mode | Started as | Who can reach it | What it offers besides the files |
 | :-- | :-- | :-- | :-- |
 | Outward-facing | `kssrv.exe <port> <root>`, with `--cert` and `--key` for HTTPS | Any machine on the network | `/api/status` |
-| Local use | `kssrv.exe <port> <root> --local` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, and the six endpoints a page uses |
+| Local use | `kssrv.exe <port> <root> --local --page=<file>` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, the five endpoints a page uses, and two more with `--builder` |
 
 Words used below:
 
@@ -52,6 +52,18 @@ A path's `%XX` (one byte as `%` and two hex digits) is decoded once only.
 | `/%252e` | `%2e` | `%25` is decoded to `%`, and the result is not decoded again |
 
 The `Content-Type` is looked up from the extension, whatever its letter case (`PHOTO.JPG` is `image/jpeg`). **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so such a file is returned this way.
+
+### Headers on every answer
+
+**Every answer carries `X-Content-Type-Options: nosniff`**, an error and an API answer included. A browser then reads a file only as the type named, and never runs a text file as a script.
+
+| Header | Facing outward | Local use (`--local`) |
+| :-- | :-- | :-- |
+| `X-Content-Type-Options: nosniff` | Sent | Sent |
+| `Content-Security-Policy: frame-ancestors 'none'` | Not sent | Sent: no page can frame it |
+| `Referrer-Policy: no-referrer` | Not sent | Sent: a link leaves no address behind |
+
+**Facing outward, framing and the referrer stay the site's own choice.** A public file has no action to steal by framing, and some sites rely on being framed. The reasons for local use are "What guards the page in the browser" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 ## HTTPS
 
@@ -95,8 +107,10 @@ $ curl -s localhost:8080/api/status
 | `uptime_s` | the uptime in seconds |
 | `requests` | the requests handled |
 | `connections_total` / `connections_open` / `max_connections` | the connection counters |
+| `connections_refused` | the connections refused because every slot was taken, or their peer already held its share |
 | `heap_bytes` | the bytes the server holds on its heap |
 | `local` | whether it is for local use |
+| `conditional_writes` | whether a `PUT` takes the `X-Kanso-If-Content` guard, which is true for local use alone ("Files" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
 | `root` | the root's path, only for local use. Empty facing outward, where it would tell anyone the machine's layout |
 | `fs_lookups` | how many times the server has asked the file system what stands at a path (`fs.lookups`), only for local use. Absent facing outward, where the count one request adds would tell which of its steps stand |
 
@@ -118,8 +132,9 @@ Started with `--local`, the server lets a program on the same machine read and w
 **These endpoints are the protocol's, and their rules stand there.** They cover the token and its header, which paths are refused, and why there is no `HEAD`. They also cover the type a file comes back as, and how a write keeps the original whole. They are "Where it listens", "Only five things can be asked for" and "How it refuses" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 ```console
-$ ./out/kssrv.exe 8080 ./public --local
+$ ./out/kssrv.exe 8080 ./public --local --page=ui/app.html
 kssrv: I: listening on 127.0.0.1:8080, root=./public
+kssrv: I: page=ui/app.html
 kssrv: I: open http://127.0.0.1:8080/#t=0123456789abcdef0123456789abcdef0123456789abcdef
 
 $ T=0123456789abcdef0123456789abcdef0123456789abcdef

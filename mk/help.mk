@@ -34,13 +34,12 @@ help_prog := function pad(s, n) { while (length(s) < n) { s = s " " } return s }
       for (j = 1; j <= c[g]; j++) { printf "  make %s  %s\n", pad(SP[g, j], w), DE[g, j] } } }
 
 define help_head
-What can be typed with make. Within a group they are ordered from what is typed most often.
+What can be typed with make, by group. Within a group they stand in the make files' order.
 endef
 define help_foot
 
 The options and variables (PREFIX / LLVM / FMT_JOBS and the like) are explained in docs/CONTRIBUTING.md.
 What each one does is written just above that target's rule (the notation is in mk/help.mk's header).
-What one target is made of, its variables and settings included: make explain T=<target>.
 One item of a gate (the group Per-item, there for -j) is described beside its rule but not listed.
 endef
 export help_head
@@ -52,12 +51,4 @@ help:
 	@awk '$(help_prog)' $(HELP_FILES)
 	@printf '%s\n' "$$help_foot"
 
-# --- What one target is made of (`tools/make_explain.kspl`) --- **Make answers, not this file**:
-# the tool reads make's own database and `make -n`, so it cannot drift from the make files. The
-# settings typed with it (`MODEL=`) reach it in `MAKEFLAGS`; `T` and `LOGGING` are this call's own.
-# **The seed runs it**, so a compiler broken by the change at hand does not stop the explanation.
-## Measure-and-inspect|explain|Say what one target is made of: where it is written, what it needs, its commands filled in, the variables it reads and the settings it takes (`T=<target>`, `T=<folder>:<target>`)
-explain: $(SEED_EXE)
-	@./$(SEED_EXE) run tools/make_explain.kspl --make=$(call shq,$(ci_make)) --not-settings=T,LOGGING -- $(call shq,$(T))
-
-.PHONY: help explain
+.PHONY: help

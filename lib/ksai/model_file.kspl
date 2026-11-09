@@ -4,7 +4,6 @@
 //< file. It passes `embed`ed bytes through `Safetensors.load_from_bytes` or `Gguf.parse`, and gets
 //< its bytes back from `Safetensors_writer.finish()`.
 import "ksai/gguf" { Gguf, Gguf_error }
-import "ksai/lora_set"
 import "ksai/safetensors" as st
 import "ksai/tensor"
 import "std/fs"
@@ -45,25 +44,3 @@ pub fn save_safetensors( //< writes what a writer has collected as a model file
     defer $out: = w.finish()
     fs.replace_file(path, out.slice(), .kept) catch
         throw .write_failed
-
-pub fn load_qkv_lora_set<|T|>( //< reads every block's attention adapters directly from a file
-    //< The names read are "blocks.{i}.attn.{q,v}.lora_*". The file's bytes are read into the
-    //< required arena: freeing it releases the whole set, including a partially loaded set.
-    path: U8[], //< the adapter file to read
-    n_layers: Sz, //< how many blocks to look for; a missing one is an error
-    q: lora_set.Lora_widths, //< the query projection's widths; an adapter that does not fit fails
-    v: lora_set.Lora_widths, //< the value projection's widths, as `q`
-    arena: Arena$@, //< the arena the file's bytes, the array and every matrix are allocated from
-): lora_set.Qkv_lora<|T|>$@!st.Safetensors_error //< one adapter per block, `n_layers` of them
-    s: = load_safetensors(path, arena)!
-    return lora_set.Qkv_lora<|T|>.load_set_from(s, n_layers, q, v, arena)!
-
-pub fn save_qkv_lora_set<|T|>( //< the inverse of `load_qkv_lora_set`: writes adapters to a file
-    adapters: lora_set.Qkv_lora<|T|>$@, //< the array to write, one per block
-    n_layers: Sz, //< how many of them are written
-    path: U8[], //< the file to write or replace, as `save_safetensors` writes it
-    arena: Arena$@, //< the arena the one-element tensor holding `scale` is allocated from
-): Void!st.Safetensors_error
-    $w: = st.Safetensors_writer()
-    lora_set.Qkv_lora<|T|>.save_set_into(adapters, n_layers, w@, arena)
-    save_safetensors(w@, path)!

@@ -3,7 +3,7 @@
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_blocks" // `insert_divider`, `insert_image`
-import "ksmd/edit/editor_drawings" // `set_image_width`, `set_image_scale`
+import "ksmd/edit/editor_drawings" // `set_image_width`
 import "ksmd/edit/region" { Style, paragraph_style, text_spot }
 import "ksmd/syntax/reader"
 import "ksmd/tests/support" { opened, saves }
@@ -25,8 +25,6 @@ priv fn reading()
     same("two images, each with its share of the text width",
         "%ksmd 1\n\n:::image src=\"a.png\" alt=\"A\" width=\"45%\"\n:::\n\n:::image src=\"b.png\" \
             alt=\"B\" caption=\"Second\" width=\"100%\"\n:::\n", arena)
-    same("an image at a share of its own size",
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"A\" scale=\"1%\"\n:::\n", arena)
     same("a hard break inside a quote", "%ksmd 1\n\n> One\\\n> two\n", arena)
     saves_as("a quote's lines join as a paragraph's do", "%ksmd 1\n\n> One\n> two\n",
         "%ksmd 1\n\n> One two\n", arena)
@@ -113,7 +111,6 @@ priv fn quoting()
     pic.set_image_width(0, 101) catch
         too_wide = true
     verdict.check("a width past 100% is refused", too_wide, "")
-    scaling(arena)
     pic.set_image_words(0, true, "The section viewer") catch e
         verdict.check("a caption", false, e.message())
     pic.set_image_words(0, false, "Sections by address") catch e
@@ -125,35 +122,6 @@ priv fn quoting()
         verdict.check("no caption", false, e.message())
     saves("and an empty caption takes it away", pic@, arena,
         "%ksmd 1\n\n:::image src=\"a.png\" alt=\"Sections by address\" width=\"40%\"\n:::\n")
-
-priv fn scaling(arena: Arena$@) //< an image's scale, and how it takes the place of a width
-    plain: = "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\"\n:::\n"
-    $pic: = opened(plain, arena)
-    pic.set_image_scale(0, 50) catch e
-        verdict.check("setting a scale", false, e.message())
-    saves("an image takes a share of its own size", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" scale=\"50%\"\n:::\n")
-    pic.set_image_width(0, 40) catch e
-        verdict.check("a width after a scale", false, e.message())
-    saves("a width takes the place of the scale", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
-    pic.set_image_scale(0, 400) catch e
-        verdict.check("a scale after a width", false, e.message())
-    saves("and a scale takes the place of the width", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" scale=\"400%\"\n:::\n")
-    pic.undo()
-    saves("each is one step of undo", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
-    pic.set_image_scale(0, 50) catch e
-        verdict.check("a scale again", false, e.message())
-    pic.set_image_scale(0, 0) catch e
-        verdict.check("no scale", false, e.message())
-    saves("0 takes the scale away, so the image fits the text again", pic@, arena, plain)
-    $past: = false
-    pic.set_image_scale(0, 401) catch
-        past = true
-    verdict.check("a scale past 400% is refused", past, "")
-    saves("and the refusal changes nothing", pic@, arena, plain)
 
 priv fn checks(): Style //< a checklist item's style, as the page asks for it
     $s: = paragraph_style()

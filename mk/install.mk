@@ -4,6 +4,7 @@
 # ==================================================================
 ## Build-and-install|install-lsp|Put the language server where the VS Code extension keeps it
 install-lsp: $(EXT_BIN_DIR)/$(PLATFORM)/$(LSP_EXE)
+.PHONY: install-lsp install install-check
 
 $(EXT_BIN_DIR)/$(PLATFORM)/$(LSP_EXE): $(SHIP_EXE)
 	@echo "# INSTALLING LSP SERVER FOR $(PLATFORM)..."

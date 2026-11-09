@@ -166,7 +166,10 @@ function ksmdRange(ks) {
     for (const el of ks.root.querySelectorAll(".whole-table")) el.classList.remove("whole-table");
     for (const el of marked) {
       if (el.classList.contains("fill-handle")) el.remove();
-      else el.classList.remove("in-range", "chosen", "corner");
+      else {
+        el.classList.remove("in-range", "chosen", "corner");
+        el.removeAttribute("aria-selected");
+      }
     }
     marked = [];
     const c = ks.cell;
@@ -178,6 +181,7 @@ function ksmdRange(ks) {
           const el = find(r.block, row, column);
           if (!el) continue;
           el.classList.add("in-range");
+          el.setAttribute("aria-selected", "true");
           marked.push(el);
         }
       }
@@ -186,6 +190,7 @@ function ksmdRange(ks) {
     const chosen = find(c.block, c.row, c.column);
     if (chosen && !open) {
       chosen.classList.add("chosen");
+      chosen.setAttribute("aria-selected", "true");
       marked.push(chosen);
     }
     const corner = find(r.block, r.r2, r.c2);
@@ -226,9 +231,6 @@ function ksmdRange(ks) {
       box = document.createElement(ks.table.boxKind(el));
       box.className = "cell-catch";
       box.tabIndex = -1;
-      const [row, column] = [Number(el.dataset.r), Number(el.dataset.c)];
-      box.setAttribute("aria-label", row < 0 ? `Name of column ${ks.table.letters(column)}` :
-        `Cell ${ks.table.letters(column)}${row + 1}`);
       // A touch screen keeps its keyboard down for a cell only chosen; a double tap opens it.
       if (window.matchMedia && window.matchMedia("(hover: none)").matches) box.inputMode = "none";
       box.addEventListener("compositionstart", () => ks.table.openTyped(adopted(box), true));
@@ -238,6 +240,12 @@ function ksmdRange(ks) {
       el.appendChild(box);
     }
     box.readOnly = ks.readOnly;
+    // The box's name is the cell's value and address (`describe` in `table.js`). It is written
+    // each time the cell takes the focus, so it never names an older value.
+    const said = ks.table.describe(el);
+    box.setAttribute("aria-label", said.name);
+    if (said.description) box.setAttribute("aria-description", said.description);
+    else box.removeAttribute("aria-description");
     return box;
   }
 
@@ -288,6 +296,55 @@ function ksmdRange(ks) {
     const column = Math.max(0, Math.min(s.columns - 1, e.column + dc));
     set(from.block, ks.cell.row, ks.cell.column, { row, column });
     focusChosen();
+  }
+
+  // Whether a cell holds a value; a column's name counts where it is not empty.
+  function filled(block, row, column) {
+    const wrap = wrapOf(block);
+    if (row < 0) return wrap.names[column] !== "";
+    const v = wrap.values[row] && wrap.values[row][column];
+    return !!v && v[0] !== 0;
+  }
+
+  // Where Ctrl and an arrow key go from a cell, as in a spreadsheet: from a value with a value
+  // beside it, to the last value before an empty cell; else to the next value; else to the table's
+  // edge. The names count as the row above the first, and hidden rows and columns are passed over.
+  function edge(block, row, column, dr, dc) {
+    const s = size(block);
+    const next = (r, c) => (dr ? [ks.table.step(block, r, dr), c] : [r, ks.table.stepColumn(block, c, dc)]);
+    // The cell after [r, c], or null at the table's edge.
+    const after = (r, c) => {
+      const [nr, nc] = next(r, c);
+      return nr >= -1 && nr < s.rows && (nr !== r || nc !== c) ? [nr, nc] : null;
+    };
+    let at = after(row, column);
+    if (!at) return { row, column };
+    // Along the values while the next holds one, or else over empty cells to the next value.
+    const along = filled(block, row, column) && filled(block, ...at);
+    for (let n = after(...at); n && (along ? filled(block, ...n) : !filled(block, ...at)); n = after(...n)) at = n;
+    return { row: at[0], column: at[1] };
+  }
+
+  // The first and last row and column in sight, for Home, End, Ctrl+Home and Ctrl+End.
+  function ends(block) {
+    const s = size(block);
+    const first = ks.table.step(block, -1, 1);
+    const last = ks.table.step(block, s.rows, -1);
+    const left = ks.table.stepColumn(block, -1, 1);
+    const right = ks.table.stepColumn(block, s.columns, -1);
+    return { top: first < s.rows ? first : -1, bottom: last >= 0 ? last : -1,
+      left: left >= 0 ? left : 0, right: right < s.columns ? right : s.columns - 1 };
+  }
+
+  // Goes to a cell, or with `extending` moves the range's far corner there from the chosen cell, as
+  // Shift with a move does.
+  function goTo(c, row, column, extending) {
+    if (extending) {
+      reach(row, column);
+      return;
+    }
+    collapse();
+    ks.table.choose(c.block, row, column);
   }
 
   // A drag across cells chooses the range from the cell pressed to the cell under the pointer, as
@@ -360,7 +417,42 @@ function ksmdRange(ks) {
     const c = ks.cell;
     const mod = e.ctrlKey || e.metaKey;
     const steps = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
-    if (steps[e.key] && e.shiftKey && !mod && !e.altKey) {
+    if (steps[e.key] && mod && !e.altKey) {
+      // Ctrl and an arrow key go to the edge of the values, with Shift the range reaches it; each
+      // starts from the range's far corner, as in Excel.
+      e.preventDefault();
+      const from = e.shiftKey && end ? end : c;
+      const to = edge(c.block, from.row, from.column, ...steps[e.key]);
+      goTo(c, to.row, to.column, e.shiftKey);
+    } else if ((e.key === "Home" || e.key === "End") && !e.altKey) {
+      // Home goes to the row's first column and End to its last; with Ctrl, to the first data cell
+      // under the names, and to the last row's last cell. Shift reaches there.
+      e.preventDefault();
+      const from = e.shiftKey && end ? end : c;
+      const t = ends(c.block);
+      const home = e.key === "Home";
+      if (mod) {
+        if (home) goTo(c, t.top, t.left, e.shiftKey);
+        else goTo(c, t.bottom, t.right, e.shiftKey);
+      } else {
+        goTo(c, from.row, home ? t.left : t.right, e.shiftKey);
+      }
+    } else if (e.key === " " && !e.altKey && e.shiftKey !== mod) {
+      // Shift+Space chooses the rows the range spans, and Ctrl+Space its columns, as in Excel.
+      // The names are no data row: Shift+Space there chooses them alone.
+      e.preventDefault();
+      const r = rect();
+      const s = size(c.block);
+      if (mod) {
+        if (s.rows > 0) chooseLines(c.block, false, c.column, c.column === r.c1 ? r.c2 : r.c1);
+      } else if (c.row < 0) {
+        set(c.block, -1, 0, { row: -1, column: s.columns - 1 });
+        focusChosen();
+      } else {
+        const top = Math.max(r.r1, 0);
+        chooseLines(c.block, true, c.row, c.row === top ? r.r2 : top);
+      }
+    } else if (steps[e.key] && e.shiftKey && !mod && !e.altKey) {
       e.preventDefault();
       extend(c, ...steps[e.key]);
     } else if (steps[e.key] && !mod && !e.altKey) {
@@ -388,12 +480,12 @@ function ksmdRange(ks) {
         focusChosen();
       }
     } else if (e.key === "Enter" || e.key === "Tab") {
-      // Enter moves down and Tab right, Shift back, as in a spreadsheet; F2 opens the cell.
+      // Enter moves down and Tab right, Shift back, as in a spreadsheet; F2 opens the cell. Tab
+      // past the last cell adds a row (`tab` in `table.js`).
       e.preventDefault();
       collapse();
-      const back = e.shiftKey ? -1 : 1;
-      if (e.key === "Enter") ks.table.choose(c.block, ks.table.step(c.block, c.row, back), c.column);
-      else ks.table.choose(c.block, c.row, Math.max(0, c.column + back));
+      if (e.key === "Enter") ks.table.choose(c.block, ks.table.step(c.block, c.row, e.shiftKey ? -1 : 1), c.column);
+      else ks.table.tab(c.block, c.row, c.column, e.shiftKey);
     } else if (mod && !e.altKey && (e.key === ";" || e.key === ":")) {
       // Today's date or the time, typed into the cell as an open one takes it; Enter keeps it.
       e.preventDefault();
@@ -695,8 +787,7 @@ function ksmdRange(ks) {
     return null;
   }, { table: true, direct: true, looks: true });
 
-  ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, selectTable,
-    lines, chooseLines, hiddenRows,
+  ks.range = { rect, set, collapse, reach, extend, grid, pasteGrid, lines, chooseLines, hiddenRows,
     // Puts the focus on the chosen cell, so the keys act on it.
     focus: focusChosen,
     // Whether a range of more than one cell is chosen.

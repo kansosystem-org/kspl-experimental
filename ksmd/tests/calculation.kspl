@@ -45,8 +45,11 @@ fn run()
     conditional_totals()
     condition_shapes()
     conditional_cycles()
+    condition_work()
     lookups()
     whole_columns()
+    bare_columns()
+    column_names()
     empty_columns()
     argument_memory()
     long_texts()
@@ -195,6 +198,41 @@ priv fn limits()
     full: = read(long.slice(), arena)
     f: = calc.calculate(full@, TODAY, arena)
     number("a formula of 4,096 bytes calculates", f@, 0, 0, 1, 2048.0)
+    read_limit()
+
+// Past the cell values a calculation may read, each formula not yet calculated is `#LIMIT!`, and
+// so is the one under way. A formula done before it keeps its value, and a plain cell keeps its
+// own.
+priv fn read_limit()
+    defer arena: = Arena(64 * 1024)
+    rows: = "| 1 | =sum(A1:A2) |\n| 2 | =sum(A1:A2) + sum(A1:A2) |\n| 3 | =1+1 |\n:::\n"
+    doc: = read(join(HEAD, rows, arena), arena)
+    r: = calc.calculate(doc@, TODAY, arena, null, 5)
+    number("a formula done before the read limit keeps its value", r@, 0, 0, 1, 3.0)
+    failure("a formula under way at the read limit is #LIMIT!", r@, 0, 1, 1, .read_limit)
+    failure("a formula after the read limit is #LIMIT!, though it reads no cell", r@, 0, 2, 1,
+        .read_limit)
+    number("a plain cell keeps its value past the read limit", r@, 0, 2, 0, 3.0)
+    verdict.check("a calculation reads no more than its limit", r.reads == 5,
+        arena.text().s("\{r.reads\}").take())
+    enough: = calc.calculate(doc@, TODAY, arena, null, 6)
+    number("at the read limit exactly, every formula calculates", enough@, 0, 1, 1, 6.0)
+    number("and the formula after it too", enough@, 0, 2, 1, 2.0)
+    verdict.check("the mark of the read limit",
+        Calc_error.read_limit.mark().equals("#LIMIT!"), "")
+    // Every row reading the whole column is the shape that multiplies the reads.
+    defer $many: = Str_builder()
+    many.s(HEAD)
+    for _ in Range.asc(300)
+        many.s("| 1 | =sum(t.A) + sum(t.A) + sum(t.A) + sum(t.A) |\n")
+    many.s(":::\n")
+    crafted: = read(many.slice(), arena)
+    c: = calc.calculate(crafted@, TODAY, arena, null, 10000)
+    verdict.check("a range on every row stops at the read limit", c.reads == 10000,
+        arena.text().s("\{c.reads\}").take())
+    number("the rows before it calculate", c@, 0, 7, 1, 1200.0)
+    failure("the row it falls in is #LIMIT!", c@, 0, 8, 1, .read_limit)
+    failure("and so is the last row", c@, 0, 299, 1, .read_limit)
 
 priv fn budget()
     defer arena: = Arena(64 * 1024)
@@ -632,6 +670,25 @@ priv fn conditional_cycles()
     failure("a total in its own range that the condition takes", r@, 0, 3, 1, .cycle)
     number("a set of cells leaves out true and false", r@, 0, 4, 1, 5.0)
 
+// A function in a condition reads a whole column's cell on each row, as one value. So twice the
+// rows take about twice the reads, not four times: the column is not read whole for each row.
+priv fn condition_work()
+    defer arena: = Arena(1024 * 1024)
+    small: = reads_for(100, arena)
+    large: = reads_for(200, arena)
+    verdict.check("sum_if over whole columns reads each row's cells a fixed number of times",
+        small > 0 && large <= 2 * small + 10,
+        arena.text().s("\{small\} reads for 100 rows, \{large\} for 200").take())
+
+priv fn reads_for(rows: Sz, arena: Arena$@): Sz //< the reads of one `sum_if` over `rows` rows
+    defer $text: = Str_builder()
+    text.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n")
+    for row in Range.asc(rows)
+        text.s("| \"x\{row\}\" | \{row\} | |\n")
+    text.s("| | | =sum_if(t.$B, find(\"x\", t.$A) = 1) |\n:::\n")
+    doc: = read(text.slice(), arena)
+    return calc.calculate(doc@, TODAY, arena).reads
+
 // A table's whole column takes its data rows, never its names row, and serves wherever a range
 // does.
 priv fn whole_columns()
@@ -640,6 +697,46 @@ priv fn whole_columns()
         "sum_if(d.C, d.A1:A6 = \"Pens\") -> 4.5", "sum_if(d.C, d.A1:A5 = \"Pens\") -> #SHAPE!",
         "lookup(\"Ink\", d.A, d.C, 0) -> 8", "max(d.C) -> 8", "sum(d.Z) -> #REF!",
         "sum(d.$C) -> 20.5", "d.C -> #SYNTAX!" }, DATA)
+
+// A whole column without a table's name is one of the formula's own table, as a cell is. Letters
+// with a row number on one side of `:` alone do not read, nor do letters before `(`.
+priv fn bare_columns()
+    defer arena: = Arena(64 * 1024)
+    list: = U8[][]::{ "sum(B) -> 7", "sum(B:C) -> 77", "sum($C) -> 70",
+        "sum_if(C, A = \"x\") -> 50", "count_if(B, A = \"y\") -> 1", "lookup(\"y\", A, C, 0) -> 20",
+        "name(B) -> \"Apples\"", "name(C) & name(map.B) -> \"Pearsv\"",
+        "sum(t.C) + sum(map.B) -> 170", "sum(D) -> #CYCLE!", "sum(Z) -> #REF!",
+        "name(B1) -> #SYNTAX!", "name(B:C) -> #SYNTAX!", "sum(C:D9) -> #SYNTAX!",
+        "sum(C1:D) -> #SYNTAX!", "B -> #SYNTAX!", "B(1) -> #SYNTAX!" }
+    defer $rows: = Str_builder()
+    rows.s("%ksmd 1\n\n:::table name=\"t\"\n| \"Fruit\" | \"Apples\" | \"Pears\" | \"f\" |\n")
+    rows.s("| \"x\" | 1 | 10 | |\n| \"y\" | 2 | 20 | |\n| \"x\" | 4 | 40 | |\n")
+    for c in list
+        rows.s("| | | | =").s(c.sub(0, arrow(c))).s(" |\n")
+    rows.s(":::\n\n:::table name=\"map\"\n| \"k\" | \"v\" | \"w\" |\n| \"x\" | 100 | =sum(B) |\n")
+    rows.s(":::\n")
+    doc: = read(arena.dup_str(rows.slice()), arena)
+    r: = calc.calculate(doc@, TODAY, arena)
+    checked(list, r@, 3, 3, arena)
+    number("a bare whole column in another table names a column of that table", r@, 1, 0, 2, 100.0)
+
+// `name` gives one whole column's name as the names row holds it. Any other argument does not
+// read; a column that is gone is `#REF!`.
+priv fn column_names()
+    defer arena: = Arena(4 * 1024)
+    // A table whose name holds digits, as a page's own names do (`table12`).
+    tables: =
+        join(DATA,
+        "\n:::table name=\"n\"\n| \"\" | \"Pens\" |\n| 1 | 2 |\n:::\n\n:::table name=\"table12\"\n| \
+            \"Item\" | \"Apples\" | \"Pears\" |\n| \"a\" | 1 | 2 |\n:::\n", arena)
+    cases_with(U8[][]::{ "name(t.B) -> \"b\"", "name(d.C) -> \"price\"", "name(d.$C) -> \"price\"",
+        "name(n.A) -> \"\"", "name(n.B) & \"!\" -> \"Pens!\"",
+        "sum_if(d.C, d.A = name(n.B)) -> 4.5", "count_if(d.C, d.A = name(n.A)) -> 0",
+        "name(d.Z) -> #REF!", "name(#REF!) -> #REF!", "if(false, name(d.Z), 1) -> 1",
+        "name(t.B1) -> #SYNTAX!", "name(B1) -> #SYNTAX!", "name(d.A1:A6) -> #SYNTAX!",
+        "name(d.B:C) -> #SYNTAX!", "name(5) -> #SYNTAX!", "name(\"b\") -> #SYNTAX!",
+        "name(d.C, d.A) -> #SYNTAX!", "name() -> #SYNTAX!", "name(d.C + 1) -> #SYNTAX!",
+        "name(table12.C) -> \"Pears\"" }, tables)
 
 // A table with no data rows: its whole columns hold no cells, and a condition over them takes
 // no row.
@@ -721,7 +818,7 @@ priv fn lookups()
 priv fn cases(list: U8[][]) //< `cases_with`, with no other table
     cases_with(list, "")
 
-priv fn cases_with(list: U8[][], after: U8[]) //<
+fn cases_with(list: U8[][], after: U8[]) //<
     //< Each a formula, without its `=`, then ` -> ` and what it calculates to as `shows` takes it
     //< `after` holds any tables after table `t`.
     defer arena: = Arena(256 * 1024)
@@ -731,12 +828,17 @@ priv fn cases_with(list: U8[][], after: U8[]) //<
         rows.s("| =").s(c.sub(0, arrow(c))).s(" | |\n")
     rows.s(":::\n").s(after)
     r: = results(arena.dup_str(rows.slice()), arena)
+    checked(list, r@, 2, 0, arena)
+
+priv fn checked(list: U8[][], r: Results@, row: Sz, column: Sz, arena: Arena$@) //<
+    //< Each case of `list` as `cases_with` writes them, its formula in table `t` from `row` down, at
+    //< `column`
     for i in Range.asc(list.len)
         c: = list[i]
         at: = arrow(c)
         want: = c.sub_from(at + 4)
         what: = arena.text().c('=').s(c.sub(0, at)).s(" is ").s(want).take()
-        shows(what, r@, i + 2, 0, want)
+        shows(what, r, row + i, column, want)
 
 priv fn arrow(c: U8[]): Sz //< where ` -> ` stands in a case
     return c.find_str(" -> ").unwrap_or(c.len)

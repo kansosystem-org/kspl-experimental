@@ -109,6 +109,33 @@ impl U8[]
                 n += 1
         return n
 
+    pub fn utf8_head( //< the longest start within max bytes, cut at a character's start
+        //< **It does not cut through a UTF-8 sequence**, so well-formed text stays well-formed.
+        //< The bytes dropped never begin with a `10xxxxxx` byte, which continues a character.
+        r: U8[],
+        max: Sz, //< the most bytes the result may hold
+    ): U8[]
+        if r.len <= max
+            return r
+        $n: = max
+        for n > 0 && ((r.ptr + n)$ & 0xC0U8) == 0x80U8
+            n -= 1
+        return r.sub(0, n)
+
+    pub fn utf8_complete(r: U8[]): U8[] //< the text without a last character still arriving
+        //< For text that arrives in pieces: a piece cut inside a character shows as U+FFFD, and so
+        //< does the next piece. Only the last three bytes are read, so it does not check the rest.
+        $back: Sz = 1
+        for back <= 3 && back <= r.len
+            c: = (r.ptr + r.len - back)$
+            if (c & 0xC0U8) == 0xC0U8
+                width: Sz = 2 if c < 0xE0U8 else (3 if c < 0xF0U8 else 4)
+                return r.sub(0, r.len - back) if width > back else r
+            if (c & 0xC0U8) != 0x80U8
+                return r
+            back += 1
+        return r
+
     pub fn contains_nul(r: U8[]): Bool //< whether a NUL byte appears anywhere in it
         //< The check to run before passing a string across the C boundary (see `to_cstr`).
         return r.find_char(0U8).is_some()

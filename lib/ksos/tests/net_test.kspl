@@ -268,7 +268,7 @@ fn test_tcp_conn_send_failure_does_not_advance_seq() //<
 fn test_frame_builders_pad_to_min() //<
     //< A built frame is padded with 0 to the minimum length (60 bytes)
     //< Caution: **An Ethernet frame under 60 bytes breaks the standard** (see pad_to_min in
-    //< lib/ksos/net/mini_ipv4.kspl). An ARP request (42 bytes) and an empty UDP/TCP are below it.
+    //< lib/ksos/net/mini_ipv4.kspl). An ARP request (42 bytes) and an empty TCP are below it.
     verdict
         .start("[ksos/net] an assembled frame being filled with 0 to the smallest length (60) \
             test...")
@@ -286,20 +286,12 @@ fn test_frame_builders_pad_to_min() //<
         "ARP request: the padding up to the minimum frame must be zero")
 
     b.fill(0xEE)
-    udp_len: = net.build_udp_packet(b, to_peer(), empty)
-    assert(udp_len == 60, "an empty UDP packet (42 bytes) must be padded out to 60")
-    check_zero_tail(view, 42, udp_len,
-        "UDP packet: the padding up to the minimum frame must be zero")
-
-    b.fill(0xEE)
     tcp_len: = net.build_tcp_segment(b, to_peer(), OUR_ISN, PEER_ISN, net.TCP_FLAG_ACK, empty)
     assert(tcp_len == 60, "an empty TCP segment (54 bytes) must be padded out to 60")
     check_zero_tail(view, 54, tcp_len,
         "TCP segment: the padding up to the minimum frame must be zero")
 
-    verdict
-        .pass("an ARP request, an empty UDP and an empty TCP are all filled with 0 to 60 bytes and \
-            returned.")
+    verdict.pass("an ARP request and an empty TCP are both filled with 0 to 60 bytes and returned.")
 
 priv fn check_zero_tail(buf: U8[], from: Sz, to: Sz, msg: U8[]) //<
     //< Checks that [from, to) is all 0 (an unfilled gap leaks what was there before)
@@ -316,8 +308,6 @@ fn test_frame_builders_refuse_a_small_buffer() //<
     arp_len: = net.build_arp_request(t, our_mac(), OUR_IP, PEER_IP)
     assert(arp_len == 0,
         "an ARP request must not be built into a buffer smaller than the minimum frame")
-    udp_len: = net.build_udp_packet(t, to_peer(), empty)
-    assert(udp_len == 0, "a UDP packet must not be built into a too-small buffer")
     tcp_len: = net.build_tcp_segment(t, to_peer(), OUR_ISN, PEER_ISN, net.TCP_FLAG_ACK, empty)
     assert(tcp_len == 0, "a TCP segment must not be built into a too-small buffer")
 

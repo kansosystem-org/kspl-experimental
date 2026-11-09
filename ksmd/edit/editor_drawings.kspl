@@ -4,7 +4,7 @@
 import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
 import "ksmd/edit/history" { begin }
 import "ksmd/edit/region" { Unit, gap_spot, whole_unit }
-import "ksmd/model/model" { Block, Drawing, MAX_SCALE }
+import "ksmd/model/model" { Block, Drawing }
 import "ksmd/syntax/drawing" { drawings_of }
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -12,17 +12,17 @@ import "std/mem" { Arena }
 impl Editor
     fn set_image_width(ed: Self$@, block: Sz, width: Sz): Void!Refused //<
         //< Gives an image its share of the text width in percent, 1 to 100, or 0 to fit it, as one
-        //< step. A width takes the place of a scale, as the clause holds one or the other.
-        if width < 0 || width > 100
+        //< step. The image takes a new entry, as for its drawings, so undo swaps the block back.
+        if block < 0 || block >= ed.doc.blocks.len || width < 0 || width > 100
             throw .not_whole
-        ed.size_image(block, width, 0)!
-
-    fn set_image_scale(ed: Self$@, block: Sz, scale: Sz): Void!Refused //<
-        //< Gives an image its size as a share of its own pixels in percent, 1 to `MAX_SCALE`, or 0
-        //< to fit it, as one step. A scale takes the place of a width, as the clause holds one.
-        if scale < 0 || scale > MAX_SCALE
+        $b: = ed.doc.blocks.get(block)
+        if b.kind != .image
             throw .not_whole
-        ed.size_image(block, 0, scale)!
+        $image: = ed.doc.images.get(b.first)
+        image.width = width
+        ed.doc.images.push(image)
+        b.first = ed.doc.images.len - 1
+        ed.put_whole(block, b)!
 
     fn set_image_words(ed: Self$@, block: Sz, caption: Bool, text: U8[]): Void!Refused //<
         //< Gives an image its caption, with `caption`, or else its alternate text, as one step
@@ -63,21 +63,6 @@ impl Editor
             chart.drawings = drawings
             ed.doc.charts.push(chart)
             b.first = ed.doc.charts.len - 1
-        ed.put_whole(block, b)!
-
-    priv fn size_image(ed: Self$@, block: Sz, width: Sz, scale: Sz): Void!Refused //<
-        //< Gives an image its width and its scale. The image takes a new entry, as for its
-        //< drawings, so undo swaps the block back.
-        if block < 0 || block >= ed.doc.blocks.len
-            throw .not_whole
-        $b: = ed.doc.blocks.get(block)
-        if b.kind != .image
-            throw .not_whole
-        $image: = ed.doc.images.get(b.first)
-        image.width = width
-        image.scale = scale
-        ed.doc.images.push(image)
-        b.first = ed.doc.images.len - 1
         ed.put_whole(block, b)!
 
     priv fn put_whole(ed: Self$@, block: Sz, b: Block): Void!Refused //<

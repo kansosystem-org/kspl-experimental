@@ -6,7 +6,7 @@
 // whole and the filter's dates are `tables.mjs`; its column widths and row heights `sizes.mjs`;
 // a diagram `diagrams.mjs`; help while a formula is typed, and its references' colours,
 // `formulas.mjs`; cells copied and pasted with their formulas or as values `pasting.mjs`; the
-// status bar `status.mjs`.
+// status bar `status.mjs`; the keys and what a screen reader is given `keyboard.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -17,7 +17,7 @@ import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { launch } from "./cdp.mjs";
-import { ALT, CTRL, H, SHIFT, cellText, check, driver, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellText, check, driver, focusOf, verdict } from "./drive.mjs";
 import { served } from "./served.mjs";
 import { menus } from "./menus.mjs";
 import { tools } from "./tools.mjs";
@@ -28,6 +28,7 @@ import { diagrams } from "./diagrams.mjs";
 import { formulaHelp } from "./formulas.mjs";
 import { pasting } from "./pasting.mjs";
 import { statusBar } from "./status.mjs";
+import { keyboard } from "./keyboard.mjs";
 import { SPEC, written } from "../../port/web/reference.mjs";
 
 const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
@@ -333,14 +334,7 @@ const sections = {
     const rows = `| "a" | "b" |\n| 1 | =A1*2 |\n| 2 | |\n| 3 | |\n:::\n\nAfter.\n`;
     const top = () => js("document.querySelector('#doc .table table').getBoundingClientRect().top");
     const cell = (r, c) => cellText(js, r, c);
-    // Where the keys go: the chosen cell as "row:column", an open cell by its name, or "doc".
-    const focus = () => js(`(() => {
-      let a = document.activeElement;
-      if (a.id === "doc") return "doc";
-      if (a.matches(".cell-catch")) a = a.parentElement;
-      if (a.matches("#doc td.chosen")) return a.dataset.r + ":" + a.dataset.c;
-      return a.getAttribute("aria-label") || a.tagName;
-    })()`);
+    const focus = () => focusOf(js);
     // No empty line stands, and the table has not moved.
     const stays = async (what, at) => {
       await settle();
@@ -470,9 +464,9 @@ const sections = {
     await click('#doc th.letter:nth-child(2)');
     await menu("format-grouped");
     await saves("Thousands on a column chosen by its letter gives the column a format in the source",
-      `${H}:::table name="t" formats="grouped:2,"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`);
-    check(await td(0, 0) === "1,234.50" && await td(1, 0) === "x",
-      "the number shows with a separator and two places; text shows as it is");
+      `${H}:::table name="t" formats="grouped:0,"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`);
+    check(await td(0, 0) === "1,235" && await td(1, 0) === "x",
+      "the number shows with a separator and no places, as a count does; text shows as it is");
     await click('#doc td[data-r="0"][data-c="1"]');
     await menu("format-percent");
     check(await td(0, 1) === "12%" && await td(1, 1) === "", "a formula's result shows as a percent; an empty cell stays empty");
@@ -501,6 +495,27 @@ const sections = {
     await click('#doc td[data-r="0"][data-c="1"]');
     await menu("look-clear");
     await saves("General on the column, and Clear format on the cell, leave the formats out of the source", table);
+  },
+
+  // An edit sends every table, since a value can reach them all; only a table that shows otherwise
+  // is drawn again. Each table is marked, and an edit counts the marks that stay.
+  async tablesDrawnAgain() {
+    await load(`${H}:::table name="a"\n| "n" |\n| 1 |\n:::\n\n:::table name="b"\n| "m" |\n` +
+      `| =sum(a.$A) |\n:::\n\n:::table name="c"\n| "k" |\n| 5 |\n:::\n`);
+    const at = (t) => `#doc .table[data-name="${t}"] td[data-r="0"][data-c="0"]`;
+    const mark = () => js("document.querySelectorAll('#doc .b.table').forEach((t) => { t.marked = true; })");
+    const kept = () => js("Array.from(document.querySelectorAll('#doc .b.table')).map((t) => (t.marked ? 1 : 0)).join('')");
+    await mark();
+    await click(at("c"));
+    await menu("format-percent");
+    check(await kept() === "110" && await js(`document.querySelector('${at("c")}').textContent`) === "500%",
+      "a number format draws its own table again, and no other", await kept());
+    await mark();
+    await click(at("a"));
+    await type("2");
+    await press("Enter");
+    check(await kept() === "001" && await js(`document.querySelector('${at("b")}').textContent`) === "2",
+      "a value draws again its table and the table whose formula reads it", await kept());
   },
 
   async examples() {
@@ -603,6 +618,7 @@ Object.assign(sections, documents({ page, js, press, click, menu, load, saves, s
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
 Object.assign(sections, formulaHelp({ page, js, settle, until, press, type, click, menu, load, saves }));
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
+Object.assign(sections, keyboard({ js, until, press, type, click, menu, load, saves, openCell, rightClick }));
 Object.assign(sections, statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }));
 

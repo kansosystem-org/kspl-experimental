@@ -33,7 +33,6 @@ priv struct Tool //< one Python tool, and how it is started
 
 priv const TOOLS: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .needs = "" },
     Tool::{ .path = "lib/ksai/tools/export_qwen_tokenizer.py", .needs = "" },
-    Tool::{ .path = "lib/ksai/examples/code_complete/lora_finetune_external.py", .needs = "" },
     Tool::{ .path = "lib/ksai/tools/gen_unicode_class.py", .needs = "" },
     Tool::{ .path = "lib/ksai/tools/check_qwen_tokenizer.py", .needs = "" },
     Tool::{ .path = "lib/ksai/tools/make_quant_fixtures.py", .needs = "numpy" },
@@ -42,10 +41,6 @@ priv const TOOLS: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .needs = "
     Tool::{ .path = "lib/ksai/tools/make_qwen35_fixtures.py", .needs = "numpy" },
     Tool::{ .path = "lib/ksai/tools/qwen_gguf_check.py", .needs = "numpy" },
     Tool::{ .path = "ksagent/tests/make_office_fixtures.py", .needs = "" } }
-
-priv const LIBRARIES: U8[][_] = ::{ "lib/ksai/tools/safetensors_io.py" } //<
-    //< The Python files under the tools' folders that are no tool: modules the tools import
-    //< Each is exercised through the tools that import it.
 
 priv fn importable(name: U8[]): Bool //< whether `python3` can import the module `name`
     arena: = ksplc_harness.arena()
@@ -73,7 +68,7 @@ priv fn check_fires() //< output with no self-test's line is told from output wi
     verdict.check("output in which no self-test ran is told apart",
         !ran_one(NOT_RUN) && ran_one(MARK_OK), NOT_RUN)
 
-priv fn check_listed() //< that every Python file of the tools and examples is run here or a library
+priv fn check_listed() //< that every Python file of the tools and examples is run here
     //< **A tool left off the list is never run**, and goes on passing while it rots.
     arena: = ksplc_harness.arena()
     $missing: = List<|U8[]|>(arena)
@@ -81,15 +76,12 @@ priv fn check_listed() //< that every Python file of the tools and examples is r
         .tracked_matching(U8[][]::{ "tools/*.py", "lib/*/tools/*.py", "lib/*/examples/*.py" })
     for f in found
         $listed: = false
-        for lib in LIBRARIES
-            listed = listed || lib.equals(f)
         for i in Range.asc(TOOLS.len)
             listed = listed || TOOLS[i].path.equals(f)
         if !listed
             missing.push(f)
-    verdict.check_list("every Python file of the tools and the examples is a tool run here or a \
-        library", found.len, "files", missing@,
-        "add it to `tools` (with a self-test run by no argument) or `libraries`")
+    verdict.check_list("every Python file of the tools and the examples is a tool run here",
+        found.len, "files", missing@, "add it to `tools`, with a self-test run by no argument")
 
 priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
     arena: = ksplc_harness.arena()

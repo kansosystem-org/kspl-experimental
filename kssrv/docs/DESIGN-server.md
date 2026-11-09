@@ -12,7 +12,7 @@ Kssrv runs either as a *local* server for one person's browser (`--local`) or as
 
 Caution: **Read the options by name.** Told apart by the argument count, the premise "the third must be `--local`" breaks silently once there are two options.
 
-`--page` names the file returned for `/`, which can lie outside the root: the agreement's one exception ("Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)).
+`--page` names the file returned for `/`, which can lie outside the root: the agreement's one exception ("Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). **With `--local` it is required.** The URL the server prints carries the token, so the page it opens must be the file the launching person named. A file someone left at the root's `index.html` must not get the token.
 
 ### Local use and outward-facing use are split by one decision
 
@@ -147,7 +147,7 @@ Caution: **Watch writable only while part-sent.** A socket whose send buffer is 
 
 ### The connection table is fixed-length; free slots are zero handles
 
-The table is one `Rc<|Conn|>[max_conns]` (`MAX_CONNS` in `kssrv/conn.kspl`), indexed by `reactor`'s token for each socket. A free slot is `Rc.empty()`, told apart by `is_empty()`.
+The table is one `Rc<|Conn|>[MAX_CONNS]` (in `kssrv/conn.kspl`), indexed by `reactor`'s token for each socket. A free slot is `Rc.empty()`, told apart by `is_empty()`.
 
 * **Why fixed-length**: concurrent connections need a cap anyway. A capped table need not grow, and going from token to slot is one subscript.
 * **Why `Rc`**: read, build and send borrow from the slot, which only the outer loop drops, so those phases carry no ownership transitions.
@@ -175,7 +175,7 @@ Each time a socket is reported ready, kssrv does a capped amount of work on it, 
 
 | What is capped | By what |
 | :-- | :-- |
-| `read`'s repeats, and the requests handled in a row | `max_read_rounds` |
+| `read`'s repeats, and the requests handled in a row | `MAX_READ_ROUNDS` |
 | The bytes held part-read | `http.MAX_HEAD_BYTES` plus the body cap |
 
 Bytes not yet read stay in the socket and come back as readable at the next `wait()`.
@@ -196,21 +196,21 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### A connection that passes nothing for a while is dropped
 
-**A connection that has neither sent nor received a byte for `idle_conn_us` is closed** by `sweep_done` (`moved_us` in `kssrv/conn.kspl`). Otherwise `MAX_CONNS` clients that connect and go quiet shut everyone else out.
+**A connection that has neither sent nor received a byte for `IDLE_CONN_US` is closed** by `sweep_done` (`kssrv/main.kspl`, which reads `moved_us` in `kssrv/conn.kspl`). Otherwise `MAX_CONNS` clients that connect and go quiet shut everyone else out.
 
 * **A page's hold is exempt** (`GET /api/here`, `holding`): it is quiet by design, and closing it would read as the page having gone.
 * **The clock restarts on every byte either way**, so a slow but moving transfer is not cut.
 
 ### A request has a deadline from its first byte
 
-**A request still arriving `request_time_us` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspl`). The idle timer alone does not bound it, because it restarts on every byte. A client sending one byte every few seconds would hold its slot for good (the attack called Slowloris).
+**A request still arriving `REQUEST_TIME_US` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspl`). The idle timer alone does not bound it, because it restarts on every byte. A client sending one byte every few seconds would hold its slot for good (the attack called Slowloris).
 
-* **One deadline for the head and body together.** The bodies taken facing outward are small (`max_request_body`), and a minimum rate would add a second figure to tune.
+* **One deadline for the head and body together.** The bodies taken facing outward are small (`MAX_REQUEST_BODY`), and a minimum rate would add a second figure to tune.
 * **The clock starts at the request's first byte**, not at accept, so a keep-alive connection waiting between requests is the idle timer's to judge.
 
 ### One address holds only a few connections, facing outward
 
-**A connection from an address that already holds `max_conns_per_peer` is closed at accept**, and counted in `connections_refused`. Without it one machine takes every slot. A browser opens six per host, so the cap leaves room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
+**A connection from an address that already holds `MAX_CONNS_PER_PEER` is closed at accept**, and counted in `connections_refused`. Without it one machine takes every slot. A browser opens six per host, so the cap leaves room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
 
 **Accepting comes last in each wakeup**, after its closes and the sweep (`accept_all` in `kssrv/main.kspl`). Accepted first, a connection already gone would still count against its address. So a client that closes one and reconnects at once would be refused.
 
@@ -257,7 +257,7 @@ Note: The check is "after a 413 it reads the rest of the body rather than resett
 
 **`--idle=<seconds>` stops the server once no page has held it and nothing has been asked for that long.** The rule is "Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Why a held connection, and not a timer, is "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md). Without the option the server stays up: a server told nothing must not stop itself.
 
-Caution: **Stamp the clock for every request, in one place** (`queue_for_request` in `kssrv/main.kspl`). Stamped per entry point, the next one added is the one forgotten.
+Caution: **Stamp the clock for every request, in one place** (`queue_for_request` in `kssrv/static.kspl`). Stamped per entry point, the next one added is the one forgotten.
 
 Caution: **Stamp it too when a page lets go of its hold** (`table_drop` in `kssrv/conn.kspl`). A page sends nothing while it holds the server. Counted from its last request alone, the wait would stop the server the moment a long-held page closed, and a reload would find no server.
 

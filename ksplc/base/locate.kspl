@@ -126,9 +126,14 @@ fn append_exe_path(out: Str_builder$@): Bool //<
     if n == 0
         return false
     // `/` throughout, as cwd() below does, so `info std-dir` names it in one spelling.
-    for c in U8[]::{ .ptr = buf[0]@, .len = n }
-        out.c('/' if sys.is_path_sep(c) else c)
+    write_slashed(U8[]::{ .ptr = buf[0]@, .len = n }, out)
     return true
+
+fn write_slashed(path: U8[], w: Writer): Writer //< writes path with every `\` as `/`
+    //< Each separator `sys.is_path_sep` names becomes `/`, on every OS.
+    for c in path
+        w.c('/' if sys.is_path_sep(c) else c)
+    return w
 
 priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
     defer $exe: = Str_builder()
@@ -215,10 +220,7 @@ fn recorded_name_to(logical: U8[], out: Str_builder$@) //<
     //< Writes the file name the generated code records for a source: a `#line`'s, a trace frame's
     //< disk_name with `/` between folders, and the extension where the name has none.
     //< **Both backends take it from here**, so a `!`'s trace names one file on either.
-    named: = disk_name(logical).with_source_ext()
-    for i in Range.asc(named.len)
-        ch: = (named.ptr + i)$
-        out.c('/' if ch == '\\' else ch)
+    write_slashed(disk_name(logical).with_source_ext(), out)
 
 fn disk_name(logical: U8[]): U8[] //<
     //< The path a package's file is read from; std's and any other logical name as it is
@@ -281,9 +283,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
     defer $parts: = List<|U8[]|>(null)
     $at: = head
     for at < path.len
-        $end: = at
-        for end < path.len && !sys.is_path_sep(path[end])
-            end += 1
+        end: = sys.segment_end(path, at)
         part: = path.sub(at, end - at)
         at = end + 1
         if part.len == 0 || part.equals(".")
@@ -296,8 +296,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
             continue
         parts.push(part)
     defer $out: = Str_builder()
-    for i in Range.asc(head)
-        out.c('/' if sys.is_path_sep(path[i]) else path[i])
+    write_slashed(path.sub(0, head), out)
     for i in Range.asc(parts.len)
         out.s("/" if i > 0 else "").s(parts.get(i))
     // **Where there is nothing to fold, do not copy.** A walk passes most folders on unchanged, and
@@ -307,9 +306,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
 priv fn first_part(path: U8[]): U8[] //< the first part of a relative path, skipping `.` levels
     $at: Sz = 0
     for at < path.len
-        $end: = at
-        for end < path.len && !sys.is_path_sep(path[end])
-            end += 1
+        end: = sys.segment_end(path, at)
         part: = path.sub(at, end - at)
         if part.len > 0 && !part.equals(".")
             return part
@@ -338,8 +335,7 @@ fn cwd(): U8[] //< the working directory with `/` separators; empty where it can
     root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = OS_PATH_BYTES }) catch
         return ""
     out: = base_core.arena.text()
-    for c in root
-        out.c('/' if sys.is_path_sep(c) else c)
+    write_slashed(root, out)
     return out.take()
 
 fn to_absolute(path: U8[]): U8[] //<

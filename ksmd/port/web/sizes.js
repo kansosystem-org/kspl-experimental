@@ -93,8 +93,9 @@ function ksmdSizes(ks) {
   }
 
   // Draws the widths `px` into the table's `colgroup`, with the row numbers first. A column a
-  // closed group hides has no `col`: its cells take no place in the row (`outline.js`).
-  function draw(wrap, px) {
+  // closed group hides has no `col`: its cells take no place in the row (`outline.js`). `room` is
+  // the paper's width for tables (`printable`).
+  function draw(wrap, px, room = printable()) {
     const table = wrap.querySelector("table");
     let cols = table.querySelector("colgroup");
     if (!cols) {
@@ -117,18 +118,18 @@ function ksmdSizes(ks) {
     table.style.width = `${wrap.firstWidth + sum}px`;
     table.style.setProperty("--columns-width", `${sum}px`);
     wrap.px = px;
-    scale(wrap, sum);
+    scale(wrap, sum, room);
   }
 
   // Lays a rendered table out: its columns' widths, then which cells cut their text. A table
   // is laid out once after it is drawn; its widths change only by an action, which draws it anew.
-  function lay(wrap) {
+  function lay(wrap, room) {
     if (wrap.laid || !wrap.isConnected) return;
     wrap.laid = true;
     const m = metrics(wrap);
     wrap.metrics = m;
     wrap.firstWidth = firstWidth(wrap, m);
-    draw(wrap, shown(wrap, m));
+    draw(wrap, shown(wrap, m), room);
     spill(wrap);
   }
 
@@ -452,6 +453,8 @@ function ksmdSizes(ks) {
 
   // The width a page of the document's paper leaves for a table, in CSS pixels: the room inside
   // the print's margins (`ks.pages.paper`), less the document's own padding.
+  // Caution: **Read it once for all the tables.** It reads the layout, and a print scale written
+  // to a table before the next read makes the browser lay out the whole document again.
   function printable() {
     const doc = getComputedStyle(ks.root);
     return ks.pages.paper().width - parseFloat(doc.paddingLeft) - parseFloat(doc.paddingRight);
@@ -460,8 +463,7 @@ function ksmdSizes(ks) {
   // A table wider than the paper prints smaller, so all of its columns fit. The status bar says so
   // while the person works in it (`status.js`). Paper leaves out the row numbers, so only the
   // columns count.
-  function scale(wrap, columns) {
-    const room = printable();
+  function scale(wrap, columns, room) {
     const by = columns > room ? Math.floor((100 * room) / columns) : 100;
     wrap.style.setProperty("--print-zoom", String(by / 100));
     wrap.printScale = by;
@@ -470,9 +472,10 @@ function ksmdSizes(ks) {
   // Lays out every table not yet laid out, then sets each table's print scale for the paper the
   // document names now.
   function layAll() {
+    const room = printable();
     for (const wrap of ks.root.querySelectorAll(".b.table")) {
-      if (!wrap.laid) lay(wrap);
-      else scale(wrap, wrap.px.reduce((a, x) => a + x, 0));
+      if (!wrap.laid) lay(wrap, room);
+      else scale(wrap, wrap.px.reduce((a, x) => a + x, 0), room);
     }
   }
 

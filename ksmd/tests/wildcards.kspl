@@ -1,0 +1,62 @@
+//< `like`: a text matched against a pattern of `*`, `?` and `~`, as a spreadsheet's criteria allow
+//< The rules are "Text" in `ksmd/docs/DESIGN-ksmd.md`.
+import "ksmd/calc/functions" { like }
+import "ksmd/calc/value" { MAX_TEXT }
+import "ksmd/tests/calculation" { cases_with }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+fn run()
+    patterns()
+    in_conditions()
+    long_text()
+
+// Each case runs in table `t`, whose `A1` is 2, `B1` is "Pens", `A2` is empty and `B2` is
+// `#DIV/0!`.
+priv fn patterns()
+    cases_with(U8[][]::{ "like(\"INV-0042\", \"INV-*\") -> true",
+        "like(\"XINV-1\", \"INV-*\") -> false", "like(\"Pens\", \"*s\") -> true",
+        "like(\"Pensx\", \"*s\") -> false", "like(\"Red ink\", \"*d i*\") -> true",
+        "like(\"abc\", \"a?c\") -> true", "like(\"ac\", \"a?c\") -> false",
+        "like(\"abbc\", \"a?c\") -> false", "like(\"ab\", \"a\") -> false",
+        "like(\"a\", \"ab\") -> false", "like(\"ab\", \"ab*\") -> true", "like(\"\", \"*\") -> true",
+        "like(\"\", \"\") -> true", "like(\"a\", \"\") -> false", "like(\"\", \"?\") -> false",
+        "like(\"\", \"**\") -> true", "like(\"pens\", \"PENS\") -> true",
+        "like(B1, \"p*S\") -> true", "like(\"かんそ\", \"か?そ\") -> true",
+        "like(\"かんそ\", \"???\") -> true", "like(\"かんそ\", \"??\") -> false",
+        "like(\"É\", \"é\") -> false", "like(\"a*c\", \"a~*c\") -> true",
+        "like(\"abc\", \"a~*c\") -> false", "like(\"a?\", \"*~?\") -> true",
+        "like(\"ab\", \"*~?\") -> false", "like(\"a~b\", \"a~~b\") -> true",
+        "like(\"a~b\", \"a~b\") -> #VALUE!", "like(\"a~\", \"a~\") -> #VALUE!",
+        "like(\"aXbXc\", \"a*b*c\") -> true", "like(\"abcabd\", \"*ab?\") -> true",
+        "like(\"mississippi\", \"m*iss*ppi\") -> true", "like(A1, \"2\") -> #VALUE!",
+        "like(true, \"*\") -> #VALUE!", "like(B1, 1) -> #VALUE!", "like(A2, \"\") -> true",
+        "like(A2, \"*\") -> true", "like(B2, \"*\") -> #DIV/0!", "if(like(B1, \"P*\"), 1, 0) -> 1" },
+        "")
+
+// Inside a condition, `like` reads each row's cell of a whole column, as ksmd's own functions do.
+priv fn in_conditions()
+    cases_with(U8[][]::{ "sum_if(w.B, like(w.A, \"INV-*\")) -> 7",
+        "count_if(w.B, like(w.A, \"inv-?\")) -> 1", "sum_if(w.B, not like(w.A, \"*-*\")) -> 100",
+        "sum_if(w.B, like(w.A, \"INV-*\") and w.B > 3) -> 4" },
+        "\n:::table name=\"w\"\n| \"code\" | \"amount\" |\n| \"INV-1\" | 3 |\n| \"inv-22\" | 4 |\n| \
+            \"CR-1\" | 50 |\n| \"Pens\" | 100 |\n:::\n")
+
+// A pattern of many `*` against the longest text ends: the work grows with the lengths, never
+// exponentially. Tried at every place, each `*` would multiply the work by the text's length.
+priv fn long_text()
+    defer $t: = Str_builder()
+    for _ in Range.asc(MAX_TEXT)
+        t.c('a')
+    defer $p: = Str_builder()
+    for _ in Range.asc(40)
+        p.s("*a")
+    yes: = like(t.slice(), p.slice()) catch
+        verdict.check("a long pattern reads", false, "")
+        return
+    verdict.check("many stars against the longest text end, and match", yes, "")
+    p.s("*b")
+    no: = like(t.slice(), p.slice()) catch
+        verdict.check("a long pattern reads", false, "")
+        return
+    verdict.check("many stars against the longest text end, and find no b", !no, "")

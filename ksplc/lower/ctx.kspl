@@ -38,6 +38,8 @@ struct Fallback_ctx
     label: U8[]
     label_used: Bool
     depth: Sz
+    lasting: List<|Ast_node$@|>$@ //<
+        //< Where the storage a `fallback`'s value points into is declared (`lasting_decls`)
 
 struct Lowering_ctx
     sema: Sema_ctx$@
@@ -72,6 +74,13 @@ struct Lowering_ctx
     stmt_decls: List<|Ast_node$@|>$@ //<
         //< Declarations that go before the statement being lowered, in its own block
         //< lower_block puts them ahead of that statement's pre_stmts.
+    lasting_decls: List<|Ast_node$@|>$@ //<
+        //< Where an array literal is declared when a slice of it leaves the block it is built in
+        //< A ternary's branch, a catch's substitute and a `fallback` assign their value inside a
+        //< block of their own. C ends a compound literal's life with that block, so a slice made
+        //< from it would point at dead storage (lower_lasting_array). The array goes into a
+        //< temporary declared here, at the level of the statement that uses the value. Null where
+        //< no such block is open: lower_block sets it so, as a block's own statements end with it.
 
 impl Lowering_ctx
     fn new(sema: Sema_ctx$@): Lowering_ctx$@
@@ -82,13 +91,29 @@ impl Lowering_ctx
         arc_helpers: = base_core.arena.create(Map<|U8[], Ast_node$@|>(base_core.arena))
         arc_helper_decls: = base_ast.new_ast_node_list()
         stmt_decls: = base_ast.new_ast_node_list()
-        fb: = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
+        fb: = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0,
+            .lasting = null }
         ctx: = Lowering_ctx::{ .sema = sema, .pre_stmts = pre_stmts, .tmp_counter = 0, .fb = fb,
             .cleanup_stack = cleanup_stack, .jump_stack = jump_stack,
             .arc_scope_pending = arc_scope_pending, .lower_depth = 0, .in_fn_body = false,
             .arc_helpers = arc_helpers, .arc_helper_decls = arc_helper_decls, .relocating = 0,
-            .stmt_decls = stmt_decls }
+            .stmt_decls = stmt_decls, .lasting_decls = null }
         return base_core.arena.create(ctx)
+
+    fn open_lasting(r: Self$@, gives_value: Bool): List<|Ast_node$@|>$@ //<
+        //< The level a branch's arrays are declared at, made `lasting_decls`: an enclosing one's
+        //< A new list where none encloses it, which close_lasting puts before the statement. Null
+        //< where the branch gives no value. **Never `stmt_decls` itself**: a block inside the
+        //< branch would take what its own statements pushed there.
+        if r.lasting_decls == null && gives_value
+            r.lasting_decls = base_ast.new_ast_node_list()
+        return r.lasting_decls
+
+    fn close_lasting(r: Self$@, outer: List<|Ast_node$@|>$@, lasting: List<|Ast_node$@|>$@) //<
+        //< Gives `lasting_decls` back to outer; a level open_lasting made goes into `stmt_decls`
+        r.lasting_decls = outer
+        if lasting != null && outer == null
+            r.stmt_decls.push_all(lasting.slice())
 
     fn can_own_temporaries(r: Self@): Bool //<
         //< Whether a temporary hoisted now can be released by the enclosing block's cleanups
