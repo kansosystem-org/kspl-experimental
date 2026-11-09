@@ -55,34 +55,72 @@ fn emit_runtime(out_path: U8[]): Void!Compile_error //<
     staged.close(out_file@, out_path)!
     staged.commit()!
 
+priv const DETAIL_SHARE_PERCENT: I64 = 5I64 //<
+    //< The share of the compile time a phase must take before its detail table prints
+    //< **`--stats` prints only what helps to tune the compiler.** With a warm AST cache, parsing
+    //< takes a few ms of several seconds, and the rules' table ranks rules nobody would tune. Even
+    //< a phase made free would save under five percent. The same share decides whether `Other`
+    //< prints.
+
+priv fn worth_detail(part: I64, whole: I64): Bool //< whether part is at least the share of whole
+    return part * 100I64 >= whole * DETAIL_SHARE_PERCENT
+
+priv fn print_left_out(block: U8[], phase: U8[], us: I64) //< the line that stands for a table
+    //< **Say that the table was left out, and why**: a missing block alone leaves the reader
+    //< guessing whether it broke.
+    defer $sb: = Str_builder()
+    sb.s("\n\{block\} left out: \{phase\} took \{Sz::(us / 1000):,\} ms, under ")
+        .s("\{DETAIL_SHARE_PERCENT\}% of the compile time\n")
+    io.err().s(sb.slice())
+
 fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head: Arena_headroom,
     peak_heap: Sz) //<
         //< It prints `--stats`' report once, on standard error; only this function lays it out.
         //< **Put the summary (`[Overall]`) at the end**: a terminal shows the last screen;
         //< `make perf-log` uses `cat`.
-        //< Caution: **Do not change the names `Compile time` / `AST Arena headroom` / `System Peak
-        //< Memory`.** `tests/tools/perf_guard.kspl` reads those three lines.
+        //< Caution: **Do not change the names `Compile time` / `AST Node bytes` / `AST Kids bytes`
+        //< / `AST Arena headroom` / `System Peak Memory`.** `tests/tools/perf_guard.kspl` reads
+        //< those five lines.
     if !base_core.config.enable_stats
         return
-    parse_load.prof.print_kspeg()
-    sema_session_prof.prof.print_bodies()
+    timed: = sys.timing_available()
+    // Without a clock no share is known, so the rules' table prints: its counts need no clock.
+    // The bodies' table needs one and prints nothing then.
+    kspeg_us: = parse_load.prof.kspeg_us
+    if !timed || worth_detail(kspeg_us, elapsed_us)
+        parse_load.prof.print_kspeg()
+    else
+        print_left_out("[KSPEG Rule]", "parsing", kspeg_us)
+    infer_us: = sema_session_prof.prof.infer_us
+    if timed && worth_detail(infer_us, elapsed_us)
+        sema_session_prof.prof.print_bodies()
+    else if timed
+        print_left_out("[Sema Body]", "inference", infer_us)
 
     io.err().s("\n[Layer]\n")
     print_layer("Parse", base_stats.stages.parse)
-    if sys.timing_available()
-        defer $sb: = Str_builder()
-        sb.s("  - File I/O:    \{Sz::(parse_load.prof.io_us / 1000):6,\} ms\n")
-            .s("  - KSPEG Parse: \{Sz::(parse_load.prof.kspeg_us / 1000):6,\} ms\n")
-            .s("  - AST Conv:    \{Sz::(parse_load.prof.ast_conv_us / 1000):6,\} ms\n")
-            .s("  - AST Norm:    \{Sz::(parse_load.prof.norm_us / 1000):6,\} ms\n")
-            .s("  - Cache I/O:   \{Sz::(parse_load.prof.cache_us / 1000):6,\} ms\n")
-        io.err().s(sb.slice())
+    if timed
+        print_part("File I/O:    ", parse_load.prof.io_us, "")
+        print_part("KSPEG Parse: ", kspeg_us, "")
+        print_part("AST Conv:    ", parse_load.prof.ast_conv_us, "")
+        print_part("AST Norm:    ", parse_load.prof.norm_us, "")
+        print_part("Cache I/O:   ", parse_load.prof.cache_us, "")
     else
         io.err().s("  - File I/O / KSPEG Parse / AST Conv / AST Norm / Cache I/O: N/A\n")
     parse_ast_cache.print_stats()
     print_layer("Desugar", base_stats.stages.desugar)
     print_layer("Sema", base_stats.stages.sema)
-    sema_session_prof.prof.print_phases()
+    // Caution: **Print Sema's parts right after its total**, so the sum can be checked.
+    sp: = sema_session_prof.prof
+    bodies: = base_core.arena.text().s(" (\{Sz::sp.body_count:,\} bodies)").take()
+    if timed
+        print_part("Collect:     ", sp.collect_us, "")
+        print_part("Infer:       ", infer_us, bodies)
+        print_part("Constraints: ", sp.constraints_us, "")
+        print_part("Layouts:     ", sp.layouts_us, "")
+    else
+        io.err().s("  - Collect / Infer / Constraints / Layouts: N/A\n")
+        io.err().s("  - Bodies analyzed: \{Sz::sp.body_count:,\}\n")
     print_layer("Lower & ABI", base_stats.stages.lower)
     defer $pr: = Str_builder()
     pr
@@ -90,17 +128,18 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
             \{lower_prune.stats.fn_defs:,\}\n")
     io.err().s(pr.slice())
     print_layer("Backend Gen", base_stats.stages.backend)
-    // Caution: **Print the remainder**: `Compile time` and `AST Arena usage` minus the stages'
-    // total (start-up, argument parsing, allocations after a stage). Without it, a growing
-    // unmeasured stage goes unnoticed.
+    // Caution: **Print the remainder once it is a real share**: `Compile time` and `AST Arena
+    // usage` minus the stages' total (start-up, argument parsing, allocations after a stage).
+    // Without it, a growing unmeasured stage goes unnoticed; below the share it is noise.
     measured: = base_stats.stages.total()
-    print_layer("Other",
-        base_stats.Stage::{ .us = elapsed_us - measured.us,
-        .bytes = arena_used - measured.bytes })
+    other: = base_stats.Stage::{ .us = elapsed_us - measured.us,
+        .bytes = arena_used - measured.bytes }
+    if !timed || worth_detail(other.us, elapsed_us) || worth_detail(other.bytes, arena_used)
+        print_layer("Other", other)
 
     defer $tail: = Str_builder()
     tail.s("\n[Overall]\n")
-    if sys.timing_available()
+    if timed
         tail.s("Compile time      : \{Sz::(elapsed_us / 1000):,\} ms\n")
     else
         tail
@@ -114,6 +153,14 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
         .s("AST Arena headroom: \{arena_head.free:,\} bytes before next chunk \
             (+\{arena_head.step:,\} bytes)\n").s("System Peak Memory: \{peak_heap:,\} bytes\n\n")
     io.err().s(tail.slice())
+
+priv fn print_part(label: U8[], us: I64, note: U8[]) //< one line of a stage's breakdown
+    //< **A part that took under 1 ms is left out**: its `0 ms` line tells nothing to tune.
+    if us < 1000I64
+        return
+    defer $sb: = Str_builder()
+    sb.s("  - \{label\}\{Sz::(us / 1000):6,\} ms\{note\}\n")
+    io.err().s(sb.slice())
 
 priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
     //< **The time and the arena use share one line**, so the log alone says which stage grew. Where

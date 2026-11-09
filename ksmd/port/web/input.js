@@ -197,8 +197,8 @@ function ksmdInput(ks) {
     return false;
   };
 
-  // An image file pasted or dropped is written beside the document, where the local server serves
-  // the page (`file.js`). It never goes into a cell.
+  // An image file pasted or dropped is written in the document's data folder, where the local
+  // server serves the page (`file.js`). It never goes into a cell.
   function image(files) {
     const file = Array.from(files || []).find((f) => f.type.startsWith("image/"));
     if (!file) return false;

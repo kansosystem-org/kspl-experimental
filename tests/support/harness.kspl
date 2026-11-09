@@ -304,6 +304,21 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
             panic(arena.text().s("there is a pattern matching not one tracked file: \{p\}").take())
     return out
 
+const LIB_DIR: U8[] = "lib" //< the folder the libraries stand in, one package each
+
+fn package_makefiles(): List<|U8[]|> //<
+    //< The `Makefile` of each package, by its path from the root: a top folder's, or one in `lib/`
+    //< Caution: **Every walk over the packages' `Makefile`s uses this one rule.** A filter that
+    //< kept the top folders alone lost every library when they moved into `lib/`, and no check
+    //< failed.
+    arena: = ksplc_harness.arena()
+    $out: = List<|U8[]|>(arena)
+    for rel in tracked_matching(U8[][]::{ "*/Makefile" })
+        dir: = sys.get_dir_name(rel)
+        if dir.find_char('/').is_none() || sys.get_dir_name(dir).equals(LIB_DIR)
+            out.push(rel)
+    return out
+
 priv fn collect_ls_files(argv: U8[][], out: List<|U8[]|>$@, arena: Arena$@): Void!Run_error
     r: = ksplc_harness.run(argv)
     if !r.exited_with(0)

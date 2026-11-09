@@ -6,17 +6,14 @@
 // A copy and a paste are synthetic `copy` and `paste` events, since a headless browser has no
 // clipboard; Ctrl+Shift+V is its key and the paste it starts, sent together as a browser sends them.
 // `pasting(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { CTRL, SHIFT, verdict } from "./drive.mjs";
+import { CTRL, H, SHIFT, cellAt, check, rowsShown } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const CELLS = "application/x-ksmd-cells";
 const rows = (second, third) => `${H}:::table name="t"\n| "a" | "b" | "c" | "d" |\n` +
   `| "x" | "1F" | =hex_to_dec(B1) | =$B$1 |\n| "y" | "2E" | ${second}\n| "z" | "3D" | ${third}\n:::\n`;
 const START = rows("| |", "| |");
 
 export function pasting({ page, js, settle, press, type, click, menu, load, saves }) {
-  const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
   // A copy of the chosen cells, kept as the page put it on the clipboard.
   const copy = () => js(`(() => {
     const data = new DataTransfer();
@@ -48,8 +45,8 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
   }
   // Chooses C1:D1 and copies them.
   async function copied() {
-    await click(cell(0, 2));
-    await click(cell(0, 3), 8);
+    await click(cellAt(0, 2));
+    await click(cellAt(0, 3), 8);
     return copy();
   }
 
@@ -61,7 +58,7 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
         JSON.stringify(got.plain));
       check(got.own.includes('"=hex_to_dec(B1)"') && got.own.includes('"=$B$1"'),
         "and beside it go the formulas as written, for a paste in ksmd", got.own);
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await paste();
       await saves("Ctrl+V pastes the formulas, a reference shifted down a row and a $ one kept",
         rows("=hex_to_dec(B2) | =$B$1 |", "| |"));
@@ -71,13 +68,13 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       await press("z", CTRL);
       await saves("one undo takes the paste back", START);
       check(!await offered(), "and the button goes with any other change");
-      await click(cell(1, 2));
-      await click(cell(2, 3), 8);
+      await click(cellAt(1, 2));
+      await click(cellAt(2, 3), 8);
       await paste();
       await saves("a copy pasted on a range that holds it twice goes in each place, shifted from there",
         rows("=hex_to_dec(B2) | =$B$1 |", "=hex_to_dec(B3) | =$B$1 |"));
       await press("z", CTRL);
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       await paste();
       await saves("a reference shifted left of the table becomes #REF!",
         `${H}:::table name="t"\n| "a" | "b" | "c" | "d" |\n| =hex_to_dec(#REF!) | =$B$1 | =hex_to_dec(B1) | ` +
@@ -87,7 +84,7 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
     async pasteValues() {
       await load(START);
       await copied();
-      await click(cell(2, 2));
+      await click(cellAt(2, 2));
       await paste(true);
       await saves("Ctrl+Shift+V pastes the values alone: a number and the text 1F", rows("| |", "31 | \"1F\" |"));
       check(await offered(), "and the button shows for it too");
@@ -97,18 +94,18 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
         readText: async () => window.__clip.plain } })`);
       check(await js("Array.from(document.querySelectorAll('.menubar [data-cmd^=\"paste\"]')).map((b) => b.dataset.cmd).join()") ===
         "paste,paste-values", "Edit holds Paste values below Paste");
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await menu("paste-values");
       await settle();
       await saves("the right-click menu's Paste values pastes the values alone", rows("31 | \"1F\" |", "| |"));
       await press("z", CTRL);
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await menu("paste");
       await settle();
       await saves("and Paste the formulas", rows("=hex_to_dec(B2) | =$B$1 |", "| |"));
       await press("z", CTRL);
       // Text another program copied pastes as before: its values fill the cells, and no button shows.
-      await click(cell(2, 2));
+      await click(cellAt(2, 2));
       await paste(false, "5\t=B1\r\n");
       await saves("text from elsewhere fills the cells as typed, as before", rows("| |", "5 | =B1 |"));
       check(!await offered(), "and offers no Paste options");
@@ -117,7 +114,7 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
     async pasteOptions() {
       await load(START);
       await copied();
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await paste();
       await click(".paste-options");
       check(await checked() === "Keep formulas" && await js("document.activeElement.closest('.paste-menu') !== null"),
@@ -127,7 +124,7 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       check(await offered() && await ranged() === "12,13", "the button stays, and the cells stay chosen");
       await press("z", CTRL);
       await saves("and one undo takes the paste back whole", START);
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await paste();
       await ctrl();
       check(await checked() === "Keep formulas" && await js("!document.querySelector('.paste-menu').hidden"),
@@ -144,7 +141,7 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
 
     async turnDollar() {
       await load(START);
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await type("=B2");
       const turns = [];
       for (let k = 0; k < 4; k += 1) {
@@ -173,6 +170,82 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       await send("paste");
       await saves("a whole column cut by its letter and pasted on another takes =sum(t.A) along",
         `${H}:::table name="t"\n| "" | "a" | "c" |\n| | 1 | =sum(t.B) |\n| | 2 | =sum(#REF!) |\n:::\n`);
+      // Its filter and number format go with it, so the column left behind hides no row.
+      const set = `${H}:::table name="t" formats=",number:2," filter="is:x,,"\n| "a" | "b" | "c" |\n` +
+        '| "x" | 1 | |\n| "y" | 2 | |\n| "x" | 3 | |\n:::\n';
+      await load(set);
+      await click(letter(2));
+      await send("cut");
+      await click(letter(3));
+      await send("paste");
+      await saves("a whole column pasted on another takes its filter and number format, and leaves none",
+        `${H}:::table name="t" formats=",,number:2" filter="is:x,,"\n| "a" | "" | "b" |\n` +
+        '| "x" | | 1 |\n| "y" | | 2 |\n| "x" | | 3 |\n:::\n');
+      await click(letter(1));
+      await send("cut");
+      await click(letter(3));
+      await send("paste");
+      await saves("and a column pasted on one with a filter takes its place",
+        `${H}:::table name="t" filter=",,is:x"\n| "" | "" | "a" |\n` +
+        '| | | "x" |\n| | | "y" |\n| | | "x" |\n:::\n');
+    },
+
+    // A cut that waits, as in Excel: a copy takes its place, Paste values is refused, and a paste
+    // onto hidden rows is refused. Remove row and Insert row above on a filtered range count the
+    // rows in sight alone.
+    async cutWaits() {
+      const said = () => js("document.getElementById('status').textContent");
+      const clip = (type, text = null) => js(`(() => {
+        const data = new DataTransfer();
+        if (${text !== null}) data.setData("text/plain", ${JSON.stringify(text)});
+        document.activeElement.dispatchEvent(new ClipboardEvent(${JSON.stringify(type)}, { clipboardData: data, bubbles: true, cancelable: true }));
+        return data.getData("text/plain");
+      })()`);
+      const plainTable = `${H}:::table name="t"\n| "a" | "b" | "c" | "d" |\n| 5 | | 5 | |\n| 7 | | =A2 | |\n:::\n`;
+      await load(plainTable);
+      await click(cellAt(0, 0));
+      await clip("cut");
+      await click(cellAt(0, 2));
+      const text = await clip("copy");
+      check(await js("document.querySelectorAll('#doc .cut').length") === 0,
+        "a copy after a cut drops the cut, as Ctrl+C in Excel does");
+      await click(cellAt(0, 3));
+      await clip("paste", text);
+      await saves("so a paste of the same text copies it and leaves the cut cell",
+        plainTable.replace("| 5 | | 5 | |", "| 5 | | 5 | 5 |"));
+      await load(plainTable);
+      await click(cellAt(1, 2));
+      const cut = await clip("cut");
+      await click(cellAt(1, 3));
+      await paste(true, cut);
+      check((await said()).startsWith("Cut cells move whole"), "Paste values while a cut waits is refused, and the page says why", await said());
+      check(await js("document.querySelectorAll('#doc .cut').length") > 0, "and the cut still waits");
+      await saves("and nothing changes", plainTable);
+      const filtered = (body) => `${H}:::table name="t" filter="is:x,"\n| "a" | "b" |\n${body}:::\n`;
+      const start = filtered('| "x" | 1 |\n| "x" | 2 |\n| "x" | 3 |\n| "y" | "s" |\n| "x" | 5 |\n| "x" | =t.B4 |\n');
+      await load(start);
+      check(await rowsShown(js) === "111011", "the filter hides the fourth row", await rowsShown(js));
+      await click(cellAt(0, 1));
+      await click(cellAt(1, 1), SHIFT);
+      const two = await clip("cut");
+      await click(cellAt(2, 1));
+      await clip("paste", two);
+      check((await said()).startsWith("A cut cannot pass over hidden rows"), "a paste of a cut onto hidden rows is refused, and the page says why", await said());
+      await saves("and changes nothing, so no reference to the hidden row breaks", start);
+      const four = filtered('| "x" | 1 |\n| "x" | 2 |\n| "y" | "s" |\n| "x" | 4 |\n');
+      await load(four);
+      await click(cellAt(1, 1));
+      await click(cellAt(3, 1), SHIFT);
+      await menu("row-remove");
+      await saves("Remove row on a filtered range removes the rows in sight alone",
+        filtered('| "x" | 1 |\n| "y" | "s" |\n'));
+      await menu("undo");
+      await saves("and one undo brings them back", four);
+      await click(cellAt(1, 1));
+      await click(cellAt(3, 1), SHIFT);
+      await menu("row-above");
+      await saves("Insert row above inserts one row for each row in sight",
+        filtered('| "x" | 1 |\n| | |\n| | |\n| "x" | 2 |\n| "y" | "s" |\n| "x" | 4 |\n'));
     },
 
     // A range over rows a filter hides: Delete, a fill and a copy act on the rows in sight alone, as
@@ -185,7 +258,7 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       const table = (body = filtered, attrs = ' filter="in:done,,"') =>
         `${H}:::table name="t"${attrs}\n| "s" | "v" | "w" |\n${body}:::\n\n${other}`;
       const start = table();
-      const shown = () => js("Array.from(document.querySelectorAll('#doc .table[data-name=t] tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
+      const shown = () => rowsShown(js, "#doc .table[data-name=t]");
       const at = (r, c, name = "t") => `#doc .table[data-name="${name}"] td[data-r="${r}"][data-c="${c}"]`;
       const said = () => js("document.getElementById('status').textContent");
       const clip = (type) => js(`(() => {

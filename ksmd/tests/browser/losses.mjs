@@ -5,10 +5,8 @@
 // `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
 import path from "path";
-import { CTRL, verdict } from "./drive.mjs";
+import { CTRL, H, check } from "./drive.mjs";
 
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
-const H = "%ksmd 1\n\n";
 const CELLS = `${H}Text.\n\n:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`;
 // A file the reader refuses: its version is not one ksmd reads.
 const REFUSED = "%ksmd 9\n\nA later version.\n";

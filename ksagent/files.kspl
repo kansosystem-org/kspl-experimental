@@ -119,14 +119,8 @@ fn skip_dir(name: U8[]): Bool //< the folders a walk does not enter: hidden ones
 fn text_problem(bytes: U8[]): U8[] //< why the bytes are not text, or empty when they are
     if bytes.contains_nul()
         return "it holds a NUL byte, so it is not a text file"
-    $i: Sz = 0
-    for i < bytes.len
-        if bytes[i] < 0x80U8
-            i += 1
-            continue
-        n: = bytes.utf8_seq_len(i) catch
-            return "it is not valid UTF-8 text"
-        i += n
+    if !bytes.is_utf8()
+        return "it is not valid UTF-8 text"
     return ""
 
 priv enum Kind //< how a file is read, by the ending of its name
@@ -334,7 +328,7 @@ fn words_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
         gap: = space_at(text, i)
         if i == text.len || gap > 0
             if i > start
-                w: = lower_ascii(text.sub(start, i - start), arena)
+                w: = text.sub(start, i - start).to_lower_ascii(arena)
                 if !holds(words.slice(), w)
                     words.push(w)
             i += 1 if gap == 0 else gap
@@ -478,12 +472,6 @@ priv fn cut_sent(text: U8[], max: Sz): U8[] //<
 // ==========================================
 // Text helpers
 // ==========================================
-
-fn lower_ascii(text: U8[], arena: Arena$@): U8[] //< a copy with ASCII letters made lower case
-    out: = arena.text()
-    for c in text
-        out.c(c.to_lower())
-    return out.take()
 
 priv fn holds_ignoring_case(line: U8[], lower_needle: U8[]): Bool //<
     //< Whether the line holds the needle, ASCII case ignored; the needle is already lower case

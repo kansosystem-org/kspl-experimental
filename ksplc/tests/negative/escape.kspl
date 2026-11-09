@@ -459,3 +459,103 @@ fn main(): I32
   _e: = element_of_array()
   _t: = slice_through_pointer()
   return ok_number() + ok_other_field()
+// ==== case frame_pointer_read_out_of_a_binding
+//< A name that reads a part out of a local carries what the local holds, as `p: = o` does
+//< A `case .some(v)` and an `if v: = o` binding copy the payload, and a `for … in` item reads each
+//< element. A pointer stepped by an integer (`s.ptr + 0`) points where its pointer does. A value a
+//< `catch` gives (its substitute or a `fallback`) stands for the value. A binding that holds a
+//< number holds no pointer, so `ok_number_payload` and `ok_number_item` pass.
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:29:12: error: cannot return 'v': it was set from the address of local storage
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:37:12: error: cannot return 'v': it was set from the address of local storage
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:45:12: error: cannot return 'p': it was set from the address of local storage
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:52:12: error: cannot return 'h': it was set from the address of local storage
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:59:10: error: cannot return this value: it is read through a pointer to 'ps', which was set from the address of local storage
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:68:10: error: cannot return 'p': it was set from the address of local storage
+// EXPECT: frame_pointer_read_out_of_a_binding.kspl:72:22: error: cannot return the address of local storage: 'x' lives in this function's frame
+// EXPECT: Finished with 7 error(s)
+priv struct H
+  p: I32@
+  n: I32
+
+priv enum Err
+  bad
+
+priv enum Held
+  at(p: I32@)
+  count(n: I32)
+
+priv fn payload_of_if(): I32@
+  x: I32 = 1
+  o: I32@? = .some(x@)
+  if v: = o
+    return v
+  return null
+
+priv fn payload_of_case(): I32@
+  x: I32 = 1
+  o: I32@? = .some(x@)
+  switch o
+  case .some(v)
+    return v
+  case .none
+    return null
+
+priv fn item_of_array(): I32@
+  x: I32 = 1
+  ps: I32@[1] = ::{ x@ }
+  for p in ps
+    return p
+  return null
+
+priv fn field_of_item(): I32@
+  x: I32 = 1
+  hs: H[1] = ::{ ::{ .p = x@, .n = 2 } }
+  for h in hs
+    return h.p
+  return null
+
+priv fn stepped_pointer(): I32@
+  x: I32 = 1
+  ps: I32@[1] = ::{ x@ }
+  s: = I32@[]::ps
+  return (s.ptr + 0)$
+
+priv fn may(): I32@!Err
+  return null
+
+priv fn catch_fallback(): I32@
+  x: I32 = 1
+  p: = may() catch
+    fallback x@
+  return p
+
+priv fn catch_substitute(): I32@
+  x: I32 = 1
+  return may() catch x@
+
+priv fn ok_number_payload(): I32
+  x: I32 = 1
+  $held: = Held.at(x@)
+  held = .count(3)
+  switch held
+  case .at(_p)
+    return 0
+  case .count(n)
+    return n
+
+priv fn ok_number_item(): I32
+  x: I32 = 1
+  hs: H[1] = ::{ ::{ .p = x@, .n = 2 } }
+  for h in hs
+    return h.n
+  return 0
+
+fn main(): I32
+  _a: = payload_of_if()
+  _b: = payload_of_case()
+  _c: = item_of_array()
+  _d: = field_of_item()
+  _e: = stepped_pointer()
+  _f: = catch_fallback()
+  _g: = catch_substitute()
+  return ok_number_payload() + ok_number_item()

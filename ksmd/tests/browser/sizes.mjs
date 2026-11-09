@@ -5,12 +5,10 @@
 // through the browser's own input events, as `main.mjs` drives the rest, and checked by the saved
 // source and its undo.
 // `sizes(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, check } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
-export function sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source, openCell,
+export function sizes({ page, js, settle, until, press, type, click, drag, menu, load, saves, source, openCell,
   doubleClickAt, rightClick, frames, resize }) {
   return {
   // Column widths and row heights, as a spreadsheet keeps them: a drag of a column letter's right
@@ -277,6 +275,40 @@ export function sizes({ page, js, settle, until, press, click, drag, menu, load,
     check(await tall() === one, "and the row is one line tall again", String(await tall()));
     await load(`${H}:::table name="t" char_widths="10" heights="15"\n| "a" |\n| ${long} {wrap="on"} |\n:::\n`);
     check(await tall() <= 21, "a row with a height keeps it, and cuts the wrapped lines", String(await tall()));
+  },
+
+  // Centre across columns, as Excel's Center Across Selection: a value shows centred over the
+  // empty cells to its right that are centred across too, and stays in its own cell. A value
+  // typed into one of them ends the run at once.
+  async acrossColumns() {
+    const t = (a, b) => `${H}:::table name="t" char_widths="10,10,10"\n| "a" | "b" | "c" |\n` +
+      `| 2129920${a} | ${b} | =A1 |\n:::\n`;
+    // The centre of the value's text, and of the cells from column A to `to`, in pixels.
+    const centres = (to) => js(`(() => {
+      const cell = (c) => document.querySelector('#doc td[data-r="0"][data-c="' + c + '"]').getBoundingClientRect();
+      const r = document.createRange(); r.selectNodeContents(document.querySelector('#doc td[data-r="0"][data-c="0"]'));
+      const text = r.getBoundingClientRect();
+      return [(text.left + text.right) / 2, (cell(0).left + cell(${to}).right) / 2]; })()`);
+    await load(t("", ""));
+    await click('#doc td[data-r="0"][data-c="0"]');
+    check(await until("!!document.querySelector('#doc td.chosen[data-r=\"0\"][data-c=\"0\"]')", 3000),
+      "a press chooses A1");
+    await click('#doc td[data-r="0"][data-c="1"]', SHIFT);
+    await menu("align-across");
+    await saves("Centre across columns marks each chosen cell, the value staying in A1",
+      t(' {align="across"}', '{align="across"}'));
+    const [text, run] = await centres(1);
+    check(Math.abs(text - run) <= 3, "the value shows centred across A1 and B1", `${text} ${run}`);
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "2129920",
+      "a formula =A1 still gives the value");
+    check(await js("!!document.querySelector('.menu.context [data-cmd=\"align-across\"]')"),
+      "the right-click menu holds Centre across columns too");
+    await openCell('#doc td[data-r="0"][data-c="1"]');
+    await type("x");
+    await press("Enter");
+    await saves("a value typed into B1 keeps its look", t(' {align="across"}', '"x" {align="across"}'));
+    const [own, column] = await centres(0);
+    check(Math.abs(own - column) <= 3, "and A1's value is centred in its own column again", `${own} ${column}`);
   },
 
   // In a window shorter than the right-click menu, it scrolls, so its last item can still be

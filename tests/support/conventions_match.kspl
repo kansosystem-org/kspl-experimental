@@ -12,7 +12,6 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/strnum" // `parse_size`
-import "std/sys"
 import "std/verdict"
 import "tests/support/conventions_ci" as cci
 import "tests/support/conventions_lsp" as clsp
@@ -502,10 +501,9 @@ priv fn check_fuzz_sanitized(arena: Arena$@)
     $bad: = scan.misjudged(Sample[]::ASAN_SAMPLES, fuzzes_sanitized, arena)
     $flags: U8[] = ""
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
+    for rel in harness.package_makefiles()
         text: = harness.read_under_root(rel)
-        if sys.get_dir_name(rel).find_char('/').is_some() ||
-            text.find_str(FUZZ_TARGET).is_none()
+        if text.find_str(FUZZ_TARGET).is_none()
             continue
         seen += 1
         if !fuzzes_sanitized(text, arena)

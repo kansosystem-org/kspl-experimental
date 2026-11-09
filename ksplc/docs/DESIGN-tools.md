@@ -121,6 +121,10 @@ Caution: **Match on the definition, not the spelling**: the same spelling appear
 
 **A name in a selective import's braces is a place of what it names.** In `import "lib" { helper }`, the `helper` is a use of `lib`'s `helper` (the analysis binds it, `check_import_symbols` in `ksplc/sema/decl/access.kspl`). Skipped, a rename would leave the import line naming a function `lib` no longer declares.
 
+**A closure's capture is a place of the outer local it names.** In `fn(x: I32; limit: I32)`, the capture `limit` and every `limit` in the body belong to the outer `limit`, from whichever of them the request starts. The body reads a rebinding the desugaring makes (`n: = env.n$`), so the walk links that rebinding to the outer local through the capture's place (`capture_source` and `linked_defs` in `ksplc/lsp/uses.kspl`). Skipped, a rename leaves the closure reading a name that is gone.
+
+Caution: **The capture's argument and its rebinding stand at the capture's name**, not at the closure's `fn(` (`build_capture_args`, `place_capture_rebindings` in `ksplc/parse/desugar_closure.kspl`). At `fn(`, an edit would overwrite the `fn(x:`, and every rebinding and parameter would share one place.
+
 **The list is ordered by file name, then line, then column.** It is gathered in a `Map`, whose hash order would shuffle the same answer on screen.
 
 **`context.includeDeclaration` is honoured exactly; where it is absent, the declaration is counted.**

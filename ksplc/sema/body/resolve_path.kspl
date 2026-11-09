@@ -340,8 +340,16 @@ priv fn report_type_call_without_new(c: Sema_ctx$@, node: Ast_node$@, fqn_slice:
     c.note_undefined_at(node)
 
 priv fn report_undefined_path(c: Sema_ctx$@, node: Ast_node$@, fqn_slice: U8[],
-    is_file_access: Bool, prefix: U8[], target_name: U8[], certain: Bool)
-    if c.has_error_in_fn() || (!certain && fqn_slice.find_str("<|").is_some())
+    is_file_access: Bool, prefix: U8[], target_name: U8[], certain: Bool) //<
+        //< Reports a name that names nothing, or holds the report back as a likely repeat
+        //< **A name held back is noted as reported too**, so a call through it is not reported
+        //< again in other words (report_unresolved_callee in call.kspl). An error earlier in the
+        //< function often leaves a name undeclared (a failed `r: = …`), so its later uses repeat
+        //< it.
+    if !certain && fqn_slice.find_str("<|").is_some()
+        return
+    if c.has_error_in_fn()
+        c.note_undefined_at(node)
         return
     // What could not be resolved is the head segment on a path, and the name itself on a bare name.
     // Advice pointing at `v` when `r.v`'s `r` is missing cannot be acted on.

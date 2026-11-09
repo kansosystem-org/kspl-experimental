@@ -10,11 +10,12 @@ A document contains prose, calculating tables, charts of them, images and includ
 | :-- | :-- |
 | Paragraphs, six heading levels, lists, links, emphasis and literal code | Raw HTML, executable code fences, embedded scripts |
 | Rectangular tables with text, numbers and formulas | Merged cells, nested tables, blocks inside cells |
-| Images in the document flow, with alternate text and an optional caption | Floating objects, absolute positioning, vector drawing tools |
+| Images in the document flow, with alternate text, an optional caption and shapes drawn over them | Floating objects, absolute positioning |
+| Diagrams of shapes and the arrows between them | Shapes drawn freely on the page |
 | Browser printing with automatic page breaks | Editable page boundaries, page templates, exact cross-browser pagination |
 | Includes opened separately for editing | Network includes, editing several sources in one transaction |
 
-Static figures are images with captions. Images keep their aspect ratio and fit the content width. Column resizing affects appearance, never cell identities or values. There is no presentation mode.
+Static figures are images with captions. Images keep their aspect ratio. Each fits the content width, or takes a share of it or of its own size that a person sets. Column resizing affects appearance, never cell identities or values. There is no presentation mode.
 
 ## Source boundaries
 
@@ -51,7 +52,7 @@ These reading rules settle cases the notation leaves open:
 * Only a run of three with no mark open has two readings. Strong emphasis goes outside, unless the next run on the line can close only the other order (`***a** b*`).
 * A code span ends at the next run of exactly as many backticks. One space at each end is dropped when both ends have one. The writer chooses the shortest run that the code does not hold.
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
-* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `char_widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`. A table row outside a table clause is refused.
+* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `char_widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`, `width`, `scale`. A table row outside a table clause is refused.
 * Any clause may take `invisible="printing"`, written last, which leaves its block out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). It has one value, so a misspelt one is refused.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one.
@@ -105,7 +106,7 @@ Typing inserts literal text: `#`, `*` or `:::` does not change structure. Format
 | `color` | `"#c00000"` | The text's colour: `#` and six hex digits |
 | `fill` | `"#fff2cc"` | The background's colour |
 | `size` | `14`, `10.5` | The font size in points, from 6 to 72, whole or ending in `.5`. The page offers 9, 10, 11, 12, 14, 18 and 24 |
-| `align` | `"left"`, `"center"`, `"right"` | A cell's or a paragraph's alignment |
+| `align` | `"left"`, `"center"`, `"right"`, `"across"` | A cell's or a paragraph's alignment. `across` is a cell's alone |
 | `wrap` | `"on"` | A cell's text breaks into lines at its column's width, as Excel's Wrap Text. Left out, the text stays on its lines |
 
 * **Values are written as attributes are**: strings in JSON quotes, numbers bare. The writer writes the parts in that fixed order, and colours in lower case. A look with no part is refused.
@@ -113,6 +114,10 @@ Typing inserts literal text: `#`, `*` or `:::` does not change structure. Format
 * **Text takes a colour, and nothing else, in brackets: `[text]{color="#c00000"}`.** A fill and a size on text would make a page uneven. A `{` right after brackets is escaped.
 * **A paragraph's or a heading's alignment stands on a line of braces right before it**, holding only `align`. At the end of the text, an ordinary `{` in prose could not be told apart. A `{` at the start of a paragraph's line is escaped, and anywhere else it is text.
 * **A cell's new value keeps its look.**
+* **`align="across"` centres a cell's value across the empty cells to its right that are `across` too**, as Excel's Center Across Selection. The run stops at the first cell that holds a value or has another alignment. A column a group hides is passed over.
+  * **It is only a look.** The value stays in its own cell, so references, ranges, sort, filter, fill, copy and paste act as before.
+  * **A value typed into a cell of the run ends the run there at once**, so no value is ever hidden under another.
+  * **A paragraph or a heading refuses it**: they have no cells to span.
 
 ### Notes
 
@@ -182,6 +187,7 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 ### How a formula is written
 
 * A number has a cell number's shape without its sign: `2.5`, `1e3`, `0.5`. A sign is unary minus.
+* **A whole number can also be written in hexadecimal or binary, as KSPL writes it:** `0xFF`, `0b_0111_0001` ("Hexadecimal and binary" below).
 * A cell is capital column letters, then a row number from 1 without a leading zero: `D1`, `AA12`. A `$` before either part fixes that part for copying.
 * `budget.D1` names a cell of another table in the same source, with no space around the `.`. A name that is not plain (a lowercase letter, then lowercase letters, digits and `_`) stands in JSON quotes: `"Q1 sales".D1`.
 * A range is two cells joined by `:` without spaces: `D1:D3`. A table's name stands once, before the range: `budget.D1:D3`. The corners can come in either order, and the writer saves the upper left first.
@@ -301,7 +307,7 @@ Each error has its own mark, since each is fixed differently.
 | `#CYCLE!` | The cell depends on itself, directly or through other cells |
 | `#EMPTY!` | `min`, `max`, `average` or `average_if` of no numbers |
 | `#SHAPE!` | A range in the condition of `sum_if`, `count_if` or `average_if` that is not one column as tall as the values, or a condition with no range. It is fixed by changing a range, which no other mark asks for |
-| `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function or a condition, a missing bracket or operand, or more than 64 levels |
+| `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function or a condition, a missing bracket or operand, or more than 64 levels. Or a literal in a base that is bad, past 2^53, or written as digit text |
 | `#BLOCKED!` | A call to a name that ksmd does not have, while the person has not allowed the document's functions file ("Your own functions") |
 
 ### Totals by a condition
@@ -350,6 +356,17 @@ Each error has its own mark, since each is fixed differently.
 * **A width in bits, from 1 to 53, writes two's complement**: `=dec_to_bin(-5, 8)` is `"11111011"`, and `=bin_to_dec("11111011", 8)` reads it back as -5. A number is written in the digits the width needs, zeros first (`=dec_to_hex(10, 16)` is `"000A"`). A number outside the width, or another width, is `#NUM!`.
 * **Hexadecimal is written in capitals and read in either case.** A text holding anything but the base's digits is `#VALUE!`.
 * **A whole number stands for its decimal digits** where text is read, so `=bin_to_dec(1010)` is 10. An empty cell is 0.
+
+**A formula can also write a whole number in a base: `0x` and hexadecimal digits, or `0b` and binary digits.** `=0x100000` is 1048576, and `=0b_0111_0001` is 113.
+
+* **The spelling is KSPL's, so one literal means the same in both.** The prefix is lowercase, and hexadecimal digits take either case. `_` can stand anywhere after the prefix, doubled or last too, as KSPL allows. `0X1F`, `0x`, `0x_`, `0b2` and `0xFFG` do not read.
+* **The literal is kept as written**, as `2.50` is: the source saves `0x100000`, and a paste shifts only the references beside it.
+* **Up to 2^53 it is exact; a larger literal does not read**, since a cell's number holds no larger whole number exactly.
+* **It takes no sign.** A minus before it is unary minus: `=-0x10` is -16.
+* **A literal does not read as the digit text of `hex_to_dec`, `bin_to_dec`, `hex_to_bin` or `bin_to_hex`**: `=hex_to_dec(0x100000)` is `#SYNTAX!`.
+* A value typed into a cell is not read this way: a typed `0xFF` stays text.
+
+**Why the literal is refused as digit text:** it is already the number. As a whole number, it would stand for its decimal digits, so `hex_to_dec(0x100000)` would quietly give 17073526. The rule holds in the argument's own brackets and arithmetic, but not inside another call: `=hex_to_dec(dec_to_hex(0xFF))` is 255. A formula that does not read shows at once, where a wrong number may never be noticed.
 
 **Why a sign by default:** a negative number written as a fixed run of digits surprises a reader who wanted a sign. A fixed width also limits which numbers convert. So the width is the reader's choice, up to 53 bits.
 
@@ -460,6 +477,8 @@ Each error has its own mark, since each is fixed differently.
 
 ### Captions and merged columns
 
+**Merged cells stay out: a table stays a rectangular grid, so sort, filter, ranges and references keep one cell per place.** Their look is given without them: `merge` gives it down a column, and `align="across"` ("Looks: colours, font size and alignment" above) along a row.
+
 **A table's `caption` stands above it**: `:::table name="modes" caption="運用モード一覧"`. A caption is 1 to 200 bytes of text with no braces, numbered where the document numbers headings ("The document's own settings" above).
 
 **`merge="A,B"` shows a value repeated down a column once, as merged cells look in a word processor.** Each cell still holds its value, so a sort, a filter and a range work as before; only the look changes.
@@ -486,6 +505,44 @@ Each error has its own mark, since each is fixed differently.
 * **Whether a group is hidden is saved in the file, unlike a filter.** Hiding detail is the shape the writer gives the table, while a filter answers one question for the moment.
 
 `ksmd/model/group.kspl` reads, writes and checks the groups. `edit.group_lines`, `edit.ungroup_lines` and `edit.show_group` are each one step of undo. Ungrouping takes away the smallest group that holds the chosen rows.
+
+### Column widths and row heights
+
+**The table's `char_widths` attribute gives a column a width in characters**, as a quoted list with one entry per column: `char_widths="12,,8.5"`. An entry is 0.5 to 255, Excel's limit, with at most one decimal place. An empty entry is a column that fits its text. The attribute stands only while some column has a width.
+
+* **A character is the width of the digit 0 in the table's font**, as Excel's column width and CSS's unit `ch` count it. The model keeps tenths of a character, so a width is a whole number.
+* **The table is as wide as its columns, not as wide as the window.** A person who sets a column's width in a spreadsheet expects it to stay, and expects no text to wrap when the window narrows. A wider table makes the page scroll sideways.
+* **The older `widths="1,2,1"`, which gave each column a share of the width, is refused.** The message names `char_widths`, which says the same in characters.
+
+**The table's `heights` attribute gives a row a height in points**, as a quoted list with one entry per data row: `heights=",30,,"`. An entry is a whole number from 6 to 409, Excel's limit, or empty for a row that fits its lines. The attribute stands only while some row has a height.
+
+* **A height is exact: text taller than the row is cut, as in Excel.** A person who makes a row lower means it. A double-click on the row's edge fits it to its lines again ("Column widths and row heights" in [`DESIGN-page.md`](DESIGN-page.md)).
+* **The model keeps each height by the row's identity**, so a sort, a moved row and an inserted row leave it on its row. A removed row's height comes back with an undo.
+* **Points are the unit of a font's size**, which the look already uses ("Looks" above), and of Excel's row height.
+
+### Filters
+
+**The table's `filter` attribute keeps which rows the page shows**, as a quoted list with one entry per column (`ksmd/model/filter.kspl`):
+
+```text
+:::table name="tasks" filter="in:open|in progress|,,above:100"
+```
+
+| Entry | The rows it shows |
+| :-- | :-- |
+| Nothing | Every row |
+| `in:` and values separated by bars | Rows whose cell shows one of the values; an empty value stands for empty cells |
+| `out:` and values separated by bars | Rows whose cell shows none of the values |
+| `is:`, `not:`, `contains:` and a value | Rows whose cell shows that text, any other, or text holding it |
+| `above:`, `below:` and a value | Rows whose number is greater or less; text compares as text |
+| `empty`, `filled` | Rows whose cell is empty, or holds a value |
+
+* **A value is the text the cell shows, in lower case**, since the page compares without regard to case. `%25`, `%2C` and `%7C` stand for `%`, `,` and `|`, which separate the entries.
+* **A change of number format takes the column's entry away, in the same step of undo.** The format of the column or of a cell in it changes the text the cell shows, so `in:1.5` would hide every row once 1.5 shows as 1.50.
+* **A row inserted leaves every entry as it is.** The page shows the new row until the filter is chosen again ([`DESIGN-page.md`](DESIGN-page.md)), so the file keeps the filter the person chose.
+* **The model keeps each entry by the column's identity**, so it moves with its column, and an undo of a removed column brings it back.
+* **Whole columns cut and pasted on others give their entries to the columns pasted on**, as their widths, formats, choices and rules go (`move_cells` in `ksmd/edit/moving.kspl`). The cells move but the columns stay, so an entry left on its column would hide every row of an empty column.
+* **The file keeps every row; a filter only hides some on the page and on paper.** A reader that does not know the attribute refuses the file rather than show rows the writer hid ("Source boundaries" above).
 
 ### How references follow edits
 
@@ -626,12 +683,18 @@ line from="tip" to="ask" via="380,180"
 
 ## Includes and images
 
-An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption` and `width`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption`, and `width` or `scale`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
 
 **An image's `width` is its share of the text width: `width="40%"`, a whole number from 1 to 100.** Its height follows, so the picture keeps its shape. Without it, the image fits the text width as far as its pixels allow.
 
 * **A share, not pixels or centimetres**: the same file shows alike on any screen and on any paper. A narrower window narrows the image with the text.
 * **Images next to each other share a row while each has a width and the widths add up to 100% or less.** So pictures stand in a line of Word's text. Two screenshots at `45%` stand side by side, with no clause for a row.
+
+**An image's `scale` is its share of its own size: `scale="50%"`, a whole number from 1 to 400.** At `100%`, one pixel of the image is one CSS pixel. Its height follows, and the image is never wider than the text.
+
+* **A scale follows the picture, not the window.** The text width changes with the window, so a width cannot hold "half of this screenshot". A scale keeps a picture at the size that its own pixels give, on any window, as Word's Scale and Typora's zoom do.
+* **A clause holds a width or a scale, never both.** Each is a way to size the image, so the reader refuses the two together, and the message says to keep one. Setting one in the editor takes the other away.
+* **Only a width shares a row.** A width is a share of the text, so the widths add up; a scale gives no share to add.
 
 Links may use `https`, `http`, `mailto`, or a document fragment; other schemes are refused. Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -695,39 +758,6 @@ Links may use `https`, `http`, `mailto`, or a document fragment; other schemes a
 * **An upward import is refused by `make test-conventions`.** The compiler sees only a cycle.
 
 The model is an ordered block tree of paragraphs, headings, lists, code, tables, charts, images and includes. Tables own rectangular cells, not child blocks. Editing identities belong to the model and need not appear in source.
-
-**The table's `char_widths` attribute gives a column a width in characters**, as a quoted list with one entry per column: `char_widths="12,,8.5"`. An entry is 0.5 to 255, Excel's limit, with at most one decimal place. An empty entry is a column that fits its text. The attribute stands only while some column has a width.
-
-* **A character is the width of the digit 0 in the table's font**, as Excel's column width and CSS's unit `ch` count it. The model keeps tenths of a character, so a width is a whole number.
-* **The table is as wide as its columns, not as wide as the window.** A person who sets a column's width in a spreadsheet expects it to stay, and expects no text to wrap when the window narrows. A wider table makes the page scroll sideways.
-* **The older `widths="1,2,1"` gave weights, each column's share of the table's width.** The reader still takes it, and turns the shares into a table of 80 characters, half a character at least. The writer writes `char_widths` only, so a file saved once has the new form. Giving both attributes is refused.
-
-**The table's `heights` attribute gives a row a height in points**, as a quoted list with one entry per data row: `heights=",30,,"`. An entry is a whole number from 6 to 409, Excel's limit, or empty for a row that fits its lines. The attribute stands only while some row has a height.
-
-* **A height is exact: text taller than the row is cut, as in Excel.** A person who makes a row lower means it. A double-click on the row's edge fits it to its lines again ("Column widths and row heights" in [`DESIGN-page.md`](DESIGN-page.md)).
-* **The model keeps each height by the row's identity**, so a sort, a moved row and an inserted row leave it on its row. A removed row's height comes back with an undo.
-* **Points are the unit of a font's size**, which the look already uses ("Looks" above), and of Excel's row height.
-
-**The table's `filter` attribute keeps which rows the page shows**, as a quoted list with one entry per column (`ksmd/model/filter.kspl`):
-
-```text
-:::table name="tasks" filter="in:open|in progress|,,above:100"
-```
-
-| Entry | The rows it shows |
-| :-- | :-- |
-| Nothing | Every row |
-| `in:` and values separated by bars | Rows whose cell shows one of the values; an empty value stands for empty cells |
-| `out:` and values separated by bars | Rows whose cell shows none of the values |
-| `is:`, `not:`, `contains:` and a value | Rows whose cell shows that text, any other, or text holding it |
-| `above:`, `below:` and a value | Rows whose number is greater or less; text compares as text |
-| `empty`, `filled` | Rows whose cell is empty, or holds a value |
-
-* **A value is the text the cell shows, in lower case**, since the page compares without regard to case. `%25`, `%2C` and `%7C` stand for `%`, `,` and `|`, which separate the entries.
-* **A change of number format takes the column's entry away, in the same step of undo.** The format of the column or of a cell in it changes the text the cell shows, so `in:1.5` would hide every row once 1.5 shows as 1.50.
-* **A row inserted leaves every entry as it is.** The page shows the new row until the filter is chosen again ([`DESIGN-page.md`](DESIGN-page.md)), so the file keeps the filter the person chose.
-* **The model keeps each entry by the column's identity**, so it moves with its column, and an undo of a removed column brings it back.
-* **The file keeps every row; a filter only hides some on the page and on paper.** A reader that does not know the attribute refuses the file rather than show rows the writer hid ("Source boundaries" above).
 
 **The editor uses browser layout.** Paragraphs and real HTML tables give text flow, selection, accessibility structure and print layout without a second text-layout engine. Canvas remains an option for future specialized figures, not the default document surface.
 
@@ -856,11 +886,12 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **An image's format and size come from its file's header, before the browser decodes it.** `measure` in `ksmd/files/image.kspl` reads a PNG's IHDR chunk, or walks a JPEG's segments to its frame header. The bytes decide the format, not the file's name. The page passes the header in windows of 64 KiB, so a large file never fills the editor's memory.
 
-**An image pasted or dropped into the text is written in the document's folder of images, and its clause goes in after the caret's block.** That folder is the document's name and `-images`, beside it, and the image takes the first free number: `notes-images/image-2.png`.
+**An image pasted or dropped into the text is written in the document's data folder, and its clause goes in after the caret's block.** That folder is the document's name and `-data`, beside it, and the image takes the first free number: `notes-data/image-2.png`.
 
-* **One folder per document**, so a folder of documents does not fill with their pictures, and each document's pictures can be told apart. The server makes the folder on the first write.
-* **File ▸ Gather images into a folder moves into it the images an older page wrote beside the document** (`notes-image-2.png`). It points the document at them, and saves. A move never replaces a file: one whose place is taken stays, and the page names it. The save is part of the command, as the file on disk would otherwise name images that moved.
-
+* **One folder per document holds every file ksmd writes for it**: its images, and a new functions file or included document from Insert (`dataFolder` in `ksmd/port/web/file.js`). A folder of documents does not fill with their files, and each document's files can be told apart. Moving or sending a document means one folder more. The server makes the folder on the first write.
+* **The folder's name says it belongs to the document, not what it holds.** A name per kind of file, such as `-images`, would need a second folder for each new kind.
+* **A file chosen elsewhere is used where it stands.** The folder is only where a new file goes by default; a clause may name any file in the workspace.
+* **A document renamed or saved elsewhere keeps the folder's old name.** Its clauses name the files by their paths, which Save As writes again (`ksmd/port/web/moving.kspl`), so nothing breaks.
 * **The write never replaces a file**: a name already taken goes on to the next number.
 * **The page asks nothing as the image goes in.** It goes in with no alternate text, as one that only decorates. Alt text… in the image's tools gives it a description later, and Caption… a caption that a reference names. A question on every image was asked more often than it was answered, and put the work before the picture.
 * **It needs the local server and a document saved once**, for the image needs a folder to go in.

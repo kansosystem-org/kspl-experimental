@@ -182,5 +182,5 @@ function ksmdPages(ks) {
     return { page: Math.min(page, pages), pages, paper: laid.name };
   }
 
-  ks.pages = { at, paper, lay };
+  ks.pages = { at, paper };
 }

@@ -178,6 +178,46 @@ pub extern fn takes_pod(p: Pod, e: Plain): I32
   return p.a + I32::e
 
 fn main() {}
+// ==== case ffi_callback_types
+//< A callback's parameters and result cross the C boundary as an `extern` function's own do
+//< C calls the callback with C's layout, so a slice, a Result or a trait value there breaks it as it
+//< would in the signature itself. A callback that takes only scalars and pointers passes.
+// EXPECT: ffi_callback_types.kspl:15:30: error: slices (T[]) cannot cross C-FFI boundaries
+// EXPECT: ffi_callback_types.kspl:16:33: error: result types (T!E) cannot cross C-FFI boundaries
+// EXPECT: ffi_callback_types.kspl:17:30: error: interface values cannot cross C-FFI boundaries
+// EXPECT: ffi_callback_types.kspl:19:31: error: slices (T[]) cannot cross C-FFI boundaries
+// EXPECT: Finished with 4 error(s)
+pub enum Err
+  bad
+
+pub trait S
+  fn a(r: Self): I32
+
+extern fn takes_slice_cb(cb: fn(s: U8[]): I32): I32
+extern fn returns_result_cb(cb: fn(): I32!Err): I32
+extern fn takes_trait_cb(cb: fn(s: S): I32): I32
+extern fn takes_ok_cb(cb: fn(p: Void@, n: I32): I32): I32
+pub extern fn exported_cb(cb: fn(s: U8[]): I32): I32
+  return 0
+
+fn main() {}
+// ==== case ffi_callback_struct_by_value_llvm
+//< On the LLVM backend, a callback cannot take or return a struct by value either
+//< A KSPL function passed to C as the callback receives a struct through a pointer (the internal
+//< ABI), while C passes it in registers, so the call reads garbage. The C backend accepts this.
+// ARGS: --to=llvm
+// EXPECT: ffi_callback_struct_by_value_llvm.kspl:12:27: error: structs cannot be passed or returned by value across C-FFI boundaries on the LLVM backend
+// EXPECT: ffi_callback_struct_by_value_llvm.kspl:13:29: error: structs cannot be passed or returned by value across C-FFI boundaries on the LLVM backend
+// EXPECT: Finished with 2 error(s)
+pub struct P2
+  pub a: I64
+  pub b: I64
+
+extern fn takes_p2_cb(cb: fn(p: P2): I64): I64
+extern fn returns_p2_cb(cb: fn(): P2): I64
+extern fn takes_p2_ptr_cb(cb: fn(p: P2@): I64): I64
+
+fn main() {}
 // ==== case ffi_variadic_layout
 //< A value whose layout is Kanso's own is refused inside a C function's `...` too
 //< C reads a `...` value as the type its format names. A slice there was read as a `char*` and

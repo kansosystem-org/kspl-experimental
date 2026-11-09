@@ -32,20 +32,16 @@ fn in_part(index: Sz, part: Part): Bool //< each suite belongs to exactly one ha
     core: = index % 4 == 0 || index % 4 == 3
     return part == .all || (core if part == .core else !core)
 
-priv const LIB_DIR: U8[] = "lib" //< the folder the libraries stand in, one package each
-
 priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //<
-    //< The package folders carrying a `Makefile`: a top folder, or one under `lib/`
+    //< The package folders carrying a `Makefile` (`harness.package_makefiles`)
     $out: = List<|U8[]|>(arena)
-    for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
-        dir: = sys.get_dir_name(rel)
-        if dir.find_char('/').is_none() || sys.get_dir_name(dir).equals(LIB_DIR)
-            out.push(dir)
+    for rel in harness.package_makefiles()
+        out.push(sys.get_dir_name(rel))
     return out
 
 priv fn folder_of(name: U8[], arena: Arena$@): U8[] //< the folder of the package named so
     //< A library's under `lib/`, else the top folder of its name.
-    lib: = fs.join(LIB_DIR, name, arena)
+    lib: = fs.join(harness.LIB_DIR, name, arena)
     return lib if fs.is_dir(fs.join(harness.root(), lib, arena)) else name
 
 priv fn declared(dir: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -176,7 +172,7 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
             placed =
                 placed &&
                 harness.copy_tracked(folder_of(decl.get(i), arena),
-                fs.join(fs.join(work, LIB_DIR, arena), decl.get(i), arena), false)
+                fs.join(fs.join(work, harness.LIB_DIR, arena), decl.get(i), arena), false)
     if !placed
         verdict.check(name, false, "cannot copy the package or what it uses")
         return

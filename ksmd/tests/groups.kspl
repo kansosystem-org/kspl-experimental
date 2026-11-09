@@ -2,10 +2,10 @@
 //< an edit does to them, and their undo
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
-import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
+import "ksmd/edit/editor_tables" { Group_edit }
 import "ksmd/model/format" { format_of }
 import "ksmd/syntax/reader"
-import "ksmd/tests/support" { opened, saves }
+import "ksmd/tests/support" { changed, opened, saves }
 import "std/chars"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -98,15 +98,15 @@ priv fn grouping()
 priv fn following()
     defer arena: = Arena(64 * 1024)
     $ed: = opened(table_with("rows 2-4 closed, rows 3", arena), arena)
-    changed(ed@, .insert_row, 2)
+    changed(ed@, 0, .insert_row, 2)
     saves("a row inserted inside a group joins it", ed@, arena,
         with_rows("rows 2-5 closed, rows 4", "| 1 |\n| 2 |\n| |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
-    changed(ed@, .insert_row, 1)
+    changed(ed@, 0, .insert_row, 1)
     before: =
         with_rows("rows 3-6 closed, rows 5", "| 1 |\n| |\n| 2 |\n| |\n| 3 |\n| 4 |\n| 5 |\n| 6 |",
         arena)
     saves("a row inserted before a group moves it down", ed@, arena, before)
-    changed(ed@, .remove_row, 4)
+    changed(ed@, 0, .remove_row, 4)
     saves("a group whose last row goes is taken away", ed@, arena,
         with_rows("rows 3-5 closed", "| 1 |\n| |\n| 2 |\n| |\n| 4 |\n| 5 |\n| 6 |", arena))
     ed.sort_table(0, 0, true) catch e
@@ -114,7 +114,7 @@ priv fn following()
     saves("a sort leaves the groups where they stand", ed@, arena,
         with_rows("rows 3-5 closed", "| 6 |\n| 5 |\n| 4 |\n| 2 |\n| 1 |\n| |\n| |", arena))
     $two: = opened(table_with("rows 2-4, rows 3-4", arena), arena)
-    changed(two@, .remove_row, 1)
+    changed(two@, 0, .remove_row, 1)
     saves("of two groups left on the same rows, the outer one stays", two@, arena,
         with_rows("rows 2-3", "| 1 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
 
@@ -146,14 +146,14 @@ priv fn column_groups()
     ed.group_lines(0, true, 4, 4, .ungroup) catch e
         verdict.check("ungrouping a column outside a group",
             e.message().find_str("No group").is_some(), e.message())
-    changed(ed@, .insert_column, 2)
+    changed(ed@, 0, .insert_column, 2)
     joined: =
         with_columns("columns B-E closed",
         "| \"a\" | \"b\" | \"\" | \"c\" | \"d\" | \"e\" |\n| 1 | 2 | | 3 | 4 | 5 |\n| 6 | 7 | | 8 | \
             9 | 10 |\n| 11 | 12 | | 13 | 14 | 15 |", arena)
     saves("a column inserted inside a group joins it", ed@, arena, joined)
-    changed(ed@, .remove_column, 0)
-    changed(ed@, .remove_column, 0)
+    changed(ed@, 0, .remove_column, 0)
+    changed(ed@, 0, .remove_column, 0)
     left: =
         with_columns("columns A-C closed",
         "| \"\" | \"c\" | \"d\" | \"e\" |\n| | 3 | 4 | 5 |\n| | 8 | 9 | 10 |\n| | 13 | 14 | 15 |",
@@ -184,12 +184,12 @@ priv fn heights()
         arena.text().s(OPEN).s(" heights=\"9,,,,30,\"")
         .s("\n| \"a\" |\n| 6 |\n| 5 |\n| 4 |\n| 3 |\n| 2 |\n| 1 |\n:::\n").take())
     ed.undo()
-    changed(ed@, .remove_row, 1)
+    changed(ed@, 0, .remove_row, 1)
     saves("a removed row takes its height away", ed@, arena,
         with_rows_heights(",,,,9", "| 1 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
     ed.undo()
     saves("and undo brings both back", ed@, arena, tall)
-    changed(ed@, .insert_row, 1)
+    changed(ed@, 0, .insert_row, 1)
     saves("a new row has no height", ed@, arena,
         with_rows_heights(",,30,,,,9", "| 1 |\n| |\n| 2 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
     ed.undo()
@@ -250,18 +250,18 @@ priv fn filters()
     last: = ed.history.done[ed.history.done.len - 1]@
     verdict.check("the step records the filter alone, and no copy of the table",
         last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
-    changed(ed@, .insert_column, 0)
+    changed(ed@, 0, .insert_column, 0)
     saves("an inserted column moves the filter with its column", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\" filter=\",,in:x\"\n| \"\" | \"a\" | \"b\" |\n| | 1 | \"x\" \
             |\n| | 2 | \"y\" |\n:::\n")
     ed.undo()
-    ed.edit_table(0, .remove_column, 1, 1) catch e
+    ed.edit_table(0, .remove_column, 1, 1, Sz[]::{}) catch e
         verdict.check("removing a column", false, e.message())
     saves("a removed column takes its filter away", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n| 2 |\n:::\n")
     ed.undo()
     saves("and undo brings both back", ed@, arena, with(",in:x", arena))
-    changed(ed@, .insert_row, 1)
+    changed(ed@, 0, .insert_row, 1)
     saves("an inserted row keeps the filter", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\" filter=\",in:x\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| | \
             |\n| 2 | \"y\" |\n:::\n")
@@ -365,10 +365,6 @@ priv fn refused_in(text: U8[], message: U8[]) //< the reader refuses the source 
 priv fn grouped(ed: Editor$@, first: Sz, last: Sz, what: Group_edit)
     ed.group_lines(0, false, first, last, what) catch e
         verdict.check("a group edit", false, e.message())
-
-priv fn changed(ed: Editor$@, what: Table_edit, at: Sz)
-    ed.edit_table(0, what, at, 1) catch e
-        verdict.check("a row edit", false, e.message())
 
 priv fn wrong(ed: Editor$@, first: Sz, last: Sz, what: Group_edit, says: U8[], name: U8[]) //<
     //< The group edit is refused with a message that holds `says`

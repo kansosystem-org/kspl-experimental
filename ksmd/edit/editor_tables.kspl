@@ -152,15 +152,20 @@ impl Editor
         _u: = ed.table_of(block)!
         ed.remove_whole(block)!
 
-    fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz, count: Sz): Void!Refused //<
-        //< Inserts `count` rows or columns of the table a block shows before the one at `at`, or
-        //< removes `count` from it, as one step
-        //< A filter stays as it is: the page shows a new row until the filter is chosen again. A
-        //< refusal changes nothing.
+    fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz, count: Sz, left_out: Sz[]):
+        Void!Refused //<
+            //< Inserts `count` rows or columns of the table a block shows before the one at `at`, or
+            //< removes `count` from it, as one step
+            //< A removal of rows leaves the rows `left_out`, which a filter or a closed group
+            //< hides, as Excel removes only the rows in sight. Other edits take no rows `left_out`.
+            //< A filter stays as it is: the page shows a new row until the filter is chosen again.
+            //< A refusal changes nothing.
         u: = ed.table_of(block)!
-        if count < 1
+        t: = ed.doc.tables[u]@
+        if count < 1 || (what != .remove_row && left_out.len > 0)
             throw .table(.outside)
         defer scratch: = Arena(16 * 1024)
+        out: = marks_of(left_out, t.rows.len, scratch)!
         before: = capture(ed.doc@, scratch)
         switch what
         case .insert_row
@@ -169,17 +174,28 @@ impl Editor
         case .insert_column
             edit.insert_columns(ed.doc@, u, at, count, ed.arena) catch why
                 throw .table(why)
-        case .remove_row, .remove_column
-            // Each line goes in turn from the same place; one refused puts every table back.
+        case .remove_row
+            if at < 0 || at + count > t.rows.len
+                throw .table(.outside)
+            // From the bottom up, so the rows still to go keep their places. One refused puts
+            // every table back.
+            $removed: Sz = 0
+            for k in Range.asc(count)
+                row: = at + count - 1 - k
+                if out[row]
+                    continue
+                edit.remove_row(ed.doc@, u, row) catch why
+                    ed.put_tables_back(before@)
+                    throw .table(why)
+                removed += 1
+            if removed == 0
+                throw .table(.outside)
+        case .remove_column
+            // Each column goes in turn from the same place; one refused puts every table back.
             for _ in Range.asc(count)
-                if what == .remove_row
-                    edit.remove_row(ed.doc@, u, at) catch why
-                        ed.put_tables_back(before@)
-                        throw .table(why)
-                else
-                    edit.remove_column(ed.doc@, u, at) catch why
-                        ed.put_tables_back(before@)
-                        throw .table(why)
+                edit.remove_column(ed.doc@, u, at) catch why
+                    ed.put_tables_back(before@)
+                    throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn move_lines(ed: Self$@, block: Sz, rows: Bool, first: Sz, count: Sz, at: Sz): Void!Refused //<

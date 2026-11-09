@@ -6,6 +6,7 @@
 //< token, as a page that skipped its own question would.
 import "kssrv/tests/client"
 import "kssrv/tests/local"
+import "kssrv/tests/start" { read_log, start_server }
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -14,6 +15,7 @@ import "std/mem" { Arena }
 import "std/sha256"
 import "std/str"
 import "std/strfmt" as _strfmt
+import "std/sys"
 import "std/verdict"
 
 priv const BUILDER: U8[] =
@@ -27,6 +29,23 @@ priv const CHANGED: U8[] = "pub fn tax(price: F64): F64\n    return price * 9.9\
     //< the same file after a colleague changed it
 
 priv const RECORD: U8[] = "kssrv-allowed.txt" //< the record of allowed files, in the work folder
+
+fn refused_inside(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], arena: Arena$@) //<
+    //< Checks that a record of allowed files under the root keeps the server from starting
+    //< **A page could write such a record**, and allow its own file. The second spelling climbs
+    //< out of the root and back in.
+    for record in U8[][]::{ fs.join(root, "kssrv.allowed", arena),
+        arena.text().s(root).s("/../").s(sys.get_file_name(root)).s("/./kssrv.allowed").take() }
+        inside: =
+            start_server(exe, root, out_log, err_log,
+            U8[][]::{ "--local", arena.text().s("--builder=\{exe\}").take(),
+            arena.text().s("--allowed=\{record\}").take() }, arena)
+        said: = read_log(out_log, err_log, arena)
+        verdict.check(arena.text().s("a record under the root does not come up: \{record\}").take(),
+            !inside.child.is_some() && said.find_str("outside <root>").is_some(), said)
+        if c: = inside.child
+            $bad: = c
+            bad.kill()
 
 fn placed(tmp: U8[], arena: Arena$@): U8[][]? //<
     //< Places the stand-in builder in `tmp`, and gives the options that name it and a fresh record

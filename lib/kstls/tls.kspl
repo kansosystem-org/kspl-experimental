@@ -282,11 +282,16 @@ impl Tls_stream
         return s
 
     pub fn write( //< sends and returns how much was sent; a partial send is normal, so loop
+        //< An empty `buf` gives 0 at once.
         r: Self$@,
         buf: U8[], //< the bytes to send
     ): Sz!Tls_error
         // Caution: **Call it again with the same bytes** while it does not finish, as OpenSSL asks.
         want: = math.min(buf.len, IO_CHUNK)
+        // Caution: **Do not hand OpenSSL an empty write.** It fails as SSL_ERROR_SYSCALL, which
+        // reads as a broken connection.
+        if want == 0
+            return 0
         for
             ERR_clear_error()
             n: = SSL_write(r.ssl, Void@::buf.ptr, I32::want)
@@ -298,9 +303,14 @@ impl Tls_stream
                 throw .io_failed
 
     pub fn read( //< receives and returns how much arrived; 0 only after the peer's close_notify
+        //< An empty `buf` gives 0 at once, as a read of 0 bytes does on a socket.
         r: Self$@,
         buf: U8$[], //< where the bytes go
     ): Sz!Tls_error
+        // Caution: **Do not hand OpenSSL an empty read.** It asks for more input, so the read
+        // would wait for the peer's next record, or for good.
+        if buf.len == 0
+            return 0
         // `SSL_get_error` reads this thread's error queue, so a failure left there before would be
         // taken for this call's.
         for

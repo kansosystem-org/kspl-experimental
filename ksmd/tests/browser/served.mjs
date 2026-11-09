@@ -8,14 +8,13 @@
 import fs from "fs";
 import path from "path";
 import zlib from "zlib";
-import { CTRL, driver, verdict } from "./drive.mjs";
+import { CTRL, H, check, driver, verdict } from "./drive.mjs";
 import { request, start } from "./kssrv.mjs";
 import { drafts } from "./drafts.mjs";
 import { losses } from "./losses.mjs";
 import { own } from "./own.mjs";
 import { redraws } from "./redraws.mjs";
 
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 // A 1 by 1 PNG that a browser decodes.
 const DOT = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAC" +
@@ -64,7 +63,6 @@ function grayPng(width, height) {
     chunk("IDAT", zlib.deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
 
-const H = "%ksmd 1\n\n";
 const IMAGES = ':::image src="pics/dot.png" alt="A dot"\n:::\n\n' +
   ':::image src="pics/huge.png" alt="Huge"\n:::\n\n:::image src="pics/fake.png" alt="Fake"\n:::\n\n' +
   ':::image src="pics/none.png" alt="None"\n:::\n';
@@ -707,10 +705,10 @@ const SECTIONS = {
     await ctx.browser.closeTab(d.page);
   },
 
-  // An image pasted is written beside the document under a free name, and its clause goes in.
+  // An image pasted is written in the document's data folder under a free name, and its clause goes in.
   async pasteImage(ctx) {
     fs.writeFileSync(path.join(ctx.root, "paste.ksmd"), `${H}Text.\n`);
-    fs.mkdirSync(path.join(ctx.root, "paste-images"), { recursive: true }); fs.writeFileSync(path.join(ctx.root, "paste-images/image-1.png"), "taken");
+    fs.mkdirSync(path.join(ctx.root, "paste-data"), { recursive: true }); fs.writeFileSync(path.join(ctx.root, "paste-data/image-1.png"), "taken");
     const d = await tab(ctx, "?doc=paste.ksmd");
     await d.select(0, 0, 5);
     ctx.browser.answerPrompts("A dot");
@@ -723,16 +721,16 @@ const SECTIONS = {
     })()`);
     await idle(d);
     ctx.browser.answerPrompts(null);
-    const file = path.join(ctx.root, "paste-images/image-2.png");
-    check(fs.existsSync(file) && fs.readFileSync(file).equals(DOT) && ctx.disk("paste-images/image-1.png") === "taken",
-      "a pasted PNG is written in the document's folder of images, past a name already taken");
+    const file = path.join(ctx.root, "paste-data/image-2.png");
+    check(fs.existsSync(file) && fs.readFileSync(file).equals(DOT) && ctx.disk("paste-data/image-1.png") === "taken",
+      "a pasted PNG is written in the document's data folder, past a name already taken");
     const source = await d.js("ksmd.source()");
-    check(source === `${H}Text.\n\n:::image src="paste-images/image-2.png" alt=""\n:::\n`,
+    check(source === `${H}Text.\n\n:::image src="paste-data/image-2.png" alt=""\n:::\n`,
       "its clause goes in after the caret's paragraph, asking for no description", JSON.stringify(source));
-    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"paste-images/image-2.png\"] img'); " +
+    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"paste-data/image-2.png\"] img'); " +
       "return !!i && i.complete && i.naturalWidth === 1; })()"), "and the image shows at once");
     await ctx.browser.closeTab(d.page);
-    for (const name of ["paste.ksmd", "paste-images"]) {
+    for (const name of ["paste.ksmd", "paste-data"]) {
       fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
     }
   },
@@ -755,19 +753,19 @@ const SECTIONS = {
     ctx.browser.answerPrompts("A chosen dot");
     ctx.browser.chooseFiles([picked]);
     await d.menu("image");
-    const file = path.join(ctx.root, "pick-images/image-1.png");
-    check(await d.until("ksmd.source().includes('pick-images/image-1.png')") && fs.existsSync(file) &&
-      fs.readFileSync(file).equals(DOT), "the image chosen is written beside the document",
+    const file = path.join(ctx.root, "pick-data/image-1.png");
+    check(await d.until("ksmd.source().includes('pick-data/image-1.png')") && fs.existsSync(file) &&
+      fs.readFileSync(file).equals(DOT), "the image chosen is written in the document's data folder",
     await said(d));
     ctx.browser.answerPrompts(null);
     ctx.browser.chooseFiles(null);
     const source = await d.js("ksmd.source()");
-    check(source === `${H}Text.\n\n:::image src="pick-images/image-1.png" alt=""\n:::\n`,
+    check(source === `${H}Text.\n\n:::image src="pick-data/image-1.png" alt=""\n:::\n`,
       "its clause goes in after the caret's paragraph, asking for no description", JSON.stringify(source));
-    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"pick-images/image-1.png\"] img'); " +
+    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"pick-data/image-1.png\"] img'); " +
       "return !!i && i.complete && i.naturalWidth === 1; })()"), "and the image shows at once");
     await ctx.browser.closeTab(d.page);
-    for (const name of ["pick.ksmd", "pick-images"]) fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
+    for (const name of ["pick.ksmd", "pick-data"]) fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
   },
 
   // The editor's limit and the server's ceiling are two numbers; this ties them together.
@@ -842,6 +840,32 @@ const SECTIONS = {
     await ctx.browser.closeTab(d.page);
     fs.rmSync(path.join(ctx.root, "pics/wide.png"), { force: true });
     fs.rmSync(path.join(ctx.root, "wideimg.ksmd"), { force: true });
+  },
+
+  // An image's scale is a share of its own pixels, and the text's width stops it.
+  async scaledImage(ctx) {
+    fs.writeFileSync(path.join(ctx.root, "pics/gray.png"), grayPng(400, 100));
+    fs.writeFileSync(path.join(ctx.root, "scaled.ksmd"), `${H}:::image src="pics/gray.png" alt="Gray"\n:::\n`);
+    const d = await tab(ctx, "?doc=scaled.ksmd");
+    const img = "document.querySelector('#doc .figure .picture img')";
+    const shownWidth = () => d.js(`${img}.getBoundingClientRect().width`);
+    await d.until(`!!${img} && ${img}.complete && ${img}.naturalWidth === 400`, 15000);
+    await d.js("window.prompt = () => '50'");
+    await d.click("#doc > .figure .image-scale");
+    await d.until(`!!${img} && ${img}.complete && ${img}.getBoundingClientRect().width < 300`, 15000);
+    const half = await shownWidth();
+    check((await d.js("ksmd.source()")).includes(' scale="50%"') && Math.abs(half - 200) < 1,
+      "Scale… at 50 shows the picture at half its own width", `${half} | ${await d.js("ksmd.source()")}`);
+    await d.js("window.prompt = () => '400'");
+    await d.click("#doc > .figure .image-scale");
+    await d.until(`!!${img} && ${img}.getBoundingClientRect().width > 300`, 15000);
+    const text = await d.js("(() => { const doc = document.getElementById('doc'), s = getComputedStyle(doc); " +
+      "return doc.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight); })()");
+    const wide = await shownWidth();
+    check(Math.abs(wide - text) < 1 && wide < 1600, "at 400 it stops at the text's width", `${wide} ${text}`);
+    await ctx.browser.closeTab(d.page);
+    fs.rmSync(path.join(ctx.root, "pics/gray.png"), { force: true });
+    fs.rmSync(path.join(ctx.root, "scaled.ksmd"), { force: true });
   },
 };
 

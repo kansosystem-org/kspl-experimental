@@ -202,42 +202,6 @@ priv fn make_folder_for(path: U8[]): Bool //<
         return false
     return true
 
-fn queue_api_move(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
-    //< `POST /api/move?from=<p>&to=<q>`: renames a file under the root, never over another one
-    //< Both names go through a write's refusals, so neither is a dot name nor leaves the root. A
-    //< target already standing is 409, and an absent source 404. The target's one missing folder
-    //< is made first, as for a write.
-    params: = url.parse_query(query, c.arena) catch _e
-        queue_json_error(c, 400)
-        return
-    from_rel: = params.find("from").unwrap_or("")
-    to_rel: = params.find("to").unwrap_or("")
-    if from_rel.len == 0 || to_rel.len == 0
-        queue_json_error(c, 400)
-        return
-    dots: fs.Dot_names = .refused(U8[][]::{})
-    from: = fs.join_under(root, from_rel, dots, c.arena) catch _why
-        queue_json_error(c, 403)
-        return
-    to: = fs.join_under(root, to_rel, dots, c.arena) catch _why
-        queue_json_error(c, 403)
-        return
-    if conn.regular_file_size(from).is_none()
-        queue_json_error(c, 404)
-        return
-    if fs.exists(to)
-        queue_json_error(c, 409)
-        return
-    if !make_folder_for(to)
-        queue_json_error(c, 500)
-        return
-    fs.rename_path(from, to) catch _e
-        queue_json_error(c, 500)
-        return
-    $b: = Json_builder(c.arena)
-    val: = b.obj().set("moved", b.bool_val(true)).build()
-    queue_json(c, 200, val, keep)
-
 fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< `GET /api/stat?path=<p>`: returns whether something changed
     //< Caution: **Do not return the content**, or it arrives by two paths (the file endpoint reads
@@ -521,7 +485,6 @@ priv enum Api //< the endpoint a route reaches
     file
     stat
     list
-    move
     here
     stop
     allow
@@ -534,14 +497,13 @@ priv struct Route //< one entry point under `/api/`
     methods: U8[] //< the methods it takes, as a 405's `Allow` names them; another one is a 405
     api: Api //< the endpoint it reaches
 
-priv const ROUTES: Route[9] = ::{ //<
+priv const ROUTES: Route[8] = ::{ //<
     //< Every entry point, with who may reach it and by which methods
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
     Route::{ .path = "/api/file", .reach = .local, .methods = "GET, PUT", .api = .file },
     Route::{ .path = "/api/stat", .reach = .local, .methods = "GET", .api = .stat },
     Route::{ .path = "/api/list", .reach = .local, .methods = "GET", .api = .list },
-    Route::{ .path = "/api/move", .reach = .local, .methods = "POST", .api = .move },
     Route::{ .path = "/api/here", .reach = .local, .methods = "GET", .api = .here },
     Route::{ .path = "/api/stop", .reach = .local, .methods = "POST", .api = .stop },
     Route::{ .path = "/api/allow", .reach = .local, .methods = "GET, POST, DELETE",
@@ -584,8 +546,6 @@ impl Api
             queue_api_stat(c, t.query, ctx.root, keep)
         case .list
             queue_api_list(c, t.query, ctx.root, keep)
-        case .move
-            queue_api_move(c, t.query, ctx.root, keep)
         case .here
             queue_api_here(c)
         case .stop

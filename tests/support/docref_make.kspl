@@ -1,7 +1,8 @@
 //< Checks that every `make <target>` a published document writes is a target make has
 //< **make itself is asked** (`make -pRrq`, which prints the rules it read and runs nothing), at the
 //< root and in every package with its own `Makefile`. A document inside such a package may name
-//< that `Makefile`'s targets too, and `make -C <dir>` names that folder's.
+//< that `Makefile`'s targets too, and `make -C <dir>` names that folder's. make's answer is read
+//< by `tools/make_db.kspl`, as `make explain` reads it.
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -11,10 +12,9 @@ import "std/verdict"
 import "tests/support/conventions_ci" as ci_layout
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
+import "tools/make_db"
 
-priv const SUITE_FOUND: U8[] = "suite_found := " //< how make's dump writes a folder's suite names
-priv const NOT_TARGET: U8[] = "# Not a target:" //<
-    //< what make's dump writes above a file it only knows
+priv const SUITE_FOUND: U8[] = "suite_found" //< the variable that holds a folder's suite names
 
 priv struct Forward //< a pattern the root forwards to a package's `Makefile`
     pattern: U8[] //< as the root's dump writes it
@@ -50,34 +50,25 @@ fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` (empt
     // Caution: **Pass `LOGGING=1`.** Without it the root reads only its `%:` wrapper, which takes
     // every name.
     args.push_all(U8[][]::{ "--no-print-directory", "-pRrq", "LOGGING=1", ":" })
-    r: = harness.make(args.slice())
-    $file_only: = false
-    for ln in r.out.lines(arena)
-        if ln.starts_with(NOT_TARGET)
-            file_only = true
-            continue
-        if ln.len == 0
-            file_only = false
-            continue
-        if ln.starts_with(SUITE_FOUND)
-            for name in ln.sub_from(SUITE_FOUND.len).split(' ', arena)
-                if name.len > 0
-                    out.suites.push(name)
-            continue
-        colon: = ln.find_char(':').unwrap_or(0)
-        if colon == 0 || file_only || ln[0] == '.' || ln[0] == '#' || ln[0] == '\t'
-            continue
-        if colon + 1 < ln.len && ln[colon + 1] == '='
-            continue
-        name: = ln.sub(0, colon)
-        if name.find_char(' ').is_some() || name.find_char('/').is_some() ||
-            name.find_char('$').is_some()
-            continue
-        if name.find_char('%').is_some()
+    // **make speaks English here, whatever the locale** (why is `make_speaks_english`).
+    make_db.make_speaks_english()
+    db: = make_db.parse_db(make_db.last_db(harness.make(args.slice()).out), arena)
+    if found: = db.vars.get(SUITE_FOUND)
+        for name in make_db.words(found.value, arena)
+            out.suites.push(name)
+    for name in db.order
+        if e: = db.files.get(name)
+            if e.target && is_plain(name)
+                out.targets.push(name)
+    for name in db.patterns
+        if is_plain(name)
             out.patterns.push(name)
-        else
-            out.targets.push(name)
     return out
+
+priv fn is_plain(name: U8[]): Bool //<
+    //< whether a document can name it: no special target, path or value
+    return name.len > 0 && name[0] != '.' && name.find_char(' ').is_none() &&
+        name.find_char('/').is_none() && name.find_char('$').is_none()
 
 priv fn mention_of(text: U8[], arena: Arena$@): List<|Mention|> //<
     //< The targets a `make` command line names, `-C`'s folder with them; empty for no command

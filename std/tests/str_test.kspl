@@ -38,6 +38,9 @@ fn test_str_ops(arena: Arena$@)
         "replace: overlapping candidates go left first")
     // An empty old does nothing (Python inserts at every character); this prevents an endless loop.
     assert("abc".replace("", "-", arena).equals("abc"), "replace: an empty old does nothing")
+    assert("Ab-Zé".to_lower_ascii(arena).equals("ab-zé") &&
+        "".to_lower_ascii(arena).len == 0,
+        "to_lower_ascii: ASCII letters lowered, other bytes copied as they are")
     assert("".replace("a", "b", arena).len == 0, "replace: an empty string")
     // A null arena is the global heap, as the parameter says.
     on_heap: = "a.b".replace(".", "--", null)
@@ -582,9 +585,15 @@ fn test_text_edges()
     assert(!"a".equals_ignore_case("ab") && !"[".equals_ignore_case("{") &&
         !"ß".equals_ignore_case("SS"),
         "equals_ignore_case: another length, a non-letter a case apart, and no Unicode folding")
+    assert("".is_utf8() && "aé€😀".is_utf8(), "is_utf8: empty, and one to four bytes")
+    bytes: U8[5] = ::{ 'a', 0xedU8, 0xa0U8, 0x80U8, 0xc3U8 }
+    bad: = U8[]::bytes
+    assert(!bad.is_utf8() && !bad.sub(1, 3).is_utf8() && !bad.sub(3, 1).is_utf8() &&
+        !"aé".sub(0, 2).is_utf8() && bad.sub(0, 1).is_utf8(),
+        "is_utf8: a surrogate, a lone tail and a cut-off end are false, wherever they stand")
     verdict
-        .pass("to_count, hex4, utf8_seq_len, codepoint_len/byte, rfind_char and equals_ignore_case \
-            answer at their edges.")
+        .pass("to_count, hex4, utf8_seq_len, is_utf8, codepoint_len/byte, rfind_char and \
+            equals_ignore_case answer at their edges.")
 
 fn test_builder_room_and_c_strings()
     verdict.start("[str] reserve, and a C string out and back...")

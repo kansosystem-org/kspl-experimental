@@ -308,6 +308,9 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         !pointer_arith_ok(ctx, op_text, left_type_id, right_type_id)
         report_bad_pointer_arith(ctx, node, op_text, left_type_id, right_type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
+    if !is_cmp && !is_logical && ctx.env.is_pointer(left_type_id) &&
+        !ctx.env.is_pointer(right_type_id) && refuses_step_from_null(ctx, node, left_node)
+        return I32::sema_type_env.Builtin_type_id.unknown
     if !is_cmp && !is_logical
         sema_body_lint_unchecked.note_pointer_arith(ctx, node, left_type_id, right_type_id)
 
@@ -801,6 +804,34 @@ priv fn report_no_common_type(ctx: Sema_ctx$@, o: Operands) //<
     if has_lit && (ctx.env.is_float(o.left_id) || ctx.env.is_float(o.right_id))
         ctx.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
     ctx.err(o.node, ctx.scratch.slice())
+
+priv fn refuses_step_from_null(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): Bool //<
+    //< Refuses `U8@::null + 4096` outside `#raw_address`, as a cast of the integer is refused
+    //< **A step from `null` makes an address from a number**, the same made-up address
+    //< `U8@::4096` gives. So it is allowed only where that cast is (check_pointer_cast_source in
+    //< postfix.kspl). Only `null` written there counts: a pointer that holds null at run time is
+    //< not known here.
+    if ctx.fn_ctx.raw_address || !is_written_null(left)
+        return false
+    ctx.err(node,
+        "a step from 'null' makes an address from a number, which only a function marked \
+            '#raw_address' may do\n  Hint: for memory at a fixed address, mark the function \
+            '#raw_address' and cast the number ('U8@::4096'). Write 'null' for no address")
+    return true
+
+priv fn is_written_null(n: Ast_node$@): Bool //<
+    //< Whether n is `null`, in round brackets or cast to a pointer (`U8@::null`)
+    $at: = n
+    for at != null
+        if at.kind_id == .k_null
+            return true
+        if at.kind_id == .k_expr_primary && at.children.len > 0
+            at = at.get_primary_inner_expr()
+        else if at.is_explicit_cast()
+            at = at.get_postfix_receiver()
+        else
+            return false
+    return false
 
 priv fn pointer_arith_ok(ctx: Sema_ctx@, op_text: U8[], left_id: I32, right_id: I32): Bool //<
     //< Whether pointer arithmetic is in an allowed form

@@ -35,10 +35,13 @@ priv const LOOKUPS_PER_STEP: I64 = 4I64 //<
     //< asks whether each step is a link and what its long name is, so its lookups grow with the
     //< names. Thousands of `/` once cost one lookup each, some 19 ms a request.
 priv const LOOKUPS_PER_REQUEST: I64 = 24I64 //< what a request may look up besides its path's names
-    //< The endpoint's own work: the file's `stat`, a write's folder, a move's second path, a
-    //< folder's index.
+    //< The endpoint's own work: the file's `stat`, a write's folder, a folder's index.
 priv const LOOKUPS_PER_LISTED: I64 = 8I64 //< what a listing may look up for each name it reads
     //< Each name goes through the door, and is asked whether it is a folder or a file.
+priv const COUNTED_PATH: U8[] = "sub/b.txt" //< a plain path under the root, to see lookups counted
+    //< Caution: **The bounds above pass where nothing is counted**, since a count of 0 is under
+    //< each of them. So the door and the server must each count one lookup or more for each of its
+    //< names.
 
 priv const OUTSIDE_MARK: U8[] = "OUTSIDE-ROOT-7f3a" //< what the file outside the root holds
     //< No generated body holds it, so an answer that holds it read outside the root.
@@ -80,11 +83,6 @@ priv const STARTS: U8[][8] = ::{ "/", "//host/share/", "%5C%5C%3F%5CC%3A%5C", "%
 priv const SEPS: U8[][5] = ::{ "//", "%5C", "///", "/%5C", "/./" } //<
     //< What can stand between two names besides one `/`, percent-encoded
 
-priv const MOVES: U8[] = "moves" //<
-    //< The folder each move starts from or ends in, apart from the generated paths
-    //< **No piece names it**, so the files the moves leave do not slow the listings the cases ask
-    //< for.
-
 priv const SHOWN: U8[][1] = ::{ ".well-known" } //<
     //< The dot name static serving shows; none stands in the scratch root, so a path through one
     //< is still absent
@@ -125,8 +123,8 @@ fn place(tmp: U8[], arena: Arena$@): Scratch? //<
         U8[][]::{ secret.take(), "only\n" }, arena) catch
         return .none
     fs.write_tree(root,
-        U8[][]::{ "index.html", "a.txt", "sub/b.txt", ".git/config", ".env", "dir/x", "moves/m" },
-        U8[][]::{ "page\n", "a\n", "b\n", "[core]\n", "KEY=1\n", "x\n", "m\n" }, arena) catch
+        U8[][]::{ "index.html", "a.txt", "sub/b.txt", ".git/config", ".env", "dir/x" },
+        U8[][]::{ "page\n", "a\n", "b\n", "[core]\n", "KEY=1\n", "x\n" }, arena) catch
         return .none
     $links: = List<|U8[]|>(arena)
     if local.make_link(root, "up", "../outside", arena)
@@ -493,6 +491,11 @@ fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
     // **A run that takes almost nothing tests almost nothing.**
     verdict.check("the door takes a share of the generated paths", taken * 10 >= n,
         arena.text().s("\{taken\} of \{n\} taken").take())
+    $counted: I64 = 0I64
+    _joined: = counted_join(sc.root, COUNTED_PATH, .allowed, arena, counted@)
+    verdict.check("the door counts a lookup for each name of a plain path",
+        counted >= steps(COUNTED_PATH),
+        arena.text().s("\{counted\} lookups for ").s(COUNTED_PATH).take())
 
 // ==========================================
 // The server: each endpoint that takes a path
@@ -503,17 +506,15 @@ priv enum Ask //< which request a case sends
     put_file
     stat
     list
-    move_from //< the generated path is moved to a new plain name
-    move_to //< a plain file is moved to the generated path
     page //< static serving, with the token
 
-priv const ASKS: Ask[7] = ::{ .get_file, .put_file, .stat, .list, .move_from, .move_to, .page }
+priv const ASKS: Ask[5] = ::{ .get_file, .put_file, .stat, .list, .page }
 
 priv struct Expect //< what the door says of a request, before it is sent
     broken: Bool //< its `%` encoding is broken, so it must be refused with a 400
     refused: Bool //< the door refuses a path it names
     hidden: Bool //< the door refuses it only for a dot name (static serving's 404)
-    writes: Bool //< it writes or moves, so a 500 can come from the file system
+    writes: Bool //< it writes, so a 500 can come from the file system
 
 priv fn door_says(root: U8[], rel: U8[], dots: fs.Dot_names, e: Expect$@, arena: Arena$@) //<
     //< Adds what the door says of one path to `e`
@@ -538,8 +539,6 @@ priv fn send(port: I32, ask: Ask, target: U8[], auth: U8[], body: U8[], arena: A
     switch ask
     case .put_file
         resp = client.put_file(port, target, auth, body, arena)!
-    case .move_from, .move_to
-        resp = client.post_json(port, target, auth, "", client.DEFAULT_TIMEOUT_MS, arena)!
     default
         resp = client.get(port, target, auth, arena)!
     return resp
@@ -576,6 +575,13 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
     // asking for the status looks nothing up.
     $before: = lookups_now(port, auth, arena)!
     verdict.check("the server tells its file-system lookups", before >= 0I64, "")
+    stat: =
+        send(port, .stat, arena.text().s("/api/stat?path=").s(COUNTED_PATH).take(), auth, "", arena)!
+    counted: = lookups_now(port, auth, arena)!
+    verdict.check("the server counts a lookup for each name of a plain path",
+        stat.status == 200 && counted - before >= steps(COUNTED_PATH),
+        arena.text().s("\{stat.status\}, \{counted - before\} lookups for ").s(COUNTED_PATH).take())
+    before = counted
     outside_size: = keep.text().s("\"size\":\{OUTSIDE_SIZE\}").take()
     for case_no in Range.asc(Sz::o.trials)
         mark: = arena.save()
@@ -599,19 +605,6 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
         case .list
             target = arena.text().s("/api/list?path=").s(coded).take()
             query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, .allowed, e@, arena)
-        case .move_from
-            target = arena.text().s("/api/move?from=").s(coded).s("&to=").s(MOVES)
-                .s("/moved-\{case_no\}.txt").take()
-            e.writes = true
-            query_expect(sc.root, target.sub_from(10), U8[][]::{ "from", "to" }, refused_dots, e@,
-                arena)
-        case .move_to
-            from: = arena.text().s(MOVES).s("/m-\{case_no\}.txt").take()
-            io.write_file(fs.join(sc.root, from, arena), "m\n") catch {}
-            target = arena.text().s("/api/move?from=").s(from).s("&to=").s(coded).take()
-            e.writes = true
-            query_expect(sc.root, target.sub_from(10), U8[][]::{ "from", "to" }, refused_dots, e@,
-                arena)
         case .page
             target = arena.text().c('/').s(coded).take()
             page_expect(sc.root, target, e@, arena)

@@ -374,5 +374,5 @@ function ksmdDrawings(ks) {
     for (const f of ks.root.querySelectorAll(".figure, .chart")) paint(f);
   });
 
-  ks.drawings = { attach, lines };
+  ks.drawings = { attach };
 }

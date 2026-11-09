@@ -7,6 +7,7 @@
 //< places that an edit has moved point at other cells.
 import "ksmd/base/dates" { date_of }
 import "ksmd/calc/args" { Raw_arg, Raw_args }
+import "ksmd/calc/bases" { READ_DIGITS, literal }
 import "ksmd/calc/formula" { Cursor, Positions, Token, Token_kind, next, unquoted }
 import "ksmd/calc/functions" as fns
 import "ksmd/calc/functions_table" as table
@@ -215,7 +216,7 @@ priv fn cell_value(c: Calc$@, s: Spot): Value //< what a cell holds, a formula c
         return date_value(date_of(cell.text).unwrap_or(0I64))
     case .formula
         $p: = Parser::{ .c = c, .t = t, .cell = cell, .cur = Cursor::{ .piece = 0, .at = 0 },
-            .tok = Token(.end, 0, 0), .levels = 1, .wrong = false, .skipping = 0,
+            .tok = Token(.end, 0, 0), .levels = 1, .wrong = false, .digits = false, .skipping = 0,
             .rows = Row_reading::{ .inside = false, .count = 0, .row = 0, .ranged = false,
             .shaped = true } }
         p.advance()
@@ -232,6 +233,7 @@ priv struct Parser //< reads one formula's tokens and calculates as it reads
     tok: Token //< the next token, not yet taken
     levels: Sz //< how deeply the formula nests where it is read now (`MAX_LEVELS`)
     wrong: Bool //< the formula does not read; its value is `#SYNTAX!`
+    digits: Bool //< the digit text of a function in `READ_DIGITS` is read now, outside other calls
     skipping: Sz //< above 0 while a part is read but not calculated; no cell is read then
         //< `and` and `or` skip their right side when the left one decides, and `if` the branch
         //< it does not take.
@@ -375,9 +377,14 @@ impl Parser
         //< Only the fields needed are taken from the token: a whole token is large to copy.
         switch p.tok.kind
         case .number
-            n: = number_of(p.tok.text)
+            spelled: = p.tok.text
             p.advance()
-            return n
+            if v: = literal(spelled)
+                // A literal in a base is the number, not digit text (`READ_DIGITS`).
+                if p.digits
+                    p.wrong = true
+                return number(F64::v)
+            return number_of(spelled)
         case .text
             quoted: = p.tok.text
             p.advance()
@@ -424,6 +431,9 @@ impl Parser
         p.expect(.open)
         if !p.enter()
             return Value.failed(.syntax)
+        // Another call's brackets end the digit text: `hex_to_dec(dec_to_hex(0xFF))` reads.
+        outer: = p.digits
+        p.digits = false
         $v: = Value.failed(.syntax)
         // **Seven forms stay here** (`FORMS` in `ksmd/calc/help.kspl`, in this order): `today`
         // reads the date the document opened, five choose which arguments are calculated, and
@@ -447,12 +457,15 @@ impl Parser
             mark: = p.c.scratch.save()
             v = p.kept(p.call(name))
             p.c.scratch.restore(mark)
+        p.digits = outer
         p.leave()
         p.expect(.close)
         return v
 
     priv fn call(p: Self$@, name: U8[]): Value //<
         //< An ordinary function, or a person's own, on its arguments, which go in `scratch`
+        for reads in READ_DIGITS
+            p.digits = p.digits || name.equals(reads)
         $args: = p.raw_arguments()
         if got: = table.call(name, args@)
             // **An argument too many or too few is the formula's error**, not the value's.
@@ -684,6 +697,7 @@ impl Parser
         if p.tok.kind != .close
             for
                 args.push(p.raw_argument())
+                p.digits = false // only the first argument is digit text
                 if p.tok.kind != .comma
                     break
                 p.advance()

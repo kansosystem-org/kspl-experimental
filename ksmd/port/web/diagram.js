@@ -672,5 +672,5 @@ function ksmdDiagram(ks) {
     return ks.act("ksmd_web_insert_diagram");
   });
 
-  ks.diagram = { render, clause };
+  ks.diagram = { render };
 }

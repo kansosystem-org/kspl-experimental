@@ -1,8 +1,10 @@
 //< The helpers that several of ksmd's test files share: reading a test source, opening an editor
-//< on it, the source a document saves as, and the reader's refusal of a source
+//< on it, a row or column edit, the source a document saves as, and the reader's or the editor's
+//< refusal
 import "ksmd/base/source" { Source }
-import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor"
+import "ksmd/edit/editor_tables" { Table_edit }
 import "ksmd/model/model" { Document }
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
@@ -25,6 +27,11 @@ fn written(doc: Document@, arena: Arena$@): U8[] //< the source the writer saves
     defer $out: = Str_builder()
     writer.write(doc, out@)
     return arena.dup_str(out.slice())
+
+fn changed(ed: Editor$@, block: Sz, what: Table_edit, at: Sz) //<
+    //< inserts or removes one row or column of a table; a refusal fails the check
+    ed.edit_table(block, what, at, 1, Sz[]::{}) catch e
+        verdict.check("a row or column edit", false, e.message())
 
 fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
     return arena.text().s(a).s(b).take()
@@ -52,3 +59,8 @@ fn refused(text: U8[], what: U8[]) //< the reader refuses the source
         verdict.check(arena.text().s("refused: \{what\}").take(), true, "")
         return
     verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")
+
+fn refuses(what: U8[], r: Void!Refused) //< the editor refuses the action
+    //< Caution: **Hand it the call's result, rather than checking `true` in a `catch`.** There, an
+    //< action the editor wrongly takes prints nothing, and the test passes unseen.
+    verdict.check(what, r.is_err(), "accepted")

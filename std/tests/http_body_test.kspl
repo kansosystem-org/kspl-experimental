@@ -18,9 +18,9 @@ priv struct Feed //< what the stand-in writes on the one connection it accepts
     listener: net.Tcp_listener$@
     bytes: U8[]
     piece: Sz //< how many bytes each write sends; 0 sends them all at once
-    pause_at: Sz //< where it waits `PAUSE_MS` before writing on; 0 for no wait
-
-priv const PAUSE_MS: I32 = 400 //< the stand-in's wait at `pause_at`
+    pause_at: Sz //< where it waits for `seen` before writing on; 0 for no wait
+    seen: thread.Atomic_sz //< 1 once the client has said it waits at `pause_at`
+        //< **An order, not a time**: a fixed pause lets a busy client miss the wait it checks.
 
 extern fn feed_bytes(f: Feed$@): Void$@ //< writes the bytes as the feed says, then closes
     conn: = f.listener.accept() catch panic("the stand-in accepts the client")
@@ -34,7 +34,8 @@ extern fn feed_bytes(f: Feed$@): Void$@ //< writes the bytes as the feed says, t
         conn.write_all(f.bytes.sub(at, n)) catch {}
         at += n
         if at == f.pause_at
-            sys.sleep_ms(PAUSE_MS)
+            for f.seen.load() == 0
+                sys.sleep_ms(1)
         else if f.piece > 0
             sys.sleep_ms(1)
     conn.free()
@@ -50,13 +51,14 @@ priv fn serve(bytes: U8[], piece: Sz, pause_at: Sz, arena: Arena$@): Served //<
     listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("the stand-in can listen")
     port: = listener.port() catch panic("a bound socket knows its port")
     f: = arena
-        .create(Feed::{ .listener = listener, .bytes = bytes, .piece = piece,
-        .pause_at = pause_at })
+        .create(Feed::{ .listener = listener, .bytes = bytes, .piece = piece, .pause_at = pause_at,
+        .seen = thread.Atomic_sz(0) })
     t: = thread.Thread.spawn<|Feed|>(feed_bytes, f) catch panic("the stand-in's thread starts")
     client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("the client connects")
     return Served::{ .feed = f, .worker = t, .client = client }
 
 priv fn finish($s: Served) //< closes the client, then waits for the stand-in
+    s.feed.seen.store(1)
     s.client.free()
     s.worker.free()
     s.feed.listener.free()
@@ -192,6 +194,9 @@ fn test_http_body_pieces(arena: Arena$@) //<
             pieces += 1
         case .waiting
             waits += 1
+            // Only a wait after the first piece lets the rest come.
+            if pieces > 0
+                s.feed.seen.store(1)
         case .done
             ended = true
     finish(s)

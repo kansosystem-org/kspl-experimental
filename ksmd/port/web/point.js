@@ -1,7 +1,9 @@
 // ksmd page: choosing cells by pointing while a formula is typed, as Excel's point mode. While an
 // open cell holds text that starts with `=`, and its caret stands where a reference can go, a press
-// on a data cell of the same table writes that cell's reference at the caret, and a drag writes a
-// range. The cell stays open. Pointing again replaces the reference just written, until the text
+// on a data cell writes that cell's reference at the caret, and a drag writes a range. A cell of
+// another table of the document is written with its table's name: `map.D3`. A press on a column's
+// letter or name writes the whole column, its table's name always written: `map.D`. The cell stays
+// open. Pointing again replaces the reference just written, until the text
 // changes otherwise. Anywhere else, a press ends the edit as before (`table.js`). F4 in such a cell
 // turns the `$` of the reference at the caret, as Excel's does.
 "use strict";
@@ -37,15 +39,27 @@ function ksmdPoint(ks) {
     return referencePlace(input.value.slice(0, from)) ? { from, to: input.selectionEnd } : null;
   }
 
-  // A cell's reference, `B3`, or a range's, `A1:B3`, its upper left corner first.
+  // A table's name as a formula writes it: plain where it is `[a-z][a-z0-9_]*`, else in JSON
+  // quotes, as `write_table_name` in `ksmd/calc/formula.kspl` writes it.
+  const tableName = (name) => (/^[a-z][a-z0-9_]*$/.test(name) ? name : JSON.stringify(name));
+
+  // A cell's reference, `B3`, or a range's, `A1:B3`, its upper left corner first. A cell of
+  // another table has that table's name before it, once for a range: `map.D1:D3`. Whole columns
+  // always have it, as a formula writes them: `map.D`, `map.D:F`.
   function reference(a, b) {
-    const cell = (row, column) => `${ks.table.letters(column)}${row + 1}`;
-    const r1 = Math.min(a.row, b.row);
-    const r2 = Math.max(a.row, b.row);
+    const letter = (column) => ks.table.letters(column);
     const c1 = Math.min(a.column, b.column);
     const c2 = Math.max(a.column, b.column);
-    return r1 === r2 && c1 === c2 ? cell(r1, c1) : `${cell(r1, c1)}:${cell(r2, c2)}`;
+    if (a.whole) return `${tableName(a.table)}.${letter(c1)}${c1 === c2 ? "" : `:${letter(c2)}`}`;
+    const cell = (row, column) => `${letter(column)}${row + 1}`;
+    const r1 = Math.min(a.row, b.row);
+    const r2 = Math.max(a.row, b.row);
+    const named = a.own ? "" : `${tableName(a.table)}.`;
+    return named + (r1 === r2 && c1 === c2 ? cell(r1, c1) : `${cell(r1, c1)}:${cell(r2, c2)}`);
   }
+
+  // Whether two points can make one range: the same table, and both cells or both whole columns.
+  const together = (a, b) => a.table === b.table && a.own === b.own && a.whole === b.whole;
 
   // Writes the reference from the anchor to a cell. The reference then shows in colour, with a
   // frame round the cells it names, as every reference typed does (`refs.js`).
@@ -59,12 +73,22 @@ function ksmdPoint(ks) {
     last = { input, from: at.from, to: at.from + text.length, value: input.value, anchor };
   }
 
-  // The data cell under a point, in the open cell's table, other than the open cell itself.
+  // What is under a point: { row, column, table, own, whole }. A data cell other than the open
+  // one gives its row and column. A column's letter or name gives the whole column (`whole`, row
+  // -1); its filter arrow keeps its own press. `table` is the table's name, and `own` says it is
+  // the open cell's table. A table shown from an included file is never pointed at, as no formula
+  // reaches into another file.
   function cellAt(target, open) {
-    const el = target && target.closest && target.closest(".table td[data-r]");
+    if (!target || !target.closest || target.closest(".filter-arrow")) return null;
+    const el = target.closest(".table td[data-r], .table th.name[data-c], .table th.letter");
     if (!el || el.closest(".include") || el.contains(open.input)) return null;
-    if (ks.view.blocks().indexOf(el.closest(".table")) !== open.block) return null;
-    return { row: Number(el.dataset.r), column: Number(el.dataset.c) };
+    const wrap = el.closest(".table");
+    const own = ks.view.blocks().indexOf(wrap) === open.block;
+    const whole = el.tagName === "TH";
+    if ((!own || whole) && !wrap.dataset.name) return null;
+    // A letter's column is its place in its row, after the corner cell.
+    const column = el.dataset.c !== undefined ? Number(el.dataset.c) : el.cellIndex - 1;
+    return { row: whole ? -1 : Number(el.dataset.r), column, table: wrap.dataset.name, own, whole };
   }
 
   // It runs before the table's own presses, which would end the edit, and stops them.
@@ -75,8 +99,8 @@ function ksmdPoint(ks) {
     if (!at || !slot(open.input)) return;
     e.preventDefault();
     e.stopPropagation();
-    // Shift reaches from the cell pointed at last, as Shift+click reaches a range.
-    const anchor = e.shiftKey && last ? last.anchor : at;
+    // Shift reaches from the cell pointed at last, in the same table, as Shift+click reaches a range.
+    const anchor = e.shiftKey && last && together(last.anchor, at) ? last.anchor : at;
     drag = { input: open.input, anchor, at };
     write(open.input, anchor, at);
   }, true);
@@ -88,8 +112,12 @@ function ksmdPoint(ks) {
       drag = null;
       return;
     }
-    const at = cellAt(document.elementFromPoint(e.clientX, e.clientY), open);
-    if (!at || (at.row === drag.at.row && at.column === drag.at.column)) return;
+    // **The formula's own tip and list of functions float over the cells**, often over the next
+    // table's headings, so the drag looks through them.
+    const under = document.elementsFromPoint(e.clientX, e.clientY).find((el) => !el.closest(".fx-tip, .fx-list"));
+    const at = cellAt(under, open);
+    // A range stays in one table, and holds cells or whole columns: a drag past them keeps it.
+    if (!at || !together(at, drag.anchor) || (at.row === drag.at.row && at.column === drag.at.column)) return;
     drag.at = at;
     write(drag.input, drag.anchor, at);
   });

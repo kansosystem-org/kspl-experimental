@@ -12,6 +12,7 @@ import "std/http_body"
 import "std/io"
 import "std/mem" { Arena }
 import "std/net"
+import "std/rand"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
@@ -24,10 +25,11 @@ const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where ksagent asks unless 
     //< compares the two.
 priv const LLAMA: U8[] = "llama-server" //< llama.cpp's server, looked up in PATH
 priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--jinja", "-c", "32768", "--flash-attn", "on",
-    "--cache-type-k", "q8_0", "--cache-type-v", "q8_0" } //<
+    "--cache-type-k", "q8_0", "--cache-type-v", "q8_0", "--no-slots" } //<
         //< **The one place llama-server's options stand**: `--jinja`, or it offers no tool calls,
         //< which ksagent works through; `-c`, the conversation's length in tokens. Caution: **Keep
         //< it in step with `MAX_REQUEST_BYTES` in `ksagent/agent.kspl`**, which is sized to fit it.
+        //< `--no-slots` closes `GET /slots`, which shows the prompts that are being answered.
         //<
         //< **The conversation's memory (its key and value cache) is kept at 8 bits**, not the
         //< default 16, so 32,768 tokens and the first model fit a graphics card with 6 GB. An 8-bit
@@ -38,6 +40,12 @@ priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--jinja", "-c", "32768", "--flash-
         //< numbers a token: 76.5 KiB, so 2.4 GiB in all (4.5 GiB at 16 bits). Qwen3.5-9B keeps 8
         //< layers × 4 heads × 256 × 2: 17 KiB, so 0.53 GiB. Its other 24 layers keep a fixed 0.2
         //< GiB for its 4 slots. `data/README.md` gives the sums.
+priv const KEY_ENV: U8[] = "LLAMA_API_KEY" //< where llama-server takes its API key from
+    //< **The environment, not `--api-key`**: the command line shows in the process list.
+const AGENT_KEY_ENV: U8[] = "KSAGENT_API_KEY" //< where ksagent takes the API key from
+priv const KEY_BYTES: Sz = 24 //< the random bytes of a key made here
+    //< Caution: **Make it long enough that guessing cannot find it**: it is all that stops a web
+    //< page, or another user on the machine, from asking the model server.
 priv const CHAT_NAMES: U8[][] = U8[][]::{ "chat_server.exe", "chat_server" } //<
     //< The names ksai's chat server is looked for by, beside this program
 const SLOW_TIMEOUT: U8[] = "--timeout=3600" //< what ksagent waits for one reply from chat_server
@@ -74,6 +82,8 @@ struct Model_run //< the model server ksagent asks
     slow: Bool //< whether ksagent needs `SLOW_TIMEOUT`
     log: U8[] //< the started server's log; empty for one not started here
     child: subproc.Child? //< the server this run started; none for one it found
+    key: U8[] //< the API key ksagent sends; empty leaves `KSAGENT_API_KEY` as it is
+    key_file: U8[] //< the file this run wrote its key to, deleted when it stops; empty for none
 
 priv fn say(): Writer //< standard output, with this program's name begun on a line
     return io.out().s(sys.program_name()).s(": ")
@@ -91,14 +101,21 @@ impl Model_run
             $started: = c
             started.kill()
             r.child = .none
+            r.forget_key()
             return true
         return false
+
+    priv fn forget_key(r: Self$@) //< deletes the key file this run wrote, once its server is gone
+        if r.key_file.len > 0
+            fs.remove_path(r.key_file) catch {}
+            r.key_file = ""
 
     fn wait(r: Self$@): I32 //< waits for the server this run started to end; 0 at once for another
         if c: = r.child
             $started: = c
             r.child = .none
             code: = started.wait().unwrap_or(1)
+            r.forget_key()
             warn().s("\{r.name\} ended with exit code \{code\} (its log: \{r.log\})\n")
             return code
         return 0
@@ -106,6 +123,7 @@ impl Model_run
 priv enum Probe //< what answers at the model server's port
     nothing //< nothing listens there
     other(what: U8[]) //< something answers, but not as a model server
+    locked //< a model server that asks for an API key this run does not hold
     loading //< a model server, still loading its model
     ready //< a model server that can answer a question
 
@@ -113,10 +131,14 @@ struct Answer //< one reply to a GET
     status: I32 //< its status; 0 where nothing came back, -1 where nothing listens
     body: U8[]
 
-priv fn get(at: I32, target: U8[], arena: Arena$@): Answer //< asks one GET of the loopback port
+priv fn get(at: I32, target: U8[], key: U8[], arena: Arena$@): Answer //<
+    //< Asks one GET of the loopback port, with the API key where there is one
     defer stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
         return Answer::{ .status = -1, .body = "" }
-    head: = http.headers(arena).add("Host", arena.text().s("127.0.0.1:\{at\}").take()).build()
+    $hb: = http.headers(arena).add("Host", arena.text().s("127.0.0.1:\{at\}").take())
+    if key.len > 0
+        hb = hb.add("Authorization", arena.text().s("Bearer ").s(key).take())
+    head: = hb.build()
     http.write_request(stream, "GET", target, head, "", ANSWER_WAIT_MS) catch
         return Answer::{ .status = 0, .body = "" }
     // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
@@ -125,20 +147,23 @@ priv fn get(at: I32, target: U8[], arena: Arena$@): Answer //< asks one GET of t
         return Answer::{ .status = 0, .body = "" }
     return Answer::{ .status = got.status, .body = got.body }
 
-priv fn probe(at: I32, arena: Arena$@): Probe //< what answers at the port
+priv fn probe(at: I32, key: U8[], arena: Arena$@): Probe //< what answers at the port
     //< **A model server is one whose `GET /v1/models` lists models.** llama-server answers it while
     //< it loads, too, and then answers `GET /health` with 503 until it is ready. chat_server
-    //< listens only once it is ready, and has no `/health`.
-    models: = get(at, "/v1/models", arena)
+    //< listens only once it is ready, and has no `/health`. A llama-server that has a key answers
+    //< 401 to a request without it.
+    models: = get(at, "/v1/models", key, arena)
     if models.status == -1
         return .nothing
     if models.status == 503
         return .loading
+    if models.status == 401
+        return .locked
     if models.status != 200 || models.body.find_str("\"data\"").is_none()
         if models.status == 0
             return .other("no HTTP answer")
         return .other(arena.text().s("HTTP \{models.status\} to GET /v1/models").take())
-    return .loading if get(at, "/health", arena).status == 503 else .ready
+    return .loading if get(at, "/health", key, arena).status == 503 else .ready
 
 impl Probe
     priv fn is_ready(p: Self): Bool //< whether the probe found a server that can answer
@@ -165,9 +190,11 @@ fn ensure(plan: Model_plan, arena: Arena$@): Model_run? //<
     //< The model server ksagent can ask, started here where none answers
     //< It is the one at `plan.url`, on this machine. **None, with the reason and what to do said,
     //< where there is none.**
-    found: = Model_run::{ .name = "the model server", .slow = false, .log = "", .child = .none }
     at: = aim.port_num(aim.port_in_url(plan.url))
-    switch probe(at, arena)
+    held: = held_key(key_path(plan, at, arena), arena)
+    found: = Model_run::{ .name = "the model server", .slow = false, .log = "", .child = .none,
+        .key = held, .key_file = "" }
+    switch probe(at, held, arena)
     case .ready
         if names_in_vain(plan)
             return .none
@@ -186,11 +213,40 @@ fn ensure(plan: Model_plan, arena: Arena$@): Model_run? //<
             .s("port \{at\} answers, but not as a model server (\{what\}). Stop the program using \
                 it, or name another port: make chat DIR=<folder> PORT=<port>\n")
         return .none
+    case .locked
+        warn()
+            .s("the model server at \{plan.url\} asks for an API key that this command does not \
+                hold. Set \{AGENT_KEY_ENV\} to its key, stop it, or name another port: make chat \
+                DIR=<folder> PORT=<port>\n")
+        return .none
     case .nothing
         say().s("model server: nothing answers at \{plan.url\}, so this command starts one\n")
         $run: = start(plan, at, arena) catch
             return .none
         return .some(run) if wait_ready(run@, plan, at, arena) else .none
+
+fn key_path(plan: Model_plan, at: I32, arena: Arena$@): U8[] //< where a started server's key is
+    //< **Beside its log**, so that a second launcher can use a server the first one started.
+    return fs.join(plan.tmp, arena.text().s("model.\{at\}.key").take(), arena)
+
+priv fn held_key(file: U8[], arena: Arena$@): U8[] //< the key for a server that is not started here
+    //< **The file a launcher wrote for the port, where it is there and private.** Otherwise
+    //< `KSAGENT_API_KEY`, which ksagent sends anyway; empty for none.
+    trust: = fs.secret_trust(file)
+    if trust == .own || trust == .unchecked
+        body: = io.read_file(file, arena) catch ""
+        if body.trim_spaces().len > 0
+            return body.trim_spaces()
+    return sys.get_env(AGENT_KEY_ENV).unwrap_or("")
+
+priv fn new_key(arena: Arena$@): U8[]? //< a new random key, as hex; none where the OS has none
+    $raw: U8[KEY_BYTES] = ::{}
+    rand.fill(U8$[]::raw) catch _e
+        return .none
+    out: = arena.text()
+    for i in Range.asc(KEY_BYTES)
+        out.c((raw[i] >> 4U8).to_hex_lower()).c((raw[i] & 0x0fU8).to_hex_lower())
+    return .some(out.take())
 
 priv fn names_in_vain(plan: Model_plan): Bool //< true, said, where a model file was named
     //< Caution: **A file named for a server not started here would do nothing** (Principle 5 in
@@ -229,12 +285,30 @@ priv fn start(plan: Model_plan, at: I32, arena: Arena$@): Model_run? //<
     llama.push_all(LLAMA_OPTIONS)
     llama.push("--port")
     llama.push(port)
+    // **A key made for each start keeps web pages and other users out**: llama-server checks no
+    // Host, and answers the CORS request of any page.
+    key: = new_key(arena) catch
+        warn().s("cannot read the OS's random source to make the model server's API key\n")
+        return .none
+    key_file: = key_path(plan, at, arena)
+    fs.replace_file(key_file, key, .owner_only) catch
+        warn().s("cannot write the model server's API key to \{key_file\}\n")
+        return .none
+    sys.set_env(KEY_ENV, key) catch
+        warn().s("cannot give the model server its API key\n")
+        fs.remove_path(key_file) catch {}
+        return .none
     // **A program that is not on PATH fails to start, on every OS**, so starting it is the test.
-    if c: = spawned(llama.slice(), log)
+    started: = spawned(llama.slice(), log)
+    // **Only llama-server gets the key this way**: the programs started later need not hold it.
+    sys.unset_env(KEY_ENV) catch {}
+    if c: = started
         say()
             .s("model server: starting llama-server on \{shown\} (it is on PATH, and uses the \
                 graphics card)\n")
-        return .some(Model_run::{ .name = LLAMA, .slow = false, .log = log, .child = .some(c) })
+        return .some(Model_run::{ .name = LLAMA, .slow = false, .log = log, .child = .some(c),
+            .key = key, .key_file = key_file })
+    fs.remove_path(key_file) catch {}
     // Caution: **Name the build, do not start it**: llama.cpp is the better choice, and a build
     // started here would commit the person to answers that take minutes. A program `make` started
     // would also need make's name and settings to run it again.
@@ -253,8 +327,9 @@ priv fn start(plan: Model_plan, at: I32, arena: Arena$@): Model_run? //<
     say()
         .s("model server: starting chat_server on \{shown\}, since llama-server is not on PATH. It \
             runs on the CPU only, so an answer takes minutes\n")
+    // **chat_server takes no key**: it answers only a request whose Host is this machine.
     return .some(Model_run::{ .name = "chat_server", .slow = true, .log = log,
-        .child = .some(c) })
+        .child = .some(c), .key = "", .key_file = "" })
 
 priv fn spawned(argv: U8[][], log: U8[]): subproc.Child? //< the child started, both outputs to log
     c: = subproc.spawn_beside(argv, "", log, log) catch
@@ -293,7 +368,7 @@ priv fn wait_ready(run: Model_run$@, plan: Model_plan, at: I32, arena: Arena$@):
                 warn().s("\{run.name\} stopped before it was ready. Its last lines:\n")
                 tell_tail(run.log, arena)
                 return false
-        if probe(at, arena).is_ready()
+        if probe(at, run.key, arena).is_ready()
             say().s("model server: ready at \{plan.url\}\n")
             return true
         waited: = (sys.mono_us() - began) / 1000000I64

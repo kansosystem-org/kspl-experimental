@@ -110,7 +110,7 @@ fn main(): I32 //< asks about a folder: the model server, the chat page, then `k
         io.out().s("\{sys.program_name()\}: opening \{aim.without_token(opened.url)\}\n")
     opener.hand_and_tell(opened.url,
         arena.text().s("the conversations in \{root\}").take(), show_only, where, arena)
-    code: = watch(agent, root, url, run.slow, arena)
+    code: = watch(agent, root, url, run.slow, run.key, arena)
     // **A server started for `--show` has no idle stop**, so it stops with the questions' answerer.
     if show_only
         if c: = opened.child
@@ -145,6 +145,10 @@ priv fn model_alone( //< starts the model server alone, for `ksagent ask` and `e
     io.out()
         .s("\{sys.program_name()\}: ksagent ask and eval reach it at \{plan.url\}; stop it with \
             Ctrl+C\n")
+    if run.key_file.len > 0
+        io.out()
+            .s("\{sys.program_name()\}: they need its API key in \{model_server.AGENT_KEY_ENV\}. \
+                The key stands in \{run.key_file\}\n")
     return run.wait()
 
 priv fn agent_beside(server: U8[], arena: Arena$@): U8[] //< ksagent beside the server, or empty
@@ -154,16 +158,28 @@ priv fn agent_beside(server: U8[], arena: Arena$@): U8[] //< ksagent beside the 
             return at
     return ""
 
-priv fn watch(agent: U8[], root: U8[], url: U8[], slow: Bool, arena: Arena$@): I32 //<
-    //< Runs `ksagent watch` on the folder in the foreground, and returns its exit code
+priv fn watch( //< runs `ksagent watch` on the folder in the foreground, and returns its exit code
     //< **It asks the model server at `url`**, the one `model_server.ensure` found or started, so
-    //< the two cannot differ. A slow server gets a longer limit on one reply.
+    //< the two cannot differ. A slow server gets a longer limit on one reply. **The server's key
+    //< goes through the environment**, where ksagent takes it from, since the command line shows
+    //< in the process list.
+    agent: U8[],
+    root: U8[],
+    url: U8[],
+    slow: Bool, //< whether the server needs `SLOW_TIMEOUT`
+    key: U8[], //< the server's API key; empty leaves `KSAGENT_API_KEY` as it is
+    arena: Arena$@,
+): I32
     $argv: = List<|U8[]|>(arena)
     argv.push(agent)
     argv.push("watch")
     argv.push(arena.text().s(URL_OPTION).s(url).take())
     if slow
         argv.push(model_server.SLOW_TIMEOUT)
+    if key.len > 0
+        sys.set_env(model_server.AGENT_KEY_ENV, key) catch
+            say().s("cannot give ksagent the model server's API key\n")
+            return 1
     argv.push(root)
     io.out()
         .s("\{sys.program_name()\}: ready. Ask on the page; the questions and answers stay in \

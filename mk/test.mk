@@ -374,7 +374,7 @@ test-simd: $(STAGE1_EXE)
 		echo "RESULT: SOME FAILED (1) -> the check passed a record in which no loop vectorized"; \
 		exit 1; fi
 	@echo "# a record in which no loop vectorized is refused"
-	$(call simd_check,lib/ksai/examples/qwen_infer/main.kspl,lib/ksai/nn.kspl,simd_check_qwen)
+	$(call simd_check,lib/ksai/benches/bench_qwen.kspl,lib/ksai/nn.kspl,simd_check_nn)
 	$(call simd_check,lib/ksai/benches/bench_quant.kspl,lib/ksai/quant.kspl,simd_check_quant)
 	$(call simd_check,lib/ksai/benches/bench_qwen.kspl,lib/ksai/delta_net.kspl,simd_check_delta)
 	@# Caution: **Do not remove this line.** It is the gate's verdict (`Gate.verdict`).

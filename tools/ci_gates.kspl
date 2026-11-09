@@ -320,6 +320,7 @@ const EXPECTED_SKIPS: Expected_skip[_] = ::{
     Expected_skip::{ .on = "win32", .says = "no ARM toolchain" },
     Expected_skip::{ .on = "win32", .says = "this system cannot set one (ulimit -t)" },
     Expected_skip::{ .on = "win32", .says = "Windows has no SIGPIPE" },
+    Expected_skip::{ .on = "win32", .says = "Windows has no signal that cuts a wait short" },
     Expected_skip::{ .on = "win32 darwin", .says = "/proc/self/status" },
     Expected_skip::{ .on = "darwin", .says = "this OS has no /dev/full" },
     Expected_skip::{ .on = "win32 darwin", .says = "nm is not installed" },
@@ -444,6 +445,7 @@ priv fn lists(words: U8[], word: U8[]): Bool //< whether a space-separated list 
 
 const LOG_DIR: U8[] = "out/log/ci" //< where the gates' logs go
 const SUITE_LOG_DIR: U8[] = "out/log/suite" //< where each suite's own log goes (`SUITE_LOG_DIR`)
+const LOG_DIRS: U8[][] = U8[][]::{ LOG_DIR, SUITE_LOG_DIR } //< every folder a round's logs go to
 const END_EXT: U8[] = ".end" //< the file beside a log holding `<exit code> <seconds>`
 
 struct Judge //< what a SKIP line is held against: the round's platform and the switches off
@@ -761,15 +763,22 @@ fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) /
                 b.s("* `").s(o.log).s("`\n")
     b.s("\na fallen gate's reason is in the per-gate log among the same round's artifacts, log-*\n")
 
-fn reset_logs(arena: Arena$@): Bool //<
-    //< Removes what an earlier round left, so it is not counted again; false where one stays
+fn reset_logs( //< removes what an earlier round left, so it is not counted again
+    //< Returns false where one stays.
     //< Caution: **Remove the suites' times too** (`out/log/suite/*.times`): `make test-suites`
     //< counts every one it finds.
     //< Caution: **Stop the round on a file that stays.** An old log left in place reads as this
     //< round's PASS for a gate that never ran. A folder that is not there holds nothing to remove.
+    dirs: U8[][], //< the folders a round's logs go to: `LOG_DIRS`
+    arena: Arena$@,
+): Bool
     $all_gone: = true
-    for dir in U8[][]::{ LOG_DIR, SUITE_LOG_DIR }
+    for dir in dirs
+        // A folder that stands but cannot be listed is not empty: its old logs stay.
         names: = fs.read_dir(dir, arena) catch
+            if fs.exists(dir)
+                io.err().s("ci: an earlier round's \{dir\} cannot be listed\n")
+                all_gone = false
             continue
         for name in names
             if name.ends_with(".log") || name.ends_with(END_EXT) || name.ends_with(".times")

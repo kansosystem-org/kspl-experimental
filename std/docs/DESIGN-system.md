@@ -110,6 +110,14 @@ The OS, not a check of the language, stops a write through a null pointer or a r
 * **An overflow handler needs stack room reserved before the stack runs out.** POSIX uses a separate 64 KiB stack. Windows reserves 64 KiB on the thread's own stack with `SetThreadStackGuarantee`. The runtime prepares the main thread and each `std/thread` thread. A thread started by C code is not prepared, so its overflow can end with 139 and no line.
 * **Freestanding has no OS to stop the access**, so nothing here applies to it.
 
+### A signal handler stays set
+
+`sys.set_signal_handler` sets a handler that runs at every delivery of its signal. C's `signal()` does not promise that. Under `-std=c99` on glibc, and always on Windows, the first delivery puts the default back. A second signal then ends the program, and setting the handler again inside it leaves a gap.
+
+* **POSIX sets the handler with `sigaction`**, as glibc's and BSD's own `signal()` do by default. Windows has no `sigaction`, so the runtime sets the handler again before it calls the program's.
+* **A read or write that the signal cuts short goes on** (`SA_RESTART`). The runtime makes its own calls again after a signal, but C code that the program calls is out of its reach. Without it, a signal would make `fread` or a C library's read fail.
+* **`std/libc` does not publish C's `signal()`.** It would be a second way to set a handler, and the one that loses it.
+
 The implementation is "A crash says what happened" in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c). The check is `make test-runtime` (the `crash_*` cases in `ksplc/tests/runtime/stops.kspl`).
 
 ### A run of checks goes past failures, naming them last
@@ -123,7 +131,7 @@ The exit code is the verdict.
 
 **The names on the `RESULT:` line are copied into the tally's own room** (`Names` in `std/verdict.kspl`). A caller often builds a name for `check` in its scratch arena and frees it straight after. An allocation instead would make the tally the one part of a failing run that can itself fail.
 
-**A child's run is read here too** (`run_child` / `run_children`). Its stdout and stderr come back as one text, since a diagnostic appears on either. A run that could not start, or was killed, has no code, and says why in that text. `exited_with(code)` asks whether the run ended by itself with that code. Each run waits at most the limit the check passes, `default_timeout_ms` where it has no reason for another. `run_children` runs `jobs()` children side by side, in the input's order, so the judging code is the same either way.
+**A child's run is read here too** (`run_child` / `run_children`). Its stdout and stderr come back as one text, since a diagnostic appears on either. A run that could not start, or was killed, has no code, and says why in that text. `exited_with(code)` asks whether the run ended by itself with that code. Each run waits at most the limit the check passes, `DEFAULT_TIMEOUT_MS` where it has no reason for another. `run_children` runs `jobs()` children side by side, in the input's order, so the judging code is the same either way.
 
 **A finding is indented on the lines below its `FAIL` line**, since the gates read a line by its head (`FAIL `, `RESULT:`).
 
@@ -280,7 +288,11 @@ Caution: **Do not add a per-purpose way to start a child to C.** C is written tw
 | The Windows directory | — | 4 | — |
 | The directories PATH names | 1 | 5 | 1 |
 
-Left to Windows, a `cc.exe` in a cloned repository would run in place of the compiler, and `bash` would start WSL's launcher. So on Windows, `std/subproc` looks the name up in PATH itself, adding `.exe` to a name with no extension. It puts the full path found in the command line, and a name not found fails to start.
+Left to Windows, a `cc.exe` in a cloned repository would run in place of the compiler, and `bash` would start WSL's launcher. So on Windows, `std/subproc` looks the name up in PATH itself. It puts the full path found in the command line, and a name not found fails to start with error 2, as `execvp` gives `ENOENT`.
+
+* **A name with no extension is tried with `.exe`, `.com`, `.bat` and `.cmd`**, in that order, in each folder before the next. These are the extensions `fs.can_run` accepts, so `npm` finds `npm.cmd`. `PATHEXT` is not read: whoever can change it could get something else started.
+* **A batch file found this way is refused arguments that `cmd.exe` would read as commands**, as one named in full is.
+* **A PATH entry in quotes can hold a `;`**: the entry ends at the first `;` outside quotes.
 
 ### A relative program path starts at the child's working directory
 
@@ -365,7 +377,7 @@ What this gives up:
 
 ### A child's outputs are read briefly past its end
 
-**Once the child itself has ended, `run_capture` reads its outputs for `pipe_grace_ms` (100 ms) more.** Then it closes them and returns the child's own exit code. A process the child started without redirecting its outputs (`server &` in a shell script) holds the pipes open. Waiting for them to close would run to the time limit, and report a child that ended in time as stopped.
+**Once the child itself has ended, `run_capture` reads its outputs for `PIPE_GRACE_MS` (100 ms) more.** Then it closes them and returns the child's own exit code. A process the child started without redirecting its outputs (`server &` in a shell script) holds the pipes open. Waiting for them to close would run to the time limit, and report a child that ended in time as stopped.
 
 **Nothing that the child itself wrote is lost**: once it has ended, all it wrote is in the pipes. The grace can cut only what the processes it left behind write later. Those are not killed, since only a time limit stops what a child started. `run_many` collects through files, which a leftover process cannot hold open.
 

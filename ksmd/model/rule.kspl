@@ -75,7 +75,7 @@ fn colours_of(text: U8[], arena: Arena$@): Colours? //<
     $c: = Colours::{ .color = "", .fill = "" }
     $rest: = text
     if rest.starts_with("color:")
-        c.color = lower(rest.sub(6, 7) if rest.len >= 13 else "", arena)
+        c.color = (rest.sub(6, 7) if rest.len >= 13 else "").to_lower_ascii(arena)
         if !is_colour(c.color)
             return .none
         rest = rest.sub_from(13)
@@ -84,7 +84,7 @@ fn colours_of(text: U8[], arena: Arena$@): Colours? //<
                 return .none
             rest = rest.sub_from(1)
     if rest.starts_with("fill:")
-        c.fill = lower(rest.sub(5, 7) if rest.len >= 12 else "", arena)
+        c.fill = (rest.sub(5, 7) if rest.len >= 12 else "").to_lower_ascii(arena)
         if !is_colour(c.fill)
             return .none
         rest = rest.sub_from(12)
@@ -105,8 +105,8 @@ priv fn scale_of(rest: U8[], arena: Arena$@): Rule? //< `from:#ffffff to:#ffef9c
         return .none
     $r: = no_rule()
     r.kind = .scale
-    r.color = lower(rest.sub(5, 7), arena)
-    r.fill = lower(rest.sub(16, 7), arena)
+    r.color = rest.sub(5, 7).to_lower_ascii(arena)
+    r.fill = rest.sub(16, 7).to_lower_ascii(arena)
     if !is_colour(r.color) || !is_colour(r.fill)
         return .none
     return .some(r)
@@ -146,9 +146,3 @@ priv fn is_text(text: U8[]): Bool //< a text a rule can hold: 1 to 100 bytes, as
         if c < 0x20U8 || c == 0x7FU8 || c == ',' || c == ';' || c == '"' || c == '\\'
             return false
     return true
-
-priv fn lower(text: U8[], arena: Arena$@): U8[] //< a colour in lower case, the form it is saved in
-    out: = arena.text()
-    for c in text
-        out.c(c.to_lower())
-    return out.take()

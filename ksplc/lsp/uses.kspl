@@ -105,22 +105,52 @@ priv fn wants_decl(params: json.Value): Bool //< whether the references count th
 fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style, arena: Arena$@):
     List<|Spot|> //<
         //< It collects the places of the target's definition, across the whole workspace.
+        //< **A closure's capture is the outer name**: its places are collected with the outer
+        //< local's, from either side (capture_source, linked_defs).
         //< Caution: **Walk the generics' templates too.** An instantiated tree cannot be reached
         //< from `root_file`, so skipping them silently misses the calls found only inside a
         //< generic.
     $out: = List<|Spot|>(arena)
     seen: = arena.create(Map<|U8[], I32|>(arena))
     $w: = Walk::{ .target_def = t.def, .c = ws_state.sema, .style = style, .seen = seen,
-        .out = out@, .above = List<|Ast_node$@|>.create(arena), .arena = arena }
-    if ws_state.root_file != null
-        w.node(ws_state.root_file, 0)
-    if ws_state.sema != null
-        for entry in ws_state.sema.generics.templates.items()
-            w.node(entry.value, 0)
-    seen.free()
+        .out = out@, .above = List<|Ast_node$@|>.create(arena), .arena = arena,
+        .name = t.name.text.get_generic_base_name(), .gather = true,
+        .named_ids = List<|Ast_node$@|>.create(arena),
+        .named_decls = List<|Ast_node$@|>.create(arena) }
+    w.walk_all(ws_state)
+    // A capture's rebinding is the target: start again from the outer local it reads.
+    for _ in Range.asc(MAX_CAPTURE_LINKS)
+        switch w.capture_source()
+        case .some(outer)
+            w.restart(outer)
+            w.walk_all(ws_state)
+        case .none
+            break
+    w.gather = false
+    done: = List<|Ast_node$@|>.create(arena)
+    done.push(w.target_def)
+    $from: Sz = 0
+    for _ in Range.asc(MAX_CAPTURE_LINKS)
+        linked: = w.linked_defs(from, done)
+        from = out.len
+        if linked.len == 0
+            break
+        for def in linked
+            done.push(def)
+            w.target_def = def
+            w.walk_all(ws_state)
+    w.seen.free()
     return out.order_by(fn(a: Spot@, b: Spot@; ): I32 {
         return spot_order(a, b);
     }, arena)
+
+priv fn holds(nodes: List<|Ast_node$@|>@, want: Ast_node$@): Bool //< whether want is in nodes
+    for n in nodes
+        if n == want
+            return true
+    return false
+
+priv const MAX_CAPTURE_LINKS: Sz = 64 //< how many closures deep a capture of a capture is followed
 
 priv fn spot_order(a: Spot@, b: Spot@): I32 //< by name, then line, then column
     order: = a.uri.compare(b.uri)
@@ -176,8 +206,58 @@ priv struct Walk //< what one search for a definition's uses carries down the tr
     above: List<|Ast_node$@|>$@ //<
         //< the nodes from the walk's start down to the parent of the one visited
     arena: Arena$@
+    name: U8[] //< the target's name, as written
+    gather: Bool //< whether the walk records named_ids and named_decls
+    named_ids: List<|Ast_node$@|>$@ //< every identifier spelled as the target's name
+    named_decls: List<|Ast_node$@|>$@ //< every local's declaration of that name
 
 impl Walk
+    priv fn walk_all(w: Self$@, ws_state: Doc_state$@) //< the uses in every file and template
+        if ws_state.root_file != null
+            w.node(ws_state.root_file, 0)
+        if ws_state.sema != null
+            for entry in ws_state.sema.generics.templates.items()
+                w.node(entry.value, 0)
+
+    priv fn restart(w: Self$@, def: Ast_node$@) //< forgets the places found, to walk for def
+        w.target_def = def
+        w.out.len = 0
+        w.seen.free()
+        w.seen = w.arena.create(Map<|U8[], I32|>(w.arena))
+        w.named_ids.len = 0
+        w.named_decls.len = 0
+
+    priv fn capture_source(w: Self@): Ast_node$@? //<
+        //< The outer local the target reads, where the target is a closure capture's rebinding
+        //< The rebinding (`n: = env.n$`) and the argument that passes the outer `n` to the
+        //< closure stand at the capture's name (place_capture_rebindings in
+        //< `../parse/desugar_closure.kspl`). The argument names the outer local.
+        def: = w.target_def
+        if def == null || def.kind_id != .k_decl_var
+            return .none
+        id: = def.get_var_decl_id()
+        for n in w.named_ids
+            if n != id && is_same_loc(n, id) && n.def_node != null &&
+                !is_def_match(n.def_node, def)
+                return .some(n.def_node)
+        return .none
+
+    priv fn linked_defs(w: Self@, from: Sz, done: List<|Ast_node$@|>@): List<|Ast_node$@|> //<
+        //< The rebindings of the closures that capture what the places from `from` on name
+        //< A use at a capture's name is the argument that passes it, so the rebinding standing
+        //< there carries it into the closure's body.
+        $out: = List<|Ast_node$@|>(w.arena)
+        for i in Range(from, w.out.len, 1)
+            s: = w.out.get(i)
+            if s.is_decl
+                continue
+            for d in w.named_decls
+                id: = d.get_var_decl_id()
+                if id != s.node && is_same_loc(id, s.node) && !holds(done, d) &&
+                    !holds(out@, d)
+                    out.push(d)
+        return out
+
     priv fn node(w: Self$@, node: Ast_node$@, depth: Sz) //< the uses at node and under it
         target_def: = w.target_def
         // **Nodes the compiler generated are not uses** (`made_by_compiler` in
@@ -193,6 +273,8 @@ impl Walk
                 !node.loc.file().equals(target_def.loc.file())
                 return
 
+        if w.gather
+            w.note_named(node)
         if node.kind_id == .k_identifier && node.loc.file().len > 0 && w.refers(node)
             w.add_spot(node)
 
@@ -200,6 +282,15 @@ impl Walk
         for child in node.children
             w.node(child, depth + 1)
         w.above.len -= 1
+
+    priv fn note_named(w: Self$@, node: Ast_node$@) //<
+        //< records node where it is an identifier or a local's declaration of the target's name
+        if node.kind_id == .k_identifier && node.text.equals(w.name)
+            w.named_ids.push(node)
+        else if node.kind_id == .k_decl_var
+            id: = node.get_var_decl_id()
+            if id != null && id.text.equals(w.name)
+                w.named_decls.push(node)
 
     priv fn refers(w: Self$@, n: Ast_node$@): Bool //<
         //< whether an identifier is a place of the target

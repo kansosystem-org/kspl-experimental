@@ -12,6 +12,12 @@ const MAX_BITS: I64 = 53 //< the widest width, and the bits of the largest numbe
 
 priv const LIMIT: I64 = 1I64 << 53 //< the largest magnitude converted, 2^53
 
+const READ_DIGITS: U8[][_] = ::{ "hex_to_dec", "bin_to_dec", "hex_to_bin", "bin_to_hex" } //<
+    //< the functions whose first argument is digit text, read in a base
+    //< Caution: **A literal in a base does not read as that argument** (`Parser.primary` in
+    //< `ksmd/calc/calc.kspl`). It is already the number, and the function would read its decimal
+    //< digits in the base: `hex_to_dec(0x10)` would quietly be 22.
+
 enum Base //< a base the functions write or read
     hex //< four bits a digit, `0`-`9` and `A`-`F`
     binary //< one bit a digit, `0` and `1`
@@ -95,6 +101,30 @@ fn read(s: U8[], base: Base, width: I64): I64!Base_error //<
     if v >= span
         throw .too_large
     return v - span if v >= (span >> 1) else v
+
+fn literal(spelled: U8[]): I64? //<
+    //< The number a formula's literal names: `0x` and hexadecimal digits, or `0b` and binary ones
+    //< **It reads KSPL's spelling, so one literal means the same in both.** The prefix is
+    //< lowercase, and hexadecimal digits take either case. A `_` can stand anywhere after the
+    //< prefix (`0b_0111_0001`). None for any other text, for no digit, or for a number past 2^53.
+    if !is_literal(spelled)
+        return .none
+    base: = Base.hex if spelled[1] == 'x' else Base.binary
+    $v: I64 = 0
+    $digits: = false
+    for c in spelled.sub_from(2)
+        if c == '_'
+            continue
+        d: = digit(c, base) catch
+            return .none
+        v = (v << base.bits()) | d
+        if v > LIMIT
+            return .none
+        digits = true
+    return .some(v) if digits else .none
+
+fn is_literal(spelled: U8[]): Bool //< whether text starts as a literal in a base: `0x` or `0b`
+    return spelled.len >= 2 && spelled[0] == '0' && (spelled[1] == 'x' || spelled[1] == 'b')
 
 priv fn digit(c: U8, base: Base): I64!Base_error //< one digit's value in the base
     if c >= '0' && c <= '9'

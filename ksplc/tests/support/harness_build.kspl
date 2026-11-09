@@ -5,6 +5,7 @@ import "ksplc/tests/support/harness"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
@@ -28,6 +29,26 @@ pub fn query_words(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
         if w.len > 0
             out.push(w)
     return true
+
+fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does not run
+    //< Caution: **Ask the compiler what it is.** macOS's `gcc` is clang.
+    r: = harness.run(U8[][]::{ cc, "--version" })
+    if !r.exited_with(0)
+        return .none
+    return .some(r.out.find_str("clang").is_some())
+
+fn first_diff(a: U8[], a_name: U8[], b: U8[], b_name: U8[], arena: Arena$@): U8[] //<
+    //< The first line where two programs' outputs disagree, each line under its build's name
+    //< Caution: Do not print both whole texts (a long program's output would appear twice).
+    al: = a.lines(arena)
+    bl: = b.lines(arena)
+    n: = math.min(al.len, bl.len)
+    for i in Range.asc(n)
+        if !al.get(i).equals(bl.get(i))
+            return arena.text().s("line \{i + 1\} differs\n  ").s(a_name).s(": ").s(al.get(i))
+                .s("\n  ").s(b_name).s(": ").s(bl.get(i)).take()
+    return arena.text().s("the line counts differ (").s(a_name).s(": \{al.len\}, ").s(b_name)
+        .s(": \{bl.len\})").take()
 
 fn exe_flags(): List<|U8[]|>$@ //<
     //< The options ksplc says it "passes when building an executable"

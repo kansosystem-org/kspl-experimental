@@ -13,21 +13,12 @@
 // ==========================================
 import "ksai/pretokenizer" { Split_rule }
 import "ksai/tokenizer" as ai_tokenizer
-import "std/chars"
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strnum" // `to_count`
 import "std/sys"
-
-priv fn unhex(line: U8[], arena: Arena$@): U8[] //< the bytes a line spells in hex
-    b: = arena.text()
-    for $k: Sz = 0; k + 1 < line.len; k += 2
-        hi: = line[k].hex_val().unwrap_or(0)
-        lo: = line[k + 1].hex_val().unwrap_or(0)
-        b.c(U8::((hi << 4) | lo))
-    return b.take()
 
 priv fn read_lines(path: U8[], arena: Arena$@): U8[][] //< a file's lines, the last one's end too
     text: = io.read_file(path, arena) catch
@@ -41,10 +32,15 @@ priv fn read_lines(path: U8[], arena: Arena$@): U8[][] //< a file's lines, the l
     return out.slice()
 
 priv fn hex_lines(path: U8[], arena: Arena$@): U8[][] //< each line of a file read as hex
+    //< A line that is not whole bytes in hex stops the tool, naming the file and the line.
     lines: = read_lines(path, arena)
     $out: = List<|U8[]|>.new_with_cap(lines.len, arena)
-    for line in lines
-        out.push(unhex(line, arena))
+    for i in Range.asc(lines.len)
+        defer $b: = Str_builder()
+        if !ai_tokenizer.hex_bytes(lines[i], b@)
+            io.err().s("\{sys.program_name()\}: \{path\}:\{i + 1\} is not bytes in hex\n")
+            sys.exit(1)
+        out.push(arena.dup_str(b.slice()))
     return out.slice()
 
 fn main(): I32

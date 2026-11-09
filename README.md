@@ -138,7 +138,7 @@ A package is a folder built and shipped as one unit, and its row links to its `R
 | **`lib/kspeg/`** | A parser that directly executes a parsing expression grammar (PEG), KSPL’s grammar `ksplc/kspl.kspeg` included ([introduction](lib/kspeg/README.md) / [notation](lib/kspeg/docs/SPEC-notation.md)). |
 | **`lib/ksdb/`** | Kanso DataBase, a device database with no dependencies: an append-only record on flash that survives power loss ([introduction](lib/ksdb/README.md) / [design](lib/ksdb/docs/DESIGN-storage.md)). |
 | **`lib/kstls/`** | TLS over OpenSSL, a binding to an external C library, kept outside `std` so that `std` needs no other installation ([introduction](lib/kstls/README.md) / [design](lib/kstls/docs/DESIGN-bindings.md)). |
-| **`lib/ksos/`** | Kanso OS, a lightweight real-time OS: one kernel on bare-metal microcontrollers and on Linux hosts ([introduction](lib/ksos/README.md) / [design](lib/ksos/docs/DESIGN-rtos.md) / [remaining work](docs/PLAN.md)). |
+| **`lib/ksos/`** | Kanso OS, a lightweight real-time OS: one kernel on bare-metal microcontrollers and on Linux hosts ([introduction](lib/ksos/README.md) / [design](lib/ksos/docs/DESIGN-rtos.md)). |
 | **`data/`** | The large files that Git ignores and `make clean` keeps: the downloaded models, and the weights made here that take long to make again ([entry point](data/README.md)). |
 | **`docs/`** | Documents that cover the whole project, such as the [design rationale](docs/DESIGN-principles.md), [document rules](docs/SPEC-documents.md) and [remaining work](docs/PLAN.md). [`docs/README.md`](docs/README.md) lists their readers. |
 | **`tests/`** | The test suites for the language, the toolchain and the OS ([entry point](tests/README.md)). |

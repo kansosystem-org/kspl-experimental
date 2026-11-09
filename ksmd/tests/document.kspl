@@ -243,8 +243,8 @@ priv fn inline_refusals()
 priv fn clause_models()
     defer arena: = Arena(64 * 1024)
     doc: =
-        read("%ksmd 1\n\n:::table name=\"budget\" widths=\"2,1\"\n| \"Item\" | \"Cost\" |\n| \
-            \"Pens\" | =B1*2 |\n| \"a|b\\n\" | |\n:::\n\n:::include \
+        read("%ksmd 1\n\n:::table name=\"budget\" char_widths=\"53.3,26.7\"\n| \"Item\" | \"Cost\" \
+            |\n| \"Pens\" | =B1*2 |\n| \"a|b\\n\" | |\n:::\n\n:::include \
             path=\"notes.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"\"\n:::\n", arena)
     verdict.check("a table, an include and an image are three blocks",
         doc.blocks.len == 3 && doc.blocks.get(0).kind == Block_kind.table &&
@@ -258,7 +258,7 @@ priv fn clause_models()
     verdict.check("and is written back as it was read",
         back.equals("%ksmd 1\n\n:::functions path=\"mine.kspl\"\n:::\n"), back)
     t: = doc.tables[0]@
-    verdict.check("a table keeps its name and its size, and its older weights become characters",
+    verdict.check("a table keeps its name, its size and its widths in tenths of a character",
         t.name.equals("budget") && t.columns.len == 2 && t.rows.len == 2 && t.widths.len == 2 &&
         t.widths[0] == 533 && t.widths[1] == 267, "")
     verdict.check("a header cell is text",
@@ -268,7 +268,7 @@ priv fn clause_models()
     reference: = t.pieces[formula.first]
     rest: = t.pieces[formula.first + 1]
     verdict.check("a formula keeps its place, and its reference attaches to a cell",
-        formula.kind == Cell_kind.formula && formula.offset == 76 && formula.count == 2 &&
+        formula.kind == Cell_kind.formula && formula.offset == 87 && formula.count == 2 &&
         reference.kind == Piece_kind.cell && reference.from.row == t.rows[0] &&
         reference.from.column == t.columns[1] && rest.text.equals("*2"), "")
     quoted: = t.at(1, 0)
@@ -284,12 +284,6 @@ priv fn clause_saves()
     canonical("attributes take their fixed order and one space",
         "%ksmd 1\n\n:::image  caption=\"c\"   alt=\"b\" src=\"a.png\"\n:::\n",
         "%ksmd 1\n\n:::image src=\"a.png\" alt=\"b\" caption=\"c\"\n:::\n")
-    canonical("older weights are saved as shares of 80 characters",
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"20,40\"\n| \"a\" | \"b\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"26.7,53.3\"\n| \"a\" | \"b\" |\n:::\n")
-    canonical("a share is half a character at least",
-        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,10000\"\n| \"a\" | \"b\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"0.5,80\"\n| \"a\" | \"b\" |\n:::\n")
     canonical("widths in characters save as written",
         "%ksmd 1\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n",
         "%ksmd 1\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n")
@@ -320,7 +314,12 @@ priv fn cell_looks()
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=5} |\n:::\n",
         "a font size is a number of points from 6 to 72, whole or ending in .5", 4, 8)
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {align=\"middle\"} |\n:::\n",
-        "align is \"left\", \"center\" or \"right\"", 4, 8)
+        "align is \"left\", \"center\", \"right\" or \"across\"", 4, 8)
+    canonical("a cell takes align=\"across\", and it is written back unchanged",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 2129920 {align=\"across\"} | \
+            {align=\"across\"} |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 2129920 {align=\"across\"} | \
+            {align=\"across\"} |\n:::\n")
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {bold=1} |\n:::\n",
         "braces take color, fill, size, align, wrap, format, note and link", 4, 8)
     canonical("wrap is written after the alignment, in the fixed order",
@@ -333,8 +332,9 @@ priv fn cell_looks()
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=12} x |\n:::\n",
         "a look in braces ends its cell, with '}' last", 4, 7)
 
-priv fn written_width(width: U8[], arena: Arena$@): U8[] //< a source with an image this wide
-    return arena.text().s("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"").s(width)
+priv fn sized(name: U8[], value: U8[], arena: Arena$@): U8[] //<
+    //< A source with an image that takes this attribute, `width` or `scale`
+    return arena.text().s("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" ").s(name).s("=\"").s(value)
         .s("\"\n:::\n").take()
 
 priv fn text_looks() //< text takes alignment alone, on a line of braces
@@ -359,6 +359,9 @@ priv fn text_looks() //< text takes alignment alone, on a line of braces
     refused("%ksmd 1\n\n{color=\"#000000\"}\nText\n",
         "a paragraph's line of braces holds only align and note. Colour text with [text]{color=...}",
         3, 1)
+    refused("%ksmd 1\n\n{align=\"across\"}\nText\n",
+        "align=\"across\" centres a cell's value across empty cells, so only a table cell takes it. \
+            A paragraph takes \"left\", \"center\" or \"right\"", 3, 1)
     refused("%ksmd 1\n\n{align=\"center\"}\n- item\n",
         "a line of braces stands before a paragraph or a heading", 3, 1)
     refused("%ksmd 1\n\n{align=\"center\"\nText\n",
@@ -376,8 +379,8 @@ priv fn clause_refusals()
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\n:::table name=\"t\"\n| \"a\" \
         |\n:::\n", "another table in this source has this name", 7, 10)
     refused("%ksmd 1\n\n:::table name=\"t\" size=\"2\"\n| \"a\" |\n:::\n",
-        "':::table' takes only name, caption, char_widths, widths, heights, formats, choices, \
-            color_rows, rules, groups, merge, filter and invisible", 3, 19)
+        "':::table' takes only name, caption, char_widths, heights, formats, choices, color_rows, \
+            rules, groups, merge, filter and invisible", 3, 19)
     refused("%ksmd 1\n\n:::table name=\"t\" name=\"u\"\n| \"a\" |\n:::\n",
         "this attribute is given twice", 3, 19)
     refused("%ksmd 1\n\n:::table name=t\n| \"a\" |\n:::\n",
@@ -416,12 +419,9 @@ priv fn clause_refusals()
         4, 3)
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| = |\n:::\n", "this formula is empty", 5,
         3)
-    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1\"\n| \"a\" | \"b\" |\n:::\n",
-        "widths has one weight per column", 3, 19)
-    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"0,1\"\n| \"a\" | \"b\" |\n:::\n",
-        "widths is a list of whole numbers from 1 to 10,000, separated by ','", 3, 19)
-    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1,,2\"\n| \"a\" | \"b\" |\n:::\n",
-        "widths is a list of whole numbers from 1 to 10,000, separated by ','", 3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1,2\"\n| \"a\" | \"b\" |\n:::\n",
+        "':::table' no longer takes widths. Give each column's width in characters with char_widths",
+        3, 19)
     refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\"1\"\n| \"a\" | \"b\" |\n:::\n",
         "char_widths has one entry per column, empty for none", 3, 19)
     refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\",\"\n| \"a\" | \"b\" |\n:::\n",
@@ -432,8 +432,6 @@ priv fn clause_refusals()
         refused(src.slice(),
             "a column's width is 0.5 to 255 characters, with at most one decimal place, or nothing",
             3, 19)
-    refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,1\" widths=\"1,1\"\n| \"a\" | \"b\" \
-        |\n:::\n", "give char_widths or the older widths, not both", 3, 37)
     refused("%ksmd 1\n\n:::include path=\"a.ksmd\"\nx\n:::\n",
         "':::include' has no body. Close it on the next line", 4, 1)
     refused("%ksmd 1\n\n:::include\n:::\n", "':::include' needs a path, as in path=\"notes.ksmd\"",
@@ -452,8 +450,13 @@ priv fn clause_refusals()
         "leave out an empty caption", 3, 29)
     defer arena: = Arena(16 * 1024)
     for wrong in U8[][]::{ "0%", "101%", "40", "40px", "4.5%" }
-        refused(written_width(wrong, arena),
+        refused(sized("width", wrong, arena),
             "width is a share of the text width, \"1%\" to \"100%\", or leave it out", 3, 29)
+    for wrong in U8[][]::{ "0%", "401%", "1000%", "50", "50px", "-5%" }
+        refused(sized("scale", wrong, arena),
+            "scale is a share of the image's own size, \"1%\" to \"400%\", or leave it out", 3, 29)
+    refused(sized("width", "40%\" scale=\"50%", arena),
+        "an image takes a width or a scale, not both. Keep one of them", 3, 41)
     defer $wide: = Str_builder()
     wide.s("%ksmd 1\n\n:::table name=\"t\"\n")
     for _ in Range.asc(257)

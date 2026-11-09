@@ -269,7 +269,10 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>@) //<
         for _i in Range.asc(base_cache.HASH_HEX_LEN)
             out.c('-')
         out.c(' ').s(cfg).c('\n')
-    io.write_file(deps_path, out.slice()) catch {}
+    // **A failed write can leave part of the list; remove it.** `ksplc run` renames this file into
+    // place, and a cut list names fewer files, so a changed one would pass as fresh.
+    io.write_file(deps_path, out.slice()) catch
+        fs.remove_path(deps_path) catch {}
 
 priv fn append_dep_line(path: U8[], out: Str_builder$@): Bool //<
     //< It adds the deps line for path (`<64 hex digits> <path>`); false where it has no digest

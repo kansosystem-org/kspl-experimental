@@ -209,8 +209,26 @@ pub fn program_name(): U8[] //< this program's name for messages, without folder
     return strip_last_ext(get_file_name(a.get(0)))
 
 // ==========================================
-// Raising a signal
+// Signals
 // ==========================================
+pub typedef Signal_handler = fn(sig: I32): Void //< what `set_signal_handler` takes and returns.
+    //< An unnamed function-pointer type in an extern declaration produces no valid C type name (the
+    //< same holds for Thread_entry in std/thread.kspl).
+
+#cfg(!freestanding)
+extern fn kspl_signal(sig: I32, handler: Signal_handler): Signal_handler //<
+    //< `sigaction` with `SA_RESTART` on POSIX; on Windows, `signal()` set again at each delivery
+
+#cfg(!freestanding)
+pub fn set_signal_handler(sig: I32, handler: Signal_handler): Signal_handler //<
+    //< runs handler at each sig from now on; returns the handler before it
+    //< **The handler stays set after a signal.** C's `signal()` under `-std=c99`, and on Windows,
+    //< puts the default back at the first delivery. A second signal would then end the program.
+    //< On POSIX, a read or write that the signal cuts short goes on (`SA_RESTART`).
+    //< To put the earlier handler back, pass what this returned. The reasons are "A signal handler
+    //< stays set" in std/docs/DESIGN-system.md.
+    return kspl_signal(sig, handler)
+
 pub fn raise_signal(sig: I32) //< sends a signal to this process itself
     //< For a test, or to resend a signal for its default behaviour after your own clean-up.
     libc.raise(sig)
@@ -230,7 +248,12 @@ pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Win
     //< **that drive's current working directory**, not the root. A copy that skips the separator
     //< answers differently in just that case. On POSIX `C:\x` is a relative name.
     //< A root that opens with a separator is from the root whatever follows (`\\server\share`).
-    n: = root_len(path)
+    return is_absolute_on(path, is_windows())
+
+fn is_absolute_on(path: U8[], windows: Bool): Bool //< `is_absolute`, on Windows or on POSIX
+    //< Each path helper that answers apart on Windows takes the OS as a parameter. So a test checks
+    //< both answers on every OS, before any run on Windows.
+    n: = root_len_on(path, windows)
     return n > 0 && (is_path_sep(path[0]) || is_path_sep(path[n - 1]))
 
 pub fn is_path_sep(c: U8): Bool //< a path separator, `/` or `\`, on every OS; std/fs splits by it
@@ -245,12 +268,15 @@ pub fn root_len(path: U8[]): Sz //< the length of the root a path starts from; 0
     //< `\\.\` (`\\?\C:\`, `\\?\UNC\server\share\`). A share needs its server's name: `\\` alone, or
     //< a third separator, is the plain root `\`. std/fs measures the root by this too, so the two
     //< cannot disagree.
-    if is_windows() && path.len >= 3 && is_path_sep(path[0]) && is_path_sep(path[1]) &&
+    return root_len_on(path, is_windows())
+
+fn root_len_on(path: U8[], windows: Bool): Sz //< `root_len`, on Windows or on POSIX
+    if windows && path.len >= 3 && is_path_sep(path[0]) && is_path_sep(path[1]) &&
         !is_path_sep(path[2])
         return windows_long_root_len(path)
     if path.len > 0 && is_path_sep(path[0])
         return 1
-    if !is_windows()
+    if !windows
         return 0
     return drive_root_len(path)
 
@@ -286,12 +312,15 @@ pub fn get_dir_name(path: U8[]): U8[] //<
     //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`
     //< and `\\srv\sh\x` in `\\srv\sh\`). **The root is its own folder**: `/`, `C:\` and
     //< `\\srv\sh\` give themselves. So a walk up ends where the answer stops changing.
+    return get_dir_name_on(path, is_windows())
+
+fn get_dir_name_on(path: U8[], windows: Bool): U8[] //< `get_dir_name`, on Windows or on POSIX
     if last_slash: = last_path_sep(path)
         // Caution: **Do not return empty for the root or a file under it.** Empty means the
         // current directory. So a search beside `/x` would search beside the working directory
         // instead. A file there would pick up the settings of wherever the compiler was
         // started.
-        top: = root_len(path)
+        top: = root_len_on(path, windows)
         return path.sub(0, top if last_slash < top else last_slash)
     return ""
 

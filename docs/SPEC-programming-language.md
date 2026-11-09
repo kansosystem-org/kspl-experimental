@@ -128,7 +128,7 @@ A literal is a value written directly into the source. There are these seven kin
 
 **Line ends are the file's spelling, not the program's**: a source with `\r\n` line ends and the same source with `\n` are one program. A text that must hold a `\r` writes the escape.
 
-A numeric literal can carry the digit separator `_` anywhere but first (`1_000_000`).
+A numeric literal can carry the digit separator `_` anywhere but first (`1_000_000`). A `0x` or `0b` literal holds at least one digit of its base after the prefix: `0x_` and `0b_` are syntax errors, while `0b_0111_0001` is 113.
 
 **A decimal integer does not start with `0` unless it is `0` itself**: `0755`, `09` and `0_1` are syntax errors. KSPL has no octal literal, but C and Java read that spelling as octal. The error names both readings (`755`, or `0x1ed` for the octal one). A floating-point literal is always decimal and can start with `0` (`0.5`, `007.5`).
 
@@ -1439,6 +1439,8 @@ fn send(byte: U32)
 | An integer of any width, `Sz` and an integer constant included | **Only in a function marked `#raw_address`**, or in the initializer of a top-level `const` or `var` so marked ([10](#10-compiler-directives-and-attributes)). Elsewhere it is a compile error: `an integer becomes a pointer only in a function marked '#raw_address'` |
 | Anything else (`Bool`, a float, an enum, a struct, a slice, an array) | A compile error everywhere: `only a pointer, a function or 'null' converts to a pointer` |
 
+**A step from `null` makes an address from a number too**, so it follows the integer's row. `U8@::null + 4096` names the address `U8@::4096` does, and outside `#raw_address` it is a compile error: `a step from 'null' makes an address from a number`. Only `null` written there counts; a pointer that holds null at run time is not known at compile time.
+
 **A number is a real address only on a machine with a fixed memory map**: a device's register, a memory-mapped flash, a ROM's table. Elsewhere such a cast is nearly always a slip that gives a wild pointer. An example is `U8$@::buf.len` written where the slice's `.ptr` was meant; for that shape the message names `.ptr`. The mark keeps in sight the few places that make such an address. A driver reaches its registers through a few marked helpers. A pointer still becomes an integer anywhere (`Sz::p`), since that makes no address. A value carried through a `Void$@` argument is passed as the address of a variable that holds it, not as an integer cast to a pointer.
 
 **A cast from floating point to an integer truncates toward zero, and saturates where the type cannot hold the result.** The answer is the same on every target and both backends.
@@ -2356,7 +2358,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
 
 **Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check, so it refuses only what one function's code shows:
 
-* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. **So does a value read through a pointer to such a local**: `return pp$` after `pp: = p@` is refused. So are `hp.p` after `hp: = h@`, and `s[0]` of a slice over a local array. A field that no frame pointer set, and a number, pass.
+* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. **So does a value read through a pointer to such a local**: `return pp$` after `pp: = p@` is refused. So are `hp.p` after `hp: = h@`, `s[0]` of a slice over a local array, and `(s.ptr + 0)$`. **A name bound out of such a local carries its pointer too**: a `case .some(v)` or `if v: = o` binding, and a `for p in ps` item. **The value a `catch` gives stands for the value it replaces**: `catch x@` and `fallback x@` are refused as `x@` is. A field that no frame pointer set, and a number, pass.
 * **A store of a written address into a global or behind a pointer is allowed** (`g = x@`), for a place cleared before the function returns. One the compiler makes is refused there as well.
 * **A local's storage ends with its block**, and so does a temporary's, such as a closure or a run of elements. So a pointer the compiler makes cannot be stored into a local of an outer block: in `inner:`, `c = fn(x: I32; n: I32): I32 { … }` is refused where `c` is declared outside `inner`. A written address stored so is the writer's, as above, and reading through it after the block ends is a dangling pointer.
 
@@ -2822,6 +2824,7 @@ A type whose memory layout is KSPL's own cannot be an argument or a return at th
 | :-- | :-- |
 | A single value, such as a number or a `Bool` | Yes |
 | A raw pointer (`T@`) | Yes |
+| A function type (`fn(…): R`) | Yes, if each parameter and the result can cross. Each is passed by value, so under `--to=llvm` none is a `struct` |
 | A plain `struct` | Yes, if every field can cross. Under `--to=llvm` not by value: pass it by pointer (`T@`) |
 | The `T!E` type | No |
 | A slice (`T[]`) | No |
@@ -2829,7 +2832,7 @@ A type whose memory layout is KSPL's own cannot be an argument or a return at th
 | A trait value (an address paired with a table of call targets) | No |
 | An `enum` holding attached data | No |
 
-To cross with one of the refused types, pass a raw pointer (`T@`) and the size as separate arguments. **The check walks inside a `struct`**: wrapping, as in `W { items: U8[] }`, does not let a type cross.
+To cross with one of the refused types, pass a raw pointer (`T@`) and the size as separate arguments. **The check walks inside a `struct` and a function type**: wrapping, as in `W { items: U8[] }`, does not let a type cross, and nor does a callback such as `fn(s: U8[]): I32`. C calls the callback with C's layout.
 
 A KSPL string (`U8[]`) carries its length, while a C function takes **a null-terminated pointer**. `slice.to_cstr()` allocates one and returns a `U8$@?` (`.none` when the input contains a NUL). Into a `...`, pass that pointer for a `%s`, or pass `I32::s.len` and `s.ptr` for a `%.*s`.
 

@@ -2,10 +2,8 @@
 // browser's own input events, as `main.mjs` drives the rest, and checked by the saved source and
 // its undo.
 // `tools(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellAt, check } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
   saves, dragTo, rightClick, openCell, drag, doubleClickAt, resize }) {
@@ -377,7 +375,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
     async rules() {
       const table = (rules) => `${H}:::table name="t"${rules}\n| "item" | "n" |\n| "Pens" | -2 |\n| "Ink" | 5 |\n:::\n`;
       await load(table(' rules=",<0;color:#9c0006 fill:#ffc7ce"'));
-      const fill = (r) => js(`getComputedStyle(document.querySelector('#doc td[data-r="${r}"][data-c="1"]')).backgroundColor`);
+      const fill = (r) => js(`getComputedStyle(document.querySelector('${cellAt(r, 1)}')).backgroundColor`);
       check(await fill(0) === "rgb(255, 199, 206)" && await fill(1) === "rgba(0, 0, 0, 0)",
         "a cell that meets its column's rule takes the rule's colours, and one that does not keeps its own",
         `${await fill(0)} ${await fill(1)}`);

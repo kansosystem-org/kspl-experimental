@@ -86,20 +86,13 @@
 
 **A paste takes the clipboard's plain text.** Where the clipboard also held formatting, the page says it was not kept. Rows of tab-separated values pasted into text make a table.
 
-**An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks nothing. The file is written in a folder named for the document, such as `OfficeMemo-images/image-1.png`, so the document needs a file first. File ▸ Gather images into a folder moves images that stand beside the document into that folder, and saves. Caption… in the image's tools gives it a caption, which a reference can name. Alt text… gives it a description for someone who cannot see it.
+**An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks nothing. The file is written in the document's data folder, such as `OfficeMemo-data/image-1.png`, so the document needs a file first. Caption… in the image's tools gives it a caption, which a reference can name. Alt text… gives it a description for someone who cannot see it.
 
 **Insert ▸ Include… shows another document's blocks in place.** Its Edit button opens that document in a tab of its own.
 
-**Insert ▸ Functions file… adds the document's own functions, written in KSPL.** Nothing of the file is built or run until you allow it.
+**A document's data folder holds the files ksmd writes for it.** It stands beside the document, named for it: `OfficeMemo.ksmd` keeps its images in `OfficeMemo-data/`. Insert ▸ Include… and Insert ▸ Functions file… offer a new file there too. A file you choose elsewhere is used where it stands.
 
-| To | Do |
-| :-- | :-- |
-| Let the document's own functions run | Allow, in the bar at the top or in the clause's box |
-| Leave them off for now | Not now; the bar asks again when the document next opens |
-| Take the allow back | Stop allowing, in the clause's box |
-
-* **The allow holds for the file's present content.** A file changed since asks again.
-* **A cell whose formula calls them has a small blue corner at its top left.** The status bar names the functions and their file.
+**Insert ▸ Functions file… adds the document's own functions, written in KSPL** ("Your own functions" below).
 
 ## Tables
 
@@ -131,7 +124,7 @@
 | `=B1*C1` | A formula ("Formulas" below) |
 | `"11/6"`, in quotes | Text, whatever it looks like |
 | `https://example.com` | Text that links to that address, while Edit ▸ AutoCorrect ▸ Turn typed web addresses into links is on |
-| Anything else, `1,234.5` and `true` among it | Text |
+| Anything else, `1,234.5`, `0xFF` and `true` among it | Text. A number in hexadecimal or binary is written in a formula: `=0xFF` |
 
 **Right after a typed value turns into a date or a link, `Ctrl`+`Z` gives back the text as you typed it.** A second `Ctrl`+`Z` gives back what the cell held before. The two AutoCorrect choices are this browser's own, and both start on.
 
@@ -140,14 +133,16 @@
 * **`Ctrl`+`C` copies the chosen cells.** Another program, such as a spreadsheet or a text editor, takes their shown values as tab-separated rows. A paste of rows from another program fills the table from the chosen cell, and grows it as needed.
 * **A paste in ksmd (`Ctrl`+`V`) brings the copied cells' formulas**, in any table and in another ksmd window. Each reference moves as far as the paste moved from the copy. A part with `$` stays, and a reference moved outside its table becomes `#REF!`.
 * **Paste values (`Ctrl`+`Shift`+`V`) puts the values the copied cells showed**, with no formula. Edit ▸ Paste values and the right-click menu do the same.
+* **Copy formula copies one cell's text as typed**, such as a whole formula, as plain text for another program. It stands in the right-click menu and the Edit menu. Text chosen in the status bar is copied too: a triple press there takes the whole formula.
 * **After a paste of copied cells, the Paste options button stands below their right corner.** Choose Keep formulas or Values only there to change that paste; one undo still takes it away. `Ctrl` alone opens the button's menu, and `F` or `V` chooses. The next key or press takes the button away.
 * **A range that holds the copy a whole number of times takes it in each place.** So one cell pasted on ten rows fills all ten.
 * **A whole table copied and pasted into text makes a second table**, with its formulas and looks. A name already taken gains `_2`.
-* **`Ctrl`+`X` then a paste moves cells within their table.** Formulas that named them follow them.
+* **`Ctrl`+`X` then a paste moves cells within their table.** Formulas that named them follow them. Whole columns cut by their letters also take their width, number format, choices, colour rule and filter. A copy, or `Esc`, drops the cut. Paste values does not move cut cells: press `Ctrl`+`V`, or copy them instead.
 * **To move rows, cut them by their row numbers, then right-click a row number and choose Insert cut rows.** Columns move the same way.
 * **Fill down (`Ctrl`+`D`) and Fill right (`Ctrl`+`R`) copy the first cells across the range.**
 * **A drag of the square at a range's corner goes on with a series**: `1, 2` gives `3, 4`, and `Item 1` gives `Item 2`. Anything else repeats.
-* **Delete, a copy and a fill act on the rows in sight alone.** Rows a filter or a closed group hides keep their cells. A cut over a hidden row is refused: show all rows first, or copy instead.
+* **Delete, a copy, a fill and Remove row act on the rows in sight alone.** Rows a filter or a closed group hides keep their cells. Insert row above inserts one row for each row in sight. A cut over a hidden row is refused, and so is a paste of a cut onto one: show all rows first, or copy instead.
+* **A paste fills row after row from the chosen cell, hidden rows included**, as in Excel.
 
 ### Rows and columns
 
@@ -194,6 +189,7 @@
 | Colour each row by a column's choice | Table ▸ Look ▸ Colour rows by this column |
 | Colour cells by their value | Table ▸ Look ▸ Colour by value…: below, above, equal to, empty, or a colour scale |
 | Show a repeated value once, as merged | Table ▸ Look ▸ Merge repeated values |
+| Show a value centred across empty cells to its right | Choose the cells, then Format ▸ Centre across columns, or Table ▸ Look ▸ Centre across columns |
 | Write a note on a cell | Table ▸ Note ▸ Note… (`Shift`+`F2`); a red corner marks it |
 | Link a cell's text | Insert ▸ Link… on the chosen cell. `Ctrl`+press opens it |
 
@@ -227,6 +223,7 @@
 | `= <> < <= > >=` | Comparisons, giving `true` or `false` |
 | `and`, `or`, `not` | Conditions joined |
 | `"Pens"` | Text, in quotes |
+| `0xFF`, `0b_0111_0001` | A whole number in hexadecimal or binary, kept as you wrote it. `_` can stand anywhere after `0x` or `0b`. A number past 2^53 does not read |
 
 **While a formula is typed, each reference shows in a colour of its own, with a frame of that colour round the cells it names.** The first is blue and the second red, then purple, green, orange, teal, magenta and brown. The same cells written twice keep one colour. A reference to another table is framed in that table; one that names no cell stays plain. The colours go when the cell closes.
 
@@ -253,8 +250,71 @@
 | `#CYCLE!` | The cell depends on itself |
 | `#EMPTY!` | `min`, `max` or an average of no numbers |
 | `#SHAPE!` | Ranges of shapes that do not match, as in `sum_if` |
-| `#SYNTAX!` | The formula does not read |
+| `#SYNTAX!` | The formula does not read. A literal such as `0x10` written as the digits of `hex_to_dec`, `bin_to_dec`, `hex_to_bin` or `bin_to_hex` does not read either: write `=0x10`, or `hex_to_dec("10")` |
 | `#BLOCKED!` | It may call the document's own functions, which you have not allowed yet |
+
+### Your own functions
+
+**A formula can call functions you write in KSPL, as it calls `sum`.** They need the local server: open the document by its launcher, or by a server started with `--builder` and `--allowed`. A page opened from a file runs none of them.
+
+**Nothing of a functions file is built or run until you allow that exact file.** A bar at the top of the page names the file, with Allow and Not now.
+
+1. Put the caret where the clause goes.
+2. Choose Insert ▸ Functions file…, then pick a `.kspl` file in the workspace, or type a new name. The dialog offers `functions.kspl` in the document's data folder. A new file starts with one function, `twice`, to call and to copy.
+3. Choose Allow, in the bar at the top or in the clause's box.
+4. The clause's box lists the functions the file gives, such as "A formula can call: twice." A cell can then hold `=twice(A1)`.
+5. Edit the file in any text editor. When you come back to the page, it asks again, then builds the file again.
+
+| To | Do |
+| :-- | :-- |
+| Let the document's own functions run | Allow, in the bar at the top or in the clause's box |
+| Leave them off for now | Not now; the bar asks again when the document next opens |
+| Take the allow back | Stop allowing, in the clause's box. The cells show `#BLOCKED!` again |
+
+* **The allow holds for the file's present content.** A file changed since asks again.
+* **A cell whose formula calls them has a small blue corner at its top left.** When you choose the cell, the status bar names the functions and their file.
+
+**Each `pub fn` in the file is a function a formula can call:**
+
+```kspl
+//< My functions
+import "std/mem" { Arena }
+import "std/str"
+
+pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax; the rate is 10% when left out
+    return price * (1.0 + rate.unwrap_or(0.1))
+
+pub fn greet(name: U8[], arena: Arena$@): U8[] //< a greeting
+    return arena.text().s("hello, ").s(name).take()
+```
+
+The clause in the document's file reads `:::functions path="mine.kspl"`, then `:::` on the next line.
+
+| Parameter | Takes | Else the cell shows |
+| :-- | :-- | :-- |
+| `F64` | A number; an empty cell is 0 | `#VALUE!` |
+| `I64` | A whole number | `#NUM!` for a fraction, `#VALUE!` for text |
+| `Bool` | `true` or `false` | `#VALUE!` |
+| `U8[]` | Text | `#VALUE!` |
+| `Value` | Any value, as it is | Nothing |
+| `Value[]`, last | Every argument left; a range gives its cells | Nothing |
+| `T?`, last | As `T`, or none where the formula leaves it out | As `T` |
+| `Arena$@` | No argument: the memory a text result goes in | Nothing |
+
+A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc_error` (`!Calc_error`), which the cell shows as its mark. `Value` and `Calc_error` come from `import "ksmd/calc/value"`.
+
+| You see | It means |
+| :-- | :-- |
+| The compiler's message in the clause's box | The file does not build. Fix the file and save it; the page builds it again when you come back to it |
+| `…` in a cell | Its answer has not come yet |
+| `#BLOCKED!` in a cell | It may call the document's own functions, which you have not allowed yet |
+| `#TIME!` | The call ran past 2 seconds |
+| `#STOPPED!` | The function panicked |
+| `#SYNTAX!` | Too many or too few arguments, as for ksmd's own functions |
+| The box refuses a name | ksmd already has that name, such as `sum` |
+| The build fails on an import | A file may import only `std` and ksmd's files. A path that climbs out of its folder, or names another package, fails the build |
+
+**Your functions cannot change the document, read files or reach the network.** They run in the browser, apart from the page.
 
 ### Functions that decide what they calculate
 
@@ -286,7 +346,7 @@
 | `dec_to_hex(n, [width])` | `n` in hexadecimal | `dec_to_hex(255)` is `FF` |
 | `find(part, t)` | where `part` first stands in `t`, in characters from 1; 0 where it does not | `find("c", "pencil")` is `4` |
 | `hex_to_bin(digits, [width])` | hexadecimal digits written in binary | `hex_to_bin("1F")` is `11111` |
-| `hex_to_dec(digits, [width])` | the number hexadecimal digits name | `hex_to_dec("FF")` is `255` |
+| `hex_to_dec(digits, [width])` | the number hexadecimal digits name | `hex_to_dec("100000")` is `1048576` |
 | `left(t, count)` | the first `count` characters | `left("pencil", 3)` is `pen` |
 | `len(t)` | how many characters the text holds | `len("pencil")` is `6` |
 | `max(xs…)` | the greatest; of dates alone, the latest date | `max(3, -1, 7)` is `7` |
@@ -311,7 +371,7 @@
 
 **An image and a chart have the tools Rectangle, Arrow, Line, Pen, a colour, Text… and Delete.** Drag across the picture to draw; press a shape to choose it and drag to move it. Pen draws where the pointer goes. With `Shift` held, a rectangle is a square, and a line or an arrow keeps to a multiple of 45 degrees.
 
-**To change an image's size, drag the square at its lower right corner, or press Width… and type a percent of the text width.** An empty answer fits it to the text again. **To show two images side by side, give each a width that adds up to 100% or less, such as 45% each.**
+**To change an image's size, drag the square at its lower right corner, or press Width… and type a percent of the text width.** **To size it by its own pixels, press Scale… and type a percent of its own size, 1 to 400**, such as 50 for half. The image stays within the text. A width takes the place of a scale, and a scale takes the place of a width. An empty answer to either fits the image to the text again. **To show two images side by side, give each a width that adds up to 100% or less, such as 45% each.**
 
 ## Diagrams
 
@@ -377,7 +437,6 @@
 | Open… | `Ctrl`+`O` |
 | Save | `Ctrl`+`S` |
 | Save as… | `Ctrl`+`Shift`+`S` |
-| Gather images into a folder |  |
 | Page setup… |  |
 | Print or save as PDF… | `Ctrl`+`P` |
 
@@ -389,6 +448,7 @@
 | Redo | `Ctrl`+`Y` |
 | Cut | `Ctrl`+`X` |
 | Copy | `Ctrl`+`C` |
+| Copy formula |  |
 | Paste | `Ctrl`+`V` |
 | Paste values | `Ctrl`+`Shift`+`V` |
 | Find… | `Ctrl`+`F` |
@@ -455,6 +515,7 @@
 | Align left |  |
 | Centre |  |
 | Align right |  |
+| Centre across columns |  |
 | Wrap text |  |
 | Bulleted list |  |
 | Numbered list |  |
@@ -475,6 +536,7 @@
 | Remove column |  |
 | Choices… |  |
 | Look ▸ Wrap text |  |
+| Look ▸ Centre across columns |  |
 | Look ▸ Colour by value… |  |
 | Look ▸ Colour rows by this column |  |
 | Look ▸ Merge repeated values |  |

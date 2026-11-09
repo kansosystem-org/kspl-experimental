@@ -105,6 +105,7 @@ priv struct Srv //< what the server's thread is handed, and what it saw
     quiet: Bool //< whether the socket stayed unready meanwhile, so no wait would have woken
     second: Bool //< whether a read with no wait gave the second record
     drained: Bool //< whether `buffered` was false after it
+    empty_read: Bool //< whether a read into an empty buffer gave 0 at once, with no error
 
 priv const SRV_WAIT_MS: I32 = 120000 //< how long either side waits on its socket, with a handshake
     //< **No check here is about the time**, so it is set far past any run, as in `tls_test.kspl`.
@@ -151,6 +152,8 @@ extern fn tls_server_test_peer(p: Srv$@): Void$@
     conn: = p.listener.accept() catch panic("accept should succeed once a client connects")
     conn.set_nonblocking() catch panic("the accepted socket should become non-blocking")
     s: = Tls_session.start(p.server) catch panic("a session should start")
+    $one: U8[1] = ::{}
+    p.empty_read = (s.read(conn, (U8$[]::one).sub_mut(0, 0)) catch 1) == 0
     deadline: = sys.deadline_after_ms(SRV_WAIT_MS)
     if read_all(p, s, conn, PING.len, deadline) && p.act != Srv_act.first_error
         if p.act == Srv_act.two_records
@@ -203,6 +206,7 @@ fn test_tls_server_talks_to_the_client()
     s.free()
     t.free()
     verdict.check("the server read the ping and answered", p.echoed && !p.failed, "")
+    verdict.check("the server's read into an empty buffer gave 0 at once", p.empty_read, "")
     verdict.check("the client read pong", (U8$[]::got).equals(PONG), "")
     verdict.check("the stream ended at the server's close_notify", end == 0, "")
     verdict.pass("The client verifies the server half, trades bytes both ways and ends at 0.")

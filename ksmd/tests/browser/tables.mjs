@@ -4,10 +4,8 @@
 // is driven through the browser's own input events, as `main.mjs` drives the rest, and checked by
 // the saved source and its undo.
 // `tables(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellAt, cellText, check, rowsShown } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick,
   openCell }) {
@@ -152,7 +150,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       check(await state("2025-11") === "mixed" && await state("2025") === "mixed",
         "ticking one day shows its month and year as mixed");
       await click(".filter-panel .filter-ok");
-      const shown = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
+      const shown = () => rowsShown(js);
       check(await shown() === "100111", "OK shows the day ticked, the other year, the text and the blanks",
         await shown());
       await click('#doc th.name[data-c="0"] .filter-arrow');
@@ -191,8 +189,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
     async insertFiltered() {
       const rows = '| 1 | "x" |\n| 2 | "y" |\n| 3 | "x" |\n';
       const table = (attrs, body = rows) => `${H}:::table name="t"${attrs}\n| "n" | "s" |\n${body}:::\n`;
-      const shown = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
-      const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
+      const shown = () => rowsShown(js);
       const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
       const said = () => js("document.getElementById('status').textContent");
       const paste = (text) => js(`(() => { const data = new DataTransfer();
@@ -204,13 +201,13 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       const empty = "| | |\n";
       const ways = [
         ["the Table menu's Insert row below", async () => {
-          await click(cell(0, 0));
+          await click(cellAt(0, 0));
           await click('.top-menu:has([data-cmd="row-below"]) > .menu-name');
           await click('.menubar [data-cmd="row-below"]');
         }, '| 1 | "x" |\n' + empty + '| 2 | "y" |\n| 3 | "x" |\n', "1101", 1],
         ["the right-click menu's Insert row above", async () => {
-          await click(cell(2, 0));
-          await rightClick(cell(2, 0));
+          await click(cellAt(2, 0));
+          await rightClick(cellAt(2, 0));
           await click('.menu.context [data-cmd="row-above"]');
         }, '| 1 | "x" |\n| 2 | "y" |\n' + empty + '| 3 | "x" |\n', "1011", 1],
         ["a row number's right-click menu", async () => {
@@ -218,15 +215,15 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
           await click('.menu.context [data-cmd="row-below"]');
         }, rows + empty, "1011", 1],
         ["Repeat (F4) after Insert row below", async () => {
-          await click(cell(2, 0));
+          await click(cellAt(2, 0));
           await menu("row-below");
-          await click(cell(2, 0));
+          await click(cellAt(2, 0));
           await press("F4");
         }, rows + empty + empty, "10111", 2],
         // The paste writes over the last row, which stays in sight as a changed row does, and adds one
         // row, which shows.
         ["a paste past the last row", async () => {
-          await click(cell(2, 0));
+          await click(cellAt(2, 0));
           await paste('4\t"y"\n5\t"y"');
         }, '| 1 | "x" |\n| 2 | "y" |\n| 4 | "y" |\n| 5 | "y" |\n', "1011", 1],
       ];
@@ -245,10 +242,10 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       }
       // The new row can be typed in, and stays in sight after its value goes in.
       await load(table(' filter=",in:x"'));
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       await menu("row-below");
       check(!(await said()).includes("shown again"), "the page no longer says the filter was taken away", await said());
-      await click(cell(1, 1));
+      await click(cellAt(1, 1));
       await type("z");
       await press("Enter");
       await saves("a value typed in the new row goes in, and the filter stays",
@@ -359,7 +356,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
     // The line above the table says how many rows show, and Show all rows takes the filter away.
     async keptFilter() {
       const table = (attrs) => `${H}:::table name="t"${attrs}\n| "a" | "n" |\n| "pear" | 3 |\n| "fig" | 1 |\n| "Apple" | 2 |\n:::\n`;
-      const shown = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => r.hidden ? 0 : 1).join('')");
+      const shown = () => rowsShown(js);
       const note = () => js("(document.querySelector('#doc .filter-note') || {}).textContent || ''");
       await load(table(""));
       await click('#doc td[data-r="1"][data-c="0"]');
@@ -405,7 +402,6 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await load(start);
       const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
       const letter = (k) => `#doc thead tr:first-child th:nth-child(${k + 1})`;
-      const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
       const labelOf = (cmd) => js(`(() => { const el = document.querySelector('.menu.context [data-cmd="${cmd}"]');
         return el && el.getClientRects().length > 0 ? el.querySelector(".label").textContent : ""; })()`);
       const marked = () => js("Array.from(document.querySelectorAll('#doc .cut')).map((el) => el.dataset.r + el.dataset.c).join()");
@@ -428,8 +424,9 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await rightClick(rowNumber(1));
       check(await labelOf("row-above") === "Insert row above" && await labelOf("column-left") === "Insert column left",
         "with nothing cut, the menu holds Insert row above and Insert column left");
-      check(await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(0, 4).map((el) => el.dataset.cmd).join()") ===
-        "cut,copy,paste,paste-values", "Cut, Copy, Paste and Paste values stand first in the right-click menu, as in Excel");
+      check(await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(0, 5).map((el) => el.dataset.cmd).join()") ===
+        "cut,copy,copy-formula,paste,paste-values",
+      "Cut, Copy, Copy formula, Paste and Paste values stand first in the right-click menu, as in Excel");
       await press("Escape");
       await chooseRows(3, 4);
       await cut();
@@ -459,7 +456,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await press("Escape");
       await chooseRows(1, 1);
       await cut();
-      await click(cell(3, 0));
+      await click(cellAt(3, 0));
       await type("9");
       await press("Enter");
       check(await marked() === "", "any other edit drops the cut too", await marked());
@@ -469,46 +466,46 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
 
       // A paste while a cut waits moves the cut cells there, and references to them follow.
       await load(start);
-      await click(cell(0, 0));
-      await click(cell(1, 0), SHIFT);
+      await click(cellAt(0, 0));
+      await click(cellAt(1, 0), SHIFT);
       await cut();
       check(await marked() === "00,10", "a cut of a range of cells marks it", await marked());
       await saves("and clears nothing", start);
-      await click(cell(1, 1));
+      await click(cellAt(1, 1));
       await paste();
       const shifted = `${H}:::table name="t"\n| "n" | "f" |\n| | =B2*10 |\n| | 1 |\n| 3 | 2 |\n| 4 | =sum(B2:B3) |\n:::\n`;
       await saves("a paste moves the cells there, and the references to them follow", shifted);
       check(await marked() === "" && await ranged() === "11,21", "the cut ends, and the moved cells stay chosen", await ranged());
       await menu("undo");
       await saves("the move is one step of undo", start);
-      await click(cell(2, 1));
+      await click(cellAt(2, 1));
       await paste("7");
       await saves("after the paste the cut is gone, so a paste pastes again", start.replace("| 3 | |", "| 3 | 7 |"));
       await load(start);
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       await cut();
-      await click(cell(2, 1));
+      await click(cellAt(2, 1));
       await paste("9");
       await saves("text copied since in another program pastes as usual", start.replace("| 3 | |", "| 3 | 9 |"));
       check(await marked() === "", "and the cut drops", await marked());
 
       // Paste in the menus reads the clipboard, and acts as Ctrl+V does there.
       await load(start);
-      await click(cell(2, 1));
+      await click(cellAt(2, 1));
       await clipboard(null);
       await menu("paste");
       check(await said() === "Press Ctrl+V to paste.", "where the browser refuses the clipboard, Paste asks for Ctrl+V", await said());
       await saves("and changes nothing", start);
       await clipboard("x\ty");
-      await click(cell(1, 0));
+      await click(cellAt(1, 0));
       await menu("paste");
       await saves("where it reads the clipboard, Paste fills the cells as Ctrl+V does",
         start.replace("| 2 | |", '| "x" | "y" |'));
       await load(start);
       await clipboard(null);
-      await click(cell(1, 0));
+      await click(cellAt(1, 0));
       await cut();
-      await click(cell(2, 1));
+      await click(cellAt(2, 1));
       await menu("paste");
       await saves("with the clipboard refused, Paste still moves the cells a cut left waiting",
         start.replace("| 2 | |\n| 3 | |", "| | |\n| 3 | 2 |"));
@@ -517,7 +514,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await load(start);
       await chooseRows(3, 4);
       await cut();
-      await click(cell(0, 1));
+      await click(cellAt(0, 1));
       await paste();
       await saves("whole rows pasted on a row take its place; references to rows written over become #REF!",
         `${H}:::table name="t"\n| "n" | "f" |\n| 3 | |\n| 4 | =sum(#REF!) |\n| | |\n| | |\n:::\n`);
@@ -527,7 +524,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       // Cut cells move only inside their own table.
       const two = `${start}\n:::table name="s"\n| "x" |\n| 5 |\n:::\n`;
       await load(two);
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       await cut();
       await click('#doc .table ~ .table td[data-r="0"][data-c="0"]');
       await paste();
@@ -557,7 +554,6 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
     async pointing() {
       const start = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | |\n| 2 | |\n| 3 | |\n:::\n`;
       await load(start);
-      const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
       const typed = () => js("(() => { const i = document.querySelector('#doc .cell-input'); return i ? i.value : null; })()");
       const framed = () => js("Array.from(document.querySelectorAll('#doc .ref-frame')).map((f) => f.dataset.cells).join()");
       const mouse = async (type, selector) => {
@@ -565,34 +561,34 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
           return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
         await page("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
       };
-      await click(cell(0, 1));
+      await click(cellAt(0, 1));
       await type("=sum(");
-      await mouse("mousePressed", cell(0, 0));
-      await mouse("mouseMoved", cell(1, 0));
+      await mouse("mousePressed", cellAt(0, 0));
+      await mouse("mouseMoved", cellAt(1, 0));
       check(await typed() === "=sum(A1:A2", "a drag after =sum( writes the range at the caret", await typed());
       check(await framed() === "0 0 0 1 0", "and frames the cells it names, as a reference typed", await framed());
-      await mouse("mouseReleased", cell(1, 0));
+      await mouse("mouseReleased", cellAt(1, 0));
       check(await framed() === "0 0 0 1 0", "the frame stays when the button comes up, as the reference does", await framed());
       await type(")");
       check(await typed() === "=sum(A1:A2)", "the cell stays open, the caret after the range", await typed());
       await press("Enter");
       const summed = start.replace("| 1 | |", "| 1 | =sum(A1:A2) |");
       await saves("Enter takes the formula", summed);
-      check(await js(`document.querySelector('${cell(0, 1)}').textContent`) === "3", "which gives the sum");
-      await click(cell(1, 1));
+      check(await js(`document.querySelector('${cellAt(0, 1)}').textContent`) === "3", "which gives the sum");
+      await click(cellAt(1, 1));
       await type("=");
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       check(await typed() === "=A1", "a press after = writes the cell's reference", await typed());
-      await click(cell(2, 0));
+      await click(cellAt(2, 0));
       check(await typed() === "=A3", "a second press replaces the reference just written", await typed());
       await type("*");
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       check(await typed() === "=A3*A1", "after typing, a press writes a new reference", await typed());
       await press("Escape");
       await saves("Esc drops the edit as before", summed);
-      await click(cell(2, 1));
+      await click(cellAt(2, 1));
       await type("=1+2");
-      await click(cell(0, 0));
+      await click(cellAt(0, 0));
       check(await typed() === null, "a press when the caret stands after a number ends the edit");
       await saves("and takes the formula, as before", summed.replace("| 3 | |", "| 3 | =1+2 |"));
     },
@@ -728,7 +724,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       const table = (rows) => `${H}:::table name="t"${choices}${rows}\n| "task" | "status" |\n` +
         '| "Write" | "Open" |\n| "Read" | "Done" |\n| "Sum" | |\n:::\n';
       await load(table(""));
-      const fill = (r, c) => js(`getComputedStyle(document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]')).backgroundColor`);
+      const fill = (r, c) => js(`getComputedStyle(document.querySelector('${cellAt(r, c)}')).backgroundColor`);
       check(await fill(0, 1) === "rgb(255, 199, 206)" && await fill(0, 0) !== "rgb(255, 199, 206)",
         "a cell holding a coloured choice shows its colours, and the rest of its row does not",
         `${await fill(0, 1)} ${await fill(0, 0)}`);
@@ -808,7 +804,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       const scale = "scale;from:#ffffff to:#ffef9c";
       await load(`${H}:::table name="t" rules=",${scale},${scale}"\n| "who" | "oct" | "nov" |\n` +
         '| "a" | 0 | 50 |\n| "b" | 100 | "x" |\n:::\n');
-      const fill = (r, c) => js(`getComputedStyle(document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]')).backgroundColor`);
+      const fill = (r, c) => js(`getComputedStyle(document.querySelector('${cellAt(r, c)}')).backgroundColor`);
       check(await fill(0, 1) === "rgb(255, 255, 255)" && await fill(1, 1) === "rgb(255, 239, 156)",
         "the least number is white and the greatest takes the scale's colour", `${await fill(0, 1)} ${await fill(1, 1)}`);
       check(await fill(0, 2) === "rgb(255, 247, 206)", "a number half way takes the colour half way, across both columns",
@@ -823,7 +819,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       const values = ["2.000000000000005", "0.1234567890123455"];
       const rows = values.map((v, k) => `| ${v} | =text(A${k + 1}, "") |`).join("\n");
       await load(`${H}:::table name="t"\n| "n" | "t" |\n${rows}\n:::\n`);
-      const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+      const cell = (r, c) => cellText(js, r, c);
       for (let r = 0; r < values.length; r++) {
         const [shown, written] = [await cell(r, 0), await cell(r, 1)];
         check(shown === written, `the cell for ${values[r]} shows what text(…, "") writes`, `${shown} ${written}`);

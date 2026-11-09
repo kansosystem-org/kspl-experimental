@@ -22,6 +22,9 @@ enum Align //< where a cell's or a paragraph's text stands across
     left
     center
     right
+    across //<
+        //< a cell's value centred across itself and the empty `across` cells to its right, as
+        //< Excel's Center Across Selection; a cell's alone, so the look of a row is not a merge
 
 enum Look_part //< one part of a look, which the editor sets or clears
     color
@@ -79,7 +82,8 @@ fn look_of(src: Source@, attributes: List<|Attribute|>@, at: Sz): Look!Diagnosti
         else if a.name.equals("align")
             l.align = align_of(a.value) if a.quoted else .none
             if l.align == .none
-                throw src.diagnostic(a.offset, "align is \"left\", \"center\" or \"right\"")
+                throw src.diagnostic(a.offset,
+                    "align is \"left\", \"center\", \"right\" or \"across\"")
         else if a.name.equals("wrap")
             if !a.quoted || !a.value.equals("on")
                 throw src.diagnostic(a.offset, "wrap is \"on\", or leave it out")
@@ -183,7 +187,8 @@ fn with_part($l: Look, part: Look_part, value: U8[]): Look? //<
     return .some(l)
 
 impl Align
-    fn name(a: Self): U8[] //< as `align` writes it: `left`, `center` or `right`; empty for none
+    fn name(a: Self): U8[] //<
+        //< as `align` writes it: `left`, `center`, `right` or `across`; empty for none
         switch a
         case .left
             return "left"
@@ -191,6 +196,8 @@ impl Align
             return "center"
         case .right
             return "right"
+        case .across
+            return "across"
         default
             return ""
 
@@ -201,6 +208,8 @@ priv fn align_of(name: U8[]): Align //< `.none` for any other name
         return .center
     if name.equals("right")
         return .right
+    if name.equals("across")
+        return .across
     return .none
 
 fn is_colour(text: U8[]): Bool //< `#` and six hex digits, in either case

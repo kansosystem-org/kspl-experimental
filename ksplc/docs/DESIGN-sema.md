@@ -568,7 +568,9 @@ Note: **It sets no pass/fail verdict**; what the performance guard judges is "Me
 
 **KSPL reports both the stages' totals and each single declaration, plus the count of instantiations.** The stages' totals alone do not say which declaration to fix. A generic's body is checked per instantiation (["Generics are instantiated through deferred work"](#generics-are-instantiated-through-deferred-work)). So what grows is "the same template instantiated dozens of times", not "one heavy body".
 
-Caution: **Group the rows by the position the declaration was written at, not by name.** By name, same-named methods on different types (`new`, `free`) would merge into one row. By position, copies of one body fold into one row.
+**One table, ranked by self time, shows both.** A row's time is the sum over every instantiation of its body, and its `calls` column counts them. So a generic instantiated many times at a real cost ranks high in it. A second table ranked by `calls` only added rows that cost little in total.
+
+Caution: **Group the rows by the position the declaration was written at, not by name.** By name, same-named methods on different types (`new`, `free`) would merge into one row. By position, copies of one body fold into one row. A row names that position as a diagnostic does, as the file and its line (`std/ds.kspl:404`). The offset inside the compiler's normalized text would point at no line the reader can open.
 
 **A body's time includes no other body's.** Template bodies are inferred one after another after the main walk, and the drain between statements infers none.
 

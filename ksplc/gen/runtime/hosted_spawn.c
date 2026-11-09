@@ -274,58 +274,79 @@ static Bool kspl_win_is_bare(const char *name) {
     return strpbrk(name, "\\/:") == NULL;
 }
 
-/* Keeps dir + `\` + name (+ `.exe`) in out and says whether that names a file. */
-static Bool kspl_win_try_dir(const wchar_t *dir, size_t dlen, const wchar_t *name, Bool add_exe,
-    wchar_t *out, size_t cap) {
+/* The extensions a bare name with none is looked up with, in this order. **The same list as
+ * RUN_EXTS in std/fs.kspl**, which says what can be started; change both together.
+ * Caution: **Do not read PATHEXT**, for the reason given at RUN_EXTS. A `.bat` or `.cmd` found here
+ * goes through kspl_win_batch_safe, as one named in full does. */
+static const wchar_t *const kspl_win_run_exts[] = {L".exe", L".com", L".bat", L".cmd"};
+
+/* Keeps dir + `\` + name + ext in out and says whether that names a file (ext is L"" for none). */
+static Bool kspl_win_try_dir(const wchar_t *dir, size_t dlen, const wchar_t *name,
+    const wchar_t *ext, wchar_t *out, size_t cap) {
     size_t nlen = wcslen(name);
+    size_t elen = wcslen(ext);
     size_t m = dlen;
     DWORD a;
     if (dlen == 0) return false;
     Bool sep = dir[dlen - 1] == L'\\' || dir[dlen - 1] == L'/';
-    if (dlen + 1 + nlen + 4 + 1 > cap) return false;
+    if (dlen + 1 + nlen + elen + 1 > cap) return false;
     memcpy(out, dir, dlen * sizeof(wchar_t));
     if (!sep) out[m++] = L'\\';
     memcpy(out + m, name, nlen * sizeof(wchar_t));
     m += nlen;
-    if (add_exe) {
-        memcpy(out + m, L".exe", 4 * sizeof(wchar_t));
-        m += 4;
-    }
+    memcpy(out + m, ext, elen * sizeof(wchar_t));
+    m += elen;
     out[m] = L'\0';
     a = GetFileAttributesW(out);
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+/* Copies the PATH entry at p into dir without its quotes, and returns where the next one starts
+ * (NULL after the last). *dlen is 0 for an entry too long to keep, which is then skipped.
+ * Caution: **A `;` inside quotes belongs to the entry** (`"C:\a;b"`). So the entry ends at the
+ * first `;` outside quotes. Split at the first `;`, a quoted entry is cut in two, and neither half
+ * names the folder. */
+static const wchar_t *kspl_win_path_entry(const wchar_t *p, wchar_t *dir, size_t cap,
+    size_t *dlen) {
+    size_t n = 0;
+    Bool quoted = false, fits = true;
+    for (; *p != L'\0' && (quoted || *p != L';'); p++) {
+        if (*p == L'"') quoted = !quoted;
+        else if (n + 1 < cap) dir[n++] = *p;
+        else fits = false;
+    }
+    *dlen = fits ? n : 0;
+    return *p == L';' ? p + 1 : NULL;
+}
+
 /* Looks a bare program name up in PATH alone and keeps the full path in out; false where it is
- * nowhere. `.exe` is added to a name with no extension, as CreateProcess adds it.
+ * nowhere. A name with no extension is tried with each of kspl_win_run_exts in one folder before
+ * the next folder, as cmd.exe does.
  * Caution: **Search PATH alone, as POSIX's execvp does.** CreateProcess searches this executable's
  * directory, the current directory, the system directory and the Windows directory before PATH.
  * So `bash` names WSL's launcher in System32 in place of the bash on PATH. A `cc.exe` lying in a
  * directory a build is started from (a cloned repository) runs in place of the compiler. */
 static Bool kspl_win_find_program(const wchar_t *name, wchar_t *out, size_t cap) {
-    Bool add_exe = wcschr(name, L'.') == NULL;
+    Bool has_ext = wcschr(name, L'.') != NULL;
+    size_t n_ext = has_ext ? 1 : sizeof(kspl_win_run_exts) / sizeof(kspl_win_run_exts[0]);
     DWORD n = GetEnvironmentVariableW(L"PATH", NULL, 0);
     if (n == 0) return false;
     wchar_t *path = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
-    if (path == NULL) return false;
+    wchar_t *dir = (wchar_t *)malloc(KSPL_WPATH_CAP * sizeof(wchar_t));
     Bool found = false;
-    DWORD got = GetEnvironmentVariableW(L"PATH", path, n);
+    DWORD got = path != NULL && dir != NULL ? GetEnvironmentVariableW(L"PATH", path, n) : 0;
     if (got > 0 && got < n) {
-        wchar_t *p = path;
-        while (!found && *p != L'\0') {
-            wchar_t *end = wcschr(p, L';');
-            size_t len = end != NULL ? (size_t)(end - p) : wcslen(p);
-            wchar_t *d = p;
-            /* an entry can be quoted to hold a `;` of its own; the quotes are not part of it */
-            if (len >= 2 && d[0] == L'"' && d[len - 1] == L'"') {
-                d++;
-                len -= 2;
+        const wchar_t *p = path;
+        while (!found && p != NULL) {
+            size_t dlen;
+            p = kspl_win_path_entry(p, dir, KSPL_WPATH_CAP, &dlen);
+            for (size_t k = 0; !found && k < n_ext; k++) {
+                found = kspl_win_try_dir(dir, dlen, name, has_ext ? L"" : kspl_win_run_exts[k], out,
+                    cap);
             }
-            found = kspl_win_try_dir(d, len, name, add_exe, out, cap);
-            if (end == NULL) break;
-            p = end + 1;
         }
     }
+    free(dir);
     free(path);
     return found;
 }
@@ -421,23 +442,35 @@ static Bool kspl_win_is_cwd_relative(const char *name) {
  * read it from this process's own directory.
  * Caution: **Measure it in UTF-16 units, after the conversion.** The OS's limit counts those.
  * Counted as UTF-8 bytes, a line of kana (three bytes a unit) would be refused at a third of it.
- * **That limit (KSPL_WCMD_MAX) is the only cap**, on the count of arguments as on their length. */
+ * **That limit (KSPL_WCMD_MAX) is the only cap**, on the count of arguments as on their length.
+ * Caution: **Every NULL sets *why**, the Windows error that names the cause, which becomes
+ * kspl_start_error. Without it, a tool can say only that the start failed. */
 static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 argc,
-    const U8 *cwd_ptr, Sz cwd_len) {
+    const U8 *cwd_ptr, Sz cwd_len, DWORD *why) {
     char prog[KSPL_WPATH_CAP * 3];
     U8 *found_buf = NULL;
+    char *cmd = NULL;
+    wchar_t *wcmd = NULL;
+    /* an argument holding a NUL, or none at all */
+    *why = ERROR_BAD_ARGUMENTS;
     if (argv_buf_len <= 0 || memchr(argv_buf, '\0', (size_t)argv_buf_len) == NULL) return NULL;
     Sz arg0_len = (Sz)strlen((const char *)argv_buf);
+    *why = ERROR_FILENAME_EXCED_RANGE;
     if (arg0_len >= (Sz)sizeof(prog)) return NULL;
     memcpy(prog, argv_buf, (size_t)arg0_len + 1);
     if (kspl_win_is_bare(prog)) {
         wchar_t wname[KSPL_WPATH_CAP], wfound[KSPL_WPATH_CAP];
+        *why = ERROR_INVALID_NAME;
         if (!kspl_win_cstr_to_wide(prog, wname, KSPL_WPATH_CAP)) return NULL;
+        /* 2, as POSIX's execvp gives ENOENT for a name on no PATH */
+        *why = ERROR_FILE_NOT_FOUND;
         if (!kspl_win_find_program(wname, wfound, KSPL_WPATH_CAP)) return NULL;
+        *why = ERROR_INVALID_NAME;
         if (kspl_win_from_wide(wfound, prog, (Sz)sizeof(prog)) < 0) return NULL;
     } else if (cwd_len > 0 && kspl_win_is_cwd_relative(prog)) {
         Bool sep = cwd_ptr[cwd_len - 1] == '\\' || cwd_ptr[cwd_len - 1] == '/';
         Sz head = cwd_len + (sep ? 0 : 1);
+        *why = ERROR_FILENAME_EXCED_RANGE;
         if (head + arg0_len >= (Sz)sizeof(prog)) return NULL;
         memmove(prog + head, prog, (size_t)arg0_len + 1);
         memcpy(prog, cwd_ptr, (size_t)cwd_len);
@@ -445,6 +478,7 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
     }
     /* argv[0] changed: the run is built again with the new one in front. */
     Sz prog_len = (Sz)strlen(prog);
+    *why = ERROR_NOT_ENOUGH_MEMORY;
     if (prog_len != arg0_len || memcmp(prog, argv_buf, (size_t)arg0_len) != 0) {
         Sz rest = argv_buf_len - arg0_len;
         found_buf = (U8 *)malloc((size_t)(prog_len + rest));
@@ -457,17 +491,29 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
     /* Quoting at most doubles a byte, and each argument adds two quotes and a space; the builder
      * keeps a margin of its own on top. */
     Sz cap = argv_buf_len * 2 + (Sz)argc * 3 + 256;
-    char *cmd = cap < 0x7FFFFFFF ? (char *)malloc((size_t)cap) : NULL;
-    Bool built = cmd != NULL &&
-        (!kspl_win_is_batch(prog) || kspl_win_batch_safe(argv_buf, argv_buf_len)) &&
-        kspl_win_build_cmdline(argv_buf, argv_buf_len, argc, cmd, (int)cap);
-    free(found_buf);
-    wchar_t *wcmd = built ? kspl_win_wide_dup(cmd) : NULL;
-    free(cmd);
-    if (wcmd != NULL && wcslen(wcmd) >= KSPL_WCMD_MAX) {
+    *why = ERROR_FILENAME_EXCED_RANGE;
+    if (cap >= 0x7FFFFFFF) goto done;
+    *why = ERROR_NOT_ENOUGH_MEMORY;
+    cmd = (char *)malloc((size_t)cap);
+    if (cmd == NULL) goto done;
+    /* a batch file's arguments that cmd.exe would read as commands */
+    *why = ERROR_BAD_ARGUMENTS;
+    if (kspl_win_is_batch(prog) && !kspl_win_batch_safe(argv_buf, argv_buf_len)) goto done;
+    /* the count of arguments disagrees with argc: one of them holds a NUL */
+    if (!kspl_win_build_cmdline(argv_buf, argv_buf_len, argc, cmd, (int)cap)) goto done;
+    /* an argument that is not UTF-8 has no UTF-16 form */
+    *why = ERROR_NO_UNICODE_TRANSLATION;
+    wcmd = kspl_win_wide_dup(cmd);
+    if (wcmd == NULL) goto done;
+    /* the same error CreateProcessW gives for a line past its limit */
+    *why = ERROR_FILENAME_EXCED_RANGE;
+    if (wcslen(wcmd) >= KSPL_WCMD_MAX) {
         free(wcmd);
         wcmd = NULL;
     }
+done:
+    free(found_buf);
+    free(cmd);
     return wcmd;
 }
 
@@ -481,11 +527,20 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     wchar_t cwd_path[KSPL_WPATH_CAP], out_path[KSPL_WPATH_CAP], err_path[KSPL_WPATH_CAP];
     /* The working directory alone does not go through kspl_path_to_wide. The OS keeps a process's
      * current directory under MAX_PATH unless the program opts in (SetCurrentDirectoryW's limit). */
-    if (cwd_len > 0 && !kspl_win_to_wide((const char *)cwd_ptr, cwd_len, cwd_path, KSPL_WPATH_CAP)) return 0;
-    if (out_len > 0 && !kspl_path_to_wide(out_ptr, out_len, out_path, KSPL_WPATH_CAP)) return 0;
-    if (err_len > 0 && !kspl_path_to_wide(err_ptr, err_len, err_path, KSPL_WPATH_CAP)) return 0;
-    wchar_t *wcmd = kspl_win_command_line(argv_buf, argv_buf_len, argc, cwd_ptr, cwd_len);
-    if (wcmd == NULL) return 0;
+    /* Caution: **Set kspl_start_error before every early return**, as the fail label does. */
+    if ((cwd_len > 0 && !kspl_win_to_wide((const char *)cwd_ptr, cwd_len, cwd_path, KSPL_WPATH_CAP)) ||
+        (out_len > 0 && !kspl_path_to_wide(out_ptr, out_len, out_path, KSPL_WPATH_CAP)) ||
+        (err_len > 0 && !kspl_path_to_wide(err_ptr, err_len, err_path, KSPL_WPATH_CAP))) {
+        /* not UTF-8, holding a NUL, or too long */
+        kspl_start_error = ERROR_INVALID_NAME;
+        return 0;
+    }
+    DWORD why = 0;
+    wchar_t *wcmd = kspl_win_command_line(argv_buf, argv_buf_len, argc, cwd_ptr, cwd_len, &why);
+    if (wcmd == NULL) {
+        kspl_start_error = (I32)why;
+        return 0;
+    }
     int one_file = (out_len > 0 && out_len == err_len && memcmp(out_ptr, err_ptr, (size_t)out_len) == 0);
     int pipe_in = (stdio & 1) != 0;
     int pipe_out = (stdio & 2) != 0 && out_len == 0;
@@ -508,6 +563,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
     if (h == NULL) {
         free(wcmd);
+        kspl_start_error = ERROR_NOT_ENOUGH_MEMORY;
         return 0;
     }
     /* 16: a job object of its own, the POSIX side's group. The child starts suspended and runs

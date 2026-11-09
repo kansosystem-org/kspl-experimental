@@ -132,8 +132,10 @@ impl Progress
         if files.ask_too_large(r.ask)
             r.stop = "the ask file grew larger than 1 MiB"
             return false
+        // **An ask file that cannot be read now stops nothing**: the next check reads it again.
+        // Read as empty, it would stop the answer as a question gone from its ask file.
         now: = io.read_file(r.ask, look) catch
-            fallback ""
+            return true
         r.stop = chat.stop_reason(now, r.id, look)
         return r.stop.len == 0
 
@@ -195,7 +197,11 @@ fn refused(live: U8[], why: U8[], arena: Arena$@) //<
     defer $out: = Str_builder()
     record.dump(out@)
     out.c('\n')
-    fs.replace_file(live, out.slice(), .kept) catch {}
+    // **Say a failure**: without the live file, the page shows nothing of why no question is
+    // answered.
+    fs.replace_file(live, out.slice(), .kept) catch e
+        answer.write_shown(io.err(),
+            arena.text().s("  cannot write \{live\} (\{e\}), which says why: \{why\}\n").take())
 
 impl Progress: Manual_free //< `free()` lets go the text it keeps
     fn free(r: Self$@) //< frees this round's text

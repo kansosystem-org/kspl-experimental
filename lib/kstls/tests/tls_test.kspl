@@ -5,7 +5,6 @@
 import "kstls/tests/cert" + { Test_ca }
 import "kstls/tls"
 import "std/chars" // `sub_mut`
-import "std/libc"
 import "std/mem" { Arena }
 import "std/net"
 import "std/str" // `equals`
@@ -182,6 +181,13 @@ impl Peer_act
             catch panic("thread spawn failed")
         s: = tls.Tls_stream.connect("localhost", port, HANDSHAKE_BUDGET_MS)
             catch panic("a certificate the trusted CA issued for this host should connect")
+        // An empty write or read moves nothing, so the peer still sees `PING` first.
+        empty_sent: = s.write("") catch panic("an empty write should give 0, not fail")
+        assert(empty_sent == 0, "an empty write should give 0")
+        $one: U8[1] = ::{}
+        empty_read: = s.read((U8$[]::one).sub_mut(0, 0))
+            catch panic("an empty read should give 0, not fail")
+        assert(empty_read == 0, "an empty read should give 0 at once")
         sent: = s.write(PING) catch panic("the client's write should succeed")
         assert(sent == 4, "the client's ping should go out whole")
         $got: U8[4] = ::{}
@@ -278,15 +284,15 @@ fn test_tls_cut_connection_is_an_error()
     verdict.pass("A connection cut without a close_notify fails, rather than reading as an end.")
 
 priv const SIGPIPE: I32 = 13 //< SIGPIPE's number on Linux and macOS
-priv const WRITE_TRIES: Sz = 50 //< the cap on writes to a peer that is gone before one fails
+priv const WRITE_TRIES: Sz = 6000 //< the cap on writes to a peer that is gone before two fail
+    //< 120 s with the gaps: only a write that never fails reaches it, as a busy machine can delay
+    //< the reset.
 priv const WRITE_GAP_MS: I32 = 20 //< the wait between them, for the peer's reset to arrive
 
 priv $sigpipes_seen: I32 = 0 //< how many SIGPIPEs reached `count_sigpipe`
 
 priv fn count_sigpipe(_sig: I32): Void //< a SIGPIPE handler that only counts
     sigpipes_seen += 1
-    // Registered again: under SysV semantics one delivery puts the default back.
-    libc.signal(SIGPIPE, count_sigpipe)
 
 fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     verdict.start("[Tls] writing to a peer that is gone failing with no SIGPIPE test...")
@@ -309,7 +315,7 @@ fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     // linked into can differ.** A handler stands in for that program. It counts what the default
     // would have killed it with.
     sigpipes_seen = 0
-    before: = libc.signal(SIGPIPE, count_sigpipe)
+    before: = sys.set_signal_handler(SIGPIPE, count_sigpipe)
     $failed: Sz = 0
     for _try in Range.asc(WRITE_TRIES)
         s.write(PING) catch
@@ -320,7 +326,7 @@ fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     // `free` sends a close_notify, one more write to the peer that is gone.
     s.free()
     seen: = sigpipes_seen
-    libc.signal(SIGPIPE, before)
+    sys.set_signal_handler(SIGPIPE, before)
     assert(failed >= 2, "a write to a peer that is gone should fail")
     assert(seen == 0, "a write to a peer that is gone should fail as a value, raising no SIGPIPE")
     verdict.pass("A write to a peer that is gone fails as a value, and raises no SIGPIPE.")
@@ -371,6 +377,7 @@ fn test_tls_handshake_write_deadline()
     // time limit stops that run.
     verdict.check("the stalled write waits until the deadline", elapsed >= 100000I64, took)
     $buf: U8[32] = ::{}
-    n: = peer.read_for(U8$[]::buf, 1000) catch panic("some bytes were sent before the stall")
+    n: = peer.read_for(U8$[]::buf, HANDSHAKE_BUDGET_MS)
+        catch panic("some bytes were sent before the stall")
     assert(n > 0 && buf[0] == 'x', "the deadline preserves progress before the send buffer fills")
     verdict.pass("a partially sent buffer times out when the peer does not read")

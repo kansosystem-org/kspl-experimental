@@ -176,17 +176,6 @@ function ksmdLocal() {
         return { status: 0, why: lost(e) };
       }
     },
-    // Renames a file under the root, never over another one. { status, why }; 409 means a file
-    // stands at `to` already, and nothing moved.
-    async move(from, to) {
-      try {
-        const got = await send(`/api/move?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-          { method: "POST" });
-        return { status: got.status, why: got.ok ? "" : reason(got.status) };
-      } catch (e) {
-        return { status: 0, why: lost(e) };
-      }
-    },
     // Holds one connection open while a tab of the page is open, so the server stops only once
     // none is. **One tab of this address holds it**: a browser opens six connections to one
     // server, and a hold in each tab would use them up, so no save could go out. The other tabs

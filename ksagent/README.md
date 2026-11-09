@@ -16,6 +16,7 @@ ksagent asks a model server that answers `POST /v1/chat/completions` with tool c
 
 ```sh
 make model-server                              # the model server, until Ctrl+C
+export KSAGENT_API_KEY="$(cat out/tmp/model.8081.key)"  # the key make model-server made
 make ksagent                                   # -> out/ksagent.exe
 ./out/ksagent.exe ask rules "How many days of paid leave does a new employee get?"
 ./out/ksagent.exe watch rules                  # answers the questions the chat page asks in rules/
@@ -30,6 +31,8 @@ make ksagent                                   # -> out/ksagent.exe
 | `--out=<file>` | `eval` only: also writes the table to this file under the folder, as `.md` or `.ksmd` |
 
 **An API key comes only from the environment variable `KSAGENT_API_KEY`**, sent as `Authorization: Bearer`. No option takes it, since the command line shows in the process list.
+
+**The llama-server that `make model-server` or `make chat` starts asks for a key.** Without one, any web page could ask it. The key is new at each start, and stands in `out/tmp/model.<port>.key` until the server stops. `make model-server` prints where; `make chat` gives it to ksagent itself.
 
 `ask` prints the answer, then each checked source with its quote:
 

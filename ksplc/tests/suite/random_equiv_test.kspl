@@ -21,7 +21,6 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/subproc"
@@ -59,16 +58,6 @@ priv struct Case //< one seed's program, and how each build of it went
 // The verdict on one program
 // ==========================================
 
-priv fn first_diff(a: U8[], b: U8[], arena: Arena$@): U8[] //< the first line that disagrees
-    al: = a.lines(arena)
-    bl: = b.lines(arena)
-    n: = math.min(al.len, bl.len)
-    for i in Range.asc(n)
-        if !al.get(i).equals(bl.get(i))
-            return arena.text().s("line \{i + 1\}: '").s(al.get(i)).s("' against '")
-                .s(bl.get(i)).s("'").take()
-    return arena.text().s("the line counts differ (\{al.len\} against \{bl.len\})").take()
-
 priv fn code_text(c: I32?, arena: Arena$@): U8[]
     switch c
     case .some(n)
@@ -94,10 +83,12 @@ priv fn judge(stop: Stop, builds: Build[], runs: List<|Ran|>@, arena: Arena$@): 
             r: = runs.get(i)
             code: = code_text(r.code, arena)
             if !r.out.equals(ref.out) || !code.equals(ref_code)
+                diff: = harness_build.first_diff(ref.out, builds[0].name, r.out, builds[i].name,
+                    arena)
                 out
                     .push(arena.text().s("'").s(builds[i].name).s("' differs from '")
-                    .s(builds[0].name).s("': ").s(first_diff(ref.out, r.out, arena)).s(", exit ")
-                    .s(ref_code).s(" against ").s(code).take())
+                    .s(builds[0].name).s("': ").s(diff).s(", exit ").s(ref_code).s(" against ")
+                    .s(code).take())
         words: = stop.words()
         ended_with_0: = ref_code.equals("0")
         if words.len == 0 && !ended_with_0
@@ -136,12 +127,6 @@ priv fn check_planted(builds: Build[], arena: Arena$@) //< judge flags each kind
 // The builds
 // ==========================================
 
-priv fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does not run
-    r: = harness.run(U8[][]::{ cc, "--version" })
-    if !r.exited_with(0)
-        return .none
-    return .some(r.out.find_str("clang").is_some())
-
 priv fn flags(level: U8[], traps: Bool, quiet_overflow: Bool, arena: Arena$@): U8[][] //<
     //< The options for a C build: the warnings made errors, the level, and maybe the traps
     //< quiet_overflow turns gcc's -Woverflow off: it warns about narrow values folded from
@@ -170,10 +155,10 @@ priv fn builds(open: Bool, arena: Arena$@): List<|Build|> //<
     $families: = List<|U8[]|>(arena)
     $gcc: = List<|Bool|>(arena)
     families.push(harness.cc())
-    if mine: = is_clang(harness.cc())
+    if mine: = harness_build.is_clang(harness.cc())
         gcc.push(!mine)
         other: = "gcc" if mine else "clang"
-        if theirs: = is_clang(other)
+        if theirs: = harness_build.is_clang(other)
             if theirs != mine
                 families.push(other)
                 gcc.push(!theirs)

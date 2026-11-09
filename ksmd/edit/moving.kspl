@@ -5,7 +5,8 @@ import "ksmd/calc/formula" { BROKEN, Positions, text_piece }
 import "ksmd/edit/edit" { Edit_error, Saved, charts_found, chosen, drop_filters, empty_cell, fits,
     restore, table_at }
 import "ksmd/model/format" { no_format, same_format }
-import "ksmd/model/model" { Cell, Corner, Document, Table }
+import "ksmd/model/model" { Cell, Corner, Document, Table, UNBOUND }
+import "ksmd/model/rule" { no_rule }
 import "std/ds" { List }
 import "std/mem" { Arena }
 
@@ -53,11 +54,10 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
     to_column: Sz): Void!Edit_error //<
         //< Moves the `height` by `width` cells at `top`, `left` to stand from `to_row`,
         //< `to_column` of the same table, as a paste after a cut moves them
-        //< Each cell there takes a moved cell whole: its value or formula, look and note. A cell
-        //< left behind becomes empty. Row -1 is the names, which move only along the names row.
-        //< A reference to a moved cell, or a range moved whole, follows it; one written over
-        //< becomes `#REF!`. A range moved in part stays. Whole columns, as `t.A`, follow the same
-        //< rule, but only when every data row moves.
+        //< Each cell there takes a moved cell whole; one left behind becomes empty. Row -1 is the
+        //< names. A reference to a moved cell, or a range moved whole, follows it; one written
+        //< over becomes `#REF!`. Whole columns, as `t.A`, follow only when every data row moves.
+        //< Whole lines take their settings (`carry_columns`, `carry_heights`).
     t: = table_at(doc, u)!
     if height < 1 || width < 1 || top < -1 || left < 0 || to_row < -1 || to_column < 0 ||
         (top < 0 && to_row >= 0) || (top >= 0 && to_row < 0) || top + height > t.rows.len ||
@@ -66,11 +66,13 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
         throw .outside
     if top == to_row && left == to_column
         return
-    // A value moved into a column with choices must be one of them, as for a copy.
+    // A value moved into a column with choices must be one of them, as for a copy. Whole columns
+    // take their own choices with them.
+    whole_columns: = top < 0 && top + height == t.rows.len
     for r in Range.asc(height)
         for c in Range.asc(width)
             cell: = t.cells[t.at(top + r, left + c)]
-            if top + r >= 0 &&
+            if !whole_columns && top + r >= 0 &&
                 (cell.kind == .text || cell.kind == .number || cell.kind == .date)
                 _ok: = chosen(t, to_column + c, cell.text)!
     defer scratch: = Arena(64 * 1024)
@@ -131,6 +133,12 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
     charts_found(doc, u) catch why
         put_back(doc, u, places@, was@, saved@)
         throw why
+    if whole_columns
+        // The filters go with their columns, whose cells keep the formats they matched.
+        carry_columns(t, left, width, to_column)
+        return
+    if left == 0 && width == t.columns.len
+        carry_heights(t, top, height, to_row)
     // A filter matches the text a cell shows, so a column whose cells change format loses it.
     for c in Range.asc(width)
         for r in Range.asc(height)
@@ -140,6 +148,77 @@ fn move_cells(doc: Document$@, u: Sz, top: Sz, left: Sz, height: Sz, width: Sz, 
             if top + r >= 0 &&
                 !same_format(format, was[height * width + r * width + c].look.format)
                 drop_filters(t, to_column + c, to_column + c)
+
+priv fn carry_columns(t: Table$@, left: Sz, width: Sz, to_column: Sz) //<
+    //< Gives the `width` columns from `to_column` the settings of those from `left`: width,
+    //< number format, choices, colour rule, filter, merging and row colours
+    //< A column left behind loses its settings, and a column written over loses its own.
+    if t.widths.len > 0
+        carry(t.widths@, left, width, to_column, 0)
+        $any: = false
+        for w in t.widths
+            any = any || w > 0
+        // Widths that are all 0 are written as none.
+        if !any
+            t.widths.clear()
+    if t.formats.len > 0
+        carry(t.formats@, left, width, to_column, no_format())
+    if t.choices.len > 0
+        carry(t.choices@, left, width, to_column, "")
+    if t.rules.len > 0
+        carry(t.rules@, left, width, to_column, no_rule())
+    // The settings kept by a column's identity go to the identity of its new place.
+    $i: Sz = 0
+    for i < t.filters.len
+        id: = carried(t.columns@, left, to_column, width, t.filters[i].column)
+        if id == UNBOUND
+            t.filters.remove_at(i)
+        else
+            t.filters[i].column = id
+            i += 1
+    i = 0
+    for i < t.merged.len
+        id: = carried(t.columns@, left, to_column, width, t.merged[i])
+        if id == UNBOUND
+            t.merged.remove_at(i)
+        else
+            t.merged[i] = id
+            i += 1
+    if t.row_colors != UNBOUND
+        t.row_colors = carried(t.columns@, left, to_column, width, t.row_colors)
+
+priv fn carry_heights(t: Table$@, top: Sz, height: Sz, to_row: Sz) //<
+    //< Gives the `height` data rows from `to_row` the heights of those from `top`, as
+    //< `carry_columns` gives columns their settings
+    $i: Sz = 0
+    for i < t.heights.len
+        id: = carried(t.rows@, top, to_row, height, t.heights[i].row)
+        if id == UNBOUND
+            t.heights.remove_at(i)
+        else
+            t.heights[i].row = id
+            i += 1
+
+priv fn carry<|T|>(list: List<|T|>$@, from: Sz, count: Sz, to: Sz, none: T) //<
+    //< Puts the `count` entries from `from` at `to`, and `none` where an entry was left behind
+    //< The two runs may overlap: the entries are taken in the order that reads each one first.
+    for k in Range.asc(count)
+        at: = k if to < from else count - 1 - k
+        list[to + at] = list[from + at]
+    for place in Range(from, from + count, 1)
+        if place < to || place >= to + count
+            list[place] = none
+
+priv fn carried(ids: List<|Sz|>@, from: Sz, to: Sz, count: Sz, id: Sz): Sz //<
+    //< Where the setting of the line `id` goes when `count` lines' settings move from place `from`
+    //< to place `to`: the identity at its new place, `UNBOUND` for a line written over, or `id`
+    for k in Range.asc(count)
+        if ids[from + k] == id
+            return ids[to + k]
+    for k in Range.asc(count)
+        if ids[to + k] == id
+            return UNBOUND
+    return id
 
 priv struct Area //< a rectangle of a table's cells, by places
     top: Sz

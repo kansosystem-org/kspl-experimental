@@ -800,6 +800,15 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
         if ln: = lg.at(.error)
             ln.s("the folder of --allowed does not exist: \{folder\}")
         return 1
+    // Caution: **The record must stand outside the root**: a page that could write it through the
+    // file endpoints would allow its own file ("Building a page's own functions" in
+    // `../docs/SPEC-local-server.md`).
+    if allowed.len > 0 && fs.lies_under(root, allowed)
+        if ln: = lg.at(.error)
+            ln
+                .s("--allowed must name a file outside <root>, or a page could allow its own file: \
+                    \{allowed\}")
+        return 1
     o$ = Options::{ .port = I32::port64, .root = root, .page = page, .local = local,
         .idle_s = idle_s, .cert = cert, .key = key, .builder = builder, .allowed = allowed }
     return 0

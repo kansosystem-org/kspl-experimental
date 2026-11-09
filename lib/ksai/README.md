@@ -187,12 +187,11 @@ Without a filesystem, use `embed` to include bytes in the program at build time.
 
 ## The examples
 
-The examples show how programs use ksai. Read `llama_engine` first for basic training and inference. Then read `qwen_infer` for real weights and `code_complete` for training on a corpus across CPUs.
+The examples show how programs use ksai. Read `llama_engine` first for basic training and inference. Then read `code_complete` for training on a corpus across CPUs, and `chat_server` for real weights.
 
 | Folder | What it does | How to build it |
 | :-- | :-- | :-- |
 | `examples/llama_engine/` | Trains a tiny model further from embedded weights and generates text. `main.kspl` loads, trains, and generates. `model.kspl` defines the layers | Root `make run` builds and runs it |
-| `examples/qwen_infer/` | A command-line interface for inference with real Qwen2.5-Coder weights in 32-bit floats, with LoRA adapters. `model.kspl` contains the model | Root `make qwen` builds it only |
 | [`examples/code_complete/`](examples/code_complete/README.md) | Trains a small coding model from scratch by fill-in-the-middle (FIM): predict missing code from its surroundings, with the compiler as the judge. The pipeline that makes its corpus stands beside it. `train` spreads batches across CPUs; `complete` produces candidates, greedy first | Root `make fim-model` trains it on this repository |
 | `examples/car_pilot/` | Trains a small car's driving policy from written rules into one safetensors file ("The car's policy file" below). `policy.kspl` holds the rules and the net; `encoding.kspl` holds what both the trainer and the car read | `make car_pilot` here builds it |
 | `examples/chat_server/` | Serves a Qwen3-Instruct-2507 or Qwen3.5 model from its GGUF file over HTTP to a client with tools, such as ksagent ("The chat server" below) | Root `make chat-server` builds it |
@@ -201,7 +200,7 @@ The examples belong to the package, like a Cargo crate's `examples/` folder. `ma
 
 The bundled `examples/llama_engine/mini_llama.safetensors` weights are our own, with a vocabulary of 12 and two layers. They use Llama's architecture; see [`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md). `llama_engine` includes them with `embed`, which resolves them through the package regardless of the current folder. It trains a copy without writing back; the entry point in `model.kspl` writes weights.
 
-Before running `qwen_infer`, convert real weights with `lib/ksai/tools/export_qwen_to_kspl.py`, which is why `make qwen` only builds the program. Keep downloaded and converted model files in `data/` at the repository's root; [`data/README.md`](../../data/README.md) says which models and how to get them.
+Keep downloaded model files in `data/` at the repository's root; [`data/README.md`](../../data/README.md) says which models and how to get them.
 
 ### The car's policy file
 
@@ -259,7 +258,7 @@ Before moving or deleting an example, check these dependencies:
 | :-- | :-- |
 | `make run` | The macOS CI AI step trains `llama_engine` and checks that its loss decreased |
 | `make test-extract` | Runs the package tests, and so every example, from an independent copy, on Linux and Windows instead of `make run`. The checks are in [`tests/examples_main.kspl`](tests/examples_main.kspl) and the files beside it whose names start with `examples_` |
-| `make test-simd` | Compiles `llama_engine` and `qwen_infer` to C, and checks that each named `ksai` loop is vectorized at `-O3` |
+| `make test-simd` | Compiles `llama_engine` and `lib/ksai/benches/bench_qwen.kspl` to C, and checks that each named `ksai` loop is vectorized at `-O3` |
 | `make lint` | Analyses each example's `main.kspl`, which `mk/lint.mk` finds by its `fn main` |
 | `make test-ksos-link` / `make test-ksos-qemu` | Use embedded weights in the `ksos` Cortex-M demo, without a filesystem |
 

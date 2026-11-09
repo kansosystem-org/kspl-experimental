@@ -11,20 +11,21 @@ import "std/str"
 import "std/strnum"
 import "std/sys"
 
-struct Var //< one variable as make's database records it
+pub struct Var //< one variable as make's database records it
     name: U8[]
     origin: U8[] //< `makefile`, `command line`, `environment`, `default`, `automatic` or `override`
     file: U8[] //< the make file that set it last; empty where the database names none
     line: Sz //< its line in that file; 0 where none
     simple: Bool //< `:=`, expanded once where it is set; false for `=`, expanded at each use
     append: Bool //< a target's own `+=`: its value goes after the one set outside the target
-    value: U8[] //< expanded for a simple variable, as written for a recursive one
+    pub value: U8[] //< expanded for a simple variable, as written for a recursive one
 
-struct Entry //< one file the database records: a target, or a file a target names
+pub struct Entry //< one file the database records: a target, or a file a target names
     name: U8[]
     prereqs: List<|U8[]|> //< the normal prerequisites, in order
     order_only: List<|U8[]|> //< those after `|`: made first, but never a reason to remake
-    target: Bool //< a rule names it as its target (the database does not mark it `Not a target`)
+    pub target: Bool //<
+        //< a rule names it as its target (the database does not mark it `Not a target`)
     double_colon: Bool //< its rules are `::`, each one of its own; the entry holds only the last
     phony: Bool
     stem: U8[] //< what a pattern rule's `%` matched; empty where no pattern rule made it
@@ -36,16 +37,17 @@ struct Entry //< one file the database records: a target, or a file a target nam
     recipe: List<|U8[]|> //< the recipe as written, one physical line each, without the tab
     vars: List<|Var|> //< the variables set for this target alone
 
-struct Db //< make's database: every variable and every file it recorded
-    vars: Map<|U8[], Var|>
-    files: Map<|U8[], Entry|>
-    order: List<|U8[]|> //< the files' names in the order the database lists them
+pub struct Db //< make's database: every variable, every file and every pattern rule it recorded
+    pub vars: Map<|U8[], Var|>
+    pub files: Map<|U8[], Entry|>
+    pub order: List<|U8[]|> //< the files' names in the order the database lists them
+    pub patterns: List<|U8[]|> //< each pattern rule's targets, as its line writes them
 
 priv const ORIGINS: U8[][] = U8[][]::{ "default", "environment", "environment under -e",
     "automatic", "command line", "override", "makefile", "'override' directive" } //<
         //< The origins `make -p` writes on the line above a variable
 
-fn make_speaks_english() //<
+pub fn make_speaks_english() //<
     //< Sets this process's environment so the makes it starts write their database in English
     //< **make translates the database's comments** (`# Not a target:`, `(from '...', line N)`)
     //< under a Japanese locale, and they are what this file reads. Only the messages are set:
@@ -56,7 +58,7 @@ fn make_speaks_english() //<
     sys.set_env("LC_MESSAGES", "C") catch {}
     sys.unset_env("LANGUAGE") catch {}
 
-fn last_db(out: U8[]): U8[] //< the main make's database, the last one printed
+pub fn last_db(out: U8[]): U8[] //< the main make's database, the last one printed
     //< **A recursive make prints its own database first**: with `-p` in `MAKEFLAGS`, every
     //< sub-make a recipe starts prints one, and the make asked prints its own when it ends.
     $at: Sz = 0
@@ -110,9 +112,9 @@ priv fn var_line(head: U8[], o: Origin): Var? //< `NAME = value`, `NAME := value
         .line = o.line, .simple = op.equals(":="), .append = op.equals("+="),
         .value = rest.sub_from(end + 1) if end < rest.len else "" })
 
-fn parse_db(text: U8[], arena: Arena$@): Db //< reads one database, as `last_db` cut it
+pub fn parse_db(text: U8[], arena: Arena$@): Db //< reads one database, as `last_db` cut it
     $db: = Db::{ .vars = Map<|U8[], Var|>(arena), .files = Map<|U8[], Entry|>(arena),
-        .order = List<|U8[]|>(arena) }
+        .order = List<|U8[]|>(arena), .patterns = List<|U8[]|>(arena) }
     lines: = text.lines(arena)
     $i: Sz = 0
     $section: U8[] = ""
@@ -130,6 +132,11 @@ fn parse_db(text: U8[], arena: Arena$@): Db //< reads one database, as `last_db`
         else if section.starts_with("# Files")
             i = read_entry(lines, i, db@, arena)
         else
+            // A pattern rule's line is the one that opens with neither `#` nor a recipe's tab.
+            if section.starts_with("# Implicit Rules") && line.len > 0 && line[0] != '#' &&
+                line[0] != '\t'
+                if colon: = header_colon(line)
+                    db.patterns.push(line.sub(0, colon))
             i += 1
     return db
 
@@ -426,18 +433,17 @@ fn expand(text: U8[], db: Db@, depth: Sz, arena: Arena$@): U8[]? //< plain refer
 // The make files' own lines: where a rule is written, and what its prerequisites name.
 // ==========================================
 
-struct Source_line //< one logical line of a make file: continuations joined, comment cut
-    first: Sz //< its first physical line, from 1
-    text: U8[]
-    recipe: Bool //< it starts with a tab: a recipe line, not make's own syntax
+pub struct Source_line //< one logical line of a make file: continuations joined, comment cut
+    pub first: Sz //< its first physical line, from 1
+    pub text: U8[]
+    pub recipe: Bool //< it starts with a tab: a recipe line, not make's own syntax
 
-fn logical_lines(text: U8[], arena: Arena$@): List<|Source_line|> //<
-    //< The file's logical lines; of a `define … endef`, only its first line
-    //< **A comment starts at a `#` not escaped by `\`**, as make cuts it, except in a recipe.
+pub fn joined_lines(text: U8[], arena: Arena$@): List<|Source_line|> //<
+    //< The file's lines with each continued line joined on, and nothing cut
+    //< A comment and a `define`'s body stay, for a check that reads what the make files write.
     $out: = List<|Source_line|>(arena)
     phys: = text.lines(arena)
     $i: Sz = 0
-    $in_define: Sz = 0
     for i < phys.len
         first: = i + 1
         joined: = arena.text()
@@ -449,35 +455,46 @@ fn logical_lines(text: U8[], arena: Arena$@): List<|Source_line|> //<
         joined.s(l)
         i += 1
         whole: = joined.take()
-        recipe: = whole.starts_with("\t")
-        body: = whole if recipe else cut_comment(whole)
+        out
+            .push(Source_line::{ .first = first, .text = whole,
+            .recipe = whole.starts_with("\t") })
+    return out
+
+fn logical_lines(text: U8[], arena: Arena$@): List<|Source_line|> //<
+    //< The file's logical lines; of a `define … endef`, only its first line
+    //< **A comment starts at a `#` not escaped by `\`**, as make cuts it, except in a recipe.
+    $out: = List<|Source_line|>(arena)
+    $in_define: Sz = 0
+    for l in joined_lines(text, arena)
+        body: = l.text if l.recipe else cut_comment(l.text)
         word: = body.trim_start().strip_prefix("override ").strip_prefix("export ")
-        if !recipe && (word.starts_with("define ") || word.equals("define"))
+        if !l.recipe && (word.starts_with("define ") || word.equals("define"))
             if in_define == 0
-                out.push(Source_line::{ .first = first, .text = body, .recipe = false })
+                out.push(Source_line::{ .first = l.first, .text = body, .recipe = false })
             in_define += 1
             continue
         if in_define > 0
-            if !recipe && body.trim_spaces().equals("endef")
+            if !l.recipe && body.trim_spaces().equals("endef")
                 in_define -= 1
             continue
-        out.push(Source_line::{ .first = first, .text = body, .recipe = recipe })
+        out.push(Source_line::{ .first = l.first, .text = body, .recipe = l.recipe })
     return out
 
-priv fn cut_comment(line: U8[]): U8[] //< the line before its comment
+pub fn cut_comment(line: U8[]): U8[] //< the line before its comment
     for i in Range.asc(line.len)
         if line[i] == '#' && (i == 0 || line[i - 1] != '\\')
             return line.sub(0, i)
     return line
 
-struct Rule_line //< a rule as one line writes it
+pub struct Rule_line //< a rule as one line writes it
     file: U8[]
     line: Sz //< its first physical line
-    targets: U8[] //< as written, before the colon
-    prereqs: U8[] //< as written, after it, with `|` kept; empty for none
+    pub targets: U8[] //< as written, before the colon
+    pub prereqs: U8[] //< as written, after it, with `|` kept; empty for none
     double: Bool //< `::`, a rule of its own for each
 
-fn rule_of(l: Source_line, file: U8[]): Rule_line? //< the rule the line writes, if it writes one
+pub fn rule_of(l: Source_line, file: U8[]): Rule_line? //<
+    //< the rule the line writes, if it writes one
     //< **Not a rule**: a recipe, a directive, an assignment (an `=` before the colon, or `:=`),
     //< and a target's own variable (`t: VAR = x`), whose place the database gives.
     if l.recipe
@@ -520,7 +537,7 @@ priv fn top_level_has(text: U8[], want: U8): Bool //< the byte appears outside e
             return true
     return false
 
-fn words(text: U8[], arena: Arena$@): List<|U8[]|> //< the words, split at spaces and tabs
+pub fn words(text: U8[], arena: Arena$@): List<|U8[]|> //< the words, split at spaces and tabs
     $out: = List<|U8[]|>(arena)
     $start: Sz = 0
     $in_word: = false
@@ -578,27 +595,32 @@ fn help_line(texts: U8[][], target: U8[], arena: Arena$@): Help? //< the `##` li
         $n: Sz = 0
         for l in texts[file].lines(arena)
             n += 1
-            if !l.starts_with("## ")
+            h: = help_of(l, file, n, arena) catch
                 continue
-            parts: = l.sub_from(3).split('|', arena)
-            if parts.len < 3
-                continue
-            spec: = parts.get(1).trim_spaces()
-            rest: = l.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1)
-            h: = Help::{ .file = file, .line = n, .group = parts.get(0).trim_spaces(), .spec = spec,
-                .text = rest }
-            if spec.equals(target)
+            if h.spec.equals(target)
                 return .some(h)
-            if spec.ends_with("*") && target.starts_with(spec.sub(0, spec.len - 1)) &&
-                (family.is_none() || spec.len > family.unwrap_or(h).spec.len)
+            if h.spec.ends_with("*") &&
+                target.starts_with(h.spec.sub(0, h.spec.len - 1)) &&
+                (family.is_none() || h.spec.len > family.unwrap_or(h).spec.len)
                 family = .some(h)
     return family
 
-struct Help //< one `##` line of `make help`
+pub fn help_of(l: U8[], file: Sz, line: Sz, arena: Arena$@): Help? //<
+    //< What one `## <group>|<target>|<description>` line says; none where the line is not one
+    if !l.starts_with("## ")
+        return .none
+    parts: = l.sub_from(3).split('|', arena)
+    if parts.len < 3
+        return .none
+    return .some(Help::{ .file = file, .line = line, .group = parts.get(0).trim_spaces(),
+        .spec = parts.get(1).trim_spaces(),
+        .text = l.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1) })
+
+pub struct Help //< one `##` line of `make help`
     file: Sz //< which of the texts given holds it
     line: Sz
-    group: U8[]
-    spec: U8[] //< the target, or a family's name ending in `*`
+    pub group: U8[]
+    pub spec: U8[] //< the target, or a family's name ending in `*`
     text: U8[]
 
 fn distance(a: U8[], b: U8[], arena: Arena$@): Sz //< how many one-byte edits turn a into b
@@ -675,7 +697,7 @@ priv fn is_conditional(t: U8[]): Bool //< whether the line opens `ifeq`, `ifneq`
             return true
     return false
 
-priv fn assigned_name(t: U8[]): U8[] //< the variable the line sets; empty where it sets none
+pub fn assigned_name(t: U8[]): U8[] //< the variable the line sets; empty where it sets none
     body: = t.strip_prefix("override ").strip_prefix("export ").strip_prefix("private ")
     if body.starts_with("define ")
         rest: = body.sub_from(7).trim_spaces()

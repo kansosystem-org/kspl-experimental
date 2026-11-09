@@ -143,7 +143,7 @@ static I32 kspl_proc_read_end(int fd, U8 *buf, Sz cap, I32 timeout_ms) {
     timeout_ms = kspl_wait_ms(timeout_ms);
     if (fd < 0) return -2;
     pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
-    int r = poll(&pfd, 1, timeout_ms);
+    int r = kspl_poll_whole(&pfd, 1, timeout_ms);
     if (r == 0) return -1;
     if (r < 0) return -2;
     ssize_t nr;
@@ -275,9 +275,9 @@ KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     if (h->from_w >= 0 && !h->out_eof) { out_idx = n; pfds[n].fd = h->from_w; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
     if (h->from_err >= 0 && !h->err_eof) { err_idx = n; pfds[n].fd = h->from_err; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
     if (n == 0) return -1;
-    int r = poll(pfds, (nfds_t)n, timeout_ms);
+    int r = kspl_poll_whole(pfds, (nfds_t)n, timeout_ms);
     if (r == 0) return 0;
-    if (r < 0) return errno == EINTR ? 0 : -1; /* EINTR is treated as out of time */
+    if (r < 0) return -1;
     I32 mask = 0;
     if (out_idx >= 0 && (pfds[out_idx].revents & (POLLIN | POLLHUP | POLLERR))) mask |= 2;
     if (err_idx >= 0 && (pfds[err_idx].revents & (POLLIN | POLLHUP | POLLERR))) mask |= 4;

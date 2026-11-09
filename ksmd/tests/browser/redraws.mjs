@@ -6,10 +6,8 @@
 // `redraws(t)` takes `served.mjs`'s helpers, and returns its section.
 import fs from "fs";
 import path from "path";
-import { CTRL, SHIFT, verdict } from "./drive.mjs";
+import { CTRL, H, SHIFT, check } from "./drive.mjs";
 
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
-const H = "%ksmd 1\n\n";
 const PART = (n) => `${H}Part ${n}.\n`;
 const DOC = `${H}First paragraph.\n\n:::include path="redraw-part.ksmd"\n:::\n\n:::table name="t"\n` +
   "| \"a\" | \"b\" |\n| 1 | =A1*2 |\n| 2 | =A2*2 |\n:::\n\nLast paragraph.\n";

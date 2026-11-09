@@ -71,10 +71,12 @@ LINT_MAINS := $(shell { git ls-files; git ls-files --others --exclude-standard; 
   | xargs -0 awk '$(lint_main_prog)')
 
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
-# Every ksplc suite stands on its harness, which the root's suites call too.
+# Every ksplc suite stands on its harness, which the root's suites call too. `make_explain` stands
+# on `tools/make_db.kspl`, which the root's checks read make's answers with.
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
 LINT_TARGETS_OWN := ksplc/tests/main.kspl lib/ksos/tests/main.kspl ksagent/tests/main.kspl \
-	tools/tests/main.kspl tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
+	tools/tests/main.kspl tools/repo_stat.kspl tools/seed_sum.kspl tools/make_explain.kspl \
+	$(LINT_SUITES_OWN)
 
 # The bare-metal demos, the page's wasm bridge and the fixed part of a person's own functions,
 # linted with `--freestanding`. They hold no `main`.

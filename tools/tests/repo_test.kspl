@@ -569,3 +569,22 @@ fn test_a_switch_turned_off_lets_its_own_skips_through() //<
     assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KANSO_REQUIRE_NOPE", a).unwrap_or("")
         .equals("KANSO_REQUIRE_NOPE"), "a switch no row names is found, so the round refuses it")
     verdict.pass("a switch turned off lets its own skips through, and nothing else.")
+
+fn test_a_log_folder_that_cannot_be_listed_stops_the_round(arena: Arena$@) //<
+    //< `reset_logs` is false where a log folder stands but cannot be listed
+    //< **Its old logs stay**, and would read as this round's PASS. A file stands in for such a
+    //< folder: the tests run as root, which lists a folder of any mode.
+    verdict.start("[tools/ci_gates] a log folder that cannot be listed test...")
+    dir: = "out/tmp/kspl_ci_reset"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    old: = fs.join(dir, "gate.log", arena)
+    io.write_file(old, "PASS\n") catch panic("the old log must be writable")
+    absent: = fs.join(dir, "absent", arena)
+    assert(ci_gates.reset_logs(U8[][]::{ dir, absent }, arena),
+        "a folder emptied and a folder not there leave nothing")
+    assert(!fs.exists(old), "the old log is removed")
+    io.write_file(old, "PASS\n") catch panic("the stand-in must be writable")
+    assert(!ci_gates.reset_logs(U8[][]::{ old }, arena), "a folder not listed stops the round")
+    fs.remove_path(old) catch panic("the stand-in must be removable")
+    fs.remove_path(dir) catch panic("the work directory must be removable")
+    verdict.pass("a folder that cannot be listed stops the round; a folder not there does not.")

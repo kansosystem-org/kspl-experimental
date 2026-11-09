@@ -17,7 +17,7 @@ import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { launch } from "./cdp.mjs";
-import { ALT, CTRL, SHIFT, driver, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellText, check, driver, verdict } from "./drive.mjs";
 import { served } from "./served.mjs";
 import { menus } from "./menus.mjs";
 import { tools } from "./tools.mjs";
@@ -31,7 +31,6 @@ import { statusBar } from "./status.mjs";
 import { SPEC, written } from "../../port/web/reference.mjs";
 
 const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 const browser = await launch(binary, work);
 const page = browser.page;
@@ -51,7 +50,6 @@ async function saves(what, want) {
   check(got === want, what, JSON.stringify(got));
 }
 
-const H = "%ksmd 1\n\n";
 
 const sections = {
   // Only the actions the script calls go out of the module, and only one function comes in.
@@ -334,7 +332,7 @@ const sections = {
   async tableCaret() {
     const rows = `| "a" | "b" |\n| 1 | =A1*2 |\n| 2 | |\n| 3 | |\n:::\n\nAfter.\n`;
     const top = () => js("document.querySelector('#doc .table table').getBoundingClientRect().top");
-    const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    const cell = (r, c) => cellText(js, r, c);
     // Where the keys go: the chosen cell as "row:column", an open cell by its name, or "doc".
     const focus = () => js(`(() => {
       let a = document.activeElement;
@@ -412,7 +410,7 @@ const sections = {
   async formulas() {
     await load(`${H}:::table name="t"\n| "item" | "n" | "x" |\n| "Pens" | 2 | |\n| "Ink" | 0 | |\n` +
       `| "pens" | 3 | |\n:::\n`);
-    const shown = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    const shown = (r, c) => cellText(js, r, c);
     const enter = async (r, c, text) => {
       await click(`#doc td[data-r="${r}"][data-c="${c}"]`);
       await type(text);
@@ -466,7 +464,7 @@ const sections = {
   // the source, and a copy that keeps every digit.
   async numberFormats() {
     const table = `${H}:::table name="t"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`;
-    const td = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    const td = (r, c) => cellText(js, r, c);
     await load(table);
     // A column chosen by its letter takes the format as its own, which new rows follow too.
     await click('#doc th.letter:nth-child(2)');
@@ -524,7 +522,7 @@ const sections = {
 
     // The examples of the first contract, as they stand in `ksmd/examples/`.
     const example = (name) => fs.readFileSync(new URL(`../../examples/${name}`, import.meta.url), "utf8");
-    const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    const cell = (r, c) => cellText(js, r, c);
     for (const name of ["overview.ksmd", "notes.ksmd", "literals.ksmd"]) {
       await load(example(name));
       await saves(`the example ${name} opens and saves unchanged`, example(name));
@@ -599,11 +597,11 @@ Object.assign(sections, tools({ browser, page, js, settle, until, press, type, s
   saves, dragTo, rightClick, openCell, drag, doubleClickAt, resize }));
 Object.assign(sections, tables({ page, js, settle, press, type, select, click, menu, load, saves,
   rightClick, openCell }));
-Object.assign(sections, sizes({ page, js, settle, until, press, click, drag, menu, load, saves, source,
+Object.assign(sections, sizes({ page, js, settle, until, press, type, click, drag, menu, load, saves, source,
   openCell, doubleClickAt, rightClick, frames, resize }));
 Object.assign(sections, documents({ page, js, press, click, menu, load, saves, source }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
-Object.assign(sections, formulaHelp({ page, js, settle, press, type, click, menu, load, saves }));
+Object.assign(sections, formulaHelp({ page, js, settle, until, press, type, click, menu, load, saves }));
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
 Object.assign(sections, statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }));

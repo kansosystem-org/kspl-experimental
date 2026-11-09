@@ -5,7 +5,8 @@
 //   ready  answers 503 to /health while it "loads" for LOAD_MS, then answers
 //   never  loads for ever
 //   crash  prints a line, as a server out of memory does, and ends at once
-// It writes its arguments to `<file>.argv` and its process ID to `<file>.pid`.
+// It writes its arguments to `<file>.argv`, its process ID to `<file>.pid`, and the API key it
+// took from `LLAMA_API_KEY` to `<file>.key`.
 import fs from "fs";
 import http from "http";
 import net from "net";
@@ -39,8 +40,9 @@ async function answer(body, replies, res) {
 }
 
 // A model server as llama-server answers: `GET /v1/models` at once, `GET /health` with 503 until
-// it has loaded, and each chat request with one `answer` call.
-export function standIn({ port = 0, replies = [], loadMs = 0, never = false } = {}) {
+// it has loaded, and each chat request with one `answer` call. **With a `key`, every request but
+// `/health` without `Authorization: Bearer <key>` gets 401**, as llama-server's does.
+export function standIn({ port = 0, replies = [], loadMs = 0, never = false, key = "" } = {}) {
   const readyAt = Date.now() + loadMs;
   const loading = () => never || Date.now() < readyAt;
   const json = (res, status, o) => {
@@ -52,7 +54,9 @@ export function standIn({ port = 0, replies = [], loadMs = 0, never = false } = 
     req.setEncoding("utf8");
     req.on("data", (c) => { body += c; });
     req.on("end", () => {
-      if (req.method === "GET" && req.url === "/v1/models") {
+      if (key !== "" && req.url !== "/health" && req.headers.authorization !== `Bearer ${key}`) {
+        json(res, 401, { error: { code: 401, message: "Invalid API Key", type: "authentication_error" } });
+      } else if (req.method === "GET" && req.url === "/v1/models") {
         json(res, 200, { object: "list", data: [{ id: "stand-in", object: "model" }] });
       } else if (loading()) {
         json(res, 503, { error: { code: 503, message: "Loading model", type: "unavailable_error" } });
@@ -108,13 +112,15 @@ async function main(argv) {
   }
   fs.writeFileSync(`${file}.argv`, JSON.stringify(argv));
   fs.writeFileSync(`${file}.pid`, String(process.pid));
+  const key = process.env.LLAMA_API_KEY || "";
+  fs.writeFileSync(`${file}.key`, key);
   const mode = fs.readFileSync(file, "utf8").trim().split(/\s+/)[0];
   if (mode === "crash") {
     console.error("stand-in: loading the model");
     console.error("stand-in: cudaMalloc failed: out of memory");
     process.exit(1);
   }
-  await standIn({ port, loadMs: LOAD_MS, never: mode === "never" });
+  await standIn({ port, loadMs: LOAD_MS, never: mode === "never", key });
   console.error(`stand-in: listening on http://127.0.0.1:${port}`);
 }
 

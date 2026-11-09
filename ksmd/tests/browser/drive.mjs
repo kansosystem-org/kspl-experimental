@@ -16,6 +16,19 @@ export const verdict = {
   },
 };
 
+// What every check's source starts with: the version line and a blank line.
+export const H = "%ksmd 1\n\n";
+// A check in the section that runs now (`verdict.part`).
+export const check = (ok, what, detail) => verdict.check(ok, what, detail);
+// The selector of the document's first cell at data row `r` and column `c`.
+export const cellAt = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
+// The text that cell shows, read through a tab's `js`.
+export const cellText = (js, r, c) => js(`document.querySelector('${cellAt(r, c)}').textContent`);
+// Which data rows show, from the top, as 1 for shown and 0 for hidden: every table's rows in the
+// document, or those of the table `within` selects.
+export const rowsShown = (js, within = "#doc") =>
+  js(`Array.from(document.querySelectorAll('${within} tbody tr')).map((r) => r.hidden ? 0 : 1).join('')`);
+
 // Keys by name: Windows's key code, and the text the key types.
 const KEYS = {
   Enter: [13, "\r"], Backspace: [8, ""], Delete: [46, ""], Tab: [9, ""], Escape: [27, ""],

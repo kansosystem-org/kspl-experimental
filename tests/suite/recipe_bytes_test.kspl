@@ -27,6 +27,7 @@ import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
 import "tests/support/harness_text"
+import "tools/make_db"
 
 priv struct Hit //< one finding on a recipe line
     line: Sz
@@ -76,11 +77,34 @@ priv fn recipe_files(arena: Arena$@): List<|U8[]|> //<
     //< The files whose recipes are checked against the rules: the root's, and every package's own
     //< **A package's `Makefile` runs wherever the root's does** (`make test-extract`, MSYS2 among
     //< the platforms). `make help` does not list its targets, so `scan_names` leaves it out.
+    //< Caution: **`check_range` holds the libraries in this range**; keep it when changing this.
     $out: = make_files(arena)
-    for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
-        if sys.get_dir_name(rel).find_char('/').is_none()
-            out.push(rel)
+    for rel in harness.package_makefiles()
+        out.push(rel)
     return out
+
+priv fn check_range(arena: Arena$@) //< that every library's `Makefile` is among the files checked
+    //< **It finds the libraries apart from `recipe_files`**, by reading the folder `lib/`. So a
+    //< filter there that drops them fails here, rather than shrinking the range unseen.
+    lib: = fs.join(harness.root(), harness.LIB_DIR, arena)
+    names: = fs.read_dir(lib, arena) catch
+        verdict.check("every library's `Makefile` is checked", false, "cannot read `lib/`")
+        return
+    files: = recipe_files(arena)
+    $missing: = List<|U8[]|>(arena)
+    $seen: Sz = 0
+    for name in names
+        rel: = fs.join(fs.join(harness.LIB_DIR, name, arena), "Makefile", arena)
+        if !fs.exists(fs.join(harness.root(), rel, arena))
+            continue
+        seen += 1
+        $found: = false
+        for f in files
+            found = found || f.equals(rel)
+        if !found
+            missing.push(rel)
+    verdict.check_list("every library's `Makefile` is checked", seen, "libraries", missing@,
+        "`recipe_files` leaves it out: take the packages from `harness.package_makefiles`")
 
 priv fn is_recipe(line: U8[]): Bool //< whether it is a recipe line (starting with a tab)
     //< A variable definition or make's conditional is out of scope.
@@ -181,42 +205,12 @@ priv fn has_failing_pipe(chunk: U8[]): Bool //<
 // Caution: **Do not use it in a rule with two or more dependencies**; one added in front silently
 // changes what is read.
 
-priv struct Logical //< one logical line, and the line after it
-    text: U8[]
-    next: Sz
-
-priv fn join_continued(lines: List<|U8[]|>@, at: Sz, arena: Arena$@): Logical //<
-    //< Joins a continued line (ending in `\`) into one
-    //< Caution: **Join the rule lines too**, or dependencies wrapped over lines are undercounted.
-    b: = arena.text()
-    $i: = at
-    for
-        line: = lines.get(i).trim_end()
-        b.s(line.strip_suffix("\\")).c(' ')
-        if !line.ends_with("\\") || i + 1 >= lines.len
-            break
-        i += 1
-    return Logical::{ .text = b.take(), .next = i + 1 }
-
-priv fn rule_deps(line: U8[]): U8[]? //<
-    //< If it is a rule line (`target: dependencies`), returns the dependency string
-    //< **A `:=`, and a target-specific variable (`install: export V := x`), are not rules** (told
-    //< by what follows the `:`, and by an `=` on the dependency side). Mixed in, the next recipe's
-    //< dependencies go wrong.
-    colon: = line.find_char(':').unwrap_or(0)
-    if colon == 0 // no `:`, or nothing before it
-        return .none
-    head: = line.sub(0, colon)
-    if head.find_char('=').is_some() || head.find_char('#').is_some()
-        return .none
-    $rest: = line.sub_from(colon + 1)
-    if rest.starts_with("=")
-        return .none
-    if note: = rest.find_char('#')
-        rest = rest.sub(0, note)
-    if rest.find_char('=').is_some()
-        return .none
-    return .some(rest)
+priv fn rule_in(one: make_db.Source_line): make_db.Rule_line? //<
+    //< The rule a line writes, its comment cut; none for a recipe, an assignment or a directive
+    //< **A target's own variable (`install: export V := x`) is no rule.** Mixed in, the next
+    //< recipe's dependencies go wrong.
+    return make_db.rule_of(make_db.Source_line::{ .first = one.first,
+        .text = make_db.cut_comment(one.text), .recipe = one.recipe }, "")
 
 priv fn dep_count(deps: U8[]): Sz //< the dependency count
     //< Caution: **Do not count order-only dependencies (after the `|`)**; `$<` never points there.
@@ -239,21 +233,16 @@ priv fn scan_first_dep(path: U8[], arena: Arena$@): List<|Hit|> //<
     text: = harness.read_under_root(path)
     if text.len == 0
         return out
-    $lines: = text.lines(arena)
     $deps: U8[] = ""
-    $i: Sz = 0
-    for i < lines.len
-        start: = i
-        one: = join_continued(lines@, i, arena)
-        i = one.next
-        if is_recipe(one.text)
+    for one in make_db.joined_lines(text, arena)
+        if one.recipe
             body: = recipe_body(one.text)
             if !is_shell_comment(body) && one.text.find_str("$<").is_some() &&
                 dep_count(deps) != 1
-                out.push(Hit::{ .line = start + 1, .text = one.text.trim_spaces() })
+                out.push(Hit::{ .line = one.first, .text = one.text.trim_spaces() })
             continue
-        if got: = rule_deps(one.text)
-            deps = got
+        if rule: = rule_in(one)
+            deps = rule.prereqs
     return out
 
 priv fn scan(path: U8[], kind: Sz, arena: Arena$@): List<|Hit|> //<
@@ -265,33 +254,20 @@ priv fn scan(path: U8[], kind: Sz, arena: Arena$@): List<|Hit|> //<
     text: = harness.read_under_root(path)
     if text.len == 0
         return out
-    lines: = text.lines(arena)
-    $i: Sz = 0
-    for i < lines.len
-        line: = lines.get(i)
-        if !is_recipe(line)
-            i += 1
-            continue
-        if kind < 2
-            body: = recipe_body(line)
-            if !is_shell_comment(body) &&
+    if kind < 2
+        lines: = text.lines(arena)
+        for i in Range.asc(lines.len)
+            line: = lines.get(i)
+            if is_recipe(line) && !is_shell_comment(recipe_body(line)) &&
                 ((kind == 0 && has_non_ascii(line)) || (kind == 1 && has_bare_curdir(line)))
                 out.push(Hit::{ .line = i + 1, .text = line.trim_spaces() })
-            i += 1
-            continue
-        start: = i
-        chunk: = arena.text()
-        for i < lines.len && is_recipe(lines.get(i))
-            chunk.s(lines.get(i).trim_end().strip_suffix("\\"))
-            if !lines.get(i).trim_end().ends_with("\\")
-                break
-            i += 1
-        i += 1
-        joined: = chunk.take()
-        body: = recipe_body(joined)
-        if !is_shell_comment(body) && !is_shell_comment(body.strip_prefix("@")) &&
-            joined.find_str("set -o pipefail").is_none() && has_failing_pipe(joined)
-            out.push(Hit::{ .line = start + 1, .text = joined.trim_spaces() })
+        return out
+    for one in make_db.joined_lines(text, arena)
+        body: = recipe_body(one.text)
+        if one.recipe && !is_shell_comment(body) &&
+            !is_shell_comment(body.strip_prefix("@")) &&
+            one.text.find_str("set -o pipefail").is_none() && has_failing_pipe(one.text)
+            out.push(Hit::{ .line = one.first, .text = one.text.trim_spaces() })
     return out
 
 priv fn report_hits(path: U8[], hits: List<|Hit|>, title: U8[], advice: U8[], arena: Arena$@)
@@ -321,20 +297,6 @@ priv struct Said //< one name listed in `.PHONY`, and where it is
     where: U8[]
     name: U8[]
 
-priv fn rule_targets(line: U8[]): U8[]? //<
-    //< If it is a rule line (`target: dependencies`), returns the target string
-    //< **Leave out a `:=` and a target-specific variable** (the same reason as `rule_deps`).
-    //< Caution: **Do not count `.PHONY` itself as a target**, or everything "has a rule".
-    colon: = line.find_char(':').unwrap_or(0)
-    if colon == 0 // no `:`, or nothing before it
-        return .none
-    head: = line.sub(0, colon).trim_spaces()
-    if head.find_char('=').is_some() || head.find_char('#').is_some() || head.starts_with(".")
-        return .none
-    if line.sub_from(colon + 1).starts_with("=")
-        return .none
-    return .some(head)
-
 priv struct Doc //<
     //< The explanation taken from one line of `make help`, and where that line is
     //< The line has the form `## <group>|<target>|<explanation>`.
@@ -347,25 +309,11 @@ priv struct Names //< the names gathered from every file
     have: List<|U8[]|>
     docs: List<|Doc|>
 
-priv fn read_help_line(rest: U8[], path: U8[], start: Sz, arena: Arena$@): Doc? //<
-    //< The Doc that the `## ` line at path, line start + 1, gives; none without both bars
-    bar: = rest.find_char('|').unwrap_or(0)
-    if bar == 0 // no bar, or no group before it
-        return .none
-    tail: = rest.sub_from(bar + 1)
-    bar2: = tail.find_char('|').unwrap_or(0)
-    if bar2 == 0 // no second bar, or no target before it
-        return .none
-    return .some(Doc::{ .where = arena.text().s(path).s(":\{start + 1\}").take(),
-        .group = rest.sub(0, bar).trim_spaces(),
-        .spec = tail.sub(0, bar2).trim_spaces() })
-
-priv fn push_phony(list: U8[], path: U8[], start: Sz, said: List<|Said|>$@, arena: Arena$@) //<
+priv fn push_phony(list: U8[], where: U8[], said: List<|Said|>$@, arena: Arena$@) //<
     //< Adds each bare name a `.PHONY:` line lists, with where the line is
     for w in harness_text.words(list, arena)
         if plain_name(w)
-            said
-                .push(Said::{ .where = arena.text().s(path).s(":\{start + 1\}").take(), .name = w })
+            said.push(Said::{ .where = where, .name = w })
 
 priv fn scan_names(arena: Arena$@): Names //<
     //< Collects `.PHONY`'s bare names, the rules' targets and the `##` lines from every file
@@ -376,27 +324,25 @@ priv fn scan_names(arena: Arena$@): Names //<
         text: = harness.read_under_root(path)
         if text.len == 0
             continue
-        $lines: = text.lines(arena)
-        $i: Sz = 0
-        for i < lines.len
-            start: = i
-            one: = join_continued(lines@, i, arena)
-            i = one.next
-            if is_recipe(one.text)
+        for one in make_db.joined_lines(text, arena)
+            if one.recipe
                 continue
             body: = one.text.trim_spaces()
+            where: = arena.text().s(path).s(":\{one.first\}").take()
             if body.starts_with("## ")
-                if doc: = read_help_line(body.sub_from(3), path, start, arena)
-                    docs.push(doc)
+                if h: = make_db.help_of(body, 0, one.first, arena)
+                    docs.push(Doc::{ .where = where, .group = h.group, .spec = h.spec })
                 continue
             if body.starts_with("#")
                 continue
             if body.starts_with(".PHONY:")
-                push_phony(body.sub_from(7), path, start, said@, arena)
+                push_phony(body.sub_from(7), where, said@, arena)
                 continue
-            if got: = rule_targets(one.text)
-                for w in harness_text.words(got, arena)
-                    have.push(w)
+            // Caution: **Do not count `.PHONY` itself as a target**, or everything "has a rule".
+            if rule: = rule_in(one)
+                if !rule.targets.trim_spaces().starts_with(".")
+                    for w in harness_text.words(rule.targets, arena)
+                        have.push(w)
     return Names::{ .said = said, .have = have, .docs = docs }
 
 priv fn check_phony_rules(names: Names@, arena: Arena$@) //<
@@ -570,25 +516,6 @@ priv fn call_name(call: U8[]): U8[] //< the function a call names, `call` openin
         end += 1
     return rest.sub(0, end).trim_spaces()
 
-priv fn assigned_name(line: U8[]): U8[] //<
-    //< The variable a line sets (`=`, `:=`, `::=`, `?=`, `+=`), empty where it sets none
-    //< **A rule's line sets none**, including a target's own variable (`install: export V := x`):
-    //< left of its operator it holds more than one name.
-    eq: = line.find_char('=').unwrap_or(0)
-    if eq == 0 // no `=`, or nothing before it
-        return ""
-    $head: = line.sub(0, eq).trim_end()
-    for op in U8[][]::{ "::", ":", "?", "+" }
-        if head.ends_with(op)
-            head = head.sub(0, head.len - op.len).trim_end()
-            break
-    for w in U8[][]::{ "export ", "override " }
-        head = head.strip_prefix(w)
-    if head.len == 0 || head.find_char(' ').is_some() || head.find_char('\t').is_some() ||
-        head.find_char(':').is_some() || head.find_char('$').is_some()
-        return ""
-    return head
-
 priv fn define_name(line: U8[]): U8[] //< the name a `define` line opens, its operator dropped
     name: = line.sub_from(7).trim_spaces()
     for op in U8[][]::{ "::=", ":=", "?=", "+=", "=" }
@@ -603,25 +530,25 @@ priv fn scan_fns(paths: List<|U8[]|>@, arena: Arena$@): List<|Fn_read|> //<
         text: = harness.read_under_root(path)
         if text.len == 0
             continue
-        $lines: = text.lines(arena)
-        $i: Sz = 0
-        for i < lines.len
-            line: = lines.get(i)
-            if line.starts_with("define ")
-                name: = define_name(line)
-                body: = arena.text()
-                i += 1
-                for i < lines.len && !lines.get(i).starts_with("endef")
-                    body.s(lines.get(i)).c('\n')
-                    i += 1
-                out.push(Fn_read::{ .name = name, .reads = highest_read(body.take()) })
-                i += 1
+        $define: U8[] = "" // the `define` open, or empty
+        $body: = arena.text()
+        for one in make_db.joined_lines(text, arena)
+            if define.len > 0
+                if one.text.starts_with("endef")
+                    out
+                        .push(Fn_read::{ .name = define,
+                        .reads = highest_read(body.take()) })
+                    define = ""
+                else
+                    body.s(one.text).c('\n')
                 continue
-            one: = join_continued(lines@, i, arena)
-            i = one.next
-            if is_recipe(one.text) || one.text.trim_start().starts_with("#")
+            if one.text.starts_with("define ")
+                define = define_name(one.text)
+                body = arena.text()
                 continue
-            name: = assigned_name(one.text)
+            if one.recipe || one.text.trim_start().starts_with("#")
+                continue
+            name: = make_db.assigned_name(one.text)
             if name.len > 0
                 out.push(Fn_read::{ .name = name, .reads = highest_read(one.text) })
     return out
@@ -648,12 +575,7 @@ priv fn check_run(paths: List<|U8[]|>@, finds: Call_finds$@, arena: Arena$@): Sz
         text: = harness.read_under_root(path)
         if text.len == 0
             continue
-        $lines: = text.lines(arena)
-        $i: Sz = 0
-        for i < lines.len
-            start: = i
-            one: = join_continued(lines@, i, arena)
-            i = one.next
+        for one in make_db.joined_lines(text, arena)
             if one.text.trim_start().starts_with("#") ||
                 is_shell_comment(recipe_body(one.text))
                 continue
@@ -670,7 +592,7 @@ priv fn check_run(paths: List<|U8[]|>@, finds: Call_finds$@, arena: Arena$@): Sz
                         continue
                     seen += 1
                     reads: = reads_of(fns@, name)
-                    where: = arena.text().s(path).s(":\{start + 1\}: ").s(name).take()
+                    where: = arena.text().s(path).s(":\{one.first\}: ").s(name).take()
                     if reads < 0
                         finds.nowhere.push(where)
                         continue
@@ -779,6 +701,8 @@ fn main(): I32
     for path in recipe_files(arena)
         report_hits(path, scan_first_dep(path, arena), "'s `$<` points at what does not move",
             "name the file to be read. `$<` may be used only in a rule with one dependency", arena)
+    // **A library left out of the range passes every rule above unseen** (`check_range`).
+    check_range(arena)
     // **A `.PHONY` with no rule, and a target with no explanation, pass without failing** (the
     // section "That a name listed in `.PHONY` has a rule" above, and `check_help_docs`).
     names: = scan_names(arena)

@@ -134,25 +134,21 @@ function ksmdChart(ks) {
     return el;
   }
 
-  let panel = null;
-  function close() {
-    if (panel) panel.remove();
-    panel = null;
-  }
-
   // The panel that sets a chart's kind, labels, columns or rows, and title.
   function ask(block) {
-    close();
     const el = ks.view.blocks()[block];
     const b = el.chart;
     if (b.u === undefined) {
       ks.say(`This chart cannot be edited: ${b.why}`);
       return;
     }
-    panel = document.createElement("div");
-    panel.className = "chart-panel";
-    panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "Chart");
+    const panel = ks.panel("chart-panel", "Chart", () => {
+      const v = Array.from(columns.querySelectorAll("input:checked"), (x) => Number(x.value));
+      const rows = by.value === "rows";
+      ks.act("ksmd_web_set_chart", block, ks.put(JSON.stringify({ t: b.u, k: kind.value,
+        l: Number(labels.value), v, title: title.value.trim(), r: rows ? 1 : 0,
+        f: Number(ends[0].value), e: Number(ends[1].value) })));
+    });
     const kind = document.createElement("select");
     kind.className = "chart-kind";
     kind.add(new Option("Bars", "bar"));
@@ -213,30 +209,11 @@ function ksmdChart(ks) {
     title.type = "text";
     title.placeholder = "Title";
     title.value = b.title;
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.className = "chart-apply";
-    apply.textContent = "Apply";
-    apply.addEventListener("click", () => {
-      const v = Array.from(columns.querySelectorAll("input:checked"), (x) => Number(x.value));
-      close();
-      const rows = by.value === "rows";
-      ks.act("ksmd_web_set_chart", block, ks.put(JSON.stringify({ t: b.u, k: kind.value,
-        l: Number(labels.value), v, title: title.value.trim(), r: rows ? 1 : 0,
-        f: Number(ends[0].value), e: Number(ends[1].value) })));
-    });
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", close);
-    panel.append(kind, " ", by, " labelled by ", labels, span, " showing ", columns, title, apply, cancel);
-    panel.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") close();
-    });
-    document.body.appendChild(panel);
+    panel.el.append(kind, " ", by, " labelled by ", labels, span, " showing ", columns, title);
+    panel.show();
     const at = el.getBoundingClientRect();
-    panel.style.left = `${Math.max(4, at.left + window.scrollX)}px`;
-    panel.style.top = `${at.top + window.scrollY}px`;
+    panel.el.style.left = `${Math.max(4, at.left + window.scrollX)}px`;
+    panel.el.style.top = `${at.top + window.scrollY}px`;
     kind.focus();
   }
 
@@ -250,9 +227,6 @@ function ksmdChart(ks) {
     ks.table.take();
     const block = ks.view.blocks().indexOf(b.closest(".b"));
     ask(block);
-  }, true);
-  document.addEventListener("mousedown", (e) => {
-    if (panel && !panel.contains(e.target)) close();
   }, true);
 
   ks.chart = { render };

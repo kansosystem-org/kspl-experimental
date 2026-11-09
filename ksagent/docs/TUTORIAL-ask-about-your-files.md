@@ -101,6 +101,7 @@ The buttons on the page, and the files a conversation keeps in the folder, are i
 | `llama-server stopped before it was ready` | Read the last lines it shows. The line `the model does not fit in memory` asks you to close programs that use the graphics card |
 | `llama-server stopped before it was ready`, and its last line is `error: invalid argument: on` | Your llama.cpp is older than build b6325. In PowerShell, run `winget upgrade llama.cpp`, then run `make chat` again |
 | `llama-server was not ready after 600 seconds` | Read the last lines it shows, then run `make chat` again |
+| `the model server at … asks for an API key that this command does not hold` | Another program started that model server with a key. Stop it, or set `KSAGENT_API_KEY` to its key, then run `make chat` again |
 | `the model server at … is not started here, … so MODEL=… would change nothing` | Stop that model server, or leave out `MODEL=` |
 | `another ksagent watch answers in … already` | Another `make chat` runs on that folder. Use its page, or stop it with Ctrl+C in its terminal |
 | An answer on the page says `the model server … does not answer` | The model server stopped. Press Ctrl+C, run `make chat` again, then press Ask again |

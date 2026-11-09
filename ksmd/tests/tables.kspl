@@ -7,7 +7,7 @@ import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_tables" { Table_edit }
 import "ksmd/edit/history" { capture }
 import "ksmd/edit/region" { gap_spot, text_spot }
-import "ksmd/tests/support" { opened, saves, written }
+import "ksmd/tests/support" { changed, opened, saves, written }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -27,6 +27,7 @@ fn run()
     widths()
     sorting()
     looks()
+    across()
     auto_entry()
     pasting()
     pasting_whole()
@@ -154,14 +155,14 @@ priv fn many_lines() //< a row or column edit acts on every line chosen, as one 
         "%ksmd 1\n\n:::table name=\"t\"\n| \"c\" |\n| =sum(#REF!) |\n| |\n| |\n| |\n:::\n")
     ed.undo()
     $why: U8[] = ""
-    ed.edit_table(0, .remove_column, 0, 3) catch e
+    ed.edit_table(0, .remove_column, 0, 3, Sz[]::{}) catch e
         why = e.message()
     verdict.check("removing every column is refused",
         why.find_str("at least one column").is_some(), why)
     saves("and changes nothing", ed@, arena, before)
 
 priv fn edited(ed: Editor$@, what: Table_edit, at: Sz, count: Sz)
-    ed.edit_table(0, what, at, count) catch e
+    ed.edit_table(0, what, at, count, Sz[]::{}) catch e
         verdict.check("an edit of several lines", false, e.message())
 
 priv fn removing()
@@ -312,7 +313,7 @@ priv fn attempt(ed: Editor$@, action: Wrong): Bool!Refused
     case .empty
         ed.set_cell(0, 0, 1, "=")!
     case .row
-        ed.edit_table(0, .remove_row, 5, 1)!
+        ed.edit_table(0, .remove_row, 5, 1, Sz[]::{})!
     case .taken
         ed.rename_table(0, "b")!
     case .bad_name
@@ -430,6 +431,20 @@ priv fn looks()
     ed.set_look(0, 0, 0, 0, 0, .wrap, "yes") catch
         refused_wrap = true
     verdict.check("wrap other than on is refused", refused_wrap, "")
+
+priv fn across() //< Centre across columns: one step over the chosen range, a look alone
+    defer arena: = Arena(64 * 1024)
+    before: =
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 2129920 | | =A1 |\n:::\n"
+    $ed: = opened(before, arena)
+    ed.set_look(0, 0, 0, 0, 1, .align, "across") catch e
+        verdict.check("centring across columns", false, e.message())
+    saves("Centre across columns sets across on every chosen cell, the value staying in its own",
+        ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 2129920 {align=\"across\"} | \
+            {align=\"across\"} | =A1 |\n:::\n")
+    ed.undo()
+    saves("one undo takes across off every cell it was set on", ed@, arena, before)
 
 priv fn one(cell: U8[], a: Arena$@): U8[] //< a source holding a table with one data cell
     return a.text().s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n").s(cell).s("\n:::\n").take()
@@ -657,6 +672,23 @@ priv fn leaving_rows() //< a clear and a fill leave alone the rows they are told
         nothing = true
     verdict.check("a fill whose cells to copy are all left out is refused", nothing, "")
     saves("and changes nothing", ed@, arena, before)
+    four: =
+        join3(head, "| 1 | \"x\" |\n| 2 | \"y\" |\n| 3 | \"z\" |\n| 4 | =A2 |\n", ":::\n", arena)
+    $formula: = opened(four, arena)
+    formula.edit_table(0, .remove_row, 0, 3, Sz[]::{ 1 }) catch e
+        verdict.check("a removal of rows", false, e.message())
+    saves("a removal of rows leaves the rows left out, and their references", formula@, arena,
+        join3(head, "| 2 | \"y\" |\n| 4 | =A1 |\n", ":::\n", arena))
+    formula.undo()
+    saves("and one undo brings every row back", formula@, arena, four)
+    $none: = false
+    formula.edit_table(0, .remove_row, 1, 1, Sz[]::{ 1 }) catch
+        none = true
+    verdict.check("a removal whose rows are all left out is refused", none, "")
+    $columns: = false
+    formula.edit_table(0, .remove_column, 0, 1, Sz[]::{ 1 }) catch
+        columns = true
+    verdict.check("rows left out are refused for a column edit", columns, "")
 
 priv fn goes_on(what: U8[], first: U8[], given: Sz, expected: U8[]) //<
     //< A column of four rows whose `given` first cells are `first`, filled down by the handle
@@ -721,10 +753,6 @@ priv fn inserted(ed: Editor$@, columns: Sz, rows: Sz)
 priv fn set(ed: Editor$@, block: Sz, row: Sz, column: Sz, text: U8[])
     ed.set_cell(block, row, column, text) catch e
         verdict.check(text, false, e.message())
-
-priv fn changed(ed: Editor$@, block: Sz, what: Table_edit, at: Sz)
-    ed.edit_table(block, what, at, 1) catch e
-        verdict.check("a row or column edit", false, e.message())
 
 priv fn shown(ed: Editor@, row: Sz, column: Sz, want: U8[], what: U8[], arena: Arena$@) //<
     //< What a cell of table 0 shows to edit, which sets the same value again

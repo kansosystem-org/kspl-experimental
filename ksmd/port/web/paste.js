@@ -237,6 +237,8 @@ function ksmdPaste(ks) {
   }, true);
 
   ks.pasting = { copy, paste,
+    // Whether the paste under way puts the values alone.
+    values: () => values,
     // Runs `f`, a paste the page starts itself, so that it puts the values alone.
     asValues: (f) => {
       values = true;

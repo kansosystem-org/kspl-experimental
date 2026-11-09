@@ -35,6 +35,7 @@ fn run()
     refusals()
     cells()
     whole_columns()
+    settings_follow()
     cell_refusals()
 
 priv fn rows()
@@ -173,6 +174,36 @@ priv fn whole_columns() //< a block of every data row moves a whole column's ref
     saves("a block of some rows leaves whole columns alone", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | | 1 | =sum(t.A) \
             |\n| 2 | | 6 | =sum(t.C) |\n:::\n")
+
+priv const SETTINGS: U8[] =
+    "%ksmd 1\n\n:::table name=\"t\" char_widths=\"2,,4\" formats=\"number:2,,\" choices=\"x|y,,\" \
+        color_rows=\"A\" rules=\"scale;from:#ffffff to:#ffef9c,,\" merge=\"A\" filter=\"is:x,,\"\n| \
+        \"a\" | \"b\" | \"c\" |\n| \"x\" | 1 | |\n| \"y\" | 2 | |\n| \"x\" | 3 | |\n:::\n"
+
+priv fn settings_follow() //< whole lines moved as cells take their settings, as in Excel
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(SETTINGS, arena)
+    shifted(ed@, -1, 0, 4, 1, -1, 2)
+    saves("a whole column cut by its letter and pasted on another takes its settings, and the \
+        column left behind keeps none", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\",,2\" formats=\",,number:2\" \
+            choices=\",,x|y\" color_rows=\"C\" rules=\",,scale;from:#ffffff to:#ffef9c\" \
+            merge=\"C\" filter=\",,is:x\"\n| \"\" | \"b\" | \"a\" |\n| | 1 | \"x\" |\n| | 2 | \"y\" \
+            |\n| | 3 | \"x\" |\n:::\n")
+    ed.undo()
+    saves("one undo puts them back", ed@, arena, SETTINGS)
+    shifted(ed@, 0, 0, 3, 1, 0, 2)
+    saves("every data row without the name leaves the settings where they are", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"2,,4\" formats=\"number:2,,\" \
+            choices=\"x|y,,\" color_rows=\"A\" rules=\"scale;from:#ffffff to:#ffef9c,,\" \
+            merge=\"A\" filter=\"is:x,,\"\n| \"a\" | \"b\" | \"c\" |\n| | 1 | \"x\" |\n| | 2 | \
+            \"y\" |\n| | 3 | \"x\" |\n:::\n")
+    $rows: = opened(ROWS, arena)
+    shifted(rows@, 0, 0, 1, 2, 3, 0)
+    saves("a whole row pasted on another takes its height, and the row left behind keeps none",
+        rows@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" heights=\",,30,10,\"\n| \"n\" | \"f\" |\n| | |\n| 2 | \
+            =sum(A1:A2) |\n| 3 | =A3*2 |\n| 1 | =A4 |\n| 5 | |\n:::\n")
 
 priv fn cell_refusals()
     defer arena: = Arena(256 * 1024)

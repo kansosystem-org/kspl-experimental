@@ -2,11 +2,11 @@
 //< Each shown text is worked out by hand from the number's decimal digits.
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
-import "ksmd/edit/editor_tables" { Table_edit }
+import "ksmd/edit/editor_tables" // `cell_text`, `set_format`, `step_places` and the other table edits
 import "ksmd/model/format" { Number_format, currency_of, format_of, round_places, show,
     shows_numbers }
 import "ksmd/syntax/reader"
-import "ksmd/tests/support" { opened, saves }
+import "ksmd/tests/support" { changed, opened, saves }
 import "std/chars"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -132,8 +132,8 @@ priv fn refusals()
     refused(":::table name=\"t\" formats=\",\"", "leave out formats when no column has one", 19)
     refused(":::table name=\"t\" formats=2", "this attribute takes a quoted string", 19)
     refused(":::table name=\"t\" format=\"number:2,\"",
-        "':::table' takes only name, caption, char_widths, widths, heights, formats, choices, \
-            color_rows, rules, groups, merge, filter and invisible", 19)
+        "':::table' takes only name, caption, char_widths, heights, formats, choices, color_rows, \
+            rules, groups, merge, filter and invisible", 19)
 
 priv fn editing()
     defer arena: = Arena(64 * 1024)
@@ -155,11 +155,11 @@ priv fn editing()
     ed.undo()
     saves("undo takes each step back", ed@, arena, plain)
     ed.redo()
-    changed(ed@, .insert_column, 1)
+    changed(ed@, 0, .insert_column, 1)
     saves("a new column has no format", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\" formats=\"grouped:2,,grouped:2\"\n| \"a\" | \"\" | \"b\" \
             |\n| 1234.5 | | =A1*2 |\n:::\n")
-    changed(ed@, .remove_column, 0)
+    changed(ed@, 0, .remove_column, 0)
     saves("a removed column's format goes with it", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\" formats=\",grouped:2\"\n| \"\" | \"b\" |\n| | =#REF!*2 \
             |\n:::\n")
@@ -210,10 +210,6 @@ priv fn refused(line: U8[], message: U8[], column: Sz) //<
 priv fn formatted(ed: Editor$@, first: Sz, last: Sz, format: U8[]) //< sets columns' format
     ed.set_format(0, first, last, fmt(format)) catch e
         verdict.check("setting a format", false, e.message())
-
-priv fn changed(ed: Editor$@, what: Table_edit, at: Sz)
-    ed.edit_table(0, what, at, 1) catch e
-        verdict.check("a column edit", false, e.message())
 
 priv fn wrong(ed: Editor$@, what: U8[], says: U8[]) //< more places is refused, with this message
     ed.step_places(0, 0, 1, true) catch e

@@ -47,60 +47,9 @@ The page starts with an empty document. To open a source, run `ksmd.load(text)` 
 
 ## Write your own functions
 
-A document can call functions you write in KSPL, as it calls `sum`. They need the local server, so open the document through the launcher or a server started with `--builder` and `--allowed` ("Your own functions" in the [design](docs/DESIGN-ksmd.md#your-own-functions)).
+A document can call functions you write in KSPL, as it calls `sum`. They need the local server, so open the document through the launcher or a server started with `--builder` and `--allowed`. Nothing of a functions file is built or run until you allow that exact file.
 
-**Nothing of a functions file is built or run until you allow that exact file.** A bar at the top of the page names the file, with Allow and Not now. The answer is kept for the file's present content, so a file that someone changes asks again.
-
-1. Open the document, and put the caret where the clause goes.
-2. Choose Insert ▸ Functions file…, then pick a `.kspl` file in the workspace, or type a new name. A new file starts with one function, `twice`, to call and to copy.
-3. Choose Allow in the bar at the top, or in the clause's box.
-4. The clause's box lists the functions the file gives, such as "A formula can call: twice." A cell can then hold `=twice(A1)`.
-5. Edit the file in any text editor. When you come back to the page, it asks again, then builds the file again.
-
-Each `pub fn` in the file is a function a formula can call:
-
-```kspl
-//< My functions
-import "std/mem" { Arena }
-import "std/str"
-
-pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax; the rate is 10% when left out
-    return price * (1.0 + rate.unwrap_or(0.1))
-
-pub fn greet(name: U8[], arena: Arena$@): U8[] //< a greeting
-    return arena.text().s("hello, ").s(name).take()
-```
-
-The clause in the document's file reads `:::functions path="mine.kspl"`, then `:::` on the next line.
-
-**What a parameter takes from a formula:**
-
-| Parameter | Takes | Else the cell shows |
-| :-- | :-- | :-- |
-| `F64` | a number; an empty cell is 0 | `#VALUE!` |
-| `I64` | a whole number | `#NUM!` for a fraction, `#VALUE!` for text |
-| `Bool` | `true` or `false` | `#VALUE!` |
-| `U8[]` | text | `#VALUE!` |
-| `Value` | any value, as it is | nothing |
-| `Value[]`, last | every argument left; a range gives its cells | nothing |
-| `T?`, last | as `T`, or none where the formula leaves it out | as `T` |
-| `Arena$@` | no argument: the memory a text result goes in | nothing |
-
-A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc_error` (`!Calc_error`), which the cell shows as its mark. `Value` and `Calc_error` come from `import "ksmd/calc/value"`.
-
-**What you may see:**
-
-* **The box shows the compiler's message** where the file does not build. Fix the file and save it; the page builds it again when you come back to it.
-* **`…`** in a cell: its answer has not come yet.
-* **`#BLOCKED!`** in a cell: it may call the document's own functions, which you have not allowed yet. Choose Allow in the bar or in the clause's box.
-* **A small blue corner at a cell's top left**: its formula calls the document's own functions. When you choose the cell, the status bar names them and their file.
-* **Stop allowing** in the clause's box takes the allow back. The cells show `#BLOCKED!` again, and nothing of the file runs until you allow it again.
-* **`#TIME!`**: the call ran past 2 seconds. **`#STOPPED!`**: it panicked.
-* **`#SYNTAX!`**: too many or too few arguments, as for ksmd's own functions.
-* **A name ksmd already has, such as `sum`, is refused**, and the box says so.
-* **A file may import only `std` and ksmd's files.** A path that climbs out of its folder, or names another package, fails the build.
-
-**What your functions cannot do**: change the document, read files or reach the network. They run in the browser, apart from the page.
+"Your own functions" in [`ksmd/docs/SPEC-editing-page.md`](docs/SPEC-editing-page.md#your-own-functions) gives the steps, what a parameter takes, and what a cell shows. The design and its reasons are "Your own functions" in [`ksmd/docs/DESIGN-ksmd.md`](docs/DESIGN-ksmd.md#your-own-functions).
 
 ## Test the model, the editor and the page
 

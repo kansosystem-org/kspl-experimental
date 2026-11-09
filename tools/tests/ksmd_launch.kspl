@@ -2,7 +2,8 @@
 //< Usage: `ksmd_launch <launcher> <kssrv> <builder> <work folder>` (`make test-ksmd-open`). It
 //< copies the three programs into the work folder with a stand-in page beside them, and opens with
 //< `--show`, so no browser starts. It checks the workspace served, its port, the document's URL,
-//< the reuse of a running server, a taken port, two documents opened at once and the refusals.
+//< the reuse of a running server, a taken port, two documents opened at once, the refusals and a
+//< note of servers it cannot read.
 //< **Every server it started is stopped at the end** (`--stop-all`), whatever the checks found.
 import "std/chars"
 import "std/ds" { List }
@@ -353,6 +354,28 @@ priv fn check_together(launcher: U8[], pair: U8[][2], work: U8[], arena: Arena$@
                 serves(status, pair[k], arena), status)
     return runs
 
+priv fn check_unreadable_note(launcher: U8[], work: U8[], arena: Arena$@) //<
+    //< A note that stands but cannot be read fails `--list`, and is not taken for an empty one
+    //< A folder stands in the note's place: it exists and cannot be read, even by root. The note is
+    //< put back after, so `--stop-all` still finds every server.
+    note: = fs.join(fs.join(fs.join(work, "bin", arena), "tmp", arena), "ksmd.state", arena)
+    aside: = arena.text().s(note).s(".aside").take()
+    fs.rename_path(note, aside) catch
+        verdict.check("the note can be moved aside", false, note)
+        return
+    fs.mkdir(note) catch
+        verdict.check("a folder can stand in the note's place", false, note)
+    listed: =
+        subproc.run_capture(U8[][]::{ launcher, "--list" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
+        catch panic("the launcher must start")
+    fs.remove_path(note) catch
+        verdict.check("the folder in the note's place can be removed", false, note)
+    fs.rename_path(aside, note) catch
+        verdict.check("the note can be put back", false, aside)
+    verdict.check("--list fails on a note it cannot read, and says so",
+        listed.exited_with(1) &&
+        listed.text(arena).find_str("cannot read the note").is_some(), listed.text(arena))
+
 fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
     verdict.begin("ksmd_open")
     args: = sys.args()
@@ -380,6 +403,16 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
     check_port("the folder --workspace names is served on its own port", wide@, want, arena)
     verdict.check("the document opens by its path from that folder",
         wide.url.find_str("/?doc=ws/top.ksmd#t=").is_some(), wide.url)
+    // **That folder holds the server and its record of allowed files**, which a page could then
+    // write: the server gets no builder, and the run says why. kssrv would refuse the record.
+    $wide_allow: I32 = 0
+    if got: = ask(wide.url, "/api/allow?path=ws/top.ksmd", arena)
+        wide_allow = got.status
+    verdict.check("a folder holding the record gets no builder, and the run says why",
+        wide_allow == 404 &&
+        output(wide@, arena).find_str("do not build in").is_some(),
+        arena.text().s("/api/allow: \{wide_allow\}; the run put out: ").s(output(wide@, arena))
+        .take())
     pair: = same_port_pair(work, arena)
     $together: = check_together(launcher, pair, work, arena)
     refused(launcher, U8[][]::{ fs.join(ws, "notes.txt", arena) }, "ends in .ksmd", arena)
@@ -400,6 +433,7 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
                 found || line.ends_with(arena.text().s(" ").s(folder).take())
         verdict.check(arena.text().s("--list names the server for ").s(folder).take(), found,
             listed.text(arena))
+    check_unreadable_note(launcher, work, arena)
     stopped: =
         subproc.run_capture(U8[][]::{ launcher, "--stop-all" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
         catch panic("the launcher must start")

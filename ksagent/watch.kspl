@@ -118,7 +118,9 @@ fn look(job: agent.Ask, seen: List<|Seen|>$@, keep: Arena$@) //<
         return
     for path in found
         name: = sys.get_file_name(path)
-        if !files.is_ask(name) || files.is_hidden(name) || fs.is_link(path)
+        // Caution: **Read only a regular file.** A FIFO's read waits for a writer that never
+        // comes, and the whole watch would stop.
+        if !files.is_ask(name) || files.is_hidden(name) || fs.is_link(path) || !is_regular(path)
             continue
         ask: = stamp_of(path).unwrap_or(UNSEEN)
         chat_file: = stamp_of(files.chat_path(path, arena)).unwrap_or(UNSEEN)
@@ -139,6 +141,11 @@ impl Stamp
     fn same(r: Self, other: Stamp): Bool //< whether two stamps tell the same file
         return r.size == other.size && r.mtime == other.mtime
 
+priv fn is_regular(path: U8[]): Bool //< whether a regular file stands there, not a FIFO or device
+    info: = fs.stat(path) catch
+        return false
+    return info.kind == .file
+
 priv fn index_of(seen: List<|Seen|>@, path: U8[]): Sz //< where `path` stands, or the list's length
     for i in Range.asc(seen.len)
         if seen.get(i).path.equals(path)
@@ -152,32 +159,44 @@ priv fn stamp_of(path: U8[]): Stamp? //< the file's size and change time, or non
 
 fn answer_pending(job: agent.Ask, ask_path: U8[], arena: Arena$@): Bool //<
     //< Answers each question in one ask file that has no answer yet, first to last; false where
-    //< some can still wait, past `MAX_ANSWERS_PER_LOOK`
+    //< some can still wait, past `MAX_ANSWERS_PER_LOOK`, or the ask file cannot be read now
     //< A line of the ask file that cannot be read is named once a look, and passed over. **Each
     //< question works in memory of its own**, so the files and requests of one do not add up.
     chat_path: = files.chat_path(ask_path, arena)
     for n in Range.asc(MAX_ANSWERS_PER_LOOK)
         defer turn: = Arena(256 * 1024)
-        if !answer_next(job, ask_path, chat_path, n == 0, turn)
+        next: = answer_next(job, ask_path, chat_path, n == 0, turn)
+        if next == .done
             return true
+        if next == .later
+            return false
     return false
 
+priv enum Next //< what one try at an ask file came to
+    answered //< a question was answered and recorded
+    done //< nothing more is answered until the ask file or the chat file changes
+    later //< the ask file cannot be read; the next look tries it again
+
 priv fn answer_next(job: agent.Ask, ask_path: U8[], chat_path: U8[], first: Bool, arena: Arena$@):
-    Bool //<
-        //< Answers the first pending question of an ask file; false where none was recorded
+    Next //<
+        //< Answers the first pending question of an ask file
     if files.ask_too_large(ask_path)
         why: = arena.text().s(ask_path)
             .s(" is larger than 1 MiB, so its questions are not answered. Start a new conversation")
             .take()
         say(job, why)
         progress.refused(files.live_path(ask_path, arena), why, arena)
-        return false
+        return .done
+    // Caution: **An ask file that cannot be read is not done**: its stamp does not change, so a
+    // look that took it as done would never try its questions again.
     text: = io.read_file(ask_path, arena) catch
-        return false
+        say(job,
+            arena.text().s("cannot read \{ask_path\}; it is tried again at the next look").take())
+        return .later
     problem: = files.text_problem(text)
     if problem.len > 0
         say(job, arena.text().s(ask_path).s(": ").s(problem).take())
-        return false
+        return .done
     asks: = chat.read_asks(text, arena)
     if first
         for i in Range.asc(asks.refused.len)
@@ -185,10 +204,10 @@ priv fn answer_next(job: agent.Ask, ask_path: U8[], chat_path: U8[], first: Bool
                 arena.text().s(ask_path).s(", ").s(asks.refused.get(i))
                 .s("; that line is passed over").take())
     recorded: = read_recorded(job, chat_path, arena) catch
-        return false
+        return .done
     p: = chat.find_pending(asks@, recorded@, arena) catch
-        return false
-    return answer_one(job, ask_path, p, arena)
+        return .done
+    return .answered if answer_one(job, ask_path, p, arena) else .done
 
 priv fn read_recorded(job: agent.Ask, chat_path: U8[], arena: Arena$@): chat.Recorded? //<
     //< What the chat file records, or none where it cannot be read, said on the console
@@ -208,6 +227,9 @@ priv fn recorded_text(chat_path: U8[], arena: Arena$@): U8[]!U8[] //<
     //< The chat file's text: empty where none stands yet, or why it cannot be read
     if !fs.exists(chat_path)
         return ""
+    if !is_regular(chat_path)
+        throw arena.text()
+            .s("\{chat_path\} is not a regular file, so its conversation gets no answer").take()
     text: = io.read_file(chat_path, arena) catch
         throw arena.text().s("cannot read \{chat_path\}").take()
     why: = files.text_problem(text)

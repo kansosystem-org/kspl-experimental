@@ -11,6 +11,7 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
+import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
@@ -59,6 +60,16 @@ fn test_a_repaired_chat_file_is_answered_at_the_next_look(work: U8[], arena: Are
         before == 0 && s.bodies.len == 1 && answers_in(after) == 1, after)
     stub.release(s)
 
+fn test_an_ask_file_that_cannot_be_read_is_tried_again(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an ask file that cannot be read is tried again at the next look")
+    root: = stub.folder(work, "unreadable", arena)
+    // **A folder stands in for a file that cannot be read**: the tests run as root, which reads
+    // a file of any mode.
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    fs.mkdir_all(ask) catch panic("a folder can stand at the ask file's path")
+    verdict.check("its questions are still pending, so its stamp is not kept",
+        !watch.answer_pending(agent_test.job_at(1, root, arena), ask, arena), "")
+
 fn test_questions_past_one_look_are_answered_at_the_next(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] questions past what one look answers wait only for the next look")
     root: = stub.folder(work, "many", arena)
@@ -77,6 +88,35 @@ fn test_questions_past_one_look_are_answered_at_the_next(work: U8[], arena: Aren
     verdict.check("all 21 are answered in two looks, though the ask file did not change",
         answers_in(after) == 21,
         arena.text().s("\{answers_in(after)\} answered").take())
+    stub.release(s)
+
+priv fn make_fifo(at: U8[], arena: Arena$@): Bool //< a FIFO at `at`; false where none can be made
+    //< Windows has no `mkfifo`, so the test becomes a `skip` there.
+    r: =
+        subproc.run_capture(U8[][]::{ "mkfifo", at }, "", 10000, 4096, arena) catch
+        return false
+    return r.exited_with(0) && fs.exists(at)
+
+fn test_a_fifo_is_passed_over_not_read(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an ask or chat file that is a FIFO is passed over, not read")
+    // **A FIFO's read waits for a writer that never comes**, so a watch that read one would hang
+    // here, and the suite with it.
+    root: = stub.folder(work, "fifo", arena)
+    ask_pipe: = fs.join(root, "pipe.ask.jsonl", arena)
+    ask: = fs.join(root, "talk.ask.jsonl", arena)
+    if !make_fifo(ask_pipe, arena) || !make_fifo(files.chat_path(ask, arena), arena)
+        verdict.skip("a FIFO cannot be made with `mkfifo` in this environment")
+        return
+    io.write_file(ask, asked(1, arena)) catch panic("the ask file can be written")
+    $replies: = not_found(1, arena)
+    s: = stub.start(replies.slice(), arena)
+    job: = agent_test.job_at(s.port, root, arena)
+    defer keep: = Arena(64 * 1024)
+    $seen: = List<|watch.Seen|>(keep)
+    watch.look(job, seen@, keep)
+    stub.finish(s)
+    verdict.check("the look ends, and nothing is asked", s.bodies.len == 0,
+        arena.text().s("\{s.bodies.len\} asked").take())
     stub.release(s)
 
 fn test_a_turn_another_watch_recorded_is_not_written_again(work: U8[], arena: Arena$@)

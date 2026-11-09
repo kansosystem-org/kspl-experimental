@@ -842,7 +842,7 @@ A closure lists the outer variables it uses after a `;`, with their types. It ca
 
 A chain such as `xs.where(…).select(…)` from `std/seq` can replace a hand-written loop over a `List` in ordinary code. **A chain adds no allocation** ("Iteration" in [`DESIGN-principles.md`](DESIGN-principles.md)); only `to_list` allocates, and `order_by` / `distinct` stay eager.
 
-Keep hand-written loops in `ksplc`'s inner loops (tens of thousands of runs per compilation), and in `std/`, `lib/ksos/` and `lib/ksai/`. `lib/ksai/`, with `lib/ksai/examples/qwen_infer` and `lib/ksai/examples/llama_engine`, works per layer, token and element throughout.
+Keep hand-written loops in `ksplc`'s inner loops (tens of thousands of runs per compilation), and in `std/`, `lib/ksos/` and `lib/ksai/`. `lib/ksai/`, with `lib/ksai/examples/chat_server` and `lib/ksai/examples/llama_engine`, works per layer, token and element throughout.
 
 **Only a loop that filters, maps or counts a `List` is replaced.** A loop over a slice stays, since `std/seq` extends `List<|T|>`. So does one that uses the index itself, since `std/seq` has no variant passing a position.
 
@@ -1267,11 +1267,11 @@ extern fn on_ready(status: I32)                  // published: it has a body
 
 A function published with `extern` (callable from C) cannot use a type whose memory layout is KSPL's own (docs/SPEC-programming-language.md §11.1). An example is a slice, even one buried inside a struct.
 
-Caution: **Do not look at the outermost layer only.** `struct W { items: U8[] }` would slip past. A struct's fields are followed recursively.
+Caution: **Do not look at the outermost layer only.** `struct W { items: U8[] }` would slip past. A struct's fields are followed recursively. **A function type is followed too**: C calls a callback with C's layout, so its parameters and result meet the same rules. Each of them is passed by value.
 
 **Pointers are not followed.** A pointer is a pointer in C too. Following would fail nearly every published function, self-referential structs included. Cycles are cut by a visited set and a depth limit.
 
-**The LLVM backend is stricter still**: it cannot pass even a plain struct by value across the C boundary. It does not implement each target's C ABI classification (Win64, SysV x86-64 and AAPCS differ). The C backend passes it, since the C compiler classifies ([`ksplc/docs/DESIGN-backends.md`](../ksplc/docs/DESIGN-backends.md), "Passing an aggregate is an explicit internal ABI").
+**The LLVM backend is stricter still**: it cannot pass even a plain struct by value across the C boundary, a callback's parameter or result included. It does not implement each target's C ABI classification (Win64, SysV x86-64 and AAPCS differ). The C backend passes it, since the C compiler classifies ([`ksplc/docs/DESIGN-backends.md`](../ksplc/docs/DESIGN-backends.md), "Passing an aggregate is an explicit internal ABI").
 
 ### What cannot be written in C's types
 

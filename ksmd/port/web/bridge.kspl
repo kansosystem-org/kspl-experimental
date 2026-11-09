@@ -12,7 +12,7 @@ import "ksmd/edit/editor" { Input }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_blocks" // `insert_divider`, `insert_image`, `insert_functions`, `insert_include`
 import "ksmd/edit/editor_diagrams" // `insert_diagram`, `set_diagram`
-import "ksmd/edit/editor_drawings" // `set_drawings`
+import "ksmd/edit/editor_drawings" // `set_drawings`, `set_image_width`, `set_image_scale`
 import "ksmd/edit/editor_looks"
 import "ksmd/edit/editor_replace" { Cell_text, Span }
 import "ksmd/edit/editor_settings" // `set_settings`
@@ -24,8 +24,8 @@ import "ksmd/files/files" { Refusal, resolve_text }
 import "ksmd/files/image" { measure }
 import "ksmd/model/model" { Settings }
 import "ksmd/port/web/bridge_own" { own_functions } // a person's own functions, and their actions
-import "ksmd/port/web/bridge_session" { HEAP_BYTES, RESERVE, assembled, auto, begin, doc_path, ed,
-    ensure, fetched, files, full, here, loading, number, out, refused, release_input, result,
+import "ksmd/port/web/bridge_session" { HEAP_BYTES, RESERVE, assembled, auto, begin, doc_path, done,
+    ed, ensure, fetched, files, full, here, loading, number, out, release_input, result,
     result_with, session, text_in }
 import "ksmd/port/web/bridge_tables" as _tables // the table actions; this brings them into the wasm
 import "ksmd/port/web/moving"
@@ -228,24 +228,18 @@ extern fn ksmd_web_type(len: Sz, how: I32): Sz //<
     if !begin()
         return full()
     kind: Input = .typing if how == 0 else .paste if how == 1 else .composition
-    ed.type_text(text_in(len), kind) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.type_text(text_in(len), kind))
 
 extern fn ksmd_web_erase(backward: I32): Sz //< Backspace (1) or Delete (0)
     if !begin()
         return full()
-    ed.erase(backward != 0) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.erase(backward != 0))
 
 extern fn ksmd_web_enter(hard: I32): Sz //<
     //< Enter, or with `hard` a line break inside a paragraph
     if !begin()
         return full()
-    ed.enter(hard != 0) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.enter(hard != 0))
 
 extern fn ksmd_web_kind(kind: I32, level: Sz, ordered: I32): Sz //<
     //< Sets the selection's kind: 0 paragraph, 1 heading of `level`, 2 code, 3 list item, 4 quote
@@ -259,24 +253,18 @@ extern fn ksmd_web_kind(kind: I32, level: Sz, ordered: I32): Sz //<
     style.level = level if kind == 1 else 0
     style.ordered = ordered == 1
     style.check = .open if kind == 3 && ordered == 2 else .none
-    ed.set_kind(style) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_kind(style))
 
 extern fn ksmd_web_check(block: Sz, item: Sz): Sz //<
     //< ticks a checklist item's box, or takes the tick away
     if !begin()
         return full()
-    ed.toggle_check(block, item) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.toggle_check(block, item))
 
 extern fn ksmd_web_divider(): Sz //< a divider in place of the selection
     if !begin()
         return full()
-    ed.insert_divider() catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.insert_divider())
 
 extern fn ksmd_web_move_paths(from_len: Sz, to_len: Sz): Sz //<
     //< Writes the includes' and images' paths again for the document's new folder, as one step:
@@ -317,42 +305,32 @@ extern fn ksmd_web_insert_image(src_len: Sz, alt_len: Sz): Sz //<
     if !begin()
         return full()
     both: = text_in(src_len + alt_len)
-    ed.insert_image(both.sub(0, src_len), both.sub_from(src_len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.insert_image(both.sub(0, src_len), both.sub_from(src_len)))
 
 extern fn ksmd_web_image_width(block: Sz, width: Sz): Sz //<
     //< Gives an image its share of the text width in percent, 1 to 100, or 0 to fit it
     if !begin()
         return full()
-    ed.set_image_width(block, width) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_image_width(block, width))
+
+extern fn ksmd_web_image_scale(block: Sz, scale: Sz): Sz //<
+    //< Gives an image its size as a share of its own pixels in percent, 1 to 400, or 0 to fit it
+    if !begin()
+        return full()
+    return done(ed.set_image_scale(block, scale))
 
 extern fn ksmd_web_image_words(block: Sz, caption: I32, len: Sz): Sz //<
     //< Gives an image its caption (`caption` 1) or its alternate text (0); empty text takes it away
     if !begin()
         return full()
-    ed.set_image_words(block, caption != 0, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-extern fn ksmd_web_image_src(block: Sz, len: Sz): Sz //<
-    //< Points an image at another file, by its path from the document's folder
-    if !begin()
-        return full()
-    ed.set_image_src(block, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_image_words(block, caption != 0, text_in(len)))
 
 extern fn ksmd_web_drawings(block: Sz, len: Sz): Sz //<
     //< Gives an image or a chart the shapes drawn over it: their `draw` lines, as its clause's
     //< body holds them, are written in
     if !begin()
         return full()
-    ed.set_drawings(block, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_drawings(block, text_in(len)))
 
 extern fn ksmd_web_settings(len: Sz): Sz //<
     //< Gives the document its settings, written in as JSON: `{"paper":"A3","land":1,"header":text,
@@ -371,9 +349,7 @@ extern fn ksmd_web_settings(len: Sz): Sz //<
     if says: = fault_of(s)
         if !is_empty(s)
             return result(false, says)
-    ed.set_settings(s) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_settings(s))
 
 priv fn word_of(v: json.Value, name: U8[]): U8[] //< a text field of JSON written in, kept
     return ed.arena.dup_str(v.get(name).as_str().unwrap_or(""))
@@ -383,41 +359,31 @@ extern fn ksmd_web_insert_include(len: Sz): Sz //<
     //< document's folder is written in
     if !begin()
         return full()
-    ed.insert_include(text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.insert_include(text_in(len)))
 
 extern fn ksmd_web_insert_functions(len: Sz): Sz //<
     //< A `:::functions` clause in place of the selection: its file's path from the document's
     //< folder is written in
     if !begin()
         return full()
-    ed.insert_functions(text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.insert_functions(text_in(len)))
 
 extern fn ksmd_web_invisible(block: Sz, on: I32): Sz //<
     //< leaves a clause's block out of print, or not
     if !begin()
         return full()
-    ed.set_invisible(block, on != 0) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_invisible(block, on != 0))
 
 extern fn ksmd_web_indent(deeper: I32): Sz //< nests the selected list items one level in or out
     if !begin()
         return full()
-    ed.indent(deeper != 0) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.indent(deeper != 0))
 
 extern fn ksmd_web_text_color(len: Sz): Sz //<
     //< colours the selected text: `#rrggbb` written in, or empty
     if !begin()
         return full()
-    ed.set_text_color(text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_text_color(text_in(len)))
 
 extern fn ksmd_web_mark(which: I32, len: Sz): Sz //<
     //< Turns a mark on or off: 0 emphasis, 1 strong, 2 code, 3 a link to the text written in
@@ -425,24 +391,18 @@ extern fn ksmd_web_mark(which: I32, len: Sz): Sz //<
         return full()
     mark: Mark =
         (.emphasis if which == 0 else .strong if which == 1 else .code if which == 2 else .link)
-    ed.toggle_mark(mark, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.toggle_mark(mark, text_in(len)))
 
 extern fn ksmd_web_insert_diagram(): Sz //< an empty diagram at the selection
     if !begin()
         return full()
-    ed.insert_diagram() catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.insert_diagram())
 
 extern fn ksmd_web_diagram(block: Sz, len: Sz): Sz //<
     //< Gives a diagram the whole `:::diagram` clause written in, as one step
     if !begin()
         return full()
-    ed.set_diagram(block, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_diagram(block, text_in(len)))
 
 extern fn ksmd_web_undo(): Sz
     if !begin()
@@ -459,33 +419,25 @@ extern fn ksmd_web_redo(): Sz
 extern fn ksmd_web_remove_block(block: Sz): Sz //< removes a table, an include or an image block
     if !begin()
         return full()
-    ed.remove_block(block) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.remove_block(block))
 
 extern fn ksmd_web_clear_look(): Sz //<
     //< takes the selected text's colour and alignment away, in one step
     if !begin()
         return full()
-    ed.clear_look() catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.clear_look())
 
 extern fn ksmd_web_align(len: Sz): Sz //<
     //< aligns the selected paragraphs and headings; empty for none
     if !begin()
         return full()
-    ed.set_align(text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_align(text_in(len)))
 
 extern fn ksmd_web_block_note(block: Sz, len: Sz): Sz //<
     //< Gives a paragraph or a heading the note in the `len` bytes written in; resolves it with none
     if !begin()
         return full()
-    ed.set_block_note(block, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.set_block_note(block, text_in(len)))
 
 extern fn ksmd_web_replace(len: Sz): Sz //<
     //< Replaces what a search found, as one step. Written in as JSON: `{"t":text,
@@ -507,9 +459,7 @@ extern fn ksmd_web_replace(len: Sz): Sz //<
             .push(Cell_text::{ .block = number(c.get_at(0)), .row = number(c.get_at(1)),
             .column = number(c.get_at(2)),
             .text = c.get_at(3).as_str().unwrap_or("") })
-    ed.replace_found(spans@, text, cells@) catch e
-        return refused(e)
-    return result(true, "")
+    return done(ed.replace_found(spans@, text, cells@))
 
 priv fn spot(place: I32, block: Sz, item: Sz, offset: Sz): Spot
     p: Place = .text if place == 0 else .block_gap if place == 1 else .item_gap

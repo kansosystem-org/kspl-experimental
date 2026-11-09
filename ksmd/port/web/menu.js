@@ -142,10 +142,10 @@ function ksmdMenus(ks) {
   context.setAttribute("role", "menu");
   context.setAttribute("aria-label", "Table");
   context.hidden = true;
-  // Cut, Copy, Paste and Paste values stand first, as in Excel's cell menu; the two pastes share a
-  // row, so the menu still fits a laptop's screen. Flyouts side by side share one line above and
+  // Cut, Copy, Copy formula, Paste and Paste values stand first, as in Excel's cell menu; the two
+  // copies share a row, and so do the two pastes, so the menu still fits a laptop's screen. Flyouts side by side share one line above and
   // below them, as one group of names.
-  fill(context, ["cut", "copy", { row: ["paste", "paste-values"] }, "-", ...MENUS.find(([name]) => name === "Table")[1]]);
+  fill(context, ["cut", { row: ["copy", "copy-formula"] }, { row: ["paste", "paste-values"] }, "-", ...MENUS.find(([name]) => name === "Table")[1]]);
   document.body.appendChild(context);
 
   // The open top menu's name, or null; and where the focus was before a menu took it.

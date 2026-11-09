@@ -34,7 +34,7 @@ impl Sema_ctx
         if err_node == null
             return
         defer $seen: = List<|I32|>(null)
-        r.check_ffi_safety_at(type_id, err_node, seen@, 0)
+        r.check_ffi_safety_at(type_id, err_node, seen@, 0, true)
 
     fn check_variadic_arg(r: Self$@, type_id: I32, arg_node: Ast_node$@) //<
         //< Checks a value passed into a C function's `...`, as check_ffi_safety does a parameter
@@ -50,7 +50,10 @@ impl Sema_ctx
         r.check_ffi_safety(type_id, arg_node)
 
     fn check_ffi_safety_at(r: Self$@, type_id: I32, err_node: Ast_node$@, seen: List<|I32|>$@,
-        depth: Sz)
+        depth: Sz, by_value: Bool) //<
+            //< check_ffi_safety for a type depth levels inside the signature's type
+            //< by_value tells a value a C call passes or returns itself (a parameter or a result,
+            //< a callback's among them) from a field inside one.
         if sema_type_env.is_unknown(type_id) || depth >= MAX_FFI_NESTING_DEPTH
             return
         real_id: = r.env.get_real_type(type_id)
@@ -91,16 +94,22 @@ impl Sema_ctx
                             fields separately.")
                     return
         case .struct_type(def)
-            // A plain struct passes as a C aggregate, but not by value at the signature itself
-            // (depth 0) on LLVM. genllvm lacks the per-target C ABI classification. See "Passing an
-            // aggregate is an explicit internal ABI" in ksplc/docs/DESIGN-backends.md.
-            if depth == 0 && base_core.is_llvm_target()
+            // A plain struct passes as a C aggregate, but not by value at a signature on LLVM.
+            // genllvm lacks the per-target C ABI classification. See "Passing an aggregate is an
+            // explicit internal ABI" in ksplc/docs/DESIGN-backends.md.
+            if by_value && base_core.is_llvm_target()
                 r.err(err_node,
                     "structs cannot be passed or returned by value across C-FFI boundaries on the \
                         LLVM backend. genllvm does not implement the per-target C ABI \
                         classification for by-value aggregates. Pass a pointer (T@) instead.")
             for field in def.fields_list
-                r.check_ffi_safety_at(field.type_id, err_node, seen, depth + 1)
+                r.check_ffi_safety_at(field.type_id, err_node, seen, depth + 1, false)
+        case .fn_type(sig)
+            // **A callback crosses too**: C calls it with C's layout, so its parameters and result
+            // meet the same rules as an `extern` function's own. Each is passed by value.
+            for param_id in sig.params
+                r.check_ffi_safety_at(param_id, err_node, seen, depth + 1, true)
+            r.check_ffi_safety_at(sig.ret_id, err_node, seen, depth + 1, true)
         default {}
     fn check_c_keyword_collision(r: Self$@, name: U8[], node: Ast_node$@): Bool //<
         //< Whether a name C or the target's headers reserve clashes with its suffixed form in scope

@@ -41,7 +41,8 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     not_widths //< a table takes one width per column, each 0.5 to 255 characters or none
     not_a_height //< a row's height is a whole number of points from 6 to 409
     not_a_filter //< a column's filter that the `filter` attribute does not hold
-    not_a_look //< a colour is `#rrggbb`, a size 6 to 72 points, an alignment left, center or right
+    not_a_look //<
+        //< a colour is `#rrggbb`, a size 6 to 72 points, an alignment left, center, right or across
     not_a_format //< a number format the `formats` attribute does not hold
     no_format //< the columns have no number format whose places could change
     places //< a number format shows 0 to 9 decimal places
@@ -86,7 +87,7 @@ impl Edit_error
             return "Another table in this file has this name. Choose another name."
         case .not_a_look
             return "This look cannot be saved. A colour is '#' and six hex digits, a size 6 to 72 \
-                points, and alignment left, center or right."
+                points, and alignment left, center, right or across."
         case .not_widths
             return "These column widths cannot be saved. A column's width is 0.5 to 255 characters, \
                 with at most one decimal place, or none for a column that fits its text."
@@ -302,7 +303,7 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
         if text.len > 0
             throw .not_a_value
     case .text
-        if !is_utf8(text)
+        if !text.is_utf8()
             throw .not_a_value
         cell.text = arena.dup_str(chosen(t, column, text)!)
     case .number
@@ -378,7 +379,7 @@ fn set_look(doc: Document$@, u: Sz, row: Sz, column: Sz, part: Look_part, value:
     arena: Arena$@): Void!Edit_error //<
         //< Sets or clears one part of a cell's look; row -1 is the names above the data rows
         //< A colour is `#rrggbb`, a size a number of points from 6 to 72, whole or ending in .5,
-        //< and an alignment `left`, `center` or `right`. An empty value clears that part.
+        //< and an alignment `left`, `center`, `right` or `across`. An empty value clears that part.
     t: = table_at(doc, u)!
     if row < -1 || row >= t.rows.len || column < 0 || column >= t.columns.len
         throw .outside
@@ -608,7 +609,7 @@ fn set_name(doc: Document$@, u: Sz, column: Sz, text: U8[], arena: Arena$@): Voi
     t: = table_at(doc, u)!
     if column < 0 || column >= t.columns.len
         throw .outside
-    if !is_utf8(text)
+    if !text.is_utf8()
         throw .not_a_value
     was: = t.cells[column]
     $cell: = empty_cell()
@@ -691,7 +692,7 @@ fn rename_table(doc: Document$@, u: Sz, name: U8[], arena: Arena$@): Void!Edit_e
     t: = table_at(doc, u)!
     if t.name.len == 0
         throw .outside
-    if !is_table_name(name) || !is_utf8(name)
+    if !is_table_name(name) || !name.is_utf8()
         throw .not_a_name
     if found: = find_table(doc, name)
         if found != u
@@ -881,14 +882,6 @@ fn table_at(doc: Document$@, u: Sz): Table$@!Edit_error //< the table at place `
     if u < 0 || u >= doc.tables.len
         throw .outside
     return doc.tables[u]@
-
-priv fn is_utf8(text: U8[]): Bool //< whether the text is well-formed UTF-8, as a source must be
-    $i: Sz = 0
-    for i < text.len
-        width: = text.utf8_seq_len(i) catch
-            return false
-        i += width
-    return true
 
 fn empty_cell(): Cell
     return Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = 0,

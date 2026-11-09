@@ -4,10 +4,8 @@
 // The page count is checked against the pages the browser's own print to PDF makes of the same
 // document.
 // `statusBar(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, check } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const FENCE = "```";
 
 export function statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,

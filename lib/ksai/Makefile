@@ -37,7 +37,7 @@ test-unit:
 test: examples test-unit
 	"$(KSPLC)" run tests/stops_main.kspl "$(KSPLC_EXE)"
 	rm -rf "$(OUT)/examples_test"
-	"$(KSPLC)" run tests/examples_main.kspl "$(OUT)/llama_engine.exe" "$(OUT)/qwen_infer.exe" \
+	"$(KSPLC)" run tests/examples_main.kspl "$(OUT)/llama_engine.exe" \
 		"$(OUT)/code_complete.exe" "$(OUT)/car_pilot.exe" "$(OUT)/chat_server.exe" "$(KSPLC_EXE)" \
 		"$(OUT)/examples_test"
 

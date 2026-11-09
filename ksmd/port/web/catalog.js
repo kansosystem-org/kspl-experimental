@@ -238,11 +238,16 @@ function ksmdCatalog(ks) {
   }
 
   // The focus goes back where it was: the open cell, the chosen cell or the document.
+  // Caution: **Leave a cell opened since alone.** The dialog's close event comes a moment after
+  // Esc, and the person may already have pressed a cell and typed its first key. Taking the focus
+  // from that cell closed it with that key alone: `200` became `00`.
   function back() {
     const box = held;
     held = null;
     if (box) ks.table.hold(false);
     if (inserted && !box) return;
+    const open = ks.table.editing();
+    if (open && open.input !== box) return;
     if (box && box.isConnected) {
       box.focus();
       if (!inserted) box.setSelectionRange(caret[0], caret[1]);

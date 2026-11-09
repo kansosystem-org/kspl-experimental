@@ -3,10 +3,8 @@
 // driven through the browser's own input events, as `main.mjs` drives the rest, and checked by the
 // saved source.
 // `diagrams(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { CTRL, verdict } from "./drive.mjs";
+import { CTRL, H, check } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function diagrams({ page, js, settle, press, type, click, menu, load, saves, source }) {
   // A place in the diagram's own pixels, on the page.

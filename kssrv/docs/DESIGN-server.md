@@ -304,7 +304,7 @@ The counters `/api/status` returns sit in one `priv $stats`. On a one-thread ser
 
 ### No process is started, but the builder
 
-**kssrv starts no program on a request, except the builder that `--builder` names.** Only whoever starts kssrv names it, and only with `--local`; a request names only the file. **The builder starts only for bytes the person allowed**, which the record named by `--allowed` holds. The page is the less trusted side, so the server checks the record itself before every build. The rule is "Only six things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "No program is started, except one closed build", inside "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
+**kssrv starts no program on a request, except the builder that `--builder` names.** Only whoever starts kssrv names it, and only with `--local`; a request names only the file. **The builder starts only for bytes the person allowed**, which the record named by `--allowed` holds. The page is the less trusted side, so the server checks the record itself before every build. The rule is "Only five things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "No program is started, except one closed build", inside "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 ## The log
 
@@ -334,13 +334,3 @@ Caution: **Do not write from a second thread.** A logger used from two threads c
 **Do not hold the logger in a file-level variable.** `Log`'s fields belong to `std/log`, so it could only be a null pointer filled in later. The server could then be up but unable to speak.
 
 The usage text is not a log line: it has no severity and is always printed, so it stays a plain write to `io.err()`.
-
-## The car
-
-The car (a small robot car that drives itself) takes its driving policy from kssrv as a plain file, `pilot_policy.safetensors`, once at start-up. kssrv has no endpoint for the car, and it trains nothing.
-
-### The car carries its policy, handed out as a file
-
-**The car decides every manoeuvre itself, and it keeps its own safety stops.** A car that asked the server on every round could decide nothing once the link dropped.
-
-**The policy is trained offline and kept as a file.** So kssrv starts at once and needs no AI engine, and the car drives on the file that is kept. Any server that hands out files serves the car.

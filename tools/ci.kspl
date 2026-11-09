@@ -97,7 +97,7 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     //< Runs every gate of the set in the table's order; 0 when all passed
     //< **Every set refuses a gate no set runs**: it would go green everywhere, run nowhere.
     fs.mkdir_all(ci_gates.LOG_DIR) catch {}
-    if !ci_gates.reset_logs(arena)
+    if !ci_gates.reset_logs(ci_gates.LOG_DIRS, arena)
         return 1
     // **What only Linux has its tools for runs on Linux alone**: elsewhere, open the repository in
     // its dev container, a Linux host.
@@ -194,7 +194,13 @@ priv fn judge_gate(g: Gate, r: Round, exit: I32, sec: I64, arena: Arena$@): Bool
     //< Judges one gate that has ended by its exit code and its log, and writes its `.end`
     log: = ci_gates.log_path(g.log, arena)
     $rc: = exit
-    said: = io.read_file(log, arena) catch ""
+    // Caution: **A log that cannot be read fails the gate.** Its SKIP lines and its verdict cannot
+    // be checked, so a gate that skipped would pass.
+    said: = io.read_file(log, arena) catch
+        rc = 1
+        io.out().s("# \{g.log\}: its log cannot be read, so its SKIP lines are not known: ").s(log)
+            .c('\n')
+        fallback ""
     j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed, .any_skip = r.full }
     if rc == 0 && g.verdict && !ci_gates.said_verdict(said, arena)
         rc = 1

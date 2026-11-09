@@ -144,6 +144,8 @@ pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is se
 
 priv const RUN_EXTS: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
     //< The extensions that can be started on Windows
+    //< **A bare program name is looked up with the same list** (`kspl_win_run_exts` in
+    //< `ksplc/gen/runtime/hosted_spawn.c`); change both together.
     //< Caution: **Do not read `PATHEXT`**: whoever can change it can get something else started
     //< (**do not trust a path the environment points to**, as with `PATH`).
 
@@ -329,12 +331,16 @@ pub fn join( //< a path with a segment appended (Python's `os.path.join`)
     b: U8[], //< the segment to append
     arena: Arena$@, //< where the joined path goes; null means the heap, freed with `dealloc`
 ): U8[] //< the joined path; if one side is empty, a copy of the other
+    return join_on(a, b, sys.is_windows(), arena)
+
+fn join_on(a: U8[], b: U8[], windows: Bool, arena: Arena$@): U8[] //<
+    //< `join`, on Windows or on POSIX, so a test checks both answers on every OS
     if a.len == 0
         return arena.dup_str(b)
     if b.len == 0
         return arena.dup_str(a)
-    top: = sys.root_len(a)
-    left: = without_trailing_seps(a)
+    top: = sys.root_len_on(a, windows)
+    left: = without_trailing_seps(a, windows)
     right: = without_leading_seps(b)
     // A bare drive (`C:`) takes `b` directly and stays drive-relative; a share (`\\srv\sh`) is
     // from the root, so it takes a separator as any folder does.
@@ -350,10 +356,11 @@ priv fn without_leading_seps(path: U8[]): U8[] //< the path with its leading sep
         right = right.sub_from(1)
     return right
 
-priv fn without_trailing_seps(path: U8[]): U8[] //< the path with its trailing separators cut
+priv fn without_trailing_seps(path: U8[], windows: Bool): U8[] //<
+    //< the path with its trailing separators cut
     //< Caution: **Cut no further than the root**, or `C:\` loses the separator that makes it
     //< rooted. `join` trims the left side by this, so a path it built starts with this answer.
-    top: = sys.root_len(path)
+    top: = sys.root_len_on(path, windows)
     $left: = path
     for left.len > top && sys.is_path_sep(left[left.len - 1])
         left = left.sub(0, left.len - 1)
@@ -412,6 +419,54 @@ pub fn stays_under( //< whether a relative path really stays inside the root, li
     rel: U8[], //< the given path, relative to the root
 ): Bool //< true only when neither the text nor a link climbs out
     return sys.is_safe_relative(rel) && !has_link_on_path(root, rel)
+
+pub fn lies_under( //< whether a path is the folder `root` or lies inside it, step by step
+    //< Both are made absolute; `.` and empty steps drop, `..` is taken back, `/` and `\` are alike
+    //< and ASCII case is ignored. A path that cannot be made absolute counts as inside.
+    //< Caution: **Do not compare the two texts instead.** `C:\w\a` and `C:\w/a` are one folder.
+    //< **A link is not followed** ("A path stays under the root by refusal, not comparison" in
+    //< `std/docs/DESIGN-system.md`), so a link that leads in is not found.
+    root: U8[], //< the folder
+    path: U8[], //< the path that may lie inside it
+): Bool
+    defer arena: = Arena(4096) // only a yes or no leaves, so the steps stay in here
+    full_root: = absolute(root, arena) catch
+        return true
+    full: = absolute(path, arena) catch
+        return true
+    return lies_under_on(full_root, full, sys.is_windows(), arena)
+
+fn lies_under_on(root: U8[], path: U8[], windows: Bool, arena: Arena$@): Bool //<
+    //< `lies_under` for two absolute paths, on Windows or on POSIX, so a test checks both answers
+    top: = path_steps(root, windows, arena)
+    all: = path_steps(path, windows, arena)
+    if all.len < top.len
+        return false
+    for i in Range.asc(top.len)
+        if !all.get(i).equals_ignore_case(top.get(i))
+            return false
+    return true
+
+priv fn path_steps(path: U8[], windows: Bool, arena: Arena$@): List<|U8[]|> //<
+    //< An absolute path's steps, from the top. The root (`/`, `C:\`) is the first step, with `\`
+    //< read as `/`, so two drives never match and `C:\` matches `C:/`.
+    $out: = List<|U8[]|>(arena)
+    top: = sys.root_len_on(path, windows)
+    root: = arena.text()
+    for i in Range.asc(top)
+        root.c('/' if path[i] == '\\' else path[i])
+    out.push(root.take())
+    $at: Sz = top
+    for at < path.len
+        end: = sys.segment_end(path, at)
+        piece: = path.sub(at, end - at)
+        if piece.equals("..")
+            if out.len > 1
+                out.pop()
+        else if piece.len > 0 && !piece.equals(".")
+            out.push(piece)
+        at = end + 1
+    return out
 
 pub enum Dot_names //< what `join_under` does with a name that starts with a dot
     allowed //< it is joined as any other name

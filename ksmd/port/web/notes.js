@@ -63,5 +63,5 @@ function ksmdNotes(ks) {
 
   ks.handle(["note", "note-resolve"], (name) => ask(name === "note-resolve"));
 
-  ks.notes = { mark, markBlock, ask };
+  ks.notes = { mark, markBlock };
 }

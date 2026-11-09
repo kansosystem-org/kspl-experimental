@@ -2,7 +2,8 @@
 //< buffer and the result
 //< `bridge.kspl` holds the actions on the text and on files, `bridge_tables.kspl` those on tables
 //< and charts, and `bridge_own.kspl` a person's own functions. Each begins with `begin` or
-//< `ensure`, reads what the script wrote with `text_in`, and ends with `result` or `refused`.
+//< `ensure`, reads what the script wrote with `text_in`, and ends with `result` or `refused`. An
+//< action that only calls the editor ends with `done`.
 //< Caution: **Refuse an action before memory runs short**, not during it. The heap is a fixed
 //< buffer, and running out midway stops the page with the document half changed
 //< (`ksmd_js_gave_up`).
@@ -134,6 +135,11 @@ fn full(): Sz //< the refusal of an action for want of memory
 
 fn refused(e: Refused): Sz
     return result(false, e.message())
+
+fn done(r: Void!Refused): Sz //< the result of an editor's action: taken, or refused and why
+    r catch e
+        return refused(e)
+    return result(true, "")
 
 fn result(ok: Bool, why: U8[]): Sz //<
     //< `{"ok","why","from","tail","blocks","tables","sel","here","changed","undo","redo"}`: the blocks

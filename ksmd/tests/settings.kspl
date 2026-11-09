@@ -3,7 +3,7 @@
 import "ksmd/edit/editor_settings" // `set_settings`
 import "ksmd/edit/editor_tables"
 import "ksmd/syntax/settings" { no_settings }
-import "ksmd/tests/support" { opened, refused, saves }
+import "ksmd/tests/support" { opened, refused, refuses, saves }
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -60,8 +60,7 @@ priv fn setting()
     saves("new settings replace the clause", ed@, arena, changed)
     $bad: = s
     bad.paper = "A0"
-    ed.set_settings(bad) catch
-        verdict.check("settings the reader would refuse are refused", true, "")
+    refuses("settings the reader would refuse are refused", ed.set_settings(bad))
     ed.set_settings(no_settings()) catch e
         verdict.check("taking the settings away", false, e.message())
     saves("settings that set nothing take the clause away", ed@, arena, plain)
@@ -90,7 +89,7 @@ priv fn tables()
     merged: = TABLE.replace(":::table name=\"t\"",
         ":::table name=\"t\" caption=\"Modes\" merge=\"A\"", arena)
     saves("a caption and a merged column set by the editor", t@, arena, merged)
-    t.edit_table(0, .remove_column, 0, 1) catch e
+    t.edit_table(0, .remove_column, 0, 1, Sz[]::{}) catch e
         verdict.check("removing a column", false, e.message())
     saves("removing a merged column takes it out of merge", t@, arena,
         "%ksmd 1\n\n:::table name=\"t\" caption=\"Modes\"\n| \"mode\" |\n| \"A\" |\n| \"B\" \

@@ -4,7 +4,7 @@
 It handles the same format as `Safetensors_writer` / `Safetensors` in `lib/ksai/safetensors.kspl`:
 [8B LE header length][the JSON header (right-padded with spaces to an 8-byte boundary)]
 [each tensor's raw bytes joined in order].
-Both `export_qwen_to_kspl.py` and `lora_finetune_external.py` share it
+`lora_finetune_external.py` uses it
 (the representation at hand — a numpy array or a flat Python list — is turned into
  a (name, shape, raw_bytes) triple by the caller before being handed over).
 

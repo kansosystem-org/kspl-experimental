@@ -4,14 +4,11 @@
 // and by the saved source. The cell's own keys are checked to act as before while the list is shut.
 // While a formula is typed, its references show in colour, each with a frame round its cells.
 // `formulaHelp(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellAt, cellText, check } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const TABLE = `${H}:::table name="t"\n| "a" | "b" | "c" |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n:::\n`;
 
-export function formulaHelp({ page, js, settle, press, type, click, menu, load, saves }) {
-  const cell = (r, c) => `#doc td[data-r="${r}"][data-c="${c}"]`;
+export function formulaHelp({ page, js, settle, until, press, type, click, menu, load, saves }) {
   const box = () => js("(() => { const i = document.querySelector('#doc .cell-input'); " +
     "return i ? i.value : null; })()");
   const offered = () => js("Array.from(document.querySelectorAll('.fx-list:not([hidden]) .fx-name'))" +
@@ -23,7 +20,7 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
     "[t.querySelector('.fx-signature').textContent, (t.querySelector('strong') || {}).textContent]; })()");
   // Chooses a cell and types into it, as a person starts a formula in a spreadsheet.
   async function start(r, c, text) {
-    await click(cell(r, c));
+    await click(cellAt(r, c));
     await type(text);
     await settle();
   }
@@ -121,7 +118,7 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
       }
       await load(TABLE);
       await start(0, 2, "=sum(");
-      await click(cell(1, 0));
+      await click(cellAt(1, 0));
       await settle();
       check(await box() === "=sum(A2", "a press after =sum( points at the cell, not at a function", await box());
       await press(" ", CTRL);
@@ -133,7 +130,7 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
       check(await listShown(), "after a comma Ctrl+Space opens the list with no letter typed");
       await press("Escape");
       await type("1)&");
-      await click(cell(1, 1));
+      await click(cellAt(1, 1));
       await settle();
       check(await box() === "=sum(A2,1)&B2", "a press after & points too, as & is an operator", await box());
       await press("Escape");
@@ -152,7 +149,7 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
 
     async insertFunction() {
       await load(TABLE);
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await press("F3", SHIFT);
       await settle();
       check(await js("document.querySelector('.fx-dialog').open && " +
@@ -169,8 +166,9 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
       await settle();
       const about = await js("document.querySelector('.fx-about').textContent");
       check(about.includes("hex_to_dec(digits, [width])") && about.includes("the hexadecimal digits") &&
-        about.includes("=hex_to_dec(\"FF\") shows 255"),
-      "the chosen function shows how it is written, its arguments and an example", about);
+        about.includes("=hex_to_dec(\"100000\") shows 1048576") && about.includes("=0x100000"),
+      "the chosen function shows how it is written, its arguments, an example and the literal it does not read",
+      about);
       await press("Enter");
       await settle();
       check(await box() === "=hex_to_dec(" && await js("!document.querySelector('.fx-dialog').open && " +
@@ -284,7 +282,7 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
         await js("document.querySelector('#doc .cell-input').classList.contains('tinted')"),
       "once it commits, the colours come back", await box());
       await press("Escape");
-      await click(cell(1, 2));
+      await click(cellAt(1, 2));
       await page("Input.imeSetComposition", { text: "か", selectionStart: 1, selectionEnd: 1 });
       await settle();
       check(await js("(() => { const i = document.querySelector('#doc .cell-input'); " +
@@ -303,6 +301,150 @@ export function formulaHelp({ page, js, settle, press, type, click, menu, load, 
         ".map((e) => e.textContent).join()") === "A1,B1:B2", "and the name it writes leaves the references coloured",
       await box());
       await press("Escape");
+    },
+
+    // A press on a cell of another table writes its reference with that table's name, and a drag
+    // a range there. A name that is not plain is written in quotes.
+    async pointOtherTable() {
+      const doc = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | |\n| 2 | |\n:::\n\n` +
+        `:::table name="map"\n| "c" | "d" |\n| 2 | 5 |\n| 3 | 7 |\n:::\n\n` +
+        `:::table name="Q1 sales"\n| "e" |\n| 9 |\n:::\n`;
+      await load(doc);
+      const other = (name, r, c) => `#doc .table[data-name=${JSON.stringify(name)}] td[data-r="${r}"][data-c="${c}"]`;
+      // A name cell is pressed near its left edge, clear of its filter arrow on any OS's fonts.
+      const mouse = async (type, selector) => {
+        const [x, y] = await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)})` +
+          ".getBoundingClientRect(); return [r.left + Math.min(r.width / 2, 8), r.top + r.height / 2]; })()");
+        await page("Input.dispatchMouseEvent", { type, x, y, button: "left",
+          buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+      };
+      await start(0, 1, "=sum(");
+      await mouse("mousePressed", other("map", 0, 1));
+      await mouse("mouseMoved", other("map", 1, 1));
+      await mouse("mouseReleased", other("map", 1, 1));
+      check(await box() === "=sum(map.B1:B2", "a drag in another table writes the range with its name", await box());
+      await type(")+");
+      await click(other("Q1 sales", 0, 0));
+      check(await box() === '=sum(map.B1:B2)+"Q1 sales".A1',
+        "a press in a table whose name is not plain writes the name in quotes", await box());
+      await press("Enter");
+      await saves("Enter takes the formula", doc.replace("| 1 | |", '| 1 | =sum(map.B1:B2)+"Q1 sales".A1 |'));
+      check(await js(`document.querySelector('${cellAt(0, 1)}').textContent`) === "21",
+        "which calculates from the other tables");
+
+      // A column's name or letter writes the whole column, with the table's name, its own too.
+      const name = (table, c) => `#doc .table[data-name=${JSON.stringify(table)}] th.name[data-c="${c}"]`;
+      const letter = (table, c) => `#doc .table[data-name=${JSON.stringify(table)}] th.letter:nth-child(${c + 2})`;
+      const press1 = async (selector) => {
+        await mouse("mousePressed", selector);
+        await mouse("mouseReleased", selector);
+      };
+      await start(1, 1, "=sum(");
+      await press1(name("map", 1));
+      check(await box() === "=sum(map.B", "a press on another table's column name writes the whole column", await box());
+      await mouse("mousePressed", letter("map", 0));
+      await mouse("mouseMoved", letter("map", 1));
+      await mouse("mouseReleased", letter("map", 1));
+      check(await box() === "=sum(map.A:B", "a drag across its letters replaces it with the columns side by side",
+        await box());
+      await type(")+sum(");
+      await press1(name("t", 0));
+      check(await box() === "=sum(map.A:B)+sum(t.A", "the formula's own column is written with its table's name",
+        await box());
+      await type(")");
+      await press("Enter");
+      check(await js(`document.querySelector('${cellAt(1, 1)}').textContent`) === "20",
+        "and the whole columns calculate");
+    },
+
+    // Copy formula puts the chosen cell's formula as typed on the clipboard, where Copy gives its
+    // value. The status bar's text can be chosen by a drag, and a copy then takes what was chosen.
+    // A number in hexadecimal or binary is the number, kept as typed; no function name is offered
+    // after its `0b`, and the tip of `hex_to_dec` says the literal is no digit text.
+    async baseLiteral() {
+      await load(TABLE);
+      await start(0, 2, "=0b");
+      check(!(await listShown()), "=0b offers no function: the b belongs to the number", await offered());
+      await press("Backspace");
+      await type("x100000");
+      await press("Enter");
+      await saves("the literal is saved as typed", TABLE.replace("| 3 |", "| =0x100000 |"));
+      check(await cellText(js, 0, 2) === "1048576", "and the cell shows its number",
+        await cellText(js, 0, 2));
+      await start(1, 2, "=hex_to_dec(");
+      const meaning = await js("(() => { const m = document.querySelector('.fx-tip:not([hidden]) .fx-meaning'); " +
+        "return m ? m.textContent : ''; })()");
+      check(meaning.includes("\"100000\"") && meaning.includes("0x100000"),
+        "the tip of hex_to_dec asks for digit text, not a literal", meaning);
+      await type("0x10)");
+      await press("Enter");
+      await saves("a literal as its digits is kept as typed",
+        TABLE.replace("| 3 |", "| =0x100000 |").replace("| 6 |", "| =hex_to_dec(0x10) |"));
+      check(await cellText(js, 1, 2) === "#SYNTAX!", "and does not read, never giving 22",
+        await cellText(js, 1, 2));
+    },
+
+    async copyFormula() {
+      const formula = "=sum(A1:A2)*2";
+      await load(`${H}:::table name="t"\n| "a" | "b" |\n| 1 | ${formula} |\n| 2 | |\n:::\n`);
+      await js("window.copied = []; { const set = DataTransfer.prototype.setData; " +
+        "DataTransfer.prototype.setData = function (type, text) { window.copied.push([type, text]); " +
+        "return set.call(this, type, text); }; }");
+      await click(cellAt(0, 1));
+      await menu("copy-formula");
+      const got = await js("JSON.stringify(window.copied)");
+      check(got === JSON.stringify([["text/plain", formula]]), "Copy formula copies the formula as typed", got);
+      // The bar is pressed once it shows the formula and the menu is gone.
+      await until(`document.querySelector('.status-content').textContent === ${JSON.stringify(formula)} && ` +
+        "document.querySelector('.menu.context').hidden");
+      await settle();
+      const [x1, x2, y] = await js("(() => { const r = document.querySelector('.status-content').getBoundingClientRect(); " +
+        "return [r.left + 1, r.right - 1, r.top + r.height / 2]; })()");
+      const mouse = (type, x) => page("Input.dispatchMouseEvent", { type, x, y, button: "left",
+        buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+      await mouse("mousePressed", x1);
+      await mouse("mouseMoved", x2);
+      await mouse("mouseReleased", x2);
+      const chosen = await js("window.getSelection().toString()");
+      check(chosen === formula, "a drag across the status bar's formula chooses it",
+        `${JSON.stringify(chosen)}; the bar holds ${JSON.stringify(await js("document.querySelector('.status-content').textContent"))}`);
+      const taken = await js("(() => { const data = new DataTransfer(); const e = new ClipboardEvent('copy', " +
+        "{ clipboardData: data, bubbles: true, cancelable: true }); document.activeElement.dispatchEvent(e); " +
+        "return e.defaultPrevented; })()");
+      check(!taken, "and a copy takes the text chosen there, not the cell");
+    },
+
+    // **A key that reaches a box the page has just taken away is kept.** A document's own function
+    // answers and draws the table again between the press that chose a cell and the first key.
+    // The page here takes the box out as such a drawing does, and the key goes into it.
+    async keyAfterRedraw() {
+      await load(TABLE);
+      await click(cellAt(0, 0));
+      await js("(() => { const box = document.activeElement; box.remove(); box.value = '2'; " +
+        "box.dispatchEvent(new InputEvent('input', { data: '2', inputType: 'insertText', bubbles: true })); })()");
+      await type("00");
+      check(await box() === "200", "the first key, typed into a box the page took away, opens the chosen cell",
+        String(await box()));
+      await press("Enter");
+      await saves("and the cell takes all three keys", TABLE.replace("| 1 | 2 | 3 |", "| 200 | 2 | 3 |"));
+    },
+
+    // **A late close of Insert Function leaves a cell opened since alone.** Its close event comes
+    // a moment after Esc, when the person may already have pressed a cell and typed a key. The
+    // check sends that event by hand after the first key.
+    async lateDialogClose() {
+      await load(TABLE);
+      await click(cellAt(0, 0));
+      await press("F3", SHIFT);
+      await until("document.querySelector('.fx-dialog').open");
+      await press("Escape");
+      await click(cellAt(0, 0));
+      await type("2");
+      await js("document.querySelector('.fx-dialog').dispatchEvent(new Event('close'))");
+      await type("00");
+      check(await box() === "200", "a cell opened before the dialog's late close keeps its keys", String(await box()));
+      await press("Enter");
+      await saves("and takes all three", TABLE.replace("| 1 | 2 | 3 |", "| 200 | 2 | 3 |"));
     },
   };
 }

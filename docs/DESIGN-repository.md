@@ -526,11 +526,11 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 
 ### Where CI's time goes, and what shrinks it
 
-**One local command, `make ci`, runs a round on any platform**; which sections it runs on each is "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md). **It runs every gate the host can answer, and starts no container**, so one command means one machine. Off Linux it runs the Linux-only section too, but for the few gates that cannot give a true answer there. A SKIP for a missing tool passes and is listed last. Each gate's log carries the platform it ran on, so a skip allowed on one OS cannot be accepted on another. A progress line names the active gate while its output is quiet.
+**One local command, `make ci`, runs every gate the host can answer, and starts no container**, so one command means one machine. What it runs on each platform, and how a skip passes, is "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md).
 
-**The shared jobs divide the compiler's extraction suites too**, so the heavy suites do not collect in one job ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). Each share repeats the bootstrap, since each job needs a compiler of its own. Every regression suite runs in exactly one job, and no job is added.
+**The shared jobs divide the compiler's extraction suites too**, so the heavy suites do not collect in one job. The split is in "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md). Each share repeats the bootstrap, since each job needs a compiler of its own. That costs less than one more job.
 
-**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race` and `test-sanitize` in the Linux job, and `test-ksmd-browser` in job a's Linux run. On a round that starts with nothing built, self-host ×2 joins them.
+**Do not write the seconds here** (Principle 7). Each run lists its seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last list again. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race`, `test-sanitize` and `test-ksmd-browser`. On a round that starts with nothing built, self-host ×2 joins them.
 
 **`-j` barely takes effect on GitHub's runners**, so a runner is effectively one core, and the only route to faster gates is less total work. The reproduction is `taskset -c 0 make -j1 test-suites`: `sys.cpu_count` follows the affinity, so the suites' own side-by-side runs drop to one as well.
 
@@ -542,7 +542,7 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 | test-race / test-sanitize | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer. `test-race` builds its programs side by side, then runs them side by side |
 | self-host-ship | **Not a CI gate.** `make install` runs it before it installs, and the release on each platform, so a difference only the shipped build shows is caught before anything ships. In CI it would pay an `-O2` build of ksplc in every round, and take cores from `test-race` |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
-| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone, as every gate does ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). **They run in job a's Linux run**, the shortest Linux job without them, and stay together there so those files are built once |
+| test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in the root `Makefile`; the page's in `ksmd/Makefile`). The browser's checks run alone, as every gate does ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). **The three stay together in one Linux job** (`Gate.linux_only` in `tools/ci_gates.kspl`), so those files are built once |
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, and a fine-grained name points straight at the cause. Only the same property inspected in two places can be merged.
 
@@ -557,9 +557,8 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 **A round prints thousands of lines, and each gate's cause sits among them.** It is a `FAIL` among `pass` lines, a `panic:` in a child's output, or an unexpected `SKIP`. The end of the log holds only make's last word, which names a target, not a reason. So a round ends by naming each fallen gate's causes, one line each. Each carries the path of the gate's whole log ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)).
 
 * **The causes are the gate's own lines.** A gate's marks (`FAIL`, `panic:`, `RESULT:`) are spelt the same on every machine, while make's message is in the machine's language (`Error 1` reads `エラー 1` in Japanese). So make's line is read by its `*** [` alone, and shown after the gate's own.
-* **An expected SKIP is counted, not copied**, so it does not bury the one that fails. A SKIP no row holds is listed and marked `UNEXPECTED`.
+* **An expected SKIP is counted, not copied, and a green round prints one line per gate**, so neither buries the line that fails.
 * **Where no line names the cause, the log's last lines stand in** (a C compiler's error, a crash).
-* **A green round stays short**: one line per gate.
 
 **The rows are held against the tree before a round meets them.** Otherwise a reason one platform alone prints is first seen after that platform's whole round. `make test-conventions` refuses a reason no row of `tools/ci_gates.kspl` holds:
 

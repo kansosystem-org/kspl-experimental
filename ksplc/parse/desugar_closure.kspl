@@ -147,6 +147,7 @@ impl Ast_node
             // `call`.
             if d.kind_id == .k_decl_impl
                 d.name_closure_receiver()
+                d.place_capture_rebindings(captures)
                 d.graft_closure_body(body)
 
         // The use position becomes a reference to a temporary.
@@ -300,6 +301,27 @@ impl Ast_node
                 if seg.kind_id == .k_identifier
                     seg.text = recv_name
 
+    fn place_capture_rebindings(r: Ast_node$@, captures: Ast_node$@) //<
+        //< It puts each capture's rebinding (`n: = env.n$`) where the capture list writes `n`
+        //< **The body's uses of `n` name the rebinding**, so the editor finds the capture through
+        //< it (`linked_defs` in `lsp/uses.kspl`). Left at the closure's `fn(`, every rebinding and
+        //< parameter would share one place, and one name's uses would read as another's.
+        call_fn: = r.find_child(.k_decl_fn)
+        body: = call_fn.find_child(.k_stmt_block) if call_fn != null else null
+        if body == null
+            return
+        $at: Sz = 0
+        for cap in base_ast_ext.Param_cursor(captures, false)
+            id_node: = cap.find_child(.k_identifier)
+            if id_node == null || at >= body.children.len
+                continue
+            rebind: = body.get_child(at)
+            at += 1
+            rebind.loc = id_node.loc
+            rebind_id: = rebind.get_var_decl_id()
+            if rebind_id != null
+                rebind_id.loc = id_node.loc
+
     fn graft_closure_body(r: Ast_node$@, body: Ast_node@) //<
         //< It moves the original closure body's statements into the synthesized `call`'s body
         call_fn: = r.find_child(.k_decl_fn)
@@ -364,13 +386,15 @@ fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc):
 
 fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
     //< The arguments `name@`, one per capture (passed to the constructor)
+    //< **Each name stands where the capture list writes it**: it is the one written use of the
+    //< outer local, so the editor renames and lists it there, not at the closure's `fn(`.
     args: = Ast_node.build_args(loc)
     for cap in base_ast_ext.Param_cursor(captures, false)
         id_node: = cap.find_child(.k_identifier)
         if id_node == null
             continue
         addr_of: = Ast_node(.k_expr_postfix, "postfix", loc)
-            .add_child(build_path_ref(id_node.text, loc))
+            .add_child(build_path_ref(id_node.text, id_node.loc))
             .add_child(Ast_node(.k_literal, "@", loc))
         args.add_child(addr_of)
     return args

@@ -109,12 +109,19 @@ function ksmdCut(ks) {
   // chooses them at their new place, and gives true when it took the paste. Whole rows go to the
   // chosen row, and whole columns to the chosen column. Text on the clipboard other than the cut's
   // own was copied since, from another program, so the cut drops and that text pastes as usual.
-  function paste(text) {
+  // With `values`, the paste is refused and the cut still waits: cut cells move whole, and Excel
+  // offers no Paste Special for a cut. A place whose rows a filter or a closed group hides is
+  // refused too, as a cut over hidden rows is (`range.js`): the cells would move out of sight.
+  function paste(text, values) {
     const w = where();
     if (!w) return false;
     if (plain(text) !== plain(cut.text)) {
       drop();
       return false;
+    }
+    if (values) {
+      ks.say("Cut cells move whole. Press Ctrl+V to move them, or copy them to paste their values.");
+      return true;
     }
     const r = ks.range.rect();
     if (r.block !== w.block) {
@@ -131,6 +138,11 @@ function ksmdCut(ks) {
     }
     const height = w.r2 - w.r1 + 1;
     const width = w.c2 - w.c1 + 1;
+    // Whole columns take every row, so only cells and whole rows can land on a hidden row.
+    if (toRow >= 0 && rows !== false && ks.range.hiddenRows(w.block, toRow, toRow + height - 1).length > 0) {
+      ks.say("A cut cannot pass over hidden rows. Show all rows to move the cells, or copy them instead.");
+      return true;
+    }
     ks.table.take();
     const result = ks.act("ksmd_web_move_cells", w.block, w.r1, w.c1, height, width, toRow, toColumn);
     if (!result || !result.ok) return true;
@@ -143,6 +155,11 @@ function ksmdCut(ks) {
     }
     return true;
   }
+
+  // A copy anywhere drops the cut, as Ctrl+C in Excel takes the place of a cut that waits.
+  document.addEventListener("copy", () => {
+    if (drop()) ks.say("");
+  }, true);
 
   // Esc drops the cut wherever the focus is, unless something else took the key first, such as a
   // menu or an open cell.

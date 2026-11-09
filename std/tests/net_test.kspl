@@ -423,6 +423,113 @@ fn test_tcp_read_for() //<
     listener.free()
     verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")
 
+// ==========================================
+// A handler stays set after a signal. C's `signal()` under -std=c99 puts the default back at the
+// first delivery, so the second signal would end this program. It stands beside the test of a
+// signal during a wait, whose handler takes three signals.
+// ==========================================
+priv const SIGTERM: I32 = 15 //< SIGTERM's number on Linux, macOS, the BSDs and Windows
+priv $terms_seen: I32 = 0 //< how many SIGTERMs reached `count_term`
+
+priv fn count_term(_sig: I32): Void //< a SIGTERM handler that only counts
+    terms_seen += 1
+
+fn test_signal_handler_stays()
+    verdict.start("[Sys] a signal handler stays set for a second signal...")
+    terms_seen = 0
+    before: = sys.set_signal_handler(SIGTERM, count_term)
+    // raise runs the handler before it returns, on every OS.
+    sys.raise_signal(SIGTERM)
+    sys.raise_signal(SIGTERM)
+    seen: = terms_seen
+    sys.set_signal_handler(SIGTERM, before)
+    assert(seen == 2, "the handler should have run once for each of the two signals")
+    verdict.pass("the program lived through two signals, and its handler ran for each.")
+
+// ==========================================
+// A signal during a wait. A handler that returns cuts a waiting system call short on POSIX. The
+// wait must go on for its whole time, or a program with a handler fails at each signal.
+// ==========================================
+priv const SIGALRM: I32 = 14 //< SIGALRM's number on Linux, macOS and the BSDs
+priv const SIGNAL_AFTER: U8[] = "sleep 0.2; kill -ALRM $PPID" //< a child that signals its parent
+priv const LATE_MS: I32 = 600 //< when the peer answers, well after the signal
+priv const WAIT_MS: I32 = 1000 //< the wait the signal falls into
+priv const SLACK_MS: I64 = 50I64 //< how much sooner than its time a wait may end by the clock
+
+priv $alarms_seen: I32 = 0 //< how many SIGALRMs reached `count_alarm`
+
+priv fn count_alarm(_sig: I32): Void //< a SIGALRM handler that only counts
+    alarms_seen += 1
+
+priv fn signal_soon(): subproc.Child //< starts a child that sends SIGALRM to this program soon
+    //< `$PPID` is this program: the child's shell is started directly, with no shell between.
+    return subproc.spawn_async(U8[][]::{ "/bin/sh", "-c", SIGNAL_AFTER }, "")
+        catch panic("/bin/sh should start")
+
+// Answers once, well after the signal came (test_signal_cuts_no_wait_short).
+extern fn net_answer_late(conn: net.Tcp_stream$@): Void$@
+    sys.sleep_ms(LATE_MS)
+    conn.write_all("hi") catch panic("server write should succeed")
+    return null
+
+priv fn took_ms_since(t0: I64): I64 //< the milliseconds since t0, by the monotonic clock
+    return (sys.mono_us() - t0) / 1000I64
+
+fn test_signal_cuts_no_wait_short() //<
+    //< a signal that arrives during read_for, read or sleep_ms does not end the wait early
+    verdict.start("[Net] a signal during a wait does not cut the wait short test...")
+    if sys.is_windows()
+        verdict.skip("Windows has no signal that cuts a wait short")
+        return
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
+        catch panic("bind should succeed on a free port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    client: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("connect should succeed once the listener is bound")
+    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    alarms_seen = 0
+    before: = sys.set_signal_handler(SIGALRM, count_alarm)
+    $buf: U8[16] = ::{}
+    // read_for on a quiet peer: the signal comes at 200 ms, the wait ends at its timeout.
+    $kick: = signal_soon()
+    t0: = sys.mono_us()
+    $timed_out: = false
+    _n: = client.read_for(U8$[]::buf, WAIT_MS) catch e
+        timed_out = e == net.Net_error.timed_out
+        fallback 0
+    waited: = took_ms_since(t0)
+    kick.wait()
+    // A plain read: the signal comes at 200 ms, the answer at 600 ms.
+    $kick2: = signal_soon()
+    $t: = thread.Thread.spawn<|net.Tcp_stream|>(net_answer_late, conn)
+        catch panic("thread spawn failed")
+    n: = client.read(U8$[]::buf) catch panic("a signal should not make a read fail")
+    t.free()
+    kick2.wait()
+    // sleep_ms: the signal comes at 200 ms.
+    $kick3: = signal_soon()
+    t1: = sys.mono_us()
+    sys.sleep_ms(WAIT_MS)
+    slept: = took_ms_since(t1)
+    kick3.wait()
+    seen: = alarms_seen
+    sys.set_signal_handler(SIGALRM, before)
+    conn.free()
+    client.free()
+    listener.free()
+    assert(seen == 3, "each of the three children should have signalled this program")
+    assert(timed_out, "read_for on a quiet peer should end as timed_out, not as a failure")
+    $m: = Panic_msg()
+    assert(waited >= I64::WAIT_MS - SLACK_MS,
+        m.s("read_for should wait its whole time through a signal (waited ").n(waited).s(" ms)")
+        .slice())
+    assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi"), "the read should return the answer")
+    $m2: = Panic_msg()
+    assert(slept >= I64::WAIT_MS - SLACK_MS,
+        m2.s("sleep_ms should sleep its whole time through a signal (slept ").n(slept).s(" ms)")
+        .slice())
+    verdict.pass("A signal during read_for, read or sleep_ms ends none of them early.")
+
 priv const STALL_BYTES: Sz = 256 * 1024 * 1024 //< more than any socket's buffers hold at once
 
 fn test_tcp_write_all_for() //<

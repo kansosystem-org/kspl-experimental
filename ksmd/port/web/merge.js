@@ -34,5 +34,5 @@ function ksmdMerge(ks) {
 
   ks.handle("column-merge", (_, c) => toggle(c.block, c.column), { table: true });
 
-  ks.merge = { paint, toggle };
+  ks.merge = { paint };
 }

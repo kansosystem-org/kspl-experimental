@@ -1,8 +1,9 @@
 // The launcher's model server, with no browser: `ksagent_chat` started on scratch folders, with a
 // stand-in in place of llama-server and chat_server (`chat_support.mjs`). The cases: a missing
 // model file, a port held by something else, a server that never gets ready, one that ends early,
-// starting one, reusing it, stopping only the one started, a model named in vain, Ctrl+C with
-// `--model-only`, chat_server where llama-server is not on PATH, and the settings it refuses.
+// starting one with an API key, reusing it, stopping only the one started, a model named in vain,
+// a server whose key it does not hold, Ctrl+C with `--model-only`, chat_server where llama-server
+// is not on PATH, and the settings it refuses.
 // Usage: node tools/tests/chat_launch.mjs <ksagent_chat.exe> <work folder>
 // It prints `pass` and `FAIL` lines, and `RESULT: SOME FAILED` only where a case fails.
 import { execFileSync, spawn } from "child_process";
@@ -11,11 +12,14 @@ import http from "http";
 import net from "net";
 import path from "path";
 import { verdict } from "../../ksmd/tests/browser/drive.mjs";
-import { freePort, place, standInProgram } from "./chat_support.mjs";
+import { freePort, place, standIn, standInProgram } from "./chat_support.mjs";
 
 const [launcherBuilt, work] = process.argv.slice(2);
 const check = (ok, what, detail = "") => verdict.check(ok, what, detail);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// How long a stopped server may take to be gone. **Only a server never stopped reaches it**: on a
+// busy machine a process can take seconds to end.
+const STOP_WAIT_MS = 60000;
 const FIRST = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
 const models = path.join(work, "data");
 const folder = path.join(work, "folder");
@@ -54,6 +58,8 @@ const urlOf = (port) => `--model-url=http://127.0.0.1:${port}`;
 const asMake = (port, { dir = folder, model = "" } = {}) =>
   [`--dir=${dir}`, `--model-file=${model}`, `--port=${port}`];
 const pidOf = (file) => Number(fs.readFileSync(`${file}.pid`, "utf8"));
+// Where the launcher keeps the key of the server it started on the port: `tmp/` beside it.
+const keyFileOf = (port) => path.resolve(path.dirname(launcher), "tmp", `model.${port}.key`);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (_) { return false; } };
 
 // Whether something accepts a connection on the port.
@@ -133,6 +139,18 @@ async function portTaken() {
   other.close();
 }
 
+// A model server that asks for a key the launcher does not hold is refused by name, not taken
+// for something else on the port.
+async function locked() {
+  verdict.part = "a server whose key it does not hold";
+  const other = await standIn({ key: "not-yours" });
+  const c = start(asMake(other.port), { KSAGENT_API_KEY: "" });
+  await ended(c, 10000);
+  check(c.code === 1 && /asks for an API key that this command does not hold\. Set KSAGENT_API_KEY/
+    .test(c.seen), "it is refused, with what to do", c.seen);
+  other.server.close();
+}
+
 async function neverReady() {
   verdict.part = "a server that never gets ready";
   const file = model(FIRST, "never");
@@ -141,7 +159,7 @@ async function neverReady() {
   check(c.code === 1 && /was not ready after \d+ seconds, so it was stopped/.test(c.seen),
     "it says so", c.seen);
   check(/still loading/.test(c.seen) || /waiting for llama-server/.test(c.seen), "it said it waited", c.seen);
-  check(await until(() => !alive(pidOf(file)), 5000), "the server it started is stopped");
+  check(await until(() => !alive(pidOf(file)), STOP_WAIT_MS), "the server it started is stopped");
 }
 
 async function crashes() {
@@ -166,13 +184,27 @@ async function startReuseStop() {
     "it says it starts llama-server, waits, and is ready", a.seen);
   const argv = JSON.parse(fs.readFileSync(`${file}.argv`, "utf8"));
   check(argv.join(" ") === `-m ${file} --jinja -c 32768 --flash-attn on --cache-type-k q8_0 ` +
-    `--cache-type-v q8_0 --port ${port}`,
+    `--cache-type-v q8_0 --no-slots --port ${port}`,
     "llama-server gets the model, its options and the port", argv.join(" "));
   const server = pidOf(file);
+  const key = fs.readFileSync(`${file}.key`, "utf8");
+  const keyFile = keyFileOf(port);
+  const kept = fs.existsSync(keyFile) ? fs.readFileSync(keyFile, "utf8") : "";
+  check(/^[0-9a-f]{48}$/.test(key) && kept === key && !argv.join(" ").includes(key),
+    "llama-server gets a new key through its environment, kept in tmp/, not on its command line", key);
+  check(kept !== "" && (fs.statSync(keyFile).mode & 0o077) === 0, "only its owner can read the key file");
+  // **A question answered is the proof that ksagent holds the key**: the stand-in refuses one without.
+  fs.writeFileSync(path.join(folder, "keyed.ask.jsonl"),
+    '{"type":"question","id":"00000000-0000-4000-8000-000000000001","text":"Who holds the key?"}\n');
+  const chat = path.join(folder, "keyed.chat.jsonl");
+  const said = () => (fs.existsSync(chat) ? fs.readFileSync(chat, "utf8") : "");
+  check(await until(() => said().includes("\"state\":\"not_found\""), 30000),
+    "ksagent watch asks with the key, and gets the answer", said());
 
   const b = start(["--show", ...asMake(port)]);
   check(await ended(b, 20000), "a second launcher on the folder ends, as its watch refuses", b.seen);
-  check(/using the one already answering/.test(b.seen), "it uses the running server", b.seen);
+  check(/using the one already answering/.test(b.seen), "it uses the running server, with its kept key",
+    b.seen);
   check(alive(server) && await listening(port), "and leaves the server it did not start alone");
 
   const named = start(asMake(port, { model: FIRST }));
@@ -186,7 +218,8 @@ async function startReuseStop() {
   if (w) process.kill(w.pid, "SIGTERM");
   check(await ended(a, 10000), "the launcher ends with its watch", a.seen);
   check(/stopped llama-server, which this command started/.test(a.seen), "it says it stopped it", a.seen);
-  check(await until(() => !alive(server), 5000), "the server it started is stopped");
+  check(await until(() => !alive(server), STOP_WAIT_MS), "the server it started is stopped");
+  check(!fs.existsSync(keyFile), "and its key file is deleted");
 }
 
 async function modelOnlyInterrupted() {
@@ -196,10 +229,12 @@ async function modelOnlyInterrupted() {
   const c = start(["--model-only", "--model-file=", `--port=${port}`]);
   check(await until(() => /ksagent ask and eval reach it at/.test(c.seen), 30000), "the server alone gets ready",
     c.seen);
+  const told = `need its API key in KSAGENT_API_KEY. The key stands in ${keyFileOf(port)}`;
+  check(await until(() => c.seen.includes(told), 5000), "it says where its key stands", c.seen);
   const server = pidOf(file);
   stop(c);
   check(await ended(c, 10000), "Ctrl+C ends the launcher", c.seen);
-  check(await until(() => !alive(server), 5000), "and the server it started");
+  check(await until(() => !alive(server), STOP_WAIT_MS), "and the server it started");
 }
 
 async function fallback() {
@@ -224,7 +259,7 @@ async function fallback() {
   const server = pidOf(file);
   stop(c);
   await ended(c, 10000);
-  check(await until(() => !alive(server), 5000), "Ctrl+C stops it too");
+  check(await until(() => !alive(server), STOP_WAIT_MS), "Ctrl+C stops it too");
 }
 
 function sameDefault() {
@@ -244,6 +279,7 @@ async function main() {
   await missingModel();
   await missingOther();
   await portTaken();
+  await locked();
   // **The cases that start a model server need POSIX here**: the stand-in is a shell script, which
   // Windows does not start as `llama-server`, and Ctrl+C and the started `ksagent watch` are
   // reached through process groups and `ps`. On Windows, a real llama-server checks them by hand

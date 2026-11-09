@@ -155,21 +155,28 @@ fn test_mono_clock()
     assert(advanced, "it advances once work is done")
     verdict.pass("confirmed that it does not go back and that it advances once work is done.")
 
+priv const BOTH_OSES: Bool[2] = ::{ false, true } //< POSIX's answer, then Windows's
+
 fn test_absolute_paths() //< telling an absolute path from a relative one
     //< Caution: **Test the round trip too**, including **the separator after the drive**
     //< (`C:name` is relative to that drive's current directory). **A drive is a root on Windows
-    //< only**: on POSIX `C:\x` and `a:/b` are relative names.
+    //< only**: on POSIX `C:\x` and `a:/b` are relative names. Both answers are checked on every
+    //< OS, and the public form must give this OS's.
     verdict.start("[Sys] deciding whether a path starts from the root...")
-    win: = sys.is_windows()
-    assert(sys.is_absolute("/home/me"), "starting with `/` means from the root")
-    assert(sys.is_absolute("\\\\server"), "the shape starting with `\\` is from the root too")
-    assert(sys.is_absolute("C:\\work") == win && sys.is_absolute("C:/work") == win,
-        "a drive plus a separator means from the root on Windows, and nowhere else")
-    assert(sys.is_absolute("a:/b") == win, "on POSIX `a:` is a folder's name")
-    assert(!sys.is_absolute("C:name"), "no separator after the drive means not from the root")
-    assert(!sys.is_absolute("C:"), "a drive alone is not from the root either")
-    assert(!sys.is_absolute("sub/dir"), "a relative path is not from the root")
-    assert(!sys.is_absolute(""), "empty is not from the root")
+    for win in BOTH_OSES
+        assert(sys.is_absolute_on("/home/me", win), "starting with `/` means from the root")
+        assert(sys.is_absolute_on("\\\\server", win),
+            "the shape starting with `\\` is from the root too")
+        assert(sys.is_absolute_on("C:\\work", win) == win &&
+            sys.is_absolute_on("C:/work", win) == win,
+            "a drive plus a separator means from the root on Windows, and nowhere else")
+        assert(sys.is_absolute_on("a:/b", win) == win, "on POSIX `a:` is a folder's name")
+        assert(!sys.is_absolute_on("C:name", win),
+            "no separator after the drive means not from the root")
+        assert(!sys.is_absolute_on("C:", win), "a drive alone is not from the root either")
+        assert(!sys.is_absolute_on("sub/dir", win), "a relative path is not from the root")
+        assert(!sys.is_absolute_on("", win), "empty is not from the root")
+    assert(sys.is_absolute("C:/work") == sys.is_windows(), "is_absolute answers for this OS")
     verdict
         .pass("only `/`, `\\` and, on Windows, a drive with a separator are from the root; a drive \
             without one is relative.")
@@ -186,10 +193,12 @@ fn test_dir_name() //< the folder that contains a path
         "C:\\", "a:/", "C:\\", "\\" }
     on_posix: U8[][15] = ::{ "dir", "", "/", "/", "/a", "C:", "C:", "C:", "\\", "dir", "", "C:",
         "a:", "C:", "\\" }
-    win: = sys.is_windows()
-    for i in Range.asc(paths.len)
-        want: = on_windows[i] if win else on_posix[i]
-        assert(sys.get_dir_name(paths[i]).equals(want), "get_dir_name's answer differs")
+    for win in BOTH_OSES
+        for i in Range.asc(paths.len)
+            want: = on_windows[i] if win else on_posix[i]
+            assert(sys.get_dir_name_on(paths[i], win).equals(want), "get_dir_name's answer differs")
+    here: = on_windows[5] if sys.is_windows() else on_posix[5]
+    assert(sys.get_dir_name(paths[5]).equals(here), "get_dir_name answers for this OS")
     verdict
         .pass("a file under the root is in the root, the root is its own folder, and a bare name is \
             in none.")
@@ -203,19 +212,25 @@ fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
     // On POSIX each opens with a separator, the root `/`, but `C:\x`, a relative name.
     on_windows: Sz[9] = ::{ 9, 8, 7, 15, 8, 1, 1, 3, 1 }
     on_posix: Sz[9] = ::{ 1, 1, 1, 1, 1, 1, 1, 0, 1 }
-    win: = sys.is_windows()
-    for i in Range.asc(paths.len)
-        want: = on_windows[i] if win else on_posix[i]
-        assert(sys.root_len(paths[i]) == want, "root_len's answer differs")
-    assert(sys.is_absolute("\\\\srv\\sh"), "a share is from the root without a separator after it")
-    in_share: U8[] = "\\\\srv\\sh\\" if win else "\\\\srv\\sh"
-    assert(sys.get_dir_name("\\\\srv\\sh\\x").equals(in_share), "a file in a share is in the share")
-    assert(sys.get_dir_name("\\\\srv\\sh\\").equals(in_share), "a share's root is its own folder")
-    share: U8[] = "\\\\srv\\sh" if win else "\\\\srv"
-    assert(sys.get_dir_name("\\\\srv\\sh").equals(share),
-        "a share named with no separator after it is its own folder")
     defer arena: = Arena(1024)
-    assert(fs.join("\\\\srv\\sh", "x", arena).equals("\\\\srv\\sh/x"), "a share takes a separator")
+    for win in BOTH_OSES
+        for i in Range.asc(paths.len)
+            want: = on_windows[i] if win else on_posix[i]
+            assert(sys.root_len_on(paths[i], win) == want, "root_len's answer differs")
+        assert(sys.is_absolute_on("\\\\srv\\sh", win),
+            "a share is from the root without a separator after it")
+        in_share: U8[] = "\\\\srv\\sh\\" if win else "\\\\srv\\sh"
+        assert(sys.get_dir_name_on("\\\\srv\\sh\\x", win).equals(in_share),
+            "a file in a share is in the share")
+        assert(sys.get_dir_name_on("\\\\srv\\sh\\", win).equals(in_share),
+            "a share's root is its own folder")
+        share: U8[] = "\\\\srv\\sh" if win else "\\\\srv"
+        assert(sys.get_dir_name_on("\\\\srv\\sh", win).equals(share),
+            "a share named with no separator after it is its own folder")
+        assert(fs.join_on("\\\\srv\\sh", "x", win, arena).equals("\\\\srv\\sh/x"),
+            "a share takes a separator")
+    here: = on_windows[7] if sys.is_windows() else on_posix[7]
+    assert(sys.root_len(paths[7]) == here, "root_len answers for this OS")
     verdict
         .pass("on Windows a share and what follows `\\\\?\\` are roots; `\\\\` alone is not a \
             share.")
@@ -253,12 +268,13 @@ fn test_fs_absolute() //< a relative path joined onto the working directory, not
         fs.join("/", "etc", arena).equals("/etc") &&
         fs.join("//", "etc", arena).equals("/etc")
     assert(at_root, "a segment follows a bare root with no second separator")
-    drive_want: U8[] = "C:x" if sys.is_windows() else "C:/x"
-    drive: = fs.join("C:", "x", arena).equals(drive_want)
-    assert(drive, "a drive alone is a root on Windows only, and joining keeps it drive-relative")
-    rooted_want: U8[] = "C:\\x" if sys.is_windows() else "C:/x"
-    rooted: = fs.join("C:\\", "x", arena).equals(rooted_want)
-    assert(rooted, "a drive's root keeps its separator")
+    for win in BOTH_OSES
+        drive_want: U8[] = "C:x" if win else "C:/x"
+        drive: = fs.join_on("C:", "x", win, arena).equals(drive_want)
+        assert(drive, "a drive alone is a root on Windows only, and joining keeps it drive-relative")
+        rooted_want: U8[] = "C:\\x" if win else "C:/x"
+        rooted: = fs.join_on("C:\\", "x", win, arena).equals(rooted_want)
+        assert(rooted, "a drive's root keeps its separator")
     // On Windows `C:x` is relative to that drive's own working place, which absolute cannot read.
     $drive_refused: = false
     _abs: = fs.absolute("C:x", arena) catch

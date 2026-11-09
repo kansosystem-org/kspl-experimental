@@ -43,11 +43,13 @@ function ksmdStatus(ks) {
       where = rangeAddress(wrap, ks.range.rect());
     } else {
       where = at(c.row, c.column);
-      const open = ks.table.editing();
-      text = open ? open.input.value : ks.cellText(c.block, c.row, c.column);
+      text = ks.range.typed();
     }
-    address.textContent = where;
-    content.textContent = text.replace(/\n/g, " ");
+    // **Written only when it changes**: the bar is shown again on each change of the selection,
+    // and writing the same text again would drop text being chosen in it.
+    const shown = text.replace(/\n/g, " ");
+    if (address.textContent !== where) address.textContent = where;
+    if (content.textContent !== shown) content.textContent = shown;
     cellBox.hidden = false;
     const said = text === "" ? `Cell ${where}` : `Cell ${where}: ${text}`;
     cellBox.title = said;

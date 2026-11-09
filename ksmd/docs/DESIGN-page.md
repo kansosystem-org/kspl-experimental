@@ -125,7 +125,7 @@
 
 **An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
-**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** Each takes a PNG or a JPEG, asks nothing, and writes the file in the document's folder of images under the first free name (`<name>-images/image-<n>.png`). File ▸ Gather images into a folder moves the images written beside it before. Its clause goes in at the caret. The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one.
+**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** Each takes a PNG or a JPEG, asks nothing, and writes the file in the document's data folder under the first free name (`<name>-data/image-<n>.png`). Its clause goes in at the caret. The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one.
 
 **A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
 
@@ -137,7 +137,7 @@
 
 ## Column widths and row heights
 
-**A table's columns and rows keep the sizes a person gives them, as in a spreadsheet** (`sizes.js`). The file holds them as `char_widths` and `heights` ("Model and editor architecture" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+**A table's columns and rows keep the sizes a person gives them, as in a spreadsheet** (`sizes.js`). The file holds them as `char_widths` and `heights` ("Column widths and row heights" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
 * **A column is as wide as its width in characters, and the table as wide as its columns.** A narrow window makes the page scroll sideways, and no text wraps to fit it. A table that filled the window wrapped its text differently on each screen, and a person could not make one column stay narrow.
 * **A column with no width fits its text**: its widest value or its name, from 3 to 60 characters. Rows a filter hides count too, so a filter moves no column.
@@ -145,6 +145,9 @@
 * **Wrap text, as Excel's, breaks a cell's text into lines at its column's width.** It is set on each cell, as `wrap="on"` in its braces. Its row grows to show the lines, unless the row has a height. A word too long for the column breaks inside the word.
 * **A text runs on over the empty cells to its right, and is cut where the next cell holds a value**, as Excel shows it. It is cut at the table's right edge too.
 * **A number, a date or an error is always cut at its own cell.** A number or a date too wide for its column shows `###`, as in Excel: cut, 1200 would read as 120. Opening the cell shows the value.
+* **A value centred across columns shows in a box as wide as its run, over the run's empty cells.** A number wider than the whole run shows `###` in its own cell.
+  * **The lines between the run's cells go**, as Excel draws no gridline under such a value. With them, the value would look cut by a line, and the run is meant to read as one cell. Paper shows it the same way.
+  * **A press on the run still chooses the cell under it**, and the status bar names that cell. So each cell can still be chosen and typed into, which a merged cell would not allow.
 * **A row with a height is that tall, and text taller than it is cut.** A row without one fits its lines.
 
 **Dragging the right edge of a column letter sets that column's width**, and every other column keeps its own. The last column has an edge too. When the button comes up, the width is saved in characters, as one step of undo.
@@ -172,10 +175,10 @@
 
 * **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells.
 * **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. A typed character opens the chosen cell with that character in place of its value.
-* **Delete, a copy and a fill act on the rows in sight alone, as in Excel** (`clear_cells` in `ksmd/edit/editor_tables.kspl`). A row a filter or a closed group hides keeps its cells, and a copy leaves it out. Find and Replace pass over those rows too, so no command changes a cell the person cannot see.
+* **A command on a chosen range acts on the rows in sight alone, as in Excel** (`clear_cells` in `ksmd/edit/editor_tables.kspl`). Delete, a fill, a copy, a cut and Remove row are such commands. A row a filter or a closed group hides keeps its cells, and a copy leaves it out. Find and Replace pass over those rows too. So none of these commands changes a cell the person cannot see.
 * **An input method composes from the first key.** The focus stands in an invisible text box over the chosen cell, since Windows keeps an input method off where no text can be typed. What is typed or composed there opens the cell, and the box becomes its input, so a composition goes on unbroken.
 * **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. Cells copied in ksmd fill each place of the range that holds them whole. A paste of rows fills the table from the range's corner. A cut clears nothing: its cells wait for a paste that moves them ("Moving cells" below).
-* **A paste writes into the rows from the range's corner, hidden or not.** It puts the copied lines one after another, as Excel does.
+* **A paste is not such a command: it fills row after row from the range's corner, hidden rows included**, as Excel does. It puts the copied lines one after another. A paste that moves cut cells is refused over a hidden row ("Moving cells" below).
 * **A look applies to every cell of the range in one step.**
 
 ## Copying and pasting cells
@@ -202,7 +205,10 @@
 **While a formula is typed, a press on a cell writes its reference at the caret, and a drag writes a range.** Excel calls this point mode (`ksmd/port/web/point.js`). Typing `=sum(`, then a drag from A1 to A2, gives `=sum(A1:A2`.
 
 * **It acts only where a reference can go.** The cell's text starts with `=`, and the caret stands after `=`, `(`, `,`, `:`, an operator (`+ - * / & = < >`), or the word `and`, `or` or `not`. Inside quoted text it does not act.
-* **Only the data cells of the same table are pointed at.** A press on a name, on another table or outside the table ends the edit as before. So does a press where no reference can go, such as after a number.
+* **A press on a column's letter or name writes the whole column**, and a drag across them columns side by side: `map.D`, `map.D:F`. The table's name is always written, as a whole column needs it, even in the formula's own table. The name's filter arrow keeps its own press.
+* **Only data cells and column headings are pointed at.** A press on a row number or outside every table ends the edit as before. So does a press where no reference can go, such as after a number.
+* **A cell of another table is written with that table's name**: a press gives `map.D3`, and a drag `map.D3:D5`. A name that is not plain stands in quotes, as a typed one does. A range stays in one table, as a written one must.
+* **A table shown from an included file is not pointed at.** No formula reaches into another file, so a press there ends the edit.
 * **The cell stays open, with the caret after the reference.** Enter takes the formula, and Esc drops the edit, as in any open cell.
 * **Pointing again replaces the reference just written**, until the person types or moves the caret. Shift with a press reaches a range from the cell pointed at last.
 * **The reference written shows in colour, with a frame round its cells**, as every reference typed does ("A formula's references in colour" below).
@@ -255,6 +261,8 @@
 
 **Insert row above, Insert row below and Remove row act on every row the range spans, as one step**, as in Excel and Google Sheets. With rows 2 to 3 chosen, Insert row above inserts two rows above row 2, and Remove row removes both. The column commands act on the columns the range spans the same way. A refused removal changes nothing.
 
+* **A row a filter or a closed group hides counts for none, as in Excel.** Remove row leaves it, and removes the rows in sight from the bottom up, as one step. Insert row above inserts one row for each row in sight. So a range over a hidden row never removes a row the person cannot see.
+
 ## Moving rows and columns
 
 **Rows move by a cut and Insert cut rows, as Excel's Insert Cut Cells moves them.** Columns move the same way, by Insert cut columns. Excel users already move rows this way, so the page has no Move row up or Move row down.
@@ -284,12 +292,14 @@
 * **A range follows when it moves whole.** A range moved in part stays where it is. Excel moves each corner of a range on its own. So a range's end cell moved inside it drops cells from a sum, without a word.
 * **A reference to a cell written over becomes `#REF!`, as in Excel**, and so does a range whose two corners were written over. The value it named is gone.
 * **Whole columns cut by their letters take a whole-column reference with them**, so `=sum(t.A)` follows column A's cells to C, as Excel moves `A:A` to `C:C`. A block of some rows leaves such a reference alone, since the reference names every row.
+* **Whole columns also take their settings: width, number format, choices, colour rule, filter, merging and row colours**, as Excel's paste of whole columns does (`move_cells` in `ksmd/edit/moving.kspl`). The columns written over lose their own, and the columns left behind keep none. Otherwise a filter left on an empty column would hide every row. Whole rows likewise take their heights.
 * **The move is one step of undo, and the moved cells stay chosen at their new place.** The table grows rows and columns where the cells reach past it, as a paste of rows grows it.
 * **A move is refused whole when a formula would grow past 4,096 bytes**, or when the table would pass its limits. Nothing changes then, and the page says why.
-* **A cut pastes once.** Esc, or any other change to the document, drops it, as in Excel.
+* **A cut pastes once.** Esc, a copy, or any other change to the document drops it, as in Excel.
+* **Paste values while a cut waits is refused, and the cut still waits.** Excel offers no Paste Special for a cut, since cut cells move whole. The page says to press Ctrl+V, or to copy the cells for their values.
 * **The cut puts the cells' values on the clipboard as tab-separated rows**, so another program takes them, and the cells stay. Text on the clipboard other than the cut's own was copied later, so a paste drops the cut and pastes that text.
 * **Cells move only inside their own table.** A paste in another table is refused, and the page says to copy instead. A reference across tables would need the same care, and a person rarely moves cells between two tables.
-* **A cut of cells or whole rows over a hidden row is refused**, and the page says to show all rows or copy instead. The paste would move the hidden cells too, out of the person's sight. Whole columns cut by their letters move whole, hidden rows and all, as a column moves with its filter.
+* **A cut of cells or whole rows over a hidden row is refused**, and the page says to show all rows or copy instead. The paste would move the hidden cells too, out of the person's sight. A paste of the cut onto a hidden row is refused with the same words. It would write over cells out of sight, and turn references to them into `#REF!`. Whole columns cut by their letters move whole, hidden rows and all, as a column moves with its filter.
 * **The names move only along the names row**, since a name names a column, not a value.
 
 ## Filling cells
@@ -410,6 +420,7 @@
 * **A reference's `#` stays in the text and takes no room.** Its number is drawn after it.
 * **Ctrl+press on a reference, or a press while read-only, scrolls to what it names.**
 * **Table ▸ Caption… sets a table's caption, and the Look flyout's Merge repeated values merges the chosen column** (`merge.js`). Each is one step of undo, and pressed again on a merged column, it stops.
+* **Centre across columns sets `align="across"` on each chosen cell, as one step of undo.** It stands in Format and in the table's Look flyout. Pressed again on a cell that has it, it takes it off, as the other alignments do.
 
 ## Drawing on an image or a chart
 

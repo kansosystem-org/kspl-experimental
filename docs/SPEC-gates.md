@@ -102,7 +102,7 @@ The workflow only calls the targets, so **to change which gates run, fix the tab
 
 **`make ci` needs no Docker anywhere.** The Linux-only section's tools (the sanitizers, QEMU, a browser and the rest) are in the dev container's image. Off Linux, `make ci` uses the ones the machine has. macOS also needs GNU make 4 (`brew install make`); the runner selects `gmake` when available.
 
-**`make ci` checks as much as one machine can, with no container.** CI runs a check that cannot differ by platform on Linux alone; `make ci` runs it on your Windows or macOS machine too. It leaves out three gates where they cannot give a true answer (`Gate.not_on` in `tools/ci_gates.kspl`):
+**`make ci` checks as much as one machine can.** CI runs a check that cannot differ by platform on Linux alone; `make ci` runs it on your Windows or macOS machine too. It leaves out three gates where they cannot give a true answer (`Gate.not_on` in `tools/ci_gates.kspl`):
 
 * `test-ksos-posix` on Windows: the POSIX port switches tasks with ucontext, which Windows does not have.
 * `test-ksmd-desktop` on Windows and macOS: a `.desktop` entry is what Linux desktops read.
@@ -128,7 +128,7 @@ flowchart TD
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
 
-**The gates that only Linux runs are dealt over the three Linux jobs**, so the three end at about the same time. Most stand in `ci-shard-linux`. The browser gates (`test-ksmd-browser`, `test-ksmd-open`, `test-ksagent-chat`) stand in `ci-shard-a`, and `debug-tools`, `lint` and `test-suites-text` in `ci-shard-b`, each with `linux_only` (`Gate.linux_only` in `tools/ci_gates.kspl`). The Windows job of the same section leaves them out. Moving a gate between the Linux jobs costs no start-up, as each job pays its own already.
+**The gates that only Linux runs are dealt over the three Linux jobs**, so the three end at about the same time. Most stand in `ci-shard-linux`. A few stand in a shared section instead, marked `linux_only` in the table (`Gate.linux_only` in `tools/ci_gates.kspl`), and the Windows job of that section leaves them out. Why a move between the Linux jobs costs nothing is "Where CI's time goes, and what shrinks it" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
 **The common gates run as two sections, in parallel, as separate jobs.** The two hold no difference in importance; their gates are dealt so they take about as long. `ci-shard-a` runs C self-hosting and one share of the regression suites. `ci-shard-b` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler's extraction checks deal its suite list between the jobs, longest first, in opposite directions for successive pairs. They use separate copies and scratch folders, and `make test-extract-ksplc` runs both shares. std's copy (`extract-std`) runs in job b, and every other package's copy (`extract-rest`) in job a. The number of sections is set by the job start-ups that can be paid for.
 

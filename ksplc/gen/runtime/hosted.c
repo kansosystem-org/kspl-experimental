@@ -162,6 +162,7 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <poll.h>
 /* KSPL_TEST_MARK_AFTER_OPEN, a test's define alone, takes macOS's way on Linux: mark after the
  * open, with starts taking turns (hosted_spawn.c). So the race gate races that lock on Linux. */
 #if defined(__linux__) && !defined(KSPL_TEST_MARK_AFTER_OPEN)
@@ -180,6 +181,22 @@ int pipe2(int fds[2], int flags);
 KSPL_UNUSED static void kspl_fd_cloexec(int fd) {
     int flags = fcntl(fd, F_GETFD);
     if (flags >= 0) fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+/* poll() that waits its whole time through a signal. Every wait on a socket or a child's pipe
+ * goes through here; ms has already passed kspl_wait_ms.
+ * Caution: **Do not read EINTR as a failure or as the end of the time.** A signal handler that
+ * returns cuts poll short on every POSIX OS, whatever SA_RESTART says. A program with a handler
+ * would then see a read fail, or time out early, at each signal. The wait goes on for what is
+ * left on the monotonic clock, so a stream of signals cannot stretch it either. */
+KSPL_UNUSED static int kspl_poll_whole(struct pollfd *fds, nfds_t n, I32 ms) {
+    I64 deadline = kspl_mono_us() + (I64)ms * 1000;
+    for (;;) {
+        int r = poll(fds, n, ms);
+        if (r >= 0 || errno != EINTR) return r;
+        I64 left = deadline - kspl_mono_us();
+        ms = left <= 0 ? 0 : (I32)((left + 999) / 1000);
+    }
 }
 #endif
 
@@ -344,7 +361,8 @@ KSPL_LINK void kspl_sleep_ms(I32 ms) {
     struct timespec ts;
     ts.tv_sec = (time_t)(ms / 1000);
     ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
+    /* A signal handler cuts nanosleep short; it then leaves the time still to wait in ts. */
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {}
 }
 #endif
 
@@ -568,6 +586,46 @@ KSPL_LINK void kspl_io_attach_console(void) {
 }
 #else
 KSPL_LINK void kspl_io_attach_console(void) {}
+#endif
+
+/* ============================================================
+ * A handler the program sets stays set (std/sys's set_signal_handler)
+ *
+ * C's signal() gives System V's rule under -std=c99 on glibc, and always on Windows: the first
+ * delivery puts the default back. A second signal then ends the program, unless the handler sets
+ * itself again, and one can arrive before it does. So POSIX sets the handler with sigaction, and
+ * Windows sets it again before calling the program's handler.
+ * Caution: **Keep SA_RESTART.** Without it, a signal makes C's own reads fail (fread, getchar, a
+ * C library's), which the runtime's EINTR retries do not reach. poll, nanosleep and sigsuspend
+ * return early whatever it says, and the runtime waits their whole time itself.
+ * ============================================================ */
+#ifndef _WIN32
+KSPL_LINK void (*kspl_signal(I32 sig, void (*handler)(I32)))(I32) {
+    return kspl_sigaction_kept(sig, handler);
+}
+#else
+/* The program's handler per signal. The slot is read in the signal's own thread (Ctrl+C runs on
+ * a new one), so it is volatile. */
+static void (*volatile kspl_signal_handlers[NSIG])(int);
+
+static void kspl_signal_again(int sig) {
+    void (*handler)(int) = kspl_signal_handlers[sig];
+    signal(sig, kspl_signal_again);
+    if (handler != SIG_DFL && handler != SIG_IGN) handler(sig);
+}
+
+KSPL_LINK void (*kspl_signal(I32 sig, void (*handler)(I32)))(I32) {
+    if (sig <= 0 || sig >= NSIG) return SIG_ERR;
+    void (*before)(int) = kspl_signal_handlers[sig];
+    kspl_signal_handlers[sig] = handler;
+    int own = handler != SIG_DFL && handler != SIG_IGN;
+    void (*old)(int) = signal(sig, own ? kspl_signal_again : handler);
+    if (old == SIG_ERR) {
+        kspl_signal_handlers[sig] = before;
+        return SIG_ERR;
+    }
+    return old == kspl_signal_again ? before : old;
+}
 #endif
 
 /* ============================================================

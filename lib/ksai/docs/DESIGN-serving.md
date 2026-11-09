@@ -162,7 +162,7 @@ How `reply.kspl` handles the remaining cases, such as a parameter given twice, i
 * **Each field in `UNAPPLIED` is refused unless it holds the value that changes nothing**, such as `"n": 1` or `"tool_choice": "auto"`.
 * **The request's `model` names nothing to choose.** The server holds one model, so any name picks it, and the answer names the model the server holds.
 
-Caution: **A field in neither list goes unseen.** `std/json` does not list an object's members, so the reader can ask only for the names it knows.
+Caution: **A field in neither list goes unseen.** The reader asks only for the names it knows.
 
 **`GET /v1/models` is answered too**, with the one model's name. Clients ask it to see that the server is up and which model it holds, some before their first chat. Every other path gets 404, and another method gets 405.
 

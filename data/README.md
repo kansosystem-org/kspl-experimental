@@ -9,7 +9,6 @@ The folder is flat: every file stands at its top. A file that is quick to make a
 | `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` | Downloaded (below) |
 | `Qwen3.5-9B-Q3_K_M.gguf` | Downloaded (below) |
 | `code_complete.safetensors` | Made here: `make fim-model` trains the coding example's model ([`lib/ksai/examples/code_complete/README.md`](../lib/ksai/examples/code_complete/README.md)) |
-| `qwen_kspl.safetensors` | Made here: `lib/ksai/tools/export_qwen_to_kspl.py` converts a Qwen model you download from Hugging Face ([`lib/ksai/tools/README.md`](../lib/ksai/tools/README.md)) |
 | `kanso_lora.safetensors` | Made on a machine with a GPU: `lib/ksai/examples/code_complete/lora_finetune_external.py` |
 
 This page is the one place that says which models to use, and where to get them. How to ask ksagent about your files with one of them is [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](../ksagent/docs/TUTORIAL-ask-about-your-files.md).

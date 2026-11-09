@@ -126,20 +126,14 @@ function ksmdSettings(ks) {
   }
 
   const PAPERS = ["A3", "A4", "A5", "B4", "B5", "letter", "legal"];
-  let panel = null;
-  function close() {
-    if (panel) panel.remove();
-    panel = null;
-  }
-
   // The panel that sets the paper, the header and footer, the numbers and the labels.
   function ask() {
-    close();
     const now = settings || { paper: "", land: 0, header: "", footer: "", numbers: 0, tl: "", fl: "" };
-    panel = document.createElement("div");
-    panel.className = "settings-panel";
-    panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "Page setup");
+    const panel = ks.panel("settings-panel", "Page setup", () => {
+      const s = { paper: paperSel.value, land: Number(orient.value), header: header.value.trim(),
+        footer: footer.value.trim(), numbers: Number(numbers.value), tl: tl.value.trim(), fl: fl.value.trim() };
+      ks.act("ksmd_web_settings", ks.put(JSON.stringify(s)));
+    });
     const pick = (cls, options, value) => {
       const sel = document.createElement("select");
       sel.className = cls;
@@ -163,30 +157,12 @@ function ksmdSettings(ks) {
       ...[1, 2, 3, 4, 5, 6].map((n) => [String(n), `Number headings from level ${n}`])], now.numbers);
     const tl = field("settings-tl", now.tl, "Word before a table's number: Table");
     const fl = field("settings-fl", now.fl, "Word before an image's number: Figure");
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.className = "settings-apply";
-    apply.textContent = "Apply";
-    apply.addEventListener("click", () => {
-      const s = { paper: paperSel.value, land: Number(orient.value), header: header.value.trim(),
-        footer: footer.value.trim(), numbers: Number(numbers.value), tl: tl.value.trim(), fl: fl.value.trim() };
-      close();
-      ks.act("ksmd_web_settings", ks.put(JSON.stringify(s)));
-    });
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", close);
     for (const part of [paperSel, orient, header, footer, numbers, tl, fl]) {
       const row = document.createElement("div");
       row.appendChild(part);
-      panel.appendChild(row);
+      panel.el.appendChild(row);
     }
-    panel.append(apply, cancel);
-    panel.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") close();
-    });
-    document.body.appendChild(panel);
+    panel.show();
     paperSel.focus();
     return null;
   }
@@ -194,12 +170,9 @@ function ksmdSettings(ks) {
   ks.root.addEventListener("click", (e) => {
     if (e.target.closest && e.target.closest(".settings-edit")) ask();
   });
-  document.addEventListener("mousedown", (e) => {
-    if (panel && !panel.contains(e.target)) close();
-  }, true);
 
   ks.handle("page-setup", () => ask());
 
   // The settings the document holds now, or null.
-  ks.settings = { apply, target, ask, render, current: () => settings };
+  ks.settings = { apply, target, render, current: () => settings };
 }

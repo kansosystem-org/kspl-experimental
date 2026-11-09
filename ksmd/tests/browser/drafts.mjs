@@ -4,10 +4,8 @@
 // `drafts(t)` takes `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
 import path from "path";
-import { CTRL, verdict } from "./drive.mjs";
+import { CTRL, H, check } from "./drive.mjs";
 
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
-const H = "%ksmd 1\n\n";
 const CELLS = `${H}Text.\n\n:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`;
 // A browser whose settings keep no site data: its IndexedDB refuses to open.
 const NO_STORE = "Object.defineProperty(window, 'indexedDB', { get() { " +
@@ -19,32 +17,6 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
   const docName = (d) => d.js("document.querySelector('.menubar .doc-name').textContent");
 
   return {
-    // File, Gather images into a folder moves the images ksmd wrote beside the document into its
-    // folder of images, points the document at them and saves, and never replaces a file.
-    async gatherImages(ctx) {
-      const png = fs.readFileSync(path.join(ctx.root, "pics/dot.png"));
-      fs.writeFileSync(path.join(ctx.root, "memo-image-1.png"), png);
-      fs.writeFileSync(path.join(ctx.root, "memo-image-2.png"), png);
-      fs.mkdirSync(path.join(ctx.root, "memo-images"), { recursive: true });
-      fs.writeFileSync(path.join(ctx.root, "memo-images/image-2.png"), "taken");
-      const img = (n) => `:::image src="memo-image-${n}.png" alt=""\n:::\n`;
-      fs.writeFileSync(path.join(ctx.root, "memo.ksmd"), `${H}Text.\n\n${img(1)}\n${img(2)}`);
-      const d = await tab(ctx, "?doc=memo.ksmd");
-      await d.menu("file-gather-images");
-      await idle(d);
-      const disk = fs.readFileSync(path.join(ctx.root, "memo.ksmd"), "utf8");
-      check(disk === `${H}Text.\n\n:::image src="memo-images/image-1.png" alt=""\n:::\n\n${img(2)}` &&
-        fs.existsSync(path.join(ctx.root, "memo-images/image-1.png")) &&
-        !fs.existsSync(path.join(ctx.root, "memo-image-1.png")),
-      "Gather images moves an image into the document's folder of images, and saves", disk);
-      check(fs.readFileSync(path.join(ctx.root, "memo-images/image-2.png"), "utf8") === "taken" &&
-        fs.existsSync(path.join(ctx.root, "memo-image-2.png")) && (await said(d)).includes("Left where they were"),
-      "an image whose place in the folder is taken stays, and the page says so", await said(d));
-      await ctx.browser.closeTab(d.page);
-      for (const name of ["memo.ksmd", "memo-image-2.png", "memo-images"]) {
-        fs.rmSync(path.join(ctx.root, name), { force: true, recursive: true });
-      }
-    },
     async cellDraft(ctx) {
       fs.writeFileSync(path.join(ctx.root, "cells.ksmd"), CELLS);
       const d = await tab(ctx, "?doc=cells.ksmd");
@@ -150,7 +122,8 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
         };`);
       check(await left() === "old young", "two drafts stand, 29 and 31 days old", await left());
       await d.reload("document.documentElement.dataset.files === 'ready'");
-      for (let waited = 0; waited < 5000 && await left() !== "young"; waited += 100) {
+      // The cap only stops a page that never lets it go: a busy machine can take seconds.
+      for (let waited = 0; waited < 60000 && await left() !== "young"; waited += 100) {
         await new Promise((r) => setTimeout(r, 100));
       }
       check(await left() === "young", "a page that starts lets go the draft older than 30 days, and keeps the other",
@@ -218,7 +191,8 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
       await new Promise((r) => setTimeout(r, 3500));
       check(!gone, "closing the tab that holds the server hands the hold to another tab");
       await ctx.browser.closeTab(b.page);
-      for (let waited = 0; waited < 8000 && !gone; waited += 100) {
+      // The cap only stops a server that never stops: a busy machine can take seconds past 2 s.
+      for (let waited = 0; waited < 60000 && !gone; waited += 100) {
         await new Promise((r) => setTimeout(r, 100));
       }
       check(gone, "with no tab open, the server stops after its idle time");

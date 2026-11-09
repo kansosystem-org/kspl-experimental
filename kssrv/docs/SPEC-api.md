@@ -2,7 +2,7 @@
 
 **This document is the agreement between the kssrv server and whoever calls it over HTTP.** It sets every request the server answers and what each answer holds, the JSON API under `/api/`, and the limits a caller writes against.
 
-A *client* is any program that sends the server HTTP requests: a browser, `curl`, your own code, or the robot car ("The car's policy file" below). How to start the server is in [`kssrv/README.md`](../README.md).
+A *client* is any program that sends the server HTTP requests: a browser, `curl`, your own code, or a device such as ksos's robot car. How to start the server is in [`kssrv/README.md`](../README.md).
 
 The endpoints a page opened in a browser uses are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Where the two documents meet, that one is the canonical source.
 
@@ -51,6 +51,8 @@ A path's `%XX` (one byte as `%` and two hex digits) is decoded once only.
 | `/a+b.txt` | `a+b.txt` | **A path's `+` is not a space.** A `+` for a space is the convention of HTML forms (`application/x-www-form-urlencoded`), not of a URI's path |
 | `/%252e` | `%2e` | `%25` is decoded to `%`, and the result is not decoded again |
 
+The `Content-Type` is looked up from the extension, whatever its letter case (`PHOTO.JPG` is `image/jpeg`). **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so such a file is returned this way.
+
 ## HTTPS
 
 **Started with `--cert` and `--key`, the port speaks HTTPS only**, and every answer above comes the same over it. The client needs TLS 1.2 or 1.3. Over TLS 1.2, only suites with an ECDHE key exchange and AES-GCM or ChaCha20-Poly1305 are taken.
@@ -98,7 +100,7 @@ $ curl -s localhost:8080/api/status
 | `root` | the root's path, only for local use. Empty facing outward, where it would tell anyone the machine's layout |
 | `fs_lookups` | how many times the server has asked the file system what stands at a path (`fs.lookups`), only for local use. Absent facing outward, where the count one request adds would tell which of its steps stand |
 
-For local use only, the endpoints a page uses: `GET` and `PUT` on `/api/file`, and `GET /api/stat`, `GET /api/list`, `POST /api/move`, `GET /api/here` and `POST /api/stop`. With a builder, also `GET`, `POST` and `DELETE` on `/api/allow`, and `POST /api/build`. What each takes and answers is set in "Only six things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
+For local use only, the endpoints a page uses: `GET` and `PUT` on `/api/file`, and `GET /api/stat`, `GET /api/list`, `GET /api/here` and `POST /api/stop`. With a builder, also `GET`, `POST` and `DELETE` on `/api/allow`, and `POST /api/build`. What each takes and answers is set in "Only five things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 Anything else under `/api/`:
 
@@ -113,7 +115,7 @@ Anything else under `/api/`:
 
 Started with `--local`, the server lets a program on the same machine read and write files under the root, with the token it prints.
 
-**These endpoints are the protocol's, and their rules stand there.** They cover the token and its header, which paths are refused, and why there is no `HEAD`. They also cover the type a file comes back as, and how a write keeps the original whole. They are "Where it listens", "Only six things can be asked for" and "How it refuses" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
+**These endpoints are the protocol's, and their rules stand there.** They cover the token and its header, which paths are refused, and why there is no `HEAD`. They also cover the type a file comes back as, and how a write keeps the original whole. They are "Where it listens", "Only five things can be asked for" and "How it refuses" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 ```console
 $ ./out/kssrv.exe 8080 ./public --local
@@ -130,19 +132,6 @@ $ curl -s -H "Authorization: Bearer $T" -X PUT --data-binary @notes.md \
 ```
 
 Caution: **The token above is a sample. Do not paste a token you ran into a document**: a reader would take it as a value to paste.
-
-## The car's policy file
-
-The small robot car takes its driving policy from kssrv once, at start-up, as a plain file. It asks for `GET /pilot_policy.safetensors`, so kssrv serves the folder that holds that file, as any other file under the root.
-
-```console
-$ ./out/kssrv.exe 8080 <the folder that holds pilot_policy.safetensors>
-$ curl -s -o pilot.safetensors localhost:8080/pilot_policy.safetensors
-```
-
-The car is a Freenove 4WD mecanum car with a Pico W. The steps for connecting it are in ksos's bring-up guide, named in the root [`README.md`](../../README.md#-what-works-and-how-far). kssrv does not know the file's contents.
-
-The `Content-Type` is looked up from the extension, whatever its letter case (`PHOTO.JPG` is `image/jpeg`). **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so the policy file is returned this way.
 
 ## What a client can rely on
 

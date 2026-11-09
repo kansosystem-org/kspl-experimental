@@ -134,5 +134,5 @@ function ksmdChoices(ks) {
   ks.handle("column-choices", (_, c) => ask(c.block, c.column), { table: true });
   ks.handle("column-rows", (_, c) => rows(c.block, c.column), { table: true });
 
-  ks.choices = { mark, attach, ask, rows };
+  ks.choices = { mark, attach };
 }

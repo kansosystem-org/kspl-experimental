@@ -146,17 +146,13 @@ fn test_a_long_event_line_is_searched_once() //< held to the same bytes read in 
     $whole_us: I64 = 0I64
     $pieces_us: I64 = 0I64
     for round in Range.asc(TIMING_ROUNDS)
-        whole_us = fastest(whole_us, event_us(line, line.len), round)
-        pieces_us = fastest(pieces_us, event_us(line, 4096), round)
+        whole_us = agent_test.fastest(whole_us, event_us(line, line.len), round)
+        pieces_us = agent_test.fastest(pieces_us, event_us(line, 4096), round)
     verdict.check("4 KiB pieces take less than ten times as long as one piece, plus 0.2 s",
         pieces_us < 10I64 * whole_us + 200000I64,
         arena.text().s("\{pieces_us\} us in pieces, \{whole_us\} us whole").take())
 
 priv const TIMING_ROUNDS: Sz = 5 //< rounds of the two timings, each kept at its fastest
-
-priv fn fastest(best: I64, took: I64, round: Sz): I64 //<
-    //< the faster of the two; the first round sets it
-    return took if round == 0 || took < best else best
 
 priv fn event_us(line: U8[], piece: Sz): I64 //<
     //< How long one event takes to read, its bytes added `piece` at a time

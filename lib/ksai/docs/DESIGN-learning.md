@@ -285,11 +285,9 @@ The tiny model's scores are checked against an F64 computation of the same graph
 
 The tests run a tiny Qwen3.5 model against an F64 computation of the same graph, which llama.cpp's own scores match within 1e-6 ([`tests/qwen_test.kspl`](../tests/qwen_test.kspl)). They also restore a copied state after other tokens, and compare the scores with one run bit for bit.
 
-**`qwen_infer` keeps its own Qwen2.5 model on 32-bit weights**, read from the safetensors that `export_qwen_to_kspl.py` writes. Its LoRA adapters attach to `nn.Gqa_attention`, and the coding example's `lora_finetune_external.py` writes adapters for them.
-
 ## A build for the machine's own CPU is asked for
 
-**`make chat-server NATIVE=1` builds the AI programs for the CPU of the machine that builds them** (`-march=native`). The default build runs on every CPU of its architecture. The programs are `chat-server`, `qwen`, `run` and `fim-model`.
+**`make chat-server NATIVE=1` builds the AI programs for the CPU of the machine that builds them** (`-march=native`). The default build runs on every CPU of its architecture. The programs are `chat-server`, `run` and `fim-model`.
 
 * **Why it is asked for**: a program built for one CPU stops with "illegal instruction" on a CPU that lacks one of those instructions. CI, and a program copied to another machine, keep the default.
 * **What it gives**: the C compiler can use every instruction the CPU has, such as AVX2 on most x86-64 CPUs since 2013. The measurement is in [`lib/ksai/benches/README.md`](../benches/README.md).
@@ -403,7 +401,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 | :-- | :-- |
 | **Training** | It can borrow an existing model: a large LLM, or LoRA fine-tuning of a small coding model (training only a few added parameters) |
 | **Checking** | KSPL's own tools: `ksplc` (compiling), `lint` and `fmt` |
-| **Serving** (running the model) | KSPL: inference runs on `ksai` with safetensors weights (`examples/code_complete` and `examples/qwen_infer`) |
+| **Serving** (running the model) | KSPL: inference runs on `ksai` with safetensors weights (`examples/code_complete` and `examples/chat_server`) |
 
 **The compiler is the judge** (the *compiler oracle*). What is generated and trained on is checked by a program, not by a person. The main measure is the rate at which `ksplc` accepts a file once the completion is inserted.
 

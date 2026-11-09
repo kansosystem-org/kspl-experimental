@@ -8,7 +8,6 @@
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
-import "std/libc"
 import "std/sys"
 import "std/verdict"
 
@@ -27,15 +26,10 @@ $stack_driver: U8[65536]
 $stack_consumer: U8[65536]
 
 fn on_ext_irq(_sig: I32): Void //< the mock ISR
-    //< It calls libc.signal() again at the end. On glibc built with -std=c99, signal() has SysV
-    //< semantics: after one delivery, the action resets to the default, which exits. Without
-    //< registering again, the second SIGUSR1 ends the process (the classic "reliable signal"
-    //< idiom).
     g_irq_count += 1
     if !g_q.try_send(g_next_value)
         g_drop_count += 1
     g_next_value += 1
-    libc.signal(SIGUSR1, on_ext_irq)
 
 fn driver(_arg: Void$@): Void //<
     //< Raise the "interrupt" 10 times in a row
@@ -72,7 +66,7 @@ fn consumer(_arg: Void$@): Void
 
 fn main(): I32
     g_q.init(g_qbuf[0]@, 4)
-    libc.signal(SIGUSR1, on_ext_irq)
+    sys.set_signal_handler(SIGUSR1, on_ext_irq)
     tcb_driver.create(U8$[]::stack_driver, driver, null, 1, "driver")
     tcb_consumer.create(U8$[]::stack_consumer, consumer, null, 1, "consumer")
     task.start_scheduler()

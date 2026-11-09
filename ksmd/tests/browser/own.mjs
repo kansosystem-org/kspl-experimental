@@ -7,10 +7,9 @@
 // `own(t)` takes `served.mjs`'s helpers, and returns its sections and those of `trust.mjs`.
 import fs from "fs";
 import path from "path";
-import { SHIFT, verdict } from "./drive.mjs";
+import { H, SHIFT, cellText, check, verdict } from "./drive.mjs";
 import { trust } from "./trust.mjs";
 
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const read = (file) => {
   try {
     return fs.readFileSync(file, "utf8");
@@ -18,7 +17,6 @@ const read = (file) => {
     return null;
   }
 };
-const H = "%ksmd 1\n\n";
 const MINE = `//< Functions for the test
 import "std/mem" { Arena }
 import "std/str"
@@ -68,7 +66,7 @@ export function own(helpers) {
     await d.until("!document.querySelector('.own-ask').hidden", 20000);
     await d.click(".own-ask .own-allow");
   };
-  const cell = (d, r) => d.js(`document.querySelector('#doc td[data-r="${r}"][data-c="1"]').textContent`);
+  const cell = (d, r) => cellText(d.js, r, 1);
   const box = (d) => d.js("document.querySelector('#doc .functions .functions-state').textContent");
 
   return {
@@ -174,14 +172,16 @@ export function own(helpers) {
       const p = await tab(ctx, "?doc=notes/plain.ksmd");
       await p.select(0, 0, 5);
       await p.menu("functions");
+      // The data folder does not stand yet: the dialog shows the document's folder, with the
+      // data folder in the name.
       await p.until("document.getElementById('browse').open && " +
-        "document.querySelector('#browse .browse-name').value === 'functions.kspl'");
+        "document.querySelector('#browse .browse-name').value === 'plain-data/functions.kspl'");
       await p.js("document.querySelector('#browse [data-browse=\"ok\"]').click()");
       await idle(p);
-      const started = ctx.disk("notes/functions.kspl");
+      const started = ctx.disk("notes/plain-data/functions.kspl");
       check(typeof started === "string" && started.includes("pub fn twice"),
-        "Insert, Functions starts a functions file beside the document", String(started));
-      check(await p.js("ksmd.source()").then((s) => s.includes(':::functions path="functions.kspl"')),
+        "Insert, Functions starts a functions file in the document's data folder", String(started));
+      check(await p.js("ksmd.source()").then((s) => s.includes(':::functions path="plain-data/functions.kspl"')),
         "and puts its clause at the caret", await p.js("ksmd.source()"));
       await p.until("!!document.querySelector('#doc .functions .functions-allow')", 20000);
       await p.click("#doc .functions .functions-allow");
@@ -255,15 +255,20 @@ export function own(helpers) {
         .find((b) => b.textContent === ${JSON.stringify(text)})`;
       const source = () => d.js("ksmd.source()");
 
-      await dialog("part.ksmd");
+      await dialog("host-data/part.ksmd");
       await d.js("document.querySelector('#browse [data-browse=\"ok\"]').click()");
       await idle(d);
-      check(ctx.disk("host/part.ksmd") === "%ksmd 1\n",
-        "Insert, Include starts an empty document beside the open one", String(ctx.disk("host/part.ksmd")));
-      check((await source()).includes(':::include path="part.ksmd"'), "and puts its clause at the caret",
+      check(ctx.disk("host/host-data/part.ksmd") === "%ksmd 1\n",
+        "Insert, Include starts an empty document in the open one's data folder",
+        String(ctx.disk("host/host-data/part.ksmd")));
+      check((await source()).includes(':::include path="host-data/part.ksmd"'), "and puts its clause at the caret",
         await source());
 
+      // The data folder stands now: the dialog opens in it, and `..` leads back to the document's.
       await dialog("part.ksmd");
+      check(await d.until(`!!${button("..")} && !${button("host.ksmd")}`),
+        "the next Insert, Include opens in the data folder that now stands");
+      await d.js(`${button("..")}.click()`);
       await d.until(`!!${button("sub")}`);
       await d.js(`${button("sub")}.click()`);
       await d.until(`!!${button("existing.ksmd")}`);
@@ -277,6 +282,8 @@ export function own(helpers) {
 
       const before = await source();
       await dialog("part.ksmd");
+      await d.until(`!!${button("..")}`);
+      await d.js(`${button("..")}.click()`);
       await d.until(`!!${button("host.ksmd")}`);
       await d.js(`${button("host.ksmd")}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
       await idle(d);

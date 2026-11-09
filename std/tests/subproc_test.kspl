@@ -253,6 +253,32 @@ fn test_many_arguments(arena: Arena$@) //<
     assert(r.exited_with(0) && r.stdout_data.equals("300\n"), "the child counts all 300 arguments")
     verdict.pass("A child with 300 arguments started and counted every one.")
 
+priv const ARGS_ECHO_SRC: U8[] = //< a child that puts out each argument after its name in brackets
+    """import "std/io"
+import "std/sys"
+
+fn main()
+  a: = sys.args()
+  for i in Range(1, a.len, 1)
+    io.out().c('[').s(a[i]).c(']')
+"""
+
+fn test_hard_arguments_arrive_whole(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< **Each argument arrives as it was given**, through ksplc to the program it runs
+    //< On Windows each start joins the arguments into one command line, and the child splits it
+    //< again. A backslash before a quote, a trailing backslash and an empty argument are what a
+    //< wrong quoting rule loses or merges.
+    verdict.start("[Sys] arguments with quotes, backslashes, spaces and a tab arrive whole...")
+    $argv: = List<|U8[]|>(arena)
+    argv.push_all(sys_test.child_argv(ksplc, "args_echo", ARGS_ECHO_SRC, arena))
+    argv
+        .push_all(U8[][]::{ "C:\\dir\\", "a\"b", "a\\\\\"b", "", "a b", "tab\there", "x\\" })
+    r: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena) catch
+        panic("the child echoing its arguments must start")
+    sys_test.expect_output(r, "the child echoing its arguments",
+        "[C:\\dir\\][a\"b][a\\\\\"b][][a b][tab\there][x\\]", 0, arena)
+    verdict.pass("Seven hard arguments reached the child through ksplc, each one whole.")
+
 fn test_run_many_frees_slots_early(arena: Arena$@) //<
     //< A job that ends early frees its slot for the next, while an earlier job still runs
     //< The long job waits for the mark the third job leaves, and only then ends. Waited on in start
@@ -503,9 +529,16 @@ fn test_start_error_names_the_cause(arena: Arena$@) //<
         fallback -1
     assert(started == -1, "a program that is not there must not start")
     assert(subproc.start_error() == 2, "the OS's number for a missing program is 2")
+    // **A bare name is looked up in PATH**, a step of its own on Windows. Its failure once set no
+    // number, so a tool could not say why.
+    bare: =
+        subproc.spawn_wait(U8[][]::{ "kspl-no-such-program-on-any-path" }, "") catch
+        fallback -1
+    assert(bare == -1, "a bare name on no PATH must not start")
+    assert(subproc.start_error() == 2, "the OS's number for a bare name on no PATH is 2")
     self: = sys.args()[0]
     _r: =
         subproc.run_capture(U8[][]::{ self, "--no-such-option-at-all" }, "", 60000, 4096, arena)
         catch panic("this program must start again")
     assert(subproc.start_error() == 0, "a start that succeeded leaves no error")
-    verdict.pass("a missing program gave 2, and the next good start gave 0.")
+    verdict.pass("a missing program and a bare name on no PATH gave 2, and a good start gave 0.")

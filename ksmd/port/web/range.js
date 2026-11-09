@@ -231,13 +231,29 @@ function ksmdRange(ks) {
         `Cell ${ks.table.letters(column)}${row + 1}`);
       // A touch screen keeps its keyboard down for a cell only chosen; a double tap opens it.
       if (window.matchMedia && window.matchMedia("(hover: none)").matches) box.inputMode = "none";
-      box.addEventListener("compositionstart", () => ks.table.openTyped(box, true));
+      box.addEventListener("compositionstart", () => ks.table.openTyped(adopted(box), true));
       box.addEventListener("input", (e) => {
-        if (!e.isComposing) ks.table.openTyped(box);
+        if (!e.isComposing) ks.table.openTyped(adopted(box));
       });
       el.appendChild(box);
     }
     box.readOnly = ks.readOnly;
+    return box;
+  }
+
+  // **A key can reach a box the page has just taken away.** A document's own function answers,
+  // and the table is drawn again, between the press that chose a cell and the first key. The key
+  // then went into the old table's box, which opened nothing, and was lost: `200` became `00`.
+  // Such a box moves into the chosen cell of the table drawn again, in place of the box there, so
+  // what was typed opens that cell.
+  function adopted(box) {
+    if (box.isConnected) return box;
+    const c = ks.cell;
+    const el = c && find(c.block, c.row, c.column);
+    if (!el) return box;
+    for (const old of document.querySelectorAll(".cell-catch")) if (old !== box) old.remove();
+    el.appendChild(box);
+    box.focus({ preventScroll: true });
     return box;
   }
 
@@ -598,6 +614,9 @@ function ksmdRange(ks) {
     document.addEventListener(type, (e) => {
       if (ks.where !== "cell" || !ks.cell || !wrapOf(ks.cell.block)) return;
       if (e.target && e.target.nodeType === Node.ELEMENT_NODE && !ks.root.contains(e.target)) return;
+      // Text chosen in the status bar, such as part of a formula, is copied as chosen.
+      const s = window.getSelection();
+      if (type === "copy" && s && !s.isCollapsed && ks.status.bar.contains(s.anchorNode)) return;
       if (ks.table.editing() && !end) return;
       e.preventDefault();
       const r = rect();
@@ -631,7 +650,7 @@ function ksmdRange(ks) {
     e.preventDefault();
     e.stopPropagation();
     const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
-    if (ks.cut.paste(text)) return;
+    if (ks.cut.paste(text, ks.pasting.values())) return;
     // A whole table copied from ksmd, pasted on a whole table chosen, goes after that table.
     if (whole() && ks.pasteTable(e.clipboardData, ks.cell.block + 1)) return;
     if (ks.pasting.paste(e.clipboardData, text)) return;
@@ -642,10 +661,45 @@ function ksmdRange(ks) {
     { table: true, repeat: true });
   ks.handle("table-select", (_, c) => selectTable(c.block), { table: true });
 
+  // The chosen cell's text as typed: a formula, a value or a column's name. While the cell is
+  // open, it is what its box holds now. The status bar shows it too (`status.js`).
+  function typed() {
+    const open = ks.table.editing();
+    return open ? open.input.value : ks.cellText(ks.cell.block, ks.cell.row, ks.cell.column);
+  }
+
+  // Copy formula puts the chosen cell's text as typed on the clipboard, the whole formula as
+  // plain text, where Copy gives other programs its shown value, as Excel's copy does.
+  ks.handle("copy-formula", () => {
+    if (!ks.cell || !wrapOf(ks.cell.block)) {
+      ks.say("Choose a cell to copy what was typed in it.");
+      return null;
+    }
+    if (end) {
+      ks.say("Choose one cell to copy what was typed in it.");
+      return null;
+    }
+    const text = typed();
+    // The copy event takes the text before the cells' own copy above could.
+    const put = (e) => {
+      e.clipboardData.setData("text/plain", text);
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    document.addEventListener("copy", put, true);
+    try {
+      if (!document.execCommand("copy")) ks.say("The browser did not let the page copy.");
+    } finally {
+      document.removeEventListener("copy", put, true);
+    }
+    return null;
+  }, { table: true, direct: true, looks: true });
+
   ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, selectTable,
     lines, chooseLines, hiddenRows,
     // Puts the focus on the chosen cell, so the keys act on it.
     focus: focusChosen,
     // Whether a range of more than one cell is chosen.
-    any: () => !!end };
+    any: () => !!end,
+    typed };
 }

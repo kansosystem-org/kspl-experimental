@@ -9,6 +9,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/stmt" as sema_body_stmt
+import "ksplc/sema/body/stmt_escape" { note_frame_payload }
 import "ksplc/sema/decl/access" as _sema_decl_access // `refuse_interior_mutable_copy`
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
@@ -28,6 +29,7 @@ priv struct Switch_ctx
     covered_variants: List<|Ast_node$@|>$@
     bound_vars: List<|Sema_symbol$@|>$@
     seen_values: Map<|I64, Ast_node$@|>$@ //< a non-enum switch's case values so far, by value
+    subject: Ast_node$@ //< the value switched on, whose frame pointers a payload binding carries
     success: Bool
 
 priv fn payload_type_at(variant_def: sema_type_def.Enum_variant@, idx: Sz): I32 //<
@@ -121,7 +123,7 @@ impl Ast_node
             .is_enum = enum_def != null, .enum_def = enum_def,
             .covered_variants = base_ast.new_ast_node_list(),
             .bound_vars = List<|Sema_symbol$@|>.create(base_core.arena),
-            .seen_values = seen_values@, .success = true }
+            .seen_values = seen_values@, .subject = cond_node, .success = true }
 
         $has_default: = false
 
@@ -312,6 +314,7 @@ impl Ast_node
                 // as a use, and an unread binding's [W0207] goes silent.
                 bind_var.type_id = sym.type_id
                 c.declare_symbol(bind_var.text, sym, false)
+                note_frame_payload(c, bind_var, mctx.subject)
                 mctx.bound_vars.push(sym)
                 field_idx += 1
 

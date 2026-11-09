@@ -228,6 +228,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
       }).observe(top);
     }
     ksmdHandlers(ks);
+    ksmdPanels(ks);
     ksmdView(ks);
     ksmdTable(ks);
     ksmdSizes(ks);
@@ -373,6 +374,45 @@ function ksmdHandlers(ks) {
   };
 }
 
+// The small panels that set a column's rule, a chart and the page setup (`ks.panel`). Each has
+// Apply and Cancel at its end. Escape or a press outside closes it, as a press outside a menu does.
+function ksmdPanels(ks) {
+  const open = new Set();
+  document.addEventListener("mousedown", (e) => {
+    for (const p of open) if (!p.el.contains(e.target)) p.close();
+  }, true);
+  const button = (label, cls, run) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    if (cls) b.className = cls;
+    b.addEventListener("click", run);
+    return b;
+  };
+  // A panel of class `cls` (`rule-panel`), named `label` for a screen reader. Making it closes
+  // the open panel of its class. `show` adds Apply (`rule-apply`) and Cancel, and puts it on the
+  // page. Apply closes it, then runs `onApply`, which can still read the panel's fields.
+  ks.panel = (cls, label, onApply) => {
+    for (const p of open) if (p.el.className === cls) p.close();
+    const el = document.createElement("div");
+    el.className = cls;
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", label);
+    const p = { el, close: () => { el.remove(); open.delete(p); } };
+    p.apply = button("Apply", cls.replace(/-panel$/, "-apply"), () => { p.close(); onApply(); });
+    const cancel = button("Cancel", "", () => p.close());
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") p.close();
+    });
+    p.show = () => {
+      el.append(p.apply, cancel);
+      document.body.appendChild(el);
+      open.add(p);
+    };
+    return p;
+  };
+}
+
 // The menus' and the keyboard's commands, by name, and the handlers of the commands on text and
 // on the page as a whole. A table's commands are handled by the files that do their work.
 function ksmdCommands(ks) {
@@ -380,7 +420,8 @@ function ksmdCommands(ks) {
     quote: [4, 0, 0] };
   for (let n = 1; n <= 6; n++) kinds[`h${n}`] = [1, n, 0];
   const marks = { emphasis: 0, strong: 1, code: 2 };
-  const aligns = { "align-left": "left", "align-center": "center", "align-right": "right" };
+  const aligns = { "align-left": "left", "align-center": "center", "align-right": "right",
+    "align-across": "across" };
 
   // Repeat, as Office's: with nothing to redo, Redo (Ctrl+Y) and F4 do the last command again where
   // the person works now. Only a command whose handler says `repeat` is repeated: one that asks for
@@ -509,7 +550,7 @@ function ksmdCommands(ks) {
   }, { direct: true });
   ks.handle("undo", () => ks.act("ksmd_web_undo"));
   ks.handle("redo", () => ks.act("ksmd_web_redo"));
-  ks.handle(["file-open", "file-save", "file-save-as", "file-gather-images"],
+  ks.handle(["file-open", "file-save", "file-save-as"],
     (name) => (ks.fileCommand ? ks.fileCommand(name) : null), { looks: true });
   ks.handle("print", () => window.print(), { looks: true });
   ks.handle("read-only", () => ks.setReadOnly(!ks.readOnly), { looks: true });
@@ -545,7 +586,7 @@ function ksmdCommands(ks) {
   ks.handle(["date", "time"], synced((name) => ks.act("ksmd_web_type", ks.put(ks.now(name === "time")), 0)),
     { repeat: true });
   // Insert ▸ Image… chooses a file, which then goes in as a pasted image does (`addImage` in
-  // `file.js`): written beside the document, its clause at the caret.
+  // `file.js`): written in the document's data folder, its clause at the caret.
   ks.handle("image", synced(() => {
     if (!ks.imagesHere()) return null;
     const pick = document.createElement("input");
@@ -593,7 +634,8 @@ function ksmdCommands(ks) {
     if (ks.where === "cell") {
       const c = chosen();
       const el = c && ks.view.blocks()[c.block].querySelector(`[data-r="${c.row}"][data-c="${c.column}"]`);
-      return el ? el.style.textAlign : "";
+      if (!el) return "";
+      return el.classList.contains("across") ? "across" : el.style.textAlign;
     }
     const h = ks.hereNow();
     return h ? h.a : "";
@@ -633,9 +675,10 @@ function ksmdCommands(ks) {
     }
     ks.sync();
     if (part === "all") return ks.act("ksmd_web_clear_look");
-    if (part === "align") return ks.act("ksmd_web_align", ks.put(value));
+    if (part === "align" && value !== "across") return ks.act("ksmd_web_align", ks.put(value));
     if (part === "color") return ks.act("ksmd_web_text_color", ks.put(value));
-    ks.say("Fill colours, font sizes and wrapping apply to table cells. Choose cells first.");
+    ks.say("Fill colours, font sizes, wrapping and centring across columns apply to table cells. " +
+      "Choose cells first.");
     return null;
   };
 

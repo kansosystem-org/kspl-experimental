@@ -264,15 +264,21 @@ impl Ast_node
             // Caution: **Say nothing where one of the halves already reported**, or one mistake is
             // reported twice.
             if c.error_mark() == err_before
+                // Nor after an earlier error in the function: the name check holds back an unknown
+                // name there (report_undefined_path), and a message about types would replace it.
+                $say: = true
                 if expr_node.kind_id == .k_empty
                     c.clear_scratch()
                         .s("cannot infer type for '\{id_node.text\}'. Add a type annotation (e.g. \
                             '\{id_node.text\}: I32') or an initializer")
-                else if !sema_body_resolve_path.refuse_type_name(c, expr_node)
+                else if sema_body_resolve_path.refuse_type_name(c, expr_node) ||
+                    c.has_error_in_fn()
+                    say = false
+                else
                     c.clear_scratch()
                         .s("cannot infer type for '\{id_node.text\}'. Its initializer has no type \
                             of its own. A type name is not a value")
-                if c.error_mark() == err_before
+                if say
                     c.err(id_node, c.scratch.slice())
             final_id = I32::sema_type_env.Builtin_type_id.unknown
         is_const: = r.kind_id == .k_decl_const || kw_text.equals("const")

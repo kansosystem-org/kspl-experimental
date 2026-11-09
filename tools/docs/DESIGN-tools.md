@@ -101,6 +101,7 @@ sequenceDiagram
 | **The page is served from outside the root** (`kssrv --page=<file>`), not copied into the user's folder. | Copying a 2MB page into the folder at every opening would fail on a read-only folder. |
 | **The folder served is the document's workspace** ("Opening a `.ksmd` document" below). | Serving only the document's folder would leave the files it includes unreachable. |
 | **The served folder is remembered as an absolute path.** | `.` and `/home/me/devel` are one folder but two strings, and would start two servers on the same folder. |
+| **A folder that holds the server's `tmp/` gets no builder, and the run says why.** | The record of allowed files stands in `tmp/`, and a page could write it there. kssrv refuses such a record, so with the builder named the server would not start at all. |
 
 Why that one named page file gives the client no more reach is "Where it listens" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
@@ -250,6 +251,7 @@ flowchart TD
     B -->|200, or no /health| R[use it, and leave it running at the end]
     B -->|503| W[wait until it is ready]
     A -->|another answer| X[refuse: the port belongs to another program]
+    A -->|401| K[refuse: name KSAGENT_API_KEY]
     A -->|nothing listens| F{model file in data/?}
     F -->|no| D[print the curl command, and stop]
     F -->|yes| L{llama-server starts from PATH?}
@@ -277,6 +279,11 @@ flowchart TD
 | **Only the server this run started is stopped** | A server the person started is theirs, and other programs can use it too |
 | **The server shares the launcher's console** (`spawn_beside` in [`std/subproc.kspl`](../../std/subproc.kspl)) | Ctrl+C at the console reaches it as it reaches the launcher, so it stops even when the launcher is stopped before it can act |
 | **The launcher takes the model server's port, `--port`, and hands `ksagent watch` the address on this machine** | The address is made once, so the server started and the server asked cannot differ. `make chat PORT=<n>` names the port |
+| **A llama-server it starts gets a new random key each time, through `LLAMA_API_KEY`** | llama-server checks no `Host` and answers the CORS request of any page. Without a key, a web page could use the graphics card and read the answers. The environment keeps the key out of the process list |
+| **It starts llama-server with `--no-slots`** | `GET /slots` shows the prompts that are being answered, and nothing here reads it |
+| **The key stands in `tmp/model.<port>.key`, which only its owner can read, until the server stops** | A second launcher, and `ksagent ask` after `make model-server`, ask a server they did not start. `ksagent watch` gets the key through `KSAGENT_API_KEY` |
+| **A server that answers 401 is refused, and the message names `KSAGENT_API_KEY`** | It is a model server that wants a key this launcher does not hold. Taking it for another program would hide the fix |
+| **`chat_server` gets no key** | It answers only a request whose `Host` is this machine, so a web page cannot reach it |
 | **A model file named for a server not started here is refused** | That server keeps its own model, so the name would change nothing (Principle 5 in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)) |
 | **With `chat_server`, ksagent waits an hour for one reply** | It reads a prompt several times slower than `llama-server`, and ksagent's own limit would end a question it still answers |
 | **`llama-server`'s options stand in `tools/model_server.kspl` alone**, and `make model-server` runs the launcher with `--model-only` | `ksagent ask` and `eval` need a server alone. Through the launcher it gets the same options, the same choice and the same messages |

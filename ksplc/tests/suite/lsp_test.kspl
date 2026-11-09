@@ -276,6 +276,37 @@ priv fn check_ragged_reaches(c: jsonrpc_client.Client$@, arena: Arena$@)
     verdict.check("a column slip in the indentation notation reaches the editor", found && ragged,
         lsp_client.why(c, seen, arena))
 
+// A default that calls its own function reaches the editor as one refusal per default.
+// **The compiler's stack ran out** copying the default into each call, so the worker died and no
+// diagnostic came at all.
+priv const SELF_DEFAULT_SRC: U8[] =
+    """fn f(x: I32 = f()): I32
+    return x
+
+fn g(x: I32 = h()): I32
+    return x
+
+fn h(y: I32 = g()): I32
+    return y
+
+fn main(): I32
+    return f(1) + g(2)
+"""
+priv const SELF_DEFAULT_URI: U8[] = "file:///self_default_probe.kspl"
+
+priv fn check_self_default(c: jsonrpc_client.Client$@, arena: Arena$@)
+    c.notify("textDocument/didOpen",
+        lsp_client.did_open(SELF_DEFAULT_URI, SELF_DEFAULT_SRC, arena), lsp_client.SEND_MS, arena)
+        catch {}
+    defer lsp_client.close(c, SELF_DEFAULT_URI, arena)
+    got: = published_for(c, "self_default_probe.kspl", arena)
+    $refused: Sz = 0
+    for d in got.diags
+        if d.get("message").as_str().unwrap_or("").starts_with("a parameter default must be")
+            refused += 1
+    verdict.check("a default that calls its own function is refused in the editor, once each",
+        got.found && refused == 3, lsp_client.why(c, said(got, arena), arena))
+
 priv fn check_shebang(c: jsonrpc_client.Client$@, top: U8[], arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(SHEBANG_URI, SHEBANG_SRC, arena),
         lsp_client.SEND_MS, arena) catch {}
@@ -641,12 +672,16 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
     seen: = heavy.sub(0, heavy.find_str(done).unwrap_or(0)).count_str("__KSPL_WORKER_ALIVE__")
     d14: = arena.text().s("\{seen\} liveness marks").take()
     verdict.check("it goes on telling it is alive mid-way through a heavy didOpen", seen > 0, d14)
+    // **The cap only stops a worker that never ends**: a busy machine can take past a second.
     $code: I32 = -1
-    for _i in Range.asc(100)
+    $over: = false
+    deadline: = sys.mono_us() + 300000000I64
+    for !over && sys.mono_us() < deadline
         if ended: = w.exit_code()
             code = ended
-            break
-        sys.sleep_ms(10)
+            over = true
+        else
+            sys.sleep_ms(10)
     nerr: = w.read_err(buf, 100) catch 0
     verdict.check("a worker frees a document whose import cannot be loaded", code == 0,
         arena.text().s("exit=\{code\}: ").s(buf.sub(0, nerr)).take())
@@ -703,6 +738,7 @@ fn main(): I32
     lsp_recover.check_template_bound(c@, arena)
     check_shebang(c@, top, arena)
     check_ragged_reaches(c@, arena)
+    check_self_default(c@, arena)
     lsp_spell.check_hover_types(c@, arena)
     lsp_spell.check_hover_away(c@, arena)
     lsp_spell.check_hover_prelude(c@, arena)

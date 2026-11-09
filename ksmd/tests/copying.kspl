@@ -22,6 +22,7 @@ fn run()
     values_only()
     leaving_rows()
     turned()
+    literals()
 
 priv fn carried() //< a copy carries each cell's typed text and its value as calculated
     defer arena: = Arena(64 * 1024)
@@ -147,6 +148,16 @@ priv fn leaving_rows() //< a copy that leaves rows out, as hidden ones, pastes t
         .some(Copied_at::{ .row = 0, .column = 1, .rows = Sz[]::{ 0 } })) catch
         mismatched = true
     verdict.check("rows that do not match the lines are refused", mismatched, "")
+
+priv fn literals() //< a literal in a base is saved and pasted as written, beside a reference
+    defer arena: = Arena(64 * 1024)
+    first: = "| 1 | =0xA1+A1 | =0b_0111_0001*B1 |\n"
+    before: = join(join(HEAD, first, arena), "| 2 | | |\n:::\n", arena)
+    $ed: = opened(before, arena)
+    saves("a literal in hexadecimal or binary is saved as written", ed@, arena, before)
+    pasted(ed@, 1, 1, 1, 2, "[[\"=0xA1+A1\",\"=0b_0111_0001*B1\"]]", 0, 1)
+    after(ed@, "a paste shifts the references and keeps each literal as written", HEAD,
+        join(first, "| 2 | =0xA1+A2 | =0b_0111_0001*B2 |\n:::\n", arena))
 
 priv fn after(ed: Editor@, what: U8[], head: U8[], rest: U8[]) //<
     //< The document saves as `head` followed by `rest`

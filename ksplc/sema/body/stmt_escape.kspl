@@ -153,6 +153,32 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
             return find_frame_escape(c, target.get_ternary_false(), with_address, deeper_than)
         default
             return found
+    case .k_expr_catch_chain
+        // **The value is the subject's success, or what the `catch` gives in its place**: the
+        // substitute (`catch x@`) or a `fallback` in its block. Each is checked as the value.
+        found: =
+            find_frame_escape(c, target.get_catch_chain_expr(), with_address, deeper_than)
+        switch found
+        case .none {}
+        default
+            return found
+        catch_node: = target.get_catch_chain_catch()
+        if catch_node == null
+            return .none
+        for ch in catch_node.children
+            if ch.kind_id == .k_stmt_block
+                in_block: = find_in_fallbacks(c, ch, with_address, deeper_than)
+                switch in_block
+                case .none {}
+                default
+                    return in_block
+            else if ch.kind_id != .k_keyword && ch.kind_id != .k_identifier
+                substitute: = find_frame_escape(c, ch, with_address, deeper_than)
+                switch substitute
+                case .none {}
+                default
+                    return substitute
+        return .none
     case .k_expr
         // A pointer stepped by an integer (`a[0]@ + 1`) still points where its operand did.
         if !c.env.is_pointer(target.type_id) || target.children.len != 3
@@ -228,6 +254,23 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
         return .none
     return .slice(src)
 
+priv fn find_in_fallbacks(c: Sema_ctx$@, node: Ast_node$@, with_address: Bool, deeper_than: I32):
+    Frame_escape //<
+        //< find_frame_escape's first find among the values the `fallback` statements in node give
+        //< A `catch` nested in node has its own `fallback` statements, which give its value, so
+        //< they are not searched.
+    if node == null || node.kind_id == .k_expr_catch_chain || node.kind_id == .k_expr_fn_lit
+        return .none
+    if node.kind_id == .k_stmt_fallback
+        return find_frame_escape(c, node.get_fallback_expr(), with_address, deeper_than)
+    for child in node.children
+        found: = find_in_fallbacks(c, child, with_address, deeper_than)
+        switch found
+        case .none {}
+        default
+            return found
+    return .none
+
 priv fn value_part_receiver(c: Sema_ctx@, node: Ast_node$@): Bool //<
     //< Whether node reads a field or an element held inside its receiver's own value
     //< That is a `.` on a value (a slice's `.ptr` among them), or a `[` on a fixed-length array.
@@ -275,6 +318,13 @@ priv fn points_into(c: Sema_ctx$@, node: Ast_node$@): List<|Sema_symbol$@|>@? //
         return .some(sym.frame_points_at)
     if node.kind_id == .k_expr_postfix && node.postfix_op_text().equals("@")
         return one_local(c, node.get_postfix_receiver())
+    // A pointer stepped by an integer (`s.ptr + i`) points into what its pointer operand does. A
+    // `for … in` over a slice reads each item so (build_index_loop in for_in.kspl).
+    if node.kind_id == .k_expr && node.children.len == 3 && c.env.is_pointer(node.type_id)
+        left: = node.get_binary_left()
+        if c.env.is_pointer(left.type_id)
+            return points_into(c, left)
+        return points_into(c, node.get_binary_right())
     if node.is_explicit_cast()
         src: = node.get_postfix_receiver()
         if src != null && c.env.is_array(c.env.get_real_type(src.type_id))
@@ -396,6 +446,16 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
     //< The local also keeps the deepest block its pointers reach (frame_pointer_depth), for a
     //< store of it into a local of an outer block.
     note_frame_part(c, id_node, "", expr_node)
+
+fn note_frame_payload(c: Sema_ctx$@, bind_var: Ast_node$@, subject: Ast_node$@) //<
+    //< Marks a `case .v(p)` binding, or an `if p: = o` one, as the subject it reads out
+    //< **The binding holds a copy of a part of the subject**, so it carries what the subject holds,
+    //< as `p: = o` would. The variants are not told apart, as an array's elements are not. A
+    //< binding that holds no pointer (a number) carries nothing, so `case .n(k)` still returns k.
+    sym: = c.read_written_name(bind_var).sym
+    if sym == null || holds_no_pointer(c, sym.type_id)
+        return
+    note_frame_part(c, bind_var, "", subject)
 
 priv fn note_frame_part(c: Sema_ctx$@, id_node: Ast_node$@, field: U8[], expr_node: Ast_node$@) //<
     //< note_frame_pointer for one field of the local (empty for the whole)

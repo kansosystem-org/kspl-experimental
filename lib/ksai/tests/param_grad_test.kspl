@@ -588,3 +588,41 @@ fn test_lora_raw_persist()
         assert(ad < 1.0e-9, "Lora.load_raw output must exactly match the original after round-trip")
     verdict
         .pass(sa.text().s("(raw_size=\{I32::lora.raw_size()\} bytes, 0 libc.malloc calls)").take())
+// ==========================================
+// Adding one sequence's gradients into another's (`accumulate`), field by field.
+// Caution: **A field left out of an `accumulate` still lowers the loss**, only more slowly. So a
+// test that watches the loss lets it through; this test checks each field's sum.
+// ==========================================
+priv fn grad_of(n: Sz, v: F64, arena: Arena$@): Tensor<|F64|> //< a vector of n, every element v
+    //< Each field gets its own length. Then a field added into the wrong one is refused by
+    //< `Tensor.accumulate`'s size check.
+    shape: Sz[1] = ::{ n }
+    t: = Tensor<|F64|>(Sz[]::shape, arena)
+    t.fill(v)
+    return t
+
+priv fn block_grads_of(v: F64, arena: Arena$@): ai_block_train.Block_grads<|F64|> //<
+    //< A block's gradients with every element of every field set to v
+    return ai_block_train.Block_grads<|F64|>::{ .attention_norm = ai_nn_grad.Rms_norm_grads<|F64|>::{ .dw
+        = grad_of(2, v, arena) },
+        .attention = ai_attn_train.Attention_grads<|F64|>::{ .wq = grad_of(3, v, arena),
+        .wk = grad_of(4, v, arena), .wv = grad_of(5, v, arena), .wo = grad_of(6, v, arena) },
+        .ffn_norm = ai_nn_grad.Rms_norm_grads<|F64|>::{ .dw = grad_of(7, v, arena) },
+        .ffn = ai_nn_grad.Mlp_grads<|F64|>::{ .fc1 = ai_nn_grad.Linear_grads<|F64|>::{ .dw =
+        grad_of(8, v, arena) },
+        .fc2 = ai_nn_grad.Linear_grads<|F64|>::{ .dw = grad_of(9, v, arena) } } }
+
+fn test_block_grads_accumulate(arena: Arena$@) //<
+    //< `Block_grads.accumulate` adds every field, through each smaller gradient's `accumulate`
+    verdict.start("[Grads] accumulate adds every field of a block's gradients...")
+    $sum: = block_grads_of(1.0, arena)
+    $more: = block_grads_of(2.0, arena)
+    sum.accumulate(more@)
+    // Every field of `Block_grads` and of the gradients inside it, one entry each.
+    fields: Tensor<|F64|>[8] = ::{ sum.attention_norm.dw, sum.attention.wq, sum.attention.wk,
+        sum.attention.wv, sum.attention.wo, sum.ffn_norm.dw, sum.ffn.fc1.dw, sum.ffn.fc2.dw }
+    for f in Range.asc(8)
+        t: = fields[f]
+        for i in Range.asc(t.size)
+            assert((t.data + i)$ == 3.0, "accumulate: a field of Block_grads is not 1.0 + 2.0")
+    verdict.pass("all eight fields hold 1.0 + 2.0 in every element")

@@ -508,10 +508,10 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 | The car sees | It | `car-pilot` (7, 9) | `car-ir` (12) | How it comes back |
 | :-- | :-- | :--: | :--: | :-- |
 | The battery under `BATTERY_LOW_MV` on `LOW_ROUNDS` **consecutive** laps (`lib/ksos/demo/rp2040/common/battery.kspl`) (a motor's inrush dips it for an instant) | Stops | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
-| The distance under `emergency_mm` (100mm) | Backs off | ✅ | — | By itself, once the distance grows |
+| The distance under `EMERGENCY_MM` (100mm) | Backs off | ✅ | — | By itself, once the distance grows |
 | No policy received, and none in the record | Never moves | ✅ | — | Receive one from kssrv (stage 9) |
 | A remote button while it runs | Stops | ✅ any button | ✅ ▶ or 9 only | `car-pilot`: hold a key about a second, then let go ("How to stop it when it drives itself" in stage 9) |
-| 60 seconds of driving (`max_driving_rounds`) | Stops. The only one that works while nobody watches | ✅ | — | As for the remote |
+| 60 seconds of driving (`MAX_DRIVING_ROUNDS`) | Stops. The only one that works while nobody watches | ✅ | — | As for the remote |
 | A held key let go | Stops | — | ✅ | Press the key again ("It runs only while a key is held" in stage 12) |
 | Every instruction to the wheels | Scales it down to the speed cap, `motor.CAP` (it does not stop) | ✅ | ✅ | — |
 
@@ -704,7 +704,7 @@ With neither a link nor a PC, **holding a remote key prints the whole record to 
 | Let go, hold about three seconds, let go | **It prints the record** and stays stopped |
 | Let go, hold about seven seconds, let go | **It erases the record** (`ir_wipe_rounds`) |
 
-**The seconds are a guide**: what counts is the laps held (8 to come back, 25 to print; `ir_rearm_rounds` / `ir_dump_rounds`). Printing does not release the stop.
+**The seconds are a guide**: what counts is the laps held (8 to come back, 25 to print; `IR_REARM_ROUNDS` / `IR_DUMP_ROUNDS`). Printing does not release the stop.
 
 | On erasing | What happens |
 | :-- | :-- |
@@ -713,7 +713,7 @@ With neither a link nor a PC, **holding a remote key prints the whole record to 
 | The observations (`kind=2`) | Dropped, and recording starts again: `rec=` counts from 0, and a `(stopped: full)` goes |
 | A power cut while it erases (a second or more) | **The marker and the stored policy survive.** They are copied aside before anything is erased ("Keeping a few records through an erase" in [`lib/ksdb/docs/DESIGN-storage.md`](../../ksdb/docs/DESIGN-storage.md)). Some observations can remain; erase again to drop them |
 
-**Rewriting the firmware does not erase the record**; only a changed marker (`record_marker`) does. So erase before measuring again, or generations mix.
+**Rewriting the firmware does not erase the record**; only a changed marker (`RECORD_MARKER`) does. So erase before measuring again, or generations mix.
 
 The output, one line per entry (without the `[dump] ` prefix it is CSV):
 
@@ -796,7 +796,7 @@ Note: Only `lib/ksos/demo/rp2040/common/sample.kspl` knows the columns' order, a
 | Colours shifted per element | The 24-bit boundaries do not line up | Check that each element gets exactly 24 bits |
 | Flicker, or wrong colours at times | The window for the write is missed (interrupts not stopped, or the loop not in RAM) | Check both |
 
-Caution: **Do not raise the brightness** (one place: `board.WS2812_LEVEL`). Eight elements at full white use about 0.5A, and the low-voltage watch (`battery_low_mv`) fires. To save more, light fewer elements ("The WS2812 LEDs" in [`SPEC-board.md`](SPEC-board.md)).
+Caution: **Do not raise the brightness** (one place: `board.WS2812_LEVEL`). Eight elements at full white use about 0.5A, and the low-voltage watch (`BATTERY_LOW_MV`) fires. To save more, light fewer elements ("The WS2812 LEDs" in [`SPEC-board.md`](SPEC-board.md)).
 
 If the colours start going wrong, doubling `bit_counts` doubles the window for the write. Whether WS2812 accepts the longer Low must be confirmed on the real board.
 
@@ -905,7 +905,7 @@ Which manoeuvre each line reading gives is set by `MANEUVERS` and `rule_action` 
 | On `ksos-rp2040-board`'s sensor line, cover only the physically leftmost sensor: the left character of `line=B.W.B` must change | `board.LINE_SENSOR_SWAPPED` does not match the unit |
 | That holds, yet it turns the wrong way | `motor.drive`'s turning term: with only `rot` positive, the left two wheels must go forward and the right two back (clockwise from above) |
 
-**The distance is read every control lap (`loop_interval_ms` = 100ms), and the line every `line_interval_ms` (10ms).** Steering redone mid-lap is counted in `trk=`; if it does not grow, the line is not moving or the sensors are not answering.
+**The distance is read every control lap (`LOOP_INTERVAL_MS` = 100ms), and the line every `LINE_INTERVAL_MS` (10ms).** Steering redone mid-lap is counted in `trk=`; if it does not grow, the line is not moving or the sensors are not answering.
 
 ### To start it, raise the kick, not the speed cap
 
@@ -913,13 +913,13 @@ A car standing still needs a harder push to start than to keep rolling. Caution:
 
 | Where it acts | The value | What it does |
 | :-- | :-- | :-- |
-| The kick at starting | `kick_gain` / `kick_ms` | Doubles the instruction only on the lap starting from a standstill; raise it if it does not start |
-| The floor per wheel | `wheel_min_percent` | Lifts a non-zero instruction below it, so no single wheel stays still on a mixed manoeuvre |
+| The kick at starting | `KICK_GAIN` / `KICK_MS` | Doubles the instruction only on the lap starting from a standstill; raise it if it does not start |
+| The floor per wheel | `WHEEL_MIN_PERCENT` | Lifts a non-zero instruction below it, so no single wheel stays still on a mixed manoeuvre |
 | The running speed | `motor.CAP` | Higher adds overshoot (and shortens the time crossing the line) |
 
-**The kick keeps the direction** (it only multiplies), but control does not return for `kick_ms`, so keep it short. It fires after every stop, and only then: it does not fix a stall while running.
+**The kick keeps the direction** (it only multiplies), but control does not return for `KICK_MS`, so keep it short. It fires after every stop, and only then: it does not fix a stall while running.
 
-Caution: **Set `motor.CAP` just above `wheel_min_percent`** (20 against 18 on this car). At the floor itself a wheel stalls while running, and nothing detects it (next section). Higher, the car overshoots, and the sensors cross the line faster ("The crossing time while turning sets the line-reading interval" below).
+Caution: **Set `motor.CAP` just above `WHEEL_MIN_PERCENT`** (20 against 18 on this car). At the floor itself a wheel stalls while running, and nothing detects it (next section). Higher, the car overshoots, and the sensors cross the line faster ("The crossing time while turning sets the line-reading interval" below).
 
 ### There is no telling whether the wheels are turning
 
@@ -931,7 +931,7 @@ Caution: **Set `motor.CAP` just above `wheel_min_percent`** (20 against 18 on th
 | The change in distance | Useless with many no-reflection laps (`dist=3000`) |
 | The change in the line | On a straight, `line=2` persisting is normal |
 
-**Under load the battery dips far into its margin above `battery_low_mv`.** One dip does not stop it, but a higher `motor.CAP` deepens the dips, so watch `bat=` and `HALTED`.
+**Under load the battery dips far into its margin above `BATTERY_LOW_MV`.** One dip does not stop it, but a higher `motor.CAP` deepens the dips, so watch `bat=` and `HALTED`.
 
 ### The distance check comes before line following
 
@@ -947,13 +947,13 @@ Caution: **Picking the car up fills the record with dodges** (a hand reads tens 
 
 | In the record | What it is | What helps |
 | :-- | :-- | :-- |
-| `line` swinging between 4 and 1 | Overshoot | Ease `motor.CAP`, or tighten `line_interval_ms` |
+| `line` swinging between 4 and 1 | Overshoot | Ease `motor.CAP`, or tighten `LINE_INTERVAL_MS` |
 | `line` staying on one side | Undercorrection: the `track_*` manoeuvres turn too little for how far they move forward | Lower the forward part (`lon`) of the `track_*` manoeuvres in `MANEUVERS` (`lib/ksai/examples/car_pilot/policy.kspl`), write the policy file again with `car_pilot`, and receive it again. Raising `motor.CAP` scales all three parts, so it does not help |
-| It bulges out once before correcting | The centre-black instruction has no turn | Only a shorter forward part and a tighter `line_interval_ms`, not a stronger correction |
+| It bulges out once before correcting | The centre-black instruction has no turn | Only a shorter forward part and a tighter `LINE_INTERVAL_MS`, not a stronger correction |
 
 ### The crossing time while turning sets the line-reading interval
 
-**The turning speed matters, not the forward speed.** The sensors sit about 100mm from the turn's centre ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)), so turning on the spot sweeps them sideways. The line must be read at least twice per crossing, so `line_interval_ms` must be at most half the crossing time. At this unit's settings a 20mm line takes about 75ms to cross, read about seven times at 10ms. A higher `motor.CAP` or a stronger turn shortens the crossing, so tighten the interval with it.
+**The turning speed matters, not the forward speed.** The sensors sit about 100mm from the turn's centre ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)), so turning on the spot sweeps them sideways. The line must be read at least twice per crossing, so `LINE_INTERVAL_MS` must be at most half the crossing time. At this unit's settings a 20mm line takes about 75ms to cross, read about seven times at 10ms. A higher `motor.CAP` or a stronger turn shortens the crossing, so tighten the interval with it.
 
 ### The line's width must fall within a range
 

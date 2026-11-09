@@ -40,7 +40,7 @@ typedef struct pollfd kspl_pollfd_t;
 #define kspl_fd_bad(fd) ((fd) < 0)
 #define kspl_net_closefd(fd) close(fd)
 #define kspl_net_shutdown_wr(fd) shutdown((fd), SHUT_WR)
-#define kspl_net_poll_call(p, n, t) poll((p), (nfds_t)(n), (t))
+#define kspl_net_poll_call(p, n, t) kspl_poll_whole((p), (nfds_t)(n), (t))
 #define kspl_poll_failed(r) ((r) < 0)
 
 /* POSIX needs no preparation for a socket. */
@@ -86,12 +86,22 @@ static void kspl_net_no_sigpipe(int fd) {
  * size_t, Windows a char pointer and an int). They are absorbed here, so the caller writes no
  * cast. A length reaching them is at most KSPL_NET_PIECE (kspl_tcp_send below), which the int
  * holds. */
+/* Caution: **A call that a signal cut short is made again**, here and in kspl_net_accept. EINTR is
+ * not "would block", so the caller would read it as a failed connection. Winsock has no EINTR. */
 static I32 kspl_net_send(kspl_fd_t fd, const U8 *buf, Sz len) {
-    return (I32)send(fd, buf, (size_t)len, KSPL_SEND_FLAGS);
+    ssize_t n;
+    do {
+        n = send(fd, buf, (size_t)len, KSPL_SEND_FLAGS);
+    } while (n < 0 && errno == EINTR);
+    return (I32)n;
 }
 
 static I32 kspl_net_recv(kspl_fd_t fd, U8 *buf, Sz cap) {
-    return (I32)recv(fd, buf, (size_t)cap, 0);
+    ssize_t n;
+    do {
+        n = recv(fd, buf, (size_t)cap, 0);
+    } while (n < 0 && errno == EINTR);
+    return (I32)n;
 }
 
 /* Opens a socket, and accepts a connection, that no child inherits (hosted.c's "Nothing the
@@ -111,10 +121,15 @@ static kspl_fd_t kspl_net_socket(int family, int type) {
 }
 
 static kspl_fd_t kspl_net_accept(kspl_fd_t listener) {
+    int fd;
+    do {
 #if KSPL_CLOEXEC_IN_CALL
-    int fd = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+        fd = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
 #else
-    int fd = accept(listener, NULL, NULL);
+        fd = accept(listener, NULL, NULL);
+#endif
+    } while (fd < 0 && errno == EINTR);
+#if !KSPL_CLOEXEC_IN_CALL
     if (fd >= 0) kspl_fd_cloexec(fd);
 #endif
     if (fd >= 0) {

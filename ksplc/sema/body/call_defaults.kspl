@@ -50,7 +50,10 @@ fn fill_default_args(c: Sema_ctx$@, args_node: Ast_node$@, param_list: Ast_node$
         if seen <= total - missing
             continue
         d: = p.get_param_default()
-        if d == null
+        // **A default refused at the declaration is not copied** (report_bad_param_defaults in
+        // sema/decl/type_check.kspl). Copied, `fn f(x: I32 = f())` fills its own call again and
+        // again, until the compiler's stack runs out.
+        if d == null || !d.is_const_param_default()
             continue
         // The caller's position becomes **a literal made at the caller**; copied, it would name the
         // declaration's line in `std/lang.kspl`. A plain `String` / `Integer` needs no special

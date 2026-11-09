@@ -79,21 +79,19 @@ function ksmdRules(ks) {
     });
   }
 
-  let panel = null;
-  function close() {
-    if (panel) panel.remove();
-    panel = null;
-  }
-
   // Opens the panel that sets the chosen column's rule, beside the chosen cell.
   function ask(block, column) {
-    close();
     const wrap = ks.view.blocks()[block];
     const now = (wrap.rules && wrap.rules[column]) || null;
-    panel = document.createElement("div");
-    panel.className = "rule-panel";
-    panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", `Colour column ${ks.table.letters(column)} by value`);
+    const panel = ks.panel("rule-panel", `Colour column ${ks.table.letters(column)} by value`, () => {
+      const [, color, fill] = styles[Number(style.value)];
+      const sign = { below: "<", above: ">", equal: "=" }[kind.value];
+      const condition = kind.value === "empty" ? "empty" : `${sign}${value.value.trim()}`;
+      const look = [color && `color:${color}`, fill && `fill:${fill}`].filter(Boolean).join(" ");
+      const entry = kind.value === "" ? "" : kind.value === "scale" ?
+        `scale;from:${low} to:${high.value}` : `${condition};${look}`;
+      ks.act("ksmd_web_rule", block, column, ks.put(entry));
+    });
     const kind = document.createElement("select");
     kind.className = "rule-kind";
     for (const [v, label] of [["", "No rule"], ["below", "Below"], ["above", "Above"],
@@ -138,44 +136,20 @@ function ksmdRules(ks) {
     };
     kind.addEventListener("change", sync);
     sync();
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.textContent = "Apply";
-    apply.className = "rule-apply";
-    apply.addEventListener("click", () => {
-      const [, color, fill] = styles[Number(style.value)];
-      const sign = { below: "<", above: ">", equal: "=" }[kind.value];
-      const condition = kind.value === "empty" ? "empty" : `${sign}${value.value.trim()}`;
-      const look = [color && `color:${color}`, fill && `fill:${fill}`].filter(Boolean).join(" ");
-      const entry = kind.value === "" ? "" : kind.value === "scale" ?
-        `scale;from:${low} to:${high.value}` : `${condition};${look}`;
-      close();
-      ks.act("ksmd_web_rule", block, column, ks.put(entry));
+    panel.el.append(`Colour the cells of column ${ks.table.letters(column)} that are `, kind, value,
+      " with ", style, high);
+    panel.el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target === value) panel.apply.click();
     });
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", close);
-    panel.append(`Colour the cells of column ${ks.table.letters(column)} that are `, kind, value,
-      " with ", style, high, apply, cancel);
-    panel.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") close();
-      if (e.key === "Enter" && e.target === value) apply.click();
-    });
-    document.body.appendChild(panel);
+    panel.show();
     const at = wrap.getBoundingClientRect();
-    panel.style.left = `${Math.max(4, at.left + window.scrollX)}px`;
-    panel.style.top = `${Math.max(window.scrollY + 4, at.top + window.scrollY - panel.offsetHeight - 4)}px`;
+    panel.el.style.left = `${Math.max(4, at.left + window.scrollX)}px`;
+    panel.el.style.top = `${Math.max(window.scrollY + 4, at.top + window.scrollY - panel.el.offsetHeight - 4)}px`;
     kind.focus();
     return null;
   }
 
-  // A press outside the panel closes it, as a press outside a menu does.
-  document.addEventListener("mousedown", (e) => {
-    if (panel && !panel.contains(e.target)) close();
-  }, true);
-
   ks.handle("column-rule", (_, c) => ask(c.block, c.column), { table: true });
 
-  ks.rules = { paint, ask };
+  ks.rules = { paint };
 }

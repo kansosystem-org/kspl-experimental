@@ -1,14 +1,10 @@
 //< The C standard library's declarations, written in KSPL
 //< **This is the only file that declares libc.** The standard library gets `malloc` or `memcmp`
 //< from here, so one declaration serves every backend.
-//< **Only `snprintf`, `strtod` and `signal` are public.** Each other binding has a safer `std`
+//< **Only `snprintf` and `strtod` are public.** Each other binding has a safer `std`
 //< function (`math.sqrt`, `sys.get_env`, `mem.alloc`), or only `std` uses it.
 //< Caution: **Nothing that uses C's `long` goes here** (`fseek` / `ftell` / `clock`).
 //< Its width differs by platform, so one declaration would be right on one and wrong on another.
-pub typedef Signal_handler = fn(sig: I32): Void //< what `signal()` takes and returns.
-    //< An unnamed function-pointer type in an extern declaration produces no valid C type name (the
-    //< same holds for Thread_entry in std/thread.kspl).
-
 pub extern fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32 //<
     //< C's snprintf: formats into str
     //< **Take the format as a `Void@`, not a `U8@`.** C's format is a plain `char*`, and KSPL's
@@ -58,8 +54,8 @@ extern fn getenv(name: Void$@): Void$@ //<
     //< Caution: **Do not use it to read characters on Windows** (same reason as `fopen`).
     //< Use `std/sys`'s `get_env` instead.
 // --- Signals ---
-pub extern fn signal(sig: I32, handler: Signal_handler): Signal_handler //<
-    //< C's signal: sets a handler
+// No `signal`: C's resets the handler at the first delivery. `std/sys`'s `set_signal_handler`
+// keeps it.
 extern fn raise(sig: I32): I32
 // --- Wall-clock time ---
 extern fn time(dst: I64$@): I64

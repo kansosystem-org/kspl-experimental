@@ -75,9 +75,9 @@ The token goes nowhere else either:
 * **Do not take the token from the command line**; the server makes it from the OS's random source.
 * **Compare every byte**: stopping at the first differing byte lets the response time reveal the token byte by byte.
 
-## Only six things can be asked for
+## Only five things can be asked for
 
-A page can read, write and move files, watch whether a file changed, and list a folder. It can also keep the server running or stop it, and build its own functions once the person allows them.
+A page can read and write files, watch whether a file changed, and list a folder. It can also keep the server running or stop it, and build its own functions once the person allows them.
 
 **Do not add another endpoint that starts a program**, for debugging, completion or a plugin. Every one turns a request a page can make into running code. The build is the one exception, and only within the limits of "Building a page's own functions".
 
@@ -89,11 +89,8 @@ The page reads a file whole and writes a file whole, by its path under the root.
 | :-- | :-- |
 | `GET /api/file?path=<p>` | That byte sequence. 404 if absent |
 | `PUT /api/file?path=<p>` | Writes the body under that name. On success, `{"wrote":<byte count>}`. 403 if a step of the path starts with `.` |
-| `POST /api/move?from=<p>&to=<q>` | Renames the file `p` to `q`. On success, `{"moved":true}`. 404 if `p` is absent, 409 if `q` stands already, 403 if a step of either path starts with `.` |
 
-**A write or a move makes the one folder its file goes in, if that folder is missing.** The folder above it must stand already. So a page puts a document's images in a folder named for it, and never makes a tree of folders by mistake.
-
-**A move never replaces a file.** A target already standing is 409, and nothing moves. So a move cannot lose a file, as a write without a guard can.
+**A write makes the one folder its file goes in, if that folder is missing.** The folder above it must stand already. So a page puts a document's images in a folder named for it, and never makes a tree of folders by mistake.
 
 **A write never reaches a name that starts with `.`**, at any step of the path, such as `.git/config` or `.env`. A write to `.git/config` can set a command that the next `git status` runs. A read of such a name is answered as any other.
 
@@ -187,6 +184,7 @@ A page whose document names a file of functions in KSPL asks the server to build
 * **An allow holds for one file and its exact bytes.** A file whose bytes changed since is not allowed, so the page asks again.
 * **Only the person's own act on the page sends a POST.** The token keeps every other program out. Nothing a document holds makes the page send one.
 * **The record of allows stands outside the root**, in a file named when the server starts (`--allowed`). It holds the SHA-256 of each file's path and of its allowed bytes. A page, or a document's folder, cannot write it through the file endpoints.
+* **The server does not start with a record under the root.** Both paths are made absolute and compared step by step, with ASCII case ignored. A link is not followed, so whoever starts the server names no record that a link leads into the root.
 * **A record that cannot be read allows nothing.**
 
 **The server builds only through a builder named when it starts**, by whoever starts it, never by a request. With no builder named, the endpoint does not exist (404). A server facing outward has none.

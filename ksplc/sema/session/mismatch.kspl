@@ -38,8 +38,10 @@ fn address_hint(env: sema_type_env.Env$@, node: Ast_node$@, expected_id: I32, ac
     if pointee != env.strip_const_deep(pointee) ||
         env.get_real_type(env.strip_const_deep(env.strip_ptr(actual_id))) != want
         return
-    // **Only for a name declared in this file**: another file's declaration is out of reach.
-    of: = node.get_postfix_receiver() if node.kind_id == .k_expr_postfix else null
+    // **Only for a written `x@`**, of a name declared in this file: another file's declaration
+    // is out of reach. A pointer read by another postfix (`pps$`) is no address taken.
+    is_address: = node.kind_id == .k_expr_postfix && node.postfix_op_text().equals("@")
+    of: = node.get_postfix_receiver() if is_address else null
     name: = written_name(of)
     if name.len == 0 || !declared_here(of)
         return

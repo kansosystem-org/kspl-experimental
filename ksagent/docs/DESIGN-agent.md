@@ -148,7 +148,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 
 **A page in the browser and ksagent share nothing but files.** The chat page appends a question to the ask file, and ksagent records the question and its answer in the chat file. The page sees each change by asking the local server whether a file changed. While the answer grows, the live file shows it ("Watching an answer grow").
 
-**The local server's rules stay as they are** ([`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). kssrv holds no model, and no endpoint of it starts a program. An endpoint that reached a model would let any page with the token ask for work beyond files. Every guard of that protocol would then have to hold for that work too.
+**The local server's rules stay as they are** ([`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). kssrv holds no model. Its one endpoint that starts a program, `POST /api/build`, starts only the builder named when the server starts, on a file the person allowed. An endpoint that reached a model would let any page with the token ask for work beyond files. Every guard of that protocol would then have to hold for that work too.
 
 **The price is a wait.** ksagent looks at the folder every 2 seconds, and the page looks at its files every second. A look reads an ask file again only when its size or change time moved, or its chat file's did. An ask file and a chat file only grow, so each new record changes the size. The stamps are taken before the files are read, so a question added meanwhile is seen at the next look.
 

@@ -315,6 +315,4 @@ function ksmdFind(ks) {
 
   ks.handle("find", () => open(false), { looks: true });
   ks.handle("replace", () => open(true));
-
-  ks.find = { open };
 }

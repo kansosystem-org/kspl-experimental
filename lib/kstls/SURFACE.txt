@@ -11,8 +11,8 @@ kstls/tls	Tls_error.io_failed	io_failed	a send or receive failed, or the connect
 kstls/tls	Tls_stream	pub struct Tls_stream	a TCP connection with TLS on top, which owns its resources
 kstls/tls	Tls_stream.connect	pub fn connect(host: U8[], port: I32, handshake_ms: I32 = 10000): Tls_stream$@!Tls_error	connects, then does the TLS handshake, verifying the certificate
 kstls/tls	Tls_stream.free	pub fn free(r: Self$@)	closes the connection and frees everything it owns
-kstls/tls	Tls_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Tls_error	receives and returns how much arrived; 0 only after the peer's close_notify
-kstls/tls	Tls_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz!Tls_error	sends and returns how much was sent; a partial send is normal, so loop
+kstls/tls	Tls_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Tls_error	receives and returns how much arrived; 0 only after the peer's close_notify. An empty `buf` gives 0 at once, as a read of 0 bytes does on a socket.
+kstls/tls	Tls_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz!Tls_error	sends and returns how much was sent; a partial send is normal, so loop. An empty `buf` gives 0 at once.
 kstls/tls	Tls_stream:Manual_free	impl Tls_stream: Manual_free	it owns its memory and frees it with `free()`
 kstls/tls_server	Tls_server	pub struct Tls_server	a certificate chain and its key, ready to answer handshakes
 kstls/tls_server	Tls_server.chain_len	pub chain_len: Sz	how many certificates the chain holds, the server's own first
@@ -30,7 +30,7 @@ kstls/tls_server	Tls_session.close	pub fn close(r: Self$@, tcp: net.Tcp_stream$@
 kstls/tls_server	Tls_session.flush	pub fn flush(r: Self$@, tcp: net.Tcp_stream@): Void!Tls_session_error	Sends what waits for the socket; `would_block` where the socket took only part
 kstls/tls_server	Tls_session.free	pub fn free(r: Self$@)	frees the TLS state, sending nothing; the socket stays the caller's
 kstls/tls_server	Tls_session.pending	pub fn pending(r: Self@): Bool	whether bytes wait for the socket to take them. While true, watch the socket for writable and call `flush`.
-kstls/tls_server	Tls_session.read	pub fn read(r: Self$@, tcp: net.Tcp_stream$@, buf: U8$[]): Sz!Tls_session_error	receives and returns how much arrived; 0 once the peer has ended. It runs the handshake first, and gives one record at most: **call it again while `buffered` is true**. 0 comes for a close_notify and for a TCP close alike: the request's own length shows a cut request ("The server half never waits" in `lib/kstls/docs/DESIGN-bindings.md`).
+kstls/tls_server	Tls_session.read	pub fn read(r: Self$@, tcp: net.Tcp_stream$@, buf: U8$[]): Sz!Tls_session_error	receives and returns how much arrived; 0 once the peer has ended. It runs the handshake first, and gives one record at most: **call it again while `buffered` is true**. 0 comes for a close_notify and for a TCP close alike: the request's own length shows a cut request ("The server half never waits" in `lib/kstls/docs/DESIGN-bindings.md`). An empty `buf` gives 0 at once and runs nothing.
 kstls/tls_server	Tls_session.ready	pub fn ready(r: Self@): Bool	whether the handshake has finished
 kstls/tls_server	Tls_session.start	pub fn start(server: Tls_server$@): Tls_session$@!tls.Tls_error	Starts the TLS of one accepted connection; the handshake runs inside `read`
 kstls/tls_server	Tls_session.write	pub fn write(r: Self$@, tcp: net.Tcp_stream$@, buf: U8[]): Sz!Tls_session_error	encrypts some of `buf` and returns how much it took; a partial take is normal. **It takes nothing while bytes still wait for the socket** (`would_block`), so a slow reader holds at most one record per connection.

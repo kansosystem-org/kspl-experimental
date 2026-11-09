@@ -783,13 +783,15 @@ The policy and the observations live in **the record inside the device** (the la
 
 **The car does not ask the PC on each observation**: it could then decide nothing once the link drops.
 
+**The policy is trained offline and kept as a file**, so the server needs no AI engine and starts at once. kssrv only serves the file; any server that hands out files serves the car.
+
 **The safety timeouts are in the car, outside the policy.** They must hold whatever the policy answers, with no policy, and with no link. Which ones each firmware carries is in "The safety timeouts of each firmware" in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 
 **How it reads and steers:**
 
 * **The distance is read once per control lap (100ms), and the line every 10ms.** An HC-SR04 measurement blocks up to 36ms and needs 36ms before the next, while the line is three GPIO reads. When the line moves mid-lap, only the steering is redone, except during the close-range reverse or while stopped.
 * **The speed cap scales the triple as a whole** (the three numbers of a manoeuvre). Capped per component, a manoeuvre mixing forward and turning would turn harder than instructed.
-* **The policy gets the median of the last three distance readings** (`range.steady_mm`). Only the close-range timeout uses the raw reading (`emergency_mm`): a false alarm is safe, a miss is not.
+* **The policy gets the median of the last three distance readings** (`range.steady_mm`). Only the close-range timeout uses the raw reading (`EMERGENCY_MM`): a false alarm is safe, a miss is not.
 * **The wheels need no tighter timing than 10ms**: the motors' 500Hz PWM gives five periods per instruction.
 
 **Only the first run needs the PC**, to take the policy from kssrv (its stages 7 and 9, in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)). A long press on the remote prints the kept record, with no PC.

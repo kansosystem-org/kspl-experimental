@@ -191,9 +191,18 @@ function ksmdBrowse(local) {
       });
       box.showModal();
       name.focus();
-      // A folder that has gone since the document was opened shows the workspace instead.
-      shown = go(parentOf(start)).then((ok) => (ok === false ? go("") : ok));
-      await shown;
+      // **A folder that does not stand yet**, such as a document's data folder before its first
+      // file, opens the nearest folder above it that does, with the rest of the path as the name.
+      // The server makes one missing folder on the first write.
+      const opened = (async () => {
+        for (let at = parentOf(start); ; at = parentOf(at)) {
+          const ok = await go(at);
+          if (ok !== false || at === "") return ok;
+          if (how !== "open") name.value = `${at.slice(at.lastIndexOf("/") + 1)}/${name.value}`;
+        }
+      })();
+      shown = opened;
+      await opened;
       return answer;
     },
   };

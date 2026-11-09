@@ -187,11 +187,13 @@ function ksmdView(ks) {
             place.classList.add("problem");
           }
         }
-        // A width set on the image is its share of the text width (`images.js`).
+        // A width set on the image is its share of the text width, and a scale its share of its
+        // own size, which `file.js` shows once it has read the image's pixels (`images.js`).
         if (b.w > 0) {
           el.classList.add("sized");
           el.style.setProperty("--image-width", `${b.w}%`);
         }
+        if (b.sc > 0) el.dataset.scale = b.sc;
         if (b.cap) {
           const cap = document.createElement("figcaption");
           cap.textContent = b.cap;

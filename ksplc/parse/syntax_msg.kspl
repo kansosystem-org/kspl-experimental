@@ -619,6 +619,26 @@ priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool /
     msg.s(".")
     return true
 
+priv fn append_based_digit_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+    //< It writes the sentence naming a `0x` or `0b` literal that holds no digit of its base
+    //< The grammar then reads the `0` alone, so the failure lands on the `x` or `b` that follows,
+    //< with an expected set that does not say why (`0x_`, `0b2`, `0xG`).
+    if pos <= 0 || pos >= src.len || src[pos - 1] != '0' ||
+        (src[pos] != 'x' && src[pos] != 'b')
+        return false
+    if pos >= 2 &&
+        (src[pos - 2].is_alnum() || src[pos - 2] == '_' || src[pos - 2] == '.')
+        return false
+    $end: = pos + 1
+    for end < src.len && (src[end].is_alnum() || src[end] == '_')
+        end += 1
+    hex: = src[pos] == 'x'
+    msg.s("\n  Note: '").s(src.sub(pos - 1, end - pos + 1)).s("' is not read. A ")
+        .s("hexadecimal" if hex else "binary").s(" literal holds at least one digit (")
+        .s("0-9, a-f or A-F" if hex else "0 or 1").s(") after '0").c(src[pos])
+        .s("'; '_' may stand between digits.")
+    return true
+
 priv fn append_integer_exponent_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming an exponent written on an integer (`1e5`)
     //< C, Rust and Python read `1e5` as a floating-point number. KSPL takes an exponent only after
@@ -782,6 +802,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     if append_missing_comma_hint(msg@, src, pos)
         return msg
     if append_leading_zero_hint(msg@, src, pos)
+        return msg
+    if append_based_digit_hint(msg@, src, pos)
         return msg
     if append_integer_exponent_hint(msg@, src, pos)
         return msg

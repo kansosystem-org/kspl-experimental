@@ -1,11 +1,16 @@
-// ksmd page: an image's own tools beside the drawing ones: its width, its caption and its
-// alternate text.
-// An image's width is a share of the text width. Its height follows, so the picture
-// keeps its shape. A drag of the handle at the picture's lower right corner sets it, and so does
-// Width… in the image's tools, as a number; an empty answer fits the image to the text again.
+// ksmd page: an image's own tools beside the drawing ones: its width, its scale, its caption and
+// its alternate text.
+// An image's size is set in one of two ways, and its height follows, so the picture keeps its
+// shape. A width is a share of the text width. A drag of the handle at the picture's lower right
+// corner sets it, and so does Width… in the image's tools, as a number. A scale is a share of the
+// image's own size, one image pixel to one CSS pixel at 100%, never wider than the text. Scale…
+// sets it, as a number from 1 to 400. Setting one takes the other away, and an empty answer to
+// either fits the image to the text again.
 // Images side by side that each have a width share a row while their widths fit, as pictures in
-// a line of Word's text do (`.figure.sized` in `page.css`). The file keeps it as `width="40%"`
-// on the image's clause (`set_image_width` in `ksmd/edit/editor_drawings.kspl`).
+// a line of Word's text do (`.figure.sized` in `page.css`). The file keeps them as `width="40%"`
+// and `scale="50%"` on the image's clause (`set_image_width` and `set_image_scale` in
+// `ksmd/edit/editor_drawings.kspl`). `file.js` gives a scaled picture its width once it has read
+// the image's size.
 // Caption… gives the image a caption, which a reference names (`[#](#caption)`), and Alt text…
 // the words a screen reader says. An image goes in with neither, so nothing is asked then.
 "use strict";
@@ -20,7 +25,7 @@ function ksmdImages(ks) {
   };
   const set = (fig, percent) => ks.act("ksmd_web_image_width", blockOf(fig), percent);
 
-  // Each image the page can edit gets its handle and its Width… button, once per drawing.
+  // Each image the page can edit gets its handle and its buttons, once per drawing.
   function add() {
     for (const fig of ks.root.querySelectorAll("#doc > .figure")) {
       const pic = fig.querySelector(".picture");
@@ -32,6 +37,7 @@ function ksmdImages(ks) {
       pic.appendChild(handle);
       for (const [cls, label, title] of [
         ["image-width", "Width…", "The image's width, as a share of the text width"],
+        ["image-scale", "Scale…", "The image's size, as a share of its own size"],
         ["image-caption", "Caption…", "A caption under the image, which a reference can name"],
         ["image-alt", "Alt text…", "Words that describe the image for someone who cannot see it"]]) {
         const b = document.createElement("button");
@@ -62,24 +68,36 @@ function ksmdImages(ks) {
     if (r && !r.ok) ks.say(r.why);
   });
 
+  // Width… and Scale… ask for a percent, the image's own as it stands now. Each keeps what it
+  // asks, what it says of a wrong answer, and the action that sets it.
+  const SIZES = {
+    "image-width": { most: 100, act: "ksmd_web_image_width",
+      now: (fig) => (fig.classList.contains("sized") ? parseInt(fig.style.getPropertyValue("--image-width"), 10) : ""),
+      ask: "The image's width, in percent of the text width, 1 to 100. Leave it empty to fit the text width.",
+      wrong: "The width is a whole number from 1 to 100, the percent of the text width." },
+    "image-scale": { most: 400, act: "ksmd_web_image_scale",
+      now: (fig) => fig.dataset.scale || "",
+      ask: "The image's size, in percent of its own size, 1 to 400. Leave it empty to fit the text width.",
+      wrong: "The scale is a whole number from 1 to 400, the percent of the image's own size." },
+  };
   ks.root.addEventListener("click", (e) => {
-    const b = e.target.closest && e.target.closest(".image-width");
+    const b = e.target.closest && e.target.closest(".image-width, .image-scale");
     if (!b || ks.readOnly) return;
     const fig = b.closest(".figure");
-    const now = fig.classList.contains("sized") ? parseInt(fig.style.getPropertyValue("--image-width"), 10) : "";
-    const typed = window.prompt("The image's width, in percent of the text width, 1 to 100. " +
-      "Leave it empty to fit the text width.", String(now));
+    const size = SIZES[b.classList.contains("image-width") ? "image-width" : "image-scale"];
+    const typed = window.prompt(size.ask, String(size.now(fig)));
     if (typed === null) return;
     const text = typed.trim().replace(/%$/, "");
     const n = Number(text);
-    if (text !== "" && !(Number.isInteger(n) && n >= 1 && n <= 100)) {
-      ks.say("The width is a whole number from 1 to 100, the percent of the text width.");
+    if (text !== "" && !(Number.isInteger(n) && n >= 1 && n <= size.most)) {
+      ks.say(size.wrong);
       return;
     }
-    set(fig, text === "" ? 0 : n);
+    ks.act(size.act, blockOf(fig), text === "" ? 0 : n);
   });
 
   // A drag of the handle shows the new width as it goes, and sends it when the button comes up.
+  // It sets a width, so a scaled picture lets go of the width its scale gave it.
   ks.root.addEventListener("pointerdown", (e) => {
     const handle = e.target.closest && e.target.closest(".size-handle");
     if (!handle || ks.readOnly || e.button !== 0) return;
@@ -88,11 +106,13 @@ function ksmdImages(ks) {
     const fig = handle.closest(".figure");
     const full = textWidth(fig);
     const start = fig.querySelector(".picture").getBoundingClientRect();
+    const img = fig.querySelector(".picture img");
     const x0 = e.clientX;
     let percent = null;
     const move = (m) => {
       const px = Math.max(16, start.width + m.clientX - x0);
       percent = Math.max(1, Math.min(100, Math.round((px / full) * 100)));
+      if (img) img.style.width = "";
       fig.classList.add("sized");
       fig.style.setProperty("--image-width", `${percent}%`);
       ks.say(`Width ${percent}% of the text`);

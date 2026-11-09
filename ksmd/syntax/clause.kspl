@@ -14,8 +14,8 @@ import "ksmd/model/format" { format_of }
 import "ksmd/model/group" { Group_fault, read_groups }
 import "ksmd/model/look" { look_of, note_of, plain_look }
 import "ksmd/model/model" { Block, Cell, Chart, Document, Image, Drawing, UNBOUND, MAX_CELLS,
-    MAX_COLUMNS, MAX_FORMULA, MAX_HEIGHT, MAX_NAME, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH,
-    Column_filter, Row_height, Table }
+    MAX_COLUMNS, MAX_FORMULA, MAX_HEIGHT, MAX_NAME, MAX_ROWS, MAX_SCALE, MAX_WIDTH, MIN_HEIGHT,
+    MIN_WIDTH, Column_filter, Row_height, Table }
 import "ksmd/model/rule" { has_rule, rule_of }
 import "ksmd/syntax/chart" { kind_of, split_names }
 import "ksmd/syntax/diagram" { read_diagram }
@@ -44,10 +44,11 @@ fn read_clause(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$
         doc.blocks[at].invisible = true
     return next
 
-fn percent_of(text: U8[]): Sz //< `40%` as 40: a whole number from 1 to 100 and `%`; 0 for none
+fn percent_of(text: U8[], most: Sz): Sz //<
+    //< `40%` as 40: a whole number from 1 to `most`, at most 3 digits, and `%`; 0 for none
     if text.len < 2 || text.len > 4 || !text.ends_with("%")
         return 0
-    n: = text.sub(0, text.len - 1).to_count(100) catch
+    n: = text.sub(0, text.len - 1).to_count(most) catch
         return 0
     return n
 
@@ -75,8 +76,9 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             .count = 0, .offset = first.offset, .align = .none, .note = "", .invisible = false })
         return empty_body(src, first, "':::include' has no body. Close it on the next line")
     if kind.equals("image")
-        allow(src, attributes, U8[][]::{ "src", "alt", "caption", "width", "invisible" },
-            "':::image' takes only src, alt, caption, width and invisible")!
+        allow(src, attributes,
+            U8[][]::{ "src", "alt", "caption", "width", "scale", "invisible" },
+            "':::image' takes only src, alt, caption, width, scale and invisible")!
         image_src: =
             required(src, first, attributes, "src", "':::image' needs src and alt")!
         alt: =
@@ -88,10 +90,19 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
                 throw src.diagnostic(a.offset, "leave out an empty caption")
         $width: Sz = 0
         if a: = find(attributes, "width")
-            width = percent_of(string_of(src, a)!)
+            width = percent_of(string_of(src, a)!, 100)
             if width == 0
                 throw src.diagnostic(a.offset,
                     "width is a share of the text width, \"1%\" to \"100%\", or leave it out")
+        $scale: Sz = 0
+        if a: = find(attributes, "scale")
+            scale = percent_of(string_of(src, a)!, MAX_SCALE)
+            if scale == 0
+                throw src.diagnostic(a.offset,
+                    "scale is a share of the image's own size, \"1%\" to \"400%\", or leave it out")
+            if width > 0
+                throw src.diagnostic(a.offset,
+                    "an image takes a width or a scale, not both. Keep one of them")
         doc.blocks
             .push(Block::{ .kind = .image, .level = 0, .label = "", .text = "",
             .first = doc.images.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
@@ -100,7 +111,7 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
         next: = read_drawings(src, first, drawings@, arena)!
         doc.images
             .push(Image::{ .src = image_src, .alt = alt, .caption = caption, .width = width,
-            .drawings = drawings })
+            .scale = scale, .drawings = drawings })
         return next
     if kind.equals("chart")
         return read_chart(src, first, attributes, doc, arena)
@@ -208,11 +219,15 @@ priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc
 priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
     names: Keyed<|Bool|>$@, arena: Arena$@): Sz!Diagnostic //<
         //< A header row of quoted names, then data rows, each with as many cells
+    if a: = find(attributes, "widths")
+        throw src.diagnostic(a.offset,
+            "':::table' no longer takes widths. Give each column's width in characters with \
+                char_widths")
     allow(src, attributes,
-        U8[][]::{ "name", "caption", "char_widths", "widths", "heights", "formats", "choices",
-        "color_rows", "rules", "groups", "merge", "filter", "invisible" },
-        "':::table' takes only name, caption, char_widths, widths, heights, formats, choices, \
-            color_rows, rules, groups, merge, filter and invisible")!
+        U8[][]::{ "name", "caption", "char_widths", "heights", "formats", "choices", "color_rows",
+        "rules", "groups", "merge", "filter", "invisible" },
+        "':::table' takes only name, caption, char_widths, heights, formats, choices, color_rows, \
+            rules, groups, merge, filter and invisible")!
     name: =
         required(src, first, attributes, "name", "':::table' needs a name, as in name=\"budget\"")!
     name_at: = attribute_at(attributes, "name")
@@ -404,13 +419,8 @@ priv fn brace_at(text: U8[]): Sz //< where the first `{` outside quotes stands, 
 
 priv fn read_widths(src: Source@, attributes: List<|Attribute|>, t: Table$@): Void!Diagnostic //<
     //< `char_widths="12,,8.5"`: one entry per column, its width in characters, empty where it fits
-    //< its text. The older `widths="1,2,1"` gave weights, read as shares of 80 characters.
-    given: = find(attributes, "char_widths")
-    weights: = find(attributes, "widths")
-    if given.is_some() && weights.is_some()
-        throw src.diagnostic(attribute_at(attributes, "widths"),
-            "give char_widths or the older widths, not both")
-    if a: = given
+    //< its text
+    if a: = find(attributes, "char_widths")
         if !a.quoted
             throw src.diagnostic(a.offset, "this attribute takes a quoted string")
         if !parse_widths(a.value, t.widths@)
@@ -424,20 +434,6 @@ priv fn read_widths(src: Source@, attributes: List<|Attribute|>, t: Table$@): Vo
             any = any || w > 0
         if !any
             throw src.diagnostic(a.offset, "leave out char_widths when no column has a width")
-    if a: = weights
-        if !a.quoted
-            throw src.diagnostic(a.offset, "this attribute takes a quoted string")
-        if !parse_weights(a.value, t.widths@)
-            throw src.diagnostic(a.offset,
-                "widths is a list of whole numbers from 1 to 10,000, separated by ','")
-        if t.widths.len != t.columns.len
-            throw src.diagnostic(a.offset, "widths has one weight per column")
-        $sum: Sz = 0
-        for w in t.widths
-            sum += w
-        for i in Range.asc(t.widths.len)
-            share: = (t.widths[i] * OLD_TOTAL * 2 + sum) / (sum * 2)
-            t.widths[i] = share if share > MIN_WIDTH else MIN_WIDTH
 
 priv fn read_heights(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
     //< `heights=",20,,"`: one entry per data row, its height in whole points, empty for none
@@ -621,25 +617,6 @@ priv fn message_of(f: Group_fault): U8[] //< what the reader says of groups it c
         return "two groups hold the same rows"
     case .too_deep
         return "a row or a column stands in at most 8 groups"
-
-const OLD_TOTAL: Sz = 800 //<
-    //< the tenths of a character the older `widths` weights share: 80 characters, a table that
-    //< a laptop's window and a landscape A4 page both hold
-
-priv fn parse_weights(text: U8[], weights: List<|Sz|>$@): Bool //<
-    //< Adds the weights `1,2,1` names to `weights`; false if the text is not that form
-    //< Each is a whole number from 1 to 10,000, and a ',' separates two of them.
-    $start: Sz = 0
-    for i in Range.asc(text.len + 1)
-        if i < text.len && text[i] != ','
-            continue
-        weight: = text.sub(start, i - start).to_count(10000) catch
-            return false
-        if weight == 0
-            return false
-        weights.push(weight)
-        start = i + 1
-    return true
 
 fn parse_widths(text: U8[], widths: List<|Sz|>$@): Bool //<
     //< Adds the widths `12,,8.5` names to `widths`, in tenths of a character, 0 for an empty

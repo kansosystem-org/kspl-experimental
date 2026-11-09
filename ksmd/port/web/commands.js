@@ -9,11 +9,12 @@
 // Each command: [name, label, key]. The key is the one the page already acts on; the item shows it.
 const COMMANDS = [
   ["file-open", "Open…", "Ctrl+O"], ["file-save", "Save", "Ctrl+S"],
-  ["file-save-as", "Save as…", "Ctrl+Shift+S"], ["file-gather-images", "Gather images into a folder"],
+  ["file-save-as", "Save as…", "Ctrl+Shift+S"],
   ["page-setup", "Page setup…"],
   ["print", "Print or save as PDF…", "Ctrl+P"],
   ["undo", "Undo", "Ctrl+Z"], ["redo", "Redo", "Ctrl+Y"],
-  ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["paste", "Paste", "Ctrl+V"],
+  ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["copy-formula", "Copy formula"],
+  ["paste", "Paste", "Ctrl+V"],
   ["paste-values", "Paste values", "Ctrl+Shift+V"],
   ["find", "Find…", "Ctrl+F"], ["replace", "Replace…", "Ctrl+H"],
   ["contents", "Contents"], ["width-full", "Full width"], ["width-reading", "Reading width"],
@@ -33,6 +34,7 @@ const COMMANDS = [
   ["size-12", "12 pt"], ["size-14", "14 pt"], ["size-18", "18 pt"], ["size-24", "24 pt"],
   ["look-clear", "Clear format"],
   ["align-left", "Align left"], ["align-center", "Centre"], ["align-right", "Align right"],
+  ["align-across", "Centre across columns"],
   ["wrap-text", "Wrap text"],
   ["bullets", "Bulleted list"], ["numbers", "Numbered list"], ["checks", "Checklist"],
   ["indent", "Indent", "Tab"], ["outdent", "Outdent", "Shift+Tab"],
@@ -81,7 +83,7 @@ const CUT_FORMS = { "row-above": ["Insert cut rows", "row-insert-cut"],
 const TABLE_GROUPS = [
   ["Rows", ["row-above", "row-below", "row-remove"]],
   ["Columns", ["column-left", "column-right", "column-remove", "column-choices"]],
-  ["Look", ["wrap-text", "column-rule", "column-rows", "column-merge"], true],
+  ["Look", ["wrap-text", "align-across", "column-rule", "column-rows", "column-merge"], true],
   ["Size", ["column-fit", "column-width", "row-height"], true],
   ["Fill", ["fill-down", "fill-right"], true],
   ["Sort", ["sort-up", "sort-down"], true],
@@ -99,8 +101,8 @@ const TABLE_GROUPS = [
 // The menu bar: each menu's name and its items. "-" is a line between groups, and [name, items] a
 // flyout. Every command stands in one of them, so the quick access bar's chooser lists them all.
 const MENUS = [
-  ["File", ["file-open", "file-save", "file-save-as", "file-gather-images", "-", "page-setup", "print"]],
-  ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "paste-values", "-", "find", "replace",
+  ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print"]],
+  ["Edit", ["undo", "redo", "-", "cut", "copy", "copy-formula", "paste", "paste-values", "-", "find", "replace",
     "-", ["AutoCorrect", ["auto-dates", "auto-links"]]]],
   ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "zoom-in", "zoom-out",
     "zoom-reset", "-", "read-only", "-", "quick-choose"]],
@@ -108,7 +110,8 @@ const MENUS = [
   ["Format", [["Kind of block", ["p", "h1", "h2", "h3", "h4", "h5", "h6", "c"]], "-",
     "strong", "emphasis", "code", "-", "color", "fill",
     ["Font size", ["size-default", "size-9", "size-10", "size-11", "size-12", "size-14", "size-18", "size-24"]],
-    "look-clear", "-", "align-left", "align-center", "align-right", "wrap-text", "-",
+    "look-clear", "-", "align-left", "align-center", "align-right", "align-across",
+    "wrap-text", "-",
     "bullets", "numbers", "checks", "quote", "indent", "outdent"]],
   ["Table", TABLE_GROUPS.flatMap(([name, items, nested], k) =>
     [...(k > 0 && !(nested && TABLE_GROUPS[k - 1][2]) ? ["-"] : []), ...(nested ? [[name, items]] : items)])],
@@ -142,6 +145,7 @@ const ICONS = {
   redo: `<path d="M11 3.5l3 3-3 3 M14 6.5H6.5a3.5 3.5 0 0 0 0 7H10"/>`,
   cut: `<circle cx="4.5" cy="12" r="2"/><circle cx="11.5" cy="12" r="2"/><path d="M6 10.5L11 2 M10 10.5L5 2"/>`,
   copy: `<path d="M5.5 5.5h8v9h-8z M3 11V2.5h7.5"/>`,
+  "copy-formula": `<path d="M5.5 5.5h8v9h-8z M3 11V2.5h7.5 M7.5 9h4 M7.5 11h4"/>`,
   paste: `<path d="M5 3H3v11.5h10V3h-2 M5.5 1.5h5v3h-5z M5.5 8h5 M5.5 11h3.5"/>`,
   "paste-values": `<path d="M5 3H3v11.5h10V3h-2 M5.5 1.5h5v3h-5z"/>${T("12", 6.5, "", 12)}`,
   find: `<circle cx="6.5" cy="6.5" r="4"/><path d="M9.5 9.5l4.5 4.5"/>`,
@@ -181,6 +185,8 @@ const ICONS = {
   "align-left": `<path d="${LINES([[2, 14], [2, 10], [2, 14], [2, 10]])}"/>`,
   "align-center": `<path d="${LINES([[2, 14], [4, 12], [2, 14], [4, 12]])}"/>`,
   "align-right": `<path d="${LINES([[2, 14], [6, 14], [2, 14], [6, 14]])}"/>`,
+  "align-across": `<path d="M1.5 3v10 M14.5 3v10 ${LINES([[5, 11], [6, 10], [5, 11], [6, 10]])}` +
+    ` M4.5 6.5L3 8l1.5 1.5 M11.5 6.5L13 8l-1.5 1.5"/>`,
   "wrap-text": `<path d="M2 3.5h12 M2 7h10.5a2 2 0 0 1 0 4H8 M9.5 9.5L8 11l1.5 1.5 M2 11h3.5"/>`,
   bullets: `<circle class="f" cx="3" cy="4" r="1.3"/><circle class="f" cx="3" cy="8" r="1.3"/><circle class="f" cx="3" cy="12" r="1.3"/><path d="M6 4h8 M6 8h8 M6 12h8"/>`,
   numbers: `<text x="0.5" y="6" font-size="5.5">1</text><text x="0.5" y="10" font-size="5.5">2</text><text x="0.5" y="14" font-size="5.5">3</text><path d="M6 4h8 M6 8h8 M6 12h8"/>`,

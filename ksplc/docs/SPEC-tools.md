@@ -163,7 +163,7 @@ This table lists every option of a compile. Most have a section of their own, li
 
 | The option | Description |
 | :-- | :-- |
-| `--stats` | prints a report on standard error: grammar-rule attempts (`[KSPEG Rule]`), analysis costs (the two Sema Body tables), stage costs (`[Layer]`), cache hits and misses (`[AST Cache]`), and totals (`[Overall]`). |
+| `--stats` | prints a report on standard error: grammar-rule attempts (`[KSPEG Rule]`), analysis costs per declaration (`[Sema Body]`), stage costs (`[Layer]`), cache hits and misses (`[AST Cache]`), and totals (`[Overall]`). A detail table whose phase took under 5% of the compile time is replaced by one line that says so. |
 | `--freestanding` | generates code for bare metal (a chip with no operating system), depending on neither an OS nor a standard library, and sets the `#cfg()` flag `freestanding`. |
 | `--machine=<triple>` | the machine the output is for, whose widths every size is laid out by; the default is the machine ksplc runs on ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). |
 | `--sanitize=<names>` | marks `--to=llvm`'s IR for the sanitizers named, which the C compiler's `-fsanitize=` then instruments; refused on a compile that writes C ([§2.2.2](#222-watching-a-program-with-a-sanitizer---sanitize)). |

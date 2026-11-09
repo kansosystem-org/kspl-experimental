@@ -117,7 +117,9 @@ function ksmdTable(ks) {
       if (fill) el.style.backgroundColor = fill;
       if (color || fill) el.classList.add("looked");
       if (size) el.style.fontSize = `${size / 2}pt`;
-      if (align) el.style.textAlign = align;
+      // A value centred across columns is laid out with its run (`spill` in `sizes.js`).
+      if (align === "across") el.classList.add("across");
+      else if (align) el.style.textAlign = align;
       if (wraps) el.classList.add("wrap");
     }
     // A cell's link holds its text, and opens as a prose link does: on Ctrl+press, or a press
@@ -673,9 +675,11 @@ function ksmdTable(ks) {
 
   // The commands on a table's rows and columns, and on the table as a whole. Each acts on every
   // row or column the range spans, as one step: with rows 2 to 3 chosen, Insert row above inserts
-  // two rows, as Excel does. While rows of the table are cut, Insert row above inserts them
-  // instead, and Insert column left the columns (`CUT_FORMS` in `commands.js`). A filter stays,
-  // and shows a new row until it is chosen again (`filter.js`).
+  // two rows, as Excel does. A row that a filter or a closed group hides counts for none: Remove
+  // row leaves it, and Insert row above inserts one row for each row in sight. While rows of the
+  // table are cut, Insert row above inserts them instead, and Insert column left the columns
+  // (`CUT_FORMS` in `commands.js`). A filter stays, and shows a new row until it is chosen again
+  // (`filter.js`).
   const LINES = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0],
     "column-left": [2, 0], "column-right": [2, 1], "column-remove": [3, 0] };
   const editLines = (name, c) => {
@@ -685,7 +689,10 @@ function ksmdTable(ks) {
     const r = ks.range.rect();
     const first = rows ? Math.max(r.r1, 0) : r.c1;
     const last = rows ? Math.max(r.r2, 0) : r.c2;
-    return ks.act("ksmd_web_table_edit", c.block, what, after ? last + 1 : first, last - first + 1);
+    const hidden = rows ? ks.range.hiddenRows(c.block, first, last) : [];
+    const removes = what === 1;
+    return ks.act("ksmd_web_table_edit", c.block, what, after ? last + 1 : first,
+      last - first + 1 - (removes ? 0 : hidden.length), ks.put(removes ? hidden.join(",") : ""));
   };
   ks.handle(["row-above", "row-below", "row-remove"], editLines,
     { table: true, repeat: true, when: (c) => c.row >= 0 });

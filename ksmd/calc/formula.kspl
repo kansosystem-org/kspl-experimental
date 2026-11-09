@@ -5,6 +5,7 @@
 //< Caution: **Read a formula only through `token_at` and `next`.** Binding, writing and
 //< calculating then agree on where each reference starts and ends.
 import "ksmd/base/marker" { is_decimal, quoted_end, write_column }
+import "ksmd/calc/bases" { is_literal, literal }
 import "ksmd/model/model" { Cell, Corner, Document, Piece, Table }
 import "std/chars"
 import "std/ds" { List }
@@ -22,7 +23,7 @@ struct Address //< a cell by its place, counted from 0: `A1` is row 0, column 0
     fixed_column: Bool
 
 enum Token_kind
-    number
+    number //< decimal, as a cell's number without its sign, or in a base: `0xFF`, `0b_0111`
     name //< a lowercase name not followed by `.` and a cell address: a function's name or a word
     reference //< a cell or a range: `D1`, `budget.D1`, `"Q1 sales".D1`, `D1:D3`
     text //< text in JSON quotes not followed by `.` and a cell address: `"Pens"`
@@ -78,6 +79,17 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
     if i == text.len
         return t
     c: = text[i]
+    if c.is_digit() && is_literal(text.sub_from(i))
+        // A literal in a base runs on over every letter, digit and `_`, so `0b12` is one token
+        // that does not read, not `0b1` and then `2`.
+        $j: = i
+        for j < text.len &&
+            (text[j].is_lower() || text[j].is_upper() || text[j].is_digit() || text[j] == '_')
+            j += 1
+        t.end = j
+        t.text = text.sub(i, j - i)
+        t.kind = .number if literal(t.text).is_some() else .bad
+        return t
     if c.is_digit()
         t.end = number_end(text, i)
         t.text = text.sub(i, t.end - i)

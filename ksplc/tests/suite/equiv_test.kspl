@@ -15,7 +15,6 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -98,19 +97,13 @@ priv fn run_built(exe: U8[], arena: Arena$@): Built //< it runs a built executab
     return built(true,
         arena.text().s(r.out).s("exit=\{r.code.unwrap_or(-1)\}\n").take())
 
-priv fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does not run
-    r: = harness.run(U8[][]::{ cc, "--version" })
-    if !r.exited_with(0)
-        return .none
-    return .some(r.out.find_str("clang").is_some())
-
 priv fn other_cc(): U8[] //< the other family's C compiler (gcc beside clang), empty where none
     //< Caution: **Ask the compiler what it is.** macOS's `gcc` is clang, and a build under it would
     //< pass for the gcc check while seeing clang's order.
-    switch is_clang(harness.cc())
+    switch harness_build.is_clang(harness.cc())
     case .some(mine)
         other: = "gcc" if mine else "clang"
-        switch is_clang(other)
+        switch harness_build.is_clang(other)
         case .some(theirs)
             if theirs != mine
                 return other
@@ -137,17 +130,6 @@ priv fn binary_literals(text: U8[], arena: Arena$@): List<|U8[]|> //<
             !(end < text.len && (text[end].is_alnum() || text[end] == '_'))
             out.push(text.sub(i, end - i))
     return out
-
-priv fn first_diff(a: U8[], b: U8[], arena: Arena$@): U8[] //< the first line that disagreed
-    //< Caution: Do not print both whole texts (a long program's output would appear twice).
-    al: = a.lines(arena)
-    bl: = b.lines(arena)
-    n: = math.min(al.len, bl.len)
-    for i in Range.asc(n)
-        if !al.get(i).equals(bl.get(i))
-            return arena.text().s("line \{i + 1\} differs\n  C   : ").s(al.get(i)).s("\n  LLVM: ")
-                .s(bl.get(i)).take()
-    return arena.text().s("the line counts differ (C=\{al.len\} LLVM=\{bl.len\})").take()
 
 priv struct Packed_scan //< `packed_scan`'s answer
     seen: Sz //< how many loads and stores went through a `Wire` field
@@ -235,7 +217,7 @@ fn main(): I32
         else
             alt: = run_built(alt_exe, arena)
             verdict.check("the C output agrees under gcc and clang", c.out.equals(alt.out),
-                first_diff(c.out, alt.out, arena))
+                harness_build.first_diff(c.out, harness.cc(), alt.out, alt_cc, arena))
         check_level(alt_cc, c_gen, fs.join(work, "c_alt_o2.exe", arena), c.out, arena)
     l: =
         build_run(true, fs.join(work, "l.ll", arena), fs.join(work, "l.exe", arena),
@@ -244,7 +226,7 @@ fn main(): I32
         verdict.check("the LLVM backend's build", false, l.out)
         return harness.finish()
     verdict.check("the C and LLVM output agree", c.out.equals(l.out),
-        first_diff(c.out, l.out, arena))
+        harness_build.first_diff(c.out, "C", l.out, "LLVM", arena))
     check_packed_ir(fs.join(work, "l.ll", arena), arena)
     return harness.finish()
 
@@ -256,7 +238,8 @@ priv fn check_level(cc: U8[], c_gen: U8[], exe: U8[], want: U8[], arena: Arena$@
         verdict.check(name, false, b.out)
         return
     got: = run_built(exe, arena)
-    verdict.check(name, got.out.equals(want), first_diff(want, got.out, arena))
+    verdict.check(name, got.out.equals(want),
+        harness_build.first_diff(want, "-O0", got.out, "-O2", arena))
 
 priv fn check_for_in_index(text: U8[], arena: Arena$@) //<
     //< Every index a `for … in` counts with is an `Sz`, as wide as the length it is held below

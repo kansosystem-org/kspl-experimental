@@ -75,7 +75,7 @@ flowchart LR
 * **A change under `ksplc/` reaches the seed only through `make commit-seed`.** The repository's suites run on the seed, so a fix to what ksplc emits reaches them only then.
 * **The grammar is embedded** (`embed "ksplc/kspl.kspeg" as kspl_grammar;` in `ksplc/main.kspl`). After a grammar change, tools that run the seed, such as `make fmt`, fail until `make commit-seed` has run.
 * **So is the C runtime preamble**, written into every generated `.c` ("Embedding the runtime, and what a library keeps to itself" in [`DESIGN-backends.md`](DESIGN-backends.md)). `ksplc/gen/runtime/{core,hosted,freestanding}.{h,c}` and `hosted_*.c` are embedded into ksplc. Do not skip `make commit-seed` because no `ksplc/*.kspl` changed. The diff-zero verification cannot see that the seed's copy is old.
-* **So the seed carries a record of what it was taken from.** `make commit-seed` writes `ksplc/seed.sum`: one SHA-256 over every file ksplc reads under `ksplc/`, runtime and grammar included, with line ends read as `\n`. The tests and `SPEC-diagnostics.md` are left out, since neither needs a re-bake. `make test-seed-sum`, a gate on every platform, fails while the tree differs from the record. A change to a comment alone also asks for the re-bake.
+* **So the seed carries a record of what it was taken from.** `make commit-seed` writes `ksplc/seed.sum`: one SHA-256 over `ksplc/seed.c` and every file ksplc reads under `ksplc/`, runtime and grammar included, with line ends read as `\n`. The seed is counted so that one edited by hand, or taken from the other side of a merge, fails too. The tests and `SPEC-diagnostics.md` are left out, since neither needs a re-bake. `make test-seed-sum`, a gate on every platform, fails while the tree differs from the record. A change to a comment alone also asks for the re-bake.
 * **Adding a function to the C runtime takes two seed updates.** The runtime in Stage1's C (`out/gen/stage1/`) is the seed's. Once `std/` calls the new function, Stage1 fails to link, and `make commit-seed` needs Stage1. Stage1 embeds the source tree's runtime, so:
   1. Temporarily change `std/` so it does not call the new symbol. The declaration can stay.
   2. `make stage1` → `make commit-seed`. This seed holds the new runtime.
@@ -143,8 +143,14 @@ Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one
 | block | what it shows | where it is explained |
 | :-- | :-- | :-- |
 | `[KSPEG Rule]` | how often the parser tries each grammar rule, and how each try ends | "What each rule takes (`--stats`'s `[KSPEG Rule]`)" |
-| `[Sema Body / by self time]`, `[Sema Body / by instantiations]` | the declarations Sema spent the most time on, and those instantiated most often | "Profiling where Sema's time goes" in [`DESIGN-sema.md`](DESIGN-sema.md) |
+| `[Sema Body]` | the declarations Sema spent the most time on, and how often each was instantiated | "Profiling where Sema's time goes" in [`DESIGN-sema.md`](DESIGN-sema.md) |
 | `[Layer]`, `[Overall]` | time and memory per stage, and the summary | below |
+
+**The report prints only what helps to tune the compiler.** Each choice below keeps a reader from studying a line that cannot lead to a fix:
+
+* **A detail table prints only when its phase takes at least 5% of the compile time** (`DETAIL_SHARE_PERCENT` in `pipeline.kspl`). `[KSPEG Rule]` follows KSPEG Parse's time, and `[Sema Body]` follows Infer's. With a warm AST cache, parsing takes a few ms of several seconds. Its table then ranks rules that nobody would tune, since even a free parse would save under 5%.
+* **A table left out leaves one line in its place**, such as `[KSPEG Rule] left out: parsing took 4 ms, under 5% of the compile time`. A block that is only missing leaves the reader guessing whether it broke.
+* **A part of a stage that took under 1 ms is left out**, such as `Constraints` or `AST Norm` on a warm run. `Other` prints once it reaches the same 5% of the time or of the arena.
 
 **`[AST Cache]` shows the disk cache's hits and misses** ("The normalized AST's disk cache (`ksplc/parse/ast_cache.kspl`)" in [`DESIGN-parse.md`](DESIGN-parse.md)). Without it, a cache that stops hitting only slows things, unnoticed.
 

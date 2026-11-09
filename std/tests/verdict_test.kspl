@@ -369,24 +369,33 @@ fn test_log_pushes_a_heavy_line_out_at_once()
     verdict.pass("an error and a warning are handed over as they close, and a lighter line piles.")
 
 priv const KILLED_SRC: U8[] = //< a child killed outright right after a warning written through `at`
-    """import "std/io"
+    //< **The killer waits for the child's mark, not for a time.** On a busy machine, a second can
+    //< pass before the warning is written. The killer also ends once the child is gone.
+    """import "std/fs"
+import "std/io"
 import "std/log" { Log }
 import "std/subproc"
 import "std/sys"
 
 fn main()
-  _killer: = subproc.spawn_async(U8[][]::{ "/bin/sh", "-c", "sleep 1; kill -9 $PPID" }, "")
+  mark: = "out/tmp/kspl_test_child/log_killed.mark"
+  fs.remove_path(mark) catch {}
+  wait_then_kill: =
+    "while [ ! -e $0 ]; do kill -0 $PPID 2>/dev/null || exit; sleep 0.05; done; kill -9 $PPID"
+  _killer: = subproc.spawn_async(U8[][]::{ "/bin/sh", "-c", wait_then_kill, mark }, "")
     catch panic("the shell must start")
   $lg: = Log(io.out(), .hint, "c")
   if w: = lg.at(.warning)
     w.s("last words")
-  sys.sleep_ms(30000)
+  io.write_file(mark, "") catch panic("the mark must be written")
+  sys.sleep_ms(300000)
 """
 
 fn test_log_keeps_a_heavy_line_through_a_kill(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     //< **SIGKILL runs no exit path**: what still waits in a buffer is gone, so only a line already
     //< passed on reaches the reader. The killer starts first, since starting a child flushes the
-    //< outputs; the child is killed a second later, with the line still open.
+    //< outputs. The child writes a mark once the warning is out, and is killed then, with the line
+    //< still open.
     verdict.start("[Log] a warning written through at surviving a kill right after it test...")
     if sys.is_windows()
         verdict.skip("it hands over shell command lines")

@@ -612,3 +612,23 @@ priv fn remove_walk_tree() //< deletes the tree from the leaves in order
     fs.remove_path("out/tmp/kspl_test_debug_walk/z") catch {}
     fs.remove_path("out/tmp/kspl_test_debug_walk/a") catch {}
     fs.remove_path(WALK_ROOT) catch {}
+
+fn test_fs_lies_under() //< whether a path lies inside a folder, by its steps
+    //< **Both OSes' answers on every OS**, so a Windows path meets its test before a push. The
+    //< mixed case is the one that broke: the launcher compared texts and kssrv compared steps.
+    verdict.start("[Fs] whether a path lies inside a folder...")
+    defer arena: = Arena(16 * 1024)
+    for win in Bool[2]::{ false, true }
+        mixed: = fs.lies_under_on("C:\\w\\kspl/out/tmp/t", "C:\\w\\kspl\\out\\tmp\\t\\bin/tmp/r",
+            win, arena)
+        assert(mixed, "`\\` and `/` mixed name one folder: std splits by both on every OS")
+        assert(fs.lies_under_on("/a/b", "/a/b/c", win, arena), "a path in the folder lies inside")
+        assert(fs.lies_under_on("/a/b", "/a/b", win, arena), "the folder itself counts as inside")
+        assert(!fs.lies_under_on("/a/b", "/a/bc", win, arena), "a shared start is not enough")
+        assert(!fs.lies_under_on("/a/b", "/a", win, arena), "the folder above is outside")
+        assert(fs.lies_under_on("/a/b", "/a/x/../b/./c", win, arena),
+            "`..` is taken back and `.` dropped")
+        assert(fs.lies_under_on("/A/b", "/a/B/c", win, arena), "ASCII case is ignored")
+    drives: = fs.lies_under_on("C:\\w", "D:\\w\\x", true, arena)
+    assert(!drives, "another drive is never inside")
+    verdict.pass("A path lies inside by its steps: `/` and `\\` alike on Windows, case ignored.")

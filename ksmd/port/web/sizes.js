@@ -136,10 +136,12 @@ function ksmdSizes(ks) {
   // cell whose next column shows a value, and the last column's cells. Other text runs on over
   // the empty cells to its right, as a spreadsheet's does. A number or a date wider than its
   // column shows `###` instead, as in Excel: cut, 1200 would read as 120.
+  // A cell centred across columns shows its value over the run `across` gives it instead.
   function spill(wrap) {
     const hidden = wrap.foldedColumns;
     const m = wrap.metrics;
     for (const tr of wrap.querySelector("tbody").rows) {
+      unbox(tr);
       let before = null;
       for (let c = 0; c < wrap.names.length; c++) {
         if (hidden[c]) continue;
@@ -148,16 +150,72 @@ function ksmdSizes(ks) {
         if (before) before.classList.toggle("clip", text !== "");
         const value = td.classList.contains("number") || td.classList.contains("date");
         td.classList.toggle("clip", value || ["error", "wrap"].some((k) => td.classList.contains(k)));
+        const run = text !== "" && td.classList.contains("across") ? across(wrap, tr, c) : [];
+        const width = [c, ...run].reduce((sum, k) => sum + wrap.px[k], 0) - m.pad;
+        let narrow = false;
         if (value) {
           const size = td.style.fontSize;
           const font = size ? m.font.replace(/\d+(\.\d+)?px/, size) : m.font;
-          const narrow = textWidth(text, font) > wrap.px[c] - m.pad + 0.5;
+          narrow = textWidth(text, font) > width + 0.5;
           td.classList.toggle("narrow", narrow);
           if (narrow) td.style.setProperty("--cell-size", size || `${m.size}px`);
+        }
+        if (text !== "" && td.classList.contains("across") && !narrow &&
+          !td.querySelector(".cell-input")) {
+          const last = run.length > 0 ? run[run.length - 1] : c;
+          box(td, run.map((k) => tr.cells[k + 1]), width, cutAfter(wrap, tr, last));
+          c = last;
+          before = null;
+          continue;
         }
         before = td.classList.contains("clip") ? null : td;
       }
       if (before) before.classList.add("clip");
+    }
+  }
+
+  // Centre across columns, as Excel's Center Across Selection: the columns after `c` whose cells
+  // are `across` and empty, up to the first that is not. A hidden column is passed over.
+  function across(wrap, tr, c) {
+    const run = [];
+    for (let k = c + 1; k < wrap.names.length; k++) {
+      if (wrap.foldedColumns[k]) continue;
+      const td = tr.cells[k + 1];
+      if (!td.classList.contains("across") || td.textContent !== "") break;
+      run.push(k);
+    }
+    return run;
+  }
+
+  // Whether a value wider than its run must stop at the run's end: where the next shown cell
+  // holds a value, or the run ends the row. Otherwise it runs on as other text does.
+  function cutAfter(wrap, tr, last) {
+    for (let k = last + 1; k < wrap.names.length; k++) {
+      if (!wrap.foldedColumns[k]) return tr.cells[k + 1].textContent !== "";
+    }
+    return true;
+  }
+
+  // Shows a cell's value in a box as wide as its run, centred, over the run's empty cells. The
+  // lines between the run's cells go, as a merged cell's would; each cell can still be chosen.
+  function box(td, cells, width, cut) {
+    const holder = td.querySelector(":scope > .cell-fit") || td;
+    const boxEl = document.createElement("span");
+    boxEl.className = "across-box";
+    boxEl.style.setProperty("--across-width", `${width}px`);
+    boxEl.classList.toggle("cut", cut || td.classList.contains("wrap"));
+    boxEl.append(...holder.childNodes);
+    holder.appendChild(boxEl);
+    td.classList.add("across-start");
+    td.classList.remove("clip");
+    for (const cell of cells) cell.classList.add("across-run");
+  }
+
+  // Takes a row's boxes away, so a table laid out again draws its runs anew.
+  function unbox(tr) {
+    for (const b of tr.querySelectorAll(".across-box")) b.replaceWith(...b.childNodes);
+    for (const td of tr.querySelectorAll(".across-start, .across-run")) {
+      td.classList.remove("across-start", "across-run");
     }
   }
 
@@ -429,5 +487,5 @@ function ksmdSizes(ks) {
   ks.handle("column-width", (_, c) => askWidth(c.block), { table: true });
   ks.handle("row-height", (_, c) => askHeight(c.block), { table: true });
 
-  ks.sizes = { decorate, lay, layAll, fit, askWidth, askHeight, widen };
+  ks.sizes = { decorate, layAll, widen };
 }

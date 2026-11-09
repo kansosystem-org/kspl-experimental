@@ -71,6 +71,17 @@ fn use(): I32
     return c.n
 """
 
+priv const CLOSURE_URI: U8[] = "closure.kspl"
+priv const CLOSURE_SRC: U8[] =
+    """fn apply(f: Callable1<|I32, I32|>, v: I32): I32
+    return f.call(v)
+
+fn closes(): I32
+    limit: = 3
+    add: = fn(x: I32; limit: I32): I32 { return x + limit; }
+    return apply(add, limit)
+"""
+
 priv struct Ask //< one client, and where the probe's names stand in its document
     c: jsonrpc_client.Client$@
     arena: Arena$@
@@ -146,6 +157,7 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
         lsp_client.SEND_MS, arena) catch {}
     check_selected(ask)
     check_type_calls(ask)
+    check_captures(ask)
 
 priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
     local: = lsp_client.answer(ask.c, "textDocument/prepareRename",
@@ -280,3 +292,35 @@ priv fn check_type_calls(ask: Ask) //< type calls name the type, not a written `
         ask.at_in(TYPE_URI, TYPE_SRC, "    fn new", "new"), lsp_client.WALK_MS, ask.arena)
     verdict.check("new's written references do not claim the type call's name",
         refs.get("result").arr_list(ask.arena).len == 1, lsp_client.dump(refs, ask.arena))
+
+priv fn check_captures(ask: Ask) //<
+    //< A local a closure captures is renamed in its capture list and the closure's body too
+    //< **The capture is the same name**: renamed apart, the closure reads a name that is gone. The
+    //< edits land on the names, never on the `fn(` the closure's made declarations stand at.
+    ask.c
+        .notify("textDocument/didOpen",
+        lsp_client.did_open(CLOSURE_URI, CLOSURE_SRC, ask.arena), lsp_client.SEND_MS, ask.arena)
+        catch {}
+    defer lsp_client.close(ask.c, CLOSURE_URI, ask.arena)
+    closure_line: = decl_line(CLOSURE_SRC, "    add: =", ask.arena)
+    cap_col: = col_in_line(CLOSURE_SRC, "    add: =", "limit", ask.arena)
+    use_col: = col_in_line(CLOSURE_SRC, "    add: =", "limit;", ask.arena)
+    from_outer: = ask.rename_in(CLOSURE_URI, CLOSURE_SRC, "    limit: =", "limit", "most")
+    edits: = edits_in(from_outer, CLOSURE_URI, ask.arena)
+    verdict.check("a captured local is renamed at its declaration, capture, body use and use",
+        edits.len == 4 && starts_at(edits@, closure_line, cap_col) &&
+        starts_at(edits@, closure_line, use_col) &&
+        starts_at(edits@, decl_line(CLOSURE_SRC, "    limit: =", ask.arena), 4),
+        lsp_client.why(ask.c, places(edits@, ask.arena), ask.arena))
+    from_body: = ask.rename_in(CLOSURE_URI, CLOSURE_SRC, "    add: =", "limit;", "most")
+    body_edits: = edits_in(from_body, CLOSURE_URI, ask.arena)
+    verdict.check("a capture renamed from the closure's body renames the outer local too",
+        body_edits.len == 4 &&
+        starts_at(body_edits@, decl_line(CLOSURE_SRC, "    limit: =", ask.arena), 4),
+        lsp_client.why(ask.c, places(body_edits@, ask.arena), ask.arena))
+    refs: = lsp_client.answer(ask.c, "textDocument/references",
+        ask.at_in(CLOSURE_URI, CLOSURE_SRC, "    add: =", "limit"), lsp_client.WALK_MS, ask.arena)
+    found: = refs.get("result").arr_list(ask.arena)
+    verdict.check("the references of a capture count the outer local and the body's use",
+        found.len == 4,
+        lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))

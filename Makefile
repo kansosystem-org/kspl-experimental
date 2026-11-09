@@ -255,7 +255,7 @@ endif
 	stage1 self-host self-host-ship commit-seed test-seed-sum \
 	fmt lint debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install install-check \
-	run fim-corpus fim-model fim-eval qwen chat-server kssrv kssrv-libs ksagent perf-log
+	run fim-corpus fim-model fim-eval chat-server kssrv kssrv-libs ksagent perf-log
 
 # A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
 define nl
@@ -399,7 +399,7 @@ ifeq ($(BACKEND),c)
 		|| (cp $(TMP_DIR)/seed_stripped.c $(SEED_C) \
 			&& ./$(STAGE1_EXE) run tools/repo_stat.kspl \
 			&& echo "Seed updated successfully.")
-	@./$(STAGE1_EXE) run tools/seed_sum.kspl write $(SEED_SUM) $(SEED_SUM_SRCS)
+	@./$(STAGE1_EXE) run tools/seed_sum.kspl write $(SEED_SUM) $(SEED_SUM_FILES)
 else
 	@echo "Cannot update seed.c from LLVM output. Run without LLVM=1."
 endif
@@ -408,12 +408,15 @@ endif
 # ksplc reads under `ksplc/`, its runtime included, but neither the tests nor `SPEC-diagnostics.md`,
 # which needs no re-bake ("The bootstrap, and keeping the seed in step" in
 # ksplc/docs/DESIGN-compiler.md).
-SEED_SUM      := ksplc/seed.sum
-SEED_SUM_SRCS := $(sort $(filter ksplc/%,$(filter-out ksplc/docs/SPEC-diagnostics.md,$(KSPL_SRCS))))
+# **The seed itself is counted too, first**: a `seed.c` edited by hand, or taken from the other
+# side of a merge, would otherwise pass. First, it is the file the check's one-byte change alters.
+SEED_SUM       := ksplc/seed.sum
+SEED_SUM_SRCS  := $(sort $(filter ksplc/%,$(filter-out ksplc/docs/SPEC-diagnostics.md,$(KSPL_SRCS))))
+SEED_SUM_FILES := $(SEED_C) $(SEED_SUM_SRCS)
 
 ## Gates|test-seed-sum|See that `ksplc/seed.c` was re-baked after the last change to the compiler
 test-seed-sum: $(STAGE1_EXE)
-	@./$(STAGE1_EXE) run tools/seed_sum.kspl check $(SEED_SUM) $(SEED_SUM_SRCS)
+	@./$(STAGE1_EXE) run tools/seed_sum.kspl check $(SEED_SUM) $(SEED_SUM_FILES)
 
 # ==================================================================
 # 3. Development tools (formatter / linter / LSP / debugging)
@@ -513,13 +516,6 @@ fim-eval: $(STAGE1_EXE)
 		--vocab=$(FIM_OUT)/tokenizer/vocab.txt --merges=$(FIM_OUT)/tokenizer/merges.txt \
 		--weights=$(FIM_WEIGHTS)
 	$(FIM_ENV) ./$(OUT_DIR)/eval_fim.exe --model=native --weights=$(FIM_WEIGHTS) $(FIM_KSPLC)
-
-# --- Native inference for the Qwen family (lib/ksai/examples/qwen_infer) --- Build only.
-## Run|qwen|Build native inference for the Qwen family (`lib/ksai/examples/qwen_infer`)
-qwen: $(STAGE1_EXE)
-	@echo "# BUILDING QWEN NATIVE INFERENCE (BLAS=$(BLAS))"
-	$(call kspl_build,lib/ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
-	@echo "# built -> $(OUT_DIR)/qwen_infer.exe"
 
 # --- The chat server for a Qwen model (lib/ksai/examples/chat_server) --- Build only.
 # **A file with the sources and the switches it was built from.** So `make chat-server` builds it

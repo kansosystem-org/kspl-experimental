@@ -567,6 +567,26 @@ priv fn f(a: I32 = 1 + 1): I32
 
 fn main(): I32
   return f()
+// ==== case param_default_calls_itself
+//< A default that calls its own function, or two whose defaults call each other, is refused once
+//< The refused default is not copied into a call. Copied, `f()` in `f`'s own default filled
+//< itself again and again, and the compiler's stack ran out with no diagnostic shown.
+// EXPECT: param_default_calls_itself.kspl:9:20: error: a parameter default must be a literal
+// EXPECT: param_default_calls_itself.kspl:12:20: error: a parameter default must be a literal
+// EXPECT: param_default_calls_itself.kspl:15:20: error: a parameter default must be a literal
+// EXPECT: Finished with 3 error(s)
+
+priv fn f(x: I32 = f()): I32
+  return x
+
+priv fn g(x: I32 = h()): I32
+  return x
+
+priv fn h(y: I32 = g()): I32
+  return y
+
+fn main(): I32
+  return f(1) + f() + g(2) + h()
 // ==== case param_default_not_trailing
 //< Defaults must be a run at the end of the parameter list
 //< "A default argument is allowed only for a foldable constant" in docs/DESIGN-principles.md.

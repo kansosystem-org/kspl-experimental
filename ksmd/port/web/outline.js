@@ -80,7 +80,7 @@ function ksmdOutline(ks) {
       return own;
     });
     for (const [first, last, closed, depth] of cg) {
-      const name = (c) => letterOf(c);
+      const name = ks.table.letters;
       const span = first === last ? `column ${name(first)}` : `columns ${name(first)} to ${name(last)}`;
       const b = toggle(first, last, closed, `${closed ? "Show" : "Hide"} ${span}`);
       b.dataset.columns = "1";
@@ -89,13 +89,6 @@ function ksmdOutline(ks) {
         slots[c + 1][depth].classList.add(c === last ? "outline-end" : "outline-line");
       }
     }
-  }
-
-  // A column's letters, as the column heading shows them.
-  function letterOf(c) {
-    let s = "";
-    for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
-    return s;
   }
 
   // A button that hides or shows the lines from `first` to `last`.

@@ -598,6 +598,35 @@ priv fn first(buf: U8$[]): U8
 fn main(): I32
   $a: U8[2] = ::{ 1, 2 }
   return I32::first(U8$[]::a)
+// ==== case raw_address_step_from_null
+//< A step from `null` makes an address from a number, so it too needs `#raw_address`
+//< `U8@::null + 4096` is the address `U8@::4096` names, made without the cast the mark guards. A
+//< marked function keeps it. A pointer that is null only at run time is not known, so a step
+//< from a parameter passes.
+// EXPECT: raw_address_step_from_null.kspl:14:8: error: a step from 'null' makes an address from a number, which only a function marked '#raw_address' may do
+// EXPECT: raw_address_step_from_null.kspl:18:11: error: a step from 'null' makes an address from a number
+// EXPECT: Finished with 2 error(s)
+
+#raw_address
+priv fn marked(): U8@
+  return U8@::null + 4096
+
+priv fn stepped(): U8@
+  p: = U8@::null + 4096
+  return p
+
+priv fn back(): U8@
+  return (U8@::(null)) - 1
+
+priv fn from_param(p: U8@): U8@
+  return p + 1
+
+fn main(): I32
+  _a: = marked()
+  _b: = stepped()
+  _c: = back()
+  _d: = from_param(null)
+  return 0
 // ==== case operator_receiver_writes_read_only
 //< An operator whose method takes `Self$@` is refused on an operand that method may not write
 //< An operator passes its left operand as a method call passes its receiver ("Which operation
@@ -667,6 +696,24 @@ fn main(): I32
   bump(mem.SZ_MAX@)
   bump(BIGNAT_LIMBS@)
   return 0
+// ==== case pointer_read_through_gets_no_address_hint
+//< A read-only pointer read through another (`pps$`) is not told to take an address
+//< `pps$` holds `s@`, read-only as `s` has no `$`. The hint for `x@` read it as `pps@` and asked
+//< for a `$` on `pps`, which changes nothing.
+// EXPECT: pointer_read_through_gets_no_address_hint.kspl:17:6: error: expected 'pointer_read_through_gets_no_address_hint.S$@', but got 'pointer_read_through_gets_no_address_hint.S@'
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: is a writable pointer only where
+priv struct S
+  n: I32
+
+priv fn wr(p: S$@)
+  p.n = 1
+
+fn main()
+  s: = S::{ .n = 0 }
+  ps: = s@
+  pps: = ps@
+  wr(pps$)
 // ==== case pointer_argument_spelled
 //< An argument a writable pointer is expected for shows how to write it
 //< A value given gets `n@`. A read-only `n@` gets the rule: `n@` is writable only where `n` is

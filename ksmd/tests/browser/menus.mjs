@@ -3,10 +3,8 @@
 // whole block. Each is driven through the browser's own input events, as `main.mjs` drives the
 // rest, and checked by the saved source and its undo.
 // `menus(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, SHIFT, verdict } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellAt, check } from "./drive.mjs";
 
-const H = "%ksmd 1\n\n";
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function menus({ browser, js, until, press, type, select, click, clickBelow, menu, point,
   rightClick, doubleClickAt, dragTo, load, saves, source, openCell }) {
@@ -26,9 +24,9 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     const missing = await js("Array.from(document.querySelectorAll('.menubar .menu [data-cmd], .menubar .sub-name'))" +
       ".filter((b) => !b.querySelector('svg.glyph path, svg.glyph text, svg.glyph circle')).map((b) => b.textContent)");
     check(missing.length === 0, "every item of every menu carries its icon", missing.join(", "));
-    // The right-click menu holds Cut, Copy, Paste and Paste values first, then the Table menu's
-    // commands.
-    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(4).map((b) => b.dataset.cmd).join(' ')");
+    // The right-click menu holds Cut, Copy, Copy formula, Paste and Paste values first, then the
+    // Table menu's commands.
+    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).slice(5).map((b) => b.dataset.cmd).join(' ')");
     const tableMenu = await js("Array.from(document.querySelectorAll('.top-menu:has([data-cmd=\"row-above\"]) [data-cmd]'))" +
       ".map((b) => b.dataset.cmd).join(' ')");
     check(table.length > 0 && table === tableMenu, "the Table menu holds the right-click menu's commands", tableMenu);
@@ -485,7 +483,7 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
   async everyCommand() {
     const table = `${H}:::table name="t" formats=",number:2"\n| "a" | "b" |\n| 1 | 2 |\n| 3 | 4 |\n| | |\n:::\n`;
     const grouped = `${H}:::table name="t" groups="rows 2-3"\n| "n" |\n| 1 |\n| 2 |\n| 3 |\n:::\n`;
-    const cell = (r, c) => click(`#doc td[data-r="${r}"][data-c="${c}"]`);
+    const cell = (r, c) => click(cellAt(r, c));
     const twoRows = async () => {
       await cell(0, 0);
       await press("ArrowDown", SHIFT);

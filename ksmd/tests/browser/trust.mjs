@@ -5,10 +5,8 @@
 // `trust(t)` takes `served.mjs`'s helpers through `own.mjs`, and returns its sections.
 import fs from "fs";
 import path from "path";
-import { verdict } from "./drive.mjs";
+import { H, check, verdict } from "./drive.mjs";
 
-const check = (ok, what, detail) => verdict.check(ok, what, detail);
-const H = "%ksmd 1\n\n";
 const MINE = "pub fn tax(price: F64): F64 //< the price with its tax\n    return price * 1.1\n";
 // The same file after a colleague changed it in a shared folder.
 const CHANGED = "pub fn tax(price: F64): F64 //< the price with its tax\n    return price * 1.2\n";

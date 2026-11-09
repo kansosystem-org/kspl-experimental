@@ -1,7 +1,7 @@
 //< Shapes drawn over an image or a chart: their lines read and save unchanged, the reader refuses
 //< what it cannot read, and the editor changes them as one step of undo
 import "ksmd/edit/editor_drawings" // `set_drawings`
-import "ksmd/tests/support" { opened, refused, saves }
+import "ksmd/tests/support" { opened, refused, refuses, saves }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -66,8 +66,8 @@ priv fn editing()
         verdict.check("drawing over an image", false, e.message())
     drawn: = arena.text().s(IMAGE).s(RECT).s(ARROW).s(":::\n").take()
     saves("the editor gives an image its drawings", ed@, arena, drawn)
-    ed.set_drawings(0, "draw shape=\"oval\" from=\"1,1\" to=\"2,2\"") catch
-        verdict.check("drawings the reader would refuse are refused", true, "")
+    refuses("drawings the reader would refuse are refused",
+        ed.set_drawings(0, "draw shape=\"oval\" from=\"1,1\" to=\"2,2\""))
     saves("and change nothing", ed@, arena, drawn)
     ed.undo()
     saves("undo takes the drawings away", ed@, arena, plain)
@@ -78,5 +78,4 @@ priv fn editing()
         verdict.check("drawing over a chart", false, e.message())
     saves("the editor gives a chart its drawings", chart@, arena,
         arena.text().s(CHART).s(ARROW).s(":::\n").take())
-    chart.set_drawings(0, ARROW) catch
-        verdict.check("a table takes no drawings", true, "")
+    refuses("a table takes no drawings", chart.set_drawings(0, ARROW))

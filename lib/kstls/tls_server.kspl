@@ -307,11 +307,15 @@ impl Tls_session
         //< It runs the handshake first, and gives one record at most: **call it again while
         //< `buffered` is true**. 0 comes for a close_notify and for a TCP close alike: the
         //< request's own length shows a cut request ("The server half never waits" in
-        //< `lib/kstls/docs/DESIGN-bindings.md`).
+        //< `lib/kstls/docs/DESIGN-bindings.md`). An empty `buf` gives 0 at once and runs nothing.
         r: Self$@,
         tcp: net.Tcp_stream$@,
         buf: U8$[], //< where the bytes go
     ): Sz!Tls_session_error
+        // Caution: **Do not hand OpenSSL an empty read.** It does not answer 0 but asks for more
+        // input, so the read would fail with nothing wrong.
+        if buf.len == 0
+            return 0
         $chunks: Sz = 0
         for
             tls.ERR_clear_error()
