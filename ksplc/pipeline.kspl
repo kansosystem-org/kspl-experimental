@@ -79,7 +79,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
         //< **Put the summary (`[Overall]`) at the end**: a terminal shows the last screen;
         //< `make perf-log` uses `cat`.
         //< Caution: **Do not change the names `Compile time` / `AST Node bytes` / `AST Kids bytes`
-        //< / `AST Arena headroom` / `System Peak Memory`.** `tests/tools/perf_guard.kspl` reads
+        //< / `AST Arena headroom` / `System Peak Memory`.** `tests/checkers/perf_guard.kspl` reads
         //< those five lines.
     if !base_core.config.enable_stats
         return
@@ -146,7 +146,8 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
             .s("Compile time      : N/A (real-time measurement is supported on the C backend \
                 alone)\n")
     // The two factors of the tree's memory use. **When raising this number, check the count it is
-    // multiplied by** (8 bytes each changes tens of MB); `tests/tools/perf_guard.kspl` checks it.
+    // multiplied by** (8 bytes each changes tens of MB).
+    // `tests/checkers/perf_guard.kspl` checks it.
     tail.s("AST Node bytes    : \{sizeof(Ast_node)\}\n")
         .s("AST Kids bytes    : \{sizeof(List<|Ast_node$@|>)\}\n")
     tail.s("AST Arena usage   : \{arena_used:,\} / \{arena_cap:,\} bytes\n")
@@ -426,7 +427,7 @@ impl Compiler
 
         base_stats.stages.backend = base_stats.end_stage(t4, sys.mono_us())
 
-    fn emit_c_units(r: Self$@, staged: Staged_outputs$@, out_path: U8[], units: Sz):
+    priv fn emit_c_units(r: Self$@, staged: Staged_outputs$@, out_path: U8[], units: Sz):
         Bool!Compile_error //<
             //< It writes the generated C split into several translation units
             //< `out_path` gives only the `<stem>` (its last extension dropped); **no file of that
@@ -456,8 +457,8 @@ impl Compiler
                 r.emit_c_part(staged, base_core.arena.dup_str(path.slice()), unit)! || failed
         return failed
 
-    fn emit_c_part(r: Self$@, staged: Staged_outputs$@, path: U8[], split: gen_c_ctx.Emit_split):
-        Bool!Compile_error //<
+    priv fn emit_c_part(r: Self$@, staged: Staged_outputs$@, path: U8[],
+        split: gen_c_ctx.Emit_split): Bool!Compile_error //<
             //< It writes one file of the generated C, the part `split` names, under a temporary name
         defer $out_file: = staged.open(path)!
         defer cg: = Genc_ctx(out_file@, r.sema, r.source_map, split)

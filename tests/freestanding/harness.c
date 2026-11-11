@@ -281,7 +281,7 @@ static void heap_timer(long usec) {
 }
 
 static void check_heap_from_interrupt(void) {
-    const char* want = "mem: heap locked; alloc from an interrupt handler?";
+    const char* want = "mem: heap locked; alloc from an interrupt handler, or from a preempting task with no heap guard set (mem.set_heap_guard)?";
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = heap_interrupt;

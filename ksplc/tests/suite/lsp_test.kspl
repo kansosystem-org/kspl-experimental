@@ -68,8 +68,7 @@ priv const BUILTIN_MARKS: U8[][2] = ::{ ".len", ".ptr" }
 priv const BUILTIN_WANTS: U8[][2] = ::{ "len: Sz", "ptr: U8@" }
 
 priv fn check_hover_builtin_member(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(BUILTIN_URI, BUILTIN_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, BUILTIN_URI, BUILTIN_SRC, arena)
     defer lsp_client.close(c, BUILTIN_URI, arena)
     for i in Range.asc(BUILTIN_DECLS.len)
         decl: = BUILTIN_DECLS[i]
@@ -115,8 +114,7 @@ priv const ALIAS_URI: U8[] = "file:///alias_probe.kspl"
 priv const ALIAS_USE: U8[] = "  return Form.line(3)"
 
 priv fn check_variant_through_alias(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(ALIAS_URI, ALIAS_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, ALIAS_URI, ALIAS_SRC, arena)
     defer lsp_client.close(c, ALIAS_URI, arena)
     pos: = lsp_client.at_pos(ALIAS_URI, decl_line(ALIAS_SRC, ALIAS_USE, arena),
         col_in_line(ALIAS_SRC, ALIAS_USE, "line", arena) + 1, arena)
@@ -211,8 +209,7 @@ priv const WIDE_FROM: I64 = 11I64 //<
 priv const WIDE_TO: I64 = 16I64
 
 priv fn check_wide_range(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(WIDE_URI, WIDE_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, WIDE_URI, WIDE_SRC, arena)
     defer lsp_client.close(c, WIDE_URI, arena)
     $found: = false
     $from: I64 = -1I64
@@ -254,8 +251,7 @@ fn main(): I32
 priv const RAGGED_URI: U8[] = "file:///ragged_probe.kspl"
 
 priv fn check_ragged_reaches(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(RAGGED_URI, RAGGED_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, RAGGED_URI, RAGGED_SRC, arena)
     defer lsp_client.close(c, RAGGED_URI, arena)
     $found: = false
     $ragged: = false
@@ -295,9 +291,7 @@ fn main(): I32
 priv const SELF_DEFAULT_URI: U8[] = "file:///self_default_probe.kspl"
 
 priv fn check_self_default(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen",
-        lsp_client.did_open(SELF_DEFAULT_URI, SELF_DEFAULT_SRC, arena), lsp_client.SEND_MS, arena)
-        catch {}
+    lsp_client.open(c, SELF_DEFAULT_URI, SELF_DEFAULT_SRC, arena)
     defer lsp_client.close(c, SELF_DEFAULT_URI, arena)
     got: = published_for(c, "self_default_probe.kspl", arena)
     $refused: Sz = 0
@@ -308,22 +302,19 @@ priv fn check_self_default(c: jsonrpc_client.Client$@, arena: Arena$@)
         got.found && refused == 3, lsp_client.why(c, said(got, arena), arena))
 
 priv fn check_shebang(c: jsonrpc_client.Client$@, top: U8[], arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(SHEBANG_URI, SHEBANG_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, SHEBANG_URI, SHEBANG_SRC, arena)
     defer lsp_client.close(c, SHEBANG_URI, arena)
     got: = published_for(c, "shebang_probe.kspl", arena)
     verdict.check("no diagnostic comes out on a shebang script being edited",
         got.found && got.diags.len == 0, lsp_client.why(c, said(got, arena), arena))
     described: = lsp_client.uri_of(top, DESCRIBED_REL, arena)
-    c.notify("textDocument/didOpen", lsp_client.did_open(described, DESCRIBED_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, described, DESCRIBED_SRC, arena)
     defer lsp_client.close(c, described, arena)
     quiet: = published_for(c, DESCRIBED_REL, arena)
     verdict.check("a script described under its start-up line puts out no diagnostic in the editor",
         quiet.found && quiet.diags.len == 0, lsp_client.why(c, said(quiet, arena), arena))
     dangling: = lsp_client.uri_of(top, DANGLING_REL, arena)
-    c.notify("textDocument/didOpen", lsp_client.did_open(dangling, DANGLING_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, dangling, DANGLING_SRC, arena)
     defer lsp_client.close(c, dangling, arena)
     once: = published_for(c, DANGLING_REL, arena)
     one: =
@@ -379,24 +370,19 @@ priv fn gave_up(c: jsonrpc_client.Client$@, line: U8[], arena: Arena$@): Bool //
     return arena.text().s(c.err_tail()).take().find_str(line).is_some()
 
 priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): U8[]
-    got: =
-        c.request("textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena), lsp_client.READ_MS,
-        arena) catch
+    got: = lsp_client.hover(c, uri, 1, 3, arena) catch
         return ""
     return lsp_client.hover_text(got.val)
 
 priv fn check_didclose(exe: U8[], arena: Arena$@)
     $c: =
-        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
         verdict.check("a document left open is restored after the worker is remade", false,
             "the client cannot be started")
         return
     defer c.free()
-    _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
     for uri in U8[][]::{ CLOSED_URI, OPEN_URI }
-        c.notify("textDocument/didOpen", lsp_client.did_open(uri, CLOSE_SRC, arena),
-            lsp_client.SEND_MS, arena) catch {}
+        lsp_client.open(c@, uri, CLOSE_SRC, arena)
     lsp_client.close(c@, CLOSED_URI, arena)
     c.notify("$/ksplTestCrash", lsp_client.empty_obj(arena), lsp_client.SEND_MS, arena) catch {}
     stays: = probe_hover(c@, OPEN_URI, arena)
@@ -414,8 +400,7 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
         d5)
 
 priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(CFG_URI, CFG_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, CFG_URI, CFG_SRC, arena)
     defer lsp_client.close(c, CFG_URI, arena)
     off: = lsp_client.answer(c, "textDocument/hover",
         lsp_client.at_pos(CFG_URI, 3, 4, arena), lsp_client.READ_MS, arena)
@@ -430,15 +415,12 @@ priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
     // The analysis worker is a separate process: only an environment variable reaches it.
     sys.set_env("KSPLC_DEFINES", "probe_flag") catch panic("KSPLC_DEFINES could not be set")
     $c2: =
-        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
         verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", false,
             "the client cannot be started")
         return
     defer c2.free()
-    _init: =
-        c2.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
-    c2.notify("textDocument/didOpen", lsp_client.did_open(CFG_URI, CFG_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c2@, CFG_URI, CFG_SRC, arena)
     on: = lsp_client.answer(c2@, "textDocument/hover",
         lsp_client.at_pos(CFG_URI, 3, 4, arena), lsp_client.READ_MS, arena)
     on_text: = lsp_client.hover_text(on)
@@ -516,8 +498,7 @@ priv fn check_spaced_folder(exe: U8[], arena: Arena$@)
         verdict.check(name, false, "initialize does not return")
         return
     user: = lsp_client.encoded_uri_of(dir, "user.kspl", arena)
-    c.notify("textDocument/didOpen", lsp_client.did_open(user, SPACED_BODIES[1], arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c@, user, SPACED_BODIES[1], arena)
     got: = lsp_client.answer(c@, "textDocument/definition",
         lsp_client.at_pos(user, 3, 13, arena), HEAVY_MS, arena)
     landed: = got.get("result").get("uri").as_str().unwrap_or("")
@@ -557,9 +538,7 @@ priv const CFG_WALK_SRC: U8[] =
 
 priv fn dropped_reason(c: jsonrpc_client.Client$@, arena: Arena$@): U8[] //<
     //< The hover on the name under the unraised `#cfg`
-    got: =
-        c.request("textDocument/hover", lsp_client.at_pos("cfg_walk.kspl", 1, 4, arena),
-        lsp_client.READ_MS, arena) catch
+    got: = lsp_client.hover(c, "cfg_walk.kspl", 1, 4, arena) catch
         return ""
     return lsp_client.hover_text(got.val)
 
@@ -570,14 +549,11 @@ priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
     $c: =
-        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
         verdict.check(name, false, "the client cannot be started")
         return
     defer c.free()
-    _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
-    c.notify("textDocument/didOpen",
-        lsp_client.did_open("cfg_walk.kspl", CFG_WALK_SRC, arena), lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c@, "cfg_walk.kspl", CFG_WALK_SRC, arena)
     before: = dropped_reason(c@, arena)
     _uses: =
         c.request("textDocument/references", lsp_client.at_pos("cfg_walk.kspl", 4, 4, arena),
@@ -710,8 +686,7 @@ fn main(): I32
     ok3: = !is_missing(init.val.get("result").get("capabilities"))
     verdict.check("initialize returns capabilities", ok3, d15)
 
-    c.notify("textDocument/didOpen", lsp_client.did_open(PROBE_URI, SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c@, PROBE_URI, SRC, arena)
     // A request discards didOpen's publishDiagnostics while waiting for its own id.
     probe_pos: = lsp_client.at_pos(PROBE_URI, 1, 8, arena)
     hover1: = lsp_client.answer(c@, "textDocument/hover", probe_pos, lsp_client.READ_MS, arena)

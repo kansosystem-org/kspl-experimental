@@ -22,6 +22,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
+import "std/ds"
 import "std/str" { Str_builder }
 import "std/strnum"
 
@@ -193,7 +194,7 @@ impl Ast_node
         cg.clear_scratch().s("\{val\}")
         return cg.take_scratch()
 
-    fn emit_llvm_float(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    priv fn emit_llvm_float(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         real_id: = cg.env.get_real_type(r.type_id)
         if real_id == (I32::sema_type_env.Builtin_type_id.f32_type)
             // An F32 is always written in hexadecimal (the reason is at
@@ -222,7 +223,7 @@ impl Ast_node
 
         return cg.reg_str(res2_reg)
 
-    fn emit_llvm_ident(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    priv fn emit_llvm_ident(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         name: = r.get_path_or_ident_name()
         is_mir: = name.is_made_temp()
 
@@ -345,7 +346,7 @@ impl Ast_node
 
         return cg.reg_str(res_reg)
 
-    fn emit_llvm_unary(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    priv fn emit_llvm_unary(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         op: = r.get_unary_op().text
         target_reg: = r.get_unary_target().emit_llvm_expr(cg)
 
@@ -368,7 +369,7 @@ impl Ast_node
         else if op.equals("~")
             cg.s("    %\{res_reg\} = xor ").t(r.type_id).s(" -1, ").s(target_reg).s("\n")
         return cg.reg_str(res_reg)
-    fn emit_llvm_postfix(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    priv fn emit_llvm_postfix(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< It dispatches the postfix operators (the address-taking @
         //< [ $ :: and the calling `(`).
         op_node: = r.get_postfix_op()
@@ -397,7 +398,7 @@ impl Ast_node
         defer $msg: = Str_builder()
         msg.s("Genllvm ICE: Unhandled postfix op: ").s(op)
         r.ice_panic(msg.slice())
-    fn emit_llvm_cast(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    priv fn emit_llvm_cast(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< The '::' cast: slicing, and conversion between integers, floating points and pointers
         recv: = r.get_postfix_receiver()
         target_type: = r.type_id
@@ -493,25 +494,34 @@ impl Ast_node
         return cg.emit_float_to_int_sat(recv_reg, src_id, dst_id)
 
 priv fn emit_tag_check(cg: Genllvm_ctx$@, r: Ast_node$@, def: Enum_def$@, recv_reg: U8$[]): U8$[] //<
-    //< Passes a cast's operand through `@kspl_tag_check` against the enum's tags
-    //< It returns the operand at its own width. The tags sit in a slot of the alloca group, so
-    //< a cast in a loop takes no more stack each time round.
+    //< Passes a cast's operand through the tag check against the enum's tags
+    //< It returns the operand at its own width. Tags that run unbroken go to
+    //< `@kspl_tag_range_check` as their ends. Others go to `@kspl_tag_check` in a slot of the
+    //< alloca group, so a cast in a loop takes no more stack each time round.
     src_id: = cg.env.scalar_repr_id(r.get_postfix_receiver().type_id)
     wide_reg: = cg.emit_numeric_coerce(recv_reg, src_id, I64_ID)
     n: = def.variants_list.len
-    tags_id: = cg.env.make_array(I32::sema_type_env.Builtin_type_id.i64_type, I32::n)
-    slot: = cg.get_or_alloc_tmp_slot(Void$@::r, tags_id)
-    cg.s("    store ").t(tags_id).s(" [")
-    for i in Range.asc(n)
-        cg.s(", " if i > 0 else "").s("i64 \{def.variants_list.get(i).tag_value\}")
-    cg.s("], ptr ").s(slot).s("\n")
+    low: = def.run_low()
+    $slot: U8[] = ""
+    if low.is_none()
+        tags_id: = cg.env.make_array(I32::sema_type_env.Builtin_type_id.i64_type, I32::n)
+        slot = cg.get_or_alloc_tmp_slot(Void$@::r, tags_id)
+        cg.s("    store ").t(tags_id).s(" [")
+        for i in Range.asc(n)
+            cg.s(", " if i > 0 else "").s("i64 \{def.variants_list.get(i).tag_value\}")
+        cg.s("], ptr ").s(slot).s("\n")
     name: = cg.get_or_add_raw_literal(cg.env.display(r.type_id))
     safe_reg: = cg.next_reg()
     // A `U64` above INT64_MAX arrives negative in i64; the flag makes it no tag and prints it
     // unsigned.
     unsigned_flag: = "true" if cg.env.is_unsigned(src_id) else "false"
-    cg.s("    %\{safe_reg\} = call i64 @kspl_tag_check(i64 ").s(wide_reg)
-        .s(", i1 \{unsigned_flag\}, ptr ").s(slot).s(", i64 \{n\}, ptr @.str.\{name\}")
+    cg.s("    %\{safe_reg\} = call i64 @kspl_tag_").s("range_" if low.is_some() else "")
+        .s("check(i64 ").s(wide_reg).s(", i1 \{unsigned_flag\}, ")
+    if v: = low
+        cg.s("i64 \{v\}, i64 \{v + I64::(n - 1)\}")
+    else
+        cg.s("ptr ").s(slot).s(", i64 \{n\}")
+    cg.s(", ptr @.str.\{name\}")
     emit_check_loc(cg, r.loc)
     return cg.emit_numeric_coerce(cg.reg_str(safe_reg), I64_ID, src_id)
 

@@ -46,6 +46,7 @@ fn run()
     condition_shapes()
     conditional_cycles()
     condition_work()
+    condition_on_every_row()
     lookups()
     whole_columns()
     bare_columns()
@@ -316,7 +317,7 @@ priv fn upward_sums()
         r.reads <= rows * rows + 4 * rows, arena.text().s("\{r.reads\}").take())
 
 priv const NAMES: Sz = 2000 //< the tables named in `many_names`
-priv const SHARED_BITS: U32 = 12 //< the lowest bits of their hash (`hash` in `std/str`), all zero
+priv const SHARED_BITS: U32 = 12 //< the lowest bits of their hash (`hash` in `std/ds`), all zero
 
 priv fn many_names() //<
     //< 2,000 table names that all start at one slot of a `Map` read, calculate and are looked up
@@ -708,6 +709,26 @@ priv fn reads_for(rows: Sz, arena: Arena$@): Sz //< the reads of one `sum_if` ov
     text.s("| | | =sum_if(t.$B, find(\"x\", t.$A) = 1) |\n:::\n")
     doc: = read(text.slice(), arena)
     return calc.calculate(doc@, TODAY, arena).reads
+
+// A `sum_if` over a whole column on every row checks each value it takes for an error once, so
+// twice the rows take four times the checks, not eight: no row looks again at earlier values.
+priv fn condition_on_every_row()
+    defer arena: = Arena(4 * 1024 * 1024)
+    small: = every_row_looks(100, arena)
+    large: = every_row_looks(200, arena)
+    verdict.check("a sum_if on every row checks each value it takes once",
+        small > 0 && large <= 4 * small + 40,
+        arena.text().s("\{small\} checks for 100 rows, \{large\} for 200").take())
+
+priv fn every_row_looks(rows: Sz, arena: Arena$@): Sz //<
+    //< The error checks of a table whose every row holds a `sum_if` over its whole first column
+    defer $text: = Str_builder()
+    text.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
+    for row in Range.asc(rows)
+        text.s("| \{row + 1\} | =sum_if(t.$A, t.$A > 0) |\n")
+    text.s(":::\n")
+    doc: = read(text.slice(), arena)
+    return calc.calculate(doc@, TODAY, arena).looks
 
 // A table's whole column takes its data rows, never its names row, and serves wherever a range
 // does.

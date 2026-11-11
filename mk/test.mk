@@ -312,7 +312,7 @@ test-llvm-abi: $(STAGE1_EXE) $(SEED_EXE)
 	  $(TMP_DIR)/abi_check_main_result.ll
 	./$(STAGE1_EXE) --to=llvm --emit-libs=$(TMP_DIR)/narrow_c_abi.libs \
 	  ksplc/tests/prog/narrow_c_abi.kspl $(TMP_DIR)/narrow_c_abi.ll
-	./$(SEED_EXE) run tests/tools/llvm_ir_abi_check.kspl $(TMP_DIR)/abi_check_ksplc.ll \
+	./$(SEED_EXE) run tests/checkers/llvm_ir_abi_check.kspl $(TMP_DIR)/abi_check_ksplc.ll \
 	  $(TMP_DIR)/abi_check_debug.ll $(TMP_DIR)/abi_check_main_result.ll $(TMP_DIR)/narrow_c_abi.ll
 	@echo "# NARROW INTEGERS ACROSS THE C BOUNDARY (the C built by clang at -O2)"
 	./$(STAGE1_EXE) emit-runtime $(TMP_DIR)/narrow_c_abi.runtime.c

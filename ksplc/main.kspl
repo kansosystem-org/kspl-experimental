@@ -23,13 +23,14 @@ import "ksplc/pipeline"
 import "ksplc/tools/doc" as tools_doc
 import "ksplc/tools/explain" as tools_explain
 import "ksplc/tools/interface" as tools_interface
-import "ksplc/tools/keywords" as tools_keywords
 import "ksplc/tools/libs" as tools_libs
 import "ksplc/tools/run" as tools_run
 import "ksplc/usage"
+import "std/chars" // `compare`
 import "std/ds" { List }
 import "std/io"
 import "std/mem" + { Arena }
+import "std/seq"
 import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
@@ -150,11 +151,29 @@ priv fn answer_info(topic: usage.Info_topic): Void!pipeline.Compile_error //< it
         // The only subject that needs the grammar.
         parser: = kspl_parser()!
         defer parser.free_memo()
-        tools_keywords.run_keyword_dump(parser)
+        run_keyword_dump(parser)
     case .package
         decl: = base_package.here()
         io.out().s(decl.name).c('\n')
         usage.print_words(decl.uses)
+
+priv fn run_keyword_dump(parser: kspeg.Target$@) //<
+    //< `ksplc info keywords`: the grammar's keywords on standard output, one per line, sorted
+    //< **The list is read from `kspl.kspeg`, never kept by hand**, so it cannot drift from what the
+    //< parser accepts. Each keyword is printed once.
+    //< Caution: Do not read the synthesized `_Keyword` for the list; its shape is the engine's
+    //< choice. Each rule's own keywords are its canonical form.
+    every_name: = List<|U8[]|>.create(base_core.arena)
+    for entry in parser.keywords_by_rule()
+        every_name.push_all(entry.keywords.slice())
+    uniq: = every_name.distinct(fn(a: U8[]@, b: U8[]@; ): Bool {
+        return a.equals(b$);
+    }, base_core.arena)
+    sorted: = uniq.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
+        return a.compare(b$);
+    }, base_core.arena)
+    for kw in sorted
+        io.out().s(kw).c('\n')
 
 priv fn print_flag_words(append: fn(list: List<|U8[]|>$@, arena: Arena$@)) //<
     //< The words `append` gives (`tools_run.append_link_libs` and its like), as a query answers

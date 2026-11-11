@@ -1,11 +1,11 @@
 //< How text typed into a table's cell is read: a formula, a number, a date, text, or nothing
 //< `set_cell` in `editor_tables.kspl` reads with it, by the switches of the editor's `Auto_entry`.
 import "ksmd/base/dates" { is_date, month_day, typed_date, write_date }
-import "ksmd/base/marker" { is_decimal }
+import "ksmd/base/marker" { formula_text_end, is_decimal }
+import "ksmd/calc/formula" { unquoted, write_quoted }
 import "ksmd/model/model" { Cell_kind }
 import "ksmd/syntax/inline" { is_destination }
 import "std/chars"
-import "std/json"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strnum"
@@ -26,9 +26,9 @@ fn value_of(typed: U8[], read: Reading, arena: Arena$@): Value //< how `set_cell
         return Value::{ .kind = .empty, .text = "" }
     if typed[0] == '='
         return Value::{ .kind = .formula, .text = typed.sub_from(1) }
-    if typed[0] == '"'
-        if text: = quoted(typed, arena)
-            return Value::{ .kind = .text, .text = text }
+    // **Text in quotes follows a formula's rule**: `\` is itself and `""` is a quote.
+    if typed[0] == '"' && formula_text_end(typed, 0) == typed.len - 1
+        return Value::{ .kind = .text, .text = unquoted(typed, arena) }
     // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`.
     if is_decimal(typed) && is_finite(typed)
         return Value::{ .kind = .number, .text = typed }
@@ -51,7 +51,6 @@ priv fn is_finite(number: U8[]): Bool //< whether a number as JSON writes one is
         return false
     return value - value == 0.0
 
-priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one
-    parsed: = json.parse(typed, arena) catch
-        return .none
-    return parsed.val.as_str()
+fn write_text(text: U8[], out: Str_builder$@) //<
+    //< Text as a person types it in quotes, which `value_of` reads back as that text
+    write_quoted(text, out)

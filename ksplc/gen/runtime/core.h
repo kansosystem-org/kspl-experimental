@@ -2,8 +2,8 @@
  * **Only macros, typedefs, extern declarations and static inline functions.** This enters every
  * generated unit, so a definition with external linkage would be doubled (it goes in core.c).
  * **The five run-time checks** (`kspl_bounds_check`, `kspl_div_check`, `kspl_sdiv` / `kspl_smod`,
- * `kspl_shift_check`, `kspl_tag_check`) are all below. Each target's header gives only what a
- * breach does. **Signed `/` `%` never go out bare**: a minimum by -1 is undefined in C, so
+ * `kspl_shift_check`, `kspl_tag_check` / `kspl_tag_range_check`) are all below. Each target's
+ * header gives only what a breach does. **Signed `/` `%` never go out bare**: a minimum by -1 is undefined in C, so
  * `a / -1` wraps to -a and `a % -1` is 0.
  * **Widths are `int64_t`, not `ptrdiff_t`**: a 32-bit target truncates an `I64`, and a non-zero
  * divisor would read as 0. A shift's `width` is counted at the portable lower bound. The signed
@@ -126,6 +126,17 @@ static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, int value_unsign
         i++;
     }
     if (i == count) {
+        kspl_tag_breach(value, value_unsigned, enum_name, file, line);
+    }
+    return value;
+}
+
+/* The same check where the tags are every number from `low` to `high`: two comparisons do the
+ * scan's work. ksplc chooses this form where the tags leave no gap. */
+static inline KSPL_UNUSED int64_t kspl_tag_range_check(int64_t value, int value_unsigned,
+    int64_t low, int64_t high, const char* enum_name, const char* file, int line)
+{
+    if ((value_unsigned && value < 0) || value < low || value > high) {
         kspl_tag_breach(value, value_unsigned, enum_name, file, line);
     }
     return value;

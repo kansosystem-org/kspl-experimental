@@ -10,6 +10,8 @@
 // ==========================================
 ##lint(W0107 = off)
 
+import "std/mem"
+
 typedef Task_fn = fn(arg: Void$@): Void
 
 enum Task_state //<
@@ -730,6 +732,9 @@ fn start_scheduler() //< runs the registered tasks until none remains or stop_sc
     //< **While the tasks left are all blocked with no deadline, it sleeps until an interrupt**
     //< and looks again. Once it returned, no handler's give could start it again. A task remains
     //< until it is done or deleted. A later call carries on the tasks a stop_scheduler left.
+    //< It hands std's heap this kernel's critical section first, so a task can allocate through
+    //< `alloc` and the std types on it while another task can preempt it (`mem.set_heap_guard`).
+    mem.set_heap_guard(heap_guard_enter, heap_guard_leave)
     s: = ksos_port_irq_save()
     if g_main_ctx == null
         g_main_ctx = ksos_port_ctx_create_main() // made once: a second start reuses it
@@ -753,6 +758,12 @@ fn start_scheduler() //< runs the registered tasks until none remains or stop_sc
         else
             ksos_port_wait_irq()
         ksos_port_irq_restore(st)
+
+priv fn heap_guard_enter(): Sz //< the heap guard's `enter`: irq_save, its state widened
+    return Sz::ksos_port_irq_save()
+
+priv fn heap_guard_leave(state: Sz) //< the heap guard's `leave`: irq_restore of that state
+    ksos_port_irq_restore(U32::state)
 
 priv fn any_task_left(): Bool //< whether any task has not ended (a blocked or paused one counts)
     for i in Range.asc(g_task_count)

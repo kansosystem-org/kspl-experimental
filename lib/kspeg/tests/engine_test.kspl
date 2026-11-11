@@ -4,8 +4,9 @@
 //< paths.** The examples are the documents' only copy, so they are read here, not quoted.
 import "kspeg/engine" as kspeg
 import "kspeg/notation" as kspeg_notation
+import "std/ds"
 import "std/mem" { Arena }
-import "std/str" + { Arena_text, Str_builder } // `equals` and `arena.text()` come through it too
+import "std/str" + { Arena_text, Str_builder } // `arena.text()` comes through it too
 import "std/verdict"
 
 embed "kspeg/docs/kspeg.kspeg" as notation_grammar //< the notation's own grammar (Appendix A)
@@ -32,6 +33,21 @@ priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Bool?
 
 priv const DEEP_MSG: U8[] = "nesting too deep" //<
     //< The message the engine gives when it stops on depth (Rule.parse in lib/kspeg/engine.kspl)
+
+priv const BAD_ESCAPE: U8[] = //<
+    //< The message for an escape `.kspeg` does not know (BAD_ESCAPE_MSG in lib/kspeg/notation.kspl)
+    "Unknown escape in a literal (valid: \\n \\r \\t \\\" \\' \\\\ \\[ \\] \\- \\uXXXX)"
+
+priv const WIDE_IN_CLASS: U8[] = //<
+    //< The message for a character above 007F in a class (WIDE_IN_CLASS_MSG in notation.kspl)
+    "A character above 007F is not allowed in a character class. A class matches one byte at a \
+        time, so write the character in a literal instead"
+
+priv const PAIR_LEFT_REC: U8[] = //< the message for rule `pair` entering itself first
+    "Rule 'pair' can enter itself before reading a character (left recursion), so it never ends"
+
+priv const NOPE_UNDEFINED: U8[] = "Undefined rule 'Nope' referenced from 'pair'" //<
+    //< The message for the undefined rule `Nope`
 
 priv const DEEP_LEVELS: Sz = 2000 //<
     //< Deep enough to trip the depth safety valve (`MAX_PARSE_DEPTH` in lib/kspeg/rule.kspl)
@@ -106,14 +122,23 @@ priv fn expect_parts(label: U8[], grammar: U8[], input: U8[], rule: U8[], want: 
         fail(label, arena.text().s("parts=\{got\}, want=\{want\}").take())
     verdict.pass(label)
 
-priv fn expect_bad_grammar(label: U8[], grammar: U8[], arena: Arena$@) //<
-    //< The check that the grammar itself cannot be read
+priv fn expect_bad_grammar(label: U8[], grammar: U8[], want: U8[], arena: Arena$@) //<
+    //< The check that the grammar itself cannot be read, and that the reason is `want`
     //< Not expect, which assumes a readable grammar and would report this as a failure.
-    switch try_parse(grammar, "", "pair", arena)
-    case .none
-        verdict.pass(label)
-    case .some
-        fail(label, "grammar loaded")
+    //< Caution: **Check the message, not only the refusal.** A grammar error swallowed on the way
+    //< up still refuses the grammar, but with a reason that points nowhere ("Invalid rule body").
+    $meta: = kspeg_notation.Meta(grammar, arena)
+    $got: U8[] = "grammar loaded"
+    _parser: = meta.parse_grammar() catch e
+        switch e
+        case .fatal(msg)
+            got = msg
+        case .mismatch
+            got = "mismatch"
+        fallback null
+    if !got.equals(want)
+        fail(label, arena.text().s("got=\{got\}, want=\{want\}").take())
+    verdict.pass(label)
 
 priv struct Prof_row //< one line of the rule profile
     //< Caution: **Do not count "read and failed".** It is `calls - memo_hits - parsed_ok`
@@ -254,6 +279,8 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     odd_keyword(arena)
     literal_escapes(arena)
     unicode_escapes(arena)
+    class_hyphen(arena)
+    nested_grammar_errors(arena)
     peg_termination(arena)
     whole_source(arena)
     rule_profile(arena)
@@ -355,9 +382,9 @@ priv fn first_byte_skips(arena: Arena$@) //<
         "top", arena)
     // Left recursion never ends (each entry enters it again in place), so the grammar is refused.
     expect_bad_grammar("left recursion through an empty prefix is rejected",
-        "pair = \"x\"? pair \"y\" | \"z\"\n", arena)
+        "pair = \"x\"? pair \"y\" | \"z\"\n", PAIR_LEFT_REC, arena)
     expect_bad_grammar("left recursion through a lookahead is rejected",
-        "pair = !pair \"y\" | \"z\"\n", arena)
+        "pair = !pair \"y\" | \"z\"\n", PAIR_LEFT_REC, arena)
 
 priv fn doc_examples(arena: Arena$@) //<
     //< The example grammars in lib/kspeg/docs (SPEC-notation.md points at them)
@@ -413,11 +440,51 @@ priv fn literal_escapes(arena: Arena$@) //<
     //< An escape inside a literal ("Escape sequences" in lib/kspeg/docs/SPEC-notation.md)
     // Caution: A `\X` not in the list must not pass as the character itself (the reason is at
     // `BAD_ESCAPE_MSG` in `lib/kspeg/notation.kspl`).
-    expect_bad_grammar("unknown escape in a string literal is rejected", "pair = \"a\\db\"\n", arena)
-    expect_bad_grammar("unknown escape in a keyword literal is rejected", "pair = 'a\\db'\n", arena)
-    expect_bad_grammar("unknown escape in a character class is rejected", "pair = [a\\d]+\n", arena)
+    expect_bad_grammar("unknown escape in a string literal is rejected", "pair = \"a\\db\"\n",
+        BAD_ESCAPE, arena)
+    expect_bad_grammar("unknown escape in a keyword literal is rejected", "pair = 'a\\db'\n",
+        BAD_ESCAPE, arena)
+    expect_bad_grammar("unknown escape in a character class is rejected", "pair = [a\\d]+\n",
+        BAD_ESCAPE, arena)
     // The control: a listed escape still works (the rejection is not too broad).
     expect("listed escape still decodes", "pair = \"a\\nb\"\n", "a\nb", "pair", true, arena)
+
+priv fn class_hyphen(arena: Arena$@) //<
+    //< `\-` in a character class is the byte `-`, never the hyphen of a range
+    //< ("Escape sequences" in lib/kspeg/docs/SPEC-notation.md)
+    // Caution: **Check the bytes on both sides of the `\-`.** When it was read as a range's hyphen,
+    // `[+\-*/]` was the range from `+` to `*` and the byte `/`: it took `/` and refused `+`.
+    ops: U8[] = "pair = [+\\-*/]\n"
+    expect("an escaped hyphen keeps + in the class", ops, "+", "pair", true, arena)
+    expect("an escaped hyphen is in the class", ops, "-", "pair", true, arena)
+    expect("an escaped hyphen keeps * in the class", ops, "*", "pair", true, arena)
+    expect("an escaped hyphen keeps / in the class", ops, "/", "pair", true, arena)
+    // `,` lies between `+` and `-` in ASCII, so a range would take it.
+    expect("an escaped hyphen makes no range", ops, ",", "pair", false, arena)
+    az: U8[] = "pair = [a\\-z]\n"
+    expect("[a\\-z] holds the hyphen", az, "-", "pair", true, arena)
+    expect("[a\\-z] is not the range a to z", az, "m", "pair", false, arena)
+    // The control: an unescaped hyphen between two bytes is still a range, and one at an end is a
+    // byte.
+    expect("an unescaped hyphen still makes a range", "pair = [a-z]\n", "m", "pair", true, arena)
+    expect("a hyphen at the end is a byte", "pair = [a-]\n", "-", "pair", true, arena)
+    expect("an escaped hyphen can end a range", "pair = [+-\\-]\n", ",", "pair", true, arena)
+
+priv fn nested_grammar_errors(arena: Arena$@) //<
+    //< An error in the grammar keeps its own message wherever the element stands
+    // Caution: **Put the bad element after another one, and in a rule body alone.** The first
+    // element of a sequence and the later ones are read on different paths, and both lost the
+    // message once ("Invalid rule body", or a plain mismatch).
+    expect_bad_grammar("a bad escape alone in a body keeps its message", "pair = \"x\\q\"\n",
+        BAD_ESCAPE, arena)
+    expect_bad_grammar("a bad escape after another element keeps its message",
+        "pair = b \"x\\q\"\nb = \"y\"\n", BAD_ESCAPE, arena)
+    expect_bad_grammar("a wide class after another element keeps its message",
+        "pair = b [あ]\nb = \"y\"\n", WIDE_IN_CLASS, arena)
+    expect_bad_grammar("an unterminated literal after another element keeps its message",
+        "pair = b \"open\nb = \"y\"\n", "Unterminated literal", arena)
+    expect_bad_grammar("a bad escape after '|' keeps its message",
+        "pair = \"y\" | b \"x\\q\"\nb = \"y\"\n", BAD_ESCAPE, arena)
 
 priv fn unicode_escapes(arena: Arena$@) //<
     //< `\uXXXX` in a literal or a class ("Escape sequences" in lib/kspeg/docs/SPEC-notation.md)
@@ -433,24 +500,29 @@ priv fn unicode_escapes(arena: Arena$@) //<
         true, arena)
     // **A character class matches one byte at a time, so a multi-byte `\u` is not allowed in it.**
     // If it were, あ would match any one of its three bytes, with no diagnostic.
-    expect_bad_grammar("a wide \\u in a character class is rejected", "pair = [\\u3042]+\n", arena)
+    expect_bad_grammar("a wide \\u in a character class is rejected", "pair = [\\u3042]+\n",
+        WIDE_IN_CLASS, arena)
     // **The same character typed as it is is refused too**, alone, beside others and in a range.
-    expect_bad_grammar("a raw あ in a character class is rejected", "pair = [あ]+\n", arena)
-    expect_bad_grammar("raw α and β in a character class are rejected", "pair = [aαβ]+\n", arena)
+    expect_bad_grammar("a raw あ in a character class is rejected", "pair = [あ]+\n",
+        WIDE_IN_CLASS, arena)
+    expect_bad_grammar("raw α and β in a character class are rejected", "pair = [aαβ]+\n",
+        WIDE_IN_CLASS, arena)
     expect_bad_grammar("a raw range α-ω in a character class is rejected", "pair = [α-ω]+\n",
-        arena)
+        WIDE_IN_CLASS, arena)
     // The control: in a literal it can resolve to several bytes (matched as a run).
     expect("a wide \\u decodes in a literal", "pair = \"\\u3042\"\n", "あ", "pair", true, arena)
     // **Reject a `\u` with too few digits** (it must not pass as the three bytes `u00`).
-    expect_bad_grammar("a short \\u is rejected", "pair = \"\\u00\"\n", arena)
+    expect_bad_grammar("a short \\u is rejected", "pair = \"\\u00\"\n",
+        "Invalid escape in a literal", arena)
 
 priv fn peg_termination(arena: Arena$@) //<
     //< The classic shapes on which a PEG parser fails to terminate
     // **What is checked is that it stops, before the answer.** When broken, it shows as a hang, a
     // CI timeout. Left recursion never ends under PEG, so the grammar is refused when it is read.
-    expect_bad_grammar("direct left recursion is rejected", "pair = pair \"x\" | \"y\"\n", arena)
+    expect_bad_grammar("direct left recursion is rejected", "pair = pair \"x\" | \"y\"\n",
+        PAIR_LEFT_REC, arena)
     expect_bad_grammar("indirect left recursion is rejected",
-        "pair = mid\nmid = pair \"x\" | \"y\"\n", arena)
+        "pair = mid\nmid = pair \"x\" | \"y\"\n", PAIR_LEFT_REC, arena)
     // A repetition of something that can succeed without consuming input must not loop in place.
     expect("repetition of a possibly-empty expression terminates", "pair = (\"x\"?)*\n", "xxx",
         "pair", true, arena)
@@ -460,23 +532,28 @@ priv fn peg_termination(arena: Arena$@) //<
     // A grammar that refers to an undefined rule must be rejected **when it is read**.
     // Caution: Each case below sits on a branch that never runs (an alternation's other branch, an
     // option, a repetition). So a check delayed until parsing would miss it.
-    expect_bad_grammar("a reference to an undefined rule is rejected", "pair = Nope\n", arena)
+    expect_bad_grammar("a reference to an undefined rule is rejected", "pair = Nope\n",
+        NOPE_UNDEFINED, arena)
     expect_bad_grammar("an undefined rule inside a choice is rejected", "pair = \"x\" | Nope\n",
-        arena)
+        NOPE_UNDEFINED, arena)
     expect_bad_grammar("an undefined rule inside an option is rejected", "pair = \"x\" Nope?\n",
-        arena)
+        NOPE_UNDEFINED, arena)
     expect_bad_grammar("an undefined rule inside a repetition is rejected", "pair = \"x\" Nope*\n",
-        arena)
+        NOPE_UNDEFINED, arena)
     // A rule defined twice is rejected too: one of the two would never be used.
-    expect_bad_grammar("a rule defined twice is rejected", "pair = \"x\"\npair = \"y\"\n", arena)
+    expect_bad_grammar("a rule defined twice is rejected", "pair = \"x\"\npair = \"y\"\n",
+        "Rule 'pair' is defined twice", arena)
     // The control: a grammar referring to an existing rule still reads (the check is not too
     // broad).
     expect("a reference to a defined rule still parses", "pair = \"x\" tail\ntail = \"y\"\n", "xy",
         "pair", true, arena)
     // A grammar with broken syntax must fail to read.
-    expect_bad_grammar("an unclosed group is rejected", "pair = (\"x\"\n", arena)
-    expect_bad_grammar("a rule without '=' is rejected", "pair \"x\"\n", arena)
-    expect_bad_grammar("an unclosed character class is rejected", "pair = [a-z\n", arena)
+    expect_bad_grammar("an unclosed group is rejected", "pair = (\"x\"\n",
+        "Expected closing parenthesis ')'", arena)
+    expect_bad_grammar("a rule without '=' is rejected", "pair \"x\"\n",
+        "Expected '=' in rule definition", arena)
+    expect_bad_grammar("an unclosed character class is rejected", "pair = [a-z\n",
+        "Unterminated character class", arena)
     // The control: plain recursion (not left recursion) must pass however deeply nested.
     expect("plain recursion handles a deeply nested input", "pair = \"(\" pair \")\" | \"x\"\n",
         "((((((((((((((((x))))))))))))))))", "pair", true, arena)

@@ -5,6 +5,7 @@
 //< why it is not analysed (`send_cfg_inactive_hover`).
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_value_literal`, `is_member_access`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
 import "ksplc/base/core" as base_core
@@ -134,11 +135,9 @@ priv fn owner_name_of(c: Sema_ctx$@, decl: Ast_node$@): U8[] //<
     $owner: Ast_node$@ = decl
     if decl.kind_id == .k_decl_impl
         type_node: = decl.get_decl_type_node()
-        switch named_decl(type_node)
-        case .some(named)
-            owner = named
-        case .none
+        named: = named_decl(type_node) catch
             return shown_type(c, type_node)
+        owner = named
     id_n: = owner.find_child(.k_identifier)
     if id_n == null
         return ""

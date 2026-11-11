@@ -53,8 +53,7 @@ function ksmdRefs(ks) {
   // The copy stands where the box would, as an absolute box with no offsets, and takes its sizes.
   function makeCopy() {
     const cs = getComputedStyle(input);
-    copy = document.createElement("div");
-    copy.className = "cell-copy";
+    copy = ks.el("div", "cell-copy");
     copy.setAttribute("aria-hidden", "true");
     for (const p of ["font-family", "font-size", "font-weight", "font-style", "letter-spacing",
       "line-height", "text-align", "white-space", "overflow-wrap", "word-break", "tab-size",
@@ -88,8 +87,7 @@ function ksmdRefs(ks) {
     let at = 0;
     for (const m of marks) {
       line.append(text.slice(at, m.from));
-      const part = document.createElement("span");
-      part.className = m.cls;
+      const part = ks.el("span", m.cls);
       if (m.ref) part.dataset.ref = String(m.ref);
       part.textContent = text.slice(m.from, m.to);
       line.appendChild(part);
@@ -135,8 +133,7 @@ function ksmdRefs(ks) {
     const box = wrap.getBoundingClientRect();
     const ra = a.getBoundingClientRect();
     const rb = b.getBoundingClientRect();
-    const el = document.createElement("div");
-    el.className = "ref-frame";
+    const el = ks.el("div", "ref-frame");
     el.dataset.ref = String(r.colour);
     el.dataset.cells = `${r.u} ${shown[0]} ${columns[0]} ${shown[shown.length - 1]} ${columns[columns.length - 1]}`;
     el.style.left = `${(ra.left - box.left) / zoom}px`;

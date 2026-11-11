@@ -42,15 +42,15 @@ flowchart BT
 
 **`sizeof(<an expression>)` is the only call from decl into body.** It needs the operand's type, and only `sema/body` types an expression. The declarations' constant folding (an array's length, an enum tag) runs before inference. The path is the function pointer `Sema_ctx.infer_expr_fn`, set once at start-up by `ksplc/pipeline.kspl`. `make test-conventions` watches the count, since each hook added leaves "above" and "below" a name and nothing more.
 
-**A mass** is a set of files that can all reach each other (a strongly connected component). It is the unit that cannot be split into folders any further. The masses in each folder (files with no path either way to one are left out):
+**A mass** is a set of files that can all reach each other (a strongly connected component). It is the unit that cannot be split into folders any further. A file outside its folder's mass may reach it or be reached from it, but never both. The masses in each folder:
 
-| folder | the mass (the strongly connected component) | below / above the mass |
-| :-- | :-- | :-- |
-| `sema/type` | `def`, `env`, `query` | below: `scope` / above: `arc`, `display` |
-| `sema/session` | `c_boundary`, `ctx`, `import_table` | below: `state` / above: `imports`, `pointer` |
-| `sema/decl` | `access`, `eval`, `fold_float`, `layout`, `mono`, `mono_name`, `mono_queue`, `mono_target`, `name`, `registry`, `resolve`, `trait_check`, `trait_default` | below: `declare`, `subst` / above: `attrs`, `collect`, `type_check` |
-| `sema/flow` | `field`, `lock`, `pointee`, `report`, `stmt`, `track`, `view` | below: `release` |
-| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `lint_loop`, `postfix`, `resolve_path`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `lint_unchecked`, `lint_written`, `literal` / above: `infer` |
+| folder | the mass (the strongly connected component) |
+| :-- | :-- |
+| `sema/type` | `def`, `env`, `query` |
+| `sema/session` | `c_boundary`, `ctx`, `import_table` |
+| `sema/decl` | `access`, `eval`, `fold_float`, `layout`, `mono`, `mono_name`, `mono_queue`, `mono_target`, `name`, `registry`, `resolve`, `trait_check`, `trait_default` |
+| `sema/flow` | `field`, `lock`, `pointee`, `report`, `stmt`, `track`, `view` |
+| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `lint_loop`, `postfix`, `resolve_path`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` |
 
 **To find the edge that breaks a mass, compute the strongly connected components**, not a count of edges against one chosen direction. An import with `_` (importing an extension method) is an edge too.
 
@@ -514,7 +514,7 @@ Each of these rules stops a mistake that would otherwise reach the C compiler wi
   * A `Self` return is legitimate: `std/io`'s `Writer` chains with `fn s(r: Self, val: U8[]): Self;`, and the thunk rightly returns the value as a fat pointer.
   * For a parameter, take a type argument instead, as `std/lang`'s `Add` / `Eq` do (`trait Eq<|Other|> { fn eq(r: Self, other: Other): Bool; }`).
 * **Where a trait method returns `Self`, the implementation must return a pointer** (`check_trait_method_ret` in `sema/decl/trait_check.kspl`). The thunk repacks the return value into the trait's fat pointer, which needs the target's address. From a return by value, genc emits `&` of a temporary, and a raw C compiler error reaches the user. It is the exception to the rule that a return value can differ between value and pointer (the regression test: `case_trait_self_return_by_value` in the case `trait_shape` in `tests/negative/trait.kspl`).
-* **A return type putting `Self` in a type-argument position (`Keep<|Self, T|>`) cannot be a trait method, even with a default body.** A default body holds no vtable slot (`has_vtable_slot` in `base/ast_ext.kspl`); what fails is the `Self` inside the copied body.
+* **A return type putting `Self` in a type-argument position (`Keep<|Self, T|>`) cannot be a trait method, even with a default body.** A default body holds no vtable slot (`has_vtable_slot` in `base/ast_place.kspl`); what fails is the `Self` inside the copied body.
   1. **The bindings table cannot solve it.** `generics.args` holds a name's string: a short name for `Self` fails in C with `unknown type name`, and with the FQN the `.` is read as an import alias. Cloning the impl's target type node into the `Self` makes the concrete types' implementations compile.
   2. **A generic's implementation still does not compile**: the constraint check at instantiation receives the trait's id under the short name (`does not explicitly implement interface 'Chain'`).
      * **`std/seq`'s `where` / `select` wait on 2**: solve it before folding them into a trait (why they stay per stage is "Why the chain's stages cannot be folded" in [`../../std/docs/DESIGN-core.md`](../../std/docs/DESIGN-core.md)).

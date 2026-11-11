@@ -103,6 +103,21 @@ priv fn cells()
     saves("a number too large for a cell stays the text typed, as in Excel", ed@, arena,
         "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"1e400\" | =A1*3 |\n:::\n")
     shown(ed@, 0, 0, "1e400", "and shows as typed", arena)
+    // Text typed in quotes follows a formula's rule: `\` is itself and `""` is a quote. The file
+    // keeps JSON's escapes for a text cell.
+    set(ed@, 0, 0, 0, "\"C:\\new\"")
+    saves("a backslash typed in quotes is itself", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"C:\\\\new\" | =A1*3 |\n:::\n")
+    shown(ed@, 0, 0, "C:\\new", "and shows without quotes", arena)
+    set(ed@, 0, 0, 0, "\"C:\\src\"")
+    shown(ed@, 0, 0, "C:\\src", "text in quotes that is no JSON string loses its quotes too", arena)
+    set(ed@, 0, 0, 0, "\"say \"\"hi\"\"\"")
+    saves("a doubled quote typed in quotes is one quote", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"say \\\"hi\\\"\" | =A1*3 \
+            |\n:::\n")
+    set(ed@, 0, 0, 0, "\"\"\"x\\\"\"\"")
+    shown(ed@, 0, 0, "\"\"\"x\\\"\"\"", "text that starts with a quote shows by the same rule",
+        arena)
 
 priv fn rows_and_columns()
     defer arena: = Arena(64 * 1024)

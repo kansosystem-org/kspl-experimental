@@ -1,0 +1,41 @@
+//< The two tasks of the heap-tasks demos, which allocate through std types at two priorities
+//< `demo/cortex_m/cortex_m_heap_tasks.kspl` and `demo/posix/heap_tasks_demo.kspl` run them; each
+//< demo sets its own sizes, its stacks and its console. Each task's argument points at one `Run`.
+import "ksos/kernel/task" { Task }
+import "std/ds" { List }
+import "std/refcount" { Arc }
+
+struct Run //< one run's sizes, and what its two tasks counted
+    items: U32 //< values one round pushes
+    high_rounds: I32 //< ticks the high task wakes on, each one inside the low's work
+    low_done: I32 //< rounds the low task did
+    high_done: I32 //< rounds the high task did
+    bad: I32 //< rounds that read back a value other than the one written
+    finished: Bool //< the high task is done, so the low task stops
+
+fn churn(seed: U32, items: U32): Bool //< allocates through std types and frees it all
+    //< Returns false on a wrong value.
+    $l: = List<|U32|>(null)
+    for $i: U32 = 0; i < items; i += 1
+        l.push(seed + i)
+    shared: = Arc<|U32|>(seed)
+    other: = shared.clone()
+    ok: = l.get(Sz::(items - 1)) == seed + items - 1 && other.get()$ == seed
+    l.free()
+    return ok
+
+fn low(arg: Void$@): Void //< allocates without a pause until the high task is done
+    r: = Run$@::arg
+    for !r.finished
+        if !churn(U32::r.low_done, r.items)
+            r.bad += 1
+        r.low_done += 1
+
+fn high(arg: Void$@): Void //< wakes on each tick, inside the low task's work, and allocates
+    r: = Run$@::arg
+    for $i: I32 = 0; i < r.high_rounds; i += 1
+        Task.delay(1)
+        if !churn(0x10000U32 + U32::i, r.items)
+            r.bad += 1
+        r.high_done += 1
+    r.finished = true

@@ -6,7 +6,6 @@ import "ksplc/base/core" as base_core
 import "ksplc/sema/type/env" { Info }
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/ds" { List, Map }
-import "std/str"
 
 struct Entry
     info: Info
@@ -99,6 +98,20 @@ impl Enum_def
                 return .some(variant)
         return .none
 
+    fn run_low(r: Self@): I64? //<
+        //< The lowest tag where the tags leave no number out up to the highest; else none
+        //< The tags are distinct (`registry.kspl` refuses a repeat), so `n` tags fill a run of `n`.
+        if r.variants_list.len == 0
+            return .none
+        $low: = r.variants_list.get(0).tag_value
+        $high: = low
+        for variant in r.variants_list
+            low = variant.tag_value if variant.tag_value < low else low
+            high = variant.tag_value if variant.tag_value > high else high
+        // `high - (n - 1)` cannot overflow: distinct tags make `high - low` at least `n - 1`.
+        if high - I64::(r.variants_list.len - 1) != low
+            return .none
+        return .some(low)
     fn tags_fit_i32(r: Self@): Bool //< whether every tag fits an `I32` (a C enumerator's range)
         for variant in r.variants_list
             if variant.tag_value > 2147483647I64 || variant.tag_value < -2147483648I64

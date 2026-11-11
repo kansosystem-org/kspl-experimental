@@ -179,11 +179,9 @@ priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from
         $i: = from
         for i < best
             $here: Sz = 0
-            switch doc.sub_from(i).find_str(one)
-            case .some(at)
-                here = i + at
-            case .none
+            at: = doc.sub_from(i).find_str(one) catch
                 break
+            here = i + at
             if here > from && doc[here - 1] == ' '
                 if here - 1 < best
                     best = here - 1
@@ -316,7 +314,7 @@ priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$
 
 priv fn skip_dir(name: U8[]): Bool //< `tests/`, build output, and git's own folder
     //< **`tests/` is skipped**: what a package's tests declare is nobody's to call.
-    return name.equals("tests") || fs.skip_build_output(name)
+    return name.equals("tests") || base_locate.skip_build_output(name)
 
 priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_builder$@): Bool //<
     //< Every source under the folder that publishes something, with its summary
@@ -400,22 +398,20 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
             return false
         io.out().s(out.slice())
         return true
-    switch read_lines(path, name, parser)
-    case .some(rows)
-        // **The record replaces the reference**: a tool reading the file wants nothing printed.
-        if record.len > 0
-            io.write_file(record, tools_surface.render_surface(rows@, name)) catch e
-                io.err().s("ksplc doc: cannot write \{record\}: \{e\}\n")
-                return false
-            return true
-        if key.len == 0
-            write_file(name, rows@, out@)
-        else if write_one(name, rows@, key, out@) == 0
-            io.err()
-                .s("ksplc doc: \{name\} publishes nothing called '\{key\}'. Run `ksplc doc \
-                    \{name\}` to list its published entries\n")
+    rows: = read_lines(path, name, parser) catch
+        return false
+    // **The record replaces the reference**: a tool reading the file wants nothing printed.
+    if record.len > 0
+        io.write_file(record, tools_surface.render_surface(rows@, name)) catch e
+            io.err().s("ksplc doc: cannot write \{record\}: \{e\}\n")
             return false
-    case .none
+        return true
+    if key.len == 0
+        write_file(name, rows@, out@)
+    else if write_one(name, rows@, key, out@) == 0
+        io.err()
+            .s("ksplc doc: \{name\} publishes nothing called '\{key\}'. Run `ksplc doc \{name\}` to \
+                list its published entries\n")
         return false
     io.out().s(out.slice())
     return true

@@ -5,7 +5,6 @@
 import "std/chars"
 import "std/ds"
 import "std/mem" { Arena }
-import "std/str"
 import "std/verdict"
 
 // ==========================================
@@ -244,3 +243,41 @@ fn test_slices_of_slices_differ_by_level() //< read-only at the outer or the inn
     assert(texts[1].equals("w") && inner_ro[0].equals("xy"),
         "a read-only view is replaced through a writable outer slice")
     verdict.pass("Both shapes stand in one program, each read and written as its type allows.")
+
+priv struct Pair_row //< an array as a field of a by-value `$` parameter
+    v: I32[2]
+
+priv fn set_first($a: I32[3]): I32 //< writes an element of its own copy, then replaces the copy
+    a[0] = 7
+    $sum: = a[0]
+    a = ::{ 4, 5, 6 }
+    a[1] = 8
+    sum += a[1]
+    return sum
+
+priv fn set_cell($m: I32[2][2]): I32 //< an element of an inner array
+    m[1][0] = 5
+    return m[0][0] + m[1][0]
+
+priv fn set_field($p: Pair_row): I32 //< an element of an array field
+    p.v[1] = 9
+    return p.v[0] + p.v[1]
+
+fn test_dollar_array_param_writes_its_copy() //<
+    //< A `$` array parameter writes its elements, as a `$` local does
+    //< **An array is copied when passed**, so its elements follow the `$` on the name ("4.2.2
+    //< Where `$` goes for a fixed-length array and a slice" in docs/SPEC-programming-language.md).
+    //< The parameter kept the written type, whose elements are read-only, and `a[0] = 7` was
+    //< refused; the C wrote the parameter `const`, so even `a = …` broke there.
+    verdict.start("[Array] a `$` array parameter writes its own copy test...")
+    x: I32[3] = ::{ 1, 2, 3 }
+    g: I32[2][2] = ::{::{ 1, 2 }, ::{ 3, 4 } }
+    p: = Pair_row::{ .v = ::{ 1, 2 } }
+    by_fn: = fn($a: I32[3]): I32
+        a[2] = 40
+        return a[2]
+    assert(set_first(x) == 15 && x[0] == 1, "the copy is written, the caller's array is not")
+    assert(set_cell(g) == 6 && g[1][0] == 3, "an inner array's element is written in the copy")
+    assert(set_field(p) == 10 && p.v[1] == 2, "an array field's element is written in the copy")
+    assert(by_fn(x) == 40 && x[2] == 3, "an anonymous function's `$` array parameter too")
+    verdict.pass("Each `$` array parameter writes its copy; the caller's array keeps its values.")

@@ -25,8 +25,8 @@ impl<|T|> Tensor<|T|>
             sum_exp += math.exp(F64::(r.data + offset + i)$ - max_v)
         return Reduce_stats::{ .max_v = max_v, .sum_exp = sum_exp }
     // --- The backward pass of the matrix product Y = X @ W -------
-    // Each grad has an "allocate and return" version and an `_into` one. `cfg` switches between
-    // pure KSPL (the default) and BLAS (`--define=blas`) on the `_into` one.
+    // Each grad has an "allocate and return" version and an `_into` one. An `_into` checks shapes,
+    // then calls a kernel of `tensor.kspl` (pure KSPL, or BLAS under `--define=blas`).
 
     // dX = dY @ W^T   (self=dY:[m,n], w=W:[k,n] → out:[m,k])
     // Caution: **Validate the shapes before the kernel.** `lda`/`ldb`/`ldc` come from them under
@@ -52,7 +52,8 @@ impl<|T|> Tensor<|T|>
         r.grad_matmul_input_into(w, dx)
         return dx
     // dW = X^T @ dY   (self=X:[m,k], dy=dY:[m,n] → out:[k,n])
-    #cfg(!blas)
+    // Validated like `grad_matmul_input_into`: under `cfg(blas)`, a `dy.shape[0]` that does not
+    // match `r.shape[0]` lets BLAS's reduction dimension (m) read past the end of `dy.data`.
     pub fn grad_matmul_weight_into( //< the gradient for a matrix product's weights, into `out`
         r: Self$@,
         dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
@@ -64,34 +65,7 @@ impl<|T|> Tensor<|T|>
         assert(dy.shape[0] == m, "grad_matmul_weight row mismatch")
         n: = dy.shape[1]
         assert(out.holds_matrix(k, n), "grad_matmul_weight: out is not [k, n]") // as for the input
-        // Loop order rr-i-j: the inner `j` runs contiguously over the dY row and the out row. The
-        // additions into out[i][j] stay in ascending rr, as in the naive version, so the result is
-        // unchanged bit for bit.
-        out.fill(0.0)
-        for rr in Range.asc(m)
-            dy_row: = dy.data + rr * n
-            for i in Range.asc(k)
-                a: = (r.data + rr * k + i)$
-                out_row: = out.data + i * n
-                for j in Range.asc(n)
-                    (out_row + j)$ = (out_row + j)$ + a * (dy_row + j)$
-    // The BLAS version: dW[k,n] = X[m,k]^T @ dY[m,n] (A=X Trans, B=dY NoTrans).
-    // Validated like `grad_matmul_input_into` (blas): a `dy.shape[0]` that does not match
-    // `r.shape[0]` lets BLAS's reduction dimension (m) read past the end of `dy.data`.
-    #cfg(blas)
-    pub fn grad_matmul_weight_into( //< the gradient for a matrix product's weights, into `out`
-        r: Self$@,
-        dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
-        out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and can reuse it
-    )
-        assert(r.shape.len == 2 && dy.shape.len == 2, "grad_matmul_weight requires 2D tensors")
-        m: = r.shape[0]
-        k: = r.shape[1]
-        assert(dy.shape[0] == m, "grad_matmul_weight row mismatch")
-        n: = dy.shape[1]
-        assert(out.holds_matrix(k, n), "grad_matmul_weight: out is not [k, n]")
-        tensor.blas_gemm<|T|>(tensor.CBLAS_TRANS, tensor.CBLAS_NO_TRANS, k, n, m, r.data, k,
-            dy.data, n, out.data, n)
+        tensor.transa_kernel<|T|>(out.data, r.data, dy.data, m, k, n)
     pub fn grad_matmul_weight( //< the same, but allocated on `r.arena` instead of into `out`
         r: Self$@,
         dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]

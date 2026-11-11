@@ -37,18 +37,19 @@ priv fn extern_word(item: Ast_node@): U8[] //< the storage word of an `extern` b
     return "extern "
 
 impl Ast_node
-    priv fn has_file_local_c_symbol(r: Ast_node$@): Bool //<
+    priv fn has_file_local_c_symbol(r: Ast_node$@, cg: Genc_ctx@): Bool //<
         //< Whether this declaration's C symbol can be local to its translation unit
         //< That is whether `genc` adds `static` and emits the prototype only into the owning unit.
         //<
-        //< Caution: **Do not decide by `get_visibility() == file_private` alone.** Make a
-        //< program-wide name (`Sema_symbol.has_program_unique_c_name`) local and a synthesized call
-        //< from another unit fails to link. **In a library everything but an `extern`
-        //< definition is local** (`--library`): it is one unit, and only its interface can be seen
-        //< outside it.
+        //< Caution: **Do not decide by `get_visibility() == file_private` alone under `--split`.**
+        //< Make a program-wide name (`Sema_symbol.has_program_unique_c_name`) local and a
+        //< synthesized call from another unit fails to link. **In one unit everything but an
+        //< `extern` definition is local** (a library, or a program not split): only C reaches it
+        //< from outside, by the names `extern` publishes. The C compiler then drops what it
+        //< inlined.
         if r == null || r.kind_id == .k_decl_fn_proto
             return false
-        if base_core.is_library()
+        if base_core.is_library() || cg.split.part == .whole
             return r.sym_ptr == null || !(Sema_symbol$@::r.sym_ptr).flags.is_export
         if r.get_visibility() != sema_type_scope.Visibility.file_private
             return false
@@ -129,7 +130,12 @@ impl Ast_node
                     if p_name.starts_with("_")
                         cg.s("KSPL_UNUSED ")
 
-                    if t_node != null && t_node.kind_id != .k_empty &&
+                    // **A `$` array parameter is written by the type its body sees**, whose
+                    // elements follow the `$` (declare_param in sema/body/infer.kspl). The written
+                    // type's C is `const`, and the same struct, so a prototype still matches.
+                    if item.has_mut_binding_marker() && cg.env.is_array(item.type_id)
+                        cg.t(item.type_id).s(" ").nm(p_name)
+                    else if t_node != null && t_node.kind_id != .k_empty &&
                         !t_node.text.equals(base_core.UNKNOWN_TYPE_NAME)
                         t_node.emit_c_decl(cg, p_name, false)
                     else if !sema_type_env.is_unknown(item.type_id) &&
@@ -170,7 +176,7 @@ impl Ast_node
         //< Caution: **Decide it with the same predicate as `static`** (has_file_local_c_symbol),
         //< with `owner_file` **the same name as for the body**. Otherwise some unit gets only the
         //< `static` declaration.
-        if r.has_file_local_c_symbol()
+        if r.has_file_local_c_symbol(cg)
             return cg.writes_bodies() && cg.owns_file(owner_file)
         return cg.writes_decls()
 
@@ -237,7 +243,7 @@ impl Ast_node
         cg.emit_line_directive(r)
         fn_name: = r.get_decl_id_text()
         type_node: = r.get_decl_type_node()
-        is_priv_fn: = r.has_file_local_c_symbol()
+        is_priv_fn: = r.has_file_local_c_symbol(cg)
 
         r.ice_assert(fn_name.len > 0, "emit_node: fn_def missing identifier")
         if type_node != null
@@ -470,7 +476,7 @@ impl Ast_node
 
     priv fn emit_single_func_proto(r: Ast_node$@, cg: Genc_ctx$@)
         r.ice_assert(r != null, "emit_single_func_proto: fn_node is null")
-        if r.has_file_local_c_symbol()
+        if r.has_file_local_c_symbol(cg)
             cg.s("static ")
         // Caution: **Mark the first declaration as the definition is** (emit_fn_def): clang refuses
         // `dllexport` added on a redeclaration (`-Wdll-attribute-on-redeclaration`).

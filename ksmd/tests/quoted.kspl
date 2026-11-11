@@ -1,11 +1,14 @@
 //< Text in a formula's quotes: each byte stands for itself, `\` too, and `""` is one '"'
 //< Also a `%ksmd 1` file, whose formulas quote text by JSON's rules, read into today's rule. The
 //< rules are "Text in a formula" in `ksmd/docs/DESIGN-ksmd.md`.
+import "ksmd/base/source" { Source }
 import "ksmd/calc/calc"
 import "ksmd/calc/formula" { Token_kind, shift_formula, token_at, unquoted }
+import "ksmd/syntax/reader"
 import "ksmd/tests/calculation" { cases_with }
-import "ksmd/tests/support" { opened, read, saves, written }
+import "ksmd/tests/support" { changed, opened, read, saves, written }
 import "std/chars"
+import "std/ds"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -16,6 +19,7 @@ fn run()
     tokens()
     values()
     version_1()
+    version_1_longer()
     shifting()
 
 priv fn tokens() //< where quoted text ends, and the text it means
@@ -70,6 +74,48 @@ priv fn version_1() //< a `%ksmd 1` file reads its formulas' text by JSON's rule
         values.at(0, 1, 1).text.equals("a\"|b"), values.at(0, 1, 1).text)
     verdict.check("a quoted table name with escapes still names its table",
         values.at(2, 0, 0).number == 10.0, "")
+
+// A `%ksmd 1` formula is measured as written. Converting `"a\nb"` makes it `("a" & char(10) &
+// "b")`, so a formula of 1,797 bytes there becomes one of 4,997.
+priv fn version_1_longer()
+    defer arena: = Arena(256 * 1024)
+    defer $f: = Str_builder()
+    f.s("len(")
+    for i in Range.asc(200)
+        f.s(" & " if i > 0 else "").s("\"a\\nb\"")
+    f.s(")")
+    old: = arena.text().s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =").s(f.slice())
+        .s(" |\n:::\n").take()
+    $ed: = opened(old, arena)
+    values: = calc.calculate(ed.doc@, "2026-10-23", arena)
+    verdict.check("a version 1 formula that conversion makes longer than 4,096 bytes opens",
+        values.at(0, 0, 0).number == 600.0, "")
+    changed(ed@, 0, .insert_row, 0)
+    saved: = written(ed.doc@, arena)
+    again: = read(saved, arena)
+    verdict.check("and the document takes an edit, and saves as version 2 that opens again",
+        again.tables[0].rows.len == 2 && saved.len > 4096 + 40, "")
+    refused_file("a version 1 formula over 4,096 bytes as written is refused",
+        arena.text().s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =")
+        .s(long_sum(4097, arena)).s(" |\n:::\n").take(), arena)
+    refused_file("a version 2 formula over 32,768 bytes is refused",
+        arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =")
+        .s(long_sum(32769, arena)).s(" |\n:::\n").take(), arena)
+
+priv fn long_sum(bytes: Sz, arena: Arena$@): U8[] //< a formula `1+1+…` of `bytes` bytes, odd
+    out: = arena.text().s("1")
+    for _k in Range.asc((bytes - 1) / 2)
+        out.s("+1")
+    return out.take()
+
+priv fn refused_file(what: U8[], bytes: U8[], arena: Arena$@) //< the reader refuses `bytes`
+    src: = Source("t.ksmd", bytes) catch
+        verdict.check(what, false, "the source was refused before reading")
+        return
+    _doc: = reader.read(src@, arena) catch
+        verdict.check(what, true, "")
+        return
+    verdict.check(what, false, "the source read")
 
 priv fn shifting() //< a paste shifts references and leaves quoted text as written
     defer arena: = Arena(64 * 1024)

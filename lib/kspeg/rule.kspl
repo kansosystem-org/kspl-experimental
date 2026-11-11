@@ -10,7 +10,6 @@ import "std/chars" // `is_upper`
 import "std/ds" { List, Map }
 import "std/mem" { Arena }
 import "std/stack_limit" { Stack_limit }
-import "std/str" // `equals`
 
 pub enum Kspeg_signal //< what a rule throws: both backtracking and a real failure, in one type
     //< It is one type because the single recursive entry point (Rule.parse) can throw either.
@@ -95,18 +94,12 @@ fn char_class_matches( //< whether one byte is in a character class's ranges
     //< Caution: Do not interpret a character class anywhere but here. If the code that re-reads
     //< `_Boundary` (keyword_set) disagreed, where a keyword ends would depend on where it is
     //< matched.
-    ranges: U8[], //< a 3-byte `X-Y` is a range; every other byte is a literal on its own
+    ranges: U8[], //< 3-byte ranges `X-Y` only; a lone byte is `X-X` (`Rule.char_class`)
     c: U8,
-): Bool //< true when `c` falls in a range or equals a literal
-    for $i: = 0; i < ranges.len;
-        if i + 2 < ranges.len && (ranges.ptr + i + 1)$ == '-'
-            if c >= (ranges.ptr + i)$ && c <= (ranges.ptr + i + 2)$
-                return true
-            i += 3
-            continue
-        if c == (ranges.ptr + i)$
+): Bool //< true when `c` falls in one of the ranges
+    for $i: Sz = 0; i + 2 < ranges.len; i += 3
+        if c >= (ranges.ptr + i)$ && c <= (ranges.ptr + i + 2)$
             return true
-        i += 1
     return false
 
 priv fn push_keyword(keywords: List<|U8[]|>$@, text: U8[]) //<
@@ -402,7 +395,9 @@ pub enum Rule //< one node of the rule tree; each variant is one way of matching
     and_pred(rule: Rule$@) //< matches where this would, consuming nothing and building nothing
     not_pred(rule: Rule$@) //< matches where this would not, consuming nothing and building nothing
     char_class(ranges: U8[]) //< one byte in these ranges.
-        //< A byte range X..Y is the 3-byte run "X-Y"; every other byte is a literal (`[a-z0-9_]`).
+        //< Every element is a 3-byte run "X-Y" for the bytes X..Y; a lone byte X is "X-X". So
+        //< `[a-z_\-]` is stored as "a-z_-_---". The grammar's text is not kept: there `\-` and a
+        //< range's `-` would be the same byte (Meta.class_ranges in `lib/kspeg/notation.kspl`).
     reference(name: U8[]) //< another rule, by name, before `load_rules` resolves it
     resolved_ref(rule_id: I32) //< that same rule after resolving, referred to by index, not name
     recover(stops: U8[]) //< absorbs input up to one of these, and also marks the run as lenient.

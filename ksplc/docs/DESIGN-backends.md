@@ -114,7 +114,7 @@ flowchart TB
 
 Caution: **Do not put the body half before the generated body.** It includes everything from `<fcntl.h>` to `<netinet/in.h>`, and the names those headers `#define` clobber names in the generated body. The user sees not a KSPL diagnostic but the C compiler's `expected member name` (Principle 5).
 
-**Do not grow the escaping list (`is_preamble_macro` in `ksplc/base/c_name.kspl`) to cover them**: hundreds of names (`st_mtime`, `O_RDONLY` …) would clash, differing per platform. Two gates hold this: `tests/suite/emit_runtime_test.kspl` checks the order, and `ksplc/tests/c_keyword_names.kspl` checks the names themselves.
+**Do not grow the escaping list (`is_preamble_macro` in `ksplc/base/c_name.kspl`) to cover them**: hundreds of names (`st_mtime`, `st_mode` …) would clash, differing per platform. Two gates hold this: `tests/suite/emit_runtime_test.kspl` checks the order, and `ksplc/tests/c_keyword_names.kspl` checks the names themselves.
 
 **A small remainder comes from the declaration half's own includes.** `<stdint.h>` (needed by the `I8` to `U64` typedefs in `gen/runtime/core.h`), `<signal.h>`, `<time.h>`, `<math.h>` and `<stdio.h>` cannot move to the body half. The next section covers each name they define.
 
@@ -122,25 +122,28 @@ Caution: **Do not put the body half before the generated body.** It includes eve
 
 `std/` calls libc directly from the generated body, and genc emits no `extern` prototypes for it (`write_decls` in `gen/runtime.kspl`; a build with `-Werror=implicit-function-declaration` confirms it). **So the headers' object-form macros collide with the same names written in KSPL** where those come out as plain C names. Such names are a local, a parameter, a struct field, an enum's payload, a trait's method and a closure's capture. (An object-form macro is a `#define NAME …` with no parameter list, so every later `NAME` is replaced.) The user gets a C compiler error far from the cause (`member reference base type 'int' is not a structure`).
 
-**Each such name gets exactly one of three covers.**
+**Each such name gets exactly one of four covers.**
 
 | the cover | what it covers | where |
 | :-- | :-- | :-- |
 | erased with `#undef` | names neither the runtime nor the generated C reads (POSIX's `si_*` / `sa_*` / `sigev_*` / `L_tmpnam` / `math_errhandling`; the Windows CRT's `environ` / `popen` / `strcasecmp` / `sys_errlist`) | `write_decls` in `gen/runtime.kspl` |
 | given a suffix by the escaping list | names that cannot be erased (`typedef bool Bool;` uses `bool`; the runtime uses `NULL` / `EOF` / `errno` / `stdin` / `stdout` / `stderr`) | `is_preamble_macro` in `base/c_name.kspl` |
-| turned away by the naming check | names that are not snake_case (`SIGINT` / `L_ctermid`): written at a plain-name position, [I0502] always reports them | `sema`'s naming check |
+| given a suffix by their spelling | names with an uppercase letter and no lowercase one (`SIGINT` / `M_E` / `SIZE_MAX`), whatever header defines them: a local `const` is spelled so, and the naming check accepts it there | `is_macro_case` in `base/c_name.kspl` |
+| turned away by the naming check | names that mix the cases (`L_ctermid`): written at a plain-name position, [I0502] always reports them | `sema`'s naming check |
 
 **Try `#undef` first**: a suffix hides the original name from whoever reads the generated C. An `#undef` of an undefined macro is valid C, so POSIX's and Windows's names share one run.
 
 **The same name expands differently per target**: glibc's `#define stdin stdin` expands to itself, the Windows CRT's `stderr` to a function call. So check on every target.
 
-Caution: **Do not keep the list by hand**: which names collide changes with the libc version. `tests/suite/decl_macros_test.kspl` collects them from the target's headers and checks that every remaining name is under one of the three covers. An `#undef`'d name vanishes from `-dM -E`'s output, so what it collects is exactly the names left unerased. The check at every position is `ksplc/tests/c_keyword_names.kspl`.
+Caution: **Do not keep the list by hand**: which names collide changes with the libc version. `tests/suite/decl_macros_test.kspl` collects them from the target's headers and checks that every remaining name is under one of the four covers. An `#undef`'d name vanishes from `-dM -E`'s output, so what it collects is exactly the names left unerased. The check at every position is `ksplc/tests/c_keyword_names.kspl`.
 
 #### How linkage is chosen: one artifact, one program or library
 
 **The runtime's body half and std's definitions go into every artifact**, for two reasons. `ksplc/seed.c` must build in one C compiler run ("The bootstrap, and keeping the seed in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md)). And whatever builds the generated C builds the runtime with it, so ksplc carries no prebuilt runtime per target.
 
-**A program's symbols take the linkage their visibility gives**: `priv` is `static` and the rest external, so `--split`'s units reach each other (`has_file_local_c_symbol` in `gen/c/decl.kspl`). The runtime's `kspl_*` are external, since one program holds one runtime.
+**A split program's symbols take the linkage their visibility gives**: `priv` is `static` and the rest external, so `--split`'s units reach each other (`has_file_local_c_symbol` in `gen/c/decl.kspl`). The runtime's `kspl_*` are external, since one program holds one runtime.
+
+**A program in one unit makes every function `static` but its `extern` definitions**, as a library does. No other unit exists to call one, and C reaches the program only by the names `extern` publishes. The C compiler can then drop a function it inlined everywhere, and it inlines more. Its top-level variables keep the split program's linkage.
 
 **A library's are all `static` but its `extern` definitions** (`--library`; what can be relied on is [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). "A KSPL library crosses as C, holding its own runtime" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) says why a library takes a private copy. It also says why `static` beats a hidden visibility or an export list. This section holds how the generated C and the runtime make it so.
 
@@ -221,7 +224,7 @@ Only `-Wmissing-field-initializers` and `-Woverlength-strings` are left out. The
 
 #### A switch reaches the backends grouped, its subject named
 
-**The value a `switch` tests (its subject) must arrive at genc as a plain name: an identifier or a one-segment path (`is_plain_name` in `base/ast_ext.kspl`).** Genc's `switch` and each payload read write it more than once. **Lower makes it one, and only Lower**: `lower_stmt_switch` binds any other subject to a `let` temporary. A subject that reaches genc as anything else is an ICE; spelled as a name, it would emit broken C such as `switch (.tag)`.
+**The value a `switch` tests (its subject) must arrive at genc as a plain name: an identifier or a one-segment path (`is_plain_name` in `base/ast_place.kspl`).** Genc's `switch` and each payload read write it more than once. **Lower makes it one, and only Lower**: `lower_stmt_switch` binds any other subject to a `let` temporary. A subject that reaches genc as anything else is an ICE; spelled as a name, it would emit broken C such as `switch (.tag)`.
 
 **Lower also resolves every arm, so neither backend walks the patterns** (`group_switch_arms` in `lower/root.kspl`):
 
@@ -347,7 +350,7 @@ call   void @..._load_raw(ptr %tmp,  ptr %flash,  i32 4,      i32 6,       i32 2
 
 **The countermeasure**: convert a numeric scalar to the callee's parameter type before passing. Aggregates are passed by pointer, and taking the parameter's type for one gives a mismatch LLVM rejects.
 
-**The gate checks the IR**: Linux and macOS run-time tests cannot see this mismatch, and LLVM's verifier ignores it. `tests/tools/llvm_ir_abi_check.kspl` compares every direct call's argument types with its `define`'s parameter types (and the `ret`'s type too). It runs over both `ksplc/main.kspl` and `tests/debug/main.kspl` ("Self-hosting does not test a feature ksplc does not use"). A diagnostic prints a value that identifies the caller, such as `arena_used`, not only the broken value.
+**The gate checks the IR**: Linux and macOS run-time tests cannot see this mismatch, and LLVM's verifier ignores it. `tests/checkers/llvm_ir_abi_check.kspl` compares every direct call's argument types with its `define`'s parameter types (and the `ret`'s type too). It runs over both `ksplc/main.kspl` and `tests/debug/main.kspl` ("Self-hosting does not test a feature ksplc does not use"). A diagnostic prints a value that identifies the caller, such as `arena_used`, not only the broken value.
 
 #### Correctness is not entrusted to zero filling
 

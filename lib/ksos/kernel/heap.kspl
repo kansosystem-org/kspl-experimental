@@ -1,8 +1,9 @@
 //< General heap allocation, safe to call from a task or from an interrupt handler (an ISR)
-//< `std/mem.kspl`'s freestanding heap takes a spinlock but is not ISR-safe on a single core: an
-//< ISR that meets the lock taken panics with "heap locked".
-//< (mem.kspl cannot depend on machinery above it, such as irq_save in lib/ksos/kernel/task.kspl.)
-//< So alloc/dealloc called directly are not ISR-safe.
+//< `start_scheduler` hands `std/mem` the kernel's critical section (`mem.set_heap_guard`), so
+//< from then on `alloc`/`dealloc` called directly are safe from a task and an ISR as well.
+//< **These two are safe before the scheduler starts too**: they take the critical section
+//< themselves. Without it, an ISR that cut into `main` inside `alloc` would find the heap's lock
+//< taken, and panic with "heap locked".
 import "ksos/kernel/task"
 import "std/mem" { alloc, dealloc }
 // Only heap_init below (the freestanding version) calls init_freestanding_heap. So this import

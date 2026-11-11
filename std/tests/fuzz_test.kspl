@@ -55,6 +55,9 @@ fn test_fuzz_pick()
     verdict
         .pass("A seed is picked within its kind, every one of them comes up, and none is the count.")
 
+priv fn skip_made(name: U8[]): Bool //< the folders `test_fuzz_gather` asks `gather` to leave out
+    return name.equals("out") || name.equals(".git")
+
 fn test_fuzz_gather()
     verdict.start("[fuzz] seeds gathered from folders, in the order of their paths test...")
     defer arena: = Arena(256 * 1024)
@@ -66,7 +69,7 @@ fn test_fuzz_gather()
     fs.write_tree(dir, rels, bodies, arena) catch
         panic("the tree must be writable")
     missing: = fs.join(dir, "missing", arena)
-    got: = fuzz.gather(U8[][]::{ dir, missing }, U8[][]::{ ".md" }, 10I64, arena)
+    got: = fuzz.gather(U8[][]::{ dir, missing }, skip_made, U8[][]::{ ".md" }, 10I64, arena)
     names: = arena.text()
     for i in Range.asc(got.len)
         names.s("," if i > 0 else "").s(got.get(i).name)
@@ -76,11 +79,10 @@ fn test_fuzz_gather()
     assert(got.get(1).kind.equals(".md") && got.get(1).data.equals("a"),
         "a seed carries the ending it matched and its bytes")
     fs_test.clear_tree_best_effort(dir, arena)
-    verdict
-        .pass("Seeds come in the order of their paths, and what was made or git keeps stays out.")
+    verdict.pass("Seeds come in the order of their paths, and the folders skip_dir names stay out.")
 
 priv const SUBJECT_SRC: U8[] =
-    """import "std/str"
+    """import "std/ds"
 import "std/sys"
 
 fn main(): I32

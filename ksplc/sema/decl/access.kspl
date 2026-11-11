@@ -39,7 +39,7 @@ fn narrower_vis(outer: sema_type_scope.Visibility, inner: sema_type_scope.Visibi
         //< An outer declaration (an impl's target type, a struct) caps its members' reach.
     return outer if vis_rank(outer) < vis_rank(inner) else inner
 
-fn contains_node(list: List<|Ast_node$@|>@, node: Ast_node$@): Bool
+priv fn contains_node(list: List<|Ast_node$@|>@, node: Ast_node$@): Bool
     for item in list
         if item == node
             return true
@@ -245,11 +245,9 @@ impl Sema_ctx
         //< An implicit call (`a[i]`, `for x in a`) then needs a writable receiver, as `a.m()` does.
         if method_sym == null
             return false
-        switch r.env.method_receiver_permission(method_sym.node)
-        case .some(need)
-            return need.mut_ptr
-        case .none
+        need: = r.env.method_receiver_permission(method_sym.node) catch
             return false
+        return need.mut_ptr
 
     fn index_only_reads(r: Self$@, route: Index_route, recv_id: I32): Bool //<
         //< Whether the subscript returns only a read-only place (`Index_ref` without `Index_mut`)
@@ -340,7 +338,7 @@ impl Sema_ctx
                 return false
         return !sym.flags.is_mut
 
-    fn root_binding_of(r: Self$@, node: Ast_node$@): Sema_symbol$@? //<
+    priv fn root_binding_of(r: Self$@, node: Ast_node$@): Sema_symbol$@? //<
         //< The binding at a place's root, reached through `.` and an array's `[` only
         //< A pointer or a slice on the way ends the walk with none: what lies past it is separate
         //< memory, which its type governs.
@@ -393,11 +391,9 @@ impl Sema_ctx
         //< docs/SPEC-programming-language.md). Asked by the call alone, `CV + CV` wrote a `const`.
         if recv == null
             return
-        switch r.env.method_receiver_permission(method)
-        case .some(need)
-            if !need.ptr || !need.mut_ptr
-                return
-        case .none
+        need: = r.env.method_receiver_permission(method) catch
+            return
+        if !need.ptr || !need.mut_ptr
             return
         // **A temporary is a copy**, so the caller never sees the write
         // (`make_point().set_n(5)`: "called, nothing happened"). "A read-only location" does not
@@ -513,7 +509,7 @@ impl Sema_ctx
         defer $seen: = List<|Ast_node$@|>(null)
         r.check_type_node_vis(node, owner_rank, position, owner, seen@)
 
-    fn is_bound_generic_type(r: Self@, sym: Sema_symbol$@): Bool //<
+    priv fn is_bound_generic_type(r: Self@, sym: Sema_symbol$@): Bool //<
         //< Whether sym is itself the generic type argument currently bound
         //< check_visibility_and_mark_used and check_type_node_vis both stop here, for one reason.
         //< Fix only one, and a generic trait such as `std.lang.Index<|Idx, Output|>` reads as a

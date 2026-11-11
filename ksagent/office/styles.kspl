@@ -2,12 +2,11 @@
 //< A style names its parent (`basedOn`), and takes from it what it does not set. **A heading is
 //< known by its outline level**, or by the built-in name `heading N` where no level is set: a
 //< style's id is translated (`見出し 1` in a Japanese Word), its name is not.
-import "ksagent/office/index" + { Index, Keyed }
 import "ksagent/office/xml"
+import "ksagent/sorted_names" + { Index, Keyed }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str"
 import "std/strnum"
 
 priv const MAX_CHAIN: Sz = 16 //< the most parents followed; a loop of `basedOn` stops here
@@ -25,7 +24,8 @@ struct Styles //< every paragraph style of a document, by id
 
 fn empty(arena: Arena$@): Styles //< a document with no styles part
     $none: = List<|Keyed|>(arena)
-    return Styles::{ .list = List<|Style|>(arena), .by_id = index.sorted(none@, arena) }
+    return Styles::{ .list = List<|Style|>(arena),
+        .by_id = sorted_names.sorted(none@, arena) }
 
 fn read(src: U8[], arena: Arena$@): Styles!U8[] //< reads `styles.xml`
     $list: = List<|Style|>(arena)
@@ -63,7 +63,7 @@ fn read(src: U8[], arena: Arena$@): Styles!U8[] //< reads `styles.xml`
             s.num_id = x.attr_or("val", "", arena)!
         else if x.name.equals("ilvl")
             s.level = small(x.attr_or("val", "", arena)!)
-    return Styles::{ .list = list, .by_id = index.sorted(keys@, arena) }
+    return Styles::{ .list = list, .by_id = sorted_names.sorted(keys@, arena) }
 
 fn small(text: U8[]): I32 //< a level from 0 to 9, or -1 where the text is none
     v: = text.trim_spaces().to_i64() catch

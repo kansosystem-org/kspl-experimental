@@ -300,7 +300,7 @@ perf-log: $(STAGE1_EXE) $(SEED_EXE) | $(OUT_DIR)
 	@$(call perf_run,cold)
 	@echo "# MEASURING warm (same cache, 2nd run)"
 	@$(call perf_run,warm)
-	./$(SEED_EXE) run tests/tools/perf_guard.kspl --cold=$(LOG_DIR)/perf_cold.log \
+	./$(SEED_EXE) run tests/checkers/perf_guard.kspl --cold=$(LOG_DIR)/perf_cold.log \
 	  --warm=$(LOG_DIR)/perf_warm.log
 
 $(SEED_EXE): $(SEED_C) | $(OUT_DIR)

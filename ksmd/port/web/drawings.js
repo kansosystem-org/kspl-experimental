@@ -71,15 +71,13 @@ function ksmdDrawings(ks) {
   }
 
   function tools(fig) {
-    const bar = document.createElement("div");
-    bar.className = "draw-tools";
+    const bar = ks.el("div", "draw-tools");
     for (const [shape, label] of SHAPES) {
       const b = ks.button(label, null, `Draw a ${label.toLowerCase()} over the picture: drag across it`);
       b.dataset.shape = shape;
       bar.appendChild(b);
     }
-    const pick = document.createElement("select");
-    pick.className = "draw-colour";
+    const pick = ks.el("select", "draw-colour");
     pick.title = "The colour of new shapes, and of the chosen one";
     for (const [value, name] of COLOURS) pick.appendChild(new Option(name, value, false, value === colour));
     bar.appendChild(pick);

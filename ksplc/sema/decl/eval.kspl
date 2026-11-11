@@ -6,6 +6,7 @@
 //< `../session/state.kspl`), so a chain of constants folds in linear time.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_member_access`
 import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/access" as _sema_decl_access // `check_field_visibility`
@@ -22,7 +23,6 @@ import "std/chars" // testing and slicing single characters
 import "std/checked_int" // the signed overflow checks shared with run-time arithmetic
 import "std/ds" { List }
 import "std/math"
-import "std/str"
 
 impl U8[]
     priv fn parse_int_literal(r: U8[], node: Ast_node$@, c: Sema_ctx$@, negated: Bool):
@@ -49,7 +49,7 @@ impl U8[]
         return I64::(0U64 - lit.value) if is_neg else I64::lit.value
 
 impl Sema_ctx
-    fn promoted_fold_type(r: Self@, a: I32, b: I32): I32 //<
+    priv fn promoted_fold_type(r: Self@, a: I32, b: I32): I32 //<
         //< The type two operands fold at: the wider, an unsuffixed literal taking the other's
         if a == 0 || sema_type_env.is_unknown(a)
             return b
@@ -95,7 +95,7 @@ impl Sema_ctx
             return .none
         return .some(v)
 
-    fn kept_const_fold(r: Self$@, decl_key: Sz): Const_fold? //<
+    priv fn kept_const_fold(r: Self$@, decl_key: Sz): Const_fold? //<
         //< The value kept for the constant declared at decl_key, if it is of the current epoch
         if r.statics.epoch == 0
             return .none
@@ -104,7 +104,7 @@ impl Sema_ctx
                 return .some(kept)
         return .none
 
-    fn keep_const_fold(r: Self$@, decl_key: Sz, value: I64, below: I32) //<
+    priv fn keep_const_fold(r: Self$@, decl_key: Sz, value: I64, below: I32) //<
         //< Keeps a constant's folded value for the current epoch (none while the cache is off)
         if r.statics.epoch != 0
             r.statics.ints
@@ -319,22 +319,22 @@ impl Ast_node
         default
             return r.eval_unknown(c, depth)!
 
-    fn eval_ternary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
+    priv fn eval_ternary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
         if r.children.len == 3
             cond_val: = r.get_ternary_cond().eval_constexpr_internal(c, depth + 1)!
             return (r.get_ternary_true().eval_constexpr_internal(c, depth + 1)! if cond_val != 0
                 else r.get_ternary_false().eval_constexpr_internal(c, depth + 1)!)
         return r.eval_unknown(c, depth)!
 
-    fn eval_unknown(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error
+    priv fn eval_unknown(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error
         if !c.suppress_errors
             c.err(r, "expression is not a valid compile-time constant.")
         throw .not_constant
 
-    fn eval_integer(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error
+    priv fn eval_integer(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error
         return r.text.parse_int_literal(r, c, false)!
 
-    fn check_i32_overflow(r: Self$@, c: Sema_ctx$@, wide: I64): I32!Sema_error //<
+    priv fn check_i32_overflow(r: Self$@, c: Sema_ctx$@, wide: I64): I32!Sema_error //<
         //< A value outside I32's range is an error, like division_by_zero
         //< The reason is at parse_int_literal.
         if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
@@ -353,7 +353,7 @@ impl Ast_node
             c.err(r, "shift amount is out of range in compile-time constant expression")
         throw .invalid_argument
 
-    fn eval_bool(r: Self@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
+    priv fn eval_bool(r: Self@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
         return 1 if r.text.equals("true") else 0
 
     fn eval_char(r: Self@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
@@ -361,7 +361,7 @@ impl Ast_node
             throw .invalid_argument
         return I64::base_literal.char_literal_byte(r.text)
 
-    fn eval_unary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
+    priv fn eval_unary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
         if r.children.len >= 2
             op: = r.get_unary_op().text
             target: = r.get_unary_target()
@@ -400,11 +400,9 @@ impl Ast_node
     fn eval_binary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
         // A comparison of floating-point values folds as fold_float.kspl folds its operands.
         if r.children.len >= 3 && c.env.is_float(r.get_binary_left().type_id)
-            switch r.fold_float_compare(c)
-            case .some(v)
-                return v
-            case .none
+            v: = r.fold_float_compare(c) catch
                 return r.eval_unknown(c, depth)!
+            return v
         if r.children.len >= 3
             op: = r.get_binary_op().text
             if computes_number(op)
@@ -498,7 +496,7 @@ impl Ast_node
             throw .not_constant
         return r.eval_unknown(c, depth)!
 
-    fn eval_primary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
+    priv fn eval_primary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
         if r.children.len > 0
             child: = r.get_primary_inner_expr()
             return child.eval_constexpr_internal(c, depth + 1)!
@@ -589,7 +587,7 @@ impl Ast_node
             return I64::size
         throw .not_constant
 
-    fn eval_offsetof(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error //<
+    priv fn eval_offsetof(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error //<
         //< folds `offsetof(T, f)`
         //< Caution: **Resolve the type the same way as `sizeof`** (`eval_sizeof`). The layout
         //< itself comes from `field_offset_of` in `sema/decl/layout.kspl`.
@@ -687,7 +685,7 @@ impl Ast_node
             return v
         return wrap_to(v, c.env.get_primitive_bit_size(target), c.env.is_unsigned(target))
 
-    fn fold_type(r: Self$@, c: Sema_ctx$@, depth: I32): I32 //<
+    priv fn fold_type(r: Self$@, c: Sema_ctx$@, depth: I32): I32 //<
         //< The type a constant subexpression folds at, unknown where nothing says (a bare literal)
         //< Once the bodies are typed, it is the node's own type. **The declaration walk folds
         //< before anything is typed** (an array length, an enum tag). So there it is read from the

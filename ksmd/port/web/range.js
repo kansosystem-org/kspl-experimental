@@ -161,8 +161,10 @@ function ksmdRange(ks) {
   }
 
   // Marks the range's cells and the chosen one, and puts the fill handle at the range's corner.
+  // The status bar's figures follow on the next frame (`ks.status.update`). Read here, inside the
+  // action, they made the browser lay the page out once more.
   function mark() {
-    ks.figures.update();
+    ks.status.update();
     for (const el of ks.root.querySelectorAll(".whole-table")) el.classList.remove("whole-table");
     for (const el of marked) {
       if (el.classList.contains("fill-handle")) el.remove();
@@ -228,8 +230,7 @@ function ksmdRange(ks) {
     let box = el.querySelector(":scope > .cell-catch");
     if (!box) {
       // The kind of box the open cell takes, since this box becomes it.
-      box = document.createElement(ks.table.boxKind(el));
-      box.className = "cell-catch";
+      box = ks.el(ks.table.boxKind(el), "cell-catch");
       box.tabIndex = -1;
       // A touch screen keeps its keyboard down for a cell only chosen; a double tap opens it.
       if (window.matchMedia && window.matchMedia("(hover: none)").matches) box.inputMode = "none";
@@ -481,7 +482,7 @@ function ksmdRange(ks) {
       }
     } else if (e.key === "Enter" || e.key === "Tab") {
       // Enter moves down and Tab right, Shift back, as in a spreadsheet; F2 opens the cell. Tab
-      // past the last cell adds a row (`tab` in `table.js`).
+      // past the last cell adds a row (`tab` in `cellbox.js`).
       e.preventDefault();
       collapse();
       if (e.key === "Enter") ks.table.choose(c.block, ks.table.step(c.block, c.row, e.shiftKey ? -1 : 1), c.column);
@@ -551,8 +552,7 @@ function ksmdRange(ks) {
   // with the range's cells, repeated, as one action.
   // It stands in the corner cell, so placing it reads no layout.
   function handle(corner) {
-    const box = document.createElement("span");
-    box.className = "fill-handle";
+    const box = ks.el("span", "fill-handle");
     box.contentEditable = "false";
     box.title = "Drag down or right to fill the cells with these";
     box.addEventListener("mousedown", drag);

@@ -64,8 +64,10 @@ const sections = {
     const bytes = fs.readFileSync(path.join(path.dirname(pageFile), "ksmd.wasm"));
     const mod = new WebAssembly.Module(bytes);
     const out = WebAssembly.Module.exports(mod).map((e) => e.name);
-    // `memory` is the linker's; `memcmp` is std's, exported for the calls the compiler emits.
-    const stray = out.filter((n) => !n.startsWith("ksmd_web_") && n !== "memory" && n !== "memcmp");
+    // `memory` is the linker's. `memcmp` and `memchr` are std's freestanding stand-ins for C's
+    // (`std/mem.kspl`): written with C's names so libc's declarations find them, they go out too.
+    const stray = out.filter((n) => !n.startsWith("ksmd_web_") && n !== "memory" && n !== "memcmp" &&
+      n !== "memchr");
     check(stray.length === 0, "only the page's actions are exported", stray.join(" "));
     const into = WebAssembly.Module.imports(mod).map((e) => e.name);
     check(into.length === 1 && into[0] === "ksmd_js_gave_up", "only the stop call is imported",

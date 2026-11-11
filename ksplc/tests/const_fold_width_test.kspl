@@ -4,6 +4,7 @@
 //< propagation**, **an unsigned narrower than `int` wrapping**, **a signed wrapping**. C leaves
 //< the last undefined (property 3 of tests/suite/property_test.kspl covers optimized builds).
 //< Test both a global `const` and a local: sema's fold and the generated code differ.
+import "std/ds"
 import "std/str" { Str_builder }
 import "std/verdict"
 
@@ -67,6 +68,13 @@ priv const CAST_U32_SHR: I32 = I32::(U32::-1 >> 1U32)
 priv const CAST_REF: I32 = CAST_BASE + 1 //< a constant naming another, folded through its cast
 priv const CAST_BASE: I32 = U8::511
 priv const CAST_LEN: I32[CAST_TRUNC] = ::{}
+priv const CAST_WIDE_U64: U64 = U64::0xFFFFFFFF //<
+    //< A literal I32 does not hold is cast as the value written, here and at run time
+    //< Left at I32, LLVM extended its bits (`U64::0xFFFFFFFF` gave 2^64-1) where C and the fold
+    //< kept the value; check_cast_wide_literal checks the run-time half.
+priv const CAST_WIDE_HALF: U32 = U32::0x80000000
+priv const CAST_WIDE_NEG: U64 = U64::-3000000000
+priv const CAST_WIDE_F64: F64 = F64::3000000000
 priv const NOT_LEN: I32[~0U8 / 51U8] = ::{ 1, 2, 3, 4, 5 } //<
     //< `~` wraps at a narrow width: 255 / 51
 priv const DIV_NEG: I32[-10 / -3] = ::{ 1, 2, 3 } //<
@@ -91,6 +99,7 @@ fn test_const_fold_width()
     check_global_wraps()
     check_narrow_wraps()
     check_widening()
+    check_cast_wide_literal()
     check_signed_overflow()
     check_literal_exception()
     check_min_rendering()
@@ -213,6 +222,31 @@ priv fn check_narrow_wraps() //<
     assert(u16max * u16max == U16::1, "U16 multiplication must wrap mod 2^16 past int's range")
     assert(i16neg * i16neg == I16::1, "I16 multiplication must wrap mod 2^16 past int's range")
     assert(u16acc == U16::1 && i16acc == I16::1, "a 16-bit `*=` must wrap mod 2^16 too")
+
+priv fn check_cast_wide_literal() //<
+    //< A cast's literal that I32 does not hold keeps the value written, folded and at run time
+    u64_wide: = U64::0xFFFFFFFF
+    i64_wide: = I64::0x80000000
+    sz_wide: = Sz::3000000000
+    i64_dec: = I64::3000000000
+    f64_wide: = F64::3000000000
+    i64_neg: = I64::-3000000000
+    i32_wrap: = I32::3000000000
+    i8_wrap: = I8::-2147483649
+    u64_top: = U64::18446744073709551615
+    assert(u64_wide == 4294967295U64 && CAST_WIDE_U64 == 4294967295U64,
+        "U64::0xFFFFFFFF is 4294967295, not the bits of an I32 -1")
+    assert(i64_wide == 2147483648I64 && CAST_WIDE_HALF == 2147483648U32,
+        "I64::0x80000000 is 2147483648")
+    assert(sz_wide == Sz::3000000000I64 || sizeof(Sz) == 4, "Sz::3000000000 keeps its value")
+    assert(i64_dec == 3000000000I64, "I64::3000000000 keeps its value")
+    assert(f64_wide == 3000000000.0 && CAST_WIDE_F64 == 3000000000.0,
+        "F64::3000000000 keeps its value")
+    assert(i64_neg == -3000000000I64 && CAST_WIDE_NEG == 18446744070709551616U64,
+        "I64::-3000000000 negates at I64")
+    assert(i32_wrap == -1294967296, "I32::3000000000 keeps the low 32 bits")
+    assert(i8_wrap == -1, "I8::-2147483649 keeps the low 8 bits")
+    assert(u64_top == 18446744073709551615U64, "a literal only U64 holds keeps its value")
 
 priv fn check_widening() //<
     //< A run-time narrow result wraps before it is widened

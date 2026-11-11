@@ -9,7 +9,7 @@ This guide shows where a test goes, and how to write and run it. A *suite* is on
 
 ## Where a new test goes
 
-Put a test next to what it checks. A test that looks inside one package (a top-level folder such as `std/`) lives in that package; only a suite that reads several packages lives here.
+Put a test next to what it checks. A test that looks inside one package lives in that package, such as `std/` or `lib/ksdb/`. Only a suite that reads several packages lives here.
 
 | What the test checks | Where it goes | What runs it |
 | :-- | :-- | :-- |

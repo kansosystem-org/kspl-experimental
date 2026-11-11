@@ -262,19 +262,11 @@ async function fallback() {
   check(await until(() => !alive(server), STOP_WAIT_MS), "Ctrl+C stops it too");
 }
 
-function sameDefault() {
-  verdict.part = "the default address";
-  const of = (f) => (/const DEFAULT_URL: U8\[\] = "([^"]+)"/.exec(fs.readFileSync(f, "utf8")) || [])[1];
-  const ours = of("tools/model_server.kspl");
-  check(ours !== undefined && ours === of("ksagent/model.kspl"), "the launcher's equals ksagent's", ours);
-}
-
 let launcher = "";
 async function main() {
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "leave.md"), "A new employee receives 10 days of paid leave.\n");
   launcher = place(launcherBuilt, work);
-  sameDefault();
   await refused();
   await missingModel();
   await missingOther();

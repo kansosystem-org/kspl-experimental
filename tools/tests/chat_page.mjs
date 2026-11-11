@@ -3,7 +3,8 @@
 // stand-in model server, the answer grows in the live file, and the checked answer replaces it.
 // The cases: the Markdown reader alone, on usual and on hostile text; asking; the answer growing;
 // the checked answer; a stopped answer; a model's answer holding markup, shown as text; Japanese;
-// a save that meets another tab's write; a reload; a turn the reader cannot show; lines ksagent
+// a save that meets another tab's write; a reload; a turn the reader cannot show; a question whose
+// save is never answered, or answered late; lines ksagent
 // refuses; an answer ksagent could not record; and an ask file past its cap. The browser and its
 // driver are ksmd's (`ksmd/tests/browser/`).
 // Usage: node tools/tests/chat_page.mjs <browser> <ksagent_chat.exe> <work folder>
@@ -334,6 +335,80 @@ async function main() {
     check(await d.until(`!${notice}.includes('did not answer')`, 15000),
       "the next look that gets through clears the notice", await d.js(notice));
 
+    // A question whose save the local server never answers. **Its text must not be lost**, the
+    // notice must not promise a resend the page does not make, and asking it again must write it
+    // once. `window.put` sets what the page's save meets: "drop" never reaches the server, "late"
+    // reaches it but its answer never comes back, as when the server is slow. The limit is cut to
+    // 300 ms as above.
+    const box = "document.getElementById('text').value";
+    const times = (text) => disk(`${name}.ask.jsonl`).split(text).length - 1;
+    await d.js(`(() => {
+      const plain = window.plainFetch = window.fetch;
+      AbortSignal.timeout = () => window.plainTimeout.call(AbortSignal, 300);
+      const never = (how) => new Promise((_, no) =>
+        how.signal.addEventListener("abort", () => no(how.signal.reason)));
+      window.fetch = (url, how = {}) => {
+        if (how.method === "PUT" && window.put === "drop") return never(how);
+        if (how.method === "PUT" && window.put === "late") {
+          plain(url, { ...how, signal: undefined });
+          return never(how);
+        }
+        return window.hang && String(url).startsWith("/api/stat") ? never(how) : plain(url, how);
+      };
+      window.put = "drop";
+    })()`);
+    // **Count the turns only once the page shows every question the ask file holds.** Read while
+    // the page still drew the turns of the looks before, under a full run's load, the count was
+    // short, and the three questions below then seemed to show more than once.
+    const questionsSaved = () => new Set(disk(`${name}.ask.jsonl`).split("\n").map((line) => {
+      try { const r = JSON.parse(line); return r && r.type === "question" ? r.id : null; } catch (_) { return null; }
+    }).filter((id) => id !== null)).size;
+    check(await d.until(`document.querySelectorAll('.turn').length === ${questionsSaved()}`, 15000),
+      "before the lost saves, the page shows a turn for each question in the ask file", await count());
+    const before = await count();
+    await ask("A question whose save is lost");
+    check(await d.until(`${notice}.includes('may not be saved')`, 15000),
+      "a save that is never answered says the question may not be saved", await d.js(notice));
+    check(!(await d.js(notice)).includes("asks again"), "it promises no resend the page does not make",
+      await d.js(notice));
+    check(await d.js(box) === "A question whose save is lost", "the question is back in the text box",
+      await d.js(box));
+    await d.js("window.put = ''; document.getElementById('text').focus()");
+    await d.press("Enter");
+    check(await d.until(`!${notice}.includes('may not be saved') && ${box} === ''`, 15000),
+      "asked again, it is saved, and the notice clears", await d.js(notice));
+    check(await diskUntil(() => times("A question whose save is lost") === 1, 15000),
+      "the ask file holds it once", disk(`${name}.ask.jsonl`));
+    // The save reaches the file late: the page sees it there, empties the box and clears the
+    // notice, and writes nothing more.
+    await d.js("window.put = 'late'");
+    await ask("A question saved late");
+    check(await d.until(`!${notice}.includes('may not be saved') && ${box} === '' && ` +
+      `document.querySelectorAll('.turn').length === ${before + 2}`, 15000),
+      "a save that reaches the file late shows as saved, and the notice clears", await d.js(notice));
+    // Asked again before the page sees the late save (its looks hang meanwhile): written once.
+    await d.js("window.hang = true");
+    await ask("A question saved late, asked again");
+    check(await d.until(`${notice}.includes('may not be saved')`, 15000),
+      "the second late save says it may not be saved", await d.js(notice));
+    await d.js("window.put = ''");
+    check(await diskUntil(() => times("A question saved late, asked again") === 1, 15000),
+      "the late save reaches the file", disk(`${name}.ask.jsonl`));
+    check(await d.js(box) === "A question saved late, asked again",
+      "the page has not seen it yet, so the question is still in the text box", await d.js(box));
+    await d.js("document.getElementById('text').focus()");
+    await d.press("Enter");
+    check(await d.until(`${box} === ''`, 15000), "asking it again goes through", await d.js(box));
+    await d.js("window.hang = false");
+    check(await d.until(`!${notice}.includes('may not be saved') && !${notice}.includes('did not answer')`,
+      15000), "the notice clears", await d.js(notice));
+    check(times("A question saved late, asked again") === 1,
+      "a late save and the same question asked again are written once", disk(`${name}.ask.jsonl`));
+    check(await d.until(`document.querySelectorAll('.turn').length === ${before + 3}`, 15000) &&
+      questionsSaved() === before + 3, "each of the three questions shows once",
+      `${await count()} turns, ${questionsSaved()} questions saved`);
+    await d.js("window.fetch = window.plainFetch; AbortSignal.timeout = window.plainTimeout");
+
     // Lines ksagent passes over are named on the page with ksagent's own reasons.
     const askFile = path.join(root, `${name}.ask.jsonl`);
     const firstId = /"id":"([0-9a-f-]{36})"/.exec(disk(`${name}.ask.jsonl`))[1];
@@ -356,11 +431,11 @@ async function main() {
     check(said.length === 6 && said.every((x) => named.includes(x)),
       "each line ksagent passes over is named on the page, in ksagent's words",
       `ksagent: ${said.join(" / ")}; page: ${named}`);
-    check(await count() === broke + 2, "no line it passes over shows as a question");
+    check(await count() === broke + 5, "no line it passes over shows as a question");
 
     // An answer ksagent could not record shows as stopped, with why, and can be asked again.
     await ask("An answer that will not be recorded");
-    const lost = broke + 2;
+    const lost = broke + 5;
     check(await d.until(`${stateOf(lost)} === 'writing'`, 15000), "that answer starts growing");
     fs.appendFileSync(path.join(root, `${name}.chat.jsonl`), "{broken\n");
     check(await d.until(`${stateOf(lost)} === 'stopped'`, 30000),

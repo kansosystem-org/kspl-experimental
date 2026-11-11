@@ -1,7 +1,8 @@
 // What a document costs in the page, in a headless Chromium: opening it, a key press, a cell edit,
 // a column resize and a save, on the documents `tests/measure.kspl` writes. Each step runs five
 // times, and the middle time is printed. An edit is timed from the browser's input event to the
-// end of the page's change, the page's layout included; painting is not.
+// end of the page's change, the page's layout included; painting is not. A key is timed once more
+// to the end of the next frame, and the frames of a scroll through the first table are timed.
 // Usage: node tests/browser/measure.mjs <chromium> <ksmd.html> <work folder> <documents> [<kssrv>]
 // (`make measure`). Without a kssrv, the served page is not measured.
 import fs from "fs";
@@ -28,6 +29,16 @@ const stopwatch = (type) => d.js(`(() => {
     document.getElementById("doc").getBoundingClientRect();
     window.took = performance.now() - window.began;
   };
+})()`);
+// The same, to the end of the next frame after the change: the status bar and other work that
+// waits for a frame are counted too. A timer set in a frame's callback runs after it is drawn.
+const toFrame = (type) => d.js(`(() => {
+  window.took = null;
+  document.addEventListener(${JSON.stringify(type)}, () => { window.began = performance.now(); },
+    { capture: true, once: true });
+  ksmd.onchange = () => requestAnimationFrame(() => setTimeout(() => {
+    window.took = performance.now() - window.began;
+  }, 0));
 })()`);
 const took = async () => {
   await d.until("window.took !== null", 20000);
@@ -75,6 +86,27 @@ async function inPage(name) {
     await d.press("x");
     key.push(await took());
   }
+  const keyFrame = [];
+  for (let i = 0; i < RUNS; i++) {
+    await toFrame("beforeinput");
+    await d.press("x");
+    keyFrame.push(await took());
+  }
+  // Scrolling down through the first table, 100 pixels a frame: the time between two frames.
+  const frames = await d.js(`new Promise((done) => {
+    const page = document.scrollingElement;
+    page.scrollTop += document.querySelector("#doc .table").getBoundingClientRect().top;
+    const times = [];
+    let last = 0;
+    const step = (now) => {
+      if (last) times.push(now - last);
+      last = now;
+      if (times.length >= 100) return done(times);
+      page.scrollTop += 100;
+      return requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  })`);
   // A count in the middle of the first table, then the cell below it, and so on.
   const rows = await d.js("document.querySelector('#doc table').tBodies[0].rows.length");
   const cell = `#doc .table td[data-r="${Math.floor(rows / 2)}"][data-c="1"]`;
@@ -106,6 +138,8 @@ async function inPage(name) {
   console.log(`${name}, opened from a file:`);
   shown("open: read, calculate and show every block", open);
   shown("a key typed at the end: the transaction and the blocks shown again", key);
+  shown("the same, to the end of the next frame: the status bar shown again too", keyFrame);
+  shown("a frame while the page scrolls down through the first table", frames);
   shown("a cell's value entered: the transaction, every table calculated and shown again", edit);
   shown("Alt+Right or Alt+Left in a cell: the widths set and the table shown again", resize);
   shown("the canonical source a save writes", save);

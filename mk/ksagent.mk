@@ -12,7 +12,8 @@ $(KSAGENT_PAGE): ksagent/page/chat.html
 	@mkdir -p "$(dir $@)"
 	cp ksagent/page/chat.html "$@"
 
-$(KSAGENT_CHAT_EXE): $(STAGE1_EXE) tools/ksagent_chat.kspl tools/model_server.kspl $(OPENER_SRC)
+$(KSAGENT_CHAT_EXE): $(STAGE1_EXE) tools/ksagent_chat.kspl tools/model_server.kspl \
+  ksagent/defaults.kspl $(OPENER_SRC)
 	@echo "# BUILDING the launcher that asks about a folder (out/ksagent_chat.exe)"
 	$(call kspl_build,tools/ksagent_chat.kspl,ksagent_chat,,)
 

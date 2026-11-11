@@ -430,6 +430,46 @@ fn main()
   r: = open()
   take(r)
   take(r)
+// ==== case move_only_value_receiver_moves
+//< A method that takes a Move_only receiver by value (`r: Self`) moves it; a pointer receiver lends
+//< Let through, `h.consume()` then `take(h)` handed one handle to two owners, which both release.
+//< A move in a branch or a loop is tracked as an argument's is. `Self@` / `Self$@` calls and a
+//< field read stay reads, and a new value makes the binding usable again.
+// EXPECT: move_only_value_receiver_moves.kspl:27:17: error: variable 'h' was moved out of
+// EXPECT: move_only_value_receiver_moves.kspl:31:12: error: variable 'b' was moved out of
+// EXPECT: move_only_value_receiver_moves.kspl:35:5: error: variable 'l' was moved out of
+// EXPECT: Finished with 3 error(s)
+priv struct H
+  fd: I32
+
+impl H: Move_only
+  priv fn consume(r: Self): I32
+    return r.fd
+  priv fn peek(r: Self@): I32
+    return r.fd
+  priv fn poke(r: Self$@)
+    r.fd += 1
+
+priv fn take(h: H): I32
+  return h.fd
+
+fn main(): I32
+  $h: = H::{ .fd = 3 }
+  h.poke()
+  $total: = h.peek() + h.fd + h.consume()
+  total += take(h)
+  $b: = H::{ .fd = 4 }
+  if total > 0
+    total += b.consume()
+  total += b.peek()
+  $l: = H::{ .fd = 5 }
+  for i in Range.asc(2)
+    total += I32::i
+    l.consume()
+  $kept: = H::{ .fd = 6 }
+  total += kept.consume()
+  kept = H::{ .fd = 7 }
+  return total + kept.consume()
 // ==== case move_only_use_after_move
 //< Copying a `Move_only` value moves it, so the original binding cannot be used after that
 //< Allow the copy and the owning handle is duplicated: both release, destroying the same OS object

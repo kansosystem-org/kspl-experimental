@@ -390,7 +390,7 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
     async pointOtherTable() {
       const doc = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | |\n| 2 | |\n:::\n\n` +
         `:::table name="map"\n| "c" | "d" |\n| 2 | 5 |\n| 3 | 7 |\n:::\n\n` +
-        `:::table name="Q1 sales"\n| "e" |\n| 9 |\n:::\n`;
+        `:::table name="Q1 sales"\n| "e" |\n| 9 |\n:::\n\n:::table name="a\\"b\\\\c"\n| "f" |\n| 4 |\n:::\n`;
       await load(doc);
       const other = (name, r, c) => `#doc .table[data-name=${JSON.stringify(name)}] td[data-r="${r}"][data-c="${c}"]`;
       // A name cell is pressed near its left edge, clear of its filter arrow on any OS's fonts.
@@ -409,9 +409,15 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await click(other("Q1 sales", 0, 0));
       check(await box() === '=sum(map.B1:B2)+"Q1 sales".A1',
         "a press in a table whose name is not plain writes the name in quotes", await box());
+      // In the quotes, a quote is doubled and a backslash stays as it is, as in a formula's text.
+      await type("+");
+      await click(other('a"b\\c', 0, 0));
+      check(await box() === '=sum(map.B1:B2)+"Q1 sales".A1+"a""b\\c".A1',
+        "a name with a quote and a backslash is written by the formula's rule", await box());
       await press("Enter");
-      await saves("Enter takes the formula", doc.replace("| 1 | |", '| 1 | =sum(map.B1:B2)+"Q1 sales".A1 |'));
-      check(await js(`document.querySelector('${cellAt(0, 1)}').textContent`) === "21",
+      await saves("Enter takes the formula",
+        doc.replace("| 1 | |", '| 1 | =sum(map.B1:B2)+"Q1 sales".A1+"a""b\\c".A1 |'));
+      check(await js(`document.querySelector('${cellAt(0, 1)}').textContent`) === "25",
         "which calculates from the other tables");
 
       // A column's name or letter writes the whole column: with the table's name in another

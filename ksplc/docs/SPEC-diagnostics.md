@@ -332,7 +332,7 @@ A C-style loop only counts (`for $i: = 0; i < xs.len; i += 1`): a constant start
 Something an `import` brought in is never used in that file: a whole file's alias (`import "path" as name`), or one symbol of a selective import (`import "path" { A, B }`, `docs/SPEC-programming-language.md` §9).
 * **The verdict covers that one file alone**: whether the file writes the name. A use inside a generic template never instantiated counts.
 * An alias counts only at the head of a qualified name (`io.out()`, `ds.List`), not as a field (`p.io`) or a function (`io()`) spelled the same.
-* An import an extension method's call needs ("An extension method requires the import" in [§9](../../docs/SPEC-programming-language.md)) counts as used. This holds for a built-in type's method (`import "std/str"` for `s.equals(...)`) and a format specifier (`import "std/strfmt"` for `\{n:x\}`).
+* An import an extension method's call needs ("An extension method requires the import" in [§9](../../docs/SPEC-programming-language.md)) counts as used. This holds for a built-in type's method (`import "std/ds"` for `s.equals(...)`) and a format specifier (`import "std/strfmt"` for `\{n:x\}`).
 * **Fix**: delete the import. Where loading it is deliberate, mark it ignored with a `_` on the alias (`import "p" as _p`).
   * A file can be imported only so that its conformances hold (`import "std/strfmt" as _strfmt` for the `fmt` each type's `\{x\}` reaches). The call is made inside `put`'s instantiation, so give it the `_`.
   * A name inside a declaration `#cfg` dropped is not counted. For a symbol used in one build only, put the same `#cfg` on the import, **on the line directly before it** (`ksplc fmt` moves it there anyway).

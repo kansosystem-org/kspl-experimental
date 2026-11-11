@@ -21,12 +21,10 @@ function ksmdOutline(ks) {
     const heads = [names, ...rows.map((tr) => tr.cells[0])];
     // Each row's outline: one slot per level, from the outermost group in.
     const slots = heads.map((th) => {
-      const bar = document.createElement("span");
-      bar.className = "outline";
+      const bar = ks.el("span", "outline");
       const own = [];
       for (let d = 0; d < deepest; d++) {
-        const slot = document.createElement("span");
-        slot.className = "outline-slot";
+        const slot = ks.el("span", "outline-slot");
         bar.appendChild(slot);
         own.push(slot);
       }
@@ -67,12 +65,10 @@ function ksmdOutline(ks) {
     const deepest = Math.max(...cg.map((g) => g[3])) + 1;
     // Each heading's outline: one slot per level, from the outermost group down.
     const slots = Array.from(table.tHead.rows[0].cells).map((th) => {
-      const bar = document.createElement("span");
-      bar.className = "outline-cols";
+      const bar = ks.el("span", "outline-cols");
       const own = [];
       for (let d = 0; d < deepest; d++) {
-        const slot = document.createElement("span");
-        slot.className = "outline-slot";
+        const slot = ks.el("span", "outline-slot");
         bar.appendChild(slot);
         own.push(slot);
       }

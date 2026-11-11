@@ -192,10 +192,13 @@ impl U8[]
         //< Caution: **"Not found" is no position.** A `-1` passed on as one reads the wrong byte
         //< far from the search. An `I32` cannot name a place past 2 GiB. "Is it there" is
         //< `.is_some()` on this same call.
-        for i in Range.asc(r.len)
-            if (r.ptr + i)$ == ch
-                return .some(i)
-        return .none
+        // An empty slice passes no null to libc, as mem.zero does.
+        if r.len <= 0
+            return .none
+        at: = libc.memchr(Void$@::r.ptr, I32::ch, r.len)
+        if at == null
+            return .none
+        return .some(Sz::at - Sz::r.ptr)
 
     pub fn rfind_char(r: U8[], ch: U8): Sz? //< where the byte last appears, or none
         for i in Range.desc(r.len)

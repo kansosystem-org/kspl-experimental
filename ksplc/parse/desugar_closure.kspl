@@ -92,7 +92,7 @@ impl Ast_node
             if id_node: = p.gen_param_id_node()
                 ctx.gen_params.push(id_node.text)
 
-    fn has_capture_marker(r: Ast_node@): Bool //< whether a `;` is written
+    priv fn has_capture_marker(r: Ast_node@): Bool //< whether a `;` is written
         for c in r.children
             if c.kind_id == .k_literal && c.text.equals(";")
                 return true
@@ -165,7 +165,7 @@ impl Ast_node
         r.morph(.k_expr_path, val_name)
         r.add_child(Ast_node.build_ident(val_name, 0, loc))
 
-    fn reject_param_defaults(r: Ast_node@, ctx: Desugar_ctx$@) //<
+    priv fn reject_param_defaults(r: Ast_node@, ctx: Desugar_ctx$@) //<
         //< It rejects a default value in a closure's signature
         //< Parameters and captures are both `fn_param`, so both lists are checked.
         for list in r.children
@@ -249,8 +249,8 @@ impl Ast_node
         return true
 
     // One field of the environment struct. A capture is "a name and a type", nothing else.
-    fn append_capture_field(r: Ast_node@, ctx: Desugar_ctx$@, cap: Ast_node$@, src: Str_builder$@):
-        Bool
+    priv fn append_capture_field(r: Ast_node@, ctx: Desugar_ctx$@, cap: Ast_node$@,
+        src: Str_builder$@): Bool
         // No `$`: captures are read-only, or the enclosing function's local could be written
         // through the closure, hiding the dependence on call order from the reader.
         for c in cap.children
@@ -274,7 +274,7 @@ impl Ast_node
         src.s("  priv \{c_name\}: \{c_ty\}@;\n")
         return true
 
-    fn name_closure_receiver(r: Ast_node$@) //<
+    priv fn name_closure_receiver(r: Ast_node$@) //<
         //< It gives the synthesized `call`'s receiver a made name, before the body is grafted
         //< **A name the source can spell would be seen by the body.** It would hide a top-level
         //< declaration of that name and refuse a parameter of it. Made, it is out of every
@@ -322,7 +322,7 @@ impl Ast_node
             if rebind_id != null
                 rebind_id.loc = id_node.loc
 
-    fn graft_closure_body(r: Ast_node$@, body: Ast_node@) //<
+    priv fn graft_closure_body(r: Ast_node$@, body: Ast_node@) //<
         //< It moves the original closure body's statements into the synthesized `call`'s body
         call_fn: = r.find_child(.k_decl_fn)
         if call_fn == null
@@ -333,11 +333,11 @@ impl Ast_node
         for stmt in body.children
             dest.add_child(stmt)
 
-fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
+priv fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
     //< Caution: Start every one with `_`, or [W0206] fires where one goes unused.
     return build_temp_name("_anon_env_new_", serial_str(serial))
 
-fn build_anon_env_val_name(serial: Sz): U8[]
+priv fn build_anon_env_val_name(serial: Sz): U8[]
     return base_c_name.made_name(build_temp_name("anon_env_v_", serial_str(serial)))
 
 fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
@@ -357,7 +357,7 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
             out.push(name)
     return out
 
-fn gen_args_text(names: List<|U8[]|>@): U8[] //<
+priv fn gen_args_text(names: List<|U8[]|>@): U8[] //<
     //< The `<|T, U|>` names of the type arguments copied over
     //< Empty where there are none, leaving the synthesized declarations non-generic.
     if names.len == 0
@@ -369,7 +369,7 @@ fn gen_args_text(names: List<|U8[]|>@): U8[] //<
     out.s("|>")
     return out.take()
 
-fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc): Ast_node$@ //<
+priv fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc): Ast_node$@ //<
     //< The node of the type arguments written on the reference to the lifted declaration
     //< Caution: Place the type arguments as `type_args`' **children**. The substitution at
     //< instantiation (replace_type_vars in sema/decl/subst.kspl) does not reach a `<|T|>` in the
@@ -384,7 +384,7 @@ fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc):
     return Ast_node(.k_expr_path, full, loc).add_child(Ast_node.build_ident(name, 0, loc))
         .add_child(type_args)
 
-fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
+priv fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
     //< The arguments `name@`, one per capture (passed to the constructor)
     //< **Each name stands where the capture list writes it**: it is the one written use of the
     //< outer local, so the editor renames and lists it there, not at the closure's `fn(`.
@@ -399,7 +399,7 @@ fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
         args.add_child(addr_of)
     return args
 
-fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@,
+priv fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@,
     out: Str_builder$@) //<
         //< It joins the closure signature's type spellings: parameters, return value, captures
         //< The choice of which type arguments to copy over reads this text.
@@ -409,7 +409,7 @@ fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@
     append_param_type_text(params, out)
     append_param_type_text(captures, out)
 
-fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
+priv fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
     //< It adds the parameter type names in a `param_list` / `capture_list`, separated by spaces
     for p in base_ast_ext.Param_cursor(list, false)
         out.s(spell_as_written(p.get_decl_type_node())).s(" ")

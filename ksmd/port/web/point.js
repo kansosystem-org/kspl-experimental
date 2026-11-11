@@ -4,7 +4,7 @@
 // another table of the document is written with its table's name: `map.D3`. A press on a column's
 // letter or name writes the whole column, as a cell is written: `D`, or `map.D` in another table.
 // The cell stays open. Pointing again replaces the reference just written, until the text changes
-// otherwise. Anywhere else, a press ends the edit as before (`table.js`). F4 in such a cell turns
+// otherwise. Anywhere else, a press ends the edit as before (`cellbox.js`). F4 in such a cell turns
 // the `$` of the reference at the caret, as Excel's does.
 "use strict";
 
@@ -39,9 +39,10 @@ function ksmdPoint(ks) {
     return referencePlace(input.value.slice(0, from)) ? { from, to: input.selectionEnd } : null;
   }
 
-  // A table's name as a formula writes it: plain where it is `[a-z][a-z0-9_]*`, else in JSON
-  // quotes, as `write_table_name` in `ksmd/calc/formula.kspl` writes it.
-  const tableName = (name) => (/^[a-z][a-z0-9_]*$/.test(name) ? name : JSON.stringify(name));
+  // A table's name as a formula writes it, as `write_table_name` in `ksmd/calc/formula.kspl` does:
+  // plain where it is `[a-z][a-z0-9_]*`, else in quotes as formula text, with each `"` twice and
+  // each `\` as it is.
+  const tableName = (name) => (/^[a-z][a-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`);
 
   // A cell's reference, `B3`, or a range's, `A1:B3`, its upper left corner first; whole columns
   // are `B` or `A:B`. A reference into another table has that table's name before it, once for a

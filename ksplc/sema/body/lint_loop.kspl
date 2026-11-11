@@ -5,6 +5,7 @@
 //< or a name in the bound, is not reported.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `has_keyword`
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
@@ -295,11 +296,9 @@ priv fn method_may_write(c: Sema_ctx$@, access: Ast_node$@): Bool //<
         return true
     if member.def_node.kind_id == .k_struct_field
         return false
-    switch c.env.method_receiver_permission(member.def_node)
-    case .some(need)
-        return need.mut_ptr
-    case .none
+    need: = c.env.method_receiver_permission(member.def_node) catch
         return true
+    return need.mut_ptr
 
 priv fn reads_index_as_element(c: Sema_ctx$@, node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
     //< Whether every use of the index under `node` is `seq[index]` or `seq.get(index)`, read

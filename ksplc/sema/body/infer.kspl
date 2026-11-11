@@ -5,8 +5,10 @@
 //< checked. The declarations are registered before this, by `run` in `sema/decl/collect.kspl`.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `caller_loc_kind`, `is_generic_template`
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/lines" as base_lines
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/body/analyze" as sema_body_analyze
 import "ksplc/sema/body/coerce" as _sema_body_coerce
@@ -16,6 +18,7 @@ import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_free" as sema_body_lint_free
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/lint_written" as sema_body_lint_written
+import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/body/stmt" as sema_body_stmt
 import "ksplc/sema/decl/access" as sema_decl_access
@@ -39,7 +42,6 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List, Map }
-import "std/str" { Str_builder }
 
 // ==========================================
 // Which bodies a `Bodies.mentioning` analysis checks
@@ -425,8 +427,11 @@ impl Ast_node
         else
             c.check_param_type(r, t_id)
         r.check_param_default(c, t_id)
-        sym.type_id = t_id
-        r.type_id = t_id
+        // **A `$` parameter holds a copy, as a `$` local does**, so an array's elements follow the
+        // `$` (binding_value_type in `../decl/access.kspl`). Left at the written type, `$a: I32[3]`
+        // could not write `a[0]`, which the spec's 4.2.2 allows.
+        sym.type_id = c.binding_value_type(t_id, sym.flags.is_mut)
+        r.type_id = sym.type_id
         c.declare_symbol(p_name, sym, false)
         id_node: = r.find_child(.k_identifier)
         if id_node != null
@@ -450,6 +455,7 @@ impl Ast_node
         //< A body whose function returns nothing gets the `return` its writer left out.
         block.infer_stmts(c) catch
             return false
+        sema_body_literal.check_settled_literals(c, block)
         // A value that its `defer` frees, handed over all the same.
         sema_body_defer_decl.refuse_handover(c, block)
         // [W0109] A value made here and left unfreed on some way out; [H0303] its two-line free.
@@ -522,9 +528,9 @@ impl Ast_node
         if src.len == 0
             return
         starts: = c.line_starts_for(r.loc.file(), src)
-        start_line: = base_core.line_for_offset(starts, r.loc.offset)
+        start_line: = base_lines.line_for_offset(starts, r.loc.offset)
         end_offset: = r.find_subtree_end_offset()
-        end_line: = base_core.line_for_offset(starts, end_offset)
+        end_line: = base_lines.line_for_offset(starts, end_offset)
         line_count: = end_line - start_line + 1
         max_fn_lines: Sz = 300
         if line_count > max_fn_lines

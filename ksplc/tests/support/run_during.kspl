@@ -53,7 +53,7 @@ priv fn ast_entries(work: U8[], arena: Arena$@): Sz //< how many files the AST c
                 n += 1
     return n
 
-fn case_edit_during_build_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
+fn case_edit_during_build_rebuilds(work: U8[], arena: Arena$@): Void!run_case.Stop //<
     //< A file saved while its build runs is built again on the next run
     //< **The deps file must hold the digest of the bytes compiled** (`note_read` in
     //< `ksplc/base/cache.kspl`). One taken from the disk after the build is the new bytes', and
@@ -61,30 +61,26 @@ fn case_edit_during_build_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome
     //< **The edit waits until the build has read the import**, seen as its entry in the AST
     //< cache. A first script puts `std` there, so the build adds the script's entry, then the
     //< import's, then spends a while on `slow.kspl`. A time to wait would differ per machine.
-    if !run_case.write_script(work, "s.kspl", SLOW_SCRIPT_SRC, 1, arena)
-        return run_case.failed("cannot place the material")
+    run_case.write_script(work, "s.kspl", SLOW_SCRIPT_SRC, 1, arena)!
     io.write_file(fs.join(work, "slow.kspl", arena), slow_src(arena)) catch
-        return run_case.failed("cannot place the slow import")
+        throw run_case.failed("cannot place the slow import")
     warm: = fs.join(work, "w.kspl", arena)
     io.write_file(warm, STD_ONLY_SRC) catch
-        return run_case.failed("cannot place the first script")
-    warmed: = run_case.expect_out(run_case.run_script(warm, arena), "warm",
-        "the first script failed", arena)
-    if warmed.state != run_case.STATE_OK
-        return warmed
+        throw run_case.failed("cannot place the first script")
+    run_case.expect_out(run_case.run_script(warm, arena), "warm", "the first script failed", arena)!
     before: = ast_entries(work, arena)
     s: = fs.join(work, "s.kspl", arena)
     $child: =
         subproc.spawn_redirect(harness.ksplc_argv(U8[][]::{ "run", s }), "",
         fs.join(work, "first.out", arena), fs.join(work, "first.err", arena)) catch
-        return run_case.failed("the build cannot start")
+        throw run_case.failed("the build cannot start")
     for ast_entries(work, arena) < before + 2 && child.alive()
         sys.sleep_ms(5)
     if !child.alive()
-        return run_case.failed("the build ended before it was seen reading the import")
+        throw run_case.failed("the build ended before it was seen reading the import")
     io.write_file(fs.join(work, "helper.kspl", arena), run_case.helper_src(2, arena)) catch
         child.kill()
-        return run_case.failed("the import's target cannot be rewritten")
+        throw run_case.failed("the import's target cannot be rewritten")
     child.wait()
-    return run_case.expect_out(run_case.run_script(s, arena), "v=2 7",
-        "a file saved during the build was not built again", arena)
+    run_case.expect_out(run_case.run_script(s, arena), "v=2 7",
+        "a file saved during the build was not built again", arena)!

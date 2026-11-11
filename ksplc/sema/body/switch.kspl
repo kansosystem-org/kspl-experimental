@@ -4,6 +4,7 @@
 //< **A `switch` synthesized from `if v: =` is accepted only on an `Option`.**
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `was_parenthesized`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/expr" as sema_body_expr
@@ -19,7 +20,6 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List, Map }
-import "std/str"
 
 priv struct Switch_ctx
     target_id: I32
@@ -378,11 +378,7 @@ impl Ast_node
         //< C refuses the pair ("duplicate case value"), where LLVM silently takes the first.
         if mctx.is_enum
             return true
-        $v: I64 = 0
-        switch c.try_eval_constexpr_wide(r)
-        case .some(folded)
-            v = folded
-        case .none
+        v: = c.try_eval_constexpr_wide(r) catch
             c.err(r, "a 'case' value must be a compile-time constant. Compare with 'if' instead")
             return false
         earlier: = mctx.seen_values.get(v).unwrap_or(null)
@@ -393,7 +389,7 @@ impl Ast_node
         mctx.seen_values.set(v, r)
         return true
 
-    fn check_case_pattern_type(r: Ast_node$@, c: Sema_ctx$@, pat_id: I32, cond_id: I32): Bool
+    priv fn check_case_pattern_type(r: Ast_node$@, c: Sema_ctx$@, pat_id: I32, cond_id: I32): Bool
         if pat_id != cond_id && !sema_type_env.is_unknown(pat_id) &&
             !sema_type_env.is_unknown(cond_id)
             c.report_type_mismatch(r, cond_id, pat_id)
@@ -410,11 +406,9 @@ impl Ast_node
                 continue
             $pat: = child
             if child.kind_id == .k_case_pattern
-                switch child.first_expr()
-                case .some(e)
-                    pat = e
-                case .none
+                e: = child.first_expr() catch
                     continue
+                pat = e
             if pat.kind_id == .k_bool
                 seen_true = seen_true || pat.text.equals("true")
                 seen_false = seen_false || pat.text.equals("false")

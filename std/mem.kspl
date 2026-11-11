@@ -25,6 +25,39 @@ pub fn new<|T|>( //< heap memory for one value, holding that value
     init_at(ptr, value)
     return ptr
 
+// ==========================================
+// The heap guard: an OS's critical section around the heap's own work
+// ==========================================
+// **An RTOS switches tasks from an interrupt**, and a task switched out inside `alloc` holds the
+// heap. A task of higher priority that then allocates finds it held: on the freestanding heap it
+// spins until fh_lock gives up, and in libc's `malloc` it can wait for ever. The guard closes that
+// window. The heap calls the OS's `enter` before it touches its list, and `leave` after.
+
+pub typedef Heap_enter = fn(): Sz //< begins the OS's critical section, returning what to restore
+pub typedef Heap_leave = fn(state: Sz): Void //< ends it, given what the matching `enter` returned
+
+priv $heap_enter: Heap_enter = Heap_enter::null
+priv $heap_leave: Heap_leave = Heap_leave::null
+
+pub fn set_heap_guard( //< makes `alloc` and `dealloc` do their work inside an OS's critical section
+    //< An RTOS calls it once, before its first task runs (ksos's `start_scheduler`). Then every
+    //< std type that allocates is safe from a task another task can preempt ("An RTOS hands the
+    //< heap its critical section" in `std/docs/DESIGN-core.md`).
+    //< Caution: **`enter` must stop every switch to another task on this core**, interrupts
+    //< included, and nest: `leave` restores the state `enter` found, as ksos's `irq_save` does.
+    enter: Heap_enter, //< null removes the guard; then `leave` must be null too
+    leave: Heap_leave,
+)
+    heap_enter = enter
+    heap_leave = leave
+
+priv fn guard_enter(): Sz //< enters the guard where one is set; returns what guard_leave takes
+    return 0 if heap_enter == null else heap_enter()
+
+priv fn guard_leave(state: Sz) //< leaves the guard guard_enter entered
+    if heap_leave != null
+        heap_leave(state)
+
 // The two more atomic operations the hosted counters need, declared as `std/thread.kspl` does.
 // Freestanding never calls them: an Armv6-M core has none (`ksplc/gen/runtime/core.c`).
 #cfg(!freestanding)
@@ -69,7 +102,9 @@ pub fn alloc( //< allocates raw bytes from the global heap
     // a few bytes, and the caller would write `size` of them.
     if alloc_size < size
         panic("alloc size is too large to add the header")
+    guard: = guard_enter()
     ptr: = libc.malloc(alloc_size)
+    guard_leave(guard)
     if ptr == null
         panic("Out of memory")
     size_ptr: = Sz$@::ptr
@@ -120,7 +155,9 @@ pub fn dealloc( //< returns bytes to the global heap
         size_ptr: = Sz$@::real_ptr
 
         kspl_atomic_add(heap_current@, -size_ptr$)
+        guard: = guard_enter()
         libc.free(Void$@::real_ptr)
+        guard_leave(guard)
 // Before initialization it panics, like alloc().
 #cfg(freestanding)
 pub fn dealloc( //< returns bytes to the free-list heap
@@ -163,9 +200,10 @@ priv struct _Fh_state
     total: Sz //< The total size of the buffer passed to init_freestanding_heap (never changes)
     used: Sz //< The bytes currently allocated, after rounding
     peak_used: Sz //< the highest value used has reached
+    guard: Sz //< what the heap guard's `enter` returned, kept by the lock's holder for fh_unlock
 #cfg(freestanding)
 priv $_fh: _Fh_state = ::{ .free_list = null, .lock = 0, .ready = false, .base = null, .total = 0,
-    .used = 0, .peak_used = 0 }
+    .used = 0, .peak_used = 0, .guard = 0 }
 
 // The release of the freestanding heap's lock, declared as `std/thread.kspl` does.
 #cfg(freestanding)
@@ -173,23 +211,31 @@ priv $_fh: _Fh_state = ::{ .free_list = null, .lock = 0, .ready = false, .base =
 
 #cfg(freestanding)
 priv const FH_SPIN_LIMIT: Sz = 1 << 20 //< how many times `fh_lock` tries before it stops
-    //< **On one core, a lock that stays taken this long is never let go.** An interrupt handler
-    //< that allocates while the code it interrupted holds the lock spins with no end: that code
-    //< cannot run again until the handler returns. The limit turns that hang into a panic that
-    //< says why. Another core holds the lock only for one walk of the free list, far shorter.
+    //< **On one core, a lock that stays taken this long is never let go.** With no heap guard set,
+    //< an interrupt handler or a preempting task can allocate while the code it cut into holds the
+    //< lock. It spins with no end: that code cannot run again until it returns. The limit turns
+    //< that hang into a panic that says why. Another core holds the lock only for one walk of the
+    //< free list, far shorter. With a guard set, nothing on this core cuts into the lock's holder.
 
 #cfg(freestanding)
 priv fn fh_lock()
+    // Caution: **Enter the guard before the lock, and leave it after the release.** Taken the
+    // other way, a switch could fall between the two, with the lock held.
+    guard: = guard_enter()
     $tries: Sz = 0
     for kspl_atomic_cas(_fh.lock@, 0, 1) != 0
         tries += 1
         if tries >= FH_SPIN_LIMIT
-            panic("mem: heap locked; alloc from an interrupt handler?")
+            panic("mem: heap locked; alloc from an interrupt handler, or from a preempting task \
+                with no heap guard set (mem.set_heap_guard)?")
+    _fh.guard = guard
 #cfg(freestanding)
 priv fn fh_unlock()
+    guard: = _fh.guard
     // Caution: **Not a plain store.** It is the release: the writes made under the lock must be
     // seen by the next core to take it, before it sees the lock free.
     kspl_atomic_store(_fh.lock@, 0)
+    guard_leave(guard)
 // Rounds up to a multiple of sizeof(Fh_block), which meets the header's own alignment.
 #cfg(freestanding)
 priv fn fh_round_up(size: Sz): Sz
@@ -437,8 +483,9 @@ pub fn move( //< copies a range of bytes that can overlap the destination
         else
             for i in Range.asc(bytes)
                 (d + i)$ = (s + i)$
-// std/chars and std/str call libc.memcmp, which freestanding lacks. `extern` emits this under
-// the C name "memcmp", which satisfies libc.kspl's extern declaration without changing the callers.
+// std/chars and std/str call libc.memcmp and libc.memchr, which freestanding lacks. `extern`
+// emits each under its C name. That satisfies libc.kspl's extern declaration without changing
+// the callers.
 #cfg(freestanding)
 pub extern fn memcmp( //< C's `memcmp`, written here so freestanding needs no libc
     a: Void$@, //< one range
@@ -454,6 +501,18 @@ pub extern fn memcmp( //< C's `memcmp`, written here so freestanding needs no li
             // Widened before subtracting: at U8's width `1 - 2` is 255, a "greater" answer.
             return I32::da - I32::db
     return 0
+#cfg(freestanding)
+pub extern fn memchr( //< C's `memchr`, written here so freestanding needs no libc
+    buf: Void$@, //< the bytes to search
+    c: I32, //< the byte to find; only its low 8 bits count, as in C
+    n: Sz, //< how many bytes to search
+): Void$@ //< where the byte first appears, or null
+    p: = U8$@::buf
+    want: = U8::(c & 0xFF)
+    for i in Range.asc(n)
+        if (p + i)$ == want
+            return Void$@::(p + i)
+    return null
 // clang emits AAPCS runtime calls (__aeabi_memclr4 and similar) when it turns a struct's
 // zero-initialization or copy into a 4/8-byte aligned call. They are implemented in
 // ksplc/gen/runtime/freestanding.c (the C preamble always embedded into every freestanding

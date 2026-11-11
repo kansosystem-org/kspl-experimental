@@ -78,6 +78,14 @@ fn write_decls($w: Writer): Writer //<
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
+// Caution: **Keep floating-point contraction off.** clang may otherwise join `a * b + c` into one
+// fused multiply-add that rounds once, and only at some levels or on some targets: 0.1 * 10.0 +
+// -1.0 gave 0.0 at -O0 and 5.55e-17 at -O2. The LLVM backend emits no fused operation. The pragma
+// stands in the C, so it holds for every build of it, a user's own included. gcc warns on it, and
+// its ISO modes (-std=c99, which every ksplc build passes) contract nothing.
+#if defined(__clang__)
+#pragma STDC FP_CONTRACT OFF
+#endif
 """)
     if !base_core.config.is_freestanding
         w = w

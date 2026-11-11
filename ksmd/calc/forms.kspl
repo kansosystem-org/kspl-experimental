@@ -12,12 +12,6 @@ fn parser_row(ctx: Void$@, piece: Sz): Value //< `Row_fn` for the parser reading
     p: = Parser$@::ctx
     return p.row_of(piece)
 
-priv fn has_error(xs: List<|Value|>@): Bool //< whether an error was taken
-    for i in Range.asc(xs.len)
-        if xs.get(i).kind == .error
-            return true
-    return false
-
 enum Fold_kind //< what `sum_if`, `count_if` or `average_if` makes of its values
     sum
     count
@@ -150,11 +144,15 @@ impl Parser
         p.expect(.comma)
         mark: = p.c.scratch.save()
         $xs: = List<|Value|>(p.c.scratch)
+        // **Whether an error was taken is kept as it is taken**, so no row reads `xs` again: a
+        // look over `xs` on each row would make one formula's work grow with its rows squared.
+        $errored: = false
         $area: = empty_area()
         if found: = p.area_of(values)
             area = found
         else
             xs.push(Value.because(.reference, .no_cell, "", -1))
+            errored = true
         outer: = p.rows
         p.rows = Row_reading::{ .inside = true, .count = area.rows.high - area.rows.low + 1,
             .row = 0, .ranged = false, .shaped = true }
@@ -164,14 +162,15 @@ impl Parser
         p.skipping += 1
         _shape: = p.expression()
         p.skipping -= 1
-        if !has_error(xs@) && !(p.rows.ranged && p.rows.shaped)
+        if !errored && !(p.rows.ranged && p.rows.shaped)
             why: = Why.condition_shape if p.rows.ranged else Why.condition_no_range
             xs.push(Value.because(.shape, why, "", -1))
+            errored = true
         if p.skipping == 0
             for row in Range.asc(p.rows.count)
                 // **The first error ends it**: the rows below are not read, as their values
                 // could not change the result.
-                if has_error(xs@) || p.wrong || p.c.deferring
+                if errored || p.wrong || p.c.deferring
                     break
                 p.cur = cur
                 p.tok = tok
@@ -179,8 +178,9 @@ impl Parser
                 holds: = p.condition(p.expression())
                 if holds.kind == .error
                     xs.push(holds)
+                    errored = true
                 else if holds.boolean
-                    p.take_row(xs@, area, area.rows.low + row)
+                    errored = p.take_row(xs@, area, area.rows.low + row)
         p.rows = outer
         v: = kind.fold(xs.slice())
         p.c.scratch.restore(mark)
@@ -203,12 +203,17 @@ impl Parser
             .rows =
             ordered(at.of(u, piece.from.row), at.of(u, piece.to.row)), .columns = columns })
 
-    priv fn take_row(p: Self$@, xs: List<|Value|>$@, area: Area, row: Sz) //<
+    priv fn take_row(p: Self$@, xs: List<|Value|>$@, area: Area, row: Sz): Bool //<
         //< The numbers, dates and errors of the area's cells on one row, from the left
+        //< The result is whether one of them is an error.
+        $errored: = false
         for column in Range(area.columns.low, area.columns.high + 1, 1)
             v: = p.read(Spot::{ .table = area.table, .row = row, .column = column })
             if v.kind == .number || v.kind == .date || v.kind == .error
                 xs.push(v)
+                p.c.results.looks += 1
+                errored = errored || v.kind == .error
+        return errored
 
     fn row_of(p: Self$@, piece: Sz): Value //<
         //< A range in a condition, by its piece: its cell on the row read now

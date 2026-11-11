@@ -44,6 +44,16 @@ priv fn is_snake_case(name: U8[]): Bool //<
             return false
     return true
 
+priv fn is_upper_snake_case(name: U8[]): Bool //<
+    //< Whether [I0502] stays silent on name as a local constant, the other position written bare
+    //< The headers spell most of their constants so (`M_E`, `SIZE_MAX`, `SIGINT`).
+    if name.len == 0 || !name[0].is_upper()
+        return false
+    for i in Range.asc(name.len)
+        if !(name[i].is_upper() || name[i].is_digit() || name[i] == '_')
+            return false
+    return true
+
 priv fn keywords_of(arena: Arena$@): Map<|U8[], Bool|>$@ //<
     //< It collects the reserved words from `ksplc info keywords`'s output (one per line)
     out: = arena.create(Map<|U8[], Bool|>(arena))
@@ -71,11 +81,15 @@ priv fn object_macro_name(line: U8[]): U8[] //<
         return ""
     return rest.sub(0, i)
 
-priv fn program_using(names: List<|U8[]|>, arena: Arena$@): U8[] //<
+priv fn program_using(names: List<|U8[]|>, consts: List<|U8[]|>, arena: Arena$@): U8[] //<
     //< It builds one KSPL program that uses each of names wherever a bare name is written
-    //< Caution: **Put them into one program.** One per name means dozens of builds; in one, the C
-    //< compiler's error still names the name that failed.
+    //< Each of consts is a local constant. Caution: **Put them into one program.** One per name
+    //< means dozens of builds; in one, the C compiler's error still names the name that failed.
     b: = arena.text()
+    b.s("priv fn local_consts(): I32\n  $total: I32 = 0\n")
+    for n in consts
+        b.s("  const ").s(n).s(": I32 = 1\n  total += ").s(n).s("\n")
+    b.s("  return total\n\n")
     b.s("struct Holder\n")
     for n in names
         b.s("  ").s(n).s(": I32\n")
@@ -93,7 +107,7 @@ priv fn program_using(names: List<|U8[]|>, arena: Arena$@): U8[] //<
     for n in names
         b.s("  total += take_").s(n).s("(h.").s(n).s(") + held.").s(n).s(" + local_").s(n)
             .s("(1)\n")
-    b.s("  return 0 if total > 0 else 1\n")
+    b.s("  total += local_consts()\n  return 0 if total > 0 else 1\n")
     return b.take()
 
 fn main(): I32
@@ -121,29 +135,37 @@ fn main(): I32
             .s(probe.out).take())
     keywords: = keywords_of(arena)
     $names: = List<|U8[]|>(arena)
+    $consts: = List<|U8[]|>(arena)
     $skipped: Sz = 0
     for line in probe.out.lines(arena)
         name: = object_macro_name(line)
         if name.len == 0
             continue
-        // Not snake_case: the naming check rejects it, so it is out of scope.
-        if !is_snake_case(name) || !is_kspl_identifier(name, keywords)
+        // Neither spelling: the naming check rejects it, so it is out of scope.
+        if !is_kspl_identifier(name, keywords)
             skipped += 1
-            continue
-        names.push(name)
+        else if is_snake_case(name)
+            names.push(name)
+        else if is_upper_snake_case(name)
+            consts.push(name)
+        else
+            skipped += 1
     verdict.check("the counting up is not empty (cc's output is being read)",
-        names.len > 0 || skipped > 0, probe.out)
-    if names.len == 0
+        names.len > 0 || consts.len > 0 || skipped > 0, probe.out)
+    verdict.check("the constants' spelling is counted up too (`SIZE_MAX` from <stdint.h>)",
+        consts.len > 0, probe.out)
+    if names.len == 0 && consts.len == 0
         return harness.finish()
 
     src: = fs.join(work, "decl_macro_names.kspl", arena)
-    body: = program_using(names, arena)
+    body: = program_using(names, consts, arena)
     io.write_file(src, body) catch
         return harness.fatal("cannot write the material")
     b: = harness_build.build_and_run(src, work, "decl_macro_names", U8[][]::{})
     why: = arena.text()
-    why.s("the material using the \{names.len\} counted up at every position does not build.\n")
-        .s("Caution: Add the name the C compiler's error named to the `#undef` in ")
+    why
+        .s("the material using the \{names.len + consts.len\} counted up at every position does not \
+            build.\n").s("Caution: Add the name the C compiler's error named to the `#undef` in ")
         .s("`ksplc/gen/c/ctx.kspl`,\nor if it cannot be erased, to `is_preamble_macro` in ")
         .s("`ksplc/base/c_name.kspl`.\n").s(b.out)
     note: = why.take()

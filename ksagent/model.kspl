@@ -3,6 +3,7 @@
 //< with `"tools"`, and `"stream": true` (`Exchange`). **A reply that comes whole is read too**,
 //< for a server that does not stream. Only plain http, and a reply chunked or with its length.
 //< Why is "The model server" in `ksagent/docs/DESIGN-agent.md`.
+import "ksagent/defaults"
 import "ksagent/events" { Event_reader }
 import "std/chars"
 import "std/ds" { List }
@@ -16,10 +17,6 @@ import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/sys"
 
-const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where `make model-server` starts one
-const API_KEY_ENV: U8[] = "KSAGENT_API_KEY" //< the environment variable an API key comes from
-    //< Caution: **Never an option.** The command line shows in the process list, to anyone on the
-    //< machine.
 priv const CHAT_PATH: U8[] = "/v1/chat/completions"
 priv const MAX_REPLY_BYTES: Sz = 8 * 1024 * 1024 //< a larger reply is refused, not read
 priv const SEND_WAIT_MS: I32 = 30000 //< how long sending one request may take
@@ -68,7 +65,7 @@ fn parse_url(url: U8[], model: U8[], timeout_ms: I32, arena: Arena$@): Server!U8
         throw "the model URL must name a host: a name or an IPv4 address"
     if port < 1I64 || port > 65535I64
         throw "the port in the model URL is out of range (1-65535)"
-    key: = sys.get_env(API_KEY_ENV).unwrap_or("")
+    key: = sys.get_env(defaults.API_KEY_ENV).unwrap_or("")
     return Server::{ .host = arena.dup_str(host), .port = I32::port,
         .base = arena.dup_str(base), .model = model, .timeout_ms = timeout_ms, .api_key = key,
         .stream = true }

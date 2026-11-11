@@ -28,7 +28,7 @@ $(EXAMPLES):
 	"$(KSPLC)" build $(BLAS_FLAGS) examples/$@/main.kspl "$(OUT)/$@.exe"
 
 # The unit tests alone. **They reach all that `BLAS=1` changes** (the `#cfg(blas)` blocks of
-# `tensor.kspl` and `grad.kspl`), so the root's `make test-blas` runs this, not the examples' builds.
+# `tensor.kspl`), so the root's `make test-blas` runs this, not the examples' builds.
 test-unit:
 	"$(KSPLC)" run $(BLAS_FLAGS) tests/main.kspl
 

@@ -150,7 +150,7 @@
 | `2026-10-23` | A date |
 | `2026/10/23`, `2026/1/5`, `11/6` | A date, while Edit ▸ AutoCorrect ▸ Turn typed dates into dates is on. `11/6` falls in the year the document was opened. The file keeps `2026-11-06` |
 | `=B1*C1` | A formula ("Formulas" below) |
-| `"11/6"`, in quotes | Text, whatever it looks like |
+| `"11/6"`, in quotes | Text, whatever it looks like. Inside the quotes every character is itself, `\` included, and a quote is written twice, as in a formula: `"say ""hi"""`. The file still writes the text in JSON's quotes |
 | `https://example.com` | Text that links to that address, while Edit ▸ AutoCorrect ▸ Turn typed web addresses into links is on |
 | Anything else, `1,234.5`, `0xFF` and `true` among it | Text. A number in hexadecimal or binary is written in a formula: `=0xFF` |
 

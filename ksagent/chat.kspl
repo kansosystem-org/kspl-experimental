@@ -4,7 +4,7 @@
 //< each line. A question and its answer share the id the page gave the question. The model's text
 //< is kept as it wrote it. Why is "The chat files" in `ksagent/docs/DESIGN-agent.md`.
 import "ksagent/answer" + { Answer, Lang, Turn }
-import "ksagent/office/index" + { Index, Keyed }
+import "ksagent/sorted_names" + { Index, Keyed }
 import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
@@ -84,7 +84,7 @@ priv struct Line //< one record of a conversation's file, read on its own
     why: U8[] //< why it cannot be read; empty where it can
 
 priv struct Parsed //< every record of a file, and each id's slot
-    //< **An id is found by halving** (`ksagent/office/index.kspl`), not by a walk per line, so a
+    //< **An id is found by halving** (`ksagent/sorted_names.kspl`), not by a walk per line, so a
     //< file of many questions is read in time in step with its length. A slot is the place of the
     //< first line that names the id, so what is kept by slot is kept per id.
     lines: List<|Line|>
@@ -107,7 +107,7 @@ priv fn parsed(text: U8[], arena: Arena$@): Parsed //< each line's record, and t
         if r.why.len == 0
             keys.push(Keyed::{ .key = r.id, .pos = lines.len })
         lines.push(r)
-    return Parsed::{ .lines = lines, .slots = index.sorted(keys@, arena) }
+    return Parsed::{ .lines = lines, .slots = sorted_names.sorted(keys@, arena) }
 
 priv fn line_of(n: Sz, text: U8[], arena: Arena$@): Line //< one line's record, read alone
     doc: = json.parse(text, arena) catch
@@ -154,7 +154,7 @@ fn read_chat(text: U8[], arena: Arena$@): Recorded!U8[] //<
                         .answer = r.val.get("text").as_str().unwrap_or("") })
         if why.len > 0
             throw arena.text().s("line \{r.n\}: ").s(why).take()
-    return Recorded::{ .answered = index.sorted(answers@, arena), .turns = turns }
+    return Recorded::{ .answered = sorted_names.sorted(answers@, arena), .turns = turns }
 
 priv fn take_record(r: Line@, at: Sz, question_at: List<|Sz|>$@, answer_at: List<|Sz|>$@, slot: Sz):
     U8[] //<

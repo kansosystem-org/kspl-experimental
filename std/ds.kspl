@@ -3,6 +3,7 @@
 //< all at once when that arena is reset.
 //< **`ds` never imports `std/io`** (the reason is at `grow_cap`).
 import "std/chars" as _chars // reaches the single-character tests and slicing
+import "std/libc" // `memcmp`, for comparing two strings
 import "std/mem" + { Arena, dealloc }
 
 priv fn grow_cap(cap: Sz, initial: Sz): Sz //<
@@ -114,6 +115,24 @@ impl Sz: Hashable<|Sz|> //< so an `Sz` can be a `Map`'s key
         return spread_u64(U64::r$)
     pub fn equals(r: Self@, other: Sz): Bool //< whether the two are the same number
         return r$ == other
+impl U8[]: Hashable<|U8[]|> //< so a string can be a `Map`'s key
+    //< `Eq` (what `==` desugars to) is deliberately not implemented. `equals` is an O(N) comparison
+    //< of contents. Written as `==`, it would look the same as a pointer comparison.
+    pub fn hash(r: U8[]): U32 //< a hash of the contents that spreads keys over the buckets
+        $h: = U32::2166136261
+        for i in Range.asc(r.len)
+            h = h ^ (r.ptr + i)$
+            h = h * (U32::16777619)
+        // FNV-1a alone mixes the low bits poorly (keys with a shared prefix share a bucket).
+        return fmix32(h)
+
+    pub fn equals(r: U8[], b: U8[]): Bool //<
+        //< whether the bytes are the same; deliberately not `==`
+        if r.len != b.len
+            return false
+        if r.len == 0 || r.ptr == b.ptr
+            return true
+        return libc.memcmp(Void$@::r.ptr, Void$@::b.ptr, r.len) == 0
 // ==========================================
 // List<|T|> (the generic version)
 // ==========================================
@@ -395,7 +414,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
             // lost.
             if !entry.is_active && !entry.is_tombstone
                 return .none
-            if entry.is_active && entry.key.equals(key)
+            if entry.is_active && entry.hash == h && entry.key.equals(key)
                 return .some(entry)
             idx = (idx + 1) & (r.cap - 1)
             if idx == start_idx
@@ -493,7 +512,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         for
             entry: = r.entries + idx
             if entry.is_active
-                if entry.key.equals(key)
+                if entry.hash == h && entry.key.equals(key)
                     entry.value = value
                     entry.hash = h
                     return

@@ -173,6 +173,70 @@ fn main(): I32
     e: = N::top
     io.out().s("must not get here: \{e\}\n").flush()
     return 0
+// ==== case enum_cast_past_unbroken_run
+//< Tags that leave no gap are checked as a range: both ends pass, and one past the top stops
+//< The run starts at 3, so a check that assumed a start at 0 lets 0 to 2 through.
+// EXPECT: has no tag 6
+// EXPECT: at enum_cast_past_unbroken_run:
+// EXPECT: ends: 3 5
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+priv enum R
+    three = 3
+    four
+    five
+
+fn main(): I32
+    n: = I32::sys.args().len // 1
+    low: = R::(n + 2)
+    high: = R::(n + 4)
+    io.out().s("ends: \{I32::low\} \{I32::high\}\n").flush()
+    e: = R::(n + 5)
+    io.out().s("must not get here: \{I32::e\}\n").flush()
+    return 0
+// ==== case enum_cast_below_unbroken_run
+//< A value one below a run of tags that starts below zero stops
+// EXPECT: has no tag -3
+// EXPECT: at enum_cast_below_unbroken_run:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+priv enum R
+    m2 = -2
+    m1
+    z
+    p1
+
+fn main(): I32
+    n: = I32::sys.args().len // 1
+    e: = R::(n - 4)
+    io.out().s("must not get here: \{I32::e\}\n").flush()
+    return 0
+// ==== case enum_cast_into_gap
+//< A value that falls between two tags stops, though it lies between the lowest and the highest
+//< The tags have a gap, so the check compares against each one.
+// EXPECT: has no tag 2
+// EXPECT: at enum_cast_into_gap:
+// EXPECT: listed: 44
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+priv enum G
+    a
+    b
+    c = 44
+
+fn main(): I32
+    n: = I32::sys.args().len // 1
+    listed: = G::(n + 43)
+    io.out().s("listed: \{I32::listed\}\n").flush()
+    e: = G::(n + 1)
+    io.out().s("must not get here: \{I32::e\}\n").flush()
+    return 0
 // ==== case index_place_write_out_of_bounds
 //< Even an index that returns a place and **writes** must stop when out of range
 //< A type of its own (`Index_place.at`) handles the index, and the stop names the user's line.

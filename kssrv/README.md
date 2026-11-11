@@ -61,7 +61,7 @@ To take the passphrase off a key, run `openssl pkey -in locked.pem -out key.pem`
 | File | What it holds |
 | :-- | :-- |
 | [`kssrv/main.kspl`](main.kspl) | The command line and the accept loop (the loop that takes new connections and serves the open ones). Also the one logger that a run writes through |
-| [`kssrv/static.kspl`](static.kspl) | Static serving: which file a request names under the root, and the answer that returns it |
+| [`kssrv/static.kspl`](static.kspl) | Every request's first step, which sends `/api/` to `api.kspl`, and static serving: which file a request names under the root, and the answer that returns it |
 | [`kssrv/conn.kspl`](conn.kspl) | One connection's state, and how a response is queued |
 | [`kssrv/api.kspl`](api.kspl) | The endpoints under `/api/` and their routing table |
 | [`kssrv/https.kspl`](https.kspl) | The checks on the certificate and key at start, and each connection's bytes through TLS |

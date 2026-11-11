@@ -34,7 +34,6 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
-import "std/str"
 
 impl Ast_node
     fn infer_enum_payload_args(r: Self@, c: Sema_ctx$@, variant_def: sema_type_def.Enum_variant@):
@@ -704,22 +703,14 @@ priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I
     // Caution: **Look the enum up past an alias and the immutable mark.** An array literal's
     // element expects `Kind immut`, which names no enum, and `.small` there was refused.
     enum_name: = c.env.get_str(c.env.get_clean_real_type(expected_id))
-    $enum_def: sema_type_def.Enum_def$@ = null
-    switch c.env.get_enum_def(enum_name)
-    case .some(d)
-        enum_def = d
-    case .none
+    enum_def: = c.env.get_enum_def(enum_name) catch
         refuse_variant_without_enum(c, node, expected_id)
         return expected_id
 
     variant_node: = node.get_implicit_enum_variant()
     node.ice_assert(variant_node != null, "implicit_enum is missing variant node")
     variant_name: = variant_node.text
-    $variant_def: sema_type_def.Enum_variant$@ = null
-    switch enum_def.get_variant(variant_name)
-    case .some(d)
-        variant_def = d
-    case .none
+    variant_def: = enum_def.get_variant(variant_name) catch
         c.clear_scratch().s("enum '\{enum_name\}' has no variant named '\{variant_name\}'")
         c.err(node, c.scratch.slice())
         return expected_id

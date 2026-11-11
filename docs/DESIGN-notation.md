@@ -159,7 +159,7 @@ Write `io.out()` when `out` alone would be unclear, and plain `Arena` when the n
 
 **Being one word and being spelled `for` are separate decisions.** The first follows from "every repetition serves the same purpose" (`docs/SPEC-programming-language.md`, 7.2), as Go's single `for` does.
 
-**One word costs the checks nothing.** Whether a loop ends is read from its shape: a `for` with no condition that no `break` leaves never ends (`docs/SPEC-programming-language.md`, 7.2). The missing-return check and the unreachable-code warning read one judgement (`is_endless_loop` in `ksplc/base/ast_ext.kspl`), so they cannot disagree.
+**One word costs the checks nothing.** Whether a loop ends is read from its shape: a `for` with no condition that no `break` leaves never ends (`docs/SPEC-programming-language.md`, 7.2). The missing-return check and the unreachable-code warning read one judgement (`is_endless_loop` in `ksplc/base/ast_place.kspl`), so they cannot disagree.
 
 * **A constant `true` is a condition.** `for true` gets a warning, whose fix is the bare `for`.
 * **The shape spares the writer a dead `return`** after an endless loop.

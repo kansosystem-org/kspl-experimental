@@ -9,6 +9,7 @@
 // ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_generic_template`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
@@ -17,7 +18,6 @@ import "ksplc/sema/session/state" { Alias_info, Import_hit, Import_symbol_info }
 import "ksplc/sema/type/scope" as sema_type_scope
 import "std/chars" // testing and slicing single characters
 import "std/ds" { List, Map }
-import "std/str"
 
 priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
     //< A kind with no name (an impl, an extern block and so on) returns empty.
@@ -130,7 +130,7 @@ impl Sema_ctx
         //< operation would change it too).
         return r.aliases.files.get(r.import_key(file, ali)).unwrap_or(null)
 
-    fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@? //<
+    priv fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@? //<
         //< Looks up the alias information keyed by "file::ali", setting the used flag if found
         //< It serves get_file_alias and get_file_alias_target.
         entry: = r.peek_file_alias(file, ali)
@@ -191,7 +191,8 @@ impl Sema_ctx
     fn get_file_alias(r: Self$@, file: U8[], ali: U8[]): Bool
         return r.find_file_alias(file, ali).is_some()
 
-    fn add_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[], decl_node: Ast_node$@)
+    priv fn add_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[],
+        decl_node: Ast_node$@)
         arena_key: = base_core.arena.dup_str(r.import_key(file, ali))
         arena_target: = base_core.arena.dup_str(target_path)
         info: = Alias_info(arena_target, decl_node)
@@ -205,7 +206,7 @@ impl Sema_ctx
         arena_key: = base_core.arena.dup_str(r.import_key(file, ali))
         r.aliases.withheld.set(arena_key, base_core.arena.dup_str(path))
 
-    fn add_implicit_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[]) //<
+    priv fn add_implicit_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[]) //<
         //< Registers `std/lang`'s import alias in file as an import line nobody wrote
         //< So a file declaring the same name can still write `lang.Ref_counted`.
         //< Caution: **If that name is already taken, do nothing.** A written import line wins. Look
@@ -220,7 +221,7 @@ impl Sema_ctx
         //< Caution: the reason not to reuse `find_import_symbol` is at peek_file_alias.
         return r.import_symbols.files.get(r.import_key(file, local_name)).unwrap_or(null)
 
-    fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@? //<
+    priv fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@? //<
         //< Looks up the selective-import information keyed by "file::local_name"
         //< If found, it sets the used flag and returns it.
         entry: = r.peek_import_symbol(file, local_name)
@@ -271,11 +272,12 @@ impl Sema_ctx
         entry: = r.peek_import_symbol(file, local_name)
         return entry != null && entry.decl_node != null
 
-    fn add_implicit_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[], taken: Bool) //<
-        //< Registers `std/lang`'s names in file as a selective import nobody wrote
-        //< **If that name is already taken, do nothing** (an implicit name always loses).
-        //< **decl_node is null**: with no written line, neither the unused lint ([I0401]) nor the
-        //< selector's existence check may apply to it.
+    priv fn add_implicit_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[],
+        taken: Bool) //<
+            //< Registers `std/lang`'s names in file as a selective import nobody wrote
+            //< **If that name is already taken, do nothing** (an implicit name always loses).
+            //< **decl_node is null**: with no written line, neither the unused lint ([I0401]) nor
+            //< the selector's existence check may apply to it.
         if taken || r.peek_import_symbol(file, name) != null
             return
         arena_key: = base_core.arena.dup_str(r.import_key(file, name))
@@ -285,7 +287,7 @@ impl Sema_ctx
             .set(arena_key, Import_symbol_info(arena_target, arena_name, null))
         r.drop_import_reach()
 
-    fn add_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[],
+    priv fn add_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[],
         decl_node: Ast_node$@) //<
             //< Registers one selector of `import "path" { A, B };`.
             //< A name already used in the file is an ordinary redefinition error (no

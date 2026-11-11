@@ -567,6 +567,29 @@ priv fn f(a: I32 = 1 + 1): I32
 
 fn main(): I32
   return f()
+// ==== case param_default_negative_shapes
+//< A minus counts only directly before a number literal; elsewhere the default is an expression
+//< A negative number is one value (`-1`), checked against the type as one: `U8 = -1` is out of
+//< range. `-x` and `- -1` compute, as `1 + 1` does.
+// EXPECT: param_default_negative_shapes.kspl:9:20: error: a parameter default must be a literal
+// EXPECT: param_default_negative_shapes.kspl:12:20: error: a parameter default must be a literal
+// EXPECT: param_default_negative_shapes.kspl:15:20: error: literal '-1' is out of range for type 'U8'
+// EXPECT: Finished with 3 error(s)
+priv const X: I32 = 1
+priv fn f(a: I32 = -X): I32
+  return a
+
+priv fn g(a: I32 = - -1): I32
+  return a
+
+priv fn h(a: U8 = -1): U8
+  return a
+
+priv fn ok(a: I32 = -1, b: F64 = -0.5): F64
+  return F64::a + b
+
+fn main(): I32
+  return f(1) + g(1) + I32::h(1) + I32::ok()
 // ==== case param_default_calls_itself
 //< A default that calls its own function, or two whose defaults call each other, is refused once
 //< The refused default is not copied into a call. Copied, `f()` in `f`'s own default filled

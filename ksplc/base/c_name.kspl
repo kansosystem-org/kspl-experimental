@@ -9,6 +9,7 @@
 //< The LLVM backend renames a local to `%v_<name>_<serial>`, so it is unaffected.
 import "ksplc/base/core" as base_core
 import "std/chars" // `is_upper`
+import "std/ds"
 import "std/str" { Str_builder }
 
 const MADE_NAME_MARK: U8[] = "_%" //<
@@ -69,7 +70,7 @@ impl U8[]
     fn is_made_temp(r: U8[]): Bool //< whether it names one of Lower's temporaries
         return r.is_made_name() && r.made_stem().starts_with(MADE_TEMP_STEM)
 
-    fn is_c_keyword(r: U8[]): Bool //< whether it is a C99 reserved word
+    priv fn is_c_keyword(r: U8[]): Bool //< whether it is a C99 reserved word
         //< **It is allowed as a KSPL identifier** (only the generated C escapes it).
         //< Caution: **Do not leave out a single word.** The generated C is compiled with
         //< `-std=c99`. A missing word is emitted under its plain name. It then becomes a C compiler
@@ -92,12 +93,28 @@ impl U8[]
         //< Caution: **Do not merge it into `is_c_keyword`** (that is the standard's list; a gap
         //< could no longer be spotted). **Add each new one to
         //< `ksplc/tests/c_keyword_names.kspl`.** **It holds the names `#undef` cannot remove**
-        //< (`bool`, `NULL` / `EOF` / `errno`, the `std*` streams, and `far` / `near` / `pascal`).
+        //< (`bool`, `errno`, the `std*` streams, and `far` / `near` / `pascal`) that hold a
+        //< lowercase letter. `NULL` and `EOF` match `is_macro_case` too, and stay listed for
+        //< Windows's headers, where they are the ones named.
         return r.equals("NULL") || r.equals("EOF") || r.equals("errno") || r.equals("far") ||
             r.equals("near") || r.equals("pascal") || r.equals("bool") || r.equals("stdin") ||
             r.equals("stdout") || r.equals("stderr")
 
-    fn is_reserved_for_compiler(r: U8[]): Bool //<
+    fn is_macro_case(r: U8[]): Bool //<
+        //< Whether it has an uppercase letter and no lowercase one, the spelling of C's constants
+        //< **A rule, not a list**: the headers `#define` hundreds of such names (`M_PI`, `NAN`,
+        //< `SIZE_MAX`, `SIGINT`, `BUFSIZ`, the `E*` error numbers), and which ones differs by libc
+        //< and by target. A list missed `M_E`, so a local constant of that name broke the C. It is
+        //< also how KSPL spells a constant, so a local `const` meets the headers most often.
+        $has_upper: = false
+        for ch in r
+            if ch.is_lower()
+                return false
+            if ch.is_upper()
+                has_upper = true
+        return has_upper
+
+    priv fn is_reserved_for_compiler(r: U8[]): Bool //<
         //< Whether it opens with `__`, or with `_` and a capital (C99 7.1.3's implementation space)
         //< **A rule, not a list**: MSVC's `__try` and `__int64`, clang's `__cdecl` (a keyword even
         //< on Linux), GCC's `__thread` and C11's `_Atomic` all match it, and so will future ones.
@@ -106,7 +123,7 @@ impl U8[]
         //< meet and sema has no clash to reject.
         return r.len >= 2 && r[0] == '_' && (r[1] == '_' || r[1].is_upper())
 
-    fn is_microsoft_keyword(r: U8[]): Bool //<
+    priv fn is_microsoft_keyword(r: U8[]): Bool //<
         //< Whether Microsoft's compilers read it as a keyword, outside the space above
         //< Their extensions are on unless switched off, and they add one-underscore synonyms
         //< (`_try` for `__try`), `static_assert` and `L__FUNCSIG__`. **No rule catches these**: C99
@@ -127,10 +144,10 @@ impl U8[]
 
     fn needs_c_escape(r: U8[]): Bool //<
         //< Whether a name cannot be emitted into the generated C as it is
-        //< **Only this function decides whether to escape.** There are four reasons but one way to
+        //< **Only this function decides whether to escape.** There are five reasons but one way to
         //< escape, so they fold into one answer.
-        return r.is_c_keyword() || r.is_preamble_macro() || r.is_reserved_for_compiler() ||
-            r.is_microsoft_keyword()
+        return r.is_c_keyword() || r.is_preamble_macro() || r.is_macro_case() ||
+            r.is_reserved_for_compiler() || r.is_microsoft_keyword()
 
     fn c_safe_name(r: U8[]): Str_builder //< the name as emitted into C
         //< It adds the suffix where the name is a reserved word, and spells a made name in its own

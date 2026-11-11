@@ -866,7 +866,7 @@ car t=10 mode=manual drive=(0,0,0) servo=90 line=7 ws=0 face=71 trk=0 keys=0 ir=
 
 ### It runs only while a key is held
 
-**A held NEC key sends no command.** About every 108ms a repeat says only "still held", which extends the key's life; let go and it stops. Make the life longer than the repeat interval, or it judders, but not much longer, or it runs on after release.
+**Hold the key for as long as the car must move**; let go and it stops. Why: "Why the IR remote firmware drives as it does" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 ### Line tracking redoes the steering every tick
 
@@ -876,7 +876,7 @@ Caution: **Run `make ksos-rp2040-car-pilot` once with kssrv up first.** With no 
 
 ### Plug in the LED matrix, not the ultrasonic
 
-They share GPIO 4/5 ("The ultrasonic and the LED matrix exclude each other" in [`SPEC-board.md`](SPEC-board.md)). So **obstacle dodging (`6`) prints one line of reason and refuses**, rather than ignoring the key: silently, "broken" and "no such key" look the same.
+They share GPIO 4/5 ("The ultrasonic and the LED matrix exclude each other" in [`SPEC-board.md`](SPEC-board.md)). So **obstacle dodging (`6`) prints one line of reason and refuses with a beep.**
 
 The face is `lib/ksos/boards/freenove_4wd_pico/face.kspl`; its expressions advance dark, eyes rolling, a blink, a smile, a cry.
 
@@ -884,15 +884,15 @@ The face is `lib/ksos/boards/freenove_4wd_pico/face.kspl`; its expressions advan
 
 ### Only ▶ and 9 stop it
 
-Stage 7's firmware **stops on any button** because it has no other way to stop. Here that would make the face and the light impossible to change.
+Stage 7's firmware stops on any button; this one does not. Why: "Why the IR remote firmware drives as it does" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
-### The speed is slower than the tutorial's
+### The speed is slower than Freenove's tutorial's
 
-The tutorial drives at 50 to 80%. `motor.CAP` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `motor.kspl`.
+Freenove's tutorial drives at 50 to 80%. **To raise the speed, change `motor.CAP` in `lib/ksos/boards/freenove_4wd_pico/motor.kspl`**, the one cap. Why: "Why the IR remote firmware drives as it does" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 ## Tuning line following
 
-**What stages 7, 9 and 12 share when the car follows a line**: the checks and settings to reach for when it drives badly.
+**What stages 7, 9 and 12 share when the car follows a line**: the checks and settings to reach for when it drives badly. Why: "Why line following has the limits it has" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 ### The car's own behaviour when following a line
 
@@ -909,7 +909,7 @@ Which manoeuvre each line reading gives is set by `MANEUVERS` and `rule_action` 
 
 ### To start it, raise the kick, not the speed cap
 
-A car standing still needs a harder push to start than to keep rolling. Caution: **Do not raise `motor.CAP` for this**: it only adds overshoot while running.
+Caution: **Do not raise `motor.CAP` to make a standing car start**: it only adds overshoot while running.
 
 | Where it acts | The value | What it does |
 | :-- | :-- | :-- |
@@ -917,19 +917,13 @@ A car standing still needs a harder push to start than to keep rolling. Caution:
 | The floor per wheel | `WHEEL_MIN_PERCENT` | Lifts a non-zero instruction below it, so no single wheel stays still on a mixed manoeuvre |
 | The running speed | `motor.CAP` | Higher adds overshoot (and shortens the time crossing the line) |
 
-**The kick keeps the direction** (it only multiplies), but control does not return for `KICK_MS`, so keep it short. It fires after every stop, and only then: it does not fix a stall while running.
+**Keep `KICK_MS` short.** The kick fires after every stop, and only then: it does not fix a stall while running.
 
 Caution: **Set `motor.CAP` just above `WHEEL_MIN_PERCENT`** (20 against 18 on this car). At the floor itself a wheel stalls while running, and nothing detects it (next section). Higher, the car overshoots, and the sensors cross the line faster ("The crossing time while turning sets the line-reading interval" below).
 
 ### There is no telling whether the wheels are turning
 
-**There is no encoder** (a sensor that counts a wheel's turns): the motors connect straight to the H bridges ("The motors" in [`SPEC-board.md`](SPEC-board.md)). No indirect clue decides it either:
-
-| The clue | Why it fails |
-| :-- | :-- |
-| The battery voltage | The deep dips grow in a stall, but the median barely changes |
-| The change in distance | Useless with many no-reflection laps (`dist=3000`) |
-| The change in the line | On a straight, `line=2` persisting is normal |
+**Do not look for a stall in the report**: the car has no encoder ("The motors" in [`SPEC-board.md`](SPEC-board.md)), and no other reading shows one.
 
 **Under load the battery dips far into its margin above `BATTERY_LOW_MV`.** One dip does not stop it, but a higher `motor.CAP` deepens the dips, so watch `bat=` and `HALTED`.
 
@@ -941,7 +935,7 @@ Caution: **Picking the car up fills the record with dodges** (a hand reads tens 
 
 ### A multiplication decides if it follows a sharp curve
 
-**A curve of radius R can be followed only up to `v ≤ ω_max × R`**, `ω_max` being the turning rate at `motor.CAP`. On this unit it is about 230 degrees/second (measured with `rp2040_motor_probe`, `test_speed` = `motor.CAP`, reading the angle turned over `step_ms`). No tuning passes that ceiling; moving sideways is exempt.
+**No tuning makes the car follow a curve tighter than `v ≤ ω_max × R` allows**, where `ω_max` is the turning rate at `motor.CAP`. To measure `ω_max`, run `rp2040_motor_probe` with `test_speed` = `motor.CAP`, and read the angle turned over `step_ms` (about 230 degrees/second on this unit).
 
 **If a gentler curve still loses the line, the cause is elsewhere:**
 
@@ -953,7 +947,7 @@ Caution: **Picking the car up fills the record with dodges** (a hand reads tens 
 
 ### The crossing time while turning sets the line-reading interval
 
-**The turning speed matters, not the forward speed.** The sensors sit about 100mm from the turn's centre ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)), so turning on the spot sweeps them sideways. The line must be read at least twice per crossing, so `LINE_INTERVAL_MS` must be at most half the crossing time. At this unit's settings a 20mm line takes about 75ms to cross, read about seven times at 10ms. A higher `motor.CAP` or a stronger turn shortens the crossing, so tighten the interval with it.
+**Keep `LINE_INTERVAL_MS` at most half the time the sensors take to cross the line while turning.** At this unit's settings a 20mm line takes about 75ms to cross, read about seven times at 10ms. A higher `motor.CAP` or a stronger turn shortens the crossing, so tighten the interval with it.
 
 ### The line's width must fall within a range
 
@@ -965,6 +959,6 @@ Caution: **Picking the car up fills the record with dodges** (a hand reads tens 
 | Just right | Mostly the weak correction, the strong now and then | Many `6`/`3`, `0` a few per cent |
 | Covering all three | `line=7`, read as "a junction or an end": it stops | Runs of `7` |
 
-With the sensors 20 to 25mm apart, the window, spacing < width < 2 × spacing, is **about 25 to 45mm**; 30mm is the simplest. **To check a line**, shift the car across it a little at a time while watching `ksos-rp2040-board`'s sensor line: two neighbours read `B` together, never three.
+**Use a line about 25 to 45mm wide**; 30mm is the simplest. **To check a line**, shift the car across it a little at a time while watching `ksos-rp2040-board`'s sensor line: two neighbours read `B` together, never three.
 
-**Changing the line is quicker than changing the code.** Following a narrow line would need the car to remember the side it lost the line on, which adds features and raises the format's version.
+**Change the line rather than the code** when the width falls outside that range.

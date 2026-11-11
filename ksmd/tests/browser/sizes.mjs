@@ -428,34 +428,67 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     check(await tall() === wrapped, "pressed again, the rows show their lines as before");
   },
 
-  // The room the paper leaves for a table is measured with an element put on the page, which
-  // lays it out. An edit measures it once for all the tables. Measured for each one, after the
-  // last one's print scale is written, it would lay the whole document out once for each table.
+  // The row numbers and the first column stay only while the page can scroll past the table
+  // sideways: thousands of cells that stay slowed every scrolled frame. A narrower window that
+  // makes the page scroll pins them, and a wider one lets them go again.
+  async pinnedWhenWide() {
+    const row = (r) => Array.from({ length: 6 }, (_, c) => `"r${r} c${c} words"`).join(" | ");
+    await load(`${H}:::table name="t"\n| ${row(0)} |\n| ${row(1)} |\n:::\n`);
+    const pinned = "!!document.querySelector('#doc .table.pinned')";
+    const sticky = "getComputedStyle(document.querySelector('#doc td[data-r=\"0\"][data-c=\"0\"]')).position";
+    check(!await js(pinned) && await js(sticky) !== "sticky",
+      "a table the page cannot scroll past sideways pins no column", await js(sticky));
+    try {
+      await resize(400, 700);
+      check(await until(pinned, 3000) && await js(sticky) === "sticky",
+        "a window too narrow for it pins the row numbers and the first column", await js(sticky));
+    } finally {
+      await resize();
+    }
+    check(await until(`!${pinned}`, 3000), "and the window made wide again lets them go");
+  },
+
+  // The room the paper leaves for a table needs the print's margin, measured with an element put
+  // on the page, which lays it out. The margin is measured once and kept, so an edit measures
+  // nothing, with one table or four. Measured on each edit, it laid the page out once more, and
+  // once for each table where it came after a table's print scale. A resize measures it again.
   async paperMeasured() {
     const table = (n) => `:::table name="t${n}"\n| "a" |\n| 1 |\n:::\n`;
-    const measured = async (tables) => {
+    const measured = async (tables, resized) => {
       await load(H + Array.from({ length: tables }, (_, n) => table(n)).join("\n"));
       await js(`(() => {
         if (window.watch) window.watch.disconnect();
         window.watch = new MutationObserver(() => {});
         window.watch.observe(document.body, { childList: true });
+        window.probes = 0;
         ksmd.onchange = () => {
-          window.probes = window.watch.takeRecords().flatMap((m) => [...m.addedNodes])
+          window.probes += window.watch.takeRecords().flatMap((m) => [...m.addedNodes])
             .filter((n) => n.style && n.style.visibility === "hidden").length;
+          window.changed = true;
         };
       })()`);
+      // After a resize, the edit or the print's layout after a pause measures the margin again.
+      if (resized) {
+        try {
+          await resize(900, 700);
+        } finally {
+          await resize();
+        }
+      }
       await click('#doc td[data-r="0"][data-c="0"]');
       await type("7");
-      await js("window.probes = null; window.watch.takeRecords(); true");
+      await js("window.changed = false; true");
       await press("Enter");
-      await until("window.probes !== null");
+      await until("window.changed === true");
       await js("ksmd.onchange = null; window.watch.disconnect(); true");
       return js("window.probes");
     };
-    const one = await measured(1);
-    const four = await measured(4);
-    check(one > 0 && four === one, "an edit measures the paper as often with four tables as with one",
+    const one = await measured(1, false);
+    const four = await measured(4, false);
+    check(one === 0 && four === 0, "an edit does not measure the paper's margin again, with one table or four",
       `${one} with one table, ${four} with four`);
+    const again = await measured(1, true);
+    check(again > 0, "after a resize, the margin is measured again", String(again));
   },
   };
 }

@@ -205,7 +205,11 @@ Only Cortex-M has a handler mode (`IPSR`), so only it detects the misuse. The PO
 
 ### The heap
 
-* **ISR-safe heap allocation (`lib/ksos/kernel/heap.kspl`)**: `std/mem.kspl`'s freestanding heap is a free list that joins neighbors, with a CAS lock for several cores. On one core it is not ISR-safe. An ISR that interrupts a task holding the lock would wait for ever: the task cannot run to let it go. So the lock tries a bounded number of times, then panics with `heap locked; alloc from an interrupt handler?`. So `heap_alloc`/`heap_free` disable interrupts around the allocation and the free alone. **On ksos always use these for the heap from a task or an ISR, not `alloc`/`dealloc`.** `make ksos-cm-heap-probe` checks independence, reuse and joining, and `Arc<T>` on a chip with no OS heap.
+* **The heap is safe from a task and an ISR, through std's own `alloc`/`dealloc`.** `std/mem.kspl`'s freestanding heap is a free list that joins neighbors. It has a CAS lock for several cores. On one core the lock alone is not enough. A task or an ISR that cuts into the lock's holder would wait for ever: the holder cannot run to let it go. So **`start_scheduler` hands std the kernel's critical section** (`mem.set_heap_guard`), and the heap does its own work with interrupts off. From then on every std type that allocates (`List`, `Arc`, `std/http`) is safe from any task. The POSIX port's `malloc` gets the same guard, since a task switched out inside it leaves it broken.
+  * Why the guard, and not "use `heap_alloc` on ksos": std's types allocate through `alloc` and cannot know about ksos. The rule would forbid most of std on a preemptive kernel. Only a rare panic or a corrupted heap would show a break of it.
+  * `heap_alloc`/`heap_free` (`lib/ksos/kernel/heap.kspl`) take the critical section themselves, so they are safe before the scheduler starts too.
+  * With no guard set, the lock tries a bounded number of times, then panics with `heap locked; alloc from an interrupt handler, or from a preempting task with no heap guard set`.
+  * `make ksos-cm-heap-tasks` and `make ksos-heap-tasks` run two tasks of different priority that allocate through `List` and `Arc`, the higher one waking inside the lower one's work. Without the guard, the first panics and the second breaks `malloc`. `make ksos-cm-heap-probe` checks independence, reuse and joining, and `Arc<T>` on a chip with no OS heap.
 * **Dynamic creation using the heap (`lib/ksos/kernel/dynamic.kspl`)**: an extension impl on each static type. This is the source for the list of names.
 
   | | the names |
@@ -237,7 +241,7 @@ Five ports sit under the kernel, and `lib/ksos/kernel/` changes for none of them
 | `port/rp2040/` | the RP2040 chip itself | built here, run on the real board |
 | `port/nrf51/` | the nRF51 (the BBC micro:bit's chip), only as QEMU models it | run under QEMU, as a Cortex-M0 board |
 
-**The one real chip is the RP2040** (a Raspberry Pi Pico / Pico W), on Freenove's mecanum car, brought up with no SWD probe ([`HOWTO-bring-up.md`](HOWTO-bring-up.md)). What is confirmed on it is in "What has been checked on real hardware" in [ksos](../README.md), and nowhere here.
+**The one real chip is the RP2040** (a Raspberry Pi Pico / Pico W), on Freenove's mecanum car, brought up with no SWD probe ([`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md)). What is confirmed on it is in "What has been checked on real hardware" in [ksos](../README.md), and nowhere here.
 
 ### The POSIX host port (`port/posix/`)
 
@@ -466,7 +470,7 @@ The inputs, the pulls and `spin()` are described at each function in `lib/ksos/d
 
 **`set_percent` takes the duty as a proportion, and TOP as an argument.** So TOP can grow without changing callers once DIV's 8-bit integer part overflows at 125MHz. The driving control is in [`boards/freenove_4wd_pico/motor.kspl`](../boards/freenove_4wd_pico/motor.kspl).
 
-Caution: **Write it with the wheels off the ground** (stage 3 in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)).
+Caution: **Write it with the wheels off the ground** (stage 3 in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md)).
 
 ### The clocks and the µs timer (`clocks.kspl` / `timer.kspl`) — real chip only
 
@@ -748,7 +752,7 @@ conn: = tcpconn.make(link, ...)
 
 ## 🚗 The board: Freenove's 4WD car with a Pico W
 
-**This section covers what ksos puts on the one real board**: a toy car with four mecanum wheels and a Raspberry Pi Pico W. The hardware's own facts are in [`SPEC-board.md`](SPEC-board.md), and bringing it up stage by stage is in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
+**This section covers what ksos puts on the one real board**: a toy car with four mecanum wheels and a Raspberry Pi Pico W. The hardware's own facts are in [`SPEC-board.md`](SPEC-board.md), and bringing it up stage by stage is in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md).
 
 ### What is in `boards/freenove_4wd_pico/`
 
@@ -785,7 +789,7 @@ The policy and the observations live in **the record inside the device** (the la
 
 **The policy is trained offline and kept as a file**, so the server needs no AI engine and starts at once. kssrv only serves the file; any server that hands out files serves the car.
 
-**The safety timeouts are in the car, outside the policy.** They must hold whatever the policy answers, with no policy, and with no link. Which ones each firmware carries is in "The safety timeouts of each firmware" in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
+**The safety timeouts are in the car, outside the policy.** They must hold whatever the policy answers, with no policy, and with no link. Which ones each firmware carries is in "The safety timeouts of each firmware" in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md).
 
 **How it reads and steers:**
 
@@ -794,11 +798,32 @@ The policy and the observations live in **the record inside the device** (the la
 * **The policy gets the median of the last three distance readings** (`range.steady_mm`). Only the close-range timeout uses the raw reading (`EMERGENCY_MM`): a false alarm is safe, a miss is not.
 * **The wheels need no tighter timing than 10ms**: the motors' 500Hz PWM gives five periods per instruction.
 
-**Only the first run needs the PC**, to take the policy from kssrv (its stages 7 and 9, in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)). A long press on the remote prints the kept record, with no PC.
+**Only the first run needs the PC**, to take the policy from kssrv (its stages 7 and 9, in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md)). A long press on the remote prints the kept record, with no PC.
+
+### Why line following has the limits it has
+
+**The car follows a line within limits that its parts set, and no setting moves them.** What to check when it drives badly is "Tuning line following" in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md); this section gives the reasons behind those checks.
+
+* **A sharp curve has a speed ceiling.** A curve of radius R can be followed only while `v ≤ ω_max × R`, where `ω_max` is the turning rate at `motor.CAP`. On this unit `ω_max` is about 230 degrees per second. No tuning passes that ceiling. Moving sideways is not limited by it.
+* **The turning speed sets the line-reading interval, not the forward speed.** The sensors sit about 100mm from the centre of a turn, so a turn on the spot sweeps them across the line. The line must be read at least twice in each crossing. So `LINE_INTERVAL_MS` is at most half the crossing time. At this unit's settings a 20mm line takes about 75ms to cross.
+* **The line's width must lie between the sensor spacing and twice that spacing.** A narrower line never sits under two sensors, so the weak correction never appears. A wider line covers all three sensors, which reads as a junction or an end. With the sensors 20 to 25mm apart, that is about 25 to 45mm.
+* **The policy does not remember the side on which it lost the line.** That memory would let it follow a narrow line, but it adds a feature and raises the policy file's version. A line of the right width costs nothing.
+* **Nothing tells whether a wheel turns.** The motors connect straight to the H bridges with no encoder (a sensor that counts a wheel's turns). The battery's median voltage barely changes in a stall, the distance is often absent, and a steady line reading is normal on a straight. So none of them can stand in for an encoder.
+* **A standing car gets a short kick, not a higher speed cap.** Starting needs a harder push than rolling. A higher `motor.CAP` would push harder all the time, which adds overshoot and deepens the battery's dips. The kick multiplies the instruction, so it keeps the direction. Control does not return during it, so it stays short.
+* **The distance comes before the line.** Inside the dodging band the policy moves sideways even on the line, so that an obstacle wins over the route.
+
+### Why the IR remote firmware drives as it does
+
+**`ksos-rp2040-car-ir` drives with no PC and no link**, so each choice keeps a person in control from the remote alone.
+
+* **A key acts only while it is held.** A held NEC key sends a repeat about every 108ms, and the repeat says only "still held". So a key's action lasts a little longer than one repeat interval: shorter, the car judders; much longer, it runs on after release.
+* **Only ▶ and 9 stop it.** Stage 7's firmware stops on any key, since it has no other key to stop with. Here, that rule would stop the car each time a person changes the face or the light.
+* **The speed stays below the tutorial's 50 to 80%.** `motor.CAP` is the one cap, and it holds the car to a speed a person can catch on foot.
+* **Obstacle dodging refuses with a beep and one line of text.** The ultrasonic module and the LED matrix share GPIO 4 and 5, so only one can be plugged in. A key that did nothing silently would look the same as a broken car.
 
 ### The USB-Ethernet probe's steps and what the PC needs
 
-It runs three stages, in this order. What each prints is stages 6a to 6c in [`HOWTO-bring-up.md`](HOWTO-bring-up.md), with what the PC must provide.
+It runs three stages, in this order. What each prints is stages 6a to 6c in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md), with what the PC must provide.
 
 | Stage | What it does |
 | :-- | :-- |
@@ -886,7 +911,7 @@ Training on a microcontroller is checked apart from the car: `make ksos-cm-ai-tr
 **This arrangement implements no wireless link: a decision, not a place in a queue.** (The CYW43439 is the Pico W's WiFi chip.) There are three reasons:
 
 1. **The license conflicts with what this repository states** (below), and effort cannot buy that back.
-2. **Almost no reason for wireless is left.** The car holds its policy and runs on the battery alone (stage 9 in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)). Reading the record afterwards (stage 8) gives what watching from a distance would.
+2. **Almost no reason for wireless is left.** The car holds its policy and runs on the battery alone (stage 9 in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md)). Reading the record afterwards (stage 8) gives what watching from a distance would.
 3. **It shows no more technique.** The USB device stack that exists is the harder thing to make; wireless is one more implementation of `Link` in `lib/ksos/net/link.kspl`, whose place is ready.
 
 **The license.** Over FFI, `cyw43-driver` would carry the firmware transfer (some hundreds of KB), the WiFi protocol and the CLM (the per-country table of channels and power). Only that lower driver would be taken: `pico_cyw43_arch` brings async_context, a second execution environment beside the scheduler. ksos would still need a PIO driver for the chip's half-duplex SPI, which it lacks. With `CYW43_LWIP=0`, raw 802.3 frames come up through `cyw43_cb_process_ethernet` and fit `mini_ipv4` unchanged. But `cyw43-driver` is dual-licensed. Its `LICENSE` says "for personal benefit only, not commercial", and its `LICENSE.RP` says "only in combination with Raspberry Pi-made silicon". The firmware blob comes under the same terms. **Neither can be shipped inside an MIT tree.**

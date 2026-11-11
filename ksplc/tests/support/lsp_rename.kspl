@@ -147,14 +147,12 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     verdict.check("a client that asks prepareRename is told it is answered",
         caps.get("renameProvider").get("prepareProvider").as_bool().unwrap_or(false),
         lsp_client.dump(caps, arena))
-    c.notify("textDocument/didOpen", lsp_client.did_open(USER_URI, USER_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c@, USER_URI, USER_SRC, arena)
     ask: = Ask::{ .c = c@, .arena = arena }
     check_prepare(ask)
     check_names(ask)
     check_clashes(ask)
-    c.notify("textDocument/didOpen", lsp_client.did_open(PICK_URI, PICK_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c@, PICK_URI, PICK_SRC, arena)
     check_selected(ask)
     check_type_calls(ask)
     check_captures(ask)
@@ -257,9 +255,7 @@ priv fn check_selected(ask: Ask) //<
         lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
 
 priv fn check_type_calls(ask: Ask) //< type calls name the type, not a written `new` member
-    ask.c
-        .notify("textDocument/didOpen", lsp_client.did_open(TYPE_URI, TYPE_SRC, ask.arena),
-        lsp_client.SEND_MS, ask.arena) catch {}
+    lsp_client.open(ask.c, TYPE_URI, TYPE_SRC, ask.arena)
     defer lsp_client.close(ask.c, TYPE_URI, ask.arena)
     pos: = ask.at_in(TYPE_URI, TYPE_SRC, "    c: =", "Cup")
     hover: = lsp_client.answer(ask.c, "textDocument/hover", pos, lsp_client.READ_MS, ask.arena)
@@ -297,10 +293,7 @@ priv fn check_captures(ask: Ask) //<
     //< A local a closure captures is renamed in its capture list and the closure's body too
     //< **The capture is the same name**: renamed apart, the closure reads a name that is gone. The
     //< edits land on the names, never on the `fn(` the closure's made declarations stand at.
-    ask.c
-        .notify("textDocument/didOpen",
-        lsp_client.did_open(CLOSURE_URI, CLOSURE_SRC, ask.arena), lsp_client.SEND_MS, ask.arena)
-        catch {}
+    lsp_client.open(ask.c, CLOSURE_URI, CLOSURE_SRC, ask.arena)
     defer lsp_client.close(ask.c, CLOSURE_URI, ask.arena)
     closure_line: = decl_line(CLOSURE_SRC, "    add: =", ask.arena)
     cap_col: = col_in_line(CLOSURE_SRC, "    add: =", "limit", ask.arena)

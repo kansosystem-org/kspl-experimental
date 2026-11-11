@@ -4,6 +4,7 @@
 //< are in decl.kspl; expressions and statements in expr.kspl / stmt.kspl.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `has_vtable_slot`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
@@ -15,7 +16,7 @@ import "ksplc/lower/prune" as lower_prune
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "std/str"
+import "std/ds"
 
 priv fn emit_enum_tag_macros(cg: Genc_ctx$@, name: U8[], e_def: sema_type_def.Enum_def@) //<
     //< A scalar enum's tags as macros of its own type, for tags past a C `int`
@@ -39,11 +40,7 @@ impl Ast_node
         is_scalar: = cg.env.is_scalar_enum(r.type_id)
         found: = cg.env
             .get_enum_def(cg.env.get_str(cg.env.get_clean_real_type(r.type_id)))
-        $e_def: sema_type_def.Enum_def$@ = null
-        switch found
-        case .some(d)
-            e_def = d
-        case .none
+        e_def: = found catch
             r.ice_panic("emit_enum_decl: the enum has no definition")
         // Caution: **Write each tag as the value sema folded**, never the expression. A name or a
         // cast written there is not C, and a tag that C counts itself drifts from sema's count.
@@ -92,7 +89,7 @@ impl Ast_node
                 n += 1
         return n
 
-    fn emit_variant_payload(r: Ast_node$@, cg: Genc_ctx$@) //<
+    priv fn emit_variant_payload(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< A variant's payload as a struct member of the enum's union, named after the variant
         //< A variant with no payload, or only `Void` fields, writes nothing: C has no empty struct.
         if r.payload_fields_held(cg) == 0
@@ -112,7 +109,7 @@ impl Ast_node
             cg.s(" ").nm(f_name).s(";\n")
         cg.s("        } \{v_name\};\n")
 
-    fn emit_vtable_param(r: Ast_node$@, cg: Genc_ctx$@, pi: Sz) //<
+    priv fn emit_vtable_param(r: Ast_node$@, cg: Genc_ctx$@, pi: Sz) //<
         //< It writes one argument of a vtable's function pointer
         //< pi is the argument's position. **The first (pi==0) is always a `void*`**: the receiver's
         //< type differs per implementation.
@@ -152,7 +149,7 @@ impl Ast_node
             cg.s("    char kspl_no_slot;\n")
         cg.s("};\n\n")
 
-    fn emit_vtable_slot(r: Ast_node$@, cg: Genc_ctx$@) //<
+    priv fn emit_vtable_slot(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< One method's function pointer in a trait's vtable struct
         type_node: = r.get_decl_type_node()
         cg.s("    ")

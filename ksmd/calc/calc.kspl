@@ -18,7 +18,6 @@ import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, Why, arithmetic, boolean
 import "ksmd/model/model" { Cell, Document, Table }
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str"
 
 const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions, unary minus and
     //< `not`
@@ -51,6 +50,8 @@ struct Results //< the value of every data cell of every table, at one moment
     columns: List<|Sz|> //< each table's count of columns
     reads: Sz //< how many cell values the formulas read: the work, which a test holds to the cells
         //< It stops at the calculation's limit (`MAX_READS`).
+    looks: Sz //< how many taken values `sum_if` and its kin check for an error: work beside the
+        //< reads, which a test holds to grow with them
 
 impl Results
     fn at(r: Self@, u: Sz, row: Sz, column: Sz): Value //< the value of a data cell of table `u`
@@ -77,7 +78,7 @@ fn calculate( //< calculates every data cell; the results live in `arena`
         .most_reads = MAX_READS if most_reads <= 0 else most_reads, .past_limit = false,
         .arena = arena, .scratch = scratch, .at = Positions(doc, arena),
         .results = Results::{ .values = List<|Value|>.new_with_cap(cells, arena),
-        .starts = List<|Sz|>(arena), .columns = List<|Sz|>(arena), .reads = 0 },
+        .starts = List<|Sz|>(arena), .columns = List<|Sz|>(arena), .reads = 0, .looks = 0 },
         .states = List<|U8|>.new_with_cap(cells, scratch), .depth = 0, .deferring = false,
         .deferred = Spot::{ .table = 0, .row = 0, .column = 0 },
         .todo = List<|Spot|>(arena) }

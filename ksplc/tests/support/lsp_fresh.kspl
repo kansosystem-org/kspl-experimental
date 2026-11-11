@@ -84,9 +84,7 @@ impl Ask
             verdict.check("the fresh-bytes workspace can be written again", false, rel)
 
     priv fn open(r: Self, rel: U8[], text: U8[])
-        r.c
-            .notify("textDocument/didOpen", lsp_client.did_open(rel, text, r.arena),
-            lsp_client.SEND_MS, r.arena) catch {}
+        lsp_client.open(r.c, rel, text, r.arena)
 
     priv fn renames_on(r: Self, label: U8[], got: json.Value, lib: U8[], user: U8[]) //<
         //< Checks that a rename's edits land on `WORD` in both texts given, and on nothing else
@@ -105,12 +103,10 @@ fn run_fresh(exe: U8[], arena: Arena$@) //<
         verdict.check("the fresh-bytes workspace can be laid out", false, dir)
         return
     $c: =
-        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
         verdict.check("the fresh-bytes workspace's server starts", false, dir)
         return
     defer c.free()
-    _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
     ask: = Ask::{ .c = c@, .dir = dir, .arena = arena }
     check_saved(ask)
     check_typed(ask)

@@ -232,6 +232,23 @@ ok:
     ret i64 %value
 }
 
+define i64 @kspl_tag_range_check(i64 %value, i1 %value_unsigned, i64 %low, i64 %high, ptr %enum_name, ptr %file, i32 %line) {
+entry:
+    %neg = icmp slt i64 %value, 0
+    %above = and i1 %value_unsigned, %neg
+    %under_low = icmp slt i64 %value, %low
+    %over_high = icmp sgt i64 %value, %high
+    %outside = or i1 %under_low, %over_high
+    %bad = or i1 %above, %outside
+    br i1 %bad, label %panic, label %ok
+panic:
+    %unsigned = zext i1 %value_unsigned to i32
+    call void @kspl_tag_fail(i64 %value, i32 %unsigned, ptr %enum_name, ptr %file, i32 %line)
+    unreachable
+ok:
+    ret i64 %value
+}
+
 define i64 @kspl_shift_check(i64 %amount, i64 %width, i1 %amount_unsigned, ptr %file, i32 %line) {
 entry:
     %cmp1 = icmp slt i64 %amount, 0

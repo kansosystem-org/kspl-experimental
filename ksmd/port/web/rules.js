@@ -92,14 +92,12 @@ function ksmdRules(ks) {
         `scale;from:${low} to:${high.value}` : `${condition};${look}`;
       ks.act("ksmd_web_rule", block, column, ks.put(entry));
     });
-    const kind = document.createElement("select");
-    kind.className = "rule-kind";
+    const kind = ks.el("select", "rule-kind");
     for (const [v, label] of [["", "No rule"], ["below", "Below"], ["above", "Above"],
       ["equal", "Equal to"], ["empty", "Empty"], ["scale", "A colour scale"]]) {
       kind.add(new Option(label, v));
     }
-    const value = document.createElement("input");
-    value.className = "rule-value";
+    const value = ks.el("input", "rule-value");
     value.type = "text";
     value.setAttribute("aria-label", "Value");
     // Colours written in the file that no offered choice holds are offered too, and chosen, so
@@ -109,8 +107,7 @@ function ksmdRules(ks) {
     if (now && !scaled && !styles.some(([, color, fill]) => color === now[2] && fill === now[3])) {
       styles.push(["The colours the file names", now[2], now[3]]);
     }
-    const style = document.createElement("select");
-    style.className = "rule-style";
+    const style = ks.el("select", "rule-style");
     styles.forEach(([label], i) => style.add(new Option(label, String(i))));
     if (now) {
       kind.value = now[0];
@@ -121,8 +118,7 @@ function ksmdRules(ks) {
     // A scale's two colours: the one at the least number, white for a new scale, and the one at
     // the greatest, which the person picks.
     const low = scaled ? now[2] : "#ffffff";
-    const high = document.createElement("select");
-    high.className = "rule-scale";
+    const high = ks.el("select", "rule-scale");
     high.setAttribute("aria-label", "The colour of the greatest number");
     const highs = SCALE_COLOURS.slice();
     if (scaled && !highs.some(([, hex]) => hex === now[3])) highs.push(["The colour the file names", now[3]]);

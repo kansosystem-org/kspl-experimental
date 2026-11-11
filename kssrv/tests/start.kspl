@@ -123,12 +123,22 @@ impl Running
     fn log(r: Self@, arena: Arena$@): U8[] //< the ends of its two logs (`read_log`)
         return read_log(r.out_log, r.err_log, arena)
 
-    fn failed(r: Self@, what: U8[], why: U8[], arena: Arena$@) //<
-        //< Fails the check `what` with the reason and the ends of the logs
+    fn failed(r: Self$@, what: U8[], why: U8[], arena: Arena$@) //<
+        //< Fails the check `what` with the reason, whether the server still runs, and the ends of
+        //< the logs
         //< Caution: **Do not let a failure end with its reason alone**: where it stopped and what
         //< the server said would be lost.
+        //< **Say whether the server still runs.** A connect that fails reads the same whether the
+        //< server ended or still listens, and its log ends the same way in both cases.
         verdict.check(what, false,
-            arena.text().s(why).c('\n').s(r.log(arena)).take())
+            arena.text().s(why).c('\n').s(r.state(arena)).c('\n').s(r.log(arena)).take())
+
+    fn state(r: Self$@, arena: Arena$@): U8[] //< whether the server still runs, or its exit code
+        if r.child.alive()
+            return "the server is still running"
+        if code: = r.child.wait()
+            return arena.text().s("the server has ended (exit code \{code\})").take()
+        return "the server has ended"
 
     fn stop(r: Self$@) //< kills the server
         r.child.kill()

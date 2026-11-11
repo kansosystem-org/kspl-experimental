@@ -16,13 +16,14 @@ import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
+import "ksplc/sema/type/def" { Enum_def }
 import "ksplc/sema/type/display" // `display`
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "std/str"
+import "std/ds"
 
 impl Ast_node
-    fn emit_method_call(r: Self$@, c: Genc_ctx$@, args_node: Ast_node@)
+    priv fn emit_method_call(r: Self$@, c: Genc_ctx$@, args_node: Ast_node@)
         method_node: = r.get_postfix_member()
         r.ice_assert(method_node != null, "emit_method_call: missing method name")
 
@@ -64,7 +65,7 @@ impl Ast_node
             inner.emit_address_of(c)
         c.s(", .vtable = &kspl_vtable_impl_").m(clean_base_id).s("_").m(trait_id).s(" }")
 
-    fn emit_postfix_call(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
+    priv fn emit_postfix_call(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
         is_method: = expr_node.kind_id == .k_method_access
         $args_node: = r.find_child(.k_expr_args)
         if args_node == null
@@ -85,7 +86,7 @@ impl Ast_node
                 args_node.emit_comma_separated_args(c, false)
             c.s(")")
 
-    fn emit_ptr_adjusted_receiver(r: Self$@, c: Genc_ctx$@, depth: I32) //<
+    priv fn emit_ptr_adjusted_receiver(r: Self$@, c: Genc_ctx$@, depth: I32) //<
         //< It writes depth-1 '*'s before the receiver, for a multi-level pointer (Foo@@)
         //< This is automatic dereferencing; at depth<=1 it writes nothing.
         //< The caller picks the following '->' / '.' by depth.
@@ -208,20 +209,7 @@ impl Ast_node
             c.addr_root = outer_root
             c.s(".data, .len = \{c.env.array_len(expr_node.type_id)\} }")
         else if def: = sema_body_postfix.enum_cast_needs_check(c.sema, r)
-            // The tags go as a compound literal array, so the operand is evaluated once.
-            // A `U64` above INT64_MAX arrives negative as an `int64_t`; the flag makes it no tag
-            // and prints it unsigned.
-            is_unsigned: = c.env.is_unsigned(c.env.scalar_repr_id(expr_node.type_id))
-            unsigned_flag: = "1" if is_unsigned else "0"
-            c.s("(").t(target_id).s(")kspl_tag_check((int64_t)(")
-            expr_node.emit_expr(c)
-            c.s("), ").s(unsigned_flag).s(", (const int64_t[]){ ")
-            for i in Range.asc(def.variants_list.len)
-                if i > 0
-                    c.s(", ")
-                gen_c_literal.emit_folded_i64(c, def.variants_list.get(i).tag_value)
-            c.s(" }, \{def.variants_list.len\}, \"").s(c.env.display(target_id))
-                .s("\", \"\{r.loc.file()\}\", \{c.last_line\})")
+            emit_tag_check(c, r, expr_node, target_id, def)
         else if c.env.is_float(expr_node.type_id) &&
             c.env.is_integer(c.env.scalar_repr_id(target_id))
             r.emit_float_to_int(c, expr_node, target_id)
@@ -372,6 +360,33 @@ priv fn emit_asm_volatile(c: Genc_ctx$@, args_node: Ast_node@) //<
                 ch.emit_expr(c)
             is_first = false
     c.s(")")
+
+priv fn emit_tag_check(c: Genc_ctx$@, r: Ast_node@, operand: Ast_node$@, target_id: I32,
+    def: Enum_def@) //<
+        //< A cast to an enum from a number, its operand passed through the runtime's tag check
+        //< Tags that run unbroken are checked as a range, others as a compound literal array.
+        //< Either way the operand is evaluated once. A `U64` above INT64_MAX arrives negative as
+        //< an `int64_t`; the flag makes it no tag and prints it unsigned.
+    is_unsigned: = c.env.is_unsigned(c.env.scalar_repr_id(operand.type_id))
+    unsigned_flag: = "1" if is_unsigned else "0"
+    n: = def.variants_list.len
+    low: = def.run_low()
+    c.s("(").t(target_id).s(")")
+        .s("kspl_tag_range_check" if low.is_some() else "kspl_tag_check").s("((int64_t)(")
+    operand.emit_expr(c)
+    c.s("), ").s(unsigned_flag).s(", ")
+    if v: = low
+        gen_c_literal.emit_folded_i64(c, v)
+        c.s(", ")
+        gen_c_literal.emit_folded_i64(c, v + I64::(n - 1))
+    else
+        c.s("(const int64_t[]){ ")
+        for i in Range.asc(n)
+            if i > 0
+                c.s(", ")
+            gen_c_literal.emit_folded_i64(c, def.variants_list.get(i).tag_value)
+        c.s(" }, \{n\}")
+    c.s(", \"").s(c.env.display(target_id)).s("\", \"\{r.loc.file()\}\", \{c.last_line\})")
 
 priv fn is_c_scalar(c: Genc_ctx$@, type_id: I32): Bool //<
     //< Whether C carries the type as a scalar: a number, a `Bool`, a pointer or a scalar enum

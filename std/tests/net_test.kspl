@@ -328,6 +328,21 @@ fn test_port_range()
     assert(seen == 6, "every entry refuses a port outside 0..65535 as bad_port")
     verdict.pass("bind and connect refuse a port outside 0..65535 by name rather than wrap it.")
 
+priv struct Tcp_pair //< a loopback listener and one connection through it, both of its ends
+    listener: net.Tcp_listener$@
+    port: I32 //< the port the listener holds
+    client: net.Tcp_stream$@ //< the end that connected
+    conn: net.Tcp_stream$@ //< the end the listener accepted
+
+priv fn tcp_pair(): Tcp_pair //< binds a free loopback port, connects to it and accepts
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
+        catch panic("bind should succeed on a free port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    client: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("connect should succeed once the listener is bound")
+    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    return ::{ .listener = listener, .port = port, .client = client, .conn = conn }
+
 // ==========================================
 // A child started while sockets are open holds none of them. Holding a copy, it would keep the
 // port bound and the connection open for as long as it runs.
@@ -339,18 +354,13 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     verdict
         .start("[Net] a child started meanwhile holds no socket: the port binds again, and the peer \
             sees the close...")
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
-        catch panic("bind should succeed on a free port")
-    port: = listener.port() catch panic("a bound socket knows its port")
-    client: = net.Tcp_stream.connect("127.0.0.1", port)
-        catch panic("connect should succeed once the listener is bound")
-    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    pair: = tcp_pair()
     $child: = subproc.spawn_piped(U8[][]::{ ksplc, "lsp" }, "") catch panic("the child must start")
-    listener.free()
-    conn.free()
+    pair.listener.free()
+    pair.conn.free()
 
     $rebound: = true
-    again: = net.Tcp_listener.bind("127.0.0.1", port) catch
+    again: = net.Tcp_listener.bind("127.0.0.1", pair.port) catch
         rebound = false
         fallback null
     assert(rebound, "a closed listener's port binds again while a child started before is running")
@@ -359,17 +369,19 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
 
     // **Wait with a bound**: were the connection held by the child, a plain read would never
     // return.
-    client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
+    pair.client.set_nonblocking()
+        catch panic("set_nonblocking should succeed on a connected socket")
     defer $r: = reactor.Reactor()
-    r.register(client.raw_handle(), reactor.READABLE, 0)
+    r.register(pair.client.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     seen: = ready.len == 1
     ready.free()
     assert(seen, "the peer sees the close while a child started before is running")
     $buf: U8[8] = ::{}
-    got: = client.read(U8$[]::buf) catch panic("the read after the close should return the end")
+    got: = pair.client.read(U8$[]::buf)
+        catch panic("the read after the close should return the end")
     assert(got == 0, "the read after the peer closed returns the end, 0 bytes")
-    client.free()
+    pair.client.free()
     child.close_stdin()
     child.kill()
     verdict
@@ -402,25 +414,20 @@ fn test_tcp_half_close() //<
 fn test_tcp_read_for() //<
     //< a read with a time limit ends at it on a quiet peer, and reads what comes
     verdict.start("[Net] a read that waits at most its timeout test...")
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
-        catch panic("bind should succeed on a free port")
-    port: = listener.port() catch panic("a bound socket knows its port")
     // The connection is made before any accept, and the peer then says nothing.
-    client: = net.Tcp_stream.connect("127.0.0.1", port)
-        catch panic("connect should succeed once the listener is bound")
-    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    pair: = tcp_pair()
     $buf: U8[16] = ::{}
     $timed_out: = false
-    _n: = client.read_for(U8$[]::buf, 200) catch e
+    _n: = pair.client.read_for(U8$[]::buf, 200) catch e
         timed_out = e == net.Net_error.timed_out
         fallback 0
     assert(timed_out, "a quiet peer makes read_for fail as timed_out")
-    conn.write_all("hi") catch panic("server write should succeed")
-    n: = client.read_for(U8$[]::buf, 60000) catch panic("what the peer sent should be read")
+    pair.conn.write_all("hi") catch panic("server write should succeed")
+    n: = pair.client.read_for(U8$[]::buf, 60000) catch panic("what the peer sent should be read")
     assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi"), "read_for reads what arrives")
-    conn.free()
-    client.free()
-    listener.free()
+    pair.conn.free()
+    pair.client.free()
+    pair.listener.free()
     verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")
 
 // ==========================================
@@ -481,12 +488,7 @@ fn test_signal_cuts_no_wait_short() //<
     if sys.is_windows()
         verdict.skip("Windows has no signal that cuts a wait short")
         return
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
-        catch panic("bind should succeed on a free port")
-    port: = listener.port() catch panic("a bound socket knows its port")
-    client: = net.Tcp_stream.connect("127.0.0.1", port)
-        catch panic("connect should succeed once the listener is bound")
-    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    pair: = tcp_pair()
     alarms_seen = 0
     before: = sys.set_signal_handler(SIGALRM, count_alarm)
     $buf: U8[16] = ::{}
@@ -494,16 +496,17 @@ fn test_signal_cuts_no_wait_short() //<
     $kick: = signal_soon()
     t0: = sys.mono_us()
     $timed_out: = false
-    _n: = client.read_for(U8$[]::buf, WAIT_MS) catch e
+    _n: = pair.client.read_for(U8$[]::buf, WAIT_MS) catch e
         timed_out = e == net.Net_error.timed_out
         fallback 0
     waited: = took_ms_since(t0)
     kick.wait()
     // A plain read: the signal comes at 200 ms, the answer at 600 ms.
     $kick2: = signal_soon()
-    $t: = thread.Thread.spawn<|net.Tcp_stream|>(net_answer_late, conn)
+    $t: =
+        thread.Thread.spawn<|net.Tcp_stream|>(net_answer_late, pair.conn)
         catch panic("thread spawn failed")
-    n: = client.read(U8$[]::buf) catch panic("a signal should not make a read fail")
+    n: = pair.client.read(U8$[]::buf) catch panic("a signal should not make a read fail")
     t.free()
     kick2.wait()
     // sleep_ms: the signal comes at 200 ms.
@@ -514,9 +517,9 @@ fn test_signal_cuts_no_wait_short() //<
     kick3.wait()
     seen: = alarms_seen
     sys.set_signal_handler(SIGALRM, before)
-    conn.free()
-    client.free()
-    listener.free()
+    pair.conn.free()
+    pair.client.free()
+    pair.listener.free()
     assert(seen == 3, "each of the three children should have signalled this program")
     assert(timed_out, "read_for on a quiet peer should end as timed_out, not as a failure")
     $m: = Panic_msg()
@@ -536,31 +539,26 @@ fn test_tcp_write_all_for() //<
     //< a send with a time limit ends at it on a peer that stops reading, and sends to one that reads
     //< **The memory is never touched here**, as in test_tcp_past_int: the OS only copies from it.
     verdict.start("[Net] a send that ends at its timeout test...")
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
-        catch panic("bind should succeed on a free port")
-    port: = listener.port() catch panic("a bound socket knows its port")
-    client: = net.Tcp_stream.connect("127.0.0.1", port)
-        catch panic("connect should succeed once the listener is bound")
-    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    pair: = tcp_pair()
     big: = U8$@::mem.alloc(STALL_BYTES)
     $timed_out: = false
-    client.write_all_for(U8[]::{ .ptr = big, .len = STALL_BYTES }, 200) catch e
+    pair.client.write_all_for(U8[]::{ .ptr = big, .len = STALL_BYTES }, 200) catch e
         timed_out = e == net.Net_error.timed_out
     assert(timed_out, "a peer that reads nothing makes write_all_for fail as timed_out")
     mem.dealloc(Void$@::big)
-    conn.free()
-    client.free()
+    pair.conn.free()
+    pair.client.free()
     // A fresh connection: the first one holds half a send.
-    again: = net.Tcp_stream.connect("127.0.0.1", port)
+    again: = net.Tcp_stream.connect("127.0.0.1", pair.port)
         catch panic("connect should succeed once the listener is bound")
-    peer: = listener.accept() catch panic("accept should succeed once the client connects")
+    peer: = pair.listener.accept() catch panic("accept should succeed once the client connects")
     again.write_all_for("hi", 60000) catch panic("a send the peer has room for should finish")
     $buf: U8[16] = ::{}
     n: = peer.read_for(U8$[]::buf, 60000) catch panic("what was sent should be read")
     assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi"), "write_all_for sends every byte")
     peer.free()
     again.free()
-    listener.free()
+    pair.listener.free()
     verdict
         .pass("write_all_for ends at its timeout on a peer that reads nothing, and sends to one \
             that reads.")
@@ -575,26 +573,21 @@ fn test_tcp_past_int() //<
     //< moves only what the socket takes at once. Only a 64-bit `Sz` holds a length past an `int`.
     verdict.start("[Net] a read and a write handed more than an int holds move a piece test...")
     len: = Sz::FOUR_GIB
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
-        catch panic("bind should succeed on a free port")
-    port: = listener.port() catch panic("a bound socket knows its port")
-    client: = net.Tcp_stream.connect("127.0.0.1", port)
-        catch panic("connect should succeed once the listener is bound")
-    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    pair: = tcp_pair()
     big: = U8$@::mem.alloc(len)
-    conn.write_all("hello") catch panic("server write should succeed")
-    got: = client.read(U8$[]::{ .ptr = big, .len = len })
+    pair.conn.write_all("hello") catch panic("server write should succeed")
+    got: = pair.client.read(U8$[]::{ .ptr = big, .len = len })
         catch panic("a read into a buffer of 4 GiB should succeed")
     assert(U8[]::{ .ptr = big, .len = got }.equals("hello"), "the read of 4 GiB gets what came")
-    client.set_nonblocking() catch panic("a connected stream can be made non-blocking")
-    sent: = client.write(U8[]::{ .ptr = big, .len = len }) catch e
+    pair.client.set_nonblocking() catch panic("a connected stream can be made non-blocking")
+    sent: = pair.client.write(U8[]::{ .ptr = big, .len = len }) catch e
         io.err().s("the write of 4 GiB failed as \{e\}\n")
         panic("a write of 4 GiB should send a piece")
     assert(sent > 0 && sent < len, "the write of 4 GiB sends a piece and says its size")
     mem.dealloc(Void$@::big)
-    conn.free()
-    client.free()
-    listener.free()
+    pair.conn.free()
+    pair.client.free()
+    pair.listener.free()
     verdict.pass("A read and a write handed 4 GiB each move a piece and return its size.")
 
 // ==========================================
@@ -611,6 +604,22 @@ extern fn reactor_multi_echo_server(listener: net.Tcp_listener$@): Void$@
         conn.write(U8$[]::{ .ptr = buf@, .len = n }) catch panic("server write should succeed")
         conn.free()
     return null
+
+fn test_reactor_wait_with_nothing_registered()
+    verdict.start("[Reactor] wait with nothing registered waits its timeout test...")
+    defer $r: = reactor.Reactor()
+    // Caution: **Check only a lower bound, below the timeout.** A busy machine makes the wait
+    // longer, never shorter, so the check cannot fail by load. The 10 ms below the timeout allow
+    // for a sleep that ends a clock tick early (Windows). Returned at once, it takes microseconds.
+    t0: = sys.mono_us()
+    $ready: = r.wait(50) catch panic("a wait with nothing registered cannot fail")
+    took_us: = sys.mono_us() - t0
+    assert(ready.len == 0, "nothing registered, so nothing is ready")
+    ready.free()
+    $m: = Panic_msg()
+    assert(took_us >= 40000I64,
+        m.s("it waits the timeout out (took ").n(took_us).s(" us, want at least 40000)").slice())
+    verdict.pass("A wait with nothing registered waits its timeout and returns nothing.")
 
 fn test_reactor_multi_connection()
     verdict

@@ -245,6 +245,14 @@ function ksmdStart(root, bar, status, wasmBytes) {
       if (onClick) b.addEventListener("click", onClick);
       return b;
     };
+    // An element of the page's own: its tag, its class and its text. A class left out, as null or
+    // "", is not set, and neither is a text left out.
+    ks.el = (tag, cls, text) => {
+      const el = document.createElement(tag);
+      if (cls) el.className = cls;
+      if (text !== undefined) el.textContent = text;
+      return el;
+    };
     // The header's height, under which a table's frozen heading and a heading scrolled to stand.
     const top = document.querySelector(".top");
     if (top && window.ResizeObserver) {
@@ -371,45 +379,4 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdFunctions(ks);
     return api;
   });
-}
-
-// The small panels that set a column's rule, a chart and the page setup (`ks.panel`). Each has
-// Apply and Cancel at its end. Escape or a press outside closes it, as a press outside a menu does.
-// Apply, Cancel and Escape give the focus back where it was before the panel opened, as a dialog
-// does; left on the panel that went, it fell to the page's body, and the next key went nowhere.
-function ksmdPanels(ks) {
-  const open = new Set();
-  document.addEventListener("mousedown", (e) => {
-    for (const p of open) if (!p.el.contains(e.target)) p.close();
-  }, true);
-  // A panel of class `cls` (`rule-panel`), named `label` for a screen reader. Making it closes
-  // the open panel of its class. `show` adds Apply (`rule-apply`) and Cancel, and puts it on the
-  // page. Apply closes it, then runs `onApply`, which can still read the panel's fields.
-  ks.panel = (cls, label, onApply) => {
-    for (const p of open) if (p.el.className === cls) p.close();
-    const el = document.createElement("div");
-    el.className = cls;
-    el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", label);
-    const from = document.activeElement;
-    const p = { el, close: () => { el.remove(); open.delete(p); } };
-    const back = () => {
-      p.close();
-      ks.focusBack(from);
-    };
-    p.apply = ks.button("Apply", cls.replace(/-panel$/, "-apply"), null, () => { back(); onApply(); });
-    const cancel = ks.button("Cancel", null, null, back);
-    el.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      back();
-    });
-    p.show = () => {
-      el.append(p.apply, cancel);
-      document.body.appendChild(el);
-      open.add(p);
-    };
-    return p;
-  };
 }

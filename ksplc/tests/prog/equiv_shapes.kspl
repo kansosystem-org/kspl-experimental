@@ -528,6 +528,13 @@ priv fn addr_of(x: I32): U8@ //< a negative `I32` as an address, widened by its 
     return U8@::x
 
 fn parted_lines(b: Str_builder$@) //< each shape's answer, one line
+    // `a * b + c` rounds twice. Joined into one fused multiply-add, it rounds once: clang folded
+    // that at `-O2` to 5.55e-17, where `-O0` and LLVM gave 0.0 (the pragma in
+    // ksplc/gen/runtime.kspl).
+    fa: = 0.1
+    fb: = 10.0
+    fc: = -1.0
+    fused: = fa * fb + fc
     $word: I64 = 9
     w: = pun_word(word@, F64$@::word@)
     $arr: F32[2] = ::{ 0.0F32, 0.0F32 }
@@ -535,7 +542,7 @@ fn parted_lines(b: Str_builder$@) //< each shape's answer, one line
     zeroed: = pun_slice(s, I32$[]::s)
     b.s("parted=\{w\}/\{word\}/\{zeroed\}/\{Ord_u8.high.kept() > Ord_u8.low.kept()\}/")
         .s("\{Ord_u16.high.kept() > Ord_u16.low.kept()\}/\{PK.a\}/\{PK.b\}/\{pk_var.b\}/")
-        .s("\{Sz::addr_of(-16)\}\n")
+        .s("\{Sz::addr_of(-16)\}/\{fused == 0.0\}\n")
 
 // ==========================================
 // A slice of an array literal built in a branch, read after it

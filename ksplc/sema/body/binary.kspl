@@ -24,7 +24,7 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // `sub`
-import "std/str"
+import "std/ds"
 
 priv struct Op_traits //< the method and trait an operator calls on a user type
     op: U8[]
@@ -64,7 +64,7 @@ priv fn const_divisor(ctx: Sema_ctx$@, right_node: Ast_node$@): I32? //<
     //< run-time check.
     return .none if right_node == null else ctx.try_eval_constexpr(right_node)
 
-fn check_const_divisor(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@) //<
+priv fn check_const_divisor(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@) //<
     //< Checks whether the divisor is 0, for both `/` `%` and `/=` `%=`
     //< **This is an error, not a lint**, and carries no code. Dividing by 0 is undefined in both C
     //< and LLVM, and a project setting can silence a coded diagnostic (base/lint_codes.kspl).
@@ -81,23 +81,19 @@ fn divisor_is_static(ctx: Sema_ctx$@, right_node: Ast_node$@): Bool //<
     //< When it is true, the generator must not insert one. The generated C's top-level initializer
     //< must be a C constant expression, and a call turns it into
     //< `initializer element is not a compile-time constant`.
-    switch const_divisor(ctx, right_node)
-    case .some(divisor)
-        return divisor != 0
-    case .none
+    divisor: = const_divisor(ctx, right_node) catch
         return false
+    return divisor != 0
 
-fn divisor_cannot_overflow(ctx: Sema_ctx$@, right_node: Ast_node$@): Bool //<
+priv fn divisor_cannot_overflow(ctx: Sema_ctx$@, right_node: Ast_node$@): Bool //<
     //< Whether a signed division or remainder can be emitted as a plain instruction
     //< Caution: **Exclude `-1`.** A type's minimum divided by `-1` does not fit the type. C and
     //< LLVM leave that undefined, while the specification defines it as `mod 2^N`. So such a form
     //< must go to the run-time function that takes both operands. `0` is excluded as in
     //< divisor_is_static.
-    switch const_divisor(ctx, right_node)
-    case .some(divisor)
-        return divisor != 0 && divisor != -1
-    case .none
+    divisor: = const_divisor(ctx, right_node) catch
         return false
+    return divisor != 0 && divisor != -1
 
 fn takes_signed_div(ctx: Sema_ctx$@, op: U8[], type_id: I32, divisor: Ast_node$@): Bool //<
     //< Whether `/` or `%` on type_id goes to the run-time `kspl_sdiv` / `kspl_smod`
@@ -114,7 +110,7 @@ priv fn shift_amount_in_range(ctx: Sema_ctx@, amount: I32, left_type_id: I32): B
     //< (get_primitive_bit_size) for the same reason.
     return amount >= 0 && amount < ctx.env.get_portable_bit_size(left_type_id)
 
-fn check_const_shift_amount(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@) //<
+priv fn check_const_shift_amount(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@) //<
     //< Whether the shift amount is outside the left-hand side's width (`<<` `>>` and `<<=` `>>=`)
     //< **This is an error, not a lint**: clang reports `left shift count >= width of type` too.
     //< Without it, the error comes from clang, not ksplc. See "Failing fast through an exception or
@@ -138,11 +134,9 @@ fn shift_amount_is_static(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_no
     //< the type argument. When true, no run-time check may be inserted (as in divisor_is_static).
     if right_node == null
         return false
-    switch ctx.try_eval_constexpr(right_node)
-    case .some(shift_val)
-        return shift_amount_in_range(ctx, shift_val, left_type_id)
-    case .none
+    shift_val: = ctx.try_eval_constexpr(right_node) catch
         return false
+    return shift_amount_in_range(ctx, shift_val, left_type_id)
 
 priv fn is_bare_bitwise(n: Ast_node$@): Bool //<
     //< Whether it is an unparenthesized `&` / `|` / `^` binary expression
@@ -153,7 +147,7 @@ priv fn is_bare_bitwise(n: Ast_node$@): Bool //<
         return false
     return op.text.equals("&") || op.text.equals("|") || op.text.equals("^")
 
-fn reject_float_remainder(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_text: U8[]): Bool //<
+priv fn reject_float_remainder(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_text: U8[]): Bool //<
     //< Whether it reported a `%` (or `%=`) on a floating-point operand, which KSPL does not carry
     //< C has no `%` on a `double` (it refuses the generated code), and LLVM's `frem` would answer.
     //< So the two backends would part. A float remainder's sign also has two readings (C's `fmod`

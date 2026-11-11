@@ -584,8 +584,9 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     //< Each element starts with `path` (`walk_files(".")` gives `./std/io.kspl`).
     //< **A link to a directory is not entered** (Python's `os.walk` default); a link to a file is
     //< listed as a file.
-    //< **Exclude `.git` and `out`** (`skip_build_output`) in a repository, or the time and the
-    //< result grow by an order of magnitude.
+    //< **In a repository, give a `skip_dir` that leaves out `.git` and the build output**, or the
+    //< time and the result grow by an order of magnitude. Which folders those are is the caller's
+    //< knowledge: std cannot know that a folder named `out` holds only what a build made.
     path: U8[], //< where the walk starts
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
     arena: Arena$@, //< where the paths go; null uses the heap: free each path, then the list
@@ -606,10 +607,6 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
 
 pub fn skip_none(_name: U8[]): Bool //< a `skip_dir` that enters every directory
     return false
-
-pub fn skip_build_output(name: U8[]): Bool //< a `skip_dir` that leaves out `out` and `.git`
-    //< A repository's build output and git's own folder: neither holds a file anyone wrote there.
-    return name.equals("out") || name.equals(".git")
 
 priv const MAX_WALK_DEPTH: Sz = 512 //< the maximum number of levels a walk descends
     //< Each level is one native stack frame, so a deep tree (or a link cycle) would exhaust the

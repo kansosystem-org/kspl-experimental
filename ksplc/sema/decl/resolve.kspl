@@ -5,6 +5,7 @@
 //< constraint, and builds a function's own type (`fn_signature_type_id`).
 import "ksplc/base/ast" + { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `has_literal_child`, `is_const_gen_param`
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
@@ -34,7 +35,7 @@ import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 // `../../../docs/DESIGN-programming-language.md`. The type comparison decides the one level of
 // weakening such a position allows (generic_arg_weakens in `../type/query.kspl`), not this file.
 // ==========================================
-fn arg_names_mut(arg: Ast_node$@): Bool //<
+priv fn arg_names_mut(arg: Ast_node$@): Bool //<
     //< Whether the actual argument holds the mutability mark (the `$` of a `Slice<|$U8|>`)
     //< The parser wraps a marked argument in a `k_type_arg` with a Literal at the head.
     return arg != null && arg.kind_id == .k_type_arg && arg.has_literal_child("$")
@@ -221,11 +222,13 @@ impl Sema_ctx
         r.resolving.aliases.truncate(r.resolving.aliases.len - 1)
         return alias_id
 
-    fn apply_arg_mut_mark(r: Self$@, decl: Ast_node$@, pos: Sz, arg: Ast_node$@, arg_id: I32): I32 //<
-        //< Decides the argument type at that position from the declaration and the argument's mark
-        //< Whether the declaration names the position is matched against the argument's mark.
-        //< **A mark at a position the declaration does not name is rejected**, or `List<|$U8|>`
-        //< would silently equal `List<|U8|>` while the writer believes the elements are mutable.
+    priv fn apply_arg_mut_mark(r: Self$@, decl: Ast_node$@, pos: Sz, arg: Ast_node$@, arg_id: I32):
+        I32 //<
+            //< Decides the argument type at that position from the declaration and the argument's mark
+            //< Whether the declaration names the position is matched against the argument's mark.
+            //< **A mark at a position the declaration does not name is rejected**, or `List<|$U8|>`
+            //< would silently equal `List<|U8|>` while the writer believes the elements are
+            //< mutable.
         marked: = arg_names_mut(arg)
         if !variance_names_mut(decl.gen_param_variance_mask(), pos)
             if marked
@@ -552,16 +555,14 @@ priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
     //< Whether the head name of a type argument names no type at all
     //< Only the head name (`mod.Box2` of `mod.Box2<|t|>$@`). `Self` (unbound in a trait) and a
     //< leading `_` pass, as in report_type_existence_error in type_check.kspl.
-    switch type_arg_head(arg)
-    case .some(head)
-        written: = c.read_written_type(head)
-        name: = written.spelled
-        if name.len == 0 || name.equals("Self") || name.starts_with("_")
-            return false
-        return !c.env.has_type_named(name) &&
-            (written.member != null || !c.env.has_type_named(written.fqn))
-    case .none
+    head: = type_arg_head(arg) catch
         return false
+    written: = c.read_written_type(head)
+    name: = written.spelled
+    if name.len == 0 || name.equals("Self") || name.starts_with("_")
+        return false
+    return !c.env.has_type_named(name) &&
+        (written.member != null || !c.env.has_type_named(written.fqn))
 
 fn refuses_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, decl: Ast_node$@, param: Ast_node$@,
     own: Ast_node$@): Bool //<
@@ -597,7 +598,7 @@ priv fn refuse_computed_arg(c: Sema_ctx$@, arg: Ast_node$@) //<
         "a value passed as a type argument must be a literal, a negated literal or the name of a \
             const. Declare 'const N: I32 = ...'. Pass 'N' as the argument")
 
-fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: Ast_node$@,
+priv fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: Ast_node$@,
     own: Ast_node$@) //<
         //< Reports a type argument of the other kind than its parameter's: value or type
         //< own is the enclosing generic's parameter the argument names, or null; the hint then

@@ -462,6 +462,10 @@ const ksagentMarkdown = (() => {
   const failed = (e) => (e && e.name === "TimeoutError" ?
     `The local server did not answer within ${WAIT_MS / 1000} seconds. The page asks again each ` +
       "second." : `${e.message}. Start the page again with the command that opened it.`);
+  // What a question whose save went unanswered means. **The save may still have reached the file**,
+  // so the page cannot say "not saved", and it does not resend by itself.
+  const UNSURE = `The local server did not answer within ${WAIT_MS / 1000} seconds, so the question ` +
+    "may not be saved. It is back in the text box: ask again, and it is saved only once.";
   const fileUrl = (p) => `/api/file?path=${encodeURIComponent(p)}`;
   async function digest(bytes) {
     const d = await crypto.subtle.digest("SHA-256", bytes);
@@ -550,7 +554,7 @@ const ksagentMarkdown = (() => {
   }
 
   const S = { name: "", ask: null, chat: null, live: null, refused: "", stamps: {},
-    askedAt: new Map(), shown: new Map(), problem: "", late: "", ready: false };
+    askedAt: new Map(), shown: new Map(), problem: "", late: "", unsure: null, ready: false };
   const path = (kind) => `${S.name}.${kind}`;
 
   async function refresh(kind, file) {
@@ -718,10 +722,13 @@ const ksagentMarkdown = (() => {
 
   // Appends one record to the ask file. The write names the digest of the bytes read, or
   // `missing`; a 409 means another tab wrote meanwhile, so it reads again and appends again.
+  // A question whose id the file holds already is not written again: a save that went unanswered
+  // may have reached the file.
   async function append(record) {
     for (let tries = 0; tries < 5; tries++) {
       const got = await read(path("ask.jsonl"));
       const had = got.bytes ? new TextDecoder().decode(got.bytes) : "";
+      if (record.type === "question" && holds(had, record.id)) return "";
       const sep = had === "" || had.endsWith("\n") ? "" : "\n";
       const body = new TextEncoder().encode(`${had}${sep}${JSON.stringify(record)}\n`);
       const put = await send(fileUrl(path("ask.jsonl")), { method: "PUT", body,
@@ -731,14 +738,31 @@ const ksagentMarkdown = (() => {
     }
     return "The ask file kept changing while it was saved. Try again.";
   }
+  function holds(had, id) {
+    return had.split("\n").some((line) => {
+      try {
+        const r = JSON.parse(line);
+        return r !== null && r.type === "question" && r.id === id;
+      } catch (_) { return false; }
+    });
+  }
+  // Caution: **A question not known to be saved goes back into the text box, and keeps its id.**
+  // The box was emptied when it was sent. Asked again, the same id lets append write it once,
+  // even where the first save reached the file late.
   async function ask(text) {
-    const id = crypto.randomUUID();
+    const id = S.unsure && S.unsure.text === text ? S.unsure.id : crypto.randomUUID();
     S.askedAt.set(id, Date.now());
-    S.problem = await append({ type: "question", id, text }).catch(failed);
+    S.problem = await append({ type: "question", id, text }).catch((e) =>
+      e && e.name === "TimeoutError" ? UNSURE : failed(e));
+    S.unsure = S.problem === "" ? null : { id, text };
+    if (S.unsure && $("text").value.trim() === "") $("text").value = text;
+    // **Draw the notice here**: look draws only when a file changed, and a lost save changed none.
+    draw();
     await look();
   }
   async function stop(id) {
     S.problem = await append({ type: "stop", id }).catch(failed);
+    draw();
     await look();
   }
 
@@ -760,14 +784,20 @@ const ksagentMarkdown = (() => {
         if (refused) live = null;
         if (JSON.stringify(live) !== JSON.stringify(S.live)) { S.live = live; l = true; }
       }
-      // **A late answer is said only until the next look gets through**: the server may answer
-      // again, and a stale notice would then mislead.
+      // **A look's own failure is said only until the next look gets through**: the server may
+      // answer again, and a stale notice would then mislead.
       const late = S.late !== "";
       S.late = "";
+      // A question whose save went unanswered and now stands in the file was saved after all.
+      if (S.unsure && (S.ask ? S.ask.out : []).some((r) => r.type === "question" && r.id === S.unsure.id)) {
+        if ($("text").value.trim() === S.unsure.text) $("text").value = "";
+        S.unsure = null;
+        S.problem = "";
+        draw();
+      }
       if (a || c || l || late || turns().some(isOpen)) draw();
     } catch (e) {
-      if (e && e.name === "TimeoutError") S.late = failed(e);
-      else S.problem = failed(e);
+      S.late = failed(e);
       draw();
     }
   }

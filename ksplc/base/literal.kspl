@@ -71,7 +71,7 @@ struct Literal_check //<
     at: Sz
     len: Sz
 
-fn escape_code_point(text: U8[], at: Sz): I32? //< the code point a `\uXXXX` stands for
+priv fn escape_code_point(text: U8[], at: Sz): I32? //< the code point a `\uXXXX` stands for
     //< `at` is the backslash's index; none without four hexadecimal digits (as hex4 in std/chars).
     return text.hex4(at + 2)
 
@@ -82,12 +82,12 @@ struct Literal_step //< one step through a string literal's body, and what it st
     is_cont: Bool //< a `\` at a line's end, standing for no byte at all
 
 impl Literal_step
-    fn byte_count(r: Self): Sz //< how many bytes the step stands for
+    priv fn byte_count(r: Self): Sz //< how many bytes the step stands for
         if r.is_cont
             return 0
         return 1 if r.code_point < 0 else chars.codepoint_len(r.code_point)
 
-fn literal_step(text: U8[], at: Sz, end: Sz, is_raw: Bool): Literal_step //<
+priv fn literal_step(text: U8[], at: Sz, end: Sz, is_raw: Bool): Literal_step //<
     //< The step starting at `at` in a string literal's body, which ends at `end`
     //< **The only reader of the escapes**: `literal_span` counts with it and `append_literal_bytes`
     //< writes with it, so a string's reported length and the bytes either backend emits agree.
@@ -234,15 +234,13 @@ fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
         $cp: I32? = .none
         if j + 6 <= span.end
             cp = escape_code_point(text, j)
-        switch cp
-        case .none
+        code: = cp catch
             return Literal_check::{ .fault = .short_hex, .at = j,
                 .len = 6 if j + 6 <= span.end else span.end - j }
-        case .some(code)
-            if code >= 0xD800 && code <= 0xDFFF
-                return Literal_check::{ .fault = .surrogate, .at = j, .len = 6 }
-            if one_byte && code > 0x7F
-                return Literal_check::{ .fault = .wide_in_char, .at = j, .len = 6 }
+        if code >= 0xD800 && code <= 0xDFFF
+            return Literal_check::{ .fault = .surrogate, .at = j, .len = 6 }
+        if one_byte && code > 0x7F
+            return Literal_check::{ .fault = .wide_in_char, .at = j, .len = 6 }
         j += 6
     // **A character literal is one byte**, so `'€'` and `'ab'` are rejected, or char_literal_byte
     // **silently returns only the leading byte**. **Count with literal_span's byte_len**; a recount

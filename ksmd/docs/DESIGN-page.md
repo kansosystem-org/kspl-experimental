@@ -391,6 +391,7 @@
 
 * **A table never scrolls in a box of its own.** A box would take the mouse wheel in the middle of a document, and its heading would hide under the header. A table wider than the page reaches past it, and the page scrolls sideways.
 * **The row numbers and the first column stay in sight while the page scrolls sideways** (`position: sticky` on each row's first two cells). So a row of a wide table keeps its name, as a spreadsheet's frozen first column does. `table.js` measures the row numbers' width, so the first column stands just right of them. It measures a table that an include shows too.
+  * **They stay only in a table that the page can scroll past sideways** (`pinned`). Elsewhere a cell that stays has no effect, and thousands of them slowed each scrolled frame about threefold. `table.js` checks again when the tables are drawn, and when the window, the zoom or the contents' width changes.
 * **Every table's heading sticks, and no source notation chooses it.** A choice per table would change the file for a way of looking.
 * **On paper, the browser repeats the `thead` on each page.**
 
@@ -594,6 +595,7 @@
 * **A line is a line as written.** Each paragraph, heading, list item, quote and code line is one, and each line break typed inside one adds one. The count does not change with the window's width or the zoom. A table's cells and captions are not counted.
 * **A character is one that a person sees, and spaces are left out.** A kanji written with a variation selector, as some names are, is one character, though it takes two code points. A space, full-width or not, is not counted.
 * **A block that the selection only touches at its edge is not counted.** So selecting a paragraph up to the start of the next one counts one paragraph.
+* **The lines and characters are counted once the person pauses, as the page is.** Each count reads every block, and in a document of 12,000 blocks that took a tenth of a second per key. The figures for chosen cells show on the next frame.
 
 ### The page
 
@@ -627,12 +629,12 @@
 * **While it holds the edit, it grows with the wrapped text, up to eight lines, and scrolls past them.** Excel's bar opens to a fixed height that the person sets by hand, and people ask for one that fits the formula.
 * **It has no key of its own to grow, as Excel's `Ctrl`+`Shift`+`U`.** The bar grows by itself where the text needs room, so the key would do nothing a press does not.
 
-**One edit, two views: the bar's box takes the open edit itself** (`inBar` in `ksmd/port/web/table.js`). The keys, the list of functions, the colours, the marked brackets and AutoCorrect act in the bar as in the cell, by the same code. The cell shows a copy of the text, framed with dashes.
+**One edit, two views: the bar's box takes the open edit itself** (`inBar` in `ksmd/port/web/cellbox.js`). The keys, the list of functions, the colours, the marked brackets and AutoCorrect act in the bar as in the cell, by the same code. The cell shows a copy of the text, framed with dashes.
 
 * **An edit open in the cell moves into the bar with its text** when the bar is pressed. The caret stands where the press was.
 * **The bar always edits, as F2 does**: the arrow keys move the caret. Enter and Tab take the text and choose the next cell. Esc drops the edit. The keys then go back to the table.
 * **While a formula is typed in the bar, a press on a cell writes its reference.** It works as from the cell ("Pointing at cells in a formula" above).
-* **A table drawn again while the bar holds the edit keeps the text, the caret and the focus.** The bar is not drawn again. The cell's copy of the text comes back in the table drawn again (`redrawn` in `ksmd/port/web/table.js`).
+* **A table drawn again while the bar holds the edit keeps the text, the caret and the focus.** The bar is not drawn again. The cell's copy of the text comes back in the table drawn again (`redrawn` in `ksmd/port/web/cellbox.js`).
 * **A box that held an edit is never used again.** Its keys and help stay attached to it, so the bar puts a fresh box in its place once that edit ends.
 
 **The bar is a stop of Tab after the quick access bar.** Its box's name says which cell it edits, such as `Formula bar, Cell C2`. F10 then Tab twice reach it from a chosen cell. Tab to the box puts the caret at the end, as F2 does.
@@ -697,7 +699,7 @@ Served by the local server, the page opens and saves files itself ("The file lif
 * **Leaving the page asks first while no draft holds the latest edits**: in the second after typing, and where no draft can be held. A draft written as the page goes may not land before the page closes.
 * **A document named in the address that does not open leaves the address.** The new document is then open, and its draft is offered.
 * **Text typed in a cell that the editor refuses stays in its cell, and the draft holds it.** A save writes nothing, another document does not open, and a menu command does nothing until the text is put right or Esc drops it. A press in the menu bar or in a dialog leaves the cell open.
-* **Save As into another folder writes each include's, image's and functions file's path again, so it names the same file from there** (`ksmd/port/web/moving.kspl`). The file is written from a copy with the new paths. The page's document takes them, as one step of undo, only after the write succeeds. So a save that fails changes nothing, and text typed during the write stays.
+* **Save As into another folder writes each include's, image's and functions file's path again, so it names the same file from there** (`ksmd/port/web/save_as.kspl`). The file is written from a copy with the new paths. The page's document takes them, as one step of undo, only after the write succeeds. So a save that fails changes nothing, and text typed during the write stays.
 * **A notice runs one choice.** The first press closes it, so a double press does not save twice or hold a second draft.
 * **Before the page lays another file in, a draft holds what the page shows.** Text typed while the draft is written makes the page write the draft again, so no key is lost.
 * **The Save as and Open dialog shows the folder pressed last, and a choice waits for its listing.** A listing that arrives after a newer one is let go.

@@ -29,8 +29,10 @@ make ksagent                                   # -> out/ksagent.exe
 | [`ksagent/agent.kspl`](agent.kspl) | The loop for one question, the system prompt and the tools' descriptions |
 | [`ksagent/files.kspl`](files.kspl) | The tools `list`, `search` and `read`, and the guards on every path |
 | [`ksagent/office/`](office/) | Word and Excel files as lines of text: the zip, DEFLATE and XML readers, and a file for each format |
+| [`ksagent/sorted_names.kspl`](sorted_names.kspl) | Names read from a file, sorted once and found by halving: the Office readers' and the chat file's |
 | [`ksagent/answer.kspl`](answer.kspl) | An answer, the citation check, and the lines ksagent adds in English or Japanese |
 | [`ksagent/model.kspl`](model.kspl) | One request to the model server, and its reply as it arrives |
+| [`ksagent/defaults.kspl`](defaults.kspl) | Where ksagent asks by default, the API key's variable, and the conversation's length a model server must hold |
 | [`ksagent/events.kspl`](events.kspl) | The server-sent events a streamed reply comes in |
 | [`ksagent/progress.kspl`](progress.kspl) | What the console and the live file show while an answer is written |
 | [`ksagent/chat.kspl`](chat.kspl) | Reading an ask file and a chat file, and recording a question with its answer |

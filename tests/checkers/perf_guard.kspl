@@ -2,7 +2,7 @@
 //< CI performance guard: checks whether memory use has grown markedly over the baseline
 //< It reads the lines that ksplc prints to the log when self-hosting: "Compile time", "System Peak
 //< Memory", "AST Arena headroom", "AST Node bytes" and "AST Kids bytes". The peak and the time are
-//< compared against tests/tools/perf_baseline.json.
+//< compared against tests/checkers/perf_baseline.json.
 //< Caution: **The peak memory and the two exact type sizes decide. Do not remove either.** The
 //< peak covers **everything coarsely**, in steps of one chunk. The sizes of the tree's two types
 //< hold the node to the byte, and a node that grows can hide under the peak's 30% slack. The peak
@@ -175,7 +175,7 @@ priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
     //< next to the script (`tests/`); only when the script path is unknown does it assume the root.
     script: = sys.script_path().unwrap_or("")
     if script.len == 0
-        return "tests/tools/perf_baseline.json"
+        return "tests/checkers/perf_baseline.json"
     return fs.join(sys.get_dir_name(script), "perf_baseline.json", arena)
 
 priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
@@ -269,11 +269,11 @@ priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //
     return peak_ok
 
 priv fn report_headroom(kind: U8[], limit: I64, cur: Reading) //<
-    //< Prints the distance to the carry
-    //< Caution: **Do not return a verdict.** Being near the edge is not a regression; the reader
-    //< asks "if it takes the next step, does this guard still pass" against today's limit. `IT
-    //< WOULD FAIL THIS GATE` means the slack is under one step — raise the baseline now, not after
-    //< it fails.
+    //< Prints the distance to the carry, and where one more chunk would take the peak
+    //< Caution: **Do not return a verdict, and do not word the line as one.** It is a forecast:
+    //< being near the edge is not a regression, and the peak's own line judges. It says `NOT
+    //< GATED`, as the time's line does. Where the forecast is over the limit, the slack is under
+    //< one step: run `--update` now, not after the gate fails.
     free: = cur.head.free
     next_peak: = cur.metrics.peak_bytes + cur.head.step
     share: =
@@ -281,9 +281,10 @@ priv fn report_headroom(kind: U8[], limit: I64, cur: Reading) //<
         else 100.0 * F64::free / F64::cur.metrics.peak_bytes)
     io.out().s("[perf_guard] ").s(kind).s(" arena carry: \{free:,\} bytes (\{share:.1\}% of peak) ")
         .s("before the next chunk of \{cur.head.step:,\} bytes\n")
-    io.out().s("[perf_guard] ").s(kind).s(" arena carry: peak would become \{next_peak:,\} ")
-        .s("(limit \{limit:,\}) -> ")
-        .s("BASELINE ABSORBS IT" if next_peak <= limit else "IT WOULD FAIL THIS GATE").s("\n")
+    io.out().s("[perf_guard] ").s(kind).s(" forecast: one more chunk would make the peak ")
+        .s("\{next_peak:,\}, ").s("within" if next_peak <= limit else "over")
+        .s(" the limit \{limit:,\} -> NOT GATED")
+        .s("" if next_peak <= limit else " (run --update before the next chunk)").s("\n")
 
 priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
     //< whether the types' sizes match the fixed values
@@ -305,8 +306,8 @@ priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
 
 fn main(): I32 //<
     //< Compares a build's cost against the baseline
-    //< Usage: `make perf-log` (the proper entry point), or `ksplc run tests/tools/perf_guard.kspl
-    //< --cold=<log> --warm=<log> [--update]`
+    //< Usage: `make perf-log` (the proper entry point), or
+    //< `ksplc run tests/checkers/perf_guard.kspl --cold=<log> --warm=<log> [--update]`
     //<
     //< Caution: **Let `make perf-log` produce the logs.** It measures on an empty cache (cold) and
     //< again on the same cache (warm), **against separate baselines**. A hit in the AST disk cache

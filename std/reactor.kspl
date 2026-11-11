@@ -8,6 +8,7 @@
 // ==========================================
 import "std/ds" { List }
 
+extern fn kspl_sleep_ms(ms: I32) //< sleeps that long; declared here so a reactor brings no std/sys
 extern fn kspl_net_poll(handles: I64$@, interest: U8$@, n: Sz, timeout_ms: I32, revents_out: U8$@):
     I32
 
@@ -63,10 +64,14 @@ impl Reactor
     pub fn wait( //< waits, and returns only the handles something happened on
         r: Self$@,
         timeout_ms: I32, //< the longest time to wait; 0, or a negative value, looks once and returns
-    ): List<|Ready|>!Reactor_error
+    ): List<|Ready|>!Reactor_error //< empty after the whole timeout when nothing is registered
         $results: = List<|Ready|>(null)
         n: = r.handles.len
+        // Caution: **Wait the timeout out with nothing registered too.** Returned at once, a loop
+        // that paces itself by `wait` (a server between two connections) would take a whole core.
         if n == 0
+            if timeout_ms > 0
+                kspl_sleep_ms(timeout_ms)
             return results
         for r.revents_scratch.len < n
             r.revents_scratch.push(0)

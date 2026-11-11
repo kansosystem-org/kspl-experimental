@@ -4,9 +4,9 @@
 //< numbers of one list continue each other, as Word shows them; a number that overrides a level's
 //< start restarts that level where it is first used. A paragraph is counted as the document is
 //< read, in order (`Numbering.count`), and only one with text gets its label written out.
-import "ksagent/office/index" + { Index, Keyed }
 import "ksagent/office/package" + { Work }
 import "ksagent/office/xml"
+import "ksagent/sorted_names" + { Index, Keyed }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -50,7 +50,7 @@ fn empty(arena: Arena$@): Numbering //< a document with no lists
     $none: = List<|Keyed|>(arena)
     return Numbering::{ .lists = List<|List_def|>(arena), .nums = List<|Num|>(arena),
         .list_keys = List<|Keyed|>(arena), .num_keys = List<|Keyed|>(arena),
-        .num_index = index.sorted(none@, arena) }
+        .num_index = sorted_names.sorted(none@, arena) }
 
 fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
     //< Reads `numbering.xml`, each list and number charged to the file's work before it is made
@@ -97,11 +97,11 @@ fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
             lv: = n.lists.at(list).levels.at(level)
             read_level_field(x@, lv, arena)!
     // A number names its list by id; the ids are put in order once all are read.
-    lists: = index.sorted(n.list_keys@, arena)
+    lists: = sorted_names.sorted(n.list_keys@, arena)
     for i in Range.asc(n.nums.len)
         at: = n.nums.at(i)
         at.list = lists.find(at.list_id).unwrap_or(-1)
-    n.num_index = index.sorted(n.num_keys@, arena)
+    n.num_index = sorted_names.sorted(n.num_keys@, arena)
     return n
 
 priv fn read_level_field(x: xml.Reader@, lv: Level$@, arena: Arena$@): Void!U8[] //<

@@ -75,6 +75,49 @@ fn test_loop_exits_carry_their_state()
     verdict.pass("a loop's exits, `break` included, carry what each path set, moved or released.")
 
 // ==========================================
+// A question to an Option or a Result lends it: `is_some`, `is_none` and `is_err` take `Self@`
+// ("The receiver of a read-only method is `Self@`" in
+// `../../docs/DESIGN-programming-language.md`). So a move-only value inside is still there to take
+// out after the question, and a temporary can be asked as well.
+// ==========================================
+priv fn loop_handle_if(n: I32): Loop_handle? //< a handle holding n where n is positive
+    return .some(Loop_handle::{ .v = n }) if n > 0 else .none
+
+priv fn loop_handle_or_throw(n: I32): Loop_handle!Catch_probe_error
+    if n <= 0
+        throw .missing
+    return Loop_handle::{ .v = n }
+
+priv fn asked_then_taken(n: I32): I32 //< asks the Option twice, then moves its value out
+    h: = loop_handle_if(n)
+    if h.is_none() || !h.is_some()
+        return -1
+    switch h
+    case .some(x)
+        return loop_take(x)
+    case .none
+        return -2
+
+priv fn result_asked_then_taken(n: I32): I32 //< asks the Result, then moves its value out
+    r: = loop_handle_or_throw(n)
+    if r.is_err()
+        return -1
+    x: = r catch
+        return -2
+    return loop_take(x)
+
+fn test_question_lends_a_move_only_value()
+    verdict.start("[Lang] asking an Option or a Result moves nothing out of it test...")
+    assert(asked_then_taken(5) == 5 && asked_then_taken(0) == -1,
+        "an Option asked twice still holds its move-only value")
+    assert(result_asked_then_taken(6) == 6 && result_asked_then_taken(0) == -1,
+        "a Result asked still holds its move-only value")
+    assert(loop_handle_if(1).is_some() && loop_handle_if(0).is_none(),
+        "a temporary Option can be asked")
+    assert(loop_handle_or_throw(0).is_err(), "a temporary Result can be asked")
+    verdict.pass("each question lent its receiver, so the move-only value was taken out after it.")
+
+// ==========================================
 // `for x in` reads a place where it stands, and evaluates anything else once ("Loops" in
 // `../../docs/SPEC-programming-language.md`). The loop points at the place, so it moves nothing
 // and sees an element the body pushes. An `Iter` is copied, so each loop starts from its start.

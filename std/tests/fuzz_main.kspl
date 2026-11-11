@@ -192,6 +192,10 @@ priv fn push_hand(out: List<|fuzz.Sample|>$@, kind: U8[], samples: U8[][], arena
         push_sample(out, kind,
             arena.text().s("hand-written ").s(kind).s(" \{i\}").take(), samples[i], false)
 
+priv fn skip_build_output(name: U8[]): Bool //< the repository's build output and git's own folder
+    //< Neither holds a seed anyone wrote. Only this repository knows its build output is `out`.
+    return name.equals("out") || name.equals(".git")
+
 priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
     //< The seeds built here, then the JSON files under dirs
     $out: = List<|fuzz.Sample|>(arena)
@@ -208,7 +212,7 @@ priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
     push_hand(out@, "argv", U8[][]::ARGV_SAMPLES, arena)
     push_hand(out@, "regex", U8[][]::REGEX_SAMPLES, arena)
     push_hand(out@, "http-req", U8[][]::REQUEST_SAMPLES, arena)
-    for f in fuzz.gather(dirs, U8[][]::{ ".json" }, MAX_SEED_BYTES, arena)
+    for f in fuzz.gather(dirs, skip_build_output, U8[][]::{ ".json" }, MAX_SEED_BYTES, arena)
         push_sample(out@, "json", f.name, f.data, false)
     return out
 

@@ -138,8 +138,7 @@ function ksmdFilter(ks) {
       return;
     }
     if (!note) {
-      note = document.createElement("div");
-      note.className = "filter-note";
+      note = ks.el("div", "filter-note");
       wrap.insertBefore(note, wrap.querySelector("table"));
     }
     note.textContent = `Showing ${shown} of ${rows.length} rows. `;
@@ -219,12 +218,10 @@ function ksmdFilter(ks) {
     ks.table.chooseCell({ block, row: -1, column });
     const conds = condsOf(wrap);
     const cond = conds && conds.get(column);
-    const el = document.createElement("div");
-    el.className = "filter-panel";
+    const el = ks.el("div", "filter-panel");
     el.setAttribute("aria-label", `Filter column ${ks.table.letters(column)}`);
 
-    const sorts = document.createElement("div");
-    sorts.className = "filter-sorts";
+    const sorts = ks.el("div", "filter-sorts");
     const up = ks.button("Sort ascending (A to Z, 0 to 9)");
     const down = ks.button("Sort descending");
     const clear = ks.button("Clear filter from this column");
@@ -258,8 +255,7 @@ function ksmdFilter(ks) {
     const matches = (q, key) => q === "" || searched(key).includes(q);
     // The values the search leaves in; the list shows the first FILTER_LIST_CAP of them.
     let found = values;
-    const list = document.createElement("div");
-    list.className = "filter-values";
+    const list = ks.el("div", "filter-values");
     const allBox = document.createElement("label");
     const all = document.createElement("input");
     all.type = "checkbox";
@@ -277,8 +273,7 @@ function ksmdFilter(ks) {
       boxes.push(box);
       return label;
     };
-    const capped = document.createElement("p");
-    capped.className = "filter-capped";
+    const capped = ks.el("p", "filter-capped");
     // Lists the first values `found` holds, with the boxes as `ticked` holds them.
     const fill = () => {
       boxes.length = 0;
@@ -317,8 +312,7 @@ function ksmdFilter(ks) {
     more.append(summary, op, arg);
     el.appendChild(more);
 
-    const ends = document.createElement("div");
-    ends.className = "filter-ends";
+    const ends = ks.el("div", "filter-ends");
     const ok = ks.button("OK", "filter-ok");
     const cancel = ks.button("Cancel");
     ends.append(ok, cancel);
@@ -436,16 +430,14 @@ function ksmdFilter(ks) {
   // folded, and a box per day made by `valueBox`. A month is named in the browser's language.
   function dateTree(dates, valueBox) {
     if (dates.length === 0) return null;
-    const tree = document.createElement("div");
-    tree.className = "date-tree";
+    const tree = ks.el("div", "date-tree");
     tree.setAttribute("role", "tree");
     tree.setAttribute("aria-label", "Dates by year and month");
     const node = (key, text, label) => {
       const n = document.createElement("div");
       n.setAttribute("role", "treeitem");
       n.dataset.key = key;
-      const row = document.createElement("div");
-      row.className = "tree-row";
+      const row = ks.el("div", "tree-row");
       const twist = ks.button("", "tree-twist");
       twist.tabIndex = -1;
       twist.setAttribute("aria-label", label);
@@ -454,8 +446,7 @@ function ksmdFilter(ks) {
       input.type = "checkbox";
       box.append(input, ` ${text}`);
       row.append(twist, box);
-      const kids = document.createElement("div");
-      kids.className = "tree-kids";
+      const kids = ks.el("div", "tree-kids");
       kids.setAttribute("role", "group");
       n.append(row, kids);
       fold(n, true);

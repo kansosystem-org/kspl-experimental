@@ -48,9 +48,7 @@ function ksmdMenus(ks) {
     if (CHECKED[cmd]) b.setAttribute("aria-checked", "false");
     b.dataset.cmd = cmd;
     b.appendChild(ksmdIcon(cmd));
-    const name = document.createElement("span");
-    name.className = "label";
-    name.textContent = label;
+    const name = ks.el("span", "label", label);
     b.appendChild(name);
     if (key) {
       const kbd = document.createElement("kbd");
@@ -61,8 +59,7 @@ function ksmdMenus(ks) {
   }
 
   function flyout(name, items) {
-    const sub = document.createElement("div");
-    sub.className = "sub";
+    const sub = ks.el("div", "sub");
     const head = document.createElement("button");
     head.type = "button";
     head.className = "sub-name";
@@ -70,12 +67,9 @@ function ksmdMenus(ks) {
     head.setAttribute("aria-haspopup", "menu");
     head.setAttribute("aria-expanded", "false");
     head.appendChild(ksmdIcon(items[0]));
-    const label = document.createElement("span");
-    label.className = "label";
-    label.textContent = name;
+    const label = ks.el("span", "label", name);
     head.appendChild(label);
-    const menu = document.createElement("div");
-    menu.className = "menu flyout";
+    const menu = ks.el("div", "menu flyout");
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", name);
     menu.hidden = true;
@@ -92,8 +86,7 @@ function ksmdMenus(ks) {
       if (entry === "-") menu.appendChild(document.createElement("hr"));
       else if (Array.isArray(entry)) menu.appendChild(flyout(entry[0], entry[1]));
       else if (entry.row) {
-        const row = document.createElement("div");
-        row.className = "menu-row";
+        const row = ks.el("div", "menu-row");
         for (const cmd of entry.row) {
           const b = item(cmd);
           const kbd = b.querySelector("kbd");
@@ -112,14 +105,12 @@ function ksmdMenus(ks) {
   // The menu bar's menus stand before the document's name, in a menu bar of their own: the name
   // and the saved state are not menus. File's own commands show only where the local server opens
   // files (`file.js`).
-  const names = document.createElement("div");
-  names.className = "menu-names";
+  const names = ks.el("div", "menu-names");
   names.setAttribute("role", "menubar");
   names.setAttribute("aria-label", "Menu");
   bar.insertBefore(names, bar.firstChild);
   for (const [name, entries] of MENUS) {
-    const top = document.createElement("div");
-    top.className = "top-menu";
+    const top = ks.el("div", "top-menu");
     const head = document.createElement("button");
     head.type = "button";
     head.className = "menu-name";
@@ -128,8 +119,7 @@ function ksmdMenus(ks) {
     head.setAttribute("aria-haspopup", "menu");
     head.setAttribute("aria-expanded", "false");
     head.textContent = name;
-    const menu = document.createElement("div");
-    menu.className = "menu";
+    const menu = ks.el("div", "menu");
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", name);
     menu.hidden = true;
@@ -156,8 +146,7 @@ function ksmdMenus(ks) {
     if (e.target.classList.contains("menu-name")) rove(e.target);
   });
 
-  const context = document.createElement("div");
-  context.className = "menu context";
+  const context = ks.el("div", "menu context");
   context.setAttribute("role", "menu");
   context.setAttribute("aria-label", "Table");
   context.hidden = true;

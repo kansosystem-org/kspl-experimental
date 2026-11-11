@@ -62,7 +62,7 @@ Four words name the units that code is organized in. Every document and source c
 | :-- | :-- |
 | file | One `.kspl` source file. It is what `import` names, and `priv` keeps a name visible inside it only |
 | folder | One directory. Inside one folder, files can import each other in a circle |
-| package | Each of `ksplc/` `std/` … listed under "implementation" in the layer table below. It is the unit that is distributed, and a name with no visibility keyword is visible inside its package. **Packages do not nest**: only a top-level folder is one, and `ksmd/port/` is a folder (Java's and Python's packages nest; that is the one difference) |
+| package | Each of `ksplc/` `std/` … listed under "implementation" in the layer table below. It is the unit that is distributed, and a name with no visibility keyword is visible inside its package. **Packages do not nest.** Only a top-level folder or a folder directly under `lib/` can be one, and `ksmd/port/` is a folder. Java's and Python's packages nest; that is the one difference |
 | all | Everywhere: what `pub` opens a name to |
 
 **When you name another product's unit, name its owner too** (`MSYS2's package`, `an ES module`). A bare `package` is always KSPL's.
@@ -75,6 +75,10 @@ Four words name the units that code is organized in. Every document and source c
 | :-- | :-- | :-- |
 | What it holds, many of a kind | Plural | `tests/` `tools/` `docs/` `examples/` `benches/` `boards/` `drivers/` |
 | One step or one aspect of the package it sits in | Singular | `parse/` `sema/` `lower/` `gen/` `fmt/` `lsp/` `model/` `lay/` `write/` `port/` `kernel/` |
+
+**A package's `demo/` is the one named exception, and counts as one part of its package.** It holds many programs, but together they are the package's demonstration, as `lib/ksos/demo/` is ksos's. `examples/` and `benches/` need no exception: their names are plural already.
+
+**`make test-conventions` refuses only the singular names it lists** (`PLURAL_NAMES` in `tests/suite/conventions_test.kspl`). A folder of many things under a singular name it does not list is still a violation.
 
 **Do not give a folder and a file beside it the same name** (a `verdict/` beside `verdict.kspl`): nothing refuses it, but `ls` shows two `verdict` entries.
 

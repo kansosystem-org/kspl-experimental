@@ -8,6 +8,7 @@
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/ast_place" as _base_ast_place // `has_literal_child`
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
 import "ksplc/base/core" as base_core
 import "ksplc/parse/normalize_decl" as parse_normalize_decl
@@ -40,31 +41,29 @@ impl Ast_node
     priv fn should_drop_by_cfg(r: Ast_node$@): Bool
         if r == null
             return false
-        switch r.get_attribute("cfg")
-        case .some(attr)
-            $is_neg: = false
-            target_str: = attr.cfg_flag_name(is_neg@)
-            // Caution: **Do not drop a shape other than `cfg(flag)` / `cfg(!flag)`.** Kept, it is
-            // reported with a position by sema's check_attributes (see cfg_flag_name in
-            // base/ast_ext.kspl).
-            if target_str.len == 0
-                return false
-            $found: = false
-            if base_core.config.defines != null
-                for defined_flag in base_core.config.defines
-                    if defined_flag.equals(target_str)
-                        found = true
-                        break
-            drop: = found if is_neg else !found
-            if drop
-                // Caution: **Take the range before the morph.** A dropped node becomes `empty` and
-                // loses its extent. The LSP uses this range to explain why nothing shows there.
-                span: = r.get_span_length()
-                base_cfg_inactive.record_cfg_inactive(r.loc.file(), r.loc.offset, span, target_str,
-                    is_neg)
-            return drop
-        case .none
+        attr: = r.get_attribute("cfg") catch
             return false
+        $is_neg: = false
+        target_str: = attr.cfg_flag_name(is_neg@)
+        // Caution: **Do not drop a shape other than `cfg(flag)` / `cfg(!flag)`.** Kept, it is
+        // reported with a position by sema's check_attributes (see cfg_flag_name in
+        // base/ast_ext.kspl).
+        if target_str.len == 0
+            return false
+        $found: = false
+        if base_core.config.defines != null
+            for defined_flag in base_core.config.defines
+                if defined_flag.equals(target_str)
+                    found = true
+                    break
+        drop: = found if is_neg else !found
+        if drop
+            // Caution: **Take the range before the morph.** A dropped node becomes `empty` and
+            // loses its extent. The LSP uses this range to explain why nothing shows there.
+            span: = r.get_span_length()
+            base_cfg_inactive.record_cfg_inactive(r.loc.file(), r.loc.offset, span, target_str,
+                is_neg)
+        return drop
 
     fn normalize_ast(r: Ast_node$@, src: U8$[], depth: Sz): Ast_node$@?
         if r == null
@@ -89,14 +88,12 @@ impl Ast_node
                 write_idx += 1
         r.children.truncate(write_idx)
 
-        switch r.elide_node()
-        case .some(elided)
-            if elided != r
-                return .some(elided)
-
-            return .some(elided.treeify_expr().normalize_by_kind())
-        case .none
+        elided: = r.elide_node() catch
             return .none
+        if elided != r
+            return .some(elided)
+
+        return .some(elided.treeify_expr().normalize_by_kind())
 
     fn is_modifier(r: Ast_node$@): Bool
         if r == null

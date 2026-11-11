@@ -1,6 +1,6 @@
-# tools — Kanso's own development tools
+# tools — programs that use more than one package
 
-**Tools for working on this repository, written in KSPL wherever possible.** They are for whoever changes Kanso: they regenerate documents, run the CI's gates, and help with debugging. Nothing here ships with the compiler. Each runs from the tree with `ksplc run tools/<name>.kspl`, or through the make target named beside it.
+**Programs that need more than one package and `std`, and the data files beside them, written in KSPL wherever possible.** Most are for whoever changes Kanso: they regenerate documents and run the CI's gates. Some reach the end user as well. Where ksmd can be built, `make install` builds `ksmd.kspl` into `ksmd.exe` and installs it. `make chat` starts `ksagent_chat.kspl`. The release zip carries `kspl_lldb.py` and the contents of `release-assets/`. Each program runs from the tree with `ksplc run tools/<name>.kspl`, or through the make target named beside it.
 
 ## Run it
 
@@ -16,7 +16,7 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 
 | File | What it does |
 | :-- | :-- |
-| **Documents generated from the source** | |
+| **Document generators** | |
 | `surface.kspl` / `surface_rows.kspl` | Writes and checks a package's API record (`<package>/SURFACE.txt`), the list of every name the package publishes. `pages` writes `ksplc doc`'s reference under `out/docs/`. `make surface` regenerates both; `make test-surface` fails on a record that no longer matches the source. |
 | `tutorial.kspl` / `tutorial_page.kspl` | The tour of the language (`docs/TUTORIAL-programming-language.md`), generated from its program by `make tutorial`. `make test-docs` fails on a drift, or when the page's code blocks, joined in order, do not run as the program does. |
 | **The repository and its CI** | |
@@ -24,15 +24,16 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 | `repo_stat.kspl` / `repo_stat_path.kspl` | Writes the repository's size as one page of text, over the files git tracks or does not ignore. It totals functional code, test code, tooling and prose apart. |
 | `ci.kspl` / `ci_gates.kspl` | The CI's gate table and runner. `make ci` runs every gate the host can answer, and `make ci-summary` asks for the job's summary page. How the gates are read is in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). |
 | `make_db.kspl` | Reads make's database and the make files' own lines. The root's checks of the make names in documents and of the make files' text use it. |
-| `msys2-packages.txt`, `msys2-packages-full.txt` | The MSYS2 UCRT64 packages CI's Windows job needs. CI, the release's Windows build (`.github/actions/msys2-ucrt64/`) and "The environment for each platform" in [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) all read this one list. The second list adds what `make ci` uses on Windows for the gates CI runs on Linux alone. |
-| **Editing and debugging** | |
+| **Launchers for the user** | |
 | `ksmd.kspl` | Opens one `.ksmd` document in ksmd, the document editor (`make ksmd-open`, `make ksmd`), serving its workspace on that workspace's own port. `--list`, `--stop=<folder>` and `--stop-all` tend its servers. Its design is "The desktop opener" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). |
 | `ksagent_chat.kspl` | Asks about a folder in one command (`make chat`): the model server, the chat page, then `ksagent watch` until Ctrl+C. `--show`, `--list`, `--stop=<folder>` and `--stop-all` work as ksmd's opener's do. Its design is "Opening the chat page" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). |
 | `model_server.kspl` | Uses the model server that answers where ksagent asks, or starts `llama-server` or `chat_server` and waits until it is ready. Its design is "Starting the model server" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). |
 | `opener.kspl` / `opener_aim.kspl` | What the two openers share: finding or starting the local server, handing the URL to a browser, and listing and stopping servers. `opener_aim.kspl` holds the rules a test checks alone: what each opener opens (`App`), the paths, the URL, the workspace and its port. |
-| `kspl_lldb.py` | The LLDB pretty printer: it shows slices, `Result`s and structs in readable form while debugging. |
-| **Folders** | |
+| **Data that other programs read** | |
+| `kspl_lldb.py` | The LLDB pretty printer: it shows slices, `Result`s and structs in readable form while debugging. The release zip carries it. |
+| `msys2-packages.txt`, `msys2-packages-full.txt` | The MSYS2 UCRT64 packages CI's Windows job needs. CI, the release's Windows build (`.github/actions/msys2-ucrt64/`) and "The environment for each platform" in [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) all read this one list. The second list adds what `make ci` uses on Windows for the gates CI runs on Linux alone. |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
+| **Folders** | |
 | `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tour page. `repo_test.kspl` covers the file statistics and the CI's sets. `ksmd_aim_test.kspl` covers the rules of ksmd's opener. `all.kspl` runs them; `main.kspl` gives them a `main` for `make debug-tools`. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
 | `docs/` | The design ("Further reading" below). |
 

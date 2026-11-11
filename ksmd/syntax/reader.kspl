@@ -7,7 +7,7 @@ import "ksmd/base/marker" { is_list_marker, is_quote_marker, leading, run_of, ru
 import "ksmd/base/source" { Diagnostic, Line, Source }
 import "ksmd/calc/formula"
 import "ksmd/model/look" { look_of, note_of }
-import "ksmd/model/model" { Block, Check, Document, Item, MAX_BLOCKS, MAX_NESTING }
+import "ksmd/model/model" { Block, Check, Document, Item, MAX_BLOCKS, MAX_FORMULA, MAX_NESTING }
 import "ksmd/syntax/chart" { bind_charts }
 import "ksmd/syntax/clause" { read_clause }
 import "ksmd/syntax/inline" { Inline_reader }
@@ -31,9 +31,20 @@ fn read(src: Source@, arena: Arena$@): Document!Diagnostic //<
         if doc.blocks.len == MAX_BLOCKS
             throw src.diagnostic(line.offset, "a source holds at most 100,000 blocks")
         at = read_block(src, line, doc@, names@, arena)!
+    doc.formula_cap = longest_formula(doc@)
     formula.bind_all(doc@, arena)
     bind_charts(doc@)
     return doc
+
+priv fn longest_formula(doc: Document@): Sz //<
+    //< `MAX_FORMULA`, or the bytes of the longest formula read where it is longer
+    //< Each formula is still one text piece here, as `formula.bind_all` has not split it.
+    $most: = MAX_FORMULA
+    for t in doc.tables
+        for cell in t.cells
+            if cell.kind == .formula && t.pieces[cell.first].text.len > most
+                most = t.pieces[cell.first].text.len
+    return most
 
 priv fn read_block(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$@,
     arena: Arena$@): Sz!Diagnostic //<

@@ -9,6 +9,7 @@
 import "ksplc/base/ast_kinds" as base_ast_kinds
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/lines" as _base_lines // `line_starts`
 import "ksplc/base/locate" as base_locate
 import "std/chars"
 import "std/ds" { List }
@@ -82,10 +83,20 @@ priv const MAX_OFFSET: Sz = 2147483647 //<
     //< The largest position an I32 can hold
     //< **It is also the size limit of one source** (`Loc.at` rejects a larger one).
 
+priv fn fit_offset(offset: Sz): I32 //< a position as a `Loc` holds it; one that does not fit stops
+    //< Caution: **Do not wrap a position that does not fit.** A position past I32 wraps around and
+    //< **points at an unrelated line**, so it is rejected here.
+    if offset < 0 || offset > MAX_OFFSET
+        io.err()
+            .s("\nfatal: source offset does not fit in 32 bits. One source file must stay under 2 \
+                GiB.\n")
+        sys.exit(1)
+    return I32::offset
+
 struct Loc //< a position inside the source
     //< **The logical name is stored as a number** (the reason is at `source_files` in `base_core`).
-    //< Caution: **Do not build it directly with `Loc::{ … }`.** Without `Loc.at`, a forgotten 0
-    //< passes silently and the diagnostic and the jump target lose their file.
+    //< Caution: **Do not build it directly with `Loc::{ … }`.** Without `Loc.at` or `at_offset`, a
+    //< forgotten 0 passes silently and the diagnostic and the jump target lose their file.
     file_id: I32
     offset: I32
 
@@ -94,17 +105,15 @@ impl Loc
         return r.file_id == other.file_id && r.offset == other.offset
 
     fn at(file: U8[], offset: Sz): Loc //< the only builder from a name and a position
-        //< Caution: **Do not wrap a position that does not fit.** A position past I32 wraps around
-        //< and **points at an unrelated line**, so it is rejected here.
-        if offset < 0 || offset > MAX_OFFSET
-            io.err()
-                .s("\nfatal: source offset does not fit in 32 bits. One source file must stay under \
-                    2 GiB.\n")
-            sys.exit(1)
-        return Loc::{ .file_id = base_core.pools.intern_file(file), .offset = I32::offset }
+        return Loc::{ .file_id = base_core.pools.intern_file(file),
+            .offset = fit_offset(offset) }
+
+    fn at_offset(r: Self, offset: Sz): Loc //< the same file at another position
+        //< It looks no name up, so a reader that makes many positions in one file calls `at` once.
+        return Loc::{ .file_id = r.file_id, .offset = fit_offset(offset) }
 
     fn with_file(r: Self, file: U8[]): Loc //< it replaces only the name (the position stays)
-        //< **Only this and `at` turn a name into its number.**
+        //< **Only this and `at` turn a name into its number**; `at_offset` keeps the number it has.
         return Loc::{ .file_id = base_core.pools.intern_file(file), .offset = r.offset }
 
     fn file(r: Self): U8[] //< the only function that turns the number back into a logical name
@@ -136,7 +145,7 @@ struct Ast_node
     // The I32 fields (kind_id / type_id / ival) come first, together, to cut the padding.
     // **When adding a field, check the size per node**: there can be millions of nodes, so 8 bytes
     // change the tree by tens of MB. **A guard fixes the size** (`want_node_bytes` in
-    // `tests/tools/perf_guard.kspl`); where growing it is the decision, update both.
+    // `tests/checkers/perf_guard.kspl`); where growing it is the decision, update both.
     kind_id: base_ast_kinds.Ast_kind
     type_id: I32
     ival: I32 //<
@@ -348,7 +357,7 @@ impl Ast_node
     fn build_empty(loc: Loc): Ast_node$@ //< a node standing for nothing, such as an absent part
         return Ast_node(.k_empty, "", loc)
 
-    fn as_args(args: Ast_node$@, loc: Loc): Ast_node$@ //<
+    priv fn as_args(args: Ast_node$@, loc: Loc): Ast_node$@ //<
         //< `args` as an argument list: itself if it is one, wrapped if it is one argument
         if args == null
             return Ast_node.build_args(loc)

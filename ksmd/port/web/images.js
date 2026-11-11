@@ -26,8 +26,7 @@ function ksmdImages(ks) {
       const pic = fig.querySelector(".picture");
       const bar = fig.querySelector(".draw-tools");
       if (!pic || !bar || pic.querySelector(".size-handle")) continue;
-      const handle = document.createElement("span");
-      handle.className = "size-handle";
+      const handle = ks.el("span", "size-handle");
       handle.title = "Drag to change the image's width";
       pic.appendChild(handle);
       for (const [cls, label, title] of [

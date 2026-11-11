@@ -5,6 +5,7 @@
 //< caller.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_negative_number`
 import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/ds" { List }
@@ -118,10 +119,14 @@ impl Ast_node
             if p.kind_id == .k_fn_param
                 name: = p.get_decl_id_text()
                 d: = p.get_param_default()
+                $default_text: = d.text if d != null else ""
+                // A negative default's node is the minus; its digits are the child's.
+                if d != null && d.is_negative_number()
+                    default_text = base_core.arena.text().s("-").s(d.get_unary_target().text).take()
                 out
                     .push(Sig_part::{ .name = name if name.len > 0 else "?",
                     .type_node = p.get_decl_type_node(), .type_id = p.type_id,
-                    .default_text = d.text if d != null else "", .is_rest = false })
+                    .default_text = default_text, .is_rest = false })
             else if p.kind_id == .k_keyword && p.text.equals("...")
                 out
                     .push(Sig_part::{ .name = "", .type_node = null, .type_id = 0,

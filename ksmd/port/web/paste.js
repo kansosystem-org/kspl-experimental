@@ -30,8 +30,7 @@ function ksmdPaste(ks) {
   button.insertAdjacentHTML("beforeend", '<span class="arrow" aria-hidden="true">▾</span>');
   button.hidden = true;
   // The menu the button opens (`ks.popup`). The letter of a choice chooses it, as in Excel.
-  const menu = document.createElement("div");
-  menu.className = "menu paste-menu";
+  const menu = ks.el("div", "menu paste-menu");
   menu.setAttribute("aria-label", "Paste options");
   // Each choice: whether it puts values, its name, its key there, and the key that pastes so.
   const CHOICES = [[false, "Keep formulas", "F", "Ctrl+V"], [true, "Values only", "V", "Ctrl+Shift+V"]];
@@ -43,8 +42,7 @@ function ksmdPaste(ks) {
     b.appendChild(ksmdIcon(kind ? "paste-values" : "paste"));
     // The letter that chooses it is underlined, as in Excel's menus.
     const at = label.toLowerCase().indexOf(letter.toLowerCase());
-    const name = document.createElement("span");
-    name.className = "label";
+    const name = ks.el("span", "label");
     const u = document.createElement("u");
     u.textContent = label[at];
     name.append(label.slice(0, at), u, label.slice(at + 1));

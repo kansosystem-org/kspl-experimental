@@ -4,7 +4,8 @@
 //< the reference is written. Removing a row or a column turns a reference to it into `#REF!`, and
 //< moves a range's corner on it one line inward.
 //< Caution: **An edit that would write a formula longer than 4,096 bytes is undone and refused.**
-//< The reader refuses such a formula, so the saved source could not be opened again.
+//< A document read with a longer formula, which a `%ksmd 1` file's conversion can make, allows
+//< that formula's length instead (`formula_cap`), so the document stays editable and savable.
 import "ksmd/base/dates" { is_date }
 import "ksmd/base/marker" { is_decimal }
 import "ksmd/calc/formula" { BROKEN, Positions, bind, find_table, has_attachable, text_piece,
@@ -14,8 +15,7 @@ import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, same_format, 
 import "ksmd/model/group" { after_insert, after_remove, fault_of, innermost, order }
 import "ksmd/model/look" { Look_part, is_note, plain_look, with_part }
 import "ksmd/model/model" { Cell, Cell_kind, Corner, Document, Group, MAX_CELLS, MAX_COLUMNS,
-    MAX_FORMULA, MAX_HEIGHT, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, Piece, Row_height, Table,
-    UNBOUND }
+    MAX_HEIGHT, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, Piece, Row_height, Table, UNBOUND }
 import "ksmd/model/rule" { Rule, no_rule }
 import "ksmd/syntax/chart" { reads_back }
 import "ksmd/syntax/clause" { is_table_name, reads_as_formula }
@@ -78,8 +78,8 @@ impl Edit_error
         case .empty_formula
             return "This formula is empty. Type the formula after '=', or remove the '='."
         case .not_a_value
-            return "This value cannot be saved in one cell. Put each '|' and '{' inside quotes, and \
-                write a line break as \\n inside quotes."
+            return "This value cannot be saved in one cell. Put each '|' and '{' inside quotes, \
+                close each quote, and write a line break as char(10)."
         case .not_a_name
             return "A table name is 1 to 255 bytes of text, with no line breaks or other control \
                 characters."
@@ -318,7 +318,7 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
         cell.text = arena.dup_str(text)
     case .formula
         formula: = text.trim_spaces()
-        if formula.len > MAX_FORMULA
+        if formula.len > doc.formula_cap
             throw .too_long
         if formula.len == 0
             throw .empty_formula
@@ -773,7 +773,7 @@ fn fits(doc: Document@): Void!Edit_error //<
                 continue
             out.clear()
             write_formula(doc, t, cell, at@, 0, 0, out@)
-            if out.slice().len > MAX_FORMULA
+            if out.slice().len > doc.formula_cap
                 throw .too_long
 
 fn charts_found(doc: Document@, u: Sz): Void!Edit_error //<

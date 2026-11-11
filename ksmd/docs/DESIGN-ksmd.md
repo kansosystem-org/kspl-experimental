@@ -34,6 +34,9 @@ A clause starts at column one with `:::`, its kind and its attributes. A line ho
 * **The reader rewrites each formula of a `%ksmd 1` file into the rule of version 2** (`from_version_1` in `ksmd/calc/formula.kspl`). `"\\"` becomes `"\"`, `"\""` becomes `""""`, and `"\u0041"` becomes `"A"`.
 * **A control character, such as a line break, cannot stand on the formula's line.** It becomes `char(10)` and the like, joined to the rest by `&` in brackets. `"a\nb"` becomes `("a" & char(10) & "b")`, which gives the same text.
 * **Quoted text that is no JSON string stays as written**, such as `"\q"`. In version 1 it calculates as empty text.
+* **A version 1 formula is measured as the file writes it, at most 4,096 bytes.** Its conversion can make it longer: `"a\nb"` takes 6 bytes, and its form in version 2 takes 22. A formula of 4,096 bytes grows less than 6 times, so a version 2 file holds a formula of up to 32,768 bytes (`MAX_READ_FORMULA` in `ksmd/model/model.kspl`).
+  * Why: a document that opened in an older ksmd opens in this one too, and saves.
+* **A document that holds a formula over 4,096 bytes when read allows that formula's length to each edit** (`formula_cap`). So a converted formula does not refuse every edit of the document. A formula typed into a cell, or made longer by an edit, keeps within that length.
 * **A save writes `%ksmd 2`**, so the file then needs a ksmd that reads version 2.
 * **Every other part of the file reads the same in both versions.** A text cell, an attribute and a note keep JSON's quotes and escapes.
 
@@ -68,7 +71,7 @@ These reading rules settle cases the notation leaves open:
 * A table may have a header and no data rows, so an editor can create an empty one.
 * A cell's spaces are trimmed. The writer puts one space on each side of a value, and writes an empty cell as `| |`.
 * A number has JSON's shape: no `+`, no leading zero, and a finite value. It is kept as written, so `2.50` stays `2.50`.
-* A formula is kept as written after `=`, up to 4,096 bytes, and checked when tables calculate.
+* A formula is kept as written after `=`, up to 32,768 bytes, and checked when tables calculate. An edit writes at most 4,096 bytes; the larger file limit is for a converted version 1 formula ("A version 1 file").
 * Quoted text is decoded by JSON's rules. The writer escapes only what JSON requires.
 * Paths are kept as written, and checked when files are resolved.
 
@@ -216,10 +219,11 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 **Inside a formula's quotes, every character stands for itself, `\` included, and a `"` is written twice.** `=like(A1, ".\src\*")` matches a Windows path, and `="say ""hi"""` gives `say "hi"`. Formula text has no other escape.
 
 * **`""` alone is empty text, and `""""` is one quote.**
-* **A quote that nothing closes leaves the formula unread**, and the cell shows `#SYNTAX!`. With AutoCorrect's brackets on, the page adds the closing quote, so `="C:\` becomes `="C:\"`.
+* **A quote that nothing closes makes the edit refused**, as other text that would not read back as one cell is. The cell stays open with the text typed. With AutoCorrect's brackets on, the page adds the closing quote, so `="C:\` becomes `="C:\"`.
 * **`char(n)` writes a character that formula text cannot hold**, such as a line break: `char(10)`. A formula stays on one line, and its quotes hold no escapes.
 * **A table's name in quotes follows the same rule**, so one rule covers all quoted text in a formula.
-* **Only a formula's text follows this rule.** A text cell, an attribute and a note keep JSON's quotes and escapes, as the rest of the file does.
+* **Text typed in quotes into a cell follows this rule too**, so `"C:\new"` is the text `C:\new`, and `"say ""hi"""` is `say "hi"`. A cell's editor shows quoted text by the same rule.
+* **The file keeps JSON's quotes and escapes for a text cell, an attribute and a note**, as for the rest of the file. Only a formula's text is written by this rule.
 
 **Why the spreadsheets' rule:** Excel, LibreOffice Calc and Google Sheets all write a quote inside formula text as `""`, and none of them escapes with `\`. A formula copied from one of them keeps its text and its answer. A path, a regular expression or a file pattern holds `\` often, and doubling every one of them is easy to forget. A single `\` before the closing quote would join the quote to the text, and the rest of the formula would change meaning.
 
@@ -869,7 +873,7 @@ The KSPL model remains authoritative: the page turns editing into model actions,
 
 **A removed table keeps its place in the document's list of tables, emptied and with no name.** Blocks and references name a table by its place, so taking it out would renumber every later table. A reference to it from another table becomes text as written, and calculates as `#REF!`. Removing a table's block by any action empties its table.
 
-**A cell edits as the text a person types.** Text after `=` is a formula, and a number as JSON writes one is a number. A date as the file writes one, `2026-10-23`, is a date. While the page's AutoCorrect for dates is on, `2026/10/23` and `11/6` are dates too, and the file keeps the `-` form ("Choosing and editing cells" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). A quoted JSON string is text, so `"12"` is the text 12. Nothing makes the cell empty, and anything else is text as typed. A number too large for a cell, as `1e400`, stays the text typed, as Excel keeps it. An `=` with nothing after it is refused as an empty formula. A cell's editor shows text that would read as another kind in quotes.
+**A cell edits as the text a person types.** Text after `=` is a formula, and a number as JSON writes one is a number. A date as the file writes one, `2026-10-23`, is a date. While the page's AutoCorrect for dates is on, `2026/10/23` and `11/6` are dates too, and the file keeps the `-` form ("Choosing and editing cells" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). Text in quotes is text, read as formula text is ("Text in a formula"), so `"12"` is the text 12. Nothing makes the cell empty, and anything else is text as typed. A number too large for a cell, as `1e400`, stays the text typed, as Excel keeps it. An `=` with nothing after it is refused as an empty formula. A cell's editor shows text that would read as another kind in quotes.
 
 ## Undo and redo
 
@@ -950,7 +954,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 * **One folder per document holds every file ksmd writes for it**: its images, and a new functions file or included document from Insert (`dataFolder` in `ksmd/port/web/file.js`). A folder of documents does not fill with their files, and each document's files can be told apart. Moving or sending a document means one folder more. The server makes the folder on the first write.
 * **The folder's name says it belongs to the document, not what it holds.** A name per kind of file, such as `-images`, would need a second folder for each new kind.
 * **A file chosen elsewhere is used where it stands.** The folder is only where a new file goes by default; a clause may name any file in the workspace.
-* **A document renamed or saved elsewhere keeps the folder's old name.** Its clauses name the files by their paths, which Save As writes again (`ksmd/port/web/moving.kspl`), so nothing breaks.
+* **A document renamed or saved elsewhere keeps the folder's old name.** Its clauses name the files by their paths, which Save As writes again (`ksmd/port/web/save_as.kspl`), so nothing breaks.
 * **The write never replaces a file**: a name already taken goes on to the next number.
 * **The page asks nothing as the image goes in.** It goes in with no alternate text, as one that only decorates. Alt text… in the image's tools gives it a description later, and Caption… a caption that a reference names. A question on every image was asked more often than it was answered, and put the work before the picture.
 * **It needs the local server and a document saved once**, for the image needs a folder to go in.
@@ -972,7 +976,7 @@ Initial limits are safety bounds, not performance claims. Apply them before allo
 | Blocks in one source | 100,000 |
 | List nesting or inline nesting | 16 levels each |
 | One table | 256 columns, 10,000 data rows, 100,000 cells including the header |
-| One formula | 4,096 UTF-8 bytes and 64 expression levels |
+| One formula | 4,096 UTF-8 bytes and 64 expression levels; 32,768 bytes in a file, for a converted version 1 formula |
 | Text that `&` or a function gives | 32,767 UTF-8 bytes; past it, `#NUM!` |
 | `round`'s places | -15 to 15 |
 | Cell values read in one calculation | 500 million; past it, `#LIMIT!` |
@@ -986,7 +990,7 @@ A diagnostic names the source path, one-based line and Unicode-scalar column, pl
 
 A source the reader refuses cannot be edited or saved, so a partly parsed model never overwrites the file; its diagnostics are offered instead. Calculation errors are valid cell results and do not prevent saving.
 
-An edit that would write a formula over 4,096 bytes is refused; a table's new name counts too, as a reference writes it. A formula nested deeper than 64 levels calculates as `#SYNTAX!`. A table edit past a table's limits is refused, and a refused edit changes nothing.
+An edit that would write a formula over 4,096 bytes is refused; a table's new name counts too, as a reference writes it. In a document read with a longer formula, that formula's length is the limit instead ("A version 1 file"). A formula nested deeper than 64 levels calculates as `#SYNTAX!`. A table edit past a table's limits is refused, and a refused edit changes nothing.
 
 **A step that would leave the source over 8 MiB or 100,000 blocks is undone and refused**, since the saved file would not open again. The editor keeps the count of the source's bytes. A step that changes only blocks adds the bytes of those blocks. A step that changes a table measures the whole source, since a table changes how other tables and charts are written.
 
@@ -998,7 +1002,7 @@ An edit that would write a formula over 4,096 bytes is refused; a table's new na
 
 ### What a document costs
 
-**`make measure-ksmd` times three documents and checks nothing; its figures hold only for the machine it runs on.** `ksmd/tests/measure.kspl` times the model outside the browser, and `ksmd/tests/browser/measure.mjs` the page in headless Chromium. The documents are a typical one of about 46 KB, and two of about 2.4 MB and 6.2 MB with a table of 9,999 rows.
+**`make measure-ksmd` times three documents and checks nothing; its figures hold only for the machine it runs on.** `ksmd/tests/measure.kspl` times the model outside the browser, and `ksmd/tests/browser/measure.mjs` the page in headless Chromium. The documents are a typical one of about 46 KB, and two of about 2.4 MB and 6.2 MB with a table of 9,999 rows. In the page, a key is also timed to the end of the next frame, so the status bar's work counts too. The frames of a scroll through the first table are timed as well.
 
 What the figures show, as orders of magnitude:
 

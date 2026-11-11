@@ -3,9 +3,9 @@
 //< variables split into one per name; `normalize_by_kind` in `normalize.kspl` calls each by kind.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `has_keyword`, `has_literal_child`
 import "ksplc/parse/normalize" as parse_normalize
 import "std/ds" { List }
-import "std/str"
 
 priv enum Var_decl_phase
     id
@@ -96,13 +96,11 @@ impl Ast_node
         //< without a body, a variable without an initializer, or a `struct` without fields
         //< Caution: **A generic struct is left alone**: no C type takes a type argument, and the
         //< check of a `struct` with no fields refuses it where it stands.
-        switch r.linkage_of()
-        case .some(l)
-            // A string (`extern "C"`) is refused where it stands (`check_linkage` in
-            // `sema/decl/attrs.kspl`); dropped here, the refusal would never see it.
-            if l.find_child(.k_string) != null
-                return false
-        case .none
+        l: = r.linkage_of() catch
+            return false
+        // A string (`extern "C"`) is refused where it stands (`check_linkage` in
+        // `sema/decl/attrs.kspl`); dropped here, the refusal would never see it.
+        if l.find_child(.k_string) != null
             return false
         switch r.kind_id
         case .k_decl_fn

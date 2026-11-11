@@ -217,6 +217,7 @@ priv fn parse_string(ctx: Parse_ctx$@): U8[]!Json_error
         throw .invalid_string
     ctx.pos += 1
     start: = ctx.pos
+    $has_escape: = false
     for ctx.pos < ctx.src.len
         c: = (ctx.src.ptr + ctx.pos)$
         // **A raw control character is refused (RFC 8259 §7).** Passed through raw, it breaks a
@@ -227,15 +228,23 @@ priv fn parse_string(ctx: Parse_ctx$@): U8[]!Json_error
             if ctx.pos + 1 >= ctx.src.len ||
                 !is_json_escape((ctx.src.ptr + ctx.pos + 1)$)
                 throw .invalid_string
+            has_escape = true
             ctx.pos += 2
             continue
         if c == '"'
             raw_str: = U8[]::{ .ptr = ctx.src.ptr + start, .len = ctx.pos - start }
             ctx.pos += 1
+            // With no `\`, the string means its bytes as they are: a copy, not the decoder.
+            if !has_escape
+                return ctx.arena.dup_str(raw_str)
             // A broken `\u` is not accepted as a string (the reason is in str.kspl's
             // unescape_to_arena).
             return raw_str.unescape_to_arena(ctx.arena) catch
                 throw .invalid_string
+        // An ASCII byte is a whole character; the checks above have already refused the bad ones.
+        if c < 0x80U8
+            ctx.pos += 1
+            continue
         // **Bytes that are not UTF-8 are refused (RFC 8259 §8.1).** Passed through, they reach a
         // peer whose decoder refuses or replaces them, so the two read different strings.
         if step: = ctx.src.utf8_seq_len(ctx.pos)
@@ -504,11 +513,11 @@ impl Value
         //< A `Value` cannot be the subject of `for in` (a chain has no `.len`), so walk this list.
         //< Caution: When arena is null it allocates on the global heap, so the caller frees it with
         //< a `defer` (the same convention as `List.new`).
-        r: Self,
+        r: Self@,
         arena: Arena$@, //< the arena for the list; null means the global heap, freed by the caller
     ): List<|Value|>
         $out: = List<|Value|>(arena)
-        switch r
+        switch r$
         case .array_val(a)
             $curr: = a.head
             for curr != null
@@ -521,9 +530,9 @@ impl Value
         //< `m.val`). It allocates nothing. Any other kind yields no member.
         //< Caution: **Do not walk the keys and then `get` each one.** `get` is a linear scan, so
         //< that walk is quadratic: a few MB of keys from outside take minutes.
-        r: Self,
+        r: Self@,
     ): Member_seq
-        switch r
+        switch r$
         case .obj_val(o)
             return Member_seq::{ .at = o.head }
         default {}
@@ -532,14 +541,14 @@ impl Value
     pub fn dump( //< writes the value as JSON text
         //< **Indentation is only for files a person reads.** For data exchange keep it at 0: the
         //< whitespace is waste to the peer.
-        r: Self,
+        r: Self@,
         out: Str_builder$@, //< where the text is built
         indent: Sz = 0, //< columns per level; 0 gives the exchange form, with no whitespace
     )
         r.dump_at(out, indent, 0)
 
-    priv fn dump_at(r: Self, out: Str_builder$@, indent: Sz, depth: Sz)
-        switch r
+    priv fn dump_at(r: Self@, out: Str_builder$@, indent: Sz, depth: Sz)
+        switch r$
         case .null_val
             out.s("null")
         case .bool_val(b)
@@ -590,7 +599,7 @@ impl Value
         //< where absent and `null` differ, ask `find`. A key names one member.
         //< **It is a linear scan.** Calling it for a list of names the peer chose makes one request
         //< O(members x names); to read every member, walk `obj_members`.
-        r: Self,
+        r: Self@,
         key: U8[], //< the member's name
     ): Value
         return r.find(key).unwrap_or(.null_val)
@@ -598,7 +607,7 @@ impl Value
     pub fn find( //< an object's member, or nothing where the object has none
         //< **A member holding `null` is found** (`.some(.null_val)`), so this tells an absent key
         //< from a `null` one. On a value that is not an object, nothing.
-        r: Self,
+        r: Self@,
         key: U8[], //< the member's name
     ): Value?
         for m in r.obj_members()
@@ -609,10 +618,10 @@ impl Value
     pub fn get_at( //< an array's element, for reading a path; `null_val` past the end
         //< Past the end reads as `null`, as an absent member does for `get`; `arr_list` gives the
         //< count.
-        r: Self,
+        r: Self@,
         index: Sz, //< which element, counting from 0
     ): Value
-        switch r
+        switch r$
         case .array_val(a)
             $curr: = a.head
             $i: Sz = 0
@@ -624,43 +633,43 @@ impl Value
         default {}
         return .null_val
 
-    pub fn as_str(r: Self): U8[]? //< the string it holds, or nothing for another kind
+    pub fn as_str(r: Self@): U8[]? //< the string it holds, or nothing for another kind
         //< An empty string is `.some("")`, apart from a number, `null` or an absent member.
-        switch r
+        switch r$
         case .str_val(s)
             return .some(s)
         default {}
         return .none
 
-    pub fn as_bool(r: Self): Bool? //< the boolean it holds, or nothing for another kind
-        switch r
+    pub fn as_bool(r: Self@): Bool? //< the boolean it holds, or nothing for another kind
+        switch r$
         case .bool_val(b)
             return .some(b)
         default {}
         return .none
 
-    pub fn as_int(r: Self): I32? //< the integer it holds, when an `I32` holds it; nothing otherwise
+    pub fn as_int(r: Self@): I32? //< the integer it holds, when it fits an `I32`; nothing otherwise
         //< Caution: **An integer past `I32` gives nothing, never its low bytes**: narrowed,
         //< 4294967297 would read as 1, and an id that large would match id 1.
-        switch r
+        switch r$
         case .int_val(i)
             if i >= -2147483648I64 && i <= 2147483647I64
                 return .some(I32::i)
         default {}
         return .none
 
-    pub fn as_int64(r: Self): I64? //< the integer it holds, at its full width; nothing otherwise
+    pub fn as_int64(r: Self@): I64? //< the integer it holds, at its full width; nothing otherwise
         //< For a value that can exceed 2GB, such as safetensors' `data_offsets`. A number written
         //< with a point is no integer, however whole.
-        switch r
+        switch r$
         case .int_val(i)
             return .some(i)
         default {}
         return .none
 
-    pub fn as_f64(r: Self): F64? //< the number it holds, or nothing when it is not a number
+    pub fn as_f64(r: Self@): F64? //< the number it holds, or nothing when it is not a number
         //< It accepts the integer kind too, so `3` and `3.0` need no branch.
-        switch r
+        switch r$
         case .float_val(f)
             return .some(f)
         case .int_val(i)
@@ -674,13 +683,13 @@ impl Value
         //< are equal when they hold the same members in any order, a repeated key counted each
         //< time.
         //< Caution: **It is quadratic in an object's members**, as `get` called for each key is.
-        r: Self,
+        r: Self@,
         o: Value, //< the value to compare with
     ): Bool
         if r.kind_rank() != o.kind_rank()
             return false
         // The kinds match, so each read below finds o's own value and its fallback is never taken.
-        switch r
+        switch r$
         case .null_val
             return true
         case .bool_val(b)
@@ -704,8 +713,8 @@ impl Value
             default {}
             return false
 
-    priv fn kind_rank(r: Self): I32 //< which of the seven kinds it is, as a number
-        switch r
+    priv fn kind_rank(r: Self@): I32 //< which of the seven kinds it is, as a number
+        switch r$
         case .null_val
             return 0
         case .bool_val

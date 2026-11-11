@@ -8,6 +8,7 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/locate" as _base_locate // `strip_file_uri`
 import "ksplc/base/package" as base_package
 import "ksplc/lsp/call_hier" as lsp_call_hier
 import "ksplc/lsp/complete" as lsp_complete
@@ -373,7 +374,7 @@ impl Server
         r.latest_state = state
         r.reset_current_state()
 
-    fn ensure_latest_state(r: Self$@, uri: U8[])
+    priv fn ensure_latest_state(r: Self$@, uri: U8[])
         if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
             return
         switch r.docs.open_text(uri)
@@ -382,7 +383,7 @@ impl Server
             r.latest_state = build_document_state(r, text, uri, false)
         default {}
 
-    fn handle_did_open_change(r: Self$@, method: U8[], params: json.Value)
+    priv fn handle_did_open_change(r: Self$@, method: U8[], params: json.Value)
         text_doc: = params.get("textDocument")
         uri: = text_doc.get("uri").as_str().unwrap_or("")
         $src_val: = json.Value.null_val
@@ -411,7 +412,7 @@ impl Server
                 parse_load.record_layout_notes(doc_name(uri).strip_kspl_ext(), kept)
             r.latest_state = build_document_state(r, src, uri, true)
 
-    fn handle_restore(r: Self$@, params: json.Value) //<
+    priv fn handle_restore(r: Self$@, params: json.Value) //<
         //< It takes one open document's text from a supervisor that restarted it, without analysing
         //< **A restart must not make the next answer wait for every open document.** The
         //< supervisor sends each document's analysis later, as a didOpen. It sends it before the
@@ -441,7 +442,7 @@ impl Server
         r.reset_current_state()
         return .some(src)
 
-    fn handle_did_close(r: Self$@, params: json.Value)
+    priv fn handle_did_close(r: Self$@, params: json.Value)
         uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         if uri.len > 0
             r.docs.close(uri)

@@ -4,7 +4,6 @@
 //< lives as long as an arena, use `Arena_text`.
 import "std/chars" // classifying and converting characters, and code points as strings
 import "std/ds" + { List }
-import "std/libc"
 import "std/mem" + { Arena, alloc, dealloc }
 // Caution: **Keep this import even if nothing here seems to call it.** It brings each type's `fmt`,
 // which `\{x\}` calls, into every program that uses this file. The call is made inside `put`, which
@@ -48,6 +47,14 @@ impl Str_builder
         $i: Sz = 0
         for i < src.len
             c: = (src.ptr + i)$
+            // A run of bytes that need no escape goes out in one write, not a byte at a time.
+            if plain_json_byte(c)
+                $j: = i + 1
+                for j < src.len && plain_json_byte((src.ptr + j)$)
+                    j += 1
+                r.s(src.sub(i, j - i))
+                i = j
+                continue
             // Caution: **Do not pass a byte that is not UTF-8 through.** JSON text is UTF-8 (RFC
             // 8259 §8.1), so std/json's parser refuses it, and the writer's output would not read
             // back.
@@ -161,7 +168,8 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     #ends_views
     #inline
     pub fn c(r: Self$@, c: U8): Self$@ //< writes one byte, growing if needed
-        r.reserve(r.len + 1)
+        if r.len >= r.cap
+            r.reserve(r.len + 1)
         dest: U8$@ = r.ptr + r.len
         dest$ = c
         r.len += 1
@@ -174,24 +182,9 @@ impl Str_builder: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self$@, w: Writer): Writer //< writes its contents to `w`
         return w.s(r.slice())
 
-impl U8[]: ds.Hashable<|U8[]|> //< so a string can be a `Map`'s key
-    //< `Eq` (what `==` desugars to) is deliberately not implemented. `equals` is an O(N) comparison
-    //< of contents. Written as `==`, it would look the same as a pointer comparison.
-    pub fn hash(r: U8[]): U32 //< a hash of the contents that spreads keys over the buckets
-        $h: = U32::2166136261
-        for i in Range.asc(r.len)
-            h = h ^ (r.ptr + i)$
-            h = h * (U32::16777619)
-        // FNV-1a alone mixes the low bits poorly (keys with a shared prefix share a bucket).
-        return ds.fmix32(h)
-
-    pub fn equals(r: U8[], b: U8[]): Bool //<
-        //< whether the bytes are the same; deliberately not `==`
-        if r.len != b.len
-            return false
-        if r.len == 0 || r.ptr == b.ptr
-            return true
-        return libc.memcmp(Void$@::r.ptr, Void$@::b.ptr, r.len) == 0
+#inline
+priv fn plain_json_byte(c: U8): Bool //< whether a JSON string holds this byte as it is, unescaped
+    return c >= 0x20U8 && c < 0x80U8 && c != '"' && c != '\\'
 
 priv fn write_utf8(dst: U8$@, cp: I32): Sz //<
     //< Writes a code point in UTF-8 and returns the bytes written
@@ -272,16 +265,17 @@ impl U8[]
     ): List<|U8[]|>
         $out: = List<|U8[]|>(arena)
         $start: Sz = 0
-        for $i: Sz = 0; i <= r.len; i += 1
-            if i < r.len && (r.ptr + i)$ != '\n'
-                continue
-            if i == r.len && start == r.len
-                break // a trailing newline starts no new line
-            $e: = i
+        // A trailing newline starts no new line, so the loop ends at the end of the text.
+        for start < r.len
+            rest: = U8[]::{ .ptr = r.ptr + start, .len = r.len - start }
+            $e: = r.len
+            if k: = rest.find_char('\n')
+                e = start + k
+            next: = e + 1
             if e > start && (r.ptr + e - 1)$ == '\r'
                 e -= 1
             out.push(U8[]::{ .ptr = r.ptr + start, .len = e - start })
-            start = i + 1
+            start = next
         return out
 
     pub fn join( //< joins the pieces, with the receiver between each pair

@@ -20,7 +20,6 @@ import "ksplc/sema/decl/access" as _sema_decl_access // `address_is_readonly`
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List }
-import "std/str"
 
 priv const MAX_ORDER_DEPTH: Sz = 200 //<
     //< How deep the classifying walk goes before it gives the cautious answer (`acts`)
@@ -155,21 +154,21 @@ impl Operand_order
                 lower_arc.arc_taken(s.live_name, lctx, node.loc)
 
 impl Operand_slot
-    fn reads_address(r: Self, lctx: Lowering_ctx$@): Bool //<
+    priv fn reads_address(r: Self, lctx: Lowering_ctx$@): Bool //<
         //< Whether the operand is a place its consumer reaches through its address
         //< Then only the address is fixed early; what lies there is read when the consumer runs.
         node: = r.parent.get_child(r.idx)
         return r.by_address && lctx.sema.env.is_place_expr(node) &&
             !lctx.sema.env.is_pointer(node.type_id)
 
-    fn operand_class(r: Self, lctx: Lowering_ctx$@): Order_class
+    priv fn operand_class(r: Self, lctx: Lowering_ctx$@): Order_class
         node: = r.parent.get_child(r.idx)
         if (r.writes || r.reads_address(lctx)) && node.has_fixed_address(lctx, 0)
             return .fixed
         return node.order_class(lctx, 0)
 
 impl Ast_node
-    fn order_class(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Order_class //<
+    priv fn order_class(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Order_class //<
         //< What running this expression at another point of its statement could change
         //< Caution: **Count everything Lower moves into statements as `acts`** (`&&`, a
         //< conditional, `catch`, `!`, a user operator): it already runs ahead of the expression
@@ -273,7 +272,7 @@ impl Ast_node
         default
             return false
 
-    fn has_fixed_address(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
+    priv fn has_fixed_address(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
         //< Whether the place's address is the same wherever in the statement it is taken
         //< A name, and a field of a place with a fixed address reached without a pointer.
         if r == null || depth >= MAX_ORDER_DEPTH

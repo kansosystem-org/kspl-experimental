@@ -125,7 +125,7 @@ A *central difference* estimates a gradient without the backward pass. It nudges
 
 A loop reaches the vectorizer only through one of two techniques.
 
-1. **Swap the loop nesting alone, keeping the order of the additions into each output element.** It then accumulates each element in parallel rather than by a horizontal sum (adding the lanes of one vector together). The result is unchanged bit for bit (as in `grad_matmul_weight_into`).
+1. **Swap the loop nesting alone, keeping the order of the additions into each output element.** It then accumulates each element in parallel rather than by a horizontal sum (adding the lanes of one vector together). The result is unchanged bit for bit (as in `transa_kernel`, the kernel of `grad_matmul_weight_into`).
 2. **Replace a division inside the loop with one reciprocal computed outside it and a multiplication** (division has lower per-lane throughput).
 
 Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, the vectorizer cannot reach a horizontal sum over one accumulator, or a loop with `exp` / `sin` / `cos` / `sqrt`, unless one technique applies. `-Rpass-analysis=loop-vectorize` says why.

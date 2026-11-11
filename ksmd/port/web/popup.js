@@ -1,7 +1,8 @@
 // ksmd page: the small pop-ups over the page, in one place. They are the status bar's menus
 // (`status.js`), Paste Options (`paste.js`), the quick access bar's right-click menu and its colour
 // palette (`quick.js`), and a column's filter panel (`filter.js`). The menu bar's menus and the
-// right-click menu take their place and their keys from here too (`menu.js`).
+// right-click menu take their place and their keys from here too (`menu.js`). So do the panels
+// with Apply and Cancel that set a column's rule, a chart and the page setup (`ksmdPanels`).
 // One pop-up is open at a time. It stands by what opened it, inside the window, and keeps off its
 // bottom edge. Esc, a press outside it and a change of the window's size close it, and the focus
 // goes back where it was. In a menu, Up and Down move through its items, Home and End go to the
@@ -151,4 +152,44 @@ function ksmdPopup(ks) {
     bottom,
     MARGIN,
   });
+}
+
+// The small panels that set a column's rule, a chart and the page setup (`ks.panel`). Each has
+// Apply and Cancel at its end. Escape or a press outside closes it, as a press outside a menu does.
+// Apply, Cancel and Escape give the focus back where it was before the panel opened, as a dialog
+// does; left on the panel that went, it fell to the page's body, and the next key went nowhere.
+function ksmdPanels(ks) {
+  const open = new Set();
+  document.addEventListener("mousedown", (e) => {
+    for (const p of open) if (!p.el.contains(e.target)) p.close();
+  }, true);
+  // A panel of class `cls` (`rule-panel`), named `label` for a screen reader. Making it closes
+  // the open panel of its class. `show` adds Apply (`rule-apply`) and Cancel, and puts it on the
+  // page. Apply closes it, then runs `onApply`, which can still read the panel's fields.
+  ks.panel = (cls, label, onApply) => {
+    for (const p of open) if (p.el.className === cls) p.close();
+    const el = ks.el("div", cls);
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", label);
+    const from = document.activeElement;
+    const p = { el, close: () => { el.remove(); open.delete(p); } };
+    const back = () => {
+      p.close();
+      ks.focusBack(from);
+    };
+    p.apply = ks.button("Apply", cls.replace(/-panel$/, "-apply"), null, () => { back(); onApply(); });
+    const cancel = ks.button("Cancel", null, null, back);
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      back();
+    });
+    p.show = () => {
+      el.append(p.apply, cancel);
+      document.body.appendChild(el);
+      open.add(p);
+    };
+    return p;
+  };
 }

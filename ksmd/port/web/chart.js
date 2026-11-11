@@ -87,12 +87,10 @@ function ksmdChart(ks) {
   }
 
   function render(b) {
-    const el = document.createElement("figure");
-    el.className = "b chart";
+    const el = ks.el("figure", "b chart");
     el.contentEditable = "false";
     el.chart = b;
-    const bar = document.createElement("div");
-    bar.className = "chart-buttons";
+    const bar = ks.el("div", "chart-buttons");
     bar.appendChild(ks.button("Edit", "chart-edit", "Choose the kind of chart, its labels, the columns drawn and its title"));
     bar.appendChild(ks.view.removeButton("Remove this chart; its table stays"));
     el.appendChild(bar);
@@ -102,24 +100,19 @@ function ksmdChart(ks) {
       el.appendChild(cap);
     }
     if (b.why) {
-      const p = document.createElement("p");
-      p.className = "problem";
-      p.textContent = `This chart cannot be drawn: ${b.why}`;
+      const p = ks.el("p", "problem", `This chart cannot be drawn: ${b.why}`);
       el.appendChild(p);
       return el;
     }
     // The chart and the shapes drawn over it share one box (`drawings.js`).
-    const picture = document.createElement("div");
-    picture.className = "picture";
+    const picture = ks.el("div", "picture");
     picture.appendChild(draw(b));
     el.appendChild(picture);
     if (b.ser.length > 1) {
-      const key = document.createElement("div");
-      key.className = "chart-key";
+      const key = ks.el("div", "chart-key");
       b.ser.forEach((s, k) => {
         const item = document.createElement("span");
-        const swatch = document.createElement("span");
-        swatch.className = "chart-swatch";
+        const swatch = ks.el("span", "chart-swatch");
         swatch.style.backgroundColor = CHART_COLOURS[k % CHART_COLOURS.length];
         item.append(swatch, s.n);
         key.appendChild(item);
@@ -144,25 +137,21 @@ function ksmdChart(ks) {
         l: Number(labels.value), v, title: title.value.trim(), r: rows ? 1 : 0,
         f: Number(ends[0].value), e: Number(ends[1].value) })));
     });
-    const kind = document.createElement("select");
-    kind.className = "chart-kind";
+    const kind = ks.el("select", "chart-kind");
     kind.add(new Option("Bars", "bar"));
     kind.add(new Option("Lines", "line"));
     kind.value = b.kind;
-    const labels = document.createElement("select");
-    labels.className = "chart-labels";
+    const labels = ks.el("select", "chart-labels");
     b.cols.forEach((n, c) => labels.add(new Option(n || ks.table.letters(c), String(c))));
     labels.value = String(Math.max(b.l, 0));
     // Series in columns, or in rows as a burn-up chart of a plan whose months stand across.
-    const by = document.createElement("select");
-    by.className = "chart-by";
+    const by = ks.el("select", "chart-by");
     by.add(new Option("Series in columns", "columns"));
     by.add(new Option("Series in rows", "rows"));
     by.value = b.r ? "rows" : "columns";
     const name = (c) => b.cols[c] || ks.table.letters(c);
     const ends = ["chart-from", "chart-to"].map((cls, i) => {
-      const pick = document.createElement("select");
-      pick.className = cls;
+      const pick = ks.el("select", cls);
       b.cols.forEach((n, c) => pick.add(new Option(name(c), String(c))));
       pick.value = String(b.r ? (i === 0 ? b.f : b.e) : (i === 0 ? 0 : b.cols.length - 1));
       return pick;
@@ -171,8 +160,7 @@ function ksmdChart(ks) {
     span.append(" from ", ends[0], " to ", ends[1]);
     // The table's own block, whose values name the rows.
     const table = ks.view.blocks().find((x) => x.classList.contains("table") && x.u === b.u && !x.included);
-    const columns = document.createElement("span");
-    columns.className = "chart-columns";
+    const columns = ks.el("span", "chart-columns");
     // The boxes: the table's columns, or the rows by their text in the labels column. Only the
     // rows the editor takes as series are offered (`sr`): text written in the cell, not a
     // calculated value, and a name the saved chart finds that row by.
@@ -199,8 +187,7 @@ function ksmdChart(ks) {
     by.addEventListener("change", boxes);
     labels.addEventListener("change", boxes);
     boxes();
-    const title = document.createElement("input");
-    title.className = "chart-title";
+    const title = ks.el("input", "chart-title");
     title.type = "text";
     title.placeholder = "Title";
     title.value = b.title;

@@ -3,8 +3,8 @@ import "ksdb/ram_store" as ram
 import "ksdb/store" { Store }
 import "std/bytes"
 import "std/chars" // `sub`
+import "std/ds"
 import "std/prng"
-import "std/str"
 import "std/verdict"
 
 // ==========================================
@@ -21,6 +21,13 @@ priv $store_buf: U8[1024]
 
 priv const KIND_SAMPLE: U16 = 1
 priv const KIND_POLICY: U16 = 2
+
+priv fn count_records(store: Store): Sz //< opens the log on `store` again and counts its records
+    $seen: Sz = 0
+    $it: = ksdblog.Log.open(store).iter()
+    for it.next()
+        seen += 1
+    return seen
 
 fn test_append_and_replay() //< that it appends, reads back, and keeps the order
     verdict.start("[ksdb] an appended record reads again, oldest first, test...")
@@ -237,12 +244,7 @@ fn test_corruption_is_detected() //< a record with garbled content is rejected
     // Clears one bit of the second record's content (flash can only garble 1 into 0).
     ram.tear(ksdblog.HEADER_SIZE + ksdblog.HEADER_SIZE + 8, 1)
 
-    reopened: = ksdblog.Log.open(store)
-    $seen: Sz = 0
-    $it: = reopened.iter()
-    for it.next()
-        seen += 1
-    assert(seen == 1,
+    assert(count_records(store) == 1,
         "a record whose CRC does not fit is not read (the rest of that sector is given up)")
     verdict.pass("The CRC catches one flipped bit and does not hand that record on.")
 
@@ -264,11 +266,7 @@ fn test_a_corrupt_header_is_detected() //<
         store.program_at(second_at + offset, U8[]::zero)
 
         reopened: = ksdblog.Log.open(store)
-        $seen: Sz = 0
-        $it: = reopened.iter()
-        for it.next()
-            seen += 1
-        assert(seen == 1,
+        assert(count_records(store) == 1,
             "a record whose header was garbled is not returned (the rest of that sector is \
                 abandoned)")
         // Reading it as a policy must not return it either.
@@ -298,12 +296,7 @@ fn test_full_is_reported_not_overwritten() //< a full log is reported, not silen
     assert(wrote == 32, "32 fit without straddling a sector")
 
     // Once it is full, every record written so far still reads.
-    reopened: = ksdblog.Log.open(store)
-    $seen: Sz = 0
-    $it: = reopened.iter()
-    for it.next()
-        seen += 1
-    assert(seen == wrote, "even once full, everything finished reads")
+    assert(count_records(store) == wrote, "even once full, everything finished reads")
 
     // reset empties it again.
     lg.reset() catch panic("reset should succeed")
@@ -365,11 +358,7 @@ fn test_open_when_the_last_record_ends_near_the_end() //<
 
     $reopened: = ksdblog.Log.open(store)
     assert(reopened.used() == lg.used(), "opening again points at the same position")
-    $seen: Sz = 0
-    $it: = reopened.iter()
-    for it.next()
-        seen += 1
-    assert(seen == 4, "all four read")
+    assert(count_records(store) == 4, "all four read")
 
     // Not even a header fits in the 4 bytes left, so appending throws full.
     $hit_full: = false
@@ -634,11 +623,7 @@ fn test_reset_keeping_leaves_only_the_kept() //< what a finished `reset_keeping`
     lg.reset_keeping(U16[]::KEEP_KINDS) catch panic("reset_keeping should succeed")
     $again: = ksdblog.Log.open(keep_store)
     assert(kept_ones_read(again@), "the marker and the newest policy are kept")
-    $seen: Sz = 0
-    $it: = again.iter()
-    for it.next()
-        seen += 1
-    assert(seen == 2, "the samples and the older policy are gone")
+    assert(count_records(keep_store) == 2, "the samples and the older policy are gone")
     // **The copies sit at the head**, so the whole medium is free again behind them.
     assert(again.used() == 12 + 40, "the next append goes right after the two kept records")
     assert(again.used() == lg.used(), "the log and a reopening agree on where to append")
@@ -730,9 +715,5 @@ fn test_a_half_erased_sector_brings_no_old_record_back() //<
     reread: = ksdblog.Log.open(store)
     n: = reread.last(KIND_POLICY, U8$[]::dst) catch panic("a policy was written")
     assert((U8[]::dst).sub(0, n).equals("NEW-POL2"), "the newest policy is the one written last")
-    $seen: Sz = 0
-    $it: = reread.iter()
-    for it.next()
-        seen += 1
-    assert(seen == appended, "every record read was written after the reset")
+    assert(count_records(store) == appended, "every record read was written after the reset")
     verdict.pass("A half-erased sector is skipped, so no record from before the reset comes back.")

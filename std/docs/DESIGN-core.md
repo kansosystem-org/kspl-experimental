@@ -105,7 +105,7 @@ Two known problems are not handled.
 | File | What is not handled | Why it stays open | What would fill it |
 | :-- | :-- | :-- | :-- |
 | `thread` | **Nothing says which types can cross threads**, so a non-atomic count or a raw pointer gets handed over casually | A constraint on `spawn`'s arguments would miss sharing through a global. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#why-data-races-are-not-prevented-by-the-type-system) | Nothing is planned. What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
-| `Map` | **Hash flooding.** An attacker sends many keys chosen to land in the same slot, so every lookup slows to a crawl. PHP, Python, Ruby and Java all issued CVEs and added hash randomization | No attacker's key reaches a `Map` in std or in the packages that take keys from outside. Their files use none, except where a line marks its keys as coming from a file the user chose to run, such as a model. `http` keeps its headers in a linked list, and `json` sorts a large object's keys to find a repeat. **All of std is held to it**: a library file cannot know where its caller's bytes come from. Only `ds` itself and std's tests are left out. `make test-conventions` holds which folders those are. It reads text, so a `Map` reached with no `Map<\|` written escapes it and still breaks the rule. **When that check fails, design the hash seed then** | Decided already. `str.hash` is FNV-1a plus extra mixing with a fixed seed. `Hashable`'s `hash(r: Self): U32` changes to take a seed per `Map`. Randomization by default is ruled out: an iteration order that changes per run would make the generated C differ per run. That breaks self-hosting's check that the compiler, built twice, gives identical outputs |
+| `Map` | **Hash flooding.** An attacker sends many keys chosen to land in the same slot, so every lookup slows to a crawl. PHP, Python, Ruby and Java all issued CVEs and added hash randomization | No attacker's key reaches a `Map` in std or in the packages that take keys from outside. Their files use none, except where a line marks its keys as coming from a file the user chose to run, such as a model. `http` keeps its headers in a linked list, and `json` sorts a large object's keys to find a repeat. **All of std is held to it**: a library file cannot know where its caller's bytes come from. Only `ds` itself and std's tests are left out. `make test-conventions` holds which folders those are. It reads text, so a `Map` reached with no `Map<\|` written escapes it and still breaks the rule. **When that check fails, design the hash seed then** | Decided already. A string's `hash` is FNV-1a plus extra mixing with a fixed seed. `Hashable`'s `hash(r: Self): U32` changes to take a seed per `Map`. Randomization by default is ruled out: an iteration order that changes per run would make the generated C differ per run. That breaks self-hosting's check that the compiler, built twice, gives identical outputs |
 
 ## Memory and ownership
 
@@ -279,6 +279,14 @@ Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `
 
 Caution: **Do not judge by `U8[]` against `U8$[]`.** `sub_mut` returns a writable view without an allocation, so the return type cannot tell. The arguments can.
 
+### An RTOS hands the heap its critical section
+
+**`mem.set_heap_guard(enter, leave)` makes `alloc` and `dealloc` do their own work inside an OS's critical section.** The freestanding heap enters it before it takes its lock and leaves it after the release. The hosted heap enters it around `malloc` and `free`. With no guard set, nothing changes, and a program with no RTOS pays one test of a null pointer.
+
+Why: an RTOS switches tasks from an interrupt. A task switched out inside `alloc` still holds the heap. Another task that then allocates spins on the freestanding heap's lock until it panics, or breaks `malloc`, which a switch inside it leaves half changed. The heap cannot call the OS itself, since `std` depends on no package above it. So the OS passes its two functions in, once, before its first task runs.
+
+The rule "allocate only through the OS's own calls" was the other answer. It fails because every std type that allocates (`List`, `Arc`, `std/http`) goes through `alloc`, and a break of the rule shows only as a rare panic.
+
 ### The receiver aligns the start of a given buffer
 
 **`mem.init_freestanding_heap()` and `Arena.from_buffer()` align the caller's buffer themselves** (`align_pad` in `std/mem.kspl`). The buffer is usually a plain byte array such as `$buf: U8[4096]`, aligned to 1, and the caller cannot control its alignment. Its address depends on how variables happen to be ordered in `.bss`, so one 1-byte variable before it puts it at an odd address.
@@ -324,7 +332,7 @@ Caution: **Do not express a requirement by name agreement alone.** It is then wr
 
 The other key arrives as the type argument `Key`, since `Self` stands only on the receiver ("Why a trait's receiver is fixed to a bare `Self`" in `docs/DESIGN-programming-language.md`).
 
-**The built-in types' conformances go in std.** In the compiler, an implementation that exists to make a type a key of std's containers would invert the layers. So `Sz`'s `Hashable` sits in `std/ds.kspl` beside what requires it.
+**The built-in types' conformances go in std.** In the compiler, an implementation that exists to make a type a key of std's containers would invert the layers. So the `Hashable` of `Sz` and `U8[]` sits in `std/ds.kspl` beside what requires it.
 
 `ds.fmix32` is the one place where the bit mixing lives: it spreads keys with the same low bits over the slots. **Measure before you add it: added everywhere, it is a mistake.** In a `hash` on the innermost loop, the extra operation outweighs the diffusion. So a parser's memo lookup and a key of token IDs leave it out, since their low bits already differ.
 
@@ -502,7 +510,7 @@ flowchart LR
 
 Caution: **Do not make `chars` point at `str`.** `str` imports `chars`, so the cycle would merge the two tiers into one lump (`make test-thin-use`).
 
-Two functions cannot move to `chars`. `equals` must sit in `Hashable`'s impl block, so `Map<|U8[], V|>` needs `std/str`. `to_cstr` allocates. `std/strfmt` and `std/strnum` never allocate, so a program that only prints or reads numbers does not bring in `std/str`.
+`U8[]`'s `hash` and `equals` sit in `std/ds`, beside `Hashable` and the integer keys. So `Map<|U8[], V|>` works with `std/ds` alone, and comparing two strings does not bring in `std/str`. `to_cstr` cannot move to `chars`, since it allocates. `std/strfmt` and `std/strnum` never allocate, so a program that only prints or reads numbers does not bring in `std/str`.
 
 ### A string allocated and returned is returned read-only
 

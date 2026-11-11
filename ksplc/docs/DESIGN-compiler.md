@@ -130,7 +130,7 @@ Caution: **Do not make them kinds of their own.** Every stage that skips `kind_i
 
 ### A tree node's size is fixed by rule and guarded
 
-**The size in bytes of one tree node (`Ast_node`) and of its run of children (`std/ds`'s `List`) is a fixed number, guarded to the byte.** A self-host builds so many nodes that 8 bytes per node changes the tree by tens of MB. `ksplc/pipeline.kspl` prints `AST Node bytes` and `AST Kids bytes` under `--stats`. `perf_guard` compares them with `WANT_NODE_BYTES` / `WANT_KIDS_BYTES` in `tests/tools/perf_guard.kspl`.
+**The size in bytes of one tree node (`Ast_node`) and of its run of children (`std/ds`'s `List`) is a fixed number, guarded to the byte.** A self-host builds so many nodes that 8 bytes per node changes the tree by tens of MB. `ksplc/pipeline.kspl` prints `AST Node bytes` and `AST Kids bytes` under `--stats`. `perf_guard` compares them with `WANT_NODE_BYTES` / `WANT_KIDS_BYTES` in `tests/checkers/perf_guard.kspl`.
 
 Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one more pointer per node pass, and any difference means somebody touched a type. Where a node is to grow by decision, change `perf_guard`'s numbers and give the grounds.
 
@@ -160,7 +160,7 @@ Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one
 
 **Each `[Layer]` row gives the time and the arena bytes side by side** (`Parse: N ms, M bytes`), so the log alone says which stage grew. The bytes are printed even on a target with no clock. **The remainder is printed as `Other`** (start-up, the CLI parse, what comes after the stages), so an unmeasured stage cannot grow unseen.
 
-**CI's performance guard judges memory, not time.** `tests/tools/perf_guard.kspl` reads `make perf-log`'s log; its opening comment holds the reasons. Its verdicts:
+**CI's performance guard judges memory, not time.** `tests/checkers/perf_guard.kspl` reads `make perf-log`'s log; its opening comment holds the reasons. Its verdicts:
 
 | verdict | how it behaves |
 | :-- | :-- |
@@ -168,7 +168,7 @@ Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one
 | the two node sizes ("A tree node's size is fixed by rule and guarded") | fixed by rule |
 | (the compile time) | recorded beside them, decides nothing: it measures the machine and its load as much as the work |
 
-Caution: **Keep the characters of every line another program reads.** The guard finds its lines by the patterns at its head (`TIME_PATTERN` in `tests/tools/perf_guard.kspl` and the ones beside it). `STATS_HEAD` in `ksplc/tests/suite/ast_cache_test.kspl` finds `[AST Cache]`.
+Caution: **Keep the characters of every line another program reads.** The guard finds its lines by the patterns at its head (`TIME_PATTERN` in `tests/checkers/perf_guard.kspl` and the ones beside it). `STATS_HEAD` in `ksplc/tests/suite/ast_cache_test.kspl` finds `[AST Cache]`.
 
 ## The Development Principles
 

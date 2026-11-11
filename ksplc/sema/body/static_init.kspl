@@ -21,7 +21,6 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/state" { Static_value }
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { Map }
-import "std/str"
 
 priv enum Bad_init_why //<
     //< why a form cannot stand in a top-level initializer, which picks the message
@@ -149,15 +148,13 @@ impl Ast_node
         //< Folds a scalar node and records its value, or says why it does not fold
         if c.env.is_float(r.type_id)
             c.statics.float_cut = false
-            switch r.fold_float(c)
-            case .some(f)
-                c.statics.values.set(Sz::r, .real(f))
-                return .none
-            case .none
+            f: = r.fold_float(c) catch
                 if c.statics.float_cut
                     r.report_float_cut(c)
                     return .some(Bad_init::{ .node = r, .why = .reported })
                 return r.not_static_why(c, walk)
+            c.statics.values.set(Sz::r, .real(f))
+            return .none
         $folded: = true
         $broken: = false
         v: = c.fold_quietly(r, false) catch e
@@ -189,13 +186,11 @@ impl Ast_node
         //< Lower puts the branch in its place (`lower_expr_ternary`), so no backend sees the
         //< choice.
         cond: = r.get_ternary_cond()
-        switch c.try_eval_constexpr_wide(cond)
-        case .some(v)
-            chosen: = r.get_ternary_true() if v != 0 else r.get_ternary_false()
-            c.statics.picks.set(Sz::r, chosen)
-            return chosen.classify_static(c, walk)
-        case .none
+        v: = c.try_eval_constexpr_wide(cond) catch
             return cond.not_static_why(c, walk)
+        chosen: = r.get_ternary_true() if v != 0 else r.get_ternary_false()
+        c.statics.picks.set(Sz::r, chosen)
+        return chosen.classify_static(c, walk)
 
     priv fn classify_static_name(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
         //< A name whose value is no scalar: a function, or a constant written in its place

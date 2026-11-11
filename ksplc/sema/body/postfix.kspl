@@ -12,6 +12,7 @@ import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/dot" as sema_body_dot
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
+import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/type_call" as sema_body_type_call
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
@@ -29,6 +30,7 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/ds"
 import "std/str" { Str_builder }
 
 priv fn lint_receiver_parens(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@) //<
@@ -94,7 +96,12 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
         // **A receiver's type is inferred without the enclosing expected type.** Passing it through
         // `x@` would turn `ro[0]`'s `U8 immut` into `U8` by value-copy conversion (coerce.kspl). It
         // would then make a mutable pointer, and a write to ROM would pass on both backends.
-        target_id = left.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
+        // A literal that I32 does not hold is the one operand a cast passes a type down to
+        // (cast_operand_type_id in literal.kspl).
+        left_expected_id: =
+            (sema_body_literal.cast_operand_type_id(left) if op.equals("::")
+            else I32::sema_type_env.Builtin_type_id.unknown)
+        target_id = left.infer_expr(c, left_expected_id)!
     if op.equals(".")
         return infer_dot_postfix(c, node, left, target_id, expected_id)
     if op.equals("(")
@@ -731,11 +738,9 @@ fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): B
     //< omission of the run-time check must agree. The reason is the same as at
     //< shift_amount_in_range in sema/body/binary.kspl. **Arrays only**: a slice's length is a
     //< run-time value, so its check stays even for a constant index.
-    switch const_index(c, index_node)
-    case .some(idx)
-        return idx >= 0 && idx < size
-    case .none
+    idx: = const_index(c, index_node) catch
         return false
+    return idx >= 0 && idx < size
 
 // target_id is the type as written (for the diagnostic), recv_id stripped by receiver_base_id.
 // `[]` is allowed **only on what carries its own length**: a slice, an array, an Index /
@@ -807,22 +812,20 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
     default
         place_method: = route.index_route_method()
         next_op: = node.get_postfix_member()
-        switch c.resolve_operator_method(recv_id, place_method)
-        case .some(method_sym)
-            if refuses_index_receiver(c, node, recv_id, method_sym, place_method)
-                return I32::sema_type_env.Builtin_type_id.unknown
-            node.def_node = method_sym.node
-            next_op.infer_expr(c, c.operator_index_param_id(method_sym))!
-            // The node's type is the element, not the returned pointer; lower rebuilds the
-            // dereference as `at(i)$` / `at_ref(i)$` (lower/expr.kspl). `at_ref` returns
-            // `Output@`, so the element is immutable, which is what rejects a write.
-            elem_id: = c.env.strip_ptr(method_sym.type_id)
-            node.type_id = elem_id
-            return elem_id
-        case .none
+        method_sym: = c.resolve_operator_method(recv_id, place_method) catch
             place_trait: = route.index_route_trait()
             c.report_operator_method_missing(recv_id, place_trait, place_method, node)
             return I32::sema_type_env.Builtin_type_id.unknown
+        if refuses_index_receiver(c, node, recv_id, method_sym, place_method)
+            return I32::sema_type_env.Builtin_type_id.unknown
+        node.def_node = method_sym.node
+        next_op.infer_expr(c, c.operator_index_param_id(method_sym))!
+        // The node's type is the element, not the returned pointer; lower rebuilds the
+        // dereference as `at(i)$` / `at_ref(i)$` (lower/expr.kspl). `at_ref` returns
+        // `Output@`, so the element is immutable, which is what rejects a write.
+        elem_id: = c.env.strip_ptr(method_sym.type_id)
+        node.type_id = elem_id
+        return elem_id
     switch c.resolve_operator_call(recv_id, "Index", "get", "Index access", "[]", node)
     case .user(method_sym)
         if refuses_index_receiver(c, node, recv_id, method_sym, "get")

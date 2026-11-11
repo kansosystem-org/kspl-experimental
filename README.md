@@ -106,7 +106,7 @@ A row counts only what actually ran.
 | **The folder agent** (`ksagent/`) | Answers questions about a folder's files through a model server on the same machine, citing lines it checks | **Only against a stand-in model server**; no real model runs in CI |
 | **The document editor** (`ksmd/`) | Prose, lists, formatting, calculating tables with resizable columns, images and included files, in a `.ksmd` source a person can read. Opens and saves a folder's files through `kssrv --local`, and opens a document on a double-click. | Runs in a browser with wasm32. Browser tests drive headless Chromium on Linux. Other browsers, a real input method editor (IME) and screen readers are untested. The double-click was checked by hand on Windows only. [ksmd](ksmd/README.md) lists what works and its limits. |
 
-**The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("🤖 The AI on bare metal" in [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md)). [`lib/ksos/docs/HOWTO-bring-up.md`](lib/ksos/docs/HOWTO-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
+**The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("🤖 The AI on bare metal" in [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md)). [`lib/ksos/docs/TUTORIAL-bring-up.md`](lib/ksos/docs/TUTORIAL-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
 
 **Current work improves the existing parts** rather than adding features. [`docs/PLAN.md`](docs/PLAN.md) lists the remaining work by package.
 
@@ -141,8 +141,8 @@ A package is a folder built and shipped as one unit, and its row links to its `R
 | **`lib/ksos/`** | Kanso OS, a lightweight real-time OS: one kernel on bare-metal microcontrollers and on Linux hosts ([introduction](lib/ksos/README.md) / [design](lib/ksos/docs/DESIGN-rtos.md)). |
 | **`data/`** | The large files that Git ignores and `make clean` keeps: the downloaded models, and the weights made here that take long to make again ([entry point](data/README.md)). |
 | **`docs/`** | Documents that cover the whole project, such as the [design rationale](docs/DESIGN-principles.md), [document rules](docs/SPEC-documents.md) and [remaining work](docs/PLAN.md). [`docs/README.md`](docs/README.md) lists their readers. |
-| **`tests/`** | The test suites for the language, the toolchain and the OS ([entry point](tests/README.md)). |
-| **`tools/`** | Tools for developing Kanso itself, in KSPL where possible ([entry point](tools/README.md)). |
+| **`tests/`** | The tests that walk the whole repository or build a child process, such as the checks of the documents' rules. Each package's own tests stand in its own `tests/` ([entry point](tests/README.md)). |
+| **`tools/`** | Programs that use more than one package: the CI's tools, document generators, and the launchers for ksmd and ksagent's chat ([entry point](tools/README.md)). |
 | **`.vscode/`** | Editor settings, syntax highlighting for `.kspl` and `.kspeg`, and the Language Server Protocol (LSP) extension. |
 | **`.github/`** | GitHub Actions: `ci.yml` and `release.yml` (per-OS binaries on a tag push). |
 | **`.devcontainer/`** | The same environment for Dev Containers and Codespaces. |

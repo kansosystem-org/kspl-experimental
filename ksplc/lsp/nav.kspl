@@ -8,6 +8,7 @@ import "ksplc/base/ast_doc" as base_ast_doc
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
+import "ksplc/base/lines" as base_lines
 import "ksplc/base/locate" as base_locate
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/position" as lsp_position
@@ -269,12 +270,10 @@ fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_nod
         at += 1
     if at == 0 || at >= p.children.len
         return ""
-    switch local_decl_of(path, p.get_child(0))
-    case .some(decl)
-        if decl.kind_id != .k_fn_param && decl.kind_id != .k_decl_var &&
-            decl.kind_id != .k_decl_const
-            return ""
-    case .none
+    decl: = local_decl_of(path, p.get_child(0)) catch
+        return ""
+    if decl.kind_id != .k_fn_param && decl.kind_id != .k_decl_var &&
+        decl.kind_id != .k_decl_const
         return ""
     return path_type_name(c, path, p, at, 0)
 
@@ -330,11 +329,9 @@ priv fn field_type_name(c: Sema_ctx$@, owner: U8[], field: Ast_node$@): U8[] //<
     //< The type a field of `owner`'s declaration names, or "" where it has no such field
     if field == null || field.kind_id != .k_identifier
         return ""
-    switch field_of(c, owner, field.text)
-    case .some(f)
-        return declared_type_name(c, f.get_decl_type_node())
-    case .none
+    f: = field_of(c, owner, field.text) catch
         return ""
+    return declared_type_name(c, f.get_decl_type_node())
 
 fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Ast_node$@? //<
     //< The declaration of the struct a type's name stands for, a generic's own where it is one
@@ -361,11 +358,9 @@ priv fn field_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
 
 priv fn field_of(c: Sema_ctx$@, owner: U8[], name: U8[]): Ast_node$@? //<
     //< The field of that name in the struct a type's name stands for
-    switch struct_decl_of(c, owner)
-    case .some(decl)
-        return field_named(decl, name)
-    case .none
+    decl: = struct_decl_of(c, owner) catch
         return .none
+    return field_named(decl, name)
 
 priv fn declared_field(c: Sema_ctx$@, struct_name: U8[], name: U8[]): Ast_node$@? //<
     //< The field called name in the declaration of the struct struct_name names
@@ -591,7 +586,7 @@ fn find_parent_enum(node: Ast_node$@, target: Ast_node$@, depth: Sz = 0): Ast_no
             return .some(res)
     return .none
 
-fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
+priv fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
     //< The documentation a declaration carries, read from the source it was declared in
     //< **One place answers this for every editor feature.** The hover and the completion list read
     //< the same comment run that the record and the declaration file read
@@ -620,7 +615,7 @@ priv fn place_of(c: Sema_ctx$@, node: Ast_node$@): U8[] //<
         at = id.loc.offset
     if at >= src.len
         return ""
-    line: = base_core.line_for_offset(c.line_starts_for(file, src), at)
+    line: = base_lines.line_for_offset(c.line_starts_for(file, src), at)
     // A Markdown link has no client URI to copy. Always use an absolute file URI,
     // including the slash before a Windows drive.
     style: = base_locate.Uri_style::{ .has_scheme = true, .is_absolute = true,

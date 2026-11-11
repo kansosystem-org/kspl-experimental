@@ -271,8 +271,8 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 14**: `test-broken-pipe` checks POSIX's handling of SIGPIPE. **Windows has nothing to check**: a write to a closed named pipe merely fails. The suite reads the C compiler's target triple (`-dumpmachine`) and prints a `SKIP` line there. Only its check "a launched child holds SIGPIPE's default" reads `/proc/self/status`, so it runs only on Linux.
   * Note: The decision's canonical source is "Writing when nobody is left to read it" in `ksplc/gen/runtime/hosted_io.c`.
 * **note 15**: `make test-blas` runs ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`. It needs libopenblas, which the windows-ucrt64 and macOS runners lack. **`make lint` cannot replace it**, since only a real build shows whether the FFI is right: argument order, types, the library linked. So this is also where a library named by `##link` is seen linked.
-* **note 16**: `tests/tools/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's hardware, which would mislead elsewhere.
-  * The verdict rests on the peak memory and the exact sizes of `Ast_node` and its list of children. The build time is only recorded, as a ratio to the baseline (`tests/tools/perf_guard.kspl` says why).
+* **note 16**: `tests/checkers/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's hardware, which would mislead elsewhere.
+  * The verdict rests on the peak memory and the exact sizes of `Ast_node` and its list of children. The build time is only recorded, as a ratio to the baseline (`tests/checkers/perf_guard.kspl` says why).
 * **note 17**: `test-race` builds through the C backend with clang's `-fsanitize=thread`, and runs these programs (`tests/suite/race_test.kspl`):
   * std's and ksplc's own tests, the packages whose tests start threads;
   * ksai's examples, with the tests that run them;

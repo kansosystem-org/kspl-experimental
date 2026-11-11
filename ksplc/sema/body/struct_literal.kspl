@@ -18,7 +18,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { Map }
 
-fn size_inferred_array_literal(node: Ast_node$@, c: Sema_ctx$@, type_node: Ast_node$@,
+priv fn size_inferred_array_literal(node: Ast_node$@, c: Sema_ctx$@, type_node: Ast_node$@,
     actual_id: I32, base_struct_id: I32): I32 //<
         //< Decides the count of a `T[_]` literal and returns the sized type id; otherwise actual_id
         //< The count comes from the initializers and the largest [idx] written.
@@ -130,18 +130,16 @@ priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@,
         return
     if idx_node: = child.get_field_init_index()
         idx_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)!
-        switch c.try_eval_constexpr_wide(idx_node)
-        case .some(at)
-            if at < 0
-                c.clear_scratch().s("an array's index cannot be negative, but this one is \{at\}")
-                c.err(idx_node, c.scratch.slice())
-                return
-            walk.at = Sz::at
-        case .none
+        at: = c.try_eval_constexpr_wide(idx_node) catch
             c.err(idx_node,
                 "an array literal's index must be a compile-time constant. Write the value with no \
                     index, or assign the element after the declaration ('a[i] = v')")
             return
+        if at < 0
+            c.clear_scratch().s("an array's index cannot be negative, but this one is \{at\}")
+            c.err(idx_node, c.scratch.slice())
+            return
+        walk.at = Sz::at
     if arr_size >= 0 && walk.at >= Sz::arr_size
         c.clear_scratch()
             .s("too many initializers for an array of length \{arr_size\}. This initializer has \

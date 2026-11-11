@@ -138,8 +138,7 @@ function ksmdStatus(ks) {
   // (`ks.popup`). `items` are [label, checked, act, aside]; `radio` makes the ticks exclude each
   // other, and `stays` keeps the menu open after a press, so several can be ticked in turn.
   function popup(from, label, items, radio, stays) {
-    const menu = document.createElement("div");
-    menu.className = "menu status-menu";
+    const menu = ks.el("div", "menu status-menu");
     menu.setAttribute("aria-label", label);
     for (const [text, on, act, aside] of items) {
       const b = ks.button("", null, null, () => {
@@ -150,14 +149,10 @@ function ksmdStatus(ks) {
       });
       b.setAttribute("role", radio ? "menuitemradio" : "menuitemcheckbox");
       b.setAttribute("aria-checked", String(on));
-      const name = document.createElement("span");
-      name.className = "label";
-      name.textContent = text;
+      const name = ks.el("span", "label", text);
       b.appendChild(name);
       if (aside) {
-        const value = document.createElement("span");
-        value.className = "status-value";
-        value.textContent = aside;
+        const value = ks.el("span", "status-value", aside);
         b.appendChild(value);
       }
       menu.appendChild(b);

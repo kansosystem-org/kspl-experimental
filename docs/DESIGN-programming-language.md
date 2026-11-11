@@ -873,6 +873,8 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 **Only a single literal is allowed, or one of the caller's position names `caller_file` / `caller_line`** (the same section). An omitted field gets the type's zero, while a default is the writer's choice. An expression would let allocation or side effects happen unseen in the call. The two names compute nothing: the compiler writes the calling line's file and number in their place.
 
+**A number may be negative** (`b: I32 = -1`). The minus before a number is part of the value everywhere else: it is checked with the digits as one value, so `-2147483648` is an `I32`. Refused, a "none" or "from the end" marker of `-1` needed a second function or a wider type. Only a minus directly before a number literal counts; `-x` is an expression, as `1 + 1` is.
+
 **Being a literal is the condition for entry, not the reason to enter.** The second test is whether the shorter call lies to the reader. An arena parameter with `= null` would hide "omit it and it allocates on the global heap, and you owe the free".
 
 **An arena parameter carries no default. Where an API supports heap allocation, a caller requests it explicitly with `null`.** `List<|I32|>(null)`, `base64.encode(data, null)` and `json.parse(text, null)` read alike. Where the elements go, and whether a `free()` is owed, is then on the call's line.
@@ -944,7 +946,9 @@ Conformance to `Move_only` forbids implicitly copying an owning handle, such as 
 
 **Why a move rather than a ban on copying**: a ban makes construction impossible. `Mutex<|T|>::{ .mutex = m, … }` copies `m`, but ownership passes and leaves no duplicate.
 
-**Which reads are moves**: the rule (docs/SPEC-programming-language.md §5.4) lists the reads that do not duplicate: a receiver, and the target of `@` / `$` / `[`. Every other read is a move. Listing the moves instead would miss a position added later.
+**Which reads are moves**: the rule (docs/SPEC-programming-language.md §5.4) lists the reads that do not duplicate. They are a pointer receiver, a field's receiver, and the target of `@` / `$` / `[`. Every other read is a move. Listing the moves instead would miss a position added later.
+
+**Why a by-value receiver moves**: `fn consume(r: Self)` receives a copy, exactly as `take(h)` does, so it is not a read that leaves one owner. Counted as a read, `h.consume()` then `take(h)` gave one handle two owners, the double free the marker exists to stop. A method that only looks at or changes the value takes `Self@` or `Self$@`, and those still lend. So the line falls where the copy is, not at the dot.
 
 **Why a field moves on its own, rather than taking its binding with it**: a struct can hold several owning handles. Handing one over is ordinary (a pipe end given to a child), so the field's path is tracked. The moved field, what lies below it, and the whole binding are refused until a new value revives it. A field reached through a pointer is not tracked, which is the pointer limit below.
 

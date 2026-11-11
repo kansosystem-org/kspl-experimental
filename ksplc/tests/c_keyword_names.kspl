@@ -6,7 +6,8 @@
 // Caution: **Include the names the preamble headers `#define`** (`is_preamble_macro` in
 // `base/c_name.kspl`). **Include the ones erased with `#undef`** (`Sig_row`: from the declaration
 // half's headers, which ordering cannot avoid). **Include the ones that are not escaped**
-// (`Stat_row`: from the definition half's, emitted after the generated body).
+// (`Stat_row`: from the definition half's, emitted after the generated body). **Include the
+// constants' spelling** (`Const_row`: no lowercase letter, `is_macro_case`).
 // **Put every position into this one file.** Declarations and references are emitted apart, so a
 // missing position hides a wiring mistake. Write both `.` and `->`.
 // ==========================================
@@ -31,6 +32,19 @@ struct Stat_row //< the names only the definition half's headers replace
     O_RDONLY: I32
     POLLIN: I32
     AF_INET: I32
+
+struct Const_row //< names with no lowercase letter, which the headers `#define` as constants
+    //< They take the suffix by their spelling, as a field, a local, a local `const` and a
+    //< parameter.
+    M_E: I32
+    M_PI: I32
+    NAN: I32
+    INFINITY: I32
+    SIZE_MAX: I32
+    RAND_MAX: I32
+    EXIT_SUCCESS: I32
+    SIGINT: I32
+    BUFSIZ: I32
 
 struct Sig_row //< the names the declaration half's headers `#define`
     //< Erased with `#undef`, they are written bare; stop erasing them and this file fails to build.
@@ -106,6 +120,22 @@ priv fn guarded(_leave: I32, __int64: I32): I32 //< Microsoft's words as paramet
 
 priv fn tally(errno: I32, EOF: I32, pascal: I32): I32
     return errno + EOF + pascal
+
+priv fn consts_as_locals(): F64 //< the constants' names as local constants and variables
+    const M_E: F64 = 2.5
+    const M_PI: F64 = 0.5
+    const NAN: I32 = 1
+    const INFINITY: I32 = 2
+    $SIZE_MAX: = 3
+    SIZE_MAX += NAN
+    RAND_MAX: = 4
+    EXIT_SUCCESS: = 5
+    SIGINT: = 6
+    BUFSIZ: = INFINITY + SIZE_MAX + RAND_MAX + EXIT_SUCCESS + SIGINT
+    return M_E + M_PI + F64::BUFSIZ
+
+priv fn consts_as_params(SIGINT: I32, BUFSIZ: I32): I32
+    return SIGINT + BUFSIZ
 
 priv fn crt(environ: I32, stdout: I32): I32
     stderr: = environ + stdout
@@ -283,6 +313,18 @@ fn test_c_keyword_names()
         sig.si_pid + seen_sig.sa_handler + sig.sigev_notify_function + seen_sig.L_tmpnam + sig
         .math_errhandling + seen_sig.bool + sig.P_tmpdir
     assert(si_pid == 127, "decl-half macro names: field and local spellings agree")
+
+    // The constants' spelling in every place: a field, `.`, `->`, a local, a local `const`, a
+    // parameter.
+    $consts: Const_row = ::{ .M_E = 1, .M_PI = 2, .NAN = 4, .INFINITY = 8, .SIZE_MAX = 16,
+        .RAND_MAX = 32, .EXIT_SUCCESS = 64, .SIGINT = 128, .BUFSIZ = 256 }
+    held_consts: Const_row@ = consts@
+    M_E: =
+        consts.M_E + held_consts.M_PI + consts.NAN + held_consts.INFINITY + consts.SIZE_MAX +
+        held_consts.RAND_MAX + consts.EXIT_SUCCESS + held_consts.SIGINT + consts.BUFSIZ
+    assert(M_E == 511, "constant-spelled names: field and local spellings agree")
+    assert(consts_as_locals() == 24.0, "constant-spelled names: local constants and variables")
+    assert(consts_as_params(1, 2) == 3, "constant-spelled names: parameters")
     assert(sigev(1, 2) == 3, "decl-half macro names: parameters and a local")
 
     // Windows's CRT names agree in both places too.

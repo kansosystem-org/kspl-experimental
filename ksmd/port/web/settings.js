@@ -105,17 +105,14 @@ function ksmdSettings(ks) {
 
   // The bar a `:::document` block shows at the document's top: what it sets, Edit and Remove.
   function render(b) {
-    const el = document.createElement("div");
-    el.className = "b settings";
+    const el = ks.el("div", "b settings");
     el.contentEditable = "false";
     el.settings = b;
     const said = [b.paper && `${b.paper}${b.land ? " landscape" : ""}`, !b.paper && b.land && "landscape",
       b.header && `header "${b.header}"`, b.footer && `footer "${b.footer}"`,
       b.numbers && `headings numbered from level ${b.numbers}`, b.tl && `tables "${b.tl}"`,
       b.fl && `images "${b.fl}"`].filter(Boolean);
-    const text = document.createElement("span");
-    text.className = "settings-text";
-    text.textContent = `Page setup: ${said.join(", ")}`;
+    const text = ks.el("span", "settings-text", `Page setup: ${said.join(", ")}`);
     const edit = ks.button("Edit", "settings-edit", "Change the paper, the printed header and footer, and the numbers");
     el.append(text, edit, ks.view.removeButton("Take the page setup away"));
     return el;
@@ -131,8 +128,7 @@ function ksmdSettings(ks) {
       ks.act("ksmd_web_settings", ks.put(JSON.stringify(s)));
     });
     const pick = (cls, options, value) => {
-      const sel = document.createElement("select");
-      sel.className = cls;
+      const sel = ks.el("select", cls);
       for (const [v, label] of options) sel.add(new Option(label, v));
       sel.value = String(value);
       return sel;

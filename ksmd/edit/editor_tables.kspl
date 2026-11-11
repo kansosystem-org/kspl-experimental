@@ -16,7 +16,7 @@ import "ksmd/edit/moving"
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
 import "ksmd/edit/sort" { Sort_key, sort_rows }
-import "ksmd/edit/typed" { Reading, is_web_address, value_of }
+import "ksmd/edit/typed" { Reading, is_web_address, value_of, write_text }
 import "ksmd/model/choice" { entry_of }
 import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, show_plain, shows_numbers }
@@ -774,7 +774,7 @@ impl Editor
                 !cell.text.starts_with("\"")
                 return cell.text
             defer $out: = Str_builder()
-            out.c('"').escape_and_append(cell.text).c('"')
+            write_text(cell.text, out@)
             return arena.dup_str(out.slice())
         case .formula
             defer $out: = Str_builder()
@@ -899,7 +899,7 @@ priv fn write_typed(v: calculated.Value, out: Str_builder$@) //<
     case .date
         write_date(I64::v.number, out)
     case .text
-        out.c('"').escape_and_append(v.text).c('"')
+        write_text(v.text, out)
     case .boolean
         out.s("\"true\"" if v.boolean else "\"false\"")
     case .error

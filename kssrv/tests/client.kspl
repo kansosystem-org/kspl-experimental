@@ -29,8 +29,12 @@ priv const SPIN_READS: Sz = 512 //< how many times to spin on a re-read before s
     //< Caution: **Do not remove it** (the reason is inside `next`).
 
 enum Http_end //< why a response could not be read
-    // It could not connect.
+    // It could not connect: it was refused, or no socket could be made.
     connect_failed
+    // The connect got no answer within its time limit.
+    // Caution: **Keep it apart from a refusal.** A refusal says nothing listens or the queue of
+    // waiting connections is full; no answer says the packets go unanswered.
+    connect_timed_out
     // The sending or receiving itself failed.
     io_failed
     // The server closed before the response was complete.
@@ -42,7 +46,9 @@ impl Http_end
     fn reason(e: Self): U8[]
         switch e
         case .connect_failed
-            return "could not connect"
+            return "could not connect: it was refused, or no socket could be made"
+        case .connect_timed_out
+            return "the connect got no answer within its time limit"
         case .io_failed
             return "the send or receive failed"
         case .closed
@@ -72,7 +78,9 @@ struct Conn //< one connection
 
 impl Conn
     fn open(port: I32): Conn!Http_end
-        sock: = net.Tcp_stream.connect(HOST, port) catch
+        sock: = net.Tcp_stream.connect(HOST, port) catch e
+            if e == net.Net_error.timed_out
+                throw .connect_timed_out
             throw .connect_failed
         sock.set_nonblocking() catch
             sock.free()

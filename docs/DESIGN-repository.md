@@ -291,6 +291,10 @@ flowchart LR
 
 **What it gives up**: `std`'s published API grows by names a program testing nothing never calls. And the shape of a verdict line becomes `std`'s API to keep.
 
+**One helper stays in `std/tests/` and is shared from there: `std/tests/file_mode.kspl`.** It shows a file's permissions as `ls -l` does, and `tools/tests/page_test.kspl` imports it beside std's own tests. It knows no repository, so the root `tests/` is the wrong place for it. It does not join `std`'s published API either. It asks the system's own `ls`, so its answer is that tool's text, and it answers nothing on Windows. Published, that text would become `std`'s API to keep, for a name only a test calls. It holds no test, so a test of another package imports it without taking std's tests in.
+
+**What it gives up**: a test outside `std` imports a file that `ksplc doc std` does not list. A change to that file can break the tools' test, and `make debug-tools` is where that shows.
+
 ### A path's `..` is resolved by its spelling
 
 **`a/../b` always means `b`.** A path's `..` is folded by its spelling, not by asking the filesystem. That holds for the folder a file stands in and for its name ("9.1 import syntax and path resolution" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).

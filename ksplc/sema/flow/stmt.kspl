@@ -6,6 +6,7 @@
 //< not have been taken.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_endless_loop`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/eval" as sema_decl_eval
@@ -13,7 +14,6 @@ import "ksplc/sema/flow/field" as sema_flow_field
 import "ksplc/sema/flow/lock" as sema_flow_lock
 import "ksplc/sema/flow/track" as sema_flow_track
 import "std/ds" { List }
-import "std/str"
 
 impl Ast_node
     fn df_stmt_if(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
@@ -38,7 +38,7 @@ impl Ast_node
 
         state.apply_merged_state(sema_flow_track.intersect_states(state_then, state_else))
 
-    fn bind_pattern_payload(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    priv fn bind_pattern_payload(r: Self$@, c: sema_flow_track.Df_ctx$@,
         case_state: sema_flow_track.Df_state$@, bound_names: List<|U8[]|>$@, payload_start: Sz,
         written: Bool) //<
             //< Registers the identifiers in `case .A(x)`'s payload as locals of this case.
@@ -65,7 +65,7 @@ impl Ast_node
             c.add_bound_local(pchild, judged)
             case_state.bind(pchild, true)
 
-    fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    priv fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@, start_idx: Sz): sema_flow_track.Df_state$@
         $block_node: Ast_node$@ = null
         case_state: = state.clone()
@@ -261,7 +261,7 @@ impl sema_flow_track.Df_ctx
         if t.jump_state != null
             state.apply_merged_state(sema_flow_track.intersect_states(state, t.jump_state))
 
-    fn find_exit_target(r: Self$@, jump: Ast_node$@): Sz? //<
+    priv fn find_exit_target(r: Self$@, jump: Ast_node$@): Sz? //<
         //< The index of the exit target a jump leaves, as sema resolved it
         //< A `break` or `continue` leaves the statement in its `def_node` (set by
         //< infer_stmt_break_continue in sema/body/stmt.kspl), a `fallback` the innermost `catch`.
@@ -294,7 +294,7 @@ impl sema_flow_track.Df_ctx
             r.exit_targets.set(idx, t)
 
 impl sema_flow_track.Df_state
-    fn adds_to(back: Self@, head: sema_flow_track.Df_state$@, c: sema_flow_track.Df_ctx$@,
+    priv fn adds_to(back: Self@, head: sema_flow_track.Df_state$@, c: sema_flow_track.Df_ctx$@,
         known: Sz): Bool //<
             //< Whether a loop's back edge brings what its head's state lacks
             //< Only the locals declared before the loop count (`known`, their number in
@@ -315,14 +315,14 @@ impl sema_flow_track.Df_state
             back.viewing.adds_to_set(head.viewing@)
 
 impl sema_flow_track.Df_set
-    fn adds_to_set(r: Self@, other: sema_flow_track.Df_set@): Bool //<
+    priv fn adds_to_set(r: Self@, other: sema_flow_track.Df_set@): Bool //<
         //< whether r holds an item other lacks
         for v in r.items
             if !other.contains(v)
                 return true
         return false
 
-    fn adds_known_to(r: Self@, other: sema_flow_track.Df_set@, c: sema_flow_track.Df_ctx@,
+    priv fn adds_known_to(r: Self@, other: sema_flow_track.Df_set@, c: sema_flow_track.Df_ctx@,
         known: Sz): Bool //<
             //< Whether r holds an item `other` lacks whose local is one of the first `known` locals
             //< An item of `moved_fields` counts by the local it is a field of.

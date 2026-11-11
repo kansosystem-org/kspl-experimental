@@ -778,6 +778,31 @@ fn test_arc_value_receiver_takes_a_count()
     slot = empty[0]
     verdict.pass("k.hash() on a parameter left it its count, so what was kept from it lives on.")
 // ==========================================
+// A question to an Option lends it (`is_some` and `is_none` take `Self@`), so asking takes no
+// count and drops none. Asked on every pass of a loop, the count stays where it was.
+// ==========================================
+priv fn arc_counter_if(c: Arc_counter, keep: Bool): Arc_counter? //< c where keep, none otherwise
+    return .some(c) if keep else .none
+
+priv fn arc_option_asked_in_a_loop_body(): Bool
+    c: = Arc_counter(3)
+    held: = arc_counter_if(c, true)
+    $asked: I32 = 0
+    for $i: I32 = 0; i < 100; i += 1
+        if held.is_some() && !held.is_none() && arc_counter_if(c, i > 49).is_some()
+            asked += 1
+    return asked == 50 && c.refcount() == 2
+
+fn test_arc_question_takes_no_count()
+    verdict.start("[ARC] asking an Option whether it holds a value takes no count test...")
+    b0: = mem.heap_used_bytes()
+    assert(arc_option_asked_in_a_loop_body(),
+        "a counted Option asked in a loop keeps one count for itself and one for its source")
+    assert(mem.heap_used_bytes() == b0, "asking, on a binding or a temporary, must balance")
+    verdict
+        .pass("a hundred questions on a counted Option, and on temporaries, left every count where \
+            it was.")
+// ==========================================
 // Returning a place expression needs a retain whether or not the function holds a cleanup.
 // **Inserted only where there is a cleanup, it is one short in `return p.field;`**, and the
 // caller's release frees memory still alive.

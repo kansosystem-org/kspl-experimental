@@ -12,6 +12,9 @@
 const FIGURES = [["average", "Average"], ["count", "Count"], ["numbers", "Numerical count"],
   ["min", "Min"], ["max", "Max"], ["sum", "Sum"]];
 const FIGURES_DEFAULT = ["average", "count", "sum"];
+// The pause after a change before the lines and characters are counted, in milliseconds: longer
+// than the gap between two keys of most people typing.
+const FIGURES_PAUSE = 300;
 
 function ksmdFigures(ks) {
   const box = document.querySelector(".status-bar .figures");
@@ -106,11 +109,25 @@ function ksmdFigures(ks) {
     return `${plural(lineCount, "line")} · ${plural(charCount, "character")}${chosen ? " selected" : ""}`;
   }
 
+  // The lines and characters shown on the bar. Each key would read every block again, a tenth of a
+  // second in a long document, so they are counted once the person pauses, as the page count is
+  // (`pages.js`). A document that takes long to count waits longer.
+  let timer = 0;
+  let cost = 0; // how long the last count took, in milliseconds
+  function count() {
+    timer = 0;
+    const started = performance.now();
+    box.textContent = lines();
+    box.setAttribute("aria-label", `${box.textContent}. Choose the figures for chosen cells`);
+    cost = performance.now() - started;
+  }
+
   function update() {
     const all = cells();
+    clearTimeout(timer);
+    timer = 0;
     if (!all) {
-      box.textContent = lines();
-      box.setAttribute("aria-label", `${box.textContent}. Choose the figures for chosen cells`);
+      timer = setTimeout(count, Math.max(FIGURES_PAUSE, cost * 4));
       return;
     }
     box.textContent = FIGURES.filter(([name]) => picked.has(name) && name in all)

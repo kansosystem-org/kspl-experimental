@@ -177,9 +177,10 @@ pub struct Sample //< one seed: bytes to mutate, and where they came from
 pub fn gather( //< collects the files with the given endings under the folders, as seeds
     //< **In the order the folders are given, and within a folder in path order**, so the seeds are
     //< the same on every machine. The kind is the ending that matched; the name is the path below.
-    //< Caution: **Nothing under a folder named `out` or `.git`**: a seed list that changes with the
-    //< last build reproduces nothing.
+    //< Caution: **In a repository, skip the build output and `.git`** with `skip_dir`: a seed list
+    //< that changes with the last build reproduces nothing.
     dirs: U8[][], //< where to look; a folder inside another one yields its files twice
+    skip_dir: fn(name: U8[]): Bool, //< true for a folder not to enter, as `fs.walk_files` takes it
     endings: U8[][], //< the file endings to collect (`.md`, `.kspl`)
     cap: I64, //< files of this many bytes or more are skipped
     arena: Arena$@, //< where the list, the names and the bytes go; null means the heap, as below
@@ -191,7 +192,7 @@ pub fn gather( //< collects the files with the given endings under the folders, 
     defer $work: = mem.scratch(null)
     for handed in dirs
         dir: = handed.strip_suffix("/")
-        files: = fs.walk_files(dir, fs.skip_build_output, work.arena) catch
+        files: = fs.walk_files(dir, skip_dir, work.arena) catch
             continue
         for path in files
             $kind: U8[] = ""

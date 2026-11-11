@@ -45,13 +45,23 @@ function ksmdPages(ks) {
   }
 
   // A CSS length, such as 10mm, in pixels; nothing given is no margin.
+  // Each length is measured once and kept. The measure lays the whole page out, and each table
+  // action reads the paper (`printable` in `sizes.js`). A length in `em` or `%` can change with the
+  // window or the print, so a resize or a print drops the kept ones. A browser zoom is a resize.
+  const lengths = new Map();
+  const forget = () => lengths.clear();
+  window.addEventListener("resize", forget);
+  window.addEventListener("beforeprint", forget);
+  window.addEventListener("afterprint", forget);
   function length(text) {
     if (!text) return 0;
+    if (lengths.has(text)) return lengths.get(text);
     const probe = document.createElement("div");
     probe.style.cssText = `position: absolute; visibility: hidden; width: ${text}`;
     document.body.appendChild(probe);
     const px = probe.getBoundingClientRect().width;
     probe.remove();
+    lengths.set(text, px);
     return px;
   }
 
@@ -92,8 +102,7 @@ function ksmdPages(ks) {
     }
     const started = performance.now();
     if (!frame) {
-      frame = document.createElement("iframe");
-      frame.className = "page-measure";
+      frame = ks.el("iframe", "page-measure");
       frame.setAttribute("sandbox", "allow-same-origin");
       frame.setAttribute("aria-hidden", "true");
       frame.tabIndex = -1;

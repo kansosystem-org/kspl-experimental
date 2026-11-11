@@ -15,40 +15,34 @@ import "std/strfmt"
 import "std/sys"
 import "std/verdict"
 
-const STATE_OK: Sz = 0 //< the verdict's three states
+struct Stop //< why a case stopped before it passed: it failed, or it cannot be confirmed here
+    //< A case returns `Void!Stop`, so `!` passes a stop up to the case that called.
     //< Caution: Do not confuse "it cannot be confirmed in this environment" with "it failed".
-const STATE_FAILED: Sz = 1
-const STATE_SKIP: Sz = 2
-
-struct Outcome
-    state: Sz
+    skipped: Bool
     why: U8[]
 
-fn ok_result(): Outcome
-    return Outcome::{ .state = STATE_OK, .why = "" }
+fn failed(why: U8[]): Stop
+    return Stop::{ .skipped = false, .why = why }
 
-fn failed(why: U8[]): Outcome
-    return Outcome::{ .state = STATE_FAILED, .why = why }
-
-fn broke(what: U8[], out: U8[], arena: Arena$@): Outcome //<
+fn broke(what: U8[], out: U8[], arena: Arena$@): Stop //<
     //< It makes one failure out of "what did not happen" and the output at the time
     return failed(arena.text().s(what).s("\n").s(out).take())
 
-fn skipped(why: U8[]): Outcome
-    return Outcome::{ .state = STATE_SKIP, .why = why }
+fn skipped(why: U8[]): Stop
+    return Stop::{ .skipped = true, .why = why }
 
-priv fn report(name: U8[], r: Outcome)
-    if r.state == STATE_SKIP
-        verdict.skip_check(name, r.why)
+priv fn report(name: U8[], stop: Stop)
+    if stop.skipped
+        verdict.skip_check(name, stop.why)
         return
-    verdict.check(name, r.state == STATE_OK, r.why)
+    verdict.check(name, false, stop.why)
 
 // ==========================================
 // The working directory and the cache location
 // ==========================================
 
-priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, arena: Arena$@):
-    Outcome //<
+priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Void!Stop, arena: Arena$@):
+    Void!Stop //<
         //< It makes one working directory and runs the case with the child's cache pointed at it
         //< **Separate them per case**, or "was it rebuilt" passes on the previous case's artifact.
         //< Caution: **Do not forget to point the child's cache here**, or it pollutes the
@@ -56,14 +50,17 @@ priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, ar
     dir: = harness.sandbox(name)
     work: = dir
     sys.set_env("KSPLC_CACHE_DIR", fs.join(work, "cache", arena)) catch
-        return failed("cannot point the location at the child")
-    return body(work, arena)
+        throw failed("cannot point the location at the child")
+    body(work, arena)!
 
-fn run(name: U8[], slot: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, arena: Arena$@) //<
+fn run(name: U8[], slot: U8[], body: fn(work: U8[], arena: Arena$@): Void!Stop, arena: Arena$@) //<
     //< It runs one case and reports
     //< Caution: **Do not split these two into separate functions**, or reporting without a working
     //< directory, or a directory without reporting, becomes possible: "green, confirming nothing".
-    report(name, in_sandbox(slot, body, arena))
+    in_sandbox(slot, body, arena) catch stop
+        report(name, stop)
+        return
+    verdict.check(name, true, "")
 
 fn cache_dir(work: U8[], arena: Arena$@): U8[]
     return fs.join(work, "cache", arena)
@@ -89,12 +86,15 @@ fn only_slot(work: U8[], arena: Arena$@): U8[] //<
 fn helper_src(n: Sz, arena: Arena$@): U8[]
     return arena.text().s("pub fn value(): Sz\n  return \{n\}\n\n").take()
 
-fn write_script(work: U8[], entry: U8[], body: U8[], n: Sz, arena: Arena$@): Bool //<
+fn write_script(work: U8[], entry: U8[], body: U8[], n: Sz, arena: Arena$@): Void!Stop //<
     //< It writes the entry script and the imported file
     helper: = helper_src(n, arena)
     fs.write_tree(work, U8[][]::{ entry, "helper.kspl" }, U8[][]::{ body, helper }, arena) catch
-        return false
-    return true
+        throw failed("cannot place the material")
+
+fn place(path: U8[], text: U8[]): Void!Stop //< it writes one file of a case's material
+    io.write_file(path, text) catch
+        throw failed("cannot place the material")
 
 fn ksplc_run(args: U8[][], arena: Arena$@): verdict.Run_out
     $a: = List<|U8[]|>(arena)
@@ -106,10 +106,9 @@ fn run_script(path: U8[], arena: Arena$@): verdict.Run_out //<
     //< It runs one script (the most common case)
     return ksplc_run(U8[][]::{ path }, arena)
 
-fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Outcome
+fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Void!Stop
     if !r.exited_with(0) || r.out.find_str(want).is_none()
-        return failed(arena.text().s(what).s("(code=\{r.code.unwrap_or(-1)\})\n").s(r.out).take())
-    return ok_result()
+        throw failed(arena.text().s(what).s("(code=\{r.code.unwrap_or(-1)\})\n").s(r.out).take())
 
 // ==========================================
 // Reads what is inside `ksplc run`'s cache location

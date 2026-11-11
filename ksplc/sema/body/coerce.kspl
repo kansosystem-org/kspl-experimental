@@ -3,7 +3,7 @@
 //< an upcast to a trait value, a `Result` wrap, dropping a `$`. It reports anything else as a type
 //< mismatch. [I0301] reports a written `::` that does no more than that.
 import "ksplc/base/ast" as base_ast + { Ast_node }
-import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_noreturn_call`
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
 import "ksplc/sema/body/literal" as sema_body_literal
@@ -38,7 +38,12 @@ impl Ast_node
                 if original_id != 0 && cast_id != 0
                     real_src: = c.env.get_real_type(original_id)
                     real_dst: = c.env.get_real_type(cast_id)
-                    if real_src == real_dst
+                    // A literal I32 does not hold took its type from the cast
+                    // (cast_operand_type_id in literal.kspl): without it, `I64::0x80000000` is
+                    // out of range.
+                    from_cast: = !sema_type_env
+                        .is_unknown(sema_body_literal.cast_operand_type_id(r.get_child(0)))
+                    if real_src == real_dst && !from_cast
                         // An identity cast. **Only here is the expected type ignored**: without the
                         // cast the expression infers to the same type, even in `x: = T::f();`.
                         c.information(r,
@@ -71,7 +76,7 @@ impl Ast_node
         clone.type_id = type_id
         return clone
 
-    fn build_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32)
+    priv fn build_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32)
         clone: = r.snapshot_for_morph(type_id)
         kw_node: = Ast_node(.k_literal, "::", r.loc)
         type_node: = Ast_node(.k_type_expr, c.env.get_str(expected_id), r.loc)

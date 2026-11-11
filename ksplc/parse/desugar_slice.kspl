@@ -12,9 +12,10 @@ import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.Loc): Ast_node$@ //<
-    //< It wraps the base and the postfixes still attached to it into one `type_expr`
-    //< Where there is no postfix, it returns the base unchanged.
+priv fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.Loc):
+    Ast_node$@ //<
+        //< It wraps the base and the postfixes still attached to it into one `type_expr`
+        //< Where there is no postfix, it returns the base unchanged.
     if posts.len == 0
         return base
     node: = Ast_node(.k_type_expr, "", loc)
@@ -24,7 +25,7 @@ fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.L
     node.text = base_core.arena.dup_str(spell_type_expr(node))
     return node
 
-fn is_slice_postfix(p: Ast_node@): Bool //< whether it is a postfix to fold
+priv fn is_slice_postfix(p: Ast_node@): Bool //< whether it is a postfix to fold
     //< **A postfix holding a size is not folded**: a `[N]` is recognized by its child, and a `[_]`,
     //< which has none, by its text. A `[_]` comes from expanding `T[]::{ v1, … }`
     //< (desugar_slice_elems in `desugar.kspl`); if folded, its elements would read as the
@@ -32,13 +33,13 @@ fn is_slice_postfix(p: Ast_node@): Bool //< whether it is a postfix to fold
     t: = p.text.strip_prefix("$")
     return t.starts_with("[") && !t.starts_with("[_") && p.children.len == 0
 
-fn is_option_postfix(p: Ast_node@): Bool //< whether it is an optional's `?`
+priv fn is_option_postfix(p: Ast_node@): Bool //< whether it is an optional's `?`
     return p.text.equals("?")
 
-fn is_result_postfix(p: Ast_node@): Bool //< whether it is a result's `!E` (its child is `E`)
+priv fn is_result_postfix(p: Ast_node@): Bool //< whether it is a result's `!E` (its child is `E`)
     return p.text.starts_with("!") && p.children.len > 0
 
-fn make_generic_atom(ident: U8[], inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc):
+priv fn make_generic_atom(ident: U8[], inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc):
     Ast_node$@ //<
         //< It builds the `type_atom` for `<ident><|arg|>`
         //< With `is_mut`, it is `<ident><|$arg|>`.
@@ -46,7 +47,7 @@ fn make_generic_atom(ident: U8[], inner_raw: Ast_node$@, is_mut: Bool, loc: base
     one.push(inner_raw)
     return make_generic_atom_of(ident, one, is_mut, loc)
 
-fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: Bool,
+priv fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: Bool,
     loc: base_ast.Loc): Ast_node$@ //<
         //< It builds the `type_atom` for `<ident><|arg, …|>`
         //< The first argument is `$`-marked if asked.
@@ -89,7 +90,7 @@ fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: 
     atom.add_child(path)
     return atom
 
-fn spell_type_expr(node: Ast_node@): U8[] //< a type expression's name
+priv fn spell_type_expr(node: Ast_node@): U8[] //< a type expression's name
     //< **Just join the text of the base and the postfixes**: `extract_type_name` drops the
     //< mutability mark, turning `Slice<|$U8|>` into `Slice<|U8|>`.
     b: = base_core.arena.text()
@@ -150,7 +151,7 @@ priv fn is_result_atom(node: Ast_node$@): Bool //< whether it is a `T!E` folded 
         node.get_child(0).is_sugar_made() &&
         node.get_child(0).get_child(0).text.equals(base_core.result_ident())
 
-fn spell_atom(node: Ast_node@): U8[] //< a `type_atom`'s name
+priv fn spell_atom(node: Ast_node@): U8[] //< a `type_atom`'s name
     //< It reads the child path, for an atom whose text is empty.
     defer $b: = Str_builder()
     for c in node.children

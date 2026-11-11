@@ -13,6 +13,7 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
+import "std/ds"
 import "std/str" { Str_builder }
 import "std/strnum" // reading a floating-point literal's value
 
@@ -196,6 +197,58 @@ fn settle_negated_literal(c: Sema_ctx@, node: Ast_node$@, operand_id: I32): Bool
     lit.node.type_id = operand_id
     node.type_id = operand_id
     return true
+
+fn check_settled_literals(c: Sema_ctx$@, body: Ast_node$@) //<
+    //< Checks each untyped integer literal in a body against the type it ended with
+    //< **A literal with no type of its own takes one in many places**: a ternary's branches, an
+    //< inferred generic argument, a `~`, an interpolation. A check at each missed the next one
+    //< (`g(3000000000)` became -1294967296 silently). Once the body is typed, each literal's type
+    //< is final, so one walk checks them all. A place that checked already gives the same message
+    //< at the same place, reported once. Not while a generic is instantiated (infer_literal_expr).
+    if body == null || c.is_instantiating()
+        return
+    walk_settled_literals(c, body, false)
+
+priv fn walk_settled_literals(c: Sema_ctx$@, node: Ast_node$@, is_neg: Bool)
+    if node == null
+        return
+    if node.kind_id == .k_integer
+        if !sema_type_env.is_unknown(node.type_id) &&
+            sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text))
+            check_literal_bounds(c, node, node.type_id, is_neg)
+        return
+    // A type's literal (an array's length, a constant generic argument) has checks of its own.
+    if node.kind_id == .k_type_expr
+        return
+    negates: =
+        node.kind_id == .k_expr_unary && node.get_unary_op() != null &&
+        node.get_unary_op().text.equals("-")
+    for child in node.children
+        walk_settled_literals(c, child, negates && child == node.get_unary_target())
+
+fn cast_operand_type_id(node: Ast_node$@): I32 //<
+    //< The type an untyped integer literal takes as a cast's operand, or unknown to leave it I32
+    //< **The narrowest of I32, I64 and U64 that holds the value written**, a minus before it
+    //< included. The cast then converts that value, as it converts a variable's. Left at I32,
+    //< `U64::0xFFFFFFFF` widened an I32 whose bits read -1: C kept the spelling and gave
+    //< 4294967295, LLVM extended the bits and gave 18446744073709551615.
+    $at: = node
+    for at != null && at.kind_id == .k_expr_primary && at.children.len > 0
+        at = at.get_primary_inner_expr()
+    lit: = literal_under_minus(at)
+    if lit.node == null ||
+        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
+        return I32::sema_type_env.Builtin_type_id.unknown
+    v: = lit.node.text.parse_int_literal_u64()
+    if v.overflow
+        return I32::sema_type_env.Builtin_type_id.unknown
+    i32_bound: = U64::1 << U64::31
+    if (lit.is_neg && v.value <= i32_bound) || (!lit.is_neg && v.value < i32_bound)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    // A negative past I64's minimum is left to I64's range check, which names it.
+    if lit.is_neg || v.value < (U64::1 << U64::63)
+        return I32::sema_type_env.Builtin_type_id.i64_type
+    return I32::sema_type_env.Builtin_type_id.u64_type
 
 priv struct Signed_literal //<
     //< An integer literal, or an integer literal directly under a unary minus

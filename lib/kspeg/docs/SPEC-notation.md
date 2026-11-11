@@ -117,6 +117,8 @@ Inside a string, a keyword and a character class, **only these ten escapes are v
 | **Symbols** | `\"`, `\'`, `\\`, `\[`, `\]`, `\-` |
 | **Code points** | `\uXXXX` (four hex digits; a high and a low surrogate written as a pair are combined into one code point) |
 
+**Inside a character class, `\-` is the byte `-` itself and never makes a range.** `[+\-*/]` holds four bytes; only an unescaped `-` between two bytes makes a range, as in `[a-z]`.
+
 **Any other `\X` is a syntax error**, never read as that character itself. If `\d` were silently read as `d`, the author would see it only as input that matches where it must not, or the reverse.
 
 **`\uXXXX` is only for the bytes that cannot be typed**: the control bytes and DEL, all inside `\u0000`–`\u007F`. A character that can be typed is written as its UTF-8 bytes directly (`あ`, not `\u3042`).

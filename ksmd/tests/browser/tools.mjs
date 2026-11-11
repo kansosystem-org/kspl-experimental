@@ -544,6 +544,13 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await press("ArrowRight", SHIFT);
       check(await until("document.querySelector('.figures').textContent === 'Average 2.5 · Count 4 · Sum 7.5'"),
         "with a range, it shows the average and sum of its numbers and the count of its values", await shown());
+      // The figures follow the selection on the next frame, and the lines after a pause.
+      await click('#doc td[data-r="1"][data-c="1"]');
+      check(await until("document.querySelector('.figures').textContent === '1 line · 9 characters'"),
+        "a press on one cell shows the document's lines again", await shown());
+      await click('#doc td[data-r="0"][data-c="0"]', SHIFT);
+      check(await until("document.querySelector('.figures').textContent === 'Average 2.5 · Count 4 · Sum 7.5'"),
+        "and a Shift+press that chooses the range shows its figures", await shown());
       await press("Escape");
     },
 

@@ -9,7 +9,6 @@ import "ksplc/tests/support/lsp_read" { decl_line, end_text, is_missing }
 import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str" // `equals`
 import "std/verdict"
 
 // **A local inside a body and a constant's own value are no part of the outline**; `inner` and
@@ -80,8 +79,7 @@ priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
 
 priv fn ask(c: jsonrpc_client.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Value //<
     //< Opens `src` and returns the answer to `documentSymbol` (null where none came)
-    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.SEND_MS, arena)
-        catch {}
+    lsp_client.open(c, uri, src, arena)
     got: = lsp_client.answer(c, "textDocument/documentSymbol", lsp_client.at_doc(uri, arena),
         lsp_client.READ_MS, arena)
     lsp_client.close(c, uri, arena)
@@ -146,8 +144,7 @@ pub fn prepare_fn(c: jsonrpc_client.Client$@, rel: U8[], text: U8[], decl: U8[],
         //< It opens `text` as the document `rel` and sends prepareCallHierarchy at `decl`'s name
         //< Caution: **Return the raw response too**: with no item, only it tells "the worker has no
         //< answer" from "the timeout expired".
-    c.notify("textDocument/didOpen", lsp_client.did_open(rel, text, arena), lsp_client.SEND_MS,
-        arena) catch {}
+    lsp_client.open(c, rel, text, arena)
     line: = decl_line(text, decl, arena)
     pos: = lsp_client.at_pos(rel, line, decl.len - 1, arena)
     msg: = c.request("textDocument/prepareCallHierarchy", pos, HEAVY_MS, arena) catch e

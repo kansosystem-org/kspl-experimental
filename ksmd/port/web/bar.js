@@ -1,7 +1,7 @@
 // ksmd page: the formula bar under the quick access bar. It shows the chosen cell's address and
 // its whole text as typed: a formula, a value or a column's name. A press in its box, or Tab to
 // it, opens the chosen cell for editing there.
-// One edit, two views: the bar's box takes the open edit itself (`inBar` in `table.js`), so Enter,
+// One edit, two views: the bar's box takes the open edit itself (`inBar` in `cellbox.js`), so Enter,
 // Tab, Esc, the list of functions, the colours, the brackets and AutoCorrect act as in the cell.
 // The cell shows a copy of the text while the bar holds the edit.
 // Caution: **A box that held an edit is never served again.** Its keys and help stay attached
@@ -17,8 +17,7 @@ function ksmdBar(ks) {
   let pressed = false;
 
   function fresh() {
-    const b = document.createElement("textarea");
-    b.className = "formula-input";
+    const b = ks.el("textarea", "formula-input");
     b.rows = 1;
     b.wrap = "off";
     b.spellcheck = false;
@@ -26,7 +25,7 @@ function ksmdBar(ks) {
     b.setAttribute("aria-label", "Formula bar");
     b.addEventListener("mousedown", () => {
       pressed = true;
-      // An edit open in the cell stays open while the focus comes here (`blur` in `table.js`).
+      // An edit open in the cell stays open while the focus comes here (`blur` in `cellbox.js`).
       if (ks.table.editing()) ks.table.hold(true);
     });
     b.addEventListener("focus", () => take(b));

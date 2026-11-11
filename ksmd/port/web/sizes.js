@@ -201,8 +201,7 @@ function ksmdSizes(ks) {
   // lines between the run's cells go, as a merged cell's would; each cell can still be chosen.
   function box(td, cells, width, cut) {
     const holder = td.querySelector(":scope > .cell-fit") || td;
-    const boxEl = document.createElement("span");
-    boxEl.className = "across-box";
+    const boxEl = ks.el("span", "across-box");
     boxEl.style.setProperty("--across-width", `${width}px`);
     boxEl.classList.toggle("cut", cut || td.classList.contains("wrap"));
     boxEl.append(...holder.childNodes);
@@ -227,15 +226,13 @@ function ksmdSizes(ks) {
     const table = wrap.querySelector("table");
     for (const th of table.tHead.rows[0].cells) {
       if (!th.classList.contains("letter")) continue;
-      const edge = document.createElement("span");
-      edge.className = "col-edge";
+      const edge = ks.el("span", "col-edge");
       edge.dataset.edge = String(th.cellIndex - 1);
       edge.title = "Drag to change this column's width. Double-click to fit it to its text";
       th.appendChild(edge);
     }
     Array.from(table.tBodies[0].rows).forEach((tr, r) => {
-      const edge = document.createElement("span");
-      edge.className = "row-edge";
+      const edge = ks.el("span", "row-edge");
       edge.dataset.edge = String(r);
       edge.title = "Drag to change this row's height. Double-click to fit it to its lines";
       tr.cells[0].appendChild(edge);
@@ -244,8 +241,7 @@ function ksmdSizes(ks) {
       tr.style.height = `${heights[r]}pt`;
       tr.style.setProperty("--row-height", `${heights[r]}pt`);
       for (const cell of tr.cells) {
-        const box = document.createElement("div");
-        box.className = "cell-fit";
+        const box = ks.el("div", "cell-fit");
         box.append(...Array.from(cell.childNodes).filter((n) => n !== edge));
         cell.insertBefore(box, cell.firstChild);
       }
@@ -400,8 +396,7 @@ function ksmdSizes(ks) {
     // The pointer moves in the window's pixels, and the guide and the height are the document's.
     const zoom = ks.zoom.factor();
     const points = (y) => clamp(Math.round(((y - top) / zoom) * 0.75), 6, 409);
-    const guide = document.createElement("div");
-    guide.className = "row-guide";
+    const guide = ks.el("div", "row-guide");
     wrap.appendChild(guide);
     const show = (y) => {
       const p = points(y);

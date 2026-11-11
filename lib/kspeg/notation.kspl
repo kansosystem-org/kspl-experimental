@@ -9,7 +9,7 @@ import "std/chars"
 import "std/ds" { List, Map }
 import "std/mem" { Arena }
 import "std/stack_limit" { Stack_limit }
-import "std/str" // `equals`
+import "std/str" // `text` and `unescape_to_arena`
 
 // `is_kspeg_escape` holds the only escapes `.kspeg` allows, `\uXXXX` among them
 // ("Escape sequences" in `lib/kspeg/docs/SPEC-notation.md`).
@@ -108,6 +108,40 @@ impl Meta
         return raw.unescape_to_arena(r.arena) catch
             throw .fatal("Invalid escape in a literal")
 
+    priv fn class_ranges(r: Self$@, raw: U8[]): U8[]!Kspeg_signal //<
+        //< Reads a character class's text into the form `Rule.char_class` stores: 3-byte ranges
+        //< A lone byte `X` is stored as the range `X-X`. **An escaped `\-` is the byte `-` itself,
+        //< never the hyphen of a range**, so `[+\-*/]` holds four bytes and `[a\-z]` three.
+        //< Caution: **Do not decide a range on the unescaped text.** There, `\-` and `-` are the
+        //< same byte, and `[+\-*/]` would read as the range from `+` to `*`.
+        _checked: = r.unescape_string(raw, true)!
+        bytes: = List<|U8|>.create(r.arena)
+        escaped: = List<|Bool|>.create(r.arena)
+        $i: Sz = 0
+        for i < raw.len
+            if (raw.ptr + i)$ != '\\'
+                bytes.push((raw.ptr + i)$)
+                escaped.push(false)
+                i += 1
+                continue
+            // unescape_string has passed it, so a `\u` has its four digits and is one byte.
+            n: Sz = 6 if (raw.ptr + i + 1)$ == 'u' else 2
+            one: = raw.sub(i, n).unescape_to_arena(r.arena) catch
+                throw .fatal("Invalid escape in a literal")
+            bytes.push((one.ptr + 0)$)
+            escaped.push(true)
+            i += n
+        b: = r.arena.text()
+        $k: Sz = 0
+        for k < bytes.len
+            if k + 2 < bytes.len && bytes.get(k + 1) == '-' && !escaped.get(k + 1)
+                b.c(bytes.get(k)).c('-').c(bytes.get(k + 2))
+                k += 3
+                continue
+            b.c(bytes.get(k)).c('-').c(bytes.get(k))
+            k += 1
+        return b.take()
+
     priv fn scan_until(r: Self$@, close_ch: U8, err_msg: U8[]): U8[]!Kspeg_signal //<
         //< parse_primary's scan of a quoted string or a character class
         //< It returns the raw text before close_ch, and skips close_ch.
@@ -148,8 +182,7 @@ impl Meta
         if c == '['
             r.pos += 1
             raw_text: = r.scan_until(']', "Unterminated character class")!
-            unescaped: = r.unescape_string(raw_text, true)!
-            return r.arena.create(Rule.char_class(unescaped))
+            return r.arena.create(Rule.char_class(r.class_ranges(raw_text)!))
 
         if c == '.'
             r.pos += 1
@@ -209,7 +242,13 @@ impl Meta
         rules.push(r.parse_prefix()!)
         for
             saved_pos: = r.pos
-            next_rule: = r.parse_prefix() catch
+            // A mismatch ends the sequence; a fatal is the grammar's own error and goes up as it
+            // is, or "x\q" after another element would be reported as a plain mismatch.
+            next_rule: = r.parse_prefix() catch e
+                switch e
+                case .fatal
+                    throw e
+                default {}
                 r.pos = saved_pos
                 break
             rules.push(next_rule)
@@ -219,7 +258,11 @@ impl Meta
         rules: = List<|Rule$@|>.create(r.arena)
         rules.push(r.parse_sequence()!)
         for r.match_str("|")
-            seq: = r.parse_sequence() catch
+            seq: = r.parse_sequence() catch e
+                switch e
+                case .fatal
+                    throw e
+                default {}
                 throw .fatal("Expected sequence after '|'")
             rules.push(seq)
         return rules.get(0) if rules.len == 1 else r.arena.create(Rule.choice(rules))
@@ -229,7 +272,13 @@ impl Meta
         if !r.match_str("=")
             throw .fatal("Expected '=' in rule definition")
 
-        rule: = r.parse_choice() catch
+        // A fatal keeps its own message (a bad escape, say); only a mismatch is "Invalid rule
+        // body".
+        rule: = r.parse_choice() catch e
+            switch e
+            case .fatal
+                throw e
+            default {}
             throw .fatal("Invalid rule body")
         return r.arena.create(Rule_entry::{ .name = name, .rule = rule })
 

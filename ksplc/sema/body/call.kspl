@@ -29,6 +29,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
+import "std/ds"
 import "std/str" { Str_builder }
 
 fn check_variant_call_arity(c: Sema_ctx$@, node: Ast_node$@, args_node: Ast_node$@,
@@ -580,15 +581,13 @@ priv fn infer_value_call(c: Sema_ctx$@, node: Ast_node$@, callee_id: I32, args_n
         //< Infers a call through a function value: its arguments by the value's type, its result
         //< It is rejected where the type has no signature. The marker type of a bare function name
         //< in a generic call (generic_fn_value_type_id) says only "a function".
-    switch c.env.fn_sig_of(callee_id)
-    case .some(sig)
-        infer_value_call_args(c, node, args_node, sig)!
-        return sig.ret_id
-    case .none
+    sig: = c.env.fn_sig_of(callee_id) catch
         c.err(node,
             "cannot call this value. Its function type has no signature. Define a signature with \
                 'typedef Op = fn(x: I32): I32'. Then use it in 'f: Op = …'")
         return I32::sema_type_env.Builtin_type_id.unknown
+    infer_value_call_args(c, node, args_node, sig)!
+    return sig.ret_id
 
 enum Intrinsic //< a call the compiler builds in: `__kspl_<name>(…)`, declared nowhere
     not_intrinsic //< any other name

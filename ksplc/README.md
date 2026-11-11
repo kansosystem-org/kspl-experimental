@@ -54,7 +54,7 @@ The pipeline's folders come first, in the order the data flows. Then come `base/
 
 Directly in this folder:
 
-* [`main.kspl`](main.kspl) — the entry point: it starts the subcommand [`cli.kspl`](cli.kspl) read from the command line. The usage text is in [`usage.kspl`](usage.kspl).
+* [`main.kspl`](main.kspl) — the entry point: it starts the subcommand [`cli.kspl`](cli.kspl) read from the command line. The usage text is in [`usage.kspl`](usage.kspl). It also answers `ksplc info`, the keyword list derived from the grammar included.
 * [`pipeline.kspl`](pipeline.kspl) — the `Compiler` that runs the stages in order.
 * [`source_checks.kspl`](source_checks.kspl) — the checks on the source's own spelling (the indentation, the comments), run once the declarations are collected.
 
@@ -85,9 +85,9 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 | :-- | :-- | :-- |
 | [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `naming` (output names and cache keys), `scope` (the symbol table), `display` (what a diagnostic prints) |
 | [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx`, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the imports and their ledger), `pointer` (a comment's pointer), `c_boundary` (what the generated C cannot hold). Then `mismatch` (the notes a type mismatch adds) and `prof` (sema's time) |
-| [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
-| [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
-| [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` and `lint_written`. Then the checks on the program as a whole: `analyze`, and `closed` for `--closed` |
+| [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `type_check`. The constants: `eval` (integers) and `fold_float`. The generics: `mono` (an instance), `mono_name` (the lookups by name), `mono_queue` (the deferred work), `mono_target` (which impl serves an instance) and `subst`. The traits: `trait_check` / `trait_default`. Then `suite` (the `run` of a test suite) |
+| [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track` (one body, through the expressions), `field` (a field path), `stmt` (branching and joining), `release`, `report` (the diagnostics). Then a check each: `lock` (a lock), `pointee` (a `T$@` nothing writes through) and `view` (a view used after its memory moves) |
+| [`body/`](sema/body/) | Is the code right? | `infer` (the main walk). The expressions: `expr` (the dispatch), `binary`, `postfix`, `dot` (what follows a `.`), `resolve_path`, `literal`, `struct_literal`, `type_call` (`T(...)`), `value_range` (the values an integer can hold) and `fixed_answer` (a comparison whose answer is fixed). The statements: `stmt`, `switch`, `for_in`, `defer_decl`, `stmt_escape` (memory that would leave its frame) and `write_perm` (whether a place may be written). The calls: `call`, `call_args`, `call_defaults` and `generic_infer` (a call's type arguments read off its arguments). `coerce` fits a type to the expected one, and `static_init` says what a top-level initializer holds. The lints: `lint_stmt`, `lint_written`, `lint_free`, `lint_loop` and `lint_unchecked`. Then the checks on the program as a whole: `analyze`, and `closed` for `--closed` |
 
 ```sh
 make debug-ksplc   # the compiler's own tests, the type checks and the diagnostics among them
@@ -163,7 +163,7 @@ import "ksplc/base/ast" { Ast_node }
 | :-- | :-- |
 | **The tree** | [`ast.kspl`](base/ast.kspl) is the general-purpose node `Ast_node` and its verification. [`ast_kinds.kspl`](base/ast_kinds.kspl) is the closed set of node kinds. [`ast_ext.kspl`](base/ast_ext.kspl) holds the safe accessors. [`ast_place.kspl`](base/ast_place.kspl) holds the predicates a node's shape alone answers (does an expression have a side effect?). [`ast_spell.kspl`](base/ast_spell.kspl) spells a node back as text. [`ast_doc.kspl`](base/ast_doc.kspl) reads the `//<` description that a declaration carries |
 | **The shared state** | [`core.kspl`](base/core.kspl) holds the shared arenas, the string pool and the compiler's configuration. [`setup.kspl`](base/setup.kspl) starts and ends the layer in one go. [`target.kspl`](base/target.kspl) is the table of machines that ksplc lays values out for, and which one a compile is for |
-| **The source** | [`as_written.kspl`](base/as_written.kspl) keeps the text as typed before the indentation is fixed (what a diagnostic quotes). [`locate.kspl`](base/locate.kspl) says where a source comes from and its logical name. [`lines.kspl`](base/lines.kspl) finds where a line begins and ends. [`literal.kspl`](base/literal.kspl) reads a literal's spelling. [`near.kspl`](base/near.kspl) says how near one name is to another, for a message that offers the name meant |
+| **The source** | [`as_written.kspl`](base/as_written.kspl) keeps the text as typed before the indentation is fixed (what a diagnostic quotes). [`locate.kspl`](base/locate.kspl) says where a source comes from and its logical name, and turns an editor's `file://` URI into a path. [`lines.kspl`](base/lines.kspl) finds where a line begins and ends, and which line and column an offset is at. [`literal.kspl`](base/literal.kspl) reads a literal's spelling. [`near.kspl`](base/near.kspl) says how near one name is to another, for a message that offers the name meant |
 | **The diagnostics** (the compiler's messages about your code) | [`diag.kspl`](base/diag.kspl) prints them, [`lint_codes.kspl`](base/lint_codes.kspl) is the registry of their codes, and [`cfg_inactive.kspl`](base/cfg_inactive.kspl) keeps the ranges a `#cfg()` left out, so the editor can say why nothing stands there |
 | **The names emitted** | [`mangle.kspl`](base/mangle.kspl) turns KSPL's names into C and LLVM identifiers, and [`c_name.kspl`](base/c_name.kspl) avoids the C names that cannot be used plain |
 | **The settings and the packages** | [`config_file.kspl`](base/config_file.kspl) reads `ksplc.cfg`, and [`package.kspl`](base/package.kspl) its `[package]` section: a package's name, what it uses, and the logical name of a file inside it |
@@ -219,7 +219,6 @@ What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ks
 
 | File | What it does | How you reach it |
 | :-- | :-- | :-- |
-| [`keywords.kspl`](tools/keywords.kspl) | Derives the keyword list from the grammar | — |
 | [`surface.kspl`](tools/surface.kspl) | The record of the API a package offers | `ksplc doc --emit-surface=` |
 | [`interface.kspl`](tools/interface.kspl) | A library's interface, a C header or a KSPL file of `extern` declarations, from its `extern` functions | `--library=` |
 | [`doc.kspl`](tools/doc.kspl) | What a file, an entry or a folder publishes, rendered from the source as the reference to read | `ksplc doc` |
@@ -263,7 +262,7 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 | [`tests/filepath/`](tests/filepath/) | `test-file-path`'s material. **It takes two files**: with one, the unspecified-visibility path is never taken |
 | [`tests/notation/`](tests/notation/) | `test-notation`'s samples of the indentation notation. The language tour is written from one of them |
 | [`tests/ship/`](tests/ship/) | `test-ship`'s two vendors and two customers: libraries built with `--library`, a C program and a KSPL program using them. `app.kspl` imports an interface the suite writes, so it compiles only there |
-| `tests/*_test.kspl` | Tests of the language as a program sees it. [`tests/all.kspl`](tests/all.kspl) imports each, and its suite runs their `test_…` functions (`make debug`) |
+| `tests/*_test.kspl` | Tests of the language as a program sees it. [`tests/all.kspl`](tests/all.kspl) imports each, and its suite runs their `test_…` functions (`make debug`). [`tests/c_keyword_names.kspl`](tests/c_keyword_names.kspl) is one more: it writes C's reserved words as KSPL names. [`tests/main.kspl`](tests/main.kspl) gives the tests a `main`, so the package alone can run them |
 | [`tests/c_name_clash/`](tests/c_name_clash/) [`tests/extern_clash/`](tests/extern_clash/) [`tests/extern_decl/`](tests/extern_decl/) [`tests/extern_path/`](tests/extern_path/) [`tests/suite_reach/`](tests/suite_reach/) | Files a test or a fixture imports, which must stand in a file of their own. Each says in its opening comment who imports it |
 
 **The shared foundation is split by the reason for reading it**: `harness`, `harness_build`, `harness_expect`, `harness_markers` and `harness_grow`. `harness_build` is the only caller of the C compiler and the linker.

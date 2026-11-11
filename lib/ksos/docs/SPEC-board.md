@@ -4,7 +4,7 @@
 
 **"The car" is a palm-sized commercial kit**, not one a person rides in.
 
-**Nothing here is ksos's to decide.** These are facts about a board somebody else made, matched against the vendor's material and never the code. Where they disagree, the board is right. The bring-up order is in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
+**Nothing here is ksos's to decide.** These are facts about a board somebody else made, matched against the vendor's material and never the code. Where they disagree, the board is right. The bring-up order is in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md).
 
 ## Words used in this document
 
@@ -154,7 +154,7 @@ Eight WS2812 RGB LEDs, each with a small control chip inside, are chained on GPI
 * **A standard Pico / Pico W carries 2MB of QSPI Flash**, a W25Q16JVxQ or equivalent. The part fitted on this unit is not checked against its marking.
 * **Semihosting cannot be used here.** It prints through an attached debugger, and with no SWD probe the output halts the instruction that produces it.
 * Reaching the Arduino IDE's Serial Monitor takes a USB CDC driver for the RP2040's USB controller: `lib/ksos/drivers/rp2040/usb_cdc.kspl`.
-  * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** What each beep count means is stage 2b in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
+  * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** What each beep count means is stage 2b in [`TUTORIAL-bring-up.md`](TUTORIAL-bring-up.md).
 * **USB takes no GPIO.** The RP2040's dedicated pins (`USB_DP` / `USB_DM`) go straight to the micro-USB connector, so USB Ethernet needs no extra parts or GPIO.
 * **The Serial Monitor's COM port is USB CDC, not the UART on GPIO 0/1.** Of the car's two serial paths, the physical UART on connector P7 is unused. The `[0]`, `[1]`, `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins.
 * **The Pico W's on-board LED is wired to the WiFi chip (CYW43439), not a GPIO** (the plain Pico's is GPIO25). So it does not suit a first check. This is not checked against the data sheet.

@@ -11,6 +11,7 @@ import "ksplc/tests/support/jsonrpc_client"
 import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
+import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/subproc"
@@ -36,6 +37,15 @@ pub fn start(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
     argv.push("lsp")
     argv.push_all(extra)
     return jsonrpc_client.spawn(argv.slice(), cwd)
+
+pub fn start_ready(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
+    jsonrpc_client.Client!subproc.Spawn_error //<
+        //< It starts `ksplc lsp` as `start` does, then sends `initialize`
+        //< **The answer to `initialize` is not checked.** A check that needs it calls `start` and
+        //< asks itself.
+    $c: = start(exe, extra, cwd, arena)!
+    _init: = c.request("initialize", empty_obj(arena), READ_MS, arena) catch {}
+    return c
 
 // ==========================================
 // The two spellings a client names a document by
@@ -81,6 +91,10 @@ pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Value //<
         .set("version", b.int_val(1I64)).set("text", b.str_val(text)).build()
     return b.obj().set("textDocument", doc).build()
 
+pub fn open(c: jsonrpc_client.Client@, uri: U8[], text: U8[], arena: Arena$@) //<
+    //< It sends didOpen for `uri` with `text`
+    c.notify("textDocument/didOpen", did_open(uri, text, arena), SEND_MS, arena) catch {}
+
 pub fn close(c: jsonrpc_client.Client@, uri: U8[], arena: Arena$@) //<
     //< It sends didClose for `uri`
     //< **A check closes what it opened where the server is later made to recover** (the `lsp`
@@ -117,6 +131,15 @@ pub fn answer( //< the reply to a request; `null` when none comes, so the check 
     got: = c.request(method, params, timeout_ms, arena) catch
         return .null_val
     return got.val
+
+pub fn hover( //< the reply to a hover at a position
+    c: jsonrpc_client.Client$@,
+    uri: U8[], //< the document
+    line: Sz, //< the line, from 0
+    character: Sz, //< the column, from 0
+    arena: Arena$@, //< where the reply goes
+): json.Doc!jsonrpc.Rpc_end
+    return c.request("textDocument/hover", at_pos(uri, line, character, arena), READ_MS, arena)
 
 pub fn hover_text(msg: json.Value): U8[] //< `result.contents.value` (the hover's body)
     //< Empty where there is none.

@@ -20,7 +20,7 @@ The diagram shows who calls what.
 ```mermaid
 flowchart LR
     M["make"] -->|"make test-(name)"| S["tests/suite/"]
-    M -->|"passes a file or log"| T["tests/tools/"]
+    M -->|"passes a file or log"| T["tests/checkers/"]
     M -->|"make debug"| D["tests/debug/"]
     S -->|imports| H["tests/support/"]
     D -->|"calls in turn"| P["each package's tests/all"]
@@ -32,7 +32,7 @@ Each folder here holds one kind of thing, so a folder's name tells you whether `
 |---|---|
 | `tests/suite/` | One suite that runs with no arguments. `make test-<name>` calls it |
 | `tests/support/` | The code a suite reads. Not what it runs against |
-| `tests/tools/` | A tool `make` calls directly, passing its subject as an argument (below) |
+| `tests/checkers/` | A checker `make` calls directly, passing its subject as an argument (below) |
 | `tests/debug/` | `make debug`'s entry point, `main.kspl`: it calls each package's `tests/all` in turn. One package alone is `make debug-<name>`, through that package's own `<package>/tests/main.kspl` |
 | `tests/freestanding/` | Fixtures for `make test-freestanding-math`. `probe.kspl` exports std/math's functions as built with no operating system (`#cfg(freestanding)`). `harness.c` calls them and compares each answer with the real libm |
 | `tests/docs/` | This folder's documents (["Further reading"](#further-reading) below) |
@@ -59,12 +59,12 @@ Each suite has a make target, `make test-<name>`, and its opening comment says w
 
 **Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-ksai-fuzz` / `test-kssrv-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken inputs, made from valid *seeds*, to find one that crashes it.
 
-## The tools in tests/tools
+## The checkers in tests/checkers
 
 | Thing | How it is called |
 |---|---|
-| `tests/tools/llvm_ir_abi_check.kspl` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
-| `tests/tools/perf_guard.kspl` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
+| `tests/checkers/llvm_ir_abi_check.kspl` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
+| `tests/checkers/perf_guard.kspl` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
 
 ## The fixture folders
 

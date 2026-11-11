@@ -587,6 +587,26 @@ fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
 fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
     blas_gemm<|T|>(CBLAS_NO_TRANS, CBLAS_TRANS, m, n, k, a, k, b, k, c, n) // C = A@B^T
 
+// C = A^T @ B (A:[m,k], B:[m,n] -> C:[k,n]): the weight gradient's product.
+#cfg(!blas)
+fn transa_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
+    //< Loop order rr-i-j: the inner `j` runs contiguously over the B row and the C row. The
+    //< additions into C[i][j] stay in ascending rr, as in the naive version, so the result is
+    //< unchanged bit for bit.
+    for x in Range.asc(k * n)
+        (c + x)$ = 0.0
+    for rr in Range.asc(m)
+        b_row: = b + rr * n
+        for i in Range.asc(k)
+            av: = (a + rr * k + i)$
+            c_row: = c + i * n
+            for j in Range.asc(n)
+                (c_row + j)$ = (c_row + j)$ + av * (b_row + j)$
+
+#cfg(blas)
+fn transa_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
+    blas_gemm<|T|>(CBLAS_TRANS, CBLAS_NO_TRANS, k, n, m, a, k, b, n, c, n) // C = A^T@B
+
 // ---------------------------------------------------------
 // An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI. By default cfg(blas)
 // discards these and matmul_kernel's BLAS version, so the generated C never mentions cblas. The
@@ -615,8 +635,8 @@ fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@
     ldc: Sz) //<
         //< cfg(blas): the shared dispatch to BLAS gemm, C = op(A)@op(B) with alpha=1 and beta=0
         //< It is RowMajor and transposes by ta/tb (`CBLAS_NO_TRANS` / `CBLAS_TRANS`); it picks
-        //< sgemm or dgemm by the element size (F32 or F64 only). matmul and grad.kspl's backward
-        //< gemm share it.
+        //< sgemm or dgemm by the element size (F32 or F64 only). matmul and the transposed
+        //< kernels share it.
     mi: = I32::m
     ni: = I32::n
     ki: = I32::k

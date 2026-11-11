@@ -19,6 +19,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars" // testing and slicing single characters
+import "std/ds"
 import "std/str" { Str_builder }
 
 // The type of a function used as a value without being called (its bare name passed or assigned as
@@ -199,11 +200,9 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
             refuse_unwritten_type_args(c, node, "method", member.text, written.slice(),
                 tmpl.find_child(.k_type_gen_params))
             return I32::sema_type_env.Builtin_type_id.unknown
-        switch instantiate_written(node, c, fn_tmpl, tmpl, own_args)!
-        case .some(inst)
-            sym = inst
-        case .none
+        inst: = instantiate_written(node, c, fn_tmpl, tmpl, own_args)! catch
             return I32::sema_type_env.Builtin_type_id.unknown
+        sym = inst
     // The method's own declaration (an instance's, for a generic) is what the backends name.
     sym.flags.is_used = true
     node.def_node = sym.node

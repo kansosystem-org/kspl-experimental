@@ -13,6 +13,7 @@ import "std/fs"
 import "std/str" { Arena_text, Str_builder }
 import "std/strfmt"
 import "std/sys"
+import "std/url"
 
 const STD_DIR_ENV_NAME: U8[] = "KSPLC_STD_DIR"
 priv const DEFAULT_STD_DIR: U8[] = "std"
@@ -327,6 +328,11 @@ priv fn placed_elsewhere(unit: U8[]): Bool //<
     return unit.equals(STD_PREFIX.sub(0, STD_PREFIX.len - 1)) ||
         !package_dir(unit).equals(unit)
 
+fn skip_build_output(name: U8[]): Bool //< a `skip_dir` for `fs.walk_files`: not `out`, not `.git`
+    //< A build's output and git's own folder hold no source anyone wrote. std leaves this choice to
+    //< its caller, since only this repository's layout says `out` holds a build's output.
+    return name.equals("out") || name.equals(".git")
+
 fn cwd(): U8[] //< the working directory with `/` separators; empty where it cannot be read
     //< Caution: **Do not mix the separators.** The OS spells it with its own, so a plain join gives
     //< `C:\a\b/c/d.kspl`; every one becomes `/`. **Do not use `one_name`**: dropping the `.`
@@ -404,6 +410,30 @@ priv fn ends_with_at_boundary(full: U8[], suffix: U8[]): Bool //<
         return true
     return sys.is_path_sep((full.ptr + (full.len - suffix.len - 1))$)
 
+const FILE_URI_SCHEME: U8[] = "file://" //< the scheme an LSP document URI carries
+    //< **Input and output share it**, so a document cannot come in under one spelling and go back
+    //< out under another.
+
+impl U8[]
+    fn strip_file_uri(r: U8[]): U8[] //<
+        //< A `file://` URI as a local path (the LSP's document URI; anything else unchanged)
+        //< Caution: **Decode it** (RFC 8089): an editor writes a space as `%20`, a Japanese letter
+        //< as its UTF-8 bytes in `%XX`, and a Windows drive as `/c%3A/`. Left as written, a file
+        //< under such a folder matches nothing on the disk. `spell_uri_path` writes the other way.
+        return r.strip_file_uri_on(sys.is_windows())
+
+    fn strip_file_uri_on(r: U8[], windows: Bool): U8[] //<
+        //< `strip_file_uri`, on Windows or elsewhere, so a test checks both answers on every OS
+        if !r.starts_with(FILE_URI_SCHEME)
+            return r
+        rest: = r.strip_prefix(FILE_URI_SCHEME)
+        path: = url.decode_component(rest, base_core.arena) catch
+            return rest
+        // A drive comes after a `/` (`/c:/x`); the path is `c:/x`.
+        if windows && path.len >= 3 && path[0] == '/' && path[2] == ':' && path[1].is_alpha()
+            return path.sub_from(1)
+        return path
+
 fn is_same_file(a: U8[], b: U8[]): Bool //< whether they point at the same file
     //< **Equal names are not required**: a diagnostic says `std/tests/net_test`, the LSP
     //< `file:///c:/…/net_test.kspl`. With the scheme and extension dropped, one must end the other
@@ -424,10 +454,10 @@ struct Uri_style //< how one client writes a document URI, read from one it sent
 fn uri_style_of(uri: U8[]): Uri_style //<
     //< It keeps the client's form instead of choosing one, as clangd's `URIForFile` does
     path: = uri.strip_file_uri()
-    has_scheme: = uri.starts_with(base_core.FILE_URI_SCHEME)
+    has_scheme: = uri.starts_with(FILE_URI_SCHEME)
     return Uri_style::{ .has_scheme = has_scheme, .is_absolute = sys.is_absolute(path),
         .drive_slash =
-        has_scheme && uri.strip_prefix(base_core.FILE_URI_SCHEME).starts_with("/") &&
+        has_scheme && uri.strip_prefix(FILE_URI_SCHEME).starts_with("/") &&
         !path.starts_with("/") }
 
 impl Uri_style
@@ -440,7 +470,7 @@ impl Uri_style
         out: = base_core.arena.text()
         path: = to_absolute(named.slice()) if r.is_absolute else named.slice()
         if r.has_scheme
-            out.s(base_core.FILE_URI_SCHEME)
+            out.s(FILE_URI_SCHEME)
             if r.drive_slash && !path.starts_with("/")
                 out.c('/')
             spell_uri_path(path, out)
@@ -448,9 +478,9 @@ impl Uri_style
             out.s(path)
         return out.take()
 
-fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` URI's path, escaped
-    //< Caution: **Escape only what a URI cannot hold bare**, which `strip_file_uri` decodes
-    //< (`../base/core.kspl`): a space, a Japanese letter, a control byte, `%`, `#` and `?`.
+priv fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` URI's path, escaped
+    //< Caution: **Escape only what a URI cannot hold bare**, which `strip_file_uri` (above)
+    //< decodes: a space, a Japanese letter, a control byte, `%`, `#` and `?`.
     //< Anything else stays as the client wrote it, a drive's `:` and `/` included, so a client
     //< comparing its own URI with the answer finds them equal.
     for c in path

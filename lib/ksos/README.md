@@ -111,7 +111,7 @@ Each file directly inside `demo/<port>/` of a bare-metal port (`cortex_m`, `rp20
 | :-- | :-- |
 | `demo/<port>/` | that port's demos; one firmware image per file |
 | `demo/<port>/common/` | parts only that port's demos share (the RP2040's USB CDC console, …) |
-| `lib/ksos/demo/common/` | Shared components: a semihosting console that prints through QEMU's debugger, and a reader for received policies |
+| `lib/ksos/demo/common/` | Shared components: a semihosting console that prints through QEMU's debugger, a reader for received policies, and the two tasks of the heap-tasks demos |
 
 One demo per feature. The POSIX ones need no special tools:
 
@@ -145,6 +145,7 @@ One demo per feature. The POSIX ones need no special tools:
 | `lib/ksos/demo/posix/panic_demo.kspl create-again` | `make ksos-create-again` | `Task.create` again on a task not deleted panics instead of using one more slot |
 | `lib/ksos/demo/posix/tick_mid_switch_demo.kspl` | `make ksos-tick-mid-switch` | A tick delayed across a switch into a new task (at the start, and at a `Task.resume`), and thousands of starts under a tick every 30 μs |
 | `lib/ksos/demo/posix/dyn_race_demo.kspl` | `make ksos-dyn-race` | Three tasks create and delete heap-allocated tasks under a tick every 100 μs; each returns to the heap exactly once |
+| `lib/ksos/demo/posix/heap_tasks_demo.kspl` | `make ksos-heap-tasks` | Two tasks of different priority allocate through `List` and `Arc`, one preempting the other inside `malloc` |
 
 For a `panic_demo` target, the expected panic is the pass.
 
@@ -168,6 +169,7 @@ Each runs on QEMU's `mps2-an385` (a Cortex-M3). Those that fit 16 KB of RAM and 
 | `lib/ksos/demo/cortex_m/cortex_m_panic_probe.kspl` | `make ksos-cm-panic-probe` | `make ksos-cm0-panic-probe` | a panic's crash record read back across a real soft reset (AIRCR, which Armv6-M has too) |
 | `lib/ksos/demo/cortex_m/cortex_m_panic_record_bounds.kspl` | `make ksos-cm-panic-record-bounds` | — | A crash record whose lengths pass its buffers is refused, not read past its end |
 | `lib/ksos/demo/cortex_m/cortex_m_heap_probe.kspl` | `make ksos-cm-heap-probe` | — | The freestanding heap and `Arc<T>` with no OS; 120 tasks reuse the port's 33 contexts |
+| `lib/ksos/demo/cortex_m/cortex_m_heap_tasks.kspl` | `make ksos-cm-heap-tasks` | — | Two tasks of different priority allocate through `List` and `Arc`, one preempting the other inside the heap |
 | `lib/ksos/demo/cortex_m/cortex_m_ai_probe.kspl` | `make ksos-cm-ai-probe` | — | `ksai` inference (a whole `Transformer_block`) on bare metal, matching the host's numbers |
 | `lib/ksos/demo/cortex_m/cortex_m_ai_train_probe.kspl` | `make ksos-cm-ai-train-probe` | — | On-device LoRA training, with `Lora.save_raw` and `load_raw` |
 | `lib/ksos/demo/cortex_m/cortex_m_ai_weights_probe.kspl` | `make ksos-cm-ai-weights-probe` | — | real weights (a safetensors made a static array by `embed`) read with zero copies and no filesystem |
@@ -197,7 +199,7 @@ Keep one demo per feature: combined, a failure hides which feature broke.
 
 #### The RP2040's demos come three ways
 
-Every RP2040 demo is a separate small firmware, so a fault can be narrowed down. The groups below follow the flashing order; stage 1 of [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) explains flashing. `make ksos-rp2040` alone produces only the `.elf`.
+Every RP2040 demo is a separate small firmware, so a fault can be narrowed down. The groups below follow the flashing order; stage 1 of [`lib/ksos/docs/TUTORIAL-bring-up.md`](docs/TUTORIAL-bring-up.md) explains flashing. `make ksos-rp2040` alone produces only the `.elf`.
 
 **The first step** confirms that ksos runs on the real chip.
 
@@ -226,7 +228,7 @@ The images link different code: `board` and `net` use LED matrix I2C, RTC, ARP/I
 
 These components support embedded devices. They are optional for a first reading; [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) describes each.
 
-- `lib/ksos/boards/` defines the wiring of a Freenove 4WD mecanum car with a Pico W, above the CPU ports and drivers. It carries the Edge AI loop. [`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md) defines wiring, and [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) explains how to connect and bring up the car.
+- `lib/ksos/boards/` defines the wiring of a Freenove 4WD mecanum car with a Pico W, above the CPU ports and drivers. It carries the Edge AI loop. [`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md) defines wiring, and [`lib/ksos/docs/TUTORIAL-bring-up.md`](docs/TUTORIAL-bring-up.md) explains how to connect and bring up the car.
 
 - `lib/ksos/drivers/` accesses memory-mapped (MMIO) registers directly: GPIO, PWM, clocks, ADC, I2C, USB CDC, and others.
 
@@ -252,7 +254,7 @@ On Cortex-M, `PendSV_Handler` saves 16 words on the task's stack: r4–r11, then
 
 ## What has been checked on real hardware
 
-This table is the canonical record of checks on the real car: a Freenove 4WD car with a Raspberry Pi Pico W ([`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md)). Only someone with the hardware can add a ✅; AI review cannot confirm hardware behavior. Stage numbers refer to [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md).
+This table is the canonical record of checks on the real car: a Freenove 4WD car with a Raspberry Pi Pico W ([`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md)). Only someone with the hardware can add a ✅; AI review cannot confirm hardware behavior. Stage numbers refer to [`lib/ksos/docs/TUTORIAL-bring-up.md`](docs/TUTORIAL-bring-up.md).
 
 | Item | State |
 |---|---|
@@ -284,7 +286,7 @@ This table is the canonical record of checks on the real car: a Freenove 4WD car
 | Starting without a PC using the stored policy (`rp2040_car_pilot_probe`) | ✅ Without kssrv it reported `no fresh policy — using the one stored on board`, and all six manoeuvres reached the wheels. `last run ended` and `policy unchanged` appeared as expected (stage 9) |
 | Flash writes (`ksos/drivers/rp2040/flash`) and the device log | ✅ `boot #` increased at each power-on, and `records` and `used` matched each append. A record crossing a page boundary read back correctly (stage 8) |
 | USB CDC send queue (`Ring<\|512\|>` in `std/ring.kspl`) | ✅ The `make ksos-rp2040-board` lines keep arriving, a line longer than a packet among them. Bytes per round do not divide 512, so the wrap position moves |
-| The hardware watchdog (`lib/ksos/drivers/rp2040/watchdog.kspl`) | **not confirmed** (it is once "Checking the watchdog" in stage 9 of [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) passes on the car) |
+| The hardware watchdog (`lib/ksos/drivers/rp2040/watchdog.kspl`) | **not confirmed** (it is once "Checking the watchdog" in stage 9 of [`lib/ksos/docs/TUTORIAL-bring-up.md`](docs/TUTORIAL-bring-up.md) passes on the car) |
 | The calendar RTC ticking (`lib/ksos/drivers/rp2040/rtc.kspl`) | **not confirmed** (it is once `make ksos-rp2040-board`'s `[rtc]` line reads `ticking=yes` across rounds) |
 | Flash chip part number | **not confirmed**. [`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md) names the expected part under “Flashing the firmware, and the debug output”. Boot does not require a particular chip |
 
@@ -302,9 +304,9 @@ Only code without shared state can move to another file unchanged. Here, state m
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
-| [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) | Board setup stages, confirmation checks, and probe output | Anyone with the car, a USB cable, and a PC that can copy files to it |
+| [`lib/ksos/docs/TUTORIAL-bring-up.md`](docs/TUTORIAL-bring-up.md) | A walk through the board's setup, one stage at a time, with each stage's checks and probe output | Anyone with the car, a USB cable, and a PC that can copy files to it |
 | [`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md) | The car's own facts: pin assignment, motor polarity, conversion formulae | Whoever wires or drives the car, or writes a driver against it |
-| [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) | Design reasons: kernel, port layer, drivers, network stack, AI on bare metal | Anyone changing ksos |
+| [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) | Design reasons: kernel, port layer, drivers, network stack, AI on bare metal, the car's line-following limits | Anyone changing ksos |
 | [std](../../std/README.md) | The standard library. `ksplc doc std` lists its published files | Anyone changing ksos |
 | [ksai](../ksai/README.md) | The inference that runs beside the control loop, without `malloc` | Anyone changing ksos |
 | [ksdb](../ksdb/README.md) | The append-only log stored on the device | Anyone changing ksos |

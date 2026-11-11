@@ -14,8 +14,8 @@ import "ksmd/model/format" { format_of }
 import "ksmd/model/group" { Group_fault, read_groups }
 import "ksmd/model/look" { look_of, note_of, plain_look }
 import "ksmd/model/model" { Block, Cell, Chart, Document, Image, Drawing, UNBOUND, MAX_CELLS,
-    MAX_COLUMNS, MAX_FORMULA, MAX_HEIGHT, MAX_NAME, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH,
-    Column_filter, Row_height, Table }
+    MAX_COLUMNS, MAX_FORMULA, MAX_HEIGHT, MAX_READ_FORMULA, MAX_NAME, MAX_ROWS, MAX_WIDTH,
+    MIN_HEIGHT, MIN_WIDTH, Column_filter, Row_height, Table }
 import "ksmd/model/rule" { has_rule, rule_of }
 import "ksmd/syntax/chart" { kind_of, split_names }
 import "ksmd/syntax/diagram" { read_diagram }
@@ -385,13 +385,16 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$
         cell.text = decode(src, body, at, arena)!
         return cell
     if body[0] == '='
+        // **A `%ksmd 1` formula is measured as written**, since converting it can lengthen it.
         $formula: = body.sub_from(1).trim_spaces()
-        if src.version == 1
-            formula = from_version_1(formula, arena)
         if formula.len == 0
             throw src.diagnostic(at, "this formula is empty")
-        if formula.len > MAX_FORMULA
-            throw src.diagnostic(at, "a formula holds at most 4,096 bytes")
+        if src.version == 1
+            if formula.len > MAX_FORMULA
+                throw src.diagnostic(at, "a formula holds at most 4,096 bytes")
+            formula = from_version_1(formula, arena)
+        else if formula.len > MAX_READ_FORMULA
+            throw src.diagnostic(at, "a formula holds at most 32,768 bytes in a file")
         t.pieces.push(text_piece(formula))
         cell.kind = .formula
         cell.first = t.pieces.len - 1
@@ -694,8 +697,8 @@ priv fn empty_body(src: Source@, first: Line, message: U8[]): Sz!Diagnostic //<
 
 fn is_table_name(name: U8[]): Bool //<
     //< 1 to 255 bytes of text, with no line break or other control character
-    //< A formula writes a name that is not plain in JSON quotes (`write_table_name` in
-    //< `formula.kspl`), so any other character can stand in a name.
+    //< A formula writes a name that is not plain in quotes, as formula text (`write_table_name`
+    //< in `formula.kspl`), so any other character can stand in a name.
     if name.len == 0 || name.len > MAX_NAME
         return false
     for c in name

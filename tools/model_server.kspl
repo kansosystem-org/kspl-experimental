@@ -4,6 +4,7 @@
 //< command that builds `chat_server`. **Only the server it started is stopped**,
 //< by `Model_run.stop`, or by the Ctrl+C that stops the launcher (`subproc.spawn_beside`). The
 //< reasons are "Starting the model server" in `tools/docs/DESIGN-tools.md`.
+import "ksagent/defaults"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -17,16 +18,12 @@ import "std/sys"
 import "tools/opener"
 import "tools/opener_aim" as aim
 
-const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where ksagent asks unless told otherwise
-    //< Caution: **Keep it equal to `DEFAULT_URL` in `ksagent/model.kspl`**: `make model-server`
-    //< starts a server here for `ksagent ask`, which asks there. `tools/tests/chat_launch.mjs`
-    //< compares the two.
 priv const LLAMA: U8[] = "llama-server" //< llama.cpp's server, looked up in PATH
-priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--jinja", "-c", "32768", "--flash-attn", "on",
-    "--cache-type-k", "q8_0", "--cache-type-v", "q8_0", "--no-slots" } //<
-        //< **The one place llama-server's options stand**: `--jinja`, or it offers no tool calls,
-        //< which ksagent works through; `-c`, the conversation's length in tokens. Caution: **Keep
-        //< it in step with `MAX_REQUEST_BYTES` in `ksagent/agent.kspl`**, which is sized to fit it.
+priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--flash-attn", "on", "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0", "--no-slots" } //<
+        //< **llama-server's options, after the two `start` puts first**: `--jinja`, or it offers
+        //< no tool calls, which ksagent works through; and `-c`, the conversation's length in
+        //< tokens, which ksagent gives (`CONTEXT_TOKENS`).
         //< `--no-slots` closes `GET /slots`, which shows the prompts that are being answered.
         //<
         //< **The conversation's memory (its key and value cache) is kept at 8 bits**, not the
@@ -40,7 +37,6 @@ priv const LLAMA_OPTIONS: U8[][] = U8[][]::{ "--jinja", "-c", "32768", "--flash-
         //< GiB for its 4 slots. `data/README.md` gives the sums.
 priv const KEY_ENV: U8[] = "LLAMA_API_KEY" //< where llama-server takes its API key from
     //< **The environment, not `--api-key`**: the command line shows in the process list.
-const AGENT_KEY_ENV: U8[] = "KSAGENT_API_KEY" //< where ksagent takes the API key from
 priv const KEY_BYTES: Sz = 24 //< the random bytes of a key made here
     //< Caution: **Make it long enough that guessing cannot find it**: it is all that stops a web
     //< page, or another user on the machine, from asking the model server.
@@ -162,7 +158,7 @@ fn url_at(port: U8[], arena: Arena$@): U8[]? //< the model server's address on t
     //< **Empty means `DEFAULT_URL`**, where ksagent asks unless told. None where `port` is not a
     //< port number.
     if port.len == 0
-        return .some(DEFAULT_URL)
+        return .some(defaults.DEFAULT_URL)
     at: = aim.port_num(port)
     if at == 0
         return .none
@@ -198,8 +194,8 @@ fn ensure(plan: Model_plan, arena: Arena$@): Model_run? //<
     case .locked
         warn()
             .s("the model server at \{plan.url\} asks for an API key that this command does not \
-                hold. Set \{AGENT_KEY_ENV\} to its key, stop it, or name another port: make chat \
-                DIR=<folder> PORT=<port>\n")
+                hold. Set \{defaults.API_KEY_ENV\} to its key, stop it, or name another port: make \
+                chat DIR=<folder> PORT=<port>\n")
         return .none
     case .nothing
         say().s("model server: nothing answers at \{plan.url\}, so this command starts one\n")
@@ -219,7 +215,7 @@ priv fn held_key(file: U8[], arena: Arena$@): U8[] //< the key for a server that
         body: = io.read_file(file, arena) catch ""
         if body.trim_spaces().len > 0
             return body.trim_spaces()
-    return sys.get_env(AGENT_KEY_ENV).unwrap_or("")
+    return sys.get_env(defaults.API_KEY_ENV).unwrap_or("")
 
 priv fn new_key(arena: Arena$@): U8[]? //< a new random key, as hex; none where the OS has none
     $raw: U8[KEY_BYTES] = ::{}
@@ -264,6 +260,9 @@ priv fn start(plan: Model_plan, at: I32, arena: Arena$@): Model_run? //<
     llama.push(LLAMA)
     llama.push("-m")
     llama.push(model)
+    llama.push("--jinja")
+    llama.push("-c")
+    llama.push(arena.text().s("\{defaults.CONTEXT_TOKENS\}").take())
     llama.push_all(LLAMA_OPTIONS)
     llama.push("--port")
     llama.push(port)

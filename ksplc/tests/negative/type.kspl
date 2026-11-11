@@ -418,6 +418,38 @@ fn main(): I32
   io.out()
     .s("\{I64::silent_wrap\}\{I64::silent_zero\}\{I64::silent_neg\}\{I64::in_expr\}\{I64::neg_in_expr\}\{I64::with_suffix\}\{with_annotation\}\{I64::at_bounds\}\{I64::wide_ok\}\{I64::hash_ok\}\{I64::narrow_lit\}\{I64::narrow_ok\}\{I64::wide_from_narrow\}\n")
   return 0
+// ==== case untyped_literal_settled_bounds
+//< An untyped literal that takes its type anywhere else is checked against that type too
+//< **Each place a literal takes a type is one more place to miss**: a ternary whose branches
+//< agree, an inferred generic argument, a `~`, an interpolation. Each gave -1294967296 for
+//< 3000000000 silently. The check runs once the body is typed (check_settled_literals in
+//< `sema/body/literal.kspl`).
+//< Caution: **Keep the non-firing side alongside**: a branch beside an `I64`, a suffix and a cast.
+// EXPECT: untyped_literal_settled_bounds.kspl:21:28: error: literal '3000000000' is out of range for type 'I32'
+// EXPECT: untyped_literal_settled_bounds.kspl:22:19: error: literal '3000000000' is out of range for type 'I32'
+// EXPECT: untyped_literal_settled_bounds.kspl:23:23: error: literal '3000000000' is out of range for type 'I32'
+// EXPECT: untyped_literal_settled_bounds.kspl:24:16: error: literal '3000000000' is out of range for type 'I32'
+// EXPECT: untyped_literal_settled_bounds.kspl:25:17: error: literal '3000000000' is out of range for type 'I32'
+// EXPECT: Finished with 5 error(s)
+import "std/io"
+
+fn same<|T|>(x: T): T
+  return x
+
+fn main(): I32
+  p: = 1
+  c: = p > 0
+  in_branch: = p if c else 3000000000
+  first_branch: = 3000000000 if c else 1
+  generic_arg: = same(3000000000)
+  inverted: = ~3000000000
+  io.out().s("\{3000000000\}\n")
+  p64: I64 = 1
+  wide_branch: = p64 if c else 3000000000
+  wide_arg: = same(3000000000I64)
+  cast_ok: = U64::3000000000
+  io.out().s("\{in_branch\}\{first_branch\}\{generic_arg\}\{inverted\}\{wide_branch\}\{wide_arg\}\{cast_ok\}\n")
+  return 0
 // ==== case value_name_as_type
 //< A value's name is not a type, so a declaration typed with one is refused
 //< Let through, the name read as the value's type. `x: twice` declared an `I32` (the function's

@@ -15,6 +15,7 @@
 //     ksagent_chat --model-only [--model-file=<file>] [--port=<n>]
 //     ksagent_chat --list | --stop=<folder> | --stop-all
 // ==========================================
+import "ksagent/defaults"
 import "std/argparse"
 import "std/ds" { List }
 import "std/fs"
@@ -61,7 +62,7 @@ fn main(): I32 //< asks about a folder: the model server, the chat page, then `k
     p.str_opt("--model-file", model_file@, file_help)
     port_help: = arena.text()
         .s("the model server's port on this machine: used where one answers, otherwise started \
-            (empty: \{aim.port_in_url(model_server.DEFAULT_URL)\}, where ksagent asks)").take()
+            (empty: \{aim.port_in_url(defaults.DEFAULT_URL)\}, where ksagent asks)").take()
     p.str_opt("--port", port@, port_help)
     wait_help: = arena.text()
         .s("the seconds a model server can take to load (default \{MODEL_WAIT_S\})").take()
@@ -147,8 +148,8 @@ priv fn model_alone( //< starts the model server alone, for `ksagent ask` and `e
             Ctrl+C\n")
     if run.key_file.len > 0
         io.out()
-            .s("\{sys.program_name()\}: they need its API key in \{model_server.AGENT_KEY_ENV\}. \
-                The key stands in \{run.key_file\}\n")
+            .s("\{sys.program_name()\}: they need its API key in \{defaults.API_KEY_ENV\}. The key \
+                stands in \{run.key_file\}\n")
     return run.wait()
 
 priv fn agent_beside(server: U8[], arena: Arena$@): U8[] //< ksagent beside the server, or empty
@@ -177,7 +178,7 @@ priv fn watch( //< runs `ksagent watch` on the folder in the foreground, and ret
     if slow
         argv.push(model_server.SLOW_TIMEOUT)
     if key.len > 0
-        sys.set_env(model_server.AGENT_KEY_ENV, key) catch
+        sys.set_env(defaults.API_KEY_ENV, key) catch
             say().s("cannot give ksagent the model server's API key\n")
             return 1
     argv.push(root)

@@ -446,7 +446,7 @@ ksos-rp2040: $(RP2040_LINK_OBJS) | $(RP2040_OUT)
 # `.uf2` (`-` becomes `_`). **Every such file is a row.** `ksos_rp2040_hint_<suffix>` names the
 # guidance printed after writing (`UF2_HINT_COPY` where none is set); **something that moves needs
 # its own**. Before writing:
-# * net: enable internet connection sharing on the PC ("The setting on the PC side" in lib/ksos/docs/HOWTO-bring-up.md).
+# * net: enable internet connection sharing on the PC ("The setting on the PC side" in lib/ksos/docs/TUTORIAL-bring-up.md).
 # * car-pilot: lift the wheels off; kssrv is needed only while receiving (stage 7 there).
 # * car-ir: line tracking uses the policy in the records, so run car-pilot once first.
 ksos_rp2040_hint_motor := UF2_HINT_MOTOR

@@ -161,7 +161,7 @@ pub struct Header //< one header, as `Headers.each` hands it out
 
 impl Headers
     pub fn find( //< the first value with that name, or nothing; case is ignored
-        r: Self,
+        r: Self@,
         name: U8[], //< the header name to look for
     ): U8[]?
         for h in r.each()
@@ -169,13 +169,13 @@ impl Headers
                 return .some(h.value)
         return .none
 
-    pub fn each(r: Self): Header_seq //< walks the headers in order (`for h in head.each()`)
+    pub fn each(r: Self@): Header_seq //< walks the headers in order (`for h in head.each()`)
         return Header_seq::{ .at = r.first }
 
-    pub fn is_empty(r: Self): Bool //< whether it holds no header
+    pub fn is_empty(r: Self@): Bool //< whether it holds no header
         return r.first == null
 
-    priv fn has(r: Self, name: U8[]): Bool
+    priv fn has(r: Self@, name: U8[]): Bool
         return r.find(name).is_some()
 
 pub fn lists_token( //< whether a comma-separated header value holds the token, in any case
@@ -665,6 +665,38 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
     stream.write_all_for(b.slice(), timeout_ms) catch e
         throw .io(e)
 
+priv struct Status_phrase //< one status number and its standard phrase
+    status: I32
+    phrase: U8[]
+
+priv const PHRASES: Status_phrase[24] = ::{ //< RFC 9110's phrase for each status known
+    Status_phrase::{ .status = 200, .phrase = "OK" },
+    Status_phrase::{ .status = 201, .phrase = "Created" },
+    Status_phrase::{ .status = 204, .phrase = "No Content" },
+    Status_phrase::{ .status = 206, .phrase = "Partial Content" },
+    Status_phrase::{ .status = 301, .phrase = "Moved Permanently" },
+    Status_phrase::{ .status = 302, .phrase = "Found" },
+    Status_phrase::{ .status = 304, .phrase = "Not Modified" },
+    Status_phrase::{ .status = 400, .phrase = "Bad Request" },
+    Status_phrase::{ .status = 401, .phrase = "Unauthorized" },
+    Status_phrase::{ .status = 403, .phrase = "Forbidden" },
+    Status_phrase::{ .status = 404, .phrase = "Not Found" },
+    Status_phrase::{ .status = 405, .phrase = "Method Not Allowed" },
+    Status_phrase::{ .status = 408, .phrase = "Request Timeout" },
+    Status_phrase::{ .status = 409, .phrase = "Conflict" },
+    Status_phrase::{ .status = 411, .phrase = "Length Required" },
+    // RFC 9110's name (RFC 7231's is "Payload Too Large").
+    Status_phrase::{ .status = 413, .phrase = "Content Too Large" },
+    Status_phrase::{ .status = 414, .phrase = "URI Too Long" },
+    Status_phrase::{ .status = 415, .phrase = "Unsupported Media Type" },
+    Status_phrase::{ .status = 429, .phrase = "Too Many Requests" },
+    Status_phrase::{ .status = 431, .phrase = "Request Header Fields Too Large" },
+    Status_phrase::{ .status = 500, .phrase = "Internal Server Error" },
+    Status_phrase::{ .status = 501, .phrase = "Not Implemented" },
+    Status_phrase::{ .status = 503, .phrase = "Service Unavailable" },
+    Status_phrase::{ .status = 505, .phrase = "HTTP Version Not Supported" }
+}
+
 pub fn reason_phrase( //< the standard phrase for a status number, so the two cannot disagree
     //< RFC 9110's "reason-phrase"; none for a number it does not know. The builders below write it
     //< from the number, so no caller passes the number and the phrase as a pair (which could say
@@ -672,57 +704,9 @@ pub fn reason_phrase( //< the standard phrase for a status number, so the two ca
     //< Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
     status: I32, //< the status number
 ): U8[]? //< the phrase, a fixed string that needs no freeing
-    switch status
-    case 200
-        return .some("OK")
-    case 201
-        return .some("Created")
-    case 204
-        return .some("No Content")
-    case 206
-        return .some("Partial Content")
-    case 301
-        return .some("Moved Permanently")
-    case 302
-        return .some("Found")
-    case 304
-        return .some("Not Modified")
-    case 400
-        return .some("Bad Request")
-    case 401
-        return .some("Unauthorized")
-    case 403
-        return .some("Forbidden")
-    case 404
-        return .some("Not Found")
-    case 405
-        return .some("Method Not Allowed")
-    case 408
-        return .some("Request Timeout")
-    case 409
-        return .some("Conflict")
-    case 411
-        return .some("Length Required")
-    case 413
-        // RFC 9110's name (RFC 7231's is "Payload Too Large").
-        return .some("Content Too Large")
-    case 414
-        return .some("URI Too Long")
-    case 415
-        return .some("Unsupported Media Type")
-    case 429
-        return .some("Too Many Requests")
-    case 431
-        return .some("Request Header Fields Too Large")
-    case 500
-        return .some("Internal Server Error")
-    case 501
-        return .some("Not Implemented")
-    case 503
-        return .some("Service Unavailable")
-    case 505
-        return .some("HTTP Version Not Supported")
-    default {}
+    for p in PHRASES
+        if p.status == status
+            return .some(p.phrase)
     return .none
 
 pub fn format_response( //< builds one whole response as bytes, for the caller to send

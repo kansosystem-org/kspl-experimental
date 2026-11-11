@@ -18,7 +18,7 @@ import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "std/str"
+import "std/ds"
 
 struct Unwrap_ctx
     res_name: U8[]
@@ -53,8 +53,8 @@ fn build_linked_method_call(recv: Ast_node$@, method_node: Ast_node$@, args: Ast
     m_acc.def_node = method_node
     m_acc.get_child(1).def_node = method_node
     return call_node
-fn gen_result_placeholder(lctx: Lowering_ctx$@, type_id: I32, is_void: Bool, loc: base_ast.Loc):
-    U8$[] //<
+priv fn gen_result_placeholder(lctx: Lowering_ctx$@, type_id: I32, is_void: Bool,
+    loc: base_ast.Loc): U8$[] //<
         //< It declares the temporary that holds the expression's result
         //< Where the expression is void, it declares nothing and returns an unused empty string.
     if is_void
@@ -82,11 +82,11 @@ priv fn lower_substitute(expr_node: Ast_node$@, lctx: Lowering_ctx$@, gives_valu
         lower_arc.arc_release_now(expr_node, lctx)
     return discard
 
-fn append_result_or_expr(block: Ast_node$@, name: U8$[], type_id: I32, value_node: Ast_node$@,
-    is_void: Bool, loc: base_ast.Loc) //<
+priv fn append_result_or_expr(block: Ast_node$@, name: U8$[], type_id: I32,
+    value_node: Ast_node$@, is_void: Bool, loc: base_ast.Loc) //<
         //< It evaluates a void expression as a stmt_expr and assigns any other into the temporary
         //< Caution: **Never turn a call that does not return into an assignment.** The fallback of
-        //< `x: = f() catch panic(…)` stays Void (is_noreturn_call in base/ast_ext.kspl), and
+        //< `x: = f() catch panic(…)` stays Void (is_noreturn_call in base/ast_place.kspl), and
         //< as an assignment it gives C that reads `T x = <Void>`.
     if is_void || sema_type_env.is_void(value_node.type_id)
         block.add_child(Ast_node(.k_stmt_expr, "expr", loc).add_child(value_node))
@@ -109,7 +109,7 @@ priv fn lower_into_block(lctx: Lowering_ctx$@, node: Ast_node$@, loc: base_ast.L
     return block
 
 impl Ast_node
-    fn finish_call_as_tmp(r: Self$@, lctx: Lowering_ctx$@, tmp_name: U8$[], recv: Ast_node$@,
+    priv fn finish_call_as_tmp(r: Self$@, lctx: Lowering_ctx$@, tmp_name: U8$[], recv: Ast_node$@,
         method_node: Ast_node$@, args: Ast_node$@, res_type_id: I32, loc: base_ast.Loc) //<
             //< It synthesizes a method call, binds it to a temporary and becomes a reference to it
             //< lower_postfix_index_operator and lower_user_operator share it.
@@ -120,7 +120,7 @@ impl Ast_node
         r.morph(.k_identifier, tmp_name)
         r.type_id = res_type_id
 
-    fn finalize_or_void(r: Self$@, name: U8$[], type_id: I32, is_void: Bool) //<
+    priv fn finalize_or_void(r: Self$@, name: U8$[], type_id: I32, is_void: Bool) //<
         //< It turns itself into an empty node where void, else into a reference to the temporary
         if is_void
             r.morph(.k_empty, "")
@@ -129,7 +129,7 @@ impl Ast_node
             r.morph(.k_identifier, name)
             r.type_id = type_id
 
-    fn lower_logical_op(r: Self$@, lctx: Lowering_ctx$@, is_and: Bool)
+    priv fn lower_logical_op(r: Self$@, lctx: Lowering_ctx$@, is_and: Bool)
         lhs: = r.get_binary_left()
         rhs: = r.get_binary_right()
         loc: = r.loc
@@ -157,7 +157,7 @@ impl Ast_node
         r.morph(.k_identifier, tmp_name)
         r.type_id = bool_id
 
-    fn lower_try_op(r: Self$@, lctx: Lowering_ctx$@)
+    priv fn lower_try_op(r: Self$@, lctx: Lowering_ctx$@)
         loc: = r.loc
         u: = setup_result_unwrap(r.get_postfix_receiver(), r.type_id, lctx, loc)
 
@@ -584,7 +584,7 @@ impl Ast_node
             else
                 inner.lower(lctx)
 
-    fn lower_user_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
+    priv fn lower_user_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
         loc: = r.loc
         res_type_id: = r.type_id
         method_node: = r.def_node

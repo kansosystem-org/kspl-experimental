@@ -11,10 +11,12 @@ import "ksplc/base/as_written" as base_as_written
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/ast_place" as _base_ast_place // `has_keyword`, `is_const_gen_param`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/lines" as _base_lines // `line_starts`
 import "ksplc/base/literal" as base_literal
 import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
@@ -503,7 +505,10 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
     // AST for exactly these bytes, whoever supplied them. Refusing to read too would make the LSP's
     // workspace walk parse every file from scratch on every query.
     t_cache_start: = sys.mono_us()
-    hit: = ast_cache.load(import_path, perm_src, decls)
+    place: = ast_cache.place_of(import_path, perm_src)
+    $hit: = false
+    if p: = place
+        hit = ast_cache.load(p, import_path, perm_src, decls)
     t_cache_end: = sys.mono_us()
     prof.cache_us += t_cache_end - t_cache_start
     if !hit
@@ -512,11 +517,12 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         // **A source is stored unless it is a buffer being typed into.** Its entry per keystroke
         // would fill the cache up. Bytes from disk are worth an entry however they arrive ("The
         // workspace walk reads through the AST cache" in `../docs/DESIGN-tools.md`).
-        if !from_override || src_is_disk
-            t_store_start: = sys.mono_us()
-            ast_cache.store(import_path, perm_src, decls)
-            t_store_end: = sys.mono_us()
-            prof.cache_us += t_store_end - t_store_start
+        if p: = place
+            if !from_override || src_is_disk
+                t_store_start: = sys.mono_us()
+                ast_cache.store(p, import_path, decls)
+                t_store_end: = sys.mono_us()
+                prof.cache_us += t_store_end - t_store_start
 
     // Caution: Read the import targets first. root_file's children must come in the order
     // "dependency -> self": sema registers every file first, but the generated C follows this

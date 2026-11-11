@@ -8,6 +8,7 @@ import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
 import "std/chars"
+import "std/ds"
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
@@ -48,16 +49,13 @@ priv const TYPES_WANT: U8[][_] = ::{ "std.ds.List<|U8[]|>", "std.ds.List<|U8$[]|
 priv const TYPES_URI: U8[] = "file:///types_probe.kspl"
 
 fn check_hover_types(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(TYPES_URI, TYPES_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, TYPES_URI, TYPES_SRC, arena)
     defer lsp_client.close(c, TYPES_URI, arena)
     for i in Range.asc(TYPES_NAMES.len)
         var_name: = TYPES_NAMES[i]
         line: =
             decl_line(TYPES_SRC, arena.text().s("  \{var_name\}: =").take(), arena)
-        got: =
-            c.request("textDocument/hover", lsp_client.at_pos(TYPES_URI, line, 3, arena),
-            lsp_client.READ_MS, arena) catch e
+        got: = lsp_client.hover(c, TYPES_URI, line, 3, arena) catch e
             d1: = end_text(e)
             label: = arena.text().s("a hover's type becomes the source's letter: ").s(var_name)
                 .take()
@@ -117,8 +115,7 @@ priv const AWAY_WANTS: U8[][_] = ::{ "s: U8[]", "buf: U8$[]", "argv: U8[][]" }
 priv const AWAY_NAMES: U8[][_] = ::{ "a parameter", "a mutable parameter", "a field" }
 
 fn check_hover_away(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(AWAY_URI, AWAY_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, AWAY_URI, AWAY_SRC, arena)
     defer lsp_client.close(c, AWAY_URI, arena)
     for i in Range.asc(AWAY_DECLS.len)
         decl: = AWAY_DECLS[i]
@@ -167,8 +164,7 @@ impl<|T|> Box<|T|>
 priv const SELF_URI: U8[] = "file:///self_probe.kspl"
 
 fn check_hover_self_param(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(SELF_URI, SELF_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, SELF_URI, SELF_SRC, arena)
     defer lsp_client.close(c, SELF_URI, arena)
     label: = "a parameter written Self names its owner, spelt out"
     decl: = "  fn get(r: Self)"
@@ -232,8 +228,7 @@ priv const RECV_NAMES: U8[][_] = ::{ "a receiver written Self$@", "a receiver wr
     "a generic's receiver written Self$@", "a generic method named as the prelude's `put`" }
 
 fn check_hover_receiver(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(RECV_URI, RECV_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, RECV_URI, RECV_SRC, arena)
     defer lsp_client.close(c, RECV_URI, arena)
     for i in Range.asc(RECV_DECLS.len)
         decl: = RECV_DECLS[i]
@@ -275,8 +270,7 @@ priv const LABEL_LINES: U8[][_] = ::{ "  outer: for", "        break outer" }
 priv const LABEL_NAMES: U8[][_] = ::{ "a label where it is written", "a label a break names" }
 
 fn check_hover_label(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(LABEL_URI, LABEL_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, LABEL_URI, LABEL_SRC, arena)
     defer lsp_client.close(c, LABEL_URI, arena)
     for i in Range.asc(LABEL_LINES.len)
         line: = LABEL_LINES[i]
@@ -381,8 +375,7 @@ priv const GENERIC_NAMES: U8[][_] = ::{ "a call on a generic named by an alias n
     "a call on a local set from a function through `catch` (`w.left.peek`) names its method" }
 
 fn check_hover_generic_body(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(GENERIC_URI, GENERIC_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, GENERIC_URI, GENERIC_SRC, arena)
     defer lsp_client.close(c, GENERIC_URI, arena)
     for i in Range.asc(GENERIC_LINES.len)
         line: = GENERIC_LINES[i]
@@ -425,8 +418,7 @@ fn main(): I32
 priv const DEFAULT_URI: U8[] = "file:///default_probe.kspl"
 
 fn check_hover_default_arg(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(DEFAULT_URI, DEFAULT_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, DEFAULT_URI, DEFAULT_SRC, arena)
     defer lsp_client.close(c, DEFAULT_URI, arena)
     label: = "a default argument shows in the hover as written"
     call: = "  return bump(2)"
@@ -479,8 +471,7 @@ priv const OWNER_KINDS: U8[][_] = ::{ "a type of std's", "a generic nothing inst
     "a built-in type" }
 
 fn check_hover_owner(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(OWNER_URI, OWNER_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, OWNER_URI, OWNER_SRC, arena)
     defer lsp_client.close(c, OWNER_URI, arena)
     for i in Range.asc(OWNER_MARKS.len)
         decl: = arena.text().s("  fn ").s(OWNER_MARKS[i]).take()
@@ -521,8 +512,7 @@ fn check_hover_prelude(c: jsonrpc_client.Client$@, arena: Arena$@)
         verdict.check("the prelude can be read", false, std_dir)
         return
     uri: = lsp_client.uri_of(std_dir, LANG_FILE, arena)
-    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.SEND_MS, arena)
-        catch {}
+    lsp_client.open(c, uri, src, arena)
     defer lsp_client.close(c, uri, arena)
     // **Opened by its path, it is still std's file**, named as its imports name it (`name_entry` in
     // `ksplc/base/package.kspl`). Named by the path, every owner carries `.home.me.std.lang.…`, and
@@ -568,8 +558,7 @@ priv const SPELL_DECL: U8[] = "fn find_path_at_offset"
 
 priv fn def_uri_under(c: jsonrpc_client.Client$@, uri: U8[], src: U8[], arena: Arena$@): U8[] //<
     //< It asks where that name is defined, under one spelling, and returns the URI that came back
-    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.SEND_MS, arena)
-        catch {}
+    lsp_client.open(c, uri, src, arena)
     defer lsp_client.close(c, uri, arena)
     pos: = lsp_client.at_pos(uri, decl_line(src, SPELL_DECL, arena),
         col_in_line(src, SPELL_DECL, "find_path", arena) + 1, arena)

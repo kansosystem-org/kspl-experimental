@@ -123,8 +123,7 @@ priv fn hover_at(c: jsonrpc_client.Client$@, spot: Spot, arena: Arena$@):
     return c.request("textDocument/hover", pos, lsp_client.READ_MS, arena)!.val
 
 fn check_hover_marks(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(MARKS_URI, MARKS_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, MARKS_URI, MARKS_SRC, arena)
     defer lsp_client.close(c, MARKS_URI, arena)
     for spot in BLANK_SPOTS
         label: = arena.text().s("a hover on ").s(spot.name).s(" answers nothing").take()
@@ -337,8 +336,7 @@ priv fn check_refs(c: jsonrpc_client.Client$@, arena: Arena$@) //<
             lsp_client.why(c, found, arena))
 
 fn check_hover_values(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(VALUES_URI, VALUES_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, VALUES_URI, VALUES_SRC, arena)
     defer lsp_client.close(c, VALUES_URI, arena)
     check_asks(c, Ask[]::LITERAL_ASKS, arena)
     // Caution: **These come after the literals**, which hold an empty answer a dead worker would
@@ -413,15 +411,12 @@ fn main(): I32
 priv const DOC_URI: U8[] = "file:///doc_probe.kspl"
 
 priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(DOC_URI, DOC_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, DOC_URI, DOC_SRC, arena)
     defer lsp_client.close(c, DOC_URI, arena)
     // The declaration's own line carries the summary, and the start of its contents the detail.
     line: = decl_line(DOC_SRC, "pub struct Row", arena)
     col: = col_in_line(DOC_SRC, "pub struct Row", "Row", arena)
-    got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, line, col, arena),
-        lsp_client.READ_MS, arena) catch e
+    got: = lsp_client.hover(c, DOC_URI, line, col, arena) catch e
         verdict.check("a hover carries the documentation the declaration holds", false,
             end_text(e))
         return
@@ -439,9 +434,7 @@ priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
     // text**. One with text describes the return type (`return_doc` in `../../base/ast_doc.kspl`).
     w_line: = decl_line(DOC_SRC, "  w2: = wrapped(1,", arena)
     w_col: = col_in_line(DOC_SRC, "  w2: = wrapped(1,", "wrapped", arena)
-    w2_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, w_line, w_col, arena),
-        lsp_client.READ_MS, arena) catch e
+    w2_got: = lsp_client.hover(c, DOC_URI, w_line, w_col, arena) catch e
         verdict.check("a head closing on a later line carries its run", false, end_text(e))
         return
     w2_text: = lsp_client.hover_text(w2_got.val)
@@ -458,9 +451,7 @@ priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
     // struct's and show the wrong sentence.
     f_line: = decl_line(DOC_SRC, "  pub text: U8[]", arena)
     f_col: = col_in_line(DOC_SRC, "  pub text: U8[]", "text", arena)
-    f_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, f_line, f_col, arena),
-        lsp_client.READ_MS, arena) catch e
+    f_got: = lsp_client.hover(c, DOC_URI, f_line, f_col, arena) catch e
         verdict.check("a hover over a field carries that field's own sentence", false,
             end_text(e))
         return
@@ -477,14 +468,11 @@ priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< line.
     //< Caution: **Test a signature written on one line too.** Its `//<` describes the declaration;
     //< taken per parameter, each would repeat the declaration\'s summary.
-    c.notify("textDocument/didOpen", lsp_client.did_open(DOC_URI, DOC_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
+    lsp_client.open(c, DOC_URI, DOC_SRC, arena)
     defer lsp_client.close(c, DOC_URI, arena)
     line: = decl_line(DOC_SRC, "  n: = r.put(1, 2)", arena)
     col: = col_in_line(DOC_SRC, "  n: = r.put(1, 2)", "put", arena)
-    got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, line, col, arena),
-        lsp_client.READ_MS, arena) catch e
+    got: = lsp_client.hover(c, DOC_URI, line, col, arena) catch e
         verdict.check("a hover lists the parameters that carry a description", false, end_text(e))
         return
     text: = lsp_client.hover_text(got.val)
@@ -505,9 +493,7 @@ priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
     w_line: = decl_line(DOC_SRC, "  w: = wide(3, 4)", arena)
     w_col: = col_in_line(DOC_SRC, "  w: = wide(3, 4)", "wide", arena)
-    w_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, w_line, w_col, arena),
-        lsp_client.READ_MS, arena) catch e
+    w_got: = lsp_client.hover(c, DOC_URI, w_line, w_col, arena) catch e
         verdict.check("a one-line signature gives its summary to no parameter", false,
             end_text(e))
         return
@@ -524,9 +510,7 @@ priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     // line, which a reader needs, must still be shown.
     m_line: = decl_line(DOC_SRC, "fn many(a1: Sz,", arena)
     m_col: = col_in_line(DOC_SRC, "fn many(a1: Sz,", "many", arena)
-    m_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, m_line, m_col, arena),
-        lsp_client.READ_MS, arena) catch e
+    m_got: = lsp_client.hover(c, DOC_URI, m_line, m_col, arena) catch e
         verdict.check("a signature past the cap says how many were left out", false, end_text(e))
         return
     m_text: = lsp_client.hover_text(m_got.val)
@@ -543,14 +527,11 @@ priv fn check_hover_links(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@)
     //< links, `r.text` (unknown head) stays text, and so does `io.out` where a parameter `io` hides
     //< the module.
     //< Caution: **Check the line, not just the link**, or one opening the file at its start passes.
-    c.notify("textDocument/didOpen", lsp_client.did_open(uri, DOC_SRC, arena), lsp_client.SEND_MS,
-        arena) catch {}
+    lsp_client.open(c, uri, DOC_SRC, arena)
     defer lsp_client.close(c, uri, arena)
     line: = decl_line(DOC_SRC, "fn pointing(): Sz", arena)
     col: = col_in_line(DOC_SRC, "fn pointing(): Sz", "pointing", arena)
-    got: =
-        c.request("textDocument/hover", lsp_client.at_pos(uri, line, col, arena),
-        lsp_client.READ_MS, arena) catch e
+    got: = lsp_client.hover(c, uri, line, col, arena) catch e
         verdict.check("a name the description points at becomes a link", false, end_text(e))
         return
     text: = lsp_client.hover_text(got.val)

@@ -3,6 +3,7 @@
 //< switch statement is split further into collecting the cases and binding the payloads.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_default_arm`
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
@@ -66,7 +67,7 @@ impl Ast_node
                 msg.s("Genllvm ICE: Unhandled stmt kind: ").s(r.get_kind_str())
                 r.ice_panic(msg.slice())
 
-    fn emit_llvm_return(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_return(r: Ast_node$@, cg: Genllvm_ctx$@)
         expr: = r.get_return_expr()
         if expr != null && expr.kind_id != .k_empty
             val_reg: = expr.emit_llvm_expr(cg)
@@ -85,7 +86,7 @@ impl Ast_node
                 cg.s("    ret void\n")
         cg.terminate()
 
-    fn emit_llvm_throw(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_throw(r: Ast_node$@, cg: Genllvm_ctx$@)
         expr: = r.get_throw_expr()
         if expr != null
             val_reg: = expr.emit_llvm_expr(cg)
@@ -115,7 +116,7 @@ impl Ast_node
         cg.s("    call void @").s(callee).s("(ptr @.str.\{file_id\}, ptr @.str.\{func_id\}, i32 ")
             .s("\{cg.sema.line_of(r.loc)\})\n")
 
-    fn emit_llvm_var_decl(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_var_decl(r: Ast_node$@, cg: Genllvm_ctx$@)
         id_node: = r.get_var_decl_id()
         type_id: = r.type_id
         name: = id_node.text
@@ -142,7 +143,7 @@ impl Ast_node
         else if r.kind_id != .k_decl_const
             cg.emit_zero_fill(ptr_name, type_id)
 
-    fn emit_llvm_jump(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_jump(r: Ast_node$@, cg: Genllvm_ctx$@)
         label_node: = r.get_child(0) if r.children.len > 0 else null
         if label_node != null && label_node.kind_id == .k_identifier
             cg.s("    br label %").s(label_node.text).s("\n")
@@ -150,7 +151,7 @@ impl Ast_node
             cg.s("    unreachable\n")
         cg.terminate()
 
-    fn emit_llvm_if(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_if(r: Ast_node$@, cg: Genllvm_ctx$@)
         cond_node: = r.get_if_cond()
         then_block: = r.get_if_then_block()
         else_block: = r.get_if_else_block()
@@ -183,7 +184,7 @@ impl Ast_node
 
         cg.emit_b_label(merge_lbl)
 
-    fn emit_llvm_loop(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_loop(r: Ast_node$@, cg: Genllvm_ctx$@)
         init_node: = r.get_for_init()
         if init_node != null && init_node.kind_id != .k_empty
             init_node.emit_llvm_stmt(cg)
@@ -220,7 +221,7 @@ impl Ast_node
 
         cg.emit_b_label(loop_end_lbl)
 
-    fn emit_llvm_switch(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_switch(r: Ast_node$@, cg: Genllvm_ctx$@)
         cond_node: = r.get_switch_cond()
         cond_reg: = cond_node.emit_llvm_expr(cg)
         merge_lbl: = cg.next_label()
@@ -288,7 +289,7 @@ impl Ast_node
             cg.terminate()
 
         cg.emit_b_label(merge_lbl)
-    fn emit_llvm_assign(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_assign(r: Ast_node$@, cg: Genllvm_ctx$@)
         left: = r.get_assign_left()
         right: = r.get_assign_right()
         op_node: = r.get_assign_op()

@@ -269,6 +269,12 @@ Caution: **Stamp it too when a page lets go of its hold** (`table_drop` in `kssr
 
 `kssrv/tests/main.kspl` tests both halves ("a refused stop leaves it answering" and "it stops once it has answered"), for the same reason as the idle stop.
 
+### The server stops when it cannot wait
+
+**A failed wait pauses before the next one, and ten failures in a row stop the server with exit code 1** (`MAX_POLL_FAILURES` in `kssrv/main.kspl`). The pause starts at 10 ms and doubles up to 1 s. Without it, a wait that fails at once each time would take a whole core and write a log line each turn. A failure that passes clears within those three seconds. One that stays never clears, and a server that cannot wait answers nobody while it holds the port.
+
+No test makes the wait fail. `poll` refuses only on a limit of the OS or on memory, and a test cannot bring either about in the server.
+
 ## Files and the API
 
 Kssrv serves files from under its root and answers JSON under `/api/`. Every path is checked so that no request reaches a file outside the root.

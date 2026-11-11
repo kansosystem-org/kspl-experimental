@@ -1,0 +1,39 @@
+//< Two tasks of different priority allocating through std types while one preempts the other
+//< The POSIX version of `lib/ksos/demo/cortex_m/cortex_m_heap_tasks.kspl`, where the explanation
+//< is. Here the heap is libc's `malloc`, which a task switched out inside it leaves held. A task
+//< that then allocates can wait for ever. The heap guard `start_scheduler` sets holds the tick off
+//< for the length of the heap's own work.
+import "ksos/demo/common/heap_tasks" + { Run }
+import "ksos/kernel/task" + { Task }
+import "std/mem" { heap_used_bytes }
+import "std/verdict"
+
+priv const HIGH_ROUNDS: I32 = 3000 //< ticks the high task wakes on, each one inside the low's work
+    //< More than the Cortex-M demo's 300: without the guard, a tick must land inside `malloc`'s
+    //< own lock, a shorter window than the freestanding heap's. A run takes well under a second.
+priv const ITEMS: U32 = 600 //< values one round pushes
+    //< Enough for the list to grow past the sizes `malloc` serves without taking its lock.
+
+$g_run: Run = ::{ .items = ITEMS, .high_rounds = HIGH_ROUNDS, .low_done = 0, .high_done = 0,
+    .bad = 0, .finished = false } //< what both tasks' argument points at
+
+$tcb_low: Task
+$tcb_high: Task
+// The POSIX port switches with ucontext, which needs a larger stack than Cortex-M's switch.
+$stack_low: U8[65536]
+$stack_high: U8[65536]
+
+fn main(): I32
+    verdict.start("[ksos] two preempting tasks allocate through std types")
+    before: = heap_used_bytes()
+    tcb_low.create(U8$[]::stack_low, heap_tasks.low, Void$@::g_run@, 1, "low")
+    tcb_high.create(U8$[]::stack_high, heap_tasks.high, Void$@::g_run@, 2, "high")
+    task.enable_preemption(100) // a tick every 100 us, so it cuts into the low task's heap work
+    task.start_scheduler() // returns once both tasks are done
+    task.enable_preemption(1000000000) // no tick past this point
+    verdict.check("the high task allocated on each of its wakeups", g_run.high_done == HIGH_ROUNDS,
+        "")
+    verdict.check("the low task allocated between them", g_run.low_done > 0, "")
+    verdict.check("every value read back as written", g_run.bad == 0, "")
+    verdict.check("every byte went back to the heap", heap_used_bytes() == before, "")
+    return verdict.finish()

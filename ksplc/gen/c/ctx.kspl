@@ -32,6 +32,10 @@ priv const GUARANTEED_TYPE_POSTFIX: Sz = 64 //<
     //< Caution: **Do not show max_zero_init_braces in a diagnostic.** It counts brace pairs, which
     //< outnumber the postfix levels, so it would promise more levels than can be written.
 
+priv const WRITE_CHUNK: Sz = 65536 //<
+    //< How many bytes `Genc_ctx` gathers before it passes them to the file in one write
+    //< A C file is written in many small pieces, and a write per piece costs more than the bytes.
+
 const FILE_LOCAL_WORD: U8[] = "static KSPL_UNUSED " //<
     //< The storage word of a definition only its translation unit sees
     //< Whether it is used **depends on the user's program**, so C's unused warning would be a false
@@ -71,6 +75,9 @@ fn unit_for(file_path: U8[], unit_count: Sz): Sz //<
 
 struct Genc_ctx
     priv out: Writer
+    priv pending: Str_builder //<
+        //< What has been written but not yet passed to `out`, up to `WRITE_CHUNK` bytes
+        //< Caution: **Call `flush` before the file is closed**, or the last bytes are lost.
     last_char: U8
     sema: Sema_ctx$@ //<
         //< The semantic context this generation reads from
@@ -126,11 +133,11 @@ impl Genc_ctx
         base_diag.ice_assert(sema != null && sema.env != null, "Genc_ctx.new: sema is null")
         scratch: = Str_builder()
         return base_core.arena
-            .create(Genc_ctx::{ .out = out, .last_char = '\n', .sema = sema, .env = sema.env,
-            .current_ret_id = 0, .source_map = source_map, .last_line = 0, .last_file = "",
-            .last_node = null, .scratch = scratch, .had_error = false, .split = split,
-            .top_level_var = false, .const_init_depth = 0, .brace_init = false,
-            .literals = Map<|U8[], U8[]|>(null), .addr_root = null })
+            .create(Genc_ctx::{ .out = out, .pending = Str_builder(), .last_char = '\n',
+            .sema = sema, .env = sema.env, .current_ret_id = 0, .source_map = source_map,
+            .last_line = 0, .last_file = "", .last_node = null, .scratch = scratch,
+            .had_error = false, .split = split, .top_level_var = false, .const_init_depth = 0,
+            .brace_init = false, .literals = Map<|U8[], U8[]|>(null), .addr_root = null })
 
     fn writes_decls(r: Self$@): Bool //<
         //< Whether this pass writes the declarations every unit sees
@@ -382,22 +389,33 @@ impl Genc_ctx
             return r.s(val).s(base_c_name.C_NAME_SUFFIX)
         return r.s(val)
 
+    priv fn pass_pending(r: Self$@) //< it passes what `pending` holds to `out`, and empties it
+        if r.pending.len > 0
+            r.out = r.out.s(r.pending.slice())
+            r.pending.len = 0
+
 impl Genc_ctx: Writer
     fn s(r: Self$@, val: U8[]): Self$@
-        r.out = r.out.s(val)
         if val.len > 0
             r.last_char = (val.ptr + val.len - 1)$
+            r.pending.s(val)
+            if r.pending.len >= WRITE_CHUNK
+                r.pass_pending()
         return r
     fn c(r: Self$@, val: U8): Self$@
-        r.out = r.out.c(val)
+        r.pending.c(val)
         r.last_char = val
+        if r.pending.len >= WRITE_CHUNK
+            r.pass_pending()
         return r
     fn flush(r: Self$@): Self$@
+        r.pass_pending()
         r.out = r.out.flush()
         return r
 
 impl Genc_ctx: Manual_free
     fn free(r: Self$@)
+        r.pending.free()
         r.scratch.free()
         r.literals.free()
 

@@ -45,8 +45,7 @@ function ksmdView(ks) {
         }
       }
       if (s.co) {
-        const span = document.createElement("span");
-        span.className = "coloured";
+        const span = ks.el("span", "coloured");
         span.style.color = s.co;
         span.appendChild(node);
         node = span;
@@ -63,8 +62,7 @@ function ksmdView(ks) {
   }
 
   function unit(tag, cls) {
-    const el = document.createElement(tag);
-    el.className = cls;
+    const el = ks.el(tag, cls);
     return el;
   }
 
@@ -498,7 +496,7 @@ function ksmdView(ks) {
   // most of an edit's time in a document of many tables, and change nothing on the page.
   function apply(r) {
     removeGap();
-    // An open cell keeps its box in the table drawn again (`redrawn` in `table.js`).
+    // An open cell keeps its box in the table drawn again (`redrawn` in `cellbox.js`).
     ks.table.redrawn(() => {
       const all = blocks();
       const end = all.length - r.tail;

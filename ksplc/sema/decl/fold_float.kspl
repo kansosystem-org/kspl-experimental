@@ -4,11 +4,13 @@
 //< global's initializer under `--to=llvm`. Integers are folded in `eval.kspl`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_explicit_cast`
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
+import "std/ds"
 import "std/math"
 import "std/str" { Str_builder }
 import "std/strnum"
@@ -100,19 +102,15 @@ impl Ast_node
         case .k_expr_primary
             return r.get_primary_inner_expr().fold_float_at(c, depth + 1)
         case .k_identifier, .k_expr_path
-            switch r.referenced_const(c)
-            case .some(decl)
-                return rounded_as(c, decl.fold_float_const(c, depth + 1), r.type_id)
-            case .none
+            decl: = r.referenced_const(c) catch
                 return .none
+            return rounded_as(c, decl.fold_float_const(c, depth + 1), r.type_id)
         case .k_expr_unary
             if !r.get_unary_op().text.equals("-")
                 return .none
-            switch r.get_unary_target().fold_float_at(c, depth + 1)
-            case .some(a)
-                v = -a
-            case .none
+            a: = r.get_unary_target().fold_float_at(c, depth + 1) catch
                 return .none
+            v = -a
         case .k_expr
             return r.fold_float_binary(c, depth)
         case .k_expr_postfix
@@ -121,11 +119,9 @@ impl Ast_node
             src: = r.get_postfix_receiver()
             if c.env.is_float(src.type_id)
                 return rounded_as(c, src.fold_float_at(c, depth + 1), r.type_id)
-            switch c.try_eval_constexpr_wide(src)
-            case .some(n)
-                v = F64::n
-            case .none
+            n: = c.try_eval_constexpr_wide(src) catch
                 return .none
+            v = F64::n
         default
             return .none
         return rounded_as(c, .some(v), r.type_id)
@@ -180,14 +176,12 @@ impl Ast_node
 
 priv fn rounded_as(c: Sema_ctx$@, folded: F64?, type_id: I32): F64? //<
     //< A folded value rounded to `F32` where the node's type is one
-    switch folded
-    case .some(v)
-        if c.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
-            narrowed: = F32::v
-            return .some(narrowed)
-        return .some(v)
-    case .none
+    v: = folded catch
         return .none
+    if c.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
+        narrowed: = F32::v
+        return .some(narrowed)
+    return .some(v)
 
 priv fn two_to(n: I32): F64 //< 2 to the n, exact in `F64` for every n used here
     $v: F64 = 1.0

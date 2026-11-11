@@ -2,7 +2,7 @@
 // function a formula can call, by group and by a search of names and descriptions, and shows the
 // chosen one: its arguments and what each takes, what it gives, and an example. Insert writes
 // `=name(` into the chosen cell, or the name at the caret of the cell being edited, which stays
-// open meanwhile (`hold` in `table.js`). Esc or Cancel closes it, and the focus goes back.
+// open meanwhile (`hold` in `cellbox.js`). Esc or Cancel closes it, and the focus goes back.
 // What it shows is the list `suggest.js` reads, from the functions' own doc comments.
 "use strict";
 
@@ -21,14 +21,12 @@ function ksmdCatalog(ks) {
   const groupOf = (f) => (f.own ? OWN : f.group);
 
   function make() {
-    d = document.createElement("dialog");
-    d.className = "fx-dialog";
+    d = ks.el("dialog", "fx-dialog");
     d.setAttribute("aria-labelledby", "fx-dialog-title");
     const title = document.createElement("h2");
     title.id = "fx-dialog-title";
     title.textContent = "Insert function";
-    const find = document.createElement("div");
-    find.className = "fx-find";
+    const find = ks.el("div", "fx-find");
     const search = document.createElement("input");
     search.type = "search";
     search.className = "fx-search";
@@ -37,26 +35,20 @@ function ksmdCatalog(ks) {
     search.placeholder = "A name or what it does, such as hex";
     const searchLabel = document.createElement("label");
     searchLabel.append("Search ", search);
-    const group = document.createElement("select");
-    group.className = "fx-group";
+    const group = ks.el("select", "fx-group");
     const groupLabel = document.createElement("label");
     groupLabel.append("Group ", group);
     find.append(searchLabel, groupLabel);
-    const body = document.createElement("div");
-    body.className = "fx-body";
-    const names = document.createElement("select");
-    names.className = "fx-names";
+    const body = ks.el("div", "fx-body");
+    const names = ks.el("select", "fx-names");
     names.size = 12;
     names.setAttribute("aria-label", "Functions");
-    const about = document.createElement("div");
-    about.className = "fx-about";
+    const about = ks.el("div", "fx-about");
     about.setAttribute("aria-live", "polite");
     body.append(names, about);
-    const note = document.createElement("p");
-    note.className = "fx-note";
+    const note = ks.el("p", "fx-note");
     note.setAttribute("role", "status");
-    const buttons = document.createElement("div");
-    buttons.className = "fx-buttons";
+    const buttons = ks.el("div", "fx-buttons");
     const insert = ks.button("Insert", "fx-insert");
     const cancel = ks.button("Cancel");
     buttons.append(insert, cancel);
@@ -131,8 +123,7 @@ function ksmdCatalog(ks) {
       return;
     }
     const add = (tag, cls, text, parent = about) => {
-      const el = document.createElement(tag);
-      if (cls) el.className = cls;
+      const el = ks.el(tag, cls);
       ks.suggest.rich(el, text);
       parent.appendChild(el);
       return el;

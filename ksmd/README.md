@@ -64,7 +64,7 @@ flowchart BT
     syntax["syntax<br/>reading and writing the source"] --> calc
     files["files<br/>paths, includes, images"] --> syntax
     edit["edit<br/>the editor and undo"] --> syntax
-    port["port/web<br/>the page in a browser"] --> files
+    port["port<br/>the page, its builds, the icon"] --> files
     port --> edit
 ```
 
@@ -76,7 +76,7 @@ flowchart BT
 | `syntax/` | The reader and the writer of the `.ksmd` source, clauses and inline markup among them | the three above |
 | `files/` | How a path leads to a file, the workspace on disk, what a page fetched, the assembled view of includes, and image headers | the four above |
 | `edit/` | The editor: table edits, styled text, units of blocks, undo and redo, and every action | the four below `files/`; never `files/` |
-| `port/web/` | The editing page: the wasm bridge and the view, and the page's scripts and style | all of the above |
+| `port/` | Where ksmd meets the outside. `web/` is the editing page: the wasm bridge, the view, and the page's scripts and style. `wasm*.kspl` and `own_build.kspl` build the page's wasm and a person's own functions. `table_writer.kspl` writes `calc/functions_table.kspl`. `desktop/` holds the file icon | all of the above |
 | `tests/` | The tests of the package's inside | all of the above |
 
 **`files/` and `edit/` stand side by side.** The editor changes one source and never reads a file, so it does not import `files/`; the page joins the two. Under one layer, a file may import any file of its own folder.
@@ -141,7 +141,7 @@ flowchart BT
 | [edit/editor_looks.kspl](edit/editor_looks.kspl) | The editor's looks of text, Clear format, and what stands at the selection |
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
-| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. What they all share, the memory, the open document and the result, is `bridge_session.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `drawings.js`, `settings.js`, `sizes.js`, `merge.js`, `find.js`, `file.js` and `touch.js`; `suggest.js`, `catalog.js` and `refs.js` help while a formula is typed. `bundle.kspl` makes the page one file |
+| [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. What they all share, the memory, the open document and the result, is `bridge_session.kspl`. `view.kspl` shows blocks. `table.js` draws tables, and `cellbox.js` holds the cell open to edit. Each script is named for what it holds, such as `range.js`, `outline.js`, `drawings.js`, `settings.js`, `sizes.js`, `merge.js`, `find.js`, `file.js` and `touch.js`; `suggest.js`, `catalog.js` and `refs.js` help while a formula is typed. `bundle.kspl` makes the page one file |
 | [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions' |
 | [port/wasm_build.kspl](port/wasm_build.kspl) | Runs `port/wasm.kspl` for `ksmd/Makefile` to build the page's wasm |
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |

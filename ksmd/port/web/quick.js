@@ -75,8 +75,7 @@ function ksmdQuick(ks) {
   }
 
   function split(part) {
-    const s = document.createElement("span");
-    s.className = "split";
+    const s = ks.el("span", "split");
     s.dataset.colour = part;
     const face = ks.button("", "apply", part === "color" ?
       "Font colour of the selected text or the chosen table cells" : "Fill colour of the chosen table cells",
@@ -138,8 +137,7 @@ function ksmdQuick(ks) {
       if (hidden(name)) continue;
       // A line stands between the tools of two menus, as File's and Edit's.
       if (menu >= 0 && placed.get(name).menu !== menu) {
-        const line = document.createElement("span");
-        line.className = "sep";
+        const line = ks.el("span", "sep");
         line.setAttribute("role", "separator");
         bar.appendChild(line);
       }
@@ -216,8 +214,7 @@ function ksmdQuick(ks) {
   function openPalette(part, under) {
     const at = under || bar.querySelector(`.split[data-colour="${part}"]`) ||
       Array.from(ks.bar.querySelectorAll(".menu-name")).find((el) => el.textContent === "Format");
-    palette = document.createElement("div");
-    palette.className = "palette";
+    palette = ks.el("div", "palette");
     palette.setAttribute("aria-label", part === "color" ? "Font colour" : "Fill colour");
     const pick = (value) => {
       ks.popup.close(palette, true);
@@ -228,8 +225,7 @@ function ksmdQuick(ks) {
       ks.applyLook(part, value);
     };
     palette.appendChild(ks.button(part === "color" ? "Automatic" : "No fill", "none", null, () => pick("")));
-    const swatches = document.createElement("div");
-    swatches.className = "swatches";
+    const swatches = ks.el("div", "swatches");
     for (const c of QUICK_COLOURS) {
       const b = ks.button("", null, c, () => pick(c));
       b.style.backgroundColor = c;
@@ -237,8 +233,7 @@ function ksmdQuick(ks) {
       swatches.appendChild(b);
     }
     palette.appendChild(swatches);
-    const more = document.createElement("label");
-    more.className = "more-colours";
+    const more = ks.el("label", "more-colours");
     const input = document.createElement("input");
     input.type = "color";
     input.value = current[part];
@@ -261,8 +256,7 @@ function ksmdQuick(ks) {
     const choices = !chosen.includes(name) ? [["Add to quick access bar", () => set([...chosen, name])]] :
       [["Remove from quick access bar", () => set(chosen.filter((n) => n !== name))]];
     choices.push(["Choose tools…", choose]);
-    offered = document.createElement("div");
-    offered.className = "menu context quick-offer";
+    offered = ks.el("div", "menu context quick-offer");
     offered.setAttribute("aria-label", labelOf(name));
     for (const [text, act] of choices) {
       const b = ks.button(text, null, null, () => {
@@ -286,16 +280,14 @@ function ksmdQuick(ks) {
     dialog.showModal();
   }
   function chooser() {
-    const d = document.createElement("dialog");
-    d.className = "quick-choose";
+    const d = ks.el("dialog", "quick-choose");
     d.setAttribute("aria-labelledby", "quick-choose-title");
     const title = document.createElement("h2");
     title.id = "quick-choose-title";
     title.textContent = "Quick access bar";
     const note = document.createElement("p");
     note.textContent = "Tick the commands the bar holds. A right-click on a command in a menu adds it too.";
-    const groups = document.createElement("div");
-    groups.className = "quick-groups";
+    const groups = ks.el("div", "quick-groups");
     const names = (entries) => entries.flatMap((e) => (e === "-" ? [] : Array.isArray(e) ? e[1] : [e]));
     // A command in two menus, as Note in Insert and Table, is listed in the first alone.
     const listed = new Set();
@@ -321,8 +313,7 @@ function ksmdQuick(ks) {
       }
       groups.appendChild(field);
     }
-    const buttons = document.createElement("div");
-    buttons.className = "quick-buttons";
+    const buttons = ks.el("div", "quick-buttons");
     const reset = ks.button("Reset", null, null, () => {
       set(QUICK_DEFAULT.slice());
       for (const box of d.querySelectorAll("input[type=checkbox]")) box.checked = chosen.includes(box.value);

@@ -20,6 +20,7 @@ import "kssrv/https"
 import "kssrv/static"
 import "std/argparse"
 import "std/chars" // single-character tests and slicing
+import "std/ds"
 import "std/fs"
 import "std/http"
 import "std/io"
@@ -29,7 +30,6 @@ import "std/mem" { Arena }
 import "std/net"
 import "std/rand"
 import "std/reactor"
-import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 import "std/sys"
@@ -86,6 +86,17 @@ priv const REQUEST_TIME_US: I64 = 30000000I64 //<
 
 priv const POLL_TIMEOUT_MS: I32 = 1000 //< `wait()`'s wait time
     //< It returns even with no connection, so a request to stop is noticed.
+
+priv const POLL_PAUSE_MS: I32 = 10 //< the pause after a first failed wait, doubled at each failure
+    //< Caution: **Pause before trying again.** The wait failing again at once would turn the loop
+    //< into one that takes a whole core and writes a log line each turn.
+
+priv const MAX_POLL_PAUSE_MS: I32 = 1000 //< the longest pause between two failed waits
+
+priv const MAX_POLL_FAILURES: I32 = 10 //< failed waits in a row after which the server stops
+    //< About three seconds of pauses. A failure that passes (memory short for a moment) clears in
+    //< that time. One that stays (a limit of the OS) never clears, and a server that cannot wait
+    //< answers nobody while it still holds the port, so it stops with an error instead.
 
 priv const US_PER_S: I64 = 1000000I64 //< what `--idle`'s seconds are measured against
 priv const MAX_IDLE_S: I64 = 604800I64 //< the longest `--idle` taken: one week [s]
@@ -759,6 +770,8 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
     $flushed_us: = sys.mono_us()
     // Stamped at start-up too, so the wait for the first page is like any other.
     conn.used_us = flushed_us
+    $poll_failures: I32 = 0
+    $poll_pause_ms: = POLL_PAUSE_MS
     for
         backlogged: = drive_backlog(table, ctx)
         rebuild_interests(r, listener, table)
@@ -780,9 +793,18 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
                 ln.s("no page has held it for \{idle_s\} seconds: stopping")
             return 0
         $ready: = r.wait(0 if backlogged else POLL_TIMEOUT_MS) catch e
+            poll_failures += 1
+            if poll_failures >= MAX_POLL_FAILURES
+                if ln: = lg.at(.error)
+                    ln.s("poll failed \{poll_failures\} times in a row (\{e\}): stopping")
+                return 1
             if ln: = lg.at(.error)
-                ln.s("poll failed: \{e\}")
+                ln.s("poll failed: \{e\}; trying again in \{poll_pause_ms\} ms")
+            sys.sleep_ms(poll_pause_ms)
+            poll_pause_ms = math.min(poll_pause_ms * 2, MAX_POLL_PAUSE_MS)
             continue
+        poll_failures = 0
+        poll_pause_ms = POLL_PAUSE_MS
         // Caution: **Accept last**, after this wakeup's closes and the sweep: accepted first, a
         // connection already gone still counts against its address and the table's cap.
         $accepting: = false

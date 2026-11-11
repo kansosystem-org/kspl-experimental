@@ -6,6 +6,7 @@
 //< supervisor (alive, done) are spelt here alone.
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/lines" as _base_lines // `get_line_info`, `line_starts`
 import "ksplc/base/locate" as base_locate
 import "std/chars"
 import "std/ds" { List }
@@ -60,17 +61,16 @@ impl U8[]
         //< The LSP position of an offset: a 0-based line and a character in UTF-16 code units
         //< The internal line is 1-based. The character is already in UTF-16 units (get_line_info).
         //< **Where the same source is used many times, build the line-start table once.** Pass it
-        //< in (the reason is at get_line_info in base/core.kspl).
+        //< in (the reason is at get_line_info in base/lines.kspl).
         info: = r.get_line_info(target_offset, starts)
         return Position::{ .line = info.line - 1, .character = info.char_idx }
-    fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz, arena: Arena$@): Sz //<
+    priv fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz, arena: Arena$@): Sz //<
         //< The byte offset of a 0-based line and a character in UTF-16 code units
         //< It is `get_line_char`'s inverse. The line-start table it builds goes on `arena`.
         //< Caution: **Pass the request's arena, never `base_core.arena`.** A request that reuses
         //< the document's analysis does not rewind that arena, so each request would add a table.
         //<
-        //< A position past a line's end lands on that line's end (`offset_of_utf16` in
-        //< base/core.kspl).
+        //< A position past a line's end lands on that line's end (`offset_of_utf16` below).
         return r.offset_of_utf16(target_line, target_col, r.line_starts(arena))
 
     fn clamp_offset(r: U8[], offset: Sz): Sz //<
@@ -78,6 +78,32 @@ impl U8[]
         if r.len == 0
             return 0
         return 0 if offset < 0 else (r.len - 1 if offset >= r.len else offset)
+
+    priv fn offset_of_utf16(r: U8[], line_idx: Sz, char_idx: Sz, starts: List<|Sz|>@): Sz //<
+        //< get_line_info's inverse: the byte offset of a UTF-16 code-unit offset in a line
+        //< line_idx is 0-based, an index into `starts`. A character past a line's end lands on
+        //< that line's end. A line before the first lands on the text's start, and a line past
+        //< the last on its end. A character inside a surrogate pair lands on the pair's start.
+        if line_idx < 0
+            return 0
+        if line_idx >= starts.len
+            return r.len
+        $col: Sz = 0
+        $i: = starts.get(line_idx)
+        for i < r.len && col < char_idx
+            c: = (r.ptr + i)$
+            if c == '\n'
+                return i
+            if c == '\r'
+                i += 1
+                continue
+            step: = r.next_codepoint(i)
+            units: = 2 if step == 4 else 1
+            if col + units > char_idx
+                return i
+            col += units
+            i += step
+        return i
 
 impl Str_builder
     fn ensure_kspl_ext(r: Self$@) //<
@@ -139,7 +165,7 @@ fn read_message(out: Str_builder$@): Void!Lsp_error //<
         else
             break
 
-fn read_content_length(): I32!Lsp_error
+priv fn read_content_length(): I32!Lsp_error
     defer $head: = Str_builder()
     // Read the whole bounded header so duplicate lengths are checked together. Count CR bytes
     // too: a peer must not bypass the bound by sending only carriage returns or short lines.

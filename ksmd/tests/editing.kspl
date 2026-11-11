@@ -5,6 +5,8 @@ import "ksmd/edit/edit" { Edit_error }
 import "ksmd/edit/moving"
 import "ksmd/model/model" { Cell_kind, Document, Piece_kind }
 import "ksmd/tests/support" { join, read, written }
+import "std/chars"
+import "std/ds"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -236,6 +238,10 @@ priv fn cells()
     refused_set("a formula's quotes close", doc@, .formula, "\"a", arena)
     refused_set("a formula takes one line", doc@, .formula, "A1\nB1", arena)
     refused_set("a formula takes one line, inside quotes too", doc@, .formula, "\"a\nb\"", arena)
+    // A formula's text has no escape, so the advice names `char(10)`, never `\n`.
+    advice: = Edit_error.not_a_value.message()
+    verdict.check("the advice for a value that is not one cell writes a line break as char(10)",
+        advice.find_str("char(10)").is_some() && advice.find_str("\\n").is_none(), advice)
     refused_set("text is UTF-8", doc@, .text, U8[]::{ 0xFFU8 }, arena)
     refused_set("an empty cell takes no text", doc@, .empty, "x", arena)
     edit.set_cell(doc@, 0, 0, 1, .formula, "\"a|b\" + 1", arena) catch

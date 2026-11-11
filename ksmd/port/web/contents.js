@@ -53,8 +53,7 @@ function ksmdContents(ks) {
         if (next && Number(next.tagName[1]) > level) {
           li.appendChild(ks.button("", "fold", "Fold or unfold the headings under it. With Alt, every heading of this level"));
         } else {
-          const space = document.createElement("span");
-          space.className = "fold-space";
+          const space = ks.el("span", "fold-space");
           li.appendChild(space);
         }
         const a = document.createElement("a");
@@ -65,18 +64,14 @@ function ksmdContents(ks) {
         const path = from(h);
         if (path) {
           li.classList.add("included");
-          const note = document.createElement("span");
-          note.className = "from";
-          note.textContent = path;
+          const note = ks.el("span", "from", path);
           note.title = `From the included file ${path}`;
           li.appendChild(note);
         }
         list.appendChild(li);
       });
       if (heads.length === 0) {
-        const li = document.createElement("li");
-        li.className = "none";
-        li.textContent = "No headings yet. A heading made with Ctrl+Alt+1 to 6 shows here.";
+        const li = ks.el("li", "none", "No headings yet. A heading made with Ctrl+Alt+1 to 6 shows here.");
         list.appendChild(li);
       }
     }

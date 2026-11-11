@@ -1,0 +1,43 @@
+//< Two tasks of different priority allocating through std types while one preempts the other
+//< The low task allocates and frees without a pause, through `List` and `Arc`, never through
+//< `heap_alloc`. The high task wakes on every tick, inside the low task's work, and allocates too.
+//< **Without the heap guard the run stops**: a tick lands while the low task holds the heap's
+//< lock, and the high task spins until `std/mem` panics with "heap locked". `start_scheduler`
+//< sets the guard (`mem.set_heap_guard`), so the low task's heap work is never cut into.
+//< `demo/posix/heap_tasks_demo.kspl` runs the same on the POSIX port.
+import "ksos/demo/common/heap_tasks" + { Run }
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/heap"
+import "ksos/kernel/task" + { Task }
+import "std/mem" { heap_used_bytes }
+
+priv const HIGH_ROUNDS: I32 = 300 //< ticks the high task wakes on, each one inside the low's work
+priv const ITEMS: U32 = 24 //< values one round pushes, enough for the list to grow a few times
+
+$heap_buf: U8[16384]
+$g_run: Run = ::{ .items = ITEMS, .high_rounds = HIGH_ROUNDS, .low_done = 0, .high_done = 0,
+    .bad = 0, .finished = false } //< what both tasks' argument points at
+
+$tcb_low: Task
+$tcb_high: Task
+$stack_low: U8[2048]
+$stack_high: U8[2048]
+
+extern fn ksos_main()
+    panic_hook = con.on_panic
+    con.puts("=== Cortex-M: two preempting tasks allocate through std types ===\n")
+    heap.heap_init(U8$[]::heap_buf)
+    before: = heap_used_bytes()
+    tcb_low.create(U8$[]::stack_low, heap_tasks.low, Void$@::g_run@, 1, "low")
+    tcb_high.create(U8$[]::stack_high, heap_tasks.high, Void$@::g_run@, 2, "high")
+    // A short tick, so the high task cuts into the low task's heap work many times over.
+    task.enable_preemption(5000)
+    task.start_scheduler() // returns once both tasks are done
+    con.out().s("[info] low: \{g_run.low_done\} rounds, high: \{g_run.high_done\} rounds\n")
+    con.check("the high task allocated on each of its wakeups", g_run.high_done == HIGH_ROUNDS)
+    con.check("the low task allocated between them", g_run.low_done > 0)
+    con.check("every value read back as written", g_run.bad == 0)
+    con.check("every byte went back to the heap", heap_used_bytes() == before)
+    con.print_summary("two preempting tasks allocate through std types")
+    con.exit()
+    for {}

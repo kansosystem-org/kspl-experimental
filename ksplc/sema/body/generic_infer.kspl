@@ -6,6 +6,7 @@
 //< a generic's value argument. One no argument binds is refused here, with the form to write.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_const_gen_param`
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/name" as _sema_decl_name
@@ -15,7 +16,6 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as _sema_type_query
 import "std/chars"
 import "std/ds" { List }
-import "std/str"
 
 priv struct Pairing //< one formal parameter and the argument that fills it
     param: Ast_node$@
@@ -362,13 +362,11 @@ fn inferred_type_args(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: A
         for arg_node in args_node.children
             if arg_node.is_literal(",")
                 continue
-            switch params.next()
-            case .some(param)
-                arg_id: = c.own_type_of_name(arg_node)
-                saw_unknown = saw_unknown || sema_type_env.is_unknown(arg_id)
-                pairs.push(Pairing::{ .param = param, .arg = arg_node, .arg_id = arg_id })
-            case .none
+            param: = params.next() catch
                 break
+            arg_id: = c.own_type_of_name(arg_node)
+            saw_unknown = saw_unknown || sema_type_env.is_unknown(arg_id)
+            pairs.push(Pairing::{ .param = param, .arg = arg_node, .arg_id = arg_id })
     // The parameters' types are read in the declaring file, where their names resolve. **A
     // function's name binds last**: it takes its type from where it is written. So where the other
     // arguments fixed the parameter's type, the name is checked against it rather than fixing it.

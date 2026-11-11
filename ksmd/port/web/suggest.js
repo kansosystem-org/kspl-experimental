@@ -7,7 +7,7 @@
 // `ksmd_web_functions` in `ksmd/port/web/bridge_tables.kspl`, from `ksmd/calc/help.kspl`, and the
 // document's own through `functions.js`.
 // Caution: **Take a key only while the list is open, and never during an input method's
-// composition.** The cell's own keys (`keys` in `table.js`) must act as before whenever it is shut.
+// composition.** The cell's own keys (`keys` in `cellbox.js`) must act as before whenever it is shut.
 "use strict";
 
 function ksmdSuggest(ks) {
@@ -18,14 +18,12 @@ function ksmdSuggest(ks) {
   let word = null; // where the name being typed stands: { from, to, prefix }
   let forced = false; // Ctrl+Space opened the list, so it stays open with no letter typed
 
-  const list = document.createElement("div");
-  list.className = "fx-list";
+  const list = ks.el("div", "fx-list");
   list.id = "fx-list";
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Functions");
   list.hidden = true;
-  const tip = document.createElement("div");
-  tip.className = "fx-tip";
+  const tip = ks.el("div", "fx-tip");
   tip.id = "fx-tip";
   tip.setAttribute("role", "tooltip");
   tip.hidden = true;
@@ -161,16 +159,12 @@ function ksmdSuggest(ks) {
   function draw() {
     list.textContent = "";
     shown.forEach((f, i) => {
-      const row = document.createElement("div");
-      row.className = "fx-option";
+      const row = ks.el("div", "fx-option");
       row.id = `fx-option-${i}`;
       row.setAttribute("role", "option");
       row.setAttribute("aria-selected", String(i === at));
-      const name = document.createElement("span");
-      name.className = "fx-name";
-      name.textContent = f.name;
-      const what = document.createElement("span");
-      what.className = "fx-summary";
+      const name = ks.el("span", "fx-name", f.name);
+      const what = ks.el("span", "fx-summary");
       summary(what, f);
       row.append(name, what);
       row.addEventListener("click", () => {
@@ -180,9 +174,7 @@ function ksmdSuggest(ks) {
       list.appendChild(row);
     });
     const chosen = shown[at];
-    const foot = document.createElement("div");
-    foot.className = "fx-chosen";
-    foot.textContent = signature(chosen);
+    const foot = ks.el("div", "fx-chosen", signature(chosen));
     const more = ks.button("All functions… (Shift+F3)", "fx-more", null, () => ks.command("insert-function"));
     more.tabIndex = -1;
     list.append(foot, more);
@@ -219,8 +211,7 @@ function ksmdSuggest(ks) {
     const restAt = f.args.findIndex((a) => a.rest);
     const current = restAt >= 0 && arg >= restAt ? restAt : arg;
     tip.textContent = "";
-    const line = document.createElement("div");
-    line.className = "fx-signature";
+    const line = ks.el("div", "fx-signature");
     const name = ks.button(f.name, "fx-link", "Read about this function (Shift+F3)", () => ks.catalog.open(f.name));
     name.tabIndex = -1;
     line.append(name, "(");
@@ -231,14 +222,12 @@ function ksmdSuggest(ks) {
       line.appendChild(part);
     });
     line.append(")");
-    const gives = document.createElement("div");
-    gives.className = "fx-summary";
+    const gives = ks.el("div", "fx-summary");
     summary(gives, f);
     tip.append(line, gives);
     const a = f.args[current];
     if (a && a.meaning) {
-      const meaning = document.createElement("div");
-      meaning.className = "fx-meaning";
+      const meaning = ks.el("div", "fx-meaning");
       rich(meaning, `${a.name}: ${a.meaning}`);
       tip.appendChild(meaning);
     }

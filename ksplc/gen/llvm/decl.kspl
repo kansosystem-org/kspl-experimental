@@ -300,15 +300,13 @@ impl Ast_node
             cg.s(", i32 0, i32 \{r.get_postfix_member().ival\})")
             return
         $at: I64 = 0
-        switch cg.sema.static_value(r.get_postfix_member())
-        case .some(v)
-            switch v
-            case .whole(n)
-                at = n
-            default
-                r.ice_panic("emit_const_place_addr: an index sema folded is no integer")
-        case .none
+        v: = cg.sema.static_value(r.get_postfix_member()) catch
             r.ice_panic("emit_const_place_addr: an index sema did not fold")
+        switch v
+        case .whole(n)
+            at = n
+        default
+            r.ice_panic("emit_const_place_addr: an index sema folded is no integer")
         cg.s(", i32 0, i64 \{at\})")
 
     priv fn emit_llvm_const_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
@@ -478,11 +476,7 @@ impl Ast_node
             inner = r.get_child(0)
         r.ice_assert(inner.kind_id == .k_enum_init,
             "genllvm: a tagged union in a global initializer is not a variant")
-        $v_def: sema_type_def.Enum_variant$@ = null
-        switch e_def.get_variant(inner.last_child().text)
-        case .some(v)
-            v_def = v
-        case .none
+        v_def: = e_def.get_variant(inner.last_child().text) catch
             r.ice_panic("genllvm: a global initializer names a variant its enum lacks")
         parts.tag(cg.enum_tag_type(enum_id), v_def.tag_value)
         args: = r.find_child(.k_expr_args) if r.kind_id == .k_enum_init_call else null
@@ -684,7 +678,7 @@ impl Laid_parts
         r.cg.s(" }>")
 
 impl Genllvm_ctx
-    fn holds_laid_value(r: Self$@, type_id: I32, depth: Sz): Bool //<
+    priv fn holds_laid_value(r: Self$@, type_id: I32, depth: Sz): Bool //<
         //< Whether a value of the type holds a tagged union, in a field or element
         if depth >= MAX_LAID_DEPTH
             return false

@@ -28,11 +28,9 @@ fn lookup_method_template(r: Sema_ctx$@, owner_id: I32, method_name: U8[]): Meth
     if direct != null
         return .some(Method_template::{ .node = direct,
             .fqn = base_core.arena.dup_str(r.scratch.slice()), .owner = 0 })
-    switch r.env.instance_of(owner_id)
-    case .some(inst)
-        return instance_method_template(r, inst, owner_id, method_name)
-    case .none
+    inst: = r.env.instance_of(owner_id) catch
         return .none
+    return instance_method_template(r, inst, owner_id, method_name)
 
 priv fn instance_method_template(r: Sema_ctx$@, inst: sema_type_env.Instance, owner_id: I32,
     method_name: U8[]): Method_template? //<
@@ -81,7 +79,7 @@ fn unknown_type_str(): Str_builder //<
     dummy.s(base_core.UNKNOWN_TYPE_NAME)
     return dummy
 
-fn type_base_name_len(s: U8[]): Sz //<
+priv fn type_base_name_len(s: U8[]): Sz //<
     //< The length of a type name's base, before postfix modifiers (`$@` / `@` / `$[]` / `!E`)
     //< The base runs as long as identifier characters and `.` continue.
     $i: Sz = 0

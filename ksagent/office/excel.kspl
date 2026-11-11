@@ -6,9 +6,9 @@
 //< cell's text stands in every row of the merge**, so each line reads whole. Hidden sheets and
 //< empty rows have no line; a hidden sheet is one the person reading the file does not see.
 import "ksagent/office/cell_format" + { Format }
-import "ksagent/office/index" + { Keyed }
 import "ksagent/office/package" + { Rel, View }
 import "ksagent/office/xml"
+import "ksagent/sorted_names" + { Keyed }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -67,7 +67,7 @@ priv fn shown_sheets(sheets: List<|Sheet|>@, rels: List<|Rel|>@, arena: Arena$@)
     $ids: = List<|Keyed|>(arena)
     for i in Range.asc(rels.len)
         ids.push(Keyed::{ .key = rels.get(i).id, .pos = i })
-    by_id: = index.sorted(ids@, arena)
+    by_id: = sorted_names.sorted(ids@, arena)
     $out: = List<|Sheet|>(arena)
     $parts: = List<|Keyed|>(arena)
     for i in Range.asc(sheets.len)
@@ -81,7 +81,7 @@ priv fn shown_sheets(sheets: List<|Sheet|>@, rels: List<|Rel|>@, arena: Arena$@)
         // A zip's names compare with ASCII case ignored, so two spellings name one part.
         parts.push(Keyed::{ .key = r.target.to_lower_ascii(arena), .pos = out.len })
         out.push(s)
-    if index.sorted(parts@, arena).repeats()
+    if sorted_names.sorted(parts@, arena).repeats()
         throw "it lists one sheet twice"
     return out
 
@@ -177,7 +177,7 @@ priv fn read_formats(book: Book$@, src: U8[]): Void!U8[] //<
             if !x.empty
                 x.skip()!
     // A custom format can take a built-in format's id, and then stands in its place.
-    custom: = index.sorted(code_ids@, a)
+    custom: = sorted_names.sorted(code_ids@, a)
     for i in Range.asc(ids.len)
         at: = custom.find(ids.get(i))
         book.formats

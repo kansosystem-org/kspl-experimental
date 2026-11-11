@@ -103,12 +103,13 @@ Underscores separate words in all three forms. An ordinary immutable binding fol
 
 In the generated C, `ksplc` adds the suffix `_kw` to such a name. Only local variables, parameters and struct fields keep their bare names in the generated C, so only those get the suffix. Type and function names carry a prefix made from their file's path; `std/lang`'s types alone go without. In C, `_`, `.` and `/` all become `_`. **Two names spelled alike in C are a compile error naming both**: a `Foo` in each of the files `a_b/c` and `a/b_c`, or two instances of one generic. So is a name spelled like one of the C runtime's: `fn check` in a file `bounds` is `kspl_bounds_check`. So is one spelled like the type C defines for an array or a function type: a `struct Foo_Array_4` beside a use of `Foo[4]`. A suffixed name collides only where it already exists in the same scope (`goto` beside `goto_kw`).
 
-**Two more groups get `_kw` and are usable too:**
+**Three more groups get `_kw` and are usable too:**
 
+* **Names with an uppercase letter and no lowercase one**, the spelling C's headers give their constants: `M_PI`, `NAN`, `SIZE_MAX`, `SIGINT`, `EXIT_SUCCESS`. The group is a rule, not a list, since which such names the headers define differs by C library and target. A local `const` is spelled so (`const M_E: F64 = 2.718`), and so is the C in its place (`M_E_kw`).
 * **Names the generated C's preamble headers `#define` as object-like macros**: `NULL` / `EOF` / `errno` from libc, and `far` / `near` / `pascal` from Windows' `windef.h`. A function-like macro (`max(a,b)`) expands only before a `(`, so this group leaves them out.
 * **The words a C compiler keeps for itself**: every name opening with `__`, or with `_` and a capital letter; Microsoft's one-underscore synonyms (`_try` for `__try`, `_int64`); `static_assert`; `L__FUNCTION__` / `L__FUNCSIG__`. The suffixed form opens the same way and gets `_kw` in turn, so `__try` beside `__try_kw` is not an error.
 
-Names only OS headers define (`st_mtime` / `O_RDONLY` / `AF_INET`) are usable too, and get no suffix.
+Lowercase names only OS headers define (`st_mtime`) are usable too, and get no suffix.
 
 **A debugger shows such a variable with its suffix** (`int` becomes `int_kw`), since it shows the generated C's names.
 
@@ -145,6 +146,7 @@ The type a position calls for is the *expected type*: a variable declaration's a
 | An integer operand where the two sides would have no common type | The other operand's integer type | `u < 1` with `u: U32` compares at `U32`, so `u < -1` is out of range |
 | An integer operand, and the outer expected type is the other operand's type | That type | For `x: U8`, the `1` of `y: U8 = x + 1` is a `U8` |
 | Any other operand of a numeric binary operation | Its default; then the operands are promoted to the side holding the other | `x + 100` with `x: I8` (below) |
+| The operand of a cast (`T::`) | `I32` if it holds the value written, else `I64`, else `U64`; the cast then converts that value | `U64::0xFFFFFFFF` is 4294967295, `F64::3000000000` is 3000000000.0, `U8::300` is 44 |
 | Nowhere a type is expected | `I32` for an integer, `F64` for a floating-point number | `x: = 1` |
 
 **A floating-point literal takes only a floating-point type.** Placed where an integer is expected, it stays `F64`, and the implicit conversion is a compile error (`x: I32 = 2.5`, an `I32` argument, a `catch` substitute for an `I32`). **An integer literal likewise takes only an integer type**: `f: F64 = 2` and `x * 2` with `x: F64` are compile errors; write `2.0`.
@@ -1199,11 +1201,12 @@ stateDiagram-v2
     [*] --> Usable: declared with a value
     Usable --> Moved: passed elsewhere as a value
     Moved --> Usable: assigned a new value (child = ...)
-    Usable --> Usable: read as a receiver, @, $ or [i]
+    Usable --> Usable: read as a pointer receiver or a field's, @, $ or [i]
 ```
 
 * **What it is for**: an owning handle that would be released twice if it were duplicated. `subproc.Child` holds one child process's handle, whose record the runtime gives back at `wait`, so a copy's own `wait` would be a *double free*.
-* **Reads that are not moves**: a method's or field's receiver (`child.wait()`, `child.handle`), and the target of `@`, `$` or `[i]`. To lend the value without moving it, pass a pointer with `@`.
+* **Reads that are not moves**: the receiver of a method that takes a pointer (`child.wait()`, whose receiver is `Self$@`), a field's receiver (`child.handle`), and the target of `@`, `$` or `[i]`. To lend the value without moving it, pass a pointer with `@`.
+* **A method that takes its receiver by value moves it**: `fn close(r: Self)` gets a copy, as an argument would, so after `h.close()` the binding `h` cannot be used. A method that only reads or writes the value takes `Self@` or `Self$@`.
 * **Revival**: assigning a different value back into the binding (`child = ...`) makes it usable again.
 * **A loop's body runs more than once**, so the next pass sees a move inside it. A value moved on every pass is an error unless a new value is assigned before the pass ends. A binding declared inside the body is a new one on each pass. What follows the loop sees the moves of every way out of it.
 * **A field moves on its own**: reading a `Move_only` field of a local as a value (`take(b.m)`) moves that field out. Then neither the field, nor anything below it (`b.m.h`), nor the whole binding (`b`, `b@`, `b.free()`) can be used; the other fields can (`b.n`). Assigning the field or the binding a new value makes it usable again.
@@ -1907,7 +1910,7 @@ s.starts_with(head)    // offset is 0
 s.starts_with(head, 3) // the written value wins
 ```
 
-A default value is **a single literal** only (a number, `true` / `false`, a character, a string, `null`), or one of the two position names `caller_file` / `caller_line` (below). An expression cannot be written (both `= 1 + 1` and `= max_depth` are refused).
+A default value is **a single literal** only (a number, `true` / `false`, a character, a string, `null`), or one of the two position names `caller_file` / `caller_line` (below). **A number may be negative**: a minus directly before a number literal is part of it (`= -1`, `= -1.5`), as [2.3.1](#231-the-rules-that-fix-a-literals-type) checks it. An expression cannot be written (`= 1 + 1`, `= max_depth` and `= -x` are refused).
 
 Each of these placements is a compile error:
 
@@ -2566,8 +2569,8 @@ An `impl` block can add methods to a type declared in another file ([5.2](#52-im
 **An extension method requires the import**: an extension method is one that an `impl` block adds to a type defined in another file. To call it, the calling file must `import` the file that defines it, so no dependency is implicit (no lookup through the arguments' types).
 
 ```kspl
+import "std/ds" // `equals` on U8[] is added by std/ds, so this import is needed
 import "std/io"
-import "std/str" // `equals` on U8[] is added by std/str, so this import is needed
 
 fn main()
     s: = "kanso"

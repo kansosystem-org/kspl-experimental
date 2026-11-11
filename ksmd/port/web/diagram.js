@@ -51,8 +51,7 @@ function ksmdDiagram(ks) {
 
   // Builds a diagram block from the view's JSON: its tools, its area and its caption.
   function render(b) {
-    const fig = document.createElement("figure");
-    fig.className = "b figure diagram";
+    const fig = ks.el("figure", "b figure diagram");
     fig.contentEditable = "false";
     fig.dg = {
       w: b.size[0], h: b.size[1], cap: b.cap,
@@ -62,8 +61,7 @@ function ksmdDiagram(ks) {
         via: Array.from({ length: via.length / 2 }, (_, i) => [via[2 * i], via[2 * i + 1]]) })),
     };
     if (!b.included) fig.appendChild(tools());
-    const area = document.createElement("div");
-    area.className = "diagram-area";
+    const area = ks.el("div", "diagram-area");
     area.appendChild(node("svg", { class: "diagram-svg", tabindex: "-1", role: "img",
       "aria-label": b.cap || "Diagram" }));
     fig.appendChild(area);
@@ -83,16 +81,14 @@ function ksmdDiagram(ks) {
   }
 
   function picker(cls, title, list, now) {
-    const pick = document.createElement("select");
-    pick.className = cls;
+    const pick = ks.el("select", cls);
     pick.title = title;
     for (const [value, name] of list) pick.appendChild(new Option(name, value, false, value === now));
     return pick;
   }
 
   function tools() {
-    const bar = document.createElement("div");
-    bar.className = "diagram-tools";
+    const bar = ks.el("div", "diagram-tools");
     for (const [kind, label] of SHAPES) {
       bar.appendChild(button(label, `Draw a ${label.toLowerCase()}: drag across the area, or press once`,
         { tool: kind }));
@@ -501,8 +497,7 @@ function ksmdDiagram(ks) {
     const d = fig.dg;
     const isFig = chosen.part === "fig";
     const part = isFig ? d.figs[chosen.index] : d.links[chosen.index];
-    const box = document.createElement(isFig ? "textarea" : "input");
-    box.className = "diagram-text";
+    const box = ks.el(isFig ? "textarea" : "input", "diagram-text");
     box.value = part.text;
     const r = fig.querySelector("svg.diagram-svg").getBoundingClientRect();
     const k = r.width / d.w;
