@@ -10,18 +10,6 @@ A term is explained where it first appears. Shared technical terms are defined i
 
 Every KSPL development tool is a subcommand of one executable, `ksplc`: you type `ksplc fmt`, `ksplc run` and so on. Only turning the generated C into a program needs a C compiler. `ksplc` translates KSPL into C, and a C compiler turns that C into a program; `ksplc run` and `ksplc build` take both steps for you.
 
-The diagram shows the two steps from a source file to a running program; `ksplc run` and `ksplc build` take both at once.
-
-```mermaid
-flowchart LR
-    SRC["your program<br/>main.kspl"] --> K["ksplc main.kspl main.c<br/>(compile)"]
-    K --> C["C source<br/>main.c"]
-    C --> CC["a C compiler<br/>(clang, gcc)"]
-    CC --> EXE["a program you can run"]
-    SRC --> RB["ksplc run / ksplc build<br/>(both steps in one)"]
-    RB --> EXE
-```
-
 | How it is called | What it does | See |
 | :-- | :-- | :-- |
 | `ksplc <input.kspl> <output.c>` | compiles (the default, with no subcommand) | [2. The compiler](#2-the-compiler-ksplc) |
@@ -34,7 +22,7 @@ flowchart LR
 | `ksplc clean` | empties the disk cache ksplc made | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
 | `ksplc emit-runtime <output.c>` | writes only the C runtime's source, as one translation unit, for LLVM IR to link | [2.10.5 Writing the runtime for LLVM IR](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime) |
 | `ksplc explain [<code>]` | prints that code's section of the diagnostics specification: what it means and what to do. With no code it lists every code and its title. Any other word is refused | [`SPEC-diagnostics.md`](SPEC-diagnostics.md) |
-| `ksplc doc <file>[.<name>]` | prints what a file, one entry or a folder publishes, rendered from the source | [7.5 ksplc doc](#75-ksplc-doc-what-a-file-publishes-as-a-reference) |
+| `ksplc doc <file>[.<name>]` | prints what a file, one entry or a folder publishes, rendered from the source | [7.4 ksplc doc](#74-ksplc-doc-what-a-file-publishes-as-a-reference) |
 
 The words in the table: *semantic analysis* works out every type and name, and *Lower* prepares the code for output. A *diagnostic* is a message about your code: an error, a warning, an information or a hint ([§5.2](#52-the-diagnostics-four-weights)). A *translation unit* is one `.c` file as the C compiler reads it.
 
@@ -70,6 +58,8 @@ clang main.c -o main
 ksplc --to=llvm main.kspl main.ll
 ```
 
+**A debugger shows the generated C's names.** A name C reserves carries a `_kw` suffix ("2.2 Identifiers and naming rules" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A local that hides another of its name, or is spelled as a global's C name (`Slice_U8`), shows as `__k_shadow<N>_<name>`.
+
 **A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. A write the disk refuses fails the compile with `io/write_failed`. A device named as the output (`/dev/null`) is written where it is.
 
 ### 2.2 Choosing the language of the output (`--to`)
@@ -98,7 +88,7 @@ ksplc --freestanding --machine=thumbv7m-none-eabi app.kspl app.c
 clang -target thumbv7m-none-eabi -ffreestanding -c app.c
 ```
 
-**Name the same machine to both.** ksplc lays every value out by the machine's widths: a pointer's, `Sz`'s, a function pointer's, and where an `I64`, `U64` or `F64` sits in a struct. It writes some sizes and offsets into the C as numbers (an array's length, a static `if`, a `case` label, reflection's offsets and the like). Each such number comes with a compile-time check against the C compiler's own layout, at the source line that asked for it:
+**Name the same machine to both.** ksplc lays every value out by the machine's widths: a pointer's, `Sz`'s, a function pointer's, and where an `I64`, `U64` or `F64` sits in a struct. It writes some sizes and offsets into the C as numbers (an array's length, a static `if`, a `case` label and the like). Each such number comes with a compile-time check against the C compiler's own layout, at the source line that asked for it:
 
 ```
 app.kspl:14:49: error: 'kspl_folded_for_x86_64_linux_gnu_3' declared as an array with a negative size
@@ -163,6 +153,7 @@ This table lists every option of a compile. Most have a section of their own, li
 
 | The option | Description |
 | :-- | :-- |
+| `--to=<c\|llvm>` | the language of the output, C99 (the default) or LLVM IR ([§2.2](#22-choosing-the-language-of-the-output---to)). |
 | `--stats` | prints a report on standard error: grammar-rule attempts (`[KSPEG Rule]`), analysis costs per declaration (`[Sema Body]`), stage costs (`[Layer]`), cache hits and misses (`[AST Cache]`), and totals (`[Overall]`). A detail table whose phase took under 5% of the compile time is replaced by one line that says so. |
 | `--freestanding` | generates code for bare metal (a chip with no operating system), depending on neither an OS nor a standard library, and sets the `#cfg()` flag `freestanding`. |
 | `--machine=<triple>` | the machine the output is for, whose widths every size is laid out by; the default is the machine ksplc runs on ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). |
@@ -172,7 +163,7 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--pkg-src-dir=<DIR>` | where to look for the **source** of a package other than `std` ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)). |
 | `--split=<N>` | splits the generated C into N translation units to compile in parallel (the default 1 is no split) ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). |
 | `--program` | says the output becomes a program, so an input with no `main` is refused with a diagnostic rather than left to the linker. `ksplc run` and `ksplc build` pass it to the compile they start. It cannot be combined with `--library`. |
-| `--closed=<package>` | refuses, in the files of `<package>`, every way to C: `extern` in either direction, `##link`, the `__kspl_` built-ins, `#section`, `#naked`, `#interrupt` and `#raw_address`. Those reach the C compiler, the assembler and the linker, which the package rules do not watch. It is for code the build does not trust, such as a page's own functions; the standard library and the other packages stay open. A package no file of the compile is in is refused. |
+| `--closed=<package>` | refuses, in the files of `<package>`, every way to C: `extern` in either direction, `##link`, the `__kspl_` built-ins, `#section`, `#naked` and `#raw_address`. Those reach the C compiler, the assembler and the linker, which the package rules do not watch. It is for code the build does not trust, such as a page's own functions; the standard library and the other packages stay open. A package no file of the compile is in is refused. |
 | `--library=<FILE>` | builds a library, whose `extern` functions alone are visible outside it, and writes its interface to `<FILE>`; it can be repeated ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
 | `--emit-libs=<FILE>` | on success, writes the libraries the program names with `##link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
@@ -180,7 +171,7 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--diagnostic-format=<text\|json>` | how the diagnostics are written to standard error: `text` (the default), for a person, or `json`, one object per line, for a program ([§2.11](#211-diagnostics-a-program-reads---diagnostic-format)). |
 | `--help` | prints the usage on standard output and exits with 0. |
 
-**An option's value is joined with `=`** (`--std-dir=std`), and `--std-dir std` is refused. An option has no short spelling, `--help` included. [`std/argparse`](../../std/README.md) parses them, and also refuses two subcommands at once (`ksplc fmt lint`).
+**An option's value is joined with `=`** (`--std-dir=std`), and `--std-dir std` is refused. An option has no short spelling, `--help` included. [`std/argparse`](../../std/README.md) parses them. It refuses a second subcommand where no operand is due (`ksplc clean fmt`). Where one is due, a subcommand's name is an operand: `ksplc fmt lint` formats a file named `lint`.
 
 **Standard output holds only what was asked for, and every line about the run goes to standard error.** What is asked for is a program's own output under `ksplc run`, `info`'s answer, `fmt`'s text, `doc`'s Markdown, `explain`'s text and `--help`'s usage. Everything else is about the run:
 
@@ -267,7 +258,7 @@ It is passed in the environment variable `KSPL_SCRIPT` (`SCRIPT_ENV_NAME` in `st
 
 **The exit code** is the script's own. A script sets it by `main`'s return value, a failure path or `sys.exit()`; how each takes effect is the table in [`docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) §8.2.
 
-**`ksplc run` takes no option that changes how it builds**, such as `--to` or `--machine` ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)).
+**`ksplc run` takes no option that changes how it builds** ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)).
 
 **The libraries linked** follow from the OS and the C compiler's target triple (`x86_64-linux-gnu`, say), as `ksplc info link-libs` answers. The libraries the program names (`##link`) go before them, after the objects ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). Changing only those relinks without rebuilding any object.
 
@@ -356,24 +347,6 @@ Note: `ksplc emit-runtime` stands apart from both: it writes the runtime that `-
 
 ### 2.9 Source crossing the boundary: its place, and what is recorded
 
-The diagram shows the three places source is read from, and the two records ksplc can write.
-
-```mermaid
-flowchart LR
-    subgraph IN["what is read: telling it a place"]
-        SRC["one's own .kspl"]
-        STD["std/'s body<br/>--std-dir > KSPLC_STD_DIR > the default std"]
-        PKG["the source of a package other than std<br/>a local folder > --pkg-src-dir / KSPLC_PKG_SRC_DIR > the lib/ beside std"]
-    end
-    SRC --> K["ksplc"]
-    STD --> K
-    PKG --> K
-    K --> OUT["the generated C / IR"]
-    K --> DEPS["--emit-deps<br/>the list of the sources read<br/>(sha256 + path)<br/>→ the rebuild verdict, run's cache"]
-    SRC --> DOC["ksplc doc"]
-    DOC --> SURF["--emit-surface<br/>the record of the API being published<br/>→ putting one version against another"]
-```
-
 Options tell ksplc where to read source from, and records say what was read and what is published.
 
 #### 2.9.1 Locating the standard library (`--std-dir=`)
@@ -450,10 +423,10 @@ On success, `--emit-deps=<FILE>` writes one line per source the compile read to 
 ksplc doc --emit-surface=tensor.surface ksai/tensor
 ```
 
-**The record needs the source alone**, as the rest of `ksplc doc` does ([§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)): no analysis, so it does not show that the file compiles. `<file>` is a file's logical name; an entry or a folder is refused, since a record covers one whole file.
+**The record needs the source alone**, as the rest of `ksplc doc` does ([§7.4](#74-ksplc-doc-what-a-file-publishes-as-a-reference)): no analysis, so it does not show that the file compiles. `<file>` is a file's logical name; an entry or a folder is refused, since a record covers one whole file.
 
 ```
-ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	the product of two matrices
+ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	the matrix product, in a newly allocated tensor
 ```
 
 The columns are separated by tabs, and the lines are sorted by key:
@@ -463,14 +436,14 @@ The columns are separated by tabs, and the lines are sorted by key:
 | 1. the file | the file's logical name, as an `import` writes it | `ksai/tensor` |
 | 2. the key | the declaration's identity | `Tensor<\|T\|>.matmul` |
 | 3. the spelling | the source, with its whitespace folded | `pub fn matmul(...)...` |
-| 4. the documentation | what its `//<` says; left off where there is none | `the product of two matrices` |
+| 4. the documentation | what its `//<` says; left off where there is none | `the matrix product, in a newly allocated tensor` |
 
 * **The key is a declaration's identity**: `<the enclosing type>.<the name>`, or the name alone where nothing encloses it. An `impl`'s enclosing type is its target type as spelled (a `Box<|T|>` and a `Box<|I32|>` are different APIs), and a conformance to a trait is `<the target>:<the trait>`.
 * **The attributes are part of the key**: `#cfg` is the only way to write one name twice.
 * **A `pub extern` declaration is a row like any other.** An item of a `#cfg` group carries the group's attributes in its key too, as a method's carries its `impl`'s.
 * **The spelling is the source with its whitespace folded**: each run of whitespace becomes one, and line comments are dropped. **The inside of a string is not folded** (a default argument's literal is part of the spelling).
 * **The documentation holds the declaration's `//<` run**, its summary and the detail below it, joined by spaces. A parameter's `//<`, and the one on the return's line, each get a row of their own.
-  * Note: **The column is here so that drift shows.** Change what a `pub` does and leave its description standing, and `make test-surface` shows the row as changed in the same round as the signature.
+  * Note: **`SURFACE.txt` leaves this column out.** A package's record keeps the first three columns, so rewording a `//<` changes no record. `make test-surface` still reads the column, to refuse a `pub` declaration that has none. A reader that shows the text uses it as well, such as ksmd's help for a formula's functions.
 
 **A file's own description is a row too**, keyed by the mark alone (`~`). It is the `//<` run before the file's first line of code, with nothing but blank lines above it. It stands above the imports, since an `import` is code. A file that says nothing gets no row.
 
@@ -478,9 +451,9 @@ The columns are separated by tabs, and the lines are sorted by key:
 
 **A part does not always sort right after its declaration**: `~` sorts after `_`, so `sub`'s parts land after `sub_from`.
 
-Note: **The parts' rows and the file's own row are for a reference to read, not for matching versions.** `make surface` leaves these rows out of `SURFACE.txt`, and `ksplc doc` shows them ([§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)).
+Note: **The parts' rows and the file's own row are for a reference to read, not for matching versions.** `make surface` leaves these rows out of `SURFACE.txt`, and `ksplc doc` shows them ([§7.4](#74-ksplc-doc-what-a-file-publishes-as-a-reference)).
 
-**The scope decides which declarations are written** (`--surface-scope`, [§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)). The record that versions are matched by is made at `pub`; `all` serves an application, whose files reach one another with visibility unset. Any other name is refused.
+**The scope decides which declarations are written** (`--surface-scope`, [§7.4](#74-ksplc-doc-what-a-file-publishes-as-a-reference)). The record that versions are matched by is made at `pub`; `all` serves an application, whose files reach one another with visibility unset. Any other name is refused.
 
 **It is kept apart from a library's interface** (`--library=`), which writes one build's `extern` functions in C.
 
@@ -547,7 +520,7 @@ The rest behaves as in a program:
 | a pointer to a type C cannot name (a slice, a generic's instance) | `void *` |
 
 **Refused, naming the function**:
-* a generic's instance or a `#packed` / `#align` struct passed by value (C99 cannot state its name or its layout);
+* a generic's instance passed by value (C99 cannot state its name);
 * two declarations of one C name (C names a function, a type and a constant in one space). A type that cannot cross to C at all never reaches it: the signature check refuses it ("Types that cannot cross the C boundary" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
 
 **A C header does not name the libraries the library needs**: C has no portable way to. The vendor ships that line, as `--emit-libs` writes it.
@@ -683,7 +656,7 @@ It does in one step what `ksplc <input> <output.c>`, `--emit-libs`, `info exe-fl
 
 **The C compiler is `CC`'s, or `clang`**, as `ksplc run`'s is. **The C and the libraries stay beside the executable** (`out/x.c` and `out/x.libs` for `out/x.exe`): the C is a failed compile's only clue. An output ending in `.c` or `.libs` would be overwritten by its own C, and is refused. The output's folder is made where it is missing.
 
-**The exit code** is 0, or the failing step's own: ksplc's on an error in the program, the C compiler's on a failed compile.
+**The exit code** is 0, or the failing step's own: ksplc's on an error in the program, the C compiler's on a failed compile. A refused command line, a refused output name included, exits with 1 ([§2.3](#23-the-other-compiler-options)).
 
 ---
 
@@ -720,7 +693,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 
 ### 3.2 The formatting settings (`--style`)
 
-`--style` changes the few layout choices that are open: the indent width, the line width, and whether short blocks and functions can sit on one line. Everything else in this section is fixed and has no switch.
+`--style` changes the two layout choices that are open: the indent width and the line width. Everything else in this section is fixed and has no switch. So a block that holds a statement is always written across lines; only an empty block stays on one line, as `{}`.
 
 `--style="..."` takes comma-separated settings (`ksplc fmt --in-place --style="IndentWidth: 2, ColumnLimit: 120" main.kspl`).
 
@@ -728,10 +701,8 @@ A summary is its run's first line, so it runs past the width instead of being cu
 | :-- | :-- | :-- |
 | **`IndentWidth`** | `4` | the number of spaces per indentation level. |
 | **`ColumnLimit`** | `100` | the maximum width of a line, in display columns (a CJK character or `✅` takes two). An argument list, a method chain and the like that exceed it are broken at a safe position. |
-| **`AllowShortBlocks`** | `false` | `true` lets a short block go on one line (`if cond { break; }`; in `.kspl`, `if cond { break }` with no `;`), except one with a comment inside its braces, which is never folded (below). |
-| **`AllowShortFunctions`** | `false` | `true` lets an `fn` whose body is a single statement go on one line (a method in an `impl` too; in `.kspl` without the statement's `;`). As with `AllowShortBlocks`, one with a comment inside, one too wide for the column limit, and one of two or more statements stay on three lines. |
 
-**A key not in the table is an error**, so a typo such as `IndentWith` cannot succeed while the default stays in effect unnoticed. **A value the key does not take is an error too.** `IndentWidth` and `ColumnLimit` take a whole number of 1 or more, written in digits alone. The other two take `true` or `false` in lower case. So `IndentWidth: two` and `AllowShortFunctions: True` are refused. No setting switches the trailing comma: the formatter follows the source.
+**A key not in the table is an error**, so a typo such as `IndentWith` cannot succeed while the default stays in effect unnoticed. **A value the key does not take is an error too.** `IndentWidth` and `ColumnLimit` take a whole number of 1 or more, written in digits alone. So `IndentWidth: two` and `ColumnLimit: 0` are refused. No setting switches the trailing comma: the formatter follows the source.
 
 **A comment inside braces stays inside the block, at its level**, a comment right before the `}` included. A block holding a comment is never folded onto one line.
 
@@ -797,7 +768,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 
 ```mermaid
 flowchart LR
-    ED["the editor<br/>(VS Code)"] <-->|"LSP messages"| FRONT["ksplc lsp<br/>the watcher"]
+    ED["the editor<br/>(VS Code)"] <-->|"LSP messages"| FRONT["ksplc lsp<br/>the supervisor"]
     FRONT <--> W["lsp-worker<br/>the analysis"]
     FRONT -.->|"after a crash: restart it,<br/>hand the documents back"| W
 ```
@@ -809,6 +780,10 @@ flowchart LR
   * **On a literal it shows the literal's type**, the one it takes where it stands: `4` in `size: Sz = 4` shows `Sz`, `'a'` shows `U8`, `null` the pointer or `Option` it fills in. Where the compiler gives that literal no type (an array's length, an enum's tag value) the hover is empty.
   * **Where a name is bound it shows what a use of it shows**: `words: std.ds.List<|U8[]|>` on `$words: = List<|U8[]|>(arena)` as on a later `words`. The same holds for a parameter, a `for`'s item, `if v: = opt`, `catch e` and a pattern's payload.
   * **On a mark it answers nothing.** A bracket, a comma, an operator, `::`, `<|` and `|>`, and a keyword such as `priv` or `fn` name no declaration. A position at a name's end still answers that name: with the caret on the `(` of `free()`, it shows `free`.
+* **Completion**: while you type a name, it lists the names that can stand there.
+  * **After a value and a `.`** (`cup.`) it lists the fields and methods of the value's type. **After an import's alias or a type name** (`io.`, `Cup.`) it lists what can be called from outside. **For a bare name** it lists the declarations before it in the enclosing scopes, the file's own declarations and the imports' aliases.
+  * Each item shows a function's signature or a field's type, and the declaration's own description, as the hover does.
+  * **No trigger characters are declared**: the editor decides when to ask. Text that is still missing a closing bracket or the end of a statement gets an empty list.
 * **Jump to definition**: from a use to its declaration, including a typedef or an enum variant in another file.
   * **Where the server finds nothing, nothing happens**; the VS Code extension does not search the text instead.
   * On a name where it is declared, it jumps to the definition of the variable's type.
@@ -817,7 +792,8 @@ flowchart LR
   * **It refuses, with a message, rather than write a program that no longer compiles or means something else.** It refuses:
     * a new name the grammar does not read as one identifier (`1bad name`), or a keyword (`return`, `I32`, `true`);
     * a name declared in a file outside the workspace: the standard library, or a package read from another folder. The workspace is the files under the folder the editor opened, outside the folders `.gitignore` names and those starting with a dot. Asked first (`textDocument/prepareRename`), the editor says so before a new name is typed;
-    * a new name already declared in a scope around a place the name is written bare. The scope is the same block, an enclosing block, the function's parameters, or the file's own declarations and imports. A field, a variant or a method is compared with the other members of its type instead.
+    * a new name already declared in a scope around a place the name is written bare. The scope is the same block, an enclosing block, the function's parameters, or the file's own declarations and imports. A field, a variant or a method is compared with the other members of its type instead;
+    * a function that a type call selects (`Vector(1, 2)` selects `Vector.new`): the calls name the type, not the function, so a rename would break them.
 * **The call hierarchy**: a function's callers and callees across files, as a tree. It follows the operators and the methods to the plain calls the compiler rewrites them to. Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail`.
 * **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written. It lists functions, types with their fields and variants, an `impl` and a trait with their functions, constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import. Nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error.
 * **Diagnostics**: the analysis runs as you type, and errors and warnings show as wavy underlines ([5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint)).
@@ -868,7 +844,7 @@ The extension passes the list to the server in the environment variable `KSPLC_D
 
 ## 5. Static analysis and the linter (ksplc lint)
 
-Besides errors, the compiler points out code that is legal but probably wrong, or departs from the agreed style. `ksplc lint` stops before code generation and prints only those diagnostics. Each code, and the errors that have none, is listed in [`SPEC-diagnostics.md`](SPEC-diagnostics.md).
+Besides errors, the compiler points out code that is legal but probably wrong, or departs from the agreed style. `ksplc lint` stops before code generation and prints the diagnostics, errors included. Each code, and the errors that have none, is listed in [`SPEC-diagnostics.md`](SPEC-diagnostics.md).
 
 ### 5.1 Basic use
 
@@ -889,12 +865,14 @@ Every diagnostic has one of four weights, from "it does not run" down to "it run
 | :-- | :-- | :-- | :-- |
 | **Error (E)** | it does not run: compilation stops | the types disagree, a name is missing | it carries no code (below) |
 | **Warning (W)** | it runs, but an error is likely | unreachable code, an expression that does nothing | it carries a code, as do the two below |
-| **Information (I)** | no direct bearing on running or safety, but it ought to be fixed | naming, a declaration shadowing an outer one of the same name, an unneeded `::` cast or `return;` | the name is LSP's `DiagnosticSeverity.Information`, and the language server passes that level on unchanged |
+| **Information (I)** | no direct bearing on running or safety, but it ought to be fixed | naming, a declaration shadowing an outer one of the same name, an unneeded `::` cast or `return` | the name is LSP's `DiagnosticSeverity.Information`, and the language server passes that level on unchanged |
 | **Hint (H)** | a better way of writing is proposed | unneeded brackets, an early exit | VS Code and similar editors dim the text. The editor offers no one-press fix for it; it is fixed by hand, which keeps the language server stable |
+
+**A compile hides information diagnostics and hints**; `ksplc lint` and the editor show them.
 
 Only warnings, information and hints carry a code: a fixed number such as `W0201`, used to point at one or to narrow the output to it. **An error has no number**: with one, the mechanism of §5.3 could silence it.
 
-**The four digits are a class and an item.** The top two give the class. The bottom two count that weight's items within the class, each weight from 01. So `W0106` is class 01's sixth warning, and `I0301` and `H0301` are both first in class 03. **The letter is part of the code**: `I0310` and a later `H0310` would name different findings.
+**The four digits are a class and an item.** The top two give the class. The bottom two number that weight's items within the class, each weight from 01. So `W0106` is class 01's warning number 6, and `I0301` and `H0301` are both first in class 03. **The letter is part of the code**: `I0310` and a later `H0310` would name different findings. **A removed code's number is not given again**, so an old setting or note never names a new finding. A number can thus be missing (`I0311`).
 
 | | The class | What the reader is being told |
 | :-- | :-- | :-- |
@@ -924,7 +902,7 @@ You can turn each coded diagnostic off, turn on one that is off by default, or m
 | The level | The meaning |
 | :-- | :-- |
 | `off` | not reported |
-| `on` | reported at its default severity (**this enables a code that is off by default**) |
+| `on` | reported at its default severity (**this enables a code that is off by default**). A compile still hides an information diagnostic or a hint ([§5.2](#52-the-diagnostics-four-weights)) |
 | `error` | promoted to an error, and checked and refused even on an ordinary build outside lint mode |
 
 **`error` works only toward more refusals.** An error has no code ("An error has no number" in [§5.2](#52-the-diagnostics-four-weights)), so this mechanism cannot turn a genuine defect `off`.
@@ -935,7 +913,7 @@ Strongest first: inside the file > the command line > the settings file > the de
 
 | Strength | Where | How it is written | What it covers |
 | :-- | :-- | :-- | :-- |
-| 1 (strongest) | **per file** | `##lint(W0601 = on, I0305 = off);` near the file's head; settings are comma-separated | the whole file, from any position (it takes effect before any diagnostic) |
+| 1 (strongest) | **per file** | `##lint(W0601 = on, I0305 = off)` near the file's head; settings are comma-separated | the whole file, from any position (it takes effect before any diagnostic) |
 | 2 | **the CLI** | `ksplc lint --lint=I0307=off --lint=W0601=on src/main.kspl`; it can be repeated, and the later one wins | that one run |
 | 3 | **the project settings file** | the `[lint]` section of the nearest `ksplc.cfg` above the source ([§6.2](#62-the-search-and-the-range-it-applies-to); [§6.1](#61-how-to-write-it) shows one) | part of the directory tree |
 | 4 | the default | nothing written | everywhere else |
@@ -1001,7 +979,7 @@ Caution: **An outer file's setting does not reach a folder that has its own file
 An unknown section, key (diagnostic code) or value (level name) is refused as `ksplc.cfg:<line>: error: ...`, and compilation stops. A key set twice in one section is refused too, in `[lint]` as in `[package]`: the second line would silently override the first. The file is named by its path from the current folder.
 
 ```
-ksplc.cfg:3: error: unknown diagnostic code 'W9999': the codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-diagnostics.md; 'ksplc explain' lists them, and 'ksplc explain <code>' prints what one means
+ksplc.cfg:3: error: unknown diagnostic code 'W9999'. The codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-diagnostics.md. 'ksplc explain' lists them and 'ksplc explain <code>' prints what one means
 ```
 
 The check runs for every source read, so a typo shows even in a file with no finding at all.
@@ -1081,7 +1059,7 @@ It empties the disk cache and reports the location it emptied on standard error.
 ksplc info keywords
 ```
 
-It prints them to standard output, gathered automatically from the grammar `ksplc/kspl.kspeg`. It prints one word per line, sorted by byte value, each word once.
+It prints them to standard output, one word per line, sorted by byte value, each word once. **The list is written nowhere**: it is read from the grammar `ksplc/kspl.kspeg` each time, so a keyword added there needs no second list. A single-quoted string in the grammar (`'if'`) is a reserved word, unlike a double-quoted one (`"0x"`). The notation is kspeg's specification, reached from [`lib/kspeg/README.md`](../../lib/kspeg/README.md).
 
 ```
 Bool
@@ -1092,13 +1070,7 @@ break
 ...
 ```
 
-**A debugger shows the generated C's names**: a variable named like a C reserved word with its `_kw` suffix. A local that hides another of its name, or is spelled as a global's C name (`Slice_U8`), shows as `__k_shadow<N>_<name>`.
-
-### 7.4 How reserved words are gathered automatically
-
-**The list of reserved words is written nowhere**: it is read from the grammar each time. A single-quoted string in the grammar file `ksplc/kspl.kspeg` (`'if'`) is a reserved word, unlike an ordinary double-quoted string (`"0x"`). kspeg gathers them into the rule `_Keyword` it synthesizes (the notation is kspeg's specification, reached from [`lib/kspeg/README.md`](../../lib/kspeg/README.md)). The list is read from each rule's own keywords, not from the shape of `_Keyword`. A keyword that several rules use is listed once. So adding or removing a keyword in the grammar needs no separate list to maintain.
-
-### 7.5 ksplc doc: what a file publishes, as a reference
+### 7.4 ksplc doc: what a file publishes, as a reference
 
 `ksplc doc` shows the documentation of a file, an entry or a folder, read straight from the source.
 

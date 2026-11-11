@@ -53,4 +53,4 @@ These GGUF files are Unsloth's conversions of the weights Qwen publishes. Both m
 
 ## Choosing another model
 
-Any GGUF model that llama.cpp runs with tool calls can stand in. Test it first with `ksagent eval` on questions about your own documents ("Step 0" in [`ksagent/README.md`](../ksagent/README.md)). Keep the model that passes more questions at a speed you accept.
+Any GGUF model that llama.cpp runs with tool calls can stand in. Test it first with `ksagent eval` on questions about your own documents ("Testing models on your own documents" in [`ksagent/docs/SPEC-commands.md`](../ksagent/docs/SPEC-commands.md#testing-models-on-your-own-documents)). Keep the model that passes more questions at a speed you accept.

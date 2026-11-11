@@ -185,7 +185,7 @@ Caution: **Do not drop the `=` inside a parameter.** A default value is read as 
 
 **It is not enough that each diagnostic fires.** The step that turns findings into a failed build, the Makefile's `lint` target, needs a check of its own.
 
-**`make lint` analyses entry points, and code unreachable from them is not analysed.** A generic is analysed only once instantiated. So code instantiated only from `tests/debug/main.kspl` escapes unless that file is an entry point. It is one, because it holds `fn main`: `LINT_TARGETS` in `mk/lint.mk` takes every such source. `make test-lint-gate` checks that one information diagnostic makes `make lint` exit non-zero.
+**`make lint` analyses entry points, and code unreachable from them is not analysed.** A generic is analysed only once instantiated, so every source holding `fn main` is an entry point. Which sources, and what `make test-lint-gate` checks, are in "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md).
 
 **A severity and a CI policy are different things**: Hint does not stop the user's build, but findings left standing bury each new one. So the gate requires zero at Hint and above.
 
@@ -354,29 +354,23 @@ Caution: **Do not consult it with the qualification stripped.** A short name ans
 
 **`ksplc explain <code>` prints that code's section of [`SPEC-diagnostics.md`](SPEC-diagnostics.md), compiled into ksplc** (`ksplc/tools/explain.kspl`). An edit to the specification reaches the command on the next build, with no second copy (Principle 6). `ksplc/base/lint_codes.kspl` says which codes exist: an unregistered code is rejected before the text is searched.
 
-**`ksplc explain` with no code lists the codes, from the specification's section headings**, so a code given a section is listed with no other edit. The codes off by default are marked.
+**`ksplc explain` with no code lists the codes, from the specification's section headings**, so a code given a section is listed with no other edit.
 
-**A code's start does not narrow the list; it is refused as an unknown code.** A search of the list's output already filters it (Principle 6), and a mistyped code must give an error.
+**A code's start is refused rather than narrowing the list.** A search of the list's output already filters it (Principle 6), and a mistyped code must give an error.
 
 **Only a warning, an information or a hint has an explanation, because only they carry a code** ("An error has no number" in [`SPEC-tools.md`](SPEC-tools.md)). So an error's message itself says what went wrong and what to write instead.
 
 **The closing summary names the command and each code that came out, once** (`Diagnostic_counts.codes`, kept by `report_core`). A text nobody is told about goes unread. A clean run names no code, and the lint gate reads only the count line above it.
 
-**The terminal view puts the explanation before its references.** Parentheses holding document links are omitted, links show their labels, and bold and heading marks go. Prose wraps to 88 bytes; code blocks keep their text. The final line names the source document.
+**The terminal view puts the explanation before its references**, and names the document once at the end (the layout is "1. Diagnostic codes, and the errors that have none" in [`SPEC-diagnostics.md`](SPEC-diagnostics.md)). **It is written for a model as much as for a person**: an agent asks for one section, and no pager is used.
 
-**It is written for a model as much as for a person**: an agent asks for one section, and no pager is used.
-
-**Two gates hold it.** `make test-conventions` checks that every registered code has a section and every section a code (`tests/support/conventions_match.kspl`). `make test-cli` checks that each section prints alone (`case_explain` in `tests/suite/cli_test.kspl`).
+**Gates hold it.** `make test-conventions` checks that every registered code has a section and every section a code (`tests/support/conventions_match.kspl`). `make test-cli` checks that each section prints alone (`case_explain` in `tests/suite/cli_test.kspl`).
 
 **What is given up**: the executable carries the whole specification, and an edit to it rebuilds ksplc (it is in `KSPL_SRCS`). **The seed is not re-baked for an edit to the document alone**: only the seed's own binary keeps the older text, and nothing asks it.
 
 ### A line about the run goes to standard error
 
-**Every line ksplc writes about its own run goes to standard error. Standard output holds only what the command was asked for**:
-* a program's own output under `ksplc run`;
-* `info`'s answer, `fmt`'s text, `doc`'s Markdown, `explain`'s text, `--help`'s usage.
-
-The rule and its list are in [§2.3 of `SPEC-tools.md`](SPEC-tools.md#23-the-other-compiler-options).
+**Every line ksplc writes about its own run goes to standard error. Standard output holds only what the command was asked for.** The rule and its list are in [§2.3 of `SPEC-tools.md`](SPEC-tools.md#23-the-other-compiler-options).
 
 * **A status line describes the run, not its product**: the summary, the closing line, `--stats`'s report, the folder `clean` emptied. `ksplc run script.kspl > out.txt` must not leave the compiler's lines in `out.txt`.
 * **The summary stays on the diagnostics' stream**, so the count comes under the lines it counts.
@@ -390,11 +384,11 @@ Caution: **A reader taking the count from the text matches the head of the line 
 
 * **A line per diagnostic, not one document at the end**, so a compile that dies midway leaves every earlier line readable.
 * **One writer for both forms**: `print_diagnostic` in `base/diag.kspl` (and `print_unplaced`, for an error with no place) passes one place to the text or the JSON.
-* **The place is the file as written**: the line and columns as written, not a byte offset into the text with braces put in.
+* **The place is the file as written**, since a byte offset would count the braces put in.
 * **The code leaves the message**, so a reader of JSON does not cut it out again.
-* **The run ends with a closing object**: `result`, and a count per severity (`print_json_closing` in `base/diag.kspl`). A key no diagnostic has tells it apart, so a reader need not skip a fake diagnostic.
+* **The run ends with a closing object** (`print_json_closing` in `base/diag.kspl`). A key no diagnostic has tells it apart, so a reader need not skip a fake diagnostic.
   * **Its counts are of the objects written**, not the analysis's tally, which misses an error the parse stopped on.
-  * **Only a run that reaches its verdict writes it.** A stream with no closing object ended early. `--stats` is refused beside json, since its report is text on standard error.
-* **A syntax error says so in a key of its own** (`kind`), since an error carries no code. Nothing after it was analysed, so no other finding will come until it is fixed. A code family for syntax errors would let `off` silence one.
+  * **A stream with no closing object ended early**, so a reader can tell a cut run from a clean one.
+* **A syntax error is told apart by a key, not by a code.** A code family for syntax errors would let `off` silence one.
 
 **What is given up**: SARIF is not written; a converter reading these lines can make it. Nor is there a `rendered` field holding the text form: the text is one flag away.

@@ -2,7 +2,7 @@
 // right-click menu, the quick access bar and its chooser are all built from these lists, so a
 // command's name, key and icon cannot differ between them.
 // Caution: **Add a command here, and its handler in the file that does its work** (`ks.handle`
-// in `core.js`). A command that stands in no menu cannot be found, and one listed twice drifts
+// in `handlers.js`). A command that stands in no menu cannot be found, and one listed twice drifts
 // apart. The page does not start while a command lacks a handler, or a handler its command.
 "use strict";
 
@@ -46,6 +46,7 @@ const COMMANDS = [
   ["column-merge", "Merge repeated values"],
   ["column-rule", "Colour by value…"],
   ["auto-dates", "Turn typed dates into dates (11/6)"], ["auto-links", "Turn typed web addresses into links"],
+  ["auto-brackets", "Close a formula's brackets on Enter"],
   ["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"],
   ["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"],
   ["filter-column", "Filter this column…", "Alt+↓"], ["filter-value", "Show only rows with this value"],
@@ -103,7 +104,7 @@ const TABLE_GROUPS = [
 const MENUS = [
   ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print"]],
   ["Edit", ["undo", "redo", "-", "cut", "copy", "copy-formula", "paste", "paste-values", "-", "find", "replace",
-    "-", ["AutoCorrect", ["auto-dates", "auto-links"]]]],
+    "-", ["AutoCorrect", ["auto-dates", "auto-links", "auto-brackets"]]]],
   ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "zoom-in", "zoom-out",
     "zoom-reset", "-", "read-only", "-", "quick-choose"]],
   ["Insert", ["table", "diagram", "image", "include", "functions", "divider", "link", "-", "date", "time", "insert-function", "-", "note"]],
@@ -119,7 +120,7 @@ const MENUS = [
 
 // How a View choice shows that it is on: a tick, or a dot among choices that exclude each other.
 const CHECKED = { contents: "menuitemcheckbox", "read-only": "menuitemcheckbox", "one-line": "menuitemcheckbox",
-  "auto-dates": "menuitemcheckbox", "auto-links": "menuitemcheckbox",
+  "auto-dates": "menuitemcheckbox", "auto-links": "menuitemcheckbox", "auto-brackets": "menuitemcheckbox",
   "width-full": "menuitemradio", "width-reading": "menuitemradio" };
 
 // The quick access bar's tools that are not commands: two lists to choose a kind or a size from.

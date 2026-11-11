@@ -79,7 +79,7 @@ Read from the bottom of the dependencies up, so each file's prerequisites come f
 
 ### Tasks and scheduling: `lib/ksos/kernel/task.kspl`
 
-- `Task.create(stack, entry, arg, prio, name): Bool` fills the receiving task (`tcb.create(...)`) on a stack slice such as `U8$[]::stack_a`. Larger `prio` values mean higher priority; 0 is the idle task's. At `max_tasks` it returns `false`.
+- `Task.create(stack, entry, arg, prio, name): Bool` fills the receiving task (`tcb.create(...)`) on a stack slice such as `U8$[]::stack_a`. Larger `prio` values mean higher priority; 0 is the idle task's. At its cap of 32 tasks it returns `false`.
 - `start_scheduler()` runs the tasks until all end or one calls `stop_scheduler()`. `run_single_task(tcb, stack, entry, name, on_idle)` runs one task for `ksos_main`, then loops on `on_idle`.
 - `Task.yield()`, `Task.delay(ticks)` and `Task.delay_until(wake_tick)` give way; ticks are logical time. `Task.suspend()`, `Task.resume()` and `Task.delete()` act on another task.
 - `irq_save()` and `irq_restore(state)` disable and restore interrupts around a critical section.
@@ -105,7 +105,7 @@ Each port implements the nine `extern` functions declared in `lib/ksos/kernel/ta
 
 ### Worked examples: `demo/`
 
-Each file directly inside `demo/<port>/` must be a standalone demo with `ksos_main`. `demo_stems` in `lib/ksos/Makefile` derives the demo list from that directory, so a file without this entry point fails to link.
+Each file directly inside `demo/<port>/` of a bare-metal port (`cortex_m`, `rp2040`, `nrf51`) must be a standalone demo with `ksos_main`. `demo_stems` in `lib/ksos/Makefile` derives those ports' demo lists from the directory, so a file without this entry point fails to link. A POSIX demo has `main` instead; `posix_inputs` in the same file finds it.
 
 | Place | What is in it |
 | :-- | :-- |
@@ -284,11 +284,11 @@ This table is the canonical record of checks on the real car: a Freenove 4WD car
 | Starting without a PC using the stored policy (`rp2040_car_pilot_probe`) | ✅ Without kssrv it reported `no fresh policy — using the one stored on board`, and all six manoeuvres reached the wheels. `last run ended` and `policy unchanged` appeared as expected (stage 9) |
 | Flash writes (`ksos/drivers/rp2040/flash`) and the device log | ✅ `boot #` increased at each power-on, and `records` and `used` matched each append. A record crossing a page boundary read back correctly (stage 8) |
 | USB CDC send queue (`Ring<\|512\|>` in `std/ring.kspl`) | ✅ The `make ksos-rp2040-board` lines keep arriving, a line longer than a packet among them. Bytes per round do not divide 512, so the wrap position moves |
-| The hardware watchdog (`lib/ksos/drivers/rp2040/watchdog.kspl`) | **not confirmed** (it is once "Checking the watchdog" in stage 7 of [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) passes on the car) |
+| The hardware watchdog (`lib/ksos/drivers/rp2040/watchdog.kspl`) | **not confirmed** (it is once "Checking the watchdog" in stage 9 of [`lib/ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) passes on the car) |
 | The calendar RTC ticking (`lib/ksos/drivers/rp2040/rtc.kspl`) | **not confirmed** (it is once `make ksos-rp2040-board`'s `[rtc]` line reads `ticking=yes` across rounds) |
 | Flash chip part number | **not confirmed**. [`lib/ksos/docs/SPEC-board.md`](docs/SPEC-board.md) names the expected part under “Flashing the firmware, and the debug output”. Boot does not require a particular chip |
 
-## Files near the limit and how they split
+## Splitting a file
 
 Only code without shared state can move to another file unchanged. Here, state means top-level variables declared with `$`, such as `$halted: Bool = false`. Moving functions that share such variables means moving their state or passing it explicitly, so shared state, not line count, sets file boundaries. These sections remain together:
 

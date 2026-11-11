@@ -63,7 +63,7 @@ flowchart LR
 | [`lib/ksai/examples/`](examples/) | Programs that use these components; see “The examples” below |
 | [`lib/ksai/benches/`](benches/README.md) | Benchmarks for one training step, a quantized product and a whole Qwen model, with their results |
 | [`lib/ksai/tests/`](tests/) | Tests run by `make test` |
-| [`lib/ksai/tools/`](tools/README.md) | Python tools that convert a borrowed model for ksai, write the reference files its tests read, and check ksai against Hugging Face and llama.cpp |
+| [`lib/ksai/tools/`](tools/README.md) | Python tools that write the reference files ksai's tests read, and check ksai against llama.cpp |
 | [`lib/ksai/docs/`](docs/) | Design documents and the generated reference |
 
 ## Reading order
@@ -235,7 +235,7 @@ make chat-server NATIVE=1
 
 `NATIVE=1` builds the server for this machine's own CPU, which makes it faster. Leave it out for a program that runs on another machine. Why is "A build for the machine's own CPU is asked for" in [`lib/ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 
-It is ready when it prints the line `listening on http://127.0.0.1:8081`, the address ksagent asks by default. It prints one line per request on standard error.
+It is ready when it prints the line `chat_server: listening on http://127.0.0.1:8081`, the address ksagent asks by default. It prints one line per request on standard error.
 
 | Option | What it does |
 | :-- | :-- |
@@ -243,12 +243,12 @@ It is ready when it prints the line `listening on http://127.0.0.1:8081`, the ad
 | `--max-tokens=<n>` | The most tokens one answer can take, Qwen3.5's thinking included. The default is 1024; a request can ask for fewer with `max_tokens` |
 | `--context=<n>` | The most tokens a conversation and its answer can hold together. The default is 16384, a cache of 4.5 GiB for Qwen3-4B and 1 GiB for Qwen3.5-9B. At most the context the model was trained on |
 
-Its limits:
+Its limits, each with its reasons under its own heading in [`DESIGN-serving.md`](docs/DESIGN-serving.md):
 
-* **It listens on the loopback only, with no accounts and no encryption.** So any program on this machine can ask, whichever user runs it. A web page in a browser can reach the loopback too. So the server refuses a request with another site's `Origin` or another `Host`, or whose body is not `application/json`.
-* **It is several times slower than llama.cpp on the same file**, most of all in reading a prompt. A question to ksagent about a small folder takes minutes, so give ksagent a longer `--timeout`; `make chat` gives it one hour. The measurements are in [`lib/ksai/benches/README.md`](benches/README.md).
-* **Qwen3.5 thinks before it answers**, which makes an answer several times longer. A request turns it off with `"chat_template_kwargs": {"enable_thinking": false}`.
-* **It runs Qwen3-Instruct-2507 and Qwen3.5 models only.** It checks the file's chat template by its hash and refuses another.
+* **It listens on the loopback only, with no accounts and no encryption.** It refuses what only a web page sends.
+* **It is several times slower than llama.cpp on the same file**, most of all in reading a prompt. So give ksagent a longer `--timeout`; `make chat` gives it one hour. The measurements are in [`lib/ksai/benches/README.md`](benches/README.md).
+* **Qwen3.5 thinks before it answers.** A request turns it off with `"chat_template_kwargs": {"enable_thinking": false}`.
+* **It runs Qwen3-Instruct-2507 and Qwen3.5 models only.** It refuses a file whose chat template it does not know.
 
 Before moving or deleting an example, check these dependencies:
 
@@ -256,7 +256,7 @@ Before moving or deleting an example, check these dependencies:
 | :-- | :-- |
 | `make run` | The macOS CI AI step trains `llama_engine` and checks that its loss decreased |
 | `make test-extract` | Runs the package tests, and so every example, from an independent copy, on Linux and Windows instead of `make run`. The checks are in [`tests/examples_main.kspl`](tests/examples_main.kspl) and the files beside it whose names start with `examples_` |
-| `make test-simd` | Compiles `llama_engine` and `lib/ksai/benches/bench_qwen.kspl` to C, and checks that each named `ksai` loop is vectorized at `-O3` |
+| `make test-simd` | Compiles `llama_engine`, `lib/ksai/benches/bench_qwen.kspl` and `lib/ksai/benches/bench_quant.kspl` to C, and checks that each named `ksai` loop is vectorized at `-O3` |
 | `make lint` | Analyses each example's `main.kspl`, which `mk/lint.mk` finds by its `fn main` |
 | `make test-ksos-link` / `make test-ksos-qemu` | Use embedded weights in the `ksos` Cortex-M demo, without a filesystem |
 

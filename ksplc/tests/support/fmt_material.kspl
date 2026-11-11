@@ -41,10 +41,9 @@ const SRC_ATTRS: U8[] =
 pub fn f(a: I32): I32
     return a
 
-#align(8)
-#packed
-pub struct S
-    pub n: I32
+#cfg(hosted)
+#section(".data")
+pub const S: I32 = 1
 """
 
 // `extern` before one declaration, `##link`, and a `#cfg` group indenting its items, nested too.
@@ -164,89 +163,6 @@ import "std/sys" as _sys
 
 pub fn main(): I32
     return 0
-"""
-
-// The input for `AllowShortBlocks: true`.
-// Caution: **Always include a branch with a comment.** Without one, folding a comment in (its first
-// line onto the `{` line, the rest across the brace) passes unnoticed.
-const SRC_SHORT_IN: U8[] =
-    """pub fn f(n: I32): I32
-    if n < 0
-        return -1
-    if n == 0
-        // 0 is not treated as a number.
-        return 0
-    return n
-"""
-
-// The above's expected value: only the branch with no comment is folded.
-const SRC_SHORT_OUT: U8[] =
-    """pub fn f(n: I32): I32
-    if n < 0 { return -1 }
-    if n == 0
-        // 0 is not treated as a number.
-        return 0
-    return n
-"""
-
-// The input for `AllowShortFunctions: true`.
-// Caution: **Always include the four shapes that are not folded.** With only shapes that fold,
-// folding what must not be folded passes unnoticed.
-const SRC_SHORT_FN_IN: U8[] =
-    """pub fn one(x: I32): I32
-    return x + 1
-
-pub fn two(x: I32): I32
-    y: = x + 1
-    return y
-
-pub fn noted(x: I32): I32
-    // add 1.
-    return x + 1
-
-pub fn guarded(n: I32): I32
-    if n < 0
-        return -1
-    return n
-
-pub fn wide_enough_that_the_folded_form_would_not_fit(first: I32, second: I32): I32
-    return first * second + first - second + second * first + first - second
-
-pub struct S
-    n: I32
-
-impl S
-    fn get(r: Self@): I32
-        return r.n
-"""
-
-// The above's expected value: only `one` and `S.get` fold. **The one-statement `if` inside
-// `guarded` stays too** — this setting covers only a `fn`'s body; a control structure's block
-// belongs to AllowShortBlocks.
-const SRC_SHORT_FN_OUT: U8[] =
-    """pub fn one(x: I32): I32 { return x + 1 }
-
-pub fn two(x: I32): I32
-    y: = x + 1
-    return y
-
-pub fn noted(x: I32): I32
-    // add 1.
-    return x + 1
-
-pub fn guarded(n: I32): I32
-    if n < 0
-        return -1
-    return n
-
-pub fn wide_enough_that_the_folded_form_would_not_fit(first: I32, second: I32): I32
-    return first * second + first - second + second * first + first - second
-
-pub struct S
-    n: I32
-
-impl S
-    fn get(r: Self@): I32 { return r.n }
 """
 
 // A closure's `;` separates its parameters from its captures and stays on the signature's line,
@@ -697,22 +613,6 @@ fn main(): I32
 """
 
 // A block on one line: its last `;` is left out.
-const SRC_BARE_LINE_IN: U8[] =
-    """pub fn one(x: I32): I32 { return x + 1; }
-
-pub fn f(n: I32): I32
-    if n < 0 { return -1 }
-    return n
-"""
-
-const SRC_BARE_LINE_OUT: U8[] =
-    """pub fn one(x: I32): I32 { return x + 1 }
-
-pub fn f(n: I32): I32
-    if n < 0 { return -1 }
-    return n
-"""
-
 // A comment line past the column limit is cut at its last space that fits. The cut words join the
 // paragraph's next line. A caution, a table row, a list item, a long address, a trailing comment
 // and a line of wide characters within its columns are left as written.

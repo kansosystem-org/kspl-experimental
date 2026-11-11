@@ -174,7 +174,7 @@ flowchart LR
 
 **The folder does not change a name.** A library's files are still imported as `ksai/…`, since a package names itself ("A package names itself, and names what it uses" below). The compiler finds a library in the `lib/` beside `std`'s folder with nothing set. `make install` puts the same `lib/` beside the installed `std/`, so a program outside the repository imports `ksai/…` the same way. The release zip carries `std/` alone. A file in `lib/ksai/` owes a notice, and the zip holds no such file ("What recipients are owed: one table, held by a gate" below).
 
-**The motive**: with ten packages beside the folders that serve the repository, a reader could not tell which ones a program can import. The split shows it, and the compiler takes the same split as the place a library is found. So the layout and the lookup cannot drift apart.
+**The motive**: with every package beside the folders that serve the repository, a reader could not tell which ones a program can import. The split shows it, and the compiler takes the same split as the place a library is found. So the layout and the lookup cannot drift apart.
 
 **What it gives up**:
 
@@ -401,7 +401,7 @@ Where else the token must not travel, and why, is "How the token gets across" in
 
 ### The reference is rendered when asked, not committed
 
-**To read a package's API documentation, run `ksplc doc <file>`.** It renders the documentation from the source each time. **No generated HTML or Markdown reference is committed.** The command is 7.5 in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md). The record (`SURFACE.txt`) stays committed, since two versions are matched by it.
+**To read a package's API documentation, run `ksplc doc <file>`.** It renders the documentation from the source each time. **No generated HTML or Markdown reference is committed.** The command is 7.4 in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md). The record (`SURFACE.txt`) stays committed, since two versions are matched by it.
 
 * **A committed rendering is a second copy of every description**, and every change to the rendering rewrites thousands of lines that publish nothing new.
 * **An entry point returning one piece serves a person and a model alike** (the chapter "Models write it, and AI runs in it" in [`DESIGN-principles.md`](DESIGN-principles.md)). `ksplc doc std/mem.Arena.alloc` returns that entry and nothing else, at once, wherever `ksplc` runs.
@@ -483,7 +483,7 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 | Who uses it | Whoever changes the compiler | Whoever runs `make install`, and the release (`.github/workflows/release.yml`) |
 | Compared with the development build | — | It translates ksplc itself in roughly half the time, and is roughly half the size |
 
-**The generated C does not change by one byte.** `make self-host-ship` translates ksplc with the shipped build and compares the result with stage2's C, before every `make install` and in every platform's release build.
+**The generated C does not change by one byte.** `make self-host-ship` translates ksplc with the shipped build and compares the result with stage2's C. Where it runs is its row in "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md).
 
 **Only the C a person reads is tidied.** Clang-Format runs on the C of `make debug-file` and `make commit-seed`. The C the bootstrap and `make debug` leave is not tidied, since nobody reads it.
 
@@ -538,13 +538,15 @@ chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EXE)
 | perf-log | **Measure both times**: on an empty cache (cold), then on the same cache (warm). One alone leaves half unchecked. The cache sits in a dedicated location, so the shared cache is not erased |
 | test-suites | With the cores full, **the total amount of work** fixes it. **No job is added for them**: each job pays its own start-up and billing ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `SUITES` is kept longest first (the grounds are at `SUITES` in `mk/test.mk`) |
 | test-race / test-sanitize | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspl`). Each builds again what the shared jobs build once, under a sanitizer. `test-race` builds its programs side by side, then runs them side by side |
-| self-host-ship | **Not a CI gate.** `make install` runs it before it installs, and the release on each platform, so a difference only the shipped build shows is caught before anything ships. In CI it would pay an `-O2` build of ksplc in every round, and take cores from `test-race` |
+| self-host-ship | **Not a CI gate** ("What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). `make install` and the release still catch a difference only the shipped build shows, before anything ships. In CI it would pay an `-O2` build of ksplc in every round, and take cores from `test-race` |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
 | test-ksmd-browser / test-ksmd-open / test-ksagent-chat | **The server and the page are files that list their sources.** So the second gate to want one builds nothing (`kspl_dep_rules` in `mk/programs.mk`; the page's in `ksmd/Makefile`). The browser's checks run alone, as every gate does ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)). **The three stay together in one Linux job** (`Gate.linux_only` in `tools/ci_gates.kspl`), so those files are built once |
 
+**With `STOP=1`, a gate that falls often for its time runs early** (`Gate.early` in `tools/ci_gates.kspl`), so a round that ends at it ends sooner. Over the recorded rounds, `suites_text` and `lint` fell more often than any other gate. `surface` fell less often, but takes only seconds.
+
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, and a fine-grained name points straight at the cause. Only the same property inspected in two places can be merged.
 
-**A gate that only Linux runs can stand in any of the three Linux jobs.** Each job pays its start-up already. So a move between them costs nothing, and lets the three end together ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)).
+**A gate that only Linux runs can stand in any of the three Linux jobs.** Each job pays its start-up already, so a move between them costs nothing.
 
 **A test that waits for something that must not come waits only until it can no longer come.** A stand-in server holding a reply for a request too many stops waiting once its asker has returned (`done_asking` in `ksagent/tests/stub.kspl`). A fixed wait there costs every job that runs the test, on every backend.
 
@@ -614,7 +616,7 @@ Built by the POSIX tools instead, `ksplc.exe` would depend on `msys-2.0.dll`. `M
 
 * **A list written twice drifts, and the drift shows only on a fresh machine**, midway through `make ci` (without `diff`, the self-host cannot compare its stages).
 * **The source is a plain file, not the workflow**, since a person cannot run a workflow's YAML. `make test-conventions` refuses a workflow that sets MSYS2 up by itself.
-* **It holds what `make ci` needs and nothing more.** A tool only some work uses (`clang-format`, `lldb`, the ARM and wasm toolchains) is named in the guide beside that work. The gates that skip without one are named per platform in `tools/ci_gates.kspl`.
+* **It holds what CI's Windows job needs and nothing more.** What `make ci` adds, for the gates CI runs on Linux alone, is a second list, `tools/msys2-packages-full.txt`. A tool only some work uses (`clang-format`, `lldb`) is named in the guide beside that work. The gates that skip without one are named per platform in `tools/ci_gates.kspl`.
 * **`git` comes before the list**, by a command of its own, to clone the repository holding it.
 
 **What is given up**: the MSVC target is not what ships, and no CI job builds it, so it is untested. Kanso's own build refuses it (`-dumpmachine` in the root `Makefile`). A user's program can still be compiled for it, since ksplc answers its link words per target. Debug information is DWARF, read with LLDB (as the release's bundled `.vscode/` does), not with Visual Studio's debugger.

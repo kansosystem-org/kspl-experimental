@@ -1,7 +1,8 @@
-// ksmd page: the status bar at the window's foot. From the left it shows the chosen cell's address
-// and what was typed in it, why it shows an error, the note on that cell or on the paragraph at the
-// caret, a message, how many rows a filter shows, and the printed page the caret stands on
-// (`pages.js`). At the right stand the figures (`figures.js`) and the zoom (`zoom.js`).
+// ksmd page: the status bar at the window's foot. From the left it shows why the chosen cell
+// shows an error, the note on that cell or on the paragraph at the caret, a message, how many rows
+// a filter shows, and the printed page the caret stands on (`pages.js`). At the right stand the
+// figures (`figures.js`) and the zoom (`zoom.js`). The chosen cell's address and its text stand
+// in the formula bar (`bar.js`), which is shown again with this bar.
 // A range chosen is also said to a screen reader (`said`): the focus stays on its first cell.
 // The bar keeps one line: a message pushes the page and the filter aside, and a narrow window
 // drops items in the order `page.css` gives.
@@ -11,9 +12,6 @@
 function ksmdStatus(ks) {
   const bar = document.querySelector(".status-bar");
   const part = (name) => bar.querySelector(`.status-${name}`);
-  const cellBox = part("cell");
-  const address = part("address");
-  const content = part("content");
   const why = part("why");
   const note = part("note");
   const said = part("said");
@@ -34,44 +32,35 @@ function ksmdStatus(ks) {
     return `${at(r.r1, r.c1)}:${at(r.r2, r.c2)}`;
   }
 
-  // The chosen cell's address and its text as typed: a formula, a value or a column's name. While
-  // the cell is open, the text is what its box holds now.
+  // The address of the chosen cell or range, as the formula bar shows it; empty outside a table.
+  function where() {
+    const wrap = ks.inTable() ? ks.view.blocks()[ks.cell.block] : null;
+    if (!wrap) return "";
+    if (ks.range.any() || ks.range.lines()) return rangeAddress(wrap, ks.range.rect());
+    return at(ks.cell.row, ks.cell.column);
+  }
+
+  // Why the chosen cell shows an error, and a range chosen, said to a screen reader.
   function showCell(wrap) {
     if (!wrap) {
-      cellBox.hidden = true;
       why.hidden = true;
       if (said.textContent !== "") said.textContent = "";
       return;
     }
     const c = ks.cell;
-    let where;
-    let text = "";
-    if (ks.range.any() || ks.range.lines()) {
-      where = rangeAddress(wrap, ks.range.rect());
-    } else {
-      where = at(c.row, c.column);
-      text = ks.range.typed();
-    }
-    // **Written only when it changes**: the bar is shown again on each change of the selection,
-    // and writing the same text again would drop text being chosen in it.
-    const shown = text.replace(/\n/g, " ");
-    if (address.textContent !== where) address.textContent = where;
-    if (content.textContent !== shown) content.textContent = shown;
-    cellBox.hidden = false;
     // Why a chosen error stands, as its tooltip says it (`table.js`). One line: an ellipsis cuts
-    // a long reason, and the part's tooltip holds it whole.
+    // a long reason, and the part's tooltip holds it whole. **Written only when it changes**: the
+    // bar is shown again on each change of the selection, and writing the same text again would
+    // drop text being chosen in it.
     const one = !ks.range.any() && !ks.range.lines();
     const el = one ? wrap.querySelector(`td[data-r="${c.row}"][data-c="${c.column}"]`) : null;
     const reason = (el && el.dataset.why) || "";
     why.hidden = reason === "";
     if (why.textContent !== reason) why.textContent = reason;
     why.title = reason;
-    const full = text === "" ? `Cell ${where}` : `Cell ${where}: ${text}`;
-    cellBox.title = full;
-    cellBox.setAttribute("aria-label", full);
     // A range is said once each time it changes; one cell says nothing here, since its box
     // already says its value and address.
-    const range = one ? "" : `${where} chosen`;
+    const range = one ? "" : `${where()} chosen`;
     if (said.textContent !== range) said.textContent = range;
   }
 
@@ -182,5 +171,7 @@ function ksmdStatus(ks) {
     // Runs `f` each time the bar is shown again, for the parts other files keep.
     also: (f) => updates.push(f),
     bar,
+    // The address of the chosen cell or range, or empty: the formula bar shows it (`bar.js`).
+    where,
   };
 }

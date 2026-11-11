@@ -343,6 +343,24 @@ pub fn text( //<
         throw .wrong_kind
     return arena.dup_str(out.slice())
 
+pub fn char( //<
+    //< the character with this Unicode number, such as a line break for 10
+    //< **The way to write a character that formula text cannot hold**, since a formula stays on
+    //< one line and its quoted text has no escapes. Below 1, past 1114111 and the surrogates
+    //< 55296 to 57343 are `#NUM!`.
+    //< So `"a" & char(10) & "b"` puts a line break between `a` and `b`.
+    //< For example, `char(65)` is `A`.
+    code: I64, //< the character's number in Unicode: 10 for a line break, 9 for a tab
+    arena: Arena$@,
+): U8[]!Calc_error
+    if code < 1 || code > 0x10FFFF || code >= 0xD800 && code <= 0xDFFF
+        throw .not_finite
+    cp: = I32::code
+    out: = arena.text()
+    for i in Range.asc(chars.codepoint_len(cp))
+        out.c(chars.codepoint_byte(cp, i))
+    return out.take()
+
 priv fn offset_of(t: U8[], count: I64, from: Sz): Sz!Calc_error //<
     //< The byte `count` characters after the byte `from`, or the end; a negative count is `#NUM!`
     if count < 0

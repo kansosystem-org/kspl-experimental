@@ -301,8 +301,11 @@ priv fn case_build(arena: Arena$@) //<
     ng_case("build: --cflags reaches the C compiler",
         U8[][]::{ "build", std_flag(), "--cflags=-fkspl-no-such-flag", src, exe },
         "ksplc build: the C compiler failed")
-    ng_case("build: an output its own C would overwrite is refused",
-        U8[][]::{ "build", std_flag(), src, fs.join(dir, "prog.c", arena) }, "overwritten")
+    // A refused command line exits with 1, as every other refusal does.
+    as_c: = fs.join(dir, "prog.c", arena)
+    over: = cli(U8[][]::{ "build", std_flag(), src, as_c })
+    verdict.check("build: an output its own C would overwrite is refused with exit code 1",
+        over.exited_with(1) && over.out.find_str("overwritten").is_some(), over.out)
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
     io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
     ng_case("build: a program with no main() is refused by ksplc, not by the linker",

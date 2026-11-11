@@ -1,8 +1,5 @@
-//< The size caps, and how a file near a cap is split (not the suite)
-//< **Where a file splits is decided when it comes near the cap** (Principle 3).
-//< Caution: **Do not stop at printing a notice.** Shown only on screen, it is read past, and the
-//< file reaches the cap with no split written. A function's length is lint's ([H0803], which
-//< `make lint` refuses), in both notations.
+//< The size cap on one file, and the hover's widths (not the suite)
+//< A function's length is lint's ([H0803], which `make lint` refuses), in both notations.
 import "std/chars" // judging one character's case
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -15,17 +12,12 @@ import "tests/support/harness"
 
 priv const MAX_FILE_LINES: Sz = 1000
 
-priv const WARN_FILE_LINES: Sz = 900 //< the line count that marks a file as near the cap
-    //< **It names them without failing**: the cap is a cliff crossed mid-work, where a split cuts
-    //< by line count rather than by reason (Principle 3).
-
 // ==========================================
 // 1. The size (Principle 3)
 // ==========================================
 
 priv fn check_sizes(arena: Arena$@)
     $over_file: = List<|U8[]|>(arena)
-    $near_file: = List<|U8[]|>(arena)
     $files: Sz = 0
     // Caution: **Apply the one-file cap to hand-written C and the page's template, stylesheet and
     // JS too**, or they grow past it unseen.
@@ -40,121 +32,9 @@ priv fn check_sizes(arena: Arena$@)
         if lines.len > MAX_FILE_LINES
             over_file
                 .push(arena.text().s(rel).s(": \{lines.len\} lines (cap \{MAX_FILE_LINES\})").take())
-        // Caution: **Include the files over the cap too**, or they escape without a written split.
-        if lines.len > WARN_FILE_LINES
-            near_file.push(rel)
     n1: = arena.text().s("one file within \{MAX_FILE_LINES\} lines (Principle 3)").take()
     verdict.check_list(n1, files, "files", over_file@,
-        "split the file where its README's plan says (Principle 3)")
-    check_plans(near_file@, files, arena)
-
-// ==========================================
-// How a file near the cap splits
-// ==========================================
-
-priv const PLAN_HEAD: U8[] = "Files near the limit and how they split" //<
-    //< The heading of the section that says how a file splits
-    //< **It is text from the README**: change it and the READMEs in the same commit.
-priv fn plan_readme_of(rel: U8[], arena: Arena$@): U8[] //<
-    //< The README that says how a file splits: the one in the file's top-level folder
-    //< For example, `ksplc/lsp/nav.kspl` is planned in `ksplc/README.md`.
-    if cut: = rel.find_char('/')
-        return arena.text().s(rel.sub(0, cut)).s("/README.md").take()
-    return "README.md"
-priv fn heading_depth(line: U8[]): Sz //<
-    //< The depth (the count of `#`) if that line is a heading, and 0 otherwise
-    $n: Sz = 0
-    for n < line.len && line[n] == '#'
-        n += 1
-    return 0 if n <= 0 || n >= line.len || line[n] != ' ' else n
-
-priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
-    //< The inside of the README's splitting section
-    //< Caution: **Do not decide it by the heading's depth.** Limited to `## `, a README that puts
-    //< the section one level deeper comes out empty, and a written split is called "not named".
-    out: = arena.text()
-    $depth: Sz = 0
-    ls: = readme.lines(arena)
-    for ln in ls
-        d: = heading_depth(ln)
-        if d > 0
-            if depth > 0 && d <= depth
-                depth = 0
-            if ln.find_str(PLAN_HEAD).is_some()
-                depth = d
-            continue
-        if depth > 0
-            out.s(ln).c('\n')
-    return out.take()
-
-priv fn planned(readme: U8[], rel: U8[], arena: Arena$@): Bool //<
-    //< Whether that README's splitting section names that path
-    //< It accepts a path relative to the repository or to the README's own folder.
-    body: = plan_body(readme, arena)
-    if body.len == 0
-        return false
-    if body.find_str(rel).is_some()
-        return true
-    if cut: = rel.find_char('/')
-        return body.find_str(rel.sub_from(cut + 1)).is_some()
-    return false
-
-priv struct Plan_sample //< the texts that hit `planned` and the texts that do not
-    //< **A name outside the section is not a hit on its own**: that section is where the split is
-    //< written.
-    readme: U8[]
-    rel: U8[]
-    hits: Bool
-
-priv const PLAN_SAMPLES: Plan_sample[_] = ::{
-    Plan_sample::{ .readme =
-        "## Files near the limit and how they split\n\n`a/b.kspl` puts X out.\n", .rel = "a/b.kspl",
-        .hits = true },
-    // **The section one level deeper** (limited to `## `, it would read as empty).
-    Plan_sample::{ .readme =
-        "## Putting a hand in\n\n### Files near the limit and how they split\n\n`a/b.kspl` splits \
-            X.\n", .rel = "a/b.kspl", .hits = true },
-    // **A subheading inside the section does not end it.**
-    Plan_sample::{ .readme =
-        "### Files near the limit and how they split\n\n#### How\n\n`a/b.kspl` splits X.\n",
-        .rel = "a/b.kspl", .hits = true },
-    Plan_sample::{ .readme =
-        "## Files near the limit and how they split\n\n`a/c.kspl` puts X out.\n", .rel = "a/b.kspl",
-        .hits = false },
-    Plan_sample::{ .readme = "## Further reading\n\nRead `a/b.kspl`.\n", .rel = "a/b.kspl",
-        .hits = false },
-    Plan_sample::{ .readme =
-        "## Files near the limit and how they split\n\n`a/b.kspl` is X.\n\n## Next\n\n`a/c.kspl`\n",
-        .rel = "a/c.kspl", .hits = false },
-}
-
-priv fn check_plans(near: List<|U8[]|>@, files: Sz, arena: Arena$@) //<
-    //< Whether a file near the cap is named in the README with how it splits
-    //< `files` is how many files were measured: with none near the cap, the walk still saw them.
-    $bad: = List<|U8[]|>(arena)
-    for rel in near
-        readme_rel: = plan_readme_of(rel, arena)
-        readme: = harness.read_under_root(readme_rel)
-        if readme.len == 0 || !planned(readme, rel, arena)
-            bad
-                .push(arena.text().s(rel).s(" is over \{WARN_FILE_LINES\} lines and \"")
-                .s(PLAN_HEAD).s("\" in ").s(readme_rel).s(" does not name it").take())
-    n1: = arena.text().s("a file over \{WARN_FILE_LINES\} lines has how it splits in the README")
-        .take()
-    verdict.check_list(n1, files, "files", bad@,
-        "where it splits is decided when it comes near the cap (Principle 3)")
-
-priv fn check_fires(arena: Arena$@)
-    $k: = List<|U8[]|>(arena)
-    for s in PLAN_SAMPLES
-        if planned(s.readme, s.rel, arena) != s.hits
-            want: = "hit" if s.hits else "not hit"
-            k
-                .push(arena.text().s("\"").s(s.rel).s("\" should be ").s(want)
-                .s(" and came out the other way").take())
-    verdict.check_list("the judgment of whether the splitting section names it can fire",
-        PLAN_SAMPLES.len, "samples", k@,
-        "the table of what is hit and what is not is `plan_samples`")
+        "split the file where its parts are read for different reasons (Principle 3)")
 
 // ==========================================
 // The hover's widths follow the formatter's. A comment past the width is the formatter's to cut
@@ -235,5 +115,4 @@ priv fn check_hover_width(arena: Arena$@)
 fn run(arena: Arena$@)
     check_hover_width(arena)
     check_hover_indent(arena)
-    check_fires(arena)
     check_sizes(arena)

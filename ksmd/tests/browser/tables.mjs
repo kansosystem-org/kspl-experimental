@@ -106,7 +106,7 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       await saves("Delete on the data cells only clears them", start.replace("| 1 | =t.A1*2 |\n| 3 | =A2+1 |", "| | |\n| | |"));
       await menu("undo");
       await select(2, 0, 5);
-      await paste({ "application/x-ksmd": "%ksmd 1\n\nNot a table\n", "text/plain": "Not a table" });
+      await paste({ "application/x-ksmd": "%ksmd 2\n\nNot a table\n", "text/plain": "Not a table" });
       await saves("clipboard text that is no ksmd table pastes as its plain text",
         `${H}Intro\n\n${clause("t", "t")}\nAfterNot a table\n`);
       // In a table with no data rows, the names row alone reaches every row and column; it is

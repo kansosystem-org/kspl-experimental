@@ -311,6 +311,29 @@ async function main() {
     check(await d.until(`${stateOf(broke + 1)} === 'checked'`, 15000),
       "the page goes on: the next question is answered", await d.js(stateOf(broke + 1)));
 
+    // A request the local server takes and never answers ends at the page's time limit, the page
+    // says so, and the next look that gets through clears the notice. The limit is cut to 300 ms
+    // here, so the check need not wait the page's 15 s; the limit the page asked for is recorded.
+    // A request with no limit would never end, and the notice would never come.
+    const notice = "document.getElementById('notice').textContent";
+    await d.js(`(() => {
+      const plain = window.fetch;
+      window.plainTimeout = AbortSignal.timeout;
+      window.limits = new Set();
+      AbortSignal.timeout = (ms) => { window.limits.add(ms); return window.plainTimeout.call(AbortSignal, 300); };
+      window.fetch = (url, how = {}) => (window.hang && String(url).startsWith("/api/stat") ?
+        new Promise((_, no) => how.signal && how.signal.addEventListener("abort", () => no(how.signal.reason))) :
+        plain(url, how));
+      window.hang = true;
+    })()`);
+    check(await d.until(`${notice}.includes('did not answer within 15 seconds')`, 15000),
+      "a request the local server never answers ends, and the page says so", await d.js(notice));
+    check(await d.js("[...window.limits].join()") === "15000", "every request asks for a 15 s limit",
+      await d.js("[...window.limits].join()"));
+    await d.js("window.hang = false; AbortSignal.timeout = window.plainTimeout");
+    check(await d.until(`!${notice}.includes('did not answer')`, 15000),
+      "the next look that gets through clears the notice", await d.js(notice));
+
     // Lines ksagent passes over are named on the page with ksagent's own reasons.
     const askFile = path.join(root, `${name}.ask.jsonl`);
     const firstId = /"id":"([0-9a-f-]{36})"/.exec(disk(`${name}.ask.jsonl`))[1];
@@ -329,10 +352,10 @@ async function main() {
     // **The page reads the ask file on its own beat**, so it may name the lines after ksagent has.
     await d.until(`(() => { const n = document.getElementById('notice').textContent;
       return ${JSON.stringify(said)}.every((x) => n.includes(x)); })()`, 15000);
-    const notice = await d.js("document.getElementById('notice').textContent");
-    check(said.length === 6 && said.every((x) => notice.includes(x)),
+    const named = await d.js(notice);
+    check(said.length === 6 && said.every((x) => named.includes(x)),
       "each line ksagent passes over is named on the page, in ksagent's words",
-      `ksagent: ${said.join(" / ")}; page: ${notice}`);
+      `ksagent: ${said.join(" / ")}; page: ${named}`);
     check(await count() === broke + 2, "no line it passes over shows as a question");
 
     // An answer ksagent could not record shows as stopped, with why, and can be asked again.

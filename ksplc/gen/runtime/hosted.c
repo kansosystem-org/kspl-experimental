@@ -129,6 +129,11 @@ KSPL_LINK I64 kspl_mono_us(void) {
  * caller. */
 static I32 kspl_wait_ms(I32 timeout_ms) { return timeout_ms < 0 ? 0 : timeout_ms; }
 
+/* The length of a buffer that holds one narrow path, its NUL counted.
+ * Caution: **Keep it MAX_PATH_LEN + 1** (std/fs.kspl). A path std lets through must fit here, and
+ * make test-conventions compares the two. */
+#define KSPL_PATH_CAP 4096
+
 /* Copies (ptr, len) to a NUL terminator in out. Every narrow path and host name the OS is handed
  * goes through here.
  * Caution: **Returns 0 where it does not fit or holds a NUL.** A truncated copy, or one the OS

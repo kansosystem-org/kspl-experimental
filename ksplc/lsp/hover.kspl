@@ -70,9 +70,16 @@ priv fn send_markdown(id_val: json.Value, md: U8[], arena: Arena$@) //<
     content: = b.obj().set("kind", b.str_val("markdown")).set("value", b.str_val(md)).build()
     lsp_msg.send_response(id_val, b.obj().set("contents", content).build(), arena)
 
+priv enum Hover_shape //< what a hover's first line shows
+    fn_head //< a function's signature
+    type_head //< a type's declaration
+    file //< an imported file, shown as a type with `file`
+    constant //< `const name: type`
+    other //< `name: type`
+
 priv struct Hover_ctx
     type_id: I32
-    prefix: U8[]
+    shape: Hover_shape
     def_node: Ast_node$@
     fallback_str: Str_builder
 // The type a method or associated function belongs to, "" for a free function.
@@ -258,7 +265,7 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
     // get_fqn_name shows the marker. A declaration's `const` stands for it too.
     if target_node.is_keyword("const") && path.len >= 2 &&
         path.get(path.len - 2).kind_id == .k_decl_const
-        path.len -= 1
+        path.truncate(path.len - 1)
         target_node = path.get(path.len - 1)
     if target_node.kind_id == .k_decl_var || target_node.kind_id == .k_decl_const
         id_n: = target_node.get_var_decl_id()
@@ -277,7 +284,7 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         send_literal_type(state, target_node, id_val, arena)
         return
 
-    $ctx: = Hover_ctx::{ .type_id = 0, .prefix = "(Type) ", .def_node = null,
+    $ctx: = Hover_ctx::{ .type_id = 0, .shape = .type_head, .def_node = null,
         .fallback_str = Str_builder() }
     defer ctx.fallback_str.free()
 
@@ -318,14 +325,13 @@ priv fn write_shown_type(state: Doc_state$@, ctx: Hover_ctx$@, out: Str_builder$
 priv fn write_hover_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn: U8[],
     shown: U8[], out: Str_builder$@) //<
         //< The hover's first line: a function's signature, a type's declaration, or `name: type`
-    if ctx.prefix.equals("(Function) ") || ctx.prefix.equals("(Generic Function) ")
+    if ctx.shape == .fn_head
         write_fn_head(state, ctx, def_code, fqn, shown, out)
         return
-    if ctx.prefix.equals("(Type) ") || ctx.prefix.equals("(Generic Struct) ") ||
-        ctx.prefix.equals("(Interface) ") || ctx.prefix.equals("(File) ")
+    if ctx.shape == .type_head || ctx.shape == .file
         out.s(type_decl_keyword(ctx)).s(fqn)
         return
-    $decl_keyword: U8[] = "const " if ctx.prefix.equals("(Constant) ") else ""
+    $decl_keyword: U8[] = "const " if ctx.shape == .constant else ""
     if ctx.def_node != null
         k: = ctx.def_node.kind_id
         if k == .k_decl_const
@@ -349,7 +355,7 @@ priv fn type_decl_keyword(ctx: Hover_ctx$@): U8[] //< the word a type's hover op
     case .k_decl_trait
         return "trait "
     default
-        return "file " if ctx.prefix.equals("(File) ") else "type "
+        return "file " if ctx.shape == .file else "type "
 
 priv fn write_fn_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn: U8[],
     shown: U8[], out: Str_builder$@) //<
@@ -424,7 +430,7 @@ priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
         walk_path_for_type(path, target_node, ctx)
 priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast_node$@,
     ctx: Hover_ctx$@) //<
-        //< It decides the type and prefix from a definition node's kind (the first classification)
+        //< It decides the type and shape from a definition node's kind (the first classification)
     if classify_decl(d, ctx)
         return
     $parent_enum: = parent_enum_in
@@ -440,20 +446,20 @@ priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast
             ctx.type_id = parent_enum.type_id
         else if ctx.type_id == 0
             ctx.type_id = d.type_id
-        ctx.prefix = "(Enum Variant) "
+        ctx.shape = .other
     case .k_identifier
         // **A name that is its own declaration is a binding** (`catch e`, `.some(v)`, the `v` of
         // `if v: = opt`); left to the default, `e` read `type e`.
         ctx.type_id = d.type_id
-        ctx.prefix = "(Variable) "
+        ctx.shape = .other
     case .k_decl_import
         ctx.type_id = 0
-        ctx.prefix = "(File) "
+        ctx.shape = .file
     default
         if d.type_id != 0
             ctx.type_id = d.type_id
 priv fn classify_decl(d: Ast_node$@, ctx: Hover_ctx$@): Bool //<
-    //< The type and prefix of a declaration whose kind alone decides them; false for another kind
+    //< The type and shape of a declaration whose kind alone decides them; false for another kind
     //< **A method is in the symbol table only as `Foo.bar`.** So its declaration's own name reaches
     //< here through the path walk too (`walk_path_for_type`), not through the symbol table.
     switch d.kind_id
@@ -464,19 +470,19 @@ priv fn classify_decl(d: Ast_node$@, ctx: Hover_ctx$@): Bool //<
             ctx.type_id =
                 (ret_type.type_id if ret_type != null && ret_type.type_id != 0
                 else I32::sema_type_env.Builtin_type_id.void_type)
-        ctx.prefix = "(Function) "
+        ctx.shape = .fn_head
     case .k_struct_field, .k_enum_field
         ctx.type_id = d.type_id
-        ctx.prefix = "(Field) "
+        ctx.shape = .other
     case .k_fn_param
         ctx.type_id = d.type_id
-        ctx.prefix = "(Parameter) "
+        ctx.shape = .other
     case .k_decl_var, .k_decl_var_item
         ctx.type_id = d.type_id
-        ctx.prefix = "(Variable) "
+        ctx.shape = .other
     case .k_decl_const
         ctx.type_id = d.type_id
-        ctx.prefix = "(Constant) "
+        ctx.shape = .constant
     default
         return false
     return true
@@ -489,7 +495,7 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
         //< The fallback classification for a definition node with no type ID (it spells the type)
     switch d.kind_id
     case .k_struct_field, .k_enum_field
-        ctx.prefix = "(Field) "
+        ctx.shape = .other
         type_n: = d.get_decl_type_node()
         // Caution: **Get the type through the display here too** (`write_type_of` in
         // `spell.kspl`). The node holds the desugared spelling and the path's last name is the
@@ -499,7 +505,7 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
         else
             lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
     case .k_fn_param
-        ctx.prefix = "(Parameter) "
+        ctx.shape = .other
         type_n: = d.get_decl_type_node()
 
         self_spelt: = type_n.self_type_spelling()
@@ -514,19 +520,19 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
         else
             ctx.fallback_str.s("Unresolved")
     case .k_decl_struct
-        ctx.prefix = "(Generic Struct) "
+        ctx.shape = .type_head
         set_ident_fallback(d, ctx)
     case .k_decl_trait
-        ctx.prefix = "(Interface) "
+        ctx.shape = .type_head
         set_ident_fallback(d, ctx)
     case .k_decl_fn, .k_decl_fn_proto
-        ctx.prefix = "(Generic Function) "
+        ctx.shape = .fn_head
         set_ident_fallback(d, ctx)
     case .k_type_gen_param
-        ctx.prefix = "(Type Parameter) "
+        ctx.shape = .other
         set_ident_fallback(d, ctx)
     case .k_decl_var, .k_decl_var_item, .k_decl_const
-        ctx.prefix = "(Variable) " if d.kind_id != .k_decl_const else "(Constant) "
+        ctx.shape = .other if d.kind_id != .k_decl_const else .constant
         type_n: = d.get_decl_type_node()
         // Taken through the display, as a field's is (the caution in the branch above).
         if type_n == null
@@ -534,7 +540,7 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
         else
             lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
     case .k_decl_import
-        ctx.prefix = "(File) "
+        ctx.shape = .file
         path_opt: = d.get_import_path_text()
         if !path_opt.is_none()
             ctx.fallback_str.s_path_as_dots(path_opt.unwrap_or(""))
@@ -546,7 +552,7 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
             else
                 ctx.fallback_str.s("Unknown File")
     case .k_enum_variant
-        ctx.prefix = "(Enum Variant) "
+        ctx.shape = .other
         set_ident_fallback(d, ctx)
     default {}
 priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
@@ -555,39 +561,35 @@ priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     t_id: = state.sema.env.type_to_id.get(target_node.text).unwrap_or(0)
     if t_id != 0
         ctx.type_id = t_id
-        ctx.prefix = "(Type) "
+        ctx.shape = .type_head
         return
     sym: = state.sema.symtab.resolve(target_node.text).unwrap_or(null)
     if sym != null && sym.node != null
         if sym.node.kind_id == .k_decl_struct
-            ctx.prefix = "(Generic Struct) "
+            ctx.shape = .type_head
         else if sym.node.is_fn_decl()
-            ctx.prefix = "(Generic Function) "
+            ctx.shape = .fn_head
         else
-            ctx.prefix = "(Identifier) "
+            ctx.shape = .other
         ctx.def_node = sym.node
     else
-        ctx.prefix = unresolved_prefix(path, target_node)
+        ctx.shape = unresolved_shape(path, target_node)
     ctx.fallback_str.s(target_node.text)
-priv fn unresolved_prefix(path: List<|Ast_node$@|>@, target_node: Ast_node@): U8[] //<
-    //< It guesses an unresolved identifier's prefix from the node that precedes it
+priv fn unresolved_shape(path: List<|Ast_node$@|>@, target_node: Ast_node@): Hover_shape //<
+    //< It guesses an unresolved identifier's shape from the node that precedes it
+    //< A name at the head of a postfix expression is taken as a file (the `fs` of `fs.read`).
     if path.len < 2
-        return "(Unresolved) "
+        return .other
     p: = path.get(path.len - 2)
-    if p.is_member_access()
-        if p.children.len >= 2 && p.get_child(1) == target_node
-            return "(Field / Method) "
-        if p.kind_id == .k_expr_postfix && p.children.len >= 3 && p.get_child(2) == target_node
-            return "(Field / Method) "
     is_mod: =
         p.kind_id == .k_expr_postfix && p.children.len >= 1 && p.get_child(0) == target_node
-    return "(File) " if is_mod else "(Unresolved) "
+    return .file if is_mod else .other
 priv fn is_field_def(d: Ast_node$@): Bool //<
     //< Whether the definition found is a field (a struct's or an enum payload's)
     return d != null && (d.kind_id == .k_struct_field || d.kind_id == .k_enum_field)
 
 priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, ctx: Hover_ctx$@) //<
-    //< From the path's tail, the type and prefix of the first node with a type ID or definition
+    //< From the path's tail, the type and shape of the first node with a type ID or definition
     for $idx: = path.len; idx > 0; idx -= 1
         p: = path.get(idx - 1)
         // **A name in an array's length is a value, not the array type around it**: borrowed,
@@ -602,7 +604,7 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, c
             // too. Treated as a function, the display takes it from the source. That span stops
             // short on a desugared type, so a `U8[][]` field reads `U8`: a different type.
             if p.is_member_access() && !is_field_def(ctx.def_node)
-                ctx.prefix = "(Function) "
+                ctx.shape = .fn_head
             break
 
         is_target: = target_node.def_node == p || target_node == p.find_child(.k_identifier)
@@ -612,10 +614,10 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, c
         if !classify_decl(p, ctx)
             switch p.kind_id
             case .k_type_gen_param
-                ctx.prefix = "(Type Parameter) "
+                ctx.shape = .other
             case .k_enum_variant
                 ctx.type_id = p.type_id
-                ctx.prefix = "(Enum Variant) "
+                ctx.shape = .other
             case .k_decl_impl {}
             default
                 continue

@@ -11,7 +11,7 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
 
-priv const OPEN: U8[] = "%ksmd 1\n\n:::table name=\"t\""
+priv const OPEN: U8[] = "%ksmd 2\n\n:::table name=\"t\""
 priv const ROWS: U8[] = "\n| \"a\" |\n| 1 |\n| 2 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |\n:::\n" //< six rows
 
 fn run()
@@ -234,9 +234,9 @@ priv fn heights()
 
 priv fn filters()
     defer arena: = Arena(64 * 1024)
-    two: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| 2 | \"y\" |\n:::\n"
+    two: = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| 2 | \"y\" |\n:::\n"
     with: = fn(filter: U8[], arena: Arena$@): U8[]
-        return arena.text().s("%ksmd 1\n\n:::table name=\"t\" filter=\"").s(filter)
+        return arena.text().s("%ksmd 2\n\n:::table name=\"t\" filter=\"").s(filter)
             .s("\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| 2 | \"y\" |\n:::\n").take()
     for f in U8[][]::{ "in:1|,", ",is:x", "above:1,contains:%2C%7C%25", "empty,filled", "in:,",
         "out:a|,out:" }
@@ -252,18 +252,18 @@ priv fn filters()
         last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
     changed(ed@, 0, .insert_column, 0)
     saves("an inserted column moves the filter with its column", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" filter=\",,in:x\"\n| \"\" | \"a\" | \"b\" |\n| | 1 | \"x\" \
+        "%ksmd 2\n\n:::table name=\"t\" filter=\",,in:x\"\n| \"\" | \"a\" | \"b\" |\n| | 1 | \"x\" \
             |\n| | 2 | \"y\" |\n:::\n")
     ed.undo()
     ed.edit_table(0, .remove_column, 1, 1, Sz[]::{}) catch e
         verdict.check("removing a column", false, e.message())
     saves("a removed column takes its filter away", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n| 2 |\n:::\n")
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n| 2 |\n:::\n")
     ed.undo()
     saves("and undo brings both back", ed@, arena, with(",in:x", arena))
     changed(ed@, 0, .insert_row, 1)
     saves("an inserted row keeps the filter", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" filter=\",in:x\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| | \
+        "%ksmd 2\n\n:::table name=\"t\" filter=\",in:x\"\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| | \
             |\n| 2 | \"y\" |\n:::\n")
     ed.undo()
     saves("and one undo takes the row away alone", ed@, arena, with(",in:x", arena))
@@ -292,7 +292,7 @@ priv fn formats(ed: Editor$@, arena: Arena$@) //<
     //< A change of format takes the column's filter away in its step, since the filter matches the
     //< text a cell shows
     with: = fn(attributes: U8[], arena: Arena$@): U8[]
-        return arena.text().s("%ksmd 1\n\n:::table name=\"t\"").s(attributes)
+        return arena.text().s("%ksmd 2\n\n:::table name=\"t\"").s(attributes)
             .s("\n| \"a\" | \"b\" |\n| 1 | \"x\" |\n| 2 | \"y\" |\n:::\n").take()
     ed.set_filter(0, 0, "in:1") catch e
         verdict.check("a filter on the numbers", false, e.message())
@@ -315,7 +315,7 @@ priv fn formats(ed: Editor$@, arena: Arena$@) //<
     ed.set_look(0, 0, 0, 0, 0, .format, "percent:1") catch e
         verdict.check("a cell's format", false, e.message())
     saves("and so does a cell's own format", ed, arena,
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"number:2,\" filter=\",in:x\"\n| \"a\" | \"b\" \
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"number:2,\" filter=\",in:x\"\n| \"a\" | \"b\" \
             |\n| 1 {format=\"percent:1\"} | \"x\" |\n| 2 | \"y\" |\n:::\n")
     ed.undo()
     saves("one undo brings the format and the filter back together", ed, arena,
@@ -323,7 +323,7 @@ priv fn formats(ed: Editor$@, arena: Arena$@) //<
     ed.set_look(0, 0, 0, 0, 0, .color, "#ff0000") catch e
         verdict.check("a cell's colour", false, e.message())
     saves("a change of look that leaves the format keeps the filter", ed, arena,
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"number:2,\" filter=\"in:1.00,in:x\"\n| \"a\" | \
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"number:2,\" filter=\"in:1.00,in:x\"\n| \"a\" | \
             \"b\" |\n| 1 {color=\"#ff0000\"} | \"x\" |\n| 2 | \"y\" |\n:::\n")
     ed.undo()
     for _ in Range.asc(6)

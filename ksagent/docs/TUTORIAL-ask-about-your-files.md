@@ -48,7 +48,7 @@ mkdir -p "$HOME/my-files"
 cp /c/Users/me/Documents/rules.docx /c/Users/me/Documents/leave.xlsx "$HOME/my-files/"
 ```
 
-`/c/` is the `C:` drive in MSYS2. ksagent reads `.docx`, `.xlsx` and UTF-8 text files ("Word and Excel files" in [`ksagent/README.md`](../README.md)).
+`/c/` is the `C:` drive in MSYS2. ksagent reads `.docx`, `.xlsx` and UTF-8 text files ("Word and Excel files" in [`ksagent/docs/SPEC-commands.md`](SPEC-commands.md#word-and-excel-files)).
 
 ## 4. Run the one command
 
@@ -82,7 +82,7 @@ ksagent_chat: ready. Ask on the page; the questions and answers stay in /home/me
 
 **Read each quote.** ksagent checks that the quote stands at those lines, not that the answer follows from it. The terminal shows what the model does meanwhile: each search, each file it reads, and the answer as it is written.
 
-The buttons on the page, and the files a conversation keeps in the folder, are in "The chat page" in [`ksagent/README.md`](../README.md).
+The buttons on the page, and the files a conversation keeps in the folder, are in "The chat page" in [`ksagent/docs/SPEC-commands.md`](SPEC-commands.md#the-chat-page).
 
 ## 6. Stop
 

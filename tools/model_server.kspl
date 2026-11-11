@@ -7,16 +7,14 @@
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
-import "std/http"
-import "std/http_body"
 import "std/io"
 import "std/mem" { Arena }
-import "std/net"
 import "std/rand"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
+import "tools/opener"
 import "tools/opener_aim" as aim
 
 const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where ksagent asks unless told otherwise
@@ -127,25 +125,9 @@ priv enum Probe //< what answers at the model server's port
     loading //< a model server, still loading its model
     ready //< a model server that can answer a question
 
-struct Answer //< one reply to a GET
-    status: I32 //< its status; 0 where nothing came back, -1 where nothing listens
-    body: U8[]
-
-priv fn get(at: I32, target: U8[], key: U8[], arena: Arena$@): Answer //<
+priv fn get(at: I32, target: U8[], key: U8[], arena: Arena$@): opener.Local_answer //<
     //< Asks one GET of the loopback port, with the API key where there is one
-    defer stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
-        return Answer::{ .status = -1, .body = "" }
-    $hb: = http.headers(arena).add("Host", arena.text().s("127.0.0.1:\{at\}").take())
-    if key.len > 0
-        hb = hb.add("Authorization", arena.text().s("Bearer ").s(key).take())
-    head: = hb.build()
-    http.write_request(stream, "GET", target, head, "", ANSWER_WAIT_MS) catch
-        return Answer::{ .status = 0, .body = "" }
-    // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
-    got: =
-        http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
-        return Answer::{ .status = 0, .body = "" }
-    return Answer::{ .status = got.status, .body = got.body }
+    return opener.ask_local(at, "GET", target, key, ANSWER_WAIT_MS, arena)
 
 priv fn probe(at: I32, key: U8[], arena: Arena$@): Probe //< what answers at the port
     //< **A model server is one whose `GET /v1/models` lists models.** llama-server answers it while

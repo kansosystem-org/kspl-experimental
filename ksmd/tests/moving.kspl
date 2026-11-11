@@ -14,19 +14,19 @@ import "std/str" { Str_builder }
 import "std/verdict"
 
 priv const ROWS: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\" heights=\"10,,30,,\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 2 | \
+    "%ksmd 2\n\n:::table name=\"t\" heights=\"10,,30,,\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 2 | \
         =sum(A1:A2) |\n| 3 | =A3*2 |\n| 4 | =A4+A5 |\n| 5 | |\n:::\n"
 
 priv const CELLS: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1 |\n| 3 | 4 | \
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1 |\n| 3 | 4 | \
         =sum(A1:B2) |\n| 5 | | =A3 |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.A1 |\n:::\n"
 
 priv const COLUMNS: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\" char_widths=\"1,2,3,4\" formats=\",,number:2,\" \
+    "%ksmd 2\n\n:::table name=\"t\" char_widths=\"1,2,3,4\" formats=\",,number:2,\" \
         filter=\",,above:1,\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 2 | 3 | =A1+B1+C1 |\n:::\n"
 
 priv const WHOLE: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | | 5 | =sum(t.A) |\n| \
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | | 5 | =sum(t.A) |\n| \
         2 | | 6 | =sum(t.C) |\n:::\n"
 
 fn run()
@@ -47,7 +47,7 @@ priv fn rows()
     moved(ed@, true, 3, 2, 1)
     saves("two rows moved up stand above the row chosen, with their references and heights", ed@,
         arena,
-        "%ksmd 1\n\n:::table name=\"t\" heights=\"10,,,,30\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 4 | \
+        "%ksmd 2\n\n:::table name=\"t\" heights=\"10,,,,30\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 4 | \
             =A2+A3 |\n| 5 | |\n| 2 | =sum(A1:A4) |\n| 3 | =A5*2 |\n:::\n")
     ed.undo()
     saves("one undo puts them back", ed@, arena, ROWS)
@@ -55,12 +55,12 @@ priv fn rows()
     ed.undo()
     moved(ed@, true, 0, 2, 4)
     saves("two rows moved down stand above the row chosen", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" heights=\"30,,10,,\"\n| \"n\" | \"f\" |\n| 3 | =A1*2 |\n| 4 \
+        "%ksmd 2\n\n:::table name=\"t\" heights=\"30,,10,,\"\n| \"n\" | \"f\" |\n| 3 | =A1*2 |\n| 4 \
             | =A2+A5 |\n| 1 | =A3 |\n| 2 | =sum(A3:A4) |\n| 5 | |\n:::\n")
     ed.undo()
     moved(ed@, true, 1, 2, 5)
     saves("and rows moved after the last row end the table", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" heights=\"10,,,,30\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 4 | \
+        "%ksmd 2\n\n:::table name=\"t\" heights=\"10,,,,30\"\n| \"n\" | \"f\" |\n| 1 | =A1 |\n| 4 | \
             =A2+A3 |\n| 5 | |\n| 2 | =sum(A1:A4) |\n| 3 | =A5*2 |\n:::\n")
 
 priv fn columns()
@@ -69,14 +69,14 @@ priv fn columns()
     moved(ed@, false, 2, 2, 0)
     saves("two columns moved left take their names, widths, formats, filter and references", ed@,
         arena,
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"3,4,1,2\" formats=\"number:2,,,\" \
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\"3,4,1,2\" formats=\"number:2,,,\" \
             filter=\"above:1,,,\"\n| \"c\" | \"d\" | \"a\" | \"b\" |\n| 3 | =C1+D1+A1 | 1 | 2 \
             |\n:::\n")
     ed.undo()
     saves("one undo puts them back", ed@, arena, COLUMNS)
     moved(ed@, false, 0, 1, 3)
     saves("a column moved right stands left of the column chosen", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"2,3,1,4\" formats=\",number:2,,\" \
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\"2,3,1,4\" formats=\",number:2,,\" \
             filter=\",above:1,,\"\n| \"b\" | \"c\" | \"a\" | \"d\" |\n| 2 | 3 | 1 | =C1+A1+B1 \
             |\n:::\n")
 
@@ -94,7 +94,7 @@ priv fn nothing() //< a place inside the lines moved, or just after them, change
 priv fn refusals()
     defer arena: = Arena(256 * 1024)
     defer $long: = Str_builder()
-    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
+    long.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
     for _ in Range.asc(8)
         long.s("| | |\n")
     long.s("| | =A9")
@@ -132,27 +132,27 @@ priv fn cells()
     shifted(ed@, 0, 0, 1, 2, 2, 0)
     saves("cells moved onto others take their place; references to them follow, those to a cell \
         written over become #REF!, and a range moved in part stays", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| | | =A3+B3 |\n| 3 | 4 | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| | | =A3+B3 |\n| 3 | 4 | \
             =sum(A1:B2) |\n| 1 | 2 | =#REF! |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.A3 \
             |\n:::\n")
     ed.undo()
     saves("one undo puts them back", ed@, arena, CELLS)
     shifted(ed@, 0, 2, 1, 1, 2, 1)
     saves("a formula moved keeps pointing at the same cells", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | |\n| 3 | 4 | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | |\n| 3 | 4 | \
             =sum(A1:B2) |\n| 5 | =A1+B1 | =A3 |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.A1 \
             |\n:::\n")
     ed.undo()
     shifted(ed@, 0, 0, 2, 2, 2, 3)
     saves("a range moved whole follows, and the table grows to hold the cells", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"\" | \"\" |\n| | | =D3+E3 | | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"\" | \"\" |\n| | | =D3+E3 | | \
             |\n| | | =sum(D3:E4) | | |\n| 5 | | =A3 | 1 | 2 |\n| | | | 3 | 4 |\n:::\n\n:::table \
             name=\"s\"\n| \"x\" |\n| =t.D3 |\n:::\n")
     ed.undo()
     saves("and one undo takes the new rows and columns away", ed@, arena, CELLS)
     shifted(ed@, -1, 0, 2, 1, -1, 1)
     saves("a name moves along the names row with its cells", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"a\" | \"c\" |\n| | 1 | =B1+#REF! |\n| 3 | 4 | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\" | \"a\" | \"c\" |\n| | 1 | =B1+#REF! |\n| 3 | 4 | \
             =sum(A1:B2) |\n| 5 | | =A3 |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =t.B1 |\n:::\n")
     ed.undo()
     shifted(ed@, 1, 0, 1, 1, 1, 0)
@@ -164,22 +164,22 @@ priv fn whole_columns() //< a block of every data row moves a whole column's ref
     shifted(ed@, -1, 0, 3, 1, -1, 2)
     saves("a whole column cut by its letter takes its reference along, and one written over becomes \
         #REF!", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"a\" | \"d\" |\n| | | 1 | =sum(t.C) |\n| \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"a\" | \"d\" |\n| | | 1 | =sum(t.C) |\n| \
             | | 2 | =sum(#REF!) |\n:::\n")
     ed.undo()
     saves("one undo puts it back", ed@, arena, WHOLE)
     shifted(ed@, 0, 0, 2, 1, 0, 1)
     saves("every data row without the name moves it too", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | 1 | 5 | =sum(t.B) \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | 1 | 5 | =sum(t.B) \
             |\n| | 2 | 6 | =sum(t.C) |\n:::\n")
     ed.undo()
     shifted(ed@, 0, 0, 1, 1, 0, 2)
     saves("a block of some rows leaves whole columns alone", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | | 1 | =sum(t.A) \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| | | 1 | =sum(t.A) \
             |\n| 2 | | 6 | =sum(t.C) |\n:::\n")
 
 priv const BARE: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 5 | | \
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 5 | | \
         =sum(A)+count(A:B)+sum(t.A) |\n:::\n"
 
 priv fn bare_columns() //< a whole column without its table's name follows as one with it does
@@ -187,17 +187,17 @@ priv fn bare_columns() //< a whole column without its table's name follows as on
     $ed: = opened(BARE, arena)
     changed(ed@, 0, .insert_column, 0)
     saves("a column inserted before bare whole columns moves them, and they stay bare", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"a\" | \"b\" | \"c\" | \"d\" |\n| | 1 | 5 | | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\" | \"a\" | \"b\" | \"c\" | \"d\" |\n| | 1 | 5 | | \
             =sum(B)+count(B:C)+sum(t.B) |\n:::\n")
     ed.undo()
     shifted(ed@, -1, 0, 2, 1, -1, 2)
     saves("a whole column cut by its letter takes a bare reference along, and it stays bare", ed@,
         arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"a\" | \"d\" |\n| | 5 | 1 | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"a\" | \"d\" |\n| | 5 | 1 | \
             =sum(C)+count(A:B)+sum(t.C) |\n:::\n")
 
 priv const NAMED: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\"\n| \"Type\" | \"b\" |\n| \"x\" | =name(t.A) |\n:::\n\n:::table \
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"Type\" | \"b\" |\n| \"x\" | =name(t.A) |\n:::\n\n:::table \
         name=\"s\"\n| \"x\" |\n| =name(t.A) |\n:::\n"
 
 priv fn column_names() //< `name` follows its column as the column is renamed and moved
@@ -214,7 +214,7 @@ priv fn column_names() //< `name` follows its column as the column is renamed an
     moved(ed@, false, 0, 1, 3)
     named(ed@, 1, "Kind", "and so does a column moved with Insert cut columns")
     saves("each name is written for the column's place now", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"Kind\" |\n| | =name(t.C) | \"x\" \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\" | \"b\" | \"Kind\" |\n| | =name(t.C) | \"x\" \
             |\n:::\n\n:::table name=\"s\"\n| \"x\" |\n| =name(t.C) |\n:::\n")
 
 priv fn named(ed: Editor@, column: Sz, want: U8[], what: U8[]) //<
@@ -228,7 +228,7 @@ priv fn named(ed: Editor@, column: Sz, want: U8[], what: U8[]) //<
         other.text.equals(want), own.text)
 
 priv const SETTINGS: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\" char_widths=\"2,,4\" formats=\"number:2,,\" choices=\"x|y,,\" \
+    "%ksmd 2\n\n:::table name=\"t\" char_widths=\"2,,4\" formats=\"number:2,,\" choices=\"x|y,,\" \
         color_rows=\"A\" rules=\"scale;from:#ffffff to:#ffef9c,,\" merge=\"A\" filter=\"is:x,,\"\n| \
         \"a\" | \"b\" | \"c\" |\n| \"x\" | 1 | |\n| \"y\" | 2 | |\n| \"x\" | 3 | |\n:::\n"
 
@@ -238,7 +238,7 @@ priv fn settings_follow() //< whole lines moved as cells take their settings, as
     shifted(ed@, -1, 0, 4, 1, -1, 2)
     saves("a whole column cut by its letter and pasted on another takes its settings, and the \
         column left behind keeps none", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\",,2\" formats=\",,number:2\" \
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\",,2\" formats=\",,number:2\" \
             choices=\",,x|y\" color_rows=\"C\" rules=\",,scale;from:#ffffff to:#ffef9c\" \
             merge=\"C\" filter=\",,is:x\"\n| \"\" | \"b\" | \"a\" |\n| | 1 | \"x\" |\n| | 2 | \"y\" \
             |\n| | 3 | \"x\" |\n:::\n")
@@ -246,7 +246,7 @@ priv fn settings_follow() //< whole lines moved as cells take their settings, as
     saves("one undo puts them back", ed@, arena, SETTINGS)
     shifted(ed@, 0, 0, 3, 1, 0, 2)
     saves("every data row without the name leaves the settings where they are", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"2,,4\" formats=\"number:2,,\" \
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\"2,,4\" formats=\"number:2,,\" \
             choices=\"x|y,,\" color_rows=\"A\" rules=\"scale;from:#ffffff to:#ffef9c,,\" \
             merge=\"A\" filter=\"is:x,,\"\n| \"a\" | \"b\" | \"c\" |\n| | 1 | \"x\" |\n| | 2 | \
             \"y\" |\n| | 3 | \"x\" |\n:::\n")
@@ -254,13 +254,13 @@ priv fn settings_follow() //< whole lines moved as cells take their settings, as
     shifted(rows@, 0, 0, 1, 2, 3, 0)
     saves("a whole row pasted on another takes its height, and the row left behind keeps none",
         rows@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" heights=\",,30,10,\"\n| \"n\" | \"f\" |\n| | |\n| 2 | \
+        "%ksmd 2\n\n:::table name=\"t\" heights=\",,30,10,\"\n| \"n\" | \"f\" |\n| | |\n| 2 | \
             =sum(A1:A2) |\n| 3 | =A3*2 |\n| 1 | =A4 |\n| 5 | |\n:::\n")
 
 priv fn cell_refusals()
     defer arena: = Arena(256 * 1024)
     defer $long: = Str_builder()
-    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
+    long.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
     for _ in Range.asc(8)
         long.s("| | |\n")
     long.s("| 1 | =A9")

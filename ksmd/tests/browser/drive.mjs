@@ -1,5 +1,12 @@
 // What the browser checks share: the verdict lines, and driving one tab through the browser's own
 // key and mouse events. `driver(page)` takes a tab from `cdp.mjs`.
+// Caution: **Wait for what the page does, never for a time.** A step can end after the call that
+// started it returns: a resize event, a scroll, a request to the server, a file written. A check
+// that waits a fixed time passes here and fails on a slower machine. Wait with `until` for a state
+// the page shows, `waitFor` for one Node sees (a file on disk, a server gone), `frames` for a step
+// the page takes on the next frame, or the page's own event (`resize`). A fixed time is right only
+// where a check proves that something does not happen, or holds back a step on purpose to make a
+// race; say which beside it.
 
 // The one place that builds a verdict's line: marker, section, then what was confirmed or skipped.
 export const verdict = {
@@ -17,7 +24,7 @@ export const verdict = {
 };
 
 // What every check's source starts with: the version line and a blank line.
-export const H = "%ksmd 1\n\n";
+export const H = "%ksmd 2\n\n";
 // A check in the section that runs now (`verdict.part`).
 export const check = (ok, what, detail) => verdict.check(ok, what, detail);
 // The selector of the document's first cell at data row `r` and column `c`.
@@ -49,6 +56,18 @@ export const CTRL = 2;
 export const SHIFT = 8;
 export const ALT = 1;
 
+// Waits until `holds()` is true, checked in Node, up to `ms`, and answers whether it came true:
+// a file on disk, a server that stopped, a value read through a tab. A condition the page alone
+// can check is `until` in `driver`.
+export async function waitFor(holds, ms = 10000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    if (await holds()) return true;
+    if (Date.now() >= end) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 export function driver(page) {
   async function js(expression) {
     const r = await page("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
@@ -59,6 +78,9 @@ export function driver(page) {
     return r.result.value;
   }
 
+  // Lets the page run what a step queued, 20 ms. Caution: **Do not use it to wait for a result**
+  // (the rule is at the top of this file). It suits a check that nothing changed, and a pause
+  // before the next step that waits for its own state.
   const settle = () => js("new Promise((r) => setTimeout(r, 20))");
 
   // Waits until the page has drawn `n` frames, for a step it takes on the next frame.
@@ -96,7 +118,8 @@ export function driver(page) {
     }
   }
 
-  // Waits until an expression holds, up to `ms`; a page still loading counts as not holding.
+  // Waits until an expression holds, up to `ms`; a page still loading counts as not holding. A
+  // condition checked in Node is `waitFor`.
   async function until(expression, ms = 10000) {
     for (let waited = 0; waited < ms; waited += 50) {
       try {
@@ -174,7 +197,9 @@ export function driver(page) {
   }
 
   // A press at an element's middle. An element of the document that stands out of sight, or
-  // under the header, is scrolled into the middle of the window first, as a person scrolls to it.
+  // under the header, is scrolled into the middle of the room under the bars first, as a person
+  // scrolls to it.
+  // So is an element of a dialog that scrolls, where its sticky buttons can cover it.
   async function click(selector, modifiers = 0) {
     const box = await sighted(selector);
     await clickAt(box[0], box[1], modifiers);
@@ -196,7 +221,14 @@ export function driver(page) {
       const el = document.querySelector(${JSON.stringify(selector)});
       const top = document.querySelector('.top').getBoundingClientRect().bottom;
       let r = el.getBoundingClientRect();
+      const dialog = el.closest('dialog');
+      // **A cell in the document has its middle put at the middle of the room under the page's
+      // bars**, not of the window, so a cell taller than the room still has its middle in sight. In a window 200 pixels tall the middle of the window stood under the bars on
+      // Windows, whose fonts make them taller, and the press hit the formula bar.
       if (el.closest('#doc') && (r.top < top || r.bottom > window.innerHeight)) {
+        window.scrollBy(0, r.top + r.height / 2 - (top + window.innerHeight) / 2);
+        r = el.getBoundingClientRect();
+      } else if (dialog && dialog.scrollHeight > dialog.clientHeight) {
         el.scrollIntoView({ block: "center" });
         r = el.getBoundingClientRect();
       }

@@ -4,7 +4,7 @@
 
 ## ksai
 
-This section plans ksai running ksagent's model itself, so that no outside program is needed. **ksai runs both models the user runs today: Qwen3-4B-Instruct-2507 from its Q4_K_M file, and Qwen3.5-9B from its Q3_K_M file.** What is left is speed. What ksai holds is in [ksai](../lib/ksai/README.md), and its decisions are in [`lib/ksai/docs/DESIGN-learning.md`](../lib/ksai/docs/DESIGN-learning.md).
+This section plans ksai running ksagent's model itself, so that no outside program is needed. **What is left is speed.** Which models ksai runs today, and what it holds, is in [ksai](../lib/ksai/README.md), and its decisions are in [`lib/ksai/docs/DESIGN-learning.md`](../lib/ksai/docs/DESIGN-learning.md).
 
 **The reference for every stage is llama.cpp, run on the same GGUF file.** ksai's answers must match its answers. The server is a ksai program of its own, so kssrv stays free of models.
 

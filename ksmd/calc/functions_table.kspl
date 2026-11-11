@@ -15,6 +15,8 @@ fn call(name: U8[], a: Raw_args$@): Value? //<
         return .some(call_bin_to_dec(a))
     if name.equals("bin_to_hex")
         return .some(call_bin_to_hex(a))
+    if name.equals("char")
+        return .some(call_char(a))
     if name.equals("count")
         return .some(call_count(a))
     if name.equals("date")
@@ -69,7 +71,7 @@ fn call(name: U8[], a: Raw_args$@): Value? //<
         return .some(call_year(a))
     return .none
 
-const NAMES: U8[][_] = ::{ "average", "bin_to_dec", "bin_to_hex", "count", "date", "day",
+const NAMES: U8[][_] = ::{ "average", "bin_to_dec", "bin_to_hex", "char", "count", "date", "day",
         "dec_to_bin", "dec_to_hex", "find", "hex_to_bin", "hex_to_dec", "left", "len", "like",
         "max", "mid", "min", "mod", "month", "power", "right", "round", "round_down", "round_up",
         "substitute", "sum", "text", "value", "year",
@@ -99,6 +101,16 @@ const HELP: Help[_] = ::{
         .detail =
         "A literal such as `0b11111` does not read as the digits; write `dec_to_hex(0b11111)`.",
         .example = "bin_to_hex(\"11111\")", .gives = "1F" },
+    Help::{ .name = "char", .group = "Text",
+        .args = Arg[]::{ Arg::{ .name = "code",
+        .meaning = "the character's number in Unicode: 10 for a line break, 9 for a tab",
+        .optional = false, .rest = false } },
+        .summary = "the character with this Unicode number, such as a line break for 10",
+        .detail =
+        "**The way to write a character that formula text cannot hold**, since a formula stays on \
+            one line and its quoted text has no escapes. Below 1, past 1114111 and the surrogates \
+            55296 to 57343 are `#NUM!`. So `\"a\" & char(10) & \"b\"` puts a line break between `a` \
+            and `b`.", .example = "char(65)", .gives = "A" },
     Help::{ .name = "count", .group = "Numbers",
         .args = Arg[]::{ Arg::{ .name = "xs", .meaning = "the values, cells or ranges to count",
         .optional = false, .rest = true } }, .summary = "how many numbers and dates there are",
@@ -336,6 +348,19 @@ priv fn call_bin_to_hex(a: Raw_args$@): Value //< `bin_to_hex(…)`
     if first.broken
         return Value.failed(first.error)
     r: = fns.bin_to_hex(p_digits, p_width, a.arena()) catch e
+        return Value.failed(e)
+    return text(r)
+
+priv fn call_char(a: Raw_args$@): Value //< `char(…)`
+    $first: = First_error::{ .broken = false, .error = .syntax }
+    p_code: = a.whole() catch e
+        first.take(e)
+        fallback 0I64
+    if !a.calculating()
+        return empty()
+    if first.broken
+        return Value.failed(first.error)
+    r: = fns.char(p_code, a.arena()) catch e
         return Value.failed(e)
     return text(r)
 

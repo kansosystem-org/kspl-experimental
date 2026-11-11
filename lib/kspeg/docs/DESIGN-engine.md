@@ -114,13 +114,7 @@ Reading the clock at each of a parse's million rule references would add work an
 
 ## How the engine is split across files
 
-**The engine's files import in one direction only** (`engine` → `expected` and `engine` → `memo`), and each split keeps them so.
-
-```mermaid
-flowchart LR
-    engine["engine<br/>applies the rules"] --> expected["expected<br/>what could have been written<br/>where the parse failed"]
-    engine --> memo["memo<br/>each rule's answer<br/>at each position"]
-```
+**The engine's files import in one direction only**, and each split keeps them so. The graph is in "What is here" in [kspeg](../README.md).
 
 **`Target` holds `Fail_track` from [`../expected.kspl`](../expected.kspl) as one field (`fail`).** `is_suppressed` stays in `Target` as the mode of the engine applying the rules. `track_fail`, which decides whether to record a failure, stays in `engine`.
 

@@ -347,7 +347,7 @@ function ksmdFiles(ks, api) {
   const CLAUSES = {
     functions: { name: "functions.kspl", starter: STARTER, act: "ksmd_web_insert_functions",
       what: "functions file" },
-    include: { name: "part.ksmd", starter: "%ksmd 1\n", act: "ksmd_web_insert_include",
+    include: { name: "part.ksmd", starter: "%ksmd 2\n", act: "ksmd_web_insert_include",
       what: "included document" },
   };
 

@@ -311,7 +311,7 @@ The engine refuses **a bad grammar, and input that does not fit the grammar**. T
 
 * **The requirement**: the engine records `max_fail_pos` (the furthest parse position reached so far) and the rules expected there (`expected_labels`).
 * **Zero allocation**: it is recommended that this list allocate no strings: a fixed-length slice array (about 8 elements) plus a counter (`expected_label_count`).
-* The final syntax error must join the gathered labels into one message (`Syntax Error: expected 'case', 'default', or '}'`, say).
+* The caller joins the gathered labels into one message. KSPL prints `error: expected 'case', 'default', or '}'`, for example.
 
 **The behaviour** on each failure depends on where it happens:
 
@@ -339,11 +339,11 @@ One recursive entry point (`Rule.parse`) throws either, so the receiver can mist
 
 #### 12.1 Packrat memoization
 
-The engine caches each result in a table keyed on `(rule_id, pos, syntax/lexical mode)`, so no position is re-parsed under the same rule. It holds the end position and node on success, and the bare fact on failure. Lexical-mode rules (section 4) are not memoized.
+The engine caches each result in a table keyed on `(pos, rule_id, syn, sup)`: whether whitespace is skipped there, and whether nodes are built (`Memo_key` in `memo.kspl`). So no position is re-parsed under the same rule and mode, while the memo is on for that rule. It holds the end position and node on success, and the bare fact on failure. Lexical-mode rules (section 4) are not memoized. **A rule the memo has not answered within its first 1024 writes is not memoized again** (`MEMO_TRIAL_WRITES` in `engine.kspl`).
 
 #### 12.2 The recursion depth guard
 
-On pathologically deep input, such as ten thousand `(` in a row, a recursive rule can use up the native call stack and crash. The engine must count the recursion depth (`ctx.depth`) and stop the parse past a fixed limit (`max_parse_depth = 3000` by default). It fails as a compile error before a native stack overflow.
+On pathologically deep input, such as ten thousand `(` in a row, a recursive rule can use up the native call stack and crash. The engine must count the recursion depth (`ctx.depth`) and stop the parse past a fixed limit (`MAX_PARSE_DEPTH`, 3000, in `rule.kspl`). It fails as a compile error before a native stack overflow.
 
 * **A count alone does not protect the stack.** The stack one level costs varies with the backend and toolchain. So the engine also stops, with the same failure, when the stack left on its thread drops below a margin (`std/stack_limit`).
 * **The cut-off must not be thrown as a backtracking signal**, or a choice would swallow it and carry on at the same depth. Throw it as a `fatal` ([11.3](#113-a-backtracking-signal-can-be-swallowed-a-real-failure-cannot)).
@@ -359,25 +359,11 @@ On pathologically deep input, such as ten thousand `(` in a row, a recursive rul
 
 ### 13. How to handle a language that depends on indentation
 
-**For a language like Python, where indentation shows structure, the caller marks each change of indentation before the parse.** Structure decided by the column at a line's start is beyond a PEG's expressive power.
+**For a language like Python, where indentation shows structure, the caller rewrites the text before the parse.** Structure decided by the column at a line's start is beyond a PEG's expressive power.
 
-The caller writes each change of column as a marker at the end of the line before it, and has that text parsed. Below, `<IN>` and `<OUT>` are one byte each, from the bytes that cannot be typed.
-
-```
-if x:                     if x:<IN>
-    y = 1        ──▶          y = 1<OUT>
-z = 2                     z = 2
-```
-
-The grammar writes the marker as a plain literal (`Indent = "\u0001"`), so the engine needs no column count and no state.
-
-**Line numbers do not change**, since a marker goes at a line's end. So a diagnostic built from `ctx.max_fail_pos` needs no table mapping back to the original text.
-
-Caution: Keep the marker at one byte, so the shift is just the number of markers inserted before that position.
-
-**Narrow `_Space` first.** The default `_Space` consumes newlines, but here a newline and a line's leading whitespace are syntax. Define `_Space = [ \t]*` and consume newlines explicitly in a rule.
-
-**The markers are computed before parsing**, so syntax that closes a block in response to a parse failure cannot be represented.
+* **Keep line numbers.** Put what marks a change of column at the end of the line before it. It can be a byte that cannot be typed (`Indent = "\u0001"`), or the grammar's own brackets. KSPL's own reader writes braces (`ksplc/parse/layout.kspl`).
+* **Narrow `_Space` where a newline is syntax** (`_Space = [ \t]*`), and consume the newline in a rule.
+* **A block cannot close in response to a parse failure**, since the marks are placed before the parse.
 
 ## Appendix A: KSPEG's own grammar definition (the normative grammar)
 

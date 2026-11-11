@@ -19,16 +19,16 @@ sequenceDiagram
     E->>S: request (a didChange, a hover)
     S->>A: allocate while parsing and running Sema
     S->>E: response
-    S->>A: restore(base_state), and all of it is gone
+    S->>A: wind_back(base_arena_state), and all of it is gone
 ```
 
-It saves the arena once at start-up. For each request it reruns the pipeline up to Sema, allocating at the arena's tail, and winds back with `restore(base_state)` once the response is sent. What must outlive a request is taken elsewhere (the caution in "The three-tier allocation strategy" in [`DESIGN-compiler.md`](DESIGN-compiler.md)).
+It saves the arena once at start-up. For each request it reruns the pipeline up to Sema, allocating at the arena's tail. It winds back to that mark once the response is sent. `wind_back` in `lsp/state.kspl` does it, and also clears what module-level variables hold on the arena. What must outlive a request is taken elsewhere (the caution in "The three-tier allocation strategy" in [`DESIGN-compiler.md`](DESIGN-compiler.md)).
 
 **A load that returns immediately after publishing diagnostics frees the compiler's heap storage before returning an empty analysis.** Once semantic analysis has run, the document state owns the source map and semantic context until reset. The pipeline alone keeps the validity verdict; editor queries use the available tree and semantic context, including incomplete results.
 
 **An empty open buffer is source, not an absent override.** The pipeline takes an optional override, and the loader uses source-map membership to decide whether bytes were supplied. The workspace reads an open buffer before trying the disk and copies that text once for its document state. Clearing a document therefore removes its declarations even while its saved file still holds them, and a restarted worker restores the same empty buffer.
 
-## The language server runs as two processes: watcher and analyser
+## The language server runs as two processes: supervisor and worker
 
 Editor support analyses half-written source without pause, so crashes (SEGV) and hangs on unexpected input cannot be ruled out. In one process, such a failure stops the whole server. So the server **separates a supervisor (`ksplc/lsp/server.kspl`) from an analysing worker (`ksplc/lsp/worker.kspl`)**, and a failure kills only the worker.
 
@@ -127,8 +127,6 @@ Caution: **The capture's argument and its rebinding stand at the capture's name*
 
 **The list is ordered by file name, then line, then column.** It is gathered in a `Map`, whose hash order would shuffle the same answer on screen.
 
-**`context.includeDeclaration` is honoured exactly; where it is absent, the declaration is counted.**
-
 Caution: **Do not ask the client for the narrowing's clue.** The server holds the position and the source, so receiving them from the client counts the same thing in two places. Only the call hierarchy's requests carry no position; there the clue is the `item.data` the server returned earlier.
 
 ## A rename is refused where the new name cannot stand
@@ -138,6 +136,7 @@ Caution: **Do not ask the client for the narrowing's clue.** The server holds th
 * **The new name is checked against the grammar itself** (`reads_whole` in `ksplc/parse/load.kspl`). A list of reserved words kept here would miss the next one.
 * **A declaration outside the workspace is read only.** An edit to an installed standard library or a package read from another place (`--pkg-src-dir`, an installed `lib/`) rewrites a copy other projects share. `holds` in `ksplc/lsp/workspace.kspl` asks the walk's own rules of each place. A repository that holds `std/` itself renames in it as in any other folder.
 * **`prepareRename` asks the second question of the declaration alone**, from the document's own analysis. So the editor refuses before a name is typed, without the workspace's analysis. The capability is declared only to a client that says it sends the request.
+* **A function a type call selects is refused.** A type call's written name stays the type's name: hover and go-to show the type, and renaming the type updates the call. The implicit `new` is not a written reference, so replacing the type's text with a function name would break the program. `Vector.new(1, 2)` is itself a compile error, so the function keeps its name.
 * **A new name already declared where it would land is refused**, at each place the name is written bare. A method is also compared with the methods of the type's other `impl`s.
 * **The search is conservative.** A declaration counts for its whole scope, before the place as well as after it, and a `switch` counts the bindings of all its arms together. A rename that could have gone through is sometimes refused, and the message names the declaration in the way. The opposite error, an edit that silently changes which declaration a name means, is what the check exists to stop.
 * **What is declared is read from the compiler's own record** (each declaration's symbol, `sym_ptr`), not from the shapes of the tree. So a binding of any form (a `for`'s item, `if v: =`, a pattern's payload) is found. A field is no symbol, and is read from its declaration.
@@ -146,13 +145,13 @@ Caution: **Do not ask the client for the narrowing's clue.** The server holds th
 
 The `CallHierarchyItem.data` that `callHierarchy/prepareCallHierarchy` returns is an **opaque identifier** the client sends back unchanged to `incomingCalls` / `outgoingCalls`. Keeping it unique is wholly the server's job.
 
-Caution: **`Sema_symbol.name` is the bare name**; the FQN exists only as a key of `symtab.by_fqn`. As `data`, a common name such as `init` would fold every same-named function into one definition. So `compute_def_fqn` in `lsp/call_hier.kspl` prefixes the defining file (`ksos.drivers.ht16k33.init`). The name is assembled as `make_fqn` in `sema/session/ctx.kspl` assembles it, so `symtab.resolve_fqn`'s O(1) lookup hits it.
+Caution: **`Sema_symbol.name` is the bare name**; the FQN exists only as a key of `symtab.by_fqn`. As `data`, a common name such as `init` would fold every same-named function into one definition. So `compute_def_fqn` in `lsp/call_hier.kspl` prefixes the defining file (`app.drivers.display.init`). The name is assembled as `make_fqn` in `sema/session/ctx.kspl` assembles it, so `symtab.resolve_fqn`'s O(1) lookup hits it.
 
 A method's `sym.name` already holds its owner's path, and the owner need not stand in the method's file (`impl pipeline.Compile_error` in `main.kspl`). So an already-qualified name gets no prefix (`write_full_name` in `lsp/nav.kspl`).
 
 ## The call hierarchy counts a function passed as a pointer
 
-**The call hierarchy lists the place that hands a function over as a pointer as an edge, marked as a hand-over.** Passing a function pointer is not a call, but much code here is reachable only that way, such as ksos's task entry functions passed to `run_single_task`. Without the edge they show "no callers" and are mistaken for removable.
+**The call hierarchy lists the place that hands a function over as a pointer as an edge, marked as a hand-over.** Passing a function pointer is not a call, but much code is reachable only that way. An OS's task entry functions, handed to its scheduler, are one example. Without the edge they show "no callers" and are mistaken for removable.
 
 **It must not look like a call**: a pointer can be registered and never called. The LSP has no field for an edge's kind, so `CallHierarchyItem.detail` carries `(as fn pointer)`. A function can both call and register one target, so `has_call` / `has_ref` are held separately.
 
@@ -161,7 +160,7 @@ Two exclusions are indispensable:
 1. A call's callee name also points at a function, so the callee positions are excluded first, or every call is listed twice.
 2. A declaration's own name (the `f` of `fn f()`) has a `def_node` pointing at its own declaration, so unless excluded every function becomes its own caller.
 
-**`make test-lsp-tree` holds both down**, on ksos's task entry functions. Everything needed is in `def_node`, as for the renaming walk.
+**`make test-lsp-tree` holds both down.** Everything needed is in `def_node`, as for the renaming walk.
 
 ## Completion re-analyses the text as if one name were missing
 
@@ -200,8 +199,6 @@ Caution: **Do not take a function's type from its symbol.** The symbol's `type_i
 **When a file has a syntax error, the compiler stops at the first one. Where the editor is the reader, the file is read a second time with the recovering branches alive, and a tree is returned.** The grammar is a PEG (`kspl.kspeg`; a *PEG*, parsing expression grammar, tries each alternative in order). So half-written code (`p.`, say) still answers hover, jump to definition, references, renaming and the call hierarchy with one diagnostic, instead of five `null`s.
 
 ### Why signature help is not offered
-
-**A type call's written name remains the type's name in the editor.** Hover and go-to show its type declaration, and renaming the type updates the call. The implicit `new` is not a written reference. Renaming that constructor is refused while type calls select it, since replacing the type's text with a function name would break the program. Write those calls as explicit member calls before renaming the function.
 
 **The editor's "parameter hints while you type a call" panel (`textDocument/signatureHelp`) is not offered.** While a call is being written the file does not parse. The recovered tree holds the half-written call only as swallowed text ("What a broken node holds"), so the name before the bracket is not resolved. A fallback by name cannot tell one `new` from another. The parameter descriptions are on the hover instead, each on its own parameter's line (`format_fn_sig` in `lsp/spell.kspl`).
 
@@ -282,7 +279,7 @@ So the document view checks `main_file`'s bodies and no others (`Bodies.main_fil
 
 | View | Bodies checked | Serves |
 | :-- | :-- | :-- |
-| the document view (`build_document_state`) | the open file's only | hover, jump to definition, the outline, the panel while a call is typed, this document's diagnostics |
+| the document view (`build_document_state`) | the open file's only | hover, jump to definition, the outline, this document's diagnostics |
 | the workspace view (`build_workspace_state`) | every file's that names the word, or a generic using it | references, renaming, the call hierarchy |
 
 **Nothing shown depends on other files' bodies.** Diagnostics are filtered to the open file when sent (`is_same_file` in `lsp/msg.kspl`).
@@ -389,28 +386,21 @@ Caution: **Do not reorder nodes inside the printer.** `fmt_printer` advances mon
 
 **The order of the declarations in the generated C follows the imports' order**, so a change to the sorting rule rewrites much of `ksplc/seed.c`.
 
-## The formatter folds nothing by default (`AllowShortBlocks` / `AllowShortFunctions`)
+## The formatter folds no block onto one line
 
-**By default the formatter never squeezes a short block or a short function onto one line.**
+**The formatter never squeezes a short block or a short function onto one line, and no setting asks it to.** Only an empty block stays on one line, as `{}`.
 
 ```ksplb
-// with AllowShortBlocks: true
-if n > 0 { count += 1; }
-
-// the default
 if n > 0 {
     count += 1;
 }
 ```
 
 * **A folded block cannot take a breakpoint inside.** The `if`'s condition and its body share the line, so the debugger cannot stop at the body alone.
-* **The common formatters expand a one-statement block by default**, and the line count saved over the whole tree is small.
+* **The common formatters expand a one-statement block by default**, and the line count saved over the whole tree is small. One-statement functions are many in the small files, so a file near the 1000-line cap drops almost nothing.
+* **A setting that folds would give one text two layouts** (Principle 6 in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)), for a gain that is this small.
 
-**Folding is kept for users' code.** A block with a comment inside its braces is not folded (`has_comment_in` in `fmt/source.kspl`), since only the comment's first line would ride onto the `{` line.
-
-**`AllowShortFunctions` is `false` too, for another reason.** There is no debugger price, since the entry and the one statement share a position. But the lines saved do not pay: one-statement functions are many in the small files, so a file near the 1000-line cap drops almost nothing.
-
-**The `fn` is what reads the setting** (`pass_allow_single` in `fmt/printer.kspl`). The `k_stmt_block` inside does not know whose body it is, so read there, an `if`'s body would get the same treatment.
+**An empty block with a comment inside its braces is not folded either** (`has_comment_in` in `fmt/source.kspl`), since only the comment's first line would ride onto the `{` line.
 
 ## One level is four spaces (`IndentWidth`)
 
@@ -452,9 +442,18 @@ So a text formatting leaves unchanged (a *fixed point*) is recorded, and not for
 
 **Not taken: an optimized ksplc for the tree-wide runs.** `make fmt` runs the seed, which builds in seconds at `-O0 -g` ("The bootstrap, and keeping the seed in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md)). An `-O2` build formats about three times faster, but takes several times longer to build than the runs it shortens. With the record in place, only a cold run would gain.
 
-## `ksplc run` builds under a lock and runs outside it
+## A comment line is cut only past the column limit
 
-The C compiler's target is queried once per process and kept as an optional `Target_kind` in `tools/run.kspl`. A present answer can have every flag false, as on Linux, so the answer itself cannot double as the mark that it is known. The link libraries and target-specific executable flags read the same answer.
+**The formatter cuts a comment line that crosses `ColumnLimit`** (`fmt/comment.kspl`, applied in `fmt/trivia.kspl`); the rule is §3.1 of [`SPEC-tools.md`](SPEC-tools.md). A line within the limit stays as written, so a rename rewraps only the comment it widened. `make test-fmt-tree` holds every comment to the width as it holds the code.
+
+* **Not a full reflow.** Reflowing every paragraph would rejoin lines the writer broke on purpose, and turn each edit into a diff over the whole comment.
+* **A line whose layout carries meaning is never cut, and carried words never join it.** These are where cutting does damage, such as a table row or a marker a gate reads a line at a time.
+* **A `//<` too long behind its declaration moves below the mark instead** (`carries_summary_down`).
+* **A summary is not cut** (`opens_summary` in `fmt/trivia.kspl`): the cut would move its end into the detail, and the hover would show half a sentence.
+* **An empty `//<` right below a summary is not written** (`drops_after_summary` in `fmt/trivia.kspl`): the line boundary already ends the summary ("The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md)).
+* **What the cut cannot do stays a check**: a comment past Principle 7's line count needs rewording, which the linter counts (`[H0806]`).
+
+## `ksplc run` builds under a lock and runs outside it
 
 **Runs of one script share its slot, and the build in it is one at a time** (the behaviour is §2.5 of [`SPEC-tools.md`](SPEC-tools.md)). The build writes working names that belong to the slot (`prog.new.c`, `prog.new.exe`, `deps.new`) and sweeps unused objects. Two builds at once would take each other's files away. `hold_slot` in `tools/run.kspl` takes the slot's lock before the freshness check, so a run that waited finds the build done and starts the program.
 
@@ -487,16 +486,7 @@ sequenceDiagram
 * **Its slot is keyed by its text** besides `-`'s path, which holds the current folder (`append_slot_key`).
 * **Its deps file has no line for it** (`write_deps_file`): there is no file to take a digest of, and the key already holds the text. The lines for what it imports still decide whether the build is fresh.
 
-## A comment line is cut only past the column limit
-
-**The formatter cuts a comment line that crosses `ColumnLimit`** (`fmt/comment.kspl`, applied in `fmt/trivia.kspl`); the rule is §3.1 of [`SPEC-tools.md`](SPEC-tools.md). A line within the limit stays as written, so a rename rewraps only the comment it widened. `make test-fmt-tree` holds every comment to the width as it holds the code.
-
-* **Not a full reflow.** Reflowing every paragraph would rejoin lines the writer broke on purpose, and turn each edit into a diff over the whole comment.
-* **A line whose layout carries meaning is never cut, and carried words never join it.** These are where cutting does damage, such as a table row or a marker a gate reads a line at a time.
-* **A `//<` too long behind its declaration moves below the mark instead** (`carries_summary_down`).
-* **A summary is not cut** (`opens_summary` in `fmt/trivia.kspl`): the cut would move its end into the detail, and the hover would show half a sentence.
-* **An empty `//<` right below a summary is not written** (`drops_after_summary` in `fmt/trivia.kspl`): the line boundary already ends the summary ("The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md)).
-* **What the cut cannot do stays a check**: a comment past Principle 7's line count needs rewording, which the linter counts (`[H0806]`).
+**The C compiler's target is asked once per process**, and kept as an optional `Target_kind` in `tools/run.kspl`. A present answer can have every flag false, as on Linux, so the answer itself cannot double as the mark that it is known. The link libraries and target-specific executable flags read the same answer.
 
 ## The design of the tool settings
 
@@ -522,7 +512,7 @@ Caution: **Set it from all three routes.** If the settings file's route does not
 
 **The format is INI**, not a new language for settings alone, nor KSPL syntax, which would need semantic analysis just to read the settings.
 
-**The nearest file applies whole** (SPEC-tools.md §6.2). So a folder where deliberately empty blocks are scattered, as under `lib/ksos/`, needs one `ksplc.cfg` rather than `##lint(I0307 = off);` in every file.
+**The nearest file applies whole** (SPEC-tools.md §6.2). So a folder where deliberately empty blocks are scattered needs one `ksplc.cfg` rather than `##lint(I0307 = off)` in every file.
 
 **Files do not merge**, so one file tells which settings govern a source. The cost is repetition in a nested folder; if that becomes common, the answer is an explicit `extends`, not the merge.
 
@@ -555,8 +545,6 @@ Caution: **Set it from all three routes.** If the settings file's route does not
 **The bootstrap is cut off from the environment.** The Makefile passes `--std-dir=std` explicitly, so a `KSPLC_STD_DIR` already set, or a `std/` beside a compiler the build runs, cannot break the byte match.
 
 Caution: **Pass it as a relative path.** `--std-dir=$(CURDIR)/std` breaks the Windows build. Make expands the variable unquoted inside a recipe, so the shell word-splits a path containing a space. MSYS2's `$(CURDIR)` is the POSIX form `/c/…`, which a native Windows binary cannot open.
-
-**An unknown option and a wrong number of input files are errors**: silently using the first N would leave the rest writable but ineffective.
 
 ### A package other than `std` is located once per package
 

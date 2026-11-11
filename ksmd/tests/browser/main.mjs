@@ -6,7 +6,8 @@
 // whole and the filter's dates are `tables.mjs`; its column widths and row heights `sizes.mjs`;
 // a diagram `diagrams.mjs`; help while a formula is typed, and its references' colours,
 // `formulas.mjs`; cells copied and pasted with their formulas or as values `pasting.mjs`; the
-// status bar `status.mjs`; the keys and what a screen reader is given `keyboard.mjs`.
+// status bar `status.mjs`; the formula bar `bar.mjs`; the keys and what a screen reader is given
+// `keyboard.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -28,6 +29,7 @@ import { diagrams } from "./diagrams.mjs";
 import { formulaHelp } from "./formulas.mjs";
 import { pasting } from "./pasting.mjs";
 import { statusBar } from "./status.mjs";
+import { formulaBar } from "./bar.mjs";
 import { keyboard } from "./keyboard.mjs";
 import { SPEC, written } from "../../port/web/reference.mjs";
 
@@ -301,7 +303,7 @@ const sections = {
       `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |\n| 5 | 3 | =A1*B1 | |\n:::\n`);
     await click('#doc td[data-r="0"][data-c="0"]');
     await menu("table-remove");
-    await saves("removing the table", "%ksmd 1\n");
+    await saves("removing the table", "%ksmd 2\n");
     await menu("undo");
     await saves("and undoing that", `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |` +
       `\n| 5 | 3 | =A1*B1 | |\n:::\n`);
@@ -530,7 +532,7 @@ const sections = {
     check(await js("document.querySelector('#doc td[data-r=\"1\"][data-c=\"1\"]').textContent") === "30",
       "a table shows calculated values");
     await saves("opening and saving changes nothing", overview);
-    const refused = await js(`ksmd.load("%ksmd 2\\n")`);
+    const refused = await js(`ksmd.load("%ksmd 3\\n")`);
     check(!refused.ok && refused.line === 1, "a source the reader refuses is not opened, and its " +
       "place is named");
     await saves("and the open document stays", overview);
@@ -619,6 +621,7 @@ Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, l
 Object.assign(sections, formulaHelp({ page, js, settle, until, press, type, click, menu, load, saves }));
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
 Object.assign(sections, keyboard({ js, until, press, type, click, menu, load, saves, openCell, rightClick }));
+Object.assign(sections, formulaBar({ js, settle, until, press, type, click, menu, load, saves }));
 Object.assign(sections, statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }));
 

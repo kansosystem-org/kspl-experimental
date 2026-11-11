@@ -321,13 +321,12 @@ fn enum_cast_needs_check(c: Sema_ctx$@, node: Ast_node$@): Enum_def$@? //<
     return .some(def)
 
 priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, target_id: I32) //<
-    //< Reports a cast to an aggregate type that no implementation of `std/lang`'s `Cast` provides
+    //< Reports a cast to an aggregate type
     //< A struct, a tagged union (`T?` too), a fixed-length array, a Result and a trait value are
     //< aggregates in C, where a cast `(T)value` is invalid. The cast is allowed only where the
     //< value already has that type (a no-op), and rejected here otherwise.
     //< gen/c/expr_postfix.kspl's emit_as_cast trusts this check and emits the cast as is.
     as_real_id: = c.env.get_real_type(as_target_id)
-    src_real_id: = c.env.get_real_type(target_id)
     as_clean_id: = c.env.get_clean_real_type(as_target_id)
     // Caution: **Do not reject `Slice<|T|>` here.** `U8$[]::buf` is the legitimate "build a
     // descriptor" cast (check_slice_cast_source checks its shape and element size).
@@ -335,12 +334,6 @@ priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
         (c.env.is_slice(as_real_id) &&
         (c.env.is_slice(target_id) || c.env.is_array(target_id)))
         return
-    if c.env.has_implemented_operator_trait(src_real_id, "Cast")
-        c.clear_scratch().s(c.env.base_type_name(src_real_id)).s(".cast")
-        if method_sym: = c.resolve_type_method_fqn(c.scratch.slice())
-            if c.env.get_real_type(method_sym.type_id) == as_real_id
-                node.def_node = method_sym.node
-                return
     // Caution: Show the name as written (`List<|I32|>`), not the instance's registered name
     // (`std_ds_List_I32`), which the writer never wrote.
     shown: = c.env.display(as_target_id)
@@ -369,10 +362,8 @@ priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
                 is the expected type (a declaration's, a parameter's, a field's)")
     default
         c.scratch
-            .s("struct type '\{shown\}'. A value becomes a struct through '::' only where its type \
-                implements 'Cast<|\{shown\}|>' (std/lang's trait: 'impl \
-                \{c.env.display(target_id)\}: Cast<|\{shown\}|>'). Otherwise build the struct with \
-                a literal ('\{shown\}::{ … }') or a constructor")
+            .s("struct type '\{shown\}'. A value does not become a struct through '::'. Build the \
+                struct with a literal ('\{shown\}::{ … }') or a constructor")
     c.err(node, c.scratch.slice())
 
 fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32):
@@ -394,8 +385,6 @@ fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, targ
             "cannot take the address of a call result, literal, or computed value; '@' would yield \
                 the address of a temporary. Bind it first (`x: = ...;`) and take the address of \
                 that.")
-        throw .analysis_failed
-    if c.refuse_packed_address(left, "'@'")
         throw .analysis_failed
     $pointee_id: = target_id
     if c.env.is_array(target_id)
@@ -649,8 +638,6 @@ priv fn check_slice_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I
     if c.env.is_slice(src_id) || c.env.is_array(src_id)
         check_slice_elem_size(c, node, as_target_id, src_id)
         check_slice_cast_writability(c, node, as_target_id)
-        if c.env.is_array(src_id)
-            c.refuse_packed_address(node.get_postfix_receiver(), "a slice cast")
         return
     src_shown: = c.env.display(src_id)
     dst_shown: = c.env.display(as_target_id)
@@ -825,7 +812,6 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
             if refuses_index_receiver(c, node, recv_id, method_sym, place_method)
                 return I32::sema_type_env.Builtin_type_id.unknown
             node.def_node = method_sym.node
-            c.refuse_packed_receiver(node.get_postfix_receiver(), method_sym.node, "[]")
             next_op.infer_expr(c, c.operator_index_param_id(method_sym))!
             // The node's type is the element, not the returned pointer; lower rebuilds the
             // dereference as `at(i)$` / `at_ref(i)$` (lower/expr.kspl). `at_ref` returns
@@ -843,7 +829,6 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
             return I32::sema_type_env.Builtin_type_id.unknown
         next_op: = node.get_postfix_member()
         node.def_node = method_sym.node
-        c.refuse_packed_receiver(node.get_postfix_receiver(), method_sym.node, "[]")
         next_op.infer_expr(c, c.operator_index_param_id(method_sym))!
         node.type_id = method_sym.type_id
         return method_sym.type_id

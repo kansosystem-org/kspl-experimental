@@ -275,6 +275,13 @@ fn test_the_path_the_server_will_see() //< the path the server sees for a docume
         "it drops even for the root itself")
     assert(aim.doc_under("/home/me", "/home/me").equals("/home/me"),
         "handed the root itself, it is kept")
+    // **"Inside" is `fs.lies_under`'s answer**, not the texts' shared start: on Windows `\` and
+    // `/` mix, and a drive letter's case varies. Elsewhere `C:` is a folder's name, so the same
+    // paths check the same steps on every OS.
+    assert(aim.doc_under("C:\\ws", "C:/ws/parts/a.ksmd").equals("parts/a.ksmd"),
+        "a root written with `\\` drops from a path written with `/`")
+    assert(aim.doc_under("/Home/Me", "/home/me/a.ksmd").equals("a.ksmd"),
+        "a root spelled in another case drops")
     verdict
         .pass("the root part drops, and what is not under the root and the root itself are kept.")
 
@@ -381,6 +388,10 @@ fn test_reading_the_record(arena: Arena$@) //< the record's text becomes a list 
     wide: = surface.rows_of("a/b\tk\tv1\tv2\n", arena)
     assert(wide.len == 1 && wide.get(0).text.equals("v1\tv2"),
         "from the third column on it stays as the text")
+    // The record keeps the signature alone, so rewording a summary changes no record.
+    bare: = surface.signature_only(wide.get(0))
+    assert(bare.key.equals("a/b\tk") && bare.text.equals("v1"),
+        "the record's row drops the summary and keeps the key and the signature")
     verdict
         .pass("the header and short rows are dropped; complete rows split into a key and a text.")
 

@@ -24,7 +24,7 @@
 1. **Bringing in what the program uses** — `import`
 1. **Naming a value, and why the type is written** — `LIMIT`
 1. **Saying something, and what a function looks like** — `greet`
-1. **A changing binding, and the three shapes of a loop** — `count_up`
+1. **A changing binding, and the four shapes of a loop** — `count_up`
 1. **Values laid side by side** — `Point`
 1. **Methods of one's own** — `Point`
 1. **What a type promises** — `Sized_thing`
@@ -45,14 +45,13 @@
 
 ## Bringing in what the program uses
 
-**An `import` names another file by its path, and the program reaches that file's names through the path's last part**: after `import "std/io"`, it writes `io.out()`. A name listed in braces (`{ List }`) is written bare instead. The `std/strfmt` line brings in no name the program writes. It lets `\{x\}` print each type. The `_` opening its `as` name tells the compiler the import is meant to go unused.
+**An `import` names another file by its path, and the program reaches that file's names through the path's last part**: after `import "std/io"`, it writes `io.out()`. A name listed in braces (`{ List }`) is written bare instead.
 
 ```kspl
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
-import "std/strfmt" as _strfmt // the route reaching `\{x\}`'s `fmt`; `_` asks for no `strfmt.`
 ```
 
 ## Naming a value, and why the type is written
@@ -72,9 +71,9 @@ priv fn greet(who: U8[])
     io.out().s("hello, ").s(who).s(".\n")
 ```
 
-## A changing binding, and the three shapes of a loop
+## A changing binding, and the four shapes of a loop
 
-**A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of three shapes. `for x in …` walks what it is given; over `Range.asc(n)` it counts. `for a; b; c` serves an index the body moves itself. A bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
+**A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of four shapes. `for x in …` walks what it is given; over `Range.asc(n)` it counts. `for x > 0` goes round while its condition holds. `for a; b; c` serves an index the body moves itself. A bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
 
 ```kspl
 priv fn count_up(n: Sz): Sz

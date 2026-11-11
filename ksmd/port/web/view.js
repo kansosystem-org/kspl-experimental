@@ -467,15 +467,18 @@ function ksmdView(ks) {
   });
 
   // Shows the model's selection on the page, or no caret while the person works in a table.
-  function showSelection(sel) {
+  // With `caret` false, only a gap the selection stands in is drawn, and the page's selection
+  // stays where it is, as in a bar that holds the focus (`ks.redraw`).
+  function showSelection(sel, caret = true) {
     if (ks.inTable()) return hideCaret();
     removeGap();
     const s = window.getSelection();
     if (sel.f[0] !== 0) {
       const g = makeGap(sel.f, sel.g);
-      s.setBaseAndExtent(g, 0, g, 0);
+      if (caret) s.setBaseAndExtent(g, 0, g, 0);
       return;
     }
+    if (!caret) return;
     const a = pointOf(sel.a[0] === 0 ? sel.a : sel.f);
     const f = pointOf(sel.f);
     s.setBaseAndExtent(a.node, a.offset, f.node, f.offset);

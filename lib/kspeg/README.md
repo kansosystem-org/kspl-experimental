@@ -78,10 +78,6 @@ Caution: The dependencies run one way, downward; do not add an `import` in the r
 * **kspeg reaches only what `std` publishes.** The compiler rejects a name under `std/` that is not marked `pub` (`cannot access symbol`). Making one `pub` is a decision to weigh: an engine depending on `std/`'s internals cannot be swapped out.
 * **Inside the grammar, only `try_parse` in `lib/kspeg/engine.kspl` swallows a backtracking signal** ("A backtracking signal can be swallowed, a real failure cannot" in [`lib/kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). The one other place is the top. A run that skipped rules by the next byte runs again without skipping, and that run reports the mismatch.
 
-## Files near the limit and how they split
-
-The file nearest the limit is [`lib/kspeg/engine.kspl`](engine.kspl). **Before adding to it, write here what will be split out and where it goes** (`make test-conventions` checks this). How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md). How kspeg's files are split is "How the engine is split across files" in [`lib/kspeg/docs/DESIGN-engine.md`](docs/DESIGN-engine.md).
-
 ## Further reading
 
 | Document | What it is for | Who reads it |

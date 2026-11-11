@@ -85,7 +85,7 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 | :-- | :-- | :-- |
 | [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `naming` (output names and cache keys), `scope` (the symbol table), `display` (what a diagnostic prints) |
 | [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx`, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the imports and their ledger), `pointer` (a comment's pointer), `c_boundary` (what the generated C cannot hold). Then `mismatch` (the notes a type mismatch adds) and `prof` (sema's time) |
-| [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
+| [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
 | [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
 | [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` and `lint_written`. Then the checks on the program as a whole: `analyze`, and `closed` for `--closed` |
 
@@ -211,7 +211,7 @@ The design is [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) from "The are
 make fmt    # every tracked .kspl
 ```
 
-What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md). Its own decisions are in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md), from "The formatter reorders the `import`s as text, before the printer" to "Blank lines and the line terminator".
+What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md). Its own decisions are in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). They run from "The formatter reorders the `import`s as text, before the printer" to "A comment line is cut only past the column limit".
 
 ### tools/ — the tools that work on the pipeline's artifact
 
@@ -232,7 +232,7 @@ What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ks
 make lint   # the static analysis alone; zero down to hints is a pass
 ```
 
-The CLI options, and the formatter, the language server and the linter as seen from outside, are specified in [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md). Why lint is switched per code and where the settings file sits is "The design of the tool settings" in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md).
+The CLI options, and the formatter, the language server and the linter as seen from outside, are specified in [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md). Why lint is switched per code and where the settings file sits is "The design of the tool settings" in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md). How `ksplc run` builds is "`ksplc run` builds under a lock and runs outside it" in the same document.
 
 ### kspl.kspeg / seed.c — the grammar and the seed
 
@@ -257,34 +257,27 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 | Folder | What lives there |
 |---|---|
 | [`tests/suite/`](tests/suite/) | One suite, `<name>_test.kspl`, run by `make test-<name>` |
-| [`tests/support/`](tests/support/) | Code the suites read: `harness*`, shared by every suite, and `<suite name>_<subject>`, one suite's own piece |
+| [`tests/support/`](tests/support/) | Code the suites read: `harness*`, shared by every suite, and each suite's own pieces, most named `<suite name>_<subject>` |
 | [`tests/parse/`](tests/parse/) [`tests/negative/`](tests/negative/) [`tests/lint/`](tests/lint/) [`tests/runtime/`](tests/runtime/) | The fixtures `test-negative`, `test-lint` and `test-runtime` read: many cases to a file by subject |
 | [`tests/prog/`](tests/prog/) | A program under inspection. A suite builds it on both backends, or reads a line-number landmark from it. It is one file, or `equiv.kspl`. `equiv.kspl` imports `equiv_shapes.kspl`, which holds the shapes that C leaves open |
 | [`tests/filepath/`](tests/filepath/) | `test-file-path`'s material. **It takes two files**: with one, the unspecified-visibility path is never taken |
 | [`tests/notation/`](tests/notation/) | `test-notation`'s samples of the indentation notation. The language tour is written from one of them |
 | [`tests/ship/`](tests/ship/) | `test-ship`'s two vendors and two customers: libraries built with `--library`, a C program and a KSPL program using them. `app.kspl` imports an interface the suite writes, so it compiles only there |
+| `tests/*_test.kspl` | Tests of the language as a program sees it. [`tests/all.kspl`](tests/all.kspl) imports each, and its suite runs their `test_…` functions (`make debug`) |
+| [`tests/c_name_clash/`](tests/c_name_clash/) [`tests/extern_clash/`](tests/extern_clash/) [`tests/extern_decl/`](tests/extern_decl/) [`tests/extern_path/`](tests/extern_path/) [`tests/suite_reach/`](tests/suite_reach/) | Files a test or a fixture imports, which must stand in a file of their own. Each says in its opening comment who imports it |
 
 **The shared foundation is split by the reason for reading it**: `harness`, `harness_build`, `harness_expect`, `harness_markers` and `harness_grow`. `harness_build` is the only caller of the C compiler and the linker.
-
-Two suites are split in two. `tests/suite/cli_test.kspl` keeps command selection and diagnostics, and `tests/support/cli_emit.kspl` the emitted-file checks. `tests/suite/std_dir_test.kspl` keeps std discovery, and `tests/support/std_dir_named.kspl` the named-package and path-identity checks.
 
 ## Adding a fixture
 
 The steps, the marks a fixture carries and the rules each fixture folder keeps are [`ksplc/docs/HOWTO-add-a-fixture.md`](docs/HOWTO-add-a-fixture.md).
 
-## Files near the limit and how they split
+## Splitting a file
 
-**How to choose the cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).** This package adds two constraints of its own:
+**How to choose the cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).** This package adds constraints of its own:
 
 * **`make fmt` uses the seed**, so in a split that touches the grammar, run `make commit-seed` first (why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md)).
-* [`base/ast_ext.kspl`](base/ast_ext.kspl): **the reading of attributes** moves to a new `base/ast_attr.kspl`, an `impl Ast_node` as `base/ast_place.kspl` is. That is `attribute_name`, `is_attribute_named`, `get_attribute` and `has_attribute`, with `cfg_flag_name`, `link_name` and `section_name`. The accessors that name one child stay. A file that reads an attribute imports the new file too.
-* [`fmt/printer.kspl`](fmt/printer.kspl): **the decisions on where a line breaks** move to a new `fmt/wrap.kspl`, an `impl Formatter` as `fmt/trivia.kspl` is. That is `calc_will_break`, `reader_joins`, `ends_open_catch`, `break_before_choice` and `wrap_before_next_element`. The cut lies between deciding a break and writing tokens: `write_token` and `format_internal` stay, and call across it.
-* [`sema/body/postfix.kspl`](sema/body/postfix.kspl): **the checks of a cast's source** move to a new `sema/body/cast.kspl`. That is `check_float_cast` to `check_slice_elem_size`, with `enum_cast_needs_check` and the helpers only they call. `infer_cast_postfix` stays and calls across, as `infer` calls `dot.kspl`. The two backends then take `enum_cast_needs_check` from the new file. The index, `@`, `$`, `!` and `read_as_path` stay.
-* [`sema/flow/track.kspl`](sema/flow/track.kspl): call-release effects and raw-storage argument checks move into `sema/flow/call.kspl`. Local state, expression traversal and assignment tracking remain together.
-* [`tests/lang_types_test.kspl`](tests/lang_types_test.kspl): **the tests of a trait upcast** (`test_trait_upcast_lifetimes` and the three after it) move into a new file of tests, `lang_upcast_test.kspl`, beside it.
-* [`tests/negative/trait.kspl`](tests/negative/trait.kspl): **the cases of a trait value** move to a new `trait_value.kspl` beside it. That is `trait_upcast_returns_local` to `trait_value_wrapped_in_struct_escapes`, which pin where a trait value may live. The suite reads every file of the folder, so no list changes. Prove the move by the marks ([`ksplc/docs/HOWTO-add-a-fixture.md`](docs/HOWTO-add-a-fixture.md)).
-* [`tests/suite/run_test.kspl`](tests/suite/run_test.kspl): **the cases of "Handling a failure"** move to a new `run_failure.kspl` in `tests/support/`, as [`tests/support/run_during.kspl`](tests/support/run_during.kspl) holds one case. That is `case_compile_error_is_reported` to `case_cc_gets_relative_paths`, with `version_src` and `run_with_cc_probe`. `main` keeps the whole list, so the count it prints stays in one place.
-* **A file of tests splits with no list to edit.** The new file needs one import line in `tests/all.kspl`, whose suite then runs its `test_…` functions.
+* **A file of tests splits with one line to add**: an import in `tests/all.kspl`, whose suite then runs the new file's `test_…` functions. The tests themselves are found by name.
 * **A suite splits where what it reads splits.** A copy of this folder has no repository tree, so an answer that needs one (a rename reaching another package) is not asked here. The queries this folder can answer stay in `lsp`, with this folder as the workspace.
 
 ## Further reading

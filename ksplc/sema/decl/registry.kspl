@@ -123,7 +123,7 @@ impl Ast_node
             // recorded by the caller instead, a `sizeof` cycle is missed
             // (Resolving_state.registries in sema/session/state.kspl).
             c.resolving.registries.push(c.env.get_or_add(target_fqn))
-            defer c.resolving.registries.len -= 1
+            defer c.resolving.registries.truncate(c.resolving.registries.len - 1)
             // **Put the name back in a `defer`**: a `!` below leaves before the line after it.
             outer_impl: = c.fn_ctx.impl_name
             defer c.fn_ctx.impl_name = outer_impl
@@ -133,17 +133,9 @@ impl Ast_node
 
     fn fill_struct_fields(r: Ast_node$@, c: Sema_ctx$@, struct_def: sema_type_def.Struct_def$@):
         Void!Sema_error //<
-            //< Resolves a struct declaration's (self's) layout attributes and fields to struct_def
+            //< Resolves a struct declaration's (self's) fields to struct_def
             //< build_struct_registry and a generic struct's instantiation (instantiate_struct in
             //< mono.kspl) both fill through here. So an instance is checked as a plain struct is.
-        if r.has_attribute("packed")
-            struct_def.is_packed = true
-        // sema/decl/attrs.kspl checks the value's form; only usable values reach here.
-        // Caution: **Do not copy that check here** (fix only one and the messages disagree).
-        align_val: = c.eval_attribute_arg(r, "align")
-        if align_val > 0
-            struct_def.align_attr = align_val
-
         // This map finds duplicates: get_field per field is O(n^2) and hangs on a huge struct.
         defer $seen_fields: = Map<|U8[], Bool|>(null)
 
@@ -244,7 +236,7 @@ impl Ast_node
             enum_def.pending_decl = null
             type_id: = c.env.get_or_add(target_fqn)
             c.resolving.registries.push(type_id)
-            defer c.resolving.registries.len -= 1
+            defer c.resolving.registries.truncate(c.resolving.registries.len - 1)
             outer_impl: = c.fn_ctx.impl_name
             defer c.fn_ctx.impl_name = outer_impl
             c.fn_ctx.impl_name = target_fqn

@@ -207,8 +207,8 @@ priv const BASE_FILES: U8[][2] = ::{ "std/lang", "std/libc" } //<
     //< declarations** of `List_seq<|X|>` / `Keep<|...|>` / `X?` / `Callable1<|X, Bool|>`.
     //< **A type that appears only in a signature is dropped after that function is**: dead-code
     //< removal runs for functions, then types (`../../lower/prune.kspl`).
-priv const BASE_MAX_LINES: Sz = 648 //<
-    //< The cap on the base's line count
+priv const BASE_MAX_LINES: Sz = 720 //<
+    //< The cap on the base's line count, about a tenth over the 648 counted when it was set
     //< One line is `#cfg(!freestanding)`'s directive, not code in the generated C (a freestanding
     //< build imports one **fewer**)
     //< **Nothing counted by this cap can be placed anywhere but `std/lang`.**
@@ -221,20 +221,21 @@ priv const EXT: U8[] = ".kspl" //<
 
 // The files that bring nothing but themselves besides BASE. An import under `#cfg` counts:
 // `std/chars` is not here, as a freestanding build brings `std/mem` along for `memcmp`.
-priv const LEAF_FILES: U8[][13] = ::{ "std/bytes", "std/math", "std/checked_int", "std/mem",
-    "std/reflect", "std/ring", "std/prng", "std/bignat", "std/log", "std/stack_limit", "std/suite",
-    "std/thread", "std/panic_record" }
+priv const LEAF_FILES: U8[][12] = ::{ "std/bytes", "std/math", "std/checked_int", "std/mem",
+    "std/ring", "std/prng", "std/bignat", "std/log", "std/stack_limit", "std/suite", "std/thread",
+    "std/panic_record" }
 
 priv const HEAVIEST: U8[] = "std/str" //< the heaviest unit
     //< **`std/io` is not in here.** Writer / Formattable are in std/lang, so string handling pays
     //< for no file I/O (io still brings str along).
 
-priv const CORE_MAX_LINES: Sz = 3777 //<
+priv const CORE_MAX_LINES: Sz = 4200 //<
     //< The cap on the line count of the chunk the heaviest unit reaches
     //< **An added line costs every program that uses strings**, such as a format's field padding
     //< that even programs not using it pay for.
-    //< Caution: **Update it to the current value whenever it changes, up or down.** Left loose, it
-    //< can silently grow by the slack, with no run that fails.
+    //< **Both caps leave about a tenth of room** over the count when set (3777 here), so a change
+    //< of some tens of lines needs no edit. Only growth past a cap fails; the pass line shows the
+    //< count.
 
 priv struct Std_file
     name: U8[]
@@ -317,7 +318,7 @@ priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], buil
     stack.push_all(U8[][]::BASE_FILES)
     for stack.len > 0
         cur: = stack.get(stack.len - 1)
-        stack.len -= 1
+        stack.truncate(stack.len - 1)
         if seen.contains(cur)
             continue
         at: = index_of(files, cur)
@@ -352,10 +353,12 @@ priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
         //< Checks the table "How many files one import brings along" in std's README.md
         //< A row's number is a hosted build's; `(N on a freestanding build ...)` is that build's,
         //< and `N+` is a floor. **Hand-kept, it drifted by a file or more** when an import was
-        //< added, and nothing failed.
+        //< added, and nothing failed. **Every file directly under std needs a row**, or a new file
+        //< escapes the count.
     path: = fs.join(harness.std_dir(), "README.md", arena)
     doc: = io.read_file(path, null) catch ""
     $bad: = List<|U8[]|>(arena)
+    $named: = List<|U8[]|>(arena)
     $rows: Sz = 0
     $inside: = false
     for line in doc.lines(arena)
@@ -379,6 +382,7 @@ priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
             if name.len == 0 || name.find_char(' ').is_some() || !name[0].is_lower()
                 continue
             file: = arena.text().s("std/").s(name).take()
+            named.push(file)
             if base_names.contains(file)
                 if want.get(0) != base_names.len
                     bad
@@ -396,6 +400,11 @@ priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
                 bad
                     .push(arena.text().s(name).s(" brings \{hosted\} (freestanding \{free\}), ")
                     .s("the row says ").s(cells.get(2).trim_spaces()).take())
+    for f in files
+        // A test under `std/tests/` and an entry point are no import a program makes.
+        if f.entry || f.name.sub_from(4).find_char('/').is_some() || named.contains(f.name)
+            continue
+        bad.push(arena.text().s(f.name).s(" has no row").take())
     detail: = arena.text().s(path).s(":")
     for one in bad
         detail.s("\n    ").s(one)

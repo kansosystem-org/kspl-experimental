@@ -269,7 +269,11 @@ fn test_finding_the_pending_question_grows_in_step_with_the_files() //< held to 
         verdict.skip("a sanitizer's build does not keep time in step with the work")
         return
     defer arena: = Arena(1024 * 1024)
-    small: = asked_and_answered(3000, arena)
+    // **The sizes differ 16 times, and the search may grow 4 times more than the parse.** Work
+    // that grows with the square then grows 16 times more, so the limit stands 4 times from each
+    // outcome. At 4 times the size it would stand 2 times from each, and a large file that leaves
+    // the cache can grow the search 2 times more on a busy machine.
+    small: = asked_and_answered(750, arena)
     large: = asked_and_answered(12000, arena)
     // **The four timings take turns, each round**: a busy spell on a shared machine then slows
     // both sides of the comparison, not the parse of the small files alone. Timed apart, one such
@@ -284,13 +288,13 @@ fn test_finding_the_pending_question_grows_in_step_with_the_files() //< held to 
         found_large = agent_test.fastest(found_large, pending_us(large), round)
         parse_large = agent_test.fastest(parse_large, parse_us(large), round)
     name: = arena.text()
-        .s("four times the questions take at most twice the growth of a plain parse ")
+        .s("16 times the questions take at most 4 times the growth of a plain parse ")
         .s("(\{found_small\} to \{found_large\} us; the parse \{parse_small\} to \{parse_large\} \
             us)").take()
-    // found_large / found_small <= 2 * parse_large / parse_small, cross-multiplied; the 1000 us
+    // found_large / found_small <= 4 * parse_large / parse_small, cross-multiplied; the 1000 us
     // keeps a tiny small run from making the ratio meaningless.
     verdict.check(name,
-        found_large * (parse_small + 1000I64) <= 2I64 * parse_large * (found_small + 1000I64), "")
+        found_large * (parse_small + 1000I64) <= 4I64 * parse_large * (found_small + 1000I64), "")
 
 fn test_an_ask_file_past_its_cap_is_refused(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] an ask file larger than its cap is not read, and the page is told why")

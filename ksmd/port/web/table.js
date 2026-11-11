@@ -235,8 +235,25 @@ function ksmdTable(ks) {
     input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
   }
 
-  function edit(el, opening = true, whole = false, typed = null, composing = false) {
-    if (open && open.input.parentNode === el) return;
+  // A cell's box while the formula bar holds its edit: a copy of the bar's text that takes no keys,
+  // so the cell keeps the size and the place it has while it is edited in itself (`bar.js`).
+  function mirrorOf(el, text) {
+    const m = document.createElement(boxKind(el));
+    m.className = "cell-input cell-mirror";
+    m.readOnly = true;
+    m.tabIndex = -1;
+    m.setAttribute("aria-hidden", "true");
+    if (m.tagName === "TEXTAREA") m.cols = 1;
+    else m.size = 1;
+    m.value = text;
+    return m;
+  }
+  // What stands in the open cell: its own box, or the copy of the formula bar's box.
+  const homeOf = (o) => o.mirror || o.input;
+
+  // With `bar`, the formula bar's box takes the edit, and the cell shows a copy of its text.
+  function edit(el, opening = true, whole = false, typed = null, composing = false, bar = null) {
+    if (open && homeOf(open).parentNode === el) return;
     // Caution: **A cell whose text the model refuses stays open, and no other cell opens.** Its box
     // stood on with nothing owning it: Esc did not drop it, and the draft did not hold its text.
     if (!take()) {
@@ -256,38 +273,60 @@ function ksmdTable(ks) {
     }
     // A text area, so a cell's line breaks stay while it is edited; Alt+Enter types one. A column
     // with choices takes one line, and keeps an input, which alone offers a list as one types.
-    const input = typed || document.createElement(boxKind(el));
-    input.className = "cell-input";
+    const input = bar || typed || document.createElement(boxKind(el));
+    const where = row < 0 ? `Name of column ${letters(column)}` : `Cell ${letters(column)}${row + 1}`;
+    if (!bar) {
+      input.className = "cell-input";
+      // A box asks for about 20 characters of width; given one, opening a cell moves no column.
+      if (input.tagName === "TEXTAREA") input.cols = 1;
+      else input.size = 1;
+      input.title = "Alt+Right makes this column wider, and Alt+Left narrower. Shift+F10 opens the table menu";
+    }
     input.readOnly = false;
-    // A box asks for about 20 characters of width; given one, opening a cell moves no column.
-    if (input.tagName === "TEXTAREA") input.cols = 1;
-    else input.size = 1;
-    input.setAttribute("aria-label", row < 0 ? `Name of column ${letters(column)}` :
-      `Cell ${letters(column)}${row + 1}`);
-    input.title = "Alt+Right makes this column wider, and Alt+Left narrower. Shift+F10 opens the table menu";
+    input.setAttribute("aria-label", bar ? `Formula bar, ${where}` : where);
     const before = ks.cellText(block, row, column);
-    if (!typed) input.value = before;
-    fitLines(input);
-    input.addEventListener("input", () => fitLines(input));
+    // The bar's box shows the text already; writing it again would move the caret pressed into it.
+    if (!typed && input.value !== before) input.value = before;
     // **Two modes, as Excel's.** Typing into a chosen cell enters it: an arrow key takes the text
     // and moves to the next cell. A double-click or F2 edits it: the arrow keys move the caret
-    // inside the text, and F2 turns entering into editing.
-    const entering = !!typed || whole;
-    open = { block, row, column, input, before, entering,
+    // inside the text, and F2 turns entering into editing. The formula bar always edits.
+    const entering = !bar && (!!typed || whole);
+    const mirror = bar ? mirrorOf(el, before) : null;
+    open = { block, row, column, input, before, entering, mirror,
       nodes: Array.from(el.childNodes).filter((n) => n !== input) };
     // Caution: **Leave a typed box where it stands.** Moved, it loses the focus, and an input
     // method its composition.
     for (const n of open.nodes) n.remove();
-    if (!typed) el.appendChild(input);
-    fitLines(input);
+    if (mirror) el.appendChild(mirror);
+    else if (!typed) el.appendChild(input);
+    serve(open, el, composing);
+    ks.range.collapse();
+    if (typed || bar) return;
+    input.focus();
+    if (whole) input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  // Gives the open edit's box its keys and its help: the cell's own box, or the formula bar's.
+  // Each box is served once, when the edit comes to it, and dropped when the edit ends.
+  function serve(o, el, composing = false) {
+    const input = o.input;
+    const fit = () => {
+      fitLines(input);
+      if (o.mirror) {
+        o.mirror.value = input.value;
+        fitLines(o.mirror);
+      }
+    };
+    fit();
+    input.addEventListener("input", fit);
     // The list of functions takes its keys first, while it is open, so this cell's keys stay as
     // they are whenever it is closed.
-    if (row >= 0) ks.suggest.attach(input);
+    if (o.row >= 0) ks.suggest.attach(input);
     // A formula's references show in colour while it is typed (`refs.js`).
-    if (row >= 0) ks.refs.attach(input, block, composing);
+    if (o.row >= 0) ks.refs.attach(input, o.block, composing);
     input.addEventListener("keydown", keys);
-    if (row >= 0) ks.choices.attach(el.closest(".table"), column, input);
-    ks.range.collapse();
+    if (o.row >= 0) ks.choices.attach(el.closest(".table"), o.column, input);
     // A grid from a spreadsheet fills cells from this one; one value goes into the input.
     input.addEventListener("paste", (e) => {
       const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
@@ -315,10 +354,26 @@ function ksmdTable(ks) {
         take();
       }
     });
-    if (typed) return;
-    input.focus();
-    if (whole) input.select();
-    else input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  // Moves the edit open in a cell into the formula bar's `box`, with its text: the cell's own box
+  // becomes the copy, and takes no more keys.
+  function toBar(box) {
+    const o = open;
+    const was = o.input;
+    ks.refs.detach();
+    was.readOnly = true;
+    was.tabIndex = -1;
+    was.classList.add("cell-mirror");
+    was.setAttribute("aria-hidden", "true");
+    box.value = was.value;
+    o.mirror = was;
+    o.input = box;
+    o.entering = false;
+    o.held = false;
+    box.readOnly = false;
+    box.setAttribute("aria-label", `Formula bar, ${was.getAttribute("aria-label")}`);
+    serve(o, was.parentNode);
   }
 
   // Takes the open cell's text into the model; the table is then shown again with its values.
@@ -332,7 +387,7 @@ function ksmdTable(ks) {
     ks.refs.detach();
     // Puts the cell's own content back in place of its box.
     const shut = () => {
-      const el = o.input.parentNode;
+      const el = homeOf(o).parentNode;
       if (!el) return;
       el.textContent = "";
       el.append(...o.nodes);
@@ -344,12 +399,13 @@ function ksmdTable(ks) {
       return true;
     }
     const r = ks.act("ksmd_web_set_cell", o.block, o.row, o.column, ks.put(o.input.value));
+    if (r && r.ok) closed(o);
     // Caution: **A table whose values did not change is not drawn again**, as `=1+2` typed over a
     // 3 leaves it. Its box then stood on in the cell, and the next cell opened beside it.
-    if (r && r.ok && o.input.isConnected) shut();
+    if (r && r.ok && homeOf(o).isConnected) shut();
     if (!r || r.ok) return true;
     if (keep !== "focus") {
-      if (!o.input.isConnected) return true;
+      if (!homeOf(o).isConnected) return true;
       open = o;
       if (o.row >= 0) ks.refs.attach(o.input, o.block);
       return false;
@@ -358,12 +414,21 @@ function ksmdTable(ks) {
     if (el) {
       // The cell's own content goes back first, so Esc in the box opened next puts it back
       // rather than the refused box.
-      if (o.input.parentNode === el) o.input.replaceWith(...o.nodes);
+      if (homeOf(o).parentNode === el) homeOf(o).replaceWith(...o.nodes);
       edit(el);
       open.input.value = o.input.value;
     }
     ks.say(r.why);
     return false;
+  }
+
+  // Says what the editor added to close a formula just taken (`close_formula` in
+  // `ksmd/edit/editor_tables.kspl`), so the person knows why the cell holds more than they typed.
+  function closed(o) {
+    const typed = o.input.value;
+    const now = ks.cellText(o.block, o.row, o.column);
+    if (o.row < 0 || !typed.startsWith("=") || now.length <= typed.length || !now.startsWith(typed)) return;
+    ks.say(`Added ${now.slice(typed.length)} at the end so the formula reads. Ctrl+Z takes it back.`);
   }
 
   // Whether the page is drawing the open cell's table again (`redrawn`).
@@ -379,7 +444,8 @@ function ksmdTable(ks) {
     const o = open;
     // **The open cell's table is found again by what it is, not by its place**: a block drawn
     // before it, such as a pasted image, moves it down.
-    const was = o.input.closest(".table");
+    const home = homeOf(o);
+    const was = home.closest(".table");
     const focused = document.activeElement === o.input;
     const { selectionStart: from, selectionEnd: to, selectionDirection: way } = o.input;
     carrying = true;
@@ -390,12 +456,12 @@ function ksmdTable(ks) {
     }
     if (open !== o) return;
     const blocks = ks.view.blocks();
-    const wrap = o.input.isConnected ? o.input.closest(".table") :
+    const wrap = home.isConnected ? home.closest(".table") :
       blocks.find((b) => was && b.u === was.u && b.classList.contains("table") && !b.included);
     const block = wrap ? blocks.indexOf(wrap) : -1;
-    const el = o.input.isConnected || block < 0 ? null : find(block, o.row, o.column);
+    const el = home.isConnected || block < 0 ? null : find(block, o.row, o.column);
     // A cell the drawing took away takes its box with it.
-    if (block < 0 || (!o.input.isConnected && !el)) {
+    if (block < 0 || (!home.isConnected && !el)) {
       open = null;
       ks.refs.detach();
       return;
@@ -403,16 +469,17 @@ function ksmdTable(ks) {
     const moved = block !== o.block;
     if (moved && cell && cell.block === o.block) cell = { ...cell, block };
     o.block = block;
-    if (o.input.isConnected) {
+    if (home.isConnected) {
       if (moved && o.row >= 0) ks.refs.attach(o.input, o.block);
       return;
     }
     o.nodes = Array.from(el.childNodes);
     for (const n of o.nodes) n.remove();
-    el.appendChild(o.input);
-    fitLines(o.input);
+    el.appendChild(home);
+    fitLines(home);
     if (o.row >= 0) ks.refs.attach(o.input, o.block);
-    if (!focused) return;
+    // The formula bar is never drawn again, so its box keeps its focus and its caret.
+    if (!focused || o.mirror) return;
     o.input.focus({ preventScroll: true });
     o.input.setSelectionRange(from, to, way);
   }
@@ -796,6 +863,19 @@ function ksmdTable(ks) {
       ks.range.collapse();
       edit(el, true, false, box, composing);
     },
+    // Gives the edit of the chosen cell to the formula bar's `box`: an edit open in the cell moves
+    // there with its text, or the cell opens there. False where the cell cannot be edited: none or
+    // a range is chosen, the page is read-only, or the table is shown from an included file.
+    inBar: (box) => {
+      if (open) {
+        if (open.input !== box && !open.mirror) toBar(box);
+        return open.input === box;
+      }
+      const el = cell && find(cell.block, cell.row, cell.column);
+      if (ks.readOnly || !el || el.closest(".include") || ks.range.any() || ks.range.lines()) return false;
+      edit(el, true, false, null, false, box);
+      return !!open && open.input === box;
+    },
     // Chooses a cell, or leaves the table past its first or last row.
     choose: (block, row, column) => moveTo(block, row, column, false),
     tab,
@@ -812,7 +892,8 @@ function ksmdTable(ks) {
     // The column `dc` steps from `column`, passing over the columns a group hides.
     stepColumn: (block, column, dc) => stepColumn(block, column, dc),
     // The cell being edited, whose row a filter keeps in sight: { block, row, input } or null.
-    editing: () => (open ? { block: open.block, row: open.row, input: open.input } : null),
+    // `home` is what stands in the cell: the box itself, or the copy of the formula bar's box.
+    editing: () => (open ? { block: open.block, row: open.row, input: open.input, home: homeOf(open) } : null),
     redrawn,
     // The open cell's text where it differs from the cell's own, not yet taken into the
     // document: { block, row, column, text } or null.

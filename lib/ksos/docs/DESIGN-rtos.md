@@ -26,7 +26,7 @@ flowchart TD
 | `ksos_port_ctx_free(ctx)` | takes back a deleted task's context for reuse. If the task is the running one, its switch away saves nothing into it |
 | `ksos_port_switch(from, to)` | saves `from` and switches to `to`; a null `from` (the running task was just deleted) saves nothing |
 | `ksos_port_tick_start(reload)` | starts the periodic timer: `SIGALRM`+`setitimer` on POSIX, `SysTick` on Cortex-M |
-| `ksos_port_irq_save() / _restore(s)` | a critical section: `SIGALRM` blocked through `sigprocmask` on POSIX, `PRIMASK` on Cortex-M |
+| `ksos_port_irq_save() / _restore(s)` | a critical section: `SIGALRM` and `SIGUSR1` blocked through `sigprocmask` on POSIX, `PRIMASK` on Cortex-M |
 | `ksos_port_in_isr()` | non-zero inside an interrupt handler: `IPSR` on Cortex-M; always 0 on POSIX, whose signal handler runs on top of the interrupted task |
 | `ksos_port_wait_irq()` | called inside a critical section; opens it and sleeps until an interrupt in one step: `wfi` then a brief `cpsie i`, or `sigsuspend` |
 
@@ -171,7 +171,7 @@ All three break with no diagnostic. A returned error code gets forgotten, so kso
 
 * **Tickless idle**: where no task is runnable, the kernel moves the logical time (`g_tick`) to the nearest `delay` expiry instead of waiting in real time. So `Task.delay` works with no timer, and a test ends in the same order every time without waiting. With no `enable_preemption`, this is the only path that advances `g_tick`.
   * **So `Task.delay(n)` counts logical ticks, not real time.** It never wakes before the expiry. But where no other task runs, it returns in zero real time, even with a real timer running. So `cortex_m_control_ai_probe`'s `max_jitter` is in logical ticks, not real-time jitter.
-  * Caution: **Where the real board needs a real-time period, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `lib/ksos/drivers/rp2040/timer.kspl`. Power-saving tickless idle is in the "ksos" section of [`docs/PLAN.md`](../../../docs/PLAN.md).
+  * Caution: **Where the real board needs a real-time period, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `lib/ksos/drivers/rp2040/timer.kspl`.
 * **A timeout on a wait**: a blocking call is written three ways.
 
   | Form | Example | What it does |
@@ -766,7 +766,7 @@ Caution: Do not point at a demo from here. Once the board knows a particular dem
 | `head.kspl` | The servo swinging the ultrasonic's head, held to its range of motion |
 | `status.kspl` | The states' names and how they are shown (the report's line, and WS2812) |
 
-**What differs from unit to unit is a table of constants that is always read**, in `board.kspl`. A commented-out `#define` does not show whether it is off or on (Principle 5). So `wheel_polarity` holds each wheel's direction, and `line_sensor_swapped` corrects swapped outer line sensors. [`SPEC-board.md`](SPEC-board.md) gives the facts under two headings:
+**What differs from unit to unit is a table of constants that is always read**, in `board.kspl`. A commented-out `#define` does not show whether it is off or on (Principle 5). So `WHEEL_POLARITY` holds each wheel's direction, and `LINE_SENSOR_SWAPPED` corrects swapped outer line sensors. [`SPEC-board.md`](SPEC-board.md) gives the facts under two headings:
 
 * "The direction of rotation differs from unit to unit";
 * "Line tracking".
@@ -891,10 +891,4 @@ Training on a microcontroller is checked apart from the car: `make ksos-cm-ai-tr
 
 **The license.** Over FFI, `cyw43-driver` would carry the firmware transfer (some hundreds of KB), the WiFi protocol and the CLM (the per-country table of channels and power). Only that lower driver would be taken: `pico_cyw43_arch` brings async_context, a second execution environment beside the scheduler. ksos would still need a PIO driver for the chip's half-duplex SPI, which it lacks. With `CYW43_LWIP=0`, raw 802.3 frames come up through `cyw43_cb_process_ethernet` and fit `mini_ipv4` unchanged. But `cyw43-driver` is dual-licensed. Its `LICENSE` says "for personal benefit only, not commercial", and its `LICENSE.RP` says "only in combination with Raspberry Pi-made silicon". The firmware blob comes under the same terms. **Neither can be shipped inside an MIT tree.**
 
-| The dependency | The license | The obligation on the user |
-|---|---|---|
-| OpenSSL / mbedTLS | Apache-2.0 | Attribution only |
-| SQLite | Public domain | Effectively none |
-| **cyw43-driver** | **Non-commercial only, or RP2040 only** | **A restriction on the use and the hardware** |
-
-Delegating over FFI keeps the repository MIT, but **what a user builds is a combined work under those restrictions**. It would break the root README.md's statement that the repository is "free to modify, redistribute and use commercially alike".
+Delegating over FFI keeps the repository MIT, but **what a user builds is a combined work under those restrictions**. The MIT licence ([`LICENSE.md`](../../../LICENSE.md)) lets the user sell it or run it on any chip; these terms would not.

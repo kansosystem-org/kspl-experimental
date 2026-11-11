@@ -316,7 +316,13 @@ fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     assert(bignat.f32_to_bits(0.1F32) == 0x3DCCCCCDU32, "0.1 is 0x3DCCCCCD")
     assert(bignat.f32_to_bits(-0.0F32) == 0x80000000U32, "-0 keeps its sign bit")
     assert(bignat.f32_to_bits(F32::(1.0 / 0.0)) == 0x7F800000U32, "infinity is 0x7F800000")
-    verdict.pass("Known values read as their bit patterns, -0 and infinity included.")
+    assert(bignat.f32_from_bits(0x3DCCCCCDU32) == 0.1F32, "0x3DCCCCCD is 0.1")
+    assert(bignat.f32_to_bits(bignat.f32_from_bits(0x80000000U32)) == 0x80000000U32,
+        "-0 read back keeps its sign bit")
+    // A NaN's payload survives only a copy; a conversion may quiet it or drop it.
+    assert(bignat.f32_to_bits(bignat.f32_from_bits(0x7FC00001U32)) == 0x7FC00001U32,
+        "a NaN's payload reads back unchanged")
+    verdict.pass("Known patterns read as bits and back, -0, infinity and a NaN included.")
 
 fn test_math_round() //< rounding goes to the nearest whole number, halves away from 0
     //< **Include the largest F64 below one half**: adding 0.5 to it rounds up to 1 in the addition.

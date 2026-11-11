@@ -5,11 +5,11 @@
 // through the browser's own input events, as `main.mjs` drives the rest, and checked by the saved
 // source and its undo.
 // `sizes(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, H, SHIFT, check } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, check, waitFor } from "./drive.mjs";
 
 
 export function sizes({ page, js, settle, until, press, type, click, drag, menu, load, saves, source, openCell,
-  doubleClickAt, rightClick, frames, resize }) {
+  doubleClickAt, rightClick, resize }) {
   return {
   // Column widths and row heights, as a spreadsheet keeps them: a drag of a column letter's right
   // edge or of a row number's bottom edge, a double-click there, and Alt+Left and Alt+Right in a
@@ -60,8 +60,7 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     await cellsKept("the cells and the formula's value stay as they were");
     await menu("undo");
     await saves("one undo gives the widths before the drag back", sized);
-    await menu("redo");
-    await settle();
+    await resized(() => menu("redo"));
     check((await widths()).join() === dragged.join(), "and redo the dragged ones again");
     await drag('#doc .col-edge[data-edge="0"]', 0);
     await settle();
@@ -84,8 +83,7 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     await resized(() => press("ArrowRight", ALT));
     check((await widths()).join() === "10,12,20", "Alt+Right in a cell makes its column one character wider",
       (await widths()).join());
-    await menu("undo");
-    await settle();
+    await resized(() => menu("undo"));
     check((await widths()).join() === "10,11,20", "each press is one undo step", (await widths()).join());
     await openAt(1);
     for (let i = 0; i < 3; i++) await resized(() => press("ArrowLeft", ALT));
@@ -121,18 +119,15 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
       "a text is cut where the next cell holds a value");
     const middleOf = (selector) => js(`(() => { const r = document.querySelector(${JSON.stringify(selector)})
       .getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
-    await doubleClickAt(...await middleOf('#doc .col-edge[data-edge="0"]'));
-    await settle();
+    await resized(async () => doubleClickAt(...await middleOf('#doc .col-edge[data-edge="0"]')));
     const fitted = await widths();
     check(fitted[0] >= 8 && fitted[1] === 2, "a double-click on A's edge fits A to its widest value",
       JSON.stringify(fitted));
     // With every cell chosen by Ctrl+A, a double-click on one column's edge fits every column.
-    await menu("undo");
-    await settle();
+    await resized(() => menu("undo"));
     await click('#doc td[data-r="0"][data-c="0"]');
     await press("a", CTRL);
-    await doubleClickAt(...await middleOf('#doc .col-edge[data-edge="0"]'));
-    await settle();
+    await resized(async () => doubleClickAt(...await middleOf('#doc .col-edge[data-edge="0"]')));
     const all = await widths();
     check(all[0] >= 8 && all[1] >= 4, "with every cell chosen, a double-click on A's edge fits every column, as in Excel",
       JSON.stringify(all));
@@ -144,14 +139,14 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     await page("Input.dispatchMouseEvent", { type: "mousePressed", x: ex, y: ey, button: "left", clickCount: 1 });
     await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: ex, y: ey + 30, button: "left", buttons: 1 });
     await page("Input.dispatchMouseEvent", { type: "mouseReleased", x: ex, y: ey + 30, button: "left", clickCount: 1 });
-    await settle();
+    await waitFor(async () => / heights="\d+,"/.test(await source()), 3000);
     const height = (await source()).match(/ heights="(\d+),"/);
     check(!!height && Math.abs(Number(height[1]) / 0.75 - was - 30) <= 4,
       "dragging row 1's bottom edge down gives it a height in points", `${was} ${height && height[1]}`);
     check(Math.abs(await tall() - Number(height ? height[1] : 0) / 0.75) <= 1, "and the row stands that tall",
       String(await tall()));
     await doubleClickAt(...await middleOf('#doc .row-edge[data-edge="0"]'));
-    await settle();
+    await waitFor(async () => !(await source()).includes("heights="), 3000);
     check(!(await source()).includes("heights="), "a double-click on the edge fits the row to its lines again");
   },
 
@@ -334,13 +329,14 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
       return [r.right + 20 < innerWidth ? r.right + 20 : Math.max(1, r.left - 20), r.top + 10]; })()`);
     await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: offX, y: offY });
     const short = await js(`(() => { const m = document.querySelector('.menu.context');
-      const r = m.getBoundingClientRect(); m.scrollTop = m.scrollHeight;
+      const r = m.getBoundingClientRect(); const before = m.scrollTop;
+      const scrolled = new Promise((done) => m.addEventListener('scroll', () => done(), { once: true }));
+      m.scrollTop = m.scrollHeight; if (m.scrollTop === before) return [false, false, false];
       const subs = m.querySelectorAll(':scope > .sub'); const last = subs[subs.length - 1];
-      return [r.bottom <= innerHeight - 8, m.scrollHeight > m.clientHeight,
-        last.getBoundingClientRect().bottom <= innerHeight - 8]; })()`);
-    // The scroll's own event closes any flyout; wait the frames it takes, or a slow machine
-    // closes the flyout opened next.
-    await frames();
+      const answer = [r.bottom <= innerHeight - 8, m.scrollHeight > m.clientHeight,
+        last.getBoundingClientRect().bottom <= innerHeight - 8];
+      // The scroll's own event closes any flyout, so the answer comes once that event has come.
+      return scrolled.then(() => answer); })()`);
     // Pointing at the name opens the flyout and never closes it, as a press would were a pointer
     // already over it (on Windows the window's own pointer can be).
     await js("(() => { const subs = document.querySelectorAll('.menu.context > .sub'); " +
@@ -362,14 +358,31 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     try {
     await click('#doc td[data-r="1"][data-c="0"]');
     await until("!!document.querySelector('#doc td.chosen[data-r=\"1\"][data-c=\"0\"]')", 3000);
+    // A failure says what happened in order: each mouseover's item, each scroll, and each time
+    // a flyout opened or closed. The check failed twice on the user's Windows PC with the flyout
+    // closed, which a run here never showed.
+    await js(`(() => { const seen = window.__menuSeen = [];
+      const what = (el) => el && el.closest ? ((el.closest('.menu > *') || el).textContent || el.className || el.tagName).trim().slice(0, 24) : String(el);
+      document.addEventListener('mouseover', (e) => seen.push('over:' + what(e.target)), true);
+      document.addEventListener('scroll', (e) => seen.push('scroll:' + (e.target.className || 'page')), true);
+      new MutationObserver((ms) => { for (const m of ms) if (m.target.classList.contains('flyout'))
+        seen.push((m.target.hidden ? 'shut:' : 'open:') + what(m.target.parentElement.firstElementChild)); })
+        .observe(document.body, { attributes: true, attributeFilter: ['hidden'], subtree: true }); return true; })()`);
     await rightClick('#doc td[data-r="1"][data-c="0"]');
-    await until("!document.querySelector('.menu.context').hidden", 3000);
+    if (!await until("!document.querySelector('.menu.context').hidden", 3000)) {
+      check(false, "the right-click menu opens in a window 200 pixels tall", await js(
+        "JSON.stringify({ bars: document.querySelector('.top').getBoundingClientRect().bottom, " +
+        "seen: window.__menuSeen })"));
+      return;
+    }
     await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: 790, y: 5 });
     const head = "Array.from(document.querySelectorAll('.menu.context .sub-name'))" +
       ".find((b) => b.querySelector('.label').textContent === 'Number format')";
-    // The scroll's own event closes any flyout, so the name is pointed at once it has come.
-    await js(`${head}.scrollIntoView({ block: 'nearest' })`);
-    await frames();
+    // **The scroll's own event closes any flyout, so the name is pointed at once that event has
+    // come**, not after a count of frames.
+    await js(`new Promise((done) => { const m = document.querySelector('.menu.context');
+      const before = m.scrollTop; m.addEventListener('scroll', () => done(), { once: true });
+      ${head}.scrollIntoView({ block: 'nearest' }); if (m.scrollTop === before) done(); })`);
     await js(`${head}.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`);
     await settle();
     const tall = await js(`(() => { const head = Array.from(document.querySelectorAll('.menu.context .sub-name'))
@@ -378,10 +391,14 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
       f.scrollTop = f.scrollHeight; const last = f.lastElementChild.getBoundingClientRect();
       return [r.height > 0, r.top >= 0, r.bottom <= innerHeight - 8, f.scrollHeight > f.clientHeight,
         last.bottom <= innerHeight - 8]; })()`);
+    const why = await js(`(() => { const c = document.querySelector('.menu.context').getBoundingClientRect();
+        const at = document.elementFromPoint(790, 5); return JSON.stringify({ window: [innerWidth, innerHeight],
+        menu: [c.left, c.top, c.right, c.bottom].map(Math.round), under: at ? (at.className || at.tagName) : null,
+        seen: window.__menuSeen }); })()`);
     await press("Escape");
     check(tall.every((ok) => ok),
       "in a window 200 pixels tall the Number format flyout scrolls to its last item and ends 8 pixels above the bottom",
-      JSON.stringify(tall));
+      JSON.stringify(tall) + " " + why);
     } finally {
       await resize();
     }

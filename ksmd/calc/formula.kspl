@@ -4,7 +4,7 @@
 //< the identities back into the coordinates the rows and columns have now.
 //< Caution: **Read a formula only through `token_at` and `next`.** Binding, writing and
 //< calculating then agree on where each reference starts and ends.
-import "ksmd/base/marker" { is_decimal, quoted_end, write_column }
+import "ksmd/base/marker" { formula_text_end, is_decimal, quoted_end, write_column }
 import "ksmd/calc/bases" { is_literal, literal }
 import "ksmd/model/model" { Cell, Corner, Document, Piece, Table }
 import "std/chars"
@@ -26,7 +26,7 @@ enum Token_kind
     number //< decimal, as a cell's number without its sign, or in a base: `0xFF`, `0b_0111`
     name //< a lowercase name not followed by `.` and a cell address: a function's name or a word
     reference //< a cell, a range or whole columns: `D1`, `budget.D1`, `"Q1 sales".D1`, `D1:D3`, `D`
-    text //< text in JSON quotes not followed by `.` and a cell address: `"Pens"`
+    text //< quoted text not followed by `.` and a cell address: `"C:\src"`, `"say ""hi"""`
     broken //< `#REF!`
     plus
     minus
@@ -116,7 +116,7 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
     if c == '"'
         // A table's name before `.` and a cell, as any name that is not plain is written; or else
         // text. Text never stands before `.`, so the two cannot be confused.
-        close: = quoted_end(text, i)
+        close: = formula_text_end(text, i)
         if close == text.len
             return Token(.bad, i, text.len)
         if close + 1 < text.len && text[close + 1] == '.'
@@ -351,6 +351,73 @@ fn cycle_fixed(text: U8[], from: Sz, to: Sz, out: Str_builder$@): Sz //<
     out.s(text.sub_from(kept))
     return last
 
+priv struct Brackets //< how a formula's brackets and quotes stand at its end
+    open: Sz //< each `(` that no `)` closes
+    stray: Bool //< a `)` closes nothing
+    quoted: Bool //< quoted text runs on to the end
+
+priv fn brackets_of(text: U8[]): Brackets //< the brackets of a formula's tokens
+    //< A bracket inside quoted text is text, as `token_at` reads it.
+    $b: = Brackets::{ .open = 0, .stray = false, .quoted = false }
+    $at: Sz = 0
+    for
+        tok: = token_at(text, at)
+        if tok.kind == .end
+            return b
+        if tok.kind == .open
+            b.open += 1
+        else if tok.kind == .close && b.open == 0
+            b.stray = true
+        else if tok.kind == .close
+            b.open -= 1
+        else if tok.kind == .bad && text[tok.start] == '"' && tok.end == text.len
+            b.quoted = true
+        at = tok.end
+
+fn closing(text: U8[], out: Str_builder$@) //<
+    //< Writes what closes a formula left open at its end: a `"` for quoted text still open, then
+    //< a `)` for each `(` no `)` closes. It writes nothing where the formula closes already.
+    //< **It writes nothing where an ending alone cannot close it**, as where a `)` closes nothing.
+    //< It never guesses a place inside. A `\` before the end is text, so `"C:\` closes as `"C:\"`.
+    b: = brackets_of(text)
+    if b.stray || (b.open == 0 && !b.quoted)
+        return
+    defer $whole: = Str_builder()
+    whole.s(text)
+    if b.quoted
+        whole.c('"')
+    for _ in Range.asc(b.open)
+        whole.c(')')
+    after: = brackets_of(whole.slice())
+    if after.stray || after.open > 0 || after.quoted
+        return
+    out.s(whole.slice().sub_from(text.len))
+
+fn partner(text: U8[], at: Sz, arena: Arena$@): Sz //<
+    //< Where the bracket that pairs with the bracket at byte `at` starts, or -1
+    //< -1 also where byte `at` starts no bracket, as inside quoted text, or where nothing pairs.
+    $opens: = List<|Sz|>(arena)
+    $from: Sz = 0
+    $wanted: Sz = -1 //< how many `(` stay open once the `(` at `at` is closed
+    for
+        tok: = token_at(text, from)
+        if tok.kind == .end || (wanted < 0 && tok.start > at)
+            return -1
+        if tok.kind == .open
+            if tok.start == at
+                wanted = opens.len
+            opens.push(tok.start)
+        else if tok.kind == .close && opens.len == 0
+            if tok.start == at
+                return -1
+        else if tok.kind == .close
+            o: = opens.pop().unwrap_or(-1)
+            if tok.start == at
+                return o
+            if opens.len == wanted
+                return tok.start
+        from = tok.end
+
 priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, columns: Sz,
     out: Str_builder$@) //<
         //< `[name.]A1`, or a range from its upper left corner to its lower right one
@@ -503,11 +570,20 @@ priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
         .named = tok.table.len > 0, .from = corner(t, tok.from), .to = corner(t, tok.to) })
 
 fn write_table_name(name: U8[], out: Str_builder$@) //<
-    //< A table's name as a reference writes it: plain, or in JSON quotes
+    //< A table's name as a reference writes it: plain, or in quotes as formula text is written
     if is_plain_name(name)
         out.s(name)
     else
-        out.c('"').escape_and_append(name).c('"')
+        write_quoted(name, out)
+
+fn write_quoted(text: U8[], out: Str_builder$@) //<
+    //< Text in a formula's quotes: each byte as it is, and each '"' twice, as `unquoted` reads it
+    out.c('"')
+    for c in text
+        if c == '"'
+            out.c('"')
+        out.c(c)
+    out.c('"')
 
 fn is_plain_name(name: U8[]): Bool //< `[a-z][a-z0-9_]*`, which a formula writes without quotes
     if name.len == 0 || !name[0].is_lower()
@@ -521,19 +597,65 @@ priv fn find_written(doc: Document@, written: U8[]): Sz? //< the table a referen
     if !written.starts_with("\"")
         return find_table(doc, written)
     defer scratch: = Arena(4096)
-    name: = unquoted(written, scratch) catch
-        return .none
-    return find_table(doc, name)
+    return find_table(doc, unquoted(written, scratch))
 
-fn unquoted(quoted: U8[], arena: Arena$@): U8[]? //<
-    //< The text a JSON string means, its quotes included in `quoted`; without an escape, a view of
-    //< `quoted` itself
+fn unquoted(quoted: U8[], arena: Arena$@): U8[] //<
+    //< The text a formula's quoted text means, its quotes included in `quoted`: each `""` is one
+    //< '"', and every other byte stands for itself. Without a `""`, a view of `quoted` itself.
     inner: = quoted.sub(1, quoted.len - 2)
-    if inner.find_str("\\").is_none()
-        return .some(inner)
-    decoded: = json.parse(quoted, arena) catch
-        return .none
-    return decoded.val.as_str()
+    if inner.find_char('"').is_none()
+        return inner
+    out: = arena.text()
+    $i: Sz = 0
+    for i < inner.len
+        out.c(inner[i])
+        i += 2 if inner[i] == '"' else 1
+    return out.take()
+
+fn from_version_1(written: U8[], arena: Arena$@): U8[] //<
+    //< A formula of a `%ksmd 1` file, its quoted text rewritten by today's rule (`write_quoted`)
+    //< Version 1 read quoted text by JSON's rules, so `"C:\\src"` was `C:\src`. A control
+    //< character cannot stand on the formula's line, so it becomes `char(10)` joined by `&`. Text
+    //< that was no JSON string stays as written.
+    defer $out: = Str_builder()
+    $i: Sz = 0
+    for i < written.len
+        if written[i] != '"'
+            out.c(written[i])
+            i += 1
+            continue
+        close: = quoted_end(written, i)
+        if close == written.len
+            out.s(written.sub_from(i))
+            break
+        quoted: = written.sub(i, close + 1 - i)
+        i = close + 1
+        decoded: = json.parse(quoted, arena) catch
+            out.s(quoted)
+            continue
+        write_joined(decoded.val.as_str().unwrap_or(""), out@)
+    return arena.dup_str(out.slice())
+
+priv fn write_joined(text: U8[], out: Str_builder$@) //<
+    //< Text as quoted runs and `char(n)` for each control character, joined by `&` in brackets
+    $parts: Sz = 0
+    $run: Sz = 0
+    defer $whole: = Str_builder()
+    for k in Range.asc(text.len + 1)
+        if k < text.len && text[k] >= 0x20U8 && text[k] != 0x7FU8
+            continue
+        if k > run || parts == 0 && k == text.len
+            whole.s(" & " if parts > 0 else "")
+            write_quoted(text.sub(run, k - run), whole@)
+            parts += 1
+        if k < text.len
+            whole.s(" & " if parts > 0 else "").s("char(\{Sz::text[k]\})")
+            parts += 1
+        run = k + 1
+    if parts > 1
+        out.c('(').s(whole.slice()).c(')')
+    else
+        out.s(whole.slice())
 
 fn find_table(doc: Document@, name: U8[]): Sz? //< the table of this name in this source
     for u in Range.asc(doc.tables.len)

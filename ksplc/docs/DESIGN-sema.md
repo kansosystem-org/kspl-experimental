@@ -40,7 +40,7 @@ flowchart BT
 
 **The language guards only cycles**, so an edge between `decl` and `flow`, on one tier, passes parse. There is exactly one: `flow/stmt` borrows `try_eval_constexpr` from `decl/eval` to count the branches of a constant-folded condition (`if sizeof(T) == 4`). *Constant folding* is computing an expression's value at compile time. More such edges would merge the two questions back into one mass, so `make test-conventions` allows this one and no other.
 
-**`sizeof(<an expression>)` is the only call from decl into body.** It needs the operand's type, and only `sema/body` types an expression. The declarations' constant folding (an array's length, an enum tag, `#align`) runs before inference. The path is the function pointer `Sema_ctx.infer_expr_fn`, set once at start-up by `ksplc/pipeline.kspl`. `make test-conventions` watches the count, since each hook added leaves "above" and "below" a name and nothing more.
+**`sizeof(<an expression>)` is the only call from decl into body.** It needs the operand's type, and only `sema/body` types an expression. The declarations' constant folding (an array's length, an enum tag) runs before inference. The path is the function pointer `Sema_ctx.infer_expr_fn`, set once at start-up by `ksplc/pipeline.kspl`. `make test-conventions` watches the count, since each hook added leaves "above" and "below" a name and nothing more.
 
 **A mass** is a set of files that can all reach each other (a strongly connected component). It is the unit that cannot be split into folders any further. The masses in each folder (files with no path either way to one are left out):
 
@@ -48,9 +48,9 @@ flowchart BT
 | :-- | :-- | :-- |
 | `sema/type` | `def`, `env`, `query` | below: `scope` / above: `arc`, `display` |
 | `sema/session` | `c_boundary`, `ctx`, `import_table` | below: `state` / above: `imports`, `pointer` |
-| `sema/decl` | `access`, `eval`, `layout`, `mono`, `mono_name`, `mono_queue`, `mono_target`, `name`, `registry`, `resolve`, `trait_check`, `trait_default` | below: `declare`, `subst` / above: `attrs`, `collect`, `reflect`, `type_check` |
-| `sema/flow` | `field`, `lock`, `report`, `stmt`, `track`, `view` | below: `release` |
-| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `postfix`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `lint_unchecked`, `lint_written`, `literal`, `resolve_path` / above: `infer` |
+| `sema/decl` | `access`, `eval`, `fold_float`, `layout`, `mono`, `mono_name`, `mono_queue`, `mono_target`, `name`, `registry`, `resolve`, `trait_check`, `trait_default` | below: `declare`, `subst` / above: `attrs`, `collect`, `type_check` |
+| `sema/flow` | `field`, `lock`, `pointee`, `report`, `stmt`, `track`, `view` | below: `release` |
+| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `lint_loop`, `postfix`, `resolve_path`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `lint_unchecked`, `lint_written`, `literal` / above: `infer` |
 
 **To find the edge that breaks a mass, compute the strongly connected components**, not a count of edges against one chosen direction. An import with `_` (importing an extension method) is an edge too.
 
@@ -86,7 +86,7 @@ Caution: **Put `collect` outside the mass, above it.** `collect.run` drives the 
 
 **Instantiation (`mono`) belongs in `decl`, not with inference**: it happens partway through inference, but what it makes is a declaration.
 
-**`lint_stmt` stays in `body`, not in a `sema/lint`, because the lints are not gathered there.** It holds about a quarter of the diagnostic codes; the rest sit with the checks that hold the context to detect them. `lint_stmt` is a hook called from `infer` / `match` / `stmt`, not a pass.
+**`lint_stmt` stays in `body`, not in a `sema/lint`, because the lints are not gathered there.** It holds about a quarter of the diagnostic codes; the rest sit with the checks that hold the context to detect them. It is a hook the dispatch calls, not a pass (its row in "The main walk's order, and where the helper files stand").
 
 **Do not repeat the folder's name in the file's name** (`type/env`, not `type/types`).
 
@@ -115,23 +115,10 @@ flowchart TD
     * The names of the top-level `var`s / `const`s (`declare_var_syms`), which folding an array's length (`U8[n]`) reads. The folding reads only the declaration's initializer, not `type_id`, so unresolved types do not stop it.
     * The `impl` blocks that monomorphization builds the method tables from (`impl_needs_early_collect`: the generics' impls, and impls covering one instantiation). `instantiate_generic_methods` / `register_generic_trait_impls` in `sema/decl/mono.kspl` need all of `generics.impls` (["Generics are instantiated through deferred work"](#generics-are-instantiated-through-deferred-work)).
   * 2a can come first because it resolves no type: a method registers only its template name, and its signature is resolved at instantiation. In one run, both would depend on the order within the file (Principle 5).
-  * Between the two runs, 2a' synthesizes the table and `fields()` for `impl X: reflect.Reflectable {}` (`synthesize_reflect_impls` in `sema/decl/reflect.kspl`). *Reflection* means a program reading its own types' fields at run time. **It must run after the generics' impls are all in (after 2a) and before the values' names are handed out (before 2b).**
-    * Resolving the fields' types instantiates generics. Run before 2a, an instantiated `List<|T|>` gets no methods.
-    * 2a has already handed out the `const` names, so `collect` hands out the synthesized ones itself.
-    * The kind comes from the resolved type, because the name would mistake a `typedef`. A `List<|T|>` is recognised by resolving the written generic base to an FQN (fully qualified name, such as `std.ds.List`).
-  * After 2a', 2a'' writes the `run` of each `impl S: suite.Suite` (`synthesize_suite_runs` in `sema/decl/suite.kspl`). It must come before 2b for the same reason as 2a'. **It writes `run` as source and parses it** (`parse_synth_decls` in `parse/load.kspl`), then moves the method onto the `impl`, at the `impl`'s position (`place_as_made`). Every test is checked before any source is written. So a refusal (a parameter with no field, a `priv` test in another file) is reported at the test. The order it calls the tests in is "8.5 Tests: functions named `test_`, run by a suite" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md).
+  * Between the two runs, 2a' writes the `run` of each `impl S: suite.Suite` (`synthesize_suite_runs` in `sema/decl/suite.kspl`). **It must run after the generics' impls are all in (after 2a).** Resolving its types instantiates generics, and run before 2a, an instantiated `List<|T|>` gets no methods. **It must run before 2b**, which hands out the method it adds. **It writes `run` as source and parses it** (`parse_synth_decls` in `parse/load.kspl`), then moves the method onto the `impl`, at the `impl`'s position (`place_as_made`). Every test is checked before any source is written. So a refusal (a parameter with no field, a `priv` test in another file) is reported at the test. The order it calls the tests in is "8.5 Tests: functions named `test_`, run by a suite" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md).
 * **Pass 3**: filling the registry itself in (the fields, the variants, the method signatures), and `validate_all_type_exprs`.
 * **Pass 4**: checking a `const` declaration's body (`check_const_decl_storage`; it needs the field list, so it follows 3).
 * **Pass 5**: checking that no member's visibility is wider than its enclosing declaration's; it matches type ids, so it follows 2b and 3.
-
-The rules for the reflection tables Pass 2a' makes:
-
-* **Pass 2a' emits a nested table into the file that wrote the `impl`**, because another file's table is `priv` and cannot be pointed at. The same type nested from two outer types still folds to one table per file (`ensure_nested_table` in `sema/decl/reflect.kspl`).
-* **It matches the trait by FQN**, as for the other compiler-known traits, not by the name's tail.
-* Caution: **Build an `offsetof` node for the offset; do not fold it to a number.** The generated C passes it to C's own `offsetof`, so the offset ksplc measured cannot differ from the one C laid out.
-* **Take both tags from the declaration**; never hard-code "the variant with a value is 0". Only an enum payload's position cannot be asked with `offsetof`, since in C it sits in an anonymous union KSPL cannot name. It comes from ksplc's single layout, trusted as `sizeof` is.
-* **A container of containers is not described.** It needs a payload on `Field_kind` that std does not declare; neither backend stands in the way.
-* Caution: **Take the element type from the instantiated `List`'s `ptr`, and strip exactly one level of pointer.** Stripping them all makes the element of `List<|I64$@|>` look like `I64`, and a container of pointers silently round-trips as an array of integers.
 
 **Collect always runs to the end before `infer.kspl` starts**, so a forward reference across files resolves.
 
@@ -156,7 +143,6 @@ Caution: **Do not add a path that bypasses it.** Such a path returns a size of 0
 
 **A folded layout number is checked by the C compiler.** ksplc's layout is a copy of the C compiler's, tied to it by a check (Principle 4). Every reader whose number reaches the output as a number calls `record_folded` in `sema/decl/layout.kspl`:
 * `eval_sizeof` / `eval_offsetof` in `sema/decl/eval.kspl` (an array's length, a constant chain, a static `if`, `##error`, a `case` label);
-* reflection's payload offset (`sema/decl/reflect.kspl`);
 * a slice cast that stands on two equal element sizes (`check_slice_elem_size` in `sema/body/postfix.kspl`).
 
 The record holds the type, what was measured, the number and the node that asked. `emit_layout_checks` in `gen/c/root.kspl` writes one `typedef char kspl_folded_for_<machine>_<n>[(sizeof(T) == 40) ? 1 : -1];` per record, under a `#line` of the node that asked, so the C compiler's refusal names the source line and the machine.
@@ -187,7 +173,7 @@ The record holds the type, what was measured, the number and the node that asked
 | `resolve.kspl` / `resolve_path.kspl` | wherever a type or a name is resolved: `expr.kspl`'s identifier and path branches, `collect`, `postfix`, `call` and more |
 | `postfix.kspl` | `expr.kspl`'s postfix / `method_access` / `generic_method` branches alone; it passes the call operator `(` on to `call.kspl` |
 | `switch.kspl` | the `k_stmt_switch` branch in `stmt.kspl` alone |
-| `eval.kspl` | translation-time constants (an array's size, an enum tag, `#align`), from all over |
+| `eval.kspl` | translation-time constants (an array's size, an enum tag), from all over |
 | `analyze.kspl` | right after each function's `infer_stmts`. It follows one body's paths as a control-flow graph would (defined variables, use-after-free), once per function. `check_unused_imports` / `check_unused_symbols` are the one global final check, at the end of `infer.run` |
 | `lint_stmt.kspl` / `literal.kspl` | the statement-level lints (`if`, `for`, an accumulating overflow and so on), fired inline during the dispatch in `stmt.kspl` / `infer.kspl` / `switch.kspl` |
 | `lint_written.kspl` | the lints on how declarations are written (`lang.`, a function of one enum, an arena's default). `infer.run` walks the written tree once, before a template's body is dropped |
@@ -370,6 +356,13 @@ Caution: **Look it up through `lookup_method_template` in `sema/decl/mono_name.k
 
 **Do not look up on a field reference**, which would keep building deeper levels.
 
+**Each instance is checked on its own, and only the bodies some checked body refers to** (`sema/body/infer.kspl`, each once, until no more is needed). So an operation valid for one type argument alone is allowed. `List<|io.File_stream|>` can push and pop values that cannot be copied, while its copying methods stay invalid if called. Only checked bodies enter the tree Lower gets; signatures stay in their method tables.
+
+* **Implicit calls count as uses**: an upcast needs every slot of its trait's table, and `Ref_counted` needs `retain` and `release`, which Lower makes after Sema ends.
+* **A use mark records a reference from any checked body**, not reachability from the entry point. Lower removes what `main` cannot reach ("A function or type nothing calls is not emitted" in [`DESIGN-lower.md`](DESIGN-lower.md)).
+* **Source identity survives instantiation.** `Env.fn_templates` records each instance's template. Cleanup-hook checks and raw-storage contracts read that record, not a name taken back from a mangled C identifier.
+* An unused generic body still needs its imports, so its explicit names and written extension calls are recorded before templates are discarded.
+
 **A lookup first drains what is still queued, then builds what is parked.** An instance born in the same expression (the `Box_of<|Bool|>` of `b.moved(true).get()`) is looked up while still queued. A drain that only parks it leaves no table.
 
 **Clear the mark when re-queuing a parked item.**
@@ -380,7 +373,7 @@ Caution: **Look it up through `lookup_method_template` in `sema/decl/mono_name.k
 
 **Register after binding the type arguments**, or the registration carries the trait's unbound `T`.
 
-**This lets a method return itself one level deeper** (`Seq<|S|>.f(): Seq<|Wh<|S|>|>`), as an iterator chain (`xs.filter(p).map(f)`) does. A level advances only when its method is looked up. A body that calls the method of itself one level deeper is a real polymorphic recursion. It reaches the level limit and is rejected ("Each depth limit is set by what breaks first" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)).
+**This lets a method return itself one level deeper** (`Keep<|S, T|>.where(): Keep<|Keep<|S, T|>, T|>`), as an iterator chain (`xs.where(p).select(f)`) does. A level advances only when its method is looked up. A body that calls the method of itself one level deeper is a real polymorphic recursion. It reaches the level limit and is rejected ("Each depth limit is set by what breaks first" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)).
 
 **Count the levels once, across the body and the table** (`Generic_state.inst_chain_depth`).
 
@@ -451,25 +444,6 @@ Caution: **Register it at Pass 2a** (`impl_needs_early_collect`). At 2b, resolvi
 **A generic's impl covering a slice type (`T[]`) is accepted.** Desugaring turns `impl<|T|> T$[] { ... }` into `impl<|T|> Slice<|$T|>`, which is handled as a generic's impl for `List<|T|>` is (the regression test: `ksplc/tests/slice_test.kspl`).
 
 Caution: **Do not add a test rejecting it.** Monomorphization has one starting point, `instantiate_struct`, so there is nothing to reject. The reason is "A slice is a std struct, under generics' rules" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
-
-#### Instantiation's two axes
-
-| Axis | KSPL's choice | What it permits |
-| :-- | :-- | :-- |
-| The unit of checking | Each concrete instantiation | Operations whose validity depends on the actual type arguments |
-| The range of body checking | Referenced methods and required implicit hooks | A container of `Move_only` elements, even when unused copying methods cannot support them |
-
-**The benefit is which programs can be written.** `List<|io.File_stream|>` can push and pop values without copying them, while its copying methods remain invalid when called.
-
-`sema/body/infer.kspl` checks referenced bodies, each once, until no additional body is needed. Only checked function bodies enter the tree passed to Lower; signatures remain in their method tables.
-
-**Implicit calls count as uses**: an upcast requires every slot of its trait table, and `Ref_counted` requires `retain` and `release`, which Lower synthesizes after semantic analysis ends.
-
-A use mark records a reference from any body being checked, not reachability from the entry point; Lower removes unreachable code separately.
-
-**Source identity survives instantiation.** `Env.fn_templates` records each instantiated function's canonical template. Cleanup-hook checks and raw-storage contracts read that record, rather than deriving a source name from a mangled C identifier.
-
-An unused generic body still needs its imports, so its explicit names and written extension calls are recorded before templates are discarded.
 
 Caution: **Raise `Self`'s counterpart (`fn_ctx.impl_name`) before resolving the signature.** Otherwise the unresolved `Self` enters the parameter types before the body is checked.
 
@@ -556,7 +530,7 @@ d: F64 = p.distance() // p: Point; distance is impl Point { fn distance(r: Self@
 | layer | what the node is after it | what changed |
 | :-- | :-- | :-- |
 | **Parse (the chapter "The Parse layer: from text to an AST (Desugar included)" in [`DESIGN-parse.md`](DESIGN-parse.md))** | `k_expr_postfix` { the receiver: `p` (Identifier), the operator: `.`, the member: `distance`, the argument list: `()` } | a general-purpose node that cannot yet tell a value access from a method call |
-| **Sema (the chapter "The Sema layer: it knows the types")** | `method_access` { [0]: the receiver expression `p`, [1]: the method name `distance` }, whose own `type_id` holds the return type `F64` | name resolution (`postfix.kspl`) identifies `distance` as an instance method of `impl Point`, and morphs the node |
+| **Sema (the chapter "The Sema layer: it knows the types")** | `method_access` { [0]: the receiver expression `p`, [1]: the method name `distance` }, whose own `type_id` holds the return type `F64` | name resolution (`dot.kspl`) identifies `distance` as an instance method of `impl Point`, and morphs the node |
 | **Lower (the chapter "The Lower layer: a flat tree independent of backends" in [`DESIGN-lower.md`](DESIGN-lower.md))** | a flat call with the receiver as the first argument (conceptually `Point_distance(p@)`) | the ABI conversion; "The internal flow: flatten, add vtables, mangle, prune, verify" in [`DESIGN-lower.md`](DESIGN-lower.md) has the actual rules |
 | **Genc / Genllvm (the chapter "The backends (Genc / Genllvm) and the runtime ABI" in [`DESIGN-backends.md`](DESIGN-backends.md))** | `kspl_Point_distance(&p)` in C99, or the matching `call` instruction in LLVM IR | they receive a plain function call, knowing nothing of its having been a method call |
 
@@ -576,7 +550,7 @@ Caution: **Group the rows by the position the declaration was written at, not by
 
 **Infer takes several times as long as Collect, and its top is nearly all generic instantiation** (`List<|U8[]|>`'s methods, `U8[]?`, `Arena.create`). The call site queues a body on demand, while the method-table builder queues them all at once (`queue_fn_body` in `sema/decl/mono_queue.kspl`).
 
-Note: **Dead-code elimination (`lower/prune.kspl`) drops about half of the function declarations it sees**, each body already type-checked per instantiation. ["Instantiation's two axes"](#instantiations-two-axes) distinguishes references from reachability.
+Note: **Dead-code elimination (`lower/prune.kspl`) drops about half of the function declarations it sees.** A body checked because another refers to it can still be unreachable from `main` ("Where the instantiation queue is drained").
 
 **Three choices keep Sema cheap without changing the model**, the largest first, as callgrind shows on a cold compile of `ksplc/main.kspl`:
 

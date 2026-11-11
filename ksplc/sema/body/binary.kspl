@@ -4,8 +4,7 @@
 //< **This file and `expr.kspl` import each other.** expr.kspl dispatches into here, and an
 //< operand's own inference calls back out to `infer_expr`, so the dependency cannot go one way
 //< (as in `ksplc/gen/c/expr.kspl`).
-//< The split is "a rule about one operator" versus "dispatch on an expression's kind". The
-//< reasoning is in "Files near the limit and how they split" in `../../README.md`.
+//< The split is "a rule about one operator" versus "dispatch on an expression's kind".
 import "ksplc/base/ast" { Ast_node, is_anon_fn_name }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -19,7 +18,6 @@ import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/decl/access" as _sema_decl_access // `refuse_writing_receiver`
 import "ksplc/sema/decl/eval" as sema_decl_eval
-import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/display" as sema_type_display
@@ -248,7 +246,6 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         switch resolved
         case .user(method_sym)
             node.def_node = method_sym.node
-            ctx.refuse_packed_receiver(left_node, method_sym.node, op_text)
             ctx.refuse_writing_receiver(left_node, method_sym.node, op_text)
             if !right_done
                 right_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!

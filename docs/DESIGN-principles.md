@@ -64,7 +64,6 @@ Eight rules come first in every folder: in the language, the libraries, the tool
    **A reader holds one file in mind at a time.** Mistakes hide in a file too long to hold, and a file too short to stand alone sends the reader elsewhere. The limits are in "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md).
 
    * **Split where the parts are read for different reasons**, not at a line count ("Choosing where to split a file" below).
-   * **Plan the split before the limit is reached**, or it lands inside an unrelated change. Write down where the file will split ("Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md)).
    * **Merge a small file into its only user**, unless it has a reason to stand alone ("When a small file stands alone" below).
    * What `make test-conventions` counts, and its exceptions, are "What the convention checks count" in [`SPEC-gates.md`](SPEC-gates.md).
 
@@ -112,7 +111,7 @@ Eight rules come first in every folder: in the language, the libraries, the tool
 
 ### Choosing where to split a file
 
-**Put the cut where the fewest names have to cross it.** Among the cuts that Principle 3 allows, this one leaves each file readable on its own. A package's limits, and the plan for each of its files near the cap, are in its README. Below, `priv` marks a name visible only inside its own file.
+**Put the cut where the fewest names have to cross it.** Among the cuts that Principle 3 allows, this one leaves each file readable on its own. A package's own constraints on a split, where it has any, are in its README. Below, `priv` marks a name visible only inside its own file.
 
 **First count what would cross**: the names each side needs from the other, by call sites. A part that touches none of the other part's state moves out cleanly. So does one that reads only a value fixed before the work starts. `ksplc/fmt/space.kspl` touches no part of `Formatter`, and `ksplc/fmt/style.kspl` takes only `Config`.
 
@@ -149,7 +148,7 @@ Eight rules come first in every folder: in the language, the libraries, the tool
 | **It is a boundary** | `priv` stops at the file, so the file keeps its insides out of reach |
 | **It changes for another reason** | A platform, a piece of hardware, a bring-up stage, or a cut made because the file it came from neared the cap |
 
-**"Short" is 60 lines or fewer**, about one screen. Two kinds of import are not a use: a link-only import (an `_` alias), and a package's test entry point (`all.kspl`).
+**Review takes "short" as 60 lines or fewer**, about one screen; no gate counts it. Two kinds of import are not a use: a link-only import (an `_` alias), and a package's test entry point (`all.kspl`).
 
 **What it gives up**: a file with one user today and several tomorrow is merged and later split out again. A merge is cheap to undo.
 
@@ -177,8 +176,6 @@ A notation is judged by three questions, in this order. *Sugar* means a short sp
 | 2 | **Code that says who owns what** | The price of not hiding which code frees which memory. It stays |
 | 3 | **Functions `std/` lacks that would do a whole errand in one call** | Not a price but a gap ("Known holes, and what would fill them" in [`../std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md)) |
 
-Note: **A function doing a whole errand barely reduces the line count.** With a JSON round-trip function, `tests/tools/perf_guard.kspl` has as many code lines as without one. It removes key names spelled twice, not lines (the `json_struct` rows of "Known problems KSPL handles" in [`../std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md)).
-
 ### Notations not carried
 
 What KSPL leaves out, and what to write instead, is "Appendix A: Features not carried, and what to write instead" in [`SPEC-programming-language.md`](SPEC-programming-language.md). This section holds why, so that the same proposal does not come round again.
@@ -190,6 +187,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **try-finally** | Each resource nests a level deeper. `defer` gives `finally`'s guarantee on every way out |
 | **Automatic cleanup** | Every cleanup stands in the source, where a reader sees when it runs. `defer` in front of a declaration costs one word. Shared ownership opts into `Ref_counted` |
 | **Garbage collection** | When something is freed can be read from the source |
+| **`async` / `await`** | The mark spreads to every caller, and a task needs a scheduler and an allocation the source does not show. ("Why KSPL has no `async` / `await`" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) |
 | **A cleanup joined behind its declaration** | It would fill in a receiver, as no other construct does. See "A declaration takes `defer` in front, and only to free" below |
 | **Class inheritance** | It keeps the memory layout simple |
 | **Named actual arguments** | One call would have two spellings (`f(0)` and `f(offset = 0)`), and **parameter names would become published API**. A function-pointer type and its definition could disagree on them |
@@ -199,6 +197,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **The abbreviated error type `T!`** | It would be a second spelling of one type |
 | **Several variables in one declaration, and several inits or steps in a loop's header** | See "Symmetry does not save a form nobody uses" above |
 | **The type's name in a `case`** | The subject already fixes the type, so `case Event.quit` would repeat `case .quit` |
+| **A condition or a range of values in a `case`** | An `if` at the top of the case and two comparisons already write them. Few places gained ("Why a case takes no condition and no range" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) |
 | **Another language's word for a loop or a branch** | One word for each job, spelled as C spells it ("The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md)) |
 | **`::` as a path separator** | A member would have two spellings, and `json::Value` would read like the cast `Sz::n` ("Why `::` stays the cast, and what it costs to parse" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) |
 | **Range syntax (`a..b`)** | A call already writes it, and `Range.new`'s argument names show whether a bound is exclusive |
@@ -225,7 +224,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 
 #### Escapes are closed at ten
 
-**Only ten escapes can follow a `\` in a literal; any other, such as C's `\b`, is an error, not a plain `b`** ("2.3.2 Escape sequences" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Reading an unknown one as the character itself would give one byte two spellings (Principle 6). And a `'\b'` copied from C, the backspace, would silently become `'b'` (Principle 5). The rejection stands in one place (`is_known_escape` in `ksplc/base/literal.kspl`).
+**Only ten escapes can follow a `\` in a literal; any other, such as C's `\b`, is an error, not a plain `b`** ("2.3.2 Escape sequences" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). In a string, a `\` can also end a line, which continues the string. Reading an unknown one as the character itself would give one byte two spellings (Principle 6). And a `'\b'` copied from C, the backspace, would silently become `'b'` (Principle 5). The rejection stands in one place (`is_known_escape` in `ksplc/base/literal.kspl`).
 
 **`\{` and `\}` are among the ten because interpolation is written `\{` … `\}`**, as in `"n=\{n\}"`. So a bare `{` stands as it is, with no doubling (`{{`). `'\{'` is the matching form in a character literal.
 
@@ -312,7 +311,7 @@ C, C++ and Java read `0755` as octal (493), while Rust and Swift read it as deci
 
 **The lazy chain rests on four properties of the language**: the `Iter` above, and three that let it be written as method calls.
 
-* **A method can return its own type one level deeper** (`Seq<|S|>.where(): Seq<|Wh<|S|>|>`).
+* **A method can return its own type one level deeper** (`Keep<|S, T|>.where(): Keep<|Keep<|S, T|>, T|>` in `std/seq`).
 * **A method can introduce a new type argument** (`fn select<|U|>`), bound at the call site (["A type argument with nothing to bind to is rejected" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)](DESIGN-programming-language.md#a-type-argument-with-nothing-to-bind-to-is-rejected)).
 * **A closure literal passed directly still fixes the type argument**, taken from the `Callable1` its environment declares (`implemented_trait_instance` in `ksplc/sema/type/env.kspl`).
 
@@ -375,7 +374,7 @@ C, C++ and Java read `0755` as octal (493), while Rust and Swift read it as deci
 | Typing an integer | The suffix `5I64` / the prefix cast `I64::5` | The suffix **checks the range** (`300U8` is an error); the cast **truncates** (`U8::300` passes) |
 | An enum variant | Implicit `.some(x)` / type-qualified `T.some(x)` | With no expected type (`y: = .some(1)` is refused), only the qualified form can be written |
 
-**Nor is a `const` inside a function.** Only a `const`, fixed at compile time and holding no memory, can size an array (`I32$[n]`).
+**Nor is a `const` inside a function.** Only a `const`, fixed at compile time and holding no memory, can size an array (`I32[n]`).
 
 **A raw pointer's `null` remains in three places only.** Elsewhere `T?` says whether a value is present, and lint [H0701] finds a raw pointer's `null` being returned. `T!E` is not the answer here: it says "it failed", not "there is no value".
 
@@ -385,77 +384,13 @@ C, C++ and Java read `0755` as octal (493), while Rust and Swift read it as deci
 | Functions published with `extern` | At the C boundary, `T?` does not match C's null convention in memory |
 | Tree walking in `ksplc/base` (`find_child` / `unwrap_top_level` / generating notation) | The same reason, suppressed with its grounds in the file-opening `##lint(H0701 = off)` |
 
-### A default argument is allowed only for a foldable constant
-
-**The last parameters of a function can have a default, written `= literal` (such as `offset: Sz = 0`), and a caller can then leave them out** (docs/SPEC-programming-language.md §8.1.1). A *foldable constant* is a value the compiler knows without running anything.
-
-* **Real demand.** Most calls of `starts_with` in `std/chars` look at the start of the text. To recount, compare `grep -o "starts_with([^,()]*)"` with `grep -o "starts_with("` over the tracked sources.
-* **Symmetry.** A struct literal can omit a field. Otherwise a writer would remember two rules: a field can be omitted, a parameter cannot.
-
-**Only a single literal is allowed.** An omitted field gets the type's zero, while a default is the writer's choice. An expression would let allocation or side effects happen unseen in the call.
-
-**Being a foldable constant is the condition for entry, not the reason to enter.** The second test is whether the shorter call lies to the reader. An arena parameter with `= null` would hide "omit it and it allocates on the global heap, and you owe the free".
-
-**An arena parameter carries no default. Where an API supports heap allocation, a caller requests it explicitly with `null`.** `List<|I32|>(null)`, `base64.encode(data, null)` and `json.parse(text, null)` read alike. Where the elements go, and whether a `free()` is owed, is then on the call's line.
-
-| Shape not taken | Why not |
-| :-- | :-- |
-| **A second constructor for the heap** (`new_on_heap()` beside `new(arena)`) | `new(null)` stays writable, so the heap would have two spellings ("A constructor's name says where the returned thing goes" in [`../std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md)) |
-| **The arena on each growing call** (`xs.push(arena, x)`) | Every `push` would carry it, and `free()` would need it back |
-| **A default arena per thread or per scope** | The call would again not show where it allocates |
-
-**An API can require a real arena.** Compound objects with shared storage need one lifetime, and a heap fallback would add cleanup rules. Such constructors reject `null`, and non-public fields prevent raw construction.
-
-**The linter holds it** (`[I0702]`): it reports an arena parameter that carries a default, read through typedefs.
-
-**Where a default cannot be placed**, and why, is the table in docs/SPEC-programming-language.md §8.1.1 (the cases `param_default_*` in `ksplc/tests/negative/fn.kspl`). A trait's declaration can carry one (`Index_place.at` in `std/lang`).
-
-**Where defaults stand is not listed here.** Each package's `SURFACE.txt` holds the published ones, and `ksplc doc --surface-scope=all <file>` shows every one a file reaches ("Writing out the published API" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). The second test turned these away, since the value left out is a judgment the caller must make. They are an arena, an environment's timing (`delay_us`), a grab tolerance (`drag_edge`'s `10.0`), a character to search for (`seek`'s `']'`), and a person's name.
-
-**What is given up**: a call's text does not show how many arguments it passes.
-
 ### Why `import` has no partner word for C
 
-**Naming and linking are different axes, and each is written with its own words.**
-
-| Axis | One end | The other end |
-| :-- | :-- | :-- |
-| Naming: which names a file can see | Bringing a name in (`import`) | Hiding one (not writing `pub`) |
-| Linking: which symbols the compiled output shares with other code | Emitting a symbol (`extern` before a definition) | Using an outside one (`extern` before a declaration without a body) |
-
-The list of axes is "9. Files and import" in [`SPEC-programming-language.md`](SPEC-programming-language.md). Where other languages pair the words (C++20 modules, Java's `module-info`), the pair reaches past naming.
-
-**A keyword like `export fn` is not used**: beside `import` it would look as if it decided naming, which visibility decides. Linking keeps the one word `extern` for both directions, and the body tells which ("`extern` is written on each declaration, in both directions" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)).
-
-**A combination that becomes ineffective across the axes is rejected**, as that section lists. On a method the cause is the name's uniqueness: symbols share one namespace, so only a name unique on its own can go out bare.
-
-**This is a language rule, not a lint**, since a lint runs only over the files it is given. It carries no diagnostic code ("1. Diagnostic codes, and the errors that have none" in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
-
-### Every item in a declaration block ends with `;`
-
-**Inside `{ … }`, every field and every enum value ends with `;`, the last one too. A `,` there is an error.** So a block has exactly one mark that says "end". The rule is "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
-
-```ksplb
-enum Color {
-    red;
-    green;
-}
-
-struct Point {
-    x: I32;
-    y: I32;
-}
-```
-
-**`,` keeps its own job**: it separates the items of a list within one notation. So the trailing `,` rule ("2.4 Trailing commas" in [`SPEC-programming-language.md`](SPEC-programming-language.md)) applies only to lists.
-
-**The C family's shape is not taken.** There, `,` separates names inside an `enum` that is one declaration closed by `;`. KSPL's `enum` sits at the level of `struct`, with no closing `;`. The formatter never keeps two items on one line, so a `,` has no job there either.
-
-**The rejection of a `,` there carries a Note stating the rule** (`forbidden_spelling_hint` in [`../ksplc/parse/syntax_msg.kspl`](../ksplc/parse/syntax_msg.kspl)).
+**Naming and linking are separate axes, so `import` has no partner word such as `export`.** `pub` decides naming, and `extern` decides linking in both directions. The reasons are "Visibility and linkage are separate axes" and "`extern` is written on each declaration, in both directions" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md).
 
 ## Models write it, and AI runs in it
 
-**This chapter decides two things.** A model writes, reads and checks KSPL ("A model writes it, and the compiler judges it"), and AI runs in KSPL ("AI runs in it"). The grounds are the same: only what is written happens, so neither a model nor a microcontroller has to guess.
+**A model writes, reads and checks KSPL, and AI runs in KSPL.** Both rest on one ground: only what is written happens, so neither a model nor a microcontroller has to guess.
 
 ### A model writes it, and the compiler judges it
 

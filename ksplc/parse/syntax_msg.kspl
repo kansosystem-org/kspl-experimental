@@ -101,6 +101,9 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
             type. No type name follows it."
     // The range syntax `a..b` / the slice syntax `a[i..j]`: the failure lands on the second `.`.
     if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
+        if on_case_line(src, pos)
+            return "\n  Note: a case takes no range of values. List the values ('case 1, 2, 3'). \
+                For a wide range, compare in the 'default' ('if c >= 'a' && c <= 'z'')."
         return "\n  Note: KSPL has no range syntax ('a..b'). Count with 'for i in Range(a, b, 1)' \
             ('Range.asc(b)' from 0). Use 'x.sub(start, len)' for a sub-slice."
     // A trailing closure (`count_over(xs) fn(x: I32; ): Bool`, Swift's and Kotlin's shape). Nothing
@@ -110,6 +113,12 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
         return "\n  Note: KSPL has no trailing closure. Pass the closure inside the call's \
             parentheses ('f(xs, fn(x: I32; ): Bool { return x > 0 })'). Alternatively, bind it to a \
             name and pass that name."
+    // A condition on a case (`case .tap(x) if x > 0`): the failure lands on the `if` or after
+    // its condition, on the case's own line.
+    if pos <= src.len && on_case_line(src, pos) &&
+        code_line(src, line_start(src, pos)).code.find_str(" if ").is_some()
+        return "\n  Note: a case takes no condition. Write the 'if' as the first statement in the \
+            case's block ('case .tap(x)', then 'if x > 0 { ... }')."
     // A postfixed `if` (`return x if cond;` / `return if cond;`): an unmatched ternary's shape.
     // Caution: A ternary (`a if cond else b`) exists, so do not say "an `if` cannot be written";
     // what is missing is a branch.
@@ -117,6 +126,11 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
         return "\n  Note: 'if' as an expression needs all three parts ('a if cond else b'). KSPL \
             has no postfix condition ('x if cond'). To branch without a value, write 'if cond { ... \
             }' first."
+    // Struct fields separated by `,` (`x: I32, y: I32`), Go's and Rust's shape. A field looks
+    // like a declaration, so ask for the `struct` first: the declaration's note names a variable.
+    if pos < src.len && src[pos] == ',' && enclosing_block_head(src, pos).equals("struct")
+        return "\n  Note: a struct field stands on its own, as an enum value does. End each field \
+            with ';' or with its line. Use ',' only between the items of a list."
     // A second name in one declaration, or a second init or step in a loop's header (C's
     // `for (i = 0, j = n; …; i++, j--)`). Each part takes one, so the failure lands on the `,`.
     if pos < src.len && src[pos] == ','
@@ -281,6 +295,9 @@ priv fn ends_with_word(code: U8[], w: U8[]): Bool //< whether the code's last wo
 
 priv fn starts_with_word(code: U8[], w: U8[]): Bool //< whether the code's first word is `w`
     return code.starts_with(w) && (code.len == w.len || !code[w.len].is_alnum())
+
+priv fn on_case_line(src: U8[], pos: Sz): Bool //< whether the line holding `pos` opens a `case`
+    return starts_with_word(code_line(src, line_start(src, pos)).code, "case")
 
 priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming the parentheses a value split onto a deeper line needs

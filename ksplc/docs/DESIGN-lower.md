@@ -8,7 +8,7 @@ It is one chapter of the compiler's internal design; [`DESIGN-compiler.md`](DESI
 
 ### What it answers for
 
-Lower flattens complex control flow (`defer`, short-circuit `&&`, `try(?)`, `break label;`) into a plain `if` or `goto`. To flatten, it *hoists* a piece of an expression into its own statement ahead of it. It also desugars method calls, builds dynamic dispatch and mangles names, so the backends stay pure emitters.
+Lower flattens complex control flow (`defer`, short-circuit `&&`, `!` and `catch`, a labelled `break`) into a plain `if` or `goto`. To flatten, it *hoists* a piece of an expression into its own statement ahead of it. It also desugars method calls, builds dynamic dispatch and mangles names, so the backends stay pure emitters.
 
 ### ARC values share the cleanup stack with `defer`
 
@@ -52,13 +52,13 @@ The steps, one by one:
 
   They extend the same `impl Ast_node` (`lower_expr_postfix`, `lower_cleanup_stmt`, `lower_loop_jump` and so on). The `Ast_node.lower` dispatch in `lower/root.kspl` calls them, and they recurse back through `r.lower(lctx)`. So the tree is walked once.
 * **`generate_trait_thunks` in `lower/vtable.kspl` is an independent second pass.** One flat loop over `root.children` finds each `.k_decl_impl`. It gathers the thunk functions (`decl_fn`) and the vtables (`decl_const`) into a side list. It then `add_child`s them to the root (`root_file`), where the backend emits them as plain functions and constants. It has two inputs (["An upcast, not conformance, decides what gets a vtable"](#an-upcast-not-conformance-decides-what-gets-a-vtable)).
-* **The ABI mangling (`lower/abi.kspl`) is the last independent pass.** *Mangling* turns a name into one that cannot collide ([the glossary](DESIGN-compiler.md#the-glossary)). It runs after the thunk generation, so its walk (`apply_abi_recursive`) covers the new nodes too. Sema itself does no string rewriting.
+* **The ABI mangling (`lower/abi.kspl`) is the last pass that synthesizes.** *Mangling* turns a name into one that cannot collide ([the glossary](DESIGN-compiler.md#the-glossary)). It runs after the thunk generation, so its walk (`apply_abi_recursive`) covers the new nodes too. Sema itself does no string rewriting.
   * **It gives every declaration its final C name, and both backends write that name as it stands** (`transform_decl_name`). Neither backend adds a prefix or recognizes `main`.
 
     | declaration | its C name |
     | :-- | :-- |
     | a top-level function, variable or constant | `kspl_` and its file's path, then its name; `main` becomes `kspl_main` |
-    | one marked `priv` (`file_private` in `File_env`) | `kspl_priv_{the file's base name}_{the name}`, so the single `.c` file of a unity build has no collision |
+    | one marked `priv` (`file_private` in `File_env`) | `kspl_priv_`, the file's logical path with each byte that is not a letter or a digit as `_`, then `_` and the name (`write_priv_prefix_to`). So the single `.c` file of a unity build has no collision |
     | a method in an `impl` | `kspl_`, the mangled name of the `impl`'s type, then `_` and the method's name |
     | a generic function's or method's instance | `kspl_` and the instance's mangled name |
     | a type | the type's mangled name (`mangle_type_id_to`), which every use of the type also writes |
@@ -79,17 +79,16 @@ The steps, one by one:
 * **A slice that a branch makes from an array literal points into a temporary at the statement's level** (`lower_lasting_array` in `lower/expr.kspl`).
   * The branches are a ternary's, a catch's substitute and a `fallback`. Each assigns its value inside a block of its own.
   * Written in place, the array is a C compound literal, and C ends its life with that block. A read after the branch is then undefined.
-  * clang keeps such storage for the whole function, so only gcc shows it. Built by mingw's gcc at `-O1`, std's tests reused that stack and stopped with "Out of memory".
+  * clang keeps such storage for the whole function, so only gcc shows it, mingw's at `-O1` among them.
   * Where the branch is inside another branch, the outer one's level holds it (`lasting_decls` in `lower/ctx.kspl`). `branch_array_lines` in `tests/prog/equiv_shapes.kspl` reads each shape after the branch.
-* **Verifying the types (`lower/verify.kspl`)** ends the order. One pass confirms that `x$`'s and `x@`'s types agree in pointer depth (`x@` takes an address, `x$` reads through a pointer). A mismatch stops with an ICE.
-  * **It is needed because lower sets types by hand** (`make_ptr` / `strip_ptr` and so on, in over twenty places). A mistake would otherwise break only on Win64 (["Stores and arguments are emitted at 'the receiver's type'"](DESIGN-backends.md#stores-and-arguments-are-emitted-at-the-receivers-type)).
-  * Caution: **Keep it at the end of the order.** At the end of `lower_root.run` it would miss the types vtable and abi write. With one `make_ptr` line dropped from `lower/abi.kspl`, only the end catches it.
+* **Verifying the types (`lower/verify.kspl`)** ends the order. One pass confirms that `x$`'s and `x@`'s types agree in pointer depth, and a mismatch stops with an ICE. Why lower needs it is the file's opening comment. A mistake can otherwise break only on Win64 (["Stores and arguments are emitted at 'the receiver's type'"](DESIGN-backends.md#stores-and-arguments-are-emitted-at-the-receivers-type)).
+  * Caution: **Keep it at the end of the order.** At the end of `lower_root.run` it would miss the types vtable and abi write.
   * **Where a generic's template arrives, stop; do not skip it.** `lower_prune` drops every uninstantiated template, so an arrival is announced with an ICE. It also shows the check is misplaced.
   * Types are compared normalized (aliases resolved, const marks dropped) to a fixed point, since the marks nest (`const_of(alias Meters)`).
 
 #### An upcast, not conformance, decides what gets a vtable
 
-An *upcast* turns a concrete value into a trait value (the `expr_upcast` node, "The nodes Sema creates: its contract with Lower and Genc" in [`DESIGN-sema.md`](DESIGN-sema.md)). **Only the pairs for which the tree holds an upcast naming `kspl_vtable_impl_<the conforming type>_<the trait>` get a vtable constant and thunks** (`collect_upcast_keys` in `lower/vtable.kspl`). Only two places name one, `emit_upcast_expr` in `gen/c/expr_postfix.kspl` and `gen/llvm/expr_agg.kspl`, both from `k_expr_upcast`.
+An *upcast* turns a concrete value into a trait value (the `expr_upcast` node, "The nodes Sema creates: its contract with Lower and Genc" in [`DESIGN-sema.md`](DESIGN-sema.md)). **Only the pairs for which the tree holds an upcast naming `kspl_vtable_impl_<the conforming type>_<the trait>` get a vtable constant and thunks** (`collect_upcast_keys` in `lower/vtable.kspl`). The places that name one all start from `k_expr_upcast`: `emit_upcast_expr` in `gen/c/expr_postfix.kspl`, `gen/llvm/expr_agg.kspl`, and genllvm's global initializer in `gen/llvm/decl.kspl`.
 
 Caution: **Do not make it "everything that conforms".** A conformance such as `impl<|T|> List<|T|>: Index<|Sz, T|>` grows with each instantiation, while `m[k]` makes no upcast. Several hundred unused constants and thunks would pile up in ksplc itself.
 
@@ -104,15 +103,16 @@ Read only one, and the other becomes C referring to an undefined symbol (`gentra
 
 #### A function or type nothing calls is not emitted
 
-**After Lower, ksplc deletes every function and generic type that the program's starting points cannot reach.** A generic's impl makes every method for each instantiation (`instantiate_generic_methods` in `sema/decl/mono.kspl`). Kept, one `List` use brings every operation `std/seq` adds, and over half of a small program's C is never called.
+**After Lower, ksplc deletes every function and generic type that the program's starting points cannot reach.** A generic's impl gives each instantiation every method's signature (`instantiate_generic_methods` in `sema/decl/mono.kspl`). A body is checked only once a checked body refers to it, and much of that is still unreachable from `main`. Kept, over half of a small program's C is never called.
 
-**`prune_unreachable_fns` in `lower/prune.kspl` removes the unreachable `decl_fn`s.** There are three kinds of starting point, and losing one erases everything beyond it:
+**`prune_unreachable_fns` in `lower/prune.kspl` removes the unreachable `decl_fn`s.** Each kind of starting point below is one, and losing one erases everything beyond it:
 
 | starting point | why the tree shows no call to it |
 | :-- | :-- |
 | `main` | the C runtime calls it (it is found with `find_main_symbol`) |
 | the `extern` definitions | their callers are on C's side, invisible from the tree |
 | references from the initializer of a non-function top-level declaration (`const` / `var`) | a trait's vtable naming a thunk as data is one, and it does not look like a call |
+| what the generated `main` or the C runtime calls: the backtrace and the check-panic hooks (`find_backtrace_symbol`, `find_check_panic_symbol`) | the call is outside the tree |
 
 Caution: **Walk the edges by `def_node`, never by name** ("The limits on building an AST, and linking `def_node`"). The backend decides a call target's name (`emit_generic_path` in `gen/c/expr.kspl`, from the `type_id`). Walking by name would copy that rule here, and the copies would drift.
 
@@ -138,9 +138,9 @@ Caution: **Call it after the functions have been dropped.** A type named only in
 
 **Lower makes a new node or an expanded control flow only through the builder functions in `base/ast.kspl`** (`build_var_decl`, `build_if_stmt` and so on). Assembling a raw node by hand invites a structural inconsistency, and is forbidden.
 
-**Every reference Lower makes must link `def_node` to the declaring node** (a `decl_var`, an `fn_param` and so on). The C backend resolves a variable by its name. But `genllvm` keys each local's SSA register (`%v_r_1`, say) on the declaring node's address. So wherever Lower inserts an `Identifier` or an `expr_path`, it links `def_node`.
+**Every reference Lower makes must link `def_node` to the declaring node** (a `decl_var`, an `fn_param` and so on). The C backend resolves a variable by its name. But `genllvm` keys each local's slot (`%v_r_1`, say) on its symbol, through `def_node` (`local_slot_key` in `gen/llvm/ctx.kspl`). So wherever Lower inserts an `Identifier` or an `expr_path`, it links `def_node`.
 
-**No single gate in `lower/*` enforces this.** The builders do not set `def_node`, so each call site links it by hand. A miss is caught downstream: the ID map in `gen/llvm/ctx.kspl` panics (an ICE) with "an undefined register (opaque)".
+**No single gate in `lower/*` enforces this.** The builders do not set `def_node`, so each call site links it by hand. A miss gets a new slot, so the IR reads an undefined register, which the LLVM toolchain rejects.
 
 ### An annotation belongs to the phase that decides it
 
@@ -215,7 +215,7 @@ Caution: A variable declaration, an argument and a `return` are not enough. Stru
 
 A managed read is classified as an ordinary place copy first. Only then do `Arc_take.decide` and the freshness check ask `arc_read_once_lowered` about the remaining reads.
 
-**The retain goes where the copy is made, never earlier.** Emitted ahead of its operands, `two(a, mk(k)!)` retained `a` before `mk(k)!` could leave, and the exit never gave that count back. The operands of a call, a compound literal, an enum's payload and an assignment go through `Operand_order` (`lower/order.kspl`), which knows which operand is taken (`add_value`):
+**The retain goes where the copy is made, never earlier**: in `two(a, mk(k)!)`, a retain of `a` ahead of `mk(k)!` is never given back when `mk(k)!` leaves. The operands of a call, a compound literal, an enum's payload and an assignment go through `Operand_order` (`lower/order.kspl`), which knows which operand is taken (`add_value`):
 
 | The taken operand | Where its count comes in | If a later operand acts (can leave) |
 | :-- | :-- | :-- |
@@ -225,7 +225,7 @@ A managed read is classified as an ordinary place copy first. Only then do `Arc_
 
 Caution: **Call `Operand_order.finish` after lowering the consumer.** Without it a taken operand's retain is never placed; `free` stops the compiler with an ICE.
 
-**An assignment also releases the value it overwrites.** **The release waits until the right side is lowered, retained and held in a temporary** (`retain; tmp = x; release(dst); dst = tmp`). `finish_arc_assign` places the release. An earlier release freed `head` in `head = Rc(Node::{ .next = head })` before retaining it. The temporary also lets `head = head.get().next` read before the old value goes.
+**An assignment also releases the value it overwrites.** **The release waits until the right side is lowered, retained and held in a temporary** (`retain; tmp = x; release(dst); dst = tmp`). `finish_arc_assign` places the release. So `head = Rc(Node::{ .next = head })` retains `head` before the release frees it. The temporary also lets `head = head.get().next` read before the old value goes.
 
 **It targets reads from a place expression**, one that points at existing memory:
 * an identifier or a path;
@@ -240,22 +240,22 @@ An expression with a call inside (`f().x`) must not be a place expression: it re
 | `f().x`, `f()[i]` (a part of a fresh value) | no clone can be made, but once lowered it reads the temporary holding `f()` | yes, once lowered, where something takes it |
 | `b.get().v`, `f()$` (through a pointer a call returns) | no clone can be made, but it reads existing memory | yes, once lowered |
 
-**A read through a pointer a call returns is a copy of existing memory, not a fresh value** (`arc_read_once_lowered`). Taken as fresh, `x: = b.get().v` got no retain, and `x`'s release freed a value the box still held. A clone would run the call twice, so:
+**A read through a pointer a call returns is a copy of existing memory, not a fresh value** (`arc_read_once_lowered`). Taken as fresh, `x: = b.get().v` would get no retain, and `x`'s release would free a value the box still holds. A clone would run the call twice, so:
 1. `Operand_order` fixes the operands' order.
 2. Lowering moves the pointer into a temporary (`arc_needs_pointer_hoist` in `lower_expr_postfix`).
 3. The retain clones the lowered read (`arc_retain_lowered`).
 
 **A Result built around a place, or unwrapped from one by `!`, reads that place.** `return e.value` in a `V!E` function wraps `e.value`, and `r!` takes `r`'s payload while `r` still owns it. The verdict looks through the wrap and the `!` and retains the place.
 
-**Each way a branching value can go hands over a count of its own** (`lower_into_block`, `lower_expr_catch_chain`, `lower_fallback_stmt` in `lower/expr.kspl`). A ternary's branch, a catch's substitute and a `fallback` retain a place they read. A catch's success retains a payload a binding still owns (`r catch …`). So a ternary and a catch are fresh values, and the verdict does not look through a catch. Otherwise `return a if c else b` released `a` twice.
+**Each way a branching value can go hands over a count of its own** (`lower_into_block`, `lower_expr_catch_chain`, `lower_fallback_stmt` in `lower/expr.kspl`). A ternary's branch, a catch's substitute and a `fallback` retain a place they read. A catch's success retains a payload a binding still owns (`r catch …`). So a ternary and a catch are fresh values, and the verdict does not look through a catch. Otherwise `return a if c else b` would release `a` twice.
 
-**A `switch` arm's binding holds a count of its own** (`register_arc_arm_bindings`). A retain goes at the arm's start, and the release waits in `arc_scope_pending` for the arm's block. Without it, an arm that reassigned its subject (`s = .none`) freed the payload under the binding. Why the language counts it is "Why a `switch` arm's binding holds its own count" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
+**A `switch` arm's binding holds a count of its own** (`register_arc_arm_bindings`). A retain goes at the arm's start, and the release waits in `arc_scope_pending` for the arm's block. Without it, an arm that reassigns its subject (`s = .none`) would free the payload under the binding. Why the language counts it is "Why a `switch` arm's binding holds its own count" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
 
 **A dereference does not demand a place expression of its receiver**, since a pointer leads to existing memory however it was computed. Demanding it lets `(p + i)$` slip through: a `List`'s `get` steals the stored count, and its `set` leaks. For the receiver the verdict looks only for a call (`arc_has_call`).
 
-Caution: **Do not make a `return`'s retain depend on there being a cleanup.** With no cleanup, `return p.field;` comes one short, and the caller's release frees memory still in use.
+Caution: **Do not make a `return`'s retain depend on there being a cleanup.** With no cleanup, `return p.field` comes one short, and the caller's release frees memory still in use.
 
-**An assignment whose left side is not a place expression is an error.** For `rc.get().f = x;`, the release would run the call twice or leak. The error asks for `p: = rc.get(); p.f = x;` (the case `arc_assign_through_call` in `tests/negative/pointer.kspl`).
+**An assignment whose left side is not a place expression is an error.** For `rc.get().f = x`, the release would run the call twice or leak. The error asks for `p: = rc.get()`, then `p.f = x` (the case `arc_assign_through_call` in `tests/negative/pointer.kspl`).
 
 **Liveness is checked with `Weak_rc.upgrade()`, not by reading the value**, which freed memory can still hold.
 
@@ -280,7 +280,7 @@ A call's result, a literal, and a field read off one arrive counted once. Whoeve
 
 * **Always make the parameter a pointer.** Passed by value, the cleanup's lowering would insert a `retain` on the argument. A pointer type has `type_is_managed` false.
 * **An array takes a pointer to its element.** `@` on an array gives a pointer to the first element, and no expression has type `T[N]$@`.
-* **The pointer is read-only, and there is one helper per type whatever its immutability.** `retain` and `release` take `Self@`. A writable parameter discarded C's `const` where `for x in` copies a read-only array (`-Wdiscarded-qualifiers`).
+* **The pointer is read-only, and there is one helper per type whatever its immutability.** `retain` and `release` take `Self@`. A writable parameter would discard C's `const` where `for x in` copies a read-only array (`-Wdiscarded-qualifiers`).
 * **Register the helper before building its body**, or a type that comes back round to itself recurses forever.
 
 **An enum must read its tag at run time.** A `switch` is synthesized over the active payload. A variant without a payload gets no `case`, and a `default {}` is always added for a tag no `case` matches. A Result goes the same way.

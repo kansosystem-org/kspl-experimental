@@ -1,6 +1,6 @@
 # The design of ksagent
 
-This document gives the reasons behind ksagent's shape: how a question is answered, and what keeps an answer honest. It is for whoever changes ksagent. How to run it is in [`ksagent/README.md`](../README.md).
+This document gives the reasons behind ksagent's shape: how a question is answered, and what keeps an answer honest. It is for whoever changes ksagent. How to run it is in [`ksagent/README.md`](../README.md), and what each command, option and file does is [`ksagent/docs/SPEC-commands.md`](SPEC-commands.md).
 
 Words used here: the *root* is the one folder whose files ksagent reads. A *source* is a place an answer cites: a file under the root, a first and a last line, and a quote. A *conversation* is three files that share a name under the root. Its *ask file* (`team.ask.jsonl`) holds the questions the chat page asks. Its *chat file* (`team.chat.jsonl`) records each question ksagent took and the answer it got. Its *live file* (`team.live.json`) shows the answer being written. A *pending* question is one in an ask file with no stop and no answer yet. A *text view* is the lines of text a Word or Excel file is read as.
 
@@ -87,7 +87,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **A name that starts with a dot is hidden.** A root that is a checkout holds `.git/` and `.env`. `fs.join_under` checks each segment, by its long name too, because Windows opens `.git` by its short name `GIT~1`.
 * **A listing and a search offer only what a read takes.** They pass each name through the same check, so the model is never shown a name that a read then refuses.
 * **Only text is read.** A file with a NUL byte, or one that is not valid UTF-8, is skipped by a search and refused by a read. A Word or Excel file is read as its text view ("Word and Excel files" below).
-* **The tools only read.** ksagent writes only chat files, live files, the lock `watch` holds (`.ksagent.lock`) and the table that `--out` names.
+* **The tools only read.** The files ksagent writes are "Limits" in [`ksagent/docs/SPEC-commands.md`](SPEC-commands.md#limits).
 
 ## Word and Excel files
 
@@ -220,6 +220,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **A line break stays a line break**, since models write one line per sentence or item, and Japanese text joined with a space reads wrong.
 * **A hostile or runaway answer reads in time in step with its length.** Each mark's closings, and each bracket's match, are found in one pass, never by a scan from each opening.
 * **Quotes, lists and emphasis nest at most 8 deep**, and deeper text reads as text. Thousands of `>` would otherwise nest the reader as deep, and overflow the browser's stack.
+* **A table has at most 64 columns** (`MAX_COLUMNS` in `ksagent/page/chat.html`), and a wider header reads as text. Each row is filled out to the header's width. So a header of N `|` over N short rows would make N² cells, and run the tab out of memory.
 * **ksmd's reader is not used.** It is strict, and refuses much of what models write; it is also internal to ksmd.
 
 ### What a turn shows
@@ -239,6 +240,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **The page follows the growing answer only while it stands near the bottom**, within 60 pixels. A person reading above is not pulled down, and a button jumps to the latest text.
 * **Only a turn whose records changed is read and drawn again.** So a growing answer leaves the rest of the page still, and unread.
 * **A turn that cannot be shown says so, and the page goes on.** Its text stands as plain text, and the next look comes whatever the last one met.
+* **A request to the local server gives up after 15 seconds, and the page says so.** The next look that gets through removes the notice. A slow model never makes a request slow, since the answer reaches the page through files. Only the request that holds the server open has no limit.
 * **A live file with an empty id and the phase `refused` is shown as a notice**: ksagent answers none of the conversation's questions, and says why.
 
 ### Opening the page

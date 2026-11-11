@@ -756,7 +756,7 @@ function ksmdRange(ks) {
   ks.handle("table-select", (_, c) => selectTable(c.block), { table: true });
 
   // The chosen cell's text as typed: a formula, a value or a column's name. While the cell is
-  // open, it is what its box holds now. The status bar shows it too (`status.js`).
+  // open, it is what its box holds now. The formula bar shows it too (`bar.js`).
   function typed() {
     const open = ks.table.editing();
     return open ? open.input.value : ks.cellText(ks.cell.block, ks.cell.row, ks.cell.column);

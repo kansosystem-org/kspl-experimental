@@ -13,7 +13,7 @@ priv const FULL: U8[] =
         ({page}/{pages})\" numbers=2 table_label=\"表\" figure_label=\"図\"\n:::\n"
 priv const BODY: U8[] = "\n# Title\n\n## One\n"
 priv const TABLE: U8[] =
-    "%ksmd 1\n\n:::table name=\"t\"\n| \"kind\" | \"mode\" |\n| \"lock\" | \"A\" |\n| \"lock\" | \
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"kind\" | \"mode\" |\n| \"lock\" | \"A\" |\n| \"lock\" | \
         \"B\" |\n:::\n"
 
 fn run()
@@ -25,7 +25,7 @@ priv fn reading()
     defer arena: = Arena(64 * 1024)
     for clause in U8[][]::{ FULL, ":::document numbers=1\n:::\n",
         ":::document paper=\"letter\"\n:::\n", ":::document orientation=\"landscape\"\n:::\n" }
-        text: = arena.text().s("%ksmd 1\n\n").s(clause).s(BODY).take()
+        text: = arena.text().s("%ksmd 2\n\n").s(clause).s(BODY).take()
         ed: = opened(text, arena)
         saves(arena.text().s("settings read and save unchanged: \{clause\}").take(), ed@, arena,
             text)
@@ -35,27 +35,27 @@ priv fn reading()
         ":::document header=\"{date}\"\n:::\n", ":::document header=\"a}\"\n:::\n",
         ":::document table_label=\"{page}\"\n:::\n", ":::document colour=\"red\"\n:::\n",
         ":::document numbers=2\nbody\n:::\n" }
-        refused(arena.text().s("%ksmd 1\n\n").s(bad).s(BODY).take(), bad)
-    refused(arena.text().s("%ksmd 1\n\n# Title\n\n").s(FULL).take(), "settings after another block")
-    refused(arena.text().s("%ksmd 1\n\n").s(FULL).s("\n").s(FULL).take(), "settings twice")
+        refused(arena.text().s("%ksmd 2\n\n").s(bad).s(BODY).take(), bad)
+    refused(arena.text().s("%ksmd 2\n\n# Title\n\n").s(FULL).take(), "settings after another block")
+    refused(arena.text().s("%ksmd 2\n\n").s(FULL).s("\n").s(FULL).take(), "settings twice")
 
 priv fn setting()
     defer arena: = Arena(64 * 1024)
-    plain: = arena.text().s("%ksmd 1\n").s(BODY).take()
+    plain: = arena.text().s("%ksmd 2\n").s(BODY).take()
     $ed: = opened(plain, arena)
     $s: = no_settings()
     s.numbers = 2
     s.header = "[Confidential]"
     ed.set_settings(s) catch e
         verdict.check("setting the settings", false, e.message())
-    first: = arena.text().s("%ksmd 1\n\n:::document header=\"[Confidential]\" numbers=2\n:::\n")
+    first: = arena.text().s("%ksmd 2\n\n:::document header=\"[Confidential]\" numbers=2\n:::\n")
         .s(BODY).take()
     saves("settings set on a document go first", ed@, arena, first)
     s.paper = "A3"
     ed.set_settings(s) catch e
         verdict.check("changing the settings", false, e.message())
     changed: = arena.text()
-        .s("%ksmd 1\n\n:::document paper=\"A3\" header=\"[Confidential]\" numbers=2\n:::\n").s(BODY)
+        .s("%ksmd 2\n\n:::document paper=\"A3\" header=\"[Confidential]\" numbers=2\n:::\n").s(BODY)
         .take()
     saves("new settings replace the clause", ed@, arena, changed)
     $bad: = s
@@ -73,13 +73,13 @@ priv fn setting()
 priv fn tables()
     defer arena: = Arena(64 * 1024)
     text: =
-        "%ksmd 1\n\n:::table name=\"t\" caption=\"Modes\" merge=\"A,B\"\n| \"kind\" | \"mode\" |\n| \
+        "%ksmd 2\n\n:::table name=\"t\" caption=\"Modes\" merge=\"A,B\"\n| \"kind\" | \"mode\" |\n| \
             \"lock\" | \"A\" |\n:::\n"
     ed: = opened(text, arena)
     saves("a caption and merged columns read and save unchanged", ed@, arena, text)
     for bad in U8[][]::{ " caption=\"\"", " caption=\"a{b}\"", " merge=\"C\"", " merge=\"B,A\"",
         " merge=\"A,A\"", " merge=\"a\"", " merge=\"\"" }
-        refused(arena.text().s("%ksmd 1\n\n:::table name=\"t\"").s(bad)
+        refused(arena.text().s("%ksmd 2\n\n:::table name=\"t\"").s(bad)
             .s("\n| \"kind\" | \"mode\" |\n:::\n").take(), bad)
     $t: = opened(TABLE, arena)
     t.set_caption(0, "Modes") catch e
@@ -92,7 +92,7 @@ priv fn tables()
     t.edit_table(0, .remove_column, 0, 1, Sz[]::{}) catch e
         verdict.check("removing a column", false, e.message())
     saves("removing a merged column takes it out of merge", t@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" caption=\"Modes\"\n| \"mode\" |\n| \"A\" |\n| \"B\" \
+        "%ksmd 2\n\n:::table name=\"t\" caption=\"Modes\"\n| \"mode\" |\n| \"A\" |\n| \"B\" \
             |\n:::\n")
     t.undo()
     t.set_merged(0, 0, false) catch e

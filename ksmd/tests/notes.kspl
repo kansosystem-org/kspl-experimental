@@ -10,7 +10,7 @@ import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
 
-priv const TABLE: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n"
+priv const TABLE: U8[] = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n"
 
 fn run()
     reading()
@@ -20,15 +20,15 @@ fn run()
 
 priv fn reading()
     defer arena: = Arena(64 * 1024)
-    for text in U8[][]::{ "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 120 {fill=\"#fff2cc\" \
+    for text in U8[][]::{ "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 120 {fill=\"#fff2cc\" \
         note=\"Check with Sam\"} |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| {note=\"Say \\\"hi\\\"\\nthen go\"} |\n:::\n",
-        "%ksmd 1\n\n{align=\"center\" note=\"Is this the final title?\"}\n# Plan\n\nText.\n",
-        "%ksmd 1\n\n{note=\"A remark\"}\nText.\n" }
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| {note=\"Say \\\"hi\\\"\\nthen go\"} |\n:::\n",
+        "%ksmd 2\n\n{align=\"center\" note=\"Is this the final title?\"}\n# Plan\n\nText.\n",
+        "%ksmd 2\n\n{note=\"A remark\"}\nText.\n" }
         ed: = opened(text, arena)
         saves("a note reads and saves unchanged", ed@, arena, text)
-    for bad in U8[][]::{ "%ksmd 1\n\n{note=\"\"}\nText.\n", "%ksmd 1\n\n{note=\"a\\tb\"}\nText.\n",
-        "%ksmd 1\n\n{note=2}\nText.\n" }
+    for bad in U8[][]::{ "%ksmd 2\n\n{note=\"\"}\nText.\n", "%ksmd 2\n\n{note=\"a\\tb\"}\nText.\n",
+        "%ksmd 2\n\n{note=2}\nText.\n" }
         src: = Source("bad.ksmd", bad) catch
             continue
         $read: = true
@@ -57,28 +57,28 @@ priv fn cells()
     ed.undo()
     saves("undo brings it back", ed@, arena, noted)
     $named: =
-        opened("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {fill=\"#fff2cc\" note=\"In USD\"} |\n| 1 \
+        opened("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {fill=\"#fff2cc\" note=\"In USD\"} |\n| 1 \
             |\n:::\n", arena)
     named.set_cell(0, -1, 0, "Cost") catch e
         verdict.check("a new name", false, e.message())
     saves("a new name keeps the name's look and note", named@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"Cost\" {fill=\"#fff2cc\" note=\"In USD\"} |\n| 1 \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Cost\" {fill=\"#fff2cc\" note=\"In USD\"} |\n| 1 \
             |\n:::\n")
 
 priv fn paragraphs()
     defer arena: = Arena(64 * 1024)
-    plain: = "%ksmd 1\n\nOne two.\n"
+    plain: = "%ksmd 2\n\nOne two.\n"
     $ed: = opened(plain, arena)
     ed.set_block_note(0, "Too short?") catch e
         verdict.check("a note on a paragraph", false, e.message())
-    noted: = "%ksmd 1\n\n{note=\"Too short?\"}\nOne two.\n"
+    noted: = "%ksmd 2\n\n{note=\"Too short?\"}\nOne two.\n"
     saves("a paragraph takes a note on a line of braces before it", ed@, arena, noted)
     p: = text_spot(0, 0, 3)
     ed.select(p, p)
     ed.enter(false) catch e
         verdict.check("a split", false, e.message())
     saves("a paragraph split in two keeps its note on the first part", ed@, arena,
-        "%ksmd 1\n\n{note=\"Too short?\"}\nOne\n\ntwo.\n")
+        "%ksmd 2\n\n{note=\"Too short?\"}\nOne\n\ntwo.\n")
     ed.undo()
     ed.set_block_note(0, "") catch e
         verdict.check("resolving a paragraph's note", false, e.message())

@@ -119,7 +119,7 @@ A *central difference* estimates a gradient without the backward pass. It nudges
 
 **ksai's kernels hold no hand-written intrinsic.** The default `matmul_cols` in [`tensor.kspl`](../tensor.kspl) is a cache-efficient i-k-j loop, which Clang's `-O3` vectorizes. So it needs no particular instruction set and checks correctly on any target.
 
-**`make test-simd` checks that the hot loops stay vectorized**, in [`tensor.kspl`](../tensor.kspl), [`nn.kspl`](../nn.kspl) and [`quant.kspl`](../quant.kspl). Each loop it checks carries a comment naming it on the line before, and is checked at its own place in the optimization record. So a function whose other loop vectorizes does not pass for it.
+**`make test-simd` checks that the hot loops stay vectorized**, in [`tensor.kspl`](../tensor.kspl), [`nn.kspl`](../nn.kspl), [`quant.kspl`](../quant.kspl) and [`delta_net.kspl`](../delta_net.kspl). Each loop it checks carries a comment naming it on the line before, and is checked at its own place in the optimization record. So a function whose other loop vectorizes does not pass for it.
 
 **A loop of 32 is vectorized whole, not as a loop.** The C compiler unrolls it and turns its sum into vector code (the SLP vectorizer), which the loop vectorizer's record does not show. A comment saying "sees this sum vectorize" makes the gate look in the SLP vectorizer's record instead.
 
@@ -134,9 +134,9 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 
 **An F32 dot product keeps 16 or 8 sums side by side, added in a fixed order at the end** (`dot_lanes` in [`quant.kspl`](../quant.kspl) and in [`nn.kspl`](../nn.kspl)). So the C compiler packs the sums into vector registers, and the result does not depend on the thread count.
 
-**The integer products sum 16-bit whole numbers in groups of 32, exactly in 32 bits** (`dot_block` and `dot_ints` in [`quant.kspl`](../quant.kspl)). Integer addition gives the same result in any order, so the C compiler vectorizes the sums without `-ffast-math`. Each group becomes four `pmaddwd` instructions. How the loops around them are shaped to reach the vectorizer is in their comments.
+**The integer products sum 16-bit whole numbers in groups of 32, exactly in 32 bits** (`dot_block` and `dot_ints` in [`quant.kspl`](../quant.kspl)). Integer addition gives the same result in any order, so the C compiler vectorizes the sums without `-ffast-math`. Each group becomes four 128-bit `pmaddwd` instructions, or two 256-bit `vpmaddwd` with AVX2. How the loops around them are shaped to reach the vectorizer is in their comments.
 
-**What the auto-vectorizer does not reach.** Clang 18 makes the 128-bit `pmaddwd` from these loops, eight multiply-adds an instruction, even for a CPU with AVX2 or AVX-512. It forms neither the 256-bit `vpmaddwd`, nor AVX2's `vpmaddubsw` (32 multiply-adds), nor AVX-512 VNNI's `vpdpbusd` (64). llama.cpp writes those by hand. That gap is most of the difference left in reading a prompt ([`benches/README.md`](../benches/README.md) has the measurements).
+**What the auto-vectorizer does not reach.** Clang 22.1 at `-O3` makes the 128-bit `pmaddwd` in the default build, eight multiply-adds an instruction. With `-march=x86-64-v3` (AVX2) it makes the 256-bit `vpmaddwd` (16). With `-march=native` on a CPU with AVX-512 VNNI, it also makes `vpdpwssd`, which adds the products into the sums in the same instruction. It forms neither AVX2's `vpmaddubsw` (32 multiply-adds of 8-bit numbers) nor AVX-512 VNNI's `vpdpbusd` (64), and no 512-bit form. llama.cpp writes those by hand. That gap is most of the difference left in reading a prompt ([`benches/README.md`](../benches/README.md) has the measurements).
 
 **The exponential of an F32 is KSPL code** (`exp_f32` in [`tensor.kspl`](../tensor.kspl)), as ggml's `ggml_v_expf` is. `math.exp` calls the C library on an F64, and no loop that calls it can be vectorized. SiLU and the attention's softmax use `exp_f32` for F32 tensors, and `math.exp` for F64 ones.
 
@@ -145,8 +145,8 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 **A quantized weight matrix (`Quant_matrix` in [`quant.kspl`](../quant.kspl)) holds GGUF's bytes exactly as GGUF stores them.** GGUF is llama.cpp's file format, in which most models are shared. Each format is a block of 32 or 256 numbers with one scale, or with a scale per group inside the block.
 
 * **Why GGUF's own layouts**: a tensor read from a GGUF file is used as it stands. A layout of ksai's own would need a conversion at every load, and a second file format to keep in step.
-* **Why no full F32 copy**: a 9B model takes about 36 GB as F32 and about 6 GB as 4-bit numbers. So `mul_mat` turns one block at a time into numbers in a buffer on the stack, and multiplies it with the inputs at once.
-* **Why Q5_0 too**: llama.cpp's Q4_K_M mix needs rows that are a multiple of 256. Where a row is shorter, as the 896 numbers of a 0.5B Qwen model, the file holds Q5_0 and Q8_0 instead.
+* **Why no full F32 copy**: it takes several times the memory of the quantized file ([ksai](../README.md) gives the sizes). So `mul_mat` turns one block at a time into numbers in a buffer on the stack, and multiplies it with the inputs at once.
+* **Why Q5_0 too**: the K formats need rows that are a multiple of 256, which a 0.5B Qwen model's 896 numbers are not.
 
 **Decoding gives the reference's numbers bit for bit.** Each block decoder follows ggml's `dequantize_row_*`, product by product. A product and a subtraction stay in separate statements, since a C compiler can fuse `a * b - c` into one rounding on some machines. The tests compare every format with llama.cpp's Python package `gguf`, on random blocks that reach every bit of the packed scales ([`tests/quant_test.kspl`](../tests/quant_test.kspl)). The reference files are committed, so the tests need no Python.
 
@@ -381,13 +381,13 @@ Caution: **Keep the layers so that taking one out leaves the others to catch it.
 
 The task is *fill-in-the-middle* (FIM): the model sees the code before and after a gap (a *hole*) and writes what goes in the gap.
 
-### The approach: borrow for training, KSPL for checking and serving
+### The approach: KSPL for training, checking and serving
 
 | Part | What it uses |
 | :-- | :-- |
-| **Training** | It can borrow an existing model: a large LLM, or LoRA fine-tuning of a small coding model (training only a few added parameters) |
+| **Training** | `ksai`: `code_complete train` learns from the FIM examples |
 | **Checking** | KSPL's own tools: `ksplc` (compiling), `lint` and `fmt` |
-| **Serving** (running the model) | KSPL: inference runs on `ksai` with safetensors weights (`examples/code_complete` and `examples/chat_server`) |
+| **Serving** (running the model) | `ksai`: `code_complete complete` reads the trained safetensors weights |
 
 **The compiler is the judge** (the *compiler oracle*). What is generated and trained on is checked by a program, not by a person. The main measure is the rate at which `ksplc` accepts a file once the completion is inserted.
 
@@ -396,8 +396,6 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 ### Implementation language: KSPL for data, evaluation and the gate
 
 **Whatever reduces to the compiler oracle is KSPL.** Calling `ksplc` as a child process and judging the result needs no machine-learning library; it uses `run_capture` in [`std/subproc.kspl`](../../../std/subproc.kspl).
-
-**What depends on the outside ML ecosystem stays in Python on purpose** (`transformers`, `peft`, `torch` and the like): it is an outside reference that checks the KSPL code. Those helpers import the libraries inside a function, so a file loads without them.
 
 ### How a completion is scored
 

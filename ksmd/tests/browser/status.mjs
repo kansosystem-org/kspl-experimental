@@ -1,6 +1,6 @@
-// The status bar: the lines and characters of the document or the selection, the chosen cell's
-// address and what was typed in it, the figures for chosen cells picked by a right-click and kept by
-// the browser, the document's zoom, the printed page where the caret stands, and a filter's count.
+// The status bar: the lines and characters of the document or the selection, the figures for
+// chosen cells picked by a right-click and kept by the browser, the document's zoom, the printed
+// page where the caret stands, and a filter's count.
 // The page count is checked against the pages the browser's own print to PDF makes of the same
 // document.
 // `statusBar(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
@@ -52,42 +52,17 @@ export function statusBar({ page, js, settle, until, press, type, select, click,
         "a character with a variation selector counts once, and a space is not counted");
     },
 
-    // The chosen cell's address and its text as typed, as Excel's name box and formula bar show them.
-    async statusCell() {
-      const long = '=if(A1 = "1F", "a long text that runs well past the room the status bar holds", "another one")';
-      await load(`${H}Text.\n\n:::table name="t"\n| "a" | "b" | "c" |\n| "1F" | =hex_to_dec(A1) | 3 |\n` +
-        `| "2E" | =hex_to_dec(A2) | ${long} |\n:::\n`);
-      await click(cell(0, 1));
-      await shows(".status-address", "B1", "a chosen cell shows its address");
-      await shows(".status-content", "=hex_to_dec(A1)", "and its formula as typed");
-      await click(cell(-1, 1));
-      await shows(".status-address", "B name", "a column's name cell shows its column");
-      await shows(".status-content", "b", "and the name");
-      await click(cell(0, 1));
-      await press("ArrowDown", SHIFT);
-      await press("ArrowRight", SHIFT);
-      await shows(".status-address", "B1:C2", "a range shows its address");
-      await press("Escape");
-      await click(cell(1, 2));
-      await shows(".status-address", "C2", "a range left with Esc gives the chosen cell's address back");
-      const cut = await js("(() => { const el = document.querySelector('.status-cell'); " +
-        "return [el.scrollWidth > el.clientWidth, el.title, el.getAttribute('aria-label')]; })()");
-      check(cut[0] && cut[1] === `Cell C2: ${long}` && cut[2] === cut[1],
-        "a long formula is cut on the bar, and its tooltip and accessible name hold it whole", JSON.stringify(cut));
-      await click("#doc p");
-      await until("document.querySelector('.status-cell').hidden", 3000);
-      check(await text(".status-cell") === null, "in the text, the bar shows no cell");
-    },
-
     // The bar names no cell mode and no section: the open cell's keys show the mode, and the
-    // contents the section. What is typed shows as it is typed.
+    // contents the section. What is typed shows in the formula bar as it is typed.
     async statusNoMode() {
       await load(`${H}# Scope\n\nText.\n\n:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`);
       check(await js("!document.querySelector('.status-mode, .status-section')"),
         "the bar holds no cell mode and no section");
       await click(cell(0, 0));
       await type("5");
-      await shows(".status-content", "5", "the bar shows what is typed as it is typed");
+      await until("document.querySelector('.formula-bar .formula-input').value === '5'", 3000);
+      check(await js("document.querySelector('.formula-bar .formula-input').value") === "5",
+        "the formula bar shows what is typed in the cell as it is typed");
       const said = await js("document.querySelector('.status-bar').textContent");
       check(!/\b(Ready|Enter|Edit)\b/.test(said) && !said.includes("Scope"),
         "and names neither the cell's mode nor the section", said);

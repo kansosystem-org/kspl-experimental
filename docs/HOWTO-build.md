@@ -96,9 +96,9 @@ It ends with `# installed ->` lines, then says **which `ksplc` your PATH starts*
 * **It installs only a compiler that reproduces itself.** It runs `make self-host` and `make self-host-ship` first, and stops where either differs. It changes no file in the tree. After a change to how ksplc generates code, it stops until `make commit-seed` has run, and says so.
 * **Do not put `out/ksplc_seed.exe` on the PATH.** The seed lacks every feature since it was last re-taken, and is built with `-O0 -g`. `make install` installs Stage2, the compiler that reproduces itself, rebuilt with optimization. Why is "A shipped executable is optimized; the development cycle is not" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
-**Installation prepares both copies before replacing the compiler or library**, and a failed replacement tries to restore both backups. Wait until it ends before compiling.
+**Installation prepares every copy before replacing anything**: the compiler, `std/`, `lib/`, and ksmd's folder when ksmd is installed. A failed replacement tries to restore every backup. Wait until it ends before compiling.
 
-**If rollback fails, the error names the backup folders**; keep them until the old pair is restored. A killed process or power loss can also leave `.kspl-install.*` folders and `$PREFIX/lib/kspl/.install-lock`. After checking that no installer runs, recover any `old` library and `old` compiler (`old.exe` on Windows) from those folders. Then remove the empty lock directory and retry. Close programs using the installed compiler if Windows refuses a move.
+**If rollback fails, the error names the backup folders**; keep them until the old copies are restored. A killed process or power loss can also leave `.kspl-install.*` folders and `$PREFIX/lib/kspl/.install-lock`. After checking that no installer runs, recover each `old` entry from those folders (the compiler's is `old.exe` on Windows). Then remove the empty lock directory and retry. Close programs using the installed compiler if Windows refuses a move.
 
 **If it goes wrong, there are four ways, each with its own sign.**
 

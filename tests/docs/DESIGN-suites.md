@@ -38,9 +38,7 @@ Caution: **Do not build the suites with the compiler under inspection.** A broke
 
 ## What stays in the root tests folder
 
-**A suite stays in the root `tests/` only when it reads more than one package; a suite about one package lives inside that package.** A suite here checks the compiler against something outside its folder, or gates the repository itself. Examples are the language specification, the VS Code extension's grammar and the root `Makefile`'s rebuild list. Others read every package's generated C, or the whole tree. So a package carved out of the tree takes its own tests with it.
-
-**A suite lives where what it reads lives.**
+**A suite lives where what it reads lives**, so a package carved out of the tree takes its own tests with it. The rule and its reasons are "A test of a unit's inside goes inside that unit" in [`docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md). Where a new test goes is "Where a new test goes" in [`HOWTO-write-a-suite.md`](HOWTO-write-a-suite.md).
 
 | Suite | What it reads | Where it lives |
 | :-- | :-- | :-- |

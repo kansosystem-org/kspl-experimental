@@ -17,12 +17,12 @@ function ksmdPoint(ks) {
 
   // Whether text that ends here leaves the caret where a reference can go: after `=`, `(`, `,`,
   // `:`, an operator (`+ - * / & = < >`), or the words and, or, not; never inside quoted text.
+  // Each `"` opens or closes quoted text, so a doubled `""` stays inside, and `\` is text.
   function referencePlace(before) {
     if (!before.startsWith("=")) return false;
     let quoted = false;
     for (let i = 1; i < before.length; i++) {
-      if (quoted && before[i] === "\\") i++;
-      else if (before[i] === '"') quoted = !quoted;
+      if (before[i] === '"') quoted = !quoted;
     }
     return !quoted && /(?:[=(,:+\-*/<>&]|(?:^|[^\w.$"])(?:and|or|not)\s)\s*$/.test(before);
   }
@@ -81,7 +81,7 @@ function ksmdPoint(ks) {
   function cellAt(target, open) {
     if (!target || !target.closest || target.closest(".filter-arrow")) return null;
     const el = target.closest(".table td[data-r], .table th.name[data-c], .table th.letter");
-    if (!el || el.closest(".include") || el.contains(open.input)) return null;
+    if (!el || el.closest(".include") || el.contains(open.home)) return null;
     const wrap = el.closest(".table");
     const own = ks.view.blocks().indexOf(wrap) === open.block;
     const whole = el.tagName === "TH";

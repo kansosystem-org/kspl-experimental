@@ -5,8 +5,6 @@
 //< docs/DESIGN-principles.md). Silently ignored, its intent and the real behaviour diverge.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/core" as base_core
-import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/chars" // testing and slicing single characters
 import "std/str"
@@ -16,10 +14,9 @@ priv fn is_known_attribute(name: U8[]): Bool //<
     //< Caution: Add an attribute to docs/SPEC-programming-language.md's table and .vscode's
     //< colouring too (`make test-conventions` compares them). The directives have their own list
     //< (`directive_shape` below).
-    return name.equals("align") || name.equals("cfg") || name.equals("ends_views") ||
-        name.equals("gives_view") || name.equals("inline") || name.equals("interrupt") ||
-        name.equals("naked") || name.equals("noinline") || name.equals("noreturn") ||
-        name.equals("packed") || name.equals("raw_address") || name.equals("section")
+    return name.equals("cfg") || name.equals("ends_views") || name.equals("gives_view") ||
+        name.equals("inline") || name.equals("naked") || name.equals("noinline") ||
+        name.equals("noreturn") || name.equals("raw_address") || name.equals("section")
 
 // ==========================================
 // The check on directives (`##name(...)`)
@@ -154,15 +151,11 @@ priv fn check_link_directive(r: Ast_node@, c: Sema_ctx$@): Directive_shape //<
 priv enum Attr_owner //< the kind of declaration an attribute is on, by where it is read
     fn_decl //<
         //< A `fn` body or prototype (including an extern's, a trait's, and a method in an impl).
-    struct_decl //< a `struct`, where the layout attributes go
-    extern_struct_decl //<
-        //< A `struct` inside an `extern` block, where no attribute takes effect
-        //< The generated C emits only `typedef struct X X;` (gen/c/decl.kspl), so a layout
-        //< attribute has nowhere to go. Classified with `struct_decl`, it would let through an
-        //< attribute that does nothing.
     value_decl //<
         //< A declaration making one value: `const` / `var` / `let` / `embed`, a local variable too.
-    type_decl //< an `enum`, a `trait` or a `typedef`, where only `#cfg` takes effect
+    type_decl //<
+        //< A `struct` (its `extern` form too), an `enum`, a `trait` or a `typedef`
+        //< Only `#cfg` takes effect there.
     group_decl //<
         //< Syntax that groups declarations: `import` / an `impl` block.
     stmt //<
@@ -175,13 +168,9 @@ priv fn classify_owner(r: Ast_node$@): Attr_owner
     switch r.kind_id
     case .k_decl_fn, .k_decl_fn_proto
         return .fn_decl
-    case .k_decl_struct
-        return .struct_decl
-    case .k_decl_extern_struct
-        return .extern_struct_decl
     case .k_decl_var, .k_decl_const, .k_decl_embed
         return .value_decl
-    case .k_decl_enum, .k_decl_trait, .k_decl_typedef
+    case .k_decl_struct, .k_decl_extern_struct, .k_decl_enum, .k_decl_trait, .k_decl_typedef
         return .type_decl
     case .k_decl_import, .k_decl_impl
         return .group_decl
@@ -195,9 +184,8 @@ priv fn classify_owner(r: Ast_node$@): Attr_owner
 priv const VIEW_ATTRIBUTES: U8[][2] = ::{ "gives_view", "ends_views" } //<
     //< The attributes that say what a method does to the views into its receiver ([W0111])
 
-priv struct Attr_rule //< where one attribute takes effect, and which backend emits it there
+priv struct Attr_rule //< where one attribute takes effect
     owners: U32 //< the positions it takes effect at, one bit per Attr_owner (Attr_owner.bit)
-    c_only: U32 //< the positions among those that only the C backend (genc) implements
     targets: U8[] //< "where it can be written", for a diagnostic
 
 impl Attr_owner
@@ -205,44 +193,33 @@ impl Attr_owner
         return 1U32 << U32::r
 
 priv fn attr_rule(name: U8[]): Attr_rule //<
-    //< The positions, the diagnostic's text and the backends of a known attribute, in one place
+    //< The positions and the diagnostic's text of a known attribute, in one place
     //< Caution: **Allow a position only where it takes effect.** Widened, it lets through an
-    //< attribute that does nothing there; first confirm it reaches its reader (registry.kspl /
-    //< genc / genllvm / apply_attributes in scope.kspl). Mark C-only what LLVM cannot emit: it
-    //< must not be silently ignored there either (Principle 5).
+    //< attribute that does nothing there; first confirm it reaches its reader (genc / genllvm /
+    //< apply_attributes in scope.kspl). **Both backends emit every attribute**: one that only one
+    //< backend could emit would do nothing on the other (Principle 5).
     fn_b: = Attr_owner.fn_decl.bit()
     value_b: = Attr_owner.value_decl.bit()
-    struct_b: = Attr_owner.struct_decl.bit()
     // `#cfg` drops the declaration itself, so it takes effect at every position (should_drop_by_cfg
     // in parse/normalize.kspl ignores the kind).
     if name.equals("cfg")
-        return Attr_rule::{ .owners = 0xFFFFFFFFU32, .c_only = 0, .targets = "" }
+        return Attr_rule::{ .owners = 0xFFFFFFFFU32, .targets = "" }
     if name.equals("inline") || name.equals("noinline") || name.equals("noreturn") ||
         name.equals("naked")
-        return Attr_rule::{ .owners = fn_b, .c_only = 0, .targets = "functions" }
+        return Attr_rule::{ .owners = fn_b, .targets = "functions" }
     // Read by the [W0111] lint (`sema/flow/view.kspl`), on a method alone (see
     // check_attribute_combination).
     if name.equals("gives_view") || name.equals("ends_views")
-        return Attr_rule::{ .owners = fn_b, .c_only = 0, .targets = "methods" }
-    // A per-machine calling convention with no portable LLVM IR counterpart.
-    if name.equals("interrupt")
-        return Attr_rule::{ .owners = fn_b, .c_only = fn_b, .targets = "functions" }
-    if name.equals("packed")
-        return Attr_rule::{ .owners = struct_b, .c_only = 0, .targets = "structs" }
+        return Attr_rule::{ .owners = fn_b, .targets = "methods" }
     // Read by `check_pointer_cast_source` in sema/body/postfix.kspl, through `Fn_ctx.raw_address`.
     // A local takes none: the function it is in is what is marked.
     if name.equals("raw_address")
-        return Attr_rule::{ .owners = fn_b | value_b, .c_only = 0,
+        return Attr_rule::{ .owners = fn_b | value_b,
             .targets = "functions, and top-level variables and constants" }
     if name.equals("section")
-        return Attr_rule::{ .owners = fn_b | value_b, .c_only = 0,
+        return Attr_rule::{ .owners = fn_b | value_b,
             .targets = "functions, variables, and constants" }
-    // It takes effect on LLVM only on a struct (the attribute table in
-    // docs/SPEC-programming-language.md).
-    if name.equals("align")
-        return Attr_rule::{ .owners = struct_b | fn_b | value_b, .c_only = fn_b | value_b,
-            .targets = "structs, functions, variables, and constants" }
-    return Attr_rule::{ .owners = 0, .c_only = 0, .targets = "" }
+    return Attr_rule::{ .owners = 0, .targets = "" }
 
 priv fn check_cfg_attribute(r: Ast_node$@, c: Sema_ctx$@) //<
     //< Checks the shape of `#cfg(...)`'s argument
@@ -260,21 +237,6 @@ priv fn check_cfg_attribute(r: Ast_node$@, c: Sema_ctx$@) //<
             Alternatively, use '##error(cond, msg)' to assert on a compile-time value")
     c.err(r, c.scratch.slice())
 
-priv fn check_align_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the N of `#align(N)`
-    //< Neither C nor LLVM accepts a non-power of two. The upper limit is the target C compiler's,
-    //< so it is not checked. `sema/decl/registry.kspl` receives the value; **only here is it
-    //< checked**.
-    arg_node: = r.safe_get_child(1)
-    if arg_node == null
-        return
-    n: = c.eval_constexpr_quiet(arg_node, 0)
-    if n > 0 && (n & (n - 1)) == 0
-        return
-    c.clear_scratch()
-        .s("'#align(N)' needs N to be a positive constant power of two (1, 2, 4, 8, ...). Alignment \
-            cannot be expressed otherwise")
-    c.err(r, c.scratch.slice())
-
 priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#section("name")`
     //< **One name, of letters, digits, `_` and `.`** (the rule is `is_section_name` in
     //< ksplc/base/ast_ext.kspl). It reaches the C and the assembler as written.
@@ -286,18 +248,6 @@ priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#secti
             interpolation. The name reaches C and the assembler as written. A quote or a ';' would \
             end it early")
     c.err(r, c.scratch.slice())
-
-priv fn report_attribute_on_extern_struct(name: U8[], id_node: Ast_node$@, c: Sema_ctx$@) //<
-    //< Reports an attribute written on a `struct` inside an `extern` block
-    //< Caution: **Do not use the general "it does nothing here".** That message lists "structs",
-    //< which reads as a contradiction; the real reason is that the C gets only a forward
-    //< declaration.
-    c.clear_scratch()
-        .s("attribute '#\{name\}' cannot be written on an 'extern' struct. The generated C only \
-            forward-declares it ('typedef struct X X;'). This side therefore has no layout for the \
-            type, and the attribute cannot affect its layout. The layout stays in the C header. \
-            Hold the type through a pointer ('@'), or declare it in KSPL instead of 'extern'")
-    c.err(id_node, c.scratch.slice())
 
 priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
     id_node: = attr.find_child(.k_attribute_prefix)
@@ -325,26 +275,14 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
         return
     rule: = attr_rule(name)
     if (rule.owners & owner.bit()) == 0
-        if owner == Attr_owner.extern_struct_decl
-            report_attribute_on_extern_struct(name, id_node, c)
-            return
         c.clear_scratch()
             .s("attribute '#\{name\}' does nothing here. It applies to \{rule.targets\}")
         c.err(id_node, c.scratch.slice())
         return
-    // Caution: **Keep the argument check out of the backend check's chain.** Chained, only one
-    // would run, and two violations (`#align` on `--to=llvm`) would be reported as one.
     if name.equals("cfg")
         check_cfg_attribute(attr, c)
-    else if name.equals("align")
-        check_align_attribute(attr, c)
     else if name.equals("section")
         check_section_attribute(attr, c)
-    if base_core.is_llvm_target() && (rule.c_only & owner.bit()) != 0
-        c.clear_scratch()
-            .s("attribute '#\{name\}' is only implemented by the C backend. The LLVM backend cannot \
-                emit it. Compile this file with --to=c, or remove the attribute")
-        c.err(id_node, c.scratch.slice())
 
 priv fn privately_declared(r: Ast_node$@): Bool //<
     //< Whether `priv` is written, for checking how one declaration's attributes fit together

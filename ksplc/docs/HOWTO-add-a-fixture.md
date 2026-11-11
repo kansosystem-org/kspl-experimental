@@ -13,7 +13,7 @@
    | `ksplc/tests/lint/` | `ksplc lint [ARGS] <file>` | Not looked at: lint exits 0 even with diagnostics | `make test-lint` |
    | `ksplc/tests/runtime/` | The compile must pass; then it links and runs the program and matches its own output | **Must be non-zero** (this folder pins down stopping at run time) | `make test-runtime` |
 
-2. **Add the case to the file of its subject**, opened by a line `// ==== case <name>` (the name in lower case letters, digits and `_`). Make a new file only for a new subject, and keep a file under about 600 lines. A mark above the first head, or two cases with one name in a folder, fails the suite.
+2. **Add the case to the file of its subject**, opened by a line `// ==== case <name>` (the name in lower case letters, digits and `_`). Make a new file only for a new subject, or where the file would pass 1000 lines. That is the cap on every file written by hand ("Principle 3 - what is counted, and how" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)). A mark above the first head, or two cases with one name in a folder, fails the suite.
 3. **Write the marks at the case's head.** `harness_markers.markers()` reads them, the same in every folder:
 
    ```kspl

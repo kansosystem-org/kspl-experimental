@@ -10,6 +10,7 @@
 //< one. A formula's references take the coordinates of their cells now.
 import "ksmd/base/attribute" { write_invisible }
 import "ksmd/base/marker" { is_list_marker, run_of, run_of_digits, starts_block, write_column }
+import "ksmd/base/source" { HEADER }
 import "ksmd/calc/formula" { Positions, write_formula }
 import "ksmd/model/choice" { has_choices, write_choices }
 import "ksmd/model/format" { write_format }
@@ -27,12 +28,11 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 priv const MIN_FENCE: Sz = 3
-priv const HEADER: U8[] = "%ksmd 1\n"
 
 fn write(doc: Document@, out: Str_builder$@) //< appends the whole source to `out`
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    out.s(HEADER)
+    out.s(HEADER).c('\n')
     for i in Range.asc(doc.blocks.len)
         out.c('\n')
         write_block(doc, doc.blocks.get(i), at@, out)
@@ -41,11 +41,11 @@ fn write_one(doc: Document@, block: Sz, out: Str_builder$@) //<
     //< Appends a source that holds one block of the document alone, as a copy of it carries it
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    out.s(HEADER).c('\n')
+    out.s(HEADER).s("\n\n")
     write_block(doc, doc.blocks.get(block), at@, out)
 
 fn size(doc: Document@): Sz //< how many bytes `write` appends
-    return HEADER.len + blocks_size(doc, doc.blocks@, 0, doc.blocks.len)
+    return HEADER.len + 1 + blocks_size(doc, doc.blocks@, 0, doc.blocks.len)
 
 fn blocks_size(doc: Document@, blocks: List<|Block|>@, from: Sz, to: Sz): Sz //<
     //< How many bytes blocks `from` to `to` of `blocks` take in the source, with a blank line each

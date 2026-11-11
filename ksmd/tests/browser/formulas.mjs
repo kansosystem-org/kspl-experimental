@@ -147,6 +147,88 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await saves("a number too large for a cell stays the text typed", TABLE.replace("| 6 |", '| "1e400" |'));
     },
 
+    // A formula missing its last `)` takes it on Enter, and the status bar says so. `Ctrl`+`Z`
+    // right after gives back the formula as typed. Edit ▸ AutoCorrect turns it off.
+    async closingBrackets() {
+      const said = () => js("document.getElementById('status').textContent");
+      await load(TABLE);
+      await start(0, 2, "=sum(A1:B1");
+      await press("Enter");
+      await saves("Enter adds the ) a formula misses at its end", TABLE.replace("| 3 |", "| =sum(A1:B1) |"));
+      check((await said()).startsWith("Added ) at the end so the formula reads."),
+        "the status bar says what was added", await said());
+      await press("z", CTRL);
+      await saves("Ctrl+Z right after gives back the formula as typed", TABLE.replace("| 3 |", "| =sum(A1:B1 |"));
+      await load(TABLE);
+      await start(0, 2, "=1+(");
+      await press("Tab");
+      await saves("a formula that would not read with them keeps the text as typed",
+        TABLE.replace("| 3 |", "| =1+( |"));
+      check(await js("document.querySelector('.menubar [data-cmd=\"auto-brackets\"]').getAttribute('aria-checked')") ===
+        "true", "Edit, AutoCorrect shows it turned on at first");
+      await menu("auto-brackets");
+      await load(TABLE);
+      await start(0, 2, "=sum(A1:B1");
+      await press("Enter");
+      await saves("turned off, Enter takes the formula as typed", TABLE.replace("| 3 |", "| =sum(A1:B1 |"));
+      check(await js("localStorage.getItem('ksmd.autoBrackets')") === "0", "this browser keeps the choice");
+      await menu("auto-brackets");
+    },
+
+    // Text in a formula's quotes keeps every `\`, as a Windows path copied from Excel holds it, and
+    // a quote inside is written twice.
+    async quotedText() {
+      const paths = `${H}:::table name="t"\n| "a" | "b" |\n| ".\\\\src\\\\a.c" | |\n:::\n`;
+      await load(paths);
+      await start(0, 1, '=like(A1, ".\\src\\*")');
+      await press("Enter");
+      await saves("a formula with a single \\ in its quotes goes in as typed",
+        paths.replace("| |\n:::", '| =like(A1, ".\\src\\*") |\n:::'));
+      check(await cellText(js, 0, 1) === "true", "and the pattern matches the path",
+        await cellText(js, 0, 1));
+      await start(0, 1, '=len(".\\src\\su');
+      check(!(await listShown()), "a name inside quoted text after a \\ opens no list");
+      await press("Enter");
+      await saves("Enter closes the quote after a \\ and the bracket",
+        paths.replace("| |\n:::", '| =len(".\\src\\su") |\n:::'));
+      check(await cellText(js, 0, 1) === "8", "and the text counts each \\ once", await cellText(js, 0, 1));
+      await start(0, 1, '="say ""hi"""');
+      await press("Enter");
+      check(await cellText(js, 0, 1) === 'say "hi"', "a doubled quote is one quote", await cellText(js, 0, 1));
+    },
+
+    // The bracket beside the caret and the one it pairs with are marked while a formula is typed,
+    // never one inside quoted text.
+    async bracketPairs() {
+      const marked = () => js("Array.from(document.querySelectorAll('#doc .cell-copy:not([hidden]) " +
+        ".bracket-pair')).map((e) => e.textContent).join('')");
+      // The text before the first bracket marked, which says where it stands.
+      const before = () => js("(() => { const m = document.querySelector('#doc .cell-copy .bracket-pair'); " +
+        "let t = ''; for (let n = m.parentNode.firstChild; n !== m; n = n.nextSibling) t += n.textContent; " +
+        "return t; })()");
+      const caretAt = async (n) => {
+        await js(`document.querySelector('#doc .cell-input').setSelectionRange(${n}, ${n})`);
+        await settle();
+      };
+      await load(TABLE);
+      await start(0, 2, "=round(sum(A1");
+      check(await marked() === "", "a caret beside no bracket marks none", await marked());
+      await type(")");
+      await settle();
+      check(await marked() === "()" && await before() === "=round(sum",
+        "the ) typed and the ( it closes are marked", `${await marked()} after ${await before()}`);
+      await caretAt(7);
+      check(await marked() === "", "a ( that nothing closes marks none", await marked());
+      await press("Escape");
+      await start(1, 2, "=len(\"(\")");
+      check(await marked() === "()" && await before() === "=len",
+        "a bracket inside quoted text is passed over", `${await marked()} after ${await before()}`);
+      await caretAt(7);
+      check(await marked() === "", "and a caret beside it marks nothing", await marked());
+      await press("Escape");
+      await press("Escape");
+    },
+
     async insertFunction() {
       await load(TABLE);
       await click(cellAt(1, 2));
@@ -374,7 +456,7 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
     },
 
     // Copy formula puts the chosen cell's formula as typed on the clipboard, where Copy gives its
-    // value. The status bar's text can be chosen by a drag, and a copy then takes what was chosen.
+    // value. Text chosen in the formula bar is copied as chosen.
     // A number in hexadecimal or binary is the number, kept as typed; no function name is offered
     // after its `0b`, and the tip of `hex_to_dec` says the literal is no digit text.
     async baseLiteral() {
@@ -435,9 +517,9 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await click(cellAt(0, 0));
       await until("!document.querySelector('.status-why').hidden");
       check(await bar() === why, "the status bar says why while the cell is chosen", await bar());
-      // One line is about as tall as the chosen cell's part beside it; two would be twice as tall.
+      // One line is about as tall as the figures beside it; two would be twice as tall.
       const tall = await js("(() => { const s = document.querySelector('.status-why'); " +
-        "const line = document.querySelector('.status-cell').getBoundingClientRect().height; " +
+        "const line = document.querySelector('.status-bar .figures').getBoundingClientRect().height; " +
         "return [s.title === s.textContent, s.getBoundingClientRect().height, line]; })()");
       check(tall[0] && tall[1] < 1.5 * tall[2], "it keeps to one line, and its tooltip holds it whole",
         JSON.stringify(tall));
@@ -458,24 +540,17 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await menu("copy-formula");
       const got = await js("JSON.stringify(window.copied)");
       check(got === JSON.stringify([["text/plain", formula]]), "Copy formula copies the formula as typed", got);
-      // The bar is pressed once it shows the formula and the menu is gone.
-      await until(`document.querySelector('.status-content').textContent === ${JSON.stringify(formula)} && ` +
+      // The formula bar holds the formula whole, and a copy there takes the text chosen in it.
+      await until(`document.querySelector('.formula-bar .formula-input').value === ${JSON.stringify(formula)} && ` +
         "document.querySelector('.menu.context').hidden");
-      await settle();
-      const [x1, x2, y] = await js("(() => { const r = document.querySelector('.status-content').getBoundingClientRect(); " +
-        "return [r.left + 1, r.right - 1, r.top + r.height / 2]; })()");
-      const mouse = (type, x) => page("Input.dispatchMouseEvent", { type, x, y, button: "left",
-        buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
-      await mouse("mousePressed", x1);
-      await mouse("mouseMoved", x2);
-      await mouse("mouseReleased", x2);
-      const chosen = await js("window.getSelection().toString()");
-      check(chosen === formula, "a drag across the status bar's formula chooses it",
-        `${JSON.stringify(chosen)}; the bar holds ${JSON.stringify(await js("document.querySelector('.status-content').textContent"))}`);
+      await click(".formula-bar .formula-input");
+      await until("document.activeElement === document.querySelector('.formula-bar .formula-input')");
+      await js("document.activeElement.setSelectionRange(5, 10)");
       const taken = await js("(() => { const data = new DataTransfer(); const e = new ClipboardEvent('copy', " +
         "{ clipboardData: data, bubbles: true, cancelable: true }); document.activeElement.dispatchEvent(e); " +
         "return e.defaultPrevented; })()");
-      check(!taken, "and a copy takes the text chosen there, not the cell");
+      check(!taken, "part of the formula chosen in the formula bar is copied as chosen, not the cell");
+      await press("Escape");
     },
 
     // **A key that reaches a box the page has just taken away is kept.** A document's own function

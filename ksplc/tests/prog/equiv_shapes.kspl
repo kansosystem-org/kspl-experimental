@@ -1,11 +1,10 @@
 //< The shapes the backend-equivalence program checks that C leaves open or lays out its own way
-//< The evaluation order, tagged unions in arrays and globals, nested `#align(N)` and `#packed`
-//< layout, 16-bit products, globals naming globals, locals named as a C symbol, casts from
+//< The evaluation order, tagged unions in arrays and globals, a narrow tag's layout, 16-bit
+//< products, globals naming globals, locals named as a C symbol, casts from
 //< floating point to an integer, comparisons whose answer is fixed, and `^` between two numbers.
 //< Also a slice of an array literal that a branch built, read after the branch. Each is a function
 //< that `equiv.kspl`'s `main` calls with the builder, with the declarations it alone reads.
 import "std/libc"
-import "std/mem"
 import "std/str" { Str_builder }
 // The comparisons, assignments and `^` that [W0203], [W0204] and [W0215] report are shapes under
 // test here.
@@ -166,34 +165,24 @@ fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group
     eval_log = 0
     b.s("/\{eval_a()\}\{eval_b()\}/\{eval_log\}\n")
 
-#align(16)
-priv struct Aligned16 //< a struct whose `#align(N)` its single field does not show
+priv struct Held8 //< a struct aligned to 8 by its second field
     priv a: U8
-
-priv struct Aligned_holder //< it, nested: LLVM lays a struct out by its fields' own alignments
-    //< Caution: **Measure the offsets at run time, and write through the nested one.** The fold
-    //< answers from ksplc's layout either way, and a `zero(…, sizeof(Aligned16))` overran the next
-    //< field on LLVM, whose type held the struct as one byte.
-    priv x: U8
-    priv al: Aligned16
-    priv y: U32
-    priv rows: Aligned16[2]
+    priv w: I64
 
 priv enum Narrow_tag: U8 //< a tagged union with a one-byte tag, which C held as an `int`
     one(a: U8)
     two(b: U8, c: U8)
-    wide(p: U8, al: Aligned16) //< a payload aligned past 8, behind a field of its own
+    wide(p: U8, al: Held8) //< a payload aligned to 8, behind a field of its own
 
-priv const G_ALIGNED: Aligned_holder = ::{ .x = 1, .al = ::{ .a = 2 }, .y = 3 }
-priv const G_NARROW: Narrow_tag[2] = ::{ .two(4, 5), .wide(6, ::{ .a = 7 }) }
+priv const G_NARROW: Narrow_tag[2] = ::{ .two(4, 5), .wide(6, ::{ .a = 7, .w = 0 }) }
 
 priv enum Layout_err: U8 //< a one-byte error, so a Result's `val` follows it closely
     bad
 
-priv fn aligned_ok(a: U8): Aligned16!Layout_err
+priv fn aligned_ok(a: U8): Held8!Layout_err
     if a == 0
         throw .bad
-    return ::{ .a = a }
+    return ::{ .a = a, .w = 0 }
 
 impl Narrow_tag
     priv fn sum(r: Self): I32
@@ -206,59 +195,15 @@ impl Narrow_tag
             return p * 10 + al.a
 
 fn layout_lines(b: Str_builder$@) //<
-    //< `#align(N)` nested, a narrow tag and `#packed`, laid out alike
-    $h: Aligned_holder = ::{}
-    h.y = 12345
-    h.rows[1].a = 9
-    mem.zero(Void$@::h.al@, sizeof(Aligned16))
-    base: = Sz::h@
-    b.s("aligned=\{Sz::h.al@ - base\}/\{Sz::h.y@ - base\}/\{Sz::h.rows@ - base\}/")
-        .s("\{Sz::h.rows[1]@ - base\}/\{sizeof(Aligned_holder)\}/\{h.y\}/\{h.rows[1].a\}/")
-        .s("\{G_ALIGNED.al.a\}\{G_ALIGNED.y\}")
-    n: = Narrow_tag.wide(1, Aligned16::{ .a = 2 })
-    b.s(" narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{G_NARROW[0].sum()\}/\{G_NARROW[1].sum()\}")
-    // A Result holding an over-aligned value: LLVM put `val` right after the error, so the stride
-    // and the value's alignment differed from C's. And one of bytes alone, whose size C gives as 3.
-    rs: (Aligned16!Layout_err)[2] = ::{ aligned_ok(4), aligned_ok(5) }
-    got: = rs[1] catch Aligned16::{}
-    b.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Aligned16!Layout_err)\}/")
-        .s("\{(Sz::rs[0]@) % 16\}/\{got.a\}/\{sizeof(U8!Layout_err)\}\n")
-    packed_lines(b)
-
-#packed
-priv struct Wire //< a wire record: `#packed` leaves every field but the first under-aligned
-    //< Caution: **Reach the fields through a subscript.** The C backend fixes such a target's
-    //< address first. An aligned pointer to the field makes the store a word store, which
-    //< faults on a Cortex-M0 (`make test-equiv` builds this C with C's alignment trap).
-    priv tag: U8
-    priv n: I32
-    priv big: I64
-    priv pair: Wire_pair
-    priv nums: I32[2]
-
-priv struct Wire_pair //< a struct at its own alignment, inside the packed one
-    priv a: I16
-    priv b: I64
-
-#noinline
-priv fn wire_fill(ws: Wire$[], i: Sz, v: I32) //< each field written and updated through `ws[i]`
-    ws[i].tag = U8::i
-    ws[i].n = v
-    ws[i].n *= 3
-    ws[i].big = I64::v << 40
-    ws[i].big -= 1
-    ws[i].pair = ::{ .a = I16::v, .b = I64::v * 7 }
-    ws[i].pair.b += 1
-    ws[i].nums[1] = v + 1
-
-priv fn packed_lines(b: Str_builder$@) //< `#packed` fields written, updated and read by subscript
-    $ws: Wire[3] = ::{}
-    wire_fill(Wire$[]::ws, 1, 5)
-    // The order holds through a field the subscript's receiver cannot point at.
-    eval_log = 0
-    ws[eval_idx() + 2].nums[eval_idx()] += eval_val()
-    b.s("packed=\{sizeof(Wire)\}/\{ws[1].tag\}/\{ws[1].n\}/\{ws[1].big\}/\{ws[1].pair.a\}/")
-        .s("\{ws[1].pair.b\}/\{ws[1].nums[1]\}/\{ws[2].nums[0]\}/\{eval_log\}\n")
+    //< a narrow tag and a Result of a small error, laid out alike
+    n: = Narrow_tag.wide(1, Held8::{ .a = 2, .w = 0 })
+    b.s("narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{G_NARROW[0].sum()\}/\{G_NARROW[1].sum()\}")
+    // A Result holding a value aligned past its one-byte error, so `val` does not follow it
+    // closely. And one of bytes alone, whose size C gives as 3.
+    rs: (Held8!Layout_err)[2] = ::{ aligned_ok(4), aligned_ok(5) }
+    got: = rs[1] catch Held8::{ .a = 0, .w = 0 }
+    b.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Held8!Layout_err)\}/")
+        .s("\{(Sz::rs[0]@) % 8\}/\{got.a\}/\{sizeof(U8!Layout_err)\}\n")
 
 #noinline
 priv fn wrap16(u: U16, s: I16, b: Str_builder$@) //<
@@ -570,8 +515,7 @@ impl Ord_u16
     priv fn kept(e: Self): Self //< the value, through a call the optimizer does not fold
         return e
 
-#packed
-priv struct Pk //< a packed struct's global initializer, which LLVM writes `<{ … }>`
+priv struct Pk //< a struct's global initializer, a constant and a variable
     a: U8
     b: I32
 

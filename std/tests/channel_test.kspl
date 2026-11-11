@@ -1,0 +1,190 @@
+//< Tests of `channel.Channel`: its order, its limits, its close, and threads on both sides
+//< **No check reads the clock.** A wait with a limit is checked only for how it ended, and the
+//< threaded checks end when the work is done, so a slow machine is slower, never wrong.
+import "std/channel"
+import "std/refcount" { Arc }
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// One thread: the values come out in the order sent, a full or empty channel answers at its
+// limit, and a close refuses sends but lets the receives take what is left.
+// ==========================================
+fn test_channel_order_limits_and_close()
+    verdict.start("[Channel] order, the limit of a full or empty channel, and the close...")
+    defer $c: = channel.Channel<|I32|>(2, null) catch panic("the channel must be created")
+    $none: = 0
+    c.receive_for(0) catch e
+        assert(e == .timed_out, "an empty channel looked at once answers timed_out")
+        none += 1
+        fallback 0
+    c.receive_for(20) catch e
+        assert(e == .timed_out, "an empty channel answers timed_out at its limit")
+        none += 1
+        fallback 0
+    assert(none == 2, "an empty channel gives no value")
+    c.send(1) catch panic("the first send has room")
+    c.send_for(2, 0) catch panic("the second send has room")
+    assert(c.len() == 2, "the channel holds the two values sent")
+    $back: I32 = 0
+    c.send_for(3, 20) catch e
+        switch e
+        case .timed_out(v)
+            back = v
+        case .closed
+            panic("an open channel does not refuse as closed")
+    assert(back == 3, "a send to a full channel times out and gives its value back")
+    first: = c.receive() catch panic("the channel holds a value")
+    assert(first == 1, "the oldest value comes out first")
+    c.send(4) catch panic("a receive made room")
+    c.close()
+    c.close()
+    c.send(5) catch e
+        switch e
+        case .closed(v)
+            back = v
+        case .timed_out
+            panic("a blocking send never times out")
+    assert(back == 5, "a send after the close fails as closed and gives its value back")
+    second: = c.receive() catch panic("a closed channel still gives what it holds")
+    third: = c.receive_for(0) catch panic("a closed channel still gives what it holds")
+    assert(second == 2 && third == 4, "after the close, the values left come out in order")
+    $ends: = 0
+    c.receive() catch e
+        assert(e == .closed, "a closed, empty channel answers closed")
+        ends += 1
+        fallback 0
+    c.receive_for(20) catch e
+        assert(e == .closed, "a closed, empty channel answers closed before its limit")
+        ends += 1
+        fallback 0
+    assert(ends == 2, "a closed, empty channel gives no value")
+    verdict.pass("FIFO order, both limits, and close (refused sends, drained receives) hold.")
+
+// ==========================================
+// Threads on both sides: three senders and three receivers share a channel smaller than the work,
+// so both sides wait. Every value arrives once, and the receivers end on the close.
+// ==========================================
+priv const SIDES: Sz = 3 //< how many senders, and how many receivers
+priv const PER_SENDER: Sz = 2000 //< how many values each sender sends
+
+struct Pipe_ctx //< what the senders and receivers share
+    ch: channel.Channel<|Sz|>
+    next_id: thread.Atomic_sz //< hands each sender its own number
+    count: thread.Atomic_sz //< how many values the receivers took
+    sum: thread.Atomic_sz //< the sum of the values the receivers took
+
+extern fn channel_test_sender(arg: Pipe_ctx$@): Void$@
+    id: = arg.next_id.fetch_add(1)
+    for i in Range.asc(PER_SENDER)
+        arg.ch.send(id * PER_SENDER + i) catch panic("the channel closes only after the senders")
+    return null
+
+extern fn channel_test_receiver(arg: Pipe_ctx$@): Void$@
+    for
+        v: = arg.ch.receive() catch
+            break
+        arg.count.fetch_add(1)
+        arg.sum.fetch_add(v)
+    return null
+
+fn test_channel_many_senders_and_receivers()
+    verdict.start("[Channel] three senders and three receivers pass every value once...")
+    ch: = channel.Channel<|Sz|>(4, null) catch panic("the channel must be created")
+    $ctx: = Pipe_ctx::{ .ch = ch, .next_id = thread.Atomic_sz(0), .count = thread.Atomic_sz(0),
+        .sum = thread.Atomic_sz(0) }
+    defer ctx.ch.free()
+    $receivers: thread.Thread[SIDES] = ::{}
+    for i in Range.asc(SIDES)
+        receivers[i] =
+            thread.Thread.spawn<|Pipe_ctx|>(channel_test_receiver, ctx@)
+            catch panic("spawn failed")
+    $senders: thread.Thread[SIDES] = ::{}
+    for i in Range.asc(SIDES)
+        senders[i] =
+            thread.Thread.spawn<|Pipe_ctx|>(channel_test_sender, ctx@) catch panic("spawn failed")
+    for i in Range.asc(SIDES)
+        senders[i].free()
+    ctx.ch.close()
+    for i in Range.asc(SIDES)
+        receivers[i].free()
+    all: = SIDES * PER_SENDER
+    assert(ctx.count.load() == all, "every value sent is received, once")
+    assert(ctx.sum.load() == all * (all - 1) / 2, "no value is lost or taken twice")
+    assert(ctx.ch.len() == 0, "the receivers took everything before they ended")
+    verdict.pass("6000 values passed from three senders to three receivers through four slots.")
+
+// ==========================================
+// The close wakes a sender waiting on a full channel and a receiver waiting on an empty one.
+// Either reaches its wait before the close or after it; both end as closed.
+// ==========================================
+struct Waiter_ctx //< a full channel, an empty one, and what each waiter saw
+    full: channel.Channel<|I32|>
+    empty: channel.Channel<|I32|>
+    sent_back: I32 //< the value the refused send gave back
+    receive_closed: Bool //< whether the receive ended as closed
+
+extern fn channel_test_blocked_sender(arg: Waiter_ctx$@): Void$@
+    arg.full.send(7) catch e
+        switch e
+        case .closed(v)
+            arg.sent_back = v
+        case .timed_out {}
+    return null
+
+extern fn channel_test_blocked_receiver(arg: Waiter_ctx$@): Void$@
+    _v: = arg.empty.receive() catch e
+        arg.receive_closed = e == .closed
+        fallback 0
+    return null
+
+fn test_channel_close_wakes_waiters()
+    verdict.start("[Channel] the close wakes a waiting sender and a waiting receiver...")
+    full: = channel.Channel<|I32|>(1, null) catch panic("the channel must be created")
+    empty: = channel.Channel<|I32|>(1, null) catch panic("the channel must be created")
+    $ctx: = Waiter_ctx::{ .full = full, .empty = empty, .sent_back = 0, .receive_closed = false }
+    defer ctx.full.free()
+    defer ctx.empty.free()
+    ctx.full.send(1) catch panic("the first send has room")
+    $s: =
+        thread.Thread.spawn<|Waiter_ctx|>(channel_test_blocked_sender, ctx@)
+        catch panic("spawn failed")
+    $r: =
+        thread.Thread.spawn<|Waiter_ctx|>(channel_test_blocked_receiver, ctx@)
+        catch panic("spawn failed")
+    ctx.full.close()
+    ctx.empty.close()
+    s.free()
+    r.free()
+    assert(ctx.sent_back == 7, "the waiting sender is refused as closed, with its value")
+    assert(ctx.receive_closed, "the waiting receiver ends as closed")
+    verdict.pass("Closing woke both waiters, and each ended as closed.")
+
+// ==========================================
+// A counted value moves through with its count, and one left inside is released by `free()`. A
+// move-only value moves through too.
+// ==========================================
+extern fn channel_test_idle(arg: I32$@): Void$@ //< a thread that ends at once
+    arg$ = 1
+    return null
+
+fn test_channel_counted_and_move_only()
+    verdict.start("[Channel] a counted value keeps its count, and a move-only value moves...")
+    shared: = Arc<|I64|>(42I64)
+    $c: = channel.Channel<|Arc<|I64|>|>(2, null) catch panic("the channel must be created")
+    c.send(shared.clone()) catch panic("the send has room")
+    c.send(shared.clone()) catch panic("the send has room")
+    $taken: = c.receive() catch panic("the channel holds a value")
+    assert(taken.get()$ == 42I64, "the value received is the one sent")
+    assert(shared.get_mut().is_none(), "the channel and the receiver each hold an owner")
+    c.free()
+    taken = Arc<|I64|>.empty()
+    assert(shared.get_mut().is_some(), "free() released the owner left inside")
+    $n: I32 = 0
+    defer $threads: = channel.Channel<|thread.Thread|>(1, null) catch panic("the channel")
+    t: = thread.Thread.spawn<|I32|>(channel_test_idle, n@) catch panic("spawn failed")
+    threads.send(t) catch panic("the send has room")
+    $back: = threads.receive() catch panic("the channel holds the thread")
+    back.free()
+    assert(n == 1, "the thread received is the one started, and free() waited for it")
+    verdict.pass("Counts stayed right through the channel, and a Thread moved through it.")

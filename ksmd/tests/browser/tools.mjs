@@ -168,8 +168,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await menu("undo");
       await click('#doc td[data-r="0"][data-c="1"]');
       await click('#doc td[data-r="0"][data-c="1"]');
-      await settle();
-      check(await js("!!document.querySelector('#doc .fill-handle')"), "a chosen cell shows the fill handle");
+      check(await until("!!document.querySelector('#doc .fill-handle')", 3000), "a chosen cell shows the fill handle");
       await dragTo("#doc .fill-handle", '#doc td[data-r="2"][data-c="1"]');
       await saves("a drag of the handle down fills the cells it reaches",
         table("| 1 | =A1*2 |\n| 2 | =A2*2 |\n| 3 | =A3*2 |\n"));
@@ -179,7 +178,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await load(counts);
       await click('#doc td[data-r="0"][data-c="0"]');
       await click('#doc td[data-r="1"][data-c="0"]', SHIFT);
-      await settle();
+      await until("!!document.querySelector('#doc .fill-handle')", 3000);
       await dragTo("#doc .fill-handle", '#doc td[data-r="3"][data-c="0"]');
       await saves("a drag of the handle from 1 and 2 goes on with 3 and 4",
         `${H}:::table name="n"\n| "n" |\n| 1 |\n| 2 |\n| 3 |\n| 4 |\n:::\n`);
@@ -422,7 +421,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const shown = await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').textContent");
       check(shown === "2026-11-06", "a date plus days shows as a date", shown);
       await click('#doc td[data-r="0"][data-c="0"]');
-      await settle();
+      await until("!!document.querySelector('#doc .fill-handle')", 3000);
       await dragTo("#doc .fill-handle", '#doc td[data-r="1"][data-c="0"]');
       await saves("the handle goes on with the next day", `${H}:::table name="t"\n| "day" | "next" |\n` +
         "| 2026-10-30 | =A1+7 |\n| 2026-10-31 | |\n:::\n");
@@ -829,7 +828,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await menu("undo");
       await js("document.body.style.minHeight = '3000px'");
       await click('.contents-list a[data-k="2"]');
-      await settle();
+      await until("JSON.stringify(ksmd.selection().a) === '[0,4,0,0]'", 3000);
       const sel = await js("JSON.stringify(ksmd.selection().a)");
       check(sel === "[0,4,0,0]", "a press on a heading puts the caret at its start", sel);
       // The mark follows the `scroll` event, which the browser sends with a later frame.

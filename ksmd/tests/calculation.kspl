@@ -18,7 +18,7 @@ import "std/str"
 import "std/strnum"
 import "std/verdict"
 
-priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+priv const HEAD: U8[] = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
 priv const TODAY: U8[] = "2026-10-23" //< the date the test documents count as opened on
 
 fn run()
@@ -278,7 +278,7 @@ priv fn budget()
 priv fn chains()
     defer arena: = Arena(1024 * 1024)
     defer $long: = Str_builder()
-    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n")
+    long.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n")
     for row in Range(2, 10001, 1)
         long.s("| =A").s("\{row - 1\}").s("+1 |\n")
     long.s(":::\n")
@@ -286,7 +286,7 @@ priv fn chains()
     r: = calc.calculate(doc@, TODAY, arena)
     number("a running total down 10,000 rows", r@, 0, 9999, 0, 10000.0)
     defer $ring: = Str_builder()
-    ring.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =A1000 |\n")
+    ring.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =A1000 |\n")
     for row in Range(2, 1001, 1)
         ring.s("| =A").s("\{row - 1\}").s(" |\n")
     ring.s(":::\n")
@@ -325,7 +325,7 @@ priv fn many_names() //<
     defer arena: = Arena(4 * 1024 * 1024)
     names: = colliding_names(arena)
     defer $text: = Str_builder()
-    text.s("%ksmd 1\n\n")
+    text.s("%ksmd 2\n\n")
     for i in Range.asc(NAMES) // falling byte order, so each name is the least so far
         text.s(":::table name=\"").s(names[NAMES - 1 - i]).s("\"\n| \"n\" | \"twice\" |\n")
         text.s("| 3 | =A1*2 |\n:::\n\n")
@@ -418,9 +418,9 @@ priv fn logic()
 
 priv fn text_in_formulas()
     cases(U8[][]::{ "\"late\" -> \"late\"", "\"\" -> \"\"", "B1 -> \"Pens\"", "A2 -> 0", "A1 -> 2",
-        "\"A1\" -> \"A1\"", "\"a\\\"b\" -> \"a\"b\"", "\"x|y\" -> \"x|y\"", "\"x\" + 1 -> #VALUE!",
-        "\"1\" * 2 -> #VALUE!", "-\"1\" -> #VALUE!", "sum(\"1\") -> #VALUE!", "count(B1) -> 0",
-        "\"a\" \"b\" -> #SYNTAX!", "\"a\". -> #SYNTAX!" })
+        "\"A1\" -> \"A1\"", "\"a\"\"b\" -> \"a\"b\"", "\"C:\\src\\\" -> \"C:\\src\\\"",
+        "\"x|y\" -> \"x|y\"", "\"x\" + 1 -> #VALUE!", "\"1\" * 2 -> #VALUE!", "-\"1\" -> #VALUE!",
+        "sum(\"1\") -> #VALUE!", "count(B1) -> 0", "\"a\" \"b\" -> #SYNTAX!", "\"a\". -> #SYNTAX!" })
     // Quotes before `.` and a cell name a table; anywhere else they hold text.
     defer arena: = Arena(64 * 1024)
     r: =
@@ -469,7 +469,7 @@ priv fn lazy_choices()
     failure("two cells that name each other in branches taken", r@, 0, 4, 0, .cycle)
     failure("and the other of those two", r@, 0, 4, 1, .cycle)
     defer $long: = Str_builder()
-    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n")
+    long.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n")
     for row in Range(2, 10001, 1)
         long.s("| =if(A").s("\{row - 1\}").s(" > 0, A").s("\{row - 1\}").s(" + 1, Z1) |\n")
     long.s(":::\n")
@@ -702,7 +702,7 @@ priv fn condition_work()
 
 priv fn reads_for(rows: Sz, arena: Arena$@): Sz //< the reads of one `sum_if` over `rows` rows
     defer $text: = Str_builder()
-    text.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n")
+    text.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n")
     for row in Range.asc(rows)
         text.s("| \"x\{row\}\" | \{row\} | |\n")
     text.s("| | | =sum_if(t.$B, find(\"x\", t.$A) = 1) |\n:::\n")
@@ -729,7 +729,7 @@ priv fn bare_columns()
         "name(B1) -> #SYNTAX!", "name(B:C) -> #SYNTAX!", "sum(C:D9) -> #SYNTAX!",
         "sum(C1:D) -> #SYNTAX!", "B -> #SYNTAX!", "B(1) -> #SYNTAX!" }
     defer $rows: = Str_builder()
-    rows.s("%ksmd 1\n\n:::table name=\"t\"\n| \"Fruit\" | \"Apples\" | \"Pears\" | \"f\" |\n")
+    rows.s("%ksmd 2\n\n:::table name=\"t\"\n| \"Fruit\" | \"Apples\" | \"Pears\" | \"f\" |\n")
     rows.s("| \"x\" | 1 | 10 | |\n| \"y\" | 2 | 20 | |\n| \"x\" | 4 | 40 | |\n")
     for c in list
         rows.s("| | | | =").s(c.sub(0, arrow(c))).s(" |\n")
@@ -771,7 +771,7 @@ priv fn empty_columns()
 priv fn argument_memory()
     rows: Sz = 100
     defer $source: = Str_builder()
-    source.s("%ksmd 1\n\n:::table name=\"t\"\n| \"n\" | \"total\" | \"above\" |\n")
+    source.s("%ksmd 2\n\n:::table name=\"t\"\n| \"n\" | \"total\" | \"above\" |\n")
     for n in Range(1, rows + 1, 1)
         source.s("| \{n\} | =sum(t.A) | =sum_if(t.A, t.A > average(t.A)) |\n")
     source.s(":::\n")

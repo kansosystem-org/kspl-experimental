@@ -40,9 +40,9 @@ flowchart TD
 | **Lower** | the typed AST | the flat AST | levels complex control flow and method calls into a simple shape | yes | not yet | "The internal flow: flatten, add vtables, mangle, prune, verify" in [`DESIGN-lower.md`](DESIGN-lower.md) |
 | **Genc / Genllvm** | the flat AST | C99 or LLVM IR text | writes the levelled AST out in the target language, reshaping nothing | yes | yes | "What they answer for" in [`DESIGN-backends.md`](DESIGN-backends.md) |
 
-**Why there are four layers.** Two questions sort them: "does this layer know the types?" and "does it know where the output goes?". The answers turn to "yes" one layer at a time (`no, no` → `yes, no` → `yes, yes`), so there are four layers, plus Desugar. A layer that reads what it does not know yet breaks the one-way flow. **Flowing backwards (an earlier layer importing a later layer's file) is strictly forbidden.**
+**Why there are four layers.** Two questions sort them: "does this layer know the types?" and "does it know where the output goes?". The answers turn to "yes" one at a time (`no, no` → `yes, no` → `yes, yes`). Lower shares Sema's answers, but flattens the control flow, which Sema leaves as written. A layer that reads what it does not know yet breaks the one-way flow. **Flowing backwards (an earlier layer importing a later layer's file) is strictly forbidden.**
 
-**Where the order is written.** `main.run_compiler` drives it through `pipeline.Compiler`: `Compiler.parse_file` → `run_semantic_analysis` (Desugar, Scan over the declarations, Infer over the bodies) → `run_lower_and_codegen` (Lower, Genc/Genllvm).
+**Where the order is written.** `main.run_compiler` drives it through `pipeline.Compiler`: `Compiler.parse_file` → `run_semantic_analysis` (Desugar, Collect over the declarations, Infer over the bodies) → `run_lower_and_codegen` (Lower, Genc/Genllvm).
 
 "A worked example: one expression through each layer" in [`DESIGN-sema.md`](DESIGN-sema.md) follows `p.distance()` through every layer.
 
@@ -92,7 +92,7 @@ Caution: **Confirm diff-zero with `make self-host` (or `make ci`) before `make c
 
 `make ci` runs this check too. No third stage is needed: the self-host after burning already answers "does the burned seed reproduce itself" (Principle 6).
 
-**`make install` checks what it installs, and changes no file in the tree**: it runs `self-host` and `self-host-ship`, then installs the executable and the language server. Re-baking there would grow the history by the seed's size each time. `make lint` builds Stage1 itself, so it is the fast first check before `make ci`.
+**`make install` checks what it installs, and changes no file in the tree** (the reason is at `install` in `mk/install.mk`). `make lint` builds Stage1 itself, so it is the fast first check before `make ci`.
 
 ### Keeping the grammar and the AST node kinds in step
 
@@ -106,13 +106,13 @@ The *grammar* (`ksplc/kspl.kspeg`) is the file of rules the parser reads. Each n
 
 **There are three exceptions, and they are never added**: `Block_open` / `Block_close` / `Stmt_end`. They stand for the symbols that become a level and a newline in the indentation notation (`.kspl`). `rule_kind` in `ksplc/parse/load.kspl` turns them into `Literal` where they enter the tree.
 
-Caution: **Do not make them kinds of their own.** Every stage that skips `kind_id == .k_literal` would need three more cases, and one that misses a case misreads silently (the `;` of `##lint(I0307 = off);` taken as an argument).
+Caution: **Do not make them kinds of their own.** Every stage that skips `kind_id == .k_literal` would need three more cases, and one that misses a case misreads silently (the `Stmt_end` that ends `##lint(I0307 = off)` taken as its argument).
 
 `kspl.kspeg`'s header lists which rule plays which role, and `make test-notation` recounts it from the grammar.
 
 ### The parts that are not in the pipeline: `base` / `lsp` / `fmt` / `tools`
 
-**`base/` stands below the pipeline**: it holds the primitives every layer depends on. **`lsp/` drives the pipeline from outside**, once per editor request ("The language server runs as two processes: watcher and analyser" in [`DESIGN-tools.md`](DESIGN-tools.md)). **`fmt/` and `tools/` stand beside it**, built on what it produces. "What is here" in [`ksplc/README.md`](../README.md) says what each folder holds.
+**`base/` stands below the pipeline**: it holds the primitives every layer depends on. **`lsp/` drives the pipeline from outside**, once per editor request ("The language server runs as two processes: supervisor and worker" in [`DESIGN-tools.md`](DESIGN-tools.md)). **`fmt/` and `tools/` stand beside it**, built on what it produces. "What is here" in [`ksplc/README.md`](../README.md) says what each folder holds.
 
 ### String interning
 
@@ -142,7 +142,7 @@ Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one
 
 | block | what it shows | where it is explained |
 | :-- | :-- | :-- |
-| `[KSPEG Rule]` | how often the parser tries each grammar rule, and how each try ends | "What each rule takes (`--stats`'s `[KSPEG Rule]`)" |
+| `[KSPEG Rule]` | how often the parser tries each grammar rule, and how each try ends | "What each rule takes (`--stats`'s `[KSPEG Rule]`)" in [`DESIGN-parse.md`](DESIGN-parse.md) |
 | `[Sema Body]` | the declarations Sema spent the most time on, and how often each was instantiated | "Profiling where Sema's time goes" in [`DESIGN-sema.md`](DESIGN-sema.md) |
 | `[Layer]`, `[Overall]` | time and memory per stage, and the summary | below |
 
@@ -169,30 +169,6 @@ Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one
 | (the compile time) | recorded beside them, decides nothing: it measures the machine and its load as much as the work |
 
 Caution: **Keep the characters of every line another program reads.** The guard finds its lines by the patterns at its head (`TIME_PATTERN` in `tests/tools/perf_guard.kspl` and the ones beside it). `STATS_HEAD` in `ksplc/tests/suite/ast_cache_test.kspl` finds `[AST Cache]`.
-
-#### What each rule takes (`--stats`'s `[KSPEG Rule]`)
-
-KSPEG is a *PEG* parser: for each rule it tries the alternatives in order and takes the first that matches. It also *memoizes* (a *packrat* parser): a second try of a rule at the same position is a lookup, a *memo hit*.
-
-`--stats` prints four numbers per rule: **calls / memo hits / read and succeeded / read and failed** (`Rule_prof` in `lib/kspeg/engine.kspl`). They are counts, not times, so a grammar change can be compared before and after under any load.
-
-**"Read and failed" is derived, not counted**: it is `calls - memo hits - succeeded`. A counted one could lie while every column adds up. `lib/kspeg/tests/engine_test.kspl` matches all four on a small grammar with a known answer.
-
-| what you see | what it means |
-| :-- | :-- |
-| a rule whose memo hits do not grow | it visited each position once, so packrat has nothing to save there |
-| a rule with few successes and many failures | it is speculating and missing. Of those, only the ones where a miss is costly repay a grammar change |
-
-**Many failures are not waste in themselves**: most alternatives fail on a one- or two-character comparison. A miss is costly only where the rule reads another rule whole first. `expr_cast` (`type_expr "::" expr_unary`) and `expr_compound` (`( type_expr &"::{" )? …`) both read `type_expr` at one position, and the memo makes the second a hit.
-
-Caution: **Do not avoid it by moving `expr_cast` behind `expr_postfix`.** The reason is written above that rule in `ksplc/kspl.kspeg`.
-
-**Two of kspeg's devices pay off on this grammar** (both in [`../../lib/kspeg/docs/DESIGN-engine.md`](../../lib/kspeg/docs/DESIGN-engine.md)):
-
-* **Folding a run of keywords into one lookup** takes `Primitive_type`'s thirteen names, otherwise tried millions of times in a cold compile of `ksplc/main.kspl`.
-* **Skipping a rule that cannot begin with the next byte** catches most failures before they are entered.
-
-**Together they remove about two fifths of the parse's work.** The way to retake the figure is callgrind on that cold compile.
 
 ## The Development Principles
 
@@ -292,7 +268,7 @@ Making and discarding things take one name **per role**, with no dialects such a
 | **Global and file state** | `init()` | `fin()` | the global lifecycle, with no receiver |
 | **Raw memory (`std/mem` only)** | `alloc` | `dealloc` | tier C's byte allocation and freeing |
 
-**`free` and `dealloc` are the only names that carry an effect.** Sema's use-after-free and double-free tracking recognizes a freeing by these names alone ("Measuring what suppression costs" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). The rule is "8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). Under any other name the check silently stops.
+**`free` and `dealloc` are the only names that carry an effect.** Sema's use-after-free and double-free tracking counts `x.free()` on a type that conforms to `Manual_free`, and `dealloc`. A wrapper around either is followed one level, whatever its name. A type that frees under another name gets [W0107]. The rule is "8.4.5 Tracking a free with `Manual_free`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md); what the tracking costs is "Measuring what suppression costs" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md).
 
 * **`Arena.create<|T|>` copies an existing value onto an arena** and returns a permanent `T@` (`base_core.arena.create(Foo::{...})`). It is a typed `alloc`, apart from `new`, which constructs.
 * **One `init()` / `fin()` pair per layer**, in the layer's entry file, gathers its globals, and `main` calls only those pairs. `base_setup`'s covers the shared arena, the pools, the AST's shared state and the diagnostics; `parse_load`'s covers the Profiler and the kspeg arena.
@@ -378,7 +354,7 @@ The compiler's own terms, by the part of the compiler they belong to. **A term t
 | :-- | :-- | :-- |
 | **Lowering** | rearranging nested control structure (`defer`, the short-circuiting `&&`/`\|\|`, `!`, a labelled `break`) into a shallow combination of `if` and `goto`: the Lower layer's job | "The Lower layer: a flat tree independent of backends" in [`DESIGN-lower.md`](DESIGN-lower.md) |
 | **MIR** (mid-level intermediate representation) | the flat, backend-neutral tree that Lower's first walk leaves. ksplc keeps it in the same `Ast_node`s, not in a type of its own | "The internal flow: flatten, add vtables, mangle, prune, verify" in [`DESIGN-lower.md`](DESIGN-lower.md) |
-| **Name mangling** | transforming a symbol name by a regular rule to avoid collisions. A `priv` symbol becomes `kspl_priv_{file name}_{original name}` | "The internal flow: flatten, add vtables, mangle, prune, verify" in [`DESIGN-lower.md`](DESIGN-lower.md) |
+| **Name mangling** | transforming a symbol name by a regular rule to avoid collisions | "The internal flow: flatten, add vtables, mangle, prune, verify" in [`DESIGN-lower.md`](DESIGN-lower.md) |
 | **Drop glue** | the helper generated once per aggregate type that retains or releases every ARC value it owns | "The chaining is gathered into a per-type drop-glue function" in [`DESIGN-lower.md`](DESIGN-lower.md) |
 
 **The backends and C**
@@ -388,7 +364,7 @@ The compiler's own terms, by the part of the compiler they belong to. **A term t
 | **Backend** | the stage that writes code for a target: Genc writes C99, Genllvm writes LLVM IR | "The backends (Genc / Genllvm) and the runtime ABI" in [`DESIGN-backends.md`](DESIGN-backends.md) |
 | **Preamble** | the C runtime as written into each generated `.c` | "Embedding the runtime, and what a library keeps to itself" in [`DESIGN-backends.md`](DESIGN-backends.md) |
 | **Aggregate** | a value made of several parts: a struct, an array, a slice, an enum with a payload (a Result among them), a trait value | "Passing an aggregate is an explicit internal ABI" in [`DESIGN-backends.md`](DESIGN-backends.md) |
-| **SSA** (static single assignment) | the IR form in which each register is assigned once. genllvm numbers its registers per function and keys a local on its declaring node | "The limits on building an AST, and linking `def_node`" in [`DESIGN-lower.md`](DESIGN-lower.md); "Genllvm (LLVM IR): why the structure differs, and managing SSA" in [`DESIGN-backends.md`](DESIGN-backends.md) |
+| **SSA** (static single assignment) | the IR form in which each register is assigned once. genllvm numbers its registers per function and keys a local's slot on its symbol | "The limits on building an AST, and linking `def_node`" in [`DESIGN-lower.md`](DESIGN-lower.md); "Genllvm (LLVM IR): why the structure differs, and managing SSA" in [`DESIGN-backends.md`](DESIGN-backends.md) |
 | **sret** | LLVM's mark for a hidden pointer through which a function returns an aggregate. genllvm passes such a pointer without the mark | "Passing an aggregate is an explicit internal ABI" in [`DESIGN-backends.md`](DESIGN-backends.md) |
 
 **Memory**
@@ -401,7 +377,7 @@ The compiler's own terms, by the part of the compiler they belong to. **A term t
 
 | Term | What it means | Where |
 | :-- | :-- | :-- |
-| **Supervisor / worker** | the language server's two processes: the supervisor talks to the editor, the worker does the analysis and can crash | "The language server runs as two processes: watcher and analyser" in [`DESIGN-tools.md`](DESIGN-tools.md) |
+| **Supervisor / worker** | the language server's two processes: the supervisor talks to the editor, the worker does the analysis and can crash | "The language server runs as two processes: supervisor and worker" in [`DESIGN-tools.md`](DESIGN-tools.md) |
 | **URI / logical name** | the editor names a file by a URI (`file:///…`); inside the compiler a file is named by its logical name, a path from the project root (`std/lang`) | "A URI is converted to the logical name and back" in [`DESIGN-tools.md`](DESIGN-tools.md) |
 | **Broken node** | the node a lenient parse makes for text it could not read; it holds that text and nothing else | "What a broken node holds" in [`DESIGN-tools.md`](DESIGN-tools.md) |
 | **Fixed point** | a text that formatting leaves exactly as it is | "The formatter's time, and the record of formatted texts" in [`DESIGN-tools.md`](DESIGN-tools.md) |

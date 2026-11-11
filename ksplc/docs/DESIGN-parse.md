@@ -134,7 +134,7 @@ Caution: When adding an accessor, confirm that the kind really comes at that ind
 | **`expr_catch`** | `[0]`: `Keyword("catch")`<br>`[1]?: Identifier` (the error variable)<br>`[2]: stmt_block / expr` | one `catch`, as `expr_catch_chain`'s right-hand element |
 | **`struct_literal`** | `[0]?: type_path / type_expr`<br>`[1...]: expr_field_init` | a compound literal, renamed from `expr_compound` by normalizing |
 | **`expr_field_init`** | `[0]?: Identifier / . / [` (the prefix)<br>`[1]: Identifier / expr` (the key's name / the index)<br>`[2]?: Literal("=")`<br>`[3]: expr` (the initializing expression) | |
-| **`type_expr`** | `0` (Terminal) | stringified: normalizing joins every child's text into a type string such as `const I32[]` in `self.text`, and discards the subtree |
+| **`type_expr`** | `[0]: type_atom`<br>`[1...]: type_postfix` | normalizing also joins every child's text into `self.text` (`U8$[]@`); Sema reads the postfixes from the children |
 
 ### Desugar: expanding the syntactic sugar that needs no types
 
@@ -144,9 +144,9 @@ Caution: When adding an accessor, confirm that the kind really comes at that ind
 
 **Little work fits this layer**: most candidate sugars need to know what a name refers to, so they belong to Sema.
 
-`parse/format_spec.kspl` holds only the grammar of a format specifier's SPEC `\{value:SPEC\}`; the desugaring code reports.
+`parse/format_spec.kspl` reads a format specifier's SPEC (`\{value:SPEC\}`) and builds its call (`build_call`); the desugaring code reports.
 
-**Why it is called at a separate timing rather than from `parse_file`**: it runs once over the whole of `root_file`, at the head of `Compiler.run_semantic_analysis` (`pipeline.kspl`). **The reason is the diagnostics.** Desugar reports a mis-written format specifier or a failed closure synthesis. Run per file, the report would sit inside the disk cache (`parse/ast_cache.kspl`), and a cache hit would print nothing. (The `loaded_files` guard already runs each file once, and a lifted closure is `priv`, made unique per file by `write_priv_prefix_to` in `lower/abi.kspl`.)
+**Why it is called at a separate timing rather than from `parse_file`**: it runs once over the whole of `root_file`, at the head of `Compiler.run_semantic_analysis` (`pipeline.kspl`). **There are two reasons.** The editor's workspace walk calls `parse_file` once per file (`build_workspace_state` in `lsp/worker.kspl`), while Desugar runs once over the whole tree. The other is the diagnostics: Desugar reports a mis-written format specifier or a failed closure synthesis. Run per file, the report would sit inside the disk cache (`parse/ast_cache.kspl`), and a cache hit would print nothing. (The `loaded_files` guard already runs each file once, and a lifted closure is `priv`, made unique per file by `write_priv_prefix_to` in `lower/abi.kspl`.)
 
 Caution: **To move it, first make sure that a file which emitted a diagnostic is not cached.** Otherwise a mistake shows red on the first run alone.
 
@@ -218,7 +218,7 @@ Read their reasons at `desugar_node` in `parse/desugar.kspl` before adding a Des
 | | filling in default arguments (an operator's desugaring has its own entry point) | `fill_default_args` / `fill_operator_defaults` in `sema/body/call_defaults.kspl` |
 | | instantiating a generic | `instantiate_struct` / `instantiate_fn` in `sema/decl/mono.kspl` |
 | | a general-purpose access → a dedicated node (`method_access` / `enum_init`) | `infer_dot_access` / `infer_namespace_access` in `sema/body/dot.kspl` |
-| | a **synthesized** slice (a string literal's type, the reflection table) | `slice_type_of` in `sema/decl/mono.kspl` |
+| | a **synthesized** slice (a string literal's type) | `slice_type_of` in `sema/decl/mono.kspl` |
 | **Lower** | hoisting short-circuit evaluation `&&` / `\|\|`, `!` (`result_unwrap`), and `catch` / `fallback` | `lower_logical_op` / `lower_try_op` / `lower_expr_catch_chain` in `lower/expr.kspl` |
 | | operator overloading `a + b` / `a[i]` → a method-call node (**Sema decides which method, Lower builds the call**) | `lower_user_operator` in `lower/expr.kspl` |
 | | moving an index aside (a slice's `at` needs the receiver's address) | `lower_postfix_index_operator` in `lower/expr.kspl` |
@@ -333,6 +333,30 @@ Caution: **Infer only the new argument.** The writer is a chain already inferred
 **It must not decide on the name `put` alone either.** A user's own `put` would have its body ignored. It matches only a `put` whose body is `std/lang`'s.
 
 **The price**: the generated C grows slightly. `--gc-sections` drops an unused synthesized method and array, so a freestanding artifact's size does not change.
+
+### What each rule takes (`--stats`'s `[KSPEG Rule]`)
+
+KSPEG is a *PEG* parser: for each rule it tries the alternatives in order and takes the first that matches. It also *memoizes* (a *packrat* parser): a second try of a rule at the same position is a lookup, a *memo hit*.
+
+The report as a whole is "Measuring the compiler: `--stats` and the performance guard" in [`DESIGN-compiler.md`](DESIGN-compiler.md). It prints four numbers per rule: **calls / memo hits / read and succeeded / read and failed** (`Rule_prof` in `lib/kspeg/engine.kspl`). They are counts, not times, so a grammar change can be compared before and after under any load.
+
+**"Read and failed" is derived, not counted**: it is `calls - memo hits - succeeded`. A counted one could lie while every column adds up. `lib/kspeg/tests/engine_test.kspl` matches all four on a small grammar with a known answer.
+
+| what you see | what it means |
+| :-- | :-- |
+| a rule whose memo hits do not grow | it visited each position once, so packrat has nothing to save there |
+| a rule with few successes and many failures | it is speculating and missing. Of those, only the ones where a miss is costly repay a grammar change |
+
+**Many failures are not waste in themselves**: most alternatives fail on a one- or two-character comparison. A miss is costly only where the rule reads another rule whole first. `expr_cast` (`type_expr "::" expr_unary`) and `expr_compound` (`( type_expr &"::{" )? …`) both read `type_expr` at one position, and the memo makes the second a hit.
+
+Caution: **Do not avoid it by moving `expr_cast` behind `expr_postfix`.** The reason is written above that rule in `ksplc/kspl.kspeg`.
+
+**Two of kspeg's devices pay off on this grammar** (both in [`../../lib/kspeg/docs/DESIGN-engine.md`](../../lib/kspeg/docs/DESIGN-engine.md)):
+
+* **Folding a run of keywords into one lookup** takes `Primitive_type`'s thirteen names, otherwise tried millions of times in a cold compile of `ksplc/main.kspl`.
+* **Skipping a rule that cannot begin with the next byte** catches most failures before they are entered.
+
+**Together they remove about two fifths of the parse's work.** The way to retake the figure is callgrind on that cold compile.
 
 ### The normalized AST's disk cache (`ksplc/parse/ast_cache.kspl`)
 

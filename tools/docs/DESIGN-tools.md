@@ -124,7 +124,7 @@ The page moves on with a `refresh`, and the fragment (the part after `#`) travel
 
 **The server stays running after an opening, so the opener can also list those servers and stop them.** `--list` prints each running server's URL and folder; `--stop=<folder>` stops the one serving that folder, and `--stop-all` every one (`tend` in [`../opener.kspl`](../opener.kspl)).
 
-**A server counts as running only when it answers with its token.** A process number is handed to the next process, so a stop by number could end an unrelated program.
+**A server counts as running by the test for reuse**: "Reusing a server" under "Where the double-click opener lives" above. Why a stop never goes by process number is "A page asks the local machine through one protocol" in [`docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 **A server is picked by the folder it serves, not by its port**, which changes when a taken one is skipped. The folder is made absolute and loses a trailing separator first (`trim_end_sep` in [`../opener_aim.kspl`](../opener_aim.kspl)), so the one typed with tab completion is the one the record holds.
 

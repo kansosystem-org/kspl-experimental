@@ -6,7 +6,7 @@ Caution: **Pushing the tag starts the workflow**, which builds on three platform
 
 ## Before the tag
 
-1. **Run the gates on the commit you will tag, on Linux** (a Linux machine, or the dev container). Only there does `make ci` run the Linux-only gates ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)), and the workflow runs no suite of its own:
+1. **Run the gates on the commit you will tag, on Linux** (a Linux machine, or the dev container). Only there does each `*_REQUIRE_*` switch read 1, so no Linux-only gate can skip for want of a tool ("The switches that require a tool" in [`SPEC-gates.md`](SPEC-gates.md)). The workflow runs no suite of its own:
 
    ```sh
    make ci             # last line: # ci: ALL GREEN

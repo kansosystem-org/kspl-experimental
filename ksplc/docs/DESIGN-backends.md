@@ -4,7 +4,7 @@
 
 ## The backends (Genc / Genllvm) and the runtime ABI
 
-A *backend* is the last stage of the compiler: it turns the finished tree into code for a target. ksplc has two. **Genc** writes C99 source, and every shipped program is built through it. **Genllvm** writes LLVM IR, the text form that the LLVM toolchain (clang's back half) compiles. It exists to check the stages above it, and is not shipped.
+A *backend* is the last stage of the compiler: it turns the finished tree into code for a target. ksplc has two. **Genc** writes C99 source, and every shipped program is built through it. **Genllvm** writes LLVM IR, the text form that the LLVM toolchain (clang's back half) compiles.
 
 ```mermaid
 flowchart LR
@@ -19,11 +19,9 @@ flowchart LR
 1. **It proves that the layers above the backends (parse / sema / lower) are neutral.** When two outputs from the same AST behave alike (`make test-equiv` / `make test-llvm-abi`), no backend dependency has leaked upstream.
 2. **It keeps an option open**, so a target with no C compiler does not start from zero.
 
-**The LLVM backend is a mirror, not an exit**: shipping uses C99 alone (Principle 6).
+**The LLVM backend is a mirror, not an exit**: shipping uses C99 alone (Principle 6). An LLVM artifact also carries no debug information ("Genllvm (LLVM IR): why the structure differs, and managing SSA"), which shipping would need first.
 
 **Only the C runtime holds the bodies of `kspl_*` symbols.** The *runtime* is the C code every program needs besides its own (files, sockets, threads, the clock and the like), in `gen/runtime/`. The IR only emits `declare`s from `std/`'s `extern` declarations, and is linked with the runtime `ksplc emit-runtime` writes (`STAGE1_RT` under `make LLVM=1`; `tests/support/harness_build.kspl` for the tests). The IR's own share is only the `main` entry point and what is `static inline` on the C side: the bounds, division and shift checks. `make test-conventions`'s "there is no `kspl_*` body on LLVM's side" holds this. Both backends spell the entry point's work from `gen/entry.kspl` ("What the two generators share: the decisions, not the spelling").
-
-**An LLVM artifact is not shipped, because it carries no debug information** ("Genllvm (LLVM IR): why the structure differs, and managing SSA"). Shipping one needs debug information first.
 
 | | Genc (C99) | Genllvm (LLVM IR) |
 | :-- | :-- | :-- |
@@ -51,7 +49,7 @@ The backends only translate, as the first stage that knows the target. They rece
 
 **A decision written twice drifts with no warning until someone runs the other backend.** A `main` written per backend can lack the call that puts standard output into binary mode ("Standard output carries the bytes a program writes" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md)). And a symbol one backend owns would make the other import it.
 
-**An `embed` with no path in the tree stops with an ICE** (an internal compiler error, [the glossary](DESIGN-compiler.md#the-glossary)). The parser always gives an `embed` its path, so a missing one is a broken invariant. Returning silently would be the stopgap "Failing fast through an exception or an ICE" in [`DESIGN-compiler.md`](DESIGN-compiler.md) forbids.
+**An `embed` with no path in the tree stops with an ICE.** The parser always gives one its path, so a missing one is a broken invariant.
 
 **Where the spelling differs, the table belongs to the backend.** The functions the LLVM preamble declares or defines itself form one table, `PREAMBLE_FNS` in `gen/llvm/ctx.kspl`. It drives both the `declare`s and the skipping of `std`'s own declarations, so the two cannot disagree. `make test-conventions` holds its hand-defined entries against the `define`s in `gen/llvm/module.kspl`.
 
@@ -80,23 +78,7 @@ Every KSPL value has one fixed layout, which Sema fixes and both backends follow
 A Result (`T!E`) is `std/lang`'s enum `Result<|T, E|>`, laid out as any enum with a payload. A payload field of type `Void` is not carried, so `Void!E`'s `ok` holds nothing.
 
 * **Enums**: an enum with a payload is a *tagged union*: a tag that says which variant is active, then room for the largest payload. The tag has the enum's base type (`I32` where none is written; genc's `tag` field is that type too, not a C `enum`). On LLVM it is `{ <tag>, [N x iW] }`, the words `W` bytes wide for the alignment (8 at most), so the type has sema's size. **A payload field is reached by its byte offset** from the value's start (`enum_payload_offset` plus `payload_field_offset`; `payload_field_ptr` in `gen/llvm/types.kspl`). A struct of the payload's types would be laid out by LLVM's own alignments.
-* **Structs**: on LLVM a struct is `{ <the fields> }`, laid out by LLVM's own alignments, which agree with C's. **One that is, or holds, an `#align(N)` struct, or a tagged union aligned past 8, is laid instead** (`is_laid` in `gen/llvm/types.kspl`). No LLVM type carries such an alignment, so the struct is written *packed* (no automatic gaps). Each field sits at sema's offset, with `i8` padding bytes between and after. A field's element index is counted past the padding (`field_index`), and every alloca and global of it is told the alignment (`get_struct_align`). Unlaid, a field after it would sit elsewhere than C and `offsetof` say.
-
-#### A field of a `#packed` struct is reached byte-wise
-
-**A field of a `#packed` struct sits at any byte. So each load and store of it is made at the alignment it keeps, and nothing makes a pointer to it.** One function answers what that alignment is: `packed_place_align` in `sema/decl/layout.kspl`. It walks the place's path (`.` and an array's `[]`); a step through a pointer starts afresh at the type's own alignment. It gives the alignment where it is below the type's own, else 0. Each reader asks it:
-
-| Who | What it does with the answer |
-| :-- | :-- |
-| sema | Refuses whatever would take the address (`refuse_packed_address` / `refuse_packed_receiver`), and an ARC-managed field, whose helpers take it (`check_packed_managed_fields`); why is "Why a field `#packed` leaves under-aligned has no address" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) |
-| genc | Leaves the access to C, which knows the packing from the member path. Only the target an assignment fixes first (`_kspl_dst_N` in `emit_assign_stmt`, `gen/c/stmt.kspl`) is held through a pointer to a one-field packed struct, never a `T*` |
-| genllvm | Writes `, align N` on the load or store (`op_load_place` / `op_store_place` in `gen/llvm/types.kspl`), and on a struct literal's field store (`packed_field_align`) |
-| lower | Fixing an operand's address early (`hoist_address` in `lower/order.kspl`) fixes the struct holding the field instead (`hoist_holder`) |
-| lower's exit check | An `@` of such a field is an ICE (`lower/verify.kspl`): sema refuses every form a writer can write, so one there was made by lower |
-
-Caution: **An LLVM load or store with no `align`, and a C `T*`, promise the type's own alignment**, which x86 does not check. `make test-equiv` builds its program's C with C's alignment trap and reads the IR's `align` (`check_traps` / `check_packed_ir` in `tests/suite/equiv_test.kspl`).
-
-**What is given up**: an index between the holding struct and the field, in an operand fixed early (`p[f()].grid[j][g()] += 1`), moves into a temporary by value. So its bounds check runs where the field is used, after the operands that follow it.
+* **Structs**: on LLVM a struct is `{ <the fields> }`, laid out by LLVM's own alignments, which agree with C's. A field's element index is its place in the declaration.
 
 ### Embedding the runtime, and what a library keeps to itself
 
@@ -108,7 +90,7 @@ Caution: **An LLVM load or store with no `align`, and a C `T*`, promise the type
 | `hosted.*` | where there is an OS | files, sockets, threads and the rest of what needs libc and the OS API |
 | `freestanding.*` | under `--freestanding` (bare metal) | nothing OS-dependent; a breached run-time check stops in an endless loop, and the like |
 
-The sources `ksplc/gen/runtime/{core,hosted,freestanding}.{h,c}` are built into ksplc with `embed` (as in "Keeping the grammar and the AST node kinds in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md)). genc writes the hosted or the freestanding set into every generated `.c`, unconditionally. **So their reachability differs from an ordinary KSPL file's**, which reaches the output only if the entry file imports it, directly or not.
+The sources `ksplc/gen/runtime/{core,hosted,freestanding}.{h,c}` and `hosted_*.c` are built into ksplc with `embed` (as in "Keeping the grammar and the AST node kinds in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md)). genc writes the hosted or the freestanding set into every generated `.c`, unconditionally. **So their reachability differs from an ordinary KSPL file's**, which reaches the output only if the entry file imports it, directly or not.
 
 That matters for the calls clang inserts where the KSPL source shows none, such as `__aeabi_memclr4` (ARM's AAPCS helpers) and `kspl_bounds_check`. Written as a KSPL `pub fn`, such a helper vanishes whenever its file is unreachable. So the helpers that must not appear in KSPL's call graph live in `runtime/*.c` (`kspl_atomic_add` / `kspl_atomic_cas`, the AAPCS memclr/memcpy family, `kspl_get_sp` and so on).
 
@@ -333,7 +315,7 @@ LLVM IR allows forward references to `%struct` types and `@function` symbols, so
 
 ```mermaid
 flowchart LR
-    A[emit_slice_base_types] --> B[emit_type_decls] --> C[emit_globals] --> D[emit_fn_defs] --> F[emit_runtime_and_main] --> G["emit_string_pool<br/>(the strings gathered lazily, put out in one lot at the end)"]
+    A[emit_slice_base_types] --> B[emit_type_decls] --> C[emit_globals] --> D[emit_fn_defs] --> E[emit_saturating_casts] --> F[emit_runtime_and_main] --> H["emit_llvm_const_arrays<br/>(before the strings: an element can add one)"] --> G["emit_string_pool<br/>(the strings gathered lazily, put out in one lot at the end)"]
 ```
 
 The call chain mirrors Genc's: `emit_llvm_fn_def` (`ksplc/gen/llvm/decl.kspl`) → `block.emit_llvm_stmt` (`ksplc/gen/llvm/stmt.kspl`) → `node.emit_llvm_expr` / `emit_llvm_lvalue` (`ksplc/gen/llvm/expr.kspl`). In *SSA* form every value gets a fresh numbered register (`%1`, `%2`, …) that is assigned once; an *alloca* reserves a stack slot for a local variable.
@@ -428,7 +410,7 @@ There are four requirements:
 
 Caution: Do not let an initializer that cannot be evaluated silently fall back to `zeroinitializer`. **A backend that generates nothing is safer than one that changes the meaning of what it generates.**
 
-**A test holds the backends equivalent**: `tests/prog/equiv.kspl` builds one program with both C and LLVM and compares the standard output. Only this catches a bug where one backend alone breaks.
+**A test holds the backends equivalent**: `tests/prog/equiv.kspl` builds one program with both C and LLVM and compares the standard output. It and `make test-random-equiv` catch a bug where one backend alone breaks.
 
 ### A function pointer breaks differently in each backend
 
@@ -446,14 +428,14 @@ The regression test is `tests/prog/equiv.kspl`: a `const`, a mutable and a `null
 
 ### An attribute: interpreted in both backends, or refused in one
 
-**An attribute such as `#inline` must work under both backends, or be an error under the one that cannot do it. So never let only one backend read `has_attribute`.** Otherwise `#inline` (on `List.push/get/set/at` in `std/ds.kspl`), `#noreturn`, `#naked`, `#section(...)` and `#align(N)` would be silently dropped under `--to=llvm` (Principle 5). There are two ways:
+**An attribute such as `#inline` must work under both backends, or be an error under the one that cannot do it. So never let only one backend read `has_attribute`.** Otherwise an attribute would be silently dropped under `--to=llvm` (Principle 5). There are two ways:
 
-1. **Implement it in both backends.** A function attribute nearly always maps to one LLVM IR word: `#inline`→`inlinehint`, `#noreturn`→`noreturn`, `#naked`→`naked`, `#section("s")`→`section "s"`. `emit_llvm_fn_attributes` in `gen/llvm/decl.kspl` emits them in the attribute position of `define ... ) <attributes> {`; a global variable's `section` adds `, section "s"` after the initializer.
+1. **Implement it in both backends.** A function attribute nearly always maps to one LLVM IR word (`#inline`→`inlinehint`, `#section("s")`→`section "s"`). `emit_llvm_fn_attributes` in `gen/llvm/decl.kspl` emits them in the attribute position of `define ... ) <attributes> {`; a global variable's `section` adds `, section "s"` after the initializer.
    * Follow LangRef's order (LLVM's language reference: fn attrs → section → align). Reversed, `llvm-as` reports a syntax error.
    * Do not map `#inline` to `alwaysinline`: that forces inlining even at `-O0`, so debugging behaves differently from genc's output.
-2. **Declare it single-backend and make it a compile error**, only where there is no portable counterpart. `#interrupt` is a per-machine calling convention with no LLVM IR form. An `#align(N)` placed directly on a function or a variable reaches C as an expression genc copies, so no constant exists to pass to LLVM. On a struct, sema folds it into `Struct_def.align_attr`, and it works on both backends. `attr_rule` in `sema/decl/attrs.kspl` marks these two C-only, which makes them an error under `--to=llvm`.
+2. **Leave it out of the language**, where there is no portable counterpart. Every attribute the table lists takes the first way, so `attr_rule` in `sema/decl/attrs.kspl` has no backend column.
 
-**Every new attribute takes one of the two ways.** `#cfg` and `##link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `##link` names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`. The regression tests are the cases `attr_interrupt_llvm_backend` and `attr_fn_align_llvm_backend` in `tests/negative/attr.kspl` (both with `// ARGS: --to=llvm`).
+**Every new attribute takes one of the two ways.** `#cfg` and `##link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `##link` names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`.
 
 **The LLVM backend's missing debug information is a gap of the same kind.** It stays open because `-g` is a build flag, not an attribute: there is nothing to refuse.
 

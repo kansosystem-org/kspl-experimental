@@ -12,7 +12,7 @@ Kssrv runs either as a *local* server for one person's browser (`--local`) or as
 
 Caution: **Read the options by name.** Told apart by the argument count, the premise "the third must be `--local`" breaks silently once there are two options.
 
-`--page` names the file returned for `/`, which can lie outside the root: the agreement's one exception ("Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). **With `--local` it is required.** The URL the server prints carries the token, so the page it opens must be the file the launching person named. A file someone left at the root's `index.html` must not get the token.
+`--page` names the file returned for `/`, which can lie outside the root: the agreement's one exception ("Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). **With `--local` it is required** ("Do not start a local server without a named page" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)).
 
 ### Local use and outward-facing use are split by one decision
 

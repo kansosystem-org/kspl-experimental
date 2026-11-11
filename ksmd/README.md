@@ -1,17 +1,10 @@
 # ksmd
 
-**ksmd is Kanso's document editor:** an editor for prose and tables with calculations, using its own Markdown-inspired `.ksmd` document language. It replaced an earlier editor, kspage, and reads none of its documents.
+**ksmd is Kanso's document editor:** an editor for prose and tables with calculations, using its own Markdown-inspired `.ksmd` document language.
 
 ## Status
 
-The reader models every structure of the design, and the writer saves it in canonical form. Source validation checks the version header, UTF-8, line endings and file size, and keeps byte offsets for diagnostics. A document opens inside a workspace folder, with each included file shown in place, and each source saves alone. Tables calculate, and table edits keep each formula's references on their cells.
-
-The editing page edits one document in a browser, with undo and redo. It holds:
-
-* **Prose**: formatting, lists and checklists, quotes, dividers, code, colours and alignment, and notes.
-* **Tables**: formulas, a document's own functions written in KSPL, number formats, choice lists and colour rules per column, sorting, filters and groups of rows. While a formula is typed, a list offers the functions that fit, and Insert ▸ Function… lists them all. Columns take a width in characters and rows a height in points, by a drag, a double-click that fits them, or a number typed. A long table keeps its heading in sight. Ranges of cells fill down or right, or go on with a series, and AutoSum totals a column.
-* **Tools**: a menu bar, a right-click table menu, a quick access bar, find and replace, a contents panel, Read-only, and Print or PDF. The status bar shows the chosen cell and its mode, and the section and printed page. It shows figures for chosen cells or a line count, and the document's zoom. The page turns dark with the system.
-* **Files**: served by the local server on a workspace folder, the page opens and saves files, shows includes and images. An include goes in from Insert, and an image from Insert, a paste or a drop. It notices a change on disk and holds unsaved edits as drafts. A `.ksmd` file double-clicked in a file manager opens in the browser.
+**The reader and writer model every structure of the design, and the editing page edits one document in a browser.** It edits prose, calculating tables, charts, images, diagrams and includes, opened and saved through the local server. What each part does is in [`ksmd/docs/SPEC-editing-page.md`](docs/SPEC-editing-page.md).
 
 Markdown supplies familiar notation, but compatibility with `.md` is not a requirement. Presentations are outside ksmd's scope.
 
@@ -21,8 +14,7 @@ Markdown supplies familiar notation, but compatibility with `.md` is not a requi
 
 From the repository root, `make ksmd` builds what a double-click needs: the page, the local server and a launcher. `make install` installs the three beside `ksplc`, and on Linux ties `.ksmd` files to the installed launcher for your user, with their icon; `make install-desktop` ties them to the one in `out/`. On Windows and macOS, `make ksmd` prints the steps that tie them by hand. "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../docs/HOWTO-set-up-a-project.md) gives the steps for each system, and how to reset them.
 
-* **The workspace is the document's own folder**, or the nearest folder above it that holds a file named `.ksmd-workspace`. Put that empty file in a folder to open its documents together, with includes that climb with `../`.
-* **Each workspace keeps its own port**, worked out from its path, so the drafts the browser holds for it come back.
+* **Which folder is the workspace, and the port it keeps:** "Opening a document from the desktop" in [`ksmd/docs/DESIGN-ksmd.md`](docs/DESIGN-ksmd.md#opening-a-document-from-the-desktop).
 * **On Windows, `make ksmd` and `make clean` first stop the servers the launcher left running**, since Windows cannot replace a running program's file. An open page keeps its edits as a draft; open the document again after the build.
 
 ## Start ksmd on a folder by hand
@@ -116,12 +108,14 @@ flowchart BT
 | [calc/glue.kspl](calc/glue.kspl) | Writes the table that calls a file's functions, from their signatures, and what a person reads of each from their doc comments |
 | [calc/help.kspl](calc/help.kspl) | What a person reads of a function: its arguments, what it gives and an example. The entries of the forms the calculator reads itself, such as `if`, stand here |
 | [calc/wire.kspl](calc/wire.kspl) | A call to a person's own function, and its answer, as bytes between the page and its worker |
+| [calc/reason.kspl](calc/reason.kspl) | Why a cell shows an error, in plain words, for the page's tooltip and status bar |
 | [calc/functions_table.kspl](calc/functions_table.kspl) | That table for `calc/functions.kspl`, written by `make ksmd-functions` |
 | [syntax/reader.kspl](syntax/reader.kspl) | Reads paragraphs, headings, code fences and lists into the model |
 | [syntax/inline.kspl](syntax/inline.kspl) | Reads the inline markup of a paragraph, a heading or a list item |
 | [syntax/clause.kspl](syntax/clause.kspl) | Reads a table, an include or an image clause |
 | [syntax/chart.kspl](syntax/chart.kspl) | A chart clause, the table and columns it names, and the clause written back |
 | [syntax/drawing.kspl](syntax/drawing.kspl) | The shapes drawn over an image or a chart: the `draw` lines of its clause, read and written back |
+| [syntax/diagram.kspl](syntax/diagram.kspl) | A diagram's clause: its size and caption, one line per shape and per arrow, read and written back |
 | [syntax/settings.kspl](syntax/settings.kspl) | The document's own settings: the `:::document` clause, read, checked and written back |
 | [syntax/writer.kspl](syntax/writer.kspl) | Saves the model as canonical source |
 | [files/files.kspl](files/files.kspl) | Which paths are refused by their text alone, and `Files`, where a document's files are read from |
@@ -129,6 +123,7 @@ flowchart BT
 | [files/fetched.kspl](files/fetched.kspl) | The files a page fetched through the local server, and the ones it still lacks |
 | [files/assemble.kspl](files/assemble.kspl) | The assembled view: each included file in place, with where each block came from |
 | [files/image.kspl](files/image.kspl) | An image's format and size, read from its header |
+| [edit/typed.kspl](edit/typed.kspl) | How text typed into a cell is read: a formula, a number, a date, text, or nothing |
 | [edit/series.kspl](edit/series.kspl) | How a line of cells goes on when the fill handle drags it |
 | [edit/edit.kspl](edit/edit.kspl) | Inserts and removes rows and columns, sets and copies cells, and adds, removes and renames tables |
 | [edit/moving.kspl](edit/moving.kspl) | Moves rows, columns and blocks of cells |
@@ -138,6 +133,8 @@ flowchart BT
 | [edit/history.kspl](edit/history.kspl) | Undo and redo: each action's changes, kept to swap back |
 | [edit/editor.kspl](edit/editor.kspl) | The editor: the selection, and every action on prose as one transaction |
 | [edit/editor_charts.kspl](edit/editor_charts.kspl) | The editor's actions on charts |
+| [edit/editor_diagrams.kspl](edit/editor_diagrams.kspl) | The editor's actions on diagrams: an empty one at the selection, and a diagram changed whole |
+| [edit/editor_blocks.kspl](edit/editor_blocks.kspl) | The commands that put a whole block in place of the selection: a divider, an image, an include or a functions clause |
 | [edit/editor_drawings.kspl](edit/editor_drawings.kspl) | The editor's action on the shapes drawn over an image or a chart |
 | [edit/editor_settings.kspl](edit/editor_settings.kspl) | The editor's action on the document's own settings |
 | [edit/editor_tables.kspl](edit/editor_tables.kspl) | The editor's actions on tables: rows, columns, cells, looks, sorting, pasting, filling |
@@ -145,20 +142,12 @@ flowchart BT
 | [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action over prose and cells |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
 | [port/web/](port/web/) | The editing page: the wasm bridge and its scripts and style. The bridge is `bridge.kspl`, with its actions on tables and charts in `bridge_tables.kspl` and a person's own functions in `bridge_own.kspl`. What they all share, the memory, the open document and the result, is `bridge_session.kspl`. `view.kspl` shows blocks, and `moving.kspl` writes paths again after a Save As. Each script is named for what it holds, such as `range.js`, `outline.js`, `drawings.js`, `settings.js`, `sizes.js`, `merge.js`, `find.js`, `file.js` and `touch.js`; `suggest.js`, `catalog.js` and `refs.js` help while a formula is typed. `bundle.kspl` makes the page one file |
-| [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions'. `wasm_build.kspl` runs it for `ksmd/Makefile` |
+| [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions' |
+| [port/wasm_build.kspl](port/wasm_build.kspl) | Runs `port/wasm.kspl` for `ksmd/Makefile` to build the page's wasm |
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
 | [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |
 | [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
 | [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server (started by `kssrv.mjs`), and `measure.mjs` times it |
-
-## Files near the limit and how they split
-
-How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md).
-
-* [`edit/edit.kspl`](edit/edit.kspl): **the settings of a table that leave its cells in place** move to a new `table_settings.kspl` under `ksmd/edit/`. That is `set_look` through `step_places`: looks, groups, choices, rules, the caption, merged columns, notes, links, widths, heights and number formats. They call only `table_at` and `Edit_error`, which stay. Inserting, removing, setting and copying cells stay, with the helpers that keep references attached.
-* [`edit/editor.kspl`](edit/editor.kspl): **the actions on one whole block** move into `editor_blocks.kspl` beside it, which holds the other whole-block actions. That is `set_block_note`, `toggle_check`, `set_invisible`, `insert_whole`, `remove_block` and `remove_whole`. Typing, erasing, Enter, marks and the history stay, with `finish` and `commit`, which the moved actions call across the cut.
-* [`tests/calculation.kspl`](tests/calculation.kspl): **the tests of single functions** move to a new `calc_functions.kspl` under `ksmd/tests/`. That is `rounding` through `lookups`. `run` calls them there, and the case helpers from `cases_with` down stay, opened from `priv` where a moved test calls them.
-* [`tests/browser/tools.mjs`](tests/browser/tools.mjs): **the sections on the page as a whole** move to a new `page.mjs` beside it: `print`, `readOnly`, `dark`, `touch`, `contents` and `contentsWidth`. It returns its sections as `keyboard.mjs` does, and `main.mjs` joins them. The tools over a range of cells stay.
 
 ## Further reading
 

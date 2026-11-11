@@ -18,6 +18,7 @@ import "ksmd/tests/limits"
 import "ksmd/tests/moving"
 import "ksmd/tests/notes"
 import "ksmd/tests/prose"
+import "ksmd/tests/quoted"
 import "ksmd/tests/reasons"
 import "ksmd/tests/replacing"
 import "ksmd/tests/rules"
@@ -56,19 +57,20 @@ fn main(): I32
     replacing.run()
     limits.run()
     wildcards.run()
+    quoted.run()
     return verdict.finish()
 
 priv fn valid_sources()
-    empty: = Source("empty.ksmd", "%ksmd 1") catch
+    empty: = Source("empty.ksmd", "%ksmd 2") catch
         panic("a header alone is an empty document")
     verdict.check("header without a final newline", empty.body == empty.bytes.len, "")
-    lf: = Source("prose.ksmd", "%ksmd 1\n\n日本語\n") catch
+    lf: = Source("prose.ksmd", "%ksmd 2\n\n日本語\n") catch
         panic("valid UTF-8 source")
     first: = lf.line_at(lf.body)
     second: = lf.line_at(first.next)
     verdict.check("blank and Unicode lines",
         first.text.len == 0 && second.text.equals("日本語"), "")
-    crlf: = Source("windows.ksmd", "\uFEFF%ksmd 1\r\n日本語\r\nlast") catch
+    crlf: = Source("windows.ksmd", "\uFEFF%ksmd 2\r\n日本語\r\nlast") catch
         panic("BOM and CRLF source")
     row: = crlf.line_at(crlf.body)
     last: = crlf.line_at(row.next)
@@ -92,17 +94,17 @@ priv fn valid_sources()
     verdict.check("exact source size limit", true, "")
 
 priv fn invalid_sources()
-    fails("", "expected version header %ksmd 1", 0, 1, 1)
-    fails("%ksmd 2\ninvalid body", "expected version header %ksmd 1", 0, 1, 1)
-    fails("%ksmd 1 \n", "expected version header %ksmd 1", 0, 1, 1)
+    fails("", "expected version header %ksmd 2, or %ksmd 1", 0, 1, 1)
+    fails("%ksmd 3\ninvalid body", "expected version header %ksmd 2, or %ksmd 1", 0, 1, 1)
+    fails("%ksmd 2 \n", "expected version header %ksmd 2, or %ksmd 1", 0, 1, 1)
     defer $unicode: = Str_builder()
-    unicode.s("%ksmd 1\n日").c(0xFFU8)
+    unicode.s("%ksmd 2\n日").c(0xFFU8)
     fails(unicode.slice(), "invalid UTF-8", 11, 2, 2)
     bad_utf8(U8[]::{ 0xC0U8, 0xAFU8 })
     bad_utf8(U8[]::{ 0xEDU8, 0xA0U8, 0x80U8 })
     bad_utf8(U8[]::{ 0xF0U8, 0x9FU8 })
-    fails("%ksmd 1\r", "a carriage return must be followed by a line feed", 7, 1, 8)
-    fails("%ksmd 1\r\na\rb", "a carriage return must be followed by a line feed", 10, 2, 2)
+    fails("%ksmd 2\r", "a carriage return must be followed by a line feed", 7, 1, 8)
+    fails("%ksmd 2\r\na\rb", "a carriage return must be followed by a line feed", 10, 2, 2)
     defer arena: = Arena(MAX_SOURCE_BYTES + 1024)
     large: = U8$[]::{ .ptr = U8$@::arena.alloc(MAX_SOURCE_BYTES + 1), .len = MAX_SOURCE_BYTES + 1 }
     for i in Range.asc(large.len)
@@ -119,5 +121,5 @@ priv fn fails(bytes: U8[], message: U8[], offset: Sz, line: Sz, column: Sz)
 
 priv fn bad_utf8(tail: U8[])
     defer $text: = Str_builder()
-    text.s("%ksmd 1\n").s(tail)
+    text.s("%ksmd 2\n").s(tail)
     fails(text.slice(), "invalid UTF-8", 8, 2, 1)

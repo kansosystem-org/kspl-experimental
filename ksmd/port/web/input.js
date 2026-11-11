@@ -238,7 +238,7 @@ function ksmdInput(ks) {
   // before block `at` where it is 0 or more. False where the clipboard holds no such table.
   ks.pasteTable = (data, at) => {
     const own = data ? data.getData(KSMD_TYPE) : "";
-    if (!/^%ksmd 1\r?\n\r?\n:::table /.test(own) || ks.tooLarge(own)) return false;
+    if (!/^%ksmd [12]\r?\n\r?\n:::table /.test(own) || ks.tooLarge(own)) return false;
     ks.table.take();
     if (at >= 0) {
       ks.table.chooseCell(null);
@@ -297,9 +297,16 @@ function ksmdInput(ks) {
   // A gap stands only while the caret is in it. The blocks after a gap move up when it goes.
   // A table that is chosen or opened takes the gap away itself, at once (`hideCaret` in
   // `view.js`).
+  // Caution: **A gap stays while the focus is outside the document**, in a bar, a menu or a
+  // dialog, as the caret does: it comes back there. The table below went up a line as Insert
+  // Function opened, and came down again a moment after it closed, so a press made then
+  // landed a row too high.
   document.addEventListener("selectionchange", () => {
     const s = window.getSelection();
     const gap = root.querySelector(".gap");
-    if (gap && s.rangeCount > 0 && !gap.contains(s.focusNode) && !ks.composing) gap.remove();
+    if (gap && s.rangeCount > 0 && root.contains(s.focusNode) && !gap.contains(s.focusNode) &&
+      !ks.composing) {
+      gap.remove();
+    }
   });
 }

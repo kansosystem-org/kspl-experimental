@@ -30,7 +30,7 @@ fn run()
 priv fn models()
     defer arena: = Arena(64 * 1024)
     doc: =
-        read("%ksmd 1\n\n# Title\n\nOne\ntwo.\\\nThree.\n\n```text\n:::include\n```\n", arena)
+        read("%ksmd 2\n\n# Title\n\nOne\ntwo.\\\nThree.\n\n```text\n:::include\n```\n", arena)
     verdict.check("three blocks in order", doc.blocks.len == 3, "")
     h: = doc.blocks.get(0)
     verdict.check("heading level and text",
@@ -43,33 +43,33 @@ priv fn models()
     c: = doc.blocks.get(2)
     verdict.check("a fence keeps its label and literal lines",
         c.kind == Block_kind.code && c.label.equals("text") && c.text.equals(":::include\n"), "")
-    empty: = read("%ksmd 1", arena)
+    empty: = read("%ksmd 2", arena)
     verdict.check("a header alone has no blocks", empty.blocks.len == 0, "")
-    escaped: = read("%ksmd 1\n\n\\# Not a heading\n", arena)
+    escaped: = read("%ksmd 2\n\n\\# Not a heading\n", arena)
     verdict.check("an escaped marker starts a paragraph",
         escaped.blocks.get(0).kind == Block_kind.paragraph &&
         first_shape(escaped, arena).equals("# Not a heading"), "")
-    literal: = read("%ksmd 1\n\nends in \\\\\nnext\n", arena)
+    literal: = read("%ksmd 2\n\nends in \\\\\nnext\n", arena)
     verdict.check("an even run of backslashes is literal, not a hard break",
         first_shape(literal, arena).equals("ends in \\ next"), "")
 
 priv fn canonical_saves()
-    canonical("an empty document", "%ksmd 1", "%ksmd 1\n")
+    canonical("an empty document", "%ksmd 2", "%ksmd 2\n")
     canonical("CRLF, a BOM and extra blank lines",
-        "﻿%ksmd 1\r\n\r\n\r\n#  Title  \r\n\r\n\r\nOne\r\n   two\r\n",
-        "%ksmd 1\n\n# Title\n\nOne two\n")
-    canonical("a hard break stays a hard break", "%ksmd 1\n\na  \\\n  b\n", "%ksmd 1\n\na\\\nb\n")
+        "﻿%ksmd 2\r\n\r\n\r\n#  Title  \r\n\r\n\r\nOne\r\n   two\r\n",
+        "%ksmd 2\n\n# Title\n\nOne two\n")
+    canonical("a hard break stays a hard break", "%ksmd 2\n\na  \\\n  b\n", "%ksmd 2\n\na\\\nb\n")
     canonical("a line holding only a backslash is a blank line, kept as it is",
-        "%ksmd 1\n\na\n\n\\\n\n\\  \n\nb\n", "%ksmd 1\n\na\n\n\\\n\n\\\n\nb\n")
-    canonical("headings keep their level", "%ksmd 1\n\n###### Six\n", "%ksmd 1\n\n###### Six\n")
+        "%ksmd 2\n\na\n\n\\\n\n\\  \n\nb\n", "%ksmd 2\n\na\n\n\\\n\n\\\n\nb\n")
+    canonical("headings keep their level", "%ksmd 2\n\n###### Six\n", "%ksmd 2\n\n###### Six\n")
     small_diff()
-    canonical("a whitespace-only line separates blocks", "%ksmd 1\n\nA\n \t\nB\n",
-        "%ksmd 1\n\nA\n\nB\n")
+    canonical("a whitespace-only line separates blocks", "%ksmd 2\n\nA\n \t\nB\n",
+        "%ksmd 2\n\nA\n\nB\n")
 
 priv fn small_diff() //< changing one word of the model changes one line of the save
     defer arena: = Arena(64 * 1024)
     doc: =
-        read("%ksmd 1\n\nFirst\nparagraph.\n\nSecond paragraph.\n\nThird paragraph.\n", arena)
+        read("%ksmd 2\n\nFirst\nparagraph.\n\nSecond paragraph.\n\nThird paragraph.\n", arena)
     defer $before: = Str_builder()
     writer.write(doc@, before@)
     $edited: = doc
@@ -101,23 +101,23 @@ priv fn changed_lines(a: U8[], b: U8[]): Sz //< how many lines differ, for texts
     return count
 
 priv fn fences()
-    canonical("an empty code block", "%ksmd 1\n\n```\n```\n", "%ksmd 1\n\n```\n```\n")
-    canonical("a blank line inside code is kept", "%ksmd 1\n\n```\n\n```\n",
-        "%ksmd 1\n\n```\n\n```\n")
-    canonical("a longer fence shortens when the text allows", "%ksmd 1\n\n``````kspl\nx\n``````\n",
-        "%ksmd 1\n\n```kspl\nx\n```\n")
-    canonical("a fence lengthens past a line of three backticks", "%ksmd 1\n\n````\n```\n````\n",
-        "%ksmd 1\n\n````\n```\n````\n")
+    canonical("an empty code block", "%ksmd 2\n\n```\n```\n", "%ksmd 2\n\n```\n```\n")
+    canonical("a blank line inside code is kept", "%ksmd 2\n\n```\n\n```\n",
+        "%ksmd 2\n\n```\n\n```\n")
+    canonical("a longer fence shortens when the text allows", "%ksmd 2\n\n``````kspl\nx\n``````\n",
+        "%ksmd 2\n\n```kspl\nx\n```\n")
+    canonical("a fence lengthens past a line of three backticks", "%ksmd 2\n\n````\n```\n````\n",
+        "%ksmd 2\n\n````\n```\n````\n")
     canonical("a fence lengthens past lines of three and four",
-        "%ksmd 1\n\n``````\n```\n````\n``````\n", "%ksmd 1\n\n`````\n```\n````\n`````\n")
-    canonical("a backtick line with more text is content", "%ksmd 1\n\n```\n``` \n````x\n```\n",
-        "%ksmd 1\n\n```\n``` \n````x\n```\n")
-    canonical("the version marker inside code is literal", "%ksmd 1\n\n```\n%ksmd 1\n```\n",
-        "%ksmd 1\n\n```\n%ksmd 1\n```\n")
+        "%ksmd 2\n\n``````\n```\n````\n``````\n", "%ksmd 2\n\n`````\n```\n````\n`````\n")
+    canonical("a backtick line with more text is content", "%ksmd 2\n\n```\n``` \n````x\n```\n",
+        "%ksmd 2\n\n```\n``` \n````x\n```\n")
+    canonical("the version marker inside code is literal", "%ksmd 2\n\n```\n%ksmd 2\n```\n",
+        "%ksmd 2\n\n```\n%ksmd 2\n```\n")
 
 priv fn lists()
     defer arena: = Arena(64 * 1024)
-    doc: = read("%ksmd 1\n\n- one\n  3. two\n  1. three\n    - four\n- five\n\nAfter\n", arena)
+    doc: = read("%ksmd 2\n\n- one\n  3. two\n  1. three\n    - four\n- five\n\nAfter\n", arena)
     verdict.check("a list is one block, and the paragraph after it another",
         doc.blocks.len == 2 && doc.blocks.get(0).kind == Block_kind.list &&
         doc.blocks.get(0).first == 0 && doc.blocks.get(0).count == 5 && doc.items.len == 5, "")
@@ -129,29 +129,29 @@ priv fn lists()
         doc.items.get(3).depth == 2 && !doc.items.get(4).ordered &&
         doc.items.get(4).depth == 0, "")
     canonical("ordered items are numbered 1. and items are trimmed",
-        "%ksmd 1\n\n7.  first  \n12. second\n", "%ksmd 1\n\n1. first\n1. second\n")
-    canonical("a nested list round-trips", "%ksmd 1\n\n- a\n  1. b\n    - c\n- d\n",
-        "%ksmd 1\n\n- a\n  1. b\n    - c\n- d\n")
-    canonical("a blank line splits two lists", "%ksmd 1\n\n- a\n\n1. b\n",
-        "%ksmd 1\n\n- a\n\n1. b\n")
-    canonical("an item keeps its inline source", "%ksmd 1\n\n- *a* \\\\ [b](#c)\n",
-        "%ksmd 1\n\n- *a* \\\\ [b](#c)\n")
-    refused("%ksmd 1\n\n- a\n    - b\n",
+        "%ksmd 2\n\n7.  first  \n12. second\n", "%ksmd 2\n\n1. first\n1. second\n")
+    canonical("a nested list round-trips", "%ksmd 2\n\n- a\n  1. b\n    - c\n- d\n",
+        "%ksmd 2\n\n- a\n  1. b\n    - c\n- d\n")
+    canonical("a blank line splits two lists", "%ksmd 2\n\n- a\n\n1. b\n",
+        "%ksmd 2\n\n- a\n\n1. b\n")
+    canonical("an item keeps its inline source", "%ksmd 2\n\n- *a* \\\\ [b](#c)\n",
+        "%ksmd 2\n\n- *a* \\\\ [b](#c)\n")
+    refused("%ksmd 2\n\n- a\n    - b\n",
         "an item is nested at most one level deeper than the item before it", 4, 5)
-    refused("%ksmd 1\n\n- a\n1. b\n",
+    refused("%ksmd 2\n\n- a\n1. b\n",
         "the items of one list share one marker. Put a blank line between two lists", 4, 1)
-    refused("%ksmd 1\n\n- a\n  - b\n  1. c\n",
+    refused("%ksmd 2\n\n- a\n  - b\n  1. c\n",
         "the items of one list share one marker. Put a blank line between two lists", 5, 3)
-    refused("%ksmd 1\n\n- a\ncontinued\n",
+    refused("%ksmd 2\n\n- a\ncontinued\n",
         "a list item takes one line. Put a blank line before a paragraph", 4, 1)
-    refused("%ksmd 1\n\n- a\n - b\n", "a nested item is indented two spaces per level", 4, 1)
-    refused("%ksmd 1\n\n- \n", "this list item has no text", 3, 1)
-    refused("%ksmd 1\n\n1.\n", "this list item has no text", 3, 1)
-    refused("%ksmd 1\n\n- a\\\n",
+    refused("%ksmd 2\n\n- a\n - b\n", "a nested item is indented two spaces per level", 4, 1)
+    refused("%ksmd 2\n\n- \n", "this list item has no text", 3, 1)
+    refused("%ksmd 2\n\n1.\n", "this list item has no text", 3, 1)
+    refused("%ksmd 2\n\n- a\\\n",
         "a list item takes one line and has no hard break. Write '\\\\' for a literal backslash", 3,
         4)
     defer $deep: = Str_builder()
-    deep.s("%ksmd 1\n\n")
+    deep.s("%ksmd 2\n\n")
     for depth in Range.asc(17)
         for _ in Range.asc(depth)
             deep.s("  ")
@@ -175,88 +175,88 @@ priv fn inline_models()
     inline("text joins across a source newline", "a\n*b*\nc", "a <e>b</e> c")
     inline("a code span keeps '*' and '\\' literal", "`*a\\`", "{*a\\}")
     defer arena: = Arena(64 * 1024)
-    doc: = read("%ksmd 1\n\nx *y*\n", arena)
+    doc: = read("%ksmd 2\n\nx *y*\n", arena)
     verdict.check("a mark's node keeps its place in the source",
         doc.inlines.get(1).kind == Inline_kind.emphasis_start &&
         doc.inlines.get(1).offset == 11, "")
 
 priv fn inline_saves()
-    canonical("a needless escape is dropped", "%ksmd 1\n\na\\.b\n", "%ksmd 1\n\na.b\n")
-    canonical("an escaped list marker stays escaped", "%ksmd 1\n\n\\- not a list\n",
-        "%ksmd 1\n\n\\- not a list\n")
-    canonical("an escaped number marker stays escaped", "%ksmd 1\n\n12\\. not a list\n",
-        "%ksmd 1\n\n12\\. not a list\n")
-    canonical("an escaped pipe and clause stay escaped", "%ksmd 1\n\n\\| a\n\n\\::: b\n",
-        "%ksmd 1\n\n\\| a\n\n\\::: b\n")
-    canonical("a marker after a hard break stays escaped", "%ksmd 1\n\na\\\n\\# b\n",
-        "%ksmd 1\n\na\\\n\\# b\n")
-    canonical("a code span loses needless padding", "%ksmd 1\n\n` a `\n", "%ksmd 1\n\n`a`\n")
-    canonical("a code span keeps the padding a backtick needs", "%ksmd 1\n\n`` `x ``\n",
-        "%ksmd 1\n\n`` `x ``\n")
-    canonical("marks, a link and code in a heading", "%ksmd 1\n\n## *a* [b](#c) `d`\n",
-        "%ksmd 1\n\n## *a* [b](#c) `d`\n")
-    canonical("three '*' in each reading", "%ksmd 1\n\n***a** b* ***c* d** ***e***\n",
-        "%ksmd 1\n\n***a** b* ***c* d** ***e***\n")
-    canonical("literal markup characters are escaped", "%ksmd 1\n\n\\*a\\* \\`b\\` \\[c\\]\n",
-        "%ksmd 1\n\n\\*a\\* \\`b\\` \\[c\\]\n")
+    canonical("a needless escape is dropped", "%ksmd 2\n\na\\.b\n", "%ksmd 2\n\na.b\n")
+    canonical("an escaped list marker stays escaped", "%ksmd 2\n\n\\- not a list\n",
+        "%ksmd 2\n\n\\- not a list\n")
+    canonical("an escaped number marker stays escaped", "%ksmd 2\n\n12\\. not a list\n",
+        "%ksmd 2\n\n12\\. not a list\n")
+    canonical("an escaped pipe and clause stay escaped", "%ksmd 2\n\n\\| a\n\n\\::: b\n",
+        "%ksmd 2\n\n\\| a\n\n\\::: b\n")
+    canonical("a marker after a hard break stays escaped", "%ksmd 2\n\na\\\n\\# b\n",
+        "%ksmd 2\n\na\\\n\\# b\n")
+    canonical("a code span loses needless padding", "%ksmd 2\n\n` a `\n", "%ksmd 2\n\n`a`\n")
+    canonical("a code span keeps the padding a backtick needs", "%ksmd 2\n\n`` `x ``\n",
+        "%ksmd 2\n\n`` `x ``\n")
+    canonical("marks, a link and code in a heading", "%ksmd 2\n\n## *a* [b](#c) `d`\n",
+        "%ksmd 2\n\n## *a* [b](#c) `d`\n")
+    canonical("three '*' in each reading", "%ksmd 2\n\n***a** b* ***c* d** ***e***\n",
+        "%ksmd 2\n\n***a** b* ***c* d** ***e***\n")
+    canonical("literal markup characters are escaped", "%ksmd 2\n\n\\*a\\* \\`b\\` \\[c\\]\n",
+        "%ksmd 2\n\n\\*a\\* \\`b\\` \\[c\\]\n")
 
 priv fn inline_refusals()
-    refused("%ksmd 1\n\na \\q\n",
+    refused("%ksmd 2\n\na \\q\n",
         "a backslash escapes only ASCII punctuation. Write '\\\\' for a literal backslash", 3, 3)
-    refused("%ksmd 1\n\n# a \\\n",
+    refused("%ksmd 2\n\n# a \\\n",
         "a backslash escapes only ASCII punctuation. Write '\\\\' for a literal backslash", 3, 5)
-    refused("%ksmd 1\n\n*a\n",
+    refused("%ksmd 2\n\n*a\n",
         "this '*' is not closed on its line. Close it there, or write '\\*' for a literal '*'", 3,
         1)
-    refused("%ksmd 1\n\nx **a\n",
+    refused("%ksmd 2\n\nx **a\n",
         "this '**' is not closed on its line. Close it there, or write '\\*\\*' for literal \
             asterisks", 3, 3)
-    refused("%ksmd 1\n\n*a\nb*\n",
+    refused("%ksmd 2\n\n*a\nb*\n",
         "this '*' is not closed on its line. Close it there, or write '\\*' for a literal '*'", 3,
         1)
-    refused("%ksmd 1\n\n- [a\n",
+    refused("%ksmd 2\n\n- [a\n",
         "this '[' is not closed on its line. Close it there, or write '\\[' for a literal '['", 3,
         3)
-    refused("%ksmd 1\n\na]\n", "this ']' ends no link. Write '\\]' for a literal ']'", 3, 2)
-    refused("%ksmd 1\n\n[a] b\n",
+    refused("%ksmd 2\n\na]\n", "this ']' ends no link. Write '\\]' for a literal ']'", 3, 2)
+    refused("%ksmd 2\n\n[a] b\n",
         "text in brackets is followed by a link's destination in '(' and ')', or a colour in '{' \
             and '}'", 3, 3)
-    refused("%ksmd 1\n\n[a](ftp://x)\n",
+    refused("%ksmd 2\n\n[a](ftp://x)\n",
         "a link goes to an https:, http: or mailto: address, or to a '#' fragment", 3, 5)
-    refused("%ksmd 1\n\n[a](https://x y)\n",
+    refused("%ksmd 2\n\n[a](https://x y)\n",
         "a link's destination holds no spaces or parentheses. Write them as %20, %28 and %29", 3,
         14)
-    refused("%ksmd 1\n\n[a](#b\n", "this link's destination has no ')'", 3, 4)
-    refused("%ksmd 1\n\n[](#b)\n", "this link has no label", 3, 1)
-    refused("%ksmd 1\n\n[a [b](#c)](#d)\n",
+    refused("%ksmd 2\n\n[a](#b\n", "this link's destination has no ')'", 3, 4)
+    refused("%ksmd 2\n\n[](#b)\n", "this link has no label", 3, 1)
+    refused("%ksmd 2\n\n[a [b](#c)](#d)\n",
         "a link holds no other link. Write '\\[' for a literal '['", 3, 4)
-    refused("%ksmd 1\n\n[a *b](#c)*\n", "close this mark before the ']' that ends its link", 3, 4)
-    refused("%ksmd 1\n\n*a **b* c**\n",
+    refused("%ksmd 2\n\n[a *b](#c)*\n", "close this mark before the ']' that ends its link", 3, 4)
+    refused("%ksmd 2\n\n*a **b* c**\n",
         "this run of '*' can neither close the innermost mark nor open one. Write '\\*' for a \
             literal '*'", 3, 7)
-    refused("%ksmd 1\n\n****a\n",
+    refused("%ksmd 2\n\n****a\n",
         "this run of '*' can neither close the innermost mark nor open one. Write '\\*' for a \
             literal '*'", 3, 1)
-    refused("%ksmd 1\n\nx `a\n",
+    refused("%ksmd 2\n\nx `a\n",
         "this code span is not closed on its line. Close it with a run of as many backticks", 3, 3)
 
 priv fn clause_models()
     defer arena: = Arena(64 * 1024)
     doc: =
-        read("%ksmd 1\n\n:::table name=\"budget\" char_widths=\"53.3,26.7\"\n| \"Item\" | \"Cost\" \
+        read("%ksmd 2\n\n:::table name=\"budget\" char_widths=\"53.3,26.7\"\n| \"Item\" | \"Cost\" \
             |\n| \"Pens\" | =B1*2 |\n| \"a|b\\n\" | |\n:::\n\n:::include \
             path=\"notes.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"\"\n:::\n", arena)
     verdict.check("a table, an include and an image are three blocks",
         doc.blocks.len == 3 && doc.blocks.get(0).kind == Block_kind.table &&
         doc.blocks.get(1).kind == Block_kind.include &&
         doc.blocks.get(2).kind == Block_kind.image, "")
-    own: = read("%ksmd 1\n\n:::functions path=\"mine.kspl\"\n:::\n", arena)
+    own: = read("%ksmd 2\n\n:::functions path=\"mine.kspl\"\n:::\n", arena)
     verdict.check("a functions clause is a block naming its KSPL file",
         own.blocks.len == 1 && own.blocks.get(0).kind == Block_kind.functions &&
         own.blocks.get(0).text.equals("mine.kspl"), "")
     back: = written(own@, arena)
     verdict.check("and is written back as it was read",
-        back.equals("%ksmd 1\n\n:::functions path=\"mine.kspl\"\n:::\n"), back)
+        back.equals("%ksmd 2\n\n:::functions path=\"mine.kspl\"\n:::\n"), back)
     t: = doc.tables[0]@
     verdict.check("a table keeps its name, its size and its widths in tenths of a character",
         t.name.equals("budget") && t.columns.len == 2 && t.rows.len == 2 && t.widths.len == 2 &&
@@ -282,171 +282,171 @@ priv fn clause_models()
 
 priv fn clause_saves()
     canonical("attributes take their fixed order and one space",
-        "%ksmd 1\n\n:::image  caption=\"c\"   alt=\"b\" src=\"a.png\"\n:::\n",
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"b\" caption=\"c\"\n:::\n")
+        "%ksmd 2\n\n:::image  caption=\"c\"   alt=\"b\" src=\"a.png\"\n:::\n",
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"b\" caption=\"c\"\n:::\n")
     canonical("widths in characters save as written",
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n")
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\"8.5,,255\"\n| \"a\" | \"b\" | \"c\" |\n:::\n")
     canonical("cells take one space on each side, and an empty cell one in all",
-        "%ksmd 1\n\n:::table name=\"t\"\n|\"a\"|\"b\"|\"c\"|\"d\"|\n|\"x\"|  -1.5e3|=A1 + 1  \
+        "%ksmd 2\n\n:::table name=\"t\"\n|\"a\"|\"b\"|\"c\"|\"d\"|\n|\"x\"|  -1.5e3|=A1 + 1  \
             ||\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| \"x\" | -1.5e3 | =A1 \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| \"x\" | -1.5e3 | =A1 \
             + 1 | |\n:::\n")
     canonical("quoted text takes the shortest JSON escapes",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\\u0041\\/\\t\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"A/\\t\" |\n:::\n")
-    canonical("a table with only its header", "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n")
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\\u0041\\/\\t\" |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"A/\\t\" |\n:::\n")
+    canonical("a table with only its header", "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n:::\n")
 
 priv fn cell_looks()
     canonical("a cell's look is written after its value, its parts in a fixed order",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"Item\" {fill=\"#DDE8F5\"} | \"n\" |\n| \"Pens\" |  \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Item\" {fill=\"#DDE8F5\"} | \"n\" |\n| \"Pens\" |  \
             120  {align=\"right\"  size=10.5 color=\"#C00000\"} |\n| {fill=\"#fff2cc\"} | \
             =B1*2{size=14} |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"Item\" {fill=\"#dde8f5\"} | \"n\" |\n| \"Pens\" | 120 \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Item\" {fill=\"#dde8f5\"} | \"n\" |\n| \"Pens\" | 120 \
             {color=\"#c00000\" size=10.5 align=\"right\"} |\n| {fill=\"#fff2cc\"} | =B1*2 {size=14} \
             |\n:::\n")
     canonical("a brace inside quoted text is text",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"{a}\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"{a}\" |\n:::\n")
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {color=\"red\"} |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"{a}\" |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"{a}\" |\n:::\n")
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {color=\"red\"} |\n:::\n",
         "a colour is '#' and six hex digits, as in \"#c00000\"", 4, 8)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=5} |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {size=5} |\n:::\n",
         "a font size is a number of points from 6 to 72, whole or ending in .5", 4, 8)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {align=\"middle\"} |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {align=\"middle\"} |\n:::\n",
         "align is \"left\", \"center\", \"right\" or \"across\"", 4, 8)
     canonical("a cell takes align=\"across\", and it is written back unchanged",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 2129920 {align=\"across\"} | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 2129920 {align=\"across\"} | \
             {align=\"across\"} |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 2129920 {align=\"across\"} | \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 2129920 {align=\"across\"} | \
             {align=\"across\"} |\n:::\n")
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {bold=1} |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {bold=1} |\n:::\n",
         "braces take color, fill, size, align, wrap, format, note and link", 4, 8)
     canonical("wrap is written after the alignment, in the fixed order",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {wrap=\"on\" align=\"right\"} |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {align=\"right\" wrap=\"on\"} |\n:::\n")
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {wrap=1} |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {wrap=\"on\" align=\"right\"} |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {align=\"right\" wrap=\"on\"} |\n:::\n")
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {wrap=1} |\n:::\n",
         "wrap is \"on\", or leave it out", 4, 8)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {} |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {} |\n:::\n",
         "a look in braces holds at least one attribute", 4, 7)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=12} x |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" {size=12} x |\n:::\n",
         "a look in braces ends its cell, with '}' last", 4, 7)
 
 priv fn sized(name: U8[], value: U8[], arena: Arena$@): U8[] //<
     //< A source with an image that takes this attribute, `width` or the refused `scale`
-    return arena.text().s("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" ").s(name).s("=\"").s(value)
+    return arena.text().s("%ksmd 2\n\n:::image src=\"a.png\" alt=\"\" ").s(name).s("=\"").s(value)
         .s("\"\n:::\n").take()
 
 priv fn text_looks() //< text takes alignment alone, on a line of braces
     canonical("a brace after brackets stays escaped, so it is not read as a colour",
-        "%ksmd 1\n\n[a](#b)\\{x}\n", "%ksmd 1\n\n[a](#b)\\{x}\n")
+        "%ksmd 2\n\n[a](#b)\\{x}\n", "%ksmd 2\n\n[a](#b)\\{x}\n")
     canonical("text in brackets with a colour is coloured, the colour in lower case",
-        "%ksmd 1\n\nSay [stop]{color=\"#C00000\"} now.\n",
-        "%ksmd 1\n\nSay [stop]{color=\"#c00000\"} now.\n")
+        "%ksmd 2\n\nSay [stop]{color=\"#C00000\"} now.\n",
+        "%ksmd 2\n\nSay [stop]{color=\"#c00000\"} now.\n")
     canonical("a link takes a colour after its destination, and marks stand inside it",
-        "%ksmd 1\n\n[a **b**](#c){color=\"#00b050\"}\n",
-        "%ksmd 1\n\n[a **b**](#c){color=\"#00b050\"}\n")
-    canonical("a paragraph that starts with a brace stays escaped", "%ksmd 1\n\n\\{not a look}\n",
-        "%ksmd 1\n\n\\{not a look}\n")
+        "%ksmd 2\n\n[a **b**](#c){color=\"#00b050\"}\n",
+        "%ksmd 2\n\n[a **b**](#c){color=\"#00b050\"}\n")
+    canonical("a paragraph that starts with a brace stays escaped", "%ksmd 2\n\n\\{not a look}\n",
+        "%ksmd 2\n\n\\{not a look}\n")
     canonical("a line of braces aligns the paragraph or heading after it",
-        "%ksmd 1\n\n{align=\"center\"}\nCentred\ntext.\n\n{align=\"right\"}\n## Right\n",
-        "%ksmd 1\n\n{align=\"center\"}\nCentred text.\n\n{align=\"right\"}\n## Right\n")
-    refused("%ksmd 1\n\n[a]{size=12}\n",
+        "%ksmd 2\n\n{align=\"center\"}\nCentred\ntext.\n\n{align=\"right\"}\n## Right\n",
+        "%ksmd 2\n\n{align=\"center\"}\nCentred text.\n\n{align=\"right\"}\n## Right\n")
+    refused("%ksmd 2\n\n[a]{size=12}\n",
         "text in brackets takes a colour alone, as in [text]{color=\"#c00000\"}", 3, 4)
-    refused("%ksmd 1\n\n[]{color=\"#c00000\"}\n", "these brackets hold no text", 3, 1)
-    refused("%ksmd 1\n\n{align=\"center\"}\n\nText\n",
+    refused("%ksmd 2\n\n[]{color=\"#c00000\"}\n", "these brackets hold no text", 3, 1)
+    refused("%ksmd 2\n\n{align=\"center\"}\n\nText\n",
         "put the paragraph or heading on the line right after its braces", 3, 1)
-    refused("%ksmd 1\n\n{color=\"#000000\"}\nText\n",
+    refused("%ksmd 2\n\n{color=\"#000000\"}\nText\n",
         "a paragraph's line of braces holds only align and note. Colour text with [text]{color=...}",
         3, 1)
-    refused("%ksmd 1\n\n{align=\"across\"}\nText\n",
+    refused("%ksmd 2\n\n{align=\"across\"}\nText\n",
         "align=\"across\" centres a cell's value across empty cells, so only a table cell takes it. \
             A paragraph takes \"left\", \"center\" or \"right\"", 3, 1)
-    refused("%ksmd 1\n\n{align=\"center\"}\n- item\n",
+    refused("%ksmd 2\n\n{align=\"center\"}\n- item\n",
         "a line of braces stands before a paragraph or a heading", 3, 1)
-    refused("%ksmd 1\n\n{align=\"center\"\nText\n",
+    refused("%ksmd 2\n\n{align=\"center\"\nText\n",
         "a line of braces before a paragraph ends with '}'. Write '\\{' for a literal '{'", 3, 16)
 
 priv fn clause_refusals()
-    refused("%ksmd 1\n\n:::graph\n:::\n",
+    refused("%ksmd 2\n\n:::graph\n:::\n",
         "a clause is ':::table', ':::include', ':::image', ':::chart', ':::diagram', ':::functions' \
             or ':::document'", 3, 4)
-    refused("%ksmd 1\n\n:::table\n| \"a\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table\n| \"a\" |\n:::\n",
         "':::table' needs a name, as in name=\"budget\"", 3, 1)
-    refused("%ksmd 1\n\n:::table name=\"a\\tb\"\n| \"a\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"a\\tb\"\n| \"a\" |\n:::\n",
         "a table name is 1 to 255 bytes of text, with no line breaks or other control characters",
         3, 10)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\n:::table name=\"t\"\n| \"a\" \
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\n:::table name=\"t\"\n| \"a\" \
         |\n:::\n", "another table in this source has this name", 7, 10)
-    refused("%ksmd 1\n\n:::table name=\"t\" size=\"2\"\n| \"a\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\" size=\"2\"\n| \"a\" |\n:::\n",
         "':::table' takes only name, caption, char_widths, heights, formats, choices, color_rows, \
             rules, groups, merge, filter and invisible", 3, 19)
-    refused("%ksmd 1\n\n:::table name=\"t\" name=\"u\"\n| \"a\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\" name=\"u\"\n| \"a\" |\n:::\n",
         "this attribute is given twice", 3, 19)
-    refused("%ksmd 1\n\n:::table name=t\n| \"a\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=t\n| \"a\" |\n:::\n",
         "a value is a quoted string or a decimal number", 3, 15)
-    refused("%ksmd 1\n\n:::table name=3\n| \"a\" |\n:::\n", "this attribute takes a quoted string",
+    refused("%ksmd 2\n\n:::table name=3\n| \"a\" |\n:::\n", "this attribute takes a quoted string",
         3, 10)
-    refused("%ksmd 1\n\n:::table name\n",
+    refused("%ksmd 2\n\n:::table name\n",
         "an attribute is a name, '=' and a value, as in name=\"budget\"", 3, 10)
-    refused("%ksmd 1\n\n:::table name=\"t\"x\n", "put a space between two attributes", 3, 18)
-    refused("%ksmd 1\n\n:::table name=\"t\n", "this quoted value has no closing '\"'", 3, 15)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n", "this clause has no closing ':::' line",
+    refused("%ksmd 2\n\n:::table name=\"t\"x\n", "put a space between two attributes", 3, 18)
+    refused("%ksmd 2\n\n:::table name=\"t\n", "this quoted value has no closing '\"'", 3, 15)
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n", "this clause has no closing ':::' line",
         3, 1)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n:::\n", "a table has a header row of quoted names", 3,
+    refused("%ksmd 2\n\n:::table name=\"t\"\n:::\n", "a table has a header row of quoted names", 3,
         1)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| 1 |\n:::\n", "a header cell is a quoted name", 4, 3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| 1 |\n:::\n", "a header cell is a quoted name", 4, 3)
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 |\n:::\n",
         "every row has as many cells as the header", 5, 1)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\nx\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\nx\n:::\n",
         "a table row starts and ends with '|'", 5, 1)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| \"b\" | x\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| \"b\" | x\n:::\n",
         "a table row starts and ends with '|'", 5, 1)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| abc |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| abc |\n:::\n",
         "a cell holds one value: quoted text, a number, a date, a formula after '=', or nothing", 5,
         3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 0012 |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 0012 |\n:::\n",
         "a cell holds one value: quoted text, a number, a date, a formula after '=', or nothing", 5,
         3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| \"b\" \"c\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| \"b\" \"c\" |\n:::\n",
         "a cell holds one value: quoted text, a number, a date, a formula after '=', or nothing", 5,
         3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1e999 |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 1e999 |\n:::\n",
         "this number is too large for a cell", 5, 3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\\q\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\\q\" |\n:::\n",
         "quoted text uses JSON quoting and escapes", 4, 3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a |\n:::\n", "this quoted text has no closing '\"'",
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a |\n:::\n", "this quoted text has no closing '\"'",
         4, 3)
-    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| = |\n:::\n", "this formula is empty", 5,
+    refused("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| = |\n:::\n", "this formula is empty", 5,
         3)
-    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1,2\"\n| \"a\" | \"b\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\" widths=\"1,2\"\n| \"a\" | \"b\" |\n:::\n",
         "':::table' no longer takes widths. Give each column's width in characters with char_widths",
         3, 19)
-    refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\"1\"\n| \"a\" | \"b\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\" char_widths=\"1\"\n| \"a\" | \"b\" |\n:::\n",
         "char_widths has one entry per column, empty for none", 3, 19)
-    refused("%ksmd 1\n\n:::table name=\"t\" char_widths=\",\"\n| \"a\" | \"b\" |\n:::\n",
+    refused("%ksmd 2\n\n:::table name=\"t\" char_widths=\",\"\n| \"a\" | \"b\" |\n:::\n",
         "leave out char_widths when no column has a width", 3, 19)
     for bad in U8[][]::{ "0.4", "256", "1.25", "1.", "x" }
         defer $src: = Str_builder()
-        src.s("%ksmd 1\n\n:::table name=\"t\" char_widths=\"\{bad\},1\"\n| \"a\" | \"b\" |\n:::\n")
+        src.s("%ksmd 2\n\n:::table name=\"t\" char_widths=\"\{bad\},1\"\n| \"a\" | \"b\" |\n:::\n")
         refused(src.slice(),
             "a column's width is 0.5 to 255 characters, with at most one decimal place, or nothing",
             3, 19)
-    refused("%ksmd 1\n\n:::include path=\"a.ksmd\"\nx\n:::\n",
+    refused("%ksmd 2\n\n:::include path=\"a.ksmd\"\nx\n:::\n",
         "':::include' has no body. Close it on the next line", 4, 1)
-    refused("%ksmd 1\n\n:::include\n:::\n", "':::include' needs a path, as in path=\"notes.ksmd\"",
+    refused("%ksmd 2\n\n:::include\n:::\n", "':::include' needs a path, as in path=\"notes.ksmd\"",
         3, 1)
-    refused("%ksmd 1\n\n:::include path=\"\"\n:::\n", "this attribute is not empty", 3, 12)
-    refused("%ksmd 1\n\n:::image src=\"a.png\"\n:::\n", "':::image' needs src and alt", 3, 1)
-    refused("%ksmd 1\n\n:::functions\n:::\n",
+    refused("%ksmd 2\n\n:::include path=\"\"\n:::\n", "this attribute is not empty", 3, 12)
+    refused("%ksmd 2\n\n:::image src=\"a.png\"\n:::\n", "':::image' needs src and alt", 3, 1)
+    refused("%ksmd 2\n\n:::functions\n:::\n",
         "':::functions' needs a path, as in path=\"mine.kspl\"", 3, 1)
-    refused("%ksmd 1\n\n:::functions path=\"mine.py\"\n:::\n",
+    refused("%ksmd 2\n\n:::functions path=\"mine.py\"\n:::\n",
         "':::functions' names a KSPL file, ending in .kspl", 3, 1)
-    refused("%ksmd 1\n\n:::functions path=\"mine.kspl\" invisible=\"printing\"\n:::\n",
+    refused("%ksmd 2\n\n:::functions path=\"mine.kspl\" invisible=\"printing\"\n:::\n",
         "':::functions' takes only path", 3, 31)
-    refused("%ksmd 1\n\n:::functions path=\"mine.kspl\"\nx\n:::\n",
+    refused("%ksmd 2\n\n:::functions path=\"mine.kspl\"\nx\n:::\n",
         "':::functions' has no body. Close it on the next line", 4, 1)
-    refused("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" caption=\"\"\n:::\n",
+    refused("%ksmd 2\n\n:::image src=\"a.png\" alt=\"\" caption=\"\"\n:::\n",
         "leave out an empty caption", 3, 29)
     defer arena: = Arena(16 * 1024)
     for wrong in U8[][]::{ "0%", "101%", "40", "40px", "4.5%" }
@@ -456,7 +456,7 @@ priv fn clause_refusals()
         "':::image' no longer takes scale. Give its size as a share of the text width with width",
         3, 29)
     defer $wide: = Str_builder()
-    wide.s("%ksmd 1\n\n:::table name=\"t\"\n")
+    wide.s("%ksmd 2\n\n:::table name=\"t\"\n")
     for _ in Range.asc(257)
         wide.s("| \"a\" ")
     wide.s("|\n:::\n")
@@ -473,33 +473,33 @@ priv fn examples() //< each example reads, and its first save is the file itself
         canonical(path, bytes, bytes)
 
 priv fn refusals()
-    refused("%ksmd 1\n\n```\nnever closed\n",
+    refused("%ksmd 2\n\n```\nnever closed\n",
         "this code fence has no closing line. Close it with a line of 3 backticks", 3, 1)
-    refused("%ksmd 1\n\n```c#\n```\n",
+    refused("%ksmd 2\n\n```c#\n```\n",
         "a code fence's label holds only letters, digits and '_' '-' '+' '.'", 3, 5)
-    refused("%ksmd 1\n\n####### Seven\n",
+    refused("%ksmd 2\n\n####### Seven\n",
         "a heading is one to six '#', a space and its text. Write '\\#' for a literal '#'", 3, 1)
-    refused("%ksmd 1\n\n#tag\n",
+    refused("%ksmd 2\n\n#tag\n",
         "a heading is one to six '#', a space and its text. Write '\\#' for a literal '#'", 3, 1)
-    refused("%ksmd 1\n\n#   \n", "this heading has no text", 3, 1)
-    refused("%ksmd 1\n\n| \"a\" |\n", "a table row stands only inside a ':::table' clause", 3, 1)
-    refused("%ksmd 1\n\n  indented\n", "a block starts at column one", 3, 1)
-    refused("%ksmd 1\n\nprose\n# heading\n",
+    refused("%ksmd 2\n\n#   \n", "this heading has no text", 3, 1)
+    refused("%ksmd 2\n\n| \"a\" |\n", "a table row stands only inside a ':::table' clause", 3, 1)
+    refused("%ksmd 2\n\n  indented\n", "a block starts at column one", 3, 1)
+    refused("%ksmd 2\n\nprose\n# heading\n",
         "put a blank line before this block. To keep it in the paragraph, escape its first \
             character", 4, 1)
-    refused("%ksmd 1\n\nprose\n  - item\n",
+    refused("%ksmd 2\n\nprose\n  - item\n",
         "put a blank line before this block. To keep it in the paragraph, escape its first \
             character", 4, 1)
-    refused("%ksmd 1\n\nlast line\\\n",
+    refused("%ksmd 2\n\nlast line\\\n",
         "a hard break ends this paragraph. Delete the '\\', or write '\\\\' for a literal backslash",
         3, 10)
     verdict.check("prose that only looks like a marker stays prose",
-        read_count("%ksmd 1\n\n-5 degrees\n\n1.5 metres\n") == 2, "")
+        read_count("%ksmd 2\n\n-5 degrees\n\n1.5 metres\n") == 2, "")
 
 priv fn inline(what: U8[], text: U8[], expected: U8[]) //<
     //< The paragraph `text` reads as the nodes `expected` describes (`shape`)
     defer arena: = Arena(64 * 1024)
-    bytes: = arena.text().s("%ksmd 1\n\n").s(text).c('\n').take()
+    bytes: = arena.text().s("%ksmd 2\n\n").s(text).c('\n').take()
     doc: = read(bytes, arena)
     got: = first_shape(doc, arena)
     verdict.check(what, got.equals(expected), got)

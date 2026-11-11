@@ -9,7 +9,6 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/gen/c/ctx" as gen_c_ctx + { Genc_ctx }
-import "ksplc/gen/c/expr" as gen_c_expr
 import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/gen/c/root" as gen_c_root
 import "ksplc/gen/embed" as gen_embed
@@ -62,20 +61,12 @@ impl Ast_node
             return
         if r.has_attribute("noreturn")
             cg.s("__attribute__((noreturn)) ")
-        if r.has_attribute("interrupt")
-            cg.s("__attribute__((interrupt)) ")
         if r.has_attribute("naked")
             cg.s("__attribute__((naked)) ")
         // **A function with a `#section` needs this** (`ksplc/sema/decl/attrs.kspl` requires the
         // pair). Inlined, nothing would remain in the named section.
         if r.has_attribute("noinline")
             cg.s("__attribute__((noinline)) ")
-        if align_attr: = r.get_attribute("align")
-            arg_node: = align_attr.safe_get_child(1)
-            if arg_node != null
-                cg.s("__attribute__((aligned(")
-                arg_node.emit_expr(cg)
-                cg.s("))) ")
         // Only a name sema let through (`section_name`), so it needs no escaping.
         if section_attr: = r.get_attribute("section")
             cg.s("KSPL_SECTION(\"").s(section_attr.section_name()).s("\") ")

@@ -49,7 +49,7 @@ Each row is a bug or attack that other libraries are known for. It says what `st
 | `str` | **A NUL byte cuts a string short** ("the poison NUL byte"). A KSPL string carries its length and can hold a byte 0, but C reads only up to the first 0. So a conversion to a C string silently drops the rest. PHP and Java had path checks bypassed this way | C's strings | `to_cstr()` returns `U8$@?`: `.none` when the input holds a NUL, which `switch` makes the caller handle. `contains_nul()` is public too |
 | `checked_int` | **Signed overflow is undefined behavior**: the C compiler can assume it never happens, so optimization changes the result | C's integer arithmetic | The plain operators wrap around (`mod 2^N`), through the unsigned type of the same width, so no wrapping type is needed. Native `checked_*` methods report failure |
 | `math` | **The absolute value of a signed integer's minimum is the minimum itself**, so a check `abs(x) >= 0` fails | C's `abs` (undefined), Java's `Math.abs` | `math.abs` stops the program there, naming the reason |
-| `option` | **Null references**: a forgotten check for `null` still compiles | A raw pointer's `null` | `T?`'s content comes out only through `switch`. The linter's [H0701] proposes `T?` for a raw pointer returned as `null` |
+| `lang` (`Option`) | **Null references**: a forgotten check for `null` still compiles | A raw pointer's `null` | `T?`'s content comes out only through `switch`. The linter's [H0701] proposes `T?` for a raw pointer returned as `null` |
 | `chars`, `regex`, `subproc` and the rest | **"None" spelt as a value of the answer's own type**: a `-1`, an empty string or a flag beside the value. A forgotten check still compiles, and the stand-in flows on as data | C's `EOF` and `-1`, an `indexOf` or `find` answering -1 | "There can be none" is `T?`, and "it failed" is `T!E`, never a stand-in ("Absent or failed: one rule" below) |
 | `mem` | **Double free and use after free** | `malloc` / `free` | The arena (`Arena`) is the main route, and `defer` shows in the code where memory is freed. The compiler traces the paths for a use after the free |
 
@@ -88,18 +88,15 @@ Each row is a bug or attack that other libraries are known for. It says what `st
 
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
-| `json_struct` | **A key's name is written twice, once for the writer and once for the reader.** n fields take 2n lines, and a fix of only one silently fills in the default | `serde`'s derive, Swift's `Codable`, Jackson's annotations, nlohmann's macros | `json_struct.from_struct` / `into_struct` walk `std/reflect`'s table of a type's fields. **ksplc synthesizes the table from an empty `impl X: reflect.Reflectable {}`** ([5.5 in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#55-worked-example-synthesizing-a-field-table-with-reflectable)), so it cannot drift from the declaration. A key is the field's name |
-| `json_struct` | **A missing value silently becomes a default** | The same | A missing key and a `null` one are refused with different values (`missing_field` / `field_type`). So no sentinel default such as `as_int64().unwrap_or(-1)` folds two causes into one value |
-| `json_struct` | **An integer is silently narrowed into a smaller field** | The same | **An integer that the field cannot hold is refused** (`field_type`): 70000 into a `U16`, -1 into a `U8`. On a write, so is a `U64` past the largest `I64`, the widest integer a `Value` holds. `std/reflect`'s `fits_int` decides |
-| `json` | **Stack exhaustion from deep nesting**: a document nested very deep makes a recursive reader run out of stack and crash | JSON parsers in general | Nesting stops at `max_nesting_depth = 500` with a `Json_error`, not a panic |
-| `json` | **Duplicate keys**: implementations read `{"a":1,"a":2}` differently, so two parsers given the same document see different values | The same | Refused (`Json_error.duplicate_key`), as I-JSON requires, with an error that names the key. `Object_builder.set` replaces, so a built object holds no repeat either. Past a few members, the parser sorts the keys once the object closes and compares neighbours. So a hostile object cannot make the check quadratic, and no hash takes part |
+| `json` | **Stack exhaustion from deep nesting**: a document nested very deep makes a recursive reader run out of stack and crash | JSON parsers in general | Nesting stops at `MAX_NESTING_DEPTH = 500` with a `Json_error`, not a panic |
+| `json` | **Duplicate keys**: implementations read `{"a":1,"a":2}` differently, so two parsers given the same document see different values | The same | Refused (`Json_error.duplicate_key`), as I-JSON requires, with an error that gives where the second name starts. `Object_builder.set` replaces, so a built object holds no repeat either. Past a few members, the parser sorts the keys once the object closes and compares neighbours. So a hostile object cannot make the check quadratic, and no hash takes part |
 | `json` | **A read that cannot say "there is none".** A read with a default gives `""` for an absent key and an empty string alike, and 0 for an absent number and a written 0. So a misspelt key reads as a real value | Python's `dict.get`, Jackson's `asText()` / `asInt()`, Go's zero-filled fields | Each read of a kind returns an option (`as_str(): U8[]?`, `as_int64(): I64?`, …) ("A JSON read says when there is no value" in [`DESIGN-system.md`](DESIGN-system.md)) |
 
 **Threads**
 
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
-| `thread` | **Nothing says which types can cross threads**, so a non-atomic count or a raw pointer gets handed over casually | POSIX threads | **Not handled, but for one sure bug.** A constraint on `spawn`'s arguments would miss sharing through a global. `spawn` refuses only an argument type that reaches an `Rc` or a `Weak_rc`. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#why-data-races-are-not-prevented-by-the-type-system). What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
+| `thread` | **One sure bug: an `Rc` handed to another thread.** Its count is not atomic, so two threads that change it at once lose a change | POSIX threads | `spawn` refuses an argument type that reaches an `Rc` or a `Weak_rc`. The wider problem is a hole (below) |
 
 ### Known holes, and what would fill them
 
@@ -107,7 +104,7 @@ Two known problems are not handled.
 
 | File | What is not handled | Why it stays open | What would fill it |
 | :-- | :-- | :-- | :-- |
-| `reflect` | **The round-trip functions cannot walk a container of containers (`List<\|List<\|T\|>\|>`), or an option that holds a container or an option** | **One hole stops both.** Such a field needs a kind whose content kind refers to itself, so `Field_kind` would need a payload. Both backends can write one; the kind, its synthesis and the walkers are missing | A payload on the list and option kinds that names the contents' kind, with its synthesis and walkers in one change. It is not added ahead of time, since a shape nobody can walk would be writable (Principle 5). The mechanism is [5.5 in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#55-worked-example-synthesizing-a-field-table-with-reflectable) |
+| `thread` | **Nothing says which types can cross threads**, so a non-atomic count or a raw pointer gets handed over casually | A constraint on `spawn`'s arguments would miss sharing through a global. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#why-data-races-are-not-prevented-by-the-type-system) | Nothing is planned. What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
 | `Map` | **Hash flooding.** An attacker sends many keys chosen to land in the same slot, so every lookup slows to a crawl. PHP, Python, Ruby and Java all issued CVEs and added hash randomization | No attacker's key reaches a `Map` in std or in the packages that take keys from outside. Their files use none, except where a line marks its keys as coming from a file the user chose to run, such as a model. `http` keeps its headers in a linked list, and `json` sorts a large object's keys to find a repeat. **All of std is held to it**: a library file cannot know where its caller's bytes come from. Only `ds` itself and std's tests are left out. `make test-conventions` holds which folders those are. It reads text, so a `Map` reached with no `Map<\|` written escapes it and still breaks the rule. **When that check fails, design the hash seed then** | Decided already. `str.hash` is FNV-1a plus extra mixing with a fixed seed. `Hashable`'s `hash(r: Self): U32` changes to take a seed per `Map`. Randomization by default is ruled out: an iteration order that changes per run would make the generated C differ per run. That breaks self-hosting's check that the compiler, built twice, gives identical outputs |
 
 ## Memory and ownership
@@ -125,23 +122,6 @@ KSPL has no garbage collector. Memory that `std` hands you lives in one of four 
 
 * **A function given an arena makes what it returns there**: `arena.text().s(…).take()`, not a `Str_builder` on the heap handed back.
 * **Use the heap** where nothing that outlives the result holds an arena, or where memory must go back early, such as inside a long loop.
-
-The first two side by side:
-
-```kspl
-import "std/ds" { List }
-import "std/mem" { Arena }
-
-fn main()
-    // On the heap: this function owes a free(), which `defer` in front says.
-    defer $on_heap: = List<|I32|>(null)
-    on_heap.push(1)
-
-    // In an arena: freed with the arena, all at once.
-    defer arena: = Arena(4096)
-    $in_arena: = List<|I32|>(arena)
-    in_arena.push(2)
-```
 
 The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-memory-management).
 
@@ -180,7 +160,6 @@ The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory manageme
 | A `List` | `xs.free()`, after the strings that each element owns. Those are a string each for `fs.read_dir` and `fs.walk_files`, `out` for `verdict.run_children`, the two outputs for `subproc.run_many`, and `name` and `data` for `fuzz.gather`. A list that `List.create` placed on the heap then gives back its own block with `mem.dealloc(Void$@::xs)` ([below](#a-lists-free-leaves-the-list-itself)) |
 | A child's two outputs (`subproc.run_capture`) | Each with `mem.dealloc`. A child that did not start has empty ones, which free as nothing |
 | A value of many blocks: a JSON document (`json.parse`), a `Json_builder`, an HTTP request or response, the headers that `http.headers` builds, a query's pairs, an `argparse.Parser`, the fuzz driver's `Setup` | `v.free()`, which lets all of it go at once ([below](#a-value-of-many-blocks-keeps-its-own-arena)) |
-| The fields that `json_struct.into_struct` fills in the caller's struct | Each string with `mem.dealloc` and each list with `free()`, as above. **A refusal leaves the fields that it filled before it**, freed the same way |
 
 **A whole file is read into the arena given** (`io.read_file`). Read onto the heap and copied, the file would be held twice at the peak.
 
@@ -188,7 +167,7 @@ The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory manageme
 
 * **Why the caller's arena is rewound**: a server reads each request into one arena per connection. Leftover work would grow it with every head read.
 * **Why no arena of its own when one is given**: a caller who passes an arena avoids the heap, as on a microcontroller.
-* Caution: **A function that writes into the caller's arena while it works takes `mem.scratch(null)`.** `fs.walk_files` pushes each path into its result as it walks, so a rewind would take the result with the work. A function that refuses after it made its result gives the result back too, so a failure leaves nothing to free. Only `into_struct` cannot, since what it fills is the caller's.
+* Caution: **A function that writes into the caller's arena while it works takes `mem.scratch(null)`.** `fs.walk_files` pushes each path into its result as it walks, so a rewind would take the result with the work. A function that refuses after it made its result gives the result back too, so a failure leaves nothing to free.
 
 #### A list's `free()` leaves the list itself
 
@@ -220,8 +199,6 @@ Caution: **The arena of its own takes a whole chunk at its first allocation**, h
 
 `Rc<|T|>` shares a value between owners on one thread (`std/refcount.kspl`). `Arc<|T|>` shares it between threads, with an atomic count. A weak handle, which watches a value without owning it, is `Weak_` plus its owner's name (`Weak_arc<|T|>`). So the owner is what remains without the prefix. The names come from Rust and are short, since counted code repeats them constantly.
 
-Caution: **Do not confuse `Arc` with ARC in a document.** ARC is Automatic Reference Counting, by which the compiler inserts retain and release. `Arc<|T|>` is the type, as Rust's `Arc<T>`.
-
 **An `Arc`'s value is read-only** (`get()` returns `T@`), so threads change it only through a `Mutex` or an atomic inside. `get_mut()` reaches it writable while one owner alone holds it, to end what it owns. The reasons are "An `Arc` shares a read-only value" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#an-arc-shares-a-read-only-value). An `Rc` stays writable, since it lives on one thread.
 
 **The zero value is an empty handle that owns nothing**, and retain and release skip it. So a table of empty slots such as `Rc<|T|>[N] = ::{}` is written plainly, and survives the compiler's chained release over zeroed storage. `empty()` / `is_empty()` spell it out.
@@ -234,26 +211,55 @@ Caution: **Do not confuse `Arc` with ARC in a document.** ARC is Automatic Refer
 
 ### A container owns its elements' ARC counts
 
-Put an ARC value into a `List` or `Map`, and the container keeps its count right. That holds through every way to take it out, overwrite it, grow and free. The caller cannot reach the storage, so anything the container fails to release is a leak nobody can fix. The implementation keeps two promises:
+Put an ARC value into a `List` or `Map`, and the container keeps its count right. That holds through every way to take it out, overwrite it, grow and free. **Only the container's methods write its storage and its count.** The fields stay `pub` for reading, and nothing in the repository writes them from outside `std/ds`. So anything the methods fail to release is a leak that no caller can fix. The implementation keeps two promises:
 
 | Promise | How | What breaks without it |
 | :-- | :-- | :-- |
 | **Zero freshly allocated capacity** | `mem.zero` on new storage | A store of an element is an ordinary assignment, so the compiler inserts a release of the value it overwrites. A release of leftover garbage as if it were ARC crashes |
-| **Give the ownership back when discarding** | `clear` assigns the zero value to each element; `free` calls it before releasing storage. `pop` and `remove_at` clear the vacated last slot. A map's `remove` clears the removed pair, and a resize clears each moved pair's old slot. Keys holding an `Rc` are counted too | `mem.zero` runs no release. Without an assignment, the compiler has nowhere to insert one |
+| **Give the ownership back when discarding** | `clear` and `truncate` assign the zero value to each element they drop; `free` calls `clear` before releasing storage. `pop` and `remove_at` clear the vacated last slot. A map's `remove` clears the removed pair, and a resize clears each moved pair's old slot. Keys holding an `Rc` are counted too | `mem.zero` runs no release. Without an assignment, the compiler has nowhere to insert one |
 
 **An `Rc<|T|>` element's own release takes its value apart** ("Release takes the value apart", above). So a container of `Rc` needs nothing more.
 
 **`pop()` returns `T?`: an empty list has no last element.** It keeps the value alive before clearing its slot, so the result owns its ARC count apart from the list.
 
-**`clear()` releases elements and keeps capacity; `free()` also gives back heap storage.** Clearing visits every element, so a large buffer of plain values can reset its length instead. Caution: **A length reset on ARC elements leaks their ownership**, since `free` no longer visits those slots. Neither operation frees what elements own through raw pointers or manual `free()` methods.
+**`clear()` releases elements and keeps capacity; `truncate(n)` does the same for the elements past the first `n`; `free()` also gives back heap storage.** None of them frees what elements own through raw pointers or manual `free()` methods.
+
+Caution: **Do not write `len` to shorten a list.** The slots past it keep their ARC counts, and `free` no longer visits them, so they leak.
 
 ### A constructor's name says where the returned thing goes
 
-`alloc`, `new` and `create` are not three names for one thing. Each says where the result goes, so a reader can read a call without the signature. The table of the three names is "Pitfalls" in [std](../README.md). This section holds the rules that come with it.
+`alloc`, `new` and `create` are not three names for one thing. Each says where the result goes, so a reader can read a call without the signature.
+
+| Name | Where the returned thing goes | What is returned | Examples |
+| --- | --- | --- | --- |
+| `alloc*` | It only allocates, **leaving the content uninitialized** | A pointer | `mem.alloc` / `Arena.alloc` |
+| `new*` | **Anywhere but the arena handed over** (the caller's variable, or the heap) | A value, or a pointer for what goes on the heap (`Arena.new`, `mem.new`) | `List<\|T\|>.new` / `Rc<\|T\|>.new` / `mem.new` |
+| `create*` | **The arena handed over** (as an argument or as the receiver) | A pointer into it | `Arena.create<\|T\|>` / `List<\|T\|>.create` |
+
+The same arena, given to `new` and to `create`:
+
+```kspl
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+fn main()
+    defer arena: = Arena(4096)
+
+    // new: the list is the value in your variable; it keeps its items in the arena.
+    $mine: = List<|I32|>(arena)
+    mine.push(1)
+
+    // create: the list itself is placed in the arena, and you get a pointer to it.
+    shared: = List<|I32|>.create(arena)
+    shared.push(2)
+
+    io.out().s("\{mine[0]\} \{shared[0]\}\n")
+```
 
 **The arena that `new` receives is where the content goes.** `List<|T|>(a)` returns a `List` value whose elements go in `a`. To place the `List` itself in the arena, as a pointer, use `create(a)`. To put an arena in the caller's variable (with no malloc), use `Arena.from_buffer`, which returns a value.
 
-**An arena is always the last parameter, and it has no default.** The heap is `null`, written at the call, so the call shows where the content goes and whether a `free()` is owed. Why a default is refused is "A default argument is allowed only for a foldable constant" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md). The signature says whether a function takes one, so the name does not say it again.
+**An arena is always the last parameter, and it has no default.** The heap is `null`, written at the call, so the call shows where the content goes and whether a `free()` is owed. Why a default is refused is "A default argument is a literal or the caller's position" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md). The signature says whether a function takes one, so the name does not say it again.
 
 Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `_in` also means "in that place" (`harness.run_in(argv, cwd)`) and "inside a thing" (`index_in(row, cell)`).
 
@@ -312,9 +318,9 @@ After `reset()` or `restore()`, an old slice reads what the next allocation wrot
 
 To be a key of `Map<|K, V|>`, a type must conform to the trait `ds.Hashable<|Key|>`, which asks for `hash` and `equals`. A type that does not conform gets an error where you used it, not one deep inside `std`.
 
-Caution: **Do not express a requirement by name agreement alone.** It is then written nowhere, and a key type that fails it gets a distant `has no field or method named 'hash'` inside `std/ds.kspl`. Express it as a trait: the rule is ② in `docs/DESIGN-programming-language.md` "The order of decision". Every key type declares its conformance (std's own are `I32` / `Sz` / `U8[]`).
+Caution: **Do not express a requirement by name agreement alone.** It is then written nowhere, and a key type that fails it gets a distant `has no field or method named 'hash'` inside `std/ds.kspl`. Express it as a trait: the rule is ② in `docs/DESIGN-programming-language.md` "The order of decision". Every key type declares its conformance (std's own are `I32` / `I64` / `Sz` / `U8[]`).
 
-**`Hashable.equals` and `Eq` are different requirements.** `Eq` is what `==` desugars to, and `Hashable.equals` asks by an explicit call whether two keys are the same. `U8[]` deliberately does not implement `Eq`. `a == b` would become an O(N) comparison, and a reader could not tell contents from pointers. That is why `switch` cannot take a `U8[]` subject (`docs/SPEC-programming-language.md` §6.1).
+**`Hashable.equals` and `Eq` are different requirements.** `Eq` is what `==` desugars to, and `Hashable.equals` asks by an explicit call whether two keys are the same. `U8[]` deliberately does not implement `Eq`. `a == b` would become an O(N) comparison, and a reader could not tell contents from pointers. That is why `switch` cannot take a `U8[]` subject ("7.1 Branching" in `docs/SPEC-programming-language.md`).
 
 The other key arrives as the type argument `Key`, since `Self` stands only on the receiver ("Why a trait's receiver is fixed to a bare `Self`" in `docs/DESIGN-programming-language.md`).
 
@@ -345,7 +351,7 @@ Every loop over a collection is written `for x in xs`. The type of `xs` decides 
 | A `.len` field and an index (`List`, arrays) | Indexing, `xs[i]` |
 | A conformance to `std/lang`'s `Iter<\|T\|>` (`next(): T?`) | Calling `next()` until it returns none |
 
-The rule is `docs/SPEC-programming-language.md` 7.2, the reasoning `docs/DESIGN-principles.md` 9.2.
+The rule is "7.2 Loops" in `docs/SPEC-programming-language.md`. The reasoning is "Iteration", under "One mechanism per purpose" in `docs/DESIGN-principles.md`.
 
 **Do not make a `has_next` / `next` pair.** It would bring a second notation into std, `for it.has_next() { x: = it.next(); … }`. That is also why `Iter` holds only `next`: split in two, a call of only one of them becomes writable.
 
@@ -356,7 +362,7 @@ The rule is `docs/SPEC-programming-language.md` 7.2, the reasoning `docs/DESIGN-
 | Eager: returns a `List` | `str.split` / `json.Value.arr_list` / `fs.read_dir`, and each `std/seq` operation that needs the whole (`order_by` / `distinct`) | Nothing: the work is done on return |
 | Lazy: a chain | Only `where` / `select` | `for x in`, `to_list(arena)` or `count()` |
 
-**A function that returns elements in order and can allocate them all is eager, and returns a `List`.** A `List` is walked by index, so it is not given `Iter`, which would win over the index. **A walk of a chain that a value already holds is an `Iter`** (`http.Headers.each`, `url.Query.each`, `json.Value.obj_members`). It hands out each link where it stands, so it allocates nothing and takes no arena. The eager side allocates more, so only code that tolerates a slowdown can rely on it. Which code that is, `std/` included, is for `docs/DESIGN-principles.md` 8.3 to say.
+**A function that returns elements in order and can allocate them all is eager, and returns a `List`.** A `List` is walked by index, so it is not given `Iter`, which would win over the index. **A walk of a chain that a value already holds is an `Iter`** (`http.Headers.each`, `url.Query.each`, `json.Value.obj_members`). It hands out each link where it stands, so it allocates nothing and takes no arena. The eager side allocates more, so only code that tolerates a slowdown can rely on it. Which code that is, `std/` included, is said in "Where it is fine to move to `std/seq`" in `docs/DESIGN-programming-language.md`.
 
 **`order_by` is the one sort, and it is stable**: equal keys keep their order. So an answer built from a sorted list is the same on every run, and sorts by two keys compose. Its algorithm is described at `order_by` in `std/seq.kspl`. There is no unstable variant: its one gain, a sort in place, does not suit operations that return a new list anyway.
 
@@ -443,7 +449,17 @@ sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
 
 ### Indexing costs one comparison; the stop is out of line
 
-`xs[i]` calls `at`, which compares `i` with the length and calls `bounds_panic` (`std/lang.kspl`) when it is out of range. **Every index check in `std` is one unsigned comparison**: `U64::i >= U64::len`, or `>` where the end itself is allowed (`List.insert`). A negative index becomes larger than any length, so one test covers both ends. **Where the length is a slice's, a second test stops a negative length** (`|| len < 0`). A slice built by hand can carry one, and the unsigned comparison alone would then pass every index and read past the memory. `sub_count` refuses a negative `count` the same way. The second test reads a value that a loop does not change, so it costs one comparison that the processor predicts correctly. `List`'s length is written only by its own methods, which never make it negative, so its checks take the first form alone. So does the check the compiler writes for a fixed-length array (`kspl_bounds_check`), whose length is a constant. Written as two signed comparisons on the index inside a loop, the check led LLVM 22 at `-O1` to make the loop's end test constant. The loop then ran past its end. Neither form is undefined in C, but only the unsigned one avoids that fault. The test on the length does not bring the fault back, since it does not read the index. **`at` carries `#inline`**: its body is copied into each call site, leaving one comparison and the address arithmetic.
+`xs[i]` calls `at`, which compares `i` with the length and calls `bounds_panic` (`std/lang.kspl`) when it is out of range. **Every index check in `std` is one unsigned comparison**: `U64::i >= U64::len`, or `>` where the end itself is allowed (`List.insert`). A negative index becomes larger than any length, so one test covers both ends.
+
+| Whose length | The check | Why |
+| :-- | :-- | :-- |
+| A slice's | The comparison, then `\|\| len < 0` | A slice built by hand can carry a negative length, and the comparison alone would then pass every index and read past the memory. `sub_count` refuses a negative `count` the same way. A loop does not change the length, so the processor predicts this test correctly |
+| A `List`'s | The comparison alone | Its methods never make the length negative, and nothing outside `std/ds` writes it |
+| A fixed-length array's (`kspl_bounds_check`, which the compiler writes) | The comparison alone | The length is a constant |
+
+Caution: **Do not write the check as two signed comparisons on the index.** Inside a loop, that form led LLVM 22 at `-O1` to make the loop's end test constant, and the loop ran past its end. Neither form is undefined in C. The test on the length does not bring the fault back, since it does not read the index.
+
+**`at` carries `#inline`**: its body is copied into each call site, leaving one comparison and the address arithmetic.
 
 **`bounds_panic` carries `#noinline` for that to happen.** The C compiler judges whether a function is small enough to copy only after it has copied that function's own callees into it. Copied into `at`, the message building (`Panic_msg`, three numbers turned into text) makes `at` too big, and every `xs[i]` stays a call. With it kept out, every `xs[i]` of an optimized build is the comparison inline, and a program that indexes lists runs measurably fewer instructions.
 
@@ -477,7 +493,7 @@ flowchart LR
 
 ### String functions are split by whether they allocate
 
-**`std/chars` only looks at text and never allocates. `std/str` builds new text and can allocate.** So files that cannot afford the whole string set, such as `std/base64` or `std/sha256`, can still test characters and cut slices: `chars` needs neither `std/mem` nor `std/ds`.
+**`std/chars` only looks at text and never allocates. `std/str` builds new text and can allocate.** So files that cannot afford the whole string set, such as `std/base64` or `std/sha256`, can still test characters and cut slices. On a hosted build, `chars` needs neither `std/mem` nor `std/ds`.
 
 | File | What it does | Allocates? |
 | :-- | :-- | :-- |
@@ -490,7 +506,7 @@ Two functions cannot move to `chars`. `equals` must sit in `Hashable`'s impl blo
 
 ### A string allocated and returned is returned read-only
 
-**A function that returns a newly allocated string returns `U8[]`**, the read-only type, though you own the copy: `fs.join`, `str.replace`, `json.Value.as_str`, `sys.get_env` and the rest. A writable `U8$[]` comes back only where a writable buffer was asked for: `arena.dup_str`, `Str_builder.slice`, `chars.sub_mut`, and the buffer that `rand.fill` receives.
+**A function that returns a newly allocated string returns `U8[]`**, the read-only type, though you own the copy: `fs.join`, `str.replace`, `str.join` and the rest. A writable `U8$[]` comes back only where a writable buffer was asked for: `arena.dup_str`, `Str_builder.slice`, `chars.sub_mut`, and the buffer that `rand.fill` receives.
 
 **Write permission spreads through generics.** User-written generics are invariant, so `List<|U8$[]|>` cannot become `List<|U8[]|>` ("6.4 Type conversion (`::`) and implicit casts" in `docs/SPEC-programming-language.md`). A returned `List<|U8$[]|>` would make the caller carry the `$` into every variable, field and argument, as C's `strdup` spreads `char *`.
 
@@ -565,7 +581,7 @@ NaN and infinity (`nan` / `inf` / `-inf`) pad to a width with spaces only, since
 
 `std/strnum`'s `to_f64` turns text into an F64 with KSPL code, not with C's `strtod`. So it works on bare metal, gives the same answer everywhere, and rounds every text correctly.
 
-**Why**: left to `strtod`, `to_f64` could exist only under `cfg(!freestanding)`. `std/json` and `std/argparse` call it, so **a build for a microcontroller would fail at type checking**.
+**Why**: left to `strtod`, `to_f64` could exist only under `cfg(!freestanding)`. `std/json` calls it, so **a build for a microcontroller would fail at type checking**.
 
 **What is given up**: `strtod`'s `inf`, `nan` and hexadecimal floating point. JSON's numbers never hold them, and a configuration value holds them only ambiguously.
 
@@ -600,7 +616,7 @@ Caution: **Cap both the mantissa and the exponent.** Otherwise a 20th digit over
 
 ### Format-specifier dispatch per type stays as an impl per type
 
-`std/strfmt.kspl` implements `fmt_spec` / `fmt_prec` / `fmt_hex` / `fmt_char` separately for twelve built-in types. Each delegates to the shared `int_fmt_spec` / `hex_fmt_spec` / `float_fmt_spec`, so the impls read as one shape repeated. **They are not folded, because the return type differs per type**: `Int_fmt` (signed, and `U8` through `U32`), `Uint_fmt` (`U64`) or `Float_fmt` (`F32` / `F64`). A default body declares one return type.
+`std/strfmt.kspl` implements `fmt_spec` / `fmt_prec` / `fmt_hex` / `fmt_char` separately for eleven built-in types. Each delegates to the shared `int_fmt_spec` / `hex_fmt_spec` / `float_fmt_spec`, so the impls read as one shape repeated. **They are not folded, because the return type differs per type**: `Int_fmt` (signed, and `U8` through `U32`), `Uint_fmt` (`U64`) or `Float_fmt` (`F32` / `F64`). A default body declares one return type.
 
 ### `abs`, `min` and `max` are one generic each
 
@@ -610,10 +626,6 @@ Caution: **Cap both the mantissa and the exponent.** Otherwise a 20th digit over
 * **`min` and `max` give the second argument when their comparison is false**: on a tie, and where either is a NaN. So `min(a, b)` is exactly `a if a < b else b`.
 * **They live in `std/math`, not `std/lang`.** Every program carries `std/lang`, and most use none of the three.
 * **One generic, not a method per type.** A method needs one `impl` per number type, and a type added later would lack it.
-
-### The largest `Sz` is one constant
-
-**`mem.SZ_MAX` is the largest `Sz`.** `Sz` is as wide as a pointer, so no literal is right on every target. Written by hand, a shift off by one bit gives -1 or half the value, and nothing catches it.
 
 ### Checked arithmetic shares its checks
 
@@ -698,7 +710,7 @@ A search keeps the ways alive at the current byte in a list, in the order the pa
 
 **A count is not kept beside a way.** A way's future would then depend on its count. So two ways at one step could no longer merge, and the list would lose its bound.
 
-**So the program's size is limited, not only the count.** A program of more than `max_program_size` (20000) states is refused as `too_large`. A search's memory and work per byte grow with the states, so the limit bounds both. Memory reaches about 8 MB for a pattern with nine groups. One count up to `max_repeat_count` (1000) on a short body fits (`[a-z]{1,1000}`). A count of counts does not: `(a{1000}){1000}` would hold a million. **The write of the program stops once it passes the limit**, so `((a{1000}){1000}){1000}` is refused at once.
+**So the program's size is limited, not only the count.** A program of more than `MAX_PROGRAM_SIZE` (20000) states is refused as `too_large`. A search's memory and work per byte grow with the states, so the limit bounds both. Memory reaches about 8 MB for a pattern with nine groups. One count up to `MAX_REPEAT_COUNT` (1000) on a short body fits (`[a-z]{1,1000}`). A count of counts does not: `(a{1000}){1000}` would hold a million. **The write of the program stops once it passes the limit**, so `((a{1000}){1000}){1000}` is refused at once.
 
 **`(…)?` is not a repetition** but an empty alternative. So when `(ab)?c` matches `c`, the group is "not participating", as Python's `re` and PCRE answer.
 
@@ -776,7 +788,7 @@ A pattern with more than 9 capture groups is refused with `too_many_groups`. A c
 
 **`.` does not match `\n`**, as in Python, Java and Rust by default, where an option (`(?s)`) changes it. KSPL holds no options, so a newline is matched with `[\s\S]`, and a `.*` brought from elsewhere keeps its span.
 
-**The counted repetitions `{n}` `{n,}` `{n,m}` are held**, since `\d{4}-\d{2}` is needed daily. `*` `+` `?` are shorthands on the same tree (`.repeat`'s minimum and maximum), so an answer cannot split across two paths. A count on a group takes the same pair (`.group_repeat`'s); only `(ab){0,1}` takes `(ab)?`'s shape. The upper bound is `max_repeat_count` (1000, as in RE2 and Go).
+**The counted repetitions `{n}` `{n,}` `{n,m}` are held**, since `\d{4}-\d{2}` is needed daily. `*` `+` `?` are shorthands on the same tree (`.repeat`'s minimum and maximum), so an answer cannot split across two paths. A count on a group takes the same pair (`.group_repeat`'s); only `(ab){0,1}` takes `(ab)?`'s shape. The upper bound is `MAX_REPEAT_COUNT` (1000, as in RE2 and Go).
 
 **A `{` not in a count's shape is refused** (`invalid_repeat`), since swallowed, `a{3` would silently match the characters `a{3`. `}` alone is a character, as Python's `re` and PCRE read it.
 
@@ -848,7 +860,7 @@ A pattern with more than 9 capture groups is refused with `too_many_groups`. A c
 
 **Within one file, failure takes one shape**: `std/fs.kspl` returns every failure as `!Fs_error`, and `std/io.kspl` as `!Io_error`.
 
-**Do not split into variants what cannot be told apart.** `fs.Fs_error.operation_failed` does not distinguish "already exists", "no permission" and "the parent is missing". The C runtime (`ksplc/gen/runtime/hosted.c`) does not pass `errno` up to KSPL, so to subdivide the error, pass `errno` up first. A variant that pretends to know leads the caller to a wrong branch.
+**Do not split into variants what cannot be told apart.** `fs.Fs_error.operation_failed` does not distinguish "already exists", "no permission" and "the parent is missing". The C runtime (`ksplc/gen/runtime/hosted_fs.c`) does not pass `errno` up to KSPL, so to subdivide the error, pass `errno` up first. A variant that pretends to know leads the caller to a wrong branch.
 
 ### Logs and diagnostics share level names, not meaning
 
@@ -948,7 +960,7 @@ The cause is often small: one error type in a signature brings its whole file al
 
 **Do not add a function that takes a `Writer` for convenience.** It brings the whole lump along.
 
-These counts are **at compile time**: `--gc-sections` drops what nothing references at link time. The exceptions are the `Writer` vtable's thunks, and Windows, whose PE linker keeps unreferenced sections. `make test-thin-use` pins upper bounds on the size of `std/lang` + `std/libc`, of the files that bring only themselves, and of the three lumps.
+These counts are **at compile time**: `--gc-sections` drops what nothing references at link time. The exceptions are the `Writer` vtable's thunks, and Windows, whose PE linker keeps unreferenced sections. `make test-thin-use` caps the lines of `std/lang` + `std/libc`, of the lump that `str` reaches, and of a small program's generated C. It checks which files the leaves bring along.
 
 ### Only a unit with its own README gets a folder
 
@@ -956,17 +968,27 @@ These counts are **at compile time**: `--gc-sections` drops what nothing referen
 
 Caution: **Do not cut by area (networking, cryptography, strings): that makes two axes.** What `std/` promises its readers is the tier, how many files come along with one import ("Why one import brings few files along" above). An area cuts across it, and gives two maps.
 
-**The one folder, `std/tests/`, holds std's own tests and is on no user's map.** Nobody imports it (only `make debug` calls it), and neither `SURFACE.txt` nor `std/README.md` lists it. Where a test goes is "A test of a unit's inside goes inside that unit" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
+**The one folder of code, `std/tests/`, holds std's own tests and is on no user's map.** Nobody imports it: `make debug` calls it, and so do `std/Makefile`'s `test` and `test-fuzz`. `SURFACE.txt` does not list it, and the README lists it apart from the tiers. Where a test goes is "A test of a unit's inside goes inside that unit" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 **A group large enough to hold its own README becomes a package at the root, not a folder.** Such a group is also "a unit distributed together" (the table in the root [`../../README.md`](../../README.md)). A group of two or three files meets neither condition, so `regex` and `regex_node` stay uncut.
 
-**A move of a file out leaves every call as it is**, since an import's alias is the path's last element (`a/b/engine` moved to `b/engine` keeps `engine`). What changes is the import line and the C-name prefix of the `priv` symbols, derived from the file's path. So the seed must be taken again, and the fixed point confirmed: the compiler, rebuilt by itself, gives the same output again.
+**A move of a file out leaves every call as it is**, since an import's alias is the path's last element (`a/b/engine` moved to `b/engine` keeps `engine`). What changes is the import line and the C-name prefix of the `priv` symbols, derived from the file's path. So the seed must follow ("`std` cannot be separated from `ksplc`" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md)).
+
+### Splitting a file
+
+How to choose where to cut is "Choosing where to split a file" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md). What follows are the constraints of std alone.
+
+**Name a new file with a word no value uses.** `rc.kspl` for the reference-counting handles would make its alias collide with the variable name `rc`, hence `std/refcount.kspl`.
+
+**Names the compiler holds do not move alone.** `Arena` stays in `std/mem.kspl`, since `ksplc/sema/flow/release.kspl` names `std.mem.Arena`. The compiler matches the trait names in `std/lang.kspl` by their fully qualified name, such as `std.lang.Ref_counted`. It does so in `ksplc/sema/` (for example `type/arc.kspl`), so renaming or moving one means a change in `ksplc/`.
+
+Note: The reference-counting handles can move freely. The compiler recognizes an ARC type by `Ref_counted`'s name in `std/lang.kspl`, not by where the handles live.
 
 ### Whether `pub` is needed is not settled by walking the references
 
 Caution: **Do not take a `pub` in `std/` off as "unused".** `std/` is distributed, and `pub` is the contract with its users outside. No reference inside the repository does not mean no contract.
 
-**The failure type shows what a walk cannot decide.** A caller that only receives a `T!E` with `catch e` never writes `E`'s name. `std/regex`'s `Regex_error`, the failure type of `compile` and `find`, appears nowhere outside `std/regex.kspl`, so a walk calls it unused. A result struct and a trait fare the same.
+**The failure type shows what a walk cannot decide.** A caller that only receives a `T!E` with `catch e` never writes `E`'s name. `std/regex`'s `Regex_error`, the failure type of `compile`, appears nowhere outside `std/regex.kspl`, so a walk calls it unused. A result struct and a trait fare the same.
 
 **So [I0402], which flags a `pub` used only within its package, is not enabled in `std/`.** It judges by the references one compilation sees, so it calls the published API itself "unneeded". It can be enabled in a unit that builds an executable ("A test of a unit's inside goes inside that unit" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md)).
 

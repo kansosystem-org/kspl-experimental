@@ -79,13 +79,30 @@ fn marked_above(from: U8[], mark: U8[], arena: Arena$@): U8[] //<
 fn doc_under(root: U8[], path: U8[]): U8[] //< the document's path relative to the served folder
     //< Caution: **Drop the served folder's part**, or the server looks for one more folder of that
     //< name under the root (a 404). A path already relative to the root (`--root=.`) stays as it
-    //< is.
-    if root.len == 0 || root.equals(".") || !path.starts_with(root, 0)
+    //< is. Both are `plain`.
+    //< Caution: **Judge "inside" with `fs.lies_under`, not by the texts' shared start.** The
+    //< server judges by it, and `C:\ws` and `C:/ws/a.ksmd` share no start on Windows, where `\`
+    //< and `/` mix.
+    if root.len == 0 || root.equals(".") || !fs.lies_under(root, path)
         return path
-    $rest: U8[] = path.sub_from(root.len)
-    for rest.len > 0 && (rest[0] == '/' || rest[0] == '\\')
-        rest = rest.sub_from(1)
-    return path if rest.len == 0 else rest
+    // **Step past as many names as the root holds**: their spelling can differ in case and
+    // separator, so the root's length in bytes is not where the rest starts.
+    $at: Sz = sys.root_len(path)
+    $names: Sz = 0
+    $i: Sz = sys.root_len(root)
+    for i < root.len
+        end: = sys.segment_end(root, i)
+        if end > i
+            names += 1
+        i = end + 1
+    for names > 0 && at < path.len
+        end: = sys.segment_end(path, at)
+        if end > at
+            names -= 1
+        at = end + 1
+    for at < path.len && sys.is_path_sep(path[at])
+        at += 1
+    return path if at >= path.len else path.sub_from(at)
 
 fn url_in_log(log: U8[]): U8[] //< the URL from the line kssrv printed, empty where there is none
     // Caution: **The level sits in the middle** (`kssrv: I: open `). Without the `I: `, the marker
@@ -362,12 +379,6 @@ fn plain(path: U8[], arena: Arena$@): U8[] //<
             kept += 1
         at = end + 1
     return out.take()
-
-fn under(root: U8[], path: U8[]): Bool //< whether `path` lies inside the folder `root`
-    //< Both are `plain`. **A shared start is not enough**: `/ws2/a.ksmd` is not under `/ws`.
-    if !path.starts_with(root) || path.len <= root.len
-        return false
-    return sys.is_path_sep(root[root.len - 1]) || sys.is_path_sep(path[root.len])
 
 fn workspace_of(folder: U8[], arena: Arena$@): U8[] //< the workspace of a document in `folder`
     //< The nearest folder at or above it that holds `MARK`, else `folder` itself.

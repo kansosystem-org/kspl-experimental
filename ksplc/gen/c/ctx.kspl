@@ -278,7 +278,6 @@ impl Genc_ctx
         info: = r.env.get_info(type_id)
         // Immutability is a structural node (Info.const_of), so only the const_of branch below
         // emits a `const`.
-        base_str: = r.env.get_str(type_id)
         $res: = w
 
         switch info
@@ -315,11 +314,9 @@ impl Genc_ctx
             return r.env.mangle_type_id_to(type_id, res)
         default {}
 
-        prims: = U8[][]::{ "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Sz", "F32", "F64",
-            "Bool", "Void" }
-        for i in Range.asc(prims.len)
-            if base_str.equals(prims[i])
-                return res.s(prims[i])
+        // A built-in keeps its KSPL name, which the C preamble typedefs.
+        if sema_type_env.is_builtin(type_id)
+            return res.s(sema_type_env.BUILTIN_TYPES[type_id].name)
         return r.env.mangle_type_id_to(type_id, res)
 
     fn emit_zero_init(r: Self$@, type_id: I32, site: Ast_node$@) //<

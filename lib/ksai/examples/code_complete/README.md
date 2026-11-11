@@ -48,6 +48,6 @@ The tests stand with ksai's. `lib/ksai/tests/code_complete_test.kspl` checks the
 
 ## Further reading
 
-* [`lib/ksai/docs/DESIGN-learning.md`](../../docs/DESIGN-learning.md) — why the example is built this way: what is borrowed, how a completion is scored, and why it runs alone.
+* [`lib/ksai/docs/DESIGN-learning.md`](../../docs/DESIGN-learning.md) — why the example is built this way: how a completion is scored, and why it runs alone.
 * [ksai](../../README.md) — the engine the example trains on, with the other examples.
-* [`lib/ksai/tools/README.md`](../../tools/README.md) — the tools that convert a borrowed model for ksai and check ksai against Hugging Face and llama.cpp.
+* [`lib/ksai/tools/README.md`](../../tools/README.md) — the tools that check ksai against llama.cpp.

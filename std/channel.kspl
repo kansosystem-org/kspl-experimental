@@ -1,0 +1,180 @@
+//< A channel: a queue of fixed size that threads send values into and receive from
+//< It is built on `std/thread`'s lock and condition variables, in a file of its own so that a
+//< program using threads alone does not bring `std/mem` along. **For hosted environments only**,
+//< as `std/thread` is.
+import "std/mem" + { Arena, dealloc }
+import "std/thread" + { Thread_error, Mutex, Cond_var }
+
+extern fn kspl_mono_us(): I64 //< the monotonic clock in microseconds, from the C runtime
+
+pub enum Send_refused<|T|> //< why a send stored nothing; the value comes back with the reason
+    closed(value: T) //< the channel is closed, so no receiver takes more
+    timed_out(value: T) //< the channel stayed full up to the limit (`send_for` only)
+
+pub enum Receive_end //< why a receive returned no value
+    closed //< the channel is closed and every value in it was taken; waiting again gives nothing
+    timed_out //< nothing arrived up to the limit (`receive_for` only); the channel stays open
+
+priv struct Slots<|T|> //< the queue a `Channel` keeps under its lock
+    at: T$@ //< `cap` slots, given once by `Channel.new`; only the `len` from `head` hold a value
+    cap: Sz //< how many values fit
+    head: Sz //< the slot the next receive takes, in `[0, cap)`
+    len: Sz //< how many values it holds now
+    closed: Bool //< set once by `close`, never cleared
+    arena: Arena$@ //< where `at` came from; null means the heap, which `free` gives back
+
+impl<|T|> Slots<|T|>
+    fn put(r: Self$@, value: T) //< stores a value behind the others; the caller checked for room
+        mem.init_at(r.at + (r.head + r.len) % r.cap, value)
+        r.len += 1
+
+    fn take(r: Self$@): T //< takes the oldest value out; the caller checked that one is there
+        value: = mem.take_at(r.at + r.head)
+        r.head = (r.head + 1) % r.cap
+        r.len -= 1
+        return value
+
+priv fn left_ms(deadline_us: I64): I32 //< the milliseconds to the deadline, rounded up; 0 once past
+    left_us: = deadline_us - kspl_mono_us()
+    if left_us <= 0I64
+        return 0
+    return I32::((left_us + 999I64) / 1000I64)
+
+pub struct Channel<|T|> //< a queue of fixed size that threads send values into and receive from
+    //< Any number of threads send and receive; each value goes to one receiver, in the order sent.
+    //< **A send waits while the channel is full**, so a fast sender cannot grow memory. Threads
+    //< share one through a pointer handed to `Thread.spawn`, or through an `Arc`.
+    //< **`close()` ends it for both sides**: a send then fails as `closed`, with its value, and a
+    //< receive takes what is left before it fails as `closed`. **Its owner frees it with `free()`**
+    //< once no thread uses it any more.
+    priv slots: Mutex<|Slots<|T|>|>
+    priv not_empty: Cond_var //< a receiver waits here for a value or the close
+    priv not_full: Cond_var //< a sender waits here for room or the close
+
+impl<|T|> Channel<|T|>
+    pub fn new( //< creates an open, empty channel, with room for `capacity` values
+        //< The slots are taken here, once: a send never allocates, and the channel never grows.
+        //< Caution: **A capacity below 1 stops the program.** A channel that holds nothing makes
+        //< every send wait for a receiver, and a lone thread that sends then waits for ever.
+        capacity: Sz, //< how many values it holds before a send waits
+        arena: Arena$@, //< where the slots go; null means the heap, which `free()` gives back
+    ): Channel<|T|>!Thread_error
+        if capacity < 1
+            $m: = Panic_msg()
+            panic(m.s("Channel.new: the capacity must be 1 or more, not ").n(capacity).slice())
+        bytes: = capacity * sizeof(T)
+        if sizeof(T) > 0 && bytes / sizeof(T) != capacity
+            panic("Channel.new: the capacity is too large (overflow)")
+        at: = T$@::arena.alloc(bytes)
+        queue: = Slots<|T|>::{ .at = at, .cap = capacity, .head = 0, .len = 0, .closed = false,
+            .arena = arena }
+        $slots: = Mutex<|Slots<|T|>|>(queue) catch e
+            give_back(at, arena)
+            throw e
+        $not_empty: = Cond_var() catch e
+            slots.free()
+            give_back(at, arena)
+            throw e
+        not_full: = Cond_var() catch e
+            not_empty.free()
+            slots.free()
+            give_back(at, arena)
+            throw e
+        return Channel<|T|>::{ .slots = slots, .not_empty = not_empty, .not_full = not_full }
+
+    pub fn send( //< stores a value, waiting while the channel is full
+        //< It fails only as `closed`, never as `timed_out`.
+        r: Self@,
+        value: T, //< what to send; it moves into the channel, or comes back in the failure
+    ): Void!Send_refused<|T|>
+        q: = r.slots.lock()
+        defer r.slots.unlock()
+        for q.len == q.cap && !q.closed
+            r.not_full.wait(r.slots@)
+        if q.closed
+            throw .closed(value)
+        q.put(value)
+        r.not_empty.signal(r.slots@)
+
+    pub fn send_for( //< stores a value as `send` does, waiting up to the limit
+        r: Self@,
+        value: T, //< what to send; it moves into the channel, or comes back in the failure
+        timeout_ms: I32, //< the limit, read as every wait in std reads it: 0 or less looks once
+    ): Void!Send_refused<|T|>
+        deadline: = kspl_mono_us() + I64::timeout_ms * 1000I64
+        q: = r.slots.lock()
+        defer r.slots.unlock()
+        for q.len == q.cap && !q.closed
+            left: = left_ms(deadline)
+            if left == 0
+                throw .timed_out(value)
+            r.not_full.wait_for(r.slots@, left)
+        if q.closed
+            throw .closed(value)
+        q.put(value)
+        r.not_empty.signal(r.slots@)
+
+    pub fn receive(r: Self@): T!Receive_end //< takes the oldest value, waiting while there is none
+        //< After `close()` it still takes what is left, then fails as `closed`. It never fails as
+        //< `timed_out`.
+        q: = r.slots.lock()
+        defer r.slots.unlock()
+        for q.len == 0 && !q.closed
+            r.not_empty.wait(r.slots@)
+        if q.len == 0
+            throw .closed
+        value: = q.take()
+        r.not_full.signal(r.slots@)
+        return value
+
+    pub fn receive_for( //< takes the oldest value as `receive` does, waiting up to the limit
+        r: Self@,
+        timeout_ms: I32, //< the limit, read as every wait in std reads it: 0 or less looks once
+    ): T!Receive_end
+        deadline: = kspl_mono_us() + I64::timeout_ms * 1000I64
+        q: = r.slots.lock()
+        defer r.slots.unlock()
+        for q.len == 0 && !q.closed
+            left: = left_ms(deadline)
+            if left == 0
+                throw .timed_out
+            r.not_empty.wait_for(r.slots@, left)
+        if q.len == 0
+            throw .closed
+        value: = q.take()
+        r.not_full.signal(r.slots@)
+        return value
+
+    pub fn close(r: Self@) //< ends sending, and wakes every thread that waits on the channel
+        //< Any thread can close it, a sender or a receiver. Closing it again does nothing.
+        q: = r.slots.lock()
+        defer r.slots.unlock()
+        q.closed = true
+        r.not_empty.broadcast(r.slots@)
+        r.not_full.broadcast(r.slots@)
+
+    pub fn len(r: Self@): Sz //< how many values it holds at this moment
+        //< Caution: **Another thread can change it at once**, so it suits a report, not a decision.
+        q: = r.slots.lock()
+        defer r.slots.unlock()
+        return q.len
+
+priv fn give_back<|T|>(at: T$@, arena: Arena@) //< gives a channel's slots back to the heap
+    if arena == null
+        dealloc(Void$@::at)
+
+impl<|T|> Channel<|T|>: Manual_free //< it owns its slots, a lock and two condition variables
+    pub fn free(r: Self$@) //< releases what it still holds, then its slots and its OS objects
+        //< Counted values left in it (an `Arc`) are released. Caution: **What a value left in it
+        //< owns by hand is not freed**: receive until `closed` after `close()`, and free each one.
+        //< No thread may still use the channel: join them first.
+        q: = r.slots.lock()
+        for q.len > 0
+            mem.drop_at(q.at + q.head)
+            q.head = (q.head + 1) % q.cap
+            q.len -= 1
+        give_back(q.at, q.arena)
+        r.slots.unlock()
+        r.not_full.free()
+        r.not_empty.free()
+        r.slots.free()

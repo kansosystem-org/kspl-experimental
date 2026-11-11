@@ -98,12 +98,21 @@ priv fn declarations_only(body: U8[], arena: Arena$@): U8[] //<
         out.s(ln).c('\n')
     return out.take()
 
+priv fn signatures_only(body: U8[], arena: Arena$@): U8[] //<
+    //< The declarations' rows without their summaries, as the record holds them
+    //< **Writing and checking both go through here**, so the two compare the same columns.
+    out: = arena.text()
+    for one in rows.rows_of(body, arena)
+        r: = rows.signature_only(one)
+        out.s(r.key).c('\t').s(r.text).c('\n')
+    return out.take()
+
 priv fn record_path(pkg: U8[], arena: Arena$@): U8[]
     return fs.join(pkg, RECORD_NAME, arena)
 
 priv const PAGES_DIR: U8[] = "out/docs" //< where `pages` writes the reference to browse
     //< **It is build output, never committed**: the description in the source is the one copy, and
-    //< `ksplc doc` renders it whenever asked (7.5 in `ksplc/docs/SPEC-tools.md`).
+    //< `ksplc doc` renders it whenever asked (7.4 in `ksplc/docs/SPEC-tools.md`).
 priv const PAGE_CAP: Sz = 1 << 24 //< the most of one rendering kept; std's largest is far below
 
 priv fn publishing(body: U8[], arena: Arena$@): List<|U8[]|>$@ //<
@@ -140,7 +149,7 @@ priv fn do_pages(pkg: U8[], ksplc: U8[], arena: Arena$@): Void!fs.Fs_error //<
 
 priv fn do_write(pkg: U8[], ksplc: U8[], arena: Arena$@): Void!fs.Fs_error
     whole: = built(pkg, ksplc, arena)!
-    body: = declarations_only(whole, arena)
+    body: = signatures_only(declarations_only(whole, arena), arena)
     path: = record_path(pkg, arena)
     io.write_file(path, arena.text().s(rows.RECORD_HEAD).s(body).take()) catch
         throw .operation_failed
@@ -155,10 +164,11 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
     body: = declarations_only(whole, arena)
     defer $b: = Str_builder()
     $was: = rows.rows_of(had, arena)
-    $now: = rows.rows_of(body, arena)
+    $now: = rows.rows_of(signatures_only(body, arena), arena)
     n: = rows.classify(was@, now@, b@)
     defer $d: = Str_builder()
-    m: = rows.undocumented(now@, d@)
+    $described: = rows.rows_of(body, arena)
+    m: = rows.undocumented(described@, d@)
     defer $t: = Str_builder()
     k: = rows.drifted_twins(now@, t@, arena)
     if n == 0 && m == 0 && k == 0

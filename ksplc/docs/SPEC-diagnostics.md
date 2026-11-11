@@ -12,7 +12,7 @@ A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights"
 
 The terminal view omits parenthetical document references and Markdown link targets. It wraps prose, preserves code examples, and names this document once at the end.
 
-**Nine shapes are errors with no code**, so no setting can silence them. An error has no section: its message explains itself.
+**These shapes are errors with no code**, so no setting can silence them. An error has no section: its message explains itself.
 
 | The shape | What goes wrong |
 | :-- | :-- |
@@ -21,7 +21,7 @@ The terminal view omits parenthetical document references and Markdown link targ
 | an integer literal outside its range (`U8 = 300` and the like) | changes what runs |
 | a carriage return (`\r`) with no line feed after it, anywhere in the source | an editor ends a line there and the compiler would not, so they would number the lines below differently |
 | a line in the indentation notation whose column matches no block | the reader and the compiler would disagree. `ksplc fmt` rebuilds the columns from the tree, so no formatted source meets it |
-| `extern` before a `priv` definition | written but does nothing: `priv` makes the generated C `static`, so the published name still links to nothing outside |
+| `extern` on a `priv` definition (`priv extern fn …`) | written but does nothing: `priv` makes the generated C `static`, so the published name still links to nothing outside |
 | a `;` at the end of a statement's line in the indentation notation | a second way of writing the line's end, which already ends the statement. `ksplc fmt` drops it |
 | a `;` right after the `}` of a block written on one line, where that block ends its statement (`if c { f() }; g()`) | a second way of writing that end. A block inside a value (`x: = f() catch { fallback 0 }; g(x)`) ends no statement, and its `;` stays |
 | a method a trait requires, written in another block of the type than `impl T: Trait` (`'Arena: Manual_free' requires 'free'. Move 'fn free' (line 650) into this block`) | the conformance block no longer shows what meets the trait. The error names the line the method stands on now |
@@ -66,7 +66,7 @@ After `thread.Mutex<|T|>.lock()`, the lock is still held, on every path, where t
 * **Fix**: call `g.unlock()` before each way out, or `defer g.unlock()` right after locking, which releases on every exit.
 
 ### [W0107] A method that frees outside a release contract
-The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` and the method called is `free`. So a `pub` method that frees its receiver otherwise lets `x.close(); x.read();` compile silently. It is reported where the name differs (`close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`). It is also reported where the name is `free` but the type has no `impl X: Manual_free {}`.
+The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` and the method called is `free`. So a `pub` method that frees its receiver otherwise lets `x.close()` followed by `x.read()` compile silently. It is reported where the name differs (`close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`). It is also reported where the name is `free` but the type has no `impl X: Manual_free {}`.
 * **Fix**: name it `free` and add `impl X: Manual_free {}`. That `free` returns no failure, so a clean-up whose result must be checked (a flush) goes in a separate method. An operation that frees no receiver, or takes an argument (`delete(key)`), is out of scope.
 
 ### [W0108] A bit operation's operand is compared without brackets
@@ -124,7 +124,7 @@ Code after a `return`, a `throw`, a `for` that never ends, a `#noreturn` call (`
 * **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#72-loops)), nor after a `#noreturn` call. A `catch` block ending in one needs no `fallback` ("8.3.2 Catching an error (`catch`)" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#832-catching-an-error-catch)).
 
 ### [W0202] An unused expression with no side effect
-An expression's result is not stored, and it has no side effect (a call, an assignment), so it does nothing. Examples are `1 + 1;` and a bare variable reference.
+An expression's result is not stored, and it has no side effect (a call, an assignment), so it does nothing. Examples are `1 + 1` and a bare variable reference.
 
 ### [W0203] A meaningless self-assignment
 A place is assigned its own value, as in `a = a`, `p.n = p.n`, or `b |= b` and `b &= b`, which give `b` back. It changes nothing, so it is usually a slip for another name.
@@ -155,7 +155,7 @@ A `priv` function, struct or the like is never referred to within its file.
 * **A `#cfg` leaves out what one build does not hold.** A helper that only a hosted function calls is unused in a freestanding build. Put the same `#cfg` on the helper.
 
 ### [W0207] A local variable or parameter nobody reads
-A local variable or a parameter is **never read**. Reading counts, not the name appearing. A fixed-length array's `.len` folds to a constant at translation time. So an `a: Sz[3] = ::{ 1, 2, 3 };` used only through `a.len` fires it.
+A local variable or a parameter is **never read**. Reading counts, not the name appearing. A fixed-length array's `.len` folds to a constant at translation time. So an `a: Sz[3] = ::{ 1, 2, 3 }` used only through `a.len` fires it.
 * **Fix**: delete the variable, or, where a trait's constraint requires the parameter, start its name with `_` (`_x`). Where only the length is needed, declare a `const` rather than an array.
 
 ### [W0208] A variable assigned but never read
@@ -227,7 +227,7 @@ A top-level function stands in a file of tests, nothing calls it, and its name d
 
 ### [W0601] The use of an ARC-managed type
 Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). ARC (automatic reference counting) inserts `retain()`/`release()` calls that run invisibly, a risk where execution timing must stay visible. It is reported where a local's or parameter's type is ARC-managed (conforms to `Ref_counted`), or holds one as a value field at any depth.
-* **Fix**: consider explicit ownership through an arena or `defer`. A deliberate exception can stay. To exclude one file while it is enabled, write `##lint(W0601 = off);`.
+* **Fix**: consider explicit ownership through an arena or `defer`. A deliberate exception can stay. To exclude one file while it is enabled, write `##lint(W0601 = off)`.
 
 ### [W0602] A place whose memory safety the compiler cannot check
 Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). It lists each place where the text shows a shape that "14.2 Undefined" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#142-undefined---no-answer-is-fixed) leaves undefined when it goes wrong. It is a list for a review, not a finding of a fault: most places it lists are correct. Each finding names the kind of place and what the compiler does not check there:
@@ -255,7 +255,7 @@ A `::` cast that the compiler would do anyway:
 * a cast that only drops the write permission `$` (`U8$[]` to `U8[]`, `U8$@` to `U8@`).
 
 * **Fix**: drop the `::` (the implicit casts in "6.4 Type conversion (`::`) and implicit casts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
-* **The verdict is made against the expected type.** It is reported only where the surroundings fix the type (an argument, a return value, an annotated binding), not in `x: = U8[]::f();`.
+* **The verdict is made against the expected type.** It is reported only where the surroundings fix the type (an argument, a return value, an annotated binding), not in `x: = U8[]::f()`.
 
 ### [I0302] A redundant boolean comparison
 A comparison with a boolean literal, as in `is_open == true` or `is_valid != false`.
@@ -269,12 +269,12 @@ A logical operation with a boolean literal on one side, as in `a && true` or `b 
 A `switch` over an enum has a `default` clause although `case`s cover every variant.
 * **Fix**: delete the `default`. Left in, it would silently take a variant added later.
 
-### [I0305] A redundant `return;`
-A `return;` at the end of a `Void` function.
+### [I0305] A redundant `return`
+A `return` with no value at the end of a `Void` function.
 * **Fix**: KSPL supplies it implicitly; delete it.
 
 ### [I0306] A redundant continue
-A `continue;` as the last statement of a loop body.
+A `continue` as the last statement of a loop body.
 * **Fix**: the loop moves to the next iteration anyway; delete it.
 
 ### [I0307] A meaningless empty block
@@ -282,8 +282,8 @@ An empty `stmt_block`: a `defer {}`, an `if {}` with no `else`, an empty `else {
 * **Fix**: deleting it usually suffices. Where only the `if`'s `then` side is empty, invert the condition with `!` and fold the `else` body into the `then` side. An empty `for` can hang forever: add a body or a break condition.
 
 ### [I0308] A redundant if-return
-A branch that could return a boolean directly, as in `if cond { return true; } else { return false; }`.
-* **Fix**: `return cond;`.
+A branch that could return a boolean directly, as in `if cond { return true } else { return false }`.
+* **Fix**: `return cond`.
 
 ### [I0309] An unnecessary explicit `$`
 `.` dereferences a pointer receiver automatically, so an explicit `$` just before it is redundant (`(p$).field`, `p$.method()`). The `.` strips every level of a multiple pointer (`T@@` and the like).
@@ -384,7 +384,7 @@ A variable or parameter declared with the mutability marker `$` is never reassig
 
   | The write | Is a `$` before the name needed | Why |
   | :-- | :-- | :-- |
-  | `p = other;` | **yes** | The name is given another value |
+  | `p = other` | **yes** | The name is given another value |
   | `p.f = v` / `p$ = v`, `p` a pointer | no | What `p` points at changes, not `p`; `p`'s type `T$@` allows it |
   | `s[i] = v`, `s` a slice | no | An element changes, not `s`; `s`'s type `T$[]` allows it |
   | `v.f = v2`, `v` a struct held **by value** (not through a pointer) | **yes** | The field is part of `v`'s own value |
@@ -450,7 +450,7 @@ A type written where the line, or the place the value goes, already says it. It 
   * a call made through the type (`xs: List<|I32|> = List<|I32|>(arena)`).
 
   The annotation can also be `Bool` over `true` / `false`. **Only a type the text shows is reported**, not `count: Sz = items.len`.
-* **An enum's type written at its variant where the place already gives it.** The places are the nine where the type name can be left out ("6.6.2 Where the type may be omitted" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)):
+* **An enum's type written at its variant where the place already gives it.** The places are those where the type name can be left out ("6.6.2 Where the type may be omitted" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)):
   1. the right side of a declaration with a written type (`const USUAL: Kind = Kind.small`);
   2. the right side of `=` (`held = Option<|I32|>.some(3)`);
   3. a direct argument of a call (`kinds.push(Kind.small)`, a call through a function value's too);
@@ -472,9 +472,9 @@ A type written where the line, or the place the value goes, already says it. It 
   An `impl Box<|I32|>` can give `make` another return type, so there the annotation can be needed.
 * **Not reported at a variant**:
   * a declaration whose annotation is reported (`k: Kind = Kind.small` loses the annotation, so the line has one fix);
-  * every place outside the nine, where the name stays.
+  * every place outside that list, where the name stays.
 
-  Outside the nine are, for example, `k: = Kind.small`, `same(Kind.small)` for a generic, `mode == Mode.on` and `+=`. A struct literal keeps its type there too.
+  Outside it are, for example, `k: = Kind.small`, `same(Kind.small)` for a generic, `mode == Mode.on` and `+=`. A struct literal keeps its type there too.
 
 ### [H0303] A free written on the line after its declaration
 `defer x.free()` is the statement right after the declaration of `x`, whose type conforms to `Manual_free`. `defer` in front of the declaration says the same in one line (`defer $x: = …`).
@@ -511,7 +511,7 @@ An `if` block always leaves, and an `else` block follows. It leaves by one of th
 A call whose argument list wraps over several lines stands where its wrap tangles with another wrap. A chain wrapping at a method boundary (`x.method()\n    .chain()`) is not judged. The two places:
 * **An argument of another call whose argument list wraps too** (`borrows.push(base_core.arena.create(Lock_borrow::{ .borrow = id.text,\n    .guard = g, ... }))`).
 * **The subject of a `switch` or an `if`** (`switch x.foo(a, b,\n    c) case ...`).
-* **Fix**: move the call into a named temporary, and pass that or make it the subject (`lb: = base_core.arena.create(Lock_borrow::{ ... }); borrows.push(lb);`).
+* **Fix**: move the call into a named temporary, and pass that or make it the subject (`lb: = base_core.arena.create(Lock_borrow::{ ... })`, then `borrows.push(lb)`).
 
 ### [H0803] A function exceeds 300 lines
 A function or method exceeds 300 lines. The limit is defined in "Principle 3 - what is counted, and how" in [`../../docs/SPEC-gates.md`](../../docs/SPEC-gates.md).

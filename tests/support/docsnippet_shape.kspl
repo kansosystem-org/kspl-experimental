@@ -182,12 +182,37 @@ fn names_a_sibling(lines: List<|U8[]|>@): Bool //<
         return t.starts_with("//") && t.find_str(BESIDE_MARK).is_some()
     return false
 
+priv fn opens_main(text: U8[]): Bool //< whether the text opens the declaration of `main`
+    t: = text.trim_start().strip_prefix("pub ")
+    return t.starts_with("fn main") && (t.len == 7 || t[7] == '(' || t[7] == ' ')
+
 fn is_whole(lines: List<|U8[]|>@): Bool //< whether it holds `main`, so it is a whole program
+    //< Caution: **Look past each `;` outside the brackets too.** A line can hold a whole program
+    //< after an `import "std/io";`, which a check of the line's start alone excuses unread.
     for raw in lines
-        t: = raw.strip_prefix("pub ")
-        if raw.len > 0 && raw[0] != ' ' && t.starts_with("fn main") &&
-            (t.len == 7 || t[7] == '(')
+        if raw.len == 0 || raw[0] == ' '
+            continue
+        code: = code_of(raw)
+        if opens_main(code)
             return true
+        $d: Sz = 0
+        $in_str: = false
+        $i: Sz = 0
+        for i < code.len
+            c: = code[i]
+            if in_str
+                if c == '\\'
+                    i += 1
+                in_str = c != '"'
+            else if c == '"'
+                in_str = true
+            else if c == '(' || c == '[' || c == '{'
+                d += 1
+            else if c == ')' || c == ']' || c == '}'
+                d -= 1
+            else if c == ';' && d == 0 && opens_main(code.sub_from(i + 1))
+                return true
+            i += 1
     return false
 
 // ==========================================

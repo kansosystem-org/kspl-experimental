@@ -5,52 +5,31 @@
 import "std/chars"
 import "std/ds" as _ds // `contains`
 import "std/mem" { Arena }
-import "std/reflect"
 import "std/str" { Str_builder } // `text` / `split` / `trim_spaces`
 
 struct Config //< the formatting specification
     //< Caution: **Add a field's key and its reading in the same change** (the reason is at
     //< `INDENT_WIDTH_KEY`). A trailing comma has no key: `check_line_wrap` follows the source.
-    //< `append_key` walks the field table, so a new field joins the cache key by itself.
+    //< Add it to `append_key` as well, or two styles share a cache record.
     indent_width: Sz
     column_limit: Sz //<
         //< **The source file's width, comments included** (not a `.md` document's).
         //< Caution: **Do not count a comment's width in bytes.** A check mark (`✅`) or CJK takes
         //< two columns and three bytes, so counting bytes calls a short line too wide.
-    allow_short_blocks: Bool
-    allow_short_functions: Bool
-
-impl Config: reflect.Reflectable {}
 
 impl Config
     fn default_fmt(): Config
         return Config::{
             .indent_width = 4,
             .column_limit = 100,
-            .allow_short_blocks = false,
-            .allow_short_functions = false,
         }
 
     fn append_key(r: Self, out: Str_builder$@) //<
         //< it writes every field, for the formatter's cache
-        //< **It walks the field table, not a list of names.** A field left out would let two
-        //< styles share a record. Then the second is told a text is already formatted that it
-        //< would change (`file.kspl`).
-        $c: = r
-        base: = U8@::c@
-        for f in c.fields()
-            at: = base + f.offset
-            switch f.kind
-            case .int_field
-                out.s("\{reflect.load_int(at, f.extra.width)\}")
-            case .uint_field
-                out.s("\{reflect.load_uint(at, f.extra.width)\}")
-            case .bool_field
-                p: = Bool@::at
-                out.c('1' if p$ else '0')
-            default
-                panic("Config.append_key: a field of a kind the key does not write")
-            out.c(0U8)
+        //< Caution: **Write every field.** A field left out would let two styles share a record.
+        //< Then the second is told a text is already formatted that it would change (`file.kspl`).
+        //< `tests/support/fmt_cache.kspl` checks that each `--style` key changes the record.
+        out.s("\{r.indent_width\}").c(0U8).s("\{r.column_limit\}").c(0U8)
 
 // ==========================================
 // Reading `--style` into Config
@@ -70,13 +49,6 @@ priv fn read_style_size(value: U8[]): Sz? //<
         n = n * 10 + Sz::(ch - '0')
     return .some(n) if n > 0 else .none
 
-priv fn read_style_bool(value: U8[]): Bool? //< `true` or `false` as written, nothing else
-    if value.equals("true")
-        return .some(true)
-    if value.equals("false")
-        return .some(false)
-    return .none
-
 priv const INDENT_WIDTH_KEY: U8[] = "IndentWidth" //<
     //< `--style`'s keys, one per `Config` field, each written here alone
     //< Caution: **When adding one, add `Config`'s field, its reading and its place in
@@ -84,15 +56,13 @@ priv const INDENT_WIDTH_KEY: U8[] = "IndentWidth" //<
     //< (Principle 5). The keys follow the `--style` table in ksplc/docs/SPEC-tools.md (the check
     //< is tests/support/conventions_iface.kspl).
 priv const COLUMN_LIMIT_KEY: U8[] = "ColumnLimit"
-priv const SHORT_BLOCKS_KEY: U8[] = "AllowShortBlocks"
-priv const SHORT_FUNCTIONS_KEY: U8[] = "AllowShortFunctions"
 
 priv fn check_style_keys(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<
     //< It splits the specification at `,`, checks each item's key and value, and applies them
     //< It returns "" where all are good, else the diagnostic for the first bad item.
     //< Caution: **An unknown key or a bad value must not be silently ignored.** Ignored,
     //< `IndentWith: 8` or `IndentWidth: two` formats with the default and reports success.
-    known: U8[][4] = ::{ INDENT_WIDTH_KEY, COLUMN_LIMIT_KEY, SHORT_BLOCKS_KEY, SHORT_FUNCTIONS_KEY }
+    known: U8[][2] = ::{ INDENT_WIDTH_KEY, COLUMN_LIMIT_KEY }
     for item in style_str.split(',', arena)
         colon: = item.find_char(':').unwrap_or(item.len)
         key: = item.sub(0, colon).trim_spaces()
@@ -108,32 +78,16 @@ priv fn check_style_keys(style_str: U8[], config: Config$@, arena: Arena$@): U8[
                 msg.s(", " if k > 0 else "").s(known[k])
             msg.s(")\n")
             return msg.take()
-        $good: = true
-        if key.equals(INDENT_WIDTH_KEY) || key.equals(COLUMN_LIMIT_KEY)
-            switch read_style_size(value)
-            case .some(n)
-                if key.equals(INDENT_WIDTH_KEY)
-                    config.indent_width = n
-                else
-                    config.column_limit = n
-            case .none
-                good = false
-        else
-            switch read_style_bool(value)
-            case .some(b)
-                if key.equals(SHORT_BLOCKS_KEY)
-                    config.allow_short_blocks = b
-                else
-                    config.allow_short_functions = b
-            case .none
-                good = false
-        if !good
-            want: =
-                ("a positive whole number"
-                if key.equals(INDENT_WIDTH_KEY) || key.equals(COLUMN_LIMIT_KEY)
-                else "'true' or 'false'")
+        switch read_style_size(value)
+        case .some(n)
+            if key.equals(INDENT_WIDTH_KEY)
+                config.indent_width = n
+            else
+                config.column_limit = n
+        case .none
             return arena.text()
-                .s("--style: '\{value\}' is not a value of '\{key\}'. It takes \{want\}\n").take()
+                .s("--style: '\{value\}' is not a value of '\{key\}'. It takes a positive whole \
+                    number\n").take()
     return ""
 
 fn apply_style(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<

@@ -6,8 +6,9 @@
 | :-- | :-- | :-- |
 | **It fits a freestanding microcontroller, with zero dependencies** | A *freestanding* target is a small chip with no operating system and no C library to call | A binding to SQLite does not fit. It passes the work to libsqlite3 through FFI (calling a C library from KSPL), which needs the library and a C backend |
 | **The power can fail at any moment** | The device can lose power in the middle of any write | The one record being written at that instant can break, but the records finished before it must always read back |
+| **The place is flash** | Erasing and writing work differently from RAM (below) | A record is only appended, never rewritten |
 
-**The third requirement: the place is flash**, which works differently from RAM:
+How flash differs from RAM:
 
 * *Erasing* sets every bit to 1, so erased flash reads as `0xFF` bytes.
 * *Writing* (also called programming) can only turn bits from 1 to 0. To write a byte again, you must erase first.

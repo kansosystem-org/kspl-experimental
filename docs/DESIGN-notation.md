@@ -55,9 +55,7 @@ By the heading's column alone, the line at 4 would join the block, while a perso
 
 Note: **Japanese input most easily slips in the ideographic space** (U+3000). The line looks correctly indented, so `odd_indent_name` in `ksplc/parse/syntax_msg.kspl` adds a Note naming the character.
 
-**A lone `return`, `throw` or `fallback`, and a `!` at a line's end, end the statement.** A `!` at the start of a line continues one (a wrapped `T!E`).
-
-**A value that splits where no mark continues it goes in parentheses.** In a conditional value (`a if c else b`), an `if` / `else` at a line's head or end reads as a statement's heading. In the value of a `return` / `throw` / `fallback`, the keyword alone is a bare statement. A newline inside brackets never starts a level, so parentheses carry either value.
+**A split value goes in parentheses** ("2.5 Blocks and statement ends"), for two reasons. In a conditional value (`a if c else b`), an `if` / `else` at a line's head or end reads as a heading. In the value of a `return` / `throw` / `fallback`, the keyword alone is a bare statement. A newline inside brackets never starts a level, so parentheses carry either value.
 
 | Question | Answer |
 | :-- | :-- |
@@ -70,16 +68,11 @@ Note: **Japanese input most easily slips in the ideographic space** (U+3000). Th
 
 The rules are "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why.
 
-**A bare block carries a label**, because a block with no heading cannot be told from a continuation of the previous statement. A bare block exists so that something runs on exit, and that becomes the name (`release_on_exit` / `while_locked`). A meaningless name (`scope1`) hides the reason. `stmt` does not use `stmt_block` (`ksplc/kspl.kspeg`), so a bare block does not parse, and the message names the label to add (the case `bare_block_without_label` in `ksplc/tests/parse/syntax.ksplb`). A `break` to `_` is refused (the case `break_to_no_name_label` in `ksplc/tests/negative/control.kspl`).
+**A bare block carries a label**, because a block with no heading cannot be told from a continuation of the previous statement. A bare block exists so that something runs on exit, and that becomes the name (`release_on_exit` / `while_locked`). A meaningless name (`scope1`) hides the reason. `stmt` does not use `stmt_block` (`ksplc/kspl.kspeg`), so the message names the label to add (the cases `bare_block_without_label` in `ksplc/tests/parse/syntax.ksplb` and `break_to_no_name_label` in `ksplc/tests/negative/control.kspl`).
 
-**Why two forms keep their braces in `.kspl`**:
+**Why two forms keep their braces:** inside a call's arguments, a newline inside brackets does not become a block. An empty block has nothing that indentation could show, and no word such as Python's `pass` is added, since the braces already say it (Principles 1 and 6).
 
-| Form | Why it keeps its braces |
-| :-- | :-- |
-| **A closure with a multi-line body inside a call's arguments** | A newline inside brackets does not become a block |
-| **An empty block, and a block fitting on one line** | Indentation cannot say "there are no contents". No word such as Python's `pass` is added, since the braces already say it (Principles 1 and 6) |
-
-**Such a block needs no `;` on its last statement.** The heading word tells it apart from a value such as `T::{ … }`. The reader supplies the `;` before a `}` on the same line (`supply_block_end` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)), so no line break changes what a statement means. `ksplc fmt` leaves the `;` out.
+**Why a one-line block needs no `;` on its last statement:** the heading word tells it apart from a value such as `T::{ … }`. The reader supplies the `;` before a `}` on the same line (`supply_block_end` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)), so no line break changes what a statement means. `ksplc fmt` leaves the `;` out.
 
 ### Statements sharing a line
 
@@ -90,7 +83,7 @@ The rules are "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`
 * **The heading is the last statement's** (`seg_from` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)).
 * **A C-style loop header keeps its `;`** until the loop's block has closed, even where the header is continued onto a line of its own.
 
-**A `;` right after a one-line block's `}` is refused, with no code.** The `}` already ended the statement, so `};` would be a second spelling (Principle 6). Writers from C or JavaScript, and models, type it by habit, so the message names the cause and the fix. A `catch` block ends no statement, so its `;` stays.
+**Why a `;` right after a one-line block's `}` is refused:** the `}` already ended the statement, so `};` would be a second spelling (Principle 6). Writers from C or JavaScript, and models, type it by habit, so the message names the cause and the fix.
 
 **A program with no file is read as a file named `-` in the current folder** (`ksplc run -` or `--eval=`; "2.5 Running as a script (ksplc run)" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). A relative import then resolves from where the command runs.
 
@@ -106,9 +99,7 @@ The rules are "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`
 
 **So the `switch`'s line takes no terminator and goes on into a `case` at its own column** (`arms_follow` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)). A comment written over the first arm stays there.
 
-* **A `case` indented under the `switch` is refused** ("Do not align with Python" below), and the Note says where the arms go (the cases `switch_arms_in_a_block` in `../ksplc/tests/parse/syntax.ksplb` and `laid_switch_case_indented` in `../ksplc/tests/negative/laid.kspl`).
-* **A shallower `case` belongs to the level outside** ("How a column is read").
-* **Only a `case` continues it**, so a `default` standing first is a compile error.
+**A `case` indented under the `switch` is refused for the reason in "Do not align with Python" below.** Its Note says where the arms go (the cases `switch_arms_in_a_block` in `../ksplc/tests/parse/syntax.ksplb` and `laid_switch_case_indented` in `../ksplc/tests/negative/laid.kspl`).
 
 **The one-line form is still read, and `ksplc fmt` writes the arm below.** **An empty arm (`case .a {}`) keeps a line of its own too**, so the next arm stays findable.
 
@@ -218,7 +209,7 @@ flowchart LR
 
 ### Carrying a long string literal across lines
 
-End a line inside a string with `\` to continue the string on the next line. The `\`, the line break and the next line's indent add no bytes ("Escape sequences" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+End a line inside a string with `\` to continue the string on the next line. The `\`, the line break and the next line's indent add no bytes ("2.3.4 A `\` at a line's end continues a string" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
 
 **A string literal is the one thing on a line a formatter cannot narrow by itself**, because its bytes are the program. With the `\` seam, indenting moves no byte, and `ksplc fmt` lays a literal out like anything else. What is carried on stands one step in from its opening line.
 
@@ -244,36 +235,25 @@ priv const HELP: U8[] = "usage: tool [options] <file>, \
 
 ### The documentation a declaration carries
 
-A documentation comment starts with `//<` and stands on the line of what it describes, or just below it. Its first line is a one-line summary, and the detail starts on the next line.
-
-```kspl
-priv struct Window //< a rectangle on the screen
-    //< Its origin is the top-left corner, and every size is in pixels.
-    width: I32 //< how wide it is
-    height: I32 //< how tall it is
-```
-
-**One marker, `//<`, describes the thing on its own line, and the first line of its run is the summary.** Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md). `Rule_prof` in `lib/kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, the description below).
+**One marker, `//<`, describes the thing on its own line, and the first line of its run is the summary.** The rules, the anchor shape and a wrapped head among them, are "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why. `Rule_prof` in `lib/kspeg/engine.kspl` shows a summary with its detail below. The variant `compile` of `Mode` in `ksplc/cli.kspl` shows the anchor shape.
 
 **The description sits behind the thing it describes.** So no name is written twice, and a renamed parameter takes its description along. Prose in front would push the signature down, which is why Python puts its docstring after the `def` line.
 
-**A run stands one step in** from the line it continues. (A *run* is a description's lines of `//<` one after another.) At the declaration's column, it would look like a comment over the *next* declaration. Where the declaration has braces, the run goes inside them. The linter holds this (`[H0807]`).
+**A run stands one step in**, since at the declaration's column it would look like a comment over the *next* declaration. The linter holds this (`[H0807]`).
 
-**The line boundary ends the summary.** A first sentence cut at a `.` is a guess that lands at `e.g.` or inside version numbers. An empty line after the summary is a separator the writer must remember. So the summary is the run's first line. `ksplc fmt` removes an empty `//<` right below a summary; further down, one parts two paragraphs of the detail.
+**The line boundary ends the summary.** A first sentence cut at a `.` is a guess that lands at `e.g.` or inside version numbers. An empty line after the summary is a separator the writer must remember. The summary says what the thing is, since the hover, the completion list and `ksplc doc` open with it.
 
-**The summary is one line that says what the thing is.** The hover, the completion list and `ksplc doc` open with it. The compiler warns about a summary that opens with a `Caution:` or `Note:` label (`[W0213]`, in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
+**A wrapped head's run hangs off its closing line**, or it would read as the last parameter's.
 
-**Where the head closes on a later line, the run hangs off that line**, or it would read as the last parameter's.
-
-**A description longer than one line stands below a mark with no text.** One that fits stays on the line. Length decides the shape, so it is one rule. `ksplc fmt` moves a description that does not fit into the anchor shape, never the reverse ("The formatting settings" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+**Length alone decides between the two shapes, so it is one rule.** `ksplc fmt` moves a description that does not fit into the anchor shape, never the reverse ("The formatting settings" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 **The run is joined onto one line** in the record of the published API ("The published API is recorded in the repository" in [`DESIGN-repository.md`](DESIGN-repository.md)). The record and the hover read the same words whichever shape the source has. A full stop is put in after a summary that does not already close a sentence.
 
-**A continuation that continues nothing, and an anchor with nothing under it, are refused.** The first reaches neither the hover nor the record, and the second publishes an empty entry (Principle 5). Both are compiler warnings (`[W0209]` and `[W0210]` in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), asked through the reader's own function (Principle 4).
+**A continuation that continues nothing, and an anchor with nothing under it, draw a warning.** The first reaches neither the hover nor the record, and the second publishes an empty entry (Principle 5). Both are asked through the reader's own function (Principle 4).
 
 **No third marker is added for a description below the code.** Written the wrong way round, a "the code above me" mark attaches the description to the neighbouring field, and nothing reports it (Principle 8).
 
-**`///` is refused rather than read, and `//<` is not respelled `///` either.** Every product with `///` points it at the thing *after* it, so a writer from Rust, Swift, C# or Zig types it before the declaration. Read as the contents, the sentence would land on the wrong thing. Read as nothing, it would vanish. Given `//<`'s meaning, the same spelling would point the opposite way. So `///` is a compiler warning (`[W0212]`), as is `//!`. Four slashes or more make an ordinary comment.
+**`///` is refused rather than read, and `//<` is not respelled `///` either.** Every product with `///` points it at the thing *after* it, so a writer from Rust, Swift, C# or Zig types it before the declaration. Read as the contents, the sentence would land on the wrong thing. Read as nothing, it would vanish. Given `//<`'s meaning, the same spelling would point the opposite way. So the compiler warns about `///` and does not read it.
 
 **Three things hold this up, none of them new grammar.**
 
@@ -314,3 +294,25 @@ The run does not restate the file's name, which `ksplc doc` already shows beside
 **An enum of another file or package is left out.** Its `impl` would hold another package's reading of it, against the reference direction ("What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md)).
 
 **The language allows both shapes; the linter reports the free function** (`[I0503]`, in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)). It reports only an enum taken by value as the first parameter; review judges a pointer or a slice of it (Principle 8).
+
+### Every item in a declaration block ends with `;`
+
+**Inside `{ … }`, every field and every enum value ends with `;`, the last one too. A `,` there is an error.** So a block has exactly one mark that says "end". The rule is "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
+
+```ksplb
+enum Color {
+    red;
+    green;
+}
+
+struct Point {
+    x: I32;
+    y: I32;
+}
+```
+
+**`,` keeps its own job**: it separates the items of a list within one notation. So the trailing `,` rule ("2.4 Trailing commas" in [`SPEC-programming-language.md`](SPEC-programming-language.md)) applies only to lists.
+
+**The C family's shape is not taken.** There, `,` separates names inside an `enum` that is one declaration closed by `;`. KSPL's `enum` sits at the level of `struct`, with no closing `;`. The formatter never keeps two items on one line, so a `,` has no job there either.
+
+**The rejection of a `,` between enum values or after a struct field carries a Note stating the rule** (`forbidden_spelling_hint` in [`../ksplc/parse/syntax_msg.kspl`](../ksplc/parse/syntax_msg.kspl)).

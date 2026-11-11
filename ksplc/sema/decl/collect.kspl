@@ -18,7 +18,6 @@ import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/name" as _sema_decl_name
-import "ksplc/sema/decl/reflect" as sema_decl_reflect
 import "ksplc/sema/decl/registry" as sema_decl_registry
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/suite" as sema_decl_suite
@@ -70,8 +69,8 @@ fn run(r: Ast_node$@, c: Sema_ctx$@, parser: kspeg.Target$@): Void!Sema_error //
     if c.has_error()
         throw .analysis_failed
     collect_early_values(r, c)!
-    synthesize_reflect_bodies(r, c)
-    // Pass 2a'': each suite's `run`, for 2b's reason, as for 2a'.
+    // Pass 2a': each suite's `run`. **It must come after 2a**: resolving its types instantiates
+    // generics. **It must come before 2b**, which registers the method it adds.
     c.synthesize_suite_runs(r, parser)
     if c.has_error()
         throw .analysis_failed
@@ -88,16 +87,6 @@ priv fn check_all_attributes(r: Ast_node@, c: Sema_ctx$@) //<
     for top_node in r.children
         c.set_current_file(top_node.unwrap_top_level().loc.file())
         sema_decl_attrs.check_attributes(top_node, c)
-
-priv fn synthesize_reflect_bodies(r: Ast_node$@, c: Sema_ctx$@) //<
-    //< Pass 2a': the body of each `impl X: Reflectable {}`
-    //< Caution: **It must come after 2a** (for 2a's reason): resolving the fields' types
-    //< instantiates generics, and an instantiated `List<|T|>` would lack its methods. **It must
-    //< come before 2b**, which registers the synthesized impl's methods.
-    synth_consts: = c.synthesize_reflect_impls(r)
-    for synth_decl in synth_consts
-        synth_decl.declare_var_syms(c, .file_private)
-    synth_consts.free()
 
 priv fn check_visibility_widths(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
     //< Pass 5: whether a member's visibility is wider than the enclosing one

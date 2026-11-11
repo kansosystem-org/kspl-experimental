@@ -59,11 +59,13 @@ The price: a scope is a string of names, separated by spaces. A name no declarat
 
 `panic` (`std/lang`) flushes standard output before `abort()`. But into a pipe (CI's log collection, `| tee`), the C library writes only when its buffer is full. An abnormal exit, death by a signal included, loses everything not flushed. So **the log's last line is not necessarily where the program died**.
 
-So a program whose main clue is how far it got, such as the test harness, calls `io.set_line_buffered()`. Its flush at each newline means the same on both backends and every platform. `setvbuf`'s `_IOLBF` would not: it is 1 on glibc and macOS, and 0x40 on MSVC's UCRT.
+So a program whose main clue is how far it got, such as the test harness, calls `io.set_line_buffered()` (the next section).
 
-Caution: **The code that keeps the panic record must not itself crash.** On freestanding, `panic` sets three things aside in `.noinit_panic`, a region that start-up does not clear. They are the message, the stack pointer (SP) and a piece of the stack.
+### A freestanding panic leaves a record for the next start
 
-`kspl_get_sp` returns 0 where an architecture lacks it, and a read of address 0 would crash with no word about why. So when `sp == 0`, `panic` does not read the stack. Otherwise, `kspl_panic_stack_words` asks the port how many words are readable, by default zero. `take_panic_record` returns the actual count as `stack_len`. So a panic inside an interrupt cannot read past the end of RAM either.
+On freestanding, `panic` sets its message, the stack pointer and a piece of the stack aside in RAM that start-up does not clear. After a warm reset, `std/panic_record` reads it once.
+
+Caution: **The code that keeps the record must not itself crash.** `kspl_get_sp` returns 0 where an architecture lacks it, and a read of address 0 would crash with no word about why. So when `sp == 0`, `panic` does not read the stack. Otherwise, `kspl_panic_stack_words` asks the port how many words are readable, by default zero. So a panic inside an interrupt cannot read past the end of RAM either.
 
 ### Standard output has one buffer, the C library's
 
@@ -110,6 +112,8 @@ The OS, not a check of the language, stops a write through a null pointer or a r
 * **An overflow handler needs stack room reserved before the stack runs out.** POSIX uses a separate 64 KiB stack. Windows reserves 64 KiB on the thread's own stack with `SetThreadStackGuarantee`. The runtime prepares the main thread and each `std/thread` thread. A thread started by C code is not prepared, so its overflow can end with 139 and no line.
 * **Freestanding has no OS to stop the access**, so nothing here applies to it.
 
+The implementation is "A crash says what happened" in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c). The check is `make test-runtime` (the `crash_*` cases in `ksplc/tests/runtime/stops.kspl`).
+
 ### A signal handler stays set
 
 `sys.set_signal_handler` sets a handler that runs at every delivery of its signal. C's `signal()` does not promise that. Under `-std=c99` on glibc, and always on Windows, the first delivery puts the default back. A second signal then ends the program, and setting the handler again inside it leaves a gap.
@@ -118,7 +122,7 @@ The OS, not a check of the language, stops a write through a null pointer or a r
 * **A read or write that the signal cuts short goes on** (`SA_RESTART`). The runtime makes its own calls again after a signal, but C code that the program calls is out of its reach. Without it, a signal would make `fread` or a C library's read fail.
 * **`std/libc` does not publish C's `signal()`.** It would be a second way to set a handler, and the one that loses it.
 
-The implementation is "A crash says what happened" in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c). The check is `make test-runtime` (the `crash_*` cases in `ksplc/tests/runtime/stops.kspl`).
+The implementation is "A handler the program sets stays set" in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c). The check is `test_signal_handler_stays` in [`../tests/net_test.kspl`](../tests/net_test.kspl), which `make debug` runs.
 
 ### A run of checks goes past failures, naming them last
 
@@ -156,7 +160,6 @@ Why a walk that walked nothing fails is at `check_list` in `std/verdict.kspl`. W
 | Kind | What reads it | What must hold besides an end |
 | :-- | :-- | :-- |
 | `json` | `json.parse` | The value is written (`dump`, flat and indented) and read back. The result `equals` the one read, and is written the same again |
-| `json-struct` | `json_struct.into_struct`, into a struct with a field of each kind it walks. That is integers of each width and sign, an `F32`, a `Bool`, a string, a nested struct, lists and options | The struct is written (`from_struct`) and read back into another, then written the same again. Only this second trip must be equal: the first drops unknown keys and rounds an `F32` |
 | `url` | `url.decode_component`, `url.parse_query` | A component, encoded (`url.encode`), decodes to itself. The pairs, encoded into a query, parse back to the same pairs in order |
 | `base64` | `base64.decode` | The bytes, encoded, decode to themselves |
 | `regex` | `Regex.compile`, then matching | `is_match`, `find` and `find_all`'s first match agree. A search visits no more states per byte than the program holds, plus one |
@@ -174,7 +177,7 @@ POSIX ends a process that writes to a pipe whose reader has closed (SIGPIPE's de
 
 | Where the write goes | What happens when the reader is gone |
 | :-- | :-- |
-| A child's standard input (`Piped_child.write`) | Returns false |
+| A child's standard input (`Piped_child.write`) | Fails as `Write_end.closed` |
 | A socket (`std/net`'s send) | Returns a failure |
 | The program's own standard output | The program ends quietly, as `prog \| head` expects |
 | Anything, inside a child the program starts | SIGPIPE's default is back, so the child dies as usual |
@@ -226,6 +229,9 @@ The implementation is "Standard output that could not be written fails the exit"
 | What is wanted | The function | Where the output goes |
 | :-- | :-- | :-- |
 | Run it and collect everything | `run_capture(argv, cwd, timeout_ms, cap, arena)` | The parent's memory (cut at the cap) |
+| Run it, collect its standard output, and fail on any exit but 0 | `run(argv, cwd, timeout_ms, cap, arena)` | The parent's memory (cut at the cap) |
+| Run it where the parent writes, and wait | `spawn_wait(argv, cwd)` | Inherited (the terminal) |
+| Start it where the parent writes, without waiting | `spawn_async(argv, cwd)` + `wait()` | Inherited (the terminal) |
 | Run many side by side and collect everything | `run_many(jobs, …)` | Files in a directory (the section above) |
 | Keep it running | `spawn_redirect(argv, cwd, out_path, err_path)` | Files the caller named |
 | Run a helper only while the starter runs, stopped by the same Ctrl+C | `spawn_beside(argv, cwd, out_path, err_path)` | Files the caller named |
@@ -248,7 +254,7 @@ sequenceDiagram
     Note over P,C: the parent waits for the child, the child waits for the parent
 ```
 
-**Why only the functions that use a pipe take a timeout**: only a pipe's buffer can fill. So the timeout is an argument of the read, and of `spawn_feed`, and its expiry comes back as a value. It also tells a slow child from a dead one, which returns 0. The time limit of `run_capture`, `run_many` and `spawn_limited` is another thing: it bounds the child's whole run.
+**Why only the functions that use a pipe take a timeout**: only a pipe's buffer can fill. So the timeout is an argument of the read, of the write, and of `spawn_feed`, and its expiry comes back as a value. It also tells a slow child from a dead one, which returns 0. The time limit of `run_capture`, `run_many` and `spawn_limited` is another thing: it bounds the child's whole run.
 
 **A helper that lives as long as its caller shares the caller's standard error** (`spawn_piped_shared_err`). The caller waits on the answer, so nothing would read a third pipe in that time. Once full, it would stop the helper, and a helper that dies would leave its last words in it. Shared, they reach the caller's log as they come.
 
@@ -274,7 +280,7 @@ After `ended` or `timed_out`, a wait gives none at once. It has no `kill`: its l
 
 **The split is on the KSPL side.** C starts a child one way, `kspl_proc_start`, given the arguments, the working directory, and a pipe or a file for each standard stream. The functions combine it in KSPL with `kspl_proc_poll` / `kspl_proc_read` / `kspl_proc_wait` / `kspl_proc_kill`, for the cap, the timeout and the kill.
 
-Caution: **Do not add a per-purpose way to start a child to C.** C is written twice, for POSIX and for Windows, and the Windows copy cannot run locally. C keeps only what needs the OS's API: `fork` / `CreateProcessW`, pipes, Windows's command-line quoting, and the UTF-16 conversion.
+Caution: **Do not add a per-purpose way to start a child to C**, for the reason in "How std reaches the operating system" in [`DESIGN-core.md`](DESIGN-core.md). C keeps only what needs the OS's API: `fork` / `CreateProcessW`, pipes, Windows's command-line quoting, and the UTF-16 conversion.
 
 ### A bare program name is looked up in PATH alone
 
@@ -429,11 +435,7 @@ Every wait that std takes in milliseconds reads its number the same way. Such wa
 
 **There is no "wait for good".** A wait exists so that a peer that goes silent comes back as a value. A deadline counted down (`deadline - now`) can go negative on a slow machine, and then means "the time is up", never "no limit".
 
-Caution: **Read the sign in one place, the runtime's entry** (`kspl_wait_ms`). Read at each OS call, one number gave three behaviours, so a program that worked on one OS hung on another:
-
-* `-1` waited for good in POSIX `poll()`.
-* It waited 49 days through Windows' unsigned tick comparison.
-* POSIX's write deadline did not read it at all.
+Caution: **Read the sign in one place, the runtime's entry** (`kspl_wait_ms`). Each OS call reads a negative number its own way: `poll()` waits for good, and Windows's unsigned tick comparison waits 49 days.
 
 ## Files and paths
 
@@ -464,7 +466,7 @@ With only the outbound calls wide, `sys.args()[0]` is invalid UTF-8 on a child's
 
 **One gap remains that the wide API cannot close: a receiving program with a narrow `main`.** Its CRT moves the UTF-16 command line to the current code page to build `argv`. A character that the code page cannot represent collapses into `?`, so the tool fails with `Invalid argument` (under CP1252, `かんそ` becomes `???`). KSPL's own calls are wide, but `cc` and `ld` are third-party tools, and mingw's GNU binutils takes a narrow `main`.
 
-**So a third-party tool is given relative paths, with their base directory as `cwd`.** The OS sets `cwd` without going through `argv`, so non-ASCII in it survives. That is why all five functions that start a child take a `cwd`, `spawn_wait` / `spawn_async` included. CMake's Ninja generator makes the same move.
+**So a third-party tool is given relative paths, with their base directory as `cwd`.** The OS sets `cwd` without going through `argv`, so non-ASCII in it survives. That is why every function that starts a child takes a `cwd`, `spawn_wait` / `spawn_async` included. CMake's Ninja generator makes the same move.
 
 **The C standard's path functions are not used.** `fopen` and `rename` are narrow, so `std/fs`'s `rename_path` and `std/io`'s `open` go through `kspl_rename_cstr` / `kspl_fopen_cstr`. `std/libc`'s `fopen` / `rename` carry a mark that says not to use them; they stay as companions of `fclose` / `fread`.
 
@@ -472,7 +474,7 @@ With only the outbound calls wide, `sys.args()[0]` is invalid UTF-8 on a child's
 
 Caution: **Nobody can notice it on POSIX.** What fails is the Windows job or a user's machine. `std/net`'s `shut_write` goes through `kspl_net_shutdown_write`, which keeps even the constant (`SHUT_WR` / `SD_SEND`) in one place in C.
 
-**A new `kspl_*` function has its body in the compiler's C runtime (`ksplc/gen/runtime/`).** The seed must carry that body before `std/` calls it. Otherwise Stage1, the compiler that the seed builds, fails to link on an undefined symbol.
+**A new `kspl_*` function has its body in the compiler's C runtime (`ksplc/gen/runtime/`).** The seed must carry that body before `std/` calls it, or the compiler that the seed builds fails to link ("`std` cannot be separated from `ksplc`" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md)).
 
 **Where the environments answer one call differently, one answer is chosen for all.** `rename` onto an existing destination replaces it on POSIX, and fails with `EEXIST` in UCRT, which breaks "write under another name, then replace". `rename_path` is contracted to replace, through `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on Windows. `MOVEFILE_COPY_ALLOWED` is not added: POSIX fails with `EXDEV` across volumes, and a copy is not atomic.
 
@@ -515,7 +517,7 @@ Note: **A child's working directory stays under 260**, since the OS keeps a proc
 
 **An empty path is the root itself.** A web server and a model's tools both name the root that way.
 
-Caution: **Do not check the path's parts again in the caller.** A second check drifts from this one. Two programs here once each fixed the same Windows hole four times, one form at a time. A form found later is added here once.
+Caution: **Do not check the path's parts again in the caller.** A second check drifts from this one, and each caller then fixes each hole again. A form found later is added here once.
 
 **`fs.lookups()` counts each time the process asks the OS what stands at a path**: a `stat`, a link check, a long name or a listing. So a test holds the door's cost to the path's names by a count, which is the same on every machine. A time is not.
 
@@ -540,6 +542,8 @@ Caution: **Do not look at `FILE_ATTRIBUTE_REPARSE_POINT` alone on Windows.** One
 | -1 | Cannot tell | Refuses |
 
 The LLVM backend's degenerate case is -1 too. Made 0, it would land on the unsafe side.
+
+**`fs.lies_under(root, path)` answers another question**: whether a path the program itself holds, such as a file named in its settings, lies in a folder. It compares the steps and follows no link, so it is no door for a path from outside.
 
 ### A hidden name is found by its long name too
 
@@ -747,6 +751,48 @@ A lock kept in memory that the program allocated by hand is freed by hand too, b
 
 `broadcast` is for a change that every waiter must see, such as a queue that closes. With `signal` alone, the others sleep on past it.
 
+### A channel is bounded, and its close is a value
+
+`channel.Channel<|T|>` passes values between threads. Any number of threads send, and any number receive. Each value goes to one receiver, in the order sent. It is built from one `Mutex` and two `Cond_var`s, so it adds nothing to the runtime. It stands in `std/channel`, apart from `std/thread`, so that a program using threads alone does not bring `std/mem` along.
+
+| Call | What it does | How it can fail |
+| :-- | :-- | :-- |
+| `Channel<\|T\|>(capacity, arena)` | Takes the slots for `capacity` values, once | `Thread_error`, as a lock does; a capacity below 1 stops the program |
+| `send(v)` / `send_for(v, timeout_ms)` | Stores `v`, waiting while the channel is full | `Send_refused.closed(v)` or `.timed_out(v)`, which give `v` back |
+| `receive()` / `receive_for(timeout_ms)` | Takes the oldest value, waiting while there is none | `Receive_end.closed` once closed and empty, or `.timed_out` |
+| `close()` | Ends sending, and wakes every waiter | Never; a second close does nothing |
+| `free()` | Releases what is left, then the slots and the OS objects | Never |
+
+**Why it is always bounded**: a queue with no limit lets a fast sender fill memory while a slow receiver falls behind. Nothing reports it until the program runs out. A full channel makes the sender wait, so the slow side sets the pace. A program that wants room for a burst names the size.
+
+**Why the capacity is at least 1**: with no slot, every send waits for a receiver at that moment. A thread that sends and then receives on its own channel waits for ever, with nothing said.
+
+**Why the slots are taken once, in `new`**: a send never allocates, and the memory a channel uses is known when it is made. The arena follows "A null arena is the heap, for every function" in [`DESIGN-core.md`](DESIGN-core.md#a-null-arena-is-the-heap-for-every-function). Only the creating thread touches it, so an arena that is not thread-safe still serves.
+
+**Why the end is a `close()`, not the last sender's drop**: no KSPL type frees itself, so nothing can notice that the last sender has gone. The program says when sending ends.
+
+* **Any thread can close it, and closing again does nothing.** A receiver can close it to stop the senders. A crash on a second close would make each side ask who closed first, which no check can answer before the next line runs.
+* **A send after the close fails, and gives the value back.** A value that owns something is not lost on the way, and the sender decides what to do with it. A crash would turn a race between a close and a send into a stop.
+* **A receive takes what is left before it fails as `closed`.** So a worker's loop ends when the work is done, with no marker value sent once per worker: `v: = ch.receive() catch` and then `break`.
+
+**Why the timed forms are separate calls**: `send` and `receive` wait for good, as `Cond_var.wait` does, since the other side is a thread of this program. `send_for` and `receive_for` read their limit as every wait in std does ("A wait's sign means one thing everywhere" above), so 0 looks once. There is no third `try_` form for that. The limit is on the monotonic clock, as `wait_for`'s is.
+
+**Why `closed` and `timed_out` share one enum for both forms**: the file then fails in one shape. A blocking call never answers `timed_out`, and its summary says so.
+
+**What it may hold**:
+
+* **A counted value (`Arc<|T|>`) moves in with its count and out with it.** `free()` releases each one left inside.
+* **A move-only value** (a `Thread`, a `File_stream`) moves in and out, never copied. What such a value owns is not freed by `free()`: close, receive until `closed`, and free each one.
+* **An `Rc<|T|>` is refused where the channel is handed to `Thread.spawn`**, by the check that refuses an `Rc` reaching another thread.
+
+**Its owner frees it once no thread uses it**: join the threads first, then call `free()`. As a lock does, it is move-only, and threads share it through a pointer or an `Arc`.
+
+**Not offered**:
+
+* **A `select` over several channels.** It needs a waiter that more than one condition variable can wake, which the OS's condition variable does not give. Several producers can share one channel instead.
+* **A count of values in flight beside the queue** (a `task_done` / `join` pair). One call too many or too few corrupts it with nothing said. Joining the workers, or a second channel for the answers, says the same.
+* **`len()` for a decision.** Another thread can change the length at once, so it suits a report.
+
 ### Threads and the reactor are both kept
 
 The *reactor* (`std/reactor.kspl`) is one thread that watches many non-blocking sockets, and runs the code for whichever is ready.
@@ -756,7 +802,7 @@ The *reactor* (`std/reactor.kspl`) is one thread that watches many non-blocking 
 | Where it suits | CPU-bound parallel work. A call of a blocking API as it is. Few connections, a thread for each | Many connections (hundreds or more), without a stack for each. Waiting that is almost all I/O |
 | The cost | A stack per connection. Shared state needs a lock | One thread, so no synchronization. But the caller must make the socket `set_nonblocking()`. Its failure comes back as `!Net_error`, which the compiler refuses to see dropped |
 
-Both can work together: the reactor accepts, and a worker thread takes heavy work.
+Both can work together: the reactor accepts, and a worker thread takes heavy work from a `channel.Channel`.
 
 ### A deep walk asks where its stack ends
 
@@ -834,7 +880,7 @@ Caution: **Do not fold across that line.** It decides whether the caller fixes t
 
 **Do not pass the same option everywhere for uniform code.** It would share the socket on Windows. The exclusive option sometimes cannot bind again until accepted connections have fully closed, which is visible and fixable.
 
-**KSPL caches no resolver answers**: each `connect` resolves its name again, so a changed address is not missed. An address buffer shorter than `addr_text_max` is refused rather than truncated, since `2001:db8::1` cut short looks like another address.
+**KSPL caches no resolver answers**: each `connect` resolves its name again, so a changed address is not missed. An address buffer shorter than `ADDR_TEXT_MAX` is refused rather than truncated, since `2001:db8::1` cut short looks like another address.
 
 ### A response's body is read piece by piece
 
@@ -868,30 +914,12 @@ Caution: **Drop the broken header from the buffer then.** Kept, it makes every l
 
 **Where a read ends must not change the frames.** A pipe splits a message anywhere, and the same bytes must give the same frames up to the first broken one. Two rules follow:
 
-* **A head's limit counts the head's own bytes**: its end is looked for only within `max_head_bytes`. Otherwise a head past the limit would be read when it came in one read, and broken a byte at a time.
+* **A head's limit counts the head's own bytes**: its end is looked for only within `MAX_HEAD_BYTES`. Otherwise a head past the limit would be read when it came in one read, and broken a byte at a time.
 * **Two lengths that differ give no length.** Readers differ on which `Content-Length` line counts, so the peer could cut the frame elsewhere. The frame is `broken`, as `std/http` refuses the same head. The same length named twice is read.
 
 **Why a frame's body is bound by a size**: otherwise a peer that declares 4GB starts an endless wait. A short timeout on each read does not prevent that.
 
 **No second frame, writable by hand, is held.** KSPL assembles the frame in KSPL too (`frame_into`), so its tests need none.
-
-### The field table holds widths as data, nesting by pointer
-
-`std/reflect` describes a struct as a table of its fields, which walkers such as `std/json_struct` read at run time.
-
-**Nesting is a table that points at a table**, since a flattened table never ends on a recursive type such as `Tree { left: Tree$@ }`. Keys nest with it (`{"cold":{"ms":1}}`), never flat (`"cold.ms"`).
-
-**A container (`List<|T|>`) can be described because `ptr` / `len` / `cap` / `arena` are `pub`**, so `offsetof` gives their positions. They do not depend on `T`, so the walker asks one representative instantiation. An element's stride is `sizeof(T)`.
-
-**A number's width is `Field_extra.width`, not part of the kind.** The kinds are signed integer, unsigned integer and floating point, and the width is the declaration's `sizeof`. So `Sz`, whose width varies with the environment, fits as it is. A kind per width (ten, from `i8` to `f64`) would swell the `switch` in every walker (Principle 6 in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)). So only `std/reflect`'s read and write functions branch on width.
-
-**Signed and unsigned are separate kinds for reads**, since a `U32`'s `0xFFFFFFFF` read with sign extension is `-1`. A write only truncates to the width, so one path serves both. `Sz` is the signed kind, as the type is.
-
-**Whether a value fits is asked apart from its write** (`fits_int`, from the kind and the width). Truncated, 300 becomes 44 in a `U8`, so a walker that takes values from outside refuses it instead. Kept in `std/reflect`, the ranges stand in one place for every walker.
-
-**The JSON walker uses one value dispatcher in each direction.** An optional's contents and a list's element use a local copy of the field descriptor, with the element's kind and width. The object walk handles absent keys and optional tags before the dispatch. So a missing optional becomes `.none`, while an explicit `null` fails without a change to its tag.
-
-**Other encoders spell out every width** (serde's `serialize_i8` … `serialize_f64`), since static dispatch puts the width in their API. KSPL's table is data walked at run time, so it holds the width as a number. A rounded width, as Jackson's `NumberType` gives, loses `short` versus `int`.
 
 ### JSON's numbers hold integers and decimals separately
 

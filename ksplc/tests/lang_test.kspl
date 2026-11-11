@@ -137,36 +137,15 @@ impl<|T|> Wrapped<|T|>: Sub<|Wrapped<|T|>, Wrapped<|T|>|> //< `-` on every insta
     fn sub(r: Self@, rhs: Self): Self //< the difference of the held values
         return Self::{ .val = r.val - rhs.val }
 
-impl I32: Cast<|Wrapped_i32|> //< `Wrapped_i32::x` for an `I32`
-    fn cast(r: Self$@): Wrapped_i32 //< the same value, held in the struct
-        return Wrapped_i32::{ .val = r$ }
-impl U8: Cast<|Wrapped_u8|> //< `Wrapped_u8::x` for a `U8`
-    fn cast(r: Self$@): Wrapped_u8 //< the same value, held in the struct
-        return Wrapped_u8::{ .val = r$ }
+fn test_struct_operators()
+    verdict.start("[Operators] `+` and `-` on a generic struct test...")
 
-fn test_struct_operators_and_cast()
-    verdict.start("[Operators] `+`, `-` and `Type::value` on a generic struct test...")
-
-    sum: = Wrapped_i32::10 + Wrapped_i32::20
+    sum: = Wrapped_i32::{ .val = 10 } + Wrapped_i32::{ .val = 20 }
     assert(sum.val == 30, "Wrapped_i32: 10 + 20 must equal 30 through `+`")
-    diff: = Wrapped_u8::100U8 - Wrapped_u8::30U8
+    diff: = Wrapped_u8::{ .val = 100 } - Wrapped_u8::{ .val = 30 }
     assert(diff.val == 70, "Wrapped_u8: 100 - 30 must equal 70 through `-`")
 
-    // `I32` and `U8` implement `Cast`, so `Dest::src` calls cast() (see
-    // ksplc/sema/body/postfix.kspl), from a literal, a variable and an expression.
-    cast_lit: = Wrapped_i32::123
-    assert(cast_lit.val == 123, "Wrapped_i32::123 (literal receiver) must produce val=123")
-
-    src_i32: I32 = 7
-    cast_var: = Wrapped_i32::src_i32
-    assert(cast_var.val == 7, "Wrapped_i32::src_i32 (variable receiver) must produce val=7")
-
-    cast_expr: = Wrapped_u8::(200U8 - 50U8)
-    assert(cast_expr.val == 150, "Wrapped_u8::(expr) (non-lvalue receiver) must produce val=150")
-
-    verdict
-        .pass("a generic struct's operator impls and `Cast` work through the operators and through \
-            the prefix cast notation alike.")
+    verdict.pass("a generic struct's operator impls work through the operators.")
 
 // The selective import `import "path" { A, B };` (dropping the namespace).
 // A `typedef` taken by a selective import can be written as a type. **That this declaration
@@ -509,7 +488,7 @@ impl Counter
         return r.n
 
 // ==========================================
-// Default arguments (only a foldable constant).
+// Default arguments (a literal, or the caller's position).
 // ==========================================
 
 fn test_default_args() //<
@@ -542,15 +521,10 @@ fn test_default_args() //<
             value beats it.")
 
 priv struct Off_padded //< the types used in `offsetof`'s check
-    //< They cover all three: the alignment's padding, `#packed` and nesting.
+    //< They cover both: the alignment's padding and nesting.
     a: U8
     b: I64
     c: U8
-
-#packed
-priv struct Off_packed
-    a: U8
-    b: I64
 
 priv struct Off_nested
     h: U8
@@ -574,10 +548,6 @@ fn test_offsetof()
     assert(offsetof(Off_padded, c) == 16, "behind the padding it keeps counting on")
     assert(sizeof(Off_padded) == 24, "the whole size rounds the tail up too")
 
-    // `#packed` stops the padding, so there the offsets equal the accumulated sizes.
-    assert(offsetof(Off_packed, a) == 0, "the head is 0 under packed too")
-    assert(offsetof(Off_packed, b) == 1, "packed puts no padding in")
-
     // Nesting inherits the inner type's alignment.
     assert(offsetof(Off_nested, h) == 0, "before the nesting it is 0")
     assert(offsetof(Off_nested, inner) == 8, "the nesting rounds up to the inner type's alignment")
@@ -589,19 +559,14 @@ fn test_offsetof()
     assert(second == 8, "it crosses the padding in a constant's context too")
     assert(third == 16, "it keeps counting on in a constant's context too")
 
-    verdict.pass("the alignment's padding, #packed and nesting all answer the same position as C.")
+    verdict.pass("the alignment's padding and nesting both answer the same position as C.")
 
-// A generic struct's instance is filled as the same non-generic struct is. Its layout attributes
-// hold, and an array field's elements follow the binding (fill_struct_fields in
+// A generic struct's instance is filled as the same non-generic struct is. Its layout follows
+// the binding, and so do an array field's elements (fill_struct_fields in
 // sema/decl/registry.kspl).
-#packed
-priv struct Off_packed_of<|T|>
+priv struct Padded_of<|T|>
     a: U8
     b: T
-
-#align(16)
-priv struct Aligned_of<|T|>
-    a: T
 
 priv struct Array_field_of<|T|>
     items: T[2]
@@ -613,16 +578,15 @@ fn test_generic_struct_fills_as_plain()
 
     // Named only in `sizeof` / `offsetof`, an instance stays in the output (is_alive_for_backend in
     // lower/prune.kspl).
-    assert(offsetof(Off_packed_of<|I64|>, b) == 1, "#packed on a generic puts no padding in")
-    assert(sizeof(Off_packed_of<|I64|>) == 9, "#packed on a generic stops the tail padding too")
-    assert(sizeof(Aligned_of<|U8|>) == 16, "#align on a generic rounds the instance up")
+    assert(offsetof(Padded_of<|I64|>, b) == 8, "a generic's instance pads to its field's alignment")
+    assert(sizeof(Padded_of<|I64|>) == 16, "a generic's instance rounds its tail up")
+    assert(sizeof(Padded_of<|U8|>) == 2, "another instance is laid out by its own binding")
 
     $held: Array_field_of<|I32|> = ::{ .items = ::{ 1, 2 } }
     held.items[1] = 7
     assert(held.items[1] == 7, "a mutable binding writes an array field of a generic's instance")
 
-    verdict
-        .pass("#packed, #align and an array field's elements take effect on a generic's instance.")
+    verdict.pass("a generic's instance is laid out by its binding, and its array field is written.")
 
 priv fn const_arg_of<|const N: I32|>(): I32 //< the value its const type argument carries
     return N

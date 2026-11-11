@@ -6,7 +6,7 @@ import "ksmd/base/dates" { date_of, is_date, write_date, ymd_of }
 import "ksmd/base/marker" { is_decimal }
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { calculate }
-import "ksmd/calc/formula" { Positions, bind, find_table, shift_formula, write_formula }
+import "ksmd/calc/formula" { Positions, bind, closing, find_table, shift_formula, write_formula }
 import "ksmd/calc/value" as calculated
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
@@ -244,7 +244,8 @@ impl Editor
         //< It reads as `value_of` does. **A line break typed into a cell that held none turns Wrap
         //< text on**, in the same step, as Excel does. **What turns into a date or a link on its
         //< own is a step of its own** (`Auto_entry`), so `Ctrl`+`Z` right after gives back the
-        //< text as typed, as Excel's AutoCorrect does.
+        //< text as typed, as Excel's AutoCorrect does. So is a formula's missing ending
+        //< (`close_formula`).
         u: = ed.table_of(block)!
         defer scratch: = Arena(16 * 1024)
         had_break: = ed.cell_text(u, row, column, scratch).find_char('\n').is_some()
@@ -256,7 +257,11 @@ impl Editor
             edit.set_cell(ed.doc@, u, row, column, .text, text, ed.arena) catch why
                 throw .table(why)
         else
+            // Quoted text left open runs over the cell's end, so the file cannot hold it as typed.
+            // Only its closed form goes in then, as one step.
             ed.put_typed(u, row, column, text, scratch) catch why
+                if ed.close_formula(u, row, column, text)!
+                    return
                 throw .table(why)
         if !had_break && text.find_char('\n').is_some()
             edit.set_look(ed.doc@, u, row, column, .wrap, "on", ed.arena) catch why
@@ -264,6 +269,7 @@ impl Editor
                 throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
         if !dated && !linked
+            _closed: = ed.close_formula(u, row, column, text)!
             return
         turned: = capture(ed.doc@, scratch)
         if dated
@@ -273,6 +279,30 @@ impl Editor
             edit.set_link(ed.doc@, u, row, column, text, ed.arena) catch why
                 throw .table(why)
         ed.close_table_step(turned@, begin(ed.selection(), ed.arena))!
+
+    priv fn close_formula(ed: Self$@, u: Sz, row: Sz, column: Sz, text: U8[]): Bool!Refused //<
+        //< Adds a formula's missing `"` and `)` at its end, as a step of its own (`closing`), and
+        //< says whether it did
+        //< **Only a formula that reads with them takes them.** One that still does not read keeps
+        //< the text as typed, so the person finds their own mistake where they made it.
+        if row < 0 || !ed.auto.brackets || !text.starts_with("=")
+            return false
+        defer $end: = Str_builder()
+        closing(text, end@)
+        if end.slice().len == 0
+            return false
+        defer scratch: = Arena(16 * 1024)
+        whole: = scratch.text().s(text).s(end.slice()).take()
+        before: = capture(ed.doc@, scratch)
+        ed.put_typed(u, row, column, whole, scratch) catch why
+            throw .table(why)
+        defer values: = Arena(64 * 1024)
+        v: = calculate(ed.doc@, ed.today, values, ed.own).at(u, row, column)
+        if v.kind == .error && v.error == .syntax && v.why != .from_cell
+            ed.put_tables_back(before@)
+            return false
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+        return true
 
     fn put_typed(ed: Self$@, u: Sz, row: Sz, column: Sz, text: U8[], scratch: Arena$@):
         Void!Edit_error //<

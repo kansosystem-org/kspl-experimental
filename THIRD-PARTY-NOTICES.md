@@ -305,8 +305,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 | Freenove 4WD car kit | `lib/ksos/boards/freenove_4wd_pico/` | The vendor material itself. **It is a rule not to copy it in** ("Where the facts come from" in [`lib/ksos/docs/SPEC-board.md`](lib/ksos/docs/SPEC-board.md)). Only hardware facts, such as pin numbers, are used, read from the official repository |
 | Qwen | `lib/ksai/qwen.kspl`, `lib/ksai/examples/`, `lib/ksai/tools/` | The weights. Only the code that reads or converts them is present. **Whoever downloads and uses them follows Qwen's own license** |
 | Llama | `lib/ksai/examples/llama_engine/` | Meta's weights. The bundled `mini_llama.safetensors` is made here, with a vocabulary of 12 and two layers; only the shape is borrowed |
-| PyTorch / transformers / peft | `lib/ksai/tools/*.py`, `lib/ksai/examples/code_complete/*.py` | The packages themselves. The tools assume you install them on your own machine |
-| OpenSSL | `kstls/tls` | The library itself. Only the caller's declarations are present |
+| NumPy / gguf / llama-cpp-python | `lib/ksai/tools/*.py` | The packages themselves. The tools assume you install them on your own machine |
+| OpenSSL | `lib/kstls/tls.kspl`, `lib/kstls/tls_server.kspl` | The library itself. Only the caller's declarations are present |
 
 ## Binary files
 

@@ -25,7 +25,7 @@ Words used here: a *marker* is a token the template writes by its ID, such as `<
 | 16384, the default | 4.5 GiB | about 7 GB |
 | 32768 | 9 GiB | about 11.5 GB |
 
-**The default is 16384 tokens.** It leaves room on a machine of 16 GB, and holds a long search by ksagent. ksagent's own cap on a request, 192 KiB, is about 50 000 tokens, so a larger `--context` serves longer searches. `--context` cannot exceed the context the model was trained on, `<arch>.context_length`. On Linux the system gives the cache's memory as the conversation fills it, so a short conversation takes less.
+**The default is 16384 tokens.** It leaves room on a machine of 16 GB, and holds a long search by ksagent. ksagent's own cap on a request, 64 KiB, is about 22 000 tokens of Japanese, and its reply needs room too. So `--context=32768` serves ksagent's longest searches. `--context` cannot exceed the context the model was trained on, `<arch>.context_length`. On Linux the system gives the cache's memory as the conversation fills it, so a short conversation takes less.
 
 ## It listens on the loopback only
 
@@ -168,7 +168,7 @@ Caution: **A field in neither list goes unseen.** The reader asks only for the n
 
 ## What it does not do
 
-Besides several requests at once, other models and other addresses (the sections above), **it does not reach llama.cpp's speed**. The measurements are in [`lib/ksai/benches/README.md`](../benches/README.md). What stands in the way is "The kernels are spelt for the auto-vectorizer, not with intrinsics" in [`DESIGN-learning.md`](DESIGN-learning.md). The plan to pass it is the ksai section of [`docs/PLAN.md`](../../../docs/PLAN.md).
+Besides several requests at once, other models and other addresses (the sections above), **it does not reach llama.cpp's speed**. The measurements are in [`lib/ksai/benches/README.md`](../benches/README.md). What stands in the way is "The kernels are spelt for the auto-vectorizer, not with intrinsics" in [`DESIGN-learning.md`](DESIGN-learning.md). The ksai section of [`docs/PLAN.md`](../../../docs/PLAN.md) plans the graphics card instead.
 
 ## Further reading
 

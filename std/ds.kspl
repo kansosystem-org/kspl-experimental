@@ -226,6 +226,22 @@ impl<|T|> List<|T|>
             mem.drop_at(r.ptr + i - 1)
         r.len = 0
 
+    #ends_views
+    pub fn truncate( //< releases the elements from `n` on, keeping the first n and the capacity
+        //< An `n` at or past the length leaves the list as it is. O(elements released).
+        //< Caution: **Do not write `len` instead.** The slots past it keep their ARC counts, and
+        //< `free` no longer visits them, so they leak.
+        r: Self$@,
+        n: Sz, //< how many elements stay; a negative count stops the program
+        file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+        line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+    )
+        if n < 0
+            bounds_panic("List.truncate", n, r.len, file, line)
+        for r.len > n
+            r.len -= 1
+            mem.drop_at(r.ptr + r.len)
+
     #gives_view
     pub fn slice(r: Self$@): T$[] //< a view of every element, for a function that takes a slice
         //< Caution: It is borrowed. What ends it is "What invalidates a view" in

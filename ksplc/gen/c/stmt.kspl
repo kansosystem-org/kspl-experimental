@@ -16,7 +16,6 @@ import "ksplc/gen/c/root" as gen_c_root
 import "ksplc/sema/body/binary" as sema_body_binary
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/decl/eval" as sema_decl_eval
-import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
@@ -216,17 +215,8 @@ impl Ast_node
             // **Take the type from the memory, not the target expression**: a KSPL `I32@` can point
             // at memory genc typed `I32 *`.
             dst_type: = c.env.strip_const_deep(left_node.type_id)
-            $dst: = base_core.arena.text().s("*_kspl_dst_\{seq\}").take()
-            // Caution: **A field of a `#packed` struct gets a packed pointer.** A plain `T*` to it
-            // tells C the address is aligned, and the store faults on a Cortex-M0. **Mark it
-            // `may_alias` too**: without it, gcc -O2 assumes the wrapper never shares memory with
-            // the struct it points into, and loses the write.
-            if c.sema.packed_place_align(left_node) > 0
-                c.s("{ struct __attribute__((packed, may_alias)) { ").t(dst_type)
-                    .s(" v; } *_kspl_dst_\{seq\} = (void *)&(")
-                dst = base_core.arena.text().s("_kspl_dst_\{seq\}->v").take()
-            else
-                c.s("{ ").t(dst_type).s("* _kspl_dst_\{seq\} = &(")
+            dst: = base_core.arena.text().s("*_kspl_dst_\{seq\}").take()
+            c.s("{ ").t(dst_type).s("* _kspl_dst_\{seq\} = &(")
             left_node.emit_expr(c)
             c.s("); ")
             emit_assign_target(c, left_node, dst)

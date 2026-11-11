@@ -95,7 +95,7 @@ impl Sema_ctx
 
     fn restore_generic_args(r: Self$@, snapshot: List<|sema_session_state.Generic_arg|>@) //<
         //< Restores the bindings from the copy (the counterpart of snapshot_generic_args)
-        r.generics.args.len = 0
+        r.generics.args.clear()
         for i in Range.asc(snapshot.len)
             r.generics.args.push(snapshot.get(i))
 
@@ -126,7 +126,7 @@ impl Sema_ctx
         // Under suppression the queue is **discarded, not drained**: check_type_constraint would
         // queue again, and the loop would never end.
         if r.suppress_errors
-            r.mono.pending_constraints.len = 0
+            r.mono.pending_constraints.clear()
             return
         // Under this flag, check_type_constraint checks instead of queueing again.
         r.mono.draining_constraints = true
@@ -156,8 +156,8 @@ impl Sema_ctx
             r.set_current_file(prev_file)
             r.mono.current_inst_name = prev_inst
             r.generics.inst_site = prev_site
-            r.generics.args.len = saved_len
-        r.mono.pending_constraints.len = 0
+            r.generics.args.truncate(saved_len)
+        r.mono.pending_constraints.clear()
         for j in Range.asc(kept.len)
             r.mono.pending_constraints.push(kept.get(j))
 
@@ -183,7 +183,7 @@ impl Sema_ctx
         defer r.mono.draining_methods = false
         // **Hide the outer bindings. Restoring the length is not enough** (as above).
         outer_args: = r.snapshot_generic_args()
-        r.generics.args.len = 0
+        r.generics.args.clear()
         defer r.restore_generic_args(outer_args)
         // The depth returns to the outer one, not 0: this can run in the middle of a body.
         outer_depth: = r.generics.inst_chain_depth
@@ -268,4 +268,4 @@ impl Sema_ctx
             // The conformance too, or `impl<|T|> List<|T|>: Index...` stays unattached and `for x
             // in list` fails with "pointer indexing is forbidden" inside std.
             r.register_generic_trait_impls(real_id, inst, p.inst_name, true)!
-        r.mono.pending_methods.len = 0
+        r.mono.pending_methods.clear()

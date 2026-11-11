@@ -407,6 +407,12 @@ const ksagentMarkdown = (() => {
   const KEY = "ksagent.token";
   const LOOK_MS = 1000;
   const HINT_MS = 15000;
+  // A request past this many milliseconds gives up, and the page says so. **A slow model does
+  // not make a request slow**: ksagent writes the answer into files, and the page reads them each
+  // second (LOOK_MS). So a request waits only for the local server on this computer, and 15 s is
+  // ample. Without a limit, a server that takes a request and never answers stops the page with
+  // no word.
+  const WAIT_MS = 15000;
   const NAME = /^[\p{L}\p{N}._-]+$/u;
   const $ = (id) => document.getElementById(id);
   const ja = (navigator.language || "").startsWith("ja");
@@ -448,8 +454,14 @@ const ksagentMarkdown = (() => {
     }
     try { return sessionStorage.getItem(KEY) || ""; } catch (_) { return ""; }
   })();
-  const send = (url, how = {}) => fetch(url, { ...how, cache: "no-store",
-    headers: { Authorization: `Bearer ${token}`, ...(how.headers || {}) } });
+  // Caution: **Only the hold passes `wait` 0**: its request stays open on purpose (`hold`).
+  const send = (url, how = {}, wait = WAIT_MS) => fetch(url, { ...how, cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, ...(how.headers || {}) },
+    ...(wait > 0 ? { signal: AbortSignal.timeout(wait) } : {}) });
+  // What a request that failed means, in words a person can act on.
+  const failed = (e) => (e && e.name === "TimeoutError" ?
+    `The local server did not answer within ${WAIT_MS / 1000} seconds. The page asks again each ` +
+      "second." : `${e.message}. Start the page again with the command that opened it.`);
   const fileUrl = (p) => `/api/file?path=${encodeURIComponent(p)}`;
   async function digest(bytes) {
     const d = await crypto.subtle.digest("SHA-256", bytes);
@@ -472,7 +484,7 @@ const ksagentMarkdown = (() => {
     const holding = async () => {
       for (;;) {
         try {
-          const got = await send("/api/here");
+          const got = await send("/api/here", {}, 0);
           if (got.ok && got.body) {
             const r = got.body.getReader();
             while (!(await r.read()).done) { /* the wait is the hold */ }
@@ -538,7 +550,7 @@ const ksagentMarkdown = (() => {
   }
 
   const S = { name: "", ask: null, chat: null, live: null, refused: "", stamps: {},
-    askedAt: new Map(), shown: new Map(), problem: "", ready: false };
+    askedAt: new Map(), shown: new Map(), problem: "", late: "", ready: false };
   const path = (kind) => `${S.name}.${kind}`;
 
   async function refresh(kind, file) {
@@ -699,7 +711,7 @@ const ksagentMarkdown = (() => {
       S.shown.set(t.id, { from, node: turn });
     }
     const broken = [...(S.ask ? S.ask.broken : []), ...(S.chat ? S.chat.broken : [])];
-    $("notice").textContent = [S.problem, S.refused, ...broken].filter((x) => x).join("\n");
+    $("notice").textContent = [S.late, S.problem, S.refused, ...broken].filter((x) => x).join("\n");
     if (bottom) log.scrollTop = log.scrollHeight;
     $("latest").style.display = bottom ? "none" : "block";
   }
@@ -722,11 +734,11 @@ const ksagentMarkdown = (() => {
   async function ask(text) {
     const id = crypto.randomUUID();
     S.askedAt.set(id, Date.now());
-    S.problem = await append({ type: "question", id, text });
+    S.problem = await append({ type: "question", id, text }).catch(failed);
     await look();
   }
   async function stop(id) {
-    S.problem = await append({ type: "stop", id });
+    S.problem = await append({ type: "stop", id }).catch(failed);
     await look();
   }
 
@@ -748,9 +760,14 @@ const ksagentMarkdown = (() => {
         if (refused) live = null;
         if (JSON.stringify(live) !== JSON.stringify(S.live)) { S.live = live; l = true; }
       }
-      if (a || c || l || turns().some(isOpen)) draw();
+      // **A late answer is said only until the next look gets through**: the server may answer
+      // again, and a stale notice would then mislead.
+      const late = S.late !== "";
+      S.late = "";
+      if (a || c || l || late || turns().some(isOpen)) draw();
     } catch (e) {
-      S.problem = `${e.message}. Start the page again with the command that opened it.`;
+      if (e && e.name === "TimeoutError") S.late = failed(e);
+      else S.problem = failed(e);
       draw();
     }
   }

@@ -315,28 +315,6 @@ fn main(): I32
   $k: = n
   k += m
   return sum.x
-// ==== case packed_managed_field
-//< An ARC-managed field `#packed` leaves under-aligned is refused where the struct declares it
-//< Its count is kept through the field's address, which a pointer could not give aligned. A struct
-//< holding one counts too; a raw pointer to one is not managed and passes.
-// EXPECT: field 'r' holds the ARC-managed 'std.refcount.Rc<|I32|>'. Its count is kept through
-// EXPECT: field 'h' holds the ARC-managed 'packed_managed_field.Holder'
-// EXPECT: Finished with 2 error(s)
-import "std/refcount" { Rc }
-
-priv struct Holder
-  r: Rc<|I32|>
-
-#packed
-priv struct Wire
-  tag: U8
-  r: Rc<|I32|>
-  h: Holder
-  p: Rc<|I32|>@
-
-fn main(): I32
-  w: Wire = ::{ .r = Rc<|I32|>(1) }
-  return I32::w.tag
 // ==== case recursive_generic_instantiation
 //< A generic function that calls itself with **a deeper type argument**
 //< Monomorphisation makes a substance per type argument, so the run-time stop (`d <= 0`) does not
@@ -354,17 +332,13 @@ fn main(): I32
 // ==== case struct_cast
 //< Sema clearly rejects a direct `::` value cast to a struct type
 //< Let through, a cast from a scalar or another struct becomes the invalid C `(StructType)value`
-//< (see ksplc/sema/body/postfix.kspl). A source type implementing `Cast` (`Small::10`)
-//< resolves to a cast() call and passes, so Small to Large, with no Cast, is used here.
-//< The message names the trait as it is written, `std/lang`'s `Cast`, with the `impl` to add.
-// EXPECT: cannot cast to struct type
-// EXPECT: implements 'Cast<|struct_cast.Large|>' (std/lang's trait: 'impl struct_cast.Small: Cast<|struct_cast.Large|>')
-// EXPECT-NOT: operator.Cast
+//< (see ksplc/sema/body/postfix.kspl). The message names the literal to write instead.
+//< `std/lang` has no trait that turns a cast into a call, so `impl I32: Cast<|Small|>` names an
+//< unknown trait.
+// EXPECT: cannot cast to struct type 'struct_cast.Small'. A value does not become a struct through '::'
+// EXPECT: undefined type 'Cast'
 struct Small
   val: I32
-
-struct Large
-  val: I64
 
 impl I32: Cast<|Small|>
   fn cast(r: Self$@): Small
@@ -372,7 +346,6 @@ impl I32: Cast<|Small|>
 
 fn main()
   a: = Small::10
-  b: = Large::a
 // ==== case struct_cast_names_the_type
 //< A rejected cast to a struct names the type as its writer wrote it
 //< **The instance's registered name must not reach the message** (`std_ds_List_I32`); it
@@ -383,6 +356,18 @@ import "std/ds" { List }
 
 fn main(): I32
   _xs: = List<|I32|>::5
+  return 0
+// ==== case struct_field_comma_separator
+//< Fields separated by `,` (Go's and Rust's shape) carry a Note on the struct field
+//< A field looks like a declaration, so the declaration's Note, which speaks of a variable,
+//< must not stand in for it.
+// EXPECT: expected the end of the line
+// EXPECT: Note: a struct field stands on its own, as an enum value does
+// EXPECT-NOT: a declaration names one variable
+struct Point
+  x: I32, y: I32
+
+fn main(): I32
   return 0
 // ==== case struct_literal_array_index
 //< An array literal's index is a constant from 0 below the length, and its element has no name

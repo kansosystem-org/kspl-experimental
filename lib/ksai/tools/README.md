@@ -1,12 +1,11 @@
 # ksai's tools
 
-These Python tools convert a borrowed model into the files ksai reads, and write the reference files its tests read. They also check ksai against Hugging Face and llama.cpp. Each one checks itself when run with no argument; `make test-pytools` runs those self-tests.
+These Python tools write the reference files ksai's tests read, and check ksai against llama.cpp. Each one checks itself when run with no argument; `make test-pytools` runs those self-tests.
 
 ## What is here
 
 | File | What it does |
 | :-- | :-- |
-| `export_qwen_tokenizer.py` | Converts Hugging Face Qwen's tokenizer into the files `Tokenizer.load` reads. |
 | `gen_unicode_class.py` | Writes `lib/ksai/unicode_class.kspl`, the Unicode classes the tokenizer's rule reads, from llama.cpp's `unicode-data.cpp`. `--check` compares instead of writing. |
 | `check_qwen_tokenizer.py` / `tokenize_lists.kspl` | Compare ksai's tokenizer with llama.cpp's on a GGUF model, text by text (below). `tokenize_lists.kspl` loads the GGUF file's lists through `Tokenizer.load_lists` and prints each text's IDs. |
 | `qwen_gguf_check.py` | Runs ksai's Qwen model (`lib/ksai/benches/bench_qwen.kspl`) and llama.cpp on the same GGUF file and compares them ("Checking against llama.cpp" below). |
@@ -20,34 +19,26 @@ These Python tools convert a borrowed model into the files ksai reads, and write
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install numpy transformers gguf llama-cpp-python jinja2
+pip install numpy gguf llama-cpp-python jinja2
 ```
 
 ### How borrowed models are handled
 
-**You bring the borrowed model's weights yourself: they are not in this repository.** [`data/README.md`](../../../data/README.md) names the files to get. Only the procedures that read or tune them are distributed here, so the [MIT](../../../LICENSE.md) notice does not cover the model.
+**You bring the borrowed model's weights yourself: they are not in this repository.** [`data/README.md`](../../../data/README.md) names the files to get. Only the procedures that read them are distributed here, so the [MIT](../../../LICENSE.md) notice does not cover the model.
 
-**Weights made from a borrowed model inherit its license.** To distribute them, meet its conditions (the Qwen2.5 family is Apache-2.0, which requires attribution).
+**Weights made from a borrowed model inherit its license.** To distribute them, meet its conditions (Qwen3 and Qwen3.5 are Apache-2.0, which requires attribution).
 
 The `lib/ksai/examples/llama_engine/mini_llama.safetensors` and `lib/ksos/demo/cortex_m/pilot_policy.safetensors` in the repository are tiny models made here, not borrowed ones.
 
 ## Checking against llama.cpp
 
-This check shows that ksai runs the user's model, Qwen3-4B-Instruct-2507, as llama.cpp runs the same GGUF file. It needs `gguf`, `llama-cpp-python` and `numpy`, and the file that [`data/README.md`](../../../data/README.md) names:
+This check shows that ksai runs the user's models as llama.cpp runs the same GGUF file. It needs `gguf`, `llama-cpp-python` and `numpy`, and the files that [`data/README.md`](../../../data/README.md) names. What it compares, and what each line it prints means, is in the docstring of `qwen_gguf_check.py`.
 
 ```sh
 out/ksplc_stage1.exe build "--cflags=-O3 -march=native" lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
 python3 lib/ksai/tools/qwen_gguf_check.py --model data/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 python3 lib/ksai/tools/qwen_gguf_check.py --model data/Qwen3.5-9B-Q3_K_M.gguf
 ```
-
-The prompts' token IDs come from llama.cpp, so the tokenizers do not mix in. Each check prints `agree` or `DIFFER`:
-
-* **The first 32 greedy tokens** equal llama.cpp's, for prompts in English, Japanese and code, and a conversation with tools. A parting within the scores' tolerance prints `tie`.
-* **The scores after a fixed prompt** agree within a tolerance, since both sides round each product's inputs to 8 bits. Beside it stands llama.cpp against itself, reading a prompt in one batch and token by token.
-* **The chat template**: llama.cpp renders each conversation of `template_cases.json`, or `template35_cases.json` for Qwen3.5, in `lib/ksai/tests/qwen_data/`. ksai's tests check that `chat_server` renders the same texts.
-
-Last it prints how fast each side reads a prompt of 350 tokens and generates 64, on the same machine.
 
 ## Checking the tokenizer against llama.cpp
 
@@ -71,4 +62,4 @@ It fails when `lib/ksai/unicode_class.kspl` differs from what that source gives.
 
 ## Further reading
 
-* [ksai](../README.md) — the engine these tools convert models for and check.
+* [ksai](../README.md) — the engine these tools check.

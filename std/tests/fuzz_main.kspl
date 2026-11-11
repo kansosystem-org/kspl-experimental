@@ -38,7 +38,7 @@ priv const TRIAL_TIMEOUT_MS: I32 = 10000 //<
 priv const MAX_SEED_BYTES: I64 = 64I64 * 1024I64 //< the size cap on a file used as a seed
     //< Caution: **Do not drop the small files.** A file of a few bytes can break a reader too.
 
-priv const KINDS: fuzz.Input_kind[10] = ::{ //<
+priv const KINDS: fuzz.Input_kind[9] = ::{ //<
     //< The kinds of input that the fuzzer mutates and feeds to a reader, and their files' endings
     //< **This is the canonical source**: the reader's names ([`read_prog.kspl`](read_prog.kspl))
     //< and the seeds below follow it.
@@ -50,7 +50,6 @@ priv const KINDS: fuzz.Input_kind[10] = ::{ //<
     fuzz.Input_kind::{ .name = "http-res", .ext = ".http" },
     fuzz.Input_kind::{ .name = "http-write", .ext = ".fields" },
     fuzz.Input_kind::{ .name = "jsonrpc", .ext = ".rpc" },
-    fuzz.Input_kind::{ .name = "json-struct", .ext = ".json" },
     fuzz.Input_kind::{ .name = "argv", .ext = ".argv" },
 }
 
@@ -134,26 +133,6 @@ priv fn head_at_limit(arena: Arena$@): U8[] //<
         out.c('a')
     return out.s(tail).s("{}Content-Length: 2\r\n\r\n[]").take()
 
-priv fn built_shape(arena: Arena$@): U8[] //<
-    //< A `Shape` of [`read_prog.kspl`](read_prog.kspl), as std's JSON writer writes it
-    //< **The keys are its field names**: a key that drifts from them is refused at reading, and
-    //< `check_seeds` fails on it. Every option is present, so mutation can drop one.
-    $b: = Json_builder(arena)
-    part: = b.obj().set("label", b.str_val("p")).set("weight", b.float_val(1.5)).build()
-    root: = b.obj().set("name", b.str_val("shape")).set("count", b.int_val(-42I64))
-        .set("small", b.int_val(-128I64)).set("port", b.int_val(65535I64))
-        .set("big", b.int_val(9223372036854775807I64)).set("ratio", b.float_val(0.1))
-        .set("on", b.bool_val(true)).set("size", b.int_val(12I64)).set("part", part)
-        .set("tags",
-        b.arr().push(b.str_val("a")).push(b.str_val("")).build())
-        .set("nums",
-        b.arr().push(b.int_val(1I64)).push(b.int_val(-2147483648I64)).build())
-        .set("parts", b.arr().push(part).build()).set("note", b.str_val("é"))
-        .set("limit", b.int_val(7I64)).set("spare", part).build()
-    defer $out: = Str_builder()
-    root.dump(out@)
-    return arena.dup_str(out.slice())
-
 // **From here down the seeds are written by hand.**
 // **When adding one, choose "a form that reaches one more branch of the reader"**; similar forms
 // add no path.
@@ -221,7 +200,6 @@ priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
     push_sample(out@, "base64", "built Base64", built_base64(arena), true)
     push_sample(out@, "http-res", "built response", built_response(arena), true)
     push_sample(out@, "jsonrpc", "built frames", built_frames(arena), true)
-    push_sample(out@, "json-struct", "built shape", built_shape(arena), true)
     push_sample(out@, "json", "built numbers", built_numbers(arena), true)
     push_sample(out@, "json", "hand-written numbers", NUMBER_SAMPLE, false)
     push_hand(out@, "jsonrpc", U8[][]::FRAME_SAMPLES, arena)

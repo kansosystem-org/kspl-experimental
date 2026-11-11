@@ -1,12 +1,12 @@
-# The first ksmd document and editor
+# The ksmd document and editor
 
-This is the design for implementers and reviewers. **It is not an implemented file-format specification.** The examples under `ksmd/examples/` illustrate these decisions, and everything below is implemented. The editing page has its own design, [`DESIGN-page.md`](DESIGN-page.md).
+This is the design for implementers and reviewers, and everything below is implemented. The examples under `ksmd/examples/` illustrate these decisions. The editing page has its own design, [`DESIGN-page.md`](DESIGN-page.md).
 
-## The first usable document
+## What a document holds
 
 A document contains prose, calculating tables, charts of them, images and includes, in reading order. The editor changes that structure directly. Source is read at open and written at save, not reparsed after each keystroke.
 
-| Included | Excluded from the first release |
+| Included | Left out |
 | :-- | :-- |
 | Paragraphs, six heading levels, lists, links, emphasis and literal code | Raw HTML, executable code fences, embedded scripts |
 | Rectangular tables with text, numbers and formulas | Merged cells, nested tables, blocks inside cells |
@@ -15,21 +15,31 @@ A document contains prose, calculating tables, charts of them, images and includ
 | Browser printing with automatic page breaks | Editable page boundaries, page templates, exact cross-browser pagination |
 | Includes opened separately for editing | Network includes, editing several sources in one transaction |
 
-Static figures are images with captions. Images keep their aspect ratio. Each fits the content width, or takes a share of it or of its own size that a person sets. Column resizing affects appearance, never cell identities or values. There is no presentation mode.
+Static figures are images with captions. Images keep their aspect ratio. Each fits the content width, or takes a share of it that a person sets. Column resizing affects appearance, never cell identities or values. There is no presentation mode.
 
 ## Source boundaries
 
-Files use UTF-8. The first line is exactly `%ksmd 1`; an unsupported version is an error before the body is read. The writer uses LF line endings and ends the file with one newline. The reader also accepts CRLF and an initial UTF-8 BOM. A carriage return without a following line feed is an error. Source views keep the original bytes, so diagnostics do not shift after CRLF or a BOM.
+Files use UTF-8. The writer writes the first line `%ksmd 2`, and the reader also takes `%ksmd 1` ("A version 1 file" below). Any other first line is an error before the body is read. The writer uses LF line endings and ends the file with one newline. The reader also accepts CRLF and an initial UTF-8 BOM. A carriage return without a following line feed is an error. Source views keep the original bytes, so diagnostics do not shift after CRLF or a BOM.
 
 A file holding only the version marker is an empty document. A blank line separates blocks. Within a paragraph, a source newline becomes one space, and a backslash right before a newline is a hard line break. The writer puts a paragraph on one source line except for hard breaks.
 
-A clause starts at column one with `:::`, its kind and its attributes. A line holding only `:::` closes it. Clauses do not nest in version 1. The kinds are `table`, `include`, `image`, `chart`, `diagram`, `functions` and `document`; an unknown kind is an error. Attributes are unique `name=value` pairs separated by spaces; an unknown or a repeated attribute is an error. Strings use JSON quoting and escapes, and numbers are decimal. There are no implicit attributes, positional arguments or short forms. A style cannot change a block's kind.
+A clause starts at column one with `:::`, its kind and its attributes. A line holding only `:::` closes it. Clauses do not nest. The kinds are `table`, `include`, `image`, `chart`, `diagram`, `functions` and `document`; an unknown kind is an error. Attributes are unique `name=value` pairs separated by spaces; an unknown or a repeated attribute is an error. Strings use JSON quoting and escapes, and numbers are decimal. There are no implicit attributes, positional arguments or short forms. A style cannot change a block's kind.
 
-**A new attribute stays in version 1, and a ksmd older than the attribute refuses the file.** Its reader refuses an unknown attribute, naming the line and column, so it never opens such a file and saves it without the attribute. A version step would add nothing to that refusal: the older reader refuses `%ksmd 2` as well. It would cost a second reader to keep, and every file written since would carry the new number. The format is not yet a published specification, so version 1 still grows. A version step comes with a change an older reader would read wrongly rather than refuse.
+**A new attribute stays in version 2, and a ksmd older than the attribute refuses the file.** Its reader refuses an unknown attribute, naming the line and column, so it never opens such a file and saves it without the attribute. A version step would add nothing to that refusal: the older reader refuses `%ksmd 3` as well. It would cost a second reader to keep, and every file written since would carry the new number. The format is not yet a published specification, so version 2 still grows. A version step comes with a change an older reader would read wrongly rather than refuse.
+
+### A version 1 file
+
+**Version 2 changes only how a formula's quoted text is read.** A version 1 file quotes it by JSON's escapes, so `"C:\\src"` means `C:\src` there. Version 2 reads it as "Text in a formula" below says. The formula is stored as its text, so a ksmd that read version 1 would read such a formula wrongly. The version step makes that ksmd refuse the file instead.
+
+* **The reader rewrites each formula of a `%ksmd 1` file into the rule of version 2** (`from_version_1` in `ksmd/calc/formula.kspl`). `"\\"` becomes `"\"`, `"\""` becomes `""""`, and `"\u0041"` becomes `"A"`.
+* **A control character, such as a line break, cannot stand on the formula's line.** It becomes `char(10)` and the like, joined to the rest by `&` in brackets. `"a\nb"` becomes `("a" & char(10) & "b")`, which gives the same text.
+* **Quoted text that is no JSON string stays as written**, such as `"\q"`. In version 1 it calculates as empty text.
+* **A save writes `%ksmd 2`**, so the file then needs a ksmd that reads version 2.
+* **Every other part of the file reads the same in both versions.** A text cell, an attribute and a note keep JSON's quotes and escapes.
 
 A code fence starts with at least three backticks and an optional language label. Its closing line holds the same number of backticks and nothing else. Everything inside is literal, clauses and the version marker included. The writer chooses the shortest safe fence of at least three backticks.
 
-## What the first reader models
+## What the reader models
 
 **The reader models every structure of this design, and refuses a source it cannot read whole.** Saving a partial model would lose what it did not read. A refusal names the line and column.
 
@@ -52,7 +62,7 @@ These reading rules settle cases the notation leaves open:
 * Only a run of three with no mark open has two readings. Strong emphasis goes outside, unless the next run on the line can close only the other order (`***a** b*`).
 * A code span ends at the next run of exactly as many backticks. One space at each end is dropped when both ends have one. The writer chooses the shortest run that the code does not hold.
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
-* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `char_widths`, `heights`, `formats`, `choices`, `rules`, `groups`, `filter`; `path`; `src`, `alt`, `caption`, `width`. A table row outside a table clause is refused.
+* A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `caption`, `char_widths`, `heights`, `formats`, `choices`, `color_rows`, `rules`, `merge`, `groups`, `filter`; `path`; `src`, `alt`, `caption`, `width`. A table row outside a table clause is refused.
 * Any clause may take `invisible="printing"`, written last, which leaves its block out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). It has one value, so a misspelt one is refused.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one.
@@ -189,17 +199,31 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 * A number has a cell number's shape without its sign: `2.5`, `1e3`, `0.5`. A sign is unary minus.
 * **A whole number can also be written in hexadecimal or binary, as KSPL writes it:** `0xFF`, `0b_0111_0001` ("Hexadecimal and binary" below).
 * A cell is capital column letters, then a row number from 1 without a leading zero: `D1`, `AA12`. A `$` before either part fixes that part for copying.
-* `budget.D1` names a cell of another table in the same source, with no space around the `.`. A name that is not plain (a lowercase letter, then lowercase letters, digits and `_`) stands in JSON quotes: `"Q1 sales".D1`.
+* `budget.D1` names a cell of another table in the same source, with no space around the `.`. A name that is not plain (a lowercase letter, then lowercase letters, digits and `_`) stands in quotes, as text in a formula does: `"Q1 sales".D1`.
 * A range is two cells joined by `:` without spaces: `D1:D3`. A table's name stands once, before the range: `budget.D1:D3`. The corners can come in either order, and the writer saves the upper left first.
 * **Column letters alone name the whole column: `D`.** It takes every data row, never the names row, and rows added later. `D:F` names whole columns side by side. `map.D` and `map.D:F` name whole columns of another table.
 * **A whole column without a table's name is a column of the formula's own table, as a cell is.** So a copy into another table names that table's column, and the own table needs no name. A `$` fixes the column for copying: `$D`.
 * **Letters with a row number on one side of `:` only do not read**: `D:F9` and `D1:F` are neither a range nor columns. Letters just before `(` do not read either, since a function's name is lowercase.
 * `#REF!` stands where a reference lost its row or column. The reader and writer keep it, and it calculates as `#REF!`.
-* **Text stands in JSON quotes, with JSON's escapes:** `"Pens"`, `"say \"hi\""`. Quotes followed at once by `.` and a cell name a table instead.
+* **Text stands in quotes, and every character inside stands for itself**, `\` included: `"Pens"`, `".\src\Module\"`. A quote inside is written twice: `"say ""hi"""` ("Text in a formula" below). Quotes followed at once by `.` and a cell name a table instead.
 * **`and`, `or`, `not`, `true` and `false` are words.** A `|` splits a table row unless it stands in quotes, so the symbols `||` and `|` cannot serve.
 * **A comparison takes one step: `1 < A1 < 9` does not read.** Write `1 < A1 and A1 < 9`.
 * Spaces and tabs can stand between tokens. A function takes one or more arguments, separated by `,`.
 * A formula nests at most 64 levels. The formula itself is one level, and each bracket, function, unary minus and `not` adds one.
+
+### Text in a formula
+
+**Inside a formula's quotes, every character stands for itself, `\` included, and a `"` is written twice.** `=like(A1, ".\src\*")` matches a Windows path, and `="say ""hi"""` gives `say "hi"`. Formula text has no other escape.
+
+* **`""` alone is empty text, and `""""` is one quote.**
+* **A quote that nothing closes leaves the formula unread**, and the cell shows `#SYNTAX!`. With AutoCorrect's brackets on, the page adds the closing quote, so `="C:\` becomes `="C:\"`.
+* **`char(n)` writes a character that formula text cannot hold**, such as a line break: `char(10)`. A formula stays on one line, and its quotes hold no escapes.
+* **A table's name in quotes follows the same rule**, so one rule covers all quoted text in a formula.
+* **Only a formula's text follows this rule.** A text cell, an attribute and a note keep JSON's quotes and escapes, as the rest of the file does.
+
+**Why the spreadsheets' rule:** Excel, LibreOffice Calc and Google Sheets all write a quote inside formula text as `""`, and none of them escapes with `\`. A formula copied from one of them keeps its text and its answer. A path, a regular expression or a file pattern holds `\` often, and doubling every one of them is easy to forget. A single `\` before the closing quote would join the quote to the text, and the rest of the formula would change meaning.
+
+**What this gives up:** a quote inside text takes two characters, and a long run such as `""""` is hard to read. `char(34)` writes a quote too. JSON's `\n` and `\u` do not apply in formula text, so `char` writes those characters.
 
 ### A column's name in a formula
 
@@ -325,7 +349,7 @@ Each error has its own mark, since each is fixed differently.
 | `#REF!` | A reference to no cell: `#REF!`, a cell outside its table, or a table name this source does not hold |
 | `#CYCLE!` | The cell depends on itself, directly or through other cells |
 | `#EMPTY!` | `min`, `max`, `average` or `average_if` of no numbers |
-| `#SHAPE!` | A range in the condition of `sum_if`, `count_if` or `average_if` that is not one column as tall as the values, or a condition with no range. It is fixed by changing a range, which no other mark asks for |
+| `#SHAPE!` | A range in the condition of `sum_if`, `count_if` or `average_if` that is not one column as tall as the values, or a condition with no range. Also ranges of `sum_product` or `lookup` that are not one line of equal length. It is fixed by changing a range, which no other mark asks for |
 | `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function or a condition, a missing bracket or operand, or more than 64 levels. Or a literal in a base that is bad, past 2^53, or written as digit text |
 | `#BLOCKED!` | A call to a name that ksmd does not have, while the person has not allowed the document's functions file ("Your own functions") |
 | `#LIMIT!` | The calculation read 500 million cell values, and this formula was not finished then. It is fixed by reading fewer cells, which no other mark asks for |
@@ -406,7 +430,7 @@ Each error has its own mark, since each is fixed differently.
 
 **`mid`, `left`, `right`, `len` and `find` take Excel's names and its order of arguments, counted from 1**, so a formula carries over. `=mid("1234 5678", 6, 4)` is `"5678"`.
 
-The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `substitute` and `text`, and `a & b` joins two texts. What each one gives, with its arguments, is in "Functions by name" in [`SPEC-editing-page.md`](SPEC-editing-page.md).
+The text functions are `char`, `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `substitute` and `text`, and `a & b` joins two texts. What each one gives, with its arguments, is in "Functions by name" in [`SPEC-editing-page.md`](SPEC-editing-page.md).
 
 * **A position counts characters, not bytes**, so `mid("かんそ", 2, 1)` is `"ん"`.
 * **A start below 1 or a negative count is `#NUM!`.** A count past the end takes what there is, and a start past it gives empty text.
@@ -416,7 +440,7 @@ The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `
 * **An empty format writes a number as the page shows it without a format**: at most 15 significant digits, so `text(0.1 + 0.2, "")` is `"0.3"`.
 * **Text that `&` or a function gives is at most 32,767 bytes; a longer result is `#NUM!`.** Spreadsheets cap a cell's text at 32,767 characters. The count is in UTF-8 bytes, as for every other limit here.
 * **The length is found before the text is made.** So a formula that doubles its text down 27 rows stops at the cap, and takes no more memory.
-* **A line break in text is written `\n`**, with JSON's escapes: `substitute(A1, "\n", ", ")` puts a line's parts on one line.
+* **A line break in text is written `char(10)`**: `substitute(A1, char(10), ", ")` puts a line's parts on one line.
 * **`value` is the one way from text to a number.** Text that writes no decimal number, `"0x10"` among it, is `#VALUE!`; `hex_to_dec` reads hexadecimal.
 
 **`like(text, pattern)` matches text against a pattern with the wildcards of a spreadsheet's criteria.** `=sum_if(D, like(A, "INV-*"))` adds column D on the rows where A starts with `INV-`.
@@ -441,7 +465,7 @@ The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `
 
 ### Number formats
 
-**A column's number format sets how its numbers show, and a cell can take its own; each cell keeps the number it holds.** The table's `formats` attribute holds one entry per column, as `widths` does:
+**A column's number format sets how its numbers show, and a cell can take its own; each cell keeps the number it holds.** The table's `formats` attribute holds one entry per column, as `char_widths` does:
 
 ```text
 :::table name="budget" formats=",grouped:2,percent:1,currency:USD:2"
@@ -553,7 +577,7 @@ The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `
 
 * **A character is the width of the digit 0 in the table's font**, as Excel's column width and CSS's unit `ch` count it. The model keeps tenths of a character, so a width is a whole number.
 * **The table is as wide as its columns, not as wide as the window.** A person who sets a column's width in a spreadsheet expects it to stay, and expects no text to wrap when the window narrows. A wider table makes the page scroll sideways.
-* **The older `widths="1,2,1"`, which gave each column a share of the width, is refused.** The message names `char_widths`, which says the same in characters.
+* **`widths="1,2,1"`, a share of the width per column, is refused with a message that names `char_widths`.**
 
 **The table's `heights` attribute gives a row a height in points**, as a quoted list with one entry per data row: `heights=",30,,"`. An entry is a whole number from 6 to 409, Excel's limit, or empty for a row that fits its lines. The attribute stands only while some row has a height.
 
@@ -582,7 +606,7 @@ The text functions are `mid`, `left`, `right`, `len`, `find`, `like`, `value`, `
 * **A change of number format takes the column's entry away, in the same step of undo.** The format of the column or of a cell in it changes the text the cell shows, so `in:1.5` would hide every row once 1.5 shows as 1.50.
 * **A row inserted leaves every entry as it is.** The page shows the new row until the filter is chosen again ([`DESIGN-page.md`](DESIGN-page.md)), so the file keeps the filter the person chose.
 * **The model keeps each entry by the column's identity**, so it moves with its column, and an undo of a removed column brings it back.
-* **Whole columns cut and pasted on others give their entries to the columns pasted on**, as their widths, formats, choices and rules go (`move_cells` in `ksmd/edit/moving.kspl`). The cells move but the columns stay, so an entry left on its column would hide every row of an empty column.
+* **Whole columns cut and pasted on others give their entries to the columns pasted on**, as their other settings go ("Moving cells" in [`DESIGN-page.md`](DESIGN-page.md)). The cells move but the columns stay, so an entry left on its column would hide every row of an empty column.
 * **The file keeps every row; a filter only hides some on the page and on paper.** A reader that does not know the attribute refuses the file rather than show rows the writer hid ("Source boundaries" above).
 
 ### How references follow edits
@@ -728,13 +752,13 @@ line from="tip" to="ask" via="380,180"
 
 ## Includes and images
 
-An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption` and `width`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" below). Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
+An include clause has only `path="notes.ksmd"` and an empty body. Insert ▸ Include… puts one at the caret: it picks a document in the workspace, or starts an empty one. A document never includes itself. An image clause requires `src` and `alt`, and permits `caption` and `width`. Its body holds only the shapes drawn over it ("Shapes drawn over an image or a chart" above). An image is a local PNG or JPEG file. SVG, remote images, executable formats and data URLs are excluded.
 
 **An image's `width` is its share of the text width: `width="40%"`, a whole number from 1 to 100.** Its height follows, so the picture keeps its shape. Without it, the image fits the text width as far as its pixels allow.
 
 * **A share, not pixels or centimetres**: the same file shows alike on any screen and on any paper. A narrower window narrows the image with the text.
 * **Images next to each other share a row while each has a width and the widths add up to 100% or less.** So pictures stand in a line of Word's text. Two screenshots at `45%` stand side by side, with no clause for a row.
-* **The older `scale="50%"`, a share of the image's own size, is refused.** The message names `width`. An image has one way to be sized, so a clause never holds two sizes that disagree.
+* **`scale="50%"`, a share of the image's own size, is refused with a message that names `width`**, so a clause never holds two sizes that disagree.
 
 Links may use `https`, `http`, `mailto`, or a document fragment; other schemes are refused. Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -803,9 +827,9 @@ The model is an ordered block tree of paragraphs, headings, lists, code, tables,
 
 The KSPL model remains authoritative: the page turns editing into model actions, and the selection is a pair of model spots, not a DOM range ([`DESIGN-page.md`](DESIGN-page.md)).
 
-**A layout comparison confirmed the choice.** In headless Chromium, editable paragraphs and a real HTML table took typing and composition once. They wrapped and fitted at a 320-pixel width. Native selection read the text, the accessibility tree held the table, and printing broke a long table across pages. A canvas exposed no text, so accessibility, selection and typing would each be the editor's own code.
+**A canvas exposes no text**, so selection, accessibility and typing would each need the editor's own code.
 
-**The browser's own undo is not the product's undo.** The browser groups edits by its own rules, so one undo removed two separate edits. Undo records model transactions instead ("Undo and redo").
+**The browser's own undo is not the product's undo.** The browser groups edits by its own rules, so undo records model transactions instead ("Undo and redo").
 
 ## How the editor changes a document
 
@@ -863,8 +887,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 | Guarantee | What holds it |
 | :-- | :-- |
-| Only this machine reaches the server | The server listens on the loopback alone, and refuses a request that names another host |
-| Another page or program cannot drive it | The server makes a new token at each start. The page moves it from the address into the tab's storage, and sends it in a header |
+| Only this machine and this page reach the server | "Where it listens" and "How the token gets across" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md) |
 | A path stays inside the workspace | The page applies the workspace's text rules (`resolve_text` in `ksmd/files/files.kspl`). The server refuses a link and a path out of its root |
 | No file is replaced by itself | Opening, viewing and drafts write nothing. A save writes the open document's own path, or a new path where no file stands. Save As replaces another file only after a second press, and only while that file still holds what it held when chosen. A new image, and a file that Insert starts, are written at once, never over a file that stands ("Images" below) |
 
@@ -873,10 +896,6 @@ Undo and redo put back the selection each step started or ended with. A new acti
 **A document opens from its path in the workspace**: from the address (`?doc=notes.ksmd`), or chosen in File, Open (Ctrl+O). The page gives the file's bytes to the editor unchanged. A file the reader refuses does not open, and the open document stays.
 
 **The page builds the assembled view itself, in rounds.** An assembly over what the page holds names the files it still lacks (`Fetched` in `ksmd/files/fetched.kspl`). The page fetches them and assembles again, one round per level of includes. So the browser applies `assemble`'s rules, and a refusal that the server gives stands as that file's.
-
-**A chart's Edit button opens a panel**: bars or lines, the labels column, the columns drawn, and a title. The table's right-click menu holds Insert chart, which puts a bar chart of the first column of numbers after the table.
-
-**A Remove button on an include, an image or a chart takes that block out of the document**, since no text selection reaches inside it. The included file or the image file stays as it is.
 
 **An include shows its file's blocks in place, and they do not edit there.** Its Edit button opens the included file in a tab of its own, with its own undo, save and draft.
 
@@ -993,9 +1012,3 @@ These are known limits, not yet worked on:
 * A key press in a document of tens of thousands of blocks takes over 100 ms.
 * An edit in a table of 10,000 rows takes over a second, as the page draws and lays out that whole table again.
 * So the served page does not reach the limits above: a document of 6.2 MB does not open, and one of 4.3 MB does.
-
-## Acceptance examples and next work
-
-The examples `overview.ksmd`, `notes.ksmd` and `literals.ksmd` cover the first contract. In the budget table, D1 is 30, D2 is 10 and D3 is 40. The include remains a clause when the parent is saved. A pipe in quoted table text remains one cell. The fenced clause in the literal example stays code.
-
-`make test-ksmd-browser` drives the editing page through the browser's own input events, and checks the source each model transaction saves. It then serves the page with `kssrv --local` on a scratch workspace, and checks each file step against the bytes on disk.

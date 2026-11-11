@@ -23,7 +23,7 @@ make ci          # every gate this machine can run: run it before you propose a 
 
 Caution: **Do not copy the list into this document.** Adding a target would make the copy outdated (Principle 4 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-A variable is a setting passed as `NAME=value`, described with its task: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), `STOP=1` and `CI_GATE_CAP=` in [`SPEC-gates.md`](SPEC-gates.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
+A variable is a setting passed as `NAME=value`, described with its task: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), `STOP=1` and `CI_GATE_CAP=` in [`SPEC-gates.md`](SPEC-gates.md), and `FILE=` in `make help`'s line for `ksmd-open`.
 
 ## Setting your git identity
 
@@ -76,7 +76,7 @@ sequenceDiagram
 
 * **Open an issue first** for anything beyond a small fix, with the problem and the expected result. Maintainers then decide whether they want the change before work starts.
 * **Submit a pull request as a proposal.** Maintainers close an accepted one with a note crediting its author, since a snapshot commit does not name each contributor.
-* **Run the gates before proposing a change**: `make ci`. Outside Linux it runs the Linux-only gates too, where this machine has their tools; the round lists last what it could not check ([`SPEC-gates.md`](SPEC-gates.md)).
+* **Run the gates before proposing a change**: `make ci`. What it runs off Linux, and how it lists what it could not check, is "How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md).
 
 ## How AI-written work is handled
 

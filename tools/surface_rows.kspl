@@ -13,8 +13,8 @@ import "std/str" { Str_builder }
 const RECORD_HEAD: U8[] = //< the record's header
     "# The record of the API this package publishes, written by ksplc doc --emit-surface.\n# \
         Caution: Do not fix it by hand. Change the API, remake it with `make surface`, and commit \
-        the diff.\n# The columns are tab-separated: the file's logical name / the key / the text / \
-        the documentation (left off where there is none). Rows are by key, ascending.\n"
+        the diff.\n# The columns are tab-separated: the file's logical name / the key / the text. \
+        Rows are by key, ascending.\n"
 
 struct Row //< one unit compared
     key: U8[] //< the file's logical name joined to the key
@@ -117,7 +117,9 @@ priv fn write_row(b: Str_builder$@, mark: U8[], key: U8[]) //<
     b.c('\n')
 
 fn undocumented( //< lists the published entries with no description, and returns how many
-    //< The fourth column is the summary, so a row whose text holds no tab has none.
+    //< `ksplc doc --emit-surface` writes the summary as a fourth column, so a row whose text holds
+    //< no tab has none. **Only whether there is one is checked**: the record leaves the summary
+    //< out (`signature_only`), so rewording it changes no record.
     //< Caution: **Check the current sources, not the record** (what was committed). A declaration
     //< added in the same change is not in it. So the entry that most needs a sentence gets through.
     rows: List<|Row|>@, //< the package as it is now
@@ -130,6 +132,11 @@ fn undocumented( //< lists the published entries with no description, and return
         write_row(b, "no summary", r.key)
         n += 1
     return n
+
+fn signature_only(r: Row): Row //< the row without its fourth column, the summary
+    //< **The record keeps the signature alone.** With the summary in it, rewording a `//<` would
+    //< show as an API change.
+    return Row::{ .key = r.key, .text = parts_of(r).text }
 
 priv fn twin_spelling(text: U8[], arena: Arena$@): U8[] //<
     //< A signature with the unused mark taken off its parameters' names

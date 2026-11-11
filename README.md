@@ -11,7 +11,7 @@
 
 **To start, follow the three [Quick start](#-quick-start-write-and-run-your-first-program) steps below**, then learn the language in short steps with [`docs/TUTORIAL-programming-language.md`](docs/TUTORIAL-programming-language.md).
 
-"Kanso" (簡素, simplicity) names the project’s design philosophy, which KSPL, Kanso OS, Kanso Server, the AI engine, Kanso DataBase and Kanso Doc follow.
+"Kanso" (簡素, simplicity) names the project’s design philosophy. KSPL, Kanso OS, Kanso Server, the AI engine, Kanso DataBase, Kanso Doc and the folder agent follow it.
 
 **The compiler turns KSPL into C99**, the 1999 edition of C that nearly every C compiler accepts, and a C compiler then builds the program. A new platform therefore needs a C compiler rather than a port of the whole toolchain. [Where it is supported](#where-it-is-supported) lists the confirmed environments.
 
@@ -38,7 +38,7 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
 
   ```sh
   make                               # builds ksplc from the seed written in C
-  make install                       # puts ksplc into ~/.local/bin, std/ and ksmd into ~/.local/lib/kspl
+  make install                       # puts ksplc into ~/.local/bin, std/, lib/ and ksmd into ~/.local/lib/kspl
   ```
 
   Installation requirements and failures are in "Putting `ksplc` on the PATH" in [`docs/HOWTO-build.md`](docs/HOWTO-build.md).
@@ -118,7 +118,7 @@ A row counts only what actually ran.
 | :-- | :-- | :-- |
 | **Supported** | CI runs the gates: checks that can fail the build. Daily development also exposes problems that gates do not check. | Linux x86-64 (glibc) with clang, configured by [`.devcontainer/`](.devcontainer/). Windows x64 with MSYS2 UCRT64’s clang, which builds the released Windows `ksplc.exe`. |
 | **Built in CI, not confirmed** | CI builds the compiler and runs some gates. Nobody develops there, so problems outside those checks remain unconfirmed. | macOS arm64 with Xcode’s clang |
-| **Untested** | No tests run there. C99 output makes these environments possible, but none is confirmed. | GCC. Windows x64 with LLVM’s clang targeting MSVC. MSVC’s `cl.exe` and `clang-cl`. Clang versions older than those above. Linux on arm64, on musl, or outside the image above. Intel Macs. Windows on Arm. 32-bit hosts. The BSDs. |
+| **Untested** | No tests run there. C99 output makes these environments possible, but none is confirmed. | GCC. Windows x64 with LLVM’s clang targeting MSVC. MSVC’s `cl.exe` and `clang-cl`. Clang older than version 22, the one the Linux image holds. Linux on arm64, on musl, or outside the image above. Intel Macs. Windows on Arm. 32-bit hosts. The BSDs. |
 
 **A supported environment does not carry every package**: each package's row in [the table above](#-what-works-and-how-far) says how far it is confirmed. Which gate runs where is "What each platform runs" in [`docs/SPEC-gates.md`](docs/SPEC-gates.md).
 

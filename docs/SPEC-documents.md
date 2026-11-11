@@ -46,7 +46,7 @@ These definitions apply to technical terms used across Kanso. Each package's glo
 | **receiver** | The value a method is called on: `b` in `b.free()` |
 | **ARC** | Automatic reference counting. For a type that conforms to `Ref_counted`, each value counts the places holding it; the compiler inserts `retain` (count up) and `release` (count down, free at zero). This differs from `Arc`, a reference-counted library container |
 | **arena** | A block of memory that hands out pieces and gives all of them back at once, when the arena itself is freed. Nothing inside is freed one by one. `std/mem`'s `Arena` is one ("8.4 Memory management" in [`SPEC-programming-language.md`](SPEC-programming-language.md#84-memory-management)) |
-| **FQN** | Fully qualified name: a name with its file's path in front (`std.Ref_counted`), unique in the program |
+| **FQN** | Fully qualified name: a name with its file's path in front (`std.lang.Ref_counted`), unique in the program |
 | **FFI**, **ABI** | FFI is calling between KSPL and C. The ABI is the binary agreement such a call rests on: how a type is laid out, and how arguments are passed. Both of `ksplc`'s backends keep it identical, so C output and LLVM output can call each other |
 | **hosted**, **freestanding**, **bare metal** | *Hosted* code runs under an operating system and can call libc. *Freestanding* code (`--freestanding`) cannot; it is for *bare metal*, a chip with no operating system, such as a microcontroller |
 | **libc** | The C standard library (`printf`, `strtod`, `fopen` …). glibc is the usual one on Linux, and the CRT (UCRT) is Windows'. A freestanding build has none |
@@ -144,20 +144,9 @@ A few documents have names chosen by a tool or a convention outside this reposit
 | `Reading order` | Which document or file to read first, and what next |
 | `Common changes` | Which files a typical change touches |
 | `Pitfalls` | The traps the next person is likely to hit |
-| `Files near the limit and how they split` | Where the folder needs it (below) |
 | `Further reading` | The guide, always last |
 
 **A README's heading carries no number and no time estimate** ("(30 seconds)").
-
-### Where a file's splitting plan is written
-
-**When a file comes near the line cap, the `README.md` of its top-level folder says how the file will be split.** It says so under the heading "Files near the limit and how they split". What counts as near is "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md). The check is `make test-conventions`.
-
-**Do not write a file's line count there**, only what is split out and where it goes.
-
-Caution: **Read the plan before touching a file it names.** A file named there is touched only once "what is split out" and "where it goes" are written for it.
-
-**Write where it goes as a name plus its folder**, not as a path, which `make test-docref` would report: "a new `locate.kspl` under `ksplc/base/`".
 
 ## Wording and formatting rules
 

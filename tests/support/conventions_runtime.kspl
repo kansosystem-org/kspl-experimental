@@ -7,6 +7,7 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
+import "std/strnum" // `parse_size`
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
@@ -364,10 +365,70 @@ priv fn check_status_table(arena: Arena$@)
     verdict.check_list("Windows's NTSTATUS codes read as the same signals in the runtime and the \
         doc", c.len, "codes", gaps@, "fix the side that is wrong (a row is `NAME=code`)")
 
+// ==========================================
+// The runtime's path buffers hold every path `std/fs.kspl` lets through `MAX_PATH_LEN` refuses a
+// longer path before the runtime sees it, and `KSPL_PATH_CAP` sizes each narrow path buffer. A
+// cap one short refuses a path std promised to pass. A buffer sized by a bare number keeps its
+// old size when the cap moves.
+// ==========================================
+priv const PATH_LEN_KSPL: U8[] = "std/fs.kspl"
+priv const PATH_CAP_USERS: U8[][_] = ::{ "ksplc/gen/runtime/hosted_fs.c",
+    "ksplc/gen/runtime/hosted_spawn.c" } //< the POSIX files that size a path buffer
+priv const PATH_LEN_HEAD: U8[] = "pub const MAX_PATH_LEN: Sz = "
+priv const PATH_CAP_HEAD: U8[] = "#define KSPL_PATH_CAP "
+
+priv fn number_after(text: U8[], head: U8[]): Sz //<
+    //< The number right after the first `head` in `text`, or -1 where there is none
+    if at: = text.find_str(head)
+        return text.parse_size(at + head.len) catch -1
+    return -1
+
+priv fn path_caps_disagree(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a sample's C half and KSPL half fail to agree on the path cap
+    //< The C half fails too where a buffer is sized by the cap's bare number.
+    switch text.find_str(STATUS_SPLIT)
+    case .none
+        return true
+    case .some(at)
+        c: = text.sub(0, at)
+        cap: = number_after(c, PATH_CAP_HEAD)
+        len: = number_after(text.sub_from(at + STATUS_SPLIT.len), PATH_LEN_HEAD)
+        bare: = arena.text().s("[\{cap\}]").take()
+        return cap < 0 || len < 0 || cap != len + 1 || c.find_str(bare).is_some()
+
+// The samples for the judgment above: the agreeing pair, and one break of each kind.
+priv const PATH_CAP_SAMPLES: Sample[_] = ::{
+    Sample::{ .text =
+        "#define KSPL_PATH_CAP 4096\nchar path[KSPL_PATH_CAP];\n@@@\npub const MAX_PATH_LEN: Sz = \
+            4095 //< the longest path\n", .hits = false },
+    Sample::{ .text = "#define KSPL_PATH_CAP 4096\n@@@\npub const MAX_PATH_LEN: Sz = 4096\n",
+        .hits = true },
+    Sample::{ .text =
+        "#define KSPL_PATH_CAP 4096\nchar path[4096];\n@@@\npub const MAX_PATH_LEN: Sz = 4095\n",
+        .hits = true },
+    Sample::{ .text = "char path[4096];\n@@@\npub const MAX_PATH_LEN: Sz = 4095\n", .hits = true },
+    Sample::{ .text = "#define KSPL_PATH_CAP 4096\n@@@\npub const OTHER: Sz = 4095\n",
+        .hits = true },
+}
+
+priv fn check_path_cap(arena: Arena$@)
+    scan.check_samples("the judgment of the path cap's agreement can fire",
+        Sample[]::PATH_CAP_SAMPLES, "path_cap_samples", path_caps_disagree, arena)
+    c: = arena.text().s(harness.read_under_root(HOST_C))
+    for rel in PATH_CAP_USERS
+        c.s(harness.read_under_root(rel))
+    joined: = c.s(STATUS_SPLIT).s(harness.read_under_root(PATH_LEN_KSPL)).take()
+    verdict.check(arena.text().s("KSPL_PATH_CAP in ").s(HOST_C)
+        .s(" is MAX_PATH_LEN + 1 and sizes every path buffer").take(),
+        !path_caps_disagree(joined, arena),
+        arena.text().s("set KSPL_PATH_CAP to ").s(PATH_LEN_KSPL)
+        .s("'s MAX_PATH_LEN + 1, and size each path buffer by the name").take())
+
 fn run(arena: Arena$@) //< runs every check that the runtime and the KSPL side agree
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
     check_reactor_bits(arena)
     check_stdio_bits(arena)
     check_status_table(arena)
+    check_path_cap(arena)
     check_host_spellings(arena)
     check_facade(arena)

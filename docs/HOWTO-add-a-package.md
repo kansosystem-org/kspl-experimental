@@ -19,7 +19,7 @@
 ## The checks that must learn the name
 
 4. **The reference directions** are in `tests/suite/docref_test.kspl`. Add `ksfoo` to `LAYER_FROM`, and a `LAYER_TO` row that starts `"ksfoo docs std root"` and names each package it imports. Add `ksfoo` to the rows of `docs`, `root`, `tests` and `tools`. Left out of `LAYER_FROM`, `make test-docref` fails with "every package folder has a row in the reference directions".
-5. **The table those directions come from** is "The layers" in [`SPEC-documents.md`](SPEC-documents.md). Add `` `ksfoo/` `` to its implementation row, and an arrow (`ksfoo→std`) for each direction of the `layer_to` row. A mismatch fails `make test-conventions` with "the reference-direction table and the check line up".
+5. **The table those directions come from** is "The layers" in [`SPEC-documents.md`](SPEC-documents.md). Add `` `ksfoo/` `` to its implementation row, and an arrow (`ksfoo→std`) for each direction of its `LAYER_TO` row. A mismatch fails `make test-conventions` with "the reference-direction table and the check line up".
 6. **The published API, if it has one**: create an empty `ksfoo/SURFACE.txt`, then write the record:
 
    ```sh

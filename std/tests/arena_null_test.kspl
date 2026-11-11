@@ -11,11 +11,9 @@ import "std/fuzz"
 import "std/http"
 import "std/io"
 import "std/json" + { Json_builder }
-import "std/json_struct"
 import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
 import "std/rand"
-import "std/reflect"
 import "std/regex" { Regex }
 import "std/seq"
 import "std/str" + { Str_builder }
@@ -27,31 +25,6 @@ import "std/verdict"
 // The arena here is null, so what it hands out is heap memory, which `dealloc` frees. [W0104]
 // (a pointer an arena handed out reaching `dealloc`) cannot see that the arena is null.
 ##lint(W0104 = off)
-
-priv struct Null_probe //< a struct `into_struct` fills from JSON
-    name: U8[]
-    count: I64
-
-// The table is written out: a second file holding a table ksplc builds loses the first one's.
-priv const PROBE_FIELDS: reflect.Field_info[2] = ::{::{ .name = "name",
-    .offset = offsetof(Null_probe, name), .kind = .str_field },
-    ::{ .name = "count", .offset = offsetof(Null_probe, count), .kind = .int_field,
-    .extra = ::{ .width = sizeof(I64) } } }
-
-impl Null_probe: reflect.Reflectable
-    fn fields(_r: Self): reflect.Field_info[]
-        return reflect.Field_info[]::PROBE_FIELDS
-
-priv struct Name_list //< a struct whose one field is a list of strings
-    names: List<|U8[]|>
-
-priv const NAME_LIST_FIELDS: reflect.Field_info[1] = ::{::{ .name = "names",
-    .offset = offsetof(Name_list, names), .kind = .list_field,
-    .extra = ::{ .elem = .str_field, .elem_size = sizeof(U8[]) } } }
-
-impl Name_list: reflect.Reflectable
-    fn fields(_r: Self): reflect.Field_info[]
-        return reflect.Field_info[]::NAME_LIST_FIELDS
 
 priv fn freed(s: U8[]) //< gives back one block a null arena handed out
     dealloc(Void$@::s.ptr)
@@ -200,10 +173,7 @@ fn test_null_arena_json() //< a JSON document, and a builder, free with their ow
 
     $b: = Json_builder(null)
     obj: = b.obj().set("name", b.str_val("n")).set("count", b.int_val(2)).build()
-    $probe: Null_probe = ::{ .name = "", .count = 0 }
-    json_struct.into_struct(obj, probe@, null) catch panic("the object fits the struct")
-    assert(probe.name.equals("n") && probe.count == 2I64, "into_struct with a null arena")
-    freed(probe.name)
+    assert(obj.get("name").as_str().unwrap_or("").equals("n"), "a built object reads")
     b.free()
     back_to(before, "a builder given null frees every value it made")
     verdict.pass("A JSON document and a builder made with a null arena free all they made.")
@@ -228,24 +198,6 @@ fn test_json_doc_val_switch() //<
     assert(seen == 3, "each variant binds its one field")
     back_to(before, "each document frees at the end of its turn")
     verdict.pass("A switch over a document's value binds each variant's one field.")
-
-fn test_null_arena_refused_list() //<
-    //< a list refused part way frees with the cleanup `into_struct` documents
-    verdict.start("[json] a list into_struct refused part way, freed as documented test...")
-    before: = mem.heap_used_bytes()
-    doc: = json.parse("{\"names\":[\"a\",1,\"c\"]}", null) catch panic("the fixture parses")
-    $out: Name_list = ::{}
-    $refused: = false
-    json_struct.into_struct(doc.val, out@, null) catch
-        refused = true
-    assert(refused, "an element of another kind refuses the list")
-    // **The elements past the refusal are not counted**: their memory holds nothing written.
-    assert(out.names.len == 2 && out.names[0].equals("a") && out.names[1].len == 0,
-        "a refused list counts what was written, the refused element zeroed")
-    freed_all(out.names@)
-    doc.free()
-    back_to(before, "a refused list frees with each string, then the list")
-    verdict.pass("A list refused part way holds only what was written, and frees as documented.")
 
 priv fn query_refused(text: U8[]): Bool //< whether `parse_query` refuses text, freeing what it took
     $q: = url.parse_query(text, null) catch

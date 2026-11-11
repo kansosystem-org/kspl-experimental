@@ -63,8 +63,7 @@ function ksmdSuggest(ks) {
   function quoted(before) {
     let inside = false;
     for (let i = 1; i < before.length; i++) {
-      if (inside && before[i] === "\\") i++;
-      else if (before[i] === '"') inside = !inside;
+      if (before[i] === '"') inside = !inside;
     }
     return inside;
   }
@@ -102,8 +101,7 @@ function ksmdSuggest(ks) {
     for (let i = 1; i < caret; i++) {
       const c = text[i];
       if (inside) {
-        if (c === "\\") i++;
-        else if (c === '"') inside = false;
+        if (c === '"') inside = false;
       } else if (c === '"') {
         inside = true;
       } else if (c === "(") {

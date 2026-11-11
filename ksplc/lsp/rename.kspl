@@ -3,8 +3,8 @@
 //< refused with a message naming why, in these cases. ① The grammar does not read the new
 //< name as an identifier (`Identifier` in `../kspl.kspeg`). ② A place lies in a file the
 //< workspace walk does not list (`holds` in `workspace.kspl`). ③ The new name is already
-//< declared where it would land. `prepareRename` asks ② of the declaration alone, so the
-//< editor refuses before a name is typed.
+//< declared where it would land. ④ A type call selects the function (`place_refusal`).
+//< `prepareRename` asks ② of the declaration alone, so the editor refuses before a name is typed.
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as _ast_ext
@@ -142,8 +142,8 @@ priv fn place_refusal(spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //
     for i in Range.asc(spots.len)
         s: = spots.get(i)
         if s.node.made_by_compiler()
-            return "this function is selected by a type call. Write its calls as explicit member \
-                calls before renaming it"
+            return "this function is called where the source does not name it: a type call such as \
+                'Vector(1, 2)' selects 'new'. Renaming it would leave those calls behind"
         if s.file.equals(last)
             continue
         last = s.file

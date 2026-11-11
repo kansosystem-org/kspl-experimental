@@ -147,7 +147,7 @@ The program stays in the flash and beeps at every power-on. **To silence it**, c
    ```
 
 2. Unplug USB and plug it in again without BOOTSEL. Expected: **one** beep (initialized), then **two** more once the PC has enumerated it.
-3. A new serial port appears (Device Manager, `ls /dev/tty.*` or `lsusb`): **`ksos CDC`**, VID/PID 0x1209/0x0001.
+3. A new serial port appears (Device Manager, `ls /dev/tty.*` or `lsusb`): **`ksos CDC`**, VID/PID 0x1209/0x0002.
 4. Open it in the Serial Monitor, or with `screen /dev/ttyACM0 115200`. Any baud rate works.
 5. Expected, every lap (about 20 seconds, with other stages' lines between): `[board] round=1`, then `[1]`, `[2]`, `[3]` **in that order**, four times at 0.5-second intervals, and **`[2]`'s line ends with `<END`**.
 
@@ -183,7 +183,7 @@ Caution: **Lift the wheels off before writing it.** Put the body on a box so tha
    2. **Two** beeps, then forward, back, sideways both ways, diagonally, turning both ways.
    3. **Two** beeps, and the wheels stay stopped.
 
-**The first part is the real check.** A wrong order means `motor_pin_a/b` disagrees with the wiring ("The right side reverses pin names and forward/back" in [`SPEC-board.md`](SPEC-board.md)). A wheel turning backward means `board.WHEEL_POLARITY` does not fit this unit ("The direction of rotation differs from unit to unit" in [`SPEC-board.md`](SPEC-board.md)).
+**The first part is the real check.** A wrong order means `board.MOTOR_PIN_A/B` disagrees with the wiring ("The right side reverses pin names and forward/back" in [`SPEC-board.md`](SPEC-board.md)). A wheel turning backward means `board.WHEEL_POLARITY` does not fit this unit ("The direction of rotation differs from unit to unit" in [`SPEC-board.md`](SPEC-board.md)).
 
 In the second part, moving sideways turns the front left and rear right one way, and the other pair the other way. Moving diagonally turns only one diagonal pair. The body must move right for positive `lateral` and clockwise for positive `rotation` in `drive()`.
 
@@ -301,7 +301,7 @@ Caution: **Put the ultrasonic module back afterwards**, or stages 4, 5a and 5b r
    * Device Manager: a COM port under Ports, and **one more entry under Network adapters**.
    * The Serial Monitor: `ncm t= stage= alt= link=down` every second, then `[ncm] link=up` once, with `alt=1`.
 
-Caution: **If the COM port appears but the network adapter does not, remove the old `ksos CDC` and replug.** Windows remembers the driver per VID/PID, and this firmware's PID is 0x0002, not stage 2b's 0x0001. Enable "Show hidden devices" in Device Manager to see the old entry.
+Caution: **If the COM port appears but the network adapter does not, remove the old `ksos CDC` and replug.** Windows remembers the driver per VID/PID, and an older ksos build gave PID 0x0001, not this one's 0x0002. Enable "Show hidden devices" in Device Manager to see the old entry.
 
 Caution: **Windows 10 has no standard CDC-NCM driver**: the adapter shows a "!", and "USB NCM" has to be chosen by hand. Windows 11 ships `UsbNcm.sys`.
 
@@ -665,7 +665,7 @@ Caution: **Lift the wheels off for every step**: the hang test leaves the wheels
 | Do | Expected |
 | :-- | :-- |
 | Drive normally for the 60 seconds, with the remote's stop and re-arm in between | No restart: the report line's `t=` keeps growing and no `restarted by` line appears |
-| Hold about seven seconds to erase the record, then hold about three to print it | No restart during either (`records erased — the policy was written back`, then the whole `[dump]`) |
+| Hold about six seconds to erase the record, then hold about three to print it | No restart during either (`records erased — the policy was written back`, then the whole `[dump]`) |
 | Copy a fresh UF2 with BOOTSEL | The first lines say `restarted by a reboot (boot ROM or debugger)`, or nothing on a power-on; the car drives as usual |
 | A test build: set `HANG_AFTER_ROUNDS` in `lib/ksos/demo/rp2040/rp2040_car_pilot_probe.kspl` to 30, write it, let it drive | About three seconds after starting off the wheels keep turning for at most a second, then stop. The console comes back with `restarted by the watchdog: the program had stopped answering`, the first LED is white, and the line reads `HALTED: restarted by watchdog` |
 | In that build, hold a key about a second | `remote re-armed`, and it drives until the hang again |
@@ -702,9 +702,9 @@ With neither a link nor a PC, **holding a remote key prints the whole record to 
 | Press while running | It stops (`HALTED: stopped by remote`) |
 | Let go, hold about a second, let go | It comes back and starts off |
 | Let go, hold about three seconds, let go | **It prints the record** and stays stopped |
-| Let go, hold about seven seconds, let go | **It erases the record** (`ir_wipe_rounds`) |
+| Let go, hold about six seconds, let go | **It erases the record** |
 
-**The seconds are a guide**: what counts is the laps held (8 to come back, 25 to print; `IR_REARM_ROUNDS` / `IR_DUMP_ROUNDS`). Printing does not release the stop.
+**The seconds are a guide**: what counts is the laps held (8 to come back, 25 to print, 60 to erase; `IR_REARM_ROUNDS` / `IR_DUMP_ROUNDS` / `IR_WIPE_ROUNDS`). Printing does not release the stop.
 
 | On erasing | What happens |
 | :-- | :-- |
@@ -859,7 +859,7 @@ car t=10 mode=manual drive=(0,0,0) servo=90 line=7 ws=0 face=71 trk=0 keys=0 ir=
 | The symptom | The likely cause | What to do |
 | :-- | :-- | :-- |
 | It stays `ir=0/0/0` | Nothing reaches the receiver | Check the remote's battery, direction and distance |
-| Only `bad` grows | Polling too slowly, or noise from fluorescent light or sunlight | Keep `ir_poll_us` under 1.5ms (below) |
+| Only `bad` grows | Polling too slowly, or noise from fluorescent light or sunlight | Keep `IR_POLL_US` under 1.5ms (below) |
 | `ok` grows but `keys=0` | Frames arrive, but their command (`last=`'s `cmd`) is in no row of the table, and is ignored with no beep | Use the bundled remote, and a key from the table |
 
 **The polling interval is the usual culprit.** The driver accepts the leader's mark (nominally 9000µs) from 7500µs. So not calling `try_receive` within 1.5ms of the leader's falling edge refuses the frame.
@@ -892,7 +892,7 @@ The tutorial drives at 50 to 80%. `motor.CAP` is the only cap, held to **a speed
 
 ## Tuning line following
 
-**What stages 7, 9, 11 and 12 share when the car follows a line**: the checks and settings to reach for when it drives badly.
+**What stages 7, 9 and 12 share when the car follows a line**: the checks and settings to reach for when it drives badly.
 
 ### The car's own behaviour when following a line
 
@@ -913,7 +913,7 @@ A car standing still needs a harder push to start than to keep rolling. Caution:
 
 | Where it acts | The value | What it does |
 | :-- | :-- | :-- |
-| The kick at starting | `KICK_GAIN` / `KICK_MS` | Doubles the instruction only on the lap starting from a standstill; raise it if it does not start |
+| The kick at starting | `KICK_GAIN` / `KICK_MS` | Multiplies the instruction by `KICK_GAIN` (3) only on the lap starting from a standstill; raise it if it does not start |
 | The floor per wheel | `WHEEL_MIN_PERCENT` | Lifts a non-zero instruction below it, so no single wheel stays still on a mixed manoeuvre |
 | The running speed | `motor.CAP` | Higher adds overshoot (and shortens the time crossing the line) |
 

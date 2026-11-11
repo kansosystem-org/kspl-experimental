@@ -34,7 +34,7 @@
 #include <unistd.h> /* geteuid */
 
 KSPL_LINK I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 0;
     DIR *d = opendir(path);
     return d ? (I64)(intptr_t)d : 0;
@@ -77,7 +77,7 @@ KSPL_LINK void kspl_dir_close(I64 handle) {
  * False where nothing can be read there. */
 KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *kind_out,
     I64 *mtime_out) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     if (stat(path, &st) != 0) return false;
@@ -92,7 +92,7 @@ KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I3
  * **A separate function, not a field of kspl_path_info** (the reason is at kspl_is_exec below).
  * A file system that keeps whole seconds gives a multiple of 10^9. */
 KSPL_LINK Bool kspl_path_mtime_ns(const U8 *path_ptr, Sz path_len, I64 *ns_out) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     if (stat(path, &st) != 0) return false;
@@ -111,7 +111,7 @@ KSPL_LINK Bool kspl_path_mtime_ns(const U8 *path_ptr, Sz path_len, I64 *ns_out) 
  * link.
  * An addition is always a separate function. */
 KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     struct stat st;
     if (stat(path, &st) != 0) return false;
@@ -124,7 +124,7 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
  * a road out of the root. Refusing is the caller's part (has_link_on_path in std/fs.kspl).
  * A path that is not there is 0 (the function that creates one comes through here). */
 KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
     if (lstat(path, &st) != 0) {
@@ -137,7 +137,7 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
  * long_name, and returns its length. -1 = nothing stands at the path, or the name does not fit.
  * POSIX keeps one name per entry, so it is the last segment as written. */
 KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     Sz start = path_len;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
@@ -158,8 +158,8 @@ KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
  * **The source opens with O_NONBLOCK, and its kind is checked before any read.** A plain open of a
  * FIFO waits for a writer, for good. The flag is cleared once the file is known to be regular. */
 KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
-    char from[4096];
-    char to[4096];
+    char from[KSPL_PATH_CAP];
+    char to[KSPL_PATH_CAP];
     struct stat st;
     int ok = 1;
     if (!kspl_to_cstr(from_ptr, from_len, from, sizeof(from))) return -1;
@@ -204,7 +204,7 @@ KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, 
 }
 
 KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
     return mkdir(path, 0755);
 }
@@ -215,7 +215,7 @@ KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
  * mode from the first byte (a chmod after creating leaves a moment others could open it).
  * What fails partway is removed, so no half-written file stands under the name. */
 KSPL_LINK I32 kspl_create_owned(const U8 *path_ptr, Sz path_len, const U8 *data, Sz len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     Sz done = 0;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
@@ -256,7 +256,7 @@ static int kspl_sync_fd(int fd) {
  * A file system that cannot sync a directory (EINVAL, EBADF) has nothing more to give, so that is
  * no failure. */
 static int kspl_sync_parent(const char *path) {
-    char dir[4096];
+    char dir[KSPL_PATH_CAP];
     const char *slash = strrchr(path, '/');
     size_t n = slash == NULL ? 0 : (slash == path ? 1 : (size_t)(slash - path));
     if (n == 0) {
@@ -290,8 +290,8 @@ KSPL_LINK I32 kspl_stream_sync_disk(void *stream) {
  * file's bits once written. A new `kept` file is made as a plain write makes one. */
 KSPL_LINK I32 kspl_replace_file(const U8 *part_ptr, Sz part_len, const U8 *path_ptr, Sz path_len,
     const U8 *data, Sz len, I32 owner_only) {
-    char part[4096];
-    char path[4096];
+    char part[KSPL_PATH_CAP];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     Sz done = 0;
     int ok = 1;
@@ -323,7 +323,7 @@ KSPL_LINK I32 kspl_replace_file(const U8 *part_ptr, Sz part_len, const U8 *path_
  *   3 = its group or everyone can write it, 4 = not checked here (the Windows side).
  * It follows a link, so a cache folder linked onto another disk is judged by what it reaches. */
 KSPL_LINK I32 kspl_dir_trust(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 1;
     if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 1;
@@ -336,7 +336,7 @@ KSPL_LINK I32 kspl_dir_trust(const U8 *path_ptr, Sz path_len) {
  * secret_trust). The answers are kspl_dir_trust's, for a regular file: 3 means its group or
  * everyone can read or write it. It follows a link, as the reader of the file does. */
 KSPL_LINK I32 kspl_secret_trust(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     struct stat st;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 1;
     if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return 1;
@@ -349,7 +349,7 @@ KSPL_LINK I32 kspl_secret_trust(const U8 *path_ptr, Sz path_len) {
  * Caution: **Use lstat, not stat.** stat answers "a directory" for a link to one, rmdir fails with
  * ENOTDIR, and **the link can never be taken off**. */
 KSPL_LINK I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
     struct stat st;
     if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -394,7 +394,7 @@ KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
    **flock, not fcntl's lock.** fcntl's lock goes the moment the process closes any fd on the file.
  * A second fd in the same process never waits on it. O_CLOEXEC keeps a child from holding it on. */
 KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
-    char path[4096];
+    char path[KSPL_PATH_CAP];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 0;
     /* O_NOFOLLOW: a link planted at the lock's name would have it create or open another file. */
     int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);

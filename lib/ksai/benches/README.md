@@ -82,7 +82,7 @@ The following relationships held on a 4-CPU x86-64 machine with AVX-512 that oth
 - A product rounds its inputs to 8 bits and sums whole numbers. With one input row it runs about four times as fast as decoding each block to F32 did. With 64 rows it runs about twice as fast.
 - With 64 input rows, a block's numbers are made once for all of them. The multiply-adds a second are then two to three times those with one row.
 - Four CPUs take 3 to 3.5 times less time than one.
-- The build for the machine's own CPU takes a tenth to a fifth less time than the default build. The C compiler makes the same 128-bit multiply-adds in both; the rest of the work gains from the wider vectors.
+- The build for the machine's own CPU takes a tenth to a fifth less time than the default build.
 - The real Q4_K, Q5_0, Q6_K and Q8_0 tensors of 0.5B Qwen models decode to the reference's bits.
 
 ## A whole model
@@ -99,11 +99,11 @@ Leave out `-march=native` for the default build. `--piece` sets how many prompt 
 
 `qwen_gguf_check.py` takes the median of three runs of each side: its longest prompt, the conversation with tools, then 64 generated tokens. That prompt is 350 tokens long in Qwen3-Instruct-2507's template and 475 in Qwen3.5's. The following relationships held for Qwen3-4B-Instruct-2507's Q4_K_M file on a 4-CPU x86-64 machine with AVX-512 that other work shared:
 
-- Built for the machine's own CPU, ksai generated at about half llama.cpp's speed, and read the prompt at about a fifth. Before the products multiplied whole numbers, llama.cpp was about five times faster in generating and fifteen times in reading.
+- Built for the machine's own CPU, ksai generated at about half llama.cpp's speed, and read the prompt at about a fifth.
 - The default build was about a tenth slower than the build for the machine's own CPU.
 - Reading a prompt 64 tokens at a time is several times faster than one token at a time.
 - ksai's scores differ from llama.cpp's by less than llama.cpp's own differ between reading a prompt in one batch and token by token.
-- What stands in the way of reading faster is "The kernels are spelt for the auto-vectorizer, not with intrinsics" in [`lib/ksai/docs/DESIGN-learning.md`](../docs/DESIGN-learning.md). The plan to pass it is the ksai section of [`docs/PLAN.md`](../../../docs/PLAN.md).
+- What stands in the way of reading faster is "The kernels are spelt for the auto-vectorizer, not with intrinsics" in [`lib/ksai/docs/DESIGN-learning.md`](../docs/DESIGN-learning.md). The ksai section of [`docs/PLAN.md`](../../../docs/PLAN.md) plans the graphics card instead.
 
 For Qwen3.5-9B's Q3_K_M file, on the same machine and built for its CPU:
 

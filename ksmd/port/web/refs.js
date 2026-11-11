@@ -5,6 +5,8 @@
 // document. The colours follow each change, and go when the cell closes.
 // The editor says which text is a reference and what it names (`ksmd_web_references` in
 // `bridge_tables.kspl`), so the colours agree with what taking the formula attaches.
+// The bracket beside the caret and the one it pairs with are marked in the same copy, as the
+// editor pairs them (`ksmd_web_bracket_pair`), so a bracket inside quoted text is never marked.
 "use strict";
 
 function ksmdRefs(ks) {
@@ -15,6 +17,7 @@ function ksmdRefs(ks) {
   let block = -1;
   let copy = null;
   let frames = [];
+  let refs = []; // the references the box holds now, coloured
   let watch = null;
   // While an input method composes, the box shows its own text and the copy waits.
   let composing = false;
@@ -36,13 +39,13 @@ function ksmdRefs(ks) {
 
   // Gives each reference its colour, from 1: the first cells named take the first colour, and
   // cells named again keep theirs.
-  function colour(refs) {
+  function colour(found) {
     const given = new Map();
-    for (const r of refs) {
+    for (const r of found) {
       if (!given.has(r.key)) given.set(r.key, (given.size % COLOURS) + 1);
       r.colour = given.get(r.key);
     }
-    return refs;
+    return found;
   }
 
   // A text area colours no part of its text. So a copy of the text, coloured, stands behind the
@@ -65,18 +68,32 @@ function ksmdRefs(ks) {
     input.parentNode.insertBefore(copy, input);
   }
 
-  function paint(text, refs) {
+  // The two brackets that pair at the caret, in UTF-16 units: [a, b], or null. A selection, or a
+  // caret beside no bracket that pairs, marks none.
+  function pairAt(text) {
+    if (!text.startsWith("=") || input.selectionStart !== input.selectionEnd) return null;
+    const caret = ks.view.u8len(text.slice(0, input.selectionStart));
+    const out = ks.out(ks.w.ksmd_web_bracket_pair(ks.put(text), caret));
+    if (!out) return null;
+    return JSON.parse(out).map((n) => ks.view.u16At(text, n));
+  }
+
+  // Writes the coloured copy: each reference in its colour, and the brackets that pair marked.
+  function paint(text, pair) {
     copy.textContent = "";
     const line = document.createElement("span");
+    const marks = refs.map((r) => ({ from: r.from, to: r.to, cls: "ref-text", ref: r.colour }));
+    for (const at of pair || []) marks.push({ from: at, to: at + 1, cls: "bracket-pair", ref: 0 });
+    marks.sort((a, b) => a.from - b.from);
     let at = 0;
-    for (const r of refs) {
-      line.append(text.slice(at, r.from));
+    for (const m of marks) {
+      line.append(text.slice(at, m.from));
       const part = document.createElement("span");
-      part.className = "ref-text";
-      part.dataset.ref = String(r.colour);
-      part.textContent = text.slice(r.from, r.to);
+      part.className = m.cls;
+      if (m.ref) part.dataset.ref = String(m.ref);
+      part.textContent = text.slice(m.from, m.to);
       line.appendChild(part);
-      at = r.to;
+      at = m.to;
     }
     // A last line break needs a character after it to take its line, as the box gives it one.
     line.append(text.slice(at), text.endsWith("\n") ? " " : "");
@@ -143,12 +160,8 @@ function ksmdRefs(ks) {
       return;
     }
     if (composing) return;
-    const text = input.value;
-    const refs = colour(text.startsWith("=") ? read(text) : []);
-    const any = refs.length > 0;
-    input.classList.toggle("tinted", any);
-    copy.hidden = !any;
-    if (any) paint(text, refs);
+    refs = colour(input.value.startsWith("=") ? read(input.value) : []);
+    repaint();
     unframe();
     const seen = new Set();
     for (const r of refs) {
@@ -157,6 +170,22 @@ function ksmdRefs(ks) {
       frame(r);
     }
   }
+
+  // Shows the copy again, as the caret moves: the copy shows while it marks anything.
+  function repaint() {
+    if (!input || composing || !input.isConnected) return;
+    const text = input.value;
+    const pair = pairAt(text);
+    const any = refs.length > 0 || !!pair;
+    input.classList.toggle("tinted", any);
+    copy.hidden = !any;
+    if (any) paint(text, pair);
+  }
+  // The caret moves without an input event: by the arrow keys, a press, or Home and End.
+  const moved = () => {
+    if (input && document.activeElement === input) repaint();
+  };
+  document.addEventListener("selectionchange", moved);
 
   // Serves a cell's box while it is open; `at` is the block of its table. A box opened by an input
   // method's first key is opened `composing`.
@@ -171,6 +200,8 @@ function ksmdRefs(ks) {
     box.addEventListener("scroll", fit);
     box.addEventListener("compositionstart", onCompose);
     box.addEventListener("compositionend", onComposed);
+    box.addEventListener("keyup", moved);
+    box.addEventListener("mouseup", moved);
     // The box grows with its lines, which moves the rows below it, and with them the frames.
     if (window.ResizeObserver) {
       watch = new ResizeObserver(() => sync());
@@ -206,8 +237,11 @@ function ksmdRefs(ks) {
       input.removeEventListener("scroll", fit);
       input.removeEventListener("compositionstart", onCompose);
       input.removeEventListener("compositionend", onComposed);
+      input.removeEventListener("keyup", moved);
+      input.removeEventListener("mouseup", moved);
     }
     input = null;
+    refs = [];
   }
 
   // A showing of the document can put new tables in place, and the frames are drawn again; it can

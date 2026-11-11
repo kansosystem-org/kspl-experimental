@@ -29,7 +29,7 @@ priv const TRAP_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0",
         //< C's traps for what C leaves undefined and KSPL defines, which stop the program
         //< A trap needs no sanitizer library, so every C compiler the suite runs on can build it.
         //< **At `-O0` a misaligned store or an `int` overflow still answers right.** So only a trap
-        //< shows that the C is undefined. A word store to a `#packed` field faults on a Cortex-M0.
+        //< shows that the C is undefined.
 
 priv const OPT_CFLAGS: U8[][_] = ::{ "-std=c99", "-O2" } //<
     //< The level a program ships at (`ksplc build`), where the optimizer acts on C's assumptions
@@ -46,22 +46,6 @@ int main(void) {
     return 0;
 }
 """ //< a misaligned store, which a build with trap_cflags must stop on
-
-priv const PACKED_FN: U8[] = "_wire_fill(" //<
-    //< how the IR names `wire_fill` (`tests/prog/equiv_shapes.kspl`)
-priv const PACKED_GEP: U8[] = "_Wire, ptr " //< a GEP into `Wire` itself, not into `Wire_pair`
-
-priv const PACKED_IR_SAMPLE: U8[] =
-    """define void @x_wire_fill(ptr %ws) {
-    %1 = getelementptr inbounds %x_Wire, ptr %ws, i32 0, i32 1
-    store i32 7, ptr %1, align 1
-    %2 = getelementptr inbounds [2 x i32], ptr %1, i32 0, i32 1
-    store i32 8, ptr %2
-    store i8 1, ptr %1
-    %3 = load i32, ptr %1
-    store i32 9, ptr %ws
-}
-""" //< through `Wire`: two with no `align`, one with and a byte's; one access outside it
 
 priv struct Built //< the result of building and running
     //< Caution: **Do not mix "it did not build" with "the output was empty".**
@@ -131,57 +115,6 @@ priv fn binary_literals(text: U8[], arena: Arena$@): List<|U8[]|> //<
             out.push(text.sub(i, end - i))
     return out
 
-priv struct Packed_scan //< `packed_scan`'s answer
-    seen: Sz //< how many loads and stores went through a `Wire` field
-    bad: List<|U8[]|> //< those with no `align`, a line each
-
-priv fn ptr_operand(line: U8[]): U8[] //< the register a load, a store or a GEP reaches through
-    switch line.find_str(", ptr ")
-    case .some(at)
-        rest: = line.sub_from(at + 6)
-        switch rest.find_str(",")
-        case .some(end)
-            return rest.sub(0, end)
-        case .none
-            return rest.trim_spaces()
-    case .none
-        return ""
-
-priv fn defined_reg(line: U8[]): U8[] //< the register a line defines (`%5 = ...`), empty if none
-    switch line.find_str(" = ")
-    case .some(at)
-        return line.sub(0, at) if line.starts_with("%") else ""
-    case .none
-        return ""
-
-priv fn packed_scan(ir: U8[], arena: Arena$@): Packed_scan //<
-    //< The loads and stores `wire_fill` makes through a `#packed` field, and those with no `align`
-    //< One without an `align` takes its type's own alignment, which a `Wire` field lacks; x86 runs
-    //< it unharmed, so the IR is read. A one-byte access needs none.
-    $out: = Packed_scan::{ .seen = 0, .bad = List<|U8[]|>(arena) }
-    $held: = List<|U8[]|>(arena)
-    $inside: = false
-    for line in ir.lines(arena)
-        if line.starts_with("define ") || line.starts_with("}")
-            inside = line.starts_with("define ") && line.find_str(PACKED_FN).is_some()
-            continue
-        t: = line.trim_spaces()
-        if !inside || t.len == 0
-            continue
-        through: = held.contains(ptr_operand(t))
-        if t.find_str("= getelementptr ").is_some()
-            if through || t.find_str(PACKED_GEP).is_some()
-                held.push(defined_reg(t))
-            continue
-        is_access: = t.find_str("= load ").is_some() || t.starts_with("store ")
-        is_byte: = t.find_str("= load i8,").is_some() || t.starts_with("store i8 ")
-        if !is_access || is_byte || !through
-            continue
-        out.seen += 1
-        if t.find_str(", align ").is_none()
-            out.bad.push(t)
-    return out
-
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     dir: = harness.sandbox("equiv")
@@ -227,7 +160,6 @@ fn main(): I32
         return harness.finish()
     verdict.check("the C and LLVM output agree", c.out.equals(l.out),
         harness_build.first_diff(c.out, "C", l.out, "LLVM", arena))
-    check_packed_ir(fs.join(work, "l.ll", arena), arena)
     return harness.finish()
 
 priv fn check_level(cc: U8[], c_gen: U8[], exe: U8[], want: U8[], arena: Arena$@) //<
@@ -282,17 +214,3 @@ priv fn check_traps(work: U8[], c_gen: U8[], want: U8[], arena: Arena$@) //<
         t.out.equals(want),
         arena.text().s("it ended with '").s(got.get(got.len - 1) if got.len > 0 else "")
         .s("'; a trap stops it early, with a signal's exit code").take())
-
-priv fn check_packed_ir(ll: U8[], arena: Arena$@) //<
-    //< Every load and store genllvm makes through a `#packed` field carries the field's alignment
-    sample: = packed_scan(PACKED_IR_SAMPLE, arena)
-    verdict.check("the IR scan finds the accesses through a `#packed` field with no `align`",
-        sample.seen == 3 && sample.bad.len == 2,
-        arena.text().s("seen \{sample.seen\}, without `align` \{sample.bad.len\}").take())
-    ir: = io.read_file(ll, null) catch
-        verdict.check("a `#packed` field is loaded and stored at its alignment", false,
-            "cannot read the IR")
-        return
-    scan: = packed_scan(ir, arena)
-    verdict.check_list("a `#packed` field is loaded and stored at its alignment", scan.seen,
-        "accesses", scan.bad@, "give the load or store the field's `align` (op_load_place)")

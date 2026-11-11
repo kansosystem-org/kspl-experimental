@@ -350,30 +350,29 @@ fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Ast_node$@? //<
         return .none
     return .some(decl)
 
+priv fn field_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< The field called name among a struct declaration's children
+    for f in decl.children
+        if f.kind_id == .k_struct_field
+            id_n: = f.find_child(.k_identifier)
+            if id_n != null && id_n.text.equals(name)
+                return .some(f)
+    return .none
+
 priv fn field_of(c: Sema_ctx$@, owner: U8[], name: U8[]): Ast_node$@? //<
     //< The field of that name in the struct a type's name stands for
     switch struct_decl_of(c, owner)
     case .some(decl)
-        for f in decl.children
-            if f.kind_id == .k_struct_field
-                id_n: = f.find_child(.k_identifier)
-                if id_n != null && id_n.text.equals(name)
-                    return .some(f)
-    case .none {}
-    return .none
+        return field_named(decl, name)
+    case .none
+        return .none
 
 priv fn declared_field(c: Sema_ctx$@, struct_name: U8[], name: U8[]): Ast_node$@? //<
     //< The field called name in the declaration of the struct struct_name names
     struct_sym: = c.symtab.resolve(struct_name).unwrap_or(null)
     if struct_sym == null || struct_sym.node == null
         return .none
-    for field_node in struct_sym.node.children
-        if field_node.kind_id != .k_struct_field
-            continue
-        fid: = field_node.find_child(.k_identifier)
-        if fid != null && fid.text.equals(name)
-            return .some(field_node)
-    return .none
+    return field_named(struct_sym.node, name)
 
 priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
     //< What a `.name` names on a type: a method on its table, a field, or a `<type>.<name>` method

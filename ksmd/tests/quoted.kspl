@@ -1,0 +1,86 @@
+//< Text in a formula's quotes: each byte stands for itself, `\` too, and `""` is one '"'
+//< Also a `%ksmd 1` file, whose formulas quote text by JSON's rules, read into today's rule. The
+//< rules are "Text in a formula" in `ksmd/docs/DESIGN-ksmd.md`.
+import "ksmd/calc/calc"
+import "ksmd/calc/formula" { Token_kind, shift_formula, token_at, unquoted }
+import "ksmd/tests/calculation" { cases_with }
+import "ksmd/tests/support" { opened, read, saves, written }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const HEAD: U8[] = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+
+fn run()
+    tokens()
+    values()
+    version_1()
+    shifting()
+
+priv fn tokens() //< where quoted text ends, and the text it means
+    token("a backslash is text, also before the closing quote", "\"\\src\\\"", .text, 7, "\\src\\")
+    token("a doubled quote is one quote, inside one token", "\"a\"\"b\" & 1", .text, 6, "a\"b")
+    token("two quotes alone are empty text", "\"\"", .text, 2, "")
+    token("three quotes open text that holds a quote", "\"\"\"", .bad, 3, "")
+    token("a lone quote opens text that never closes", "\"", .bad, 1, "")
+    token("a backslash at the end leaves the text open", "\"a\\", .bad, 3, "")
+    token("a quoted name before a cell is a reference", "\"Q1 \"\"x\"\"\".A1", .reference, 13, "")
+
+priv fn token(what: U8[], text: U8[], kind: Token_kind, end: Sz, means: U8[]) //<
+    //< The first token of `text` is of `kind`, ends at `end` and, as text, means `means`
+    defer arena: = Arena(4096)
+    t: = token_at(text, 0)
+    meant: = unquoted(t.text, arena) if kind == .text else ""
+    verdict.check(what, t.kind == kind && t.end == end && meant.equals(means),
+        arena.text().s(t.kind.variant_name()).s(" \{t.end\} ").s(meant).take())
+
+// Each case runs in table `t`, whose `A1` is 2 and `B1` is "Pens".
+priv fn values() //< what quoted text calculates to, and `char` for what text cannot hold
+    cases_with(U8[][]::{ "\".\\src\\Module\\\" -> \".\\src\\Module\\\"",
+        "like(\".\\src\\a.c\", \".\\src\\*\") -> true", "len(\"\\\") -> 1",
+        "\"say \"\"hi\"\"\" -> \"say \"hi\"\"", "len(\"\"\"\") -> 1", "\"\\n\" -> \"\\n\"",
+        "len(\"a\" & char(10) & \"b\") -> 3", "char(65) -> \"A\"", "char(12354) -> \"あ\"",
+        "char(0) -> #NUM!", "char(55296) -> #NUM!", "char(1114112) -> #NUM!" }, "")
+
+priv fn version_1() //< a `%ksmd 1` file reads its formulas' text by JSON's rules, and saves as 2
+    defer arena: = Arena(64 * 1024)
+    old: =
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| =\"\\\\src\\\\\" | =\"say \
+            \\\"hi\\\"\" | =substitute(\"x\\ny\", \"\\n\", \", \") |\n| \"a\\\"|b\" | =\"a\\\"|b\" \
+            | =\"\\u0041\\/\" & \"\\q\" {color=\"#c00000\"} |\n:::\n\n:::table name=\"Q1 \
+            \\\"x\\\"\"\n| \"n\" |\n| 5 |\n:::\n\n:::table name=\"u\"\n| \"m\" |\n| =\"Q1 \
+            \\\"x\\\"\".A1 * 2 |\n:::\n"
+    ed: = opened(old, arena)
+    saves("a version 1 file saves as version 2, its formulas' quoted text by today's rule", ed@,
+        arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| =\"\\src\\\" | =\"say \
+            \"\"hi\"\"\" | =substitute((\"x\" & char(10) & \"y\"), char(10), \", \") |\n| \
+            \"a\\\"|b\" | =\"a\"\"|b\" | =\"A/\" & \"\\q\" {color=\"#c00000\"} |\n:::\n\n:::table \
+            name=\"Q1 \\\"x\\\"\"\n| \"n\" |\n| 5 |\n:::\n\n:::table name=\"u\"\n| \"m\" |\n| =\"Q1 \
+            \"\"x\"\"\".A1 * 2 |\n:::\n")
+    values: = calc.calculate(ed.doc@, "2026-10-23", arena)
+    verdict.check("a doubled backslash in version 1 is one backslash",
+        values.at(0, 0, 0).text.equals("\\src\\"), values.at(0, 0, 0).text)
+    verdict.check("an escaped quote in version 1 is a quote",
+        values.at(0, 0, 1).text.equals("say \"hi\""), values.at(0, 0, 1).text)
+    verdict.check("an escaped line break in version 1 is still a line break",
+        values.at(0, 0, 2).text.equals("x, y"), values.at(0, 0, 2).text)
+    verdict.check("a pipe after an escaped quote stays in its cell",
+        values.at(0, 1, 1).text.equals("a\"|b"), values.at(0, 1, 1).text)
+    verdict.check("a quoted table name with escapes still names its table",
+        values.at(2, 0, 0).number == 10.0, "")
+
+priv fn shifting() //< a paste shifts references and leaves quoted text as written
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read(arena.text().s(HEAD).s("| 1 | 2 |\n| 3 | 4 |\n:::\n").take(), arena)
+    defer $out: = Str_builder()
+    shift_formula(doc@, 0, "A1 & \"A1\\\" & B1 & \"\"\"B1\"", 1, 0, out@)
+    want: = "A2 & \"A1\\\" & B2 & \"\"\"B1\""
+    verdict.check("a reference after a backslash and a quote shifts; text in quotes stays",
+        out.slice().equals(want), out.slice())
+    ed: =
+        opened(arena.text().s(HEAD).s("| 1 | =A1 & \".\\src\\\" & \"\"\"\" |\n:::\n").take(), arena)
+    verdict.check("a formula with a backslash and a doubled quote saves as written",
+        written(ed.doc@, arena).find_str("=A1 & \".\\src\\\" & \"\"\"\" |").is_some(), "")

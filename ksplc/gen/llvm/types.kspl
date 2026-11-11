@@ -11,7 +11,6 @@ import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/math"
-import "std/str"
 
 priv const MAX_LLVM_TYPE_DEPTH: Sz = 1000 //<
     //< The depth limit for Ctx.t's recursive walk down a `[N]` array chain
@@ -22,17 +21,28 @@ priv const MAX_INLINE_ZERO_FILL_BYTES: Sz = 256 //<
     //< The largest aggregate, in bytes, still zeroed with one `store <T> zeroinitializer`
     //< Above it, llvm.memset is used (see emit_zero_fill); a small type keeps a readable store.
 
-priv fn llvm_prim_name(base_str: U8[]): U8[] //<
-    //< It returns the LLVM scalar type for a KSPL primitive type name ("" for a non-primitive)
+priv fn llvm_prim_name(type_id: I32): U8[] //<
+    //< It returns the LLVM scalar type for a built-in type's id ("" for any other type)
     //< Ctx.t_impl and Ctx.is_llvm_aggregate both read this one table. Two tables would let "an i64
-    //< treated as an aggregate" slip in silently.
-    prim_map: = U8[][]::{ "I8", "i8", "I16", "i16", "I32", "i32", "I64", "i64", "U8", "i8", "U16",
-        "i16", "U32", "i32", "U64", "i64", "Sz", "i64", "Bool", "i8", "F32", "float", "F64",
-        "double" }
-    for $i: = 0; i < prim_map.len; i += 2
-        if base_str.equals(prim_map[i])
-            return prim_map[i + 1]
-    return ""
+    //< treated as an aggregate" slip in silently. The switch names every built-in, so a new one
+    //< does not compile until it has a row here.
+    if !sema_type_env.is_builtin(type_id)
+        return ""
+    switch sema_type_env.Builtin_type_id::type_id
+    case .bool_type, .i8_type, .u8_type
+        return "i8"
+    case .i16_type, .u16_type
+        return "i16"
+    case .i32_type, .u32_type
+        return "i32"
+    case .i64_type, .u64_type, .size_type
+        return "i64"
+    case .f32_type
+        return "float"
+    case .f64_type
+        return "double"
+    case .unknown, .void_type, .void_ptr
+        return ""
 
 impl Genllvm_ctx
     fn reg_str(r: Self$@, reg: I32): U8$[]
@@ -130,14 +140,9 @@ impl Genllvm_ctx
 
     fn emit_alloca(r: Self$@, slot: U8[], type_id: I32) //<
         //< It writes `<slot> = alloca <type>` to the alloca group at the function's start
-        //< An `#align(N)` struct gets `, align N` as well.
-        align_val: = r.get_struct_align(type_id)
         prev: = r.emit.target
         r.emit.target = .alloca
-        r.s("    ").s(slot).s(" = alloca ").t(type_id)
-        if align_val > 0
-            r.s(", align \{align_val\}")
-        r.s("\n")
+        r.s("    ").s(slot).s(" = alloca ").t(type_id).s("\n")
         r.emit.target = prev
 
     fn emit_zero_fill(r: Self$@, ptr: U8[], type_id: I32) //<
@@ -159,18 +164,6 @@ impl Genllvm_ctx
         r.s("    %\{res_reg\} = load ").t(type_id).s(", ptr ").s(ptr).s("\n")
     fn op_store(r: Self$@, type_id: I32, val: U8[], ptr: U8[])
         r.s("    store ").t(type_id).s(" ").s(val).s(", ptr ").s(ptr).s("\n")
-    fn op_load_place(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[], place: Ast_node$@) //<
-        //< op_load from a place, told the alignment a `#packed` struct leaves it
-        //< Caution: **A load or store with no `align` takes its type's own.** So a field of a
-        //< `#packed` struct read or written without one faults on a Cortex-M0.
-        r.s("    %\{res_reg\} = load ").t(type_id).s(", ptr ").s(ptr).place_align(place).s("\n")
-    fn op_store_place(r: Self$@, type_id: I32, val: U8[], ptr: U8[], place: Ast_node$@) //<
-        //< op_store to a place, told the alignment a `#packed` struct leaves it (op_load_place)
-        r.s("    store ").t(type_id).s(" ").s(val).s(", ptr ").s(ptr).place_align(place).s("\n")
-    priv fn place_align(r: Self$@, place: Ast_node$@): Self$@ //<
-        //< `, align N` where packing lowers it
-        align: = r.sema.packed_place_align(place)
-        return r.s(", align \{align\}") if align > 0 else r
     fn op_gep(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[], idx0: I32, idx1: I32)
         r.s("    %\{res_reg\} = getelementptr inbounds ").t(type_id).s(", ptr ").s(ptr)
             .s(", i32 \{idx0\}, i32 \{idx1\}\n")
@@ -252,8 +245,7 @@ impl Genllvm_ctx
         default {}
 
         // The LLVM IR has no const qualifier; the plain base type is used.
-        base_str: = r.env.get_str(r.env.strip_const(real_id))
-        prim: = llvm_prim_name(base_str)
+        prim: = llvm_prim_name(r.env.strip_const(real_id))
         if prim.len > 0
             return r.s(prim)
         // Everything else is a user-defined type such as a struct or an enum.
@@ -289,7 +281,7 @@ impl Genllvm_ctx
         default {}
 
         // A primitive gives the scalar type, anything else a named struct or trait type.
-        return llvm_prim_name(r.env.get_str(r.env.strip_const(real_id))).len == 0
+        return llvm_prim_name(r.env.strip_const(real_id)).len == 0
 
     fn ret_needs_sret(r: Self$@, type_id: I32): Bool //<
         //< Whether a return type type_id is returned by an explicit `sret` pointer argument
@@ -299,30 +291,6 @@ impl Genllvm_ctx
         //< chosen independently without drifting from C. Where a form that could drift appears,
         //< gen/llvm/decl.kspl fails with an ICE.
         return r.is_llvm_aggregate(type_id)
-    fn get_struct_align(r: Self$@, type_id: I32): I32 //<
-        //< The alignment an alloca or global of the type must be told (0 where LLVM's own is right)
-        //< A named struct type cannot carry an alignment. So each alloca or global adds `, align N`
-        //< taken from here: an `#align(N)` struct's N, and ksplc's own for a laid one (`is_laid`).
-        //< LLVM takes a laid struct's packed type for byte-aligned. An array asks of its element.
-        real_id: = r.env.get_clean_real_type(type_id)
-        switch r.env.get_info(real_id)
-        case .array(elem_id, _size)
-            return r.get_struct_align(elem_id)
-        case .enum_type(def)
-            // A tagged union's type aligns to 8 at most (its words are i64 at most).
-            if !def.is_scalar()
-                lay_align: = I32::r.sema.type_layout(real_id).align
-                return lay_align if lay_align > 8 else 0
-        default {}
-        // With an immutability qualifier on the type name, the struct definition is not found.
-        // The `#align(N)` is then silently lost (it is stripped for the same reason as in t_impl).
-        if sdef: = r.env.get_struct_def(r.env.get_str(real_id))
-            if sdef.align_attr > 0
-                return sdef.align_attr
-            if r.is_laid(real_id, 0)
-                return I32::r.sema.type_layout(real_id).align
-        return 0
-
     fn enum_tag_type(r: Self$@, enum_type: I32): I32 //< a tagged union's tag type: its base type
         if def: = r.env
             .get_enum_def(r.env.get_str(r.env.get_clean_real_type(enum_type)))
@@ -383,65 +351,15 @@ impl Genllvm_ctx
     fn payload_field_ptr(r: Self$@, enum_ptr: U8[], enum_type: I32,
         v_def: sema_type_def.Enum_variant$@, k: Sz): U8$[] //<
             //< The address of a tagged union's payload field k, at ksplc's offset from its start
-            //< Caution: **Do not reach it through a struct of the payload's types.** LLVM lays that
-            //< out by its own alignments. So a field after an `#align(N)` struct, or a payload
-            //< aligned past 8, lands elsewhere than in C and in a global's constant (decl.kspl).
+            //< Caution: **Do not reach it through a struct of the payload's types.** The offset is
+            //< ksplc's one placement (`enum_parts` in `sema/decl/layout.kspl`), which a global's
+            //< constant uses too (decl.kspl); a second placement could drift from it.
         off: =
             r.sema.enum_payload_offset(enum_type) + r.sema
             .payload_field_offset(v_def, v_def.payload_fields.get(k).name)
         reg: = r.next_reg()
         r.s("    %\{reg\} = getelementptr inbounds i8, ptr ").s(enum_ptr).s(", i64 \{off\}\n")
         return r.reg_str(reg)
-
-    fn is_laid(r: Self$@, type_id: I32, depth: Sz): Bool //<
-        //< Whether the struct's LLVM type is written at ksplc's layout, with explicit padding
-        //< LLVM lays a struct out by its fields' own alignments, and an `#align(N)` struct has none
-        //< to show it. So a struct holding one (or being one) would put its fields elsewhere than C
-        //< and `offsetof` do. Such a struct, and every struct holding it, is written packed, each
-        //< field at sema's offset and padded to sema's size.
-        if depth >= MAX_LLVM_TYPE_DEPTH
-            return false
-        real_id: = r.env.get_clean_real_type(type_id)
-        switch r.env.get_info(real_id)
-        case .array(elem_id, _size)
-            return r.is_laid(elem_id, depth + 1)
-        case .enum_type(def)
-            // A tagged union aligned past 8 has no LLVM type showing it (its words are i64 at
-            // most).
-            return !def.is_scalar() && r.sema.type_layout(real_id).align > 8
-        case .struct_type(def)
-            if def.is_packed
-                return false
-            if def.align_attr > 0
-                return true
-            for f in def.fields_list
-                if r.is_laid(f.type_id, depth + 1)
-                    return true
-            return false
-        default
-            return false
-
-    fn field_index(r: Self$@, type_id: I32, idx: I32): I32 //<
-        //< The LLVM element index of a struct's field number idx
-        //< The same number unless the struct is laid, where padding elements come between.
-        real_id: = r.env.get_clean_real_type(type_id)
-        if !r.is_laid(real_id, 0)
-            return idx
-        $piece: I32 = 0
-        $pos: Sz = 0
-        switch r.env.get_info(real_id)
-        case .struct_type(def)
-            for i in Range.asc(def.fields_list.len)
-                f: = def.fields_list.get(i)
-                off: = r.sema.field_offset_of(real_id, f.name, null) catch pos
-                if off > pos
-                    piece += 1
-                if I32::i == idx
-                    return piece
-                piece += 1
-                pos = off + r.sema.type_layout(f.type_id).size
-        default {}
-        return idx
 
 fn emit_slice_base_types(cg: Genllvm_ctx$@) //< it defines the base types of a string slice
     cg.s("%U8_Slice = type { ptr, i64 }\n")
@@ -499,19 +417,12 @@ impl Ast_node
             return ""
         return base_core.arena.dup_str(cg.mangled_in_scratch(r.type_id))
 
-    priv fn emit_llvm_struct(r: Ast_node$@, cg: Genllvm_ctx$@)
+    priv fn emit_llvm_struct(r: Ast_node@, cg: Genllvm_ctx$@)
         m_name: = r.mangled_type_name(cg)
         if m_name.len == 0
             return
 
-        $is_packed: = false
-        if struct_def: = cg.env.get_struct_def(cg.env.get_str(r.type_id))
-            is_packed = struct_def.is_packed
-            if cg.is_laid(r.type_id, 0)
-                r.emit_llvm_laid_struct(cg, m_name, struct_def)
-                return
-
-        cg.s("%").s(m_name).s(" = type <{ " if is_packed else " = type { ")
+        cg.s("%").s(m_name).s(" = type { ")
 
         $is_first: = true
         for c in r.children
@@ -522,28 +433,7 @@ impl Ast_node
                         cg.s(", ")
                     cg.t(type_node.type_id)
                     is_first = false
-        cg.s(" }>\n" if is_packed else " }\n")
-
-    priv fn emit_llvm_laid_struct(r: Ast_node$@, cg: Genllvm_ctx$@, m_name: U8[],
-        def: sema_type_def.Struct_def@) //<
-            //< A laid struct's type: packed, each field at sema's offset, `i8` padding around
-            //< Caution: **Keep the pieces in step with `field_index`**, which counts them to find
-            //< one.
-        cg.s("%").s(m_name).s(" = type <{ ")
-        $pos: Sz = 0
-        $first: = true
-        for f in def.fields_list
-            off: = cg.sema.field_offset_of(r.type_id, f.name, r) catch pos
-            if off > pos
-                cg.s("" if first else ", ").s("[\{off - pos\} x i8]")
-                first = false
-            cg.s("" if first else ", ").t(f.type_id)
-            first = false
-            pos = off + cg.sema.type_layout(f.type_id).size
-        size: = cg.sema.type_layout(r.type_id).size
-        if size > pos
-            cg.s("" if first else ", ").s("[\{size - pos\} x i8]")
-        cg.s(" }>\n")
+        cg.s(" }\n")
 
     priv fn emit_llvm_enum(r: Ast_node@, cg: Genllvm_ctx$@)
         m_name: = r.mangled_type_name(cg)

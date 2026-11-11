@@ -2,11 +2,6 @@
 //< `layout_targets_test.kspl` compiles it for each machine ksplc knows, and clang compiles the C
 //< for the same machine. The C checks each folded number, so a size laid out wrongly fails there.
 //< Its entry points answer what the folds decided, for a machine that runs it (wasm32 under node).
-import "std/json"
-import "std/json_struct"
-import "std/mem"
-import "std/reflect"
-
 trait Shape //< a trait value: an object and its table of methods
     fn area(r: Self): I64
 
@@ -29,22 +24,9 @@ enum Pick //< a tagged enumeration whose payload holds a pointer and a 64-bit fi
     one(at: U8@, n: Sz)
     two(d: I64)
 
-#packed
-struct Tight
-    a: U8
-    n: Sz
-    d: I64
-
-#align(16)
-struct Lined
-    a: U8
-    p: U8@
-
-struct Spec //< what reflection walks: an option over `Sz` is read past its tag at a folded offset
+struct Spec //< a field after an option over `Sz`: its place stands on the option's tag and padding
     count: Sz?
     after: I32
-
-impl Spec: reflect.Reflectable {}
 
 struct Holder
     words: Sz[2]
@@ -62,17 +44,17 @@ $pick_bytes: U8[sizeof(Pick)] = ::{}
 const FN_BYTES: Sz = sizeof(fn(): I32)
 const SLICE_BYTES: Sz = sizeof(U8[])
 const TRAIT_BYTES: Sz = sizeof(Shape)
-const TIGHT_BYTES: Sz = sizeof(Tight)
-const LINED_BYTES: Sz = sizeof(Lined)
 const RESULT_BYTES: Sz = sizeof(I64!U8)
 const WIDE_D_AT: Sz = offsetof(Wide, d)
-const TIGHT_D_AT: Sz = offsetof(Tight, d)
+const OPTION_BYTES: Sz = sizeof(Sz?)
+const SPEC_AFTER_AT: Sz = offsetof(Spec, after)
+const WIDE_OPTION_BYTES: Sz = sizeof(I64?) //<
+    //< an option over a field aligned to 8, even on a 32-bit machine
+const HOLDER_TAIL_AT: Sz = offsetof(Holder, tail)
 // Named through constants, so the C holds each folded number; a `sizeof` here would stay C's.
-$sizes: Sz[8] = ::{ FN_BYTES, SLICE_BYTES, TRAIT_BYTES, TIGHT_BYTES, LINED_BYTES, RESULT_BYTES,
-    WIDE_D_AT, TIGHT_D_AT }
+$sizes: Sz[9] = ::{ FN_BYTES, SLICE_BYTES, TRAIT_BYTES, RESULT_BYTES, WIDE_D_AT, OPTION_BYTES,
+    SPEC_AFTER_AT, WIDE_OPTION_BYTES, HOLDER_TAIL_AT }
 $top_bits: Sz = 64 if sizeof(Sz) == 8 else 32
-
-$heap: U8[4096] = ::{}
 
 extern fn two_ptrs(): Sz //< two pointers' bytes, through a chain of constants
     return TWO_PTR_BYTES
@@ -113,30 +95,6 @@ extern fn cast_len(): Sz //< a slice cast that stands on two element sizes being
     h: Holder = ::{ .words = ::{ 1, 2 }, .tail = 9 }
     view: = U8@[]::h.words
     return view.len
-
-extern fn json_count(): I64 //< reflection writing an option over `Sz`, read back
-    $a: = mem.Arena.from_buffer(Void$@::heap@, heap.len)
-    $b: = json.Json_builder(a@)
-    s: Spec = ::{ .count = .some(7), .after = 99 }
-    v: = json_struct.from_struct(s@, b@) catch .null_val
-    switch v.get("count")
-    case .int_val(i)
-        return i
-    default
-        return -1
-
-extern fn json_after(): I32 //<
-    //< reflection reading into the option, and the field after it left whole
-    $a: = mem.Arena.from_buffer(Void$@::heap@, heap.len)
-    doc: = json.parse("{\"count\": 7, \"after\": 99}", a@) catch
-        return -1
-    $s: Spec = ::{ .count = .none, .after = 0 }
-    json_struct.into_struct(doc.val, s@, a@) catch {}
-    switch s.count
-    case .some(n)
-        return s.after if n == 7 else -2
-    default
-        return -1
 
 fn main(): I32
     return 0

@@ -127,6 +127,8 @@ export function own(helpers) {
       // empty or as text, which the worker alone cannot do.
       // A failure also gives the record of where each key and each focus went, and when the table
       // was drawn again: the third failure showed the first key alone lost, the box holding `00`.
+      // The fourth showed every key in the box and the row unchanged: the press had landed on the
+      // column's name, as the table moved down a line when Insert Function closed (`redraws.mjs`).
       await d.js(RECORD);
       await d.click('#doc td[data-r="0"][data-c="0"]');
       await d.type("200");
@@ -258,7 +260,7 @@ export function own(helpers) {
       await dialog("host-data/part.ksmd");
       await d.js("document.querySelector('#browse [data-browse=\"ok\"]').click()");
       await idle(d);
-      check(ctx.disk("host/host-data/part.ksmd") === "%ksmd 1\n",
+      check(ctx.disk("host/host-data/part.ksmd") === "%ksmd 2\n",
         "Insert, Include starts an empty document in the open one's data folder",
         String(ctx.disk("host/host-data/part.ksmd")));
       check((await source()).includes(':::include path="host-data/part.ksmd"'), "and puts its clause at the caret",

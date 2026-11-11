@@ -1,6 +1,8 @@
 // The served page, shown again by work that ended later while the person is in the middle of
 // something: typing in the find bar or in Insert Function, reading a message, composing in a cell,
-// or typing in a cell while a pasted image is saved. Each keeps what the person was doing.
+// typing in a cell while a pasted image is saved, or typing in the formula bar. Each keeps what
+// the person was doing.
+// A table also stands still while a bar or a dialog holds the focus, so a press lands where aimed.
 // The showing is made to come at a known moment: an include changes on disk, and the window is
 // looked at again (`check` in `ksmd/port/web/file.js`), which fetches it and shows the tables again.
 // `redraws(t)` takes `served.mjs`'s helpers, and returns its section.
@@ -13,6 +15,20 @@ import { CTRL, H, SHIFT, check } from "./drive.mjs";
 const PART = (n) => `${H}Part ${n}.\n\n:::table name="p"\n| "n" |\n| ${n} |\n:::\n`;
 const DOC = `${H}First paragraph.\n\n:::include path="redraw-part.ksmd"\n:::\n\n:::table name="t"\n` +
   "| \"a\" | \"b\" |\n| 1 | =A1*2 |\n| 2 | =A2*2 |\n:::\n\nLast paragraph.\n";
+// The caret stands in a gap, an empty line, above the table: no text stands before it.
+const GAPPED = `${H}:::include path="redraw-part.ksmd"\n:::\n\n:::table name="t"\n| "a" | "b" |\n| 1 | =A1*2 |\n:::\n`;
+// Sets `window.__left` once the page has had a `selectionchange` that took the selection out of
+// the document, as the focus going into a dialog or a bar does.
+const LEFT = `(() => { window.__left = false; document.addEventListener("selectionchange", () => {
+  const s = getSelection();
+  if (s.rangeCount > 0 && !document.getElementById("doc").contains(s.focusNode)) window.__left = true;
+}); })()`;
+// Holds the next \`close\` event of a dialog until the check lets it go with \`window.__close()\`.
+const HOLD_CLOSE = `(() => { window.addEventListener("close", (e) => {
+  if (window.__close) return;
+  e.stopImmediatePropagation();
+  window.__close = () => e.target.dispatchEvent(new Event("close"));
+}, true); })()`;
 // Counts each table drawn again, in `window.__drawn`.
 const WATCH = `(() => { window.__drawn = 0; new MutationObserver((l) => {
   if (l.some((m) => [...m.addedNodes].some((x) => x.querySelector && x.querySelector("td")))) window.__drawn++;
@@ -30,10 +46,10 @@ export function redraws({ tab }) {
       let n = 0;
       let k = 0;
       const part = path.join(ctx.root, "redraw-part.ksmd");
-      const open = async () => {
+      const open = async (doc = DOC) => {
         n += 1;
         fs.writeFileSync(part, PART(0));
-        fs.writeFileSync(path.join(ctx.root, `redraw-${n}.ksmd`), DOC);
+        fs.writeFileSync(path.join(ctx.root, `redraw-${n}.ksmd`), doc);
         const d = await tab(ctx, `?doc=redraw-${n}.ksmd`);
         await d.until("!!document.querySelector('#doc td')");
         await d.js(WATCH);
@@ -141,6 +157,77 @@ export function redraws({ tab }) {
       check(at(":::image") > at("First") && at(":::image") < at(":::include"),
         "a pasted image goes where it was pasted, though a cell was opened while it was saved",
         JSON.stringify(lines));
+      await ctx.browser.closeTab(d.page);
+
+      // **An edit in the formula bar keeps its text, its caret and the focus.** The bar is not
+      // drawn again, and the cell's copy of its text comes back in the table drawn again.
+      d = await open();
+      const bar = ".formula-bar .formula-input";
+      await d.click('#doc .table[data-name="t"] td[data-r="0"][data-c="0"]');
+      await d.until("document.querySelector('.formula-address').textContent === 'A1'");
+      await d.click(bar);
+      await d.until(`document.activeElement === document.querySelector('${bar}')`);
+      await d.js("document.activeElement.setSelectionRange(1, 1)");
+      await d.type("2");
+      drawn = await later(d);
+      await d.type("3");
+      const kept = await d.js(`[document.activeElement === document.querySelector('${bar}'), ` +
+        "document.activeElement.value, (document.querySelector('#doc .cell-mirror') || { value: null }).value]");
+      await d.press("Enter");
+      await d.settle();
+      check(drawn && kept[0] && kept[1] === "123" && kept[2] === "123" && (await rows(d)).includes("| 123 | =A1*2 |"),
+        "an edit in the formula bar keeps its text, its caret and the focus while the tables are shown again",
+        `drawn ${drawn}; kept ${JSON.stringify(kept)}; rows ${await rows(d)}`);
+      await ctx.browser.closeTab(d.page);
+
+      // **The table stays where it stands while the focus is in a bar or a dialog.** The caret's
+      // empty line above the table went when the focus left the document, and came back with
+      // it, so the table moved up a line and back down. A press made as Insert Function closed
+      // landed a row too high, on the column's name, and what was typed renamed the column.
+      const a1 = '#doc .table[data-name="t"] td[data-r="0"][data-c="0"]';
+      // Where the cell stands in the document, which a bar at the top moves as a whole.
+      const top = (dd) => dd.js(`Math.round(document.querySelector('${a1}').getBoundingClientRect().top -
+        document.getElementById("doc").getBoundingClientRect().top)`);
+      d = await open(GAPPED);
+      await d.js(LEFT);
+      const gapped = await d.js("!!document.querySelector('#doc .gap')");
+      const t0 = await top(d);
+      await d.press("F3", SHIFT);
+      const left = await d.until("window.__left && !!document.activeElement.closest('dialog')");
+      const t1 = await top(d);
+      await d.js(HOLD_CLOSE);
+      await d.press("Escape");
+      const held = await d.until("!!window.__close");
+      // The press is aimed where the cell stands as the dialog's close event comes.
+      const [x, y] = await d.js(`(() => { const r = document.querySelector('${a1}').getBoundingClientRect(); ` +
+        "return [r.left + r.width / 2, r.top + r.height / 2]; })()");
+      await d.js("window.__close()");
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await d.page("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+      }
+      await d.type("5");
+      await d.press("Enter");
+      await d.settle();
+      check(gapped && left && held && t1 === t0 && (await rows(d)).includes("| 5 | =A1*2 |"),
+        "a press made as Insert Function closes chooses the cell aimed at, the table standing still",
+        `gap ${gapped}; left ${left}; held ${held}; top ${t0} then ${t1}; rows ${await rows(d)}`);
+      await ctx.browser.closeTab(d.page);
+
+      // The tables shown again while the person types in the find bar keep the empty line too.
+      d = await open(GAPPED);
+      await d.js(LEFT);
+      const s0 = await top(d);
+      await d.press("f", CTRL);
+      const finding = await d.until("window.__left && document.activeElement.classList.contains('find-text')");
+      const s1 = await top(d);
+      drawn = await later(d);
+      const s2 = await top(d);
+      await d.press("Escape");
+      const back = await d.until("document.activeElement === document.getElementById('doc')");
+      const s3 = await top(d);
+      check(finding && drawn && back && s1 === s0 && s2 === s0 && s3 === s0,
+        "the table stands still while the find bar is open and the tables are shown again",
+        `find ${finding}; drawn ${drawn}; back ${back}; top ${s0}, ${s1}, ${s2}, ${s3}`);
       await ctx.browser.closeTab(d.page);
       for (let i = 1; i <= n; i++) fs.rmSync(path.join(ctx.root, `redraw-${i}.ksmd`), { force: true });
       fs.rmSync(path.join(ctx.root, `redraw-${n}-data`), { recursive: true, force: true });

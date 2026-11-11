@@ -109,24 +109,27 @@ priv fn case_carried_string(arena: Arena$@) //<
 priv fn case_unknown_style_key(arena: Arena$@) //<
     //< Checks that an unknown `--style` key is not silently ignored
     //< Ignored, a typo formats with the default and reports success, so it must fail naming the
-    //< key.
+    //< key. **The keys the formatter does not take are refused the same way** (`AllowShortBlocks`,
+    //< `AllowShortFunctions`): accepted, they would change nothing (Principle 5).
     name: = "an unknown `--style` key is rejected"
     path: = write_src("style", "a.kspl", "fn f(): I32\n    return 1\n", arena)
     if path.len == 0
         verdict.check(name, false, "cannot place the material")
         return
     exe: = harness.ksplc_exe()
-    bad: = harness.run(U8[][]::{ exe, "fmt", "--style=IndentWith: 8", path })
-    if bad.exited_with(0)
-        verdict.check(name, false,
-            arena.text().s("the mistyped 'IndentWith' passed\n\{bad.out\}").take())
-        return
-    if bad.out.find_str("IndentWith").is_none()
-        why: = harness.arena().text()
-            .s("the rejected key is not in the output, so which is bad cannot be \
-                traced\n\{bad.out\}").take()
-        verdict.check(name, false, why)
-        return
+    for key in U8[][]::{ "IndentWith", "AllowShortBlocks", "AllowShortFunctions" }
+        bad: = harness
+            .run(U8[][]::{ exe, "fmt", arena.text().s("--style=\{key\}: 8").take(), path })
+        if bad.exited_with(0)
+            verdict.check(name, false,
+                arena.text().s("the unknown key '\{key\}' passed\n\{bad.out\}").take())
+            return
+        if bad.out.find_str(key).is_none()
+            why: = harness.arena().text()
+                .s("the rejected key is not in the output, so which is bad cannot be \
+                    traced\n\{bad.out\}").take()
+            verdict.check(name, false, why)
+            return
     // Caution: A correct key must pass. If everything were rejected, the case above would pass too.
     good: = harness.run(U8[][]::{ exe, "fmt", "--style=IndentWidth: 8", path })
     verdict.check(name, good.exited_with(0),
@@ -142,7 +145,7 @@ priv fn case_bad_style_value(arena: Arena$@) //<
         return
     exe: = harness.ksplc_exe()
     bads: U8[][_] = ::{ "IndentWidth: two", "IndentWidth: 0", "IndentWidth: -3", "ColumnLimit: 2x",
-        "AllowShortFunctions: True", "AllowShortBlocks:" }
+        "ColumnLimit:" }
     for style in bads
         bad: = harness
             .run(U8[][]::{ exe, "fmt", arena.text().s("--style=\{style\}").take(), path })
@@ -154,7 +157,7 @@ priv fn case_bad_style_value(arena: Arena$@) //<
             return
     // Caution: Good values must pass. If every value were rejected, the loop above would pass too.
     good: = harness
-        .run(U8[][]::{ exe, "fmt", "--style=IndentWidth: 2, AllowShortBlocks: false", path })
+        .run(U8[][]::{ exe, "fmt", "--style=IndentWidth: 2, ColumnLimit: 80", path })
     verdict.check(name, good.exited_with(0),
         arena.text().s("good values were rejected\n\{good.out\}").take())
 
@@ -266,23 +269,10 @@ fn main(): I32
     // so "a comment right above belongs to the import below" would move it along.
     case_becomes("imports", "the imports are sorted by name (the heading does not move)",
         fmt_material.SRC_IMPORTS_IN, fmt_material.SRC_IMPORTS_OUT, arena)
-    // Caution: Check that a branch with a comment is not folded. Folded, the comment would take
-    // the rest of the block's line with it.
-    case_becomes("short", "AllowShortBlocks folds only a one-statement block with no comment",
-        fmt_material.SRC_SHORT_IN, fmt_material.SRC_SHORT_OUT, arena,
-        "--style=AllowShortBlocks: true")
     case_idempotent("messy", "the second formatting changes nothing (idempotent)",
         fmt_material.SRC_MESSY, arena)
     case_becomes("foldedpostfix", "a postfix on the line below its type joins it with no space",
         fmt_material.SRC_FOLDED_POSTFIX_IN, fmt_material.SRC_FOLDED_POSTFIX_OUT, arena)
-    // Caution: Test the bodies that are not folded too. Folding a two-statement body, one with a
-    // comment, or one over the column width breaks the comment or the width setting.
-    case_becomes("shortfn", "AllowShortFunctions folds the body of a one-statement fn",
-        fmt_material.SRC_SHORT_FN_IN, fmt_material.SRC_SHORT_FN_OUT, arena,
-        "--style=AllowShortFunctions: true")
-    case_becomes("bareline", "a one-line block leaves its last `;` out",
-        fmt_material.SRC_BARE_LINE_IN, fmt_material.SRC_BARE_LINE_OUT, arena,
-        "--style=AllowShortFunctions: true, AllowShortBlocks: true")
     case_unknown_style_key(arena)
     case_bad_style_value(arena)
     case_syntax_error_as_written(arena)

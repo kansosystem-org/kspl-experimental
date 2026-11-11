@@ -12,9 +12,7 @@ import "std/chars"
 import "std/fs"
 import "std/io"
 import "std/json"
-import "std/json_struct"
 import "std/mem" { Arena, dealloc }
-import "std/reflect"
 import "std/regex"
 import "std/str" { Str_builder }
 import "std/strfmt"
@@ -84,10 +82,11 @@ priv struct Baseline //< holds cold and warm together
     cold: Metrics
     warm: Metrics
 
-// The round trip with JSON. **A key is the field name itself**; ksplc builds the table and
-// `fields()` from the declarations, nesting included ("The compiler writes the table only" in
-// `../../docs/DESIGN-programming-language.md`).
-impl Baseline: reflect.Reflectable {}
+// The baseline's JSON keys. **A key is the field's name**, and writing and reading both use these.
+priv const COLD_KEY: U8[] = "cold"
+priv const WARM_KEY: U8[] = "warm"
+priv const TIME_KEY: U8[] = "compile_ms"
+priv const PEAK_KEY: U8[] = "peak_bytes"
 
 priv const VALUE_CEILING: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
     //< It is a petabyte, or thirty thousand years in ms; no indicator reaches it.
@@ -185,17 +184,40 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
     //< writer drifts in escaping and number form), two-space indent so `git diff` shows which value
     //< moved. `--update` rewrites every key; to add one key alone, write it by hand.
     $jb: = json.Json_builder(arena)
-    // Keys are not listed here; the function that walks the table and its nesting builds them.
     defer $out: = Str_builder()
-    doc: = json_struct.from_struct(cur@, jb@) catch
-        io.err().s("[perf_guard] the baseline cannot be written as JSON\n")
-        return false
+    doc: = jb.obj().set(COLD_KEY, metrics_value(cur.cold, jb@))
+        .set(WARM_KEY, metrics_value(cur.warm, jb@)).build()
     doc.dump(out@, 2)
     out.c('\n')
     io.write_file(path, out.slice()) catch
         io.err().s("[perf_guard] the baseline cannot be written: ").s(path).s("\n")
         return false
     return true
+
+priv fn metrics_value(m: Metrics, jb: json.Json_builder$@): json.Value //< one side as an object
+    return jb.obj().set(TIME_KEY, jb.int_val(m.compile_ms))
+        .set(PEAK_KEY, jb.int_val(m.peak_bytes)).build()
+
+priv fn read_number(side: json.Value, side_key: U8[], key: U8[]): I64!Guard_error //<
+    //< One number of one side, refused where it is absent or not an integer
+    //< Caution: **Print the key as it is.** With the key printed, the one to add is known.
+    switch side.find(key)
+    case .some(v)
+        if n: = v.as_int64()
+            return n
+        io.err()
+            .s("[perf_guard] the baseline cannot be read: the key '\{side_key\}.\{key\}' is of the \
+                wrong kind")
+    case .none
+        io.err()
+            .s("[perf_guard] the baseline cannot be read: the key '\{side_key\}.\{key\}' is absent")
+    io.err().s(". Add --update to `make perf-log`'s recipe and take the measurements again\n")
+    throw .failed
+
+priv fn read_metrics(root: json.Value, key: U8[]): Metrics!Guard_error //< one side of the baseline
+    side: = root.get(key)
+    return Metrics::{ .compile_ms = read_number(side, key, TIME_KEY)!,
+        .peak_bytes = read_number(side, key, PEAK_KEY)! }
 
 priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
     //< Reads the baseline, which differs per machine
@@ -214,25 +236,8 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
         throw .failed
     // **A missing key or a wrong kind is refused, not filled with a default** (filled in, an old
     // baseline shows only as "the value was 0").
-    // Caution: **Print the name the error carries as it is.** Folded into "something went wrong",
-    // the only remedy is to measure again. With the name printed, the key to add is known.
-    $out: Baseline = ::{}
-    json_struct.into_struct(root.val, out@, arena) catch e
-        io.err().s("[perf_guard] the baseline cannot be read: ")
-        switch e
-        case .missing_field(name)
-            io.err().s("the key '\{name\}' is absent")
-        case .field_type(name)
-            // `<root>`: the content is not an object (Json_error in std/json.kspl).
-            if name.equals("<root>")
-                io.err().s("it is not an object")
-            else
-                io.err().s("the key '\{name\}' is of the wrong kind")
-        default
-            io.err().s("it does not resolve as JSON")
-        io.err().s(". Add --update to `make perf-log`'s recipe and take the measurements again\n")
-        throw .failed
-    return out
+    return Baseline::{ .cold = read_metrics(root.val, COLD_KEY)!,
+        .warm = read_metrics(root.val, WARM_KEY)! }
 
 priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio against the baseline
     //< Where the baseline is 0 it cannot divide, so it returns `n/a`.

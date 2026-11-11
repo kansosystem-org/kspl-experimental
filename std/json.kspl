@@ -169,13 +169,6 @@ pub enum Json_error //< why a document could not be read, or cannot be trusted
         //< a failed parse rewinds. The text is the caller's and outlives the error.
         //< **Refused, not read first or last wins.** Readers that pick differently would see two
         //< different documents in one (std/docs/DESIGN-core.md's "Known problems KSPL handles").
-    missing_field(missing: U8[]) //< a field in the table is missing from the object.
-        //< Only `into_struct` returns this one.
-        //< Caution: **It and the next keep a default from being filled in silently.** Filled with 0
-        //< or "", a sender's misspelt key would show only as "the value was 0" (see
-        //< std/docs/DESIGN-core.md's "Known holes").
-    field_type(mismatched: U8[]) //< the kinds differ, or the field cannot hold the integer.
-        //< `"<root>"` when it is not at a field. Only `into_struct` and `from_struct` return it.
 
 priv struct Parse_ctx
     src: U8[]
@@ -185,8 +178,7 @@ priv struct Parse_ctx
     stack: Stack_limit //< where the parse stops short of the stack's end, beside `depth`'s count
 
 pub const MAX_NESTING_DEPTH: Sz = 500 //< the deepest nesting read; deeper fails with `too_deep`
-    //< It guards against stack exhaustion, and is deep enough for ordinary JSON. `std/json_struct`
-    //< holds a round trip to it too, so a document that parses does not stop part way.
+    //< It guards against stack exhaustion, and is deep enough for ordinary JSON.
 
 priv const STACK_MARGIN: Sz = 64 * 1024 //<
     //< The stack kept free below where a parse stops

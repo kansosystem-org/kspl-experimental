@@ -42,7 +42,7 @@ The source is the `#define`s of Freenove's shared header `Freenove_4WD_Car_For_P
 | 20 / 21 | Motor M2 (rear left) | M2_IN1 / M2_IN2 |
 | 6 / 7 | Motor M3 (the rear right, see below) | M3_IN1 / M3_IN2 |
 | 8 / 9 | Motor M4 (the front right, see below) | M4_IN1 / M4_IN2 |
-| 13 / 14 / 15 | Three servos (13 swings the ultrasonic's head) | Servo1 / Servo2 / Servo3 |
+| 13 / 14 / 15 | Three servos (13 swings the ultrasonic's head; 14 and 15 drive nothing on this car) | Servo1 / Servo2 / Servo3 |
 | 10 / 11 / 12 | Three for line tracking | Track1 / Track2 / Track3 |
 | **4 / 5** | The I2C port, doubling as the ultrasonic module's | SDA/Trig / SCL/Echo |
 | 16 | Eight WS2812 RGB LEDs (also usable as PWM slice 0 channel A) | WS2812 |
@@ -121,11 +121,11 @@ The battery reaches the ADC through a voltage divider (two resistors that scale 
 voltage = (the ADC value / 1023 * 3.3) * 4       (4 is the voltage divider's coefficient)
 ```
 
-For example, an ADC value of 640 gives about 8.26V.
+For example, an ADC value of 640 gives about 8.26V. The sample reads the ADC at 10 bits (0 to 1023). At the RP2040's 12 bits, divide by 4095 instead.
 
 * Full charge is **8.4V** (two 18650 lithium cells in series).
 * The sample **reads the ADC five times and averages** them, against noise.
-* The low-voltage threshold compares the raw ADC value against **525**, not the formula's voltage (525 is about 6.8V by the formula).
+* The low-voltage threshold compares the raw ADC value against **525**, not the formula's voltage (525 is about 6.8V by the formula, and about 2100 at 12 bits).
 
 ## The ultrasonic sensor (HC-SR04)
 

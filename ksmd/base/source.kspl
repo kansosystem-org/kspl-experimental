@@ -4,7 +4,8 @@ import "std/chars"
 import "std/str"
 
 const MAX_SOURCE_BYTES: Sz = 8 * 1024 * 1024
-priv const HEADER: U8[] = "%ksmd 1"
+const HEADER: U8[] = "%ksmd 2" //< the writer's first line; the reader takes `OLD_HEADER` too
+priv const OLD_HEADER: U8[] = "%ksmd 1" //< a file whose formulas quote text by JSON's rules
 priv const BOM: U8[] = "\uFEFF"
 
 struct Diagnostic
@@ -18,6 +19,7 @@ struct Source
     path: U8[]
     bytes: U8[]
     body: Sz //< first byte after the version line
+    version: Sz //< 2, or 1 for a file read by the old rule for a formula's text
 
 struct Line
     text: U8[] //< excludes LF and the CR of a CRLF ending
@@ -27,14 +29,15 @@ struct Line
 impl Source
     fn new(path: U8[], bytes: U8[]): Source!Diagnostic
         start: Sz = BOM.len if bytes.starts_with(BOM) else 0
-        src: = Source::{ .path = path, .bytes = bytes, .body = start }
+        src: = Source::{ .path = path, .bytes = bytes, .body = start, .version = 2 }
         if bytes.len > MAX_SOURCE_BYTES
             throw src.diagnostic(0, "source exceeds 8 MiB")
         first: = src.line_at(start)
-        if !first.text.equals(HEADER)
-            throw src.diagnostic(start, "expected version header %ksmd 1")
+        if !first.text.equals(HEADER) && !first.text.equals(OLD_HEADER)
+            throw src.diagnostic(start, "expected version header %ksmd 2, or %ksmd 1")
         src.validate()!
-        return Source::{ .path = path, .bytes = bytes, .body = first.next }
+        return Source::{ .path = path, .bytes = bytes, .body = first.next,
+            .version = 1 if first.text.equals(OLD_HEADER) else 2 }
 
     fn line_at(r: Self@, offset: Sz): Line //< offset must be a line boundary in this source
         $end: = offset

@@ -5,9 +5,9 @@
 import "ksmd/base/attribute" { Attribute, attribute_at, decode, find, read_attributes }
 import "ksmd/base/dates" { is_date }
 import "ksmd/base/keyed" { Keyed }
-import "ksmd/base/marker" { is_decimal, leading, quoted_end }
-import "ksmd/base/source" { Diagnostic, Line, Source }
-import "ksmd/calc/formula" { text_piece }
+import "ksmd/base/marker" { formula_text_end, is_decimal, leading, quoted_end }
+import "ksmd/base/source" { HEADER, Diagnostic, Line, Source }
+import "ksmd/calc/formula" { from_version_1, text_piece }
 import "ksmd/model/choice" { has_choices, is_entry, lowered }
 import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { format_of }
@@ -290,19 +290,24 @@ priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc
 
 priv fn read_row(src: Source@, line: Line, t: Table$@, arena: Arena$@): Sz!Diagnostic //<
     //< One row's cells, split at each '|' outside quoted text; returns how many it holds
+    //< A formula's quoted text ends by the formula's rule up to the cell's look in braces, and
+    //< all other quoted text by JSON's (`plain_quotes`).
     text: = line.text.trim_end()
     if text.len < 2 || text[0] != '|' || text[text.len - 1] != '|'
         throw src.diagnostic(line.offset, "a table row starts and ends with '|'")
     $count: Sz = 0
     $start: Sz = 1
     $i: Sz = 1
+    $plain: = plain_quotes(src, text.sub_from(1))
     for i < text.len
         if text[i] == '"'
-            close: = quoted_end(text, i)
+            close: = formula_text_end(text, i) if plain else quoted_end(text, i)
             if close == text.len
                 throw src.diagnostic(line.offset + i, "this quoted text has no closing '\"'")
             i = close + 1
             continue
+        if text[i] == '{'
+            plain = false
         if text[i] == '|'
             if count == MAX_COLUMNS
                 throw src.diagnostic(line.offset + i, "a table holds at most 256 columns")
@@ -310,10 +315,16 @@ priv fn read_row(src: Source@, line: Line, t: Table$@, arena: Arena$@): Sz!Diagn
                 .push(read_cell(src, text.sub(start, i - start), line.offset + start, t, arena)!)
             count += 1
             start = i + 1
+            plain = plain_quotes(src, text.sub_from(start))
         i += 1
     if start != text.len
         throw src.diagnostic(line.offset, "a table row starts and ends with '|'")
     return count
+
+priv fn plain_quotes(src: Source@, cell: U8[]): Bool //<
+    //< Whether a cell's quotes, from its start to a `{`, follow a formula's rule: `""` is a '"'
+    //< and a `\` is itself. A `%ksmd 1` file quotes a formula's text by JSON's rules too.
+    return src.version >= 2 && cell.trim_start().starts_with("=")
 
 fn reads_as_formula(formula: U8[]): Bool //<
     //< Whether `formula`, saved after `=` alone in a cell, reads back as this formula and nothing
@@ -321,7 +332,7 @@ fn reads_as_formula(formula: U8[]): Bool //<
     //< The editor asks this before it takes a formula, so the reader's rule for a cell is the only
     //< one. A `|` or a `{` outside quotes, or a line break, fails it.
     defer scratch: = Arena(8 * 1024)
-    bytes: = scratch.text().s("%ksmd 1\n| =").s(formula).s(" |").take()
+    bytes: = scratch.text().s(HEADER).s("\n| =").s(formula).s(" |").take()
     src: = Source("", bytes) catch
         return false
     $t: = Table("", scratch)
@@ -337,7 +348,7 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$
         //< is read.
     whole: = raw.trim_spaces()
     at: = offset + leading(raw)
-    brace: = brace_at(whole)
+    brace: = brace_at(whole, plain_quotes(src, whole))
     $look: = plain_look()
     $note: U8[] = ""
     $link: U8[] = ""
@@ -374,7 +385,9 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$
         cell.text = decode(src, body, at, arena)!
         return cell
     if body[0] == '='
-        formula: = body.sub_from(1).trim_spaces()
+        $formula: = body.sub_from(1).trim_spaces()
+        if src.version == 1
+            formula = from_version_1(formula, arena)
         if formula.len == 0
             throw src.diagnostic(at, "this formula is empty")
         if formula.len > MAX_FORMULA
@@ -399,11 +412,12 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$
     cell.text = body
     return cell
 
-priv fn brace_at(text: U8[]): Sz //< where the first `{` outside quotes stands, or the length
+priv fn brace_at(text: U8[], plain: Bool): Sz //<
+    //< Where the first `{` outside quotes stands, or the length; `plain` for a formula's quotes
     $i: Sz = 0
     for i < text.len
         if text[i] == '"'
-            i = quoted_end(text, i) + 1
+            i = (formula_text_end(text, i) if plain else quoted_end(text, i)) + 1
             continue
         if text[i] == '{'
             return i

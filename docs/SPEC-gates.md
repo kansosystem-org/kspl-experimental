@@ -6,7 +6,7 @@ This file says what CI runs, what every gate promises, and what the checks count
 
 CI runs the gates in one job for each of Linux, macOS and Windows (`.github/workflows/ci.yml`). "What each platform runs" below says which job runs which check, and `make test-conventions` refuses a gate or suite it does not name.
 
-**CI runs only once a week, late at night (`cron` in `.github/workflows/ci.yml`), and when someone launches it by hand from the Actions screen.** So "CI is green" does not mean a given commit is green. After 60 days with no activity, GitHub stops the scheduled run; re-enable it from the Actions screen.
+**CI runs only once a week, on Saturday evening in UTC (`cron` in `.github/workflows/ci.yml`), and when someone launches it by hand from the Actions screen.** So "CI is green" does not mean a given commit is green. After 60 days with no activity, GitHub stops the scheduled run; re-enable it from the Actions screen.
 
 **Each job names its runner by the image's version** (`ubuntu-24.04`, `macos-26`, `windows-2025`), never by a `-latest` label. GitHub moves a `-latest` label on its own schedule, so a round could turn red with no commit behind it. `make test-conventions` refuses `-latest` in a workflow (`tests/support/conventions_ci.kspl`). Dependabot does not propose the next image: edit both workflows by hand, and start `ci.yml` on that branch.
 
@@ -43,7 +43,7 @@ Caution: **When adding a job, add an input of the same name and an `if:` that re
 | `RESULT: SOME FAILED (count)[ -> name]` | It failed |
 | `RESULT: SKIPPED (reason)` | It passed silently, for want of a tool or the like |
 
-CI looks for `RESULT: ALL PASS`, or `RESULT: SKIPPED` from a gate skipped whole (`said_verdict` in `tools/ci_gates.kspl`), which passes only where a row of `expected_skips` holds its reason.
+CI looks for `RESULT: ALL PASS`, or `RESULT: SKIPPED` from a gate skipped whole (`said_verdict` in `tools/ci_gates.kspl`), which passes only where a row of `EXPECTED_SKIPS` holds its reason.
 
 Caution: **When adding a gate, make it print one line in this notation.** A notation per gate needs a reader per gate on the CI side, and a bug in such a reader stays green.
 
@@ -55,7 +55,7 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 | `OUTPUT:` | The path of a built file |
 | `NOTE:` | A refusal along the way, or a child that took three quarters of its time cap |
 
-**One gate's full log is in the run's Artifacts**, since the screen's log merges a whole job. `tools/ci.kspl` writes each gate's log to `out/log/ci/<name>.log`. The workflow uploads it as `log-<job>-<section>`, on a failing run too (`if:always()`).
+**One gate's full log is in the run's Artifacts**, since the screen's log merges a whole job. `tools/ci.kspl` writes each gate's log to `out/log/ci/<name>.log`. The workflow uploads it as `log-<job>-<section>` (`log-macos` for the macOS job, which has one section), on a failing run too (`if:always()`).
 
 **The log's tail lists the gates that ran and the seconds each took** (`gate seconds:` is the total), read from `out/log/ci/` itself. A gate that passed on an expected SKIP stays `PASS`, with the count of its `SKIP` lines beside it. Examples are `test-ksos-link` off Linux, and `test-ship`'s run under Wine on Linux.
 
@@ -66,7 +66,7 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 | Is the runner's own `# gate <gate> ran over <N> s and was stopped`, naming this gate | As it is |
 | Starts with `panic: ` | As it is |
 | Starts with `FAIL ` or `[FAIL]` | As it is |
-| Holds `SKIP`, and no row of `expected_skips` holds it for the platform | After `UNEXPECTED`; the round's last line says to bring the tool back, or add the row |
+| Holds `SKIP`, and no row of `EXPECTED_SKIPS` holds it for the platform | After `UNEXPECTED`; the round's last line says to bring the tool back, or add the row |
 | Starts with `RESULT: SOME FAILED` | As it is |
 | Holds make's `*** [`, which names the target that stopped | As it is, in the language make prints in |
 
@@ -76,7 +76,7 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 
 **`make ci STOP=1` ends the round at the first gate that fails**, for a quicker answer while you work; it is not the verdict for a push. By default only a gate with `stops` in `tools/ci_gates.kspl` (the self-host) ends a round, since the later gates build on it. CI's jobs never set it.
 
-**With `STOP=1`, the gates that fail most often for their time run first.** The gates with `stops` come first, then those with `early`, then the rest, each part in the table's order. `early` marks `lint`, `surface` and `suites_text`. In 59 recorded rounds `suites_text` failed 10 times and `lint` 7, more than any other gate. `surface` failed 3 times and takes about 13 seconds.
+**With `STOP=1`, the gates that fail most often for their time run first.** The gates with `stops` come first, then those with `early`, then the rest, each part in the table's order. `early` marks `lint`, `surface` and `suites_text`. Why those three is "Where CI's time goes, and what shrinks it" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
 **A round that ends early says so in its last two lines**, after the list of the gates that ran:
 
@@ -195,7 +195,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-ast-cache (the parse cache does not change the result) | ✅ | ➖(note 2) | ✅(note 12) |
 | test-property (a random expression matches on both backends) | ✅ | ➖(note 2) | ✅ |
 | test-generic-matrix (each shape of a generic builds on both backends or is refused at the user's line, never with a C or LLVM error) | ✅ | ➖(note 2) | ✅ |
-| test-random-equiv (generated programs build with no warning, and run alike, under clang, gcc and LLVM) | ✅(note 35) | ➖(note 35) | ➖(note 35) |
+| test-random-equiv (generated programs build with no warning, and run alike, under clang, gcc and LLVM; a local `make ci` runs it only for a change under `ksplc/`) | ✅(note 35) | ➖(note 35) | ➖(note 35) |
 | Fuzzing: each package's own `test-fuzz`, a shallow run on a fixed seed, on its copy by `test-extract`. No run on corrupted input can die, and what std writes back must read the same. `make fuzz-long` goes deep by hand, with a fresh seed | ✅ | ➖(note 2) | ✅(note 21) |
 | test-notation (indentation-written source gives the same C, squiggles, hovers and jump targets) | ✅ | ➖(note 2) | ✅ |
 | test-fmt-tree (every tracked source is already formatted, and formatted at other widths it reads back) | ✅ | ➖(note 2) | ➖(note 26) |
@@ -249,7 +249,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 
 `KSMD_REQUIRE_DESKTOP` is not a switch of this kind: only the gate's row in `ci-shard-linux` sets it. `make ksmd` checks its desktop entry too, and needs none of these tools for it.
 
-A tool with no switch and no Linux row of `expected_skips` (`wasm-ld` and `node`, say) has no way off. CI's Linux job fails where it is missing, since only the image is promised to hold it; `make ci` lists the skip last. The devcontainer (`.devcontainer/`) gives every tool at once.
+A tool with no switch and no Linux row of `EXPECTED_SKIPS` (`wasm-ld` and `node`, say) has no way off. CI's Linux job fails where it is missing, since only the image is promised to hold it; `make ci` lists the skip last. The devcontainer (`.devcontainer/`) gives every tool at once.
 
 ### The notes
 
@@ -298,14 +298,14 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 19**: `test-ship` builds both forms with the host's own toolchain, natively on ucrt64. **Elsewhere it also cross-builds them for Windows where `x86_64-w64-mingw32-gcc` is installed**, and runs them only under Wine.
   * **No CI job runs the check "the Windows programs run under Wine".** The Linux image leaves Wine out for its size. The Windows job builds natively, and macOS runs no `test-ship`.
   * **To run it by hand, put Wine on a Linux machine or in the dev container (the `wine` package on Debian and Ubuntu), then run `make test-ship`.** The check's two `pass` lines then stand where its `SKIP` line stood.
-* **note 20**: **CI does not run `self-host-ship`.** `make install` runs it before it installs anything, and the release runs it on each of its three platforms (`.github/workflows/release.yml`). So a difference that only the shipped build shows is still caught before anything ships. Why it is not a CI gate is "Where CI's time goes, and what shrinks it" in [`DESIGN-repository.md`](DESIGN-repository.md).
+* **note 20**: **CI does not run `self-host-ship`.** `make install` runs it before it installs anything, and the release runs it on each of its three platforms (`.github/workflows/release.yml`). Why it is not a CI gate is "Where CI's time goes, and what shrinks it" in [`DESIGN-repository.md`](DESIGN-repository.md).
 * **note 21**: std's and ksai's `test-fuzz` build what they fuzz with the address sanitizer where the C compiler holds it, and print which build they made. ksplc's fuzz runs the compiler unsanitized.
 * **note 22**: two of `cli`'s cases check that ksplc refuses a cache folder that others could plant entries in. Windows's permissions are an ACL, which ksplc does not read, so neither case runs there.
 * **note 23**: `test-ksmd-desktop` writes the entry and its MIME declaration, building nothing, and installs them into a scratch data folder as `make install-desktop` does. It also writes an entry for a probe program in a folder whose name holds a space, and starts it. `desktop-file-validate` accepts an Exec that splits at that space. macOS and Windows associate a file with a program another way.
 * **note 24**: `ksplc/tests/suite/layout_targets_test.kspl` needs only clang, which builds for every machine in `MACHINES` in `ksplc/base/target.kspl`. The wasm32 build also needs `wasm-ld`, `node` and clang's wasm32 builtins, for a 128-bit product that links only with them. A folded size decides through a static `if`, a constant chain, a `case` label and reflection; each must answer as wasm32 lays values out.
 * **note 25**: Linux and Windows run the same check through `test-extract`, where ksai's own `make test` trains `llama_engine` (`lib/ksai/tests/examples_main.kspl`). macOS runs `make run` instead.
-* **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`); the suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.
-  * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF. `make ci` still runs both on every platform.
+* **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run on Linux alone: in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`), or in job b's Linux run (`Gate.linux_only`). The suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.
+  * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF.
 * **note 27**: `make debug` runs the tests of every package but kssrv and kstls in one program; those two run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's and kstls's tests unrun.
   * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux still runs both.
 * **note 28**: `make LLVM=1 debug` holds neither kssrv nor kstls (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
@@ -328,7 +328,10 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **A build fails on any warning** that `test-c-warnings` holds the tree's C free of, and ksplc must say nothing about the program. gcc's -Woverflow alone is off: gcc 13 warns about narrow constants that fit. One C build of each family traps on C's undefined arithmetic.
   * **Every build must print the same and end with the same code.** A program written to stop must stop with the stop's `panic:` line.
   * **It shows that it can fail**: runs that differ in one line, or in the exit code alone, must be flagged (`PLANTED`).
-  * **CI runs it in the Linux job alone**, apart from ksplc's other suites. What it finds lies in ksplc's C and IR, the same on every system. A Windows or macOS minute costs more.
+  * **CI runs it in the Linux job alone**, apart from ksplc's other suites.
+  * **A local `make ci` runs it only when the change reaches `ksplc/`.** Why it runs only there, and only then, is the comment at `random_equiv` in `tools/ci_gates.kspl`. The change is what the branch holds beyond `origin/main`, with what is not committed and new files. Where git cannot say, it runs.
+    * **Left out, it is named last**, on a `# left out here:` line with the reason, so the green round does not hide it. It prints no `SKIP` line, so no row of `EXPECTED_SKIPS` is needed.
+    * GitHub's Linux job always runs it, and `make test-random-equiv` runs it by hand.
   * **The default seeds take a little over a minute on four cores.** `make test-random-equiv RANDOM_EQUIV_ARGS="--n=400 --seed=1000"` runs more by hand. A failure prints the seed and the program.
   * **The windows-ucrt64 runner has clang alone**, so there gcc's builds give a `SKIP` line, as in `test-equiv`.
 * **note 33**: `test-ksagent-chat` first checks the launcher's model server with no browser (`tools/tests/chat_launch.mjs`): a stand-in takes the place of `llama-server` and `chat_server`. It then drives ksagent's chat page in a headless Chromium (`tools/tests/chat_page.mjs`), through ksmd's browser driver. The launcher starts with `--show`, so no browser of the desktop starts. It starts kssrv and `ksagent watch`, which asks a stand-in model server in the same script. Without a browser, only the second half is skipped.
@@ -368,7 +371,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
 
 ```
 pass lsp-tree: a workspace query does not stay silent longer than the supervisor's window
-FAIL conventions: the letters by which the compiler names std really exist: std/reflect.kspl:17: …
+FAIL conventions: the letters by which the compiler names std really exist: std/ring.kspl:17: …
 SKIP kssrv: a link inside the root cannot get outside: a link cannot be made with `ln -s` in this environment
 ```
 
@@ -399,7 +402,9 @@ SKIP Net: connecting over the IPv6 loopback and peer() test: this machine has no
 
 ## The record of a published API
 
-**Each package that publishes an API carries a `SURFACE.txt`**, which enrolls it: one line per `pub` declaration, with its name, shape and `//<` summary. `make surface` regenerates them, and `make test-surface` refuses a drift.
+**Each package that publishes an API carries a `SURFACE.txt`**, which enrolls it: one line per `pub` declaration, with its name and shape. `make surface` regenerates them, and `make test-surface` refuses a drift.
+
+**The record holds no `//<` text, but the gate checks that each entry has one.** So rewording a summary changes no record, and a `pub` declaration with no summary still fails `make test-surface`.
 
 **Each source is read on its own by `ksplc doc --emit-surface`**, subfolders included, with nothing compiled. So the gate does not show that each file builds alone.
 
@@ -422,8 +427,6 @@ Review checks what the gate cannot measure.
 **Every file written by hand has at most 1000 lines and is measured for size** (`.kspl`, `.c` / `.h`, and the page's `.html` / `.css` / `.js`). Only the generated `ksplc/seed.c` is left out.
 
 **A function's length is lint's to measure** ([H0803], 300 lines), in KSPL source alone; C relies on the C compiler's warnings and on review. **Block nesting is limited to 8 levels**, with the function body at level 0 ([H0805]).
-
-**A file over 900 lines fails `make test-conventions` unless its top-level folder's `README.md` names it**, as "Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md) sets out.
 
 **In C, splitting only the definitions by subject is enough.** The definition files are joined into one translation unit, so `static` helpers stay visible (`ksplc/gen/runtime/hosted*.c` and `write_impl` in `ksplc/gen/runtime.kspl`).
 

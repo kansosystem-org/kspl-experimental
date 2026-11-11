@@ -66,7 +66,7 @@ fn main(): I32
         return summary(title, jobs,
             ci_gates.Judge::{ .platform = platform, .relaxed = relaxed }, arena)
     if odd: = ci_gates.unknown_switch(relaxed, arena)
-        io.err().s("ci: no row of `switch_skips` names the switch '\{odd\}'\n")
+        io.err().s("ci: no row of `SWITCH_SKIPS` names the switch '\{odd\}'\n")
         return 2
     // **No default cap here**: `CI_GATE_CAP` in `mk/ci.mk` is its one place.
     if cap < 1I64 || cap > CAP_MAX_S
@@ -128,8 +128,13 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     $ended_at: U8[]? = .none
     $by_switch: = false
     $not_run: = List<|U8[]|>(arena)
+    $left: = List<|Gate|>(arena)
+    $changed: U8[]? = .none
     for g in ci_gates.run_order(r.stop, arena)
         if !s.runs(g, r.platform)
+            continue
+        if left_out(g, r, changed@, arena)
+            left.push(g)
             continue
         if ended_at.is_some()
             not_run.push(g.log)
@@ -147,6 +152,9 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     print_digest(r, arena)
     if r.full
         print_skips(arena)
+    for g in left
+        io.out().s("# left out here: ").s(g.log).s(", as the change reaches no file under ")
+            .s(g.local_when).s(" (GitHub CI runs it; `make ").s(g.args).s("` runs it by hand)\n")
     // **A round with a switch off says so last**: green there is not CI's verdict.
     if r.relaxed.len > 0
         io.out().s("# turned off here: ").s(r.relaxed)
@@ -164,6 +172,41 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
         return 1
     io.out().s("# \{name\}: ALL GREEN\n")
     return 0
+
+priv fn left_out(g: Gate, r: Round, changed: U8[]?$@, arena: Arena$@): Bool //<
+    //< Whether a local full round leaves the gate out, as the change misses its folder
+    //< The change is read once, into `changed`: what this branch holds beyond `origin/main`,
+    //< what is not committed, and new files. **Where git cannot say, the gate runs.**
+    if !r.full || g.local_when.len == 0 || sys.get_env("GITHUB_ACTIONS").is_some()
+        return false
+    if changed.is_none()
+        changed$ = .some(change_names(arena))
+    names: = changed.unwrap_or("")
+    if names.equals(UNKNOWN_CHANGE)
+        return false
+    for name in names.lines(arena)
+        if name.starts_with(g.local_when)
+            return false
+    return true
+
+priv const UNKNOWN_CHANGE: U8[] = "?" //< what `change_names` gives where git cannot say
+
+priv fn change_names(arena: Arena$@): U8[] //<
+    //< The paths the change touches, one a line, or `UNKNOWN_CHANGE`
+    asks: = U8[][4][3]::{::{ "git", "diff", "--name-only", "origin/main...HEAD" },
+        ::{ "git", "diff", "--name-only", "HEAD" },
+        ::{ "git", "ls-files", "--others", "--exclude-standard" } }
+    out: = arena.text()
+    for argv in asks
+        got: =
+            subproc.run_capture(U8[][]::argv, "", 60000, CHANGE_CAP, arena) catch
+            return UNKNOWN_CHANGE
+        if !got.exited_with(0) || got.stdout_data.len >= CHANGE_CAP
+            return UNKNOWN_CHANGE
+        out.s(got.stdout_data).c('\n')
+    return out.take()
+
+priv const CHANGE_CAP: Sz = 16777216 //< the bytes of names read; a list cut there counts as unknown
 
 priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
     for s in ci_gates.SET_ORDER
@@ -207,7 +250,7 @@ priv fn judge_gate(g: Gate, r: Round, exit: I32, sec: I64, arena: Arena$@): Bool
     if rc == 0
         if odd: = unexpected_skip(said, j@, arena)
             rc = 1
-            io.out().s("# \{g.log\}: a SKIP no row of `expected_skips` holds for \{r.platform\}: ")
+            io.out().s("# \{g.log\}: a SKIP no row of `EXPECTED_SKIPS` holds for \{r.platform\}: ")
                 .s(odd).c('\n')
     defer $end: = Str_builder()
     end.s("\{rc\} \{sec\} \{r.platform\}\n")

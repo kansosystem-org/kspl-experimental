@@ -17,7 +17,6 @@ import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
 import "ksplc/lower/root" as lower_root
 import "ksplc/sema/decl/access" as _sema_decl_access // `address_is_readonly`
-import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List }
@@ -245,7 +244,7 @@ impl Ast_node
             return r.get_primary_inner_expr().is_translation_constant(depth + 1)
         case .k_expr_postfix
             op: = r.get_postfix_op()
-            return op != null && op.text.equals("::") && !r.def_node.is_fn_decl() &&
+            return op != null && op.text.equals("::") &&
                 r.get_postfix_receiver().is_translation_constant(depth + 1)
         default
             return false
@@ -308,12 +307,11 @@ impl Ast_node
         return Ast_node(.k_expr_postfix, "$", loc).with_type(r.type_id).add_child(tmp)
             .add_child(Ast_node(.k_literal, "$", loc))
 
-    priv fn needs_holder(r: Self$@, lctx: Lowering_ctx$@): Bool //<
+    priv fn needs_holder(r: Self@, lctx: Lowering_ctx@): Bool //<
         //< Whether no pointer of the place's own type can hold its address
         //< A fixed-length array has none: `a@` is its first element's address, and no `T[N]@`
-        //< exists. A field `#packed` leaves under-aligned has one, but it would claim its type's
-        //< alignment.
-        return lctx.sema.packed_place_align(r) > 0 || lctx.sema.env.is_array(r.type_id)
+        //< exists.
+        return lctx.sema.env.is_array(r.type_id)
 
     priv fn hoist_holder(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< hoist_address for a place that `needs_holder`: the place holding it is fixed instead

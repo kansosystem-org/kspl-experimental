@@ -94,14 +94,10 @@ impl Quant_format
 
     fn input_block(r: Self): Sz //< the block an input row is rounded in; 0 keeps it F32
         //< llama.cpp rounds a K format's inputs to its Q8_K blocks of 256, and Q8_0's and Q5_0's to
-        //< Q8_0 blocks of 32. F32, F16 and BF16 weights multiply F32 inputs as they are.
-        switch r
-        case .f32, .f16, .bf16
-            return 0
-        case .q5_0, .q8_0
-            return QK8_0
-        case .q3_k, .q4_k, .q5_k, .q6_k
-            return QK_K
+        //< Q8_0 blocks of 32: each its weights' own block. F32, F16 and BF16 weights, whose block
+        //< is one number, multiply F32 inputs as they are.
+        len: = r.block_len()
+        return 0 if len == 1 else len
 
     fn has_mins(r: Self): Bool //< whether a block subtracts a min per group: Q4_K and Q5_K
         return r == .q4_k || r == .q5_k
@@ -129,34 +125,36 @@ impl Quant_format
 
     priv fn decode_span(r: Self, row: U8@, first: Sz, n: Sz, out: F32$@) //<
         //< Decodes numbers [first, first + n) of a row; both are whole blocks
+        if r == .f32
+            // **A span of F32 is one copy**, not a decode per number. The target is little-endian,
+            // as GGUF is ("Byte order" in the language specification).
+            mem.copy(Void$@::out, Void$@::(row + first * 4), n * 4)
+            return
+        len: = r.block_len()
+        bytes: = r.block_bytes()
+        for b in Range.asc(n / len)
+            r.decode_block(row + (first / len + b) * bytes, out + b * len)
+
+    priv fn decode_block(r: Self, src: U8@, out: F32$@) //< one block's `block_len()` numbers
         switch r
         case .f32
-            // The target is little-endian, as GGUF is ("Byte order" in the language specification).
-            mem.copy(Void$@::out, Void$@::(row + first * 4), n * 4)
+            mem.copy(Void$@::out, Void$@::src, 4)
         case .f16
-            for i in Range.asc(n)
-                (out + i)$ = f16_to_f32(half_at(row + (first + i) * 2))
+            out$ = f16_to_f32(half_at(src))
         case .bf16
-            for i in Range.asc(n)
-                (out + i)$ = f32_from_bits(U32::half_at(row + (first + i) * 2) << 16)
+            out$ = bignat.f32_from_bits(U32::half_at(src) << 16)
         case .q5_0
-            for b in Range.asc(n / QK8_0)
-                decode_q5_0(row + (first / QK8_0 + b) * Q5_0_BYTES, out + b * QK8_0)
+            decode_q5_0(src, out)
         case .q8_0
-            for b in Range.asc(n / QK8_0)
-                decode_q8_0(row + (first / QK8_0 + b) * Q8_0_BYTES, out + b * QK8_0)
+            decode_q8_0(src, out)
         case .q3_k
-            for b in Range.asc(n / QK_K)
-                decode_q3_k(row + (first / QK_K + b) * Q3_K_BYTES, out + b * QK_K)
+            decode_q3_k(src, out)
         case .q4_k
-            for b in Range.asc(n / QK_K)
-                decode_q4_k(row + (first / QK_K + b) * Q4_K_BYTES, out + b * QK_K)
+            decode_q4_k(src, out)
         case .q5_k
-            for b in Range.asc(n / QK_K)
-                decode_q5_k(row + (first / QK_K + b) * Q5_K_BYTES, out + b * QK_K)
+            decode_q5_k(src, out)
         case .q6_k
-            for b in Range.asc(n / QK_K)
-                decode_q6_k(row + (first / QK_K + b) * Q6_K_BYTES, out + b * QK_K)
+            decode_q6_k(src, out)
 
 pub struct Quant_matrix //< a weight matrix in one of the GGUF formats, its bytes borrowed
     //< Row `i` holds the weights of output `i`, as GGUF stores a weight. The bytes stay the
@@ -496,6 +494,8 @@ priv fn dot_ints(w: I16@, x: I16@): I32 //< 32 weights times 32 inputs, summed e
 // size, so it fits 16 bits and a group needs no scale of its own in the dot product.
 
 priv fn ints_q5_0(src: U8@, w: I16$@, ds: F32$@) //< one Q5_0 block: `q - 16`, and `d`
+    //< Byte `j` of the nibbles holds number `j` low and number `j + 16` high. Bit `i` of the
+    //< little-endian U32 before them is number `i`'s fifth bit.
     ds$ = f16_to_f32(half_at(src))
     high: = U32::half_at(src + 2) | (U32::half_at(src + 4) << 16)
     for j in Range.asc(16)
@@ -612,23 +612,22 @@ priv fn ints_q6_k(src: U8@, w: I16$@, ds: F32$@) //< one Q6_K block: `(q - 32) Ã
 // statements: the C compiler may fuse one expression's `a * b - c` into one rounding.
 // ==========================================
 
-priv fn decode_q5_0(src: U8@, out: F32$@) //< one Q5_0 block: `d`, the fifth bits, the nibbles
-    //< Byte `j` of the nibbles holds number `j` low and number `j + 16` high. Bit `i` of the
-    //< little-endian U32 before them is number `i`'s fifth bit.
-    d: = f16_to_f32(half_at(src))
-    high: = U32::half_at(src + 2) | (U32::half_at(src + 4) << 16)
-    for j in Range.asc(16)
-        b: = I32::(src + 6 + j)$
-        h: = I32::((high >> U32::j) & 0x10001)
-        lo: = ((b & 0xF) | ((h & 1) << 4)) - 16
-        hi: = ((b >> 4) | ((h >> 12) & 0x10)) - 16
-        (out + j)$ = F32::lo * d
-        (out + j + 16)$ = F32::hi * d
+priv fn decode_q5_0(src: U8@, out: F32$@) //< one Q5_0 block: `ints_q5_0`'s numbers, times `d`
+    //< ggml's product is the same: a whole number, made a float, times `d`.
+    $ints: I16[QK8_0] = ::{}
+    $d: F32 = 0.0
+    ints_q5_0(src, ints@, d@)
+    scale(ints@, d, out)
 
-priv fn decode_q8_0(src: U8@, out: F32$@) //< one Q8_0 block: `d`, then 32 signed bytes
-    d: = f16_to_f32(half_at(src))
+priv fn decode_q8_0(src: U8@, out: F32$@) //< one Q8_0 block: `ints_q8_0`'s numbers, times `d`
+    $ints: I16[QK8_0] = ::{}
+    $d: F32 = 0.0
+    ints_q8_0(src, ints@, d@)
+    scale(ints@, d, out)
+
+priv fn scale(ints: I16@, d: F32, out: F32$@) //< a block of 32 whole numbers, each times `d`
     for i in Range.asc(QK8_0)
-        (out + i)$ = F32::I8::(src + 2 + i)$ * d
+        (out + i)$ = F32::(ints + i)$ * d
 
 fn k3_scale(j: Sz, q: U8@): I32 //< group `j`'s scale in Q3_K's 12 packed bytes, less 32
     //< The low 4 bits of groups 0-7 sit in the low half of bytes 0-7, those of groups 8-15 in the
@@ -742,12 +741,6 @@ priv fn decode_q6_k(src: U8@, out: F32$@) //< one Q6_K block of 256 numbers, in 
 fn half_at(p: U8@): U16 //< two bytes, least significant first, as GGUF stores an F16
     return U16::p$ | (U16::(p + 1)$ << 8)
 
-fn f32_from_bits(bits: U32): F32 //< the same bits read as an F32; no numeric conversion
-    $b: = bits
-    $v: F32 = 0.0
-    mem.copy(Void$@::v@, Void$@::b@, 4)
-    return v
-
 fn f16_to_f32(h: U16): F32 //< an IEEE half's value, exactly; F32 holds every half
     sign: = (U32::h & 0x8000) << 16
     exp: = (U32::h >> 10) & 0x1F
@@ -757,8 +750,8 @@ fn f16_to_f32(h: U16): F32 //< an IEEE half's value, exactly; F32 holds every ha
         mag: = F32::mant * 5.9604644775390625e-8F32
         return -mag if sign != 0 else mag
     if exp == 0x1F
-        return f32_from_bits(sign | 0x7F800000 | (mant << 13))
-    return f32_from_bits(sign | ((exp + 112) << 23) | (mant << 13))
+        return bignat.f32_from_bits(sign | 0x7F800000 | (mant << 13))
+    return bignat.f32_from_bits(sign | ((exp + 112) << 23) | (mant << 13))
 
 fn f16_from_f32(v: F32): U16 //< the nearest half, ties to even, as ggml writes a block's scale
     //< Too large gives infinity, too small gives zero, and a NaN gives the quiet NaN 0x7E00.

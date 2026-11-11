@@ -49,14 +49,14 @@ priv fn nested_and_repeated() //< a file included twice, `..` from a subfolder, 
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     make_file(root, "top.ksmd",
-        "%ksmd 1\n\n# Top\n\n:::include path=\"parts/one.ksmd\"\n:::\n\n:::include \
+        "%ksmd 2\n\n# Top\n\n:::include path=\"parts/one.ksmd\"\n:::\n\n:::include \
             path=\"parts/one.ksmd\"\n:::\n", arena)
     make_file(root, "parts/one.ksmd",
-        "%ksmd 1\n\nOne.\n\n:::include path=\"two.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"A \
+        "%ksmd 2\n\nOne.\n\n:::include path=\"two.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"A \
             cat\"\n:::\n", arena)
-    make_file(root, "parts/two.ksmd", "%ksmd 1\n\nTwo.\n\n:::include path=\"../shared.ksmd\"\n:::\n",
+    make_file(root, "parts/two.ksmd", "%ksmd 2\n\nTwo.\n\n:::include path=\"../shared.ksmd\"\n:::\n",
         arena)
-    make_file(root, "shared.ksmd", "%ksmd 1\n\nShared.\n", arena)
+    make_file(root, "shared.ksmd", "%ksmd 2\n\nShared.\n", arena)
     make_file(root, "parts/cat.png", "not decoded at this stage", arena)
     before: = snapshot(root, arena)
     a: = assembled(root, "top.ksmd", arena)
@@ -83,7 +83,7 @@ priv fn functions_files() //< a functions clause's file is found as an image's i
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     make_file(root, "top.ksmd",
-        "%ksmd 1\n\n:::functions path=\"lib/mine.kspl\"\n:::\n\n:::functions \
+        "%ksmd 2\n\n:::functions path=\"lib/mine.kspl\"\n:::\n\n:::functions \
             path=\"gone.kspl\"\n:::\n\n:::functions path=\"/away.kspl\"\n:::\n", arena)
     make_file(root, "lib/mine.kspl", "pub fn twice(x: F64): F64\n    return x * 2.0\n", arena)
     a: = assembled(root, "top.ksmd", arena)
@@ -99,7 +99,7 @@ priv fn functions_files() //< a functions clause's file is found as an image's i
 
 priv fn functions_inserted() //< Insert, Functions puts a clause at the caret, as one step
     defer arena: = Arena(64 * 1024)
-    $ed: = opened("%ksmd 1\n\nText.\n", arena)
+    $ed: = opened("%ksmd 2\n\nText.\n", arena)
     ed.insert_functions("lib/mine.kspl") catch e
         verdict.check("a functions clause goes in at the caret", false, e.message())
         return
@@ -122,7 +122,7 @@ priv fn functions_inserted() //< Insert, Functions puts a clause at the caret, a
 
 priv fn include_inserted() //< Insert, Include puts a clause at the caret, as one step
     defer arena: = Arena(64 * 1024)
-    $ed: = opened("%ksmd 1\n\nText.\n", arena)
+    $ed: = opened("%ksmd 2\n\nText.\n", arena)
     ed.insert_include("parts/notes.ksmd") catch e
         verdict.check("an include clause goes in at the caret", false, e.message())
         return
@@ -142,12 +142,12 @@ priv fn chains() //< a problem names its place and every include clause on the w
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     make_file(root, "top.ksmd",
-        "%ksmd 1\n\n:::include path=\"a.ksmd\"\n:::\n\n:::include path=\"bad.ksmd\"\n:::\n", arena)
-    make_file(root, "a.ksmd", "%ksmd 1\n\n:::include path=\"sub/b.ksmd\"\n:::\n", arena)
+        "%ksmd 2\n\n:::include path=\"a.ksmd\"\n:::\n\n:::include path=\"bad.ksmd\"\n:::\n", arena)
+    make_file(root, "a.ksmd", "%ksmd 2\n\n:::include path=\"sub/b.ksmd\"\n:::\n", arena)
     make_file(root, "sub/b.ksmd",
-        "%ksmd 1\n\n:::include path=\"gone.ksmd\"\n:::\n\n:::image src=\"../pics/none.png\" \
+        "%ksmd 2\n\n:::include path=\"gone.ksmd\"\n:::\n\n:::image src=\"../pics/none.png\" \
             alt=\"\"\n:::\n", arena)
-    make_file(root, "bad.ksmd", "%ksmd 1\n\n#bad\n", arena)
+    make_file(root, "bad.ksmd", "%ksmd 2\n\n#bad\n", arena)
     a: = assembled(root, "top.ksmd", arena)
     gone: = problem_of(a@, 0, arena)
     verdict.check("a missing include is a problem at its clause, after the clauses leading there",
@@ -170,10 +170,10 @@ priv fn chains() //< a problem names its place and every include clause on the w
 priv fn cycles()
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
-    make_file(root, "top.ksmd", "%ksmd 1\n\n:::include path=\"a.ksmd\"\n:::\n", arena)
-    make_file(root, "a.ksmd", "%ksmd 1\n\n:::include path=\"b.ksmd\"\n:::\n", arena)
-    make_file(root, "b.ksmd", "%ksmd 1\n\n:::include path=\"a.ksmd\"\n:::\n", arena)
-    make_file(root, "self.ksmd", "%ksmd 1\n\n:::include path=\"self.ksmd\"\n:::\n", arena)
+    make_file(root, "top.ksmd", "%ksmd 2\n\n:::include path=\"a.ksmd\"\n:::\n", arena)
+    make_file(root, "a.ksmd", "%ksmd 2\n\n:::include path=\"b.ksmd\"\n:::\n", arena)
+    make_file(root, "b.ksmd", "%ksmd 2\n\n:::include path=\"a.ksmd\"\n:::\n", arena)
+    make_file(root, "self.ksmd", "%ksmd 2\n\n:::include path=\"self.ksmd\"\n:::\n", arena)
     a: = assembled(root, "top.ksmd", arena)
     cycle: =
         "this include closes a cycle: its file is already being included above it. Remove one \
@@ -198,13 +198,13 @@ priv fn path_refusals() //< each written path names its refusal; `..` may climb 
     want: Refusal[13] = ::{ .absolute, .absolute, .address, .address, .backslash, .spelling,
         .spelling, .spelling, .spelling, .outside, .name, .not_file, .missing }
     defer $top: = Str_builder()
-    top.s("%ksmd 1\n")
+    top.s("%ksmd 2\n")
     for p in paths
         top.s("\n:::include path=\"").s(p).s("\"\n:::\n")
     make_file(root, "top.ksmd", top.slice(), arena)
-    make_file(root, "ok.ksmd", "%ksmd 1\n", arena)
+    make_file(root, "ok.ksmd", "%ksmd 2\n", arena)
     make_file(root, "sub/inner.ksmd",
-        "%ksmd 1\n\n:::include path=\"../ok.ksmd\"\n:::\n\n:::include path=\"../../ok.ksmd\"\n:::\n",
+        "%ksmd 2\n\n:::include path=\"../ok.ksmd\"\n:::\n\n:::include path=\"../../ok.ksmd\"\n:::\n",
         arena)
     a: = assembled(root, "top.ksmd", arena)
     $wrong: U8[] = "" if a.problems.len == want.len + 1 else "another count of problems"
@@ -224,10 +224,10 @@ priv fn links() //< a link along a path is refused, whether it leads out of the 
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     outside: = workspace(arena)
-    make_file(outside, "secret.ksmd", "%ksmd 1\n\nSecret.\n", arena)
-    make_file(root, "ok.ksmd", "%ksmd 1\n\nInside.\n", arena)
+    make_file(outside, "secret.ksmd", "%ksmd 2\n\nSecret.\n", arena)
+    make_file(root, "ok.ksmd", "%ksmd 2\n\nInside.\n", arena)
     make_file(root, "top.ksmd",
-        "%ksmd 1\n\n:::include path=\"leak.ksmd\"\n:::\n\n:::include \
+        "%ksmd 2\n\n:::include path=\"leak.ksmd\"\n:::\n\n:::include \
             path=\"away/secret.ksmd\"\n:::\n\n:::include path=\"alias.ksmd\"\n:::\n\n:::image \
             src=\"away/pic.png\" alt=\"\"\n:::\n", arena)
     away: = absolute(outside, arena)
@@ -258,10 +258,10 @@ priv fn depth_limit() //< sixteen files on the stack open; a seventeenth is refu
     for i in Range.asc(17)
         name: = arena.text().s("d\{i + 1\}.ksmd").take()
         if i == 16
-            make_file(root, name, "%ksmd 1\n\nLast.\n", arena)
+            make_file(root, name, "%ksmd 2\n\nLast.\n", arena)
         else
             make_file(root, name,
-                arena.text().s("%ksmd 1\n\n:::include path=\"d\{i + 2\}.ksmd\"\n:::\n").take(),
+                arena.text().s("%ksmd 2\n\n:::include path=\"d\{i + 2\}.ksmd\"\n:::\n").take(),
                 arena)
     full: = assembled(root, "d2.ksmd", arena)
     verdict.check("includes nest sixteen files deep",
@@ -280,14 +280,14 @@ priv fn block_limit() //< 200,000 blocks with repeats counted; the include past 
     defer arena: = Arena(1024 * 1024)
     root: = workspace(arena)
     defer $many: = Str_builder()
-    many.s("%ksmd 1\n")
+    many.s("%ksmd 2\n")
     for _ in Range.asc(99999)
         many.s("\na\n")
     make_file(root, "many.ksmd", many.slice(), arena)
     twice: = "\n:::include path=\"many.ksmd\"\n:::\n\n:::include path=\"many.ksmd\"\n:::\n"
-    make_file(root, "exact.ksmd", arena.text().s("%ksmd 1\n").s(twice).take(), arena)
+    make_file(root, "exact.ksmd", arena.text().s("%ksmd 2\n").s(twice).take(), arena)
     make_file(root, "over.ksmd",
-        arena.text().s("%ksmd 1\n\nOne more.\n").s(twice).take(), arena)
+        arena.text().s("%ksmd 2\n\nOne more.\n").s(twice).take(), arena)
     exact: = assembled(root, "exact.ksmd", arena)
     verdict.check("a view of exactly 200,000 blocks, repeats counted, opens whole",
         exact.problems.len == 0 && exact.entries.len == 200000, "")
@@ -305,7 +305,7 @@ priv fn byte_limit() //< 64 MiB of source text with repeats counted, on a new fi
     root: = workspace(arena)
     make_file(root, "big.ksmd", sized(MAX_SOURCE_BYTES, arena), arena)
     defer $seven: = Str_builder()
-    seven.s("%ksmd 1\n")
+    seven.s("%ksmd 2\n")
     for _ in Range.asc(7)
         seven.s("\n:::include path=\"big.ksmd\"\n:::\n")
     top: = arena.text().s(seven.slice()).s("\n:::include path=\"fill.ksmd\"\n:::\n").take()
@@ -364,7 +364,7 @@ priv fn saves() //< a save writes its own source alone, and the next view shows 
     ws.save("notes.ksmd", notes.doc@, arena) catch
         verdict.check("an included source saves alone", false, "the save was refused")
     edited: =
-        "%ksmd 1\n\n## Purchasing note\n\nChanged text.\n\nContact \
+        "%ksmd 2\n\n## Purchasing note\n\nChanged text.\n\nContact \
             [purchasing](mailto:purchasing@example.org) before ordering.\n"
     notes_now: = read(fs.join(root, "notes.ksmd", arena), arena)
     parent_now: = read(fs.join(root, "overview.ksmd", arena), arena)
@@ -399,7 +399,7 @@ priv fn saves() //< a save writes its own source alone, and the next view shows 
 priv fn top_failures() //< only the opened document's own failure fails the assembly
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
-    make_file(root, "bad.ksmd", "%ksmd 2\n", arena)
+    make_file(root, "bad.ksmd", "%ksmd 3\n", arena)
     ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
     verdict.check("a missing document is refused",
         refused_with(ws@, "missing.ksmd", .missing, arena), "")
@@ -422,9 +422,9 @@ priv fn tables_per_source() //< a table name belongs to its file, so repeats dec
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     table: = ":::table name=\"budget\"\n| \"Item\" |\n| \"Pens\" |\n:::\n"
-    make_file(root, "part.ksmd", arena.text().s("%ksmd 1\n\n").s(table).take(), arena)
+    make_file(root, "part.ksmd", arena.text().s("%ksmd 2\n\n").s(table).take(), arena)
     make_file(root, "top.ksmd",
-        arena.text().s("%ksmd 1\n\n").s(table)
+        arena.text().s("%ksmd 2\n\n").s(table)
         .s("\n:::include path=\"part.ksmd\"\n:::\n\n:::include path=\"part.ksmd\"\n:::\n").take(),
         arena)
     a: = assembled(root, "top.ksmd", arena)
@@ -437,8 +437,8 @@ priv fn tables_per_source() //< a table name belongs to its file, so repeats dec
 priv fn text_rules() //< the rules a page applies by text agree with a folder's, links aside
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
-    make_file(root, "ok.ksmd", "%ksmd 1\n", arena)
-    make_file(root, "sub/inner.ksmd", "%ksmd 1\n", arena)
+    make_file(root, "ok.ksmd", "%ksmd 2\n", arena)
+    make_file(root, "sub/inner.ksmd", "%ksmd 2\n", arena)
     ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
     written: U8[][15] = ::{ "/etc/passwd", "C:/x.ksmd", "https://example.org/a.ksmd",
         "//server/share/a.ksmd", "a\\b.ksmd", "./ok.ksmd", "a//ok.ksmd", "x/../ok.ksmd", "..",
@@ -473,13 +473,13 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
     defer arena: = Arena(256 * 1024)
     root: = workspace(arena)
     make_file(root, "top.ksmd",
-        "%ksmd 1\n\n:::include path=\"parts/one.ksmd\"\n:::\n\n:::include \
+        "%ksmd 2\n\n:::include path=\"parts/one.ksmd\"\n:::\n\n:::include \
             path=\"parts/one.ksmd\"\n:::\n\n:::include path=\"missing.ksmd\"\n:::\n", arena)
     make_file(root, "parts/one.ksmd",
-        "%ksmd 1\n\nOne.\n\n:::include path=\"two.ksmd\"\n:::\n\n:::image src=\"cat.png\" \
+        "%ksmd 2\n\nOne.\n\n:::include path=\"two.ksmd\"\n:::\n\n:::image src=\"cat.png\" \
             alt=\"\"\n:::\n\n:::image src=\"gone.png\" alt=\"\"\n:::\n", arena)
-    make_file(root, "parts/two.ksmd", "%ksmd 1\n\n:::include path=\"../shared.ksmd\"\n:::\n", arena)
-    make_file(root, "shared.ksmd", "%ksmd 1\n\nShared.\n", arena)
+    make_file(root, "parts/two.ksmd", "%ksmd 2\n\n:::include path=\"../shared.ksmd\"\n:::\n", arena)
+    make_file(root, "shared.ksmd", "%ksmd 2\n\nShared.\n", arena)
     make_file(root, "parts/cat.png", "only whether it stands is asked", arena)
     ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
     disk: = assembled(root, "top.ksmd", arena)
@@ -530,9 +530,9 @@ priv fn leftover_part() //< a part left by an interrupted save is neither read n
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     part: = "notes.ksmd.0123456789abcdef.part"
-    make_file(root, "top.ksmd", "%ksmd 1\n\n:::include path=\"notes.ksmd\"\n:::\n", arena)
-    make_file(root, "notes.ksmd", "%ksmd 1\n\nOld text.\n", arena)
-    make_file(root, part, "%ksmd 1\n\nNew text, cut sh", arena)
+    make_file(root, "top.ksmd", "%ksmd 2\n\n:::include path=\"notes.ksmd\"\n:::\n", arena)
+    make_file(root, "notes.ksmd", "%ksmd 2\n\nOld text.\n", arena)
+    make_file(root, part, "%ksmd 2\n\nNew text, cut sh", arena)
     a: = assembled(root, "top.ksmd", arena)
     verdict.check("a leftover part beside a source changes nothing in the view",
         a.problems.len == 0 && a.sources.len == 2 &&
@@ -543,8 +543,8 @@ priv fn leftover_part() //< a part left by an interrupted save is neither read n
     ws.save("notes.ksmd", notes.doc@, arena) catch
         verdict.check("a source beside a leftover part saves", false, "the save was refused")
     verdict.check("a save replaces its source and leaves the leftover part as it was",
-        read(fs.join(root, "notes.ksmd", arena), arena).equals("%ksmd 1\n\nSaved text.\n") &&
-        read(fs.join(root, part, arena), arena).equals("%ksmd 1\n\nNew text, cut sh"),
+        read(fs.join(root, "notes.ksmd", arena), arena).equals("%ksmd 2\n\nSaved text.\n") &&
+        read(fs.join(root, part, arena), arena).equals("%ksmd 2\n\nNew text, cut sh"),
         snapshot_names(root, arena))
     remove_tree(root, arena)
 
@@ -592,7 +592,7 @@ priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //< `ln -s`; fal
 priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly that many bytes
     //< One code block, its lines at most 1,000 bytes long
     defer $b: = Str_builder()
-    b.s("%ksmd 1\n\n```\n")
+    b.s("%ksmd 2\n\n```\n")
     $left: = bytes - 17
     for left > 0
         line: = left if left < 1000 else 1000
@@ -690,14 +690,14 @@ priv fn moved_paths() //< a source saved in another folder writes its paths to n
             .s("from '\{p.get(0)\}' to '\{p.get(1)\}', \{p.get(2)\} becomes \{p.get(3)\}").take(),
             got.equals(p.get(3)), got)
     top: =
-        "%ksmd 1\n\nText.\n\n:::include path=\"parts/notes.ksmd\"\n:::\n\n:::image \
+        "%ksmd 2\n\nText.\n\n:::include path=\"parts/notes.ksmd\"\n:::\n\n:::image \
             src=\"pics/a.png\" alt=\"A\"\n:::\n\n:::functions path=\"parts/mine.kspl\"\n:::\n"
     $ed: = opened(top, arena)
     ed.move_paths("", "parts")
     defer $out: = Str_builder()
     writer.write(ed.doc@, out@)
     moved: =
-        "%ksmd 1\n\nText.\n\n:::include path=\"notes.ksmd\"\n:::\n\n:::image src=\"../pics/a.png\" \
+        "%ksmd 2\n\nText.\n\n:::include path=\"notes.ksmd\"\n:::\n\n:::image src=\"../pics/a.png\" \
             alt=\"A\"\n:::\n\n:::functions path=\"mine.kspl\"\n:::\n"
     verdict.check("the editor writes every include's, image's and functions file's path again, in \
         one step", out.slice().equals(moved), out.slice())

@@ -37,14 +37,7 @@ The port and the root are **positional**; no environment variable fills either i
 
 **With `--cert` and `--key`, the port answers HTTPS only.** A plain HTTP request there gets a 400 in plain text that says to use `https://`. A local server (`--local`) takes no certificate, since its traffic never leaves the machine.
 
-**kssrv checks the files before it takes the port, and does not start when one is wrong.** Its error line says what to do. It refuses:
-
-* a key file that its group or everyone can read or change (not checked on Windows, where an ACL decides);
-* a key under a passphrase: kssrv never asks for one, so a restart never waits for a person;
-* a key that does not belong to the certificate;
-* a certificate that has expired, or is not valid yet.
-
-It warns when the certificate expires within 30 days, and again while it runs once that day comes. It also warns when the file holds one certificate that another issued: a client that lacks that issuer refuses it.
+**kssrv checks the files before it takes the port, and does not start when one is wrong.** Its error line says what to do. It refuses a key that does not belong to the certificate. Each other check and warning, and why it is made, is in "HTTPS" in [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md#https).
 
 To make a certificate for a test, with OpenSSL 1.1.1 or later:
 

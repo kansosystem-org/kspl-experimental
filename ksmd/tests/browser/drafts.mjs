@@ -4,7 +4,7 @@
 // `drafts(t)` takes `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
 import path from "path";
-import { CTRL, H, check } from "./drive.mjs";
+import { CTRL, H, check, waitFor } from "./drive.mjs";
 
 const CELLS = `${H}Text.\n\n:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`;
 // A browser whose settings keep no site data: its IndexedDB refuses to open.
@@ -123,9 +123,7 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
       check(await left() === "old young", "two drafts stand, 29 and 31 days old", await left());
       await d.reload("document.documentElement.dataset.files === 'ready'");
       // The cap only stops a page that never lets it go: a busy machine can take seconds.
-      for (let waited = 0; waited < 60000 && await left() !== "young"; waited += 100) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
+      await waitFor(async () => await left() === "young", 60000);
       check(await left() === "young", "a page that starts lets go the draft older than 30 days, and keeps the other",
         await left());
       await store(`s.delete("prune-test\\nold.ksmd\\nyoung");`);
@@ -188,13 +186,13 @@ export function drafts({ tab, idle, said, noticed, choose, typeAtEnd, start, ope
       await b.js("fetch('/api/status', { headers: { Authorization: " +
         "`Bearer ${sessionStorage.getItem('ksmd.token')}` } }).then((r) => r.status)");
       await ctx.browser.closeTab(a.page);
+      // A fixed time, on purpose: the check proves the server does not stop within its idle time
+      // of 2 s, and only time passing can show that.
       await new Promise((r) => setTimeout(r, 3500));
       check(!gone, "closing the tab that holds the server hands the hold to another tab");
       await ctx.browser.closeTab(b.page);
       // The cap only stops a server that never stops: a busy machine can take seconds past 2 s.
-      for (let waited = 0; waited < 60000 && !gone; waited += 100) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
+      await waitFor(() => gone, 60000);
       check(gone, "with no tab open, the server stops after its idle time");
       if (!gone) await server.stop();
     },

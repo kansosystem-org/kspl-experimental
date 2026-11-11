@@ -19,20 +19,20 @@ fn run()
 
 priv fn reading()
     defer arena: = Arena(64 * 1024)
-    same("a checklist, beside a plain item", "%ksmd 1\n\n- [ ] Buy pens\n- [x] Call Sam\n- Note\n",
+    same("a checklist, beside a plain item", "%ksmd 2\n\n- [ ] Buy pens\n- [x] Call Sam\n- Note\n",
         arena)
-    same("a quote and a divider", "%ksmd 1\n\n> Less, but better.\n\n---\n\nAfter.\n", arena)
+    same("a quote and a divider", "%ksmd 2\n\n> Less, but better.\n\n---\n\nAfter.\n", arena)
     same("two images, each with its share of the text width",
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"A\" width=\"45%\"\n:::\n\n:::image src=\"b.png\" \
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"A\" width=\"45%\"\n:::\n\n:::image src=\"b.png\" \
             alt=\"B\" caption=\"Second\" width=\"100%\"\n:::\n", arena)
-    same("a hard break inside a quote", "%ksmd 1\n\n> One\\\n> two\n", arena)
-    saves_as("a quote's lines join as a paragraph's do", "%ksmd 1\n\n> One\n> two\n",
-        "%ksmd 1\n\n> One two\n", arena)
+    same("a hard break inside a quote", "%ksmd 2\n\n> One\\\n> two\n", arena)
+    saves_as("a quote's lines join as a paragraph's do", "%ksmd 2\n\n> One\n> two\n",
+        "%ksmd 2\n\n> One two\n", arena)
     saves_as("prose that looks like a quote or a divider is escaped",
-        "%ksmd 1\n\n\\> not a quote\n\n\\---\n", "%ksmd 1\n\n\\> not a quote\n\n\\---\n", arena)
-    saves_as("an item's text in brackets is not a box", "%ksmd 1\n\n- \\[ \\] x\n",
-        "%ksmd 1\n\n- \\[ \\] x\n", arena)
-    for bad in U8[][]::{ "%ksmd 1\n\n> One\ntwo\n", "%ksmd 1\n\n> One\n>\n> two\n" }
+        "%ksmd 2\n\n\\> not a quote\n\n\\---\n", "%ksmd 2\n\n\\> not a quote\n\n\\---\n", arena)
+    saves_as("an item's text in brackets is not a box", "%ksmd 2\n\n- \\[ \\] x\n",
+        "%ksmd 2\n\n- \\[ \\] x\n", arena)
+    for bad in U8[][]::{ "%ksmd 2\n\n> One\ntwo\n", "%ksmd 2\n\n> One\n>\n> two\n" }
         src: = Source("bad.ksmd", bad) catch
             continue
         $read: = true
@@ -42,10 +42,10 @@ priv fn reading()
 
 priv fn checking()
     defer arena: = Arena(64 * 1024)
-    $ed: = opened("%ksmd 1\n\n- [ ] One\n- Two\n", arena)
+    $ed: = opened("%ksmd 2\n\n- [ ] One\n- Two\n", arena)
     ed.toggle_check(0, 0) catch e
         verdict.check("ticking", false, e.message())
-    saves("a press ticks the box", ed@, arena, "%ksmd 1\n\n- [x] One\n- Two\n")
+    saves("a press ticks the box", ed@, arena, "%ksmd 2\n\n- [x] One\n- Two\n")
     p: = text_spot(0, 0, 3)
     ed.select(p, p)
     ed.enter(false) catch e
@@ -53,14 +53,14 @@ priv fn checking()
     ed.type_text("Also", .typing) catch e
         verdict.check("typing", false, e.message())
     saves("Enter after a ticked item starts an open one", ed@, arena,
-        "%ksmd 1\n\n- [x] One\n- [ ] Also\n- Two\n")
+        "%ksmd 2\n\n- [x] One\n- [ ] Also\n- Two\n")
     ed.undo()
     ed.undo()
     whole: = text_spot(0, 1, 0)
     ed.select(whole, whole)
     kind(ed@, checks())
     saves("Checklist makes a plain item a checklist item, and leaves ticks as they are", ed@, arena,
-        "%ksmd 1\n\n- [x] One\n- [ ] Two\n")
+        "%ksmd 2\n\n- [x] One\n- [ ] Two\n")
     $plain: = false
     ed.toggle_check(0, 1) catch
         plain = true
@@ -68,45 +68,45 @@ priv fn checking()
 
 priv fn quoting()
     defer arena: = Arena(64 * 1024)
-    $ed: = opened("%ksmd 1\n\nWords.\n", arena)
+    $ed: = opened("%ksmd 2\n\nWords.\n", arena)
     p: = text_spot(0, 0, 0)
     ed.select(p, p)
     $q: = paragraph_style()
     q.kind = .quote
     kind(ed@, q)
-    saves("a paragraph becomes a quote", ed@, arena, "%ksmd 1\n\n> Words.\n")
+    saves("a paragraph becomes a quote", ed@, arena, "%ksmd 2\n\n> Words.\n")
     end: = text_spot(0, 0, 6)
     ed.select(end, end)
     ed.insert_divider() catch e
         verdict.check("a divider", false, e.message())
-    saves("Insert, Divider puts a divider at the caret", ed@, arena, "%ksmd 1\n\n> Words.\n\n---\n")
+    saves("Insert, Divider puts a divider at the caret", ed@, arena, "%ksmd 2\n\n> Words.\n\n---\n")
     ed.select(end, end)
     ed.insert_image("words-image-1.png", "A \"dot\"") catch e
         verdict.check("an image", false, e.message())
     saves("a pasted image's clause goes in after the caret's block", ed@, arena,
-        "%ksmd 1\n\n> Words.\n\n:::image src=\"words-image-1.png\" alt=\"A \
+        "%ksmd 2\n\n> Words.\n\n:::image src=\"words-image-1.png\" alt=\"A \
             \\\"dot\\\"\"\n:::\n\n---\n")
     ed.undo()
     ed.undo()
     ed.undo()
-    saves("undo takes each back", ed@, arena, "%ksmd 1\n\nWords.\n")
+    saves("undo takes each back", ed@, arena, "%ksmd 2\n\nWords.\n")
     $refused: = false
     ed.insert_image("", "") catch
         refused = true
     verdict.check("an image with an empty src is refused, as the reader refuses it", refused, "")
-    saves("and the refusal changes nothing", ed@, arena, "%ksmd 1\n\nWords.\n")
-    $pic: = opened("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\"\n:::\n", arena)
+    saves("and the refusal changes nothing", ed@, arena, "%ksmd 2\n\nWords.\n")
+    $pic: = opened("%ksmd 2\n\n:::image src=\"a.png\" alt=\"\"\n:::\n", arena)
     pic.set_image_width(0, 40) catch e
         verdict.check("setting a width", false, e.message())
     saves("an image takes its share of the text width", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
     pic.set_image_width(0, 0) catch e
         verdict.check("fitting it again", false, e.message())
     saves("and 0 fits it to the text again", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\"\n:::\n")
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"\"\n:::\n")
     pic.undo()
     saves("each is one step of undo", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"\" width=\"40%\"\n:::\n")
     $too_wide: = false
     pic.set_image_width(0, 101) catch
         too_wide = true
@@ -116,12 +116,12 @@ priv fn quoting()
     pic.set_image_words(0, false, "Sections by address") catch e
         verdict.check("alternate text", false, e.message())
     saves("an image takes a caption and alternate text later", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"Sections by address\" caption=\"The section \
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"Sections by address\" caption=\"The section \
             viewer\" width=\"40%\"\n:::\n")
     pic.set_image_words(0, true, "") catch e
         verdict.check("no caption", false, e.message())
     saves("and an empty caption takes it away", pic@, arena,
-        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"Sections by address\" width=\"40%\"\n:::\n")
+        "%ksmd 2\n\n:::image src=\"a.png\" alt=\"Sections by address\" width=\"40%\"\n:::\n")
 
 priv fn checks(): Style //< a checklist item's style, as the page asks for it
     $s: = paragraph_style()
@@ -144,25 +144,25 @@ priv fn saves_as(what: U8[], text: U8[], expected: U8[], arena: Arena$@)
 priv fn leaving_out() //< `invisible="printing"` on each kind of clause, and the editor's toggle
     defer arena: = Arena(64 * 1024)
     same("each kind of clause keeps invisible",
-        "%ksmd 1\n\n:::table name=\"calc\" invisible=\"printing\"\n| \"a\" |\n| 1 \
+        "%ksmd 2\n\n:::table name=\"calc\" invisible=\"printing\"\n| \"a\" |\n| 1 \
             |\n:::\n\n:::chart table=\"calc\" kind=\"bar\" labels=\"a\" values=\"a\" \
             invisible=\"printing\"\n:::\n\n:::image src=\"a.png\" alt=\"\" \
             invisible=\"printing\"\n:::\n\n:::include path=\"b.ksmd\" invisible=\"printing\"\n:::\n",
         arena)
-    for bad in U8[][]::{ "%ksmd 1\n\n:::include path=\"b.ksmd\" invisible=\"screen\"\n:::\n",
-        "%ksmd 1\n\n:::include path=\"b.ksmd\" invisible=1\n:::\n" }
+    for bad in U8[][]::{ "%ksmd 2\n\n:::include path=\"b.ksmd\" invisible=\"screen\"\n:::\n",
+        "%ksmd 2\n\n:::include path=\"b.ksmd\" invisible=1\n:::\n" }
         src: = Source("bad.ksmd", bad) catch
             continue
         $read: = true
         _doc: = reader.read(src@, arena) catch
             read = false
         verdict.check(arena.text().s("refused: ").s(bad).take(), !read, "")
-    table: = "%ksmd 1\n\nText.\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n:::\n"
+    table: = "%ksmd 2\n\nText.\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n:::\n"
     $ed: = opened(table, arena)
     ed.set_invisible(1, true) catch e
         verdict.check("leaving out", false, e.message())
     saves("a table left out of print says so in the file", ed@, arena,
-        "%ksmd 1\n\nText.\n\n:::table name=\"t\" invisible=\"printing\"\n| \"a\" |\n| 1 |\n:::\n")
+        "%ksmd 2\n\nText.\n\n:::table name=\"t\" invisible=\"printing\"\n| \"a\" |\n| 1 |\n:::\n")
     $refused: = false
     ed.set_invisible(0, true) catch
         refused = true

@@ -30,9 +30,9 @@
    The runner refuses at start a row no set runs, and `macos` with `par = .synced` (macOS's `make` has no `--output-sync`).
 
    **Name its failure case** as `.fails = "<file>#<name>"`: an input its check must reject, which the gate runs. Without one, `make test-conventions` fails with "every gate names a failure case that holds" ("Every gate shows that it can fail" in [`SPEC-gates.md`](SPEC-gates.md)).
-3. **Name every SKIP it can print** in an `Expected_skip` row in the same file: the platforms that expect it, and a piece of its line. An unnamed SKIP fails the gate with "a SKIP no row of `expected_skips` holds". **A tool that Linux's image holds is required there instead**, through a switch in `REQUIRE_SWITCHES` in `mk/test.mk`. Its skip lines go in `switch_skips` ("The switches that require a tool" in [`SPEC-gates.md`](SPEC-gates.md)).
+3. **Name every SKIP it can print** in an `Expected_skip` row in the same file: the platforms that expect it, and a piece of its line. An unnamed SKIP fails the gate with "a SKIP no row of `EXPECTED_SKIPS` holds". **A tool that Linux's image holds is required there instead**, through a switch in `REQUIRE_SWITCHES` in `mk/test.mk`. Its skip lines go in `SWITCH_SKIPS` ("The switches that require a tool" in [`SPEC-gates.md`](SPEC-gates.md)).
 4. **Give it a row in the platform table**, "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md). The row's first word is the target (with or without `test-`), or the target stands in the row's bracketed list. Left out, `make test-conventions` fails with "the platform table names every gate and suite CI runs".
-5. **A new shard** also needs a `Shard` and a `Set` variant, its place in `set_order`, and the job's matrix in `.github/workflows/ci.yml`. `make test-conventions` holds them together ("the CI's shards agree with the workflow's matrix").
+5. **A new shard** also needs a `Shard` and a `Set` variant, its place in `SET_ORDER`, and the job's matrix in `.github/workflows/ci.yml`. `make test-conventions` holds them together ("the CI's shards agree with the workflow's matrix").
 
 ## A suite
 

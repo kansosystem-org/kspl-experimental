@@ -4,7 +4,7 @@
 
 ## Input, menus and tables
 
-`ksmd/port/web/` holds the page: `bridge.kspl`, `bridge_tables.kspl` and `view.kspl` built as wasm32, and the script and style that show the model. `make ksmd-web` builds it as `out/ksmd/web/ksmd.html`.
+`ksmd/port/web/` holds the page: the `bridge*.kspl` files, `view.kspl` and `moving.kspl` built as wasm32, and the script and style that show the model. `make ksmd-web` builds it as `out/ksmd/web/ksmd.html`.
 
 **Text arrives through `beforeinput`, which the page cancels.** The page runs the matching action, renders the blocks it changed, and puts the selection back from model spots. So the browser's own undo has nothing to undo. A dropped item is refused.
 
@@ -16,7 +16,7 @@
 
 **The menu bar holds every command: File, Edit, View, Insert, Format and Table.** Each item shows its icon, its name and its shortcut. One list in `ksmd/port/web/commands.js` gives each command its name, key and icon, and builds the menus, the right-click menu and the quick access bar. Open and Save stand in File only where the local server opens files.
 
-**A command's work stands in the script that does it, which registers it by name** (`ks.handle` in `ksmd/port/web/core.js`). The registration also says what the command needs: a chosen cell, Repeat, or nothing that edits under Read-only. That file only looks a command up, so a new command touches its list entry and its own script.
+**A command's work stands in the script that does it, which registers it by name** (`ks.handle` in `ksmd/port/web/handlers.js`). The registration also says what the command needs: a chosen cell, Repeat, or nothing that edits under Read-only. That file only looks a command up, so a new command touches its list entry and its own script.
 
 * **The page does not start while a command lacks a handler, or a handler its command.** An item that does nothing would otherwise be found only by pressing it.
 * **The chosen cell has one keeper, `ksmd/port/web/table.js`.** Another script changes it through `ks.table.chooseCell`, and a plain write throws, so a wrong choice has one door to look at.
@@ -117,16 +117,17 @@
 * **An arrow key past the table's edge puts the caret on the text beside it** (`select_beside` in `ksmd/edit/editor.kspl`). Down from the last row goes to the start of the text after the table. Up from the names goes to the end of the text before it. A gap shows as an empty line, so the caret takes one only where no text stands on that side.
 * **The window scrolls only as far as it must to show the caret.** Focusing the document without that care scrolls a browser's window to the document's top.
 
-**Removing a whole block puts the caret on the block that takes its place** (`remove_whole` in `ksmd/edit/editor.kspl`). That is the start of the text after it, else the end of the text before it. A table, chart, image, include or divider goes this way, by its Remove button, the table menu, or Delete on a whole table.
+**Removing a whole block puts the caret on the block that takes its place** (`remove_whole` in `ksmd/edit/editor.kspl`). That is the start of the text after it, else the end of the text before it. A table, chart, image, include or divider goes this way, by its Remove button, the table menu, or Delete on a whole table. An include, an image and a chart have a Remove button, since no text selection reaches inside them. The included file or the image file stays as it is.
 
 * **The window scrolls only as far as it must to show the caret.** The person goes on working where the block stood, not at the top of the document.
 * **The caret takes a gap only where no text stands on either side**, as in an empty document. A gap shows as an empty line, which looks like a paragraph no one typed.
+* **A gap stays while the focus is in a bar, a menu or a dialog**, and while work that ends later shows the document again. The caret comes back there. Without it, the blocks below moved up a line, then down again as the focus came back. A press made then landed a row too high.
 
 **Ctrl+End and Ctrl+Home reach the gap after a last block, or before a first one, that holds no text**, such as a chart. The browser cannot put its caret beside such a block, and would leave it where it was. Where text stands at that end, the browser's own move stays.
 
 **An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
-**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** Each takes a PNG or a JPEG, asks nothing, and writes the file in the document's data folder under the first free name (`<name>-data/image-<n>.png`). Its clause goes in at the caret. The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one.
+**An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one. Where the file goes, and why nothing is asked, is "Images" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
 
 **A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
 
@@ -142,7 +143,7 @@
 
 **A table is a `grid`, on the HTML table the page already draws.** Its letters and names are column headers, its row numbers row headers, and its cells grid cells. The cells of the chosen range carry `aria-selected`. Nothing is drawn twice for a screen reader: the grid is the table a person sees.
 
-* **The focus stands in a text box over the chosen cell** ("Ranges of cells" below gives why). So that box's name is what a screen reader says: the cell's value and address, such as `6, C1`. Its description holds the formula, the error's reason, the note and the link. A name of `Cell C1` alone left a listener to open each cell to learn its value.
+* **The focus stands in a text box over the chosen cell** ("Ranges of cells" below gives why). So that box's name is what a screen reader says: the cell's value and address, such as `6, C1`. Its description holds the formula, the error's reason, the note and the link. A name of `Cell C1` alone would make a listener open each cell to learn its value.
 * **A range is said through a hidden live region in the status bar**, such as `B1:C2 chosen`, each time it changes. The focus stays on the range's first cell, so nothing else says how far a range reaches. One cell says nothing there, since its box already says it.
 
 **F10 puts the focus on the menu bar, as in Windows's programs and LibreOffice.** F10 again, or Esc, gives it back where it was, and an open cell's text goes in first. Alt alone is left to the browser: Firefox shows its own menu bar on it, and Chrome and Edge on Windows focus their own menu. Shift+F10 still opens the table's menu.
@@ -181,10 +182,12 @@
 * **Wrap text, as Excel's, breaks a cell's text into lines at its column's width.** It is set on each cell, as `wrap="on"` in its braces. Its row grows to show the lines, unless the row has a height. A word too long for the column breaks inside the word.
 * **A text runs on over the empty cells to its right, and is cut where the next cell holds a value**, as Excel shows it. It is cut at the table's right edge too.
 * **A number, a date or an error is always cut at its own cell.** A number or a date too wide for its column shows `###`, as in Excel: cut, 1200 would read as 120. Opening the cell shows the value.
+* **Centre across columns sets `align="across"` on each chosen cell, as one step of undo.** It stands in Format and in the table's Look flyout. Pressed again on a cell that has it, it takes it off, as the other alignments do.
 * **A value centred across columns shows in a box as wide as its run, over the run's empty cells.** A number wider than the whole run shows `###` in its own cell.
   * **The lines between the run's cells go**, as Excel draws no gridline under such a value. With them, the value would look cut by a line, and the run is meant to read as one cell. Paper shows it the same way.
-  * **A press on the run still chooses the cell under it**, and the status bar names that cell. So each cell can still be chosen and typed into, which a merged cell would not allow.
+  * **A press on the run still chooses the cell under it**, and the formula bar names that cell. So each cell can still be chosen and typed into, which a merged cell would not allow.
 * **A row with a height is that tall, and text taller than it is cut.** A row without one fits its lines.
+* **The Look flyout's Merge repeated values merges the chosen column** (`merge.js`), as one step of undo. Pressed again on a merged column, it stops.
 
 **Dragging the right edge of a column letter sets that column's width**, and every other column keeps its own. The last column has an edge too. When the button comes up, the width is saved in characters, as one step of undo.
 
@@ -273,7 +276,14 @@
 * **Inside a call, a tip shows the arguments, the one the caret is in bold**, with what the function gives and what that argument takes. A press on the name in the tip opens the dialog on it.
 * **The dialog searches names and what the functions do.** `hex` finds every function whose name or description holds it, and a group narrows the list. It shows each argument, what the function gives and an example, and Insert writes `=name(` into the chosen cell. In a cell being edited, the cell stays open and the name goes at the caret.
 * **What the list, the tip and the dialog say is written once, in the functions' doc comments** (`ksmd/calc/help.kspl`). A document's own functions show what their own doc comments say, marked as the document's own.
-* **The list stands under the cell, not under the caret.** A text area does not say where its caret is drawn, and the cell is narrow, so the two places differ little.
+* **The list stands under the box being typed in, the cell or the formula bar, not under the caret.** A text area does not say where its caret is drawn, and the cell is narrow, so the two places differ little.
+
+**The bracket beside the caret and the bracket it pairs with take a coloured ground, as the spreadsheets mark them** (`ksmd_web_bracket_pair` in `ksmd/port/web/bridge_tables.kspl`). In a formula of several calls, a person sees which `(` a `)` closes without counting.
+
+* **The bracket just before the caret comes first, then the one just after it.** So the `)` just typed shows the `(` it closes.
+* **The editor pairs them, from the formula's own tokens** (`partner` in `ksmd/calc/formula.kspl`). A bracket inside quoted text is text, so it is never marked, and the page has no second reader that could disagree.
+* **A bracket that pairs with nothing is not marked.** A mark on one bracket alone would tell the person less than the gap they look for.
+* **The mark is a ground alone, in the coloured copy behind the box** ("A formula's references in colour" below). Bold type would change the bracket's width, and the copy would stand off the text typed.
 
 ## A formula's references in colour
 
@@ -310,7 +320,7 @@
 **Insert cut rows stands in place of Insert row above while rows of that table are cut**, as Excel's Insert reads Insert Cut Cells then. Insert cut columns likewise stands in place of Insert column left. So the menu keeps its shape, and the item stands where a person looks for Insert.
 
 * **The move is one step of undo, and the moved lines stay chosen at their new place.**
-* **Each line keeps its identity** (`move_lines` in `ksmd/edit/editor_tables.kspl`). A formula's reference follows its row or column, so no `#REF!` appears. A row takes its height and notes along. A column takes its name, width, number format, filter, choices and colour rule, and a chart still finds it by name.
+* **Each line keeps its identity** (`move_lines` in `ksmd/edit/editor_tables.kspl`). A formula's reference follows its row or column, so no `#REF!` appears. A row takes its height and notes along. A column takes its name and every setting that a cut column takes ("Moving cells" below), and a chart still finds it by name.
 * **A group keeps its places, as after a sort**: it belongs to the table's layout ("Groups of rows and columns" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 * **A move is refused whole when a formula would grow past 4,096 bytes**, or when a chart would no longer find its column. Nothing changes then, and the page says why.
 * **Esc, or any other change to the document, drops the cut**, as in Excel. A place inside the cut lines, or just after them, changes nothing, and the cut stays.
@@ -328,7 +338,7 @@
 * **A range follows when it moves whole.** A range moved in part stays where it is. Excel moves each corner of a range on its own. So a range's end cell moved inside it drops cells from a sum, without a word.
 * **A reference to a cell written over becomes `#REF!`, as in Excel**, and so does a range whose two corners were written over. The value it named is gone.
 * **Whole columns cut by their letters take a whole-column reference with them**, so `=sum(A)` follows column A's cells to C, as Excel moves `A:A` to `C:C`. A block of some rows leaves such a reference alone, since the reference names every row.
-* **Whole columns also take their settings: width, number format, choices, colour rule, filter, merging and row colours**, as Excel's paste of whole columns does (`move_cells` in `ksmd/edit/moving.kspl`). The columns written over lose their own, and the columns left behind keep none. Otherwise a filter left on an empty column would hide every row. Whole rows likewise take their heights.
+* **Whole columns also take their settings**, as Excel's paste of whole columns does (`move_cells` in `ksmd/edit/moving.kspl`). "Copying, moving and filling" in [`SPEC-editing-page.md`](SPEC-editing-page.md) lists them. The columns written over lose their own, and the columns left behind keep none. Otherwise a filter left on an empty column would hide every row. Whole rows likewise take their heights.
 * **The move is one step of undo, and the moved cells stay chosen at their new place.** The table grows rows and columns where the cells reach past it, as a paste of rows grows it.
 * **A move is refused whole when a formula would grow past 4,096 bytes**, or when the table would pass its limits. Nothing changes then, and the page says why.
 * **A cut pastes once.** Esc, a copy, or any other change to the document drops it, as in Excel.
@@ -353,7 +363,7 @@
 
 ## Exporting a table
 
-**The right-click menu's Export as CSV downloads the table**, so another program can take its values.
+**The Table flyout's Export as CSV downloads the table**, so another program can take its values.
 
 * **The file holds the names, then each row's calculated values**, every row whether hidden or not. A number is written before any format, with `.` for its point and no separators.
 * **A value is quoted only where it holds a comma, a quote or a line break**, and a quote inside is doubled. Lines end in CR LF, as RFC 4180 writes them.
@@ -363,7 +373,7 @@
 
 ## Find and replace
 
-**Ctrl+F opens a find bar under the quick access bar, and Ctrl+H opens it with its replace part.** The Edit menu and the bar's Find tool open it too. A short selection on one line becomes the search text.
+**Ctrl+F opens a find bar under the formula bar, and Ctrl+H opens it with its replace part.** The Edit menu and the bar's Find tool open it too. A short selection on one line becomes the search text.
 
 * **Find looks in the text the page shows, and in each cell's text as a person edits it.** So a formula's source is searched, and its calculated value is not.
 * **A match can cross formatting**, but stays inside one paragraph, heading, list item, code block or cell.
@@ -414,7 +424,7 @@
 * **Colour rows by this column, in the Look flyout, colours each row by the choice that column holds.** Pressed again on that column, it stops. A column's colour rule stands over a row's colours.
 * **A column with choices opens its cells in a box of one line**, the only box a browser offers a list in. Other cells open in a text area that keeps line breaks.
 
-## AutoCorrect: dates and links as they are typed
+## AutoCorrect: dates, links and brackets as they are typed
 
 **A typed `11/6` or `2026/1/5` becomes a date, and a typed `https:` or `http:` address becomes text that links to it**, as Excel does. Each saves a step that people do by hand often.
 
@@ -423,12 +433,23 @@
 * **`2026-10-23`, the file's own form, is a date even with the choice off**, as a number is a number. A value in quotes is text whatever it looks like.
 * **A paste reads dates by the same choice, and makes no link.** A pasted column of addresses is data to be read, and a link on each would be a surprise.
 
+**A formula that misses its last `)` takes it as the cell is taken**, by Enter, Tab, a press elsewhere or any other way (`close_formula` in `ksmd/edit/editor_tables.kspl`). `=sum(A1:A3` becomes `=sum(A1:A3)`. Without it, the cell shows `#SYNTAX!`, and the person must find the gap by eye.
+
+* **Only an ending is added**: a `"` where quoted text is still open, then a `)` for each `(` left open (`closing` in `ksmd/calc/formula.kspl`). Nothing goes inside the formula. A guess in the middle can change what the formula means and still read.
+* **The formula takes the ending only where it then reads.** `=1+(` and `=round(2.5` stay as typed, with their `#SYNTAX!`, so the reason names the person's own mistake.
+* **A `)` too many is left alone**, since no ending can close it. A `\` before the end is text, so `"C:\` closes as `"C:\"`.
+* **The status bar says what was added**, such as `Added ) at the end so the formula reads. Ctrl+Z takes it back.` A cell that holds more than was typed, with no word why, looks like a fault.
+* **`Ctrl`+`Z` right after gives back the formula as typed**, as for dates and links: the editor records two steps. Quoted text left open runs over the cell's end in the file, so that formula goes in closed, as one step.
+* **It is the third choice under Edit ▸ AutoCorrect, on at first.** A person who wants to see each `#SYNTAX!` turns it off.
+* **The page adds no `)` while a formula is typed.** A bracket that appears ahead of the caret is typed over or doubled, depending on where the caret went since. Spreadsheets that add one draw that complaint.
+* **Excel asks in a dialog before it corrects a formula.** A dialog on every Enter costs a key each time, and its proposals can change the meaning. The page asks nothing, and adds only what reads.
+
 ## An image's width, caption and alternate text
 
 **A drag of the square at an image's lower right corner sets its width, and so does Width… in its tools** (`images.js`). The width is a share of the text width, and the status line shows it while the corner moves. Width… takes a number, as Column width… does, so the keyboard reaches it too.
 
 * **Caption… and Alt text… stand beside Width…** and ask for the image's words, as they stand. A caption is what a reference names (`[#](#caption)`), so an image that a reference needs takes one there.
-* **An image with no alt text is decoration, and a screen reader passes over it** (`alt=""`). Alt text… says so when it asks. Read by its file's name, as before, it told a listener nothing of what it shows.
+* **An image with no alt text is decoration, and a screen reader passes over it** (`alt=""`). Alt text… says so when it asks. A file's name, read in its place, tells a listener nothing of what the image shows.
 * **Images with widths that fit share a row**, laid out as inline blocks of their share. A paragraph or a gap between them starts a new row.
 * **The square is left out of print and while read-only**, as the drawing tools are.
 
@@ -448,6 +469,8 @@
 
 ## A chart's panel
 
+**The Table flyout's Insert chart puts a bar chart of the first column of numbers after the table.**
+
 **A chart's Edit button opens a panel**: the kind, series in columns or in rows, the labels column, the series drawn and the title (`chart.js`). In rows, the panel lists the rows that the editor takes as series, and asks for the first and last columns drawn. Such a row holds text written in the labels column, not a calculated value. The saved chart finds the row by that text, so the text holds no `,` and no row above it holds the same text. The view sends these rows for each column (`sr` in `ksmd/port/web/view.kspl`), so the panel and the editor apply one rule. Apply sets the chart as one step.
 
 ## Page setup, numbers and references
@@ -458,12 +481,11 @@
 * **A heading's or a caption's number is drawn by CSS from an attribute, never written into the text.** The editor counts the text of each block, so a number inside it would move every caret after it. The contents list shows the numbers too.
 * **A reference's `#` stays in the text and takes no room.** Its number is drawn after it.
 * **Ctrl+press on a reference, or a press while read-only, scrolls to what it names.**
-* **Table ▸ Caption… sets a table's caption, and the Look flyout's Merge repeated values merges the chosen column** (`merge.js`). Each is one step of undo, and pressed again on a merged column, it stops.
-* **Centre across columns sets `align="across"` on each chosen cell, as one step of undo.** It stands in Format and in the table's Look flyout. Pressed again on a cell that has it, it takes it off, as the other alignments do.
+* **Table ▸ Caption… sets a table's caption, as one step of undo.**
 
 ## Drawing on an image or a chart
 
-**An image and a chart each have the tools Rectangle, Arrow, Line, a colour, Text… and Delete** (`drawings.js`). The shapes are saved in the picture's clause ("Shapes drawn over an image or a chart" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+**An image and a chart each have the tools Rectangle, Arrow, Line, Pen, a colour, Text… and Delete** (`drawings.js`). With Shift held, a rectangle is a square, and a line or an arrow keeps to a multiple of 45 degrees. The shapes are saved in the picture's clause ("Shapes drawn over an image or a chart" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
 * **A shape is drawn by a drag across the picture once its tool is pressed.** The new shape is then chosen.
 * **A press on a shape chooses it, and a drag moves it**, kept inside the picture. Delete takes the chosen shape away, and Esc lets it go.
@@ -508,7 +530,7 @@
 * **A divider ends a page.** Its line still shows at the page's end.
 * **The page always prints light, and the author's fills and colours print as the page shows them.** The browser would otherwise leave background colours out.
 * **A table keeps its columns' widths on paper.** A table wider than the paper prints smaller, so all its columns fit, and no text wraps to fit the paper. The paper is the one File, Page setup… names, else A4.
-* **The status bar says when a table will print smaller**: "this table prints at 72%" follows the page while the person works in it. Before a print, the status bar names each such table. A shrunk table is harder to read, so the person learns of it before the paper does. A note beside the table's name said so once. It stood there all the time, so a person who knew found it in the way.
+* **The status bar says when a table will print smaller**: "this table prints at 72%" follows the page while the person works in it. Before a print, the status bar names each such table. A shrunk table is harder to read, so the person learns of it before the paper does. A note that stood beside the table's name all the time would be in the way of a person who knows.
 * **The row numbers' column keeps its place with no width**, so no value moves under another column's name.
 
 **Each page has a header and a footer of the page's own**, drawn with the margin boxes of CSS (`@page` in `print.css`).
@@ -547,10 +569,10 @@
 
 ## The status bar
 
-**The status bar is one line at the window's foot that says where the person works** (`status.js`). From the left it shows the chosen cell and why it shows an error. Then come a message, a filter's count and the printed page where the caret stands. The figures and the zoom stand at the right.
+**The status bar is one line at the window's foot that says where the person works** (`status.js`). From the left it shows why the chosen cell shows an error, and the note at the cell or caret. Then come a message, the document's own functions the cell calls, a filter's count and the printed page where the caret stands. The figures and the zoom stand at the right.
 
-* **The chosen cell shows its address and what was typed in it**, such as `C2  =hex_to_dec(B2)`. A value shows its typed text, and a column's name cell shows `C name` and the name. A range shows its address alone: `C2:D5`, or `A:D` from the names to the last row. While the cell is open, the bar shows its text as it is typed. The bar cuts a long formula with `…`, and its tooltip and its accessible name hold the whole text.
-* **A chosen cell that shows an error shows why after it**, as `#VALUE!: B7 holds text, which arithmetic cannot use`. The cell's tooltip holds the same words, after any note. A mark alone makes the person guess, or look it up in the reference.
+* **The status bar does not show the chosen cell's address or text.** The formula bar shows them whole, and edits them ("The formula bar" below). The same text in two bars would be one more thing to read, and the status bar could only show it cut.
+* **A chosen cell that shows an error shows why**, as `#VALUE!: B7 holds text, which arithmetic cannot use`. The cell's tooltip holds the same words, after any note. A mark alone makes the person guess, or look it up in the reference.
   * **The calculator writes the reason; the page only shows it** (`write_reason` in `ksmd/calc/reason.kspl`, sent with each table as `err`). So `#BLOCKED!` has no words of its own in the page's script: its reason comes the same way.
   * **The bar cuts a long reason with `…`**, and the part's tooltip holds it whole. A reason in two lines would push the bar's other parts out of the window.
   * **An error carried from another cell names that cell**, as `A3 shows #DIV/0!`. Choosing A3 shows its own reason, so the person follows the chain to the cell to fix.
@@ -558,7 +580,7 @@
 * **The bar names no section.** View ▸ Contents marks the heading being read ("The contents" below), and shows its place among the others, which one name cannot.
 * **A message stands in the middle until the next action.** The page and the filter's count step aside for it, and its tooltip holds a message the bar cuts.
 * **A filter's count shows while a cell of a filtered table is chosen**, as `5 of 120 rows shown`. A table no filter narrows shows none.
-* **The bar keeps one line.** A narrow window drops the zoom and the page first. A phone's width then drops the filter's count, the chosen cell and its reason. The message and the figures stay.
+* **The bar keeps one line.** A narrow window drops the zoom and the page first. A phone's width then drops the filter's count and the error's reason. The message and the figures stay.
 
 * **Only the parts a person presses are buttons**: the figures, and the zoom's −, level and +. Tab from the text reaches them. The other parts are text that a screen reader reads, and only the message is announced as it changes.
 
@@ -595,6 +617,29 @@
 * **The zoom is CSS `zoom` on the document, on the screen alone.** The file is unchanged, and the print keeps the document's own sizes. The block at the window's top stays in place as the level changes.
 * **Where the page turns a pointer's move into the document's sizes, it divides by the zoom.** This holds for a column's drag, a row's drag and a checklist's box. The header's height, under which a table's heading stays, is divided by it too.
 * **The level is this browser's own and is kept**, as the page's width is.
+
+## The formula bar
+
+**Under the quick access bar stands the formula bar: the chosen cell's address, then its whole text as typed** (`bar.js`). A press in its box, or Tab to it, opens the chosen cell for editing there. A long formula then has the window's width, not the cell's.
+
+* **It shows a value's typed text, and a formula as written.** A column's name cell shows `C name` and the name. A range shows `C2:D5`, or `A:D` from the names to the last row. While the cell is open, the bar shows its text as it is typed.
+* **It shows one line while it only shows.** Choosing another cell then moves nothing under it, so a press or a drag lands where it was aimed. The box still holds the whole text, which a screen reader reads, and a press shows it all.
+* **While it holds the edit, it grows with the wrapped text, up to eight lines, and scrolls past them.** Excel's bar opens to a fixed height that the person sets by hand, and people ask for one that fits the formula.
+* **It has no key of its own to grow, as Excel's `Ctrl`+`Shift`+`U`.** The bar grows by itself where the text needs room, so the key would do nothing a press does not.
+
+**One edit, two views: the bar's box takes the open edit itself** (`inBar` in `ksmd/port/web/table.js`). The keys, the list of functions, the colours, the marked brackets and AutoCorrect act in the bar as in the cell, by the same code. The cell shows a copy of the text, framed with dashes.
+
+* **An edit open in the cell moves into the bar with its text** when the bar is pressed. The caret stands where the press was.
+* **The bar always edits, as F2 does**: the arrow keys move the caret. Enter and Tab take the text and choose the next cell. Esc drops the edit. The keys then go back to the table.
+* **While a formula is typed in the bar, a press on a cell writes its reference.** It works as from the cell ("Pointing at cells in a formula" above).
+* **A table drawn again while the bar holds the edit keeps the text, the caret and the focus.** The bar is not drawn again. The cell's copy of the text comes back in the table drawn again (`redrawn` in `ksmd/port/web/table.js`).
+* **A box that held an edit is never used again.** Its keys and help stay attached to it, so the bar puts a fresh box in its place once that edit ends.
+
+**The bar is a stop of Tab after the quick access bar.** Its box's name says which cell it edits, such as `Formula bar, Cell C2`. F10 then Tab twice reach it from a chosen cell. Tab to the box puts the caret at the end, as F2 does.
+
+**Where no edit is allowed, the bar shows the text and takes no edit.** That is in Read-only, on a range, outside a table, and on a table shown from an included file. Its text can still be chosen and copied. A page opened without the local server edits in the bar as it edits in a cell.
+
+**A column with choices offers its list in the cell alone.** A browser offers a list only under a one-line input, and the bar wraps.
 
 ## A compact page
 
@@ -689,8 +734,7 @@ sequenceDiagram
 * **The worker gets the module and nothing else.** Its one import throws, so a panic reaches the page as `#STOPPED!`; it cannot reach the document, the files or the network.
 * **An answer is kept by its call's bytes**, the name and every argument. So the same call is answered at once, and an argument changed asks again. After 4,096 answers, all are forgotten between two rounds.
 * **A functions file is fetched as an image is**: the page asks whether it stands, and keeps its bytes. When those bytes change, the page asks the server again whether they are allowed.
-* **The server answers whether a file is allowed, by the bytes it would build.** The page asks before every build, and builds nothing while the answer is no. A build refused with 403 means the file changed since, and the page asks the person again.
-* **An allow names the bytes the page read**, by their digest, as a conditional write does. Bytes changed on disk since are refused with 409, so the person never allows a content they were not shown.
+* **The page asks the server before every build, and builds nothing while the answer is no.** On a 403 or a 409 the file changed since, and the page asks the person again. The server's rules are "Building a page's own functions" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 * **The person's answers wait their turn.** A press on Allow or Stop allowing waits until the work before it ends, so two steps never change one file at once.
 * **The bar asks once per opening.** Not now and Stop allowing keep it shut for that file while the page stays open; the clause's box still offers Allow.
 * **The corner mark comes from the editor**, which reads each formula as the calculator does (`Own_functions.called`). A function's name inside quoted text is no call, so it marks nothing.

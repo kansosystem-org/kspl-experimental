@@ -238,6 +238,8 @@ export function losses({ tab, idle, said, noticed, choose, typeAtEnd, openInDial
       const d = await tab(ctx, "?doc=top.ksmd", NO_STORE);
       await typeAtEnd(d, 1, " Unkept.");
       const edited = await d.js("ksmd.source()");
+      // A fixed time, on purpose: past the draft's wait of 1 s, so the page has tried to hold a
+      // draft and failed. A failed try shows nothing a check could wait for.
       await d.js("new Promise((r) => setTimeout(r, 1500))");
       await reload(d);
       check(d.page.dialogs.includes("beforeunload") && await d.js("ksmd.source()") === edited,

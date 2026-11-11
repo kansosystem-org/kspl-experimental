@@ -54,7 +54,6 @@ priv const TRAIT_RO: U8[] = "value of a read-only location"
 priv const MADE: U8[] =
     "A binding that a 'case', an 'if name: =', a 'for … in' or a 'catch' makes"
 priv const NOT_PLACE: U8[] = "cannot take the address of a call result, literal"
-priv const PACKED: U8[] = "cannot take the address of a field that '#packed' leaves aligned"
 priv const CONST_CAST: U8[] = "cannot cast a 'const' declaration to the mutable slice type"
 priv const CONST_ELEM: U8[] = "cannot write to an element of the read-only array"
 
@@ -105,11 +104,6 @@ pub const ROWS: Row[_] = ::{
         .own = U8[][]::{ "", "", "", "", "", "", "for g in make_grid()\n    _w: P$[] = P$[]::g", "",
         "for g in make_grid()\n    for e in g\n        _w: = e", "for l in make_ls()\n    l[0] = 5",
         "" } },
-    Row::{ .head = "A field `#packed` leaves under-aligned", .cells = "rrrrrrr-cra",
-        .why = U8[][]::{ PACKED, PACKED, PACKED, PACKED, PACKED, PACKED, PACKED, PACKED },
-        .setup = "$k: K = ::{ .t = 1, .p = P::{ .n = 1 }, .l = make_l() }", .wrap = "", .t = "P",
-        .p = "k.p", .a = "k.a", .e = "P", .c = "", .l = "k.l", .v = "5", .f = "k.p.n = 5",
-        .own = NONE },
     Row::{ .head = "A temporary (a call's result)", .cells = "rrcrrrr-crr",
         .why = U8[][]::{ NOT_PLACE, NOT_PLACE, "cannot call a method that writes its receiver",
         "cannot cast an rvalue", "cannot cast an rvalue", "cannot cast a temporary array",
@@ -213,13 +207,6 @@ priv fn look_it(g: Look): I32
 
 priv fn call_it(c: Callable1<|I32, I32|>): I32
     return c.call(1)
-
-#packed
-priv struct K
-    t: U8
-    p: P
-    a: P[2]
-    l: List<|I32|>
 
 priv fn make_p(): P
     return P::{ .n = 1 }

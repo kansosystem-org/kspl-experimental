@@ -15,6 +15,7 @@ import "kspeg/engine" as kspeg
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/state" { Doc_store }
 import "ksplc/lsp/worker" as lsp_worker
+import "std/channel"
 import "std/chars"
 import "std/ds" { Map }
 import "std/io"
@@ -333,13 +334,17 @@ priv fn named_uri(params: json.Value): U8[] //< the document a message names; em
 // buffer. So one thread reads it and hands the messages over.
 // ==========================================
 
-priv struct Inbox //< what the editor has sent and the supervisor has not taken yet
-    frames: Str_builder //< whole frames, in the order they came
-    ended: Bool //< nothing more will come: the input closed, or `exit` was read
+priv const INBOX_CAPACITY: Sz = 1024 //< how many messages the reader holds before it waits
+    //< **While the channel is full, the reader reads no more.** The pipe then fills, and the
+    //< editor's own writes wait: nothing is lost or refused. The room covers the burst an editor
+    //< sends while the supervisor waits on a slow worker (up to `WORKER_TIMEOUT_MS`), at the cost
+    //< of one empty builder per slot.
 
 priv struct Editor_reader //< the thread reading the editor's messages, and what it hands over
-    inbox: thread.Mutex<|Inbox|>
-    arrived: thread.Cond_var //< signalled when a frame comes or the input ends
+    inbox: channel.Channel<|Str_builder|> //<
+        //< each message's body, in its own memory and the order it came
+        //< The reader closes it at `exit` or the end of input; the supervisor closes it when it
+        //< stops taking messages.
     reading: thread.Thread
 
 priv enum Inbound //< what the editor has for the supervisor now
@@ -348,15 +353,17 @@ priv enum Inbound //< what the editor has for the supervisor now
     ended //< nothing more will come
 
 extern fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
-    //< The reading thread: each message the editor sends, framed into the inbox
+    //< The reading thread: each message the editor sends, sent on as a body of its own
     //< Caution: **Stop at `exit`, not only at the end of input.** A client can keep the pipe open
     //< after `exit`. A thread left blocked in the C library's read holds standard input's lock. The
     //< C library's exit waits for that lock, so the process would never end.
+    //< **Once the supervisor has closed the channel, a body is let go and the reading goes on**
+    //< to `exit`. So a send never waits on a supervisor that takes no more.
     defer arena: = Arena(64 * 1024)
     base: = arena.save()
-    defer $body: = Str_builder()
     for
         arena.restore(base)
+        $body: = Str_builder()
         $got: = true
         lsp_msg.read_message(body@) catch
             got = false
@@ -365,64 +372,61 @@ extern fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
         if got && body.slice().find_str("\"exit\"").is_some()
             last = message_of(body.slice(), arena).get("method").as_str().unwrap_or("")
                 .equals("exit")
-        box: = r.inbox.lock()
-        if got
-            jsonrpc.frame_into(box.frames@, body.slice())
-        box.ended = last
-        r.arrived.signal(r.inbox@)
-        r.inbox.unlock()
+        // A body the end of input cut to nothing is no message.
+        if got && body.len > 0
+            r.inbox.send(body) catch e
+                switch e
+                case .closed(v)
+                    let_go_body(v)
+                case .timed_out(v)
+                    let_go_body(v)
+        else
+            body.free()
         if last
+            r.inbox.close()
             break
     return null
 
+priv fn let_go_body($body: Str_builder) //< frees a body the channel did not take
+    body.free()
+
 priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
-    $inbox: =
-        thread.Mutex<|Inbox|>(Inbox::{ .frames = Str_builder(), .ended = false }) catch
+    inbox: = channel.Channel<|Str_builder|>(INBOX_CAPACITY, null) catch
         return .none
-    arrived: = thread.Cond_var() catch
-        inbox.free()
-        return .none
-    r: = mem.new(Editor_reader::{ .inbox = inbox, .arrived = arrived })
+    r: = mem.new(Editor_reader::{ .inbox = inbox })
     r.reading = thread.Thread.spawn<|Editor_reader|>(ksplc_lsp_read_editor, r) catch
         r.let_go()
         return .none
     return .some(r)
 
 impl Editor_reader
-    priv fn next(r: Self$@, taken: Str_builder$@, wait: Bool, arena: Arena$@): Inbound //<
+    priv fn next(r: Self@, wait: Bool, arena: Arena$@): Inbound //<
         //< The editor's next message, copied onto `arena`; without `wait`, idle where none is there
-        //< `taken` holds the frames moved out of the inbox and not yet handed on.
-        for
-            // **The limit the reader took the frame under** (`read_message`), or a body between
-            // the two limits leaves the frames after it misread.
-            got: = jsonrpc.take_frame(taken, lsp_msg.MAX_CONTENT_LENGTH, arena) catch
-                continue // the frame was dropped with its header; the next one follows
-            if body: = got
-                return .message(body)
-            box: = r.inbox.lock()
-            for wait && box.frames.len == 0 && !box.ended
-                r.arrived.wait(r.inbox@)
-            if box.frames.len > 0
-                taken.s(box.frames.slice())
-                box.frames.len = 0
-                r.inbox.unlock()
-                continue
-            ended: = box.ended
-            r.inbox.unlock()
-            return .ended if ended else .idle
+        $body: = r.take(wait) catch e
+            return .ended if e == .closed else .idle
+        text: = U8[]::arena.dup_str(body.slice())
+        body.free()
+        return .message(text)
 
-    priv fn let_go(r: Self$@) //< lets go the inbox with its frames, the signal and the block
-        //< The thread must have stopped, or never started.
-        box: = r.inbox.lock()
-        box.frames.free()
-        r.inbox.unlock()
+    priv fn take(r: Self@, wait: Bool): Str_builder!channel.Receive_end //<
+        //< the next body; without `wait`, it looks once
+        if wait
+            return r.inbox.receive()!
+        return r.inbox.receive_for(0)!
+
+    priv fn let_go(r: Self$@) //< lets go the bodies left, the channel and the block
+        //< The thread must have stopped, or never started, and the channel be closed or empty.
+        for
+            $body: = r.inbox.receive_for(0) catch
+                break
+            body.free()
         r.inbox.free()
-        r.arrived.free()
         dealloc(Void$@::r)
 
 impl Editor_reader: Manual_free
     priv fn free(r: Self$@) //< it waits for the thread to stop, at `exit` or the end of input
+        r.inbox.close()
         r.reading.free()
         r.let_go()
 
@@ -445,7 +449,6 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
     defer $docs: = Lsp_docs()
     defer arena: = Arena(8 * 1024 * 1024)
     base: = arena.save()
-    defer $taken: = Str_builder()
 
     for
         arena.restore(base)
@@ -453,7 +456,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         // time. So a request waits for at most one of them.
         idle_work: = worker.is_some() && docs.next_unchecked().len > 0
         $msg_body: U8[] = ""
-        switch reader.next(taken@, !idle_work, arena)
+        switch reader.next(!idle_work, arena)
         case .message(body)
             msg_body = body
         case .idle

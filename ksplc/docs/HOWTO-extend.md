@@ -1,6 +1,6 @@
 # Extending the compiler
 
-**This guide gives the steps for the six changes to `ksplc` that touch several places at once.** They are a diagnostic code, an AST node kind, a primitive type, a subcommand, a target machine, and the seed. Each step names the file, the command, and what fails if the step is left out. You need a clone that builds (`make` passes, [`docs/HOWTO-build.md`](../../docs/HOWTO-build.md)). Read "The compiler as a whole" in [`DESIGN-compiler.md`](DESIGN-compiler.md) first.
+**This guide gives the steps for the changes to `ksplc` that touch several places at once.** They are a diagnostic code, an AST node kind, a primitive type, a subcommand, a target machine, and the seed. Each step names the file, the command, and what fails if the step is left out. You need a clone that builds (`make` passes, [`docs/HOWTO-build.md`](../../docs/HOWTO-build.md)). Read "The compiler as a whole" in [`DESIGN-compiler.md`](DESIGN-compiler.md) first.
 
 **Every change here ends with the seed.** The compiler is built from `ksplc/seed.c`, so a change under `ksplc/` reaches the tools only after "Updating the seed" below.
 
@@ -25,10 +25,10 @@
 
 1. **The grammar**: `Primitive_type` in [`../kspl.kspeg`](../kspl.kspeg).
 2. **Sema**:
-   * `Builtin_type_id` and the `register(...)` calls in `ksplc/sema/type/env.kspl`. `is_builtin` takes `f64_type` as its last id, so a new id past it moves that bound.
+   * `Builtin_type_id` and its row in `BUILTIN_TYPES` in `ksplc/sema/type/env.kspl`. The C backend spells a built-in by that row's name. `is_builtin` takes `f64_type` as its last id, so a new id past it moves that bound.
    * `is_integer`, `is_unsigned`, `is_float` and `get_primitive_bit_size` in `ksplc/sema/type/query.kspl`.
    * The literal suffixes in `ksplc/sema/body/literal.kspl` and `ksplc/sema/decl/eval.kspl`.
-3. **The backends**: `prims` in `ksplc/gen/c/ctx.kspl`, `llvm_prim_name` in `ksplc/gen/llvm/types.kspl`, `c_scalar` in `ksplc/tools/interface.kspl`, and a `typedef` in `ksplc/gen/runtime/core.h`.
+3. **The backends**: `llvm_prim_name` in `ksplc/gen/llvm/types.kspl`, whose switch does not compile until the new id has a case. Also `c_scalar` in `ksplc/tools/interface.kspl`, and a `typedef` in `ksplc/gen/runtime/core.h`.
 4. **The editor's colouring**: the primitive types' match in `.vscode/extensions/kspl/tmLanguage.json`. Left out, `make test-conventions` fails with "a keyword of ksplc's the grammar does not colour".
 5. **The language specification**: the table in "3.1 Primitive types" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). Nothing checks this row, so read it against the code once.
 6. **Update the seed** (below): the grammar and the runtime are both built into the compiler.
@@ -63,6 +63,5 @@
    make commit-seed          # last line: Seed updated successfully.
    ```
 
-3. **A new C runtime function that `std/` calls takes two re-bakes**, in the order "The bootstrap, and keeping the seed in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md) gives. A changed signature takes a new name.
-4. **A language change that a suite or `make fmt` must use goes into the seed first**: both run the seed.
-5. **Run the gates**: `make ci` runs every one on Linux ([`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)).
+3. **Some changes take the seed in a set order**: a new C runtime function that `std/` calls, and a language change a suite or `make fmt` must use. The order is "The bootstrap, and keeping the seed in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md).
+4. **Run the gates**: `make ci` runs every one on Linux ([`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)).

@@ -1,19 +1,5 @@
 //< Attributes: where `#` attributes may stand and what each takes
 //< Each case below is compiled alone, as the file its head names.
-// ==== case attr_align_not_power_of_two
-//< The N of `#align(N)` being positive is not enough; it has to be a power of two
-//< **Let it through and it fails on the C compiler's side.** On a variable, the error points at a
-//< line of the generated C. So the reader cannot find the `.kspl` line that was written
-//< (docs/DESIGN-principles.md Principle 5).
-// EXPECT: '#align(N)' needs N to be a positive constant power of two
-// EXPECT-NOT: requested alignment
-#align(3)
-priv struct S
-  v: I32
-
-fn main(): I32
-  s: S = ::{}
-  return s.v
 // ==== case attr_cfg_boolean_operator
 //< `#cfg(a && b)` is not accepted either
 //< Before, it gated on the first identifier alone and the remaining attribute expression fell
@@ -72,29 +58,6 @@ fn combined(): I32
 
 fn main(): I32
   return combined()
-// ==== case attr_fn_align_llvm_backend
-//< An `#align(N)` on a function is an error on the LLVM backend
-//< genc merely copies the expression into C as it stands, so the constant value is kept nowhere.
-//< The LLVM side needs a number and cannot emit one, so rather than dropping it in silence it is
-//< an error. An `#align(N)` on a struct is folded by sema, so it takes effect on both backends.
-// ARGS: --to=llvm
-// EXPECT: attribute '#align' is only implemented by the C backend
-#align(16)
-fn hot() {}
-
-fn main(): I32
-  return 0
-// ==== case attr_interrupt_llvm_backend
-//< `#interrupt` is implemented only on the C backend (LLVM IR has no portable counterpart)
-//< Whoever writes an attribute that works on one backend alone believes it is in effect. So it is
-//< an error, not silently ignored.
-// ARGS: --to=llvm
-// EXPECT: attribute '#interrupt' is only implemented by the C backend
-#interrupt
-fn on_tick() {}
-
-fn main(): I32
-  return 0
 // ==== case attr_noreturn_comes_back
 //< A `#noreturn` function is refused each way control comes back: `return`, `throw`, `!`, its end
 //< C trusts the attribute and only warns, and a caller compiled on the promise runs on into
@@ -145,16 +108,15 @@ fn main()
     ends(1)
 // ==== case attr_on_extern_struct
 //< No attribute (other than `#cfg`) can be written on an `extern` struct
-//< The generated C puts out only a forward declaration (`typedef struct X X;`). So an
-//< attribute that sets the layout has nowhere to go. Silently ignored, its writer goes on
-//< believing it is in effect.
-// EXPECT: attribute '#align' cannot be written on an 'extern' struct
-// EXPECT: attribute '#packed' cannot be written on an 'extern' struct
+//< The generated C puts out only a forward declaration (`typedef struct X X;`). Silently ignored,
+//< an attribute there leaves its writer believing it is in effect.
+// EXPECT: attribute '#inline' does nothing here. It applies to functions
+// EXPECT: attribute '#section' does nothing here. It applies to functions, variables, and constants
 // EXPECT-NOT: [
-#align(8)
-extern struct Aligned_c
-#packed
-extern struct Packed_c
+#inline
+extern struct Inline_c
+#section(".data")
+extern struct Placed_c
 
 fn main(): I32
   return 0
@@ -278,11 +240,8 @@ fn main()
 //< yet nothing happens" (Principle 5).
 // ==========================================
 // EXPECT: attribute '#inline' does nothing here. It applies to functions
-// EXPECT: attribute '#packed' does nothing here. It applies to structs
-// EXPECT: attribute '#interrupt' does nothing here. It applies to functions
+// EXPECT: attribute '#noinline' does nothing here. It applies to functions
 // EXPECT: attribute '#section' does nothing here. It applies to functions, variables, and constants
-// EXPECT: attribute '#align' does nothing here. It applies to structs, functions, variables, and
-// constants
 // EXPECT: attribute '#raw_address' does nothing here. It applies to functions, and top-level
 // variables and constants
 // ==========================================
@@ -296,24 +255,36 @@ pub struct S
 pub struct Reg
   pub at: U32
 
-#packed
-pub fn takes(p: I32): I32
-  return p
-
-#interrupt
+#noinline
 pub const LIMIT: I32 = 4
 
 // A `typedef` makes no symbol, so there is nothing to put in a section.
 #section(".meters")
 pub typedef Meters = I32
 
-#align(8)
-pub enum Kind
-  a
-  b
-
 fn main(): I32
   io.out().s("unreachable\n")
+  return 0
+// ==== case layout_and_interrupt_are_unknown
+//< `#packed`, `#align(N)` and `#interrupt` are refused as any unknown attribute is
+//< None of them is a KSPL attribute: a struct is laid out as C lays it out, and a function uses
+//< the one C calling convention. Accepted, the mark would change nothing.
+// EXPECT: unknown attribute '#packed'
+// EXPECT: unknown attribute '#align'
+// EXPECT: unknown attribute '#interrupt'
+#packed
+struct Tight
+  a: U8
+  n: I32
+
+#align(16)
+struct Wide
+  a: U8
+
+#interrupt
+fn on_tick() {}
+
+fn main(): I32
   return 0
 // ==== case deprecated_is_unknown
 //< `#deprecated` is refused as any unknown attribute is

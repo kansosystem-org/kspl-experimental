@@ -7,6 +7,7 @@
 //< file is read once and used in place" in `lib/ksai/docs/DESIGN-learning.md`.
 import "ksai/quant" { Quant_error, Quant_format, Quant_matrix }
 import "ksai/tensor" + { Tensor }
+import "std/bignat"
 import "std/bytes" // `get_u32_le` / `get_u64_le`
 import "std/chars" // `sub`
 import "std/checked_int"
@@ -380,10 +381,7 @@ impl Gguf
         case .f32
             return F64::f32_at(r.raw, k.at)
         case .f64
-            $bits: = r.raw.get_u64_le(k.at)
-            $v: F64 = 0.0
-            mem.copy(Void$@::v@, Void$@::bits@, 8)
-            return v
+            return bignat.f64_from_bits(r.raw.get_u64_le(k.at))
         default
             throw .wrong_type(key)
 
@@ -490,7 +488,4 @@ priv fn tensor_bytes(t: Gguf_tensor): Sz!checked_int.Checked_error //< the bytes
     return n
 
 priv fn f32_at(raw: U8[], at: Sz): F32 //< the F32 whose little-endian bits start at `at`
-    $bits: = raw.get_u32_le(at)
-    $v: F32 = 0.0
-    mem.copy(Void$@::v@, Void$@::bits@, 4)
-    return v
+    return bignat.f32_from_bits(raw.get_u32_le(at))

@@ -23,11 +23,11 @@ You need not tie them for this walk.
 
 ## 2. Make a document and open it
 
-A ksmd document is a text file whose first line is `%ksmd 1`. Make an empty one in a folder of its own, then open it:
+A ksmd document is a text file whose first line is `%ksmd 2`. Make an empty one in a folder of its own, then open it:
 
 ```sh
 mkdir -p ~/ksmd-try
-printf '%%ksmd 1\n' > ~/ksmd-try/trip.ksmd
+printf '%%ksmd 2\n' > ~/ksmd-try/trip.ksmd
 make ksmd-open FILE=$HOME/ksmd-try/trip.ksmd
 ```
 
@@ -53,7 +53,7 @@ The menu bar now reads "Not saved." beside the name. Your edits are held as a dr
 7. Press the first cell under Total, type `=B1*C1`, and press `Enter`.
 8. Press the cell under it, type `=B2*C2`, and press `Enter`.
 
-Both totals show `240`. Open a total's cell with two presses, and it shows its formula again.
+Both totals show `240`. Open a total's cell with two presses, and it shows its formula again. The formula bar under the menus shows the chosen cell's formula too, and a press there edits it with more room.
 
 **A formula can call functions too.** Type `=su` in a cell, and a list of the functions whose names start so opens under it. `Tab` writes the chosen one, such as `sum(`, and a tip then shows what it takes. Insert ▸ Function… (`Shift`+`F3`) lists every function, with an example of each.
 
@@ -83,7 +83,7 @@ cat ~/ksmd-try/trip.ksmd
 It prints the document as ksmd writes it, ready to read and to diff:
 
 ```text
-%ksmd 1
+%ksmd 2
 
 # Trip budget
 

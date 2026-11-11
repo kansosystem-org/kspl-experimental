@@ -124,23 +124,40 @@ fn full(p: U8[], arena: Arena$@): U8[] //<
 
 priv const ANSWER_WAIT_MS: I32 = 10000 //< how long a local server may take to answer one request
 
+struct Local_answer //< one answer from a server on this computer's loopback
+    status: I32 //< its status; 0 where nothing came back, -1 where nothing listens
+    body: U8[]
+
+fn ask_local( //< sends one request, without a body, to a server on this computer's loopback
+    //< The model server's launcher asks through this too (`tools/model_server.kspl`), so the two
+    //< cannot differ in how they reach a local server.
+    at: I32, //< the port
+    method: U8[],
+    target: U8[],
+    token: U8[], //< sent as `Authorization: Bearer`; empty sends none
+    wait_ms: I32, //< how long writing the request, and then reading the answer, may each take
+    arena: Arena$@, //< where the answer's body goes
+): Local_answer
+    defer stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
+        return Local_answer::{ .status = -1, .body = "" }
+    $hb: = http.headers(arena).add("Host", arena.text().s("127.0.0.1:\{at\}").take())
+    if token.len > 0
+        hb = hb.add("Authorization", arena.text().s("Bearer ").s(token).take())
+    head: = hb.build()
+    http.write_request(stream, method, target, head, "", wait_ms) catch
+        return Local_answer::{ .status = 0, .body = "" }
+    // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
+    got: =
+        http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, wait_ms) catch
+        return Local_answer::{ .status = 0, .body = "" }
+    return Local_answer::{ .status = got.status, .body = got.body }
+
 priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
     //< Sends one request with our token to the server on that port, and returns the status
     //< **0 where nothing answered** (nothing listens there, or it closed without an answer).
     defer arena: = Arena(16 * 1024)
-    defer stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
-        return 0
-    defer $bearer: = Str_builder()
-    bearer.s("Bearer ").s(token)
-    head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer.slice())
-        .build()
-    http.write_request(stream, method, target, head, "", ANSWER_WAIT_MS) catch
-        return 0
-    // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
-    answer: =
-        http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
-        return 0
-    return answer.status
+    status: = ask_local(at, method, target, token, ANSWER_WAIT_MS, arena).status
+    return 0 if status < 0 else status
 
 priv fn server_answers(at: I32, token: U8[]): Bool //<
     //< Whether that server is alive and accepts our token

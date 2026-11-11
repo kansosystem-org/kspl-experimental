@@ -12,7 +12,7 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
 
-priv const OPEN: U8[] = "%ksmd 1\n\n:::table name=\"t\""
+priv const OPEN: U8[] = "%ksmd 2\n\n:::table name=\"t\""
 priv const BODY: U8[] = "\n| \"a\" | \"b\" |\n| 1234.5 | =A1*2 |\n:::\n"
 
 fn run()
@@ -96,17 +96,17 @@ priv fn edges()
 
 priv fn reading()
     saves_as("formats saves as written, one entry per column",
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"grouped:2,\"\n| \"a\" | \"b\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"grouped:2,\"\n| \"a\" | \"b\" |\n:::\n")
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"grouped:2,\"\n| \"a\" | \"b\" |\n:::\n",
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"grouped:2,\"\n| \"a\" | \"b\" |\n:::\n")
     saves_as("formats is written after widths",
-        "%ksmd 1\n\n:::table formats=\",currency:EUR:2\" char_widths=\"2,4\" name=\"t\"\n| \"a\" | \
+        "%ksmd 2\n\n:::table formats=\",currency:EUR:2\" char_widths=\"2,4\" name=\"t\"\n| \"a\" | \
             \"b\" |\n:::\n",
-        "%ksmd 1\n\n:::table name=\"t\" char_widths=\"2,4\" formats=\",currency:EUR:2\"\n| \"a\" | \
+        "%ksmd 2\n\n:::table name=\"t\" char_widths=\"2,4\" formats=\",currency:EUR:2\"\n| \"a\" | \
             \"b\" |\n:::\n")
     defer arena: = Arena(64 * 1024)
     src: =
         Source("f.ksmd",
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"percent:1,\"\n| \"a\" | \"b\" |\n| 0.125 | \"x\" \
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"percent:1,\"\n| \"a\" | \"b\" |\n| 0.125 | \"x\" \
             |\n:::\n") catch
         panic("the source is valid")
     doc: = reader.read(src@, arena) catch e
@@ -157,15 +157,15 @@ priv fn editing()
     ed.redo()
     changed(ed@, 0, .insert_column, 1)
     saves("a new column has no format", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"grouped:2,,grouped:2\"\n| \"a\" | \"\" | \"b\" \
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"grouped:2,,grouped:2\"\n| \"a\" | \"\" | \"b\" \
             |\n| 1234.5 | | =A1*2 |\n:::\n")
     changed(ed@, 0, .remove_column, 0)
     saves("a removed column's format goes with it", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" formats=\",grouped:2\"\n| \"\" | \"b\" |\n| | =#REF!*2 \
+        "%ksmd 2\n\n:::table name=\"t\" formats=\",grouped:2\"\n| \"\" | \"b\" |\n| | =#REF!*2 \
             |\n:::\n")
     formatted(ed@, 1, 1, "")
     saves("clearing the last format leaves formats out", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"b\" |\n| | =#REF!*2 |\n:::\n")
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"\" | \"b\" |\n| | =#REF!*2 |\n:::\n")
     wrong(ed@, "more places on a column with no format", "no number format")
     dated(arena)
     owned(arena)
@@ -195,7 +195,7 @@ priv fn refused(line: U8[], message: U8[], column: Sz) //<
     //< The reader refuses a table opened by `line` with this message, on line 3 at `column`
     defer arena: = Arena(64 * 1024)
     defer $text: = Str_builder()
-    text.s("%ksmd 1\n\n").s(line).s("\n| \"a\" | \"b\" |\n:::\n")
+    text.s("%ksmd 2\n\n").s(line).s("\n| \"a\" | \"b\" |\n:::\n")
     src: = Source("bad.ksmd", text.slice()) catch e
         verdict.check(message, false, e.message)
         return
@@ -236,7 +236,7 @@ priv fn dated(arena: Arena$@) //< a column that shows its dates with `/`
             date:yyyy/mm/dd, or nothing", 28)
 
 priv fn owned(arena: Arena$@) //< a cell's own format, over its column's
-    head: = "%ksmd 1\n\n:::table name=\"t\" formats=\"grouped:1\"\n| \"n\" |\n"
+    head: = "%ksmd 2\n\n:::table name=\"t\" formats=\"grouped:1\"\n| \"n\" |\n"
     $ed: =
         opened(arena.text().s(head).s("| 1234.5 |\n| 0.125 |\n:::\n").take(), arena)
     ed.set_look(0, 1, 0, 1, 0, .format, "percent:1") catch e
@@ -261,7 +261,7 @@ priv fn owned(arena: Arena$@) //< a cell's own format, over its column's
         verdict.check("a cell's own format again", false, e.message())
     formatted(ed@, 0, 0, "number:0")
     saves("a column's format takes its cells' own formats away", ed@, arena,
-        "%ksmd 1\n\n:::table name=\"t\" formats=\"number:0\"\n| \"n\" |\n| 1234.5 |\n| 0.125 \
+        "%ksmd 2\n\n:::table name=\"t\" formats=\"number:0\"\n| \"n\" |\n| 1234.5 |\n| 0.125 \
             |\n:::\n")
     refused(":::table name=\"t\" formats=\"general,\"",
         "a column shows its values as calculated with an empty entry; general is a cell's", 28)

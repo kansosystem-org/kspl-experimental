@@ -228,7 +228,7 @@ static int kspl_start_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap) {
 KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, const U8 *cwd_ptr, Sz cwd_len,
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
     kspl_start_error = 0;
-    char cwd_path[4096], out_path[4096], err_path[4096];
+    char cwd_path[KSPL_PATH_CAP], out_path[KSPL_PATH_CAP], err_path[KSPL_PATH_CAP];
     char **argv_arr = NULL;
     kspl_proc_t *h = NULL;
     int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1}, exec_p[2] = {-1, -1};
@@ -428,7 +428,7 @@ KSPL_LINK Sz kspl_exe_path(U8 *buf, Sz cap) {
     }
 #elif defined(__APPLE__)
     {
-        char raw[4096];
+        char raw[KSPL_PATH_CAP];
         uint32_t size = sizeof raw;
         char *real;
         if (_NSGetExecutablePath(raw, &size) != 0) return 0;

@@ -11,7 +11,7 @@ The endpoints a page opened in a browser uses are set one level up, in [`../../d
 | Mode | Started as | Who can reach it | What it offers besides the files |
 | :-- | :-- | :-- | :-- |
 | Outward-facing | `kssrv.exe <port> <root>`, with `--cert` and `--key` for HTTPS | Any machine on the network | `/api/status` |
-| Local use | `kssrv.exe <port> <root> --local --page=<file>` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, the five endpoints a page uses, and two more with `--builder` |
+| Local use | `kssrv.exe <port> <root> --local --page=<file>` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, the five endpoints for files, watching, listing, holding and stopping, and two more with `--builder` |
 
 Words used below:
 

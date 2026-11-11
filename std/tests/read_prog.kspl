@@ -13,10 +13,8 @@ import "std/ds" { List }
 import "std/http" + { Headers }
 import "std/io"
 import "std/json"
-import "std/json_struct"
 import "std/jsonrpc"
 import "std/mem" { Arena, dealloc }
-import "std/reflect"
 import "std/regex" { Match, Regex }
 import "std/str" { Str_builder }
 import "std/sys"
@@ -363,56 +361,6 @@ priv fn frames_of(src: U8[], run: Sz, arena: Arena$@): Frames //<
         acc.s(src.sub(at, n))
         at += n
 // ---------------------------------------------------------
-// A struct filled from JSON (`json_struct`)
-// ---------------------------------------------------------
-
-priv struct Part //< a struct nested in `Shape`, in a field, a list and an option
-    label: U8[]
-    weight: F64
-
-priv struct Shape //< what `into_struct` fills: a field of each kind its walk takes
-    name: U8[]
-    count: I64
-    small: I8
-    port: U16
-    big: U64
-    ratio: F32
-    on: Bool
-    size: Sz
-    part: Part
-    tags: List<|U8[]|>
-    nums: List<|I32|>
-    parts: List<|Part|>
-    note: U8[]?
-    limit: I64?
-    spare: Part?
-
-impl Shape: reflect.Reflectable {}
-
-priv fn read_struct(src: U8[], arena: Arena$@): I32 //<
-    //< Fills a `Shape` from the JSON, writes it out, and checks that a second trip changes nothing
-    //< **Only the second trip is held to equality**: the first drops unknown keys and rounds an
-    //< `F32`, both by design.
-    doc: = json.parse(src, arena) catch
-        return 1
-    $first: Shape = ::{}
-    json_struct.into_struct(doc.val, first@, arena) catch
-        return 1
-    $b: = json.Json_builder(arena)
-    once: = json_struct.from_struct(first@, b@) catch
-        panic("json_struct: a struct it filled cannot be written")
-    $again: Shape = ::{}
-    json_struct.into_struct(once, again@, arena) catch
-        panic("json_struct: a struct it wrote cannot be read back")
-    twice: = json_struct.from_struct(again@, b@) catch
-        panic("json_struct: a struct read back cannot be written")
-    assert(twice.equals(once), "json_struct: a struct read back is written otherwise")
-    defer $out: = Str_builder()
-    twice.dump(out@)
-    use_bytes(out.slice())
-    return 0
-
-// ---------------------------------------------------------
 // A command line (`argparse`)
 // ---------------------------------------------------------
 
@@ -531,8 +479,6 @@ priv fn read_one(kind: U8[], src: U8[], arena: Arena$@): I32
         return read_http_written(src, arena)
     if kind.equals("jsonrpc")
         return read_rpc(src, arena)
-    if kind.equals("json-struct")
-        return read_struct(src, arena)
     if kind.equals("argv")
         return read_argv(src, arena)
     io.err().s("a kind I do not know: \{kind\}\n")

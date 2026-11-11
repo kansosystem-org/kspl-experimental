@@ -7,7 +7,7 @@
 **A document is a `.ksmd` file inside a workspace folder.** Every include and image a document names stands inside that folder.
 
 * **Open a document by a double-click on it**, once `make ksmd` and `make install` have tied `.ksmd` files to ksmd. "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md) gives the steps for each system.
-* **Or run `make ksmd-open FILE=<path>`** from the repository's root. The file must stand already; an empty document is the one line `%ksmd 1`.
+* **Or run `make ksmd-open FILE=<path>`** from the repository's root. The file must stand already; an empty document is the one line `%ksmd 2`.
 * **The workspace is the document's own folder**, or the nearest folder above it that holds a file named `.ksmd-workspace`.
 
 | To | Do |
@@ -33,6 +33,7 @@
 | :-- | :-- |
 | Menu bar | Every command: File, Edit, View, Insert, Format and Table |
 | Quick access bar | One row of the tools you chose. View ▸ Quick access bar… chooses them; a right-click on a command adds it or takes it off |
+| Formula bar | The chosen cell's address and its whole text, as `C2  =hex_to_dec(B2)`; a range shows `C2:D5`. Press in it to edit the cell there (The formula bar below) |
 | Status bar | One line at the foot, which says where you work (The status bar below) |
 | View ▸ Contents | The headings at the window's left; a press on one scrolls to it. The ▸/▾ before a heading folds the headings under it; with `Alt`, every heading of its level |
 | View ▸ Full width, Reading width | The document fills the window, or keeps lines about 50 characters long |
@@ -45,15 +46,22 @@
 | :-- | :-- |
 | Reach the menu bar | `F10`. `F10` again, or `Esc`, gives the focus back where it was |
 | Move along the menu bar or the quick access bar | `←` and `→`; `Home` and `End` go to the first and last. Each bar is one stop of `Tab` |
+| Reach the formula bar | `Tab` after the quick access bar, so `F10`, then `Tab` twice, from a chosen cell |
 | Open a menu from its name | `↓`, `Enter` or `Space`; `↑` opens it on its last item |
 | Move in a menu | `↑` and `↓`, `Home` and `End`; `→` opens a flyout and `←` closes it |
 | Close a panel, such as Page setup | `Esc` or Cancel. The focus goes back where it was before the panel opened |
+
+### The formula bar
+
+* **It shows the chosen cell's address and its whole text as typed**, on one line. A column's name cell shows `C name` and the name. A range shows its address alone, and takes no edit.
+* **A press in it, or `Tab` to it, edits the chosen cell there.** It grows with a long formula, up to eight lines, and scrolls past them. The cell shows what you type, framed with dashes.
+* **It edits as the cell does:** `Enter`, `Tab` and `Esc`, the list of functions, the colours of references, the marked brackets and AutoCorrect all act the same. The arrow keys move the caret, as after `F2`.
+* **In Read-only, outside a table and on a table shown from an included file, it shows the text and takes no edit.** You can still choose and copy its text.
 
 ### The status bar
 
 | Part | What it shows or does |
 | :-- | :-- |
-| The chosen cell | Its address and what was typed in it, as `C2  =hex_to_dec(B2)`; a range shows `C2:D5`. Its tooltip holds a long formula whole |
 | Why it shows an error | The mark and its reason, as `#VALUE!: B7 holds text, which arithmetic cannot use`. Its tooltip holds a long reason whole |
 | The document's own functions | Which ones the chosen cell calls, as `Uses tax from mine.kspl (this document's own)` |
 | Note | The note on the chosen cell, or on the paragraph or heading at the caret, as `Note: Count again` |
@@ -120,6 +128,7 @@
 | Go to the first data cell or the last cell | `Ctrl`+`Home`, `Ctrl`+`End` |
 | Add a row at the end | `Tab` in the last cell. `Tab` past a row's last cell goes on to the next row's first |
 | Edit a cell | Press twice, or press `F2`: the arrow keys then move the caret inside the cell. Typing on a chosen cell replaces its value, and an arrow key then moves to the next cell |
+| Edit a long formula | Press in the formula bar, under the quick access bar. It edits the chosen cell with the window's width |
 | Take the edit | `Enter`, `Tab`, or a press elsewhere. `Shift`+`Enter` takes it and moves up. `Esc` drops it |
 | Give back the value you typed over | `Esc` or `Ctrl`+`Z`, while the cell you typed into is still open |
 | Type a line break in a cell | `Alt`+`Enter` |
@@ -145,18 +154,18 @@
 | `https://example.com` | Text that links to that address, while Edit ▸ AutoCorrect ▸ Turn typed web addresses into links is on |
 | Anything else, `1,234.5`, `0xFF` and `true` among it | Text. A number in hexadecimal or binary is written in a formula: `=0xFF` |
 
-**Right after a typed value turns into a date or a link, `Ctrl`+`Z` gives back the text as you typed it.** A second `Ctrl`+`Z` gives back what the cell held before. The two AutoCorrect choices are this browser's own, and both start on.
+**Right after a typed value turns into a date or a link, `Ctrl`+`Z` gives back the text as you typed it.** A second `Ctrl`+`Z` gives back what the cell held before. The AutoCorrect choices are this browser's own, and all start on.
 
 ### Copying, moving and filling
 
 * **`Ctrl`+`C` copies the chosen cells.** Another program, such as a spreadsheet or a text editor, takes their shown values as tab-separated rows. A paste of rows from another program fills the table from the chosen cell, and grows it as needed.
 * **A paste in ksmd (`Ctrl`+`V`) brings the copied cells' formulas**, in any table and in another ksmd window. Each reference moves as far as the paste moved from the copy. A part with `$` stays, and a reference moved outside its table becomes `#REF!`.
 * **Paste values (`Ctrl`+`Shift`+`V`) puts the values the copied cells showed**, with no formula. Edit ▸ Paste values and the right-click menu do the same.
-* **Copy formula copies one cell's text as typed**, such as a whole formula, as plain text for another program. It stands in the right-click menu and the Edit menu. Text chosen in the status bar is copied too: a triple press there takes the whole formula.
+* **Copy formula copies one cell's text as typed**, such as a whole formula, as plain text for another program. It stands in the right-click menu and the Edit menu. Text chosen in the formula bar is copied as chosen.
 * **After a paste of copied cells, the Paste options button stands below their right corner.** Choose Keep formulas or Values only there to change that paste; one undo still takes it away. `Ctrl` alone opens the button's menu, and `F` or `V` chooses. The next key or press takes the button away.
 * **A range that holds the copy a whole number of times takes it in each place.** So one cell pasted on ten rows fills all ten.
 * **A whole table copied and pasted into text makes a second table**, with its formulas and looks. A name already taken gains `_2`.
-* **`Ctrl`+`X` then a paste moves cells within their table.** Formulas that named them follow them. Whole columns cut by their letters also take their width, number format, choices, colour rule and filter. A copy, or `Esc`, drops the cut. Paste values does not move cut cells: press `Ctrl`+`V`, or copy them instead.
+* **`Ctrl`+`X` then a paste moves cells within their table.** Formulas that named them follow them. Whole columns cut by their letters also take their settings. These are width, number format, choices, colour rule, filter, Merge repeated values and Colour rows by this column. A copy, or `Esc`, drops the cut. Paste values does not move cut cells: press `Ctrl`+`V`, or copy them instead.
 * **To move rows, cut them by their row numbers, then right-click a row number and choose Insert cut rows.** Columns move the same way.
 * **Fill down (`Ctrl`+`D`) and Fill right (`Ctrl`+`R`) copy the first cells across the range.**
 * **A drag of the square at a range's corner goes on with a series**: `1, 2` gives `3, 4`, and `Item 1` gives `Item 2`. Anything else repeats.
@@ -242,10 +251,19 @@
 | `&` | Two texts joined |
 | `= <> < <= > >=` | Comparisons, giving `true` or `false` |
 | `and`, `or`, `not` | Conditions joined |
-| `"Pens"` | Text, in quotes |
+| `"Pens"`, `".\src\"` | Text, in quotes. Every character inside is itself, `\` included |
+| `"say ""hi"""` | A quote inside text, written twice, as in Excel. `""` alone is empty text |
 | `0xFF`, `0b_0111_0001` | A whole number in hexadecimal or binary, kept as you wrote it. `_` can stand anywhere after `0x` or `0b`. A number past 2^53 does not read |
 
 **While a formula is typed, each reference shows in a colour of its own, with a frame of that colour round the cells it names.** The first is blue and the second red, then purple, green, orange, teal, magenta and brown. The same cells written twice keep one colour. A reference to another table is framed in that table; one that names no cell stays plain. The colours go when the cell closes.
+
+**While a formula is typed, the bracket beside the caret and the one it pairs with show on a coloured ground.** A bracket inside quoted text is text, and is never marked.
+
+**A formula that misses its last `)` takes it when the cell is taken**, by `Enter`, `Tab` or a press elsewhere. `=sum(A1:A3` becomes `=sum(A1:A3)`, and the status bar says what was added. `Ctrl`+`Z` right after gives back the formula as you typed it.
+
+* **Only an ending is added**: a closing `"` for text still open in quotes, then the `)` that are missing. `=like(A1, ".\src\*` becomes `=like(A1, ".\src\*")`.
+* **A formula that would not read with them stays as you typed it**, such as `=1+(`, and shows `#SYNTAX!`. So does one with a `)` too many.
+* **Edit ▸ AutoCorrect ▸ Close a formula's brackets on Enter turns it off.**
 
 **While a formula is typed, a press on a cell writes its reference**, and a drag writes a range. `F4` turns the reference at the caret from `D1` to `$D$1`, `D$1`, `$D1`, then `D1` again. AutoSum (`Alt`+`=`) writes `=sum(…)` over the column above the chosen cell, or the row left of it.
 
@@ -378,6 +396,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | `average(xs…)` | the numbers' mean | `average(2, 4, 9)` is `5` |
 | `bin_to_dec(digits, [width])` | the number binary digits name | `bin_to_dec("101")` is `5` |
 | `bin_to_hex(digits, [width])` | binary digits written in hexadecimal | `bin_to_hex("11111")` is `1F` |
+| `char(code)` | the character with this Unicode number, such as a line break for 10 | `char(65)` is `A` |
 | `count(xs…)` | how many numbers and dates there are | `count(4, 8, 15)` is `3` |
 | `date(year, month, day)` | the day the three parts name, in the years 1 to 9999 | `date(2026, 3, 1)` is `2026-03-01` |
 | `day(d)` | a date's day of the month | `day(date(2026, 3, 1))` is `1` |
@@ -496,6 +515,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | Replace… | `Ctrl`+`H` |
 | AutoCorrect ▸ Turn typed dates into dates (11/6) |  |
 | AutoCorrect ▸ Turn typed web addresses into links |  |
+| AutoCorrect ▸ Close a formula's brackets on Enter |  |
 
 ### View
 

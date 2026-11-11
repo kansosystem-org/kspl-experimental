@@ -99,7 +99,7 @@ This naming is recommended; **the compile does not refuse a name that breaks it*
 
 Underscores separate words in all three forms. An ordinary immutable binding follows `snake_case`; immutability alone does not make its name uppercase. A constant generic parameter follows `UPPER_SNAKE_CASE`, as in `const N: Sz`.
 
-**C's reserved words (`int` / `long` / `goto` and so on) are usable as identifiers**, except those that are also KSPL's own: `struct` / `enum` / `typedef` / `const` / `if` / `else` / `for` / `switch` / `return` / `break` / `continue` / `case` / `default` / `extern` / `sizeof` / `offsetof`.
+**C's reserved words (`int` / `long` / `goto` and so on) are usable as identifiers**, except those that are also KSPL's own: `struct` / `enum` / `typedef` / `const` / `if` / `else` / `for` / `switch` / `return` / `break` / `continue` / `case` / `default` / `extern` / `sizeof` / `offsetof` / `true` / `false`.
 
 In the generated C, `ksplc` adds the suffix `_kw` to such a name. Only local variables, parameters and struct fields keep their bare names in the generated C, so only those get the suffix. Type and function names carry a prefix made from their file's path; `std/lang`'s types alone go without. In C, `_`, `.` and `/` all become `_`. **Two names spelled alike in C are a compile error naming both**: a `Foo` in each of the files `a_b/c` and `a/b_c`, or two instances of one generic. So is a name spelled like one of the C runtime's: `fn check` in a file `bounds` is `kspl_bounds_check`. So is one spelled like the type C defines for an array or a function type: a `struct Foo_Array_4` beside a use of `Foo[4]`. A suffixed name collides only where it already exists in the same scope (`goto` beside `goto_kw`).
 
@@ -276,7 +276,7 @@ Note: **Declarations inside `{ … }` are not a comma-separated list.** A struct
 **A `;` outside every bracket ends a statement, and what follows it on the line is read as if it began a line of its own.** So one line can hold several statements or declarations, a whole program included:
 
 ```kspl
-import "std/io"; fn main() { $n: = 0; for i in Range.asc(5) { if i % 2 == 0 { n += i } } io.out().s("\{n\}\n") }
+import "std/io"; fn main() { $n: Sz = 0; for i in Range.asc(5) { if i % 2 == 0 { n += i } } io.out().s("\{n\}\n") }
 ```
 
 * **The line's last statement owns the line's end and a deeper line below it.** In `n: = 0; for i in r` with the loop's body on the lines below, the body is the `for`'s.
@@ -395,7 +395,7 @@ A struct gathers named fields into one type. It can be generic: it can take para
 
 **Memory layout**: fields are laid out in declaration order, with size, alignment and offsets following the target's C ABI on both backends ([14.1](#141-implementation-defined---the-value-is-fixed-but-differs-per-target)). So a struct can be passed straight across the C boundary (`extern`).
 
-Caution: The default alignment changes with the target. Code relying on the layout (converting to and from a byte sequence) must state it with `#packed` / `#align(N)` ([10](#10-compiler-directives-and-attributes)).
+Caution: The alignment changes with the target, and no attribute changes a struct's layout. Code that converts to and from a byte sequence reads and writes each field at its own offset, as `std/bytes`' `get_u32_le` / `put_u32_le` do.
 
 **A `struct` has at least one field.** `struct S;` is a compile error without `extern`. `extern struct S` declares a C type held by pointer ([11.2](#112-external-functions-and-opaque-structs)). `struct S {}` cannot be written either.
 
@@ -548,9 +548,10 @@ A typedef is the same type as the type it names. A typedef and its type, or two 
 **A cycle cannot be written.** A typedef that leads back to itself, directly or through other typedefs, is a compile error: it never reaches an underlying type.
 
 ```kspl
-typedef A = B // error: circular typedef: 'A' leads back to itself
-typedef B = A // error: the same cycle
+typedef A = A // error: circular typedef: 'A' leads back to itself
 ```
+
+A longer cycle (`typedef A = B` beside `typedef B = A`) is reported once, at its first typedef.
 
 ### 3.6 The expansion specification for string interpolation
 
@@ -630,7 +631,7 @@ A specifier that breaks one of these rules is a compile error, reporting the fir
 
 | Rule | Refused, for example |
 | :-- | :-- |
-| **The items go in the order above** (zero padding → width → comma → precision → `x`/`X`), so no item is silently discarded | `\{n:.2,05\}`, reported as "`,05` cannot be read" |
+| **The items go in the order above** (zero padding → width → comma → precision → `x`/`X`), so no item is silently discarded | `\{n:.2,05\}`, reported as `could not read ',05'` |
 | **Hexadecimal combines only with zero padding and width** | `,` or `.N` beside `x` |
 | **A `0` pads to a width**, so it needs a width after it | `\{n:0\}`, `\{n:0.2\}` |
 | A `:` needs a specifier after it | `\{n:\}` |
@@ -712,7 +713,7 @@ This check walks the `const`'s type, step by step, looking for a `$`:
 
 * **Only the array and slice steps are walked**, nesting included, so an array of mutable slices (`const A: U8$[][4]`) is refused as well.
 * **It does not descend through a pointer.** What a pointer points at can be in RAM, so `const P: I32$@ = ram_var@;` is legitimate.
-* **It does not descend into a `struct`'s fields either.** A `const HOLDER: H` against `struct H { pub buf: U8$[]; }` is accepted. `HOLDER.buf[0] = 'X'` is refused at the use site as `cannot assign to an immutable variable 'HOLDER'` (axis 1).
+* **It does not descend into a `struct`'s fields either.** A `const HOLDER: H` against `pub struct H { pub buf: U8$[] }` is accepted. `HOLDER.buf[0] = 'X'` is accepted too, since past a slice the slice's own `$` decides ([4.3.2](#432-the-path-to-a-write-is-checked-all-the-way)).
 
 **A `const` cannot hold a lock or an atomic, at any depth** (an `Interior_mutable` value, [4.3.3](#433-the-same-rule-applies-to-method-calls)). Their methods write through a read-only pointer, and a `const` promises that its value never changes. At the top level the write would also land in read-only memory. Declare a variable instead.
 
@@ -926,7 +927,6 @@ A write through such a cast is a write to read-only data, which is undefined ([1
 | The target of a `T@` (`p$`) | Allowed | Refused | Allowed | Refused | Allowed | Refused | – | – | Copied | Refused | Refused |
 | The target of a `T$@` (`p$`) | Allowed | Allowed | Allowed | Allowed | Allowed | Allowed | – | – | Copied | Allowed | Allowed |
 | A binding the compiler makes (a `for` item, a `case` payload, a `catch` name) | Allowed | Refused | Allowed | Refused | Allowed | Refused | Refused | Allowed | Allowed | Refused | Refused |
-| A field `#packed` leaves under-aligned | Refused | Refused | Refused | Refused | Refused | Refused | Refused | – | Copied | Refused | Allowed |
 | A temporary (a call's result) | Refused | Refused | Copied | Refused | Refused | Refused | Refused | – | Copied | Refused | Refused |
 | A `$` local stored into a local of an outer block | Allowed | Allowed | – | – | Refused | Refused | Refused | Refused | – | – | – |
 | An element of a `const` array | Allowed | Refused | Allowed | Refused | Allowed | Refused | Refused | – | Allowed | Refused | Refused |
@@ -943,7 +943,6 @@ The columns, as written in a program:
 
 The rows that need more than a word:
 
-* **A field `#packed` leaves under-aligned is a value only; nothing may take its address.** A pointer promises its type's alignment. The compiler reads and writes such a field byte by byte, and `for … in` copies it ([10](#10-compiler-directives-and-attributes)).
 * **A string literal at a `Void@` position hands over its bytes**, not an address ([11.1](#111-types-that-cannot-cross-the-c-boundary)). A copy of its descriptor serves a reading method or trait value; it ends with the block.
 * **The outer-block row is about lifetime.** It asks whether the result may be stored into a local declared outside the place's block. A written `@` is the writer's to keep valid. The compiler refuses a pointer it makes itself ([8.4.5](#845-tracking-a-free-with-manual_free)).
 * **An `Interior_mutable` value changes through its `Self@` methods**, by design ([4.3.3](#433-the-same-rule-applies-to-method-calls)). A `const` and a binding the compiler makes cannot hold one: the refusal stands at the declaration.
@@ -1099,10 +1098,7 @@ pub trait Ref_counted
 | `r: Self$@` | A pointer | No | **Yes** (the most common shape of an updating method) |
 | `$r: Self@` | A pointer | Yes (a different pointer) | No |
 
-**The call of a method whose receiver is taken by pointer (`Self@` / `Self$@`) implicitly takes an address** of a value. A pointer is passed as it is. A value that has no variable, such as a call's result, can be the receiver only of a method that does not write:
-
-* **`Self@` accepts it** (`f().m()`, `f().items[0]`, `xs.where(p).to_list(a)`). A copy goes into an automatic variable in the call's block, as `x: = f(); x.m();` would make, with nothing on the heap.
-* **`Self$@` refuses it** (`cannot call a method that writes its receiver`, and `cannot write to an element of a temporary object` for `f().items[0] = v`), since the write would go to a thrown-away copy.
+**The call of a method whose receiver is taken by pointer (`Self@` / `Self$@`) implicitly takes an address** of a value; a pointer is passed as it is. A value with no variable, such as a call's result, is the receiver only of a `Self@` method (`f().m()`, `xs.where(p).to_list(a)`). That method reads a copy in the call's block, with nothing on the heap. A `Self$@` method refuses it (`cannot call a method that writes its receiver`), and so does a write to its element (`cannot write to an element of a temporary object` for `f().items[0] = v`). The write would go to a thrown-away copy. What each operation does with a temporary is the table in [4.3.5](#435-which-operation-takes-which-place).
 
 **The dividing line is "does it write the receiver's own memory", not whether `Self` is mutable.** `impl U8$[]`'s `fill(r: Self@, …)` is accepted because its receiver is `Self@`: its write reaches the bytes the slice points at, not the copied descriptor. So `buf.sub_mut(0, 4).fill(0)` does fill the caller's memory.
 
@@ -1157,7 +1153,7 @@ For `impl Type: Trait`, the compiler checks that the block has every method the 
 | **The return type** | The same underlying type. A pointer where the trait returns a value is allowed: the thunk reads through it. A value where the trait returns a pointer is a compile error, for the reason given for `Self` below. So is a `T@` where the trait returns a `T$@` |
 | **A return of `Self`** | The implementation returns a pointer (`Self$@`); anything else is a compile error |
 
-**When the return is `Self`, the implementation returns a pointer** (`Self$@`), as every implementation of `std/io`'s `Writer` does. A call through a trait value goes through a *thunk*, which repacks the return into a trait value. That needs an address that stays valid, and a returned value would leave it pointing at a temporary. To return one's own type by value, use a type argument instead of `Self` (the shape of `trait Cast<|Output|>`).
+**When the return is `Self`, the implementation returns a pointer** (`Self$@`), as every implementation of `std/io`'s `Writer` does. A call through a trait value goes through a *thunk*, which repacks the return into a trait value. That needs an address that stays valid, and a returned value would leave it pointing at a temporary. To return one's own type by value, use a type argument instead of `Self` (`trait Make<|Output|>` with `fn make(r: Self): Output`).
 
 **The trait still writes a bare `Self`** (`Self@` / `Self$@` cannot be written), because the caller receives a trait value (`Writer`), not a pointer.
 
@@ -1222,37 +1218,9 @@ stateDiagram-v2
 
 * **The limit**: paths across branches and loops are tracked. Duplication by way of a pointer (`p$` elsewhere, a field reached through a pointer) and reading an element by index (`take(a[i])`) are not detected. So passing the check does not prove that no copy exists.
 
-Only `std.Move_only` **itself** is derived structurally. A trait of the same name declared in your own file needs an explicit `impl`, like any ordinary trait (as with `Ref_counted`; §8.4.2).
+Only `std.lang.Move_only` **itself** is derived structurally. A trait of the same name declared in your own file needs an explicit `impl`, like any ordinary trait (as with `Ref_counted`; §8.4.2).
 
 **The type system places one constraint on values crossing a thread boundary**: the `T` of `thread.Thread.spawn<|T|>` cannot reach an `Rc<|T|>` or a `Weak_rc<|T|>` ([8.6](#86-what-orders-memory-between-threads)). A raw pointer, a global, and an `Rc` in a global can still be touched from several threads. Such a *data race* (two threads touching the same memory at once, at least one of them writing) is undefined ([14.2](#142-undefined---no-answer-is-fixed)).
-
-### 5.5 Worked example: synthesizing a field table with `Reflectable`
-
-Declare that a type conforms to `std/reflect`'s `Reflectable` with an **empty body**, and the compiler writes a description of the type's fields. Code such as a JSON reader can then walk the fields by name at run time.
-
-The compiler builds a field table (a `const` of `Field_info`: each field's name, offset and kind) and the body of `fields()`. `std/json`'s `from_struct` / `into_struct` walk it.
-
-```kspl
-import "std/ds" { List }
-import "std/reflect"
-
-priv struct Metrics
-    compile_ms: I64
-    peak_bytes: I64
-priv struct Baseline
-    label: U8[]?
-    cold: Metrics
-    runs: List<|Metrics|>
-impl Baseline: reflect.Reflectable {} // the compiler assembles the table and fields() (nesting and containers included)
-```
-
-* **A key is the field's name itself.**
-* **The types covered are the integers (`I8` / `I16` / `I32` / `I64` / `U8` / `U16` / `U32` / `U64` / `Sz`), `F32` / `F64` / `Bool` / `U8[]`, and a nested `struct` built from them**, with their `List<|T|>` and `T?`. In JSON, a nested `struct` is a nested object and a `List<|T|>` an array. A `T?` at `.none` writes no key, an absent key reads as `.none`, and an explicit `null` is refused.
-  * A type holding any other field **is a compile error naming that field**, nested and contained types included. That covers a container of containers (`List<|List<|T|>|>`), an option holding a container or an option, a non-`struct` type, and a generic type.
-  * **A field that `#packed` leaves under-aligned is a compile error naming that field** ([10](#10-compiler-directives-and-attributes)). The table's reader reaches each field through a pointer of its type, which promises that type's alignment.
-* **It is derived only in a file where every field is visible** ([3.3](#33-structs-struct)). The table reads and writes each field, so another file's `priv` field is a compile error naming that field.
-* **Nothing is synthesized on an `impl` with a body written.** Write `fields()` yourself to change the key mapping, or to hold a type not covered.
-* **Conformance is matched by fully qualified name** (the trait's full path, `std.reflect.Reflectable`). A `trait Reflectable` declared in your own file does not make derivation work.
 
 ## 6. Expressions and operators
 
@@ -1291,8 +1259,6 @@ The same text compiles in both languages and only the answer changes, so write t
 
 **`Bool` has no arithmetic and no shifts.** On a `Bool`, `!`, `&&` `||` (short-circuiting), `&` `|` `^` (not short-circuiting) and the comparisons (`false < true`) are allowed. `+` `-` `*` `/` `%` `<<` `>>` and unary `-` `~` are refused at translation time. To count a `Bool` as a number, convert it first with `I32::flag`.
 
-**A function value takes `==` and `!=` alone**, and a function's name takes the other side's type in either order ([8.1](#81-definitions)).
-
 **A cast is on the same level as a unary operator.** `Type::` binds as strongly as `!` or `-` and can take another unary as its operand (both `I32::-x` and `-I32::x` can be written).
 
 **`catch` does not associate** ([8.3.2](#832-catching-an-error-catch)).
@@ -1304,7 +1270,6 @@ The same text compiles in both languages and only the answer changes, so write t
 Implement a prescribed trait (`Add` or `Eq` in `std/lang`, and so on), and `+` and `==` work on a type of your own. The compiler rewrites (*desugars*) the operator into the matching method call, so nothing is added at run time.
 
 * **Binary and unary operators**: `a + b` becomes `a.add(b)` and `-a` becomes `a.neg()`. Comparisons (`!=` / `<` / `<=` / `>` / `>=`) and unary `!` / `-` are replaced the same way.
-* **A prefix cast**: `Dest::a` becomes a call to `a.cast()` if the source type implements `Cast<|Dest|>` ([6.4](#64-type-conversion--and-implicit-casts)).
 
 **The left operand's type decides.** `1 + v` with a struct `v` is refused even when `v`'s type implements `Add`, because `1` has no `add` method. Write `v + 1`, or call the method.
 
@@ -1464,20 +1429,14 @@ Each width saturates at its own bounds; nothing goes through a wider integer fir
 
 **There is no cast to `Bool`**: `Bool::x` is a compile error unless `x` is a `Bool`. Write the comparison that is meant (`x != 0`, `p != null`). The other way is a cast: `I32::b` is `0` or `1`. **A struct, a slice, an array, a tagged union, a Result or a trait value does not cast to a number** either.
 
-**Casting to an aggregate, and `Cast`**: a cast to a struct or a fixed-length array is a compile error. So is a cast to an enum with a payload (`T?` included), a Result or a trait. It is accepted only between the same concrete type, the source's immutability aside (`P::ps[1]` for an immutable `ps: P[2]` copies a `P`). Build such values with a constructor, a compound literal (§6.6) or a variant (`.some(v)`). A value becomes a trait value with no `::` where the trait is the expected type ([5](#5-implementations-and-traits)).
-
-The one exception is a source type implementing `std/lang`'s `Cast<|Output|>` (`fn cast(r: Self): Output;`): `Output::expression` resolves at compile time to that `cast()` call.
+**Casting to an aggregate**: a cast to a struct or a fixed-length array is a compile error. So is a cast to an enum with a payload (`T?` included), a Result or a trait. It is accepted only between the same concrete type, the source's immutability aside (`P::ps[1]` for an immutable `ps: P[2]` copies a `P`). Build such values with a constructor, a compound literal (§6.6) or a variant (`.some(v)`). A value becomes a trait value with no `::` where the trait is the expected type ([5](#5-implementations-and-traits)).
 
 ```kspl
 struct Meters
     val: I32
 
-impl I32: Cast<|Meters|>
-    fn cast(r: Self$@): Meters
-        return Meters::{ .val = r$ }
-
-a: = Meters::123 // OK: resolves to the equivalent of 123.cast()
-b: = Meters::(10 + 20) // OK: an expression enclosed in parentheses can be the receiver too
+a: = Meters::123 // error: a value does not become a struct through '::'
+b: = Meters::{ .val = 123 } // OK: a compound literal
 ```
 
 **A function type casts only to its own signature.** `(fn(x: I64): I64)::f` for an `f: fn(x: I32): I32` is a compile error. The parameters' names and an alias do not count. A function pointer that arrives as `Void@` from C casts to a function type.
@@ -1601,11 +1560,7 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
     s: = U8[]::{ .ptr = buf[0]@, .len = 4 }      // OK: a descriptor is named
     ```
 
-    **The array that results is an unnamed temporary** of the block it is written in, freed when that block ends. So the compiler refuses to let a slice over it leave the function by `return` or `throw`. It also refuses its store into a global, or into a place reached through a pointer (`g = U8[]::a`, `p.s = U8[]::a` with `p: Holder$@`). It refuses its store into a local of an outer block too, since that local outlives the array's block ([8.4.5](#845-tracking-a-free-with-manual_free)). The refusal covers three sources, also inside the value returned or stored (`return Holder::{ .s = U8[]::a }`):
-
-    * a run of elements, `T[]::{ v1, v2, … }`;
-    * a local fixed-length array cast to a slice, `T[]::a`;
-    * a local variable set from either, by its declaration or by a later `x = …`, directly or through another such variable.
+    **The array that results is an unnamed temporary** of the block it is written in, freed when that block ends. So a slice over it cannot leave the function or reach an outer block; the rules are in [8.4.5](#845-tracking-a-free-with-manual_free). To return a slice, point it at arena or heap memory, or have the caller pass in the memory to write to.
 
     ```kspl
     priv fn chain(): U8[] // error: its return hands out a slice over its own array
@@ -1615,13 +1570,7 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
         return t // refused: `t` was set from `s`, which was set from `U8[]::a`
     ```
 
-    The check follows names only. These copies pass unchecked, and the writer must get them right:
-
-    * a slice stored into a local struct's field after the struct is built, and then returned (`h.s = U8[]::a; return h`);
-    * a slice passed through a call (`return id(s)`);
-    * a slice reached through a pointer.
-
-     To return a slice, point it at arena or heap memory, or have the caller pass in the memory to write to. A run for a mutable slice (`T$[]`) cannot be written: writable memory needs a binding's `$`, and this array has no name ([4.2](#42-the-two-axes-of-mutability)).
+    A run for a mutable slice (`T$[]`) cannot be written: writable memory needs a binding's `$`, and this array has no name ([4.2](#42-the-two-axes-of-mutability)).
 
 #### 6.6.2 Where the type may be omitted
 
@@ -1662,13 +1611,13 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
 * **`sizeof(a type or an expression)`**: an expression passed is not evaluated; only its type is analyzed. **A name reads as a variable or a constant where one of that name is in scope**, and as a type otherwise. So `sizeof(x)`, `sizeof(x.a)`, `sizeof(a[0])` and `sizeof(x@)` take the value's type.
 * **A function's name has no size**: `sizeof(twice)`, `sizeof(same<|I32|>)` and `sizeof(Meter.twice)` are compile errors ([8.1](#81-definitions)). The size of a pointer to a function, the target machine's pointer width, is `sizeof` of a function type (`sizeof(fn(x: I32): I32)`) or of a variable holding one. A field reached through its type (`sizeof(Point.x)`) is a compile error too; reach it through a value (`sizeof(p.x)`).
 
-**A size is the target machine's**, the one named with `--machine` (by default the machine ksplc runs on). That covers the widths of a pointer, `Sz` and a function pointer, and the alignment of `I64` / `U64` / `F64`. **A size folded into the output is checked by the C compiler.** Where an answer becomes a number in the generated C (an array's length, a `case` label, reflection's offsets), the C checks it against its own layout. C compiled for another machine is refused at that line.
+**A size is the target machine's**, the one named with `--machine` (by default the machine ksplc runs on). That covers the widths of a pointer, `Sz` and a function pointer, and the alignment of `I64` / `U64` / `F64`. **A size folded into the output is checked by the C compiler.** Where an answer becomes a number in the generated C (an array's length, a `case` label), the C checks it against its own layout. C compiled for another machine is refused at that line.
 
 **`sizeof` does not depend on the declaration order.** `sizeof` of a type declared later in the same file can stand in an array's length, a typedef, a function's return type, or another type's field. A shape whose size depends on itself cannot be written (`struct A { f: U8[sizeof(B)] }` with `struct B { g: U8[sizeof(A)] }`). Hold one of them with `@`, or write the length directly.
 
 * **`offsetof(Type, field)`**: the byte offset at which `field` starts within `Type`, as a compile-time `Sz`. The first argument is a type only: a value's name there (`offsetof(twice, a)`) is a compile error. The second is the field name itself, not an expression.
 
-**It differs from adding up the fields' sizes.** A field is placed at a position rounded up to its own alignment, so padding can go before it. `#packed` stops the padding, and `#align(N)` changes the struct's alignment.
+**It differs from adding up the fields' sizes.** A field is placed at a position rounded up to its own alignment, so padding can go before it. No attribute changes a struct's layout ([3.3](#33-structs-struct)).
 
 **It can be written only on a `struct`.** `offsetof(E, a)` on an enum is a compile error, as is a name absent from the target type's fields. **It names a field only where the field is visible** ([3.3](#33-structs-struct)), since a field's offset gives a way to write it.
 
@@ -1936,9 +1885,8 @@ fn process_item<|T: Drawable + Serializable|>(item: T)
   * where a function type is expected (a typed variable, an argument, a returned value, the other side of `==`), it is checked against that type;
   * passed to a parameter typed by the called generic's type parameter (`fn pass<|F|>(f: F): F`), or bound to a declaration with no type (`f: = twice`), it gives its function type. So `pass(Meter.read)` binds `F` to `fn(r: Meter@): I32`. A variadic function, which no function type holds, and a bare generic name (`f: = same`) are compile errors there;
   * anywhere else it has no type, and is a compile error (two names compared with each other, `sizeof`).
-* **A function's name compared with `==` or `!=` takes the other side's function type**, on either side (`twice == f`). Two names (`twice == thrice`) are a compile error; bind one to a variable of a function type first.
 * **Only a function, a method or a value of a function type is called.** `(…)` after any other value is a compile error, a call's result included (`twice(1)(5)` with `twice` returning `I32`). A function value has no members either: `P.make.qq(3)` is a compile error.
-* **A function value takes `==` and `!=` alone.** Ordering (`<`), arithmetic, a unary operator (`-f`, `!f`) and a compound assignment (`f += g`) on it are compile errors; a null check is `f == null`.
+* **A function value takes `==` and `!=` alone.** Ordering (`<`), arithmetic, a unary operator (`-f`, `!f`) and a compound assignment (`f += g`) on it are compile errors; a null check is `f == null`. A function's name compared so takes the other side's function type, on either side (`twice == f`). Two names (`twice == thrice`) are a compile error; bind one to a variable of a function type first.
 
 * **Variadic arguments**: `...` at the end of the argument list receives a variable number of arguments as C does, for interoperating with C.
 * **A function returning a value must not reach the end of its body** (a compile error). Every path ends in `return` or `throw`. These also count as an end:
@@ -2064,7 +2012,7 @@ sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
 * **A capture is read-only.** It cannot carry `$`, and rewriting it in the body is a compile error; receive what is to be rewritten as a pointer argument.
 * **A captured value is read as it stands at the call**: a capture is the entity the name refers to, not a copy. Rewrite the original variable after building the closure, and the call sees the new value. Copy the value yourself when needed (as with `defer`; [8.4.1](#841-the-defer-statement)).
 
-**A closure cannot leave its function**, since its captured values live on the function's frame. Returning it (`return` / `throw`) or storing it in a global or a place reached through a pointer, also inside the value stored (`g = .some(c)`), is a compile error. It can be passed down for a call, and kept in a local of its own block or of a block inside it. A local of an outer block outlives the closure's block, so a store there is a compile error too ([8.4.5](#845-tracking-a-free-with-manual_free)). A call that stores it (`list.push(c)`) is not followed. Nor can it cross the C boundary ([11.1](#111-types-that-cannot-cross-the-c-boundary)).
+**A closure cannot leave its function or reach an outer block**, since its captured values end with its block ([8.4.5](#845-tracking-a-free-with-manual_free)). It can be passed down for a call. Nor can it cross the C boundary ([11.1](#111-types-that-cannot-cross-the-c-boundary)).
 
 ```kspl
 priv fn make(): Callable1<|I32, Bool|> // error: the place of the captured values vanishes with the function
@@ -2098,9 +2046,9 @@ impl<|T|> Holder<|T|>
 
 A program begins at `main`, which takes no arguments (command-line arguments are read with `sys.args()`). What `main` returns becomes the program's exit status.
 
-**`main` is a function with no parameters and no type parameters** (`main() takes no parameters`, `main() cannot take type parameters`). **A program that is built to run has a `main`** (`this program has no main()` from `ksplc run`, `ksplc build` and `--program`); a `main` that names a constant or a variable is refused there too. A compile to C alone can lack one.
+**`main` is a function with no parameters and no type parameters** (`main() takes no parameters`, `main() must not take type parameters`). **A program that is built to run has a `main`** (`this program has no main()` from `ksplc run`, `ksplc build` and `--program`); a `main` that names a constant or a variable is refused there too. A compile to C alone can lack one.
 
-**`main` cannot be `priv`** (`main() cannot be 'priv'`): the start-up code calls it from another file.
+**`main` cannot be `priv`** (`main() must not be 'priv'`): the start-up code calls it from another file.
 
 Caution: **Do not write more than one `main` in a program.** Two or more across all the files in the compilation are refused (`this program defines main() N times`), whether or not they stand in the entry file. So importing a file that holds a `main` is refused too.
 
@@ -2297,7 +2245,7 @@ impl My_handle: Ref_counted
         ...
 ```
 
-`Ref_counted` is **a trait known to the compiler**, but only conformance to `std.Ref_counted` itself counts. A trait of the same name in your own file does not enable ARC. `std/mem` can be imported from a freestanding build too.
+`Ref_counted` is **a trait known to the compiler**, but only conformance to `std.lang.Ref_counted` itself counts. A trait of the same name in your own file does not enable ARC. `std/mem` can be imported from a freestanding build too.
 
 Caution: **Do not call `retain` / `release` by hand.** Such a call doubles up with the compiler's, whose `release` then writes into freed memory. `priv` on the trait blocks a call through a trait value, and `priv` on the `impl` a direct call on the type. The compiler's own calls still reach them.
 
@@ -2358,7 +2306,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
 
 **Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check, so it refuses only what one function's code shows:
 
-* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array ([6.6.1](#661-compound-literal-forms)), or a trait value, a closure among them ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. **So does a value read through a pointer to such a local**: `return pp$` after `pp: = p@` is refused. So are `hp.p` after `hp: = h@`, `s[0]` of a slice over a local array, and `(s.ptr + 0)$`. **A name bound out of such a local carries its pointer too**: a `case .some(v)` or `if v: = o` binding, and a `for p in ps` item. **The value a `catch` gives stands for the value it replaces**: `catch x@` and `fallback x@` are refused as `x@` is. A field that no frame pointer set, and a number, pass.
+* **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array or a run ([6.6.1](#661-compound-literal-forms)), or a trait value such as a closure ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. **So does a value read through a pointer to such a local**: `return pp$` after `pp: = p@` is refused. So are `hp.p` after `hp: = h@`, `s[0]` of a slice over a local array, and `(s.ptr + 0)$`. **A name bound out of such a local carries its pointer too**: a `case .some(v)` or `if v: = o` binding, and a `for p in ps` item. **The value a `catch` gives stands for the value it replaces**: `catch x@` and `fallback x@` are refused as `x@` is. A field that no frame pointer set, and a number, pass.
 * **A store of a written address into a global or behind a pointer is allowed** (`g = x@`), for a place cleared before the function returns. One the compiler makes is refused there as well.
 * **A local's storage ends with its block**, and so does a temporary's, such as a closure or a run of elements. So a pointer the compiler makes cannot be stored into a local of an outer block: in `inner:`, `c = fn(x: I32; n: I32): I32 { … }` is refused where `c` is declared outside `inner`. A written address stored so is the writer's, as above, and reading through it after the block ends is a dangling pointer.
 
@@ -2398,7 +2346,7 @@ Caution: **No row of this table stops a program at run time.** Keeping each view
 | :-- | :-- | :-- |
 | `List.slice`, `List.sub`, `List.sub_from`, or `xs[i]@` of a `List<\|T\|>` | `push`, `push_all` or `insert` that grows the list | The elements move to a new block, and the old block is freed |
 | The same | `insert` or `remove_at` | The elements after the index shift, so the view shows other elements |
-| The same | `pop`, `clear` or `remove_at` | The element is released, while the view still covers its slot |
+| The same | `pop`, `clear`, `truncate` or `remove_at` | The element is released, while the view still covers its slot |
 | The same | `List.free` | The block is freed |
 | An entry of a `Map<\|K, V\|>`, such as each `e` that `for e in m.items()` gives | Any `set` (`m[k] = v`) | A set can rebuild the table first, and that moves every pair |
 | The same | Removing its key (`m.remove(k)`), or freeing the map (`m.free()`) | The pair is released |
@@ -2445,7 +2393,7 @@ fn main(): I32
     return verdict.finish()
 ```
 
-**A suite is a struct that conforms to `std/suite`'s `Suite`.** A suite whose tests take nothing can be an enum with one variant. For each such `impl`, the compiler writes the method `run`. The trait is matched by its full name, `std.suite.Suite` ([5.5](#55-worked-example-synthesizing-a-field-table-with-reflectable)).
+**A suite is a struct that conforms to `std/suite`'s `Suite`.** A suite whose tests take nothing can be an enum with one variant. For each such `impl`, the compiler writes the method `run`. The trait is matched by its full name, `std.suite.Suite`, as `std.lang.Move_only` is ([5.4](#54-worked-example-forbidding-copies-with-move_only)).
 
 **A test is a top-level function whose name starts with `test_`.** A method of that name is not a test.
 
@@ -2481,6 +2429,7 @@ fn main(): I32
 | Waiting for a thread to end (`Thread.free`, which waits for it) | The caller sees every write the thread made |
 | `Mutex.unlock`, then a later `Mutex.lock` of the same `Mutex<\|T\|>` | The thread that locks sees every write made before the unlock |
 | `Cond_var.wait` and `Cond_var.wait_for` returning | Each returns holding the lock again, so it sees what a `lock` sees |
+| `Channel.send`, then the `receive` that takes that value | The receiver sees every write the sender made before the send, since both take the channel's lock |
 | Any `Atomic_sz` operation (`load`, `store`, `fetch_add`, `compare_and_swap`) | Every one is sequentially consistent: all threads see all of them in one order |
 
 **An atomic operation orders the plain writes around it too.** Where one thread's `Atomic_sz.load` reads the value another thread's `store` wrote, it sees every write made before that `store`.
@@ -2721,14 +2670,11 @@ The table lists the attributes, what each can stand before, and which backend ho
 | `#inline` | A function | C / LLVM | **An optimization hint** strongly recommending inlining; the behavior does not change. |
 | `#section("name")` | A function, a variable, a `const` | C / LLVM | **Places it in a named linker section**, such as a ROM bank. The name is letters, digits, `_` and `.` in a plain string (a compile error otherwise). It must match the linker's layout exactly (`.foo`, no dot added); a mismatched section lands at the default location. On a function it requires `#noinline` (a compile error otherwise). |
 | `#noinline` | A function | C / LLVM | **Forbids inlining**: exactly one definition, never expanded into a caller. A compile error with `#inline`. |
-| `#interrupt` | A function | **C only** | **A hardware interrupt handler**, for bare metal: `__attribute__((interrupt))`. A compile error under `--to=llvm`. |
 | `#naked` | A function | C / LLVM | **No compiler-built prologue or epilogue** (the stack frame's set-up and removal), for code that writes its own, such as a context switch. Its body holds only `__kspl_asm_volatile(...)` statements, and the assembly returns by itself. |
 | `#noreturn` | A function | C / LLVM / type checking | **The function never returns** (an infinite loop, a panic handler). As a `catch`'s substitute value, in the expression form or `fallback`, a call to it is not asked for a type. Elsewhere it is (`return panic(…);` is an error). **The promise is checked in the body**: a `return`, a `throw`, a `!` or a reachable end is a compile error. An `extern` declaration's promise is the foreign library's (`exit` in `std/libc`). |
 | `#gives_view` | A method | Lint | **What the method returns points into its receiver's memory** (a view, [8.4.6](#846-what-invalidates-a-view)). Lint [W0111] follows the view from the local that holds it. |
 | `#ends_views` | A method | Lint | **The method can move or release the memory its receiver owns**, which ends every view into it ([8.4.6](#846-what-invalidates-a-view)). Lint [W0111] reports a view used after it. |
 | `#raw_address` | A function, a top-level variable, a top-level `const` | Type checking | **An integer may become a pointer** in the function's body, or in the declaration's initializer ([6.4](#64-type-conversion--and-implicit-casts)). It is for code that reads memory at a fixed address, such as a device's register. A local declaration takes none: mark the function that holds it. |
-| `#packed` | A struct | C / LLVM | **No padding** between the fields. A field this leaves under-aligned has no address (the paragraph "A field `#packed` leaves under-aligned" below). |
-| `#align(N)` | A struct, a function, a variable, a `const` | C / LLVM<br>(**C only** for anything but a struct) | **Forces an alignment of `N` bytes**. `N` must be a positive constant and a power of two (a compile error otherwise); the upper bound is the target C's. Except on a struct, it is a compile error under `--to=llvm`. |
 
 **Any name parses as an attribute** (the `attribute` rule in `ksplc/kspl.kspeg`), but an attribute name absent from the table is a compile error:
 
@@ -2741,18 +2687,14 @@ The table is the single canonical source: a new attribute goes into the table an
 **An attribute in a position its "Target" column does not list is a compile error too**, such as an `#inline` on a field.
 
 ```
-error: attribute '#inline' does nothing here; it applies to functions
+error: attribute '#inline' does nothing here. It applies to functions
 ```
 
-**No attribute is interpreted by one backend and silently ignored by the other.** One whose backends column says "C only" is a compile error under `--to=llvm`.
+**No attribute is interpreted by one backend and silently ignored by the other.** Each one the table lists works on both.
 
-**An `extern struct` takes no attribute but `#cfg`** (a compile error otherwise). The generated C emits only its forward declaration, so its layout belongs to the C header; hold it by pointer (`@`). A C type held by value is declared without `extern`, with its fields ([3.3](#33-structs-struct)).
+**A struct takes no attribute but `#cfg`** (a compile error otherwise): it is laid out as C lays it out. An `extern struct`'s layout belongs to the C header, since the generated C emits only its forward declaration; hold it by pointer (`@`). A C type held by value is declared without `extern`, with its fields ([3.3](#33-structs-struct)).
 
 **No attribute keeps ARC-managed types off a real-time path**: raise lint [W0601] to `error` instead (`--lint=W0601=error` or `ksplc.cfg`).
-
-**A field `#packed` leaves under-aligned has no address.** The rule, and each operation it refuses, is the row of that name in the table of [4.3.5](#435-which-operation-takes-which-place). In `#packed struct Rec { tag: U8; n: I32 }` the `n` of `rs[i]` sits at an odd address. Reading, writing and updating it (`rs[i].n *= 4`) work, since the compiler accesses it byte by byte.
-
-The fix the message names is to copy the field into a local, use the local, and assign it back. **An ARC-managed field (`Rc`, `Arc`, or a struct holding one) left under-aligned is refused where the struct declares it**, since its count is kept through its address. A field that keeps its type's alignment passes. Such are a one-byte field, a field of a nested `#packed` struct's type, and one aligned within a struct both `#packed` and `#align(N)`.
 
 ```kspl
 // a size check (a compile error when it fails)
@@ -2972,7 +2914,7 @@ The grammar does not limit nesting, but the compiler spends its own stack on eac
 
 **A type's postfix steps are counted once its typedefs are expanded.** `typedef B = A@` has the steps of `A` plus one, so a chain of typedefs cannot build a type deeper than one written out.
 
-**A chain of references between constants is measured where its value must be fixed at translation time** (an array length, an enum tag, `#align`).
+**A chain of references between constants is measured where its value must be fixed at translation time** (an array length, an enum tag).
 
 **Every place that counts a depth must allow at least the guaranteed value**, or a later stage would pass on a half-built structure.
 
@@ -3067,7 +3009,8 @@ KSPL leaves these features out on purpose. The table names each one and what to 
 | **try-finally** | The `defer` statement, which runs on every way out (`return` / `throw` / `break` / `continue`) ([8.4.1](#841-the-defer-statement)). |
 | **Automatic cleanup** (a destructor, as Rust's `Drop` or C++'s) | `defer` in front of the declaration ([8.4.1](#841-the-defer-statement)); for shared ownership, `Ref_counted` ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)). |
 | **Garbage collection** | `defer`, and values kept on the stack. |
-| **A cleanup joined behind its declaration** (Lombok's `@Cleanup`, GCC's `cleanup` attribute, `buf: = Str_builder() defer .free()`) | `defer buf: = Str_builder()` for `free()`. Another cleanup is a `defer` of its own on the next line: `defer g.unlock()` ([8.4.1](#841-the-defer-statement)). |
+| **`async` / `await`** (Rust's, Swift's, Python's, JavaScript's) | A thread that blocks (`std/thread`), `std/channel` to hand work between threads, and `std/reactor` to wait on many sockets at once. |
+| **A cleanup joined behind its declaration** (Lombok's `@Cleanup`, GCC's `cleanup` attribute, `buf: = Str_builder() defer .free()`) | `defer buf: = Str_builder()` for `free()` ([8.4.1](#841-the-defer-statement)). |
 | **Class inheritance** | Hold a struct inside another, and gather common behavior in a `trait`. |
 | **Named actual arguments** (`f(offset = 0)`) | Take the settings as a struct, written `::{ .name = value }` (an omitted field is 0). |
 | **Function overloading** (several functions with one name, told apart by their parameters) | Make it generic, or give each its own name. |
@@ -3076,6 +3019,7 @@ KSPL leaves these features out on purpose. The table names each one and what to 
 | **The abbreviated error type `T!`** | `T!I32` ([8.3](#83-error-handling)). |
 | **Several variables in one declaration, and several inits or steps in a loop's header** (`a: = 1, b: = 2`, C's `for (i = 0, j = n; i < j; i++, j--)`) | One declaration for each variable, a second loop variable before the loop ([4.1.1](#411-the-shape-of-a-declaration)). The `,` is a syntax error whose note says so. |
 | **The type's name in a `case`** (`case Event.quit`) | `case .quit`; the type's name is an error naming this form ([7.1](#71-branching)). |
+| **A condition or a range of values in a `case`** (Rust's `x if x > 0 =>`, Swift's `case 1...5`, Java's `when`) | An `if` as the first statement of the case's block, or the values listed (`case 1, 2, 3`) ([7.1](#71-branching)). Either is a syntax error whose note says so. |
 | **Another language's word for a loop or a branch** (`while`, Rust's `loop`, `match`) | `for x > 0` for `while`, a bare `for` for `loop`, and `switch x case ...` for `match` ([7.1](#71-branching), [7.2](#72-loops)). Each is a syntax error whose note writes the KSPL head. The three words stay usable as names. |
 | **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, for a module's member, a type's own and a value's alike: `io.out()`, `Shade.dark`, and `Arena(1024)` for `new` ([6.3](#63-method-calls-and-namespaces)). Written as a path, `::` is an error naming the `.` spelling. |
 | **Range syntax (`a..b`)** | `for x in` over `std/lang`'s `Range` (`Range.asc(n)` / `Range.desc(n)` / `Range(start, stop, step)`; `stop` is exclusive). |
@@ -3086,7 +3030,7 @@ KSPL leaves these features out on purpose. The table names each one and what to 
 | **A closure that can be taken outside its function** | A `struct` holding the values to capture, passed as an argument. |
 | **A trailing closure** (Swift's `xs.sorted { … }`, Kotlin's `xs.filter { … }`) | The closure inside the call's parentheses, or bound to a name first ([8.1.3](#813-closures)). A `fn` right after a call's `)` is an error naming both. |
 | **A static variable inside a function** | A top-level variable whose name shows its purpose. |
-| **`guard let`, `?.` and `??`** | `x: = expression catch { return … }` to take an `Option`'s value or leave ([8.3.3](#833-catching-an-optional-catch-on-t)); `if name: = expression` to use it inside a block ([7.1](#71-branching)); `expression.unwrap_or(v)` for a value in place of `.none`. |
+| **`guard let`, `?.` and `??`** | The two shorter notations of an `Option`, and `unwrap_or(v)` ([3.4](#34-enums-enum)). |
 | **A separate prefixed string form for formatting** (Python's `f"…"`) | An ordinary string literal with `\{x\}` ([3.6](#36-the-expansion-specification-for-string-interpolation)). |
 | **Block comments `/* */`** | Line comments `//` ([2.1](#21-comments)). |
 | **A documentation comment in front of what it documents** (`///`, `/** */`, a `@param x` tag), or inside it (`//!`) | `//<` after the thing, on its own line ([2.1](#21-comments)). `///` and `//!` are a warning. |

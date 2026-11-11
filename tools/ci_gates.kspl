@@ -61,6 +61,11 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
         //< The platforms `ci` leaves it out on, space-separated as `PLATFORM` spells them
         //< **Only for a gate that cannot give a true answer there**, never for a missing tool: the
         //< port it runs needs Linux, or its baseline was measured on Linux.
+    local_when: U8[] //<
+        //< A folder: a local `make ci` runs it only when the change reaches that folder
+        //< **For a costly gate that finds faults only there.** GitHub's jobs always run it. Left
+        //< out, the round names it with the reason last (`left_out` in `tools/ci.kspl`), so no
+        //< green hides it. Empty for every other gate.
     fails: U8[] //<
         //< Its failure case, `<file>#<name>`: an input its check must reject
         //< **A gate that cannot fail stays green while what it checks breaks.** A row that runs a
@@ -156,13 +161,15 @@ const GATES: Gate[_] = ::{
         .fails = "ksplc/tests/suite/negative_test.kspl#tests/negative" },
     Gate::{ .log = "equiv", .args = "test-equiv", .par = .serial, .verdict = true, .shard = .none,
         .macos = true, .stops = false, .early = false,
-        .fails = "ksplc/tests/suite/equiv_test.kspl#PACKED_IR_SAMPLE" },
+        .fails = "ksplc/tests/suite/equiv_test.kspl#TRAP_PROBE" },
     // **Linux alone**: it costs about a minute of four cores, and what it finds is in ksplc's C and
     // IR, the same on every system. A Windows minute counts double, a macOS one ten times.
     // Caution: **Keep it out of job a.** There it came just before the browser gates, and on a
     // two-core runner five served sections got no answer from the browser in 20 s.
+    // **A local `make ci` runs it only for a change under `ksplc/`**: it found three compiler
+    // faults when it came, and none since.
     Gate::{ .log = "random_equiv", .args = "test-random-equiv", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false,
+        .shard = .linux, .macos = false, .stops = false, .early = false, .local_when = "ksplc/",
         .fails = "ksplc/tests/suite/random_equiv_test.kspl#PLANTED" },
     Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = .serial, .verdict = true,
         .shard = .none, .macos = true, .stops = false, .early = false,

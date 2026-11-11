@@ -8,7 +8,7 @@
 import fs from "fs";
 import path from "path";
 import zlib from "zlib";
-import { CTRL, H, check, driver, verdict } from "./drive.mjs";
+import { CTRL, H, check, driver, verdict, waitFor } from "./drive.mjs";
 import { request, start } from "./kssrv.mjs";
 import { drafts } from "./drafts.mjs";
 import { losses } from "./losses.mjs";
@@ -165,10 +165,8 @@ async function idle(d) {
 // Waits until a file on disk holds `want`, or the cap passes. **A file step started by a dialog's
 // button can begin after `idle` has looked**, so a check that reads the disk at once can come
 // before the write it checks.
-async function onDisk(ctx, rel, want, ms = 10000) {
-  const end = Date.now() + ms;
-  while (ctx.disk(rel) !== want && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
-  return ctx.disk(rel) === want;
+function onDisk(ctx, rel, want, ms = 10000) {
+  return waitFor(() => ctx.disk(rel) === want, ms);
 }
 
 const said = (d) => d.js("document.getElementById('status').textContent");
@@ -491,7 +489,7 @@ const SECTIONS = {
       "saving it writes the included file, and the parent's bytes stay",
       JSON.stringify([ctx.disk("parts/notes.ksmd"), ctx.disk("top.ksmd")]));
     await c.press("z", CTRL);
-    await c.settle();
+    await waitFor(async () => await c.js("ksmd.source()") === NOTES, 5000);
     check(await c.js("ksmd.source()") === NOTES && await d.js("ksmd.source()") === top,
       "its undo is its own: the parent's document does not change");
     await d.js("window.dispatchEvent(new Event('focus'))");
@@ -588,7 +586,7 @@ const SECTIONS = {
       await d.js("document.querySelector('#browse .browse-note').textContent + ' | ' + " +
         "document.getElementById('status').textContent"));
     await d.click('#browse [data-browse="cancel"]');
-    await d.settle();
+    await waitFor(async () => !await dialogOpen(), 5000);
     check(!await dialogOpen() && ctx.disk("parts/notes.ksmd") === notes,
       "Cancel closes the dialog and writes nothing");
     await onto();
@@ -649,6 +647,8 @@ const SECTIONS = {
     await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
       .find((b) => b.textContent === "parts").click()`);
     await press("pics");
+    // A fixed time, on purpose: it outlasts the 400 ms that holds back the listing of `parts`
+    // above, so that listing arrives after the newer one, as the check needs.
     await new Promise((r) => setTimeout(r, 600));
     check(await d.js("document.querySelector('#browse .browse-where').textContent") === "Workspace / pics",
       "the folder pressed last shows, whichever listing arrives last",
@@ -833,9 +833,10 @@ const SECTIONS = {
     await mouse("mousePressed", 0.6, 0.2);
     await mouse("mouseMoved", 0.8, 0.5);
     await mouse("mouseReleased", 0.95, 0.8);
-    await d.settle();
+    const drawn = /draw shape="rect" from="1\d{4},\d+" to="20000,\d+"/;
+    await waitFor(async () => drawn.test(await d.js("ksmd.source()")), 5000);
     const source = await d.js("ksmd.source()");
-    check(/draw shape="rect" from="1\d{4},\d+" to="20000,\d+"/.test(source),
+    check(drawn.test(source),
       "a shape drawn past 20,000 pixels on an image stops there, and the file takes it", `${source} | ${await said(d)}`);
     await ctx.browser.closeTab(d.page);
     fs.rmSync(path.join(ctx.root, "pics/wide.png"), { force: true });

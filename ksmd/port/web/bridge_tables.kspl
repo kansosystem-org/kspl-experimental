@@ -4,7 +4,7 @@
 //< and what the page shows of each function a formula calls.
 //< `extern` names a symbol, not an import, so each action is in the page's wasm wherever it
 //< stands.
-import "ksmd/calc/formula" { Positions, attachable, cycle_fixed }
+import "ksmd/calc/formula" { Positions, attachable, cycle_fixed, partner }
 import "ksmd/calc/functions_table" as table
 import "ksmd/calc/help" { FORMS, Help, write_json }
 import "ksmd/calc/value"
@@ -201,6 +201,26 @@ extern fn ksmd_web_references(block: Sz, len: Sz): Sz //<
         at = tok.end
     out.c(']')
     return out.slice().len
+
+extern fn ksmd_web_bracket_pair(len: Sz, caret: Sz): Sz //<
+    //< The two brackets of a typed formula that pair at the caret, as `[from, to]` in bytes
+    //< The bracket just before the caret comes first, then the one just after it (`partner`).
+    //< Empty where neither pairs, or where the text is no formula.
+    ensure()
+    out.clear()
+    text: = text_in(len)
+    if text.len == 0 || text[0] != '='
+        return 0
+    defer scratch: = Arena(4096)
+    for k in Range.asc(2)
+        at: = caret - 1 + k
+        if at < 0 || at >= text.len
+            continue
+        other: = partner(text, at, scratch)
+        if other >= 0
+            out.s("[\{at\},\{other\}]")
+            return out.slice().len
+    return 0
 
 extern fn ksmd_web_paste_table(len: Sz): Sz //<
     //< Puts a new table made from a grid, written in as `ksmd_web_paste_cells` takes it
