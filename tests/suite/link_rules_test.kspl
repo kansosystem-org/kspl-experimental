@@ -19,7 +19,7 @@ import "std/str"
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/harness_text"
+import "tools/make_db"
 
 priv const TRIPLE_VAR: U8[] = "KANSO_STAND_IN_TRIPLE" //< what the stand-in answers `-dumpmachine`
 
@@ -29,8 +29,6 @@ priv const WINDOWS_TRIPLE: U8[] = "x86_64-w64-windows-gnu"
 
 // What Windows and MSYS2's UCRT64 shell set, which the Makefile reads to take its Windows branch.
 priv const WINDOWS_ENV: U8[][_] = ::{ "OS=Windows_NT", "MSYSTEM=UCRT64" }
-
-priv const LDLIBS_HEAD: U8[] = "LDLIBS := " //< `LDLIBS`'s line in make's `-p`, its value expanded
 
 priv const FIX_HINT: U8[] =
     "fix the Makefile's LDLIBS or `append_link_libs` / `append_stack_flag` in ksplc/tools/run.kspl, \
@@ -54,9 +52,9 @@ priv fn disagreements(ldlibs: U8[], libs: U8[], flags: U8[], arena: Arena$@): Li
     //< A library must be on both sides, in any order. A linker option in `LDLIBS` must be one ksplc
     //< passes, and one ksplc passes for the stack must be in `LDLIBS`. The Makefile keeps ksplc's
     //< other options (removing unreferenced sections) in `CFLAGS`, so they are not compared.
-    m: = harness_text.words(ldlibs, arena)
-    l: = harness_text.words(libs, arena)
-    f: = harness_text.words(flags, arena)
+    m: = make_db.words(ldlibs, arena)
+    l: = make_db.words(libs, arena)
+    f: = make_db.words(flags, arena)
     $bad: = List<|U8[]|>(arena)
     for w in m
         if !l.contains(w) && !f.contains(w)
@@ -140,9 +138,8 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
     return exe
 
 priv fn ldlibs_of(out: U8[], arena: Arena$@): U8[]? //< `LDLIBS`'s value in make's `-p`
-    for line in out.lines(arena)
-        if line.starts_with(LDLIBS_HEAD)
-            return .some(line.sub_from(LDLIBS_HEAD.len))
+    if v: = make_db.parse_db(make_db.last_db(out), arena).vars.get("LDLIBS")
+        return .some(v.value)
     return .none
 
 priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Arena$@) //<
@@ -159,6 +156,7 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
     args.push("-pRrq")
     args.push(arena.text().s("CC=\{cc\}").take())
     args.push_all(make_vars)
+    make_db.make_speaks_english()
     made: = harness.make(args.slice())
     saved: = arena.dup_str(sys.get_env("CC").unwrap_or(""))
     $libs: = verdict.Run_out::{ .code = .none, .out = "CC could not be set" }
@@ -186,8 +184,7 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
         arena.text().s(libs.out).s(flags.out).take())
         return
     $bad: = disagreements(ldlibs, libs.out, flags.out, arena)
-    seen: =
-        harness_text.words(ldlibs, arena).len + harness_text.words(libs.out, arena).len
+    seen: = make_db.words(ldlibs, arena).len + make_db.words(libs.out, arena).len
     verdict.check_list(arena.text().s("\{name\}: the Makefile's LDLIBS agrees with ksplc").take(),
         seen, "words", bad@, FIX_HINT)
 

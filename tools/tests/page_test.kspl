@@ -6,7 +6,7 @@ import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
 import "std/sys"
-import "std/tests/file_mode"
+import "std/tests/scratch"
 import "std/verdict"
 import "tools/opener_aim" as aim
 import "tools/surface_rows" as surface
@@ -34,11 +34,11 @@ priv fn holding(path: U8[], want: U8[]): Bool //< whether the file at path holds
     defer dealloc(Void$@::got.ptr)
     return got.find_str(want).is_some()
 
-priv fn owner_only(path: U8[], arena: Arena$@): Bool //< whether only its owner may read it
-    //< **True where the system shows no mode** (Windows, or a filesystem without one): there the
-    //< folder decides, and this cannot tell.
-    shown: = file_mode.mode_shown(path, arena)
-    return shown.len == 0 || shown.equals("-rw-------")
+priv fn owner_only(path: U8[], modes: Bool, arena: Arena$@): Bool //<
+    //< whether only its owner reads it
+    //< **True where the folder keeps no mode** (`scratch.keeps_modes`): there the folder
+    //< decides, and the test says `SKIP`.
+    return !modes || scratch.mode_shown(path, arena).equals("-rw-------")
 
 fn test_the_url_keeps_the_token_last() //< the query goes before the fragment, the token last
     verdict.start("[tools/opener_aim] building the URL that opens test...")
@@ -292,6 +292,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "page_", arena)
         catch panic("cannot create the working directory")
+    modes: = scratch.keeps_modes(dir, arena)
     page: = aim.write_page(SECRET_URL, aim.KSMD, dir, arena)
         catch panic("the page should be written")
     for win in Bool[2]::{ false, true }
@@ -305,7 +306,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     assert(holding(page, moving), "the page moves on to the URL")
     linked: = arena.text().s("href=\"").s(SECRET_URL).c('"').take()
     assert(holding(page, linked), "and offers it as a link too")
-    assert(owner_only(page, arena), "only its owner may read the page")
+    assert(owner_only(page, modes, arena), "only its owner may read the page")
     // **The URL is written as an attribute's value**, so a `"` cannot end it.
     defer $text: = Str_builder()
     quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", aim.KSMD, text@)
@@ -313,6 +314,9 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
         quoted.find_str("a\"b").is_none(), "a mark in the URL is escaped")
     fs.remove_path(page) catch {}
     fs.remove_path(dir) catch {}
+    if !modes
+        verdict.skip("this system shows no POSIX mode (Windows, or a filesystem without one)")
+        return
     verdict
         .pass("the browser is handed a page only its owner reads, and no argument holds the token.")
 
@@ -345,16 +349,20 @@ fn test_the_note_is_written_for_its_owner() //< the note and the log hold the to
     defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "note_", arena)
         catch panic("cannot create the working directory")
+    modes: = scratch.keeps_modes(dir, arena)
     note: = fs.join(dir, "ksmd.state", arena)
     // **A note written before stands with the mode it was made with**, which must not carry over.
     io.write_file(note, "old") catch panic("the probe file must be writable")
     aim.write_owned(note, "new") catch panic("the note should be written")
     assert(holding(note, "new") && !holding(note, "old"), "the note holds what was written last")
-    assert(owner_only(note, arena), "only its owner may read the note")
+    assert(owner_only(note, modes, arena), "only its owner may read the note")
     names: = fs.read_dir(dir, arena) catch panic("the folder should be readable")
     assert(names.len == 1, "nothing is left beside the note")
     fs.remove_path(note) catch {}
     fs.remove_path(dir) catch {}
+    if !modes
+        verdict.skip("this system shows no POSIX mode (Windows, or a filesystem without one)")
+        return
     verdict.pass("the note is replaced by one only its owner reads, with nothing left beside it.")
 
 // ==========================================
@@ -574,8 +582,8 @@ fn test_a_walk_refuses_code_it_cannot_place(arena: Arena$@) //<
     _a: =
         tutorial.walk_steps("priv fn helper(): I32\n  return 0\n\nfn main(): I32 //< m\n  return \
             0\n", arena) catch e
-        untitled = e == .untitled
-        fallback List<|tutorial.Step|>(arena)
+                untitled = e == .untitled
+                fallback List<|tutorial.Step|>(arena)
     assert(untitled, "an undescribed declaration before every step is refused")
     $no_title: = false
     _b: = tutorial.walk_steps("fn main(): I32 //<\n  return 0\n", arena) catch e

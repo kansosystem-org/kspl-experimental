@@ -56,6 +56,9 @@ export const CTRL = 2;
 export const SHIFT = 8;
 export const ALT = 1;
 
+// Resolves after `ms` milliseconds. Only where the header above allows a fixed time.
+export const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Waits until `holds()` is true, checked in Node, up to `ms`, and answers whether it came true:
 // a file on disk, a server that stopped, a value read through a tab. A condition the page alone
 // can check is `until` in `driver`.
@@ -64,7 +67,7 @@ export async function waitFor(holds, ms = 10000) {
   for (;;) {
     if (await holds()) return true;
     if (Date.now() >= end) return false;
-    await new Promise((r) => setTimeout(r, 50));
+    await wait(50);
   }
 }
 

@@ -340,3 +340,40 @@ fn test_carried_string_leaves_the_lines_below()
         "the note must name the line the author wrote, counting the carried line as its own")
 
     verdict.pass("the line below a carried string kept its number.")
+
+fn test_column_zero_comment_keeps_brackets_open()
+    verdict.start("[layout] a comment at column 0 inside open brackets leaves them open test...")
+    defer arena: = Arena(64 * 1024)
+    // A line at column 0 that starts something new ends every open bracket. **A comment changes
+    // nothing in between**, so the call's arguments below it are still the call's.
+    assert(mend("fn main()\n    x: = add(\n// a note\n        1, 2)\n", arena)
+        .equals("fn main() {\n    x: = add(\n// a note\n        1, 2); }\n"),
+        "a call's arguments below a column-0 comment must stay in the call")
+    // Code at column 0 still ends them, so one unclosed `(` does not swallow the file.
+    assert(mend("fn f()\n    g(\nfn h()\n    k()\n", arena)
+        .equals("fn f() {\n    g(; }\nfn h() {\n    k(); }\n"),
+        "a declaration at column 0 must still end an unclosed bracket")
+    verdict.pass("a column-0 comment kept the brackets open; code at column 0 ended them.")
+
+fn test_block_in_interpolation_gets_its_semicolon()
+    verdict.start("[layout] a one-line block inside a string's interpolation gets its `;` test...")
+    defer arena: = Arena(64 * 1024)
+    // **An interpolation's code is code**: the block there gets the `;` it would get outside the
+    // string. The string's own text, and a string inside the interpolation, are left alone.
+    closure: =
+        mend("""fn main()
+    s("a\{f(fn(x: I32; k: I32): I32 { return x + k }, 1)\}b")
+""", arena)
+    closure_ok: = closure
+        .equals("""fn main() {
+    s("a\{f(fn(x: I32; k: I32): I32 { return x + k;}, 1)\}b"); }
+""")
+    assert(closure_ok, "a closure's one-line block inside an interpolation must get its `;`")
+    text: = mend("""fn main()
+    s("{ x }\{"{ y }".len\}")
+""", arena)
+    text_ok: = text.equals("""fn main() {
+    s("{ x }\{"{ y }".len\}"); }
+""")
+    assert(text_ok, "braces in a string's text, inside an interpolation too, are not a block")
+    verdict.pass("an interpolation's block got its `;`, and a string's text kept its braces.")

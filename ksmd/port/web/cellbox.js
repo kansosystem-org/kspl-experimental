@@ -125,13 +125,26 @@ function ksmdCellBox(ks, table) {
     if (o.row >= 0) ks.refs.attach(input, o.block, composing);
     input.addEventListener("keydown", keys);
     if (o.row >= 0) ks.choices.attach(el.closest(".table"), o.column, input);
-    // A grid from a spreadsheet fills cells from this one; one value goes into the input.
+    // **An open cell takes the pasted text as it is**, line breaks and tabs included, as Excel's
+    // cell does while it is edited. A chosen cell that is not open spreads rows over cells
+    // (`range.js`). A one-line box (a column with choices) and a column's name hold no line
+    // break, so there a grid from a spreadsheet still fills cells from this one.
     input.addEventListener("paste", (e) => {
       const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
       // Text a document cannot hold never goes in, not even as one value.
       if (ks.tooLarge(text)) {
         e.preventDefault();
         e.stopPropagation();
+        return;
+      }
+      if (input.tagName === "TEXTAREA" && o.row >= 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        // A copied line or row ends with a line break, which is not part of its text.
+        const body = text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+        input.setRangeText(body, input.selectionStart, input.selectionEnd, "end");
+        input.dispatchEvent(new Event("input"));
+        fitLines(input);
         return;
       }
       if (!ks.range.grid(text)) return;
@@ -222,11 +235,38 @@ function ksmdCellBox(ks, table) {
 
   // Says what the editor added to close a formula just taken (`close_formula` in
   // `ksmd/edit/editor_tables.kspl`), so the person knows why the cell holds more than they typed.
+  // **`Ctrl`+`Z` right after gives back the formula as typed, whatever was added.** A missing `)`
+  // is a step of its own, so the editor's undo gives the typed formula back. Text left open in
+  // quotes runs over the cell's end, so the file cannot hold it, and the closed form went in as
+  // one step. Its typed form is kept here instead (`unclose`), and the first `Ctrl`+`Z` opens
+  // the cell again with it.
+  let unclosed = null;
+  ks.changed.push(() => {
+    unclosed = null;
+  });
   function closed(o) {
     const typed = o.input.value;
     const now = ks.cellText(o.block, o.row, o.column);
     if (o.row < 0 || !typed.startsWith("=") || now.length <= typed.length || !now.startsWith(typed)) return;
-    ks.say(`Added ${now.slice(typed.length)} at the end so the formula reads. Ctrl+Z takes it back.`);
+    const added = now.slice(typed.length);
+    if (added.startsWith('"')) unclosed = { block: o.block, row: o.row, column: o.column, typed };
+    ks.say(`Added ${added} at the end so the formula reads. Ctrl+Z takes it back.`);
+  }
+  // Undoes the closed form put in right before, and opens its cell with the formula as typed;
+  // false where nothing was closed so, and the editor's own undo acts. `Esc` then leaves the
+  // value the cell held before, as a second `Ctrl`+`Z` does after a missing `)`.
+  function unclose() {
+    const u = unclosed;
+    if (!u || open || ks.readOnly) return false;
+    const r = ks.act("ksmd_web_undo");
+    const el = r && r.ok && table.find(u.block, u.row, u.column);
+    if (!el) return true;
+    edit(el);
+    if (!open) return true;
+    open.input.value = u.typed;
+    open.input.setSelectionRange(u.typed.length, u.typed.length);
+    fitLines(open.input);
+    return true;
   }
 
   // Whether the page is drawing the open cell's table again (`redrawn`).
@@ -417,6 +457,7 @@ function ksmdCellBox(ks, table) {
   return {
     edit,
     take,
+    unclose,
     moveTo,
     tab,
     redrawn,

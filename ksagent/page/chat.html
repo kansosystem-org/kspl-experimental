@@ -1,6 +1,7 @@
 <!doctype html>
 <!--
-  ksagent's chat page: one file, served by a local server (`kssrv --local --page=<this file>`).
+  ksagent's chat page, served by a local server (`kssrv --local --page=<the built file>`). The
+  build puts kssrv's client inside it (`kssrv/page/bundle.kspl`), so it is served as one file.
   It asks by appending to <name>.ask.jsonl, and shows <name>.chat.jsonl and <name>.live.json,
   which only ksagent writes. The reasons are "The chat page" in ksagent/docs/DESIGN-agent.md.
   Caution: **Never hand the model's text to innerHTML.** The Markdown reader builds a tree of
@@ -397,22 +398,16 @@ const ksagentMarkdown = (() => {
   return { parse, render };
 })();
 </script>
+<script src="client.js"></script>
 <script>
 "use strict";
-// The page: the local server's protocol ("docs/SPEC-local-server.md" in the repository), the
-// three files of a conversation, and what each turn shows. **The page writes only the ask file**,
-// and every write names the bytes it read, so a write from another tab is never lost.
+// The page: the three files of a conversation, and what each turn shows. kssrv's client (the
+// script above) speaks the local server's protocol ("docs/SPEC-local-server.md" in the
+// repository). **The page writes only the ask file**, and every write names the bytes it read, so
+// a write from another tab is never lost.
 (() => {
-  const TOKEN = /^[0-9a-f]{48}$/;
-  const KEY = "ksagent.token";
   const LOOK_MS = 1000;
   const HINT_MS = 15000;
-  // A request past this many milliseconds gives up, and the page says so. **A slow model does
-  // not make a request slow**: ksagent writes the answer into files, and the page reads them each
-  // second (LOOK_MS). So a request waits only for the local server on this computer, and 15 s is
-  // ample. Without a limit, a server that takes a request and never answers stops the page with
-  // no word.
-  const WAIT_MS = 15000;
   const NAME = /^[\p{L}\p{N}._-]+$/u;
   const $ = (id) => document.getElementById(id);
   const ja = (navigator.language || "").startsWith("ja");
@@ -443,21 +438,11 @@ const ksagentMarkdown = (() => {
     $("text").placeholder = "このフォルダーのファイルについて聞く";
   }
 
-  // The token: once from the fragment's `t=`, then from this tab's storage ("How the token gets
-  // across" in the protocol).
-  const token = (() => {
-    const got = new URLSearchParams(location.hash.slice(1)).get("t");
-    if (got !== null) history.replaceState(null, "", location.pathname + location.search);
-    if (got !== null && TOKEN.test(got)) {
-      try { sessionStorage.setItem(KEY, got); } catch (_) { /* a reload then asks for the URL */ }
-      return got;
-    }
-    try { return sessionStorage.getItem(KEY) || ""; } catch (_) { return ""; }
-  })();
-  // Caution: **Only the hold passes `wait` 0**: its request stays open on purpose (`hold`).
-  const send = (url, how = {}, wait = WAIT_MS) => fetch(url, { ...how, cache: "no-store",
-    headers: { Authorization: `Bearer ${token}`, ...(how.headers || {}) },
-    ...(wait > 0 ? { signal: AbortSignal.timeout(wait) } : {}) });
+  // **A slow model does not make a request slow**: ksagent writes the answer into files, and the
+  // page reads them each second (LOOK_MS). So a request waits only for the local server, and the
+  // client's limit (WAIT_MS) holds.
+  const local = kssrvLocal("ksagent");
+  const { send, digest, WAIT_MS } = local;
   // What a request that failed means, in words a person can act on.
   const failed = (e) => (e && e.name === "TimeoutError" ?
     `The local server did not answer within ${WAIT_MS / 1000} seconds. The page asks again each ` +
@@ -466,38 +451,22 @@ const ksagentMarkdown = (() => {
   // so the page cannot say "not saved", and it does not resend by itself.
   const UNSURE = `The local server did not answer within ${WAIT_MS / 1000} seconds, so the question ` +
     "may not be saved. It is back in the text box: ask again, and it is saved only once.";
-  const fileUrl = (p) => `/api/file?path=${encodeURIComponent(p)}`;
-  async function digest(bytes) {
-    const d = await crypto.subtle.digest("SHA-256", bytes);
-    return Array.from(new Uint8Array(d), (n) => n.toString(16).padStart(2, "0")).join("");
-  }
+  // The same for a stop. **The page does not send it again**, so the notice says what the person
+  // can do; a second stop for the same answer does no harm.
+  const STOP_UNSURE = `The local server did not answer within ${WAIT_MS / 1000} seconds, so the ` +
+    "stop may not be saved. The page does not send it again: if the answer goes on, press Stop again.";
+  const fileUrl = (p) => local.ask("file", p);
   async function read(path) {
-    const got = await send(fileUrl(path));
+    const got = await local.read(path);
     if (got.status === 404) return { bytes: null };
-    if (!got.ok) throw new Error(`the local server refused ${path} (${got.status})`);
-    return { bytes: new Uint8Array(await got.arrayBuffer()) };
+    if (got.status !== 200) throw new Error(`the local server refused ${path} (${got.status})`);
+    return { bytes: got.bytes };
   }
   async function stat(path) {
-    const got = await send(`/api/stat?path=${encodeURIComponent(path)}`);
+    const got = await local.stat(path);
     if (got.status === 404) return "none";
-    if (!got.ok) throw new Error(`the local server refused ${path} (${got.status})`);
-    const s = await got.json();
-    return `${s.size}/${s.changed_at}`;
-  }
-  function hold() {
-    const holding = async () => {
-      for (;;) {
-        try {
-          const got = await send("/api/here", {}, 0);
-          if (got.ok && got.body) {
-            const r = got.body.getReader();
-            while (!(await r.read()).done) { /* the wait is the hold */ }
-          }
-        } catch (_) { /* the server went, or the connection broke */ }
-        await new Promise((go) => setTimeout(go, 5000));
-      }
-    };
-    if (navigator.locks) navigator.locks.request("ksagent-hold", holding); else holding();
+    if (got.status !== 200) throw new Error(`the local server refused ${path} (${got.status})`);
+    return `${got.size}/${got.at}`;
   }
 
   // One JSON record a line; a line that cannot be read is named, never skipped without a word.
@@ -554,7 +523,8 @@ const ksagentMarkdown = (() => {
   }
 
   const S = { name: "", ask: null, chat: null, live: null, refused: "", stamps: {},
-    askedAt: new Map(), shown: new Map(), problem: "", late: "", unsure: null, ready: false };
+    askedAt: new Map(), shown: new Map(), problem: "", late: "", unsure: null, stopUnsure: null,
+    ready: false };
   const path = (kind) => `${S.name}.${kind}`;
 
   async function refresh(kind, file) {
@@ -755,13 +725,16 @@ const ksagentMarkdown = (() => {
     S.problem = await append({ type: "question", id, text }).catch((e) =>
       e && e.name === "TimeoutError" ? UNSURE : failed(e));
     S.unsure = S.problem === "" ? null : { id, text };
+    S.stopUnsure = null;
     if (S.unsure && $("text").value.trim() === "") $("text").value = text;
     // **Draw the notice here**: look draws only when a file changed, and a lost save changed none.
     draw();
     await look();
   }
   async function stop(id) {
-    S.problem = await append({ type: "stop", id }).catch(failed);
+    S.problem = await append({ type: "stop", id }).catch((e) =>
+      e && e.name === "TimeoutError" ? STOP_UNSURE : failed(e));
+    S.stopUnsure = S.problem === STOP_UNSURE ? id : null;
     draw();
     await look();
   }
@@ -792,6 +765,12 @@ const ksagentMarkdown = (() => {
       if (S.unsure && (S.ask ? S.ask.out : []).some((r) => r.type === "question" && r.id === S.unsure.id)) {
         if ($("text").value.trim() === S.unsure.text) $("text").value = "";
         S.unsure = null;
+        S.problem = "";
+        draw();
+      }
+      // Likewise a stop whose save went unanswered.
+      if (S.stopUnsure && (S.ask ? S.ask.out : []).some((r) => r.type === "stop" && r.id === S.stopUnsure)) {
+        S.stopUnsure = null;
         S.problem = "";
         draw();
       }
@@ -852,7 +831,7 @@ const ksagentMarkdown = (() => {
       draw();
       return;
     }
-    hold();
+    local.hold();
     const asked = new URLSearchParams(location.search).get("chat");
     const names = await listChats();
     await open(asked && NAME.test(asked) ? asked : names[names.length - 1] || newName());

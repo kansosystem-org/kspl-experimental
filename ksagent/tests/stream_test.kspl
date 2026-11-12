@@ -15,7 +15,6 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
-import "std/sys"
 import "std/verdict"
 
 priv const QUOTE: U8[] = "receives 10 days of paid leave after six months" //< from `rules/leave.md`
@@ -126,50 +125,30 @@ fn test_events_are_read_as_the_standard_has_them()
         got.len == 2 && got.get(0).equals("one\ntwo") && got.get(1).equals("three") &&
         tail.is_none(), "")
 
-fn test_a_long_event_line_is_searched_once() //< held to the same bytes read in one piece
-    //< **Held to the same line read in one piece, timed the same way**, not to a fixed time, so a
-    //< busy machine slows both alike. Searched again from its start at each 4 KiB piece, a 2 MiB
-    //< line takes hundreds of times as long as in one piece.
-    //< Caution: **A sanitizer's build skips it**: it slows the two ways of reading unequally.
+fn test_a_long_event_line_is_searched_once() //< a count of the bytes searched
+    //< **Counts the bytes searched for a line's end, not the time taken**: a count is the same on
+    //< every machine. Searched again from its start at each 4 KiB piece, a 256 KiB line would be
+    //< searched about 32 times over.
     verdict.start("[ksagent] a long event line that arrives in many pieces is searched once")
-    if sys.get_env("KANSO_SANITIZED").is_some()
-        verdict.skip("a sanitizer's build does not keep time in step with the work")
-        return
-    defer arena: = Arena(64 * 1024)
     defer $text: = Str_builder()
     text.s("data: ")
-    for text.len < 2 * 1024 * 1024
+    for text.len < 256 * 1024
         text.s("x")
     text.s("\n\n")
     line: = text.slice()
-    // **The two timings take turns, each round**, so a busy spell on a shared machine slows both.
-    $whole_us: I64 = 0I64
-    $pieces_us: I64 = 0I64
-    for round in Range.asc(TIMING_ROUNDS)
-        whole_us = agent_test.fastest(whole_us, event_us(line, line.len), round)
-        pieces_us = agent_test.fastest(pieces_us, event_us(line, 4096), round)
-    verdict.check("4 KiB pieces take less than ten times as long as one piece, plus 0.2 s",
-        pieces_us < 10I64 * whole_us + 200000I64,
-        arena.text().s("\{pieces_us\} us in pieces, \{whole_us\} us whole").take())
-
-priv const TIMING_ROUNDS: Sz = 5 //< rounds of the two timings, each kept at its fastest
-
-priv fn event_us(line: U8[], piece: Sz): I64 //<
-    //< How long one event takes to read, its bytes added `piece` at a time
     defer $r: = Event_reader()
-    started: = sys.mono_us()
     $at: Sz = 0
     $got: Sz = 0
     for at < line.len
-        n: = piece if line.len - at > piece else line.len - at
+        n: = 4096 if line.len - at > 4096 else line.len - at
         r.add(line.sub(at, n))
         at += n
         if data: = r.next(false)
             got = data.len
-    took: = sys.mono_us() - started
-    if got != line.len - "data: \n\n".len
-        panic("the event is read whole")
-    return took
+    defer arena: = Arena(4096)
+    verdict.check("the event is read whole, and each byte is searched at most once",
+        got == line.len - "data: \n\n".len && r.searched <= line.len,
+        arena.text().s("\{r.searched\} bytes searched of \{line.len\}").take())
 
 fn test_the_answer_text_grows_as_its_json_arrives()
     verdict.start("[ksagent] the answer's text is read from arguments cut anywhere")

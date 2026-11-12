@@ -23,9 +23,13 @@ function ksmdRules(ks) {
     const [kind, value] = rule;
     if (kind === "empty") return !v || v.length < 2 || v[0] === 0;
     if (!v || v.length < 2) return false;
-    if (v[0] === 1 && kind !== "equal") return kind === "below" ? v[1] < Number(value) : v[1] > Number(value);
+    // A number compares as a formula does, at the digits it shows (`ks.compareNumbers`).
+    if (v[0] === 1 && kind !== "equal") {
+      const order = ks.compareNumbers(v[1], Number(value));
+      return kind === "below" ? order < 0 : order > 0;
+    }
     if (kind !== "equal") return false;
-    if (v[0] === 1) return /^-?\d/.test(value) && v[1] === Number(value);
+    if (v[0] === 1) return /^-?\d/.test(value) && ks.compareNumbers(v[1], Number(value)) === 0;
     return v[0] === 2 && String(v[1]).toLowerCase() === value.toLowerCase();
   }
 

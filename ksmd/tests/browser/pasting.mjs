@@ -111,6 +111,25 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       check(!await offered(), "and offers no Paste options");
     },
 
+    async pasteIntoOpenCell() {
+      // An open cell takes pasted lines as it is, as Excel's cell does while it is edited.
+      await load(START);
+      await click(cellAt(2, 2));
+      await type("x");
+      await paste(false, "line one\r\nline two\r\n");
+      check(await box() === "xline one\nline two",
+        "an open cell takes pasted lines whole, its line breaks kept", JSON.stringify(await box()));
+      await paste(false, "1\t2\r\n3\t4\r\n");
+      check(await box() === "xline one\nline two1\t2\n3\t4",
+        "and a grid from a spreadsheet goes in as its text, not over the cells", JSON.stringify(await box()));
+      await press("Escape");
+      await click(cellAt(2, 2));
+      await paste(false, "1\t2\r\n3\t4\r\n");
+      await saves("a chosen cell that is not open still spreads the rows over cells",
+        rows("| |", "1 | 2 |").replace('| "z" | "3D" | 1 | 2 |\n', '| "z" | "3D" | 1 | 2 |\n| | | 3 | 4 |\n'));
+      check(!await offered(), "and offers no Paste options");
+    },
+
     async pasteOptions() {
       await load(START);
       await copied();

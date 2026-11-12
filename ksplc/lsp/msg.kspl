@@ -165,6 +165,15 @@ fn read_message(out: Str_builder$@): Void!Lsp_error //<
         else
             break
 
+fn report_broken_header() //<
+    //< Says on standard error that a message's header cannot be read, before the server ends with 1
+    //< **The editor would otherwise see a server that went away with no reason given.** Past such
+    //< a header, where the next message starts is not known, so nothing more can be read.
+    io.err()
+        .s("ksplc lsp: a message's header holds no valid Content-Length (a whole number from 1 to \
+            \{MAX_CONTENT_LENGTH\}). Where the next message starts is not known, so the server \
+            stops\n")
+
 priv fn read_content_length(): I32!Lsp_error
     defer $head: = Str_builder()
     // Read the whole bounded header so duplicate lengths are checked together. Count CR bytes

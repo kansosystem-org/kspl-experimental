@@ -284,7 +284,10 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         interface_texts.push(text)
         if compiler.sema.diags.counts.errors > errs
             throw .sema(.analysis_failed)
-    compiler.run_lower_and_codegen(out_path)!
+    // **Every output is committed once, after the last is written**, so a compile that fails or
+    // is killed partway leaves each older file whole (`Staged_outputs` in `pipeline.kspl`).
+    defer $staged: = pipeline.Staged_outputs()
+    compiler.run_lower_and_codegen(out_path, staged@)!
     // Lower and the code generation also report diagnostics with sema.err() (the retain/release
     // insertion reaching its depth limit, and the like). The errs check above comes before that. So
     // without checking the error count again here, it would exit with code 0 while printing errors.
@@ -293,18 +296,20 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         throw .sema(.analysis_failed)
     // It writes only after success. A failed compilation's dependency list would look like "the
     // latest" next time (`ksplc run`'s cache would reuse a broken build).
+    // Caution: **A deps file that fails to write fails the compile**, as the libs file does. A
+    // build tool reading an older one would take a changed import for unchanged.
     if deps_path.len > 0
-        tools_run.write_deps_file(deps_path, compiler.loaded_files)
+        if deps: = tools_run.deps_text(compiler.loaded_files)
+            staged.write_whole(deps_path, deps)!
     // Caution: **A libs file that fails to write fails the compile.** A build reading it would link
     // without the library and fail on undefined names, far from the cause.
     if libs_path.len > 0
-        tools_libs.write_libs_file(libs_path, compiler.root_file) catch e
-            throw .io(e)
+        staged.write_whole(libs_path, tools_libs.libs_text(compiler.root_file))!
     // Caution: **An interface that fails to write fails the compile**, as a libs file does.
     // Otherwise a caller would build against an interface left from an earlier run.
     for i in Range.asc(interface_texts.len)
-        io.write_file(base_core.config.interface_paths.get(i), interface_texts.get(i)) catch e
-            throw .io(e)
+        staged.write_whole(base_core.config.interface_paths.get(i), interface_texts.get(i))!
+    staged.commit()!
 
     end_time: = sys.mono_us()
 

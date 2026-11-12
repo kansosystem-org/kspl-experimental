@@ -19,8 +19,8 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
-import "std/subproc"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 priv const BASE: U8[] = "out/tmp/ksmd_tests" //< where each check makes its workspace
@@ -78,7 +78,7 @@ priv fn nested_and_repeated() //< a file included twice, `..` from a subfolder, 
         a.entries.get(13).instance != a.entries.get(6).instance, "")
     verdict.check("viewing an assembled document writes no file",
         snapshot(root, arena).equals(before), "")
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn functions_files() //< a functions clause's file is found as an image's is, and refused alike
     defer arena: = Arena(64 * 1024)
@@ -166,7 +166,7 @@ priv fn chains() //< a problem names its place and every include clause on the w
     verdict.check("a refusal inside an included source names its place there",
         inside.equals("bad.ksmd:3:1 < top.ksmd:6:1") &&
         a.problems.get(2).at.message.equals(heading), inside)
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn cycles()
     defer arena: = Arena(64 * 1024)
@@ -188,7 +188,7 @@ priv fn cycles()
     verdict.check("a file that includes itself is a cycle",
         own.problems.len == 1 && itself.equals("self.ksmd:3:1") &&
         own.problems.get(0).at.message.equals(cycle), itself)
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn path_refusals() //< each written path names its refusal; `..` may climb inside the root
     defer arena: = Arena(64 * 1024)
@@ -219,7 +219,7 @@ priv fn path_refusals() //< each written path names its refusal; `..` may climb 
         a.problems.get(want.len).at.message.equals(Refusal.outside.message()) &&
         a.entries.get(a.entries.len - 2).target.equals("ok.ksmd") &&
         a.entries.get(a.entries.len - 2).opens != NONE, view_of(a@, arena))
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn links() //< a link along a path is refused, whether it leads out of the root or not
     defer arena: = Arena(64 * 1024)
@@ -235,9 +235,9 @@ priv fn links() //< a link along a path is refused, whether it leads out of the 
     secret: = fs.join(away, "secret.ksmd", arena)
     inside: = fs.join(absolute(root, arena), "ok.ksmd", arena)
     made: =
-        made_link(secret, fs.join(root, "leak.ksmd", arena), arena) &&
-        made_link(away, fs.join(root, "away", arena), arena) &&
-        made_link(inside, fs.join(root, "alias.ksmd", arena), arena)
+        scratch.made_link(secret, fs.join(root, "leak.ksmd", arena), arena) &&
+        scratch.made_link(away, fs.join(root, "away", arena), arena) &&
+        scratch.made_link(inside, fs.join(root, "alias.ksmd", arena), arena)
     if !made
         verdict.skip_check("a link along an include or image path is refused",
             "a link cannot be made with `ln -s` in this environment")
@@ -250,8 +250,8 @@ priv fn links() //< a link along a path is refused, whether it leads out of the 
                 a.problems.get(i).at.message.equals(Refusal.link.message())
         verdict.check("a link along an include or image path is refused", ok,
             view_of(a@, arena))
-    remove_tree(root, arena)
-    remove_tree(outside, arena)
+    scratch.remove_tree(root, arena)
+    scratch.remove_tree(outside, arena)
 
 priv fn depth_limit() //< sixteen files on the stack open; a seventeenth is refused at its clause
     defer arena: = Arena(64 * 1024)
@@ -275,7 +275,7 @@ priv fn depth_limit() //< sixteen files on the stack open; a seventeenth is refu
         over.problems.get(0).at.message
         .equals("includes nest at most 16 files deep. Include this file from a file higher up"),
         problem_of(over@, 0, arena))
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn block_limit() //< 200,000 blocks with repeats counted; the include past it is refused
     defer arena: = Arena(1024 * 1024)
@@ -299,7 +299,7 @@ priv fn block_limit() //< 200,000 blocks with repeats counted; the include past 
         problem_of(over@, 0, arena).equals("over.ksmd:8:1") &&
         over.problems.get(0).at.message.starts_with("the assembled document exceeds 200,000 blocks"),
         problem_of(over@, 0, arena))
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn byte_limit() //< 64 MiB of source text with repeats counted, on a new file and a repeat
     defer arena: = Arena(1024 * 1024)
@@ -330,7 +330,7 @@ priv fn byte_limit() //< 64 MiB of source text with repeats counted, on a new fi
     verdict.check("a repeat that would pass 64 MiB is refused at its include",
         repeat
         .equals(arena.text().s("8 instances | eight.ksmd:24:1 ").s(limit).take()), repeat)
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn outcome(root: U8[], top: U8[], arena: Arena$@): U8[] //<
     //< How many instances a view holds, then each problem's place and message, as `arena`'s text.
@@ -395,7 +395,7 @@ priv fn saves() //< a save writes its own source alone, and the next view shows 
         refused = why == Refusal.outside
     verdict.check("a save to a path outside the workspace is refused",
         refused && !fs.exists(fs.join(root, "../escape.ksmd", arena)), "")
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn top_failures() //< only the opened document's own failure fails the assembly
     defer arena: = Arena(64 * 1024)
@@ -414,10 +414,10 @@ priv fn top_failures() //< only the opened document's own failure fails the asse
         default {}
         verdict.check("a document refused by its reader is refused at its place",
             where.equals("bad.ksmd:1:1"), where)
-        remove_tree(root, arena)
+        scratch.remove_tree(root, arena)
         return
     verdict.check("a document refused by its reader is refused at its place", false, "")
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn tables_per_source() //< a table name belongs to its file, so repeats declare nothing twice
     defer arena: = Arena(64 * 1024)
@@ -433,7 +433,7 @@ priv fn tables_per_source() //< a table name belongs to its file, so repeats dec
     verdict.check("two files and a repeat may each hold a table of one name",
         a.problems.len == 0 && a.instances.len == 3 &&
         part.doc.tables.get(0).name.equals("budget"), view_of(a@, arena))
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn text_rules() //< the rules a page applies by text agree with a folder's, links aside
     defer arena: = Arena(64 * 1024)
@@ -455,7 +455,7 @@ priv fn text_rules() //< the rules a page applies by text agree with a folder's,
     verdict.check("a '..' climbs from the holding file's folder, by text alone",
         by_text_from("a/b", "../c.ksmd", arena).equals("a/c.ksmd") &&
         by_text_from("", "x/y.ksmd", arena).equals("x/y.ksmd"), "")
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn by_text_from(folder: U8[], written: U8[], arena: Arena$@): U8[] //<
     //< The path `resolve_text` gives, or its refusal's message
@@ -506,7 +506,7 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
     verdict.check("one round per level of includes, each file asked for once",
         rounds == 4 && asked == 6,
         arena.text().s("\{rounds\} rounds, \{asked\} asked").take())
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 priv fn answer(ws: Workspace@, f: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
     //< What the local server answers for one path, held as the page holds it
@@ -547,7 +547,7 @@ priv fn leftover_part() //< a part left by an interrupted save is neither read n
         read(fs.join(root, "notes.ksmd", arena), arena).equals("%ksmd 2\n\nSaved text.\n") &&
         read(fs.join(root, part, arena), arena).equals("%ksmd 2\n\nNew text, cut sh"),
         snapshot_names(root, arena))
-    remove_tree(root, arena)
+    scratch.remove_tree(root, arena)
 
 // ==========================================
 // What the checks share: making and removing workspaces, and describing a view
@@ -569,26 +569,9 @@ priv fn read(path: U8[], arena: Arena$@): U8[] //< a file's bytes; empty where i
     return io.read_file(path, arena) catch
         return ""
 
-priv fn remove_tree(root: U8[], arena: Arena$@) //< removes a check's folder, entering no link
-    entries: = fs.read_dir(root, arena) catch
-        return
-    for name in entries
-        full: = fs.join(root, name, arena)
-        if fs.is_dir(full) && !fs.is_link(full)
-            remove_tree(full, arena)
-        else
-            fs.remove_path(full) catch {}
-    fs.remove_path(root) catch {}
-
 priv fn absolute(path: U8[], arena: Arena$@): U8[]
     return fs.absolute(path, arena) catch
         panic("the working folder cannot be read")
-
-priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //< `ln -s`; false where none
-    r: =
-        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 60000, 4096, arena) catch
-        return false
-    return r.exited_with(0) && fs.is_link(at)
 
 priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly that many bytes
     //< One code block, its lines at most 1,000 bytes long

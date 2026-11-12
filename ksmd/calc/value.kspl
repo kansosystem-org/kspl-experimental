@@ -1,9 +1,10 @@
 //< A value a formula calculates, and the arithmetic, comparisons and conversions between values
 //< `ksmd/calc/calc.kspl` reads a formula and calls these; they hold no state, so the same values
 //< always give the same result.
-import "ksmd/base/dates" { in_range }
+import "ksmd/base/dates" { BEFORE_DATES, in_range }
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/formula" { Token_kind }
+import "ksmd/model/format" { shows_same }
 import "std/mem" { Arena }
 import "std/str" // `text`
 import "std/strnum"
@@ -135,7 +136,9 @@ fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the k
     if key.kind != cell.kind
         return false
     switch key.kind
-    case .number, .date
+    case .number
+        return shows_same(key.number, cell.number)
+    case .date
         return key.number == cell.number
     case .text
         return compare_text(key.text, cell.text) == 0
@@ -222,8 +225,10 @@ priv fn as_text(v: Value): Value //< a value as one side of `&`: text, or an err
 
 fn compare(x: Value, y: Value, op: Token_kind): Value //<
     //< Two values compared; the left error comes first
-    //< An empty value takes the other side's kind: 0, empty text or false. Values of two kinds
-    //< are unequal, and ordering them is an error. Text compares without regard to case.
+    //< An empty value takes the other side's kind: 0, empty text, false or a day before every
+    //< date. Values of two kinds are unequal, and ordering them is an error. Two numbers are
+    //< equal when the 15 digits they show agree, so `0.1 + 0.2 = 0.3`. Text compares without
+    //< regard to case.
     if x.kind == .error
         return x
     if y.kind == .error
@@ -236,7 +241,10 @@ fn compare(x: Value, y: Value, op: Token_kind): Value //<
         return Value.because(.wrong_kind, .kinds_ordered, "", -1)
     $order: I32 = 0
     switch a.kind
-    case .number, .date
+    case .number
+        order =
+            0 if shows_same(a.number, b.number) else -1 if a.number < b.number else 1
+    case .date
         order = -1 if a.number < b.number else 1 if a.number > b.number else 0
     case .text
         order = compare_text(a.text, b.text)
@@ -258,6 +266,8 @@ fn compare(x: Value, y: Value, op: Token_kind): Value //<
     return boolean(order >= 0)
 
 fn like(v: Value, other: Value): Value //< an empty value as the zero of the other's kind
+    //< Among dates that is a day before the first, so an empty due date is earlier than every
+    //< date, as an empty cell is 0 among numbers.
     if v.kind != .empty
         return v
     switch other.kind
@@ -267,7 +277,9 @@ fn like(v: Value, other: Value): Value //< an empty value as the zero of the oth
         return text("")
     case .boolean
         return boolean(false)
-    case .empty, .error, .date {}
+    case .date
+        return date_value(BEFORE_DATES)
+    case .empty, .error {}
     return v
 
 priv fn date_arithmetic(x: Value, y: Value, op: Token_kind): Value //<

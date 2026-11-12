@@ -157,6 +157,5 @@ function ksmdFigures(ks) {
   });
 
   ks.status.also(update);
-  ks.figures = { update };
   update();
 }

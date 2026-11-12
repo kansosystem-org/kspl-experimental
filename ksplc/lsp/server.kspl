@@ -93,14 +93,14 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     for
         got: =
             worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, WORKER_TIMEOUT_MS) catch e
-            switch e
-            case .timed_out
-                ok = .hang
-            case .closed
-                ok = .exited
-            case .failed
-                ok = .read_error
-            break
+                switch e
+                case .timed_out
+                    ok = .hang
+                case .closed
+                    ok = .exited
+                case .failed
+                    ok = .read_error
+                break
         acc.s(U8$[]::{ .ptr = rbuf, .len = got })
         search_from: = 0 if scanned < overlap else scanned - overlap
         idx: = lsp_msg.marker_at(acc.slice(), search_from, tag)
@@ -125,7 +125,7 @@ priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
     cmd_args: = sys.args()
     child: =
         subproc.spawn_piped_shared_err(U8[][]::{ cmd_args[0], "lsp-worker" }, "") catch
-        return .none
+            return .none
     return .some(child)
 
 priv fn exchange(w: subproc.Piped_child?@, frame: U8[], arena: Arena$@): Worker_end //<
@@ -346,6 +346,9 @@ priv struct Editor_reader //< the thread reading the editor's messages, and what
         //< The reader closes it at `exit` or the end of input; the supervisor closes it when it
         //< stops taking messages.
     reading: thread.Thread
+    broken: Bool //<
+        //< Whether the reading stopped at a header it could not read, so the server ends with 1
+        //< Set before the reader closes `inbox`, so the supervisor reads it once that is closed.
 
 priv enum Inbound //< what the editor has for the supervisor now
     message(body: U8[]) //< the next message, in the order they came
@@ -365,8 +368,11 @@ extern fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
         arena.restore(base)
         $body: = Str_builder()
         $got: = true
-        lsp_msg.read_message(body@) catch
+        lsp_msg.read_message(body@) catch e
             got = false
+            if e == .format_error
+                lsp_msg.report_broken_header()
+                r.broken = true
         // A cheap look first: only a body naming `exit` is parsed here.
         $last: = !got
         if got && body.slice().find_str("\"exit\"").is_some()
@@ -394,7 +400,7 @@ priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
     inbox: = channel.Channel<|Str_builder|>(INBOX_CAPACITY, null) catch
         return .none
-    r: = mem.new(Editor_reader::{ .inbox = inbox })
+    r: = mem.new(Editor_reader::{ .inbox = inbox, .broken = false })
     r.reading = thread.Thread.spawn<|Editor_reader|>(ksplc_lsp_read_editor, r) catch
         r.let_go()
         return .none
@@ -504,3 +510,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
             break
 
     stop_worker(worker)
+    // **A header that could not be read ends the server with 1**, said on standard error by the
+    // reader. The reading thread has stopped by then, as it closed the channel.
+    if reader.broken
+        sys.exit(1)

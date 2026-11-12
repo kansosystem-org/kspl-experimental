@@ -7,6 +7,7 @@
 //< (`round_places`).
 import "std/chars"
 import "std/ds"
+import "std/math"
 import "std/str" { Str_builder }
 import "std/strnum"
 
@@ -167,6 +168,21 @@ fn round_digits(n: F64, digits: Sz): F64? //<
     //< A finite number rounded to `digits` significant digits as `show` rounds; none if too large
     d: = digits_of(-n if n < 0.0 else n)
     return round_places(n, digits - d.point)
+
+fn shows_same(a: F64, b: F64): Bool //<
+    //< Whether two finite numbers agree in the `SHOWN_DIGITS` digits they show
+    //< So `0.1 + 0.2` and `0.3`, which show alike, are the same; a comparison and a lookup's key
+    //< use this. Two numbers that agree there are at most 1e-13 apart relative to the larger, so
+    //< the digits are rounded only for those.
+    if a == b
+        return true
+    if math.abs(a - b) > math.max(math.abs(a), math.abs(b)) * 1.0e-13
+        return false
+    x: = round_digits(a, SHOWN_DIGITS) catch
+        return false
+    y: = round_digits(b, SHOWN_DIGITS) catch
+        return false
+    return x == y
 
 fn round_places(n: F64, places: Sz): F64? //<
     //< A finite number rounded to `places` decimal places as `show` rounds; none if too large

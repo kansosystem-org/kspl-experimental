@@ -6,60 +6,36 @@ import "kssrv/tests/client"
 import "std/ds"
 import "std/mem" { Arena }
 import "std/str"
-import "std/sys"
 import "std/verdict"
 
 priv const KEPT_ROUNDS: Sz = 10 //< how many answers one kept connection asks for in turn
-priv const KEPT_FILE_RATIO: I64 = 50I64 //<
-    //< how many times the same files on new connections they may take
-    //< **Far above the noise and far below the fault.** On a shared CI runner the kept side took
-    //< 5.4 times the new connections with no fault. A head sent alone waits about 40 ms for the
-    //< client's delayed ACK: 394 ms against 1.7 ms here, over 200 times.
-priv const KEPT_TRIES: Sz = 3 //< how many times each side is measured; the fastest counts
 
-priv fn kept_round_us(port: I32, target: U8[], body: U8[], whole: Bool$@, arena: Arena$@):
-    I64!client.Http_end //<
-        //< How long `KEPT_ROUNDS` answers for `target` take on one kept connection [us]
-        //< `whole` turns false if one answer is not `body` with a 200.
+priv fn writes_now(port: I32, arena: Arena$@): I64!client.Http_end //<
+    //< The server's writes to sockets so far (`writes` in `/api/status`); -1 where not told
+    st: = client.get(port, "/api/status", "", arena)!
+    return client.doc_of(st, arena).get("writes").as_int64().unwrap_or(-1I64)
+
+priv fn kept_round(port: I32, whole: Bool$@, arena: Arena$@): Void!client.Http_end //<
+    //< Asks for `KEPT_ROUNDS` files in turn on one kept connection
+    //< `whole` turns false if one answer is not the file with a 200.
     defer $c: = client.Conn.open(port)!
-    started: = sys.mono_us()
     for _i in Range.asc(KEPT_ROUNDS)
-        c.send(client.raw("GET", target, "", "", arena))!
+        c.send(client.raw("GET", "/sub/one.txt", "", "", arena))!
         got: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
-        if got.status != 200 || body.len > 0 && !got.body.equals(body)
+        if got.status != 200 || !got.body.equals("one\n")
             whole$ = false
-    return sys.mono_us() - started
-
-priv fn fresh_round_us(port: I32, target: U8[], body: U8[], whole: Bool$@, arena: Arena$@):
-    I64!client.Http_end //<
-        //< How long `KEPT_ROUNDS` answers for `target` take, each on a connection of its own [us]
-        //< **A new connection's first answer waits for no ACK**: nothing it sent is unacknowledged
-        //< yet. So it pays the file's cost alone, which the kept connection pays too.
-    started: = sys.mono_us()
-    for _i in Range.asc(KEPT_ROUNDS)
-        got: = client.get(port, target, "Connection: close\r\n", arena)!
-        if got.status != 200 || !got.body.equals(body)
-            whole$ = false
-    return sys.mono_us() - started
 
 fn file_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< Files asked for one after another on one kept connection come at once, not 40 ms apart
-    //< **Measured against the same files, each on a new connection, in the same run.** Both pay
-    //< what opening a file costs, which on Windows is many times an answer held in memory; only
-    //< the kept connection can meet the delayed ACK.
-    //< **The fastest of a few tries counts**: a busy machine only ever slows one, and the fault
-    //< slows every one.
+    //< **The server's writes are counted, not the time taken.** A head written alone waits for the
+    //< client's delayed ACK, so each answer must go out in one write. A count is the same on every
+    //< machine; a time on a busy runner moved 5 times with no fault.
     $whole: = true
-    $fresh_us: I64 = -1
-    $kept_us: I64 = -1
-    for _try in Range.asc(KEPT_TRIES)
-        f: = fresh_round_us(port, "/sub/one.txt", "one\n", whole@, arena)!
-        k: = kept_round_us(port, "/sub/one.txt", "one\n", whole@, arena)!
-        if fresh_us < 0 || f < fresh_us
-            fresh_us = f
-        if kept_us < 0 || k < kept_us
-            kept_us = k
+    before: = writes_now(port, arena)!
+    kept_round(port, whole@, arena)!
+    after: = writes_now(port, arena)!
     verdict.check("files asked for in turn each come whole", whole, "")
-    verdict.check("files asked for in turn on one connection come as fast as on new connections",
-        kept_us <= (fresh_us + 1I64) * KEPT_FILE_RATIO,
-        arena.text().s("one connection \{kept_us\} us, new connections \{fresh_us\} us").take())
+    // **One more write is the answer that told `before`**: the count was read before it went.
+    verdict.check("each file asked for in turn on one connection goes out in one write",
+        before >= 0I64 && after - before == I64::KEPT_ROUNDS + 1I64,
+        arena.text().s("\{after - before\} writes for \{KEPT_ROUNDS\} files").take())

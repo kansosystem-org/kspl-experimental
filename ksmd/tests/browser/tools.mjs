@@ -2,7 +2,7 @@
 // browser's own input events, as `main.mjs` drives the rest, and checked by the saved source and
 // its undo.
 // `tools(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { ALT, CTRL, H, SHIFT, cellAt, check } from "./drive.mjs";
+import { ALT, CTRL, H, SHIFT, cellAt, check, rowsShown } from "./drive.mjs";
 
 
 export function tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
@@ -405,6 +405,23 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         if (value) await js(`document.querySelector('.rule-panel .rule-value').value = '${value}'`);
         await click(".rule-panel .rule-apply");
         check(await js("ksmd.source()") === table(to) && await text("#status") === "", what, await text("#status"));
+      }
+      // A rule and a filter compare a number at the 15 digits it shows, as a formula's `=` does:
+      // =0.1+0.2 shows 0.3 and is 0.3, though its last bits are not.
+      const sums = (attrs) => `${H}:::table name="t"${attrs}\n| "item" | "n" |\n| "Pens" | =0.1+0.2 |\n` +
+        '| "Ink" | 0.4 |\n:::\n';
+      const [red, none] = ["rgb(255, 199, 206)", "rgba(0, 0, 0, 0)"];
+      for (const [rule, want, what] of [["=0.3", [red, none], "a rule Equal to 0.3 colours =0.1+0.2"],
+        ["<0.3", [none, none], "a rule Below 0.3 leaves it alone"],
+        [">0.3", [none, red], "and a rule Above 0.3 colours only the greater number"]]) {
+        await load(sums(` rules=",${rule};fill:#ffc7ce"`));
+        const got = [await fill(0), await fill(1)];
+        check(got.join() === want.join(), what, got.join(" "));
+      }
+      for (const [filter, want, what] of [["above:0.3", "01", "a filter Is greater than 0.3 hides =0.1+0.2"],
+        ["below:0.3", "00", "and Is less than 0.3 hides it too"]]) {
+        await load(sums(` filter=",${filter}"`));
+        check(await rowsShown(js) === want, what, await rowsShown(js));
       }
     },
 

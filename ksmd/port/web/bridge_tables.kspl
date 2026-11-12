@@ -11,7 +11,7 @@ import "ksmd/calc/value"
 import "ksmd/edit/editor" { Refused }
 import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_tables" { Copied_at, Group_edit, Table_edit }
-import "ksmd/model/format" { currency_of, format_of, show_plain, write_format }
+import "ksmd/model/format" { currency_of, format_of, show_plain, shows_same, write_format }
 import "ksmd/model/look" { Look_part }
 import "ksmd/model/model" { MAX_ROWS }
 import "ksmd/port/web/bridge_session" { begin, done, ed, ensure, full, number, out, refused, result,
@@ -472,6 +472,14 @@ extern fn ksmd_web_show_number(n: F64): Sz //<
     else
         show_plain(n, out)
     return out.slice().len
+
+extern fn ksmd_web_compare_numbers(a: F64, b: F64): I32 //<
+    //< 0 where two finite numbers show the same 15 digits, else -1 where `a` is less and 1
+    //< **The page compares no numbers itself**: a colour rule and a filter then agree with a
+    //< formula's `=` and `<` (`shows_same` in `ksmd/model/format.kspl`).
+    if shows_same(a, b)
+        return 0
+    return -1 if a < b else 1
 
 extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
     //< The text a cell shows to edit, written to the output; empty outside a table

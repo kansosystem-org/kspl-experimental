@@ -1,25 +1,26 @@
 //< The libraries a program names (`##link`)
-//< A compile writes them with `--emit-libs=` (`write_libs_file`), and `ksplc run` and `ksplc build`
+//< A compile writes them with `--emit-libs=` (`libs_text`), and `ksplc run` and `ksplc build`
 //< read them back for the link (`append_named_libs`). Split from `run.kspl` for length.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as _base_ast_ext // `link_name`
+import "ksplc/base/core" as base_core
 import "std/chars" // `trim_spaces`
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-fn write_libs_file(libs_path: U8[], root: Ast_node$@): Void!io.Io_error //<
-    //< It writes the libraries the kept `##link`s name into the libs file (`--emit-libs=`)
+fn libs_text(root: Ast_node$@): U8[] //<
+    //< The libraries the kept `##link`s name, as the libs file holds them (`--emit-libs=`)
     //< One line of `-l<name>` words (the shape `info link-libs` answers in), empty where none is
-    //< named; the reader is append_named_libs below.
+    //< named; the reader is append_named_libs below. The compile writes it with its other outputs.
     defer $names: = List<|U8[]|>(null)
     append_program_libs(root, names@)
-    defer $out: = Str_builder()
+    out: = base_core.arena.text()
     for i in Range.asc(names.len)
         out.s(" " if i > 0 else "").s("-l").s(names.get(i))
     out.c('\n')
-    io.write_file(libs_path, out.slice())!
+    return out.take()
 
 fn append_program_libs(root: Ast_node$@, names: List<|U8[]|>$@) //<
     //< It appends the libraries the kept `##link`s name, in the order a link needs them

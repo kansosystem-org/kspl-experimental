@@ -18,8 +18,8 @@ import "std/json"
 import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/verdict"
+import "tests/support/docref_make" as make_targets
 import "tests/support/harness"
-import "tests/support/harness_text" as htext
 
 priv const PROBE_STEM: U8[] = "probe file" //< the name used for `make debug-file`'s check
     //< Caution: **Include a space.** make's `$(notdir)` / `$(basename)` split on whitespace, so a
@@ -125,28 +125,6 @@ priv fn arg_text(a: json.Value): U8[] //< one argument's text, written bare or q
     return (a.as_str().unwrap_or("") if !is_obj(a)
         else a.get("value").as_str().unwrap_or(""))
 
-priv const SUITE_LISTS: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
-    //< The files whose `SUITES` / `LINUX_SUITES` name what `make test-<name>` runs
-
-priv fn typable(arena: Arena$@): List<|U8[]|> //<
-    //< What can be typed after `make`: `make help`'s listing, and one suite's `test-<name>`
-    //< **Not `make -n <target>`**: the catch-all rules (`%:`, `test-%`) answer 0 for any name.
-    $out: = List<|U8[]|>(arena)
-    help: = harness.make(U8[][]::{ "LOGGING=1", "--no-print-directory", "help" })
-    for line in help.out.lines(arena)
-        if !line.starts_with("  make ")
-            continue
-        rest: = line.sub_from(7)
-        name: = rest.sub(0, rest.find_char(' ').unwrap_or(rest.len))
-        if !name.ends_with("*")
-            out.push(name)
-    for rel in SUITE_LISTS
-        text: = harness.read_under_root(rel)
-        for head in U8[][]::{ "SUITES := ", "LINUX_SUITES := " }
-            for s in htext.make_list(text, head, arena)
-                out.push(arena.text().s("test-").s(s).take())
-    return out
-
 priv fn command_line(task: json.Value, arena: Arena$@): U8[] //< `command` and its `args`, by spaces
     //< A task may name make alone and its target among `args` (run with no shell between).
     line: = arena.text().s(task.get("command").as_str().unwrap_or(""))
@@ -158,18 +136,19 @@ priv const UNTYPABLE: U8[] = "make no-such-target V=1" //< a task naming no targ
 
 priv fn check_make_targets(tasks: json.Value, arena: Arena$@) //<
     //< Checks that each `make <target>` in `tasks.json` names a target that really exists
-    names: = typable(arena)
+    $known: = make_targets.asked(arena)
     wrong: = parse_make_cmd(UNTYPABLE, arena)
     verdict.check("a task naming no target is refused",
-        wrong.found && names.len > 0 && !names.contains(wrong.target), wrong.target)
+        wrong.found && !known.makes_at_root(wrong.target, arena) &&
+        known.makes_at_root("help", arena), wrong.target)
     for t in tasks.get("tasks").arr_list(arena)
         label: = t.get("label").as_str().unwrap_or("")
         cmd: = parse_make_cmd(command_line(t, arena), arena)
         if !cmd.found
             continue
         name: = arena.text().s("tasks.json[\{label\}]: 'make \{cmd.target\}' really exists").take()
-        verdict.check(name, names.contains(cmd.target),
-            "neither `make help` lists it nor is it a suite's `test-<name>`")
+        verdict.check(name, known.makes_at_root(cmd.target, arena),
+            "make's own rules hold no such target (`tests/support/docref_make.kspl` asks them)")
 
 priv fn check_launch(launch: json.Value, labels: List<|U8[]|>@, root: U8[], arena: Arena$@) //<
     //< `launch.json`'s preLaunchTask and initCommands

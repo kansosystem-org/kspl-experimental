@@ -1,5 +1,5 @@
 //< The layers a model is composed of, built on `ksai/tensor`'s basic operations
-//< `Linear`, `Rms_norm`, `Self_attention` and `Gqa_attention`, `Embedding`, `Swiglu_mlp`, and the
+//< `Linear`, `Rms_norm`, `Mlp`, `Self_attention`, `Gqa_cache`, `Embedding`, and the
 //< `Transformer_block` gathering them into one block. **Only the inference path is here**; the
 //< backward passes are split into `ksai/nn_grad`, `ksai/attention_train` and `ksai/block_train`,
 //< so a binary that only runs inference carries no training code. Read it after `ksai/tensor`.
@@ -164,7 +164,7 @@ impl<|T|> Self_attention<|T|>
         return r.forward_lora(x, start_pos, null, null)
 
     pub fn forward_lora( //< the same, with fine-tuned adapters added at inference
-        //< The adapters go on the Q and V projections' outputs, the same place `peft` puts them.
+        //< The adapters go on the Q and V projections' outputs, the two the LoRA paper adapts.
         r: Self$@, x: Tensor<|T|>, //< the input for this step
         start_pos: Sz, //< this input's position in the sequence
         q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
@@ -292,38 +292,10 @@ impl<|T|> Embedding<|T|>
             (out.data + i)$ = (r.weight.data + offset + i)$
         return out
 // ---------------------------------------------------------
-// The SwiGLU MLP (the Llama/Qwen family): down(silu(gate(x)) ⊙ up(x))
-// Unlike Mlp (fc1→SiLU→fc2): three matrices, gate/up/down, with no bias.
-// ---------------------------------------------------------
-pub struct Swiglu_mlp<|T|> //< the Llama/Qwen feed-forward part: three matrices and no bias
-    pub gate: Linear<|T|> //< `[dim, hidden]`, the side SiLU is applied to
-    pub up: Linear<|T|> //< `[dim, hidden]`, the side multiplied with it
-    pub down: Linear<|T|> //< `[hidden, dim]`, narrowing back to the model's width
-
-impl<|T|> Swiglu_mlp<|T|>
-    pub fn new( //< the three matrices of these shapes
-        dim: Sz, //< the input and output width
-        hidden: Sz, //< the hidden width in between
-        arena: Arena$@, //< the arena the weights are allocated from
-    ): Swiglu_mlp<|T|>
-        return Swiglu_mlp<|T|>::{ .gate = Linear<|T|>(dim, hidden, arena),
-            .up = Linear<|T|>(dim, hidden, arena),
-            .down = Linear<|T|>(hidden, dim, arena) }
-
-    pub fn forward( //< `down(silu(gate(x)) * up(x))`
-        r: Self$@,
-        x: Tensor<|T|>, //< the input
-    ): Tensor<|T|>
-        $g: = r.gate.forward(x)
-        gs: = g.silu()
-        u: = r.up.forward(x)
-        gu: = gs * u
-        return r.down.forward(gu)
-// ---------------------------------------------------------
 // Grouped-Query Attention (the Llama/Qwen family): Q has n_heads, K/V n_kv_heads (a divisor of
 // n_heads). RoPE is NeoX-style per head_dim with a variable theta. `Gqa_cache` holds the keys and
-// values and attends over them, for every model whose projections differ, such as one on
-// quantized weights (`ksai/qwen`). `Gqa_attention` adds Qwen2's projections: Q/K/V carry a bias.
+// values and attends over them. The model owns the projections around it, as `ksai/qwen` does on
+// quantized weights.
 // ---------------------------------------------------------
 pub struct Gqa_cache<|T|> //< the keys and values of every position so far, and attention over them
     pub n_heads: Sz //< how many query heads
@@ -361,10 +333,10 @@ impl<|T|> Gqa_cache<|T|>
         // Caution: **Refuse heads that do not share out evenly.** Uneven, the last query heads read
         // a key head past the cache's row; with no key head, `attend` divides by zero.
         if n_kv_heads <= 0 || n_heads <= 0 || n_heads % n_kv_heads != 0
-            panic("Gqa_attention: n_kv_heads must be positive and divide n_heads")
+            panic("Gqa_cache: n_kv_heads must be positive and divide n_heads")
         // RoPE pairs the two halves of what it turns, so an odd or empty part cannot be rotated.
         if head_dim <= 0 || rope_dims <= 0 || rope_dims % 2 != 0 || rope_dims > head_dim
-            panic("Gqa_attention: rope_dims must be even, positive and at most head_dim")
+            panic("Gqa_cache: rope_dims must be even, positive and at most head_dim")
         cache_shape: Sz[2] = ::{ max_seq_len, n_kv_heads * head_dim }
         return Gqa_cache<|T|>::{ .n_heads = n_heads, .n_kv_heads = n_kv_heads, .head_dim = head_dim,
             .rope_dims = rope_dims, .rope_theta = rope_theta,
@@ -387,17 +359,17 @@ impl<|T|> Gqa_cache<|T|>
         rows: = q.shape[0] if q.shape.len == 2 else 0
         if q.shape.len != 2 || q.shape[1] != q_dim || !k.holds_matrix(rows, kv_dim) ||
             !v.holds_matrix(rows, kv_dim)
-            panic("Gqa_attention: q, k and v are not one row each per token")
+            panic("Gqa_cache: q, k and v are not one row each per token")
         // Caution: **Stop past the cache's end**: a row written there would land in other memory.
         if start_pos < 0 || rows > r.k_cache.shape[0] - start_pos
-            panic("Gqa_attention: the positions run past the cache's end")
+            panic("Gqa_cache: the positions run past the cache's end")
         arena: = q.arena
         q_rot: =
             q.apply_rope_neox(start_pos, r.head_dim, r.rope_dims, r.rope_theta)
-            catch panic("Gqa_attention: apply_rope_neox failed")
+            catch panic("Gqa_cache: apply_rope_neox failed")
         k_rot: =
             k.apply_rope_neox(start_pos, r.head_dim, r.rope_dims, r.rope_theta)
-            catch panic("Gqa_attention: apply_rope_neox failed")
+            catch panic("Gqa_cache: apply_rope_neox failed")
         for i in Range.asc(rows * kv_dim)
             (r.k_cache.data + start_pos * kv_dim + i)$ = (k_rot.data + i)$
             (r.v_cache.data + start_pos * kv_dim + i)$ = (v.data + i)$
@@ -490,49 +462,3 @@ priv fn attend_heads<|T|>(arg: Void$@, first: Sz, last: Sz) //< key heads [first
                     // `make test-simd` sees this loop vectorize.
                     for d in Range.asc(j.head_dim)
                         (o + d)$ = (o + d)$ + w * (v_row + d)$
-
-pub struct Gqa_attention<|T|> //< grouped-query attention: several query heads share one key head
-    pub wq: Linear<|T|> //< `[dim, n_heads * head_dim]`, the queries
-    pub wk: Linear<|T|> //< `[dim, n_kv_heads * head_dim]`, the keys, of which there are fewer
-    pub wv: Linear<|T|> //< the values, shaped as the keys are
-    pub wo: Linear<|T|> //< `[n_heads * head_dim, dim]`, the output projection
-    pub cache: Gqa_cache<|T|> //< the keys and values so far, and the attention over them
-
-impl<|T|> Gqa_attention<|T|>
-    pub fn new( //< the four projections, and a cache long enough for the sequence
-        dim: Sz, //< the model's input and output width
-        n_heads: Sz, //< how many query heads
-        n_kv_heads: Sz, //< how many key and value heads; it must divide `n_heads`
-        head_dim: Sz, //< how wide one head is
-        max_seq_len: Sz, //< the longest sequence the cache must hold
-        rope_theta: F64, //< the base of the positional rotation (RoPE)
-        arena: Arena$@): Gqa_attention<|T|>
-        cache: =
-            Gqa_cache<|T|>(n_heads, n_kv_heads, head_dim, head_dim, max_seq_len, rope_theta, arena)
-        q_dim: = n_heads * head_dim
-        kv_dim: = n_kv_heads * head_dim
-        return Gqa_attention<|T|>::{ .wq = Linear<|T|>(dim, q_dim, arena),
-            .wk = Linear<|T|>(dim, kv_dim, arena), .wv = Linear<|T|>(dim, kv_dim, arena),
-            .wo = Linear<|T|>(q_dim, dim, arena), .cache = cache }
-
-    pub fn forward( //< attention over everything cached so far, these inputs included
-        r: Self$@,
-        x: Tensor<|T|>, //< the input, one row per token
-        start_pos: Sz, //< the first row's position in the sequence, so the cache and RoPE line up
-    ): Tensor<|T|>
-        return r.forward_lora(x, start_pos, null, null)
-
-    pub fn forward_lora( //< the same, with fine-tuned adapters added at inference
-        //< The adapters go on the Q and V projection outputs, before RoPE, where `peft` puts them.
-        r: Self$@, x: Tensor<|T|>, //< the input, one row per token
-        start_pos: Sz, //< the first row's position in the sequence
-        q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
-        v_lora: lora.Lora<|T|>$@): Tensor<|T|>
-        $q: = r.wq.forward(x)
-        if q_lora != null
-            q = q + q_lora.forward(x)
-        k: = r.wk.forward(x)
-        $v: = r.wv.forward(x)
-        if v_lora != null
-            v = v + v_lora.forward(x)
-        return r.wo.forward(r.cache.attend(q, k, v, start_pos))

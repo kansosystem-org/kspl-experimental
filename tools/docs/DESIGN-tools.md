@@ -188,10 +188,10 @@ ksmd needs a workspace that holds the document's includes, and one port for it o
 
 | Decision | Why |
 | :-- | :-- |
-| **A leaf starts the server and `ksagent watch` together** | ksagent and kssrv do not know each other ("Reference direction between documents" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md)), and a page may start no program |
+| **A leaf starts the server and `ksagent watch` together** | kssrv does not know ksagent, and ksagent takes only kssrv's browser client from it ("Reference direction between documents" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md)). A page may start no program |
 | **The chat opener keeps its own note** (`ksagent_chat.state`) | A ksmd server and a chat server for one folder serve different pages, so neither may be reused for the other |
 | **A new chat server looks for a free port from 30000** | ksmd's workspaces take 20000 to 29999, and the chat page keeps no draft, so its port needs not stay the same |
-| **The page is copied beside the server** (`out/ksagent/chat.html`) | The page is served from outside the root, as ksmd's is. It is one file, so the copy is all its build |
+| **The page is built beside the server** (`out/ksagent/chat.html`) | The page is served from outside the root, as ksmd's is. The build puts kssrv's client for the local server inside it, so it is one file, as ksmd's page is |
 | **With `--show`, the server it started stops when `ksagent watch` ends** | A server started for `--show` has no idle stop, so it would outlive the run |
 
 **What it gives up**: the browser check drives it with `--show` (`make test-ksagent-chat`), so no gate checks how it starts a browser, as for ksmd's opener.

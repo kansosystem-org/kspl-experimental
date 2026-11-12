@@ -13,7 +13,6 @@
 "use strict";
 
 function ksmdDiagram(ks) {
-  const SVG = "http://www.w3.org/2000/svg";
   const SHAPES = [["box", "Box"], ["diamond", "Diamond"], ["start", "Start"], ["end", "End"],
     ["group", "Group"], ["note", "Note"]];
   const LINKS = [["arrow", "Arrow"], ["line", "Line"]];
@@ -39,12 +38,7 @@ function ksmdDiagram(ks) {
   let colour = "";
   let fill = "";
 
-  const node = (tag, attrs, text) => {
-    const el = document.createElementNS(SVG, tag);
-    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-    if (text !== undefined) el.textContent = text;
-    return el;
-  };
+  const node = ks.svg;
   const blockOf = (fig) => ks.view.blocks().indexOf(fig);
   const editable = (fig) => !ks.readOnly && !!fig.querySelector(":scope > .diagram-tools");
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));

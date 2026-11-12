@@ -222,7 +222,7 @@ priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, s
     real_id: = state.sema.env.get_real_type(ctx.type_id)
     enum_def: sema_type_def.Enum_def$@ =
         state.sema.env.get_enum_def(state.sema.env.get_str(real_id)) catch
-        return
+            return
     variant_def: sema_type_def.Enum_variant$@ = enum_def.get_variant(id_n.text) catch
         return
     if variant_def.payload_fields.len > 0
@@ -418,8 +418,9 @@ priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
             classify_def_fallback(state.sema, path, ctx.def_node, ctx)
             spelt_from_def = ctx.fallback_str.len > 0
         if ctx.type_id == 0 && ctx.fallback_str.len == 0 &&
-            (target_node.kind_id == .k_identifier || target_node.kind_id == .k_primitive_type)
-            classify_identifier(state, path, target_node, ctx)
+            (target_node.kind_id == .k_identifier || target_node.kind_id == .k_primitive_type) &&
+            !classify_identifier(state, path, target_node, ctx)
+            return
     // **A keyword answers only through what it stands for** (the `const` of a declaration, the
     // declaration). Its spelling is no name, so the walk would label the enclosing declaration's
     // type with it: `priv` read `type priv`.
@@ -555,14 +556,19 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
         set_ident_fallback(d, ctx)
     default {}
 priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@, ctx: Hover_ctx$@) //<
+    target_node: Ast_node$@, ctx: Hover_ctx$@): Bool //<
         //< How an identifier or primitive type name resolves (as a type, a symbol, or unresolved)
+        //< False for a name used as a value that names nothing: **the hover then shows nothing**.
+        //< Its own name, or a type borrowed from the expression around it, would read as a
+        //< declaration that does not exist (`qq: qq`, or `b: I32` from `a + b`).
     t_id: = state.sema.env.type_to_id.get(target_node.text).unwrap_or(0)
     if t_id != 0
         ctx.type_id = t_id
         ctx.shape = .type_head
-        return
+        return true
     sym: = state.sema.symtab.resolve(target_node.text).unwrap_or(null)
+    if (sym == null || sym.node == null) && is_value_use(path, target_node)
+        return false
     if sym != null && sym.node != null
         if sym.node.kind_id == .k_decl_struct
             ctx.shape = .type_head
@@ -574,6 +580,12 @@ priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     else
         ctx.shape = unresolved_shape(path, target_node)
     ctx.fallback_str.s(target_node.text)
+    return true
+priv fn is_value_use(path: List<|Ast_node$@|>@, target_node: Ast_node@): Bool //<
+    //< Whether the name is written as a value (`a` in `a + 1`), not as a declaration's own name
+    if path.len < 2 || target_node.kind_id != .k_identifier
+        return false
+    return path.get(path.len - 2).kind_id == .k_expr_path
 priv fn unresolved_shape(path: List<|Ast_node$@|>@, target_node: Ast_node@): Hover_shape //<
     //< It guesses an unresolved identifier's shape from the node that precedes it
     //< A name at the head of a postfix expression is taken as a file (the `fs` of `fs.read`).

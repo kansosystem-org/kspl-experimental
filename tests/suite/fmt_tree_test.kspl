@@ -3,6 +3,9 @@
 //< formatting gate. At a narrow width its output must read back and come out of a second pass
 //< unchanged. **It reads the whole tree**, so it lives here; ksplc's own `fmt` and `notation`
 //< suites test the formatter and the notation themselves.
+//< **The narrow pass runs only when the change reaches `ksplc/`**, and always in GitHub's jobs
+//< (`change_reaches` in `tools/ci_gates.kspl`). It is two thirds of the suite's time, and only a
+//< change to the formatter or the reader can break it. Left out, it is a `SKIP` line.
 //< Caution: **The files run as batches** (`ksplc_harness.run_all`); one process at a time is far
 //< too slow.
 //< Its failure case: `tests/suite/fmt_tree_test.kspl#PARTINGS`, texts that part on a line.
@@ -16,6 +19,7 @@ import "std/str"
 import "std/subproc"
 import "std/verdict"
 import "tests/support/harness"
+import "tools/ci_gates"
 
 priv fn fmt_job(rel: U8[], style: U8[], arena: Arena$@): subproc.Job //<
     //< The child that formats `rel` to its output, under `style` (`--style=`) unless it is empty
@@ -122,7 +126,16 @@ priv fn narrow_name(rels: List<|U8[]|>@, k: Sz, arena: Arena$@): U8[] //<
     //< How a finding names the `k`th source: its path and the style it was formatted at
     return arena.text().s(rels.get(k)).s(" at `").s(narrow_style(k, arena)).s("`").take()
 
+priv const NARROW_CHECK: U8[] = "a source formatted at a narrow width reads back, and stays put"
+
+priv const NARROW_FOLDER: U8[] = "ksplc/" //< where a change can break the narrow pass
+
 priv fn check_narrow(rels: List<|U8[]|>@, arena: Arena$@)
+    if !ci_gates.change_reaches(NARROW_FOLDER, arena)
+        verdict.skip_check(NARROW_CHECK,
+            "the change reaches no file under `ksplc/`, where the formatter and the reader are; \
+                GitHub's jobs always run it")
+        return
     $bad: = List<|U8[]|>(arena)
     $jobs: = List<|subproc.Job|>(arena)
     for k in Range.asc(rels.len)
@@ -163,8 +176,7 @@ priv fn check_narrow(rels: List<|U8[]|>@, arena: Arena$@)
             bad
                 .push(arena.text().s(said).s(": formatting again changes line \{at\} to `")
                 .s(line_of(second.out, at, arena)).s("`").take())
-    verdict.check_list("a source formatted at a narrow width reads back, and stays put", rels.len,
-        "sources", bad@,
+    verdict.check_list(NARROW_CHECK, rels.len, "sources", bad@,
         "the formatter broke a line where the indentation reader does not join it, or its second \
             pass moves what the first wrote: mend `ksplc/fmt/` or `ksplc/parse/layout.kspl`, not \
             the source named")

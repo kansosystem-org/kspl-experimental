@@ -88,8 +88,8 @@ function ksmdView(ks) {
     return el;
   }
 
-  // A block left out of print and PDF is marked; a chart, an image or an include has its toggle
-  // beside its Remove button, and a table has it in its right-click menu.
+  // A block left out of print and PDF is marked; a chart, a diagram, an image or an include has
+  // its toggle beside its Remove button, and a table has it in its right-click menu.
   function render(b) {
     const el = shape(b);
     el.classList.toggle("print-hidden", !!b.iv);

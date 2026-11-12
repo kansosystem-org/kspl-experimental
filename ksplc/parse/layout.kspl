@@ -133,6 +133,9 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
     // can cross lines too**: `String_content` accepts a newline, so a `= "` can close lines later
     // with `";` (`make test-place`).
     $open_str: Sz = 0
+    // The kind of string around each interpolation open, the innermost last. **An interpolation's
+    // code is read as code**, so a block written on one line there gets its `;` as anywhere else.
+    $interps: = List<|Sz|>(arena)
     // The logical line being gathered: its first line's column and code start (-1 before any
     // code), and where its code ends so far.
     $lead_indent: Sz = 0
@@ -155,13 +158,16 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
         // **An open bracket ends at a line that starts something new** (`begins_anew`), or one
         // unclosed `(` would read the rest of the file as its arguments.
         // Caution: **A string left open is not cut off** — a raw string holds its own lines, and
-        // one of them can start at column 0.
-        if indent == 0 && open_str == 0 && look < src.len && begins_anew(src[look])
+        // one of them can start at column 0. **Nor is a line holding only a comment**: it changes
+        // nothing in between ("Blocks and statement ends" in docs/SPEC-programming-language.md).
+        in_str: = open_str > 0 || interps.len > 0
+        if indent == 0 && !in_str && look < src.len && begins_anew(src[look]) &&
+            !src.starts_with("//", look)
             depth = 0
-        inner: = depth > 0 || open_str > 0
+        inner: = depth > 0 || in_str
         i = look
         code_start: = i
-        has_code: = open_str == 0 && !holds_no_code(src, i)
+        has_code: = !in_str && !holds_no_code(src, i)
         joins: =
             inner ||
             (has_code && lead_start >= 0 &&
@@ -189,7 +195,13 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
                 done = true
                 continue
             if open_str > 0
-                i = string_goes_on(src, i, open_str@)
+                i = string_goes_on(src, i, open_str@, interps@)
+                code_end = i
+                continue
+            if c == '\\' && interps.len > 0 && i + 1 < src.len && src[i + 1] == '}'
+                // The interpolation closes, and the string around it goes on.
+                open_str = interps.pop().unwrap_or(2)
+                i += 2
                 code_end = i
                 continue
             if src.starts_with("//", i)
@@ -197,7 +209,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
                 i = base_lines.line_end(src, i)
                 continue
             if c == '"'
-                i = skip_string(src, i, open_str@)
+                i = skip_string(src, i, open_str@, interps@)
                 code_end = i
                 continue
             if c == '\''
@@ -209,7 +221,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
                 notes
                     .push(Note::{ .kind = .block_end(i - line_start), .line = out.len + 1 })
                 semis.push(Insert::{ .at = i, .text = " ", .drop = 1 })
-            else if c == ';' && depth == 0 &&
+            else if c == ';' && depth == 0 && interps.len == 0 &&
                 splits_statements(src, seg_from, i, seg_closed_block)
                 seg_before = seg_from
                 seg_from = skip_spaces(src, i + 1, src.len)
@@ -226,7 +238,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
                 depth = depth - 1 if depth > 0 else 0
                 seg_closed_block =
                     seg_closed_block ||
-                    (depth == 0 && opens.has_closed && opens.closed_at == i)
+                    (depth == 0 && interps.len == 0 && opens.has_closed && opens.closed_at == i)
             else if c == '<' && i + 1 < src.len && src[i + 1] == '|'
                 depth += 1
                 i += 1
@@ -328,12 +340,13 @@ priv fn supply_block_end(src: U8[], o: Line_open, close: Sz, semis: List<|Insert
         return
     semis.push(Insert::{ .at = close, .text = ";" })
 
-priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@): Sz //<
+priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@, interps: List<|Sz|>$@): Sz //<
     //< It skips a string starting with a `"`
     //< Left open at the line's end, it sets `open_str` (1 raw, 2 plain) and returns at the newline.
+    //< `interps` is as `string_goes_on` takes it.
     raw: = src.starts_with("\"\"\"", at)
     open_str$ = 1 if raw else 2
-    return string_goes_on(src, at + 3 if raw else at + 1, open_str)
+    return string_goes_on(src, at + 3 if raw else at + 1, open_str, interps)
 
 priv fn skip_char(src: U8[], at: Sz): Sz
     $j: = at + 1
@@ -346,7 +359,7 @@ priv fn skip_char(src: U8[], at: Sz): Sz
         j += 1
     return src.len
 
-priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
+priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@, interps: List<|Sz|>$@): Sz //<
     //< It walks a string's contents from `at` to past its close, or to the line's end
     //< `open_str` says which kind is open (1 raw, 2 plain), and is 0 once it closes. **The one walk
     //< for a string's contents**, on its first line and on the lines a `\` continues alike.
@@ -384,6 +397,13 @@ priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
                 continue
         else
             if c == '\\' && j + 1 < src.len && src[j + 1] == '{'
+                // **Given `interps`, it stops past the string's own `\{`**: it pushes the string's
+                // kind there and sets `open_str` to 0, so the caller reads the code. Null, it walks
+                // the code too.
+                if interps != null && level == 0
+                    interps.push(kind)
+                    open_str$ = 0
+                    return j + 2
                 level += 1
                 kind = 0
                 j += 2
@@ -417,9 +437,9 @@ fn next_line_comment(src: U8[], from: Sz): Sz //<
             return i
         if c == '"'
             $open_str: Sz = 0
-            i = skip_string(src, i, open_str@)
+            i = skip_string(src, i, open_str@, null)
             for open_str > 0 && i < src.len
-                i = string_goes_on(src, i + 1, open_str@)
+                i = string_goes_on(src, i + 1, open_str@, null)
             continue
         if c == '\''
             i = skip_char(src, i)

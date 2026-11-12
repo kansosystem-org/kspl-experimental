@@ -132,6 +132,22 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
         return infer_propagate_postfix(c, node, target_id)
     return expected_id
 
+fn infer_call_on_typed(c: Sema_ctx$@, call: Ast_node$@): I32!Sema_error //<
+    //< Types a method call made around an expression already typed (`e.variant_name()`)
+    //< **The receiver is not inferred again**, only the method and the call: `infer` above would
+    //< check its subtree a second time. A variant written out there (`id(Color.red)`) holds no type
+    //< name once typed, and checked again it is refused as a bare `.red`.
+    left: = call.get_postfix_receiver()
+    recv: = left.get_postfix_receiver()
+    $method_id: = I32::sema_type_env.Builtin_type_id.unknown
+    with_callee:
+        outer_callee: = c.fn_ctx.callee
+        c.fn_ctx.callee = left
+        defer c.fn_ctx.callee = outer_callee
+        method_id = left.settle_expected(c,
+            infer_dot_postfix(c, left, recv, recv.type_id, 0)!, 0)!
+    return call.settle_expected(c, sema_body_call.infer(c, call, left, method_id, 0)!, 0)
+
 priv struct Dot_receiver //< what stands before a `.`: a namespace (a type, an enum…) or a value
     is_namespace: Bool
     is_enum: Bool
@@ -861,7 +877,9 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
                     so the index cannot be bounds-checked. Write '(p + i)$' to walk a raw pointer, \
                     or use a slice ('T$[]') which carries its length.")
             c.err(node, c.scratch.slice())
-        else
+        // **A receiver of no known type was reported where it failed** (`for t in ::{ … }`), and
+        // "type 'Unknown'" would be a second, false message.
+        else if !sema_type_env.is_unknown(target_id)
             c.clear_scratch().s("type '\{shown\}' does not support indexing")
             c.err(node, c.scratch.slice())
         return I32::sema_type_env.Builtin_type_id.unknown

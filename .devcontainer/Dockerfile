@@ -58,12 +58,12 @@ ENV LC_ALL=en_US.UTF-8
 # **From the base image's own archive**, signed by Ubuntu and updated with the rest of the system:
 # no other source and no other key. Caution: **Take the major version from this release's
 # archive**: a version it lacks needs a third-party source, built for another release.
-# The packages: clang-22, lldb-22, lld-22 and clangd-22, then clang-format-22 (the Makefile's
+# The packages: clang-22, lldb-22 and lld-22, then clang-format-22 (the Makefile's
 # `C_FMT`, which `make commit-seed` requires), llvm-22 (OBJDUMP / OBJCOPY / NM) and
 # libclang-rt-22-dev (the sanitizers `make test-ksai-fuzz` and `make test-race` build with), and
 # libclang-rt-22-dev-wasm32 (clang's builtins a wasm32 module links: ksmd's page, layout-targets).
 RUN apt-get update && \
-    apt-get install -y clang-22 lldb-22 lld-22 clangd-22 clang-format-22 llvm-22 \
+    apt-get install -y clang-22 lldb-22 lld-22 clang-format-22 llvm-22 \
         libclang-rt-22-dev libclang-rt-22-dev-wasm32 && \
     rm -rf /var/lib/apt/lists/*
 

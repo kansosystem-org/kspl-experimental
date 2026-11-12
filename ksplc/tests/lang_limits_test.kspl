@@ -56,6 +56,94 @@ fn test_closure_wrapped_in_struct()
         .pass("a function value taken as an argument keeps its environment alive even wrapped in a \
             struct and returned (the lazy-chain shape).")
 
+// A closure's captures and parameters take any type a declaration can be written with ("8.1.3
+// Closures" in `../../docs/SPEC-programming-language.md`): a function type, a result inside an
+// option and an option inside a result. The refused fixed-length array is the case
+// closure_capture_rules in `tests/negative/closure.kspl`.
+priv enum Cap_fail
+    no_value
+
+priv typedef Cap_pred = fn(a: I32): Bool
+
+priv fn cap_is_one(a: I32): Bool
+    return a == 1
+
+priv fn cap_run(f: Callable1<|I32, Bool|>): Bool
+    return f.call(1)
+
+priv fn cap_value(o: I32?!Cap_fail): I32 //< the value, -1 for a failure, -2 for none
+    v: = o catch
+        return -1
+    if w: = v
+        return w
+    return -2
+
+priv fn cap_value2(q: (I32!Cap_fail)?): I32 //< the value, -1 for a failure, -2 for none
+    if v: = q
+        w: = v catch
+            return -1
+        return w
+    return -2
+
+priv fn cap_take_pred(f: Callable1<|fn(a: I32): Bool, Bool|>): Bool
+    return f.call(cap_is_one)
+
+priv fn cap_take_option(f: Callable1<|(I32!Cap_fail)?, I32|>): I32
+    return f.call(.some(.ok(6)))
+
+fn test_closure_takes_every_written_type()
+    verdict.start("[Lang] a closure's captures and parameters of every written type test...")
+    g: = cap_is_one
+    assert(cap_run(fn(x: I32; g: fn(a: I32): Bool): Bool {
+        return g(x);
+    }), "a capture of a function type")
+    p: Cap_pred = cap_is_one
+    assert(cap_run(fn(x: I32; p: Cap_pred): Bool {
+        return p(x);
+    }), "a capture of a function type named by a typedef")
+    o: I32?!Cap_fail = .some(4)
+    assert(cap_run(fn(x: I32; o: I32?!Cap_fail): Bool {
+        return cap_value(o) == 4 && x == 1;
+    }), "a capture of an option inside a result")
+    q: (I32!Cap_fail)? = .some(.ok(5))
+    assert(cap_run(fn(x: I32; q: (I32!Cap_fail)?): Bool {
+        return cap_value2(q) == 5 && x == 1;
+    }), "a capture of a result inside an option")
+    assert(cap_take_pred(fn(h: fn(a: I32): Bool; ): Bool {
+        return h(1);
+    }), "a parameter of a function type")
+    assert(cap_take_option(fn(q: (I32!Cap_fail)?; ): I32 {
+        return cap_value2(q);
+    }) == 6, "a parameter of a result inside an option")
+    verdict.pass("a closure takes a capture or a parameter of each type a declaration can have.")
+
+// A closure inside a function with a `const` parameter can write it in its signature and read
+// it in its body ("8.1.3 Closures" in `../../docs/SPEC-programming-language.md`). An anonymous
+// function cannot: the case anon_fn_generic_param in `tests/negative/closure.kspl`.
+priv fn const_in_body<|const N: Sz|>(a: I32[N]): Sz //< N plus the first element
+    r: = fn(x: I32; ): Sz
+        return N + Sz::x
+    return r.call(a[0])
+
+priv fn const_in_signature<|const N: Sz|>(arr: I32[N], k: I32): I32 //< the last element, plus k
+    t: = fn(a: I32[N]; k: I32): I32
+        return a[N - 1] + k
+    return t.call(arr)
+
+priv fn const_beside_type<|T, const N: Sz|>(v: T): Sz //< N, through a closure that takes a T
+    r: = fn(_x: T; ): Sz
+        return N
+    return r.call(v)
+
+fn test_closure_reads_const_param()
+    verdict.start("[Lang] a closure that uses an enclosing `const` parameter test...")
+    a: I32[3] = ::{ 4, 5, 6 }
+    assert(const_in_body(a) == 3 + 4, "N read in the body alone")
+    b: I32[2] = ::{ 10, 20 }
+    assert(const_in_signature(b, 7) == 20 + 7, "N written in a parameter's type")
+    assert(const_beside_type<|I64, 9|>(1) == 9, "N beside a type parameter")
+    verdict.pass("a closure reads an enclosing `const` parameter in its signature and its body.")
+
 // A closure or a frame's slice can be stored where the frame keeps it. A function pointer goes
 // into a global. A closure the caller built is stored through the caller's pointer. The check
 // refuses only a value this frame made, stored where it outlives the frame

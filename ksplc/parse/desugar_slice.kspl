@@ -135,7 +135,84 @@ fn spell_as_written(node: Ast_node$@): U8[] //< a type expression with its folds
             else
                 b.s(c.text)
         return b.take()
+    // **A function type and a grouped type are spelled part by part.** Their atom's text is only
+    // `fn` or the kind's name, and a closure lifted with it would not parse.
+    if node.kind_id == .k_type_atom
+        sig: = node.find_child(.k_type_fn_sig)
+        if sig != null
+            return base_core.arena.text().s("fn").s(spell_fn_sig(sig)).take()
+        inner: = node.find_child(.k_type_expr)
+        if inner != null
+            return base_core.arena.text().c('(').s(spell_as_written(inner)).c(')').take()
     return node.text if node.text.len > 0 else spell_atom(node)
+
+fn spell_before_postfix(node: Ast_node$@): U8[] //<
+    //< A type spelled as written, in brackets where a postfix written after it would bind inside
+    //< **A result and a function type take a postfix as their own part.** `I32!E@` reads as
+    //< `I32!(E@)`, and `fn(a: I32): Bool@` as a function that returns a pointer. So these are
+    //< grouped: `(I32!E)@`. The test reads the spelling: a `!` outside every bracket, or a leading
+    //< `fn`.
+    spelled: = spell_as_written(node)
+    $depth: I32 = 0
+    $bare: = spelled.starts_with("fn")
+    for ch in spelled
+        if ch == '(' || ch == '[' || ch == '<'
+            depth += 1
+        else if ch == ')' || ch == ']' || ch == '>'
+            depth -= 1
+        else if ch == '!' && depth == 0
+            bare = true
+    if !bare
+        return spelled
+    return base_core.arena.text().c('(').s(spelled).c(')').take()
+
+fn is_fixed_array_type(node: Ast_node$@): Bool //<
+    //< Whether a written type is a fixed-length array (`I32[3]`), by its last postfix
+    //< A slice's `[]` is folded or has no size, so only a sized one is left.
+    if node == null || node.kind_id != .k_type_expr || node.children.len < 2
+        return false
+    last: = node.get_child(node.children.len - 1)
+    if last.kind_id == .k_type_atom || last.kind_id == .k_type_expr
+        return false
+    return last.text.strip_prefix("$").starts_with("[") && !is_slice_postfix(last)
+
+fn spell_array_element(node: Ast_node$@): U8[] //<
+    //< A fixed-length array type's element, spelled as written (`I32` for `I32[3]`)
+    //< node is one is_fixed_array_type accepts.
+    b: = base_core.arena.text()
+    for i in Range.asc(node.children.len - 1)
+        c: = node.get_child(i)
+        if c.kind_id == .k_type_atom || c.kind_id == .k_type_expr
+            b.s(spell_as_written(c))
+        else
+            b.s(c.text)
+    return b.take()
+
+priv fn spell_fn_sig(sig: Ast_node$@): U8[] //<
+    //< A function type's `(a: I32, b: I32): Bool`, its parameters and return spelled as written
+    //< Caution: **Write the `:` and the `,` here.** The tree no longer holds them as children.
+    b: = base_core.arena.text()
+    b.c('(')
+    $first: = true
+    list: = sig.find_child(.k_param_list)
+    if list != null
+        for p in list.children
+            if p.kind_id == .k_fn_param
+                b.s("" if first else ", ")
+                mark: = p.find_child(.k_literal)
+                if mark != null && mark.text.equals("$")
+                    b.c('$')
+                b.s(p.find_text(.k_identifier)).s(": ")
+                    .s(spell_as_written(p.get_decl_type_node()))
+                first = false
+            else if p.is_literal("...")
+                b.s("" if first else ", ").s("...")
+                first = false
+    b.c(')')
+    ret: = sig.find_child(.k_type_expr)
+    if ret != null
+        b.s(": ").s(spell_as_written(ret))
+    return b.take()
 
 priv fn needs_group(inner: Ast_node$@): Bool //< whether a sugar's argument is put in brackets
     //< A result (`I32!E`) or a function type takes the postfix itself unless grouped.

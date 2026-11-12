@@ -13,9 +13,7 @@ import "std/str"
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
-
-priv const GATES_SRC: U8[] = "tools/ci_gates.kspl" //< where the rows are
-priv const SAYS_HEAD: U8[] = ".says = " //< what opens a row's piece, in both of its tables
+import "tools/ci_gates"
 
 struct Form //< a call that prints a SKIP line, and which of its arguments is the reason
     name: U8[] //< the function, called as `<receiver>.<name>(`
@@ -563,19 +561,12 @@ fn unheld(path: U8[], reasons: List<|Reason|>@, rows: U8[][], arena: Arena$@): L
                 .take())
     return bad
 
-fn rows_of(src: U8[], arena: Arena$@): List<|U8[]|> //< every row's piece, of both tables
-    s: = read_source(src, arena)
+priv fn rows_of(arena: Arena$@): List<|U8[]|> //< every row's piece, of both tables
     $out: = List<|U8[]|>(arena)
-    $at: Sz = 0
-    for
-        hit: = s.code.sub_from(at).find_str(SAYS_HEAD)
-        if hit.is_none()
-            break
-        at = at + hit.unwrap_or(0) + SAYS_HEAD.len
-        for k in Range.asc(s.lits.len)
-            l: = s.lits.get(k)
-            if l.at == at && l.holes.len == 0
-                out.push(l.parts.get(0))
+    for e in ci_gates.EXPECTED_SKIPS
+        out.push(e.says)
+    for w in ci_gates.SWITCH_SKIPS
+        out.push(w.says)
     return out
 
 // Caution: **Keep the call inside a raw string on the miss side.** A program a test writes is no
@@ -670,7 +661,7 @@ priv fn misses_make(text: U8[], arena: Arena$@): Bool
 
 priv fn check_reasons_held(arena: Arena$@) //<
     //< Every SKIP reason the tree can print is held by a row, so no platform's round meets it first
-    $rows: = rows_of(harness.read_under_root(GATES_SRC), arena)
+    $rows: = rows_of(arena)
     $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     $used: = List<|U8[]|>(arena)
@@ -710,9 +701,6 @@ priv fn check_reasons_held(arena: Arena$@) //<
                 .push(arena.text().s("`relays`' ").s(r.file).c(' ').s(r.fn_name)
                 .s(" hands on no reason, where it said it hands on ").s(r.why).s(": remove it")
                 .take())
-    if rows.len == 0
-        bad
-            .push(arena.text().s(GATES_SRC).s(" holds no `").s(SAYS_HEAD).s("` row to read").take())
     verdict.check_list("every SKIP reason the tree can print is held by a row", seen, "reasons",
         bad@,
         "add its row to `EXPECTED_SKIPS` (or `SWITCH_SKIPS`) in tools/ci_gates.kspl, for each \

@@ -93,15 +93,15 @@ impl Ast_node
     fn df_stmt_switch(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
         cond: = r.get_switch_cond()
         cond.analyze_df_node(c, state)
+        // **No path skips every case.** sema (process_switch_exhaustiveness in
+        // sema/body/switch.kspl) accepts a switch without 'default' only if its cases cover every
+        // value. So the state before the switch is not merged in, or `$x: I32` set in every
+        // variant's case would be refused as uninitialized.
         $merged_state: sema_flow_track.Df_state$@ = null
-        $has_default: = false
 
         for i in Range.asc(r.children.len)
             child: = r.get_child(i)
             if child.is_keyword("case") || child.is_keyword("default")
-                if child.is_keyword("default")
-                    has_default = true
-
                 case_state: = r.process_df_switch_case(c, state, i + 1)
 
                 if merged_state == null
@@ -109,8 +109,6 @@ impl Ast_node
                 else
                     merged_state = sema_flow_track.intersect_states(merged_state, case_state)
         if merged_state != null
-            if !has_default
-                merged_state = sema_flow_track.intersect_states(merged_state, state)
             state.apply_merged_state(merged_state)
 
     fn df_stmt_for(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<

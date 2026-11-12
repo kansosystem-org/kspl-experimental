@@ -25,6 +25,11 @@ priv $for_in_counter: Sz = 0
 const CLOSURE_EMPTY_FIELD: U8[] = "_empty" //<
     //< The field name of the padding in an environment with zero captures (C99 has no empty struct)
 
+struct Gen_param //< one type parameter of an enclosing declaration
+    name: U8[] //< `T`, or `N` for `const N: Sz`; the argument that passes it on
+    written: U8[] //< as a declaration writes it: `T`, or `const N: Sz`
+    is_const: Bool //< a `const` one, whose name a body can read as a value
+
 struct Desugar_ctx //<
     //< What the walk carries from node to node
     //< That is the closure synthesis's parser and serials, the statements to put before the current
@@ -38,10 +43,10 @@ struct Desugar_ctx //<
         //< The statements inserted **before** the statement being handled now
         //< They are the temporaries binding a closure's value. Only an lvalue can be passed to a
         //< trait, so a `::{}`'s result cannot be placed directly in an argument.
-    gen_params: List<|U8[]|>$@ //<
-        //< The type argument names of the enclosing declarations, innermost last
+    gen_params: List<|Gen_param|>$@ //<
+        //< The type parameters of the enclosing declarations, innermost last
         //< They are pushed during the walk (an `fn f<|U|>` inside an `impl<|T|>` holds both). Those
-        //< a closure's signature uses are copied to its synthesized declarations.
+        //< a closure uses are copied to its synthesized declarations.
     anon_serials: Map<|U8[], Sz|>$@ //<
         //< The **per-file** serial for naming the declaration an anonymous function is lifted into
     block_depth: Sz //<
@@ -54,7 +59,7 @@ fn run(root: Ast_node$@, parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$
     serials: = Map<|U8[], Sz|>(base_core.arena)
     cc: = Desugar_ctx::{ .parser = parser, .source_map = source_map,
         .lifted = base_ast.new_ast_node_list(), .hoisted = base_ast.new_ast_node_list(),
-        .gen_params = List<|U8[]|>.create(base_core.arena),
+        .gen_params = List<|Gen_param|>.create(base_core.arena),
         .anon_serials = base_core.arena.create(serials), .block_depth = 0, .ok = true }
     ctx: = base_core.arena.create(cc)
     lifted: = ctx.lifted

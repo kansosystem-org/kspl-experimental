@@ -78,21 +78,24 @@ fn updater_weight_count(arena: Arena$@)
     io.out().s("must not get here\n")
 
 // ==========================================
-// gqa-uneven-heads / gqa-odd-head-dim / gqa-past-cache: grouped-query attention refuses heads that
-// do not share out, a head RoPE cannot rotate, and positions past its cache. Taken, the first and
-// the last write or read past the cache's memory.
+// gqa-uneven-heads / gqa-odd-head-dim / gqa-past-cache: grouped-query attention's cache refuses
+// heads that do not share out, a head RoPE cannot rotate, and positions past its end. Taken, the
+// first and the last write or read past the cache's memory.
 // ==========================================
-fn gqa_new(n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, arena: Arena$@): nn.Gqa_attention<|F32|> //<
-    //< An attention of those heads, 8 wide, with a cache of 4 positions
+fn gqa_new(n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, arena: Arena$@): nn.Gqa_cache<|F32|> //<
+    //< A cache of those heads, of 4 positions, RoPE turning each head whole
     io.out().s("about to make \{n_heads\} heads over \{n_kv_heads\}, \{head_dim\} wide\n")
-    return nn.Gqa_attention<|F32|>(8, n_heads, n_kv_heads, head_dim, 4, 10000.0, arena)
+    return nn.Gqa_cache<|F32|>(n_heads, n_kv_heads, head_dim, head_dim, 4, 10000.0, arena)
 
-fn gqa_past_cache(arena: Arena$@) //< two rows from position 3, in a cache of 4 positions
-    $attn: = gqa_new(4, 2, 2, arena)
-    shape: Sz[2] = ::{ 2, 8 }
+fn rows_of(rows: Sz, width: Sz, arena: Arena$@): Tensor<|F32|> //< `[rows, width]` of 0.5
+    shape: Sz[2] = ::{ rows, width }
     x: = Tensor<|F32|>(Sz[]::shape, arena)
     x.fill(0.5)
-    _out: = attn.forward(x, 3)
+    return x
+
+fn gqa_past_cache(arena: Arena$@) //< two rows from position 3, in a cache of 4 positions
+    $cache: = gqa_new(4, 2, 2, arena)
+    _out: = cache.attend(rows_of(2, 8, arena), rows_of(2, 4, arena), rows_of(2, 4, arena), 3)
     io.out().s("must not get here\n")
 
 // ==========================================

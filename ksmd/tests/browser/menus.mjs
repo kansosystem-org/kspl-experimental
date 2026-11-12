@@ -387,9 +387,15 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
       JSON.stringify(copied));
 
     await load(table);
-    await openCell('#doc td[data-r="0"][data-c="0"]');
-    await pasteInto('#doc .cell-input', 'Pens\t"1,234.5"\t=A1\r\n"two\nlines"\t\t12%\r\n');
-    await saves("cells copied from Excel fill the table from the open cell, which grows",
+    // Cells from Excel spread over the table from a chosen cell; an open cell takes them as its
+    // text, as Excel's cell does while it is edited (`pasting.mjs`).
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await js(`(() => {
+      const data = new DataTransfer();
+      data.setData("text/plain", ${JSON.stringify('Pens\t"1,234.5"\t=A1\r\n"two\nlines"\t\t12%\r\n')});
+      document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    await saves("cells copied from Excel fill the table from the chosen cell, which grows",
       `${H}:::table name="t"\n| "a" | "b" | "" |\n| "Pens" | 1234.5 | =A1 |\n| "two\\nlines" | | "12%" |\n:::\n`);
     await menu("undo");
     await saves("and one undo takes the paste away", table);

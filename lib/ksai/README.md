@@ -134,12 +134,12 @@ A model combines layers built from tensor operations.
 | :-- | :-- |
 | `Linear` | Matrix multiplication plus a bias |
 | `Rms_norm` | Normalization to keep values in a steady range |
-| `Mlp` / `Swiglu_mlp` | Intermediate computation |
-| `Self_attention` / `Gqa_attention` | Combine information from other tokens in the sequence |
+| `Mlp` | Intermediate computation |
+| `Self_attention` / `Gqa_cache` | Combine information from other tokens in the sequence |
 | `Embedding` | Convert a token to a vector |
 | `Transformer_block` | Combine these layers into a repeated unit |
 
-`Self_attention` supports training with one head. `Gqa_attention` operates per head and supports inference only. Their separation is deliberate; see [`lib/ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
+`Self_attention` supports training with one head. `Gqa_cache` operates per head and supports inference only; the Qwen model computes its projections around it. Their separation is deliberate; see [`lib/ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 
 Each layer's `forward(...)` returns an output tensor from an input tensor. Read `Linear.forward` and `Transformer_block.forward` first.
 

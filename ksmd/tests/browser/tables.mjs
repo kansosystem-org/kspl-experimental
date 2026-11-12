@@ -10,6 +10,9 @@ import { ALT, CTRL, H, SHIFT, cellAt, cellText, check, rowsShown } from "./drive
 export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick,
   openCell }) {
   const sel = () => js("JSON.stringify(ksmd.selection().f)");
+  // A row's number and a column's letter, which choose the whole row or column.
+  const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
+  const letter = (k) => `#doc thead tr:first-child th:nth-child(${k + 1})`;
   // Whether the caret's block stands inside the window, below the header.
   const caretInSight = () => js(`(() => {
     const s = window.getSelection();
@@ -202,7 +205,6 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       const rows = '| 1 | "x" |\n| 2 | "y" |\n| 3 | "x" |\n';
       const table = (attrs, body = rows) => `${H}:::table name="t"${attrs}\n| "n" | "s" |\n${body}:::\n`;
       const shown = () => rowsShown(js);
-      const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
       const said = () => js("document.getElementById('status').textContent");
       const paste = (text) => js(`(() => { const data = new DataTransfer();
         data.setData("text/plain", ${JSON.stringify(text)});
@@ -412,8 +414,6 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
     async cutLines() {
       const start = `${H}:::table name="t"\n| "n" | "f" |\n| 1 | =A1*10 |\n| 2 | |\n| 3 | |\n| 4 | =sum(A1:A2) |\n:::\n`;
       await load(start);
-      const rowNumber = (k) => `#doc tbody tr:nth-child(${k}) th.row-number`;
-      const letter = (k) => `#doc thead tr:first-child th:nth-child(${k + 1})`;
       const labelOf = (cmd) => js(`(() => { const el = document.querySelector('.menu.context [data-cmd="${cmd}"]');
         return el && el.getClientRects().length > 0 ? el.querySelector(".label").textContent : ""; })()`);
       const marked = () => js("Array.from(document.querySelectorAll('#doc .cut')).map((el) => el.dataset.r + el.dataset.c).join()");
@@ -808,6 +808,33 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       })()`);
       check(offered === "plan|done", "the panel offers only the rows a chart by rows can name", offered);
       await press("Escape");
+    },
+
+    // A chart's marks reach past its largest and its least value, so no bar or point is cut off
+    // above the top line or below the bottom one, even where that value lies more than half a
+    // step past a round mark: 12 over marks 5 apart, 120 over 50, 0.12 over 0.05, and -12.
+    async chartFitsItsValues() {
+      const shown = (kind, values) => load(`${H}:::table name="t"\n| "a" | "n" |\n` +
+        values.map((v, k) => `| "r${k}" | ${v} |\n`).join("") +
+        `:::\n\n:::chart table="t" kind="${kind}" labels="a" values="n"\n:::\n`);
+      const drawn = () => js(`JSON.stringify((() => {
+        const svg = document.querySelector('#doc .chart svg.chart-svg');
+        const ys = Array.from(svg.querySelectorAll('line.chart-grid, line.chart-zero'), (l) => +l.getAttribute('y1'));
+        const top = Math.min(...ys);
+        const bottom = Math.max(...ys);
+        const inside = Array.from(svg.querySelectorAll('rect, circle'), (e) => e.tagName === 'rect'
+          ? [+e.getAttribute('y'), +e.getAttribute('y') + +e.getAttribute('height')]
+          : [+e.getAttribute('cy'), +e.getAttribute('cy')])
+          .every(([a, b]) => a >= top - 0.001 && b <= bottom + 0.001);
+        return [inside, Array.from(svg.querySelectorAll('.chart-tick'), (t) => t.textContent).join(' ')];
+      })())`);
+      for (const [kind, values, marks] of [["bar", [12, 3], "0 5 10 15"], ["bar", [120, 40], "0 50 100 150"],
+        ["line", [0.12, 0.01], "0 0.05 0.1 0.15"], ["bar", [-12, 3], "-15 -10 -5 0 5"],
+        ["bar", [1.1, 0.2], "0 0.5 1 1.5"], ["bar", [10, 2], "0 2 4 6 8 10"]]) {
+        await shown(kind, values);
+        const got = await drawn();
+        check(got === JSON.stringify([true, marks]), `a ${kind} chart of ${values} stays between its marks ${marks}`, got);
+      }
     },
 
     // A colour scale fills each number's cell from white at the least to its colour at the

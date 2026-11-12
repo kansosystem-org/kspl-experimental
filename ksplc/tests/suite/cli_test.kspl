@@ -32,6 +32,7 @@ import "std/regex"
 import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 priv struct Face_flags //<
@@ -283,8 +284,8 @@ priv fn case_build(arena: Arena$@) //<
     src: = fs.join(dir, "prog.kspl", arena)
     io.write_file(src,
         "import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"built\\n\")\n  return 3\n") catch
-        verdict.check("build: the program can be written", false, "")
-        return
+            verdict.check("build: the program can be written", false, "")
+            return
     // The output's folder is not there yet: the build makes it.
     exe: = fs.join(dir, "bin/prog.exe", arena)
     ok_case("build: it builds", U8[][]::{ "build", std_flag(), src, exe }, "")
@@ -303,6 +304,16 @@ priv fn case_build(arena: Arena$@) //<
     verdict.check("build: an output its own C would overwrite is refused with exit code 1",
         over.exited_with(1) && over.out.find_str("overwritten").is_some(), over.out)
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
+    // **[W0110] is printed by a build, not by `ksplc lint` alone** ("5.2 The diagnostics' four
+    // weights" in `../../docs/SPEC-tools.md`): what it warns of reads freed memory at run time.
+    io.write_file(src,
+        "import \"std/ds\" { List }\n\nfn fill(l: List<|Callable1<|I32, I32|>|>$@)\n  n: = 5\n  \
+            l.push(fn(x: I32; n: I32): I32 { return x + n; })\n\nfn main(): I32\n  defer $l: = \
+            List<|Callable1<|I32, I32|>|>(null)\n  fill(l@)\n  return 0\n") catch
+                verdict.check("build: the program that keeps a closure can be written", false, "")
+                return
+    ok_case("build: a container that keeps a local's closure is warned of",
+        U8[][]::{ "build", std_flag(), src, exe }, "[W0110]")
     io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
     ng_case("build: a program with no main() is refused by ksplc, not by the linker",
         U8[][]::{ "build", std_flag(), src, exe }, "this program has no main()")
@@ -497,7 +508,7 @@ priv fn case_fmt_in_place_safe(arena: Arena$@) //<
             verdict.check("fmt --in-place: the samples can be written", false, p)
             return
     name_link: = "fmt --in-place: a link is refused, and stays a link to an unchanged file"
-    if cli_cache.plant_link(link, target, arena)
+    if scratch.made_link(target, link, arena)
         f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", "--in-place", link }, dir)
         verdict.check(name_link,
             !f.exited_with(0) && f.out.find_str("symbolic link").is_some() && fs.is_link(link) &&
@@ -786,6 +797,7 @@ fn main(): I32
     cli_emit.case_emit_libs(arena)
     cli_emit.case_output_is_input(arena)
     cli_emit.case_output_cut_short(arena)
+    cli_emit.case_later_output_unwritable(arena)
     case_entry_spelling(arena)
     case_diagnostic_json(arena)
     return harness.finish()

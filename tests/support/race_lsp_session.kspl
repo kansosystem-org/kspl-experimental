@@ -91,8 +91,7 @@ priv fn play(exe: U8[], top: U8[], limit_ms: I64, arena: Arena$@): List<|U8[]|> 
         faults.push("the server cannot be started")
         return faults
     $s: = Lsp_session::{ .c = c@, .top = top, .faults = faults,
-        .deadline = sys.mono_us() + (limit_ms - LSP_EXIT_MS) * 1000I64,
-        .limit_s = limit_ms / 1000I64 }
+        .deadline = sys.deadline_after_ms(limit_ms - LSP_EXIT_MS), .limit_s = limit_ms / 1000I64 }
     $b: = Json_builder(arena)
     _init: =
         s.c.request("initialize", b.obj().build(), s.wait_ms(), arena) catch {}
@@ -126,7 +125,7 @@ priv fn play(exe: U8[], top: U8[], limit_ms: I64, arena: Arena$@): List<|U8[]|> 
         s.hover(k, "late", "after the burst", arena)
     _down: = s.c.request("shutdown", .null_val, s.wait_ms(), arena) catch {}
     s.c.notify("exit", .null_val, lsp_client.SEND_MS, arena) catch {}
-    deadline: = sys.mono_us() + LSP_EXIT_MS * 1000I64
+    deadline: = sys.deadline_after_ms(LSP_EXIT_MS)
     for s.c.alive() && sys.mono_us() < deadline
         sys.sleep_ms(20)
     if s.c.alive()

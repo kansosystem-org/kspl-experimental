@@ -26,7 +26,6 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/harness_text"
 import "tools/make_db"
 
 priv struct Hit //< one finding on a recipe line
@@ -311,7 +310,7 @@ priv struct Names //< the names gathered from every file
 
 priv fn push_phony(list: U8[], where: U8[], said: List<|Said|>$@, arena: Arena$@) //<
     //< Adds each bare name a `.PHONY:` line lists, with where the line is
-    for w in harness_text.words(list, arena)
+    for w in make_db.words(list, arena)
         if plain_name(w)
             said.push(Said::{ .where = where, .name = w })
 
@@ -341,7 +340,7 @@ priv fn scan_names(arena: Arena$@): Names //<
             // Caution: **Do not count `.PHONY` itself as a target**, or everything "has a rule".
             if rule: = rule_in(one)
                 if !rule.targets.trim_spaces().starts_with(".")
-                    for w in harness_text.words(rule.targets, arena)
+                    for w in make_db.words(rule.targets, arena)
                         have.push(w)
     return Names::{ .said = said, .have = have, .docs = docs }
 
@@ -413,7 +412,7 @@ priv fn help_groups(arena: Arena$@): List<|U8[]|> //< the groups `mk/help.mk` li
     for line in text.lines(arena)
         if !line.starts_with(GROUPS_HEAD)
             continue
-        for w in harness_text.words(line.sub_from(GROUPS_HEAD.len), arena)
+        for w in make_db.words(line.sub_from(GROUPS_HEAD.len), arena)
             out.push(w)
         break
     return out

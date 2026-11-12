@@ -1,0 +1,32 @@
+//< ksmd's and the chat page's opener: what it does with a server it started
+//< `tools/tests/ksmd_launch.kspl` runs the whole launcher; this file checks one step alone.
+import "std/fs"
+import "std/io"
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tools/opener"
+
+priv const SCRATCH: U8[] = "out/tmp/kspl_test_opener" //< where the stand-in server's log goes
+
+fn test_a_server_with_no_url_is_stopped() //< a server that runs but gives no URL is not left
+    //< **No note names such a server**, so nothing else would stop it later.
+    //< Caution: **The stand-in server is `/bin/sh`**, which Windows lacks, so the test skips there.
+    verdict.start("[tools/opener] a server that gives no URL test...")
+    if sys.is_windows()
+        verdict.skip("the stand-in server is /bin/sh, which Windows does not have")
+        return
+    fs.mkdir_all(SCRATCH) catch panic("the scratch folder must be made")
+    log: = "out/tmp/kspl_test_opener/server.log"
+    io.write_file(log, "") catch panic("the log must be writable")
+    $server: =
+        subproc.spawn_redirect(U8[][]::{ "/bin/sh", "-c", "sleep 30" }, "", log, log)
+        catch panic("the stand-in server must start")
+    url: = opener.wait_for_url(log, server@, 3)
+    stopped: = !server.alive()
+    server.kill()
+    assert(url.len == 0, "a server that printed nothing gives no URL")
+    assert(stopped, "a server that gives no URL in time is stopped, not left running")
+    fs.remove_path(log) catch {}
+    fs.remove_path(SCRATCH) catch {}
+    verdict.pass("a server that gives no URL in time is stopped before the open gives up.")

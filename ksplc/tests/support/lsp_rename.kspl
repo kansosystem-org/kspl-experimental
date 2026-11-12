@@ -126,12 +126,12 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     dir: = harness.sandbox("lsp_rename")
     fs.write_tree(dir, U8[][]::{ "lib.kspl", USER_URI, PICK_URI },
         U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC }, arena) catch
-        verdict.check("the rename workspace can be laid out", false, dir)
-        return
+            verdict.check("the rename workspace can be laid out", false, dir)
+            return
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
-        verdict.check("the rename workspace's server starts", false, dir)
-        return
+            verdict.check("the rename workspace's server starts", false, dir)
+            return
     defer c.free()
     $b: = Json_builder(arena)
     asks: = b.obj()
@@ -141,8 +141,8 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     init: =
         c.request("initialize", b.obj().set("capabilities", asks).build(), lsp_client.READ_MS, arena)
         catch
-        verdict.check("the rename workspace's server answers initialize", false, "")
-        return
+            verdict.check("the rename workspace's server answers initialize", false, "")
+            return
     caps: = init.val.get("result").get("capabilities")
     verdict.check("a client that asks prepareRename is told it is answered",
         caps.get("renameProvider").get("prepareProvider").as_bool().unwrap_or(false),
@@ -156,6 +156,7 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     check_selected(ask)
     check_type_calls(ask)
     check_captures(ask)
+    check_closure_params(ask)
 
 priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
     local: = lsp_client.answer(ask.c, "textDocument/prepareRename",
@@ -317,3 +318,26 @@ priv fn check_captures(ask: Ask) //<
     verdict.check("the references of a capture count the outer local and the body's use",
         found.len == 4,
         lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
+
+priv fn check_closure_params(ask: Ask) //<
+    //< A capturing closure's parameter renamed from its body changes the parameter and the use
+    //< **The edits land on the name**, never on the `fn(` the closure's made declarations stand
+    //< at. Go-to from the body lands on the written parameter too.
+    lsp_client.open(ask.c, CLOSURE_URI, CLOSURE_SRC, ask.arena)
+    defer lsp_client.close(ask.c, CLOSURE_URI, ask.arena)
+    closure_line: = decl_line(CLOSURE_SRC, "    add: =", ask.arena)
+    param_col: = col_in_line(CLOSURE_SRC, "    add: =", "x:", ask.arena)
+    use_col: = col_in_line(CLOSURE_SRC, "    add: =", "x +", ask.arena)
+    renamed: = ask.rename_in(CLOSURE_URI, CLOSURE_SRC, "    add: =", "x +", "item")
+    edits: = edits_in(renamed, CLOSURE_URI, ask.arena)
+    verdict.check("a closure's parameter renamed from its body changes only the name and its use",
+        edits.len == 2 && starts_at(edits@, closure_line, param_col) &&
+        starts_at(edits@, closure_line, use_col),
+        lsp_client.why(ask.c, places(edits@, ask.arena), ask.arena))
+    jump: = lsp_client.answer(ask.c, "textDocument/definition",
+        ask.at_in(CLOSURE_URI, CLOSURE_SRC, "    add: =", "x +"), lsp_client.READ_MS, ask.arena)
+    start: = jump.get("result").get("range").get("start")
+    verdict.check("go-to from a closure's body lands on the written parameter",
+        start.get("line").as_int().unwrap_or(-1) == closure_line &&
+        start.get("character").as_int().unwrap_or(-1) == param_col,
+        lsp_client.dump(jump, ask.arena))

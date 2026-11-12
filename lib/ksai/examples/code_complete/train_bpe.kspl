@@ -27,9 +27,6 @@ import "std/sys"
 
 priv const TRAIN_PATH: U8[] = "out/code_complete/corpus/train.jsonl"
 priv const VAL_PATH: U8[] = "out/code_complete/corpus/val.jsonl"
-priv const OUT_DIR: U8[] = "out/code_complete/tokenizer"
-priv const VOCAB_OUT: U8[] = "out/code_complete/tokenizer/vocab.txt"
-priv const MERGES_OUT: U8[] = "out/code_complete/tokenizer/merges.txt"
 
 priv const MAX_VOCAB: I64 = 4096 //< the largest vocabulary it trains
     //< The pair counts are one table of the vocabulary's size squared (`Pair_counts`): 128 MiB
@@ -161,8 +158,7 @@ priv fn concat_bytes(x: U8[], y: U8[], arena: Arena$@): U8[] //<
         out[x.len + i] = y[i]
     return out
 
-priv fn write_vocab(expand: List<|U8[]|>@)
-    path: = VOCAB_OUT
+priv fn write_vocab(expand: List<|U8[]|>@, path: U8[])
     $f: = io.open(path, "w") catch panic("cannot write vocab.txt")
     defer $b: = Str_builder()
     for i in Range.asc(expand.len)
@@ -174,8 +170,7 @@ priv fn write_vocab(expand: List<|U8[]|>@)
         f.s(b.slice())
     oracle.close_or_die(f@, path)
 
-priv fn write_merges(merges: List<|Merge|>@)
-    path: = MERGES_OUT
+priv fn write_merges(merges: List<|Merge|>@, path: U8[])
     $f: = io.open(path, "w") catch panic("cannot write merges.txt")
     defer $b: = Str_builder()
     for m in merges
@@ -205,7 +200,7 @@ fn main() //< derives the BPE vocabulary and merges from the corpus
         io.err().s("\{sys.program_name()\}: --vocab is at most \{MAX_VOCAB\}\n")
         sys.exit(2)
 
-    fs.mkdir_all(OUT_DIR) catch {} // fails harmlessly if it already exists
+    fs.mkdir_all(oracle.TOKENIZER_DIR) catch {} // fails harmlessly if it already exists
 
     text: = load_text(TRAIN_PATH, arena)
     $corpus: = build_corpus(text, arena)
@@ -227,8 +222,8 @@ fn main() //< derives the BPE vocabulary and merges from the corpus
         merges.push(Merge::{ .a = m.a, .b = m.b, .id = new_id })
         apply_merge(corpus@, m.a, m.b, new_id)
 
-    write_vocab(expand@)
-    write_merges(merges@)
+    write_vocab(expand@, fs.join(oracle.TOKENIZER_DIR, oracle.VOCAB_FILE, arena))
+    write_merges(merges@, fs.join(oracle.TOKENIZER_DIR, oracle.MERGES_FILE, arena))
 
     val_text: = load_text(VAL_PATH, arena)
     val_tokens: = count_tokens(val_text, expand@, merges@, arena)
@@ -236,4 +231,4 @@ fn main() //< derives the BPE vocabulary and merges from the corpus
         .s("BPE trained: vocab=\{I32::expand.len\} (target \{I32::target_vocab\}), \
             merges=\{I32::merges.len\}\n")
     io.out().s("  val compression: \{I32::val_text.len\} bytes -> \{I32::val_tokens\} tokens\n")
-    io.out().s("  -> \{OUT_DIR\}/vocab.txt, merges.txt\n")
+    io.out().s("  -> \{oracle.TOKENIZER_DIR\}/\{oracle.VOCAB_FILE\}, \{oracle.MERGES_FILE\}\n")

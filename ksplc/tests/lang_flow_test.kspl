@@ -75,6 +75,61 @@ fn test_loop_exits_carry_their_state()
     verdict.pass("a loop's exits, `break` included, carry what each path set, moved or released.")
 
 // ==========================================
+// A switch without `default` lists every value, so one of its cases always runs: a variable set in
+// every case is set after it ("4.4.2 Local variables" in
+// `../../docs/SPEC-programming-language.md`). The case `switch_case_leaves_variable_unset` in
+// `negative/control.kspl` leaves one case unset.
+// ==========================================
+priv enum Flow_color
+    red
+    green
+
+impl Flow_color
+    priv fn level(r: Self): I32 //< 1 for red, 2 for green
+        $x: I32
+        switch r
+        case .red
+            x = 1
+        case .green
+            x = 2
+        return x
+
+priv fn set_by_bool(t: Bool): I32 //< 1 for true, 2 for false
+    $x: I32
+    switch t
+    case true
+        x = 1
+    case false
+        x = 2
+    return x
+
+priv fn set_by_option(o: I32?): I32 //< the value, or 0 for none
+    $x: I32
+    switch o
+    case .some(v)
+        x = v
+    case .none
+        x = 0
+    return x
+
+priv fn set_by_short_form(o: I32?): I32 //< the value, or 0 for none
+    $x: I32
+    if v: = o
+        x = v
+    else
+        x = 0
+    return x
+
+fn test_switch_on_every_value_sets()
+    verdict.start("[Lang] a switch that lists every value sets what each case sets test...")
+    assert(Flow_color.red.level() == 1 && Flow_color.green.level() == 2, "every variant listed")
+    assert(set_by_bool(true) == 1 && set_by_bool(false) == 2, "both Bool values listed")
+    assert(set_by_option(.some(4)) == 4 && set_by_option(.none) == 0, "both Option variants")
+    assert(set_by_short_form(.some(5)) == 5 && set_by_short_form(.none) == 0,
+        "`if v: = o` with an `else`")
+    verdict.pass("a variable set in every case of a switch without `default` is set after it.")
+
+// ==========================================
 // A question to an Option or a Result lends it: `is_some`, `is_none` and `is_err` take `Self@`
 // ("The receiver of a read-only method is `Self@`" in
 // `../../docs/DESIGN-programming-language.md`). So a move-only value inside is still there to take

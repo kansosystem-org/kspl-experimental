@@ -80,6 +80,4 @@ function ksmdBar(ks) {
 
   fresh();
   ks.status.also(show);
-
-  ks.formulaBar = { el: bar };
 }

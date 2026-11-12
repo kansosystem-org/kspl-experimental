@@ -79,7 +79,7 @@ priv fn case_edit_import_rebuilds(work: U8[], arena: Arena$@): Void!run_case.Sto
 priv fn case_new_settings_file_rebuilds(work: U8[], arena: Arena$@): Void!run_case.Stop //<
     //< A `ksplc.cfg` added where there was none is read on the next run
     //< **Comparing the files read misses it**, as no file of that name was read. A file searched
-    //< for and not found is listed as such (`write_deps_file` in `ksplc/tools/run.kspl`), and its
+    //< for and not found is listed as such (`deps_text` in `ksplc/tools/run.kspl`), and its
     //< appearance makes the result stale.
     s: = fs.join(work, "s.kspl", arena)
     first_round(work, arena)!
@@ -160,14 +160,18 @@ priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): Void!run_case.S
         throw run_case
             .failed(arena.text().s("the objects are growing: \{first\} -> \{last\}").take())
 
-priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@):
+priv fn sweep_over_fakes(work: U8[], used_ago: I64, before: Sz$@, arena: Arena$@):
     Void!run_case.Stop //<
         //< It triggers the slot sweep over more fake slots than the cap
-        //< It runs one script, creates the fake slots, each last used at used_at, and runs a second
-        //< script, whose new slot triggers the sweep. before receives the slot count before that.
+        //< It runs one script, creates the fake slots, each last used `used_ago` seconds before,
+        //< and runs a second script, whose new slot triggers the sweep. before receives the slot
+        //< count before that.
         //< Caution: **Make more than the cap**, or the sweep does not run and it goes green without
         //< one.
     first_round(work, arena)!
+    // Caution: **Read the clock after the first round**, just before the fakes are placed. Read
+    // before it, a slow compile would move the fakes across the window's edge.
+    used_at: = sys.wall_seconds() - used_ago
     root: = run_case.run_root(work, arena)
     for i in Range.asc(MAX_RUN_SLOTS + 5)
         if !run_case.place_fake_slot(root, i, used_at, arena)
@@ -185,8 +189,7 @@ priv fn case_slots_do_not_pile_up(work: U8[], arena: Arena$@): Void!run_case.Sto
     //< swept, they pile up in the OS's cache area** unnoticed. The fakes are last used before the
     //< spare window. So only the first run's slot is spared, and the directory shrinks to the cap.
     $before: Sz = 0
-    long_ago: = sys.wall_seconds() - RUN_SLOT_SPARE_SECS - SPARE_EDGE_SECS
-    sweep_over_fakes(work, long_ago, before@, arena)!
+    sweep_over_fakes(work, RUN_SLOT_SPARE_SECS + SPARE_EDGE_SECS, before@, arena)!
     after: = run_case.slots(work, arena).len
     if after != MAX_RUN_SLOTS
         throw run_case
@@ -199,8 +202,7 @@ priv fn case_slot_in_use_is_spared(work: U8[], arena: Arena$@): Void!run_case.St
     //< A slot another process is still building looks just like these; swept, that build fails with
     //< `failed to write file`.
     $before: Sz = 0
-    lately: = sys.wall_seconds() - RUN_SLOT_SPARE_SECS + SPARE_EDGE_SECS
-    sweep_over_fakes(work, lately, before@, arena)!
+    sweep_over_fakes(work, RUN_SLOT_SPARE_SECS - SPARE_EDGE_SECS, before@, arena)!
     after: = run_case.slots(work, arena).len
     if after != before + 1
         throw run_case
@@ -494,6 +496,34 @@ priv fn case_damaged_exe_is_not_run(work: U8[], arena: Arena$@): Void!run_case.S
     if damaged.exited_with(0)
         throw run_case.broke("a damaged cached program ended with 0", damaged.out, arena)
 
+priv fn case_damaged_obj_is_rebuilt(work: U8[], arena: Arena$@): Void!run_case.Stop //<
+    //< A cached object a crash left empty is compiled again, not linked
+    //< **Objects are not put on the disk before the link**, so a power cut can leave one empty
+    //< while its name stays. The link records each object's size (`obj_is_recorded` in
+    //< `ksplc/tools/run.kspl`). Linked as it stands, it fails every run until the cache is
+    //< deleted by hand.
+    s: = fs.join(work, "s.kspl", arena)
+    first_round(work, arena)!
+    slot: = run_case.only_slot(work, arena)
+    if slot.len == 0
+        throw run_case.failed("the cache's slots are not one")
+    obj_dir: = fs.join(slot, "obj", arena)
+    names: = fs.read_dir(obj_dir, arena) catch
+        throw run_case.failed("the cached objects cannot be listed")
+    $emptied: Sz = 0
+    for n in names
+        if n.ends_with(".o")
+            io.write_file(fs.join(obj_dir, n, arena), "") catch
+                throw run_case.failed("a cached object cannot be emptied")
+            emptied += 1
+    if emptied == 0
+        throw run_case.failed("the cache holds no object")
+    // Without the program, the next run builds again and comes to the objects.
+    fs.remove_path(fs.join(slot, "prog.exe", arena)) catch
+        throw run_case.failed("the cached program cannot be removed")
+    run_case.expect_out(run_case.run_script(s, arena), "v=1",
+        "an emptied cached object is linked as it stands", arena)!
+
 priv fn run_with_cc_probe(work: U8[], body: U8[], arena: Arena$@, before: U8[] = ""): U8[] //<
     //< It runs once with a stand-in cc and returns the record
     //< A non-empty `before` runs first; the record holds only `body`'s run, opened by a `ROUND`
@@ -665,7 +695,7 @@ priv fn case_script_path(work: U8[], arena: Arena$@): Void!run_case.Stop //<
     //< The path does not leak to a grandchild process.
     fs.write_tree(work, U8[][]::{ "p.kspl", "c.kspl" },
         U8[][]::{ run_progs.PARENT_SRC, run_progs.CHILD_SRC }, arena) catch
-        throw run_case.failed("cannot place the material")
+            throw run_case.failed("cannot place the material")
     // The grandchild is **an ordinary build's** executable, not `ksplc run`'s: the right answer is
     // none, and the parent's path means it leaks to the child.
     gen: = fs.join(work, "c.c", arena)
@@ -743,7 +773,7 @@ priv fn case_unused_std_is_stripped(work: U8[], arena: Arena$@): Void!run_case.S
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
-    io.out().s("# ksplc run: 31\n")
+    io.out().s("# ksplc run: 32\n")
     run_case.run("it runs, and the second round runs from the cache", "run_cache",
         case_runs_and_caches, arena)
     run_case.run("editing the entry script rebuilds it", "run_edit_entry", case_edit_entry_rebuilds,
@@ -788,6 +818,8 @@ fn main(): I32
         case_cc_failure_does_not_leave_stale_exe, arena)
     run_case.run("a damaged cached program is built again or refused, never run", "run_damaged_exe",
         case_damaged_exe_is_not_run, arena)
+    run_case.run("an emptied cached object is compiled again", "run_damaged_obj",
+        case_damaged_obj_is_rebuilt, arena)
     run_case.run("there is no absolute path among the arguments handed to cc", "run_cc_argv",
         case_cc_gets_relative_paths, arena)
     run_case.run("cc is not started many times for the same question", "run_cc_once",

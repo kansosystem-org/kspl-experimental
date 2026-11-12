@@ -459,11 +459,15 @@ fn lies_under_on(root: U8[], path: U8[], windows: Bool, arena: Arena$@): Bool //
 priv fn path_steps(path: U8[], windows: Bool, arena: Arena$@): List<|U8[]|> //<
     //< An absolute path's steps, from the top. The root (`/`, `C:\`) is the first step, with `\`
     //< read as `/`, so two drives never match and `C:\` matches `C:/`.
+    //< Caution: **End the root step with one `/`.** A share's root ends with its separator or
+    //< without (`\\srv\sh\`, `\\srv\sh`); two spellings would make a file in the share outside it.
     $out: = List<|U8[]|>(arena)
     top: = sys.root_len_on(path, windows)
     root: = arena.text()
     for i in Range.asc(top)
         root.c('/' if path[i] == '\\' else path[i])
+    if top > 0 && !sys.is_path_sep(path[top - 1])
+        root.c('/')
     out.push(root.take())
     $at: Sz = top
     for at < path.len

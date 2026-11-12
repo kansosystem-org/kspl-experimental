@@ -10,6 +10,7 @@
 //   code_complete complete --vocab=<v> --merges=<m> --weights=<w> --in=<holes.jsonl> --out=<answers>
 //   code_complete loss --corpus=<held-out.jsonl> --vocab=<v> --merges=<m> --weights=<w>
 // ==========================================
+import "ksai/examples/code_complete/ksplc_oracle" as oracle
 import "ksai/examples/llama_engine/model" as ai_model
 import "ksai/model_file" as ai_file
 import "ksai/optim" as ai_optim
@@ -21,7 +22,7 @@ import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/json" + { Json_builder }
+import "std/json" { Json_builder }
 import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
@@ -111,24 +112,6 @@ priv fn load_tokenizer(at: Paths, arena: Arena$@): ai_tokenizer.Tokenizer
         sys.exit(1)
     return tok
 
-priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Value|> //< one JSON value per line
-    //< A blank line is skipped; **a broken one stops the run**, naming it, so a bad file is not
-    //< silently half-read.
-    data: = io.read_file(path, null) catch
-        io.err().s("[error] cannot read \{path\}\n")
-        sys.exit(1)
-    $out: = List<|json.Value|>(arena)
-    $n: Sz = 0
-    for line in data.lines(arena)
-        n += 1
-        if line.trim_spaces().len == 0
-            continue
-        doc: = json.parse(line, arena) catch
-            io.err().s("[error] \{path\}:\{n\} is not JSON\n")
-            sys.exit(1)
-        out.push(doc.val)
-    return out
-
 priv fn new_model(vocab: Sz, arena: Arena$@): ai_model.Mini_llama<|F32|>
     return ai_model.Mini_llama<|F32|>(vocab, DIM, HIDDEN, LAYERS, MAX_SEQ, arena)
 
@@ -142,7 +125,9 @@ priv fn encode_corpus(corpus: U8[], at: Paths, ids: Fim_ids, keep: Arena$@): Enc
     //< `keep`, outlives the call.
     defer scratch: = Arena(64 * 1024 * 1024)
     $tok: = load_tokenizer(at, scratch)
-    recs: = read_jsonl(corpus, scratch)
+    recs: = oracle.load_jsonl(corpus, scratch) catch
+        io.err().s("[error] cannot read \{corpus\}\n")
+        sys.exit(1)
     $out: = Encoded::{ .tokens = List<|I32|>(keep), .starts = List<|Sz|>(keep) }
     for rec in recs
         pre: = tok.encode(tail(rec.get("prefix").as_str().unwrap_or("")), scratch)
@@ -238,7 +223,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
         for t in Range(1, threads, 1)
             started: =
                 thread.Thread.spawn<|Worker|>(fim_worker, workers[t]@) catch
-                panic("code_complete: a training thread cannot be started")
+                    panic("code_complete: a training thread cannot be started")
             running.push(started)
         fim_worker(workers[0]@) // this thread is the first worker
         for t in Range.asc(running.len)
@@ -352,7 +337,9 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
     model.load_weights(st, model_arena) catch
         io.err().s("[error] \{weights\} does not fit the model's shape\n")
         sys.exit(1)
-    holes: = read_jsonl(in_path, model_arena)
+    holes: = oracle.load_jsonl(in_path, model_arena) catch
+        io.err().s("[error] cannot read \{in_path\}\n")
+        sys.exit(1)
     $rng: = prng.Prng(seed)
     defer work: = Arena(64 * 1024 * 1024)
     defer $text: = Str_builder()

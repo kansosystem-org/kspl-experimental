@@ -7,6 +7,7 @@ import "std/mem" { Arena }
 import "std/mem" { dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
+import "std/tests/scratch"
 import "std/thread"
 import "std/verdict"
 
@@ -280,7 +281,7 @@ fn test_fs_mkdir_all_race()
     verdict.start("[Fs] mkdir_all creating the same tree at once...")
     defer arena: = Arena(64 * 1024)
     root: = "out/tmp/kspl_test_debug_mkdir_race"
-    clear_tree_best_effort(root, arena)
+    scratch.remove_tree(root, arena)
     deep: = "out/tmp/kspl_test_debug_mkdir_race/a/b/c/d"
     $fails: = thread.Atomic_sz(0)
     $go: = thread.Atomic_sz(0)
@@ -300,21 +301,8 @@ fn test_fs_mkdir_all_race()
     assert(threads.len == RACE_DIRS, "all racers must start")
     assert(fs.is_dir(deep), "the tree must exist after the race")
     assert(fails.load() == 0, "losing the race must not be reported as a failure")
-    clear_tree_best_effort(root, arena)
+    scratch.remove_tree(root, arena)
     verdict.pass("when several create it at once, the one that loses the race is not a failure.")
-
-fn clear_tree_best_effort(root: U8[], arena: Arena$@) //< deletes a test's scratch tree
-    //< It does not report a failed delete (clean-up must not hide the result under test). A link
-    //< is removed, never entered.
-    entries: = fs.read_dir(root, arena) catch
-        return
-    for name in entries
-        full: = fs.join(root, name, arena)
-        if fs.is_dir(full) && !fs.is_link(full)
-            clear_tree_best_effort(full, arena)
-        else
-            fs.remove_path(full) catch {}
-    fs.remove_path(root) catch {}
 
 // ==========================================
 // std/sys: path safety decided by the text alone (is_safe_relative), and walk_files's depth limit.
@@ -433,7 +421,7 @@ fn test_fs_hidden_on_path(arena: Arena$@) //<
     wk_case: = refused_as(root, ".WELL-KNOWN/acme.txt", shown, .hidden, arena)
     git_shown: = refused_as(root, ".git/config", shown, .hidden, arena)
     allowed: = taken_under(root, ".git/config", .allowed, arena)
-    clear_tree_best_effort(root, arena)
+    scratch.remove_tree(root, arena)
     assert(hidden_git && hidden_deep, "a dot name hides the path at the top and deeper")
     assert(plain && not_yet, "a path with no dot name is not hidden, there or not there yet")
     assert(wk_shown && wk_none, "a name shown is not hidden, and hidden when not shown")
@@ -487,7 +475,7 @@ fn test_fs_join_under_refusals(arena: Arena$@) //<
         taken_under(root, "com12", keep, arena)
     whole: = fs.join_under(root, "", keep, arena) catch "refused"
     joined: = fs.join_under(root, "sub/page.txt", keep, arena) catch "refused"
-    clear_tree_best_effort(root, arena)
+    scratch.remove_tree(root, arena)
     assert(wrong.len == 0,
         arena.text().s("refused for its own reason: ").s(wrong).take())
     assert(ordinary, "an ordinary name, and one that only looks like a refused form, is taken")
@@ -631,6 +619,12 @@ fn test_fs_lies_under() //< whether a path lies inside a folder, by its steps
         assert(fs.lies_under_on("/A/b", "/a/B/c", win, arena), "ASCII case is ignored")
     drives: = fs.lies_under_on("C:\\w", "D:\\w\\x", true, arena)
     assert(!drives, "another drive is never inside")
+    // Caution: **Test a share named without its last `\`.** Its root step must match the same
+    // share named with it, or a file in the share reads as outside.
+    assert(fs.lies_under_on("\\\\srv\\sh", "\\\\srv\\sh\\x", true, arena),
+        "a file in a share lies inside the share named without its last `\\`")
+    assert(fs.lies_under_on("\\\\srv\\sh\\", "\\\\srv\\sh", true, arena),
+        "a share named without its last `\\` is the share itself")
     verdict.pass("A path lies inside by its steps: `/` and `\\` alike on Windows, case ignored.")
 
 fn test_fs_runs_by_extension() //< which names Windows starts, by their extension

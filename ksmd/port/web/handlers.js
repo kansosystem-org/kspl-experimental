@@ -167,7 +167,7 @@ function ksmdCommands(ks) {
     paste(true);
     return null;
   }, { direct: true });
-  ks.handle("undo", () => ks.act("ksmd_web_undo"));
+  ks.handle("undo", () => (ks.table.unclose() ? null : ks.act("ksmd_web_undo")));
   ks.handle("redo", () => ks.act("ksmd_web_redo"));
   ks.handle(["file-open", "file-save", "file-save-as"],
     (name) => (ks.fileCommand ? ks.fileCommand(name) : null), { looks: true });

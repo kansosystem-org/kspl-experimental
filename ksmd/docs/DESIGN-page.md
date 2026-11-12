@@ -51,6 +51,7 @@
 
 * The panel holds the two sorts, Clear filter from this column, a search box, and the column's values with tick boxes. OK applies them.
 * A condition is folded away under the list: is, is not, contains, is greater than, is less than, is empty, is not empty.
+* **"Is greater than" and "is less than" compare a number at the 15 digits it shows**, as a formula's `>` and `<` do. A colour rule compares so too. The page asks the editor (`ks.compareNumbers` in `ksmd/port/web/core.js`), so it has no rule of its own that could disagree with a formula.
 * Typing in the search box narrows the list shown, and never unticks a value.
 * The values are listed in the order the column sorts in. Values that differ only in case are one value, and empty cells one value listed last. The list stops at 1,000 values and says so.
 * **Past 1,000 values, the search looks through all of them**, and lists the first 1,000 it finds.
@@ -103,7 +104,7 @@
 * **Delete, Backspace and Cut on the whole table remove it, as one step.** On the data cells alone, Delete clears them, as it clears any range. Word's Delete clears a selected table's text and only Backspace removes it, which people find hard to tell apart.
 * **The caret takes the table's place** ("Removing a whole block" below).
 
-**Ctrl+C on a range puts its values on the clipboard as tab-separated rows**, which a spreadsheet takes, each number as calculated. Beside them goes what ksmd needs to paste the cells with their formulas ("Copying and pasting cells" below). A paste of rows from another program fills the table from the chosen cell, as one step, growing the table as needed. Each pasted value reads as typed text does, and `1,234.5` is a number. Rows pasted into text make a new table, whose first row gives the names.
+**Ctrl+C on a range puts its values on the clipboard as tab-separated rows**, which a spreadsheet takes, each number as calculated. Beside them goes what ksmd needs to paste the cells with their formulas ("Copying and pasting cells" below). A paste of rows from another program fills the table from the chosen cell, as one step, growing the table as needed. Each pasted value reads as typed text does, and `1,234.5` is a number. Spaces around a number or a date are left out, and text keeps its spaces. Rows pasted into text make a new table, whose first row gives the names. **An open cell takes the pasted text whole, line breaks included**, as Excel's cell does while it is edited. A person who pastes lines there means one cell's text. A chosen cell that is not open is where rows spread over cells.
 
 **The document fills the window's width by default, with a margin of 32 pixels**, so a table has a spreadsheet's room. View, Reading width keeps lines about 50 characters long instead, for long prose. The choice belongs to the browser, not to the document.
 
@@ -131,7 +132,7 @@
 
 **A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
 
-**The page is built as wasm32 with no C library**, using clang's bulk-memory instructions to copy and fill memory. **It is one file**: `ksmd/port/web/bundle.kspl` puts its style, its scripts and its wasm, as base64, inside `ksmd.html`. So the page opens from a file, and the local server hands it out alone.
+**The page is built as wasm32 with no C library**, using clang's bulk-memory instructions to copy and fill memory. **It is one file**: kssrv's `kssrv/page/bundle.kspl` puts its style, its scripts and its wasm, as base64, inside `ksmd.html`. One of the scripts is kssrv's client for the local server, `kssrv/page/client.js`, which ksagent's chat page holds too. So the page opens from a file, and the local server hands it out alone.
 
 **Opened from a file, the page reaches no file: a host opens and saves through two calls.** `ksmd.load(source)` opens a source, or names the line and column it refuses. `ksmd.source()` returns the canonical source to save, and `ksmd.onchange` learns of each change.
 
@@ -212,7 +213,7 @@
 
 **A range of cells runs from the chosen cell to a far corner.** Shift+click and Shift with an arrow key reach it from the chosen cell. A press on a row number chooses that row, and one on a column letter that column's data cells. Shift with either press reaches from the chosen cell's row or column.
 
-* **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells.
+* **The range keeps the identities of its rows and columns.** A row added above it, a sort or an undo leaves it on the same cells. A formula follows other rules on a sort. One on a sorted row moves as a copy, but a reference the shift would take out of the table keeps its places. One in another table keeps a range over several rows on its places ("How references follow edits" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 * **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. A typed character opens the chosen cell with that character in place of its value.
 * **A command on a chosen range acts on the rows in sight alone, as in Excel** (`clear_cells` in `ksmd/edit/editor_tables.kspl`). Delete, a fill, a copy, a cut and Remove row are such commands. A row a filter or a closed group hides keeps its cells, and a copy leaves it out. Find and Replace pass over those rows too. So none of these commands changes a cell the person cannot see.
 * **An input method composes from the first key.** The focus stands in an invisible text box over the chosen cell, since Windows keeps an input method off where no text can be typed. What is typed or composed there opens the cell, and the box becomes its input, so a composition goes on unbroken.
@@ -440,7 +441,7 @@
 * **The formula takes the ending only where it then reads.** `=1+(` and `=round(2.5` stay as typed, with their `#SYNTAX!`, so the reason names the person's own mistake.
 * **A `)` too many is left alone**, since no ending can close it. A `\` before the end is text, so `"C:\` closes as `"C:\"`.
 * **The status bar says what was added**, such as `Added ) at the end so the formula reads. Ctrl+Z takes it back.` A cell that holds more than was typed, with no word why, looks like a fault.
-* **`Ctrl`+`Z` right after gives back the formula as typed**, as for dates and links: the editor records two steps. Quoted text left open runs over the cell's end in the file, so that formula goes in closed, as one step.
+* **`Ctrl`+`Z` right after gives back the formula as typed**, as for dates and links: the editor records two steps. Quoted text left open runs over the cell's end in the file, so that formula goes in closed, as one step. The page keeps the typed form instead (`unclose` in `ksmd/port/web/cellbox.js`). `Ctrl`+`Z` right after then undoes the step and opens the cell with the formula as typed. `Esc` there leaves the value the cell held before.
 * **It is the third choice under Edit ▸ AutoCorrect, on at first.** A person who wants to see each `#SYNTAX!` turns it off.
 * **The page adds no `)` while a formula is typed.** A bracket that appears ahead of the caret is typed over or doubled, depending on where the caret went since. Spreadsheets that add one draw that complaint.
 * **Excel asks in a dialog before it corrects a formula.** A dialog on every Enter costs a key each time, and its proposals can change the meaning. The page asks nothing, and adds only what reads.
@@ -544,11 +545,11 @@
 * **The browser's line would also print the page's address**, which only names the local server and tells the reader of the paper nothing.
 * **A browser without margin boxes still prints its own line**, and its print dialog turns that line off.
 
-**A table, chart, image or include can be left out of the output: `invisible="printing"` in its clause.** A table that only feeds a chart is the usual case. It still calculates, and the chart still draws from it.
+**A table, chart, diagram, image or include can be left out of the output: `invisible="printing"` in its clause.** A table that only feeds a chart is the usual case. It still calculates, and the chart still draws from it.
 
 * **The attribute names the exception, so a new block is in the output until its author says otherwise.**
 * **While editing, such a block has a dashed frame and the words "Not in print or PDF".**
-* **The table menu's Table flyout holds Leave out of print. A chart, an image and an include have the button beside Remove.** Each change is one step of undo, and the button reads Put back in print once it is set.
+* **The table menu's Table flyout holds Leave out of print. A chart, a diagram, an image and an include have the button beside Remove.** Each change is one step of undo, and the button reads Put back in print once it is set.
 
 ## Repeat
 

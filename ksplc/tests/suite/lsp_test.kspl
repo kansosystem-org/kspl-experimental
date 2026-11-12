@@ -128,8 +128,8 @@ priv fn check_variant_through_alias(c: jsonrpc_client.Client$@, arena: Arena$@)
     jump: = "a jump from it lands on the enum's variant"
     went: =
         c.request("textDocument/definition", pos, lsp_client.READ_MS, arena) catch e
-        verdict.check(jump, false, end_text(e))
-        return
+            verdict.check(jump, false, end_text(e))
+            return
     landed: = went.val.get("result").get("range").get("start").get("line").as_int().unwrap_or(-1)
     verdict.check(jump, landed == I32::decl_line(ALIAS_SRC, "  line(len: I32)", arena),
         lsp_client.why(c, arena.text().s("line \{landed\}").take(), arena))
@@ -377,9 +377,9 @@ priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): U8[]
 priv fn check_didclose(exe: U8[], arena: Arena$@)
     $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
-        verdict.check("a document left open is restored after the worker is remade", false,
-            "the client cannot be started")
-        return
+            verdict.check("a document left open is restored after the worker is remade", false,
+                "the client cannot be started")
+            return
     defer c.free()
     for uri in U8[][]::{ CLOSED_URI, OPEN_URI }
         lsp_client.open(c@, uri, CLOSE_SRC, arena)
@@ -416,9 +416,9 @@ priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
     sys.set_env("KSPLC_DEFINES", "probe_flag") catch panic("KSPLC_DEFINES could not be set")
     $c2: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
-        verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", false,
-            "the client cannot be started")
-        return
+            verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", false,
+                "the client cannot be started")
+            return
     defer c2.free()
     lsp_client.open(c2@, CFG_URI, CFG_SRC, arena)
     on: = lsp_client.answer(c2@, "textDocument/hover",
@@ -460,12 +460,12 @@ priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Value //<
     //< It starts the language server in that directory and counts `hit`'s rename destinations
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
-        return .null_val
+            return .null_val
     defer c.free()
     $b: = Json_builder(arena)
     _ready: =
         c.request("initialize", b.obj().build(), lsp_client.READ_MS, arena) catch
-        return .null_val
+            return .null_val
     pos: = b.obj().set("line", b.int_val(0I64)).set("character", b.int_val(3I64)).build()
     doc: = b.obj().set("uri", b.str_val("pkg/lib.kspl")).build()
     params: = b.obj().set("textDocument", doc).set("position", pos)
@@ -490,13 +490,13 @@ priv fn check_spaced_folder(exe: U8[], arena: Arena$@)
         return
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
-        verdict.check(name, false, "the language server cannot be started")
-        return
+            verdict.check(name, false, "the language server cannot be started")
+            return
     defer c.free()
     _ready: =
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch
-        verdict.check(name, false, "initialize does not return")
-        return
+            verdict.check(name, false, "initialize does not return")
+            return
     user: = lsp_client.encoded_uri_of(dir, "user.kspl", arena)
     lsp_client.open(c@, user, SPACED_BODIES[1], arena)
     got: = lsp_client.answer(c@, "textDocument/definition",
@@ -550,8 +550,8 @@ priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
         return
     $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
-        verdict.check(name, false, "the client cannot be started")
-        return
+            verdict.check(name, false, "the client cannot be started")
+            return
     defer c.free()
     lsp_client.open(c@, "cfg_walk.kspl", CFG_WALK_SRC, arena)
     before: = dropped_reason(c@, arena)
@@ -585,13 +585,13 @@ priv fn check_generic_caller(exe: U8[], arena: Arena$@)
         return
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
-        verdict.check(name, false, "the language server cannot be started")
-        return
+            verdict.check(name, false, "the language server cannot be started")
+            return
     defer c.free()
     _ready: =
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch
-        verdict.check(name, false, "initialize does not return")
-        return
+            verdict.check(name, false, "initialize does not return")
+            return
     prep: = prepare_fn(c@, RELAY_RELS[0], RELAY_BODIES[0], "fn hit", arena)
     if !verdict.check("prepareCallHierarchy lands on the generic's callee", prep.found,
         lsp_client.why(c@, prep.raw, arena))
@@ -675,13 +675,13 @@ fn main(): I32
         return harness.fatal("the working directory cannot be read")
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
-        return harness.fatal("the language server cannot be started")
+            return harness.fatal("the language server cannot be started")
     defer c.free()
 
     init: =
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch e
-        return harness
-            .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
+            return harness
+                .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     d15: = lsp_client.dump(init.val, arena)
     ok3: = !is_missing(init.val.get("result").get("capabilities"))
     verdict.check("initialize returns capabilities", ok3, d15)
@@ -725,6 +725,7 @@ fn main(): I32
     lsp_spell.check_hover_owner(c@, arena)
     lsp_hover.check_hover_marks(c@, arena)
     lsp_hover.check_hover_values(c@, arena)
+    lsp_hover.check_hover_undefined(c@, arena)
     lsp_spell.check_uri_spelling(c@, top, arena)
     check_hover_builtin_member(c@, arena)
     check_variant_through_alias(c@, arena)

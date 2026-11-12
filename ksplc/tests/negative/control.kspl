@@ -108,6 +108,18 @@ fn main()
 fn main()
   a: = 1, b: = 2
   _c: = a + b
+// ==== case for_in_untyped_literal
+//< A `for … in` over a literal with no type is reported once, where the literal stands
+//< **The loop reads the subject by index.** A subject of no known type, reported already, was
+//< reported a second time as "type 'Unknown' does not support indexing", a type no one wrote.
+// EXPECT: cannot infer the struct type for an implicit literal
+// EXPECT-NOT: does not support indexing
+import "std/io"
+
+fn main(): I32
+  for t in ::{ "", "12" }
+    io.out().s(t)
+  return 0
 // ==== case for_one_init
 //< A loop's header declares one variable; a second one is declared before the loop
 // EXPECT: Note: a loop's header takes one declaration and one step
@@ -733,6 +745,50 @@ fn number(n: I32): I32
 
 fn main(): I32
   return letter(97) + number(1)
+// ==== case switch_case_leaves_variable_unset
+//< A variable set in only some cases of a switch may be unset after it
+//< A switch with every variant listed and no `default` enters one of its cases, so what every
+//< case sets is set after it. Here one case of each form leaves `x` unset, so each read is refused.
+// EXPECT: variable 'x' may be used uninitialized here
+// EXPECT: variable 'y' may be used uninitialized here
+// EXPECT: variable 'z' may be used uninitialized here
+// EXPECT: variable 'w' may be used uninitialized here
+enum Color
+  red
+  green
+
+fn by_variant(c: Color): I32
+  $x: I32
+  switch c
+  case .red
+    x = 1
+  case .green {}
+  return x
+
+fn by_bool(t: Bool): I32
+  $y: I32
+  switch t
+  case true
+    y = 1
+  case false {}
+  return y
+
+fn by_option(o: I32?): I32
+  $z: I32
+  switch o
+  case .some(v)
+    z = v
+  case .none {}
+  return z
+
+fn by_short_form(o: I32?): I32
+  $w: I32
+  if v: = o
+    w = v
+  return w
+
+fn main(): I32
+  return by_variant(.red) + by_bool(true) + by_option(.none) + by_short_form(.none)
 // ==== case switch_on_string_shown_as_written
 //< A string subject is refused, and the message names its type as written
 //< **The C spelling (`Slice_U8_Const`) is a name the writer never wrote**, and a reader

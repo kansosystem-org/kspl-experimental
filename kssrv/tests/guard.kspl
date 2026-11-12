@@ -169,7 +169,7 @@ priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
 
 priv fn alone(port: I32, arena: Arena$@): Bool!client.Http_end //<
     //< Whether the server comes to hold only the connection asking, within the usual timeout
-    deadline: = sys.mono_us() + I64::client.DEFAULT_TIMEOUT_MS * 1000I64
+    deadline: = sys.deadline_after_ms(client.DEFAULT_TIMEOUT_MS)
     for sys.mono_us() < deadline
         st: = client.get(port, "/api/status", "", arena)!
         if client.doc_of(st, arena).get("connections_open").as_int64().unwrap_or(-1I64) == 1I64
@@ -181,7 +181,7 @@ priv fn heap_once_served(port: I32, want: I64, arena: Arena$@): I64!client.Http_
     //< The heap `/api/status` names once the server has answered `want` requests besides these
     //< Each status request counts itself too, so the figure is checked against `want` plus the
     //< polls so far. -1 where it does not get there within the usual timeout.
-    deadline: = sys.mono_us() + I64::client.DEFAULT_TIMEOUT_MS * 1000I64
+    deadline: = sys.deadline_after_ms(client.DEFAULT_TIMEOUT_MS)
     $polls: I64 = 0I64
     for sys.mono_us() < deadline
         st: = client.get(port, "/api/status", "", arena)!
@@ -195,7 +195,7 @@ priv fn heap_once_served(port: I32, want: I64, arena: Arena$@): I64!client.Http_
 priv fn open_reaches(asker: client.Conn$@, want: Sz, arena: Arena$@): Bool!client.Http_end //<
     //< Whether `/api/status`, asked on `asker`, comes to name `want` connections open
     //< **It asks on a connection already held**, so asking adds none.
-    deadline: = sys.mono_us() + I64::client.DEFAULT_TIMEOUT_MS * 1000I64
+    deadline: = sys.deadline_after_ms(client.DEFAULT_TIMEOUT_MS)
     for sys.mono_us() < deadline
         asker.send(client.raw("GET", "/api/status", "", "", arena))!
         st: = asker.next(false, client.DEFAULT_TIMEOUT_MS, arena)!

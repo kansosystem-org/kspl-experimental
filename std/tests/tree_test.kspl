@@ -10,8 +10,8 @@ import "std/mem" + { Arena, dealloc }
 import "std/str" // `arena.text()`
 import "std/subproc"
 import "std/sys"
-import "std/tests/file_mode"
 import "std/tests/fs_test"
+import "std/tests/scratch"
 import "std/tests/sys_test"
 import "std/thread"
 import "std/verdict"
@@ -38,8 +38,8 @@ fn test_fs_mkdir_unique()
     file: = fs.join(a, "a_file", arena)
     io.write_file(file, "x") catch panic("the probe file must be writable")
     _refused: = fs.mkdir_unique(file, "box_", arena) catch
-        fs_test.clear_tree_best_effort(a, arena)
-        fs_test.clear_tree_best_effort(b, arena)
+        scratch.remove_tree(a, arena)
+        scratch.remove_tree(b, arena)
         verdict.pass("Each call makes a place of its own, and a base holding a file is refused.")
         return
     panic("a base that is a file must be refused")
@@ -63,19 +63,17 @@ fn test_fs_write_unique()
     fs.write_unique(a, "page_", ".html", "x", arena) catch
         refused = true
     assert(refused, "a base that is a file must be refused")
-    shown: = file_mode.mode_shown(a, arena)
-    if shown.len > 0
-        assert(shown.equals("-rw-------"), "only its owner may read or write it")
-    fs_test.clear_tree_best_effort(dir, arena)
-    if shown.len == 0
+    // **A probe of known mode decides whether the mode tells anything**, never the file itself: a
+    // file everyone may read must fail here, not pass as "no mode".
+    modes: = scratch.keeps_modes(dir, arena)
+    if modes
+        assert(scratch.mode_shown(a, arena).equals("-rw-------"),
+            "only its owner may read or write it")
+    scratch.remove_tree(dir, arena)
+    if !modes
         verdict.skip("this system shows no POSIX mode (Windows, or a filesystem without one)")
         return
     verdict.pass("Each call makes a file of its own, which only its owner may read.")
-
-priv fn set_mode(path: U8[], mode: U8[], arena: Arena$@): Bool //< `chmod`, true where it ran
-    if sys.is_windows()
-        return false
-    return sys_test.ran_to_zero(U8[][]::{ "/bin/chmod", mode, path }, arena)
 
 fn test_fs_replace_file()
     verdict.start("[Fs] replacing a file whole, with its mode kept or narrowed test...")
@@ -88,22 +86,22 @@ fn test_fs_replace_file()
     assert(holds(doc, "two"), "the file holds what was written last")
     $last: U8[] = "two"
     // **The mode stays**: renamed over it, the part's own 0600 would become the file's.
-    $shown: U8[] = ""
-    if set_mode(doc, "640", arena)
+    modes: = scratch.keeps_modes(dir, arena)
+    if scratch.set_mode(doc, "640", arena)
         fs.replace_file(doc, "three", .kept) catch panic("the file should be replaced again")
-        shown = file_mode.mode_shown(doc, arena)
-        if shown.len > 0
-            assert(shown.equals("-rw-r-----"), "kept: the replaced file's bits stay")
+        if modes
+            assert(scratch.mode_shown(doc, arena).equals("-rw-r-----"),
+                "kept: the replaced file's bits stay")
         fs.replace_file(doc, "four", .owner_only) catch panic("the file should be narrowed")
-        if shown.len > 0
-            assert(file_mode.mode_shown(doc, arena).equals("-rw-------"),
+        if modes
+            assert(scratch.mode_shown(doc, arena).equals("-rw-------"),
                 "owner_only: its owner alone")
         last = "four"
     // A read-only file is replaced, as a rename over it is, and stays read-only.
-    if set_mode(doc, "444", arena)
+    if scratch.set_mode(doc, "444", arena)
         fs.replace_file(doc, "five", .kept) catch panic("a read-only file should be replaced")
-        if shown.len > 0
-            assert(file_mode.mode_shown(doc, arena).equals("-r--r--r--"), "kept: read-only stays")
+        if modes
+            assert(scratch.mode_shown(doc, arena).equals("-r--r--r--"), "kept: read-only stays")
         last = "five"
     assert(holds(doc, last), "each replacement holds its own content")
     // A folder at the name is refused, and its part goes with the refusal.
@@ -120,9 +118,9 @@ fn test_fs_replace_file()
     names: = fs.read_dir(dir, arena) catch panic("the folder must be readable")
     assert(names.len == 2, "no part is left beside the file")
     replace_long_names(dir, arena)
-    _writable: = set_mode(doc, "644", arena)
-    fs_test.clear_tree_best_effort(dir, arena)
-    if shown.len == 0
+    _writable: = scratch.set_mode(doc, "644", arena)
+    scratch.remove_tree(dir, arena)
+    if !modes
         verdict.skip("this system shows no POSIX mode (Windows, or a filesystem without one)")
         return
     verdict
@@ -167,7 +165,7 @@ fn test_fs_long_name()
         missing = true
         fallback ""
     assert(missing, "a name with nothing at it fails")
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     verdict.pass("A long name comes back as written, and a missing one fails.")
 
 fn test_fs_write_tree()
@@ -202,7 +200,7 @@ fn test_fs_write_tree()
             mkdir_refused = is_invalid_path(e)
         assert(mkdir_refused && !fs.exists(fs.join(dir, "x", arena)),
             "mkdir_all refuses \\ on POSIX, and makes no folder for its first part")
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     verdict.pass("A tree is written with its levels made, and a name climbing out writes nothing.")
 
 priv fn refused_as_invalid_tree(dir: U8[], rel: U8[]): Bool //<
@@ -263,7 +261,7 @@ fn test_fs_copy_tree()
             "a copied file without one gains none")
         check_mode_from_first_byte(dir, arena)
         check_backslash_names(dir, arena)
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     verdict.pass("A tree is copied whole to a new place, and a place that stands is refused.")
 
 priv fn check_backslash_names(dir: U8[], arena: Arena$@) //<
@@ -334,13 +332,13 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others can write from one th
         "a folder that is not there is missing")
     if sys.is_windows()
         assert(fs.dir_trust(dir) == fs.Dir_trust.unchecked, "Windows's ACL is not read")
-        fs_test.clear_tree_best_effort(dir, arena)
+        scratch.remove_tree(dir, arena)
         verdict.pass("A folder not there is missing, and Windows answers unchecked.")
         return
     // The umask decides the new folder's mode, so it is set on purpose before each look.
     assert(trust_at_mode(dir, "700", arena) == fs.Dir_trust.own, "its owner alone writes it")
     assert(trust_at_mode(dir, "777", arena) == fs.Dir_trust.shared, "everyone may write it")
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     verdict
         .pass("A folder its owner alone writes is own, one everyone writes is shared, and one not \
             there is missing.")
@@ -364,7 +362,7 @@ fn test_fs_secret_trust() //< secret_trust tells a file others can read from one
     assert(fs.secret_trust(dir) == fs.Secret_trust.missing, "a folder holds no secret")
     if sys.is_windows()
         assert(fs.secret_trust(file) == fs.Secret_trust.unchecked, "Windows's ACL is not read")
-        fs_test.clear_tree_best_effort(dir, arena)
+        scratch.remove_tree(dir, arena)
         verdict.pass("A file not there and a folder are missing, and Windows answers unchecked.")
         return
     // The umask decides the new file's mode, so it is set on purpose before each look.
@@ -372,7 +370,7 @@ fn test_fs_secret_trust() //< secret_trust tells a file others can read from one
     assert(secret_at_mode(file, "640", arena) == fs.Secret_trust.shared, "its group reads it")
     assert(secret_at_mode(file, "604", arena) == fs.Secret_trust.shared, "everyone reads it")
     assert(secret_at_mode(file, "620", arena) == fs.Secret_trust.shared, "its group writes it")
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     verdict
         .pass("A file its owner alone reads is own, one its group or everyone can read or write is \
             shared, and one not there is missing.")
@@ -380,10 +378,6 @@ fn test_fs_secret_trust() //< secret_trust tells a file others can read from one
 // ==========================================
 // Tests of `std/fs`'s walks past links, made with `ln -s` (where there is none, the test skips)
 // ==========================================
-priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
-    //< `ln -s`; false where none is made
-    return sys_test.ran_to_zero(U8[][]::{ "ln", "-s", target, at }, arena) && fs.is_link(at)
-
 fn test_fs_walk_links() //<
     //< A walk does not enter a link to a directory, and a copy takes no link at all
     //< Two links to `.` would make it visit 2^depth directories, and a link out of the tree would
@@ -401,10 +395,11 @@ fn test_fs_walk_links() //<
     here: = fs.absolute(root, arena) catch panic("the root has no absolute path")
     away: = fs.absolute(outside, arena) catch panic("the outside has no absolute path")
     made: =
-        made_link(here, fs.join(root, "self1", arena), arena) &&
-        made_link(here, fs.join(root, "self2", arena), arena) &&
-        made_link(away, fs.join(root, "away", arena), arena) &&
-        made_link(fs.join(away, "secret.txt", arena), fs.join(root, "leak.txt", arena), arena)
+        scratch.made_link(here, fs.join(root, "self1", arena), arena) &&
+        scratch.made_link(here, fs.join(root, "self2", arena), arena) &&
+        scratch.made_link(away, fs.join(root, "away", arena), arena) &&
+        scratch.made_link(fs.join(away, "secret.txt", arena),
+        fs.join(root, "leak.txt", arena), arena)
     if !made
         verdict.skip("a link cannot be made with `ln -s` in this environment")
         return
@@ -431,9 +426,9 @@ fn test_fs_link_on_path() //<
     io.write_file(fs.join(outside, "secret.txt", arena), "s\n") catch
         panic("secret.txt cannot be written")
     away: = fs.absolute(outside, arena) catch panic("the outside has no absolute path")
-    if !made_link(away, fs.join(root, "esc", arena), arena)
-        fs_test.clear_tree_best_effort(root, arena)
-        fs_test.clear_tree_best_effort(outside, arena)
+    if !scratch.made_link(away, fs.join(root, "esc", arena), arena)
+        scratch.remove_tree(root, arena)
+        scratch.remove_tree(outside, arena)
         verdict.skip("a link cannot be made with `ln -s` in this environment")
         return
     // From the current folder, the root's own path is the path under an empty root.
@@ -443,8 +438,8 @@ fn test_fs_link_on_path() //<
     kept_given: = fs.stays_under(root, "esc/secret.txt")
     kept_empty: = fs.stays_under("", whole)
     plain: = fs.stays_under("", fs.join(root, "plain.txt", arena))
-    fs_test.clear_tree_best_effort(root, arena)
-    fs_test.clear_tree_best_effort(outside, arena)
+    scratch.remove_tree(root, arena)
+    scratch.remove_tree(outside, arena)
     assert(given && empty, "join_under refuses the link as .link, the root given or empty")
     assert(!kept_given && !kept_empty, "stays_under says the link leaves, the root given or empty")
     assert(plain, "a path with no link under an empty root stays under")
@@ -488,7 +483,7 @@ fn test_fs_copy_file()
         dir_refused = true
     assert(dir_refused && !fs.exists(fs.join(dir, "y.txt", arena)),
         "a directory is no regular file, and nothing is made for it")
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     verdict
         .pass("copy_file copies to a free name, and refuses one that stands, a missing source and a \
             directory.")

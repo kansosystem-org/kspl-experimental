@@ -17,6 +17,7 @@ import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/extract"
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
+import "tools/ci_gates"
 
 priv fn check_extracted_suite_shares(arena: Arena$@)
     $bad: = List<|U8[]|>(arena)
@@ -79,8 +80,9 @@ priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on
         rel: = record.sub_from(tab + 1)
         body: =
             io.read_file_capped(fs.join(harness.root(), rel, arena), 2, arena) catch
-            bad.push(arena.text().s(rel).s(": cannot read its shebang").take())
-            continue
+                bad
+                    .push(arena.text().s(rel).s(": cannot read its shebang").take())
+                continue
         seen += 1
         if missing_exec(record.sub(0, 6), body)
             bad.push(rel)
@@ -163,28 +165,10 @@ priv const GATES_SRC: U8[] = "tools/ci_gates.kspl" //<
     //< The CI's sets and the targets the workflow's matrices run agree
     //< Caution: **A set missing from the `.yml` silently stops running.** The runner refuses a set
     //< holding no gate but cannot see the CI's matrix; this is the second link.
-priv const SET_HEAD: U8[] = "enum Set "
-priv const SET_ORDER_HEAD: U8[] = "const SET_ORDER:"
-priv const SHARD_PREFIX: U8[] = "ci_shard_" //< the sets one job of `ci` runs
+priv const SHARD_PREFIX: U8[] = "ci-shard-" //< the sets one job of `ci` runs
 priv const MATRIX_HEAD: U8[] = "target: ["
 priv const LINUX_ONLY: U8[] = "ci-shard-linux" //<
     //< What only the Linux runner runs (qemu, wasm, the browser, BLAS)
-
-fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The variants `enum Set` declares, in the source's spelling
-    $out: = List<|U8[]|>(arena)
-    $inside: = false
-    for line in src.lines(arena)
-        if !inside
-            inside = line.starts_with(SET_HEAD)
-            continue
-        if !line.starts_with("  ")
-            break
-        t: = line.trim_spaces()
-        name: = t.sub(0, t.find_char(' ').unwrap_or(t.len))
-        if name.len > 0 && !name.starts_with("//")
-            out.push(name)
-    return out
 
 priv fn body_of(names: List<|U8[]|>@, bodies: List<|U8[]|>@, job: U8[]): U8[] //<
     //< Looks up a job's body by name (empty where there is none)
@@ -219,26 +203,14 @@ priv fn check_job(body: U8[], job: U8[], want: List<|U8[]|>@, bad: List<|U8[]|>$
 
 priv fn check_ci_shards(arena: Arena$@)
     $bad: = List<|U8[]|>(arena)
-    src: = harness.read_under_root(GATES_SRC)
-    sets: = set_variants(src, arena)
-    // **`set_order` is how a name is read back**, so a set missing there cannot be run.
-    $order: U8[] = ""
-    if head: = src.find_str(SET_ORDER_HEAD)
-        tail: = src.sub_from(head)
-        order = tail.sub(0, tail.find_char('}').unwrap_or(tail.len))
     $want: = List<|U8[]|>(arena)
-    for i in Range.asc(sets.len)
-        v: = sets.get(i)
-        if order.find_str(arena.text().s("Set.").s(v).s(",").take()).is_none() &&
-            order.find_str(arena.text().s("Set.").s(v).s(" ").take()).is_none()
-            bad
-                .push(arena.text().s("Set.").s(v).s(" is not in set_order in ").s(GATES_SRC).take())
-        name: = v.replace("_", "-", arena)
-        if v.starts_with(SHARD_PREFIX) && !name.equals(LINUX_ONLY)
+    for set in ci_gates.Set.variants()
+        name: = set.variant_name().replace("_", "-", arena)
+        if name.starts_with(SHARD_PREFIX) && !name.equals(LINUX_ONLY)
             want.push(name)
     if want.len == 0
         verdict.check("the CI's shards agree with the workflow's matrix", false,
-            arena.text().s("could not read the ci_shard_ sets out of ").s(GATES_SRC).take())
+            arena.text().s(GATES_SRC).s(" holds no `ci_shard_` set").take())
         return
     $names: = List<|U8[]|>(arena)
     $bodies: = List<|U8[]|>(arena)

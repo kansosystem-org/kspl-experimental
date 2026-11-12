@@ -12,9 +12,6 @@ const MAX_DISTANCE_MM: U32 = 3000 //< the largest distance that can be measured
 const ECHO_TIMEOUT_US: U32 = 18000 //< the limit on waiting for ECHO
     //< The same value as Freenove's sample (300cm × 60).
 
-const SETTLE_US: U32 = 36000 //<
-    //< Left between measurements, so the next one does not pick up the previous reflection
-
 const TRIGGER_PULSE_US: U32 = 10 //< the pulse width sent on TRIG
     //< The data sheet requires at least 10µs.
 
@@ -37,8 +34,9 @@ fn echo_us_to_mm(us: U32): U32 //< converts the time of flight in µs to the dis
     return U32::(U64::us * 17U64 / 100U64)
 
 fn measure(trig: U32, echo: U32): Distance //< measures once
-    //< It blocks for 2 × echo_timeout_us (36ms) at worst. When calling it repeatedly, leave
-    //< settle_us between calls.
+    //< It blocks for 2 × ECHO_TIMEOUT_US (36ms) at worst. When calling it repeatedly, leave 36ms
+    //< between calls, so the next one does not pick up the previous reflection. It does not wait
+    //< by itself, so a caller with a longer period loses no time.
     // --- send the 10µs pulse ---
     // Drive Low first; starting from High it is not seen as a pulse.
     gpio.clear(trig)

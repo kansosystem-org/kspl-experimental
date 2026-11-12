@@ -65,6 +65,7 @@ To take the passphrase off a key, run `openssl pkey -in locked.pem -out key.pem`
 | [`kssrv/conn.kspl`](conn.kspl) | One connection's state, and how a response is queued |
 | [`kssrv/api.kspl`](api.kspl) | The endpoints under `/api/` and their routing table |
 | [`kssrv/https.kspl`](https.kspl) | The checks on the certificate and key at start, and each connection's bytes through TLS |
+| [`kssrv/page/`](page/) | The browser's side of the local protocol (`client.js`), and the step that builds a page into the one file `--page` names (`bundle.kspl`). ksmd's page and ksagent's chat page are built with both |
 | [`kssrv/tests/`](tests/) | The tests `make test` runs ("The tests" below) |
 | [`kssrv/docs/`](docs/) | The client agreement and the design ("Further reading" below) |
 

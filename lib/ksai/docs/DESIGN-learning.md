@@ -73,11 +73,11 @@ LoRA (low-rank adaptation) fine-tunes a model by training small added matrices, 
 | | Heads | RoPE | Backward pass |
 | :-- | :-- | :-- | :-- |
 | `Self_attention` | one | the whole row, in adjacent pairs | **yes** ([`attention_train.kspl`](../attention_train.kspl)) |
-| `Gqa_attention` | split per head (GQA too) | per head's width, variable base (NeoX-style) | none (inference only) |
+| `Gqa_cache` | split per head (GQA too) | per head's width, variable base (NeoX-style) | none (inference only) |
 
 Caution: **Do not let `Self_attention` take a head count.** Nothing in it splits Q/K/V per head, so the count would have no effect (Principle 5). `n_heads=2` would change only the scale `1/sqrt(dim/n_heads)`, unnoticed.
 
-Nor is the per-head code copied into it. `Gqa_cache` already has it, for `Gqa_attention` and the Qwen model alike, and a copy would give one purpose two means (Principle 6).
+Nor is the per-head code copied into it. `Gqa_cache` already has it, and a copy would give one purpose two means (Principle 6). `Gqa_cache` holds only the keys, the values and the attention over them. The model computes the projections around it, as `Qwen` does from quantized weights.
 
 **`dim` has to be even**, since RoPE rotates adjacent elements in pairs. An odd `dim` stops `new` on the spot, rather than fail inside the first `forward` with nothing naming the cause.
 
@@ -243,7 +243,7 @@ The rest is the same: grouped-query attention, RoPE of the NeoX kind with the fi
 * **Why it is in the package, not in an example**: the chat server, `benches/bench_qwen.kspl`, the tests and the fuzz check all run it.
 * **Every tensor's shape is checked against the settings, and every tensor must be read.** An unread tensor means a layer not computed, so the answers would be another model's (`Qwen_error.unread`).
 * **Each setting has a cap, and so does the memory the settings ask for together.** One copy of every delta net's state may take 1 GiB, and the cache 256 GiB. One block's keys may not pass the numbers one tensor holds (`MAX_TENSOR_ELEMS`). A small file whose settings fit its tensors can still ask for more than a machine holds. It is refused by name (`Qwen_error.bad_setting`), not stopped by a failed allocation.
-* **The keys and values go to `nn.Gqa_cache`**, which `nn.Gqa_attention` uses too, so the attention is written once.
+* **The keys and values go to `nn.Gqa_cache`**, so the attention is written once, in `nn`.
 
 **A prompt is read many tokens at a time.** A product turns each block into whole numbers once for all the tokens it multiplies. So a piece of 64 tokens costs far less than 64 single tokens. **The scores after a token are the same bits however the prompt was cut into pieces.** Each output is summed in a fixed order, and each query row attends only to its own past. The tests compare one call, two pieces and twelve single tokens bit for bit ([`tests/qwen_test.kspl`](../tests/qwen_test.kspl)).
 

@@ -150,7 +150,8 @@ Top-level declarations (`const`, variables, `extern` variables) must carry a typ
 | `$i: Sz = 0` | No | Deleting it changes the type: the literal would be `I32` |
 | `wide: I64 = small` | No | The conversion follows the annotation |
 | `return Option<\|I32\|>.some(n)` in a function returning `I32?`, `kinds.push(Kind.small)` | Yes, the variant's type | The signature or the parameter already says it |
-| `k: = Kind.small`, `mode == Mode.on` | No | Nothing else says the type |
+| `k: = Kind.small` | No | Nothing else says the type |
+| `mode == Mode.on` | No | The left-hand side gives the type, so `.on` may stand there too; a comparison is not reported |
 
 * **Inferable is not redundant.** A model reads the text and cannot hover ("The reader can be a model" in [`DESIGN-repository.md`](DESIGN-repository.md)). Removing every inferable type would take it from the readers least able to recover it.
 * **An annotation doing work is not reported**: a literal or a conversion follows it, and `::{ … }` or `.small` are typed by it. Nor is a cast that [I0301] calls unnecessary, since deleting both would leave the value's own type.
@@ -159,7 +160,7 @@ Top-level declarations (`const`, variables, `extern` variables) must carry a typ
 **An enum's type at its variant goes where the place already gives it** ("6.6.2 Where the type may be omitted" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Such places are a declaration's written type and the place `=` assigns to, a call's parameter, and a payload. So are a struct literal's field, an array element, the value a `catch` stands in for, and the function's return and error types. There, [H0302] reports the enum's name, so the tree reads `return .some(n)`, `kinds.push(.small)` and `throw .lost`.
 
 * **The variant's name stays, and it says which value.** The enum's name stands in the signature, the parameter or the declaration, and the compiler checks the value against it.
-* **Only where the variant's type is the one the place expects.** An `if … else` in such a place passes the type to both sides, so `return .some(n) if ok else .none` needs no name. Where nothing fixes the type, the name stays. That holds in a comparison, and in an `if … else` in no such place (`v: = .ok if c else .err`). It holds in an argument a generic infers its type from.
+* **Only where the variant's type is the one the place expects.** An `if … else` in such a place passes the type to both sides, so `return .some(n) if ok else .none` needs no name. Where nothing fixes the type, the name stays. That holds on a comparison's left-hand side, and in an `if … else` in no such place (`v: = .ok if c else .err`). It holds in an argument a generic infers its type from.
 * **One fix per line.** Where the initializer repeats the annotation, only the annotation is reported.
 
 **What is given up**: a call's line no longer names an argument's enum; the reader of `kinds.push(.small)` finds `Kind` in the parameter.

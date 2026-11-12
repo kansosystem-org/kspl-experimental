@@ -1,0 +1,33 @@
+import "ksos/drivers/rp2040/pwm"
+import "std/verdict"
+
+// ==========================================
+// ksos/drivers/rp2040/pwm: the duty counts the driver writes.
+//
+// QEMU has no RP2040 model and a host cannot stand in for a register write, so **the driver
+// computes every value in a function of its own**, and this file checks those. The output itself
+// is checked on the car (TUTORIAL-bring-up.md).
+// ==========================================
+
+fn test_pwm_full_duty_survives_the_widest_top() //<
+    //< 100% under TOP 65535 gives CC 65535, not 65536 wrapped to 0
+    //< Caution: **A wrap turns full duty into none**: a motor told to go full speed stops.
+    verdict.start("[ksos/pwm] the duty count for a percentage test...")
+    assert(pwm.level_for(100, 9999) == 10000, "100% under TOP 9999 is TOP+1, always high")
+    assert(pwm.level_for(150, 9999) == 10000, "over 100 counts as 100")
+    assert(pwm.level_for(0, 9999) == 0, "0% is 0")
+    assert(pwm.level_for(50, 9999) == 5000, "50% is half of TOP+1")
+    assert(pwm.level_for(100, 65535) == 65535, "100% under TOP 65535 saturates at CC's 65535")
+    assert(pwm.level_for(99, 65535) == 64880, "99% under TOP 65535 is 99% of 65536")
+    assert(pwm.level_for(100, 70000) == 65535, "a TOP past 16 bits counts as 65535")
+    verdict.pass("0 and 100 are exact, and 100% under TOP 65535 is CC 65535, not 0.")
+
+fn test_pwm_cc_keeps_the_other_channel() //<
+    //< A level goes into its channel's half, saturated, and the other half stays
+    verdict.start("[ksos/pwm] the CC value for one channel test...")
+    cur: U32 = 0x12345678
+    assert(pwm.cc_with(cur, false, 0x00AB) == 0x123400AB, "channel A writes the low half")
+    assert(pwm.cc_with(cur, true, 0x00AB) == 0x00AB5678, "channel B writes the high half")
+    assert(pwm.cc_with(cur, false, 65536) == 0x1234FFFF, "65536 on channel A saturates, not 0")
+    assert(pwm.cc_with(cur, true, 65536) == 0xFFFF5678, "65536 on channel B saturates, not 0")
+    verdict.pass("Each channel writes its own half, and a count past 16 bits saturates.")

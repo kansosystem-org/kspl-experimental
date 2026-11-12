@@ -345,6 +345,47 @@ fn check_hover_values(c: jsonrpc_client.Client$@, arena: Arena$@)
     check_refs(c, arena)
 
 // ==========================================
+// A name that is not defined shows nothing
+// **No declaration stands behind it**, so neither its own name nor a type borrowed from the
+// expression around it is shown: `qq: qq`, or `bb: I32` from `item + bb`, read as one.
+// ==========================================
+priv const UNDEFINED_SRC: U8[] =
+    """priv fn run(f: Callable1<|I32, I32|>): I32
+    return f.call(1)
+
+fn main(): I32
+    k: = 3
+    y: = run(fn(item: I32; k: I32): I32 { return item + k + bb; })
+    return qq + y
+"""
+
+priv const UNDEFINED_URI: U8[] = "file:///undefined_probe.kspl"
+
+priv fn hover_line(c: jsonrpc_client.Client$@, line: U8[], needle: U8[], arena: Arena$@):
+    json.Value //<
+        //< The hover on `needle` of the probe line starting `line` (`null` where none came)
+    col: = col_in_line(UNDEFINED_SRC, line, needle, arena)
+    pos: = lsp_client.at_pos(UNDEFINED_URI, decl_line(UNDEFINED_SRC, line, arena), col, arena)
+    return lsp_client.answer(c, "textDocument/hover", pos, lsp_client.READ_MS, arena)
+
+fn check_hover_undefined(c: jsonrpc_client.Client$@, arena: Arena$@)
+    lsp_client.open(c, UNDEFINED_URI, UNDEFINED_SRC, arena)
+    defer lsp_client.close(c, UNDEFINED_URI, arena)
+    outside: = hover_line(c, "    return qq", "qq", arena)
+    verdict.check("a hover on a name not defined shows nothing",
+        is_missing(outside.get("result")),
+        lsp_client.why(c, lsp_client.hover_text(outside), arena))
+    within: = hover_line(c, "    y: =", "bb", arena)
+    verdict.check("a hover on a name not defined in a closure's body borrows no type",
+        is_missing(within.get("result")),
+        lsp_client.why(c, lsp_client.hover_text(within), arena))
+    // An answer here shows the analysis is standing, which a dead worker's empty answers do not.
+    param: = hover_line(c, "    y: =", "item +", arena)
+    verdict.check("a hover on a closure's parameter in its body still shows it",
+        shown_line(lsp_client.hover_text(param)).equals("item: I32"),
+        lsp_client.why(c, lsp_client.hover_text(param), arena))
+
+// ==========================================
 // What a declaration says of itself, as the editor shows it: the hover's description and
 // parameter list, and the panel that comes up while the call is being typed. **They are one
 // subject, so they share one fixture.** One reader (`ksplc/base/ast_doc.kspl`) reads all three.

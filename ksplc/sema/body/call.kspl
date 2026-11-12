@@ -4,7 +4,7 @@
 //< `call_args.kspl` matches the arguments against the parameters. `generic_infer.kspl` reads a
 //< generic's type arguments off them. **`intrinsic_of` is the one test for an intrinsic**, which
 //< Sema and both backends ask.
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" { Ast_node, is_anon_env_type }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell"
@@ -14,6 +14,7 @@ import "ksplc/sema/body/call_args" { check_args_against_instance, infer_call_arg
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/generic_infer" as sema_body_generic_infer
 import "ksplc/sema/body/lint_unchecked" as sema_body_lint_unchecked
+import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/body/stmt_escape" as sema_body_stmt_escape
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/mono" as sema_decl_mono
@@ -554,14 +555,32 @@ priv fn refuses_value_called(c: Sema_ctx$@, node: Ast_node$@, sym: Sema_symbol$@
         //< a raw C error.
     if sym == null || !sym.kind.is_var_or_const() || sema_type_env.is_unknown(target_id)
         return false
-    shown: = c.env.display(target_id)
-    c.clear_scratch()
-        .s("cannot call '\{sym.name\}'. It is a value of type '\{shown\}', not a function")
+    closure: = closure_callable(c, target_id)
+    c.clear_scratch().s("cannot call '\{sym.name\}'. ")
+    if closure.len > 0
+        c.scratch.s("It is a closure, which conforms to '\{closure\}', not a function")
+    else
+        c.scratch.s("It is a value of type '\{c.env.display(target_id)\}', not a function")
     // A pointer to a function pointer becomes callable once dereferenced, so say how.
     if c.env.is_fn_ptr(c.env.strip_ptr(target_id))
         c.scratch.s(". Dereference it first: '\{sym.name\}$(...)'")
+    else if holds_call_method(c, target_id)
+        c.scratch.s(". Call it through its 'call' method: '\{sym.name\}.call(...)'")
     c.err(node, c.scratch.slice())
     return true
+
+priv fn closure_callable(c: Sema_ctx$@, type_id: I32): U8[] //<
+    //< The `Callable` a closure's type conforms to, as a diagnostic shows it; "" for another type
+    //< **A closure's type is the environment struct the compiler made** (`_anon_env_1`, in the
+    //< module its file's path names), a name the writer never wrote. Its one trait is the
+    //< `Callable` its signature spells.
+    base: = c.env.strip_const_deep(c.env.strip_ptr(type_id))
+    if !is_anon_env_type(c.env.get_str(base)) || base < 0 || base >= c.env.id_to_type.len
+        return ""
+    traits: = c.env.id_to_type.get(base).implemented_traits
+    if traits == null || traits.len == 0
+        return ""
+    return c.env.display(traits.get(0))
 
 priv fn callee_decl(left: Ast_node$@, sym: Sema_symbol$@, template: Ast_node$@,
     is_method_access: Bool): Ast_node$@? //<
@@ -712,11 +731,11 @@ priv fn name_enum_put_value(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): 
     case .none
         return // no variant_name was synthesized (for a const generic, for example)
     case .some {}
-    // Caution: **Only the new argument is inferred**, the value again inside it. The writer is
-    // left alone: a chain inferred twice (`arena.text().s(…)`) is refused as a temporary.
-    // **A variant written out (`Color.red`) is written as its name**: typed once, it holds no type
-    // name any more, and inferred again it is refused as a bare `.red`. One with a payload cannot
-    // be replaced by its name, since the payload may do work.
+    // Caution: **Only the new method call is typed, not the value inside it**
+    // (infer_call_on_typed). The writer is left alone: a chain inferred twice
+    // (`arena.text().s(…)`) is refused as a temporary.
+    // **A variant written out (`Color.red`) is written as its name.** One with a payload cannot be
+    // replaced by its name, since the payload may do work.
     if value.kind_id == .k_enum_init_call
         c.err(value,
             "an enum variant built with its payload cannot be interpolated. Bind it to a name \
@@ -729,7 +748,10 @@ priv fn name_enum_put_value(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): 
     else
         name_arg = Ast_node.build_method_call(value, "variant_name", null, 0, value.loc)
     args.children.set(1, name_arg)
-    name_arg.infer_expr(c, 0)!
+    if value.kind_id == .k_enum_init
+        name_arg.infer_expr(c, 0)!
+    else
+        sema_body_postfix.infer_call_on_typed(c, name_arg)!
 
 priv fn refuse_unopened_put(c: Sema_ctx$@, value: Ast_node$@, base_id: I32): Void!Sema_error //<
     //< Refuses a Result or an Option written in `\{…\}` as it stands

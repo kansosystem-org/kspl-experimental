@@ -24,6 +24,7 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 priv const RUN_AS: U8[] = "ksplc run tests/main.kspl" //< how this file is started
@@ -132,9 +133,9 @@ priv fn link_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end 
     //< **It needs the root, so `serve_cases` (HTTP only) cannot call it.**
     // The check that blocks it is `join_under` in `std/fs`. **Static serving needs no token, so
     // this is the only defence.**
-    if local.make_link(root, "link.txt", "../secret.txt", arena) &&
-        local.make_link(root, "dlink", "..", arena) &&
-        local.make_link(root, "bk\\sl", "..", arena)
+    if scratch.made_link("../secret.txt", fs.join(root, "link.txt", arena), arena) &&
+        scratch.made_link("..", fs.join(root, "dlink", arena), arena) &&
+        scratch.made_link("..", fs.join(root, "bk\\sl", arena), arena)
         for target in LINK_ESCAPES
             r: = client.get(port, target, "", arena)!
             nm_l: = arena.text().s("a link inside the root cannot get outside: \{target\}").take()
@@ -144,7 +145,7 @@ priv fn link_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end 
         // **A folder's index is checked as the name served.** Checked before the index was added, a
         // link at `ix/index.html` passed for `/ix`, though `/ix/index.html` itself was refused.
         fs.mkdir(fs.join(root, "ix", arena)) catch {}
-        if local.make_link(root, "ix/index.html", "../../secret.txt", arena)
+        if scratch.made_link("../../secret.txt", fs.join(root, "ix/index.html", arena), arena)
             for target in U8[][]::{ "/ix", "/ix/", "/ix/index.html" }
                 r: = client.get(port, target, "", arena)!
                 nm_i: = arena.text().s("a link at a folder's index cannot get outside: \{target\}")
@@ -164,7 +165,7 @@ priv fn make_fifo(at: U8[], arena: Arena$@): Bool //< a FIFO at `at`; false wher
     //< Windows has no `mkfifo`, so the cases using one become a `skip` there.
     r: =
         subproc.run_capture(U8[][]::{ "mkfifo", at }, "", 10000, 4096, arena) catch
-        return false
+            return false
     return r.exited_with(0) && fs.exists(at)
 
 priv fn fifo_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end //<
@@ -334,9 +335,9 @@ priv fn serve_idle_and_check(at: Placed, arena: Arena$@) //<
         $hold: =
             client.open_stream(srv.port, "/api/here", client.bearer_head(got.token, arena), arena)
             catch e
-            srv.failed("GET /api/here is answered", e.reason(), arena)
-            srv.stop()
-            return
+                srv.failed("GET /api/here is answered", e.reason(), arena)
+                srv.stop()
+                return
         // **The head is read until it is in, not until the close.** The close must not come, so
         // reading to it would take the whole wait.
         hold.read_head(HEAD_WAIT_MS)
@@ -405,7 +406,7 @@ priv const HEAD_WAIT_MS: I32 = 10000 //< the cap on waiting for the head, which 
 
 priv fn wait_gone(srv: subproc.Child@): Bool //< whether it exited by itself within the cap
     //< **`alive` reaps the child on the call that returns false**, so no `kill` follows a true.
-    deadline: = sys.mono_us() + I64::GONE_MS * 1000I64
+    deadline: = sys.deadline_after_ms(GONE_MS)
     for sys.mono_us() < deadline
         if !srv.alive()
             return true
@@ -485,7 +486,7 @@ priv fn linked_index_and_check(exe: U8[], tmp: U8[], page: U8[], arena: Arena$@)
         verdict.check("a root for the linked index can be made", false, root)
         return
     if !fs.is_link(fs.join(root, "index.html", arena)) &&
-        !local.make_link(root, "index.html", "../secret.txt", arena)
+        !scratch.made_link("../secret.txt", fs.join(root, "index.html", arena), arena)
         verdict.skip_check("--page: a link at the root's index.html does not stop the page",
             "a link cannot be made with `ln -s` in this environment")
         return
@@ -571,7 +572,7 @@ priv fn serve_linked_and_check(at: Placed, arena: Arena$@) //<
     //< Checks that a root reached through a link is served, its listing included
     //< **A root that is a link is normal** (macOS's `/tmp`); only a link under the root is
     //< refused. A check that refuses the root's own link leaves the Save As dialog empty.
-    if !local.make_link(at.tmp, "www-link", "www", arena)
+    if !scratch.made_link("www", fs.join(at.tmp, "www-link", arena), arena)
         verdict.skip_check("a root that is a link is served",
             "a link cannot be made with `ln -s` in this environment")
         return

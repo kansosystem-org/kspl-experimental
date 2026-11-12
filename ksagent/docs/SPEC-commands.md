@@ -136,6 +136,7 @@ A last line gives the totals: questions passed and failed, answers with no check
 * **Text, Word and Excel files only.** A text file must be UTF-8 and hold no NUL byte. A PDF file is not read yet: save it as text, Word or Excel first.
 * **Each search reads every Word and Excel file under its path again**, so large workbooks make each search slower.
 * **A search skips every folder named `out`.** So does `watch`, for ask files. `list` and `read` reach these folders.
+* **A search and `watch` pass over a folder that cannot be read**, and walk the rest. Its files are not searched, and its ask files get no answer. Where the folder itself cannot be read, a search is refused, and `watch` tries again at its next look. A search of one named file that cannot be read is refused too, with the reason `read` would give.
 * **http only.** Run the model server on this machine, or reach it over a network you trust.
 * **The search matches words, not meanings.** A line matches when it holds every word of a search, in any order, so a synonym needs another search.
 * **The check shows that a quote stands at its lines, not that the answer follows from it.** Read the quote.

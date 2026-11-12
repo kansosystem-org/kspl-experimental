@@ -26,8 +26,6 @@ import "std/sys"
 priv const HOLES_PER_FILE: Sz = 8 // the most holes taken from one file
 priv const STRIDE: Sz = 3 // every third line that holds text is tried as a hole
 priv const STEM: U8[] = "_eval_tmp"
-priv const VOCAB_PATH: U8[] = "out/code_complete/tokenizer/vocab.txt"
-priv const MERGES_PATH: U8[] = "out/code_complete/tokenizer/merges.txt"
 priv const WORK_DIR: U8[] = "out/tmp" //< the holes handed to the model, and its answers
 priv const CODER_WAIT_MS: I32 = 3600000 // the cap on one run of the model over every hole
 
@@ -78,8 +76,10 @@ priv fn native_answers(holes: List<|Hole|>@, coder: U8[], weights: U8[], samples
         io.err().s("[error] cannot write \{holes_path\}\n")
         sys.exit(1)
     argv: = U8[][]::{ coder, "complete",
-        arena.text().s("--vocab=").s(VOCAB_PATH).take(),
-        arena.text().s("--merges=").s(MERGES_PATH).take(),
+        arena.text().s("--vocab=")
+        .s(fs.join(oracle.TOKENIZER_DIR, oracle.VOCAB_FILE, arena)).take(),
+        arena.text().s("--merges=")
+        .s(fs.join(oracle.TOKENIZER_DIR, oracle.MERGES_FILE, arena)).take(),
         arena.text().s("--weights=").s(weights).take(),
         arena.text().s("--in=").s(holes_path).take(),
         arena.text().s("--out=").s(answers_path).take(),

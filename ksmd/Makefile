@@ -2,7 +2,8 @@
 # `make test` wants only a `ksplc` and the `std` it carries (or `KSPLC_STD_DIR`); the page and its
 # browser checks want more, named above each.
 #   make test [KSPLC=/path/to/ksplc]  # the model, reader, writer, editing and calculation tests
-#   make web                          # the editing page, out/web/ksmd.html, and its wasm
+#   make web [KSSRV_PAGE=<folder>]    # the editing page, out/web/ksmd.html, and its wasm;
+#                                     # it takes kssrv's page folder, ../kssrv/page by default
 #   make test-browser                 # the page in a headless Chromium, driven by real input
 #   make measure                      # the time to open, edit and save a typical and a large document
 # Caution: **Keep this file standing alone**: a copy of the folder, nothing more, is tested by it.
@@ -10,6 +11,8 @@
 # a folder whose name holds a space splits an unquoted path.
 
 SHELL := bash
+# **A recipe that fails leaves no target**: a page cut short would otherwise count as current.
+.DELETE_ON_ERROR:
 
 KSPLC ?= ksplc
 OUT ?= out
@@ -35,6 +38,9 @@ functions:
 # (`port/wasm_build.kspl` runs them here). It wants a clang that targets wasm32, `wasm-ld`, and
 # clang's builtins for wasm32, which `web-tools` checks.
 WEB_SRC := port/web
+# kssrv's page folder: the local server's client, which the page holds, and the bundling step.
+# **The page alone reaches outside this folder**; `make test` does not build it.
+KSSRV_PAGE ?= ../kssrv/page
 WASM_BUILTINS := $(shell clang --target=wasm32-wasi -rtlib=compiler-rt -print-libgcc-file-name 2>/dev/null)
 
 # Whether the tools the page needs are installed. `make install` at the root asks this before it
@@ -75,11 +81,13 @@ $(WEB_WASM): $(KSPLC_FILE) $(WEB_SRC)/bridge.kspl $(WEB_SRC)/imports.txt \
 		"$(BRIDGE).deps" > "$(BRIDGE).d"
 -include $(BRIDGE).d
 
-# The page is one file: `page.html` names the style and scripts that go inside it, from its folder.
-$(WEB_PAGE): $(WEB_WASM) $(KSPLC_FILE) $(WEB_SRC)/bundle.kspl \
+# The page is one file: `page.html` names the style and scripts that go inside it, from its folder
+# and from kssrv's, which holds the local server's client and the step that bundles a page.
+$(WEB_PAGE): $(WEB_WASM) $(KSPLC_FILE) $(KSSRV_PAGE)/bundle.kspl $(KSSRV_PAGE)/client.js \
 		$(wildcard $(WEB_SRC)/*.html $(WEB_SRC)/*.js $(WEB_SRC)/*.css)
 	@echo "# BUNDLING the ksmd page into one file"
-	"$(KSPLC)" run $(WEB_SRC)/bundle.kspl $(WEB_SRC)/page.html "$(WEB_WASM)" "$(WEB_PAGE)"
+	"$(KSPLC)" run "$(KSSRV_PAGE)/bundle.kspl" $(WEB_SRC)/page.html "$(WEB_PAGE)" \
+		--from="$(KSSRV_PAGE)" --base64=KSMD_WASM_BASE64="$(WEB_WASM)"
 
 FORCE:
 

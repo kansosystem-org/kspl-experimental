@@ -1,8 +1,10 @@
 //< The real language server's header reader: duplicate lengths and a bound on all header bytes
 import "ksplc/tests/support/jsonrpc_client"
+import "std/chars" // `find_str`
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
+import "std/sys"
 import "std/verdict"
 
 priv const BODY: U8[] = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
@@ -23,12 +25,28 @@ priv fn check(exe: U8[], name: U8[], head: U8[], accepted: Bool, arena: Arena$@)
     reply: = c.read_msg(WAIT_MS, arena) catch e
         switch e
         case .closed
-            verdict.check(name, !accepted, c.err_tail())
+            // **A refused header ends the server with 1 and a line on standard error**, so the
+            // editor can show why it went away.
+            code: = exit_code_of(c@)
+            tail: = arena.text().s(c.err_tail()).take()
+            verdict.check(name,
+                !accepted && code.unwrap_or(-1) == 1 &&
+                tail.find_str("Content-Length").is_some(),
+                arena.text().s("exit code \{code.unwrap_or(-1)\}: ").s(tail).take())
         default
             verdict.check(name, false, "the server timed out or sent a broken reply")
         return
     verdict.check(name, accepted && reply.val.get("id").as_int().unwrap_or(-1) == 1,
         "the response differs from the expected acceptance")
+
+priv fn exit_code_of(c: jsonrpc_client.Client$@): I32? //<
+    //< the code it ended with, none past the wait
+    until: = sys.deadline_after_ms(WAIT_MS)
+    for sys.mono_us() < until
+        if code: = c.child.exit_code()
+            return .some(code)
+        sys.sleep_ms(10)
+    return .none
 
 fn run(exe: U8[], arena: Arena$@) //< one short server round per header shape
     defer $head: = Str_builder()

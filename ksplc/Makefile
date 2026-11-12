@@ -13,6 +13,8 @@ endif
 # The compiler asks `CC` which target it builds for, when it names the link flags below.
 export CC
 CFLAGS ?= -std=c99 -Wall -g -O0
+# **A recipe that fails leaves no target**: a compiler cut short would otherwise count as current.
+.DELETE_ON_ERROR:
 
 .PHONY: test test-answers test-suites self-host translate build compare verdict compare-fires
 test: test-answers test-suites

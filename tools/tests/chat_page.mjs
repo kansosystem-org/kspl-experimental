@@ -12,17 +12,11 @@ import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { launch } from "../../ksmd/tests/browser/cdp.mjs";
-import { driver, verdict } from "../../ksmd/tests/browser/drive.mjs";
+import { driver, verdict, waitFor } from "../../ksmd/tests/browser/drive.mjs";
 import { place, standIn } from "./chat_support.mjs";
 
 const [browserBin, opener, work] = process.argv.slice(2);
 const check = (ok, what, detail = "") => verdict.check(ok, what, detail);
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-// Waits until a test on the files holds, up to `ms`, as `d.until` waits on the page.
-async function diskUntil(holds, ms) {
-  for (const end = Date.now() + ms; !holds(); await wait(100)) if (Date.now() > end) return false;
-  return true;
-}
 
 const LEAVE = "# Leave\n\nA new employee receives 10 days of paid leave\nafter six months of work.\n";
 const KYUKA = "# 休暇規程\n\n第3条 年次有給休暇は、入社6か月後に10日付与する。\n";
@@ -111,16 +105,12 @@ const RENDER_CASES = [
 ];
 
 // Text a hostile or runaway model can write, each of which must read throwing nothing, in at most
-// HEAVY_FACTOR times as long as plain text of the same length: marks that never close, deep
+// HEAVY_FACTOR times the steps of plain text of the same length: marks that never close, deep
 // quotes, brackets and parentheses that never close, a list with many blank lines, emphasis
-// nested deep, and a table as wide as it is long. **Held to plain text, not to a fixed time**, so a
-// slow or busy machine slows both alike; a read that grows with the square of the length is
-// thousands of times slower.
-// **The two take turns over HEAVY_ROUNDS rounds**, each kept at its fastest. HEAVY_FLOOR_MS keeps
-// a plain read near zero from making the ratio meaningless.
-const HEAVY_FACTOR = 50;
-const HEAVY_ROUNDS = 5;
-const HEAVY_FLOOR_MS = 5;
+// nested deep, and a table as wide as it is long. **The steps are counted, not timed**: the
+// browser counts each block of the reader's code it runs (`markdownSteps`). A count is the same
+// on every machine; a read that grows with the square of the length takes thousands of times more.
+const HEAVY_FACTOR = 10; // the worst case today takes 2.3 times; the square, hundreds of times
 const HEAVY = [
   ["unmatched marks", "\"*a \".repeat(33000)"],
   ["20,000 quote marks", "\">\".repeat(20000) + \" x\""],
@@ -130,6 +120,25 @@ const HEAVY = [
   ["deep emphasis", "\"*_\".repeat(10000) + \"x\" + \"_*\".repeat(10000)"],
   ["a table as wide as it is long", "\"|\".repeat(3000) + \"\\n-|\\n\" + \"|\\n\".repeat(3000)"],
 ];
+
+// The steps the Markdown reader takes to read and show `expr`'s text: each block of its code that
+// runs counts one, as the browser's precise coverage counts them; null where the read throws.
+// **Only the reader's own script is counted**, found by its function `blocks`: the page's timers
+// run in the other script meanwhile. The work inside the engine (a pattern, a slice) is not seen.
+// Caution: **Start the counting before the page loads.** A function compiled before it starts is
+// counted only as a whole, so a loop inside it counts nothing.
+async function markdownSteps(page, d, expr) {
+  await page("Profiler.takePreciseCoverage"); // empties the counts
+  const ok = await d.js("(() => { const md = ksagentMarkdown; " +
+    `try { md.render(md.parse(${expr}), document.createElement('div')); return true; } ` +
+    "catch (e) { return false; } })()");
+  const { result } = await page("Profiler.takePreciseCoverage");
+  const reader = result.find((sc) => sc.functions.some((f) => f.functionName === "blocks"));
+  if (!ok || !reader) return null;
+  let steps = 0;
+  for (const f of reader.functions) for (const r of f.ranges) steps += r.count;
+  return steps;
+}
 
 async function main() {
   verdict.part = "chat page";
@@ -151,6 +160,8 @@ async function main() {
     // Windows every badge and note came out in Japanese. So the language is set here.
     const { userAgent } = await browser.page("Browser.getVersion");
     await browser.page("Emulation.setUserAgentOverride", { userAgent, acceptLanguage: "en-US" });
+    await browser.page("Profiler.enable");
+    await browser.page("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
     await browser.page("Page.navigate", { url: child.url });
     check(await d.until("document.documentElement.dataset.chat === 'ready'"), "the page gets ready");
     check(await d.js("navigator.language") === "en-US", "the page reads its language as English",
@@ -164,18 +175,14 @@ async function main() {
       check(got === want, `Markdown read: ${JSON.stringify(text)}`, got);
     }
     for (const [what, expr] of HEAVY) {
-      const got = await d.js(`(() => { const md = ksagentMarkdown; const hostile = ${expr}; ` +
-        "const plain = 'plain text '.repeat(Math.ceil(hostile.length / 11)).slice(0, hostile.length); " +
-        "const once = (s) => { const t = performance.now(); " +
-        "md.render(md.parse(s), document.createElement('div')); return performance.now() - t; }; " +
-        "let h = Infinity, p = Infinity; " +
-        `try { for (let i = 0; i < ${HEAVY_ROUNDS}; i++) { h = Math.min(h, once(hostile)); ` +
-        "p = Math.min(p, once(plain)); } } catch (e) { return null; } return [h, p]; })()");
-      const [hostileMs, plainMs] = got || [Infinity, 0];
-      check(got !== null && hostileMs <= HEAVY_FACTOR * (plainMs + HEAVY_FLOOR_MS),
+      const plainOf = `'plain text '.repeat(Math.ceil((${expr}).length / 11)).slice(0, (${expr}).length)`;
+      const hostile = await markdownSteps(browser.page, d, expr);
+      const plain = await markdownSteps(browser.page, d, plainOf);
+      check(hostile !== null && plain > 0 && hostile <= HEAVY_FACTOR * plain,
         `hostile Markdown reads in step with plain text, throwing nothing: ${what}`,
-        got ? `${hostileMs.toFixed(1)} ms, plain text ${plainMs.toFixed(1)} ms` : "it threw");
+        hostile !== null ? `${hostile} steps, plain text ${plain} steps` : "it threw");
     }
+    await browser.page("Profiler.stopPreciseCoverage");
     check(await d.js("ksagentMarkdown.render(ksagentMarkdown.parse('> '.repeat(12) + 'x'), " +
       "document.createElement('div')).querySelectorAll('blockquote').length") === 8,
       "quotes nest 8 deep, and the rest reads as text");
@@ -229,9 +236,36 @@ async function main() {
     const first = await d.js(grown);
     check(await d.until(`${grown} > ${first}`, 15000), "the growing text gets longer",
       `${first} then ${await d.js(grown)}`);
+    // **A stop whose save gets no answer must not promise a resend**: the page sends it once. The
+    // first press's save never reaches the server; the second reaches it, but its answer never
+    // comes back. The page's limit is cut to 300 ms, so the check need not wait its 15 s.
+    const stopNotice = "document.getElementById('notice').textContent";
+    await d.js(`(() => {
+      const plain = window.stopFetch = window.fetch;
+      window.stopTimeout = AbortSignal.timeout;
+      AbortSignal.timeout = () => window.stopTimeout.call(AbortSignal, 300);
+      const never = (how) => new Promise((_, no) =>
+        how.signal.addEventListener("abort", () => no(how.signal.reason)));
+      window.fetch = (url, how = {}) => {
+        if (how.method !== "PUT") return plain(url, how);
+        if (window.stopPut === "late") plain(url, { ...how, signal: undefined });
+        return never(how);
+      };
+      window.stopPut = "drop";
+    })()`);
     await d.js(`${turn(1)}.querySelector('.actions button').click()`);
+    check(await d.until(`${stopNotice}.includes('stop may not be saved')`, 15000),
+      "a stop whose save gets no answer says it may not be saved", await d.js(stopNotice));
+    check((await d.js(stopNotice)).includes("press Stop again") &&
+      !(await d.js(stopNotice)).includes("asks again"),
+      "it says to press Stop again, and promises no resend the page does not make", await d.js(stopNotice));
+    check(await d.js(stateOf(1)) === "writing", "the answer goes on", await d.js(stateOf(1)));
+    await d.js(`window.stopPut = "late"; ${turn(1)}.querySelector('.actions button').click()`);
     check(await d.until(`${stateOf(1)} === 'stopped'`, 15000), "Stop ends it, and it shows as stopped",
       await d.js(stateOf(1)));
+    check(await d.until(`!${stopNotice}.includes('may not be saved')`, 15000),
+      "once the stop stands in the ask file, the notice clears", await d.js(stopNotice));
+    await d.js("window.fetch = window.stopFetch; AbortSignal.timeout = window.stopTimeout");
     check(await d.until(`(() => { const t = ${turn(1)};
       return t.querySelector('.badge').textContent === 'Stopped' && t.querySelector('.sources') === null &&
         t.querySelector('.unchecked') !== null; })()`, 15000),
@@ -240,7 +274,7 @@ async function main() {
     // The page shows it stopped from the live file, before ksagent records it.
     const stoppedRecord = () => disk(`${name}.chat.jsonl`).includes("\"state\":\"stopped\"") &&
       disk(`${name}.chat.jsonl`).includes("stopped on the page");
-    check(await diskUntil(stoppedRecord, 15000), "the chat file records it as stopped",
+    check(await waitFor(stoppedRecord, 15000), "the chat file records it as stopped",
       disk(`${name}.chat.jsonl`));
 
     // A model's answer holding markup stays text.
@@ -287,7 +321,7 @@ async function main() {
     await d.until("document.querySelectorAll('.turn').length >= 6", 15000);
     const bothAsked = () => disk(`${name}.ask.jsonl`).includes("other-tab") &&
       disk(`${name}.ask.jsonl`).includes("Asked while another tab writes");
-    await diskUntil(bothAsked, 15000);
+    await waitFor(bothAsked, 15000);
     const asked = disk(`${name}.ask.jsonl`);
     check(await d.js("window.otherTab") === "refused 409" && bothAsked(),
       "the write that meets another tab's is refused, and both questions then stand in the file",
@@ -377,7 +411,7 @@ async function main() {
     await d.press("Enter");
     check(await d.until(`!${notice}.includes('may not be saved') && ${box} === ''`, 15000),
       "asked again, it is saved, and the notice clears", await d.js(notice));
-    check(await diskUntil(() => times("A question whose save is lost") === 1, 15000),
+    check(await waitFor(() => times("A question whose save is lost") === 1, 15000),
       "the ask file holds it once", disk(`${name}.ask.jsonl`));
     // The save reaches the file late: the page sees it there, empties the box and clears the
     // notice, and writes nothing more.
@@ -392,7 +426,7 @@ async function main() {
     check(await d.until(`${notice}.includes('may not be saved')`, 15000),
       "the second late save says it may not be saved", await d.js(notice));
     await d.js("window.put = ''");
-    check(await diskUntil(() => times("A question saved late, asked again") === 1, 15000),
+    check(await waitFor(() => times("A question saved late, asked again") === 1, 15000),
       "the late save reaches the file", disk(`${name}.ask.jsonl`));
     check(await d.js(box) === "A question saved late, asked again",
       "the page has not seen it yet, so the question is still in the text box", await d.js(box));
@@ -421,8 +455,7 @@ async function main() {
       const re = new RegExp(`${name}\\.ask\\.jsonl, (line \\d+: [^\\n]*?); that line is passed over`, "g");
       return [...new Set([...log.matchAll(re)].map((m) => m[1]))];
     };
-    const deadline = Date.now() + 15000;
-    while (told().length < 6 && Date.now() < deadline) await wait(250);
+    await waitFor(() => told().length >= 6, 15000);
     const said = told();
     // **The page reads the ask file on its own beat**, so it may name the lines after ksagent has.
     await d.until(`(() => { const n = document.getElementById('notice').textContent;

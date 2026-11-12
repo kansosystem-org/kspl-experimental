@@ -97,8 +97,9 @@ function ksmdFilter(ks) {
       case "is": return text === arg;
       case "not": return text !== arg;
       case "contains": return text.includes(arg);
-      case "above": return numeric ? v[1] > number : text > arg;
-      case "below": return numeric ? v[1] < number : text < arg;
+      // A number compares as a formula does, at the digits it shows (`ks.compareNumbers`).
+      case "above": return numeric ? ks.compareNumbers(v[1], number) > 0 : text > arg;
+      case "below": return numeric ? ks.compareNumbers(v[1], number) < 0 : text < arg;
       case "empty": return text === "";
       default: return text !== "";
     }

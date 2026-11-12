@@ -159,6 +159,7 @@
 ### Copying, moving and filling
 
 * **`Ctrl`+`C` copies the chosen cells.** Another program, such as a spreadsheet or a text editor, takes their shown values as tab-separated rows. A paste of rows from another program fills the table from the chosen cell, and grows it as needed.
+* **An open cell takes pasted text as it is**, line breaks and tabs included, as Excel's cell does while it is edited. A line break turns Wrap text on, as `Alt`+`Enter` does. A column with choices and a column's name hold one line, so there rows still fill cells.
 * **A paste in ksmd (`Ctrl`+`V`) brings the copied cells' formulas**, in any table and in another ksmd window. Each reference moves as far as the paste moved from the copy. A part with `$` stays, and a reference moved outside its table becomes `#REF!`.
 * **Paste values (`Ctrl`+`Shift`+`V`) puts the values the copied cells showed**, with no formula. Edit ▸ Paste values and the right-click menu do the same.
 * **Copy formula copies one cell's text as typed**, such as a whole formula, as plain text for another program. It stands in the right-click menu and the Edit menu. Text chosen in the formula bar is copied as chosen.
@@ -177,7 +178,7 @@
 | To | Do |
 | :-- | :-- |
 | Insert or remove rows or columns | Table ▸ Insert row above, Insert row below, Remove row, and the same for columns. Each acts on every row or column the range spans |
-| Sort by a column | Table ▸ Sort ▸ Sort ascending or Sort descending. Empty cells stand last |
+| Sort by a column | Table ▸ Sort ▸ Sort ascending or Sort descending. Empty cells stand last. A formula on a sorted row moves with its row as a copy: a running total `=sum(B$1:B3)` keeps running, and a part with `$` keeps its place. A reference that the move would take out of the table keeps its places. In another table, a range over several rows such as `t.B1:B5` keeps its places. A cell or a range within one row there moves with its row |
 | Show only some rows | The arrow on a column's name, or Table ▸ Filter ("Filters" below) |
 | Group rows or columns | Table ▸ Group ▸ Group rows (`Alt`+`Shift`+`→`), Group columns. The −/+ button beside them hides and shows them |
 | Set a column's width | Drag the right edge of its letter, or Table ▸ Size ▸ Column width… in characters, 0.5 to 255 |
@@ -281,7 +282,9 @@
 | See a function's arguments | Type inside its brackets; a tip shows them, the current one in bold |
 | Find a function by what it does, and read about it | Insert ▸ Function…, or `Shift`+`F3`; Insert writes `=name(` in the chosen cell |
 
-**Kinds never turn into each other.** Text in arithmetic is `#VALUE!`, even text that looks like a number. An empty cell is 0, empty text or `false`, as the other side needs.
+**Kinds never turn into each other.** Text in arithmetic is `#VALUE!`, even text that looks like a number. An empty cell is 0, empty text or `false`, as the other side needs. Against a date it is earlier than every date, so `B1 < today()` holds for an empty B1.
+
+**Two numbers are equal when the 15 digits they show agree.** So `0.1+0.2 = 0.3` is `true`, and `<`, `>` and `<>` give the same answer as `=`. A lookup's key and a condition of `sum_if` match by this rule too. So do a colour rule and a filter's "is greater than" and "is less than".
 
 **Point at a cell that shows an error, or choose it, to see why.** Its tooltip and the status bar give the reason in words, and what to write instead where that is clear:
 
@@ -353,7 +356,7 @@ The clause in the document's file reads `:::functions path="mine.kspl"`, then `:
 | `Bool` | `true` or `false` | `#VALUE!` |
 | `U8[]` | Text | `#VALUE!` |
 | `Value` | Any value, as it is | Nothing |
-| `Value[]`, last | Every argument left; a range gives its cells | Nothing |
+| `Value[]`, last | Every argument left, each a number or a date; a range alone gives its numbers, dates and errors | `#VALUE!` for text or `true`/`false` outside a range |
 | `T?`, last | As `T`, or none where the formula leaves it out | As `T` |
 | `Arena$@` | No argument: the memory a text result goes in | Nothing |
 

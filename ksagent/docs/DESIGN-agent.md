@@ -205,7 +205,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 
 ## The chat page
 
-**The chat page is the one place a person asks** ([`ksagent/page/chat.html`](../page/chat.html)). It lists the conversations at the top of the root, starts a new one, asks, stops, and shows each answer as it grows. One HTML file holds its style and its scripts, since the local server serves one file for the page and nothing else without the token.
+**The chat page is the one place a person asks** ([`ksagent/page/chat.html`](../page/chat.html)). It lists the conversations at the top of the root, starts a new one, asks, stops, and shows each answer as it grows. One HTML file holds its style and its scripts, since the local server serves one file for the page and nothing else without the token. Its build puts kssrv's client for the local server (`kssrv/page/client.js`) inside it, the same client ksmd's page holds.
 
 **A text editor can still ask**, by appending a question record to an ask file. Nothing in ksagent depends on which program wrote it.
 

@@ -8,7 +8,6 @@ import "ksagent/progress" { Progress }
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/json" { Json_builder }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
@@ -222,21 +221,21 @@ priv fn md_cell(out: Writer, text: U8[]) //< writes text into a Markdown cell: a
 
 fn ksmd(rows: List<|Row|>@, arena: Arena$@): U8[] //< the table and its totals, as a ksmd file
     //< **ksmd's table holds quoted text and bare numbers**, so it is not the Markdown form.
-    $b: = Json_builder(arena)
     out: = arena.text()
     out.s("%ksmd 2\n\n# ksagent evaluation\n\n:::table name=\"eval\"\n")
     out.s("| \"#\" | \"Question\" | \"Expected\" | \"Result\" | \"Seconds\" |\n")
     for i in Range.asc(rows.len)
         r: = rows.get(i)
-        out.s("| \{i + 1\} | ").s(quoted(b@, shown(r.question, arena))).s(" | ")
-            .s(quoted(b@, r.expected)).s(" | ").s(quoted(b@, r.result)).s(" | \{r.seconds:.1\} |\n")
+        out.s("| \{i + 1\} | ").s(quoted(shown(r.question, arena), arena)).s(" | ")
+            .s(quoted(r.expected, arena)).s(" | ").s(quoted(r.result, arena))
+            .s(" | \{r.seconds:.1\} |\n")
     out.s(":::\n\n").s(totals_line(totals(rows), rows.len, arena)).c('\n')
     return out.take()
 
-priv fn quoted(b: Json_builder$@, text: U8[]): U8[] //< text as a JSON string, quotes included
+priv fn quoted(text: U8[], arena: Arena$@): U8[] //< text as a JSON string, quotes included
     defer $out: = Str_builder()
-    b.str_val(text).dump(out@)
-    return b.arena.dup_str(out.slice())
+    out.c('"').escape_and_append(text).c('"')
+    return arena.dup_str(out.slice())
 
 priv fn shown(question: U8[], arena: Arena$@): U8[] //< a question on one line, cut if long
     one: = answer.collapse_spaces(question, arena)

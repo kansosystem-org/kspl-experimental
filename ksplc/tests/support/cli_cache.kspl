@@ -9,8 +9,8 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str"
-import "std/subproc"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 const CACHE_ENV: U8[] = "KSPLC_CACHE_DIR" //<
@@ -32,13 +32,6 @@ priv fn case_clean(arena: Arena$@)
 priv const PLANTED_NAME: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 priv const SLOT_NAME: U8[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where none can be made
-    //< Windows has no `ln -s`, and `mklink` needs privileges, so the case becomes a `skip` there.
-    r: =
-        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
-        return false
-    return r.exited_with(0) && fs.is_link(at)
-
 priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
     //< `clean` removes a link planted in the cache, never what it points at
     //< Whoever can write a shared cache folder could otherwise plant `run/<hex>`, or `obj` inside a
@@ -54,8 +47,8 @@ priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
     fs.mkdir_all(slot) catch
         verdict.check(name, false, "the slot cannot be made")
         return
-    if !plant_link(fs.join(run, PLANTED_NAME, arena), victim, arena) ||
-        !plant_link(fs.join(slot, "obj", arena), victim, arena)
+    if !scratch.made_link(victim, fs.join(run, PLANTED_NAME, arena), arena) ||
+        !scratch.made_link(victim, fs.join(slot, "obj", arena), arena)
         verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
         return
     r: = cli(U8[][]::{ "clean" })

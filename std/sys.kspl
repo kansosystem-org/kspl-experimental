@@ -48,9 +48,11 @@ pub fn exit( //< ends the process at once, without unwinding
 // **It exists only on the `#cfg(!freestanding)` side**, like `set_env` / `unset_env`.
 #cfg(!freestanding)
 pub fn get_env(name: U8[]): U8[]? //< an environment variable, or nothing when unset
-    // The C side would cut a name at a NUL, so such a name gives .none (see str.to_cstr).
-    name_buf: = name.to_cstr().unwrap_or(null)
-    if name_buf == null
+    //< **A name no environment can store gives nothing, on every OS**: an empty name, or one that
+    //< holds `=` or a NUL. Asked as it is, glibc reads `A=B` as the variable `A` whose value
+    //< starts with `B=`, and gives the rest; Windows answers otherwise.
+    // The same check as `set_env`'s, so a name it refuses is never found here either.
+    name_buf: = env_name_cstr(name) catch
         return .none
     defer dealloc(Void$@::name_buf)
     // Caution: **Do not use `libc.getenv`.** Windows's narrow API returns the current code page.
@@ -311,7 +313,8 @@ pub fn get_dir_name(path: U8[]): U8[] //<
     //< the folder part; empty for a bare name, the root for the root
     //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`
     //< and `\\srv\sh\x` in `\\srv\sh\`). **The root is its own folder**: `/`, `C:\` and
-    //< `\\srv\sh\` give themselves. So a walk up ends where the answer stops changing.
+    //< `\\srv\sh\` give themselves. So a walk up ends where the answer stops changing. On Windows
+    //< `C:x` is in `C:`, drive C's working folder, since empty would name the process's.
     return get_dir_name_on(path, is_windows())
 
 fn get_dir_name_on(path: U8[], windows: Bool): U8[] //< `get_dir_name`, on Windows or on POSIX
@@ -322,7 +325,8 @@ fn get_dir_name_on(path: U8[], windows: Bool): U8[] //< `get_dir_name`, on Windo
         // started.
         top: = root_len_on(path, windows)
         return path.sub(0, top if last_slash < top else last_slash)
-    return ""
+    // A root with no separator, a bare drive on Windows, holds the name: `C:x` is in `C:`.
+    return path.sub(0, root_len_on(path, windows))
 
 pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder part
     if last_slash: = last_path_sep(path)

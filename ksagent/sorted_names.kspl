@@ -7,6 +7,19 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/seq"
 
+// **A plain count**: ksagent sorts and finds on one thread. A second thread that sorted would need
+// the atomic operations `std/fs.kspl` counts its lookups with.
+priv $compared: Sz = 0
+
+fn comparisons(): Sz //< how many times this process has compared two names here
+    //< **Each comparison the sort and `find` make counts one.** A test holds a lookup's cost to the
+    //< log of the size by this count, which is the same on every machine; a time is not.
+    return compared
+
+priv fn compare_counted(p: U8[], q: U8[]): I32 //< `p.compare(q)`, counted (`comparisons`)
+    compared += 1
+    return p.compare(q)
+
 struct Keyed //< a name, and the place in the caller's list it stands for
     key: U8[]
     pos: Sz
@@ -17,7 +30,7 @@ struct Index //< names in order, each found by halving
 fn sorted(items: List<|Keyed|>@, arena: Arena$@): Index //< the names put in order
     //< Equal names keep the order they were given in, so `find` gives the first one given.
     in_order: = items.order_by(fn(p: Keyed@, q: Keyed@; ): I32 {
-        return p.key.compare(q.key);
+        return compare_counted(p.key, q.key);
     }, arena)
     return Index::{ .items = in_order }
 
@@ -27,7 +40,7 @@ impl Index
         $hi: = r.items.len
         for lo < hi
             mid: = lo + (hi - lo) / 2
-            if r.items.get(mid).key.compare(key) < 0
+            if compare_counted(r.items.get(mid).key, key) < 0
                 lo = mid + 1
             else
                 hi = mid

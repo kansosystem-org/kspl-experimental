@@ -1,0 +1,45 @@
+//< Parses a file with the internal parser, in the way its first argument names
+//< `parse_probe raw <file>` parses an internal brace fixture directly, without the public
+//< compiler's source loader. `parse_probe reads-back <file>` hands the text to the formatter's
+//< read-back check as if `ksplc fmt` had printed it. **No input makes the formatter print text
+//< that does not read back**, so `ksplc fmt` alone cannot show that check fires. Exit 0 where the
+//< text passes, 1 where it is refused, 2 where the probe cannot run.
+import "kspeg/notation"
+import "ksplc/base/core"
+import "ksplc/base/setup"
+import "ksplc/fmt/file"
+import "ksplc/parse/load"
+import "std/ds"
+import "std/io"
+import "std/mem" { dealloc }
+import "std/sys"
+
+embed "ksplc/kspl.kspeg" as grammar
+
+fn main(): I32
+    setup.init()
+    defer setup.fin()
+    load.init()
+    defer load.fin()
+    args: = sys.args()
+    if args.len != 3
+        return 2
+    mode: = args.get(1)
+    path: = args.get(2)
+    if !mode.equals("raw") && !mode.equals("reads-back")
+        return 2
+    src: = io.read_file(path, null) catch
+        return 2
+    defer dealloc(Void$@::src.ptr)
+    $meta: = notation.Meta(grammar, core.arena)
+    parser: = meta.parse_grammar() catch
+        return 2
+    defer parser.free_memo()
+    if mode.equals("reads-back")
+        file.check_reads_back(src, path, parser, 0) catch
+            return 1
+        return 0
+    load.parse_raw_ast(src, path, parser, false) catch
+        io.err().s("parse/syntax_error: compilation terminated (see diagnostics above)\n")
+        return 1
+    return 0

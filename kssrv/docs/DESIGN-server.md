@@ -33,6 +33,14 @@ How the token is made, passed on and compared is "How the token gets across" in 
 
 **The server checks the Host and token as soon as the request head arrives**, so a refused request never waits for its declared body. `http.parse_request_head` shares the complete reader's validation. The page needs no token only for GET or HEAD with no body.
 
+### Every page speaks the protocol through one client
+
+**kssrv keeps the browser's half of the protocol too**, in [`kssrv/page/client.js`](../page/client.js). It takes the token from the fragment and sends each request with it. It makes the digest a conditional write names, and holds the server while a tab is open. ksmd's page and ksagent's chat page both use it, and say in their own words what an answer means.
+
+* **Why one copy**: the token is handled there. Two copies drifted apart before: one rewrote the address without guarding against a browser that refuses.
+* **Why in kssrv**: kssrv owns the protocol, and both pages already depend on its server. A page cannot import across packages at run time, so the client stands beside the step that builds a page.
+* **A page is still one file.** [`kssrv/page/bundle.kspl`](../page/bundle.kspl) puts each script a page names, from the page's folder or from `kssrv/page/`, inside that page. The server hands out the page alone, so it can fetch nothing beside it.
+
 ## HTTPS
 
 With `--cert` and `--key`, kssrv answers HTTPS on its port. TLS itself is OpenSSL's, through `kstls/tls_server` ([kstls](../../lib/kstls/README.md)); this chapter holds what kssrv decides around it.

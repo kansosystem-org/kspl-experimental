@@ -20,7 +20,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" + { Str_builder }
+import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
 import "tools/ci_gates" + { Gate, Set }
@@ -51,8 +51,8 @@ fn main(): I32
         else
             host: =
                 subproc.run_capture(U8[][]::{ "uname", "-s" }, "", 10000, 4096, arena) catch
-                io.err().s("ci: cannot determine the host OS; pass --platform\n")
-                return 2
+                    io.err().s("ci: cannot determine the host OS; pass --platform\n")
+                    return 2
             if !host.exited_with(0)
                 io.err().s("ci: cannot determine the host OS; pass --platform\n")
                 return 2
@@ -108,9 +108,10 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
         version: =
             subproc.run_capture(U8[][]::{ r.make, "--output-sync=target", "--version" }, "", 10000,
             4096, arena) catch
-            io.err()
-                .s("ci: the shared sections need GNU make 4; install it with brew install make\n")
-            return 1
+                io.err()
+                    .s("ci: the shared sections need GNU make 4; install it with brew install \
+                        make\n")
+                return 1
         if !version.exited_with(0)
             io.err()
                 .s("ci: the shared sections need GNU make 4; install it with brew install make\n")
@@ -129,11 +130,10 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     $by_switch: = false
     $not_run: = List<|U8[]|>(arena)
     $left: = List<|Gate|>(arena)
-    $changed: U8[]? = .none
     for g in ci_gates.run_order(r.stop, arena)
         if !s.runs(g, r.platform)
             continue
-        if left_out(g, r, changed@, arena)
+        if left_out(g, r, arena)
             left.push(g)
             continue
         if ended_at.is_some()
@@ -173,43 +173,12 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     io.out().s("# \{name\}: ALL GREEN\n")
     return 0
 
-priv fn left_out(g: Gate, r: Round, changed: U8[]?$@, arena: Arena$@): Bool //<
+priv fn left_out(g: Gate, r: Round, arena: Arena$@): Bool //<
     //< Whether a local full round leaves the gate out, as the change misses its folder
-    //< The change is read once, into `changed`: what this branch holds beyond `origin/main`,
-    //< what is not committed, and new files. **Where git cannot say, the gate runs.**
-    if !r.full || g.local_when.len == 0 || sys.get_env("GITHUB_ACTIONS").is_some()
-        return false
-    if changed.is_none()
-        changed$ = .some(change_names(arena))
-    names: = changed.unwrap_or("")
-    if names.equals(UNKNOWN_CHANGE)
-        return false
-    for name in names.lines(arena)
-        if name.starts_with(g.local_when)
-            return false
-    return true
-
-priv const UNKNOWN_CHANGE: U8[] = "?" //< what `change_names` gives where git cannot say
-
-priv fn change_names(arena: Arena$@): U8[] //<
-    //< The paths the change touches, one a line, or `UNKNOWN_CHANGE`
-    asks: = U8[][4][3]::{::{ "git", "diff", "--name-only", "origin/main...HEAD" },
-        ::{ "git", "diff", "--name-only", "HEAD" },
-        ::{ "git", "ls-files", "--others", "--exclude-standard" } }
-    out: = arena.text()
-    for argv in asks
-        got: =
-            subproc.run_capture(U8[][]::argv, "", 60000, CHANGE_CAP, arena) catch
-            return UNKNOWN_CHANGE
-        if !got.exited_with(0) || got.stdout_data.len >= CHANGE_CAP
-            return UNKNOWN_CHANGE
-        out.s(got.stdout_data).c('\n')
-    return out.take()
-
-priv const CHANGE_CAP: Sz = 16777216 //< the bytes of names read; a list cut there counts as unknown
+    return r.full && g.local_when.len > 0 && !ci_gates.change_reaches(g.local_when, arena)
 
 priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
-    for s in ci_gates.SET_ORDER
+    for s in Set.variants()
         if s.runs(g)
             return true
     return false

@@ -296,7 +296,7 @@ The repository has three layers. From the top:
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `lib/ksai/` / `lib/kspeg/` / `lib/ksos/` / `kssrv/` / `lib/ksdb/` / `lib/kstls/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kstls→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→kstls`, `ksos→ksdb`) |
+| implementation | `ksplc/` / `std/` / `lib/ksai/` / `lib/kspeg/` / `lib/ksos/` / `kssrv/` / `lib/ksdb/` / `lib/kstls/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kstls→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→kstls`, `ksos→ksdb`, `ksmd→kssrv`, `ksagent→kssrv`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
 The chart shows the shape with a few of the packages; the table above is the full list of directions.
@@ -315,6 +315,8 @@ flowchart BT
 ```
 
 `ksos→ksdb` exists because `ksos` keeps an append-only record inside a device. **Do not create the reverse.**
+
+`ksmd→kssrv` and `ksagent→kssrv` exist because both pages are built with kssrv's browser client for the local server, and kssrv owns that protocol. kssrv names neither page.
 
 Caution: **Do not create sideways references between packages.** A pointer from `std/` to `ksplc/` or `lib/ksos/` has no dependency behind it, so moving either end goes unnoticed.
 

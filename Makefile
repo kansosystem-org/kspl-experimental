@@ -34,6 +34,9 @@ endif
 SHELL := bash
 .SHELLFLAGS := -o pipefail -c
 .DEFAULT_GOAL := all
+# **A recipe that fails leaves no target**, or the next make takes a cut file as current. It covers
+# mk/*.mk too; each package's own Makefile says it again, as it stands alone.
+.DELETE_ON_ERROR:
 
 # --- Paths --- shared by the log wrapper and the build it starts
 OUT_DIR     := out

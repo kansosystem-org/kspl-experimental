@@ -16,6 +16,8 @@ import "std/sys"
 const CORPUS_DIR: U8[] = "out/code_complete/corpus" //< the corpus, and the temporary sources
     //< Quick to make again, so it stands under `out/`, where `make clean` removes it.
 const TOKENIZER_DIR: U8[] = "out/code_complete/tokenizer" //< the vocabulary `train_bpe` writes
+const VOCAB_FILE: U8[] = "vocab.txt" //< in `TOKENIZER_DIR`: each word's id and bytes
+const MERGES_FILE: U8[] = "merges.txt" //< in `TOKENIZER_DIR`: the merges, in training order
 
 priv $ksplc_path: U8[] = "ksplc" //< the compiler every measure here asks
     //< **The installed one, found on PATH**, unless a tool's `--ksplc=` names another
@@ -51,17 +53,21 @@ struct Compile_result //< what one run of the compiler said
         //< std/sys.Run_result).
 
 fn load_jsonl(path: U8[], arena: Arena$@): json.Value$[]!io.Io_error //< one JSON record per line
-    //< Shared by the corpus tools. A blank line is skipped, but broken JSON panics, so a broken
-    //< corpus is noticed at once.
+    //< Shared by the corpus tools and the model. A blank line is skipped, but broken JSON
+    //< panics, naming its file and line, so a broken corpus is noticed at once.
     data: = io.read_file(path, null)!
     defer dealloc(Void$@::data.ptr)
 
     $list: = List<|json.Value|>(arena)
+    $n: Sz = 0
     for raw_line in data.lines(arena)
+        n += 1
         line: = U8$[]::raw_line.trim_spaces()
         if line.len == 0
             continue
-        val: = json.parse(line, arena) catch panic("load_jsonl: invalid JSON line")
+        val: = json.parse(line, arena) catch
+            io.err().s("[error] \{path\}:\{n\} is not JSON\n")
+            panic("load_jsonl: invalid JSON line")
         list.push(val.val)
     return list.slice()
 

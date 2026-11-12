@@ -291,9 +291,9 @@ flowchart LR
 
 **What it gives up**: `std`'s published API grows by names a program testing nothing never calls. And the shape of a verdict line becomes `std`'s API to keep.
 
-**One helper stays in `std/tests/` and is shared from there: `std/tests/file_mode.kspl`.** It shows a file's permissions as `ls -l` does, and `tools/tests/page_test.kspl` imports it beside std's own tests. It knows no repository, so the root `tests/` is the wrong place for it. It does not join `std`'s published API either. It asks the system's own `ls`, so its answer is that tool's text, and it answers nothing on Windows. Published, that text would become `std`'s API to keep, for a name only a test calls. It holds no test, so a test of another package imports it without taking std's tests in.
+**The helpers for a test's scratch files stay in `std/tests/` and are shared from there: `std/tests/scratch.kspl`.** It shows a file's permissions as `ls -l` does, sets them with `chmod`, makes a symbolic link with `ln -s`, and removes a scratch tree without following a link. Every package's tests import it, as std's own do. It knows no repository, so the root `tests/` is the wrong place for it. It does not join `std`'s published API either. It asks the system's own tools, so its answers are their text. On Windows it shows no permissions and makes no link. Published, that text would become `std`'s API to keep, for names only a test calls. Removing a tree stays out of `std/fs` for a second reason. It checks a folder, then enters it, and that race is harmless only in a tree the test made. It holds no test, so a test of another package imports it without taking std's tests in.
 
-**What it gives up**: a test outside `std` imports a file that `ksplc doc std` does not list. A change to that file can break the tools' test, and `make debug-tools` is where that shows.
+**What it gives up**: a test outside `std` imports a file that `ksplc doc std` does not list. A change to that file can break another package's tests, and that package's own `make debug-<name>` is where that shows.
 
 ### A path's `..` is resolved by its spelling
 
@@ -475,6 +475,16 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 **A new output goes into one of these folders.** It goes at the top only when a person runs it, since its path then becomes part of what the documents promise. `make debug-file` (VS Code's F5) is such a case: its program stands at the top, where the debugger looks. A benchmark goes into `out/benches/`, although a person runs it: `ksplc build` leaves a program's C and libraries beside it, and they would fill the top. `make clean` removes `out/` whole, so a folder needs no cleaning rule of its own.
 
 **What it gives up**: a gate's program is one folder deeper to type, as `./out/test/test_debug.exe`.
+
+### A recipe that fails leaves no target
+
+**Every Makefile that writes a file target declares `.DELETE_ON_ERROR:`.** Make then deletes a target that a failed recipe changed. Without it, a file cut short by a full disk or a crash is newer than its sources. The next `make` takes it as current and builds on it. ksmd's page is such a file: its bundle writes the page straight onto its name.
+
+* **The root `Makefile` declares it for `mk/` too**, since make reads those files as one.
+* **A package's own `Makefile` declares it again** where it writes files (`ksmd/`, `lib/ksos/`), since it stands alone.
+* **A log that must outlive a failed gate is not a target.** A gate writes its log inside a recipe whose target is the gate's name, so make deletes nothing there.
+
+**What it gives up**: a failed target cannot be looked at afterwards. A file worth reading after a failure, such as a gate's log, is written beside the target, not as it.
 
 ### A shipped executable is optimized; the development cycle is not
 

@@ -23,24 +23,17 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/harness_text"
-
-priv const SRCS_VAR: U8[] = "KSPL_SRCS := " //< the mark to look for when asking make
-    //< It is `:=`, so this line shows **the expanded value**.
+import "tools/make_db"
 
 priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_SRCS`'s value
     //< Caution: **Do not parse the Makefile yourself**; then an imitation of `$(shell find ...)`
     //< decides the answer, not the Makefile. `-p` lists the variables, `-Rr` drops the built-ins,
-    //< `-q` runs nothing.
-    $out: = List<|U8[]|>(arena)
+    //< `-q` runs nothing; `tools/make_db.kspl` reads the answer.
+    make_db.make_speaks_english()
     r: = harness.make(U8[][]::{ "LOGGING=1", "-pRrq" })
-    for line in r.out.lines(arena)
-        if !line.starts_with(SRCS_VAR)
-            continue
-        for w in harness_text.words(line.sub(SRCS_VAR.len, line.len - SRCS_VAR.len), arena)
-            out.push(w)
-        break
-    return out
+    if v: = make_db.parse_db(make_db.last_db(r.out), arena).vars.get("KSPL_SRCS")
+        return make_db.words(v.value, arena)
+    return List<|U8[]|>(arena)
 
 priv fn to_rel(path: U8[], arena: Arena$@): U8[] //<
     //< Rewrites a deps path to be relative to the root, as the Makefile's paths are
@@ -65,9 +58,9 @@ priv fn deps_of_ksplc(work: U8[], arena: Arena$@): List<|U8[]|> //<
     // ksplc/docs/SPEC-tools.md).
     for line in ksplc_harness.read_generated(deps).lines(arena)
         $w: = List<|U8[]|>(arena)
-        for one in harness_text.words(line, arena)
+        for one in make_db.words(line, arena)
             w.push(one)
-        // A line of dashes names a settings file looked for and not found (`write_deps_file` in
+        // A line of dashes names a settings file looked for and not found (`deps_text` in
         // `ksplc/tools/run.kspl`): no source.
         if w.len == 2 && !w.get(0).starts_with("-")
             out.push(to_rel(w.get(1), arena))

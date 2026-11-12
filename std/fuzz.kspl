@@ -15,6 +15,7 @@ import "std/prng" { Prng }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
 import "std/subproc"
+import "std/sys"
 import "std/verdict"
 
 priv const STOP_MARK: U8[] = "panic:" //<
@@ -191,7 +192,12 @@ pub fn gather( //< collects the files with the given endings under the folders, 
     // its name.
     defer $work: = mem.scratch(null)
     for handed in dirs
-        dir: = handed.strip_suffix("/")
+        // Caution: **Cut every trailing separator, `/` and `\` alike, but not the root.** The
+        // walk's paths start with the folder as `fs.join` writes it: `a//` and `a\` both give
+        // `a/x`. A name measured from the folder as given would lose its first byte.
+        $dir: = handed
+        for dir.len > sys.root_len(dir) && sys.is_path_sep(dir[dir.len - 1])
+            dir = dir.sub(0, dir.len - 1)
         files: = fs.walk_files(dir, skip_dir, work.arena) catch
             continue
         for path in files
@@ -207,8 +213,10 @@ pub fn gather( //< collects the files with the given endings under the folders, 
                 continue
             kept: = io.read_file(path, arena) catch
                 continue
-            name: = arena
-                .dup_str(path.sub_from(dir.len + 1) if path.len > dir.len else path)
+            $below: = path.sub_from(dir.len)
+            for below.len > 0 && sys.is_path_sep(below[0])
+                below = below.sub_from(1)
+            name: = arena.dup_str(below)
             out.push(Sample::{ .kind = kind, .name = name, .data = kept, .built = false })
     return out
 

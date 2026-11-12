@@ -10,7 +10,6 @@
 "use strict";
 
 function ksmdDrawings(ks) {
-  const SVG = "http://www.w3.org/2000/svg";
   // The colours offered, as the writer keeps them; the first is used where the file names none.
   const COLOURS = [["#c00000", "Red"], ["#1f5fbf", "Blue"], ["#1a7f37", "Green"], ["#000000", "Black"]];
   const CHART = [640, 300];
@@ -28,12 +27,7 @@ function ksmdDrawings(ks) {
   let chosen = null;
   let drag = null; // what a press started: a new shape, or a chosen one moving
 
-  function node(tag, attrs, text) {
-    const el = document.createElementNS(SVG, tag);
-    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-    if (text !== undefined) el.textContent = text;
-    return el;
-  }
+  const node = ks.svg;
 
   const blockOf = (fig) => ks.view.blocks().indexOf(fig);
   // The picture's frame in its own pixels, or null while an image has not loaded.

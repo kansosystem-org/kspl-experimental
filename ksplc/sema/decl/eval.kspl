@@ -59,6 +59,17 @@ impl Sema_ctx
         rb: = r.env.scalar_repr_id(b)
         return rb if r.env.get_portable_bit_size(rb) > r.env.get_portable_bit_size(ra) else ra
 
+    priv fn fold_base(r: Self@, t: I32): I32 //<
+        //< The type an operation folds at: its operands' t, else the declared type of the constant
+        //< being folded
+        //< **A constant's declared type gives the width where nothing is typed yet** ("6.8 Integer
+        //< arithmetic: folding, overflow, division, shifts" in docs/SPEC-programming-language.md).
+        //< So `const C: I64 = 3000000000 - 1` folds at I64 when an enum tag reaches it, as it does
+        //< once its initializer is typed.
+        if t != 0 && !sema_type_env.is_unknown(t)
+            return t
+        return r.resolving.const_type if r.resolving.const_type != 0 else t
+
     fn fold_quietly(r: Self$@, node: Ast_node$@, narrow: Bool): I64!Sema_error //<
         //< Folds a constant expression, discarding its diagnostics, narrowed to I32 where `narrow`
         //< **Every quiet fold goes through here.** The suppression flag and the error count are put
@@ -375,7 +386,7 @@ impl Ast_node
             // Caution: **Fit the result to the operand's width**, as the binary operators do: at
             // I64's width `-(-128I8)` is 128, and `~0U8` is -1 rather than 255. A bare literal
             // has no width yet and folds at I64's.
-            t: = r.get_unary_target().fold_type(c, depth + 1)
+            t: = c.fold_base(r.get_unary_target().fold_type(c, depth + 1))
             known: = t != 0 && !sema_type_env.is_unknown(t)
             op_id: = c.env.scalar_repr_id(t) if known else 0
             bits: = c.env.get_portable_bit_size(op_id) if known else 64
@@ -420,7 +431,7 @@ impl Ast_node
             if !is_shift
                 right_id: = r.get_binary_right().fold_type(c, depth + 1)
                 op_base = c.promoted_fold_type(left_id, right_id)
-            op_id: = c.env.scalar_repr_id(op_base)
+            op_id: = c.env.scalar_repr_id(c.fold_base(op_base))
             bits: = c.env.get_portable_bit_size(op_id)
             is_uns: = c.env.is_unsigned(op_id)
             // Division, remainder, right shift and ordering depend on the sign, so they read U64.
@@ -654,6 +665,9 @@ impl Ast_node
                     throw .not_constant
                 c.resolving.consts.set(decl_key, true)
                 defer c.resolving.consts.remove(decl_key)
+                outer_type: = c.resolving.const_type
+                c.resolving.const_type = decl_node.declared_fold_type(c)
+                defer c.resolving.const_type = outer_type
                 outer_deepest: = c.statics.deepest
                 c.statics.deepest = depth + 1
                 v: = expr_node.eval_constexpr_internal(c, depth + 1) catch e
@@ -746,6 +760,20 @@ impl Ast_node
                 !sema_type_env.is_unknown(t_node.type_id)
                 return t_node.type_id
         return unknown
+
+    priv fn declared_fold_type(r: Self$@, c: Sema_ctx$@): I32 //<
+        //< A `const` declaration's written integer type, 0 where none is written, it does not
+        //< resolve or it is no integer
+        t_node: = r.get_decl_type_node()
+        if t_node == null
+            return 0
+        if t_node.type_id != 0 && !sema_type_env.is_unknown(t_node.type_id)
+            return t_node.type_id if c.env.is_integer(t_node.type_id) else 0
+        prev_sup: = c.suppress_errors
+        c.suppress_errors = true
+        defer c.suppress_errors = prev_sup
+        t: = t_node.resolve_type(c) catch 0
+        return t if !sema_type_env.is_unknown(t) && c.env.is_integer(t) else 0
 
     priv fn names_variant(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Whether the node, parentheses aside, is a simple enum's variant (`E.a`, `.a`)

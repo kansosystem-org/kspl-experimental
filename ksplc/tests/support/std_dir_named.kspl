@@ -9,6 +9,7 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 const SRC: U8[] = """import "std/io"
@@ -168,8 +169,8 @@ fn case_named_inner_cfg(std: U8[], arena: Arena$@) //<
         return
     fs.write_tree(dir, U8[][]::{ "lib_here/probe/ksplc.cfg" },
         U8[][]::{ "[lint]\nI0307 = off\n" }, arena) catch
-        verdict.check(name, false, "cannot place the settings")
-        return
+            verdict.check(name, false, "cannot place the settings")
+            return
     inside: =
         ksplc_env(U8[][]::{ "run", "main.kspl" }, fs.join(dir, "lib_here/probe", arena), std, "",
         arena)
@@ -221,8 +222,8 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
         arena.text().s(plain.out).s(dotted.out).take())
     fs.write_tree(dir, U8[][]::{ "lib_here/ksplc.cfg", "outside/lone.kspl" },
         U8[][]::{ DOTTED_CFG, OUTSIDE_LONE }, arena) catch
-        verdict.check(name, false, "cannot place the file outside the package")
-        return
+            verdict.check(name, false, "cannot place the file outside the package")
+            return
     top: = fs.join(dir, "lib_here", arena)
     beside: = fs.join("..", "outside/lone.kspl", arena) // the file beside the package, through `..`
     lone: = ksplc_env(U8[][]::{ beside, "lone.c" }, top, std, "", arena)
@@ -320,8 +321,8 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
     fs.write_tree(top, U8[][]::{ "probe/climb.kspl" },
         U8[][]::{ "embed \"../../outside.txt\" as o\n\nfn main(): I32\n    return 0\n" }, arena)
         catch
-        verdict.check(name, false, "cannot place the climbing file")
-        return
+            verdict.check(name, false, "cannot place the climbing file")
+            return
     climb: = ksplc_env(U8[][]::{ "probe/climb.kspl", "climb.c" }, top, std, "", arena)
     verdict.check("a path that climbs out of a package is refused as a climb, not as a package",
         !climb.exited_with(0) &&
@@ -330,8 +331,8 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
     fs.write_tree(dir,
         U8[][]::{ "lib_here/ksplc.cfg", "lib_here/probe/used.kspl", "deps/otherlib/x.kspl" },
         U8[][]::{ USED_CFG, USED_MAIN, USED_X }, arena) catch
-        verdict.check(name, false, "cannot place the used package")
-        return
+            verdict.check(name, false, "cannot place the used package")
+            return
     deps: = fs.join(dir, "deps", arena)
     used: = ksplc_env(U8[][]::{ "run", "probe/used.kspl" }, top, std, deps, arena)
     verdict.check("a package listed in uses is found under the place told",
@@ -341,8 +342,8 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
         U8[][]::{ "outside\n",
         "embed \"otherlib/../../outside.txt\" as o\n\nfn main(): I32\n    return 0\n" }, arena)
         catch
-        verdict.check(name, false, "cannot place the reaching file")
-        return
+            verdict.check(name, false, "cannot place the reaching file")
+            return
     reach: =
         ksplc_env(U8[][]::{ "probe/reach.kspl", "reach.c" }, top, std, deps, arena)
     verdict.check("a path that climbs out of a listed package is refused, though its file stands",
@@ -363,8 +364,8 @@ fn case_named_embed(std: U8[], arena: Arena$@) //<
         U8[][]::{ "lib_here/probe/embed.kspl", "lib_here/probe/embed_stray.kspl",
         "lib_here/data/note.txt", "lib_here/probe/beside.txt", "otherlib/x.txt" },
         U8[][]::{ EMBED_MAIN, EMBED_STRAY, "named data\n", "beside\n", "other\n" }, arena) catch
-        verdict.check(name, false, "cannot place the embedded files")
-        return
+            verdict.check(name, false, "cannot place the embedded files")
+            return
     top: = fs.join(dir, "lib_here", arena)
     own: = ksplc_env(U8[][]::{ "run", "probe/embed.kspl" }, top, std, "", arena)
     verdict.check(name, own.out.equals(EMBED_SAID), own.out)
@@ -398,10 +399,6 @@ fn main(): I32
 
 """
 
-priv fn made_link(target: U8[], at: U8[]): Bool //< `ln -s`; false where none is made
-    //< Windows has no `ln -s`, and `mklink` needs privileges, so the case is skipped there.
-    return harness.run(U8[][]::{ "ln", "-s", target, at }).exited_with(0) && fs.is_link(at)
-
 fn case_named_link(std: U8[], arena: Arena$@) //<
     //< A link below a package's top folder is refused at the embed and the import that pass it
     //< A link there can lead out of the package, to a file nobody meant to build in.
@@ -416,16 +413,17 @@ fn case_named_link(std: U8[], arena: Arena$@) //<
         "lib_here/probe/reach.kspl" },
         U8[][]::{ "outside\n", "pub fn f(): I32\n    return 0\n", LINK_EMBED, LINK_IMPORT }, arena)
         catch
-        verdict.check(name, false, "cannot place the files")
-        return
+            verdict.check(name, false, "cannot place the files")
+            return
     top: = fs.join(dir, "lib_here", arena)
     whole_top: = fs.absolute(top, arena) catch ""
     whole_out: = fs.absolute(fs.join(dir, "outside", arena), arena) catch ""
     whole_std: = fs.absolute(std, arena) catch ""
     linked_top: = fs.join(dir, "linked_top", arena)
     linked_std: = fs.join(dir, "linked_std", arena)
-    if !made_link(whole_out, fs.join(top, "esc", arena)) || !made_link(whole_top, linked_top) ||
-        !made_link(whole_std, linked_std)
+    if !scratch.made_link(whole_out, fs.join(top, "esc", arena), arena) ||
+        !scratch.made_link(whole_top, linked_top, arena) ||
+        !scratch.made_link(whole_std, linked_std, arena)
         verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
         return
     leak: = ksplc_env(U8[][]::{ "probe/leak.kspl", "leak.c" }, top, std, "", arena)
@@ -495,9 +493,9 @@ fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
         return
     fs.write_tree(outer, U8[][]::{ "ksplc.cfg", "plain/main.kspl" },
         U8[][]::{ "[lint]\nZ9999 = on\n", SRC }, arena) catch
-        verdict.check("the settings above a package do not reach into it", false,
-            "cannot place the settings")
-        return
+            verdict.check("the settings above a package do not reach into it", false,
+                "cannot place the settings")
+            return
     inside: =
         ksplc_env(U8[][]::{ "lib_here/probe/main.kspl", "in.c" }, outer, std, "", arena)
     verdict.check("the settings above a package do not reach into it", inside.exited_with(0),

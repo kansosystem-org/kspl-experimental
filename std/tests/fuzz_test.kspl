@@ -11,7 +11,7 @@ import "std/mem" { Arena }
 import "std/prng" { Prng }
 import "std/str" // `arena.text()` and `replace`
 import "std/subproc"
-import "std/tests/fs_test"
+import "std/tests/scratch"
 import "std/tests/sys_test"
 import "std/verdict"
 
@@ -78,7 +78,13 @@ fn test_fuzz_gather()
         "the paths below the folder, in order, past out/, .git/ and a file at the cap")
     assert(got.get(1).kind.equals(".md") && got.get(1).data.equals("a"),
         "a seed carries the ending it matched and its bytes")
-    fs_test.clear_tree_best_effort(dir, arena)
+    for tail in U8[][]::{ "/", "//", "\\", "/\\" }
+        again: = fuzz.gather(U8[][]::{ arena.text().s(dir).s(tail).take() }, skip_made,
+            U8[][]::{ ".md" }, 10I64, arena)
+        assert(again.len == got.len && again.get(0).name.equals(".tool/set.md") &&
+            again.get(3).name.equals("sub/c.md"),
+            "every trailing separator, / and \\ alike, is cut before a name is measured")
+    scratch.remove_tree(dir, arena)
     verdict.pass("Seeds come in the order of their paths, and the folders skip_dir names stay out.")
 
 priv const SUBJECT_SRC: U8[] =

@@ -2,6 +2,7 @@
 import "ksagent/answer" + { Lang }
 import "ksagent/chat"
 import "ksagent/files"
+import "ksagent/sorted_names"
 import "ksagent/tests/agent_test"
 import "ksagent/tests/stub"
 import "ksagent/watch"
@@ -9,11 +10,9 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/json"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
-import "std/sys"
 import "std/verdict"
 
 priv const ASKED: U8[] =
@@ -238,63 +237,36 @@ priv fn asked_and_answered(n: Sz, arena: Arena$@): Conversation //<
                 .s("{\"type\":\"answer\",\"id\":\"q\{k\}\",\"state\":\"failed\"}\n")
     return Conversation::{ .asks = asks.take(), .recorded = recorded.take() }
 
-priv const TIMING_ROUNDS: Sz = 5 //< rounds of the four timings, each kept at its fastest
+priv fn pending_comparisons(c: Conversation, arena: Arena$@): Sz //<
+    //< The names compared while both files are read and the pending question is found
+    before: = sorted_names.comparisons()
+    asks: = chat.read_asks(c.asks, arena)
+    rec: = chat.read_chat(c.recorded, arena) catch panic("the chat file reads")
+    _p: = chat.find_pending(asks@, rec@, arena)
+    return sorted_names.comparisons() - before
 
-priv fn pending_us(c: Conversation): I64 //< one find of the pending question [us]
-    defer one: = Arena(1024 * 1024)
-    started: = sys.mono_us()
-    asks: = chat.read_asks(c.asks, one)
-    rec: = chat.read_chat(c.recorded, one) catch panic("the chat file reads")
-    _p: = chat.find_pending(asks@, rec@, one)
-    return sys.mono_us() - started
+priv fn log2_up(n: Sz): Sz //< the smallest k with 2^k >= n
+    $k: Sz = 0
+    for (1 << k) < n
+        k += 1
+    return k
 
-priv fn parse_us(c: Conversation): I64 //< one plain parse of the same lines [us]
-    //< Linear by construction: each line is read as JSON once and nothing more.
-    defer one: = Arena(1024 * 1024)
-    started: = sys.mono_us()
-    for text in U8[][]::{ c.asks, c.recorded }
-        for line in text.lines(one)
-            _v: = json.parse(line, one) catch
-                panic("a line of the files is JSON")
-    return sys.mono_us() - started
+priv const COMPARED_PER_LOG: Sz = 12 //< the comparisons allowed per question, per halving
+    //< Both files are sorted and each line's id is found, so a question costs about 6 comparisons
+    //< per halving. Work that grows with the square costs hundreds per halving at these sizes.
 
-fn test_finding_the_pending_question_grows_in_step_with_the_files() //< held to a plain parse
-    //< **Held to a plain parse of the same lines, timed the same way**, not to a fixed ratio. A
-    //< busy machine or a cold cache slows both alike as the files grow, while work that grows
-    //< with the square of the size still grows far faster than the parse.
-    //< Caution: **A sanitizer's build skips it.** ThreadSanitizer slows the search about three
-    //< times more than the parse as the files grow, so the ratio tells nothing there.
-    verdict.start("[ksagent] finding the pending question takes time in step with the files")
-    if sys.get_env("KANSO_SANITIZED").is_some()
-        verdict.skip("a sanitizer's build does not keep time in step with the work")
-        return
+fn test_finding_the_pending_question_grows_in_step_with_the_files() //< a count of comparisons
+    //< **Counts the names compared, not the time taken**: a count is the same on every machine,
+    //< while a timing moved 2 to 3 times on a loaded one and failed with right code.
+    verdict.start("[ksagent] finding the pending question compares names in step with the files")
     defer arena: = Arena(1024 * 1024)
-    // **The sizes differ 16 times, and the search may grow 4 times more than the parse.** Work
-    // that grows with the square then grows 16 times more, so the limit stands 4 times from each
-    // outcome. At 4 times the size it would stand 2 times from each, and a large file that leaves
-    // the cache can grow the search 2 times more on a busy machine.
-    small: = asked_and_answered(750, arena)
-    large: = asked_and_answered(12000, arena)
-    // **The four timings take turns, each round**: a busy spell on a shared machine then slows
-    // both sides of the comparison, not the parse of the small files alone. Timed apart, one such
-    // spell made the parse look to grow 2.8 times for 4 times the lines.
-    $found_small: I64 = 0I64
-    $found_large: I64 = 0I64
-    $parse_small: I64 = 0I64
-    $parse_large: I64 = 0I64
-    for round in Range.asc(TIMING_ROUNDS)
-        found_small = agent_test.fastest(found_small, pending_us(small), round)
-        parse_small = agent_test.fastest(parse_small, parse_us(small), round)
-        found_large = agent_test.fastest(found_large, pending_us(large), round)
-        parse_large = agent_test.fastest(parse_large, parse_us(large), round)
-    name: = arena.text()
-        .s("16 times the questions take at most 4 times the growth of a plain parse ")
-        .s("(\{found_small\} to \{found_large\} us; the parse \{parse_small\} to \{parse_large\} \
-            us)").take()
-    // found_large / found_small <= 4 * parse_large / parse_small, cross-multiplied; the 1000 us
-    // keeps a tiny small run from making the ratio meaningless.
-    verdict.check(name,
-        found_large * (parse_small + 1000I64) <= 4I64 * parse_large * (found_small + 1000I64), "")
+    for n in Sz[]::{ 200, 6400 }
+        compared: = pending_comparisons(asked_and_answered(n, arena), arena)
+        limit: = COMPARED_PER_LOG * n * log2_up(n)
+        name: = arena.text()
+            .s("\{n\} questions compare at most \{COMPARED_PER_LOG\} names each per halving ")
+            .s("(\{compared\} against \{limit\})").take()
+        verdict.check(name, compared > 0 && compared <= limit, "")
 
 fn test_an_ask_file_past_its_cap_is_refused(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] an ask file larger than its cap is not read, and the page is told why")

@@ -19,6 +19,7 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 import "tools/opener" { PORT_TRIES }
 import "tools/opener_aim" as aim
@@ -47,11 +48,9 @@ priv fn first_free(from: I32): I32 //< the first port from `from` that can be li
 priv fn url_of(out_path: U8[]): U8[] //< the URL a launcher put out, "" until a whole line of it
     body: = io.read_file(out_path, null) catch
         return ""
-    if at: = body.find_str("http://")
-        rest: = body.sub_from(at)
-        if end: = rest.find_char('\n')
-            return rest.sub(0, end)
-    return ""
+    // A URL that ends the text has no line end yet: the launcher is still writing it.
+    url: = url_of_text(body)
+    return "" if body.ends_with(url) else url
 
 priv fn ask(url: U8[], target: U8[], arena: Arena$@, method: U8[] = "GET", content: U8[] = ""):
     http.Response$@? //<
@@ -59,7 +58,7 @@ priv fn ask(url: U8[], target: U8[], arena: Arena$@, method: U8[] = "GET", conte
         //< A `content` names the bytes a file holds (`X-Kanso-If-Content`).
     defer stream: =
         net.Tcp_stream.connect("127.0.0.1", aim.port_num(aim.port_in_url(url))) catch
-        return .none
+            return .none
     bearer: = arena.text().s("Bearer ").s(aim.token_in_url(url)).take()
     $named: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer)
     if content.len > 0
@@ -69,7 +68,7 @@ priv fn ask(url: U8[], target: U8[], arena: Arena$@, method: U8[] = "GET", conte
         return .none
     answer: =
         http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
-        return .none
+            return .none
     return .some(answer)
 
 priv fn body_of(url: U8[], target: U8[], arena: Arena$@): U8[] //<
@@ -232,20 +231,13 @@ priv fn check_taken(launcher: U8[], loose: U8[], work: U8[], arena: Arena$@): Ru
         held.free()
     return taken
 
-priv fn make_link(at: U8[], target: U8[], arena: Arena$@): Bool //<
-    //< A symbolic link at `at` to `target`; false where `ln -s` cannot make one
-    r: =
-        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", TOOL_WAIT_MS, 4096, arena)
-        catch
-        return false
-    return r.exited_with(0) && fs.is_link(at)
-
 priv fn check_links(launcher: U8[], ws: U8[], arena: Arena$@) //<
     //< A document that is a link, or lies under a folder that is one, is refused before anything
     //< starts. The server refuses both (403), so a page opened on them would show nothing.
     alias: = fs.join(ws, "alias.ksmd", arena)
     folder: = fs.join(ws, "lnk", arena)
-    if !make_link(alias, "top.ksmd", arena) || !make_link(folder, "parts", arena)
+    if !scratch.made_link("top.ksmd", alias, arena) ||
+        !scratch.made_link("parts", folder, arena)
         verdict.skip_check("it refuses a document behind a link",
             "a link cannot be made with `ln -s` in this environment")
         return

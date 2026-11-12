@@ -22,6 +22,8 @@
 # --- What this file is handed, and what it settles for itself ---
 # The gates' `set -o pipefail` wants bash (dash lacks it), and make takes no shell from its caller.
 SHELL := bash
+# **A recipe that fails leaves no target**: an image cut short would otherwise count as current.
+.DELETE_ON_ERROR:
 
 KSPLC ?= ksplc
 # Where everything built goes: a demo lands at `$(OUT)/ksos_<port>/`, the path the documents name.

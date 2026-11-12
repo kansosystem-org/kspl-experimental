@@ -106,7 +106,7 @@ impl Editor
             throw .not_a_table
         edit.rename_table(from@, 0,
             free_name(ed.doc@, from.tables[0].name, ed.arena), ed.arena) catch why
-            throw .table(why)
+                throw .table(why)
         // Each formula is written out under the new name, and bound again in this document.
         defer scratch: = Arena(16 * 1024)
         at: = Positions(from@, scratch)
@@ -469,7 +469,7 @@ impl Editor
                 at_row: = row + r
                 $text: = line[c]
                 if at_row >= 0 && !typed
-                    text = pasted(text, scratch)
+                    text = pasted(text, ed.reading(), scratch)
                 if f: = from
                     if at_row >= 0 && text.starts_with("=")
                         copied_row: = f.rows[r] if f.rows.len > 0 else f.row + r
@@ -863,29 +863,32 @@ priv fn free_name(doc: Document@, name: U8[], arena: Arena$@): U8[] //<
             return candidate
         n += 1
 
-priv fn pasted(text: U8[], arena: Arena$@): U8[] //<
-    //< A pasted cell's text, with a number's thousands separators taken out: `-1,234.5` is
-    //< `-1234.5`. Anything else stays as it was.
+priv fn pasted(text: U8[], read: Reading, arena: Arena$@): U8[] //<
+    //< A pasted cell's text, with a number's or a date's spaces around it taken out, and a
+    //< number's thousands separators: ` -1,234.5 ` is `-1234.5`, and ` 2026-10-23 ` a date as
+    //< `read` reads one. Anything else stays as it was, its spaces too, as typed text keeps them.
     t: = text.trim_spaces()
+    if is_decimal(t) || value_of(t, read, arena).kind == .date
+        return t
     i: Sz = 1 if t.starts_with("-") else 0
     $digits: Sz = 0
     for i + digits < t.len && t[i + digits].is_digit()
         digits += 1
     if digits == 0 || digits > 3 || i + digits == t.len || t[i + digits] != ','
-        return t
+        return text
     defer $b: = Str_builder()
     b.s(t.sub(0, i + digits))
     $j: = i + digits
     for j < t.len && t[j] == ','
         if j + 4 > t.len || !t[j + 1].is_digit() || !t[j + 2].is_digit() ||
             !t[j + 3].is_digit()
-            return t
+            return text
         b.s(t.sub(j + 1, 3))
         j += 4
     rest: = t.sub_from(j)
     b.s(rest)
     joined: = arena.dup_str(b.slice())
-    return joined if is_decimal(joined) else t
+    return joined if is_decimal(joined) else text
 
 priv fn write_typed(v: calculated.Value, out: Str_builder$@) //<
     //< A calculated value as text typed into a cell puts it: a number as it shows without a

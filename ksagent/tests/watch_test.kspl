@@ -13,6 +13,7 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 priv fn asked(n: Sz, arena: Arena$@): U8[] //< an ask file of `n` questions, `q1` to `qn`
@@ -94,7 +95,7 @@ priv fn make_fifo(at: U8[], arena: Arena$@): Bool //< a FIFO at `at`; false wher
     //< Windows has no `mkfifo`, so the test becomes a `skip` there.
     r: =
         subproc.run_capture(U8[][]::{ "mkfifo", at }, "", 10000, 4096, arena) catch
-        return false
+            return false
     return r.exited_with(0) && fs.exists(at)
 
 fn test_a_fifo_is_passed_over_not_read(work: U8[], arena: Arena$@)
@@ -127,8 +128,8 @@ fn test_a_chat_file_that_is_a_link_is_not_followed(work: U8[], arena: Arena$@)
     ask: = fs.join(root, "talk.ask.jsonl", arena)
     target: = arena.text().s(root).s("-chat.jsonl").take()
     io.write_file(target, "") catch panic("the file the link names can be written")
-    if !agent_test.make_link(root, "talk.chat.jsonl",
-        arena.text().s("../").s(sys.get_file_name(target)).take(), arena)
+    if !scratch.made_link(arena.text().s("../").s(sys.get_file_name(target)).take(),
+        fs.join(root, "talk.chat.jsonl", arena), arena)
         verdict.skip("a link cannot be made with `ln -s` in this environment")
         return
     io.write_file(ask, asked(1, arena)) catch panic("the ask file can be written")

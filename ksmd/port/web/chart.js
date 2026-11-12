@@ -12,27 +12,24 @@ const CHART_COLOURS = ["#0072b2", "#e69f00", "#009e73", "#cc79a7", "#56b4e9", "#
   "#f0e442", "#999999"];
 
 function ksmdChart(ks) {
-  const SVG = "http://www.w3.org/2000/svg";
   const W = 640;
   const H = 300;
   const PAD = { left: 56, right: 16, top: 16, bottom: 48 };
 
-  function node(tag, attrs, text) {
-    const el = document.createElementNS(SVG, tag);
-    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-    if (text !== undefined) el.textContent = text;
-    return el;
-  }
+  const node = ks.svg;
 
-  // Round marks for an axis from `lo` to `hi`: 1, 2 or 5 times a power of ten apart.
+  // Round marks for an axis from `lo` to `hi`: 1, 2 or 5 times a power of ten apart. The first
+  // mark is at or below `lo` and the last at or above `hi`, so every bar and point falls between
+  // them. The small allowance keeps a value that is a mark, such as 1.1 over 0.1, from adding one.
   function ticks(lo, hi) {
     const span = hi - lo || 1;
     const raw = span / 5;
     const power = 10 ** Math.floor(Math.log10(raw));
     const step = [1, 2, 5, 10].map((m) => m * power).find((s) => s >= raw);
-    const first = Math.floor(lo / step) * step;
+    const first = Math.floor(lo / step + 1e-9);
+    const last = Math.ceil(hi / step - 1e-9);
     const out = [];
-    for (let v = first; v <= hi + step / 2; v += step) out.push(Number(v.toPrecision(12)));
+    for (let k = first; k <= last; k++) out.push(Number((k * step).toPrecision(12)));
     return out;
   }
 

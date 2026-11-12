@@ -119,7 +119,7 @@ fn test_http_parse_buffered()
     $incomplete_ok: = true
     _r: =
         http.parse_request("GET / HTTP/1.1\r\n", http.DEFAULT_MAX_BODY_BYTES, arena) catch
-        incomplete_ok = false
+            incomplete_ok = false
     assert(!incomplete_ok, "parse_request must reject a headerless-but-truncated message")
 
     // The body can be only partly in; sliced without a check, the view points outside the buffer.
@@ -274,8 +274,8 @@ fn test_http_reject_smuggling()
         $head_ok: = true
         _h: =
             http.parse_request_head(twice, http.DEFAULT_MAX_BODY_BYTES, arena_h) catch
-            head_ok = false
-            fallback null
+                head_ok = false
+                fallback null
         assert(!head_ok, "parse_request_head must refuse what parse_request refuses")
     assert(parse_error("GET / HTTP/1.1\r\n\r\n", http.DEFAULT_MAX_BODY_BYTES, arena_h)
         .equals("invalid_host"), "an HTTP/1.1 request naming no Host must be refused")
@@ -322,7 +322,7 @@ fn test_http_reject_smuggling()
         $request_kept: = true
         http.format_request(out@, "GET", "/",
             http.headers(arena).add("Host", "h").add("X", padded).build(), "") catch
-            request_kept = false
+                request_kept = false
         assert(!response_kept && !request_kept,
             "a header value with a space at either end must be refused when written")
     assert(out.slice().equals("an answer queued before\n"),
@@ -537,11 +537,11 @@ extern fn http_echo_server(listener: net.Tcp_listener$@): Void$@
         got.s(U8[]::{ .ptr = chunk[0]@, .len = n })
         req =
             http.parse_request(got.slice(), http.DEFAULT_MAX_BODY_BYTES, server_arena) catch e
-            switch e
-            case .incomplete {}
-            default
-                panic("server parse_request should succeed once the request is whole")
-            fallback null
+                switch e
+                case .incomplete {}
+                default
+                    panic("server parse_request should succeed once the request is whole")
+                fallback null
     req_ok: =
         req.method.equals("POST") && req.target.equals("/echo") && req.body.equals("ping")
     assert(req_ok, "server must parse the client's request correctly")
@@ -586,10 +586,10 @@ fn test_http_socket_roundtrip()
     $mismatch: = false
     http.write_request(client, "POST", "/echo",
         http.headers(arena).add("Content-Length", "1").build(), "ping", 60000) catch e
-        switch e
-        case .length_mismatch
-            mismatch = true
-        default {}
+            switch e
+            case .length_mismatch
+                mismatch = true
+            default {}
     assert(mismatch, "write_request must refuse a Content-Length that is not the body's")
     // **The writer refuses what the reader refuses**: no `Host`, two, or one that is not a host.
     for bad_host in http.Headers[]::{ http.headers(arena).build(),

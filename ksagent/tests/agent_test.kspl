@@ -14,6 +14,7 @@ import "std/net"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
+import "std/tests/scratch"
 import "std/verdict"
 
 fn job_at(port: I32, root: U8[], arena: Arena$@): agent.Ask //<
@@ -42,10 +43,6 @@ fn recorded(a: Answer@, arena: Arena$@): U8[] //<
         .history = none }
     lines: = chat.turn_lines(p@, a, "", arena)
     return lines.sub_from(lines.find_char('\n').unwrap_or(0) + 1)
-
-fn fastest(best: I64, took: I64, round: Sz): I64 //< the faster of two timings; round 0 sets it
-    //< The timing tests of `chat_test.kspl` and `stream_test.kspl` keep each one's fastest round.
-    return took if round == 0 || took < best else best
 
 fn test_a_round_whose_quote_checks(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] search, read and answer, with a quote that stands there")
@@ -124,7 +121,7 @@ fn test_an_escaping_path_is_refused(work: U8[], arena: Arena$@)
     for p in U8[][]::{ "../escape-outside.txt", "/etc/passwd", ".env", ".hidden/notes.md",
         "rules/../../escape-outside.txt", "data.bin", "team.chat.jsonl" }
         paths.push(p)
-    linked: = make_link(root, "link.md", "../escape-outside.txt", arena)
+    linked: = scratch.made_link("../escape-outside.txt", fs.join(root, "link.md", arena), arena)
     if linked
         paths.push("link.md")
     else
@@ -214,14 +211,6 @@ priv fn said_not_found(a: Answer@): Bool //< whether the answer is the not-found
     default
         return false
 
-fn make_link(root: U8[], name: U8[], target: U8[], arena: Arena$@): Bool //<
-    //< A link inside the folder pointing outside; false where `ln -s` cannot make one
-    at: = fs.join(root, name, arena)
-    r: =
-        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
-        return false
-    return r.exited_with(0) && fs.is_link(at)
-
 priv fn big_text(arena: Arena$@): U8[] //< about 1 MiB of lines that hold no word asked for
     out: = arena.text()
     for k in Range.asc(32 * 1024)
@@ -273,6 +262,55 @@ fn test_a_search_skips_out_unless_given_it(work: U8[], arena: Arena$@)
         all.find_str("build output").is_none() && all.find_str("deep output").is_none(), all)
     verdict.check("a search given rules/out reads it",
         given.find_str("rules/out/deep.md:1:").is_some(), given)
+
+fn test_a_search_of_one_file_it_cannot_read_says_why(work: U8[], arena: Arena$@)
+    // Caution: **Do not answer "no line holds" for it.** The model would take the file as read
+    // and the words as absent from it. An old Word file is refused on every OS, by any user.
+    verdict.start("[ksagent] a search of one named file that cannot be read says why")
+    root: = stub.folder(work, "one-unread", arena)
+    fs.write_tree(root, U8[][]::{ "old/leave.doc" }, U8[][]::{ "paid leave\n" }, arena)
+        catch panic("the old Word file can be written")
+    said: = files.tool_search(root, "paid leave", "old/leave.doc", stub.ROOM, arena)
+    verdict.check("the search is refused with the reason read would give",
+        said.starts_with("refused: it is a Word file in the old format"), said)
+
+priv fn set_mode(path: U8[], mode: U8[], arena: Arena$@): Bool //< `chmod`, true where it ran
+    r: =
+        subproc.run_capture(U8[][]::{ "chmod", mode, path }, "", 10000, 4096, arena) catch
+            return false
+    return r.exited_with(0)
+
+priv fn can_list(path: U8[], arena: Arena$@): Bool //< whether the folder's entries can be read
+    _names: = fs.read_dir(path, arena) catch
+        return false
+    return true
+
+priv fn walks(root: U8[], arena: Arena$@): Bool //< whether `files.walk` answers for the root
+    _found: = files.walk(root, arena) catch
+        return false
+    return true
+
+fn test_a_folder_that_cannot_be_read_is_passed_over(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a search passes over a folder that cannot be read, and walks the rest")
+    root: = stub.folder(work, "locked", arena)
+    fs.write_tree(root, U8[][]::{ "locked/inside.md" }, U8[][]::{ "paid leave, locked away\n" },
+        arena) catch panic("the folder to lock can be written")
+    locked: = fs.join(root, "locked", arena)
+    // **Root reads a folder of any mode**, and Windows has no `chmod`: where the folder can still
+    // be read after `chmod 000`, nothing can be locked, so the test is a skip.
+    $readable: = true
+    if set_mode(locked, "000", arena)
+        readable = can_list(locked, arena)
+    if readable
+        _restored: = set_mode(locked, "755", arena)
+        verdict.skip("this user reads a folder of any mode (root does), so none can be locked")
+        return
+    walked: = walks(root, arena)
+    hits: = files.tool_search(root, "paid leave", "", stub.ROOM, arena)
+    _restored: = set_mode(locked, "755", arena)
+    verdict.check("the walk does not fail, and the search finds the lines outside the locked folder",
+        walked && hits.find_str("rules/leave.md:3:").is_some() &&
+        hits.find_str("locked away").is_none(), hits)
 
 fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds Japanese text as plain bytes")

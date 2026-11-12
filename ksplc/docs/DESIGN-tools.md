@@ -67,7 +67,7 @@ Caution: **The editor must not keep a deadline of its own.** Liveness is judged 
 
 Process creation, IO and kill come from `Piped_child` in `std/subproc`, which hides POSIX `fork` and Windows `CreateProcess`. `tests/suite/lsp_test.kspl` checks the recovery on every CI run through the test hooks `$/ksplTestCrash` / `$/ksplTestHang`, and that the crash's panic reaches its log. `$/ksplTestNoise` writes more to standard error than any pipe holds, and the worker must go on answering. It also uses a document named under the `kspl-test-poison:` scheme, whose analysis crashes every worker. `tests/support/lsp_recover.kspl` queues a hook and a hover together, then checks how many documents publish diagnostics before the answer. At most the requested document and one idle analysis may precede it. Time limits only bound a missing response. The `windows-ucrt64` job runs the same suite on Windows' process-separation path.
 
-**The JSON-RPC frame's strings (`Content-Length`) are not held here.** Writing uses `frame_into` / `encode` in `std/jsonrpc` ("The frame is kept apart from the transport" in [`../../std/docs/DESIGN-system.md`](../../std/docs/DESIGN-system.md)). Only taking the header off stdin, one character at a time, is the server's own (`read_content_length` in `ksplc/lsp/msg.kspl`). It passes the whole header to `content_length` in `std/jsonrpc` with the server's own body ceiling. A missing, zero, conflicting or excessive length is `Lsp_error.format_error`.
+**The JSON-RPC frame's strings (`Content-Length`) are not held here.** Writing uses `frame_into` / `encode` in `std/jsonrpc` ("The frame is kept apart from the transport" in [`../../std/docs/DESIGN-system.md`](../../std/docs/DESIGN-system.md)). Only taking the header off stdin, one character at a time, is the server's own (`read_content_length` in `ksplc/lsp/msg.kspl`). It passes the whole header to `content_length` in `std/jsonrpc` with the server's own body ceiling. A missing, zero, conflicting or excessive length is `Lsp_error.format_error`. **It ends the server with exit code 1 and one line on standard error** (`report_broken_header`): past it, where the next message starts is not known. Ended in silence with 0, it looked to the editor like a server that went away for no reason.
 
 ## The server finds the workspace's files without asking the client
 
@@ -480,11 +480,12 @@ sequenceDiagram
 * **Not a fresh name per entry, renamed in.** Here the working names are fixed and the objects swept, so a lock around the build is the smaller change.
 * **The executable is renamed over, never removed first**, so a run that starts it in between meets no gap. Windows refuses to replace a running program, so that one is renamed aside, and the next build removes it.
 * **The executable is put on the disk before the rename, and its size is recorded after it** (`prog.objs`, read by `exe_is_recorded`). A power cut can leave a name on an empty or cut file. An empty program would run as nothing and exit 0 on every later run. A program whose size differs from the record is built again.
+* **Each object's size is recorded beside its name** (read by `obj_is_recorded`). Objects are not put on the disk first, since that would slow every build. A power cut can leave one empty or cut, and linking it would fail on every later run. An object whose size differs from the record, or that the record does not name, is compiled again.
 
 **A program with no file (`ksplc run -`, `--eval=`) reaches the child compile on its standard input**, under the input `-` (`subproc.spawn_feed` in `generate_c`). As an argument, it would meet the command line's limit (32,767 characters on Windows).
 
 * **Its slot is keyed by its text** besides `-`'s path, which holds the current folder (`append_slot_key`).
-* **Its deps file has no line for it** (`write_deps_file`): there is no file to take a digest of, and the key already holds the text. The lines for what it imports still decide whether the build is fresh.
+* **Its deps file has no line for it** (`deps_text`): there is no file to take a digest of, and the key already holds the text. The lines for what it imports still decide whether the build is fresh.
 
 **The C compiler's target is asked once per process**, and kept as an optional `Target_kind` in `tools/run.kspl`. A present answer can have every flag false, as on Linux, so the answer itself cannot double as the mark that it is known. The link libraries and target-specific executable flags read the same answer.
 
@@ -601,7 +602,7 @@ Note: **Inside, what is located is a package, so the name there stays `package_r
 
 **The `uses` check sits in the loader**, beside the resolving, so a refusal points at the `import` that caused it. The imported package's declaration is read on the way too, so a folder reached under one name that names itself another is refused.
 
-**A settings file is an input like a source**, since `[package]` decides where sources are read from. The `ksplc.cfg` files read go into `ksplc run`'s list of inputs (`write_deps_file` in `tools/run.kspl`), and into `KSPL_SRCS` for the compiler's own build. The files looked for and not found join the list, marked absent, since one added later becomes the nearest.
+**A settings file is an input like a source**, since `[package]` decides where sources are read from. The `ksplc.cfg` files read go into `ksplc run`'s list of inputs (`deps_text` in `tools/run.kspl`), and into `KSPL_SRCS` for the compiler's own build. The files looked for and not found join the list, marked absent, since one added later becomes the nearest.
 
 **An embedded file is reached as an imported one is.** Both backends turn an `embed`'s path into a logical name with `resolve_embed_path` in `base/ast.kspl`. They open it where `embed_disk_path` in `base/locate.kspl` says, so a package's data opens from its own folder. Its `uses` check sits in the loader beside the imports' check. Each embedded file joins the list of inputs (`note_embedded`), since its bytes are in the output.
 

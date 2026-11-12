@@ -53,6 +53,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
         .set("connections_total", b.int_val(conn.stats.connections_total))
         .set("connections_open", b.int_val(conn.stats.connections_open))
         .set("connections_refused", b.int_val(conn.stats.connections_refused))
+        .set("writes", b.int_val(conn.stats.writes))
         .set("max_connections", b.int_val(conn.MAX_CONNS))
         .set("heap_bytes", b.int_val(heap_used_bytes()))
     // Caution: **The file-system lookups are told only for local use.** Facing outward, the count
@@ -248,7 +249,7 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
         // link, a `\` (only POSIX allows one), a short name's form and the rest.
         full: =
             fs.join_under(folder, name, .refused(U8[][]::{}), c.arena) catch _why
-            continue
+                continue
         is_folder: = fs.is_dir(full)
         if !is_folder && conn.regular_file_size(full).is_none()
             continue
@@ -466,8 +467,8 @@ fn queue_api_build(c: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
     got: =
         subproc.run_capture(U8[][]::{ ctx.builder, path, shown.find("path").unwrap_or(""), content },
         "", BUILD_MS, MAX_BUILT, c.arena) catch
-        queue_json_error(c, 500)
-        return
+            queue_json_error(c, 500)
+            return
     // Caution: **A module cut at the cap is no module**: sent with 200, the page would fail to
     // load it with no reason given.
     if got.exited_with(0) && !got.output_cut

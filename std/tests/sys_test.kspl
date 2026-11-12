@@ -7,7 +7,7 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/subproc" + { Job }
 import "std/sys"
-import "std/tests/fs_test"
+import "std/tests/scratch"
 import "std/verdict"
 
 // ==========================================
@@ -57,6 +57,14 @@ fn test_env_set_unset()
         assert(v.equals(long.slice()), "get_env returns a value of 5000 characters whole")
     case .none
         panic("get_env must find a value of 5000 characters")
+
+    // A name holding `=` gives nothing on every OS. Asked as it is, glibc would find `name` here,
+    // whose value starts with `x=`, and give `y`.
+    sys.set_env(name, "x=y") catch panic("set_env takes a value holding =")
+    if _v: = sys.get_env("KSPL_TEST_ENV_SET_UNSET=x")
+        panic("get_env must give nothing for a name holding =")
+    if _v: = sys.get_env("")
+        panic("get_env must give nothing for an empty name")
 
     sys.unset_env(name) catch panic("unset_env should succeed")
     if _v: = sys.get_env(name)
@@ -133,8 +141,8 @@ fn test_cpu_count_affinity(ksplc: U8[], arena: Arena$@) //<
     r: =
         subproc.run_capture(U8[][]::{ "taskset", "-c", "0", ksplc, "run", src }, "", 120000, 4096,
         arena) catch
-        verdict.skip("taskset is not installed")
-        return
+            verdict.skip("taskset is not installed")
+            return
     assert(r.stdout_data.equals("one cpu\n"), "a process pinned to one CPU counts one")
     verdict.pass("A process pinned to one CPU counts one.")
 
@@ -186,13 +194,14 @@ fn test_dir_name() //< the folder that contains a path
     //< either is the root; an empty result would name the working directory instead, which a bare
     //< name alone is in.
     verdict.start("[Sys] taking the folder part off a path...")
-    paths: U8[][15] = ::{ "dir/a.kspl", "a.kspl", "/a", "/", "/a/b", "C:/a", "C:\\a", "C:/", "\\a",
-        "dir/", "C:a", "C:\\x", "a:/b", "C:\\", "\\" }
-    // On Windows a drive is part of the root; on POSIX `C:` and `a:` are folders' names.
-    on_windows: U8[][15] = ::{ "dir", "", "/", "/", "/a", "C:/", "C:\\", "C:/", "\\", "dir", "",
-        "C:\\", "a:/", "C:\\", "\\" }
-    on_posix: U8[][15] = ::{ "dir", "", "/", "/", "/a", "C:", "C:", "C:", "\\", "dir", "", "C:",
-        "a:", "C:", "\\" }
+    paths: U8[][16] = ::{ "dir/a.kspl", "a.kspl", "/a", "/", "/a/b", "C:/a", "C:\\a", "C:/", "\\a",
+        "dir/", "C:a", "C:\\x", "a:/b", "C:\\", "\\", "C:" }
+    // On Windows a drive is part of the root; on POSIX `C:` and `a:` are folders' names. On
+    // Windows `C:a` is in `C:`, drive C's working folder; empty would name the process's.
+    on_windows: U8[][16] = ::{ "dir", "", "/", "/", "/a", "C:/", "C:\\", "C:/", "\\", "dir", "C:",
+        "C:\\", "a:/", "C:\\", "\\", "C:" }
+    on_posix: U8[][16] = ::{ "dir", "", "/", "/", "/a", "C:", "C:", "C:", "\\", "dir", "", "C:",
+        "a:", "C:", "\\", "" }
     for win in BOTH_OSES
         for i in Range.asc(paths.len)
             want: = on_windows[i] if win else on_posix[i]
@@ -340,7 +349,7 @@ fn test_fs_read_only(arena: Arena$@) //<
     io.write_file(kept, "old") catch panic("the file must be writable")
     io.write_file(incoming, "new") catch panic("the file must be writable")
     if !mark_read_only(dir, "gone.txt", arena) || !mark_read_only(dir, "kept.txt", arena)
-        fs_test.clear_tree_best_effort(dir, arena)
+        scratch.remove_tree(dir, arena)
         verdict.skip("this machine has no tool that marks a file read-only")
         return
     $removed: = true
@@ -351,7 +360,7 @@ fn test_fs_read_only(arena: Arena$@) //<
         renamed = false
     body: = io.read_file_capped(kept, 16, arena) catch
         fallback ""
-    fs_test.clear_tree_best_effort(dir, arena)
+    scratch.remove_tree(dir, arena)
     assert(removed, "a read-only file is removed")
     assert(renamed && body.equals("new"), "a rename replaces a read-only file")
     verdict.pass("A read-only file is removed, and a rename replaces one, as on POSIX.")
@@ -716,7 +725,7 @@ fn test_relative_program_with_cwd(ksplc: U8[], arena: Arena$@) //< ksplc is the 
     rel: = arena.text().s(".").c(full[dir.len]).s(full.sub_from(k)).take()
     r: =
         subproc.run_capture(U8[][]::{ rel, "info", "keywords" }, dir, 60000, 4096, arena) catch
-        panic("a relative program path must be read from the working directory given")
+            panic("a relative program path must be read from the working directory given")
     assert(r.exited_with(0) && r.stdout_data.len > 0, "the program found there must run")
     verdict.pass("./<program> with a working directory runs the program in that directory.")
 

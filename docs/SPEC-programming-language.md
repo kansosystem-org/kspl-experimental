@@ -466,7 +466,7 @@ An enum is a type whose value is one of a fixed list of variants. It comes in tw
 A tag value written by hand (`ok = 0`) can be any expression fixed at compile time: a number, a constant's name, a cast, a character or a `sizeof`. It can also name another variant through its enum, cast to the base type for arithmetic as everywhere else (`b = I32::E.a + 1`; `E.a + 1` and a bare `a` are compile errors). A variant with none written takes the previous variant's tag plus one (the first takes 0).
 
 * **On a tagged union the base type is the tag's own type** (`enum E: U8` holds a one-byte tag before its payload).
-* **Every tag fits the enum's base type**, a counted one included: `b` after `a = 255` in an `enum E: U8` is a compile error, as is `a = 300`. A base type wider than `I32` holds tags past it (`enum E: U32` with `a = 0x80000000`).
+* **Every tag fits the enum's base type**, a counted one included: `b` after `a = 255` in an `enum E: U8` is a compile error, as is `a = 300`. A base type wider than `I32` holds tags past it (`enum E: U32` with `a = 0x80000000`). **A tag is at most `9223372036854775807`**, `I64`'s highest value, so an `enum E: U64` holds the lower half of `U64`'s range.
 * **No two variants share a tag.** A `switch` could not tell them apart, so the second is a compile error.
 
 ```kspl
@@ -1000,6 +1000,23 @@ fn first(n: I32): I32
         x = n
         break
     return x // OK: the one way out set x
+```
+
+**A `switch` without `default` always runs one of its cases**, since it must list every value ([7.1](#71-branching)). A variable set in every case is initialized after it. The same holds for `if v: = o` with an `else`:
+
+```kspl
+enum Color
+    red
+    green
+
+fn level(c: Color): I32
+    $x: I32
+    switch c
+    case .red
+        x = 1
+    case .green
+        x = 2
+    return x // OK: each variant's case set x
 ```
 
 **A `defer` body reads on every way out of its scope**, so a variable it reads must be initialized before every way out ([8.4.1](#841-the-defer-statement)). The ways out are `return`, `throw`, `!`, `break`, `continue` and `fallback`.
@@ -1577,7 +1594,7 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
 
 #### 6.6.2 Where the type may be omitted
 
-**You can write `::{ … }`, or an enum's `.variant`, without a type name only where the expected type ([2.3](#23-literals)) is fixed to one.** There are nine such places:
+**You can write `::{ … }`, or an enum's `.variant`, without a type name only where the expected type ([2.3](#23-literals)) is fixed to one.** There are ten such places:
 
 1. **The right-hand side of a variable declaration**
 2. **The right-hand side of `=`** (`held = .some(3)`); a compound assignment is not one
@@ -1588,10 +1605,11 @@ inferred_sparse: I32[_] = ::{[9] = 100 } // inferred as I32[10]
 7. **The value a `catch` stands in for**, after `catch` or `fallback` (`sized(n) catch .small`)
 8. **The right-hand side of a `return` statement**
 9. **The right-hand side of a `throw` statement**, which takes the `E` of the function's `T!E` (`throw .lost`)
+10. **The right-hand side of a comparison whose left-hand side is an enum** (`if x == .ok`, `k < .big`)
 
 **An `if … else` expression standing in one of these places passes the place's type to both of its sides.** So each side can leave the name out: `return .some(n) if n > 0 else .none` in a function returning `I32?`, or `held = .some(3) if ok else .none`.
 
-**Anywhere else it is a compile error**: inside a comparison (`if x == .ok`), either side of an `if … else` whose own place fixes no type (`v: = .ok if cond else .err`), and a standalone expression statement. There, write from the type name (`Status.ok`).
+**Anywhere else it is a compile error**: a comparison's left-hand side (`if .ok == x`), an `if … else` in a place that fixes no type (`v: = .ok if cond else .err`), and an expression statement. There, write from the type name (`Status.ok`).
 
 #### 6.6.3 What a literal cannot build
 
@@ -2013,6 +2031,8 @@ sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
 * **Write the type on a capture too** (`n: I32`): a capture in a signature is treated as a parameter ([4.1](#41-declaration-patterns)).
 * **It takes one or two arguments**, as `Callable1` / `Callable2` do; for three or more, move the rest into captures or write a named function.
 * **A capture is read-only.** It cannot carry `$`, and rewriting it in the body is a compile error; receive what is to be rewritten as a pointer argument.
+* **A capture or a parameter takes any type a declaration can have**, a function type and `(T!E)?` included. **A fixed-length array is the one exception:** a capture is held by pointer, and no pointer to an array can be made ([6.2](#62-pointer-arithmetic-and-implicit-dereferencing)). Capture a slice over it (`s: = I32[]::a`, then `s: I32[]`).
+* **Each name stands once among the parameters and the captures**, since a capture is a parameter of the closure.
 * **A captured value is read as it stands at the call**: a capture is the entity the name refers to, not a copy. Rewrite the original variable after building the closure, and the call sees the new value. Copy the value yourself when needed (as with `defer`; [8.4.1](#841-the-defer-statement)).
 
 **A closure cannot leave its function or reach an outer block**, since its captured values end with its block ([8.4.5](#845-tracking-a-free-with-manual_free)). It can be passed down for a call. Nor can it cross the C boundary ([11.1](#111-types-that-cannot-cross-the-c-boundary)).
@@ -2026,7 +2046,7 @@ priv fn make(): Callable1<|I32, Bool|> // error: the place of the captured value
 
 **A closure can be written only inside a function's body**, even with zero captures, so it cannot stand in a top-level `const` or a variable's initializer. An anonymous function, being a function pointer, can. A predicate reused from several functions is a closure in each, or the API takes a function pointer.
 
-**The enclosing declaration's type parameters can be written** in a closure's parameters, return and captures, inside a generic function or `impl`. A closure is specialized with the function around it. An anonymous function, one plain function, cannot use them; writing `T` there gives an error asking for a capture list, even an empty one (`fn(x: T; ): T { … }`).
+**The enclosing declaration's type parameters can be written** in a closure's parameters, return and captures, inside a generic function or `impl`. **A `const` parameter (`const N: Sz`) can also be read in its body**, as a value (`return N`). A closure is specialized with the function around it. An anonymous function, one plain function, cannot use them; writing `T` or reading `N` there gives an error asking for a capture list, even an empty one (`fn(x: T; ): T { … }`).
 
 ```kspl
 impl<|T|> Holder<|T|>

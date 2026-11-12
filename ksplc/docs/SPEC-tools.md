@@ -60,7 +60,7 @@ ksplc --to=llvm main.kspl main.ll
 
 **A debugger shows the generated C's names.** A name C reserves carries a `_kw` suffix ("2.2 Identifiers and naming rules" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A local that hides another of its name, or is spelled as a global's C name (`Slice_U8`), shows as `__k_shadow<N>_<name>`.
 
-**A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. A write the disk refuses fails the compile with `io/write_failed`. A device named as the output (`/dev/null`) is written where it is.
+**A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. **So is every other file the compile writes**: the `--emit-deps`, `--emit-libs` and `--library=` files. They are all renamed once the last is whole, so a compile that fails partway changes none of them. A write the disk refuses fails the compile with `io/write_failed`. A device named as the output (`/dev/null`) is written where it is.
 
 ### 2.2 Choosing the language of the output (`--to`)
 
@@ -413,6 +413,8 @@ On success, `--emit-deps=<FILE>` writes one line per source the compile read to 
 
 **Each digest is of the bytes the compile read**, not of the file as it stands when the list is written. A file saved during the compile then shows as changed on the next comparison. Where one file was read twice with different bytes, no list is written.
 
+**A list that cannot be written fails the compile** with `io/write_failed`, as a libs file or an interface does ([§2.1](#21-basic-use)). A build tool would otherwise read an older list and take a changed source as unchanged.
+
 **It decides rebuilds**: `ksplc run` uses it to judge whether its cache still holds ([§2.5](#25-running-as-a-script-ksplc-run)), and the repository's `make test-deps` compares it with the dependencies the Makefile lists.
 
 #### 2.9.4 Writing out the published API (`--emit-surface`)
@@ -734,7 +736,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 
 **A line is never broken after a `catch`** either, although the word continues a line. After `catch` or `catch <name>`, only the next line's column tells a handler from a continued line, so the handler would be read as the block's first statement.
 
-**Each arm of a `switch` starts a line at the `switch`'s column**, an empty one (`case .a {}`) included. The first goes below the `switch`, each later one after the arm before it. Where the breaks between statements are held back (a closure inside a call's brackets), the arms stay on the `switch`'s line.
+**Each arm of a `switch` starts a line at the `switch`'s column**, an empty one (`case .a {}`) included. The first goes below the `switch`, each later one after the arm before it. **A closure's body inside a call's brackets is laid out alike**: one statement a line, each arm starting a line.
 
 **The `import`s are sorted by name**, with no `--style` switch:
 
@@ -765,6 +767,8 @@ A summary is its run's first line, so it runs past the width instead of being cu
 * **The next answer waits for its own document only**, however many are open: that one is analysed again first.
 * **The other documents' diagnostics stay on screen**, and are replaced one document at a time as each is analysed again, while the editor sends nothing.
 * **A document whose analysis brings the analysis process down again is set aside.** It answers nothing until it is edited, and the server's log (its standard error) names it.
+
+**A message whose header holds no valid `Content-Length` ends the server** with exit code 1, and its log says why. Past such a header, where the next message starts is not known.
 
 ```mermaid
 flowchart LR
@@ -869,6 +873,8 @@ Every diagnostic has one of four weights, from "it does not run" down to "it run
 | **Hint (H)** | a better way of writing is proposed | unneeded brackets, an early exit | VS Code and similar editors dim the text. The editor offers no one-press fix for it; it is fixed by hand, which keeps the language server stable |
 
 **A compile hides information diagnostics and hints**; `ksplc lint` and the editor show them.
+
+**A compile prints only the warnings of the checks it makes anyway**, and `ksplc run` and `ksplc build` print the same. Those are the checks its own analysis needs, such as [W0207]'s unread local. [W0110] is printed too: a container that keeps a local's trait value reads freed memory at run time. **Every other check runs under `ksplc lint` alone**, or where a code is set to `error` ([§5.3.1](#531-the-levels)), since each costs time on every build.
 
 Only warnings, information and hints carry a code: a fixed number such as `W0201`, used to point at one or to narrow the output to it. **An error has no number**: with one, the mechanism of §5.3 could silence it.
 

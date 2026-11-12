@@ -6,6 +6,7 @@
 //< settle the instantiation. **That the reason and the alternative are stated** is pinned down.
 //< Caution: Keep the two passing sides alongside (forwarded_gen_params in parse/desugar.kspl).
 // EXPECT: an anonymous function cannot use the enclosing type parameter 'T'
+// EXPECT: an anonymous function cannot use the enclosing type parameter 'N'
 // EXPECT: Add a capture list to make it a closure
 // EXPECT-NOT: missing import alias prefix
 import "std/io"
@@ -38,9 +39,18 @@ impl<|T|> Holder<|T|>
     })
     return I32::bad * 0 + I32::ok_closure * 0 + ok_ptr
 
+// The stopping side: a `const` parameter read in an anonymous function's body. Let through, the
+// lifted body has no `N`, and the C compiler reports it.
+priv fn count_of<|const N: Sz|>(a: I32[N]): Sz
+  f: fn(x: I32): Sz = fn(x: I32): Sz {
+    return Sz::x + N;
+  }
+  return f(a[0])
+
 fn main(): I32
   $h: = Holder<|I32|>::{ .v = 3 }
-  io.out().s("\{h.probe()\}\n")
+  a: I32[2] = ::{ 1, 2 }
+  io.out().s("\{h.probe()\} \{count_of(a)\}\n")
   return 0
 // ==== case anon_fn_no_capture
 //< An anonymous function does not capture the outer locals
@@ -126,6 +136,23 @@ priv const G_PRED: Callable1<|I32, Bool|> = fn(x: I32; ): Bool
 fn main(): I32
   io.out().s("\{G_OP(4)\}/\{G_SLOT.op(4)\}/\{G_PRED.call(1)\}\n")
   return 0
+// ==== case closure_called_as_function
+//< A closure called as a function, `f(1)`, is told to go through its `call` method
+//< **The message names the `Callable` the closure conforms to**, not the environment struct the
+//< compiler made (`_anon_env_1`, in a module its file's path names), a type the writer never wrote.
+// EXPECT: cannot call 'f'. It is a closure, which conforms to 'std.lang.Callable1<|I32, I32|>', not a function
+// EXPECT: Call it through its 'call' method: 'f.call(...)'
+// EXPECT-NOT: _anon_env
+import "std/io"
+
+fn main(): I32
+  k: = 2
+  f: = fn(x: I32; k: I32): I32 { return x + k; }
+  bad: = f(1)
+  // The passing side.
+  good: = f.call(1)
+  io.out().s("\{bad\}/\{good\}\n")
+  return 0
 // ==== case closure_capture_closure
 //< A closure cannot capture another closure
 //< The capture's field is the type written (`Callable1<|…|>`). But the synthesised environment
@@ -162,6 +189,10 @@ fn main(): I32
 // EXPECT: capture 'a' needs a type annotation
 // EXPECT: a capture must not be marked '$'. Captures are read-only
 // EXPECT: a closure with captures must take exactly 1 or 2 parameters
+// EXPECT: capture 'arr' is a fixed-length array ('I32[3]'). A closure holds each capture by pointer
+// EXPECT: 'k' is named twice in this closure's signature
+// EXPECT: 'x' is named twice in this closure's signature
+// EXPECT-NOT: _anon_env
 import "std/io"
 
 priv fn apply1(p: Callable1<|I32, Bool|>): Bool
@@ -185,11 +216,26 @@ fn main(): I32
   bad_arity: = apply1(fn(; c: I32): Bool {
     return c > 0;
   })
+  // A fixed-length array: a capture is held by pointer, and no pointer to an array can be made.
+  arr: I32[3] = ::{ 1, 2, 3 }
+  bad_array: = apply1(fn(x: I32; arr: I32[3]): Bool {
+    return x > arr[0];
+  })
+  // A name twice, among the captures or across a parameter and a capture.
+  k: = 6
+  bad_twice: = apply1(fn(x: I32; k: I32, k: I32): Bool {
+    return x > k;
+  })
+  x: = 7
+  bad_shadow: = apply1(fn(x: I32; x: I32): Bool {
+    return x > 0;
+  })
   // The passing side.
   good: = apply1(fn(x: I32; ok: I32): Bool {
     return x > ok;
   })
   io.out().s("\{bad_no_type\}\{bad_mut\}\{bad_arity\}\{good\}\n")
+  io.out().s("\{bad_array\}\{bad_twice\}\{bad_shadow\}\n")
   return 0
 // ==== case closure_capture_sema
 //< The **existing checks** enforce the two restrictions on a captured closure

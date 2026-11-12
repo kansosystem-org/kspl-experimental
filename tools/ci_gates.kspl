@@ -13,6 +13,10 @@ import "std/strnum"
 import "std/subproc"
 import "std/sys"
 
+// **The root's checks read the table as values** (`tests/support/conventions_*.kspl`,
+// `docref_make.kspl`, `tests/suite/fmt_tree_test.kspl`), so [I0402] is off here.
+##lint(I0402 = off)
+
 enum Shard //< which job runs a gate on Linux and Windows
     //< **A shard's name is what `make ci-shard-<name>` and the workflow's matrix use.**
     //< Caution: **A shard costs a job's start-up** (checkout, MSYS2, stage1: about a shard's work,
@@ -39,9 +43,9 @@ enum Par //< how `make` is asked to run one gate's targets
         //< `--output-sync`; `run_set` in `tools/ci.kspl` refuses that combination. The complete
         //< local `ci` on macOS selects GNU make for the shared sections.
 
-struct Gate //< one gate: what `make` is asked for, and where it runs
+pub struct Gate //< one gate: what `make` is asked for, and where it runs
     log: U8[] //< its log's name, `out/log/ci/<log>.log`
-    args: U8[] //< what `make` is given, the words parted by one space
+    pub args: U8[] //< what `make` is given, the words parted by one space
     par: Par //< whether `make` runs its targets side by side, and how their output is kept
     verdict: Bool //<
         //< It must also print `RESULT: ALL PASS`
@@ -66,7 +70,7 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
         //< **For a costly gate that finds faults only there.** GitHub's jobs always run it. Left
         //< out, the round names it with the reason last (`left_out` in `tools/ci.kspl`), so no
         //< green hides it. Empty for every other gate.
-    fails: U8[] //<
+    pub fails: U8[] //<
         //< Its failure case, `<file>#<name>`: an input its check must reject
         //< **A gate that cannot fail stays green while what it checks breaks.** A row that runs a
         //< set of suites names none, as each suite names its own in its header. `make
@@ -74,7 +78,7 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
 
 // Caution: **The order is the order they run in.** A gate can use what one before it built (the
 // self-host builds stage2, which perf-log measures again).
-const GATES: Gate[_] = ::{
+pub const GATES: Gate[_] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true, .shard = .a,
         .macos = true, .stops = true, .early = false, .fails = "ksplc/Makefile#compare-fires" },
     // **Only macOS runs every package's tests in one program**: Linux and Windows run each
@@ -244,7 +248,30 @@ fn run_order(stop: Bool, arena: Arena$@): List<|Gate|> //<
                 out.push(g)
     return out
 
-enum Set //< a set of gates one command runs, named as `make` names it
+pub fn change_reaches(folder: U8[], arena: Arena$@): Bool //<
+    //< Whether the change reaches a file under `folder` (`Gate.local_when`)
+    //< The change is what this branch holds beyond `origin/main`, what is not committed, and new
+    //< files. **Where git cannot say, and in GitHub's jobs, the answer is yes**, so what depends on
+    //< it runs.
+    if sys.get_env("GITHUB_ACTIONS").is_some()
+        return true
+    asks: = U8[][4][3]::{::{ "git", "diff", "--name-only", "origin/main...HEAD" },
+        ::{ "git", "diff", "--name-only", "HEAD" },
+        ::{ "git", "ls-files", "--others", "--exclude-standard" } }
+    for argv in asks
+        got: =
+            subproc.run_capture(U8[][]::argv, "", 60000, CHANGE_CAP, arena) catch
+                return true
+        if !got.exited_with(0) || got.stdout_data.len >= CHANGE_CAP
+            return true
+        for name in(U8[]::got.stdout_data).lines(arena)
+            if name.starts_with(folder)
+                return true
+    return false
+
+priv const CHANGE_CAP: Sz = 16777216 //< the bytes of names read; a list cut there counts as unknown
+
+pub enum Set //< a set of gates one command runs, named as `make` names it
     ci //<
         //< `make ci`: every gate this host can answer, the Linux-only ones included
         //< **For a person checking all on one machine**, where CI spreads the gates over platforms
@@ -255,13 +282,10 @@ enum Set //< a set of gates one command runs, named as `make` names it
     ci_shard_b //< `make ci-shard-b`
     ci_shard_linux //< `make ci-shard-linux`: what Linux alone runs
 
-const SET_ORDER: Set[_] = ::{ Set.ci, Set.ci_macos, Set.ci_shard_a, Set.ci_shard_b,
-    Set.ci_shard_linux } //< every set, so a name can be read back
-
-fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
+pub fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
     //< **A name is the variant's with `_` written `-`** (`ci-shard-a`), so `make`, the workflow
     //< and this table spell it one way.
-    for s in SET_ORDER
+    for s in Set.variants()
         if s.variant_name().replace("_", "-", arena).equals(name)
             return .some(s)
     return .none
@@ -291,12 +315,13 @@ impl Set
 // every machine has" in `docs/SPEC-gates.md`). **Linux is named least**: its image holds every
 // tool but Wine, and its container has `::1`.
 // ==========================================
-struct Expected_skip //< one SKIP a platform's round may print
+pub struct Expected_skip //< one SKIP a platform's round may print
     on: U8[] //< the platforms it is expected on, space-separated: `linux`, `darwin`, `win32`
-    says: U8[] //< a piece of the line that tells its reason apart
+    pub says: U8[] //< a piece of the line that tells its reason apart
 
-const EXPECTED_SKIPS: Expected_skip[_] = ::{
+pub const EXPECTED_SKIPS: Expected_skip[_] = ::{
     Expected_skip::{ .on = "linux", .says = "this machine has no IPv6 at all" },
+    Expected_skip::{ .on = "linux", .says = "the change reaches no file under" },
     Expected_skip::{ .on = "win32 darwin", .says = "the loopback holds no `::1`" },
     Expected_skip::{ .on = "win32 darwin", .says = "x86_64-w64-mingw32-gcc is not installed" },
     Expected_skip::{ .on = "darwin", .says = "no GNU make 4 runs here" },
@@ -352,6 +377,7 @@ const EXPECTED_SKIPS: Expected_skip[_] = ::{
     Expected_skip::{ .on = "win32 darwin", .says = "it is not split" },
     Expected_skip::{ .on = "darwin", .says = "neither Windows's sharing check nor /proc" },
     Expected_skip::{ .on = "darwin", .says = "no util-linux `script`" },
+    Expected_skip::{ .on = "linux win32", .says = "reads a folder of any mode" },
 }
 
 fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that say a check skipped
@@ -386,11 +412,12 @@ fn said_verdict(text: U8[], arena: Arena$@): Bool //<
 // gate skips instead. Such a skip is the person's own choice, so the round expects it, and names
 // the switch as it ends: it is not CI's verdict.
 // ==========================================
-struct Switch_skip //< one SKIP a gate prints where a switch is turned off and the tool is missing
+pub struct Switch_skip //<
+    //< one SKIP a gate prints where a switch is turned off and the tool is missing
     name: U8[] //< the switch, as `mk/test.mk` names it
-    says: U8[] //< a piece of the line that tells its reason apart
+    pub says: U8[] //< a piece of the line that tells its reason apart
 
-const SWITCH_SKIPS: Switch_skip[_] = ::{
+pub const SWITCH_SKIPS: Switch_skip[_] = ::{
     Switch_skip::{ .name = "KANSO_REQUIRE_ASAN", .says = "holds no sanitizer runtime" },
     Switch_skip::{ .name = "KANSO_REQUIRE_ASAN",
         .says = "cannot build with the address and undefined-behaviour sanitizers" },

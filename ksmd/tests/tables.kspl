@@ -27,6 +27,9 @@ fn run()
     naming()
     widths()
     sorting()
+    sorting_ranges()
+    sorting_row_totals()
+    sorting_as_copies()
     looks()
     across()
     auto_entry()
@@ -412,6 +415,82 @@ priv fn sorting()
         outside = true
     verdict.check("a column outside the table is refused", outside, "")
 
+priv fn sorting_ranges() //<
+    //< A sort moves a formula on a sorted row as a copy, unless the shift would leave the table,
+    //< while another table's range keeps its places and its reference to one cell follows its
+    //< row; moving rows by hand still moves a range's corners with them
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 2\n\n:::table name=\"t\"\n| \"n\" | \"all\" | \"fixed\" |\n"
+    other: = ":::table name=\"s\"\n| \"total\" | \"first\" |\n"
+    totals: = join3(other, "| =sum(t.A1:A3) | =t.A1 |\n", ":::\n", arena)
+    before: =
+        join3(head, "| 1 | =sum(A1:A3) | =sum(A$1:A$3) |\n| 3 | | |\n| 2 | | |\n:::\n\n", totals,
+        arena)
+    $ed: = opened(before, arena)
+    sorted(ed@, 0, true)
+    totals_sorted: = join3(other, "| =sum(t.A1:A3) | =t.A3 |\n", ":::\n", arena)
+    sorted_text: =
+        join3(head, "| 3 | | |\n| 2 | | |\n| 1 | =sum(A1:A3) | =sum(A$1:A$3) |\n:::\n\n",
+        totals_sorted, arena)
+    saves("on a sorted row, a range a shift would take out of the table keeps its places, and one \
+        with $ stays", ed@, arena, sorted_text)
+    verdict.check("so both totals add every row, and another table keeps its references",
+        value(ed@, 0, 2, 1, arena) == 6.0 && value(ed@, 0, 2, 2, arena) == 6.0 &&
+        value(ed@, 1, 0, 0, arena) == 6.0 && value(ed@, 1, 0, 1, arena) == 1.0, "")
+    ed.undo()
+    saves("undo puts the sort and the ranges back", ed@, arena, before)
+    ed.move_lines(0, true, 0, 1, 3) catch e
+        verdict.check("moving a row", false, e.message())
+    totals_moved: = join3(other, "| =sum(t.A2:A3) | =t.A3 |\n", ":::\n", arena)
+    moved_text: =
+        join3(head, "| 3 | | |\n| 2 | | |\n| 1 | =sum(A2:A3) | =sum(A$2:A$3) |\n:::\n\n",
+        totals_moved, arena)
+    saves("a row moved by hand takes a range's corner with it", ed@, arena, moved_text)
+
+priv fn sorting_row_totals() //<
+    //< A range within one row moves with its row on a sort, as a reference to one cell does
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 2\n\n:::table name=\"t\"\n| \"item\" | \"q1\" | \"q2\" | \"total\" |\n"
+    other: = ":::table name=\"s\"\n| \"ink\" |\n| =sum(t.B2:C2) |\n:::\n"
+    rows: =
+        "| \"Pens\" | 1 | 10 | =sum(B1:C1) |\n| \"Ink\" | 3 | 30 | =sum(B2:C2) |\n| \"Paper\" | 2 | \
+            20 | =sum(B3:C3) |\n:::\n\n"
+    $ed: = opened(join3(head, rows, other, arena), arena)
+    sorted(ed@, 1, true)
+    other_sorted: = ":::table name=\"s\"\n| \"ink\" |\n| =sum(t.B1:C1) |\n:::\n"
+    rows_sorted: =
+        "| \"Ink\" | 3 | 30 | =sum(B1:C1) |\n| \"Paper\" | 2 | 20 | =sum(B2:C2) |\n| \"Pens\" | 1 | \
+            10 | =sum(B3:C3) |\n:::\n\n"
+    saves("a range within one row moves with its row", ed@, arena,
+        join3(head, rows_sorted, other_sorted, arena))
+    verdict.check("and each row's total adds its own figures",
+        value(ed@, 0, 0, 3, arena) == 33.0 && value(ed@, 0, 1, 3, arena) == 22.0 &&
+        value(ed@, 0, 2, 3, arena) == 11.0 && value(ed@, 1, 0, 0, arena) == 33.0, "")
+
+priv fn sorting_as_copies() //<
+    //< A formula on a sorted row moves as a copy: a running total keeps running, and a part with
+    //< `$` keeps its place; a total in another table keeps its places
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 2\n\n:::table name=\"t\"\n| \"item\" | \"n\" | \"running\" | \"gap\" |\n"
+    other: = ":::table name=\"s\"\n| \"total\" |\n| =sum(t.B1:B3) |\n:::\n"
+    rows: =
+        "| \"Ink\" | 3 | =sum(B$1:B1) | =B1-B$1 |\n| \"Pens\" | 1 | =sum(B$1:B2) | =B2-B$1 |\n| \
+            \"Paper\" | 2 | =sum(B$1:B3) | =B3-B$1 |\n:::\n\n"
+    $ed: = opened(join3(head, rows, other, arena), arena)
+    sorted(ed@, 1, false)
+    rows_sorted: =
+        "| \"Pens\" | 1 | =sum(B$1:B1) | =B1-B$1 |\n| \"Paper\" | 2 | =sum(B$1:B2) | =B2-B$1 |\n| \
+            \"Ink\" | 3 | =sum(B$1:B3) | =B3-B$1 |\n:::\n\n"
+    saves("each formula on a sorted row is written as a copy to the row's new place", ed@, arena,
+        join3(head, rows_sorted, other, arena))
+    verdict.check("so the running total runs in the new order",
+        value(ed@, 0, 0, 2, arena) == 1.0 && value(ed@, 0, 1, 2, arena) == 3.0 &&
+        value(ed@, 0, 2, 2, arena) == 6.0, "")
+    verdict.check("a part with $ names the first row in the new order",
+        value(ed@, 0, 0, 3, arena) == 0.0 && value(ed@, 0, 2, 3, arena) == 2.0, "")
+    verdict.check("and the column total in another table still adds every row",
+        value(ed@, 1, 0, 0, arena) == 6.0, "")
+
 priv fn looks()
     defer arena: = Arena(64 * 1024)
     before: = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | 2 |\n| 3 | 4 |\n:::\n"
@@ -603,6 +682,22 @@ priv fn pasting()
             \"Paper\" | | \"12%\" |\n:::\n")
     ed.undo()
     saves("one undo takes the whole paste away", ed@, arena, before)
+    $spaced: = List<|List<|U8[]|>|>(arena)
+    spaced.push(row3("  Revenue", " 1,234.5 ", " 7 ", arena))
+    ed.paste_cells(0, 0, 0, spaced@) catch e
+        verdict.check("pasting spaced values", false, e.message())
+    saves("a pasted text keeps its spaces, and a number reads without them", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| \"  Revenue\" | 1234.5 | 7 \
+            |\n:::\n")
+    ed.undo()
+    $dated: = List<|List<|U8[]|>|>(arena)
+    dated.push(row3(" 2026-10-23 ", "  2026/11/06 ", " Due ", arena))
+    ed.paste_cells(0, 0, 0, dated@) catch e
+        verdict.check("pasting spaced dates", false, e.message())
+    saves("a pasted date reads without its spaces too, and text keeps them", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| 2026-10-23 | 2026-11-06 | \" \
+            Due \" |\n:::\n")
+    ed.undo()
     $bad: = List<|List<|U8[]|>|>(arena)
     bad.push(row3("x", "=A1 | B1", "y", arena))
     $refused_paste: = false

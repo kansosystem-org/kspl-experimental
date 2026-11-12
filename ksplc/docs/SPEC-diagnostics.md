@@ -97,6 +97,7 @@ A pointer to such a value (`Arena(…)`'s result) is read only up to a `defer` l
 A local value becomes a trait value where the trait is expected, with no `@` written, and the trait value keeps the local's address. Here it is handed to a method that takes its receiver as `Self$@`, on a container that holds that trait as a type argument: `xs.push(sq)` with `xs: List<|Shape|>`. The container can keep the address after the local's block ends. It is reported where the container is behind a pointer, in a global, or in a local of an outer block.
 * **A container in a local of the same block or a deeper one is not reported.** It dies no later than the value. Returning it, or storing it where it outlives the frame, is a compile error instead ("8.4.5 Tracking a free with `Manual_free`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-manual_free)).
 * **It is a warning, not an error**: the signature does not say whether the method keeps what it is handed.
+* **Every compile prints it**, `ksplc run` and `ksplc build` included, not `ksplc lint` alone: what it warns of reads freed memory at run time.
 * **Fix**: keep the value as long as the container. Make it in the container's arena (`arena.create(Sq::{ … })`) and pass that pointer, or let the container hold the concrete type (`List<|Sq|>`).
 
 ### [W0111] A view used after its owner moved its memory

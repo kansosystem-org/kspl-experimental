@@ -468,6 +468,9 @@ function ksmdTable(ks) {
   ks.table = {
     render,
     take,
+    // Undoes a formula's closing quote right after it was added, and opens the cell with the
+    // formula as typed; false where the editor's own undo acts (`unclose` in `cellbox.js`).
+    unclose: box.unclose,
     letters,
     range: () => ks.range.rect(),
     // Opens a cell to edit, or leaves the table past its first or last row; with `whole`, what is

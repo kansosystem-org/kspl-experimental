@@ -9,7 +9,6 @@
 //< OS, so a path that Windows would read as another name fails here on Linux too.
 import "kssrv/api"
 import "kssrv/tests/client"
-import "kssrv/tests/local"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -21,6 +20,7 @@ import "std/seq"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/sys"
+import "std/tests/scratch"
 import "std/url"
 import "std/verdict"
 
@@ -121,15 +121,15 @@ fn place(tmp: U8[], arena: Arena$@): Scratch? //<
         secret.c('s')
     fs.write_tree(outside, U8[][]::{ "secret.txt", OUTSIDE_ONLY },
         U8[][]::{ secret.take(), "only\n" }, arena) catch
-        return .none
+            return .none
     fs.write_tree(root,
         U8[][]::{ "index.html", "a.txt", "sub/b.txt", ".git/config", ".env", "dir/x" },
         U8[][]::{ "page\n", "a\n", "b\n", "[core]\n", "KEY=1\n", "x\n" }, arena) catch
-        return .none
+            return .none
     $links: = List<|U8[]|>(arena)
-    if local.make_link(root, "up", "../outside", arena)
+    if scratch.made_link("../outside", fs.join(root, "up", arena), arena)
         links.push("up")
-    if local.make_link(root, "sub/peek.txt", "../../outside/secret.txt", arena)
+    if scratch.made_link("../../outside/secret.txt", fs.join(root, "sub/peek.txt", arena), arena)
         links.push("sub/peek.txt")
     // **A link is found by name as this disk finds it**: `UP` is the link `up` only where the
     // disk folds case, whichever OS's reading the text is put to.

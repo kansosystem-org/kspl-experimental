@@ -12,9 +12,9 @@ import http from "http";
 import net from "net";
 import path from "path";
 import { fileURLToPath } from "url";
+import { wait } from "../../ksmd/tests/browser/drive.mjs";
 
 const LOAD_MS = 1500;
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // One `answer` call, streamed in pieces, chosen by the words of the last question.
 async function answer(body, replies, res) {

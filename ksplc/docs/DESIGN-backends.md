@@ -438,7 +438,7 @@ The regression test is `tests/prog/equiv.kspl`: a `const`, a mutable and a `null
    * Do not map `#inline` to `alwaysinline`: that forces inlining even at `-O0`, so debugging behaves differently from genc's output.
 2. **Leave it out of the language**, where there is no portable counterpart. Every attribute the table lists takes the first way, so `attr_rule` in `sema/decl/attrs.kspl` has no backend column.
 
-**Every new attribute takes one of the two ways.** `#cfg` and `##link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `##link` names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`.
+**Every new attribute takes one of the two ways.** `#cfg` and `##link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `##link` names are written from the tree (`libs_text` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`.
 
 **The LLVM backend's missing debug information is a gap of the same kind.** It stays open because `-g` is a build flag, not an attribute: there is nothing to refuse.
 

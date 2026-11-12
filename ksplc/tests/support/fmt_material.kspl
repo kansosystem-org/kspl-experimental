@@ -500,6 +500,85 @@ fn main(): I32
     return I32::RECORD_HEAD.len - 78
 """
 
+// **A line continued past a comment line or a blank line keeps the wrapping indent**: a chain's
+// next link, and the rest of a value broken off at a mark. Both once moved back to the statement's
+// column, which reads the same but no longer shows that the line continues.
+const SRC_CONT_PAST_TRIVIA: U8[] =
+    """import "std/io"
+
+fn main()
+    w: = io.out()
+        // the first link
+        .s("a")
+
+        .s("b\\n")
+    v: = 1 +
+        // the rest of the value
+
+        2
+    w.i(v)
+"""
+
+// **A block's body goes one step in from the line holding its construct's first token**, and a
+// `}` lines up with that line. Broken below its `=`, a closure's body once stood at the column of
+// its `fn(`, and a handler's at the column of its call.
+const SRC_BODY_BELOW_IN: U8[] =
+    """fn main()
+    change_also_a_long_name_for_the_closure_value: = fn(amount_one: I32, amount_two: I32): I32
+        return amount_one + amount_two
+    a_long_name_for_what_comes_back: I32 =
+        (change_also_a_long_name_for_the_closure_value(1, 2) if true else 3) catch e
+        return
+    k: = run(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+        fn(x: I32): I32 {
+        return x;
+    })
+"""
+
+const SRC_BODY_BELOW_OUT: U8[] =
+    """fn main()
+    change_also_a_long_name_for_the_closure_value: =
+        fn(amount_one: I32, amount_two: I32): I32
+            return amount_one + amount_two
+    a_long_name_for_what_comes_back: I32 =
+        (change_also_a_long_name_for_the_closure_value(1, 2) if true else 3) catch e
+            return
+    k: =
+        run(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+        fn(x: I32): I32 {
+            return x;
+        })
+"""
+
+// **Inside a call's brackets a closure's body puts each statement on a line of its own**, as a
+// body at a statement's level does, and each `switch` arm starts a line. Some once stayed joined
+// with `;` on one line, and the arms stayed on the `switch`'s line.
+const SRC_BODY_IN_CALL_IN: U8[] =
+    """fn main()
+    r: = run(fn(x: I32): I32 { inner: = x * 2; r: = run(fn(y: I32): I32 { return y; });
+        return inner + r; })
+    t: = run(fn(x: I32): I32 { switch x case 1 { return 2 } default { return 3 } })
+"""
+
+const SRC_BODY_IN_CALL_OUT: U8[] =
+    """fn main()
+    r: = run(fn(x: I32): I32 {
+        inner: = x * 2;
+        r: = run(fn(y: I32): I32 {
+            return y;
+        });
+        return inner + r;
+    })
+    t: = run(fn(x: I32): I32 {
+        switch x
+        case 1 {
+            return 2;
+        } default {
+            return 3;
+        }
+    })
+"""
+
 // A description too long for its line, and the three that must not move. One is short enough. One
 // already carries its description below. One is after a return type on the line where a wrapped
 // head ends (it describes the return; moved below, it would read as the declaration's own).

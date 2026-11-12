@@ -98,7 +98,7 @@ fn old_chat_file(root: U8[], arena: Arena$@): U8[] //<
     //< The first chat file of the old form under the root, or empty where none stands
     //< **No command starts beside one**: the tools do not hide it, so its answers would count as
     //< sources. The person deletes it, or asks its questions again on the chat page.
-    found: = fs.walk_files(root, skip_dir, arena) catch
+    found: = walk(root, arena) catch
         return ""
     for path in found
         name: = sys.get_file_name(path)
@@ -115,6 +115,37 @@ fn skip_dir(name: U8[]): Bool //< the folders a walk does not enter: hidden ones
     //< package, and its generated text would bury the real lines. A search given a path inside
     //< one still reads it, since the walk starts there.
     return is_hidden(name) || name.equals("out")
+
+priv const MAX_WALK_DEPTH: Sz = 512 //< how many levels `walk` descends; a deeper folder is passed
+    //< over. Each level is one stack frame.
+
+fn walk(root: U8[], arena: Arena$@): List<|U8[]|>!fs.Fs_error //<
+    //< Every file under the root that a walk enters (`skip_dir`), in sorted order
+    //< **A folder below the root that cannot be read is passed over**, and the rest is walked.
+    //< `fs.walk_files` fails as a whole instead, so one folder a person locked would keep every
+    //< search and every question unanswered. **A root that cannot be read still fails.**
+    //< Caution: **Do not enter a link to a folder**, as `fs.walk_files` does not: one that leads
+    //< out of the root hands the tools files from elsewhere.
+    $found: = List<|U8[]|>(arena)
+    walk_into(root, 0, found@, arena)!
+    return found.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
+        return a.compare(b$);
+    }, arena)
+
+priv fn walk_into(dir: U8[], depth: Sz, out: List<|U8[]|>$@, arena: Arena$@): Void!fs.Fs_error //<
+    //< Collects the files below `dir` into `out`; only the root's own failure is thrown
+    names: = fs.read_dir(dir, arena) catch e
+        if depth == 0
+            throw e
+        return
+    for name in names
+        full: = fs.join(dir, name, arena)
+        if !fs.is_dir(full)
+            out.push(full)
+            continue
+        if skip_dir(name) || fs.is_link(full) || depth + 1 >= MAX_WALK_DEPTH
+            continue
+        walk_into(full, depth + 1, out, arena)!
 
 fn text_problem(bytes: U8[]): U8[] //< why the bytes are not text, or empty when they are
     if bytes.contains_nul()
@@ -190,7 +221,7 @@ priv fn office_text(full: U8[], kind: Kind, arena: Arena$@): U8[]!U8[] //<
     view: =
         (word.text_of(body, Sz::MAX_TEXT_BYTES, work) if kind == Kind.word
         else excel.text_of(body, Sz::MAX_TEXT_BYTES, work)) catch why
-        throw arena.dup_str(why)
+            throw arena.dup_str(why)
     return arena.dup_str(view)
 
 fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -249,7 +280,7 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
     rel: = at.rel
     $files: = List<|U8[]|>(arena)
     if fs.is_dir(full)
-        files = fs.walk_files(full, skip_dir, arena) catch
+        files = walk(full, arena) catch
             return "refused: the folder cannot be read"
     else
         files.push(full)
@@ -261,7 +292,11 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
         if !path.equals(full) && !taken_under(full, under(full, path), arena)
             continue
         defer one: = Arena(64 * 1024)
-        body: = read_text(path, one) catch
+        // Caution: **Refuse one named file that cannot be read, and say why.** Passed over, it
+        // would read as a file that holds none of the words. A folder's such files are passed over.
+        body: = read_text(path, one) catch why
+            if path.equals(full)
+                return arena.text().s("refused: ").s(why).take()
             continue
         lines: = split_lines(body, one)
         $shown: U8[] = ""

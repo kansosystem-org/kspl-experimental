@@ -224,6 +224,12 @@ impl Staged_outputs
             throw .io(.write_failed(path))
         file.free()
 
+    fn write_whole(r: Self$@, path: U8[], text: U8[]): Void!Compile_error //<
+        //< It writes text as the file for `path`, under a temporary name until `commit`
+        defer $file: = r.open(path)!
+        file.s(text)
+        r.close(file@, path)!
+
     fn commit(r: Self$@): Void!Compile_error //< renames every file onto its target
         for i in Range.asc(r.tmps.len)
             fs.rename_path(r.tmps.get(i), r.paths.get(i)) catch
@@ -285,21 +291,22 @@ impl Compiler
             lang_stack: = List<|U8$[]|>.create(base_core.arena)
             parse_load.load_and_parse_file(lang_file, r.loaded_files, r.root_file, r.base_parser,
                 r.source_map, lang_stack, false) catch e
-                r.has_load_error = true
-                // **Std is missing as a whole**: say where it was looked for before the bare line.
-                switch e
-                case .io(io_err)
-                    switch io_err
-                    case .file_not_found
-                        io.err().s(base_locate.std_missing_note())
+                    r.has_load_error = true
+                    // **Std is missing as a whole**: say where it was looked for before the bare
+                    // line.
+                    switch e
+                    case .io(io_err)
+                        switch io_err
+                        case .file_not_found
+                            io.err().s(base_locate.std_missing_note())
+                        default {}
                     default {}
-                default {}
-                throw .parse(e)
+                    throw .parse(e)
         import_stack: = List<|U8$[]|>.create(base_core.arena)
         parse_load.load_and_parse_file(perm_file, r.loaded_files, r.root_file, r.base_parser,
             r.source_map, import_stack, src_is_disk) catch e
-            r.has_load_error = true
-            throw .parse(e)
+                r.has_load_error = true
+                throw .parse(e)
 
     // Caution: **`Bodies.main_file` is only for the editor's document view.** It checks only
     // `main_file`'s bodies, so nothing that needs another file's call sites (references, renaming,
@@ -382,7 +389,11 @@ impl Compiler
         if !r.is_valid
             throw .analysis_failed
 
-    fn run_lower_and_codegen(r: Self$@, out_path: U8[]): Void!Compile_error
+    fn run_lower_and_codegen(r: Self$@, out_path: U8[], staged: Staged_outputs$@):
+        Void!Compile_error //<
+            //< Lowers the program and writes its code into `staged`, which the caller commits
+            //< **The caller commits once its other outputs are written too** (the deps, the libs,
+            //< the interfaces): a compile that fails after the code leaves every older file whole.
         if !r.is_valid || r.sema == null || r.root_file == null
             throw .sema(.analysis_failed)
 
@@ -405,14 +416,13 @@ impl Compiler
         base_stats.stages.lower = base_stats.end_stage(t3, t4)
 
         $codegen_failed: = false
-        defer $staged: = Staged_outputs()
         switch base_core.config.target
         case .c
             units: = base_core.unit_count_or_one()
             if units > 1
-                codegen_failed = r.emit_c_units(staged@, out_path, units)!
+                codegen_failed = r.emit_c_units(staged, out_path, units)!
             else
-                codegen_failed = r.emit_c_part(staged@, out_path, gen_c_ctx.WHOLE_OUTPUT)!
+                codegen_failed = r.emit_c_part(staged, out_path, gen_c_ctx.WHOLE_OUTPUT)!
         case .llvm
             defer $out_file: = staged.open(out_path)!
             defer cg: = Genllvm_ctx(out_file@, r.sema, r.source_map)
@@ -423,7 +433,6 @@ impl Compiler
         // A failed generation leaves the older output in place: its temporary files go at free.
         if codegen_failed
             throw .codegen
-        staged.commit()!
 
         base_stats.stages.backend = base_stats.end_stage(t4, sys.mono_us())
 

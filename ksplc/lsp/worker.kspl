@@ -522,7 +522,12 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
 
     for
         msg_arena.restore(init_state)
-        lsp_msg.read_message(payload@) catch
+        lsp_msg.read_message(payload@) catch e
+            // Run in-process, it reads the editor itself, so a header it cannot read ends it
+            // with 1, as the supervisor's reading does.
+            if e == .format_error
+                lsp_msg.report_broken_header()
+                sys.exit(1)
             break
 
         // Caution: **End every message with the marker, a rejected one too.** The supervisor relays

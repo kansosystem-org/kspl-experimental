@@ -112,7 +112,7 @@ impl Ast_node
         case .ok(_name, target_fqn, _id)
             struct_def: sema_type_def.Struct_def$@ =
                 c.env.get_struct_def(target_fqn) catch
-                return
+                    return
             // Caution: **Clear it before resolving the fields.** A field's type can request the
             // layout (`f: U8[sizeof(S)]`), and clearing it later fills the declaration in twice.
             if struct_def.pending_decl == null
@@ -365,6 +365,16 @@ impl Sema_ctx
         if v >= lo && v <= hi
             return true
         shown: = r.env.display(base_id)
+        // **A tag is kept as I64**, so a `U64` enum stops at I64's highest value. A tag past it
+        // folds to a negative I64, as a negative one does. Neither U64's range nor a wider type
+        // would be true, so the message states the limit alone.
+        if r.env.is_unsigned(base_id) && r.env.get_portable_bit_size(base_id) >= 64 && v < 0
+            r.clear_scratch()
+                .s("enum tag does not fit the enum's base type '\{shown\}'. Tags are kept as 'I64' \
+                    values, so an enum on '\{shown\}' holds tags from 0 to \{hi\}. Write a tag in \
+                    that range")
+            r.err(node, r.scratch.slice())
+            return false
         r.clear_scratch()
             .s("enum tag \{v\} does not fit the enum's base type '\{shown\}' (\{lo\} to \{hi\}). \
                 Write a tag in range, or give the enum a wider base type ('enum E: I64')")

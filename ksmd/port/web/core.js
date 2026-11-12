@@ -190,6 +190,12 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ks.cellText = (block, row, column) => ks.out(w.ksmd_web_cell_text(block, row, column));
     // A number the page worked out, such as a sum, written as a cell shows it.
     ks.showNumber = (n) => ks.out(w.ksmd_web_show_number(n));
+    // Two finite numbers compared as a formula compares them: 0 where the 15 digits they show
+    // agree, so 0.1 + 0.2 equals 0.3; else -1 where the first is less, and 1. A colour rule and a
+    // filter compare numbers through this alone, so the page and the calculator agree. A value that
+    // is no number, as a rule's value `abc`, gives NaN, which neither meets `< 0`, `> 0` nor `=== 0`.
+    ks.compareNumbers = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? w.ksmd_web_compare_numbers(a, b) :
+      a < b ? -1 : a > b ? 1 : a === b ? 0 : NaN);
     // Today's date as 2026-10-23, or the time now as 14:05: what Ctrl+; and Ctrl+: type, as in
     // Excel. The form is ISO 8601's, which reads the same in every country and sorts as text.
     ks.now = (time) => {
@@ -250,6 +256,13 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ks.el = (tag, cls, text) => {
       const el = document.createElement(tag);
       if (cls) el.className = cls;
+      if (text !== undefined) el.textContent = text;
+      return el;
+    };
+    // An SVG element: its tag, its attributes, and its text, which is not set when left out.
+    ks.svg = (tag, attrs, text) => {
+      const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
       if (text !== undefined) el.textContent = text;
       return el;
     };

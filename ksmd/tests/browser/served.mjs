@@ -366,6 +366,15 @@ const SECTIONS = {
           if (!how || !how.method) window.fetched.push(String(url));
           return send.call(window, url, how);
         };`);
+      // **Waits for two of the page's watch rounds** (`WATCH_MS` in `ksmd/port/web/file.js`), not
+      // for a fixed time: on a slow machine a fixed wait can end before the page's timer has run,
+      // and a check of "nothing happened" would pass without testing. A round asks `/api/stat`
+      // for the open file; one that started before the count was read is still finished by then.
+      const statAsks = "window.fetched.filter((u) => u.includes('/api/stat?')).length";
+      const twoRounds = async () => {
+        const from = await d.js(statAsks);
+        return d.until(`${statAsks} >= ${from + 2}`, 20000);
+      };
       // The source changes before the step that loads it ends and says so.
       const shows = (text) => d.until(`ksmd.source() === ${JSON.stringify(text)} && ` +
         "document.documentElement.dataset.files === 'ready'", 10000);
@@ -390,17 +399,21 @@ const SECTIONS = {
       check(await d.js("window.focused + window.shown") === 0, "and no focus or visibility event came",
         String(await d.js("window.focused + window.shown")));
 
-      // Hidden, the page asks nothing; shown again, it reads its file at once.
-      await d.js(`Object.defineProperty(document, "visibilityState", { configurable: true,
-        get: () => "hidden" });
+      // Hidden, the page asks nothing; shown again, it reads its file at once. **The rounds are
+      // counted by the reads of `visibilityState`**: each round reads it first, and asks nothing.
+      await d.js(`window.looks = 0;
+        Object.defineProperty(document, "visibilityState", { configurable: true,
+        get: () => { window.looks += 1; return "hidden"; } });
         Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
         document.dispatchEvent(new Event("visibilitychange"));`);
       await idle(d);
       const hidden = third.replace("A third,", "Unseen,");
       fs.writeFileSync(file, hidden);
       const asked = await d.js("window.fetched.length");
-      await d.js("new Promise((r) => setTimeout(r, 4500))");
-      check(await d.js("ksmd.source()") === third && await d.js("window.fetched.length") === asked,
+      const looked = await d.js("window.looks");
+      const hiddenRounds = await d.until(`window.looks >= ${looked + 2}`, 20000);
+      check(hiddenRounds && await d.js("ksmd.source()") === third &&
+        await d.js("window.fetched.length") === asked,
         "a hidden page asks the server nothing, and shows the file as it was",
         (await d.js("window.fetched.slice(-3).join(' ')")) || "");
       await d.js(`delete document.visibilityState; delete document.hidden;
@@ -413,10 +426,11 @@ const SECTIONS = {
       await idle(d);
       const mine = await d.js("ksmd.source()");
       await d.js("window.fetched = []");
-      await d.js("new Promise((r) => setTimeout(r, 4500))");
+      const ownRounds = await twoRounds();
       const after = await d.js("window.fetched.filter((u) => !u.includes('top.ksmd'))" +
         ".map((u) => decodeURIComponent(u)).join(' ')");
-      check(ctx.disk("top.ksmd") === mine && after === "" && (await said(d)) === "Saved top.ksmd.",
+      check(ownRounds && ctx.disk("top.ksmd") === mine && after === "" &&
+        (await said(d)) === "Saved top.ksmd.",
         "the page's own save is not taken for a change on disk", `${after} | ${await said(d)}`);
 
       // With edits unsaved, the change asks once, as a save would, and the edits stay.
@@ -429,8 +443,7 @@ const SECTIONS = {
         ctx.disk("top.ksmd") === outside,
       "with edits unsaved, the change shows the notice, and neither version is lost", await noticed(d));
       await choose(d, "Keep editing");
-      await d.js("new Promise((r) => setTimeout(r, 4500))");
-      check(await d.js("document.getElementById('notice').hidden") &&
+      check(await twoRounds() && await d.js("document.getElementById('notice').hidden") &&
         await d.js("ksmd.source()") === edited, "the notice does not come back for the same change");
       check(await d.js("window.focused") === 0, "no focus event came in the whole section");
       await d.press("s", CTRL);
@@ -640,8 +653,15 @@ const SECTIONS = {
       fs.writeFileSync(path.join(ctx.root, "top.ksmd"), top);
 
       // A folder pressed, then Save at once: the save waits for the folder, and lands there.
-      await d.js(`window.fetch = ((realFetch) => (url, how) => String(url).includes("/api/list?path=parts")
-        ? new Promise((r) => setTimeout(() => r(realFetch(url, how)), 400)) : realFetch(url, how))(window.fetch);
+      // **The held-back listing counts itself once the page has read it** (`lateListings`): its
+      // JSON is handed over, and a task queued then runs after the page's steps that follow.
+      await d.js(`window.lateListings = 0;
+        window.fetch = ((realFetch) => (url, how) => String(url).includes("/api/list?path=parts")
+        ? new Promise((r) => setTimeout(() => r(realFetch(url, how).then((got) => {
+          const read = got.json.bind(got);
+          got.json = () => read().then((v) => { setTimeout(() => { window.lateListings += 1; }, 0); return v; });
+          return got;
+        })), 400)) : realFetch(url, how))(window.fetch);
         true;`);
       await d.menu("file-save-as");
       await press("..");
@@ -656,13 +676,14 @@ const SECTIONS = {
       // A slow listing that arrives after a newer one does not show its folder.
       await d.menu("file-save-as");
       await press("..");
+      const late = await d.js("window.lateListings");
       await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
         .find((b) => b.textContent === "parts").click()`);
       await press("pics");
-      // A fixed time, on purpose: it outlasts the 400 ms that holds back the listing of `parts`
-      // above, so that listing arrives after the newer one, as the check needs.
-      await new Promise((r) => setTimeout(r, 600));
-      check(await d.js("document.querySelector('#browse .browse-where').textContent") === "Workspace / pics",
+      // **Waits until the listing of `parts`, held back 400 ms, has been read**, so it arrives
+      // after the newer one, as the check needs.
+      check(await d.until(`window.lateListings > ${late} && ` +
+        "document.querySelector('#browse .browse-where').textContent === 'Workspace / pics'", 10000),
         "the folder pressed last shows, whichever listing arrives last",
         await d.js("document.querySelector('#browse .browse-where').textContent"));
       await d.click('#browse [data-browse="cancel"]');

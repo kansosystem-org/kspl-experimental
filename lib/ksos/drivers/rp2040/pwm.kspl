@@ -66,25 +66,34 @@ fn ctr_addr_of(pin: U32): U32 //< the address of the counter (CTR) of the slice 
     //< Used like cc_addr_of; both channels of a slice give the same address.
     return PWM_BASE + SLICE_STRIDE * slice_of(pin) + 0x08
 
+const CC_MAX: U32 = 0xFFFF //< the largest count a channel's half of CC holds (16 bits)
+
 fn set_level(pin: U32, level: U32) //< sets pin's duty as a count
     //< **It is the one function that writes CC** (the one place that keeps the other channel's
-    //< value). To set it as a percentage, use set_percent.
+    //< value). To set it as a percentage, use set_percent. A level past `CC_MAX` gives `CC_MAX`.
     addr: = cc_addr_of(pin)
-    cur: = mmio.read32(addr)
-    if is_channel_b(pin)
-        mmio.write32(addr, (cur & 0x0000FFFF) | (level << 16))
-    else
-        mmio.write32(addr, (cur & 0xFFFF0000) | (level & 0xFFFF))
+    mmio.write32(addr, cc_with(mmio.read32(addr), is_channel_b(pin), level))
+
+fn cc_with(cur: U32, channel_b: Bool, level: U32): U32 //<
+    //< CC's new value: `level` in one channel's half, the other half kept from `cur`
+    //< Caution: **Saturate, do not mask.** CC is 16 bits a channel, so a level of 65536 masked to
+    //< 16 bits is 0, and full duty would become none.
+    l: = level if level <= CC_MAX else CC_MAX
+    if channel_b
+        return (cur & 0x0000FFFF) | (l << 16)
+    return (cur & 0xFFFF0000) | l
 
 fn set_percent(pin: U32, percent: U32, top: U32) //< sets pin's duty as a percentage (0 to 100)
-    //< top is the value configured on that slice, so a caller keeps working when TOP changes. Over
-    //< 100 counts as 100.
+    //< top is the value configured on that slice, so a caller keeps working when TOP changes.
+    set_level(pin, level_for(percent, top))
+
+fn level_for(percent: U32, top: U32): U32 //< the CC count for a duty in percent under a TOP
+    //< Over 100 counts as 100. 0 and 100 are exact, so rounding does not lose the endpoints.
+    //< **100% is always high only while TOP is below 65535**: only CC > TOP gives that, and CC
+    //< holds at most 65535. With TOP at 65535, 100% gives CC 65535: low for 1 count of 65536.
+    //< A TOP past 16 bits counts as 65535, as the register holds no more.
     p: = percent if percent <= 100 else 100U32
-    // 0 and 100 are special-cased, so rounding does not lose the endpoints.
-    // Only CC > TOP gives "always High", so 100% writes TOP+1.
-    $level: U32 = 0
+    t: = top if top <= CC_MAX else CC_MAX
     if p >= 100
-        level = top + 1
-    else if p > 0
-        level = ((top + 1) * p) / 100
-    set_level(pin, level)
+        return t + 1 if t < CC_MAX else CC_MAX
+    return ((t + 1) * p) / 100

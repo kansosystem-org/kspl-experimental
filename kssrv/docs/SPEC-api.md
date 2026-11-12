@@ -98,8 +98,8 @@ In both modes:
 ```console
 $ curl -s localhost:8080/api/status
 {"root":"","local":false,"conditional_writes":false,"uptime_s":1802,"requests":45001,
- "connections_total":501,"connections_open":1,"connections_refused":0,"max_connections":128,
- "heap_bytes":86692}
+ "connections_total":501,"connections_open":1,"connections_refused":0,"writes":45120,
+ "max_connections":128,"heap_bytes":86692}
 ```
 
 | Field | What it holds |
@@ -108,6 +108,7 @@ $ curl -s localhost:8080/api/status
 | `requests` | the requests handled |
 | `connections_total` / `connections_open` / `max_connections` | the connection counters |
 | `connections_refused` | the connections refused because every slot was taken, or their peer already held its share |
+| `writes` | the writes to sockets. A small file's answer takes one: its head goes with its body |
 | `heap_bytes` | the bytes the server holds on its heap |
 | `local` | whether it is for local use |
 | `conditional_writes` | whether a `PUT` takes the `X-Kanso-If-Content` guard, which is true for local use alone ("Files" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |

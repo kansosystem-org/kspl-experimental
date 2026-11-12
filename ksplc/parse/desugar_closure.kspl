@@ -4,18 +4,20 @@
 //< parsed with the file's grammar. `desugar_node` in `desugar.kspl` calls it.
 import "ksplc/base/ast" as base_ast + { Ast_node, build_anon_env_name, build_anon_fn_name }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `is_const_gen_param`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
-import "ksplc/parse/desugar" { Desugar_ctx, CLOSURE_EMPTY_FIELD, next_anon_serial, build_temp_name,
-    serial_str, build_path_ref }
+import "ksplc/parse/desugar" { Desugar_ctx, Gen_param, CLOSURE_EMPTY_FIELD, next_anon_serial,
+    build_temp_name, serial_str, build_path_ref }
 // Caution: **Spell a type for the synthesized source with `spell_as_written`, not
 // `extract_type_name()`.** That drops the mutability marker `$` (`U8$[]` -> `U8[]`, `P$@` -> `P@`).
 // The impl then implements a `Callable` with another type argument, and the caller gets "does not
 // explicitly implement interface". **Nor the folded text** (`type_expr.text` reads `Slice<|U8|>`
 // once `U8[]` is folded), which is refused as a type.
-import "ksplc/parse/desugar_slice" { spell_as_written }
+import "ksplc/parse/desugar_slice" { spell_as_written, spell_before_postfix, is_fixed_array_type,
+    spell_array_element }
 import "ksplc/parse/load" as parse_load
 import "std/ds" { List }
 import "std/str" { Str_builder }
@@ -53,14 +55,16 @@ impl Ast_node
         // top-level function used as a function pointer value. Unlike a closure's, they cannot be
         // copied over, since nothing decides the instantiation where a value is passed. Without
         // this check, the lifted `T` gives the baffling "missing import alias prefix for type 'T'".
-        fwd: = forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null)
+        fwd: =
+            forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null, body)
         if fwd.len > 0
+            used: = fwd.get(0).name
             defer $msg: = Str_builder()
             msg
-                .s("an anonymous function cannot use the enclosing type parameter '\{fwd.get(0)\}'. \
-                    It becomes a top-level function passed as a plain function pointer. Add a \
-                    capture list to make it a closure (`fn(x: \{fwd.get(0)\}; ): …`), which \
-                    carries the type parameter, or take the value as a parameter")
+                .s("an anonymous function cannot use the enclosing type parameter '\{used\}'. It \
+                    becomes a top-level function passed as a plain function pointer. Add a capture \
+                    list to make it a closure (a ';' after its parameters: `fn(x: I32; ): …`), \
+                    which carries the type parameter, or take the value as a parameter")
             r.desugar_err(ctx, msg.slice())
             return
         lifted: = ctx.lifted
@@ -90,7 +94,7 @@ impl Ast_node
             return
         for p in params.children
             if id_node: = p.gen_param_id_node()
-                ctx.gen_params.push(id_node.text)
+                ctx.gen_params.push(written_gen_param(p, id_node.text))
 
     priv fn has_capture_marker(r: Ast_node@): Bool //< whether a `;` is written
         for c in r.children
@@ -122,14 +126,16 @@ impl Ast_node
                     frame. At top level, write a named function and take it as a function pointer, \
                     or move the closure into the function that uses it")
             return
+        if !reject_repeated_names(ctx, params, captures)
+            return
         serial: = next_anon_serial(ctx, loc.file())
         // The synthesized declarations go to the top level, where the enclosing type arguments are
         // not visible. Those the signature uses are copied over (with none, it stays non-generic).
-        fwd_params: = forwarded_gen_params(ctx, sig, params, captures)
+        fwd_params: = forwarded_gen_params(ctx, sig, params, captures, body)
 
         defer $src: = Str_builder()
         if !r.build_closure_src(ctx, sig, params, arity, captures, serial,
-            gen_args_text(fwd_params), src@)
+            gen_args_text(fwd_params, true), gen_args_text(fwd_params, false), src@)
             return
 
         // Caution: **Do not copy the ordinary path (parse -> normalize -> validate) here**; it
@@ -148,6 +154,7 @@ impl Ast_node
             if d.kind_id == .k_decl_impl
                 d.name_closure_receiver()
                 d.place_capture_rebindings(captures)
+                d.place_call_params(params)
                 d.graft_closure_body(body)
 
         // The use position becomes a reference to a temporary.
@@ -181,13 +188,16 @@ impl Ast_node
     // It builds the KSPL source of the declarations to synthesize (false: a diagnostic was
     // reported).
     fn build_closure_src(r: Ast_node@, ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
-        arity: Sz, captures: Ast_node$@, serial: Sz, gen_args: U8[], src: Str_builder$@): Bool //<
+        arity: Sz, captures: Ast_node$@, serial: Sz, gen_decl: U8[], gen_args: U8[],
+        src: Str_builder$@): Bool //<
             //< Writes the closure's struct, constructor and impl as KSPL source into src
-            //< False when it refused the closure (the diagnostic is already reported).
+            //< `gen_decl` declares the type parameters copied over (`<|T, const N: Sz|>`), and
+            //< `gen_args` passes them (`<|T, N|>`). False when it refused the closure (the
+            //< diagnostic is already reported).
         env_name: = build_anon_env_name(serial)
         ctor_name: = build_anon_env_ctor_name(serial)
         // The environment struct. The captures are held by pointer.
-        src.s("priv struct \{env_name\}\{gen_args\} {\n")
+        src.s("priv struct \{env_name\}\{gen_decl\} {\n")
         // One field is placed even with zero captures. C99 has no empty struct, and the generated C
         // warns `excess elements in struct initializer` for `struct X { };` with `= {0}`
         // (Principle 2: not one warning from the generated C either).
@@ -200,11 +210,11 @@ impl Ast_node
 
         // The function that builds the environment, so the use position builds one kind of node, a
         // call, rather than a struct literal by hand.
-        src.s("priv fn \{ctor_name\}\{gen_args\}(")
+        src.s("priv fn \{ctor_name\}\{gen_decl\}(")
         $first: = true
         for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
-            c_ty: = spell_as_written(cap.get_decl_type_node())
+            c_ty: = spell_before_postfix(cap.get_decl_type_node())
             if !first
                 src.s(", ")
             src.s("\{c_name\}: \{c_ty\}@")
@@ -224,7 +234,7 @@ impl Ast_node
         // The impl of Callable; the written argument and return types become its type arguments.
         ret_node: = sig.find_child(.k_type_expr)
         ret_ty: = "Void" if ret_node == null else spell_as_written(ret_node)
-        src.s("impl\{gen_args\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
+        src.s("impl\{gen_decl\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
         for p in base_ast_ext.Param_cursor(params, false)
             p_ty: = spell_as_written(p.get_decl_type_node())
             if p_ty.equals(base_core.UNKNOWN_TYPE_NAME)
@@ -263,7 +273,8 @@ impl Ast_node
         if c_name.len == 0
             r.desugar_err(ctx, "a capture must be a name with a type ('n: I32')")
             return false
-        c_ty: = spell_as_written(cap.get_decl_type_node())
+        ty_node: = cap.get_decl_type_node()
+        c_ty: = spell_as_written(ty_node)
         if c_ty.len == 0 || c_ty.equals(base_core.UNKNOWN_TYPE_NAME)
             defer $m: = Str_builder()
             m
@@ -271,7 +282,20 @@ impl Ast_node
                     variables can omit their type")
             r.desugar_err(ctx, m.slice())
             return false
-        src.s("  priv \{c_name\}: \{c_ty\}@;\n")
+        // **A capture is held by pointer, and no pointer to a fixed-length array can be made**
+        // ("6.2 Pointer arithmetic and implicit dereferencing" in
+        // docs/SPEC-programming-language.md). A slice over it carries the length.
+        if is_fixed_array_type(ty_node)
+            elem: = spell_array_element(ty_node)
+            defer $m: = Str_builder()
+            m
+                .s("capture '\{c_name\}' is a fixed-length array ('\{c_ty\}'). A closure holds each \
+                    capture by pointer, and no pointer to a fixed-length array can be made. Capture \
+                    a slice over it instead: bind 's: = \{elem\}[]::\{c_name\}' and capture 's: \
+                    \{elem\}[]'")
+            cap.desugar_err(ctx, m.slice())
+            return false
+        src.s("  priv \{c_name\}: \{spell_before_postfix(ty_node)\}@;\n")
         return true
 
     priv fn name_closure_receiver(r: Ast_node$@) //<
@@ -322,6 +346,26 @@ impl Ast_node
             if rebind_id != null
                 rebind_id.loc = id_node.loc
 
+    priv fn place_call_params(r: Ast_node$@, params: Ast_node$@) //<
+        //< It puts each parameter of the synthesized `call` where the closure's signature writes it
+        //< **The body's uses of `x` name that parameter**, so rename and go-to land on the written
+        //< `x`. Left at the closure's `fn(`, an edit would replace the text from `fn(` on.
+        call_fn: = r.find_child(.k_decl_fn)
+        made: = call_fn.get_fn_params() if call_fn != null else null
+        if made == null
+            return
+        $cur: = base_ast_ext.Param_cursor(made, true)
+        for p in base_ast_ext.Param_cursor(params, false)
+            made_p: = cur.next() catch
+                return
+            id_node: = p.find_child(.k_identifier)
+            if id_node == null
+                continue
+            made_p.loc = p.loc
+            made_id: = made_p.find_child(.k_identifier)
+            if made_id != null
+                made_id.loc = id_node.loc
+
     priv fn graft_closure_body(r: Ast_node$@, body: Ast_node@) //<
         //< It moves the original closure body's statements into the synthesized `call`'s body
         call_fn: = r.find_child(.k_decl_fn)
@@ -333,6 +377,30 @@ impl Ast_node
         for stmt in body.children
             dest.add_child(stmt)
 
+priv fn reject_repeated_names(ctx: Desugar_ctx$@, params: Ast_node$@, captures: Ast_node$@): Bool //<
+    //< Refuses a name written twice among a closure's parameters and captures (false: refused)
+    //< **A capture is a parameter of the closure**, so each name stands once ("8.1.3 Closures"
+    //< in docs/SPEC-programming-language.md).
+    //< Let through, the second would be reported as a field of a struct the user never wrote.
+    names: = List<|Ast_node$@|>.create(base_core.arena)
+    for list in Ast_node$@[]::{ params, captures }
+        for p in base_ast_ext.Param_cursor(list, false)
+            id_node: = p.find_child(.k_identifier)
+            // `_` names nothing, so it can stand any number of times.
+            if id_node == null || id_node.text.equals("_")
+                continue
+            for seen in names
+                if seen.text.equals(id_node.text)
+                    defer $m: = Str_builder()
+                    m
+                        .s("'\{id_node.text\}' is named twice in this closure's signature. A \
+                            capture is a parameter of the closure, so each name stands once among \
+                            its parameters and captures")
+                    id_node.desugar_err(ctx, m.slice())
+                    return false
+            names.push(id_node)
+    return true
+
 priv fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
     //< Caution: Start every one with `_`, or [W0206] fires where one goes unused.
     return build_temp_name("_anon_env_new_", serial_str(serial))
@@ -340,46 +408,73 @@ priv fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
 priv fn build_anon_env_val_name(serial: Sz): U8[]
     return base_c_name.made_name(build_temp_name("anon_env_v_", serial_str(serial)))
 
+priv fn written_gen_param(p: Ast_node$@, name: U8[]): Gen_param //<
+    //< One type parameter as its declaration writes it: `T`, or `const N: Sz` with its type
+    if !p.is_const_gen_param()
+        return Gen_param::{ .name = name, .written = name, .is_const = false }
+    out: = base_core.arena.text().s("const ").s(name)
+    ty: = p.find_child(.k_type_expr)
+    if ty != null
+        out.s(": ").s(spell_as_written(ty))
+    return Gen_param::{ .name = name, .written = out.take(), .is_const = true }
+
 fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
-    captures: Ast_node$@): List<|U8[]|>$@ //<
-        //< It returns the enclosing type arguments that the closure's signature uses, in order
-        //< The order is the order they were declared in.
+    captures: Ast_node$@, body: Ast_node$@): List<|Gen_param|>$@ //<
+        //< It returns the enclosing type parameters that the closure uses, in order
+        //< The order is the order they were declared in. A type parameter counts where the
+        //< signature's types name it. **A `const` one counts where the body reads it too**: it is a
+        //< value there (`return N`), and the lifted body would have no `N` to read.
         //< Caution: Keep only the ones it uses. A synthesized type differs per instantiation. So an
         //< unused one duplicates the closure for every instantiation of the enclosing declaration.
-    out: = List<|U8[]|>.create(base_core.arena)
+    out: = List<|Gen_param|>.create(base_core.arena)
     if ctx.gen_params.len == 0
         return out
     defer $types: = Str_builder()
     signature_type_text(sig, params, captures, types@)
     type_text: = types.slice()
-    for name in ctx.gen_params
-        if base_ast_spell.mentions_ident(type_text, name)
-            out.push(name)
+    for gp in ctx.gen_params
+        if base_ast_spell.mentions_ident(type_text, gp.name) ||
+            (gp.is_const && names_identifier(body, gp.name))
+            out.push(gp)
     return out
 
-priv fn gen_args_text(names: List<|U8[]|>@): U8[] //<
-    //< The `<|T, U|>` names of the type arguments copied over
+priv fn names_identifier(node: Ast_node$@, name: U8[]): Bool //<
+    //< whether an identifier under node is name
+    if node == null
+        return false
+    if node.kind_id == .k_identifier && node.text.equals(name)
+        return true
+    for c in node.children
+        if names_identifier(c, name)
+            return true
+    return false
+
+priv fn gen_args_text(params: List<|Gen_param|>@, declared: Bool): U8[] //<
+    //< The `<|T, const N: Sz|>` that declares the type parameters copied over, or the `<|T, N|>`
+    //< that passes them
     //< Empty where there are none, leaving the synthesized declarations non-generic.
-    if names.len == 0
+    if params.len == 0
         return ""
     out: = base_core.arena.text()
     out.s("<|")
-    for i in Range.asc(names.len)
-        out.s(", " if i > 0 else "").s(names.get(i))
+    for i in Range.asc(params.len)
+        gp: = params.get(i)
+        out.s(", " if i > 0 else "").s(gp.written if declared else gp.name)
     out.s("|>")
     return out.take()
 
-priv fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc): Ast_node$@ //<
-    //< The node of the type arguments written on the reference to the lifted declaration
-    //< Caution: Place the type arguments as `type_args`' **children**. The substitution at
-    //< instantiation (replace_type_vars in sema/decl/subst.kspl) does not reach a `<|T|>` in the
-    //< path's text alone. It rebuilds the text from the children.
-    if names.len == 0
+priv fn build_generic_path_ref(name: U8[], params: List<|Gen_param|>$@, loc: base_ast.Loc):
+    Ast_node$@ //<
+        //< The node of the type arguments written on the reference to the lifted declaration
+        //< Caution: Place the type arguments as `type_args`' **children**. The substitution at
+        //< instantiation (replace_type_vars in sema/decl/subst.kspl) does not reach a `<|T|>` in
+        //< the path's text alone. It rebuilds the text from the children.
+    if params.len == 0
         return build_path_ref(name, loc)
-    args_text: = gen_args_text(names)
+    args_text: = gen_args_text(params, false)
     type_args: = Ast_node(.k_type_args, args_text, loc)
-    for n in names
-        type_args.add_child(Ast_node(.k_type_atom, n, loc))
+    for gp in params
+        type_args.add_child(Ast_node(.k_type_atom, gp.name, loc))
     full: = base_core.arena.text().s(name).s(args_text).take()
     return Ast_node(.k_expr_path, full, loc).add_child(Ast_node.build_ident(name, 0, loc))
         .add_child(type_args)

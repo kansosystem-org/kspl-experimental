@@ -100,7 +100,7 @@ impl Conn
         return c
 
     fn send(r: Self@, raw: U8[]): Void!Http_end //< sends raw bytes completely
-        deadline: = sys.mono_us() + I64::SEND_TIMEOUT_MS * 1000I64
+        deadline: = sys.deadline_after_ms(SEND_TIMEOUT_MS)
         $sent: Sz = 0
         for sent < raw.len
             n: = write_step(r.sock, raw.sub_from(sent))
@@ -116,7 +116,7 @@ impl Conn
     fn next(r: Self$@, no_body: Bool, timeout_ms: I32, arena: Arena$@): Resp!Http_end //<
         //< Reads one response
         //< `no_body` is for HEAD (it declares a `Content-Length` but no body comes).
-        deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        deadline: = sys.deadline_after_ms(timeout_ms)
         $spins: Sz = 0
         for sys.mono_us() <= deadline
             // Caution: **Try to cut a response out before reading.** The previous read may hold the
@@ -282,7 +282,7 @@ impl Stream
     fn drain(r: Self$@, timeout_ms: I32, arena: Arena$@): U8[] //<
         //< Reads until the close and returns the content after the head
         //< Caution: **Have a timeout** (if the server never closes, it waits forever).
-        deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        deadline: = sys.deadline_after_ms(timeout_ms)
         for sys.mono_us() <= deadline
             n: = recv_step(r.conn.sock, r.conn.buf)
             if n == 0 || n == FAIL_STEP
@@ -300,7 +300,7 @@ impl Stream
 
     fn read_head(r: Self$@, timeout_ms: I32) //< reads until the head is in, or the time runs out
         //< For a connection the server holds open: reading to the close would take the whole wait.
-        deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        deadline: = sys.deadline_after_ms(timeout_ms)
         for sys.mono_us() <= deadline &&
             r.conn.acc.slice().find_str("\r\n\r\n").is_none()
             n: = recv_step(r.conn.sock, r.conn.buf)

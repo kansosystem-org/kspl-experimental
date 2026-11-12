@@ -149,7 +149,7 @@ fn ask_local( //< sends one request, without a body, to a server on this compute
     // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
     got: =
         http_body.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, wait_ms) catch
-        return Local_answer::{ .status = 0, .body = "" }
+            return Local_answer::{ .status = 0, .body = "" }
     return Local_answer::{ .status = got.status, .body = got.body }
 
 priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
@@ -340,7 +340,7 @@ priv fn start_browser(page: U8[], where: Where, arena: Arena$@): Bool //<
         way: = aim.browser_argv(tool, page, sys.is_windows(), arena)
         _h: =
             subproc.spawn_redirect(U8[][]::way, "", where.browser, where.browser) catch
-            continue
+                continue
         return true
     return false
 
@@ -378,17 +378,21 @@ fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, arena
             .s("\{sys.program_name()\}: could not start a browser. Open \{page\} in one yourself\n")
     tell_how(doc, false, page, where.browser, where.app.tip)
 
-priv fn wait_for_url(log: U8[], child: subproc.Child@): U8[] //<
-    //< The URL the server writes to its log once it is up, or "" after `wait_steps` tries
+fn wait_for_url(log: U8[], child: subproc.Child$@, steps: Sz): U8[] //<
+    //< The URL the server writes to its log once it is up, or "" after `steps` tries, 100 ms apart
     //< **"" at once where the server has exited**: the lock is held meanwhile, so every other open
     //< would wait out the rest of the tries too.
-    for _step in Range.asc(WAIT_STEPS)
+    //< Caution: **Stop a server that gives no URL.** No note names it, so nothing else stops it.
+    //< With `--show` it has no idle stop either, and it runs until someone finds it.
+    for _step in Range.asc(steps)
         url: = aim.url_in_log(io.read_file(log, null) catch "")
         if url.len > 0
             return url
         if !child.alive()
+            child.kill()
             return ""
         sys.sleep_ms(100)
+    child.kill()
     return ""
 
 priv fn relay_log(log: U8[], child: subproc.Child@) //<
@@ -480,7 +484,7 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
             .s("\{sys.program_name()\}: cannot start \{where.server\} (the log it points at: \
                 \{log\})\n")
         return Opened::{ .url = "", .log = "", .child = .none }
-    url: = wait_for_url(log, child@)
+    url: = wait_for_url(log, child@, WAIT_STEPS)
     if url.len == 0
         io.err().s("\{sys.program_name()\}: the server did not come up (\{log\})\n")
         return Opened::{ .url = "", .log = "", .child = .none }

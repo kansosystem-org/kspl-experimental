@@ -161,9 +161,9 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
     if c.need == 0
         head: =
             http.parse_request_head(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
-            reject_parse(c, e)
-            c.arena.restore(base)
-            return
+                reject_parse(c, e)
+                c.arena.restore(base)
+                return
         c.answers_head = head.method.equals("HEAD")
         if !accept_head(c, head, ctx)
             c.arena.restore(base)
@@ -174,9 +174,9 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
             return
     req: =
         http.parse_request(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
-        reject_parse(c, e)
-        c.arena.restore(base)
-        return
+            reject_parse(c, e)
+            c.arena.restore(base)
+            return
     c.answers_head = req.method.equals("HEAD")
     static.queue_for_request(c, req, ctx)
     // Caution: Drop only what the finished parse used. Emptied completely, the start of the next
@@ -226,8 +226,9 @@ priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf`
             n: =
                 https.write_some(c, rest.sub(0, IO_CHUNK) if rest.len > IO_CHUNK else rest, lg)
                 catch e
-                return e == https.Io_end.wait // wait for writable, or close
+                    return e == https.Io_end.wait // wait for writable, or close
             c.sent += n
+            conn.stats.writes += 1I64
             c.moved_us = sys.mono_us()
         c.outbuf.clear()
         c.sent = 0

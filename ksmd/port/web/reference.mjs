@@ -11,7 +11,7 @@ import { fileURLToPath } from "url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SPEC = path.join(HERE, "..", "..", "docs", "SPEC-editing-page.md");
-export const HEADING = "## Every command and its key";
+const HEADING = "## Every command and its key";
 
 // The page's lists, read by running `commands.js` alone: it only defines them.
 function lists() {

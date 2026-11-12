@@ -147,8 +147,8 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await saves("a number too large for a cell stays the text typed", TABLE.replace("| 6 |", '| "1e400" |'));
     },
 
-    // A formula missing its last `)` takes it on Enter, and the status bar says so. `Ctrl`+`Z`
-    // right after gives back the formula as typed. Edit ▸ AutoCorrect turns it off.
+    // A formula missing its last `)` or `"` takes it on Enter, and the status bar says so.
+    // `Ctrl`+`Z` right after gives back the formula as typed. Edit ▸ AutoCorrect turns it off.
     async closingBrackets() {
       const said = () => js("document.getElementById('status').textContent");
       await load(TABLE);
@@ -159,6 +159,21 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
         "the status bar says what was added", await said());
       await press("z", CTRL);
       await saves("Ctrl+Z right after gives back the formula as typed", TABLE.replace("| 3 |", "| =sum(A1:B1 |"));
+      // Text left open in quotes cannot stand in the file, so its closed form goes in as one step.
+      // Ctrl+Z right after opens the cell again with the formula as typed, and Esc then leaves the
+      // value it held before.
+      await load(TABLE);
+      await start(0, 2, '="C:\\');
+      await press("Enter");
+      await saves("Enter adds the quote a formula leaves open", TABLE.replace("| 3 |", '| ="C:\\" |'));
+      await press("z", CTRL);
+      await settle();
+      check(await box() === '="C:\\', "Ctrl+Z right after opens the cell with the formula as typed", await box());
+      await press("Escape");
+      check(await box() === null, "Esc closes the cell", await box());
+      await saves("and leaves the value it held before", TABLE);
+      await press("y", CTRL);
+      await saves("and Ctrl+Y puts the closed form back", TABLE.replace("| 3 |", '| ="C:\\" |'));
       await load(TABLE);
       await start(0, 2, "=1+(");
       await press("Tab");

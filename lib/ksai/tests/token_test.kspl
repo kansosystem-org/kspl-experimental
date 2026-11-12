@@ -10,7 +10,6 @@ import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
 import "std/str"
-import "std/sys"
 import "std/verdict"
 
 fn test_tokenizer_roundtrip(arena: Arena$@)
@@ -103,12 +102,11 @@ fn test_tokenizer_keeps_its_size() //<
     verdict.pass("")
 
 priv const LONG_WORD_BYTES: Sz = 256 * 1024 //< the long chunk's length: one word, one chunk
-priv const SHORT_SHARE: Sz = 8 //< the short chunk is this share of the long one
-priv const GROWTH_MAX: I64 = 24I64 //<
-    //< How many times the short chunk's time the long chunk may take
-    //< A queue of pairs merges in time near the length: about `SHORT_SHARE` times as long.
-    //< Rescanning the chunk for each merge grows with the square, 64 times. **Both are timed in
-    //< the same run**, so a busy machine slows both alike.
+priv const SHORT_SHARE: Sz = 32 //< the short chunk is this share of the long one
+priv const STEPS_PER_LOG: Sz = 6 //<
+    //< The merge steps allowed per byte of a chunk, per halving of its length
+    //< A queue of pairs takes about 2.4 per byte per halving. Rescanning the chunk for each merge
+    //< takes steps in proportion to the length per byte: thousands per halving here.
 priv const LONG_WORDS: U8[][_] = ::{ "a", "b", "c", "d", "aa", "ab", "cd", "abcd", "bc",
     "abcdabcd" } //< the long-chunk test's vocabulary; a word's ID is its place from 1
 
@@ -118,17 +116,18 @@ priv fn word_id(w: U8[]): I32 //< the ID `LONG_WORDS` gives a word; 0 for none
             return I32::i + 1
     return 0
 
-priv const TIMING_ROUNDS: Sz = 5 //< rounds of the two timings, each kept at its fastest
+priv fn log2_up(n: Sz): Sz //< the smallest k with 2^k >= n
+    $k: Sz = 0
+    for (1 << k) < n
+        k += 1
+    return k
 
-priv fn fastest(best: I64, took: I64, round: Sz): I64 //<
-    //< the faster of the two; the first round sets it
-    return took if round == 0 || took < best else best
-
-priv fn encode_us(tok: ai_tokenizer.Tokenizer$@, text: U8[], arena: Arena$@): I64 //<
-    //< One encoding of text [us]
-    started: = sys.mono_us()
+priv fn steps_in_step(tok: ai_tokenizer.Tokenizer$@, text: U8[], arena: Arena$@): Bool //<
+    //< Whether encoding the text takes at most `STEPS_PER_LOG` merge steps per byte per halving
+    before: = tok.merge_steps()
     _ids: = tok.encode(text, arena)
-    return sys.mono_us() - started
+    took: = tok.merge_steps() - before
+    return took > 0 && took <= STEPS_PER_LOG * text.len * log2_up(text.len)
 
 priv fn merged_as(tok: ai_tokenizer.Tokenizer$@, text: U8[], want: U8[], arena: Arena$@): Bool //<
     //< Whether the text encodes to the words `want` lists, separated by spaces
@@ -147,10 +146,6 @@ fn test_tokenizer_long_chunk(arena: Arena$@) //<
     //< hold it. The short cases pin the order: the smallest rank first, the leftmost of one rank,
     //< and a pair that a merge forms taken by its own rank.
     verdict.start("[Tokenizer] a long chunk merges quickly, in the rank order")
-    // Caution: **A sanitizer's build skips it**: it slows the short and the long chunk unequally.
-    if sys.get_env("KANSO_SANITIZED").is_some()
-        verdict.skip("a sanitizer's build does not keep time in step with the work")
-        return
     $tok: = ai_tokenizer.Tokenizer(arena)
     for w in LONG_WORDS
         tok.add_token(w, word_id(w))
@@ -164,16 +159,13 @@ fn test_tokenizer_long_chunk(arena: Arena$@) //<
     defer $long: = str.Str_builder()
     for _i in Range.asc(LONG_WORD_BYTES / 4)
         long.s("abcd")
-    // **The two timings take turns, each round**, so a busy spell on a shared machine slows both.
-    short: = long.slice().sub(0, LONG_WORD_BYTES / SHORT_SHARE)
-    $short_us: I64 = 0I64
-    $long_us: I64 = 0I64
-    for round in Range.asc(TIMING_ROUNDS)
-        short_us = fastest(short_us, encode_us(tok@, short, arena), round)
-        long_us = fastest(long_us, encode_us(tok@, long.slice(), arena), round)
-    // The 1000 us keeps a short run near zero from making the ratio meaningless.
-    assert(long_us <= GROWTH_MAX * (short_us + 1000I64),
-        "merging a long chunk grew faster than its length")
+    // **Merge steps are counted, not timed**: a count is the same on every machine, while a time
+    // moves with the load. Both lengths are held to the same bound, so a cost that grows faster
+    // than n log n fails at the long one.
+    assert(steps_in_step(tok@, long.slice().sub(0, LONG_WORD_BYTES / SHORT_SHARE), arena),
+        "merging a short chunk took more steps than its length allows")
+    assert(steps_in_step(tok@, long.slice(), arena),
+        "merging a long chunk took more steps than its length allows")
     ids: = tok.encode(long.slice(), arena)
     assert(ids.len == LONG_WORD_BYTES / 8, "each abcdabcd merges to one word")
     assert(tok.decode(ids, arena).equals(long.slice()), "the long chunk decodes back")
@@ -287,11 +279,11 @@ priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
     $tok: = ai_tokenizer.Tokenizer(scratch)
     tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
         catch e
-        switch e
-        case .broken(_path, line)
-            return line
-        default
-            panic("the files written must be readable")
+            switch e
+            case .broken(_path, line)
+                return line
+            default
+                panic("the files written must be readable")
     return 0
 
 fn test_tokenizer_load(arena: Arena$@) //<

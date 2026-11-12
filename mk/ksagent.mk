@@ -3,14 +3,15 @@
 # Taken in by the root Makefile after mk/ksmd.mk, whose browser lookup the check shares.
 # ==========================================
 
-# **The page is copied beside the server**, where the opener looks (`KSAGENT` in
-# `tools/opener_aim.kspl`): one file, which `kssrv --page` serves as it is.
+# **The page is built beside the server**, where the opener looks (`KSAGENT` in
+# `tools/opener_aim.kspl`): one file, which `kssrv --page` serves as it is. The build puts kssrv's
+# client for the local server inside it.
 KSAGENT_PAGE := $(OUT_DIR)/ksagent/chat.html
 KSAGENT_CHAT_EXE := $(OUT_DIR)/ksagent_chat.exe
 
-$(KSAGENT_PAGE): ksagent/page/chat.html
+$(KSAGENT_PAGE): $(STAGE1_EXE) ksagent/page/chat.html kssrv/page/bundle.kspl kssrv/page/client.js
 	@mkdir -p "$(dir $@)"
-	cp ksagent/page/chat.html "$@"
+	./$(STAGE1_EXE) run kssrv/page/bundle.kspl ksagent/page/chat.html "$@" --from=kssrv/page
 
 $(KSAGENT_CHAT_EXE): $(STAGE1_EXE) tools/ksagent_chat.kspl tools/model_server.kspl \
   ksagent/defaults.kspl $(OPENER_SRC)

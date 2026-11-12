@@ -11,6 +11,7 @@ import "std/mem" { Arena, dealloc }
 import "std/seq" // `List.order_by`, which sorts the markers once
 import "std/str" { Str_builder }
 import "std/strnum" // `to_count`
+import "std/thread"
 
 pub fn hex_bytes(text: U8[], out: Str_builder$@): Bool //< appends the bytes spelt in hex
     //< Restores vocab.txt's byte sequences; false, with part of them appended, when the text is
@@ -26,7 +27,7 @@ pub fn hex_bytes(text: U8[], out: Str_builder$@): Bool //< appends the bytes spe
     return true
 
 priv const ID_MAX: Sz = 2147483647 //< the largest ID an `I32` holds
-pub const UNK_ID: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
+const UNK_ID: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
 
 pub fn parse_token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
     n: = text.to_count(ID_MAX) catch
@@ -69,8 +70,8 @@ impl Token_key: ds.Hashable<|Token_key|> //< so a token ID can stand as a map's 
     fn equals(r: Self$@, other: Token_key): Bool
         return r.val == other.val
 
-pub const TOKEN_NORMAL: I32 = 1 //< a GGUF token type: a word of the BPE vocabulary
-pub const TOKEN_USER_DEFINED: I32 = 4 //< a GGUF token type: a marker matched in any text
+const TOKEN_NORMAL: I32 = 1 //< a GGUF token type: a word of the BPE vocabulary
+const TOKEN_USER_DEFINED: I32 = 4 //< a GGUF token type: a marker matched in any text
     //< Such as Qwen's `<think>` and `<tool_call>`. **Matched even inside a message**, as llama.cpp
     //< and Hugging Face's tokenizer do: the chat template writes them as text, and the model was
     //< trained on their single IDs. Every other type (a control token such as `<|im_end|>`) is
@@ -136,18 +137,21 @@ priv fn merges_first(a: Bpe_pair, b: Bpe_pair): Bool //< whether `a` merges befo
     //< The smaller rank first, and the leftmost of one rank, as a scan of the chunk would pick.
     return a.rank < b.rank || (a.rank == b.rank && a.left < b.left)
 
-priv fn queue_push(queue: List<|Bpe_pair|>$@, p: Bpe_pair) //< adds a pair to the binary heap
+priv fn queue_push(queue: List<|Bpe_pair|>$@, p: Bpe_pair, steps: Sz$@) //<
+    //< Adds a pair to the binary heap; each comparison adds one to `steps`
     queue.push(p)
     $at: = queue.len - 1
     for at > 0
         up: = (at - 1) / 2
+        steps$ += 1
         if !merges_first(p, queue[up])
             break
         queue[at] = queue[up]
         at = up
     queue[at] = p
 
-priv fn queue_pop(queue: List<|Bpe_pair|>$@): Bpe_pair //< takes the pair that merges first
+priv fn queue_pop(queue: List<|Bpe_pair|>$@, steps: Sz$@): Bpe_pair //<
+    //< Takes the pair that merges first; each comparison adds one to `steps`
     //< The queue must not be empty.
     top: = queue[0]
     last: = queue[queue.len - 1]
@@ -157,8 +161,11 @@ priv fn queue_pop(queue: List<|Bpe_pair|>$@): Bpe_pair //< takes the pair that m
         $child: = 2 * at + 1
         if child >= queue.len
             break
-        if child + 1 < queue.len && merges_first(queue[child + 1], queue[child])
-            child += 1
+        if child + 1 < queue.len
+            steps$ += 1
+            if merges_first(queue[child + 1], queue[child])
+                child += 1
+        steps$ += 1
         if !merges_first(queue[child], last)
             break
         queue[at] = queue[child]
@@ -179,6 +186,7 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
         //< **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena),
         //< so a tokenizer kept for a server's lifetime does not grow.
     priv split: Split_rule //< the rule that splits a text into chunks; Qwen2's unless set
+    priv steps: thread.Atomic_sz //< the merge steps taken so far (`merge_steps`)
 
 impl Tokenizer
     pub fn new( //< an empty tokenizer, to be filled by a `load` or by `add_token` / `add_merge`
@@ -190,7 +198,7 @@ impl Tokenizer
         merge_rank: = arena.create(Map<|Bpe_key, I32|>(arena)) // keys from the model
         return Tokenizer::{ .vocab = vocab, .vocab_rev = vocab_rev, .merges = merges,
             .merge_rank = merge_rank, .markers = List<|Marker|>.create(arena), .next_rank = 0,
-            .arena = arena, .split = .qwen2 }
+            .arena = arena, .split = .qwen2, .steps = thread.Atomic_sz(0) }
 
     pub fn set_split( //< the rule that splits a text into chunks before merging
         //< It must be the rule the vocabulary was made with: GGUF's `tokenizer.ggml.pre` names it
@@ -405,6 +413,11 @@ impl Tokenizer
             work
                 .push(Marker_step::{ .text = step.text.sub(0, at), .marker = m + 1, .id = 0 })
 
+    fn merge_steps(r: Self@): Sz //< the merge steps `encode` has taken so far
+        //< **Each pair's rank looked up and each comparison in the queue counts one.** A test holds
+        //< a long chunk's cost to its length by this count, which is the same on every machine.
+        return r.steps.load()
+
     priv fn bpe_text(r: Self@, text: U8[], out: List<|I32|>$@) //< a text with no marker, by BPE
         //< It is split into chunks first, and no merge crosses a chunk.
         $i: Sz = 0
@@ -425,10 +438,11 @@ impl Tokenizer
                 .push(Bpe_piece::{ .id = r.byte_ids[chunk[i]], .prev = i - 1, .next = i + 1,
                 .gone = false })
         defer $queue: = List<|Bpe_pair|>(null)
+        $steps: Sz = 0
         for i in Range.asc(n - 1)
-            r.queue_pair(queue@, pieces@, i)
+            r.queue_pair(queue@, pieces@, i, steps@)
         for queue.len > 0
-            p: = queue_pop(queue@)
+            p: = queue_pop(queue@, steps@)
             left: = pieces[p.left]
             // A pair queued before one of its pieces changed is stale; its new pairs are queued.
             if left.gone || left.next != p.right || left.id != p.left_id ||
@@ -441,8 +455,9 @@ impl Tokenizer
             if after < n
                 pieces[after].prev = p.left
             if left.prev >= 0
-                r.queue_pair(queue@, pieces@, left.prev)
-            r.queue_pair(queue@, pieces@, p.left)
+                r.queue_pair(queue@, pieces@, left.prev, steps@)
+            r.queue_pair(queue@, pieces@, p.left, steps@)
+        r.steps.fetch_add(steps)
         // The first piece is never merged away: only a right piece is.
         for $at: Sz = 0; at < n; at = pieces[at].next
             out.push(pieces[at].id)
@@ -452,15 +467,18 @@ impl Tokenizer
         queue: List<|Bpe_pair|>$@,
         pieces: List<|Bpe_piece|>@,
         at: Sz,
+        steps: Sz$@, //< the merge steps taken, one more for the rank looked up
     )
         right: = pieces[at].next
         if right >= pieces.len
             return
         a: = pieces[at].id
         b: = pieces[right].id
+        steps$ += 1
         if rank: = r.merge_rank.get(Bpe_key.of(a, b))
             queue_push(queue,
-                Bpe_pair::{ .rank = rank, .left = at, .right = right, .left_id = a, .right_id = b })
+                Bpe_pair::{ .rank = rank, .left = at, .right = right, .left_id = a, .right_id = b },
+                steps)
 
     pub fn decode( //< the text for the IDs
         r: Self@,

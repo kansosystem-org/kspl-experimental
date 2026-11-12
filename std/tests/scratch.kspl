@@ -1,0 +1,85 @@
+//< Helpers for a test's scratch files: their permissions, a symbolic link, and removing a tree
+//< **It holds no test**, so a test of another package can import it (`tools/tests/page_test.kspl`)
+//< without taking std's tests into a program whose suite does not run them ([W0214]). Why it
+//< stands here is "What tests share stands in std" in `docs/DESIGN-repository.md`.
+import "std/chars"
+import "std/ds"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/subproc"
+import "std/sys"
+
+priv const TOOL_WAIT_MS: I32 = 60000 //<
+    //< how long `ls`, `chmod` and `ln` may take on a busy machine
+
+pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -l` shows for a file
+    //< Such as `-rw-------`. `std/fs` reads no mode, so the test asks the system's own tool.
+    //< **Empty where `ls` cannot answer**, and on Windows, whose MSYS2 `ls` shows a mode it makes
+    //< up. Ask `keeps_modes` first whether the mode tells anything.
+    if sys.is_windows()
+        return ""
+    r: =
+        subproc.run_capture(U8[][]::{ "/bin/ls", "-l", path }, "", TOOL_WAIT_MS, 4096, arena) catch
+            return ""
+    if !r.exited_with(0) || r.stdout_data.len < 10
+        return ""
+    return arena.dup_str(r.stdout_data.sub(0, 10))
+
+pub fn set_mode(path: U8[], mode: U8[], arena: Arena$@): Bool //<
+    //< Sets a file's permissions with `chmod` (`600`, `u+x`); false where it cannot, as on Windows
+    if sys.is_windows()
+        return false
+    r: =
+        subproc.run_capture(U8[][]::{ "/bin/chmod", mode, path }, "", TOOL_WAIT_MS, 4096, arena)
+        catch
+            return false
+    return r.exited_with(0)
+
+pub fn keeps_modes(dir: U8[], arena: Arena$@): Bool //< whether files in the folder keep a mode
+    //< **Decided by a probe file of known mode**, never by the file under test: a file everyone
+    //< may read must fail its check, not pass as "no mode here". `chmod 600` on a probe, read back
+    //< as `-rw-------`. False on Windows, and on a filesystem that ignores `chmod` (a Windows
+    //< folder mounted into Docker marks every file executable). The probe is removed again.
+    if sys.is_windows()
+        return false
+    probe: = fs.join(dir, "mode_probe", arena)
+    io.write_file(probe, "x") catch
+        return false
+    kept: =
+        set_mode(probe, "600", arena) && mode_shown(probe, arena).equals("-rw-------")
+    fs.remove_path(probe) catch {}
+    return kept
+
+pub fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
+    //< Makes a symbolic link at `at` to `target` with `ln -s`; false where none is made
+    //< The order is `ln -s`'s. Windows has no `ln -s`, and `mklink` needs privileges, so a test
+    //< that needs a link skips there.
+    r: =
+        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", TOOL_WAIT_MS, 4096, arena)
+        catch
+            return false
+    return r.exited_with(0) && fs.is_link(at)
+
+pub fn remove_tree(root: U8[], arena: Arena$@) //< removes a test's scratch tree, as far as it can
+    //< Caution: **Pass it only a tree this run made.** Its check-then-descend race is harmless only
+    //< there, so it stays out of `std/fs`. **A failed delete is not reported**: the clean-up would
+    //< hide the result under test (check with `fs.exists`).
+    clear_below(root, 0, arena)
+    fs.remove_path(root) catch {}
+
+priv const MAX_DEPTH: Sz = 32 //< how deep `remove_tree` descends; below that it leaves the rest
+
+priv fn clear_below(dir: U8[], depth: Sz, arena: Arena$@) //<
+    //< Removes what a folder holds
+    //< Caution: **Remove a link without following it**: followed, it deletes what it points at,
+    //< even outside the tree.
+    if depth >= MAX_DEPTH
+        return
+    entries: = fs.read_dir(dir, arena) catch
+        return
+    for name in entries
+        full: = fs.join(dir, name, arena)
+        if fs.is_dir(full) && !fs.is_link(full)
+            clear_below(full, depth + 1, arena)
+        fs.remove_path(full) catch {}

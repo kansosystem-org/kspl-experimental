@@ -198,7 +198,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-random-equiv (generated programs build with no warning, and run alike, under clang, gcc and LLVM; a local `make ci` runs it only for a change under `ksplc/`) | ✅(note 35) | ➖(note 35) | ➖(note 35) |
 | Fuzzing: each package's own `test-fuzz`, a shallow run on a fixed seed, on its copy by `test-extract`. No run on corrupted input can die, and what std writes back must read the same. `make fuzz-long` goes deep by hand, with a fresh seed | ✅ | ➖(note 2) | ✅(note 21) |
 | test-notation (indentation-written source gives the same C, squiggles, hovers and jump targets) | ✅ | ➖(note 2) | ✅ |
-| test-fmt-tree (every tracked source is already formatted, and formatted at other widths it reads back) | ✅ | ➖(note 2) | ➖(note 26) |
+| test-fmt-tree (every tracked source is already formatted, and formatted at other widths it reads back; outside GitHub, the other widths only for a change under `ksplc/`) | ✅ | ➖(note 2) | ➖(note 26) |
 | test-file-path (the logical name is stable however the entry point is written) | ✅ | ➖(note 2) | ✅ |
 | test-broken-pipe (output losing its destination ends quietly) | ✅ | ➖(note 2) | ✅(note 14) |
 | test-extract (extract-ksplc-core / extract-ksplc-rest / extract-rest / extract-std), each package with a `Makefile` tested from a copy of its folder alone | ✅ | ➖(note 2) | ✅ |
@@ -354,16 +354,16 @@ The suite a note names says what it checks in its opening comment; a note adds w
 
 **A test compares an elapsed time with a constant only as a lower bound**: the run waited at least as long as it asked. A busy machine makes a run slower, never faster, so a lower bound holds on any machine. An upper bound fails there while the code is right.
 
-* **An upper bound compares with a time measured in the same run**, as a ratio, so a busy machine slows both sides alike.
+* **No upper bound is set on a time, not even as a ratio to another time of the same run.** A busy spell slows one side more than the other. One such check failed 1 run in 10 on a loaded machine while the code was right.
+* **A check that one input costs no more than another counts work instead**, such as comparisons, steps or system calls. A count is the same on every machine; a time is not. In a browser, the engine's precise coverage counts the blocks a page's code runs.
 * **Or the test checks an order instead of a time.** For example, a child that sleeps for 30 s is still running when the call returns, so the call did not wait for the child's end.
 * **A hang is the suite's time limit's to stop**, not a bound inside the test.
 * **A limit that stops a hang counts CPU time where it can.** A busy runner stretches the clock threefold, and a program's CPU time hardly at all. The clock then stops only a program blocked on nothing, with room for the slowest platform. The race gate does so (note 17).
-* **A check that one input costs no more than another counts work where the code can count it**, such as steps or system calls. A count is the same on every machine; a time is not.
 * **A budget that the check is not about cannot decide it.** A handshake's time budget in a test of which error comes back is set far past any run.
 * **A wait's own cap is no verdict**: a `for` that polls until a deadline may stop there, and the check is on what arrived.
 * **Time itself is the perf gate's** (`perf-log`), which records it and judges only memory.
 
-`make test-conventions` refuses a test source that compares an elapsed time with a constant (`tests/support/conventions_gates.kspl`). **It follows names**: a value read from `sys.mono_us()`, one subtracted from it, and a function that returns one. An `if` on such a time is refused either way, since either branch can fail the test. Its list of exceptions (`time_allowed`) holds three files, each with its reason; an exception that no longer bounds a time fails too. The check reads literal text, so an elapsed time it cannot follow is still under the rule.
+`make test-conventions` refuses a test source that compares an elapsed time with a constant (`tests/support/conventions_gates.kspl`). **It follows names**: a value read from `sys.mono_us()` or `sys.wall_seconds()`, one subtracted from it, and a function that returns one. An upper bound on such a time is refused against a constant or against another time. An `if` on such a time is refused either way, since either branch can fail the test. Its list of exceptions (`time_allowed`) holds three files, each with its reason; an exception that no longer bounds a time fails too. The check reads literal text, so an elapsed time it cannot follow is still under the rule.
 
 ## The shape of a per-item pass/fail line
 

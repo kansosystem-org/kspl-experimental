@@ -3,7 +3,6 @@
 //< **The certificates are made at run time** (`lib/kstls/tests/cert.kspl`), so no key stands in the
 //< repository. The client is `kstls/tls`, which verifies the certificate against a test CA.
 import "kssrv/tests/client"
-import "kssrv/tests/local" // `mode_column`, for a key file others can read
 import "kssrv/tests/start" { Running, bring_up, refused }
 import "kstls/tests/cert" { Test_ca, Test_cert, Validity, VALID_NOW }
 import "kstls/tests/records" { Record_client }
@@ -18,6 +17,7 @@ import "std/net"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/sys"
+import "std/tests/scratch"
 import "std/verdict"
 
 priv const HOST: U8[] = "localhost" //< the name the certificates are for, and the client asks
@@ -203,8 +203,8 @@ priv fn plain_case(port: I32, arena: Arena$@) //<
     name: = "plain HTTP on the HTTPS port is answered 400 in plain text, not with silence"
     r: =
         client.request(port, closing("GET /", arena), 1, READ_MS, false, arena) catch e
-        verdict.check(name, false, e.reason())
-        return
+            verdict.check(name, false, e.reason())
+            return
     ok: =
         r.len == 1 && r.get(0).status == 400 &&
         r.get(0).body.find_str("https://").is_some()
@@ -233,7 +233,7 @@ priv fn stalled_case(port: I32, srv: Running@, arena: Arena$@) //<
     waited_s: = (sys.mono_us() - start) / 1000000I64
     // **The log is flushed at an interval**, so its line can come a moment after the close.
     $said: = false
-    seen_by: = sys.mono_us() + 5000000I64
+    seen_by: = sys.deadline_after_ms(5000I64)
     for !said && sys.mono_us() < seen_by
         said = srv.log(arena).find_str("did not finish the TLS handshake").is_some()
         if !said
@@ -288,7 +288,8 @@ fn start_cases(exe: U8[], root: U8[], dir: U8[], ca: Test_ca, good: Pem_files, a
     if sys.is_windows()
         verdict.skip_check("a key file others can read is refused at start",
             "Windows decides with an ACL, which kssrv does not read: no POSIX mode is checked")
-    else if local.mode_column(open_key, "644", arena).len == 0
+    else if !scratch.set_mode(open_key, "644", arena) ||
+        scratch.mode_shown(open_key, arena).len == 0
         verdict.skip_check("a key file others can read is refused at start",
             "this system has no POSIX mode for `chmod` to set and `ls -l` to read")
     else

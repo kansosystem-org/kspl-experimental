@@ -26,6 +26,12 @@ priv enum Long_tag: I64
     big = 5000000000I64
     after
 
+priv const LONG_LIMIT: I64 = 3000000000 - 1 //< folds at its declared I64, not at I32
+
+priv enum Const_tag: I64 //< a tag from a typed constant whose initializer passes I32's range
+    lo = LONG_LIMIT
+    next
+
 priv enum Byte_tag: U8 //< carried as one byte, as sema lays it out
     lo = 1
     hi = 255
@@ -47,6 +53,8 @@ fn test_enum_tags_are_the_written_values()
     assert(U32::w == 2147483649U32, "the counter after a U32 tag past I32's range")
     assert(I64::Long_tag.big == 5000000000I64, "an I64 tag past 32 bits")
     assert(I64::Long_tag.after == 5000000001I64, "the counter after an I64 tag")
+    assert(I64::Const_tag.lo == 2999999999I64, "a typed constant past I32's range as a tag")
+    assert(I64::Const_tag.next == 3000000000I64, "the counter after that constant's tag")
     assert(sizeof(Byte_tags) == 2, "a U8 enum is one byte in a struct")
     switch w
     case .top
@@ -101,6 +109,28 @@ fn test_variant_in_array()
         inner = k.size()
     case .none {}
     assert(inner == 8 && held[1].is_none(), "a payload inside an element")
+    verdict.pass("")
+
+priv fn count_large(first: Size@, sizes: Size[], pair: Size[2]): I32 //<
+    //< Compares read-only values against a short variant: what a pointer, an element and a loop
+    //< variable read keeps the read-only mark, and the variant's enum is found past it
+    $n: = 0
+    n += 1 if first$ == .large else 0
+    n += 1 if sizes[0] != .tiny else 0
+    n += 1 if pair[1] == .large else 0
+    for s in sizes
+        if s == .large
+            n += 1
+    return n
+
+fn test_variant_compared_read_only()
+    verdict.start("[enum] a read-only value compared with a variant written short test...")
+    one: = Size.large
+    pair: Size[2] = ::{ .tiny, .large }
+    assert(count_large(one@, Size[]::SIZES, pair) == 4, "a pointer, an element and a loop variable")
+    within: = fn(add: I32; one: Size): I32
+        return add + (1 if one == .large else 0)
+    assert(within.call(1) == 2, "a closure's capture")
     verdict.pass("")
 
 // ==========================================

@@ -8,7 +8,7 @@
 
    | Folder | What runs | The exit code | The suite |
    | :-- | :-- | :-- | :-- |
-   | `ksplc/tests/parse/` | `ksplc/tests/prog/raw_parse.kspl` calling the internal parser directly | **Must be non-zero** (the parser refuses the brace fixture) | `make test-negative` |
+   | `ksplc/tests/parse/` | `ksplc/tests/prog/parse_probe.kspl raw` calling the internal parser directly | **Must be non-zero** (the parser refuses the brace fixture) | `make test-negative` |
    | `ksplc/tests/negative/` | `ksplc [ARGS] <file> <out.c>` | **Must be non-zero** (the compiler refuses the program) | `make test-negative` |
    | `ksplc/tests/lint/` | `ksplc lint [ARGS] <file>` | Not looked at: lint exits 0 even with diagnostics | `make test-lint` |
    | `ksplc/tests/runtime/` | The compile must pass; then it links and runs the program and matches its own output | **Must be non-zero** (this folder pins down stopping at run time) | `make test-runtime` |

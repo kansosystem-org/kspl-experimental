@@ -66,7 +66,7 @@ These reading rules settle cases the notation leaves open:
 * A code span ends at the next run of exactly as many backticks. One space at each end is dropped when both ends have one. The writer chooses the shortest run that the code does not hold.
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
 * A clause's kind follows `:::` at once, and its attributes come in any order. The writer writes them in a fixed order with one space: `name`, `caption`, `char_widths`, `heights`, `formats`, `choices`, `color_rows`, `rules`, `merge`, `groups`, `filter`; `path`; `src`, `alt`, `caption`, `width`. A table row outside a table clause is refused.
-* Any clause may take `invisible="printing"`, written last, which leaves its block out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). It has one value, so a misspelt one is refused.
+* A table, chart, diagram, image or include clause may take `invisible="printing"`, written last, which leaves its block out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). The other clauses refuse it. It has one value, so a misspelt one is refused.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one.
 * A cell's spaces are trimmed. The writer puts one space on each side of a value, and writes an empty cell as `| |`.
@@ -254,7 +254,7 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 pub fn round(x: F64, places: I64): F64!Calc_error
 ```
 
-* **One set of rules converts every argument** (`ksmd/calc/args.kspl`). An `F64` takes a number, and an empty cell is 0; text there is `#VALUE!`. An `I64` takes a whole number, and a fraction is `#NUM!`. A `Value[]`, last, takes the arguments left, a range alone giving its numbers. A `T?`, last, may be left out.
+* **One set of rules converts every argument** (`ksmd/calc/args.kspl`). An `F64` takes a number, and an empty cell is 0; text there is `#VALUE!`. An `I64` takes a whole number, and a fraction is `#NUM!`. A `Value[]`, last, takes the arguments left, each a number or a date, a range alone giving its numbers and dates. A `T?`, last, may be left out.
 * **An argument holding an error is the result**, the leftmost first, and the function is not called. An error the function throws (`!Calc_error`) is the cell's mark.
 * **The table that calls them is written from their signatures** (`ksmd/calc/glue.kspl`, `make ksmd-functions`). So a function is added by writing it, and nothing else names it.
 * **Eight forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, and `sum_product` pairs two ranges' cells. `today` reads the date the document opened, and `name` reads a column's name. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
@@ -327,7 +327,10 @@ A cell's value is empty, a number, text, `true` or `false`, or an error. A formu
 * **Kinds are never converted into each other.** Text and `true` or `false` in arithmetic are `#VALUE!`, even text that looks like a number. A `true` counted as 1 would give a total that looks right and is not.
 * **`and`, `or` and `not` take only `true` and `false`.** A number or text there is `#VALUE!`; an empty cell is `false`.
 * **Two values of different kinds are unequal.** `=` gives `false` and `<>` gives `true`. Ordering them is `#VALUE!`: an order between a number and text would hide a mistake.
-* **An empty cell takes the kind of the other side: 0, empty text or `false`.** So `A1 = ""` and `A1 = 0` both hold for an empty A1.
+* **An empty cell takes the kind of the other side: 0, empty text, `false`, or a day before every date.** So `A1 = ""` and `A1 = 0` both hold for an empty A1, and `if(E1 < today(), "late", "")` gives "late" for an empty E1.
+  * Why the day before every date: a due date not yet written counts as passed, as a blank counts as 0 against a number. Excel and LibreOffice Calc give the same answer, so a sheet brought from them keeps its marks. An error here would turn a whole `sum_if` over a column with one blank date into `#VALUE!`.
+* **Two numbers are equal when the 15 digits they show agree** (`shows_same` in `ksmd/model/format.kspl`). So `0.1 + 0.2 = 0.3` is `true`, as both show 0.3. `<`, `<=`, `>`, `>=` and `<>` follow the same rule, so `0.1 + 0.2 > 0.3` is `false`.
+  * Why: a person reads the 15 digits, and a comparison that disagreed with what both cells show would look wrong. The display, `round_down` and `text` already use those digits. Excel, LibreOffice Calc and Google Sheets all compare so.
 * **Text compares without regard to case,** in the order the sort uses: letters A to Z, then other bytes by their value. `false` comes before `true`.
 * **`and` calculates its right side only when its left side is `true`, and `or` only when it is `false`.** An error or a wrong kind on the left decides too.
 * **`if(condition, then, else)` calculates only the branch it takes.** An error in the condition is the result.
@@ -337,7 +340,7 @@ A cell's value is empty, a number, text, `true` or `false`, or an error. A formu
 * **`places` is a whole number from -15 to 15; anything else is `#NUM!`.** `round(1250, -2)` is 1300.
 * **`round_down` cuts toward zero and `round_up` away from it**, taking `places` as `round` does. They cut the 15 significant digits a person reads, so `round_down(0.1 + 0.2, 1)` is 0.3.
 * **Only those 15 digits are rounded first**, so `round_down(0.99999999, 0)` is 0 and `round_up(1.0000001, 0)` is 2.
-* **A reference alone as a function argument is a set of cells.** The function leaves out the set's empty cells, text, and `true` and `false`. Any other argument calculates as arithmetic, so `sum(A1+0)` with text in A1 is `#VALUE!`.
+* **A reference alone as a function argument is a set of cells.** The function leaves out the set's empty cells, text, and `true` and `false`. Any other argument calculates as arithmetic, so `sum(A1+0)` with text in A1 is `#VALUE!`. A date stays a date, so `max(A1, today())` gives the later day.
 * **`min`, `max` and `average` of no numbers are `#EMPTY!`, not 0**, while `sum` and `count` of none are 0. A zero would hide that a column holds no data yet.
 * **An error in a referenced cell carries into every formula that uses it, `count` included.**
 * **Of two errors, the left one in the formula comes first**, and in a range the first in reading order.
@@ -403,7 +406,7 @@ Each error has its own mark, since each is fixed differently.
 **`lookup(key, keys, values, otherwise)` gives the value beside the first key that equals `key`**, an exact-match lookup. `=lookup(A1, prices.A1:A50, prices.B1:B50, 0)` finds a price by its code.
 
 * **`keys` and `values` are ranges of one column, or of one row, as long as each other.** Any other shape is `#SHAPE!`.
-* **A match is exact.** Text equals text without regard to case, as the sort and the filter compare it. A number equals the same number. No nearest match is guessed.
+* **A match is exact.** Text equals text without regard to case, as the sort and the filter compare it. A number equals a number that shows the same 15 digits, as `=` compares them. No nearest match is guessed.
 * **`otherwise` is required, and calculated only where no key matches.** A missing key then shows what the writer chose, never an error nobody planned for.
 * **An error in `key` is the result.** A key cell holding an error is passed over, but a key on a cycle before the match makes the lookup `#CYCLE!`. Passed over, it would hide the cycle.
 
@@ -535,7 +538,7 @@ The text functions are `char`, `mid`, `left`, `right`, `len`, `find`, `like`, `v
 ```
 
 * **An entry is a condition, `;`, then the colours.** `<5` is below 5, `>5` above 5, `=5` or `=Done` equal to it, and `empty` an empty cell. `color:` is the text's colour and `fill:` the background's, one or both.
-* **The rule reads each cell's calculated value**, and compares text without regard to case.
+* **The rule reads each cell's calculated value**, and compares text without regard to case. It compares a number as `=` and `<` do in a formula, at the 15 digits it shows. So `=0.3` colours a cell that holds `=0.1+0.2`, and `>0.3` does not.
 * **The rule's colours stand over the cell's own look** while the rule holds.
 * **`scale;from:#ffffff to:#ffef9c` is a colour scale.** The least number takes the first fill and the greatest the second, with the numbers between in between. A large workload stands out at a glance.
 * **The columns that hold the same scale share one least and one greatest number.** So a block of months compares as one, as a scale over a range does in a spreadsheet. A cell that holds no number is not filled.
@@ -620,10 +623,19 @@ Each row and column of a table holds an identity that the source does not show. 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
 * **A whole column holds no row.** Rows inserted, removed or moved anywhere only change how many it takes. Its column follows as a range's does.
 * **A moved block of cells moves a whole column only when the block holds every data row.** So a column cut by its letter and pasted on another takes `A` and `t.A` with it, as Excel moves `A:A`. A whole column written over by such a block becomes `#REF!`, and a block of some rows leaves it alone.
-* **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
-* **A sort moves each row with its identity.** A formula keeps naming the cells it named before, so `=B1*C1` in row 1 still names its own row after the sort.
+* **A range's corner follows its row or column.** When a corner's row moves by an insertion or a move, the range spans the corners' new places.
+* **A sort moves each row with its identity, and each formula on a sorted row moves as a copy, as in Excel** (`move_as_copies` in `ksmd/edit/sort.kspl`). The formula is written again at its row's new place. A row part without `$` of a reference into the sorted table shifts as far as the row moved, and a part with `$` keeps its place.
+  * So `=B1*C1` and `=sum(B1:C1)` stay their own row's figures. A running total `=sum(B$1:B3)` that lands on row 1 becomes `=sum(B$1:B1)`, so it still runs in the new order. `=B1-B$1` still compares its row with the first row.
+  * A reference or range that the shift would take outside the table keeps its places, where a copy would give `#REF!`. So `=sum(A1:A3)` on row 1 that lands on row 3 stays `=sum(A1:A3)`.
+  * A reference into another table keeps its cells, since that table's rows stay where they stood.
+  * Why: a formula on a sorted row is written for its row: `B3` on row 3 means "this row" and `B2` "the row above". Only a copy keeps that meaning in the new order. The person who wants fixed rows writes `$`, as in every spreadsheet.
+* **A formula in another table keeps naming what it named** (`keep_ranges` in `ksmd/edit/sort.kspl`). The sorted rows are not its own, so it has no row to move with.
+  * A reference to one cell follows its cell, so `=t.B1` still names the same item after the sort.
+  * A range within one row follows its row, as one cell does. So `=sum(t.B1:C1)` still adds that item's figures.
+  * A range over several rows stays on its places. So `=sum(t.B1:B5)` still adds the first five rows.
+  * Why: a total over rows 1 to 5 means that block, whatever order its rows stand in. Corners that followed their rows would land anywhere in the new order, and the total would add other rows without a word. Excel too leaves such a range on its places.
 * **Removal turns a reference to the removed line into `#REF!`.** A range's corner on that line moves one line toward the other corner. A range with no line left becomes `#REF!`.
-* **`$` acts only on copying.** A copy shifts each part without `$` by the distance copied, and a part with `$` keeps its row or column. A shift outside the table gives `#REF!`.
+* **`$` acts only on copying, and on a sort, which moves a sorted row's formulas as copies.** A copy shifts each part without `$` by the distance copied, and a part with `$` keeps its row or column. A copy's shift outside the table gives `#REF!`, and a sort's keeps the places.
 * **A reference without a table's name names a cell or a whole column of the table that holds the formula.** So a copy into another table names a cell or a column there. The writer keeps it without the name, also after a move.
 * **A paste of cells copied in the page moves their formulas by the same rule.** The copy carries each formula as typed, and the place it was copied from. So the paste works from the text, in another table or another document (`shift_formula` in `ksmd/calc/formula.kspl`). A reference to a table that document lacks stays as written.
 * **A reference that names no cell stays as written,** such as `Z9` in a four-column table. It attaches once that cell exists: after an insertion, and when the source is read again.

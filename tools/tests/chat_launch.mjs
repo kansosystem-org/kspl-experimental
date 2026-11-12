@@ -11,12 +11,11 @@ import fs from "fs";
 import http from "http";
 import net from "net";
 import path from "path";
-import { verdict } from "../../ksmd/tests/browser/drive.mjs";
+import { verdict, wait, waitFor } from "../../ksmd/tests/browser/drive.mjs";
 import { freePort, place, standIn, standInProgram } from "./chat_support.mjs";
 
 const [launcherBuilt, work] = process.argv.slice(2);
 const check = (ok, what, detail = "") => verdict.check(ok, what, detail);
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // How long a stopped server may take to be gone. **Only a server never stopped reaches it**: on a
 // busy machine a process can take seconds to end.
 const STOP_WAIT_MS = 60000;
@@ -43,13 +42,6 @@ function start(args, env = {}) {
   child.stderr.on("data", take);
   child.ended = new Promise((resolve) => child.on("close", (code) => { child.code = code; resolve(code); }));
   return child;
-}
-
-async function until(test, ms) {
-  for (const end = Date.now() + ms; Date.now() < end; await wait(100)) {
-    if (test()) return true;
-  }
-  return test();
 }
 
 const ended = (child, ms) => Promise.race([child.ended.then(() => true), wait(ms).then(() => false)]);
@@ -159,7 +151,7 @@ async function neverReady() {
   check(c.code === 1 && /was not ready after \d+ seconds, so it was stopped/.test(c.seen),
     "it says so", c.seen);
   check(/still loading/.test(c.seen) || /waiting for llama-server/.test(c.seen), "it said it waited", c.seen);
-  check(await until(() => !alive(pidOf(file)), STOP_WAIT_MS), "the server it started is stopped");
+  check(await waitFor(() => !alive(pidOf(file)), STOP_WAIT_MS), "the server it started is stopped");
 }
 
 async function crashes() {
@@ -177,7 +169,7 @@ async function startReuseStop() {
   const file = model(FIRST, "ready");
   const port = await freePort();
   const a = start(["--show", ...asMake(port)]);
-  check(await until(() => /ready\. Ask on the page/.test(a.seen), 30000), "the launcher gets ready", a.seen);
+  check(await waitFor(() => /ready\. Ask on the page/.test(a.seen), 30000), "the launcher gets ready", a.seen);
   check(/nothing answers at .*so this command starts one/.test(a.seen) &&
     /starting llama-server on data\/.*\(it is on PATH, and uses the graphics card\)/.test(a.seen) &&
     /waiting for llama-server to load/.test(a.seen) && /model server: ready at/.test(a.seen),
@@ -198,7 +190,7 @@ async function startReuseStop() {
     '{"type":"question","id":"00000000-0000-4000-8000-000000000001","text":"Who holds the key?"}\n');
   const chat = path.join(folder, "keyed.chat.jsonl");
   const said = () => (fs.existsSync(chat) ? fs.readFileSync(chat, "utf8") : "");
-  check(await until(() => said().includes("\"state\":\"not_found\""), 30000),
+  check(await waitFor(() => said().includes("\"state\":\"not_found\""), 30000),
     "ksagent watch asks with the key, and gets the answer", said());
 
   const b = start(["--show", ...asMake(port)]);
@@ -218,7 +210,7 @@ async function startReuseStop() {
   if (w) process.kill(w.pid, "SIGTERM");
   check(await ended(a, 10000), "the launcher ends with its watch", a.seen);
   check(/stopped llama-server, which this command started/.test(a.seen), "it says it stopped it", a.seen);
-  check(await until(() => !alive(server), STOP_WAIT_MS), "the server it started is stopped");
+  check(await waitFor(() => !alive(server), STOP_WAIT_MS), "the server it started is stopped");
   check(!fs.existsSync(keyFile), "and its key file is deleted");
 }
 
@@ -227,14 +219,14 @@ async function modelOnlyInterrupted() {
   const file = model(FIRST, "ready");
   const port = await freePort();
   const c = start(["--model-only", "--model-file=", `--port=${port}`]);
-  check(await until(() => /ksagent ask and eval reach it at/.test(c.seen), 30000), "the server alone gets ready",
+  check(await waitFor(() => /ksagent ask and eval reach it at/.test(c.seen), 30000), "the server alone gets ready",
     c.seen);
   const told = `need its API key in KSAGENT_API_KEY. The key stands in ${keyFileOf(port)}`;
-  check(await until(() => c.seen.includes(told), 5000), "it says where its key stands", c.seen);
+  check(await waitFor(() => c.seen.includes(told), 5000), "it says where its key stands", c.seen);
   const server = pidOf(file);
   stop(c);
   check(await ended(c, 10000), "Ctrl+C ends the launcher", c.seen);
-  check(await until(() => !alive(server), STOP_WAIT_MS), "and the server it started");
+  check(await waitFor(() => !alive(server), STOP_WAIT_MS), "and the server it started");
 }
 
 async function fallback() {
@@ -249,7 +241,7 @@ async function fallback() {
     "with chat_server not built either, it stops and names both ways out", none.seen);
   standInProgram(path.join(path.dirname(launcher), "chat_server.exe"));
   const c = start(["--show", ...asMake(port)], { PATH: bare.join(":") });
-  check(await until(() => /ready\. Ask on the page/.test(c.seen), 30000), "the launcher gets ready", c.seen);
+  check(await waitFor(() => /ready\. Ask on the page/.test(c.seen), 30000), "the launcher gets ready", c.seen);
   check(/starting chat_server on data\/.*since llama-server is not on PATH\. It runs on the CPU only/
     .test(c.seen), "it says it uses chat_server, and that it is slow", c.seen);
   const argv = JSON.parse(fs.readFileSync(`${file}.argv`, "utf8"));
@@ -259,7 +251,7 @@ async function fallback() {
   const server = pidOf(file);
   stop(c);
   await ended(c, 10000);
-  check(await until(() => !alive(server), STOP_WAIT_MS), "Ctrl+C stops it too");
+  check(await waitFor(() => !alive(server), STOP_WAIT_MS), "Ctrl+C stops it too");
 }
 
 let launcher = "";

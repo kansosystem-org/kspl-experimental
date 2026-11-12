@@ -147,7 +147,9 @@ impl Raw_args
 
     pub fn rest(a: Self$@): Value[] //<
         //< One argument or more: a reference alone gives its numbers, dates and errors, and leaves
-        //< out empty cells, text and `true`/`false`; any other argument is a number
+        //< out empty cells, text and `true`/`false`; any other argument is a number or a date
+        //< A date stays a date, so `max(A1, today())` compares days. `sum` and `average` refuse
+        //< a date themselves, with their own reason.
         $xs: = List<|Value|>(a.memory)
         if a.used == a.args.len
             a.misread = true
@@ -155,7 +157,7 @@ impl Raw_args
             one: = a.args[a.used]
             a.used += 1
             if !one.is_cells
-                v: = operand(one.value)
+                v: = one.value if one.value.kind == .date else operand(one.value)
                 if v.kind == .error
                     _e: = a.refuse(one.value, .wrong_kind, .wants_number)
                 xs.push(v)

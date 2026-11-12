@@ -9,9 +9,9 @@ import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
-import "tests/support/conventions_ci" as ci_layout
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
+import "tools/ci_gates"
 import "tools/make_db"
 
 priv const SUITE_FOUND: U8[] = "suite_found" //< the variable that holds a folder's suite names
@@ -148,12 +148,7 @@ priv fn package_of(rel: U8[], dirs: List<|U8[]|>@): U8[] //<
 
 priv fn shard_target(t: U8[], arena: Arena$@): Bool //<
     //< a section named by the CI's canonical table
-    if !t.starts_with("ci-shard-")
-        return false
-    for v in ci_layout.set_variants(harness.read_under_root("tools/ci_gates.kspl"), arena)
-        if v.starts_with("ci_shard_") && v.replace("_", "-", arena).equals(t)
-            return true
-    return false
+    return t.starts_with("ci-shard-") && ci_gates.set_from(t, arena).is_some()
 
 priv fn makes(r: Rules@, t: U8[], family: Bool, arena: Arena$@): Bool //<
     //< whether these rules make the target
@@ -167,6 +162,50 @@ priv fn makes(r: Rules@, t: U8[], family: Bool, arena: Arena$@): Bool //<
         if p.starts_with(t)
             return true
     return false
+
+struct Asked //< the rules of each folder make was asked for, so each is asked once
+    dirs: List<|U8[]|>$@
+    rules: List<|Rules|>$@
+
+impl Asked
+    fn makes_in(a: Self$@, place: U8[], t: U8[], family: Bool, arena: Arena$@): Bool //<
+        //< Whether the `Makefile` in `place` (empty: the root) makes the target
+        //< A forwarded suite is one the folder it goes to finds (`SUITE_FOUND`).
+        $k: Sz = a.dirs.len
+        for i in Range.asc(a.dirs.len)
+            if a.dirs.get(i).equals(place)
+                k = i
+        if k == a.dirs.len
+            a.dirs.push(place)
+            a.rules.push(rules_of(place, arena))
+        r: = a.rules.get(k)
+        if makes(r@, t, family, arena)
+            return true
+        for f in FORWARDS
+            if f.suites && f.dir.equals(place) && t.starts_with("test-") &&
+                names(r.suites, t.sub_from(5), family)
+                return true
+        return false
+
+    fn makes_at_root(a: Self$@, t: U8[], arena: Arena$@): Bool //<
+        //< Whether `make <t>`, typed at the root, names a target
+        for place in root_places(t, arena)
+            if a.makes_in(place, t, false, arena)
+                return true
+        return false
+
+priv fn root_places(t: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< Where `make <t>` at the root is made: the root, and each folder a pattern forwards it to
+    $out: = List<|U8[]|>(arena)
+    out.push("")
+    for f in FORWARDS
+        if t.starts_with(f.pattern.sub(0, f.pattern.len - 1))
+            out.push(f.dir)
+    return out
+
+fn asked(arena: Arena$@): Asked //< no folder asked yet
+    return Asked::{ .dirs = List<|U8[]|>.create(arena),
+        .rules = List<|Rules|>.create(arena) }
 
 priv const MENTION_SAMPLES: scan.Sample[_] = ::{
     scan.Sample::{ .text = "make test-docref", .hits = true },
@@ -217,35 +256,20 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     for rel in tracked
         if rel.ends_with(".md") && !harness.is_private_doc(rel, private@)
             read_mentions(rel, harness.read_under_root(rel), mentions@, arena)
-    $seen_dirs: = List<|U8[]|>(arena)
-    $seen_rules: = List<|Rules|>(arena)
+    $asked: = asked(arena)
     for m in mentions
-        $places: = List<|U8[]|>(arena)
-        places.push(m.dir)
+        $places: = root_places(m.target, arena)
+        if m.dir.len > 0
+            places = List<|U8[]|>(arena)
+            places.push(m.dir)
         own: = package_of(m.rel, dirs@)
         if m.dir.len == 0 && own.len > 0
             places.push(own)
-        for f in FORWARDS
-            if m.dir.len == 0 &&
-                m.target.starts_with(f.pattern.sub(0, f.pattern.len - 1))
-                places.push(f.dir)
         if m.owned
             places.push_all(dirs.slice())
         $ok: = false
         for place in places
-            $k: Sz = seen_dirs.len
-            for i in Range.asc(seen_dirs.len)
-                if seen_dirs.get(i).equals(place)
-                    k = i
-            if k == seen_dirs.len
-                seen_dirs.push(place)
-                seen_rules.push(rules_of(place, arena))
-            r: = seen_rules.get(k)
-            ok = ok || makes(r@, m.target, m.family, arena)
-            // A forwarded suite is one the folder it goes to finds (`SUITE_FOUND`).
-            for f in FORWARDS
-                if f.suites && f.dir.equals(place) && m.target.starts_with("test-")
-                    ok = ok || names(r.suites, m.target.sub_from(5), m.family)
+            ok = ok || asked.makes_in(place, m.target, m.family, arena)
         if !ok
             bad
                 .push(arena.text().s(m.rel).s(":\{m.line\}: `make ").s(m.target)

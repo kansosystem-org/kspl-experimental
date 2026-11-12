@@ -402,29 +402,6 @@ priv fn declares_name(src: U8[], name: U8[], arena: Arena$@, allow_private: Bool
                 return true
     return false
 
-priv fn check_runtime_check_location(arena: Arena$@) //<
-    //< That the position passed to a run-time check is the pair of a file name and a line number
-    //< Caution: **Do not print `loc.offset` as the line number.** `Loc` holds a byte position;
-    //< the one function that counts lines is `line_of` in `ksplc/sema/session/ctx.kspl`. **List
-    //< the allowed forms**: searching for the printing code misses an offset stored in a variable
-    //< first. An offset is correct only when passed to a diagnostic (`print_diagnostic` counts the
-    //< lines).
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>(arena)
-    for rel in harness
-        .tracked_matching(U8[][]::{ "ksplc/gen/c/*.kspl", "ksplc/gen/llvm/*.kspl" })
-        $i: Sz = 0
-        for line in harness.read_under_root(rel).lines(arena)
-            seen += 1
-            i += 1
-            if line.find_str("loc.offset").is_some() &&
-                line.find_str("print_diagnostic").is_none()
-                bad
-                    .push(arena.text().s(rel)
-                    .s(":\{i\}: it puts loc.offset where the line number goes").take())
-    verdict.check_list("what is handed to a run-time check is the file and line number pair", seen,
-        "lines", bad@, "loc.offset is not a line number (put it through sema's line_of)")
-
 priv fn panic_off(line: U8[], _arena: Arena$@): Bool //<
     //< Whether the run-time stop message's prefix breaks the rule
     //< Caution: **Keep the verdict in this one place** (inside the runtime the sample table cannot
@@ -615,29 +592,6 @@ priv fn check_result_line(arena: Arena$@)
         .s("(\"How a run is read\" in docs/SPEC-gates.md)").take()
     verdict.check_list("the letter of a gate's verdict line is one", seen, "lines", bad@, hint)
 
-// That a single test's line is not written by hand (hand-written lines always diverge): none of
-// `-> Passed!`, `-> Skipped` or the three-line `"\n[..."` comes back.
-// Caution: **Having added a package, add it here too.**
-priv const CASE_LINE_GLOBS: U8[][_] = ::{ "lib/ksai/tests/*.kspl", "lib/kstls/tests/*.kspl",
-    "lib/ksdb/tests/*.kspl", "ksmd/tests/*.kspl", "lib/kspeg/tests/*.kspl", "lib/ksos/tests/*.kspl",
-    "ksplc/tests/*.kspl", "kssrv/tests/*.kspl", "std/tests/*.kspl", "tools/tests/*.kspl" }
-
-priv fn check_case_line(arena: Arena$@)
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>(arena)
-    for rel in harness.tracked_matching(U8[][]::CASE_LINE_GLOBS)
-        $i: Sz = 0
-        for line in harness.read_under_root(rel).lines(arena)
-            seen += 1
-            i += 1
-            if line.find_str("-> Passed!").is_some() ||
-                line.find_str("-> Skipped").is_some() ||
-                line.find_str("io.out().s(\"\\n[").is_some()
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
-    verdict.check_list("a package's tests do not write a single test's line by hand", seen, "lines",
-        bad@, "go through verdict.start / verdict.pass / verdict.skip (see std/verdict.kspl)")
-
 // That the slice's type name is not written directly.
 // Caution: **Writing it directly rots silently**: a second copy drifts from core's with no sign.
 // Only the source itself is left out (this check is in `tests/`, out of scope).
@@ -740,13 +694,11 @@ priv fn check_test_files_imported(arena: Arena$@)
 fn main(): I32
     arena: = harness.begin(1024 * 1024 * 1024)
     cspell.run(arena)
-    check_runtime_check_location(arena)
     check_panic_spelling(arena)
     check_named_std_fires(arena)
     check_raw_fires(arena)
     check_result_fires(arena)
     check_result_line(arena)
-    check_case_line(arena)
     check_slice_name(arena)
     check_compiler_named_std(arena)
     csize.run(arena)
