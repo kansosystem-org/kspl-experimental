@@ -1,10 +1,12 @@
 //< `ksagent eval`: reading a questions file, and scoring each answer
-import "ksagent/answer" { Answer, Lang, Source }
+import "ksagent/answer" + { Answer, Lang, Source }
 import "ksagent/evaluate"
+import "ksagent/files"
 import "ksagent/tests/agent_test"
 import "ksagent/tests/stub"
 import "std/chars"
 import "std/ds" { List }
+import "std/fs"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -113,3 +115,35 @@ fn test_eval_runs_each_question(work: U8[], arena: Arena$@)
         doc.starts_with("%ksmd 2\n") && doc.find_str(":::table name=\"eval\"").is_some() &&
         doc.find_str("| 2 | \"社員食堂は何時に開きますか?\" | \"none\" | \"pass\" |")
         .is_some(), doc)
+
+fn test_eval_leaves_out_its_questions_and_its_table(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] eval's tools leave out its questions file and its table's file")
+    // The command the README gives puts both in the folder asked about. A question is no
+    // evidence, and an earlier table holds the model's own answers.
+    root: = stub.folder(work, "eval-left-out", arena)
+    said: = "## Question\n\nHow much paid leave does a new employee get?\n\nExpect: none\n"
+    fs.write_tree(root, U8[][]::{ "rules/questions.md", "eval.ksmd" }, U8[][]::{ said, said },
+        arena) catch panic("the questions and the table can be written")
+    questions: = fs.join(root, "rules/questions.md", arena)
+    table: = fs.join(root, "eval.ksmd", arena)
+    job: = agent_test.job_at(1, root, arena)
+    folder: = evaluate.leaving_out(job, questions, table, arena).folder
+    listed: = files.tool_list(folder, "", stub.ROOM, arena)
+    rules: = files.tool_list(folder, "rules", stub.ROOM, arena)
+    hits: = files.tool_search(folder, "new employee", "", stub.ROOM, arena)
+    verdict.check("a listing and a search leave both out, and still find the rules",
+        listed.find_str("eval.ksmd").is_none() && rules.find_str("questions.md").is_none() &&
+        hits.find_str("questions.md").is_none() && hits.find_str("eval.ksmd").is_none() &&
+        hits.find_str("rules/leave.md:3:").is_some(), hits)
+    for name in U8[][]::{ "rules/questions.md", "./eval.ksmd", "rules/QUESTIONS.md" }
+        got: = files.tool_read(folder, name, 1I64, 5I64, stub.ROOM, arena)
+        verdict.check(arena.text().s("reading ").s(name).s(" is refused").take(),
+            got.starts_with("refused: eval leaves this file out"), got)
+    $out: = Source::{ .path = "", .from_line = 0I64, .to_line = 0I64, .quote = "" }
+    cited: = Source::{ .path = "rules/questions.md", .from_line = 3I64, .to_line = 3I64,
+        .quote = "How much paid leave does a new employee get?" }
+    why: = answer.check_source(folder, cited, out@, arena)
+    verdict.check("a source in the questions file fails the check",
+        why.starts_with("eval leaves"), why)
+    plain: = answer.check_source(files.Folder(root), cited, out@, arena)
+    verdict.check("outside eval, the same file is an ordinary file", plain.len == 0, plain)

@@ -10,7 +10,7 @@
 
 **An API key comes only from the environment variable `KSAGENT_API_KEY`**, sent as `Authorization: Bearer`. No option takes it, since the command line shows in the process list.
 
-**The llama-server that `make model-server` or `make chat` starts asks for a key.** Without one, any web page could ask it. The key is new at each start, and stands in `out/tmp/model.<port>.key` until the server stops. `make model-server` prints where; `make chat` gives it to ksagent itself.
+**The llama-server that `make model-server` or `make chat` starts asks for a key.** Without one, any web page could ask it. The key is new at each start, and stands in `out/tmp/model.<port>.key` until the server stops. `make model-server` prints where; `make chat` gives it to ksagent itself. **The next `make chat` or `make model-server` deletes a key file left behind** where its server is gone. It then tries `KSAGENT_API_KEY`.
 
 ## `ask`, `watch` and `eval`
 
@@ -73,7 +73,7 @@ A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neithe
 | `--dir=<folder>` | The folder to ask about; `make chat DIR=<folder>` gives it | Stops, and says how to name one |
 | `--model-file=<file>` | The model file in `data/` to start; `make chat MODEL=<file>` gives it | The first model in [`data/README.md`](../../data/README.md) |
 | `--port=<n>` | The model server's port on this machine, used where one answers, otherwise started; `make chat PORT=<n>` gives it | 8081, where ksagent asks by default |
-| `--model-wait=<seconds>` | How long a model server can take to load its model | 600 |
+| `--model-wait=<seconds>` | How long a model server can take to load its model: 1 or more | 600 |
 | `--model-only` | Starts the model server alone, until Ctrl+C; `make model-server` gives it | |
 | `--show`, `--list`, `--stop=<folder>`, `--stop-all` | As for ksmd's opener: the whole URL with no browser, and the chat servers left running | |
 
@@ -86,6 +86,7 @@ A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neithe
 * **New conversation** starts another conversation. The list on the left holds every conversation at the top of the folder.
 * **The last 4 questions and answers**, up to 16 KiB, go with a new question as the conversation so far.
 * **When the model server cannot be reached or fails, the answer says so in one line.** Run `make chat` again, then press Ask again.
+* **When ksagent stops while it writes an answer**, as at Ctrl+C, the answer says within about 15 seconds to check that `ksagent watch` runs. Run `make chat` again: the question is asked again.
 
 ### A conversation's files
 
@@ -119,6 +120,7 @@ Expect: none
 * `Expect: <path> <from>-<to>` names the file under the folder and the lines that hold the answer.
 * `Expect: none` says the files do not hold the answer. **Include such questions**: they show whether a model invents an answer rather than say it found none.
 * Write the questions as the people who will use ksagent would ask them, in their words.
+* **The questions file and the `--out` file can stand in the folder.** The tools leave both out while `eval` runs, and a source in either fails the check.
 
 `eval` prints a table, one row per question:
 

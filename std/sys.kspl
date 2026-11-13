@@ -377,7 +377,7 @@ pub enum Path_refusal //< why a path given from outside is refused (`fs.join_und
     colon //< a `:`, which starts a drive, or on Windows a stream (`x::$DATA` gives `x`)
     trailing_dot_or_space //< a segment that ends in `.` or a space, which Windows drops
     device //< a name Windows opens as a device at any level (`CON`, `NUL`, `COM1`, `LPT1.txt`)
-    short_name //< a `~` before a digit, the form of a Windows short name (`GIT~1` for `.git`)
+    short_name //< a name shaped like a Windows short name (`GIT~1` for `.git`)
     wildcard //< `*`, `?`, `<`, `>`, `"` or `|`, which Windows reads as a pattern or refuses
     link //< a link or a junction stands on the way, which could lead out of the root
     hidden //< a name starts with a dot (`.git`, `.env`), and the caller keeps those back
@@ -403,7 +403,7 @@ impl Path_refusal
         case .device
             return "a name is one Windows opens as a device (such as CON or COM1)"
         case .short_name
-            return "a name has `~` before a digit, the form of a Windows short name"
+            return "a name has the form of a Windows short name (such as PROGRA~1 or A~1.TXT)"
         case .wildcard
             return "it holds a wildcard (`*`, `?`, `<`, `>`, `\"` or `|`)"
         case .link
@@ -413,9 +413,9 @@ impl Path_refusal
 
 pub fn outside_path_refusal( //< why a relative path from outside is refused by its text alone
     //< The text half of `fs.join_under`, **which is what a caller uses**: it adds the link check.
-    //< It refuses what `is_safe_relative` refuses, and also a `\`, an empty segment, a short
-    //< name's `~1` and a wildcard, **on every OS**: one test on Linux then holds for Windows. Why
-    //< each is refused is "A path from outside goes through one door" in
+    //< It refuses what `is_safe_relative` refuses, and also a `\`, an empty segment, a name
+    //< shaped like a short name and a wildcard, **on every OS**: one test on Linux then holds for
+    //< Windows. Why each is refused is "A path from outside goes through one door" in
     //< `std/docs/DESIGN-system.md`.
     path: U8[], //< the path from outside, `/` between its steps
 ): Path_refusal? //< none where the text may be joined under a root
@@ -444,9 +444,30 @@ priv fn outside_segment_refusal(seg: U8[]): Path_refusal? //< one segment's part
         c: = seg[i]
         if c == '*' || c == '?' || c == '<' || c == '>' || c == '"' || c == '|'
             return .some(.wildcard)
-        if c == '~' && i + 1 < seg.len && seg[i + 1].is_digit()
-            return .some(.short_name)
+    if is_short_name_shape(seg)
+        return .some(.short_name)
     return .none
+
+fn is_short_name_shape(seg: U8[]): Bool //< whether a name has the shape of a Windows short name
+    //< That is 1 to 6 ASCII characters, a `~` and digits, 8 at most in all (`PROGRA~1`), then
+    //< perhaps a `.` and 1 to 3 ASCII characters (`A~1.TXT`). Only a name of that shape can open
+    //< another file by its short name. So `budget~2024.md` and `日本語~1.md` are ordinary names.
+    $dot: = seg.len
+    for i in Range.asc(seg.len)
+        if seg[i] >= 0x80U8
+            return false
+        if seg[i] == '.' && dot == seg.len
+            dot = i
+    ext: = seg.len - dot - 1
+    if dot < seg.len &&
+        (ext < 1 || ext > 3 || seg.sub_from(dot + 1).find_char('.').is_some())
+        return false
+    if dot > 8
+        return false
+    $tilde: = dot
+    for tilde > 0 && seg[tilde - 1].is_digit()
+        tilde -= 1
+    return tilde < dot && tilde >= 2 && tilde <= 7 && seg[tilde - 1] == '~'
 
 pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cannot climb out
     //< Caution: **This alone does not keep a path under the root**: a link inside it leads out.
@@ -530,9 +551,20 @@ pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
     //< while waiting.
     return kspl_mono_us()
 
+priv const I64_LAST: I64 = 9223372036854775807I64 //< the largest I64
+priv const I64_FIRST: I64 = -9223372036854775807I64 - 1 //< the smallest I64
+
 pub fn deadline_after_ms(ms: I64): I64 //< the `mono_us` reading `ms` milliseconds from now
     //< **Each caller rounds what is left its own way** (a wait that must not end early rounds up).
-    return mono_us() + ms * 1000I64
+    //< **Past the I64 limits it gives the limit**, so a wait meant to last for good does.
+    now: = mono_us()
+    // Caution: **Compare before multiplying.** `ms * 1000` past the limit wraps, and a deadline
+    // far in the future then stands in the past.
+    if ms > (I64_LAST - (now if now > 0 else 0I64)) / 1000I64
+        return I64_LAST
+    if ms < (I64_FIRST - (now if now < 0 else 0I64)) / 1000I64
+        return I64_FIRST
+    return now + ms * 1000I64
 
 pub fn wall_seconds(): I64 //< the wall clock: the seconds elapsed since 1970-01-01T00:00:00Z
     //< **It is the date and time, not a stopwatch.** NTP or the user can set it back. So a

@@ -114,8 +114,9 @@ priv fn check_const_shift_amount(ctx: Sema_ctx$@, left_type_id: I32, right_node:
     //< Whether the shift amount is outside the left-hand side's width (`<<` `>>` and `<<=` `>>=`)
     //< **This is an error, not a lint**: clang reports `left shift count >= width of type` too.
     //< Without it, the error comes from clang, not ksplc. See "Failing fast through an exception or
-    //< an ICE" in ksplc/docs/DESIGN-compiler.md. No code, as for the division above.
-    if right_node == null || ctx.is_instantiating()
+    //< an ICE" in ksplc/docs/DESIGN-compiler.md. No code, as for the division above. In a
+    //< generic's instance too, against the type argument's width, as a literal's range is.
+    if right_node == null
         return
     // Caution: Keep it an Option. With a default of -1, an amount that really folds to `-1` cannot
     // be told apart from a run-time value.
@@ -248,7 +249,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         case .failed
             return I32::sema_type_env.Builtin_type_id.unknown
         case .builtin {}
-    if refuses_operator_operand(ctx, node, op_text, left_type_id, false)
+    if refuses_operator_operand(ctx, node, op_text, left_type_id, false) ||
+        is_logical && refuses_non_bool_logic(ctx, node, op_text, left_type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
 
     $right_type_id: = right_first_id
@@ -259,7 +261,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     if sema_body_resolve_path.refuse_type_name(ctx, right_node)
         return I32::sema_type_env.Builtin_type_id.unknown
     if refuses_fn_operator(ctx, node, op_text, right_type_id) ||
-        refuses_operator_operand(ctx, node, op_text, right_type_id, false)
+        refuses_operator_operand(ctx, node, op_text, right_type_id, false) ||
+        is_logical && refuses_non_bool_logic(ctx, node, op_text, right_type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
     // A function's name against a value that is no function (`1 == twice`) is reported as a name
     // given a type it does not have.
@@ -282,11 +285,10 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     // An integer literal with no fixed type must fit the type the operation is computed in.
     // Caution: Measure against **the type after promotion**. When the other side is such a literal
     // too, its type is the default I32, which would reject a correct `x: U64 = 4294967296 + 1;`.
-    // report_diagnostic merges a repeated report.
-    if !ctx.is_instantiating()
-        operand_id: = operand_type(ctx, o)
-        sema_body_literal.check_operand_literal_bounds(ctx, left_node, operand_id)
-        sema_body_literal.check_operand_literal_bounds(ctx, right_node, operand_id)
+    // report_diagnostic merges a repeated report. In a generic's instance too (infer_literal_expr).
+    operand_id: = operand_type(ctx, o)
+    sema_body_literal.check_operand_literal_bounds(ctx, left_node, operand_id)
+    sema_body_literal.check_operand_literal_bounds(ctx, right_node, operand_id)
 
     lint_bool_literal_operand(ctx, o)
 
@@ -408,7 +410,29 @@ priv fn refuses_operand_types(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], 
         reject_float_remainder(ctx, node,
         left_type_id if ctx.env.is_float(left_type_id) else right_type_id, written)
         return true
+    // A pointer here is report_bad_pointer_arith's, which lists the forms that do apply.
+    if is_shift || op_text.equals("&") || op_text.equals("|") || op_text.equals("^")
+        return ctx.env.is_float(left_type_id) &&
+            refuses_bit_operand(ctx, node, written, left_type_id) ||
+            ctx.env.is_float(right_type_id) &&
+            refuses_bit_operand(ctx, node, written, right_type_id)
     return false
+
+fn refuses_bit_operand(ctx: Sema_ctx$@, node: Ast_node$@, written: U8[], type_id: I32): Bool //<
+    //< Whether it reported a float or a pointer given to a bit operation or a shift
+    //< **These work on an integer's bits alone.** Let through, `a >> 1` on an `F64` and `~p` on a
+    //< pointer reached the C compiler as `invalid operands`, and LLVM IR that does not build. The
+    //< unary `~` asks here too (`sema/body/expr.kspl`).
+    if !ctx.env.is_float(type_id) && !ctx.env.is_pointer(type_id)
+        return false
+    shown: = ctx.env.display(type_id)
+    ctx.clear_scratch()
+        .s("operator '\{written\}' does not apply to '\{shown\}'. Bit operations and shifts take \
+            integers")
+    if ctx.env.is_float(type_id)
+        ctx.scratch.s("; convert the value first ('I64::x')")
+    ctx.err(node, ctx.scratch.slice())
+    return true
 
 priv fn is_number_op(op_text: U8[], is_shift: Bool): Bool //<
     //< Whether the operator computes a number: arithmetic, a bit operation or a shift
@@ -475,6 +499,29 @@ priv fn op_trait_name(op: U8[], is_unary: Bool): U8[] //< the std/lang trait op 
     if is_unary
         return "Neg" if op.equals("-") else "Not" if op.equals("!") else ""
     return get_op_traits(op).trait_name
+
+fn refuses_non_bool_logic(ctx: Sema_ctx$@, node: Ast_node$@, op: U8[], type_id: I32): Bool //<
+    //< Whether it reported a number, a pointer or a simple enum given to `!`, `&&` or `||`
+    //< **These take a `Bool` alone; nothing converts to one.** Let through, `!n` on an `I32` gave
+    //< 0 through C and `n ^ 1` through LLVM, and `n && m` made IR that does not build. The
+    //< comparison meant is written out instead ("There is no cast to `Bool`" in
+    //< docs/SPEC-programming-language.md). A struct and the like are refuses_operator_operand's.
+    env: = ctx.env
+    if !env.is_numeric(type_id) && !env.is_pointer(type_id) && !env.is_scalar_enum(type_id)
+        return false
+    shown: = env.display(type_id)
+    test: = "==" if op.equals("!") else "!="
+    ctx.clear_scratch()
+        .s("operator '\{op\}' takes a 'Bool', not '\{shown\}'. Nothing converts to 'Bool' by \
+            itself, so write the comparison you mean, such as ")
+    if env.is_pointer(type_id)
+        ctx.scratch.s("'p \{test\} null'")
+    else if env.is_scalar_enum(type_id)
+        ctx.scratch.s("'e \{test\} E.a' with a variant of its type")
+    else
+        ctx.scratch.s("'x \{test\} 0'")
+    ctx.err(node, ctx.scratch.slice())
+    return true
 
 fn refuses_operator_operand(ctx: Sema_ctx$@, node: Ast_node$@, op: U8[], type_id: I32,
     is_unary: Bool): Bool //<
@@ -589,8 +636,7 @@ priv fn refuses_compound_numbers(ctx: Sema_ctx$@, o: Operands, op_text: U8[]): B
                 b' does, and stores into '\{shown\}'. Use an explicit '::' cast")
         ctx.err(o.right, ctx.scratch.slice())
         return true
-    if !ctx.is_instantiating()
-        sema_body_literal.check_operand_literal_bounds(ctx, o.right, calc_type)
+    sema_body_literal.check_operand_literal_bounds(ctx, o.right, calc_type)
     promote_operands(ctx, o)
     return false
 

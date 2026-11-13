@@ -69,6 +69,16 @@ pub fn drop_all() //< as `Arena.free` does, or `mem.Arena`; not `mem.gone` or `i
   return
 """
 
+// A generic type, whose methods are keyed with its parameters (`Box<|T|>.put`).
+priv const BOX_SRC: U8[] =
+    """pub struct Box<|T|> //< holds one value
+  v: T
+
+impl Box<|T|>
+  pub fn put(r: Self$@, v: T) //< replaces the value
+    r.v = v
+"""
+
 // Two declarations whose headings reduce to one anchor.
 priv const MATH_SRC: U8[] =
     """#cfg(!freestanding)
@@ -108,10 +118,10 @@ fn main(): I32
     io.out().s("# ksplc doc: a file, an entry, a folder\n")
     dir: = harness.sandbox("doc")
     names: = U8[][]::{ "pk/argparse.kspl", "pk/inner.kspl", "pk/run.kspl", "pk/mem.kspl",
-        "pk/math.kspl", "pk2/broken.kspl", "pk2/fine.kspl" }
+        "pk/math.kspl", "pk2/broken.kspl", "pk2/fine.kspl", "pk/box.kspl" }
     fs.write_tree(dir, names,
-        U8[][]::{ ARGPARSE_SRC, INNER_SRC, RUN_SRC, MEM_SRC, MATH_SRC, BROKEN_SRC, FINE_SRC }, arena)
-        catch
+        U8[][]::{ ARGPARSE_SRC, INNER_SRC, RUN_SRC, MEM_SRC, MATH_SRC, BROKEN_SRC, FINE_SRC,
+        BOX_SRC }, arena) catch
             return harness.fatal("cannot place the material")
 
     // **One file, its own entries**: a type at the second level, its member one step in.
@@ -131,6 +141,16 @@ fn main(): I32
     one: = doc(dir, U8[][]::{ "pk/argparse.Parser.flag" }, arena)
     harness_markers.check("a member asked for comes alone", U8[][]::{ "### `Parser.flag`" },
         U8[][]::{ "\n## `Parser`\n" }, one.out)
+
+    // **A generic type is named bare**, as code calls it: its methods are keyed `Box<|T|>.put`.
+    gen: = doc(dir, U8[][]::{ "pk/box.Box" }, arena)
+    harness_markers.check("a generic type asked for by name comes with its methods",
+        U8[][]::{ "## `Box`", "### `Box<|T|>.put`" }, none, gen.out)
+    for spelling in U8[][]::{ "pk/box.Box.put", "pk/box.Box<|T|>.put" }
+        put: = doc(dir, U8[][]::{ spelling }, arena)
+        harness_markers.check("a generic type's method is found with or without its parameters",
+            U8[][]::{ "### `Box<|T|>.put`" }, U8[][]::{ "\n## `Box`\n", "publishes nothing" },
+            put.out)
 
     // **A folder lists each file that publishes**, with its count; the file's own row is no entry.
     list: = doc(dir, U8[][]::{ "pk" }, arena)

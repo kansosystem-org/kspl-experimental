@@ -290,18 +290,42 @@ priv fn write_file(file: U8[], rows: List<|Line|>@, out: Str_builder$@) //<
         if shown(rows.get(i))
             write_entry(rows, links@, tail, i, out)
 
+priv fn without_type_args(key: U8[]): U8[] //< the key with every `<|…|>` taken out
+    //< `List<|T|>.push` gives `List.push`; a key with none comes back as it is.
+    if key.find_str("<|").is_none()
+        return key
+    b: = base_core.arena.text()
+    $depth: Sz = 0
+    $i: Sz = 0
+    for i < key.len
+        opens: = i + 1 < key.len && key[i] == '<' && key[i + 1] == '|'
+        closes: = depth > 0 && i + 1 < key.len && key[i] == '|' && key[i + 1] == '>'
+        if opens || closes
+            depth = depth + 1 if opens else depth - 1
+            i += 2
+            continue
+        if depth == 0
+            b.c(key[i])
+        i += 1
+    return b.take()
+
 priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$@): Sz //<
     //< The entries `name` names: the entry itself and, for a type, its members; how many
     //< **A member is an entry whose key starts with the name and a `.`** (`Arena.alloc` under
     //< `Arena`). So asking for a type shows what can be called on it.
+    //< **Keys and the name are compared with their type arguments taken out**: a generic type's
+    //< methods are keyed `List<|T|>.push`, while a reader names them as code calls them,
+    //< `List.push`.
     links: = anchors(rows)
-    member: = base_core.arena.text().s(name).c('.').take()
+    bare: = without_type_args(name)
+    member: = base_core.arena.text().s(bare).c('.').take()
     $n: Sz = 0
     for i in Range.asc(rows.len)
         r: = rows.get(i)
         if !shown(r)
             continue
-        if names_entry(r.key, name) || r.key.starts_with(member)
+        key: = without_type_args(r.key)
+        if names_entry(key, bare) || key.starts_with(member)
             if n == 0
                 out.s("# ").s(file).c('.').s(name).s("\n")
             write_entry(rows, links@, tail_of(file), i, out)

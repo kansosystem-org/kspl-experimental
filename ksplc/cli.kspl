@@ -117,6 +117,24 @@ impl Face
                         '\{llvm_name\}' is not one. Write C for it (--to=c, the default)\n").take()
                 usage.error_exit(refusal)
 
+    priv fn refuse_operands(f: Self, takes: U8[], in_files: List<|U8[]|>@): Void //<
+        //< It exits with the reason, then the subcommand's usage line
+        name: = f.face_name()
+        lead: = base_core.arena.text().s("ksplc \{name\}: it takes \{takes\}").take()
+        usage.command_usage_exit(name, operand_refusal(lead, in_files))
+
+    priv fn only_input(f: Self, in_files: List<|U8[]|>@, takes: U8[]): U8[] //<
+        //< The one input it takes; any other count exits with the reason and its usage line
+        if in_files.len != 1
+            f.refuse_operands(takes, in_files)
+        return in_files.get(0)
+
+    priv fn no_operand(f: Self, in_files: List<|U8[]|>@) //<
+        //< It exits where a subcommand that takes no operand is given one
+        //< **A word after it would change nothing**, so taken silently it would pass as a success.
+        if in_files.len != 0
+            f.refuse_operands("no operand", in_files)
+
 priv fn face_named(name: U8[]): Face //< the subcommand argparse chose, by its name
     for row in FACES
         if row.face.face_name().equals(name)
@@ -343,6 +361,12 @@ priv fn apply_options(o: Cli$@, face: Face) //<
         // freestanding panic and the like, with no --define=freestanding to remember.
         base_core.config.defines.push("freestanding")
     check_sanitize(o, face)
+    // **The IR calls the hosted runtime's helpers** (`kspl_bounds_check` and the like), which no
+    // bare-metal build has; written anyway, every program's IR would name undefined functions.
+    if face == Face.compile && base_core.config.is_freestanding && base_core.is_llvm_target()
+        usage
+            .error_exit("--freestanding: --to=llvm cannot be combined. The LLVM backend has no \
+                freestanding runtime yet. Use the C backend (--to=c)\n")
     base_core.config.sanitize = o.sanitize
     if o.style.len > 0
         // fmt_printer holds the name used in the diagnostic. Kept apart from the list of
@@ -360,11 +384,17 @@ priv fn apply_options(o: Cli$@, face: Face) //<
     if o.pkg_src_dir.len > 0
         base_core.config.pkg_src_dir = o.pkg_src_dir
 
-priv fn only_input(in_files: List<|U8[]|>@, face: Face): U8[] //<
-    //< The one input a subcommand takes; any other count exits with the subcommand's usage line
-    if in_files.len != 1
-        usage.command_usage_exit(face.face_name())
-    return in_files.get(0)
+priv fn operand_refusal(lead: U8[], in_files: List<|U8[]|>@): U8[] //<
+    //< Why a command line is refused whose operands are not the count `lead` says it takes
+    //< It quotes each operand given, so a path cut by the shell's word splitting shows.
+    said: = base_core.arena.text().s(lead).c('.')
+    if in_files.len == 0
+        said.s(" None was given")
+    else
+        said.s(" It was given:")
+        for f in in_files
+            said.s(" '").s(f).c('\'')
+    return said.c('\n').take()
 
 priv fn source_input(path: U8[]): U8[] //<
     //< A source named on the command line; a name in braces (`.ksplb`) or the old `.kspls` exits
@@ -405,36 +435,38 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
     switch face
     case .fmt
         if in_files.len == 0
-            usage.command_usage_exit(face.face_name())
+            face.refuse_operands("one or more input files", in_files)
         for f in in_files
             source_input(f)
         return .fmt(in_files, o.fmt_in_place, o.fmt_config)
     case .lsp
+        face.no_operand(in_files)
         return .lsp
     case .lsp_worker
+        face.no_operand(in_files)
         return .lsp_worker
     case .lint
-        return .lint(source_input(only_input(in_files, face)))
+        return .lint(source_input(face.only_input(in_files, "one input file")))
     case .info
         if in_files.len != 1
+            why: = operand_refusal("ksplc info: it takes one subject", in_files)
             usage
-                .error_exit(usage.usage_for_topics(face.face_name(), usage.info_topics()))
+                .error_exit(base_core.arena.text().s(why)
+                .s(usage.usage_for_topics(face.face_name(), usage.info_topics())).take())
         topic: = usage.parse_info_topic(in_files.get(0))
         usage.refuse_unread_std_dir(p, topic)
         return .info(topic)
     case .clean
-        // **It takes no subject**: there is one thing to clean, and a word after it would change
-        // nothing.
-        if in_files.len != 0
-            usage.command_usage_exit(face.face_name())
+        // **It takes no subject**: there is one thing to clean.
+        face.no_operand(in_files)
         return .clean
     case .emit_runtime
-        return .emit_runtime(only_input(in_files, face))
+        return .emit_runtime(face.only_input(in_files, "one output file"))
     case .explain
         // **No code lists every code.**
         if in_files.len == 0
             return .explain("")
-        asked: = only_input(in_files, face)
+        asked: = face.only_input(in_files, "at most one code")
         code: = tools_explain.canonical_code(asked, base_core.arena)
         // An error has no code, so a message the reader wants explained may well have none.
         if !base_lint_codes.is_known(code)
@@ -445,7 +477,7 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
             usage.error_exit(msg)
         return .explain(code)
     case .doc
-        return .doc(source_input(only_input(in_files, face)))
+        return .doc(source_input(face.only_input(in_files, "one file or folder")))
     case .run
         // The program is the option's, so every argument after the options is the program's own.
         if p.saw("--eval")
@@ -454,13 +486,13 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
             args.push_all(o.script_args.slice())
             return .run_source(o.eval_source, args)
         if in_files.len == 0
-            usage.command_usage_exit(face.face_name())
+            face.refuse_operands("a script", in_files)
         // `--to=llvm` / `--freestanding` / `--library` are not valid for run, and argparse has
         // already refused them (`only_for` in `declare_options`).
         return .run(source_input(in_files.get(0)), o.script_args)
     case .build
         if in_files.len != 2
-            usage.command_usage_exit(face.face_name())
+            face.refuse_operands("an input and an output", in_files)
         refuse_output_on_input(face.face_name(), in_files.get(0),
             U8[][]::{ in_files.get(1) })
         return .build(source_input(in_files.get(0)), in_files.get(1), o.cflags)
@@ -474,6 +506,11 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
                 io.err().s("Error: too many input files (expected <input.kspl> <output.c>):\n")
                 for f in in_files
                     io.err().s("  ").s(f).c('\n')
+            else
+                why: =
+                    operand_refusal("ksplc: a compile takes an input and an output ('ksplc \
+                        <input.kspl> <output.c>')", in_files)
+                io.err().s(why)
             usage.usage_exit()
         refuse_output_on_input(face.face_name(), in_files.get(0),
             U8[][]::{ in_files.get(1), o.deps_path, o.libs_path })

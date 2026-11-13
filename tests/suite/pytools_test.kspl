@@ -25,6 +25,9 @@ priv const MARK_OK: U8[] = "pass" //< the pass mark, read as a line's first word
     //< is here, so the day the mark changes, a stale copy fails with the false reason "not one
     //< ran".
 
+priv const MARK_SKIP: U8[] = "SKIP " //< the skip mark and the space after it, opening a line
+    //< Its canonical source is the table in `tests/support/conventions_line.kspl`.
+
 priv const SELFTEST_TIMEOUT_MS: I32 = 300000 //< how long one tool's self-test may run
 
 priv struct Tool //< one Python tool, and how it is started
@@ -100,6 +103,17 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
     // self-test run (a wrong entry point printing its usage, and the like).
     verdict.check(name, ran_one(r.out),
         arena.text().s("not one self-test ran\n").s(r.out).take())
+    pass_on_skips(t.path, r.out)
+
+priv fn pass_on_skips(path: U8[], out: U8[]) //< reports each `SKIP` line a self-test printed
+    //< Caution: **Do not leave them inside a passing run's output**, shown only on failure. A
+    //< skipped check would pass silently (`tools/kspl_lldb.py` skips its run in LLDB where no
+    //< `lldb` is installed).
+    arena: = ksplc_harness.arena()
+    for line in out.lines(arena)
+        if line.starts_with(MARK_SKIP)
+            verdict.skip_check(arena.text().s(path).s("'s self-test").take(),
+                line.sub_from(MARK_SKIP.len))
 
 fn main(): I32
     harness.begin(1 << 20)

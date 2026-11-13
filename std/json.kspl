@@ -683,6 +683,7 @@ impl Value
         //< are equal when they hold the same members in any order, a repeated key counted each
         //< time.
         //< Caution: **It is quadratic in an object's members**, as `get` called for each key is.
+        //< Each value is compared once, so the depth of nesting adds no more than its own values.
         r: Self@,
         o: Value, //< the value to compare with
     ): Bool
@@ -742,12 +743,36 @@ priv fn same_elements(a_head: Node$@, b_head: Node$@): Bool //< two arrays' elem
 
 priv fn same_members(a_head: Member$@, b_head: Member$@): Bool //<
     //< Whether two objects hold the same members in any order, a repeated key counted each time
+    //< Caution: **Compare a key's value once where the key occurs once on each side.** Counting
+    //< each member's matches on both sides compares every child value twice, so the time doubles
+    //< with each level of nesting: 30 levels took 8 s.
     if count_members(a_head, null) != count_members(b_head, null)
         return false
     for m in Member_seq::{ .at = a_head }
-        if count_members(a_head, m) != count_members(b_head, m)
+        in_a: = count_key(a_head, m.key)
+        in_b: = count_key(b_head, m.key)
+        if in_a != in_b
+            return false
+        if in_a == 1
+            if !find_member(b_head, m.key).val.equals(m.val)
+                return false
+        else if count_members(a_head, m) != count_members(b_head, m)
             return false
     return true
+
+priv fn count_key(head: Member$@, key: U8[]): Sz //< how many members of the list hold the key
+    $n: Sz = 0
+    for m in Member_seq::{ .at = head }
+        if m.key.equals(key)
+            n += 1
+    return n
+
+priv fn find_member(head: Member$@, key: U8[]): Member@ //< the first member holding the key
+    //< The caller has counted the key on this list, so a member is always found.
+    $m: = head
+    for !m.key.equals(key)
+        m = m.next
+    return m
 
 priv fn count_members(head: Member$@, like: Member@): Sz //<
     //< How many members of the list hold the same key and value as `like`; null counts them all

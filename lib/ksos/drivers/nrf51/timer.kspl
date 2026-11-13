@@ -31,13 +31,15 @@ const PRESCALER_1MHZ: U32 = 4 // 16 MHz >> 4
 
 fn start_once(us: U32) //< raises TIMER0's interrupt once, `us` microseconds from now
     //< The counter stops and clears itself at the compare (SHORTS), so it raises nothing more
-    //< until the next call. The handler must call `ack`.
+    //< until the next call. The handler must call `ack`. **0 counts as 1**: the compare matches
+    //< only when the counter steps onto CC, so a CC of 0 would wait for the 32-bit counter to wrap
+    //< (about 71.6 minutes).
     mmio.write32(TASKS_STOP, 1)
     mmio.write32(TASKS_CLEAR, 1)
     mmio.write32(MODE, 0)
     mmio.write32(BITMODE, 3)
     mmio.write32(PRESCALER, PRESCALER_1MHZ)
-    mmio.write32(CC0, us)
+    mmio.write32(CC0, 1U32 if us == 0 else us)
     mmio.write32(SHORTS, SHORTS_COMPARE0_CLEAR | SHORTS_COMPARE0_STOP)
     mmio.write32(EVENTS_COMPARE0, 0)
     mmio.write32(INTENSET, INTEN_COMPARE0)

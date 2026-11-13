@@ -13,6 +13,8 @@ function ksmdFunctions(ks) {
   const ROUNDS = 8; // rounds of answers per showing: a call can wait on another's answer
   const TIME_LIMIT = 1; // `ksmd_web_own_failed`'s reasons
   const STOPPED = 2;
+  const NOT_ALLOWED_NOW = 3; // its file is not allowed now
+  const UNBUILT = 4; // its file does not build
   const dec = new TextDecoder();
 
   // The worker: it instantiates the module once, then answers one call per message. A panic in
@@ -44,12 +46,13 @@ onmessage = (e) => {
   // Each functions file by its path from the root: { bytes, state, why, module, worker, names,
   // help }, `help` being what a person reads of each function (`ksmd/calc/help.kspl`). `state` is
   // "checking", "asking" (not allowed yet), "building", "ready" or "broken"; `bytes` are those the
-  // page read last.
+  // page read last. **`names` are those of its last build**, kept while it is not ready again, so
+  // a file below never takes them over.
   const files = new Map();
   const later = new Set(); // the files whose question the person put off ("Not now")
   const todo = []; // the person's answers, each done in turn by `run`
   const bar = document.querySelector(".own-ask");
-  let sent = ""; // the names the editor holds, one per line
+  let sent = ""; // what the editor holds: the unknown names' state, the names, which are ready
   let owner = new Map(); // each name, and the path of the file whose function it calls
   let busy = false;
   let again = false;
@@ -170,8 +173,6 @@ onmessage = (e) => {
     }
     end(f);
     f.state = "asking";
-    f.names = [];
-    f.help = [];
     // **The bar does not ask again at once**: the person has just answered. The box still offers it.
     later.add(path);
   }
@@ -209,22 +210,25 @@ onmessage = (e) => {
       }
       f.bytes = bytes;
       end(f);
-      f.names = [];
-      f.help = [];
       show();
       await check(path, f);
     }
+    // **A file that is not ready keeps its names**, and a call to one shows #BLOCKED!. A file that
+    // waits for its allow or builds may give any name, so the files below it give none yet.
     owner = new Map();
+    let known = true;
     for (const path of paths) {
       const f = files.get(path);
-      if (f.state !== "ready") continue;
-      for (const n of f.names) if (!owner.has(n)) owner.set(n, path);
+      if (known) for (const n of f.names) if (!owner.has(n)) owner.set(n, path);
+      if (f.state !== "ready" && f.state !== "broken") known = false;
     }
     show();
     const state = unknownState();
     const text = [...owner.keys()].join("\n");
-    if (`${state}\n${text}` === sent) return false;
-    sent = `${state}\n${text}`;
+    // A file that turns ready, or stops being ready, changes the answers, so the old ones go.
+    const ready = [...owner.values()].map((p) => (files.get(p).state === "ready" ? "1" : "0")).join("");
+    if (`${state}\n${text}\n${ready}` === sent) return false;
+    sent = `${state}\n${text}\n${ready}`;
     ks.call("ksmd_web_own_names", ks.put(text), state);
     return true;
   }
@@ -253,11 +257,14 @@ onmessage = (e) => {
       else if (f.state === "broken") state.textContent = f.why;
       else {
         const mine = f.names.filter((n) => owner.get(n) === path);
-        const hidden = f.names.filter((n) => owner.get(n) !== path);
+        const hidden = f.names.filter((n) => owner.has(n) && owner.get(n) !== path);
+        const waiting = f.names.filter((n) => !owner.has(n));
         state.textContent = (f.names.length === 0 ? "It gives no functions." :
-          `A formula can call: ${mine.join(", ")}.`) +
+          mine.length > 0 ? `A formula can call: ${mine.join(", ")}.` : "A formula can call none of them now.") +
           (hidden.length === 0 ? "" :
-            ` Another file above gives ${hidden.join(", ")} first, so this file's are not called.`);
+            ` Another file above gives ${hidden.join(", ")} first, so this file's are not called.`) +
+          (waiting.length === 0 ? "" :
+            ` ${waiting.join(", ")} wait for a file above, which may give them first.`);
         state.appendChild(button("Stop allowing", "stop", path));
       }
     }
@@ -285,7 +292,13 @@ onmessage = (e) => {
         if (ks.stopped) return;
         const call = new Uint8Array(ks.w.memory.buffer, ks.w.ksmd_web_out_ptr(), len).slice();
         const f = files.get(owner.get(nameOf(call)));
-        const got = f && f.state === "ready" ? await ask(f, call) : { stopped: "no file gives it" };
+        // A file that builds answers once it is ready, when its names reach the editor again.
+        if (f && (f.state === "building" || f.state === "checking")) continue;
+        if (f && f.state !== "ready") {
+          ks.call("ksmd_web_own_failed", i, f.state === "broken" ? UNBUILT : NOT_ALLOWED_NOW);
+          continue;
+        }
+        const got = f ? await ask(f, call) : { stopped: "no file gives it" };
         if (got.answer) {
           ks.call("ksmd_web_own_answer", i, ks.putBytes(got.answer));
         } else {

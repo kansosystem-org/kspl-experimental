@@ -162,6 +162,21 @@ priv fn case_bad_style_value(arena: Arena$@) //<
     verdict.check(name, good.exited_with(0),
         arena.text().s("good values were rejected\n\{good.out\}").take())
 
+priv fn case_repeated_style_key(arena: Arena$@) //<
+    //< Checks that a key given twice in one `--style` is refused, naming the key
+    //< Kept, the later value silently won: `IndentWidth: 2, IndentWidth: 8` formatted with 8. A
+    //< second `--style` and a second ksplc.cfg line for one key are refused already.
+    name: = "a `--style` key given twice is rejected"
+    path: = write_src("style_twice", "a.kspl", "fn f(): I32\n    return 1\n", arena)
+    if path.len == 0
+        verdict.check(name, false, "cannot place the material")
+        return
+    bad: = harness
+        .run(U8[][]::{ harness.ksplc_exe(), "fmt", "--style=IndentWidth: 2, IndentWidth: 8", path })
+    verdict.check(name,
+        !bad.exited_with(0) && bad.out.find_str("'IndentWidth'").is_some(),
+        arena.text().s("the repeated key passed, or it is not named\n\{bad.out\}").take())
+
 priv fn case_syntax_error_as_written(arena: Arena$@) //<
     //< A syntax error `ksplc fmt` meets shows the line as written, as a compile shows it
     //< Caution: **The formatter reads the indentation notation through the conversion to braces**,
@@ -286,12 +301,22 @@ fn main(): I32
         fmt_material.SRC_MESSY, arena)
     case_becomes("foldedpostfix", "a postfix on the line below its type joins it with no space",
         fmt_material.SRC_FOLDED_POSTFIX_IN, fmt_material.SRC_FOLDED_POSTFIX_OUT, arena)
+    // Both once came out as text that did not parse, and fmt refused the file.
+    case_becomes("stringstmt", "a statement that starts with a string keeps a line of its own",
+        "fn main(): I32\n  \"abcd\".len\n  x: = 1\n\n  \"ef\".len\n  return 0\n",
+        "fn main(): I32\n    \"abcd\".len\n    x: = 1\n\n    \"ef\".len\n    return 0\n", arena)
+    case_becomes("emptylabel", "an empty labelled block in braces becomes one line that reads back",
+        "fn main() {\n  _: {\n  }\n}\n", "fn main()\n    _: {}\n", arena)
+    case_becomes("labelline", "a labelled block on one line reads as a block",
+        "fn main()\n    _: {}\n    done: { break done }\n    x: = 1\n",
+        "fn main()\n    _: {}\n    done:\n        break done\n    x: = 1\n", arena)
     // A file with no declaration once came out as the word `program`, and fmt refused it.
     case_becomes("nodecl", "an empty file becomes one line end", "", "\n", arena)
     case_stable("commentonly", "a file holding only comments keeps them",
         "//< A file summary\n//< Its detail.\n\n// a note\n", arena)
     case_unknown_style_key(arena)
     case_bad_style_value(arena)
+    case_repeated_style_key(arena)
     case_syntax_error_as_written(arena)
     fmt_cache.run(arena)
     return harness.finish()

@@ -12,7 +12,7 @@ import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { launch } from "../../ksmd/tests/browser/cdp.mjs";
-import { driver, verdict, waitFor } from "../../ksmd/tests/browser/drive.mjs";
+import { driver, verdict, wait, waitFor } from "../../ksmd/tests/browser/drive.mjs";
 import { place, standIn } from "./chat_support.mjs";
 
 const [browserBin, opener, work] = process.argv.slice(2);
@@ -236,6 +236,47 @@ async function main() {
     const first = await d.js(grown);
     check(await d.until(`${grown} > ${first}`, 15000), "the growing text gets longer",
       `${first} then ${await d.js(grown)}`);
+    // **Stop stays one button while the answer grows**, and every press of it is a click. Built
+    // again each second, a press whose release met the new button was no click, and the focus on
+    // it was lost. Each click is counted, and held back so it stops nothing. The text part gets a
+    // fixed height here, so the button stands still under the pointer while the text grows.
+    await d.js(`(() => {
+      const style = document.head.appendChild(document.createElement("style"));
+      style.id = "still";
+      style.textContent = '.turn[data-id="${await d.js(`${turn(1)}.dataset.id`)}"] .part ' +
+        "{ height: 12rem; overflow: hidden; }";
+      window.stopButton = ${turn(1)}.querySelector(".actions button");
+      window.stopClicks = 0;
+      window.countStop = (e) => {
+        const b = e.target.closest && e.target.closest(".actions button");
+        if (b && b.textContent === "Stop") { window.stopClicks++; e.stopPropagation(); }
+      };
+      document.addEventListener("click", window.countStop, true);
+    })()`);
+    const PRESSES = 16;
+    const drawnBefore = await d.js(grown);
+    for (let k = 0; k < PRESSES; k++) {
+      const [x, y] = await d.js("(() => { const r = window.stopButton.getBoundingClientRect(); " +
+        "return [r.left + r.width / 2, r.top + r.height / 2]; })()");
+      const press = { x, y, button: "left", clickCount: 1 };
+      await browser.page("Input.dispatchMouseEvent", { type: "mousePressed", ...press });
+      await wait(150);
+      await browser.page("Input.dispatchMouseEvent", { type: "mouseReleased", ...press });
+      await wait(100);
+    }
+    check(await d.js(grown) > drawnBefore && await d.js("window.stopClicks") === PRESSES &&
+      await d.js(`window.stopButton === ${turn(1)}.querySelector(".actions button")`),
+      `each of ${PRESSES} presses on Stop while the answer grows is a click on the same button`,
+      `${await d.js("window.stopClicks")} clicks; text ${drawnBefore} then ${await d.js(grown)}`);
+    await d.js("window.stopButton.focus(); window.stopClicks = 0");
+    const focusedAt = await d.js(grown);
+    check(await d.until(`${grown} > ${focusedAt} && document.activeElement === window.stopButton`,
+      15000), "the focus stays on Stop while the answer grows", await d.js("document.activeElement.tagName"));
+    await d.press("Enter");
+    check(await d.until("window.stopClicks === 1", 5000), "Enter then presses that Stop",
+      await d.js("window.stopClicks"));
+    await d.js(`document.removeEventListener("click", window.countStop, true);
+      document.getElementById("still").remove()`);
     // **A stop whose save gets no answer must not promise a resend**: the page sends it once. The
     // first press's save never reaches the server; the second reaches it, but its answer never
     // comes back. The page's limit is cut to 300 ms, so the check need not wait its 15 s.
@@ -479,6 +520,69 @@ async function main() {
         t.querySelector('.unchecked') !== null && t.querySelector('.actions button') !== null; })()`, 15000),
       "it says why, keeps its text unchecked, and offers Ask again", await d.js(`${turn(lost)}.textContent`));
 
+    // Switching to another conversation while the old one's chat file is read. **The old
+    // conversation's turns must not show in the new one**: the read that comes back late is
+    // dropped. The page's read of the old chat file is held for 1.5 s.
+    const otherAsk = path.join(root, "other.ask.jsonl");
+    fs.writeFileSync(otherAsk, '{"type": "question", "id": "other-1", "text": "Asked in the other conversation"}\n');
+    check(await d.reload("document.documentElement.dataset.chat === 'ready'"), "the page reloads with the other conversation listed");
+    const shownIds = "[...document.querySelectorAll('.turn')].map((t) => t.dataset.id).join()";
+    await d.until(`document.querySelectorAll('.turn').length === ${lost + 1}`, 15000);
+    await d.js(`(() => {
+      const plain = window.fetch;
+      window.fetch = async (url, how = {}) => {
+        if (window.slowChat && String(url) === "/api/file?path=${name}.chat.jsonl") {
+          window.slowChat = false;
+          window.slowHit = true;
+          await new Promise((r) => setTimeout(r, 1500));
+          const got = await plain(url, how);
+          window.slowDone = Date.now();
+          return got;
+        }
+        return plain(url, how);
+      };
+      window.slowChat = true;
+    })()`);
+    fs.appendFileSync(path.join(root, `${name}.chat.jsonl`),
+      '{"type": "question", "id": "late-1", "text": "Recorded while the page switched"}\n');
+    check(await d.until("window.slowHit === true", 15000), "the page starts reading the old chat file");
+    await d.js("[...document.querySelectorAll('#chats a')].find((a) => a.textContent === 'other').click()");
+    check(await d.until("window.slowDone !== undefined && Date.now() - window.slowDone > 2500", 15000),
+      "the held read comes back, and two looks pass");
+    check(await d.js(shownIds) === "other-1",
+      "the other conversation shows only its own turn", await d.js(shownIds));
+    // A turn whose question goes from the files goes from the page too. Its stop comes with it, so
+    // ksagent never takes it, and only the ask file holds it.
+    fs.appendFileSync(otherAsk, '{"type": "question", "id": "other-2", "text": "Asked, then taken out"}\n' +
+      '{"type": "stop", "id": "other-2"}\n');
+    check(await d.until(`${shownIds} === "other-1,other-2"`, 15000), "a question added shows",
+      await d.js(shownIds));
+    fs.writeFileSync(otherAsk, '{"type": "question", "id": "other-1", "text": "Asked in the other conversation"}\n');
+    check(await d.until(`${shownIds} === "other-1"`, 15000),
+      "a question taken out of the ask file goes from the page", await d.js(shownIds));
+
+    // With the local server gone, the notice says so once, though both a look and a save failed,
+    // and New conversation still opens one, with no error left unhandled.
+    await d.js("window.liveFetch = window.fetch; " +
+      "window.fetch = () => Promise.reject(new TypeError('Failed to fetch'))");
+    check(await d.until(`${notice}.includes('Failed to fetch')`, 15000),
+      "with the server gone, the page says so", await d.js(notice));
+    await ask("Asked while the server is gone");
+    check(await d.until(`document.getElementById('text').value === 'Asked while the server is gone'`, 15000) &&
+      (await d.js(notice)).split("\n").filter((l) => l.includes("Failed to fetch")).length === 1,
+      "a save that fails too leaves one line saying so, and the question back in the text box",
+      await d.js(notice));
+    const errorsBefore = browser.page.errors.length;
+    const oldTitle = await d.js("document.title");
+    await d.js("document.getElementById('new').click()");
+    check(await d.until(`document.title !== ${JSON.stringify(oldTitle)} && document.title.startsWith('chat-')`,
+      15000) && await d.until(`${notice}.includes('Failed to fetch')`, 15000),
+      "New conversation opens one, and the notice still says the server is gone", await d.js(notice));
+    await wait(500);
+    check(browser.page.errors.length === errorsBefore, "New conversation leaves no error unhandled",
+      browser.page.errors.slice(errorsBefore).join("; "));
+    await d.js("window.fetch = window.liveFetch");
+
     // An ask file past its cap is not answered, and the page says why.
     fs.writeFileSync(path.join(root, "big.ask.jsonl"),
       `{"type": "question", "id": "big1", "text": "${"x".repeat(1100000)}"}\n`);
@@ -486,6 +590,31 @@ async function main() {
     check(await d.until("document.getElementById('notice').textContent.includes('larger than 1 MiB')",
       20000), "a conversation whose ask file is past its cap says so on the page",
       await d.js("document.getElementById('notice').textContent"));
+
+    // A live file that stops changing, as one that a ksagent stopped by Ctrl+C leaves: the turn
+    // asks the person to check that ksagent watch runs. The ask file holds a byte that is not
+    // UTF-8, so ksagent passes it over and never writes this live file. The page's clock is put
+    // 20 seconds on, so the check need not wait the page's 15 s.
+    const quietLive = path.join(root, "quiet.live.json");
+    fs.writeFileSync(path.join(root, "quiet.ask.jsonl"), Buffer.concat([
+      Buffer.from('{"type": "question", "id": "quiet-1", "text": "Asked as ksagent stops"}\n'),
+      Buffer.from([0xff, 0x0a])]));
+    fs.writeFileSync(quietLive, '{"id": "quiet-1", "phase": "writing", "tools": "", "text": "Half an answer"}\n');
+    await browser.page("Page.navigate", { url: `${child.base}?chat=quiet` });
+    const quietTurn = "(document.querySelector('.turn') || { textContent: '', dataset: {} })";
+    check(await d.until(`${quietTurn}.dataset.state === 'writing'`, 15000),
+      "the turn whose live file says writing shows as written", await d.js(`${quietTurn}.textContent`));
+    check(!(await d.js(`${quietTurn}.textContent`)).includes("written nothing"),
+      "while the live file is new, it says nothing more", await d.js(`${quietTurn}.textContent`));
+    await d.js("window.realNow = Date.now; Date.now = () => window.realNow.call(Date) + 20000");
+    check(await d.until(`${quietTurn}.textContent.includes('ksagent has written nothing for over 15 seconds')`,
+      15000), "once the live file is older than 15 seconds, the turn says to check ksagent watch",
+      await d.js(`${quietTurn}.textContent`));
+    const later = new Date(Date.now() + 60000);
+    fs.utimesSync(quietLive, later, later);
+    check(await d.until(`!${quietTurn}.textContent.includes('written nothing')`, 15000),
+      "a live file written again takes the line away", await d.js(`${quietTurn}.textContent`));
+    await d.js("Date.now = window.realNow");
     check(browser.page.errors.length === 0, "the page threw nothing", browser.page.errors.join("; "));
   } finally {
     if (browser) await browser.close();

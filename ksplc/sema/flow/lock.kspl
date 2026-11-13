@@ -148,12 +148,16 @@ impl Ast_node
             if u.len > 0
                 book.on_unlock(state, u)
             return
-        if !op.text.equals("=") || left.is_bare_name_target() ||
-            names_borrow(c, right).is_none()
+        if !op.text.equals("=") || names_borrow(c, right).is_none()
             return
-        // A store into a parameter's or a global's memory outlives the function, and the lock.
+        // A store into a parameter's memory or into a global outlives the function, and the lock.
+        // **A bare name is a store only where it is a global** (`gp = p`): a parameter or a local
+        // given a new value keeps the pointer inside the function.
         root: = left.get_assign_target_def().unwrap_or(null)
-        if root == null || (root.kind_id != .k_fn_param && root.is_tracked_local(c))
+        if root == null
+            return
+        global: = root.kind_id != .k_fn_param && !root.is_tracked_local(c)
+        if !global && (root.kind_id != .k_fn_param || left.is_bare_name_target())
             return
         if book.first_report(r)
             c.sema

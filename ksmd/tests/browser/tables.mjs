@@ -808,6 +808,15 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       })()`);
       check(offered === "plan|done", "the panel offers only the rows a chart by rows can name", offered);
       await press("Escape");
+      // Enter and Space on a focused Edit button open the panel, as a press does.
+      for (const key of ["Enter", " "]) {
+        await js("document.querySelector('#doc .chart .chart-edit').focus()");
+        await press(key);
+        check(await js("!!document.querySelector('.chart-panel') && !document.querySelector('.chart-panel').hidden " +
+          "&& document.activeElement.classList.contains('chart-kind')"),
+        `${key === " " ? "Space" : key} on a chart's Edit button opens its panel`);
+        await press("Escape");
+      }
     },
 
     // A chart's marks reach past its largest and its least value, so no bar or point is cut off
@@ -835,6 +844,25 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
         const got = await drawn();
         check(got === JSON.stringify([true, marks]), `a ${kind} chart of ${values} stays between its marks ${marks}`, got);
       }
+      // A mark of eight digits keeps its first digits: the left edge makes room for the widest.
+      await shown("bar", [12000000, 3000000]);
+      const wide = await js(`JSON.stringify(Array.from(document.querySelectorAll('#doc .chart .chart-tick'),
+        (t) => [t.textContent, t.getBBox().x >= 0]))`);
+      check(wide === JSON.stringify(["0", "5,000,000", "10,000,000", "15,000,000"].map((t) => [t, true])),
+        "a chart's marks take thousands separators and stand whole", wide);
+      // Labels of 40 rows thin out, and a long one is cut, with its whole text as a tooltip.
+      const long = "a long label ".repeat(10).trim();
+      await shown("bar", Array.from({ length: 40 }, (_, k) => k + 1));
+      await js(`ksmd.load(ksmd.source().replace('"r0"', ${JSON.stringify(JSON.stringify(long))}))`);
+      const labels = await js(`JSON.stringify((() => {
+        const all = Array.from(document.querySelectorAll('#doc .chart .chart-label'), (t) => t.getBBox());
+        const apart = all.every((a, k) => k === 0 || all[k - 1].x + all[k - 1].width <= a.x);
+        const first = document.querySelector('#doc .chart .chart-label');
+        return [all.length < 40, apart, all[0].x >= 0, first.textContent.endsWith('…'),
+          first.parentNode.querySelector('title').textContent];
+      })())`);
+      check(labels === JSON.stringify([true, true, true, true, long]),
+        "a chart's labels thin out and stand apart, and a long one is cut with its text as a tooltip", labels);
     },
 
     // A colour scale fills each number's cell from white at the least to its colour at the

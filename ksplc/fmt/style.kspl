@@ -60,9 +60,12 @@ priv const COLUMN_LIMIT_KEY: U8[] = "ColumnLimit"
 priv fn check_style_keys(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<
     //< It splits the specification at `,`, checks each item's key and value, and applies them
     //< It returns "" where all are good, else the diagnostic for the first bad item.
-    //< Caution: **An unknown key or a bad value must not be silently ignored.** Ignored,
-    //< `IndentWith: 8` or `IndentWidth: two` formats with the default and reports success.
+    //< Caution: **An unknown key, a bad value or a key given twice must not be silently
+    //< ignored.** Ignored, `IndentWith: 8` or `IndentWidth: two` formats with the default and
+    //< `IndentWidth: 2, IndentWidth: 8` with 8, each reporting success. A second `--style` and a
+    //< second line for one key in ksplc.cfg are refused the same way.
     known: U8[][2] = ::{ INDENT_WIDTH_KEY, COLUMN_LIMIT_KEY }
+    $seen: Bool[2] = ::{ false, false }
     for item in style_str.split(',', arena)
         colon: = item.find_char(':').unwrap_or(item.len)
         key: = item.sub(0, colon).trim_spaces()
@@ -82,6 +85,10 @@ priv fn check_style_keys(style_str: U8[], config: Config$@, arena: Arena$@): U8[
             return arena.text()
                 .s("--style: '\{value\}' is not a value of '\{key\}'. It takes a positive whole \
                     number\n").take()
+        k: Sz = 0 if key.equals(INDENT_WIDTH_KEY) else 1
+        if seen[k]
+            return arena.text().s("--style: '\{key\}' is given more than once\n").take()
+        seen[k] = true
         if key.equals(INDENT_WIDTH_KEY)
             config.indent_width = n
         else

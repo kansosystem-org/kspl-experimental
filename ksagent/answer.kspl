@@ -123,9 +123,10 @@ impl Answer
         default
             return false
 
-fn finish(root: U8[], text: U8[], given: List<|Source|>@, lang: Lang, arena: Arena$@): Answer //<
-    //< Turns the model's final answer into an `Answer`, checking each source it cites
-    //< The not-found marker ends as `not_found`, whatever sources come with it.
+fn finish(folder: files.Folder, text: U8[], given: List<|Source|>@, lang: Lang, arena: Arena$@):
+    Answer //<
+        //< Turns the model's final answer into an `Answer`, checking each source it cites
+        //< The not-found marker ends as `not_found`, whatever sources come with it.
     if text.trim_spaces().equals_ignore_case(NOT_FOUND)
         return Answer.ended(.not_found, lang, arena)
     $a: = Answer.ended(.answered, lang, arena)
@@ -135,7 +136,7 @@ fn finish(root: U8[], text: U8[], given: List<|Source|>@, lang: Lang, arena: Are
         $checked: = s
         // **Each check reads its file in memory of its own**, so many sources do not add up.
         defer one: = Arena(64 * 1024)
-        why: = check_source(root, s, checked@, one)
+        why: = check_source(folder, s, checked@, one)
         if why.len == 0
             checked.path = arena.dup_str(checked.path)
             a.sources.push(checked)
@@ -145,7 +146,7 @@ fn finish(root: U8[], text: U8[], given: List<|Source|>@, lang: Lang, arena: Are
                 .take())
     return a
 
-fn check_source(root: U8[], s: Source, out: Source$@, arena: Arena$@): U8[] //<
+fn check_source(folder: files.Folder, s: Source, out: Source$@, arena: Arena$@): U8[] //<
     //< Why the source fails the check, or empty when its quote stands in the lines it names
     //< **The quote and the lines are compared with each run of whitespace made one space**, so a
     //< line break or an indent in either does not matter. `out` gets the path as the root holds
@@ -157,7 +158,7 @@ fn check_source(root: U8[], s: Source, out: Source$@, arena: Arena$@): U8[] //<
         return "the lines are not a range from a first line to a last one"
     if s.to_line - s.from_line + 1I64 > MAX_CITED_LINES
         return arena.text().s("the range is wider than \{MAX_CITED_LINES\} lines").take()
-    at: = files.resolve(root, s.path, arena) catch why
+    at: = files.resolve(folder, s.path, arena) catch why
         return why
     out.path = at.rel
     body: = files.read_text(at.full, arena) catch why

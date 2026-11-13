@@ -115,6 +115,14 @@ export function documents({ page, js, press, click, menu, load, saves, source })
       const rect = (await source()).match(/draw shape="rect" from="(\d+),(\d+)" to="(\d+),(\d+)"/);
       check(!!rect && Math.abs(Math.abs(rect[3] - rect[1]) - Math.abs(rect[4] - rect[2])) <= 1,
         "with Shift held, a rectangle is a square", rect && rect[0]);
+      // A 101st shape is refused, and the page names the limit.
+      const full = `${chart}${'draw shape="line" from="1,1" to="9,9"\n'.repeat(100)}:::\n`;
+      await load(full);
+      await click('#doc .chart .draw-tools [data-shape="rect"]');
+      await dragPath([at(0.5, 0.2), at(0.9, 0.3)]);
+      const said = await js("document.getElementById('status').textContent");
+      check(await source() === full && said.includes("at most 100 drawn shapes"),
+        "a 101st shape is not drawn, and the page says that 100 is the most", said);
     },
     // Headings number themselves from the level the settings name, captions take a number by
     // chapter, and a link whose text is `#` shows the number of what it names.
@@ -165,6 +173,15 @@ export function documents({ page, js, press, click, menu, load, saves, source })
       await saves("Remove takes the settings away", `${H}${body}`);
       await menu("undo");
       await saves("and undo brings them back", set);
+      // JIS-B4 is Japan's B4, 257 by 364 mm; B4 alone is ISO's, 250 by 353 mm, as CSS names them.
+      for (const [paper, mm] of [["JIS-B4", [257, 364]], ["B4", [250, 353]]]) {
+        await load(`${H}:::document paper="${paper}"\n:::\n\n${body}`);
+        const pdf = await page("Page.printToPDF", { preferCSSPageSize: true });
+        const box = Buffer.from(pdf.data, "base64").toString("latin1").match(/\/MediaBox\s*\[([^\]]*)\]/);
+        const got = box ? box[1].trim().split(/\s+/).slice(2).map((pt) => Math.round(Number(pt) * 25.4 / 72)) : [];
+        check(JSON.stringify(got) === JSON.stringify(mm), `paper="${paper}" prints on ${mm.join(" × ")} mm`,
+          box && box[1]);
+      }
     },
 
     // A merged column shows a value repeated down it once; the data keeps every value.

@@ -118,7 +118,7 @@ function ksmdSettings(ks) {
     return el;
   }
 
-  const PAPERS = ["A3", "A4", "A5", "B4", "B5", "letter", "legal"];
+  const PAPERS = ["A3", "A4", "A5", "B4", "B5", "JIS-B4", "JIS-B5", "letter", "legal"];
   // The panel that sets the paper, the header and footer, the numbers and the labels.
   function ask() {
     const now = settings || { paper: "", land: 0, header: "", footer: "", numbers: 0, tl: "", fl: "" };

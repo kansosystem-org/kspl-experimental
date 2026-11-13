@@ -1,0 +1,45 @@
+//< The program the LLDB pretty printer is checked on (`tests/suite/pytools_test.kspl`)
+//< It holds one local of each kind of value the printer shows, then stops in `stop_here`. A
+//< local nothing reads opens with `_`.
+//< Given an argument, it reads past a slice's end, so the printer's panic stop fires.
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+import "std/sys"
+
+priv enum Shape //< an enum with a payload
+    circle(r: I32)
+    square(side: I32)
+    dot
+
+priv enum Made_err //< an enum without a payload
+    too_big
+    too_small
+
+priv fn may_fail(n: I32): I32!Made_err //< fails above 2
+    if n > 2
+        throw .too_big
+    return n
+
+priv fn stop_here(x: I32): I32 //< where the check stops, one frame under `main`
+    return x + 1
+
+fn main(): I32
+    defer $list: = List<|I32|>(null)
+    list.push(3)
+    list.push(4)
+    defer $map: = Map<|U8[], I32|>(null)
+    map.set("k", 4)
+    defer $builder: = Str_builder()
+    builder.s("built")
+    text: U8[] = "hello"
+    _shape: = Shape.square(2)
+    _dot: = Shape.dot
+    bad: = may_fail(5)
+    good: = may_fail(1)
+    _some_text: U8[]? = .some("abc")
+    _no_text: U8[]? = .none
+    _err: = Made_err.too_small
+    r: = stop_here(1)
+    if sys.args().len > 1
+        return text[sys.args().len + 9]
+    return r - 2 if bad.is_err() && !good.is_err() else 1

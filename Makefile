@@ -213,6 +213,12 @@ else
     endif
 endif
 
+# --- The processor, as Node's `process.arch` spells it --- It names the VS Code extension's folder
+# for the language server (`$(EXT_BIN_DIR)/<platform>-<arch>/`). **It is the C compiler's target**,
+# which the server is built for, not `uname -m`, which a shell under emulation answers for the host.
+CC_CPU := $(firstword $(subst -, ,$(shell $(CC) -dumpmachine 2>/dev/null)))
+ARCH := $(if $(filter x86_64 amd64,$(CC_CPU)),x64,$(if $(filter aarch64 arm64,$(CC_CPU)),arm64,$(CC_CPU)))
+
 # --- Linking pthread (for std/thread.kspl) --- In libpthread below glibc 2.34; macOS has none.
 ifeq ($(PLATFORM),linux)
     LDLIBS += -lpthread
@@ -398,13 +404,13 @@ else
 endif
 
 # **The seed's record names the compiler source it was taken from** (`tools/seed_sum.kspl`): what
-# ksplc reads under `ksplc/`, its runtime included, but neither the tests nor `SPEC-diagnostics.md`,
-# which needs no re-bake ("The bootstrap, and keeping the seed in step" in
-# ksplc/docs/DESIGN-compiler.md).
+# ksplc reads under `ksplc/`, its runtime included, and the parser library `lib/kspeg/` it imports.
+# Neither the tests nor `SPEC-diagnostics.md` count, since neither needs a re-bake ("The bootstrap,
+# and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
 # **The seed itself is counted too, first**: a `seed.c` edited by hand, or taken from the other
 # side of a merge, would otherwise pass. First, it is the file the check's one-byte change alters.
 SEED_SUM       := ksplc/seed.sum
-SEED_SUM_SRCS  := $(sort $(filter ksplc/%,$(filter-out ksplc/docs/SPEC-diagnostics.md,$(KSPL_SRCS))))
+SEED_SUM_SRCS  := $(sort $(filter ksplc/% lib/kspeg/%,$(filter-out ksplc/docs/SPEC-diagnostics.md,$(KSPL_SRCS))))
 SEED_SUM_FILES := $(SEED_C) $(SEED_SUM_SRCS)
 
 ## Gates|test-seed-sum|See that `ksplc/seed.c` was re-baked after the last change to the compiler

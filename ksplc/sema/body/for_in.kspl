@@ -19,7 +19,9 @@ import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/mono_queue" as _sema_decl_mono_queue // `ensure_instance_methods`
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/display" as _sema_type_display // `display`
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds"
@@ -75,6 +77,8 @@ impl Ast_node
         if drives_by_next(c, coll_id)
             r.build_step_loop(item_id, coll_ref)
             return
+        if refuses_unwalkable_subject(c, r, coll_id)
+            throw .analysis_failed
         r.build_index_loop(item_id, coll_ref, c.env.is_slice(c.env.strip_ptr(coll_id)))
 
     priv fn build_index_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node@, over_slice: Bool) //<
@@ -161,6 +165,32 @@ impl Ast_node
         loop_children.push(step_node)
         loop_children.push(block_node)
         r.children = loop_children
+
+priv fn refuses_unwalkable_subject(c: Sema_ctx$@, loop: Ast_node$@, subject_id: I32): Bool //<
+    //< Whether it reported a subject that offers neither form, with no `len` and no `[]` at all
+    //< **Say what the loop needs, not what its expansion missed**: expanded, a plain struct gave
+    //< "no field 'len'" and "requires 'Index'", which name code the writer never wrote. A subject
+    //< with one of the two still meets the expansion's own error, which names the one missing.
+    if sema_type_env.is_unknown(subject_id)
+        return false
+    $base_id: = subject_id
+    for c.env.is_pointer(base_id)
+        base_id = c.env.strip_ptr(base_id)
+    if c.env.is_array(base_id) || c.env.is_slice(base_id)
+        return false
+    c.ensure_instance_methods(base_id) catch {}
+    if !sema_type_env.is_unknown(c.env.field_type_of(base_id, "len")) ||
+        c.env.has_implemented_operator_trait(base_id, "Index") ||
+        c.env.has_implemented_operator_trait(base_id, "Index_ref") ||
+        c.env.has_implemented_operator_trait(base_id, "Index_place")
+        return false
+    shown: = c.env.display(base_id)
+    c.clear_scratch()
+        .s("'for … in' cannot walk a '\{shown\}'. It walks an array, a slice, a type with a 'len' \
+            field and '[]' (the trait 'Index' from std/lang), or a type that implements 'Iter' from \
+            std/lang, whose 'next()' gives each element")
+    c.err(loop, c.scratch.slice())
+    return true
 
 fn drives_by_next(c: Sema_ctx$@, subject_id: I32): Bool //< whether `next()` drives the loop
     return c.env.implemented_trait_instance(subject_id, ITER_TRAIT_FQN) != 0

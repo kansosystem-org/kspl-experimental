@@ -2,8 +2,8 @@
 // stand-in in place of llama-server and chat_server (`chat_support.mjs`). The cases: a missing
 // model file, a port held by something else, a server that never gets ready, one that ends early,
 // starting one with an API key, reusing it, stopping only the one started, a model named in vain,
-// a server whose key it does not hold, Ctrl+C with `--model-only`, chat_server where llama-server
-// is not on PATH, and the settings it refuses.
+// a server whose key it does not hold, a key file left behind, Ctrl+C with `--model-only`,
+// chat_server where llama-server is not on PATH, and the settings it refuses.
 // Usage: node tools/tests/chat_launch.mjs <ksagent_chat.exe> <work folder>
 // It prints `pass` and `FAIL` lines, and `RESULT: SOME FAILED` only where a case fails.
 import { execFileSync, spawn } from "child_process";
@@ -85,6 +85,8 @@ async function refused() {
   const cases = [
     [asMake("", { dir: "" }), 1, /name the folder to ask about: make chat DIR=<folder>/, "no folder, as make gives it"],
     [asMake("eighty"), 1, /--port takes a port number from 1 to 65535/, "a port that is not a number"],
+    [["--model-wait=0", ...asMake("")], 1, /--model-wait takes .* 1 or more: 0/, "a wait of 0 seconds"],
+    [["--model-wait=-5", ...asMake("")], 1, /--model-wait takes .* 1 or more: -5/, "a negative wait"],
     [["--model-only", `--dir=${folder}`], 1, /--dir and --show would do nothing/, "a folder with --model-only"],
     [[folder, "--", urlOf(8081)], 2, /unexpected/, "the old form, a folder and options after --"],
     [["--stop=../x"], 1, /to stop without '\.\.'/, "a folder to stop that holds '..'"],
@@ -141,6 +143,37 @@ async function locked() {
   check(c.code === 1 && /asks for an API key that this command does not hold\. Set KSAGENT_API_KEY/
     .test(c.seen), "it is refused, with what to do", c.seen);
   other.server.close();
+}
+
+// A key file left behind by a launcher that Ctrl+C ended, at a port where its server is gone.
+// **It must not stand in for `KSAGENT_API_KEY`**, and is deleted.
+async function staleKey() {
+  verdict.part = "a key file whose server is gone";
+  const keyed = await standIn({ key: "the-right-key" });
+  const keyFile = keyFileOf(keyed.port);
+  const leave = (port) => {
+    fs.mkdirSync(path.dirname(keyFileOf(port)), { recursive: true });
+    fs.writeFileSync(keyFileOf(port), "a-stale-key", { mode: 0o600 });
+  };
+  leave(keyed.port);
+  const c = start(["--model-only", "--model-file=", `--port=${keyed.port}`],
+    { KSAGENT_API_KEY: "the-right-key" });
+  await ended(c, 10000);
+  check(c.code === 0 && /using the one already answering/.test(c.seen),
+    "a server that refuses the kept key is asked with KSAGENT_API_KEY, and used", c.seen);
+  check(!fs.existsSync(keyFile), "the stale key file is deleted");
+  leave(keyed.port);
+  const wrong = start(asMake(keyed.port), { KSAGENT_API_KEY: "a-wrong-key" });
+  await ended(wrong, 10000);
+  check(wrong.code === 1 && /refuses the API key in KSAGENT_API_KEY\. Set it to the server's key/
+    .test(wrong.seen), "with a wrong KSAGENT_API_KEY too, it says that one is refused", wrong.seen);
+  keyed.server.close();
+  const free = await freePort();
+  leave(free);
+  const none = start(asMake(free), { KSAGENT_API_KEY: "" });
+  await ended(none, 10000);
+  check(/nothing answers at/.test(none.seen) && !fs.existsSync(keyFileOf(free)),
+    "where nothing answers at its port, the key file is deleted", none.seen);
 }
 
 async function neverReady() {
@@ -264,6 +297,7 @@ async function main() {
   await missingOther();
   await portTaken();
   await locked();
+  await staleKey();
   // **The cases that start a model server need POSIX here**: the stand-in is a shell script, which
   // Windows does not start as `llama-server`, and Ctrl+C and the started `ksagent watch` are
   // reached through process groups and `ps`. On Windows, a real llama-server checks them by hand

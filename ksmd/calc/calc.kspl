@@ -6,6 +6,7 @@
 //< Caution: **Calculate again after every edit.** `Results` holds the values of one moment, and
 //< places that an edit has moved point at other cells.
 import "ksmd/base/dates" { date_of }
+import "ksmd/base/keyed" { Keyed }
 import "ksmd/calc/args" { Raw_arg, Raw_args }
 import "ksmd/calc/bases" { READ_DIGITS, literal }
 import "ksmd/calc/forms" // `lookup`, `sum_product`, `column_name`, `conditional`, `area_of`
@@ -18,6 +19,7 @@ import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, Why, arithmetic, boolean
 import "ksmd/model/model" { Cell, Document, Table }
 import "std/ds" { List }
 import "std/mem" { Arena }
+import "std/str" // `text`, for the key of a call kept
 
 const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions, unary minus and
     //< `not`
@@ -26,7 +28,8 @@ const MAX_READS: Sz = 500000000 //< the cell values one calculation reads; past 
     //< A range read on every row multiplies the reads, so a crafted file of 8 MiB could take many
     //< minutes, and the page calculates after every edit. Two tables of 10,000 rows, each row
     //< taking a `sum_if` over a whole column, read 410 million: more than any document measured
-    //< needs.
+    //< needs. **A call worked out once is one read when used again** (`Parser.shared`): reading it
+    //< costs no more than reading one cell.
 
 priv const MAX_DEPTH: Sz = 256 //< the cells and levels one calculation passes through at a time
     //< A deeper chain is set aside and its deepest cell calculated first (`settle`), so a running
@@ -74,9 +77,10 @@ fn calculate( //< calculates every data cell; the results live in `arena`
     for u in Range.asc(doc.tables.len)
         cells += doc.tables[u].rows.len * doc.tables[u].columns.len
     defer scratch: = Arena(64 * 1024)
-    $c: = Calc::{ .doc = doc, .today = today, .own = own,
-        .most_reads = MAX_READS if most_reads <= 0 else most_reads, .past_limit = false,
-        .arena = arena, .scratch = scratch, .at = Positions(doc, arena),
+    defer kept: = Arena(64 * 1024)
+    $c: = Calc::{ .doc = doc, .today = today, .own = own, .kept = kept,
+        .shared = Keyed<|Shared|>(kept), .most_reads = MAX_READS if most_reads <= 0 else most_reads,
+        .past_limit = false, .arena = arena, .scratch = scratch, .at = Positions(doc, arena),
         .results = Results::{ .values = List<|Value|>.new_with_cap(cells, arena),
         .starts = List<|Sz|>(arena), .columns = List<|Sz|>(arena), .reads = 0, .looks = 0 },
         .states = List<|U8|>.new_with_cap(cells, scratch), .depth = 0, .deferring = false,
@@ -159,6 +163,13 @@ struct Calc //< the state of one calculation
     deferring: Bool //< a chain went past `MAX_DEPTH` at `deferred`; what it found is dropped
     deferred: Spot
     todo: List<|Spot|> //< the cells `settle` has set aside, the last one calculated next
+    kept: Arena$@ //< holds `shared` and its keys, for this calculation alone
+    shared: Keyed<|Shared|> //< the calls whose answer is known, by their function and cells
+        //< (`Parser.shared`)
+
+struct Shared //< a call's answer, kept for the same call on the same cells
+    value: Value //< its text, if any, stands in `Calc.arena`
+    misread: Bool //< its arguments did not fit the function: each formula that makes it fails
 
 priv fn settle(c: Calc$@, spot: Spot) //<
     //< Calculates a cell, setting aside each chain too deep to follow at once
@@ -546,11 +557,21 @@ impl Parser
                 p.digits = true
                 p.reads = i
         $args: = p.raw_arguments()
+        key: = p.shared_key(name, args@)
+        if key.len > 0
+            if hit: = p.c.shared.get(key)
+                return p.shared(hit, name)
         if got: = table.call(name, args@)
             // **An argument too many or too few is the formula's error**, not the value's.
-            if args.misread || args.used < args.args.len
+            misread: = args.misread || args.used < args.args.len
+            if misread
                 p.fail(.arguments, name, -1)
-            return args.named(got, name, .in_function)
+            v: = args.named(got, name, .in_function)
+            if key.len > 0 && p.settled(args@)
+                p.c.shared
+                    .set(p.c.kept.dup_str(key),
+                    Shared::{ .value = p.kept(v), .misread = misread })
+            return v
         if p.c.own != null && p.c.own.has(name)
             if p.skipping > 0
                 return empty()
@@ -564,6 +585,57 @@ impl Parser
             return Value.because(p.c.own.unknown, .own_function, name, -1)
         p.fail(.unknown_function, name, -1)
         return Value.failed(.syntax)
+
+    priv fn shared_key(p: Self$@, name: U8[], args: Raw_args@): U8[] //<
+        //< What names a call to one of ksmd's functions whose every argument is a reference alone:
+        //< the function and the cells; empty for any other call
+        //< **Such a call gives the same answer wherever it stands**, as no function reads anything
+        //< but its arguments. So a share of a total, `=A1/sum(A$1:A$10000)` on every row, adds the
+        //< column once, not once per row. A call read but not calculated, and a range read row by
+        //< row in a condition, are never kept.
+        if args.args.len == 0 || p.skipping > 0 || p.rows.inside
+            return ""
+        key: = p.c.scratch.text()
+        key.s(name)
+        for arg in args.args
+            if !arg.is_cells
+                return ""
+            area: = p.area_of(arg.piece) catch
+                return ""
+            key.s(" \{arg.range\} \{area.table\} \{area.rows.low\} \{area.rows.high\} ")
+                .s("\{area.columns.low\} \{area.columns.high\}")
+        return key.take()
+
+    priv fn settled(p: Self@, args: Raw_args@): Bool //<
+        //< Whether every cell of the call's references holds its final value, so the answer holds
+        //< for the rest of the calculation
+        //< **A cell's value never changes once settled.** One read as a cycle, as `#LIMIT!`, or in
+        //< a pass set aside is not settled yet, and a call that read it is not kept.
+        if p.c.deferring || p.c.past_limit
+            return false
+        for arg in args.args
+            area: = p.area_of(arg.piece) catch
+                return false
+            for row in Range(area.rows.low, area.rows.high + 1, 1)
+                for column in Range(area.columns.low, area.columns.high + 1, 1)
+                    index: =
+                        slot(p.c,
+                        Spot::{ .table = area.table, .row = row, .column = column })
+                    if p.c.states[index] != SETTLED
+                        return false
+        return true
+
+    priv fn shared(p: Self$@, hit: Shared, name: U8[]): Value //<
+        //< A call's kept answer, which counts as one read (`MAX_READS`)
+        if p.c.deferring
+            return Value.failed(.cycle)
+        if p.c.results.reads >= p.c.most_reads
+            p.c.past_limit = true
+            return Value.failed(.read_limit)
+        p.c.results.reads += 1
+        if hit.misread
+            p.fail(.arguments, name, -1)
+        return hit.value
 
     priv fn kept(p: Self$@, v: Value): Value //<
         //< A function's result, its text copied into `arena` before `scratch` rewinds

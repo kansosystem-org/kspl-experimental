@@ -3,10 +3,12 @@
 //< parses, it stays green with the replacement removed.
 //< **Test the three kinds of head separately**: `p.` (a receiver's type), `io.` (an import's alias)
 //< and a bare name take different paths (the reason is at `PICK_TAILS`).
+import "ksplc/tests/support/harness"
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "std/chars"
 import "std/ds" { List }
+import "std/fs"
 import "std/json" { Json_builder }
 import "std/mem" { Arena }
 import "std/str"
@@ -236,3 +238,83 @@ fn check_completion_generic(c: jsonrpc_client.Client$@, arena: Arena$@)
             .s(GENERIC_NAMES[i]).s(" returns the fields and the methods").take(),
             holds(rows@, "v") && holds(rows@, "peek"),
             lsp_client.why(c, lsp_client.join(names@, arena), arena))
+
+// ==========================================
+// What a trait value offers, and what a sibling file offers
+// ==========================================
+
+// **A trait value has no entry in the methods table**: its methods are the trait's. Both a trait
+// written here and one from std (`io.out()` gives an `io.Writer`) are asked.
+priv const TRAIT_SRC: U8[] =
+    """import "std/io"
+
+trait Speaker
+  fn hello(r: Self): I32 //< says hello
+
+
+fn talk(t: Speaker): I32
+  return t.
+
+
+"""
+
+priv const STD_TRAIT_SRC: U8[] = """import "std/io"
+
+fn main(): I32
+  io.out().
+  return 0
+
+"""
+
+fn check_completion_trait(c: jsonrpc_client.Client$@, arena: Arena$@)
+    $own: = picks_in(c, "lsp_pick_trait.kspl", TRAIT_SRC, 7, 11, arena)
+    $own_names: = labels(own@, arena)
+    verdict.check("completion on a trait value returns the trait's methods",
+        holds(own@, "hello"),
+        lsp_client.why(c, lsp_client.join(own_names@, arena), arena))
+    $std: = picks_in(c, "lsp_pick_std_trait.kspl", STD_TRAIT_SRC, 3, 11, arena)
+    $std_names: = labels(std@, arena)
+    verdict.check("completion on a std trait value returns the trait's methods",
+        holds(std@, "s") && holds(std@, "c"),
+        lsp_client.why(c, lsp_client.join(std_names@, arena), arena))
+
+// **A file of the same package reaches the names left without `pub`**, so they compile and are
+// offered; one marked `priv` is not.
+priv const SIDE_SRC: U8[] =
+    """fn inner_one(): I32 //< reached by the package
+  return 1
+
+
+priv fn hidden_one(): I32
+  return 2
+
+
+pub fn shown_one(): I32
+  return 3
+
+"""
+
+priv const SIDE_USER: U8[] = """import "side"
+
+fn main(): I32
+  return side.
+
+"""
+
+fn check_completion_sibling(exe: U8[], arena: Arena$@)
+    name: = "completion beyond a sibling file's alias offers what the package reaches"
+    dir: = harness.sandbox("lsp_pick_side")
+    fs.write_tree(dir, U8[][]::{ "side.kspl" }, U8[][]::{ SIDE_SRC }, arena) catch
+        verdict.check(name, false, "it cannot be placed in the working directory")
+        return
+    $c: =
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+            verdict.check(name, false, "the language server cannot be started")
+            return
+    defer c.free()
+    $rows: = picks_in(c@, "user.kspl", SIDE_USER, 3, 14, arena)
+    $names: = labels(rows@, arena)
+    shown: = lsp_client.why(c@, lsp_client.join(names@, arena), arena)
+    verdict.check(name, holds(rows@, "inner_one") && holds(rows@, "shown_one"), shown)
+    verdict.check("completion beyond a sibling file's alias leaves out what is `priv`",
+        !holds(rows@, "hidden_one"), shown)

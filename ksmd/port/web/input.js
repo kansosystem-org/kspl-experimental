@@ -158,8 +158,8 @@ function ksmdInput(ks) {
       else if (key === "k") name = "link";
       else if (e.key === ";") name = "date";
       else if (e.key === ":") name = "time";
-    } else if (mod && e.altKey && /^[0-6]$/.test(e.code.replace("Digit", ""))) {
-      const n = e.code.replace("Digit", "");
+    } else if (mod && e.altKey && /^Digit[0-6]$/.test(e.code) && !altGr(e, e.code.slice(5))) {
+      const n = e.code.slice(5);
       name = n === "0" ? "p" : `h${n}`;
     } else if (e.key === "Tab" && !mod && inList()) {
       name = e.shiftKey ? "outdent" : "indent";
@@ -169,6 +169,18 @@ function ksmdInput(ks) {
       ks.command(name);
     }
   });
+
+  // Caution: **AltGr types a character; it is not a shortcut.** On Windows the browser reports
+  // AltGr as Ctrl+Alt. AltGr+0 on a German keyboard (`}`) took Ctrl+Alt+0: it made a paragraph and
+  // dropped the character. A press is AltGr's where the browser says so. Outside a Mac it is also
+  // AltGr's where Ctrl+Alt gives a character other than `want`, the character the shortcut names.
+  // ProseMirror and CodeMirror decide the same way. The cost: a layout whose digit key types a sign
+  // without Shift, as `&` on a French one, makes no heading with Ctrl+Alt there; the menu still does.
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+  function altGr(e, want) {
+    return e.getModifierState("AltGraph") ||
+      (!mac && e.ctrlKey && e.altKey && !e.metaKey && e.key.length === 1 && e.key !== want);
+  }
 
   // Ctrl+End and Ctrl+Home where the document ends, or starts, with a block that holds no text, as
   // a table, a chart or a diagram. The browser cannot put its caret beside such a block, and

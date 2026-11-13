@@ -155,6 +155,8 @@ priv fn case_info(arena: Arena$@)
     verdict.check("info keywords: one a line, sorted, each once", in_order, kw.out)
     // A missing or wrong subject is rejected, with the valid ones listed.
     ng_case("info: with no subject it turns it away", U8[][]::{ "info" }, "std-dir")
+    ng_case("info: with no subject it says why", U8[][]::{ "info" },
+        "ksplc info: it takes one subject. None was given\nusage: ksplc info")
     ng_case("info: an unknown subject is turned away", U8[][]::{ "info", "std-dirs" }, "std-dir")
     ng_case("info: pkg-src-dir is no subject", U8[][]::{ "info", "pkg-src-dir" }, "std-dir")
     // `--std-dir=` works here too (the answer is that setting's result).
@@ -218,6 +220,10 @@ priv fn case_explain(arena: Arena$@) //<
         if line.len > 88
             short_lines = false
     verdict.check("explain: prose fits a readable terminal width", short_lines, readable.out)
+    view: = cli(U8[][]::{ "explain", "W0111" })
+    verdict.check("explain: a path the advice names is named from the repository's root",
+        view.out.find_str("`docs/SPEC-programming-language.md`").is_some() &&
+        view.out.find_str("../").is_none(), view.out)
     example: = cli(U8[][]::{ "explain", "I0401" })
     verdict.check("explain: code examples keep their text and line breaks",
         example.exited_with(0) &&
@@ -251,8 +257,10 @@ priv fn case_explain(arena: Arena$@) //<
         ran_on: =
             r.out.find_str("\n[W").is_some() || r.out.find_str("\n[I").is_some() ||
             r.out.find_str("\n[H").is_some()
+        // **A path is named from the repository's root**: the specification's own are relative
+        // to its folder, and wrong from wherever the command runs.
         if !r.exited_with(0) || !r.out.starts_with(head) || ran_on ||
-            r.out.find_str("\nDetails: ").is_none()
+            r.out.find_str("\nDetails: ").is_none() || r.out.find_str("../").is_some()
             bad.s("  ").s(code).c('\n')
     verdict.check(arena.text()
         .s("explain prints each registered code's section alone (\{seen\} codes)").take(),
@@ -304,6 +312,8 @@ priv fn case_build(arena: Arena$@) //<
     verdict.check("build: an output its own C would overwrite is refused with exit code 1",
         over.exited_with(1) && over.out.find_str("overwritten").is_some(), over.out)
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
+    ng_case("build: one operand alone is turned away, saying why", U8[][]::{ "build", src },
+        "ksplc build: it takes an input and an output. It was given:")
     // **[W0110] is printed by a build, not by `ksplc lint` alone** ("5.2 The diagnostics' four
     // weights" in `../../docs/SPEC-tools.md`): what it warns of reads freed memory at run time.
     io.write_file(src,
@@ -354,6 +364,11 @@ priv fn case_output_language(arena: Arena$@) //<
         U8[][]::{ std_flag(), "--to=c", src, fs.join(dir, "prog.c", arena) }, "")
     ng_case("--to on a compile names c or llvm",
         U8[][]::{ std_flag(), "--to=kspl", src, fs.join(dir, "x.c", arena) }, "'c' or 'llvm'")
+    // **A folder never made is the usual cause of a refused write**, so the error names it.
+    missing: = fs.join(dir, "not_made", arena)
+    ng_case("a compile into a folder that does not exist says so",
+        U8[][]::{ std_flag(), src, fs.join(missing, "x.c", arena) },
+        arena.text().s("the folder ").s(missing).s(" does not exist").take())
 
 priv fn case_machine(arena: Arena$@) //<
     //< `--machine` names a machine from ksplc's table, and nothing else
@@ -374,6 +389,10 @@ priv fn case_machine(arena: Arena$@) //<
         "8-byte pointers")
     ng_case("--machine does not take effect on run", U8[][]::{ "run", "--machine=x", src },
         "compile lint")
+    // **The IR would name the hosted runtime's helpers**, undefined on bare metal.
+    ng_case("--freestanding is refused beside --to=llvm, which has no freestanding runtime",
+        U8[][]::{ std_flag(), "--to=llvm", "--freestanding", src, out_c },
+        "The LLVM backend has no freestanding runtime yet. Use the C backend")
     ll: = fs.join(dir, "prog.ll", arena)
     ok_case("--to=llvm takes a 64-bit machine",
         U8[][]::{ std_flag(), "--to=llvm", "--machine=aarch64-linux-gnu", src, ll }, "")
@@ -425,8 +444,18 @@ priv fn case_refusals()
     ng_case("a .kspls source, the old name, is refused naming the rename",
         U8[][]::{ "a.kspls", "a.c" },
         "Rename this file and the files beside it from .kspls to .kspl")
-    ng_case("fmt with no input gives fmt's usage line", U8[][]::{ "fmt" },
-        "usage: ksplc fmt [options...] <input.kspl>...")
+    // **A refused command line gets the reason, then the usage** ("2.3 The other compiler options"
+    // in `../../docs/SPEC-tools.md`). The usage line alone does not say what is wrong.
+    ng_case("fmt with no input says why, then gives fmt's usage line", U8[][]::{ "fmt" },
+        "ksplc fmt: it takes one or more input files. None was given\nusage: ksplc fmt [options...] \
+            <input.kspl>...")
+    ng_case("lsp: an operand is turned away, saying why", U8[][]::{ "lsp", "x" },
+        "ksplc lsp: it takes no operand. It was given: 'x'\nusage: ksplc lsp")
+    ng_case("lint: two inputs are turned away, naming them",
+        U8[][]::{ "lint", "a.kspl", "b.kspl" },
+        "ksplc lint: it takes one input file. It was given: 'a.kspl' 'b.kspl'")
+    ng_case("a compile with one output alone says why", U8[][]::{ "a.c" },
+        "ksplc: a compile takes an input and an output")
     // **A subcommand left out or misspelled gets one line naming the likely command**, not the
     // whole usage, whose length would bury the error.
     ng_case("a lone .kspl input names ksplc run", U8[][]::{ "hello.kspl" },

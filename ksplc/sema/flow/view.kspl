@@ -39,7 +39,10 @@ struct View_book //< what is known of one function's views whatever the path
     marks: List<|View_mark|> //< each statement making a view
     ends: List<|View_end|> //< the last end of each view
     shared: List<|Ast_node$@|> //< the counted locals copied, so a new value may not free the old
-    reported: List<|Ast_node$@|> //< the views already reported, so each is once
+    reported: List<|View_end|> //<
+        //< The ends already reported, so each fault is once
+        //< Caution: **Key a report by the view and the call that ended it**, not by the view alone.
+        //< A view given a new value, which is then ended again, is a new fault.
     comparing: Bool //<
         //< Set while walking a comparison's bare names: comparing a pointer touches no memory
     active: Bool //< whether the lint runs at all
@@ -49,7 +52,7 @@ fn new_book(): View_book$@ //< an empty book
         .create(View_book::{ .marks = List<|View_mark|>(base_core.arena),
         .ends = List<|View_end|>(base_core.arena),
         .shared = List<|Ast_node$@|>(base_core.arena),
-        .reported = List<|Ast_node$@|>(base_core.arena), .comparing = false,
+        .reported = List<|View_end|>(base_core.arena), .comparing = false,
         .active = base_core.config.run_lint_checks })
 
 priv fn is_comparison(op: U8[]): Bool //< whether a binary operator compares its operands
@@ -214,12 +217,19 @@ impl View_book
                 return true
         return false
 
-    priv fn first_report(r: Self$@, view: Ast_node$@): Bool //< whether view is not yet reported
+    priv fn first_report(r: Self$@, end: View_end): Bool //< whether this end is not yet reported
         for n in r.reported
-            if n == view
+            if n.view == end.view && n.call == end.call
                 return false
-        r.reported.push(view)
+        r.reported.push(end)
         return true
+
+    priv fn end_of(r: Self@, view: Ast_node$@, use: Ast_node$@): View_end //<
+        //< The last end of view, or one at use where none is known
+        for e in r.ends
+            if e.view == view
+                return e
+        return View_end::{ .view = view, .owner = null, .call = use, .method = "" }
 
     priv fn note_mark(r: Self$@, site: Ast_node$@, view: Ast_node$@, owner: Ast_node$@) //<
         //< Adds a mark once: a loop walks its body more than once
@@ -252,9 +262,15 @@ impl View_book
             return
         r.note_mark(site, view, owner)
         state.viewing.add(site)
-        // A copy of a stale view is stale too.
+        // **A copy of a stale view is stale too, and the same fault**: the read that made it is
+        // reported (at `owner`), so the copy carries its end and is not reported again. A
+        // `for … in` over a stale view once said so twice, the second time naming no owner.
         if state.stale.contains(owner)
             state.stale.add(view)
+            for e in r.ends
+                if e.view == owner
+                    r.note_end(view, e.owner, e.call, e.method)
+            _told: = r.first_report(r.end_of(view, site))
 
     priv fn end_views(r: Self$@, state: sema_flow_track.Df_state$@, owner: Ast_node$@,
         call: Ast_node$@, method: U8[]) //<
@@ -283,13 +299,11 @@ impl sema_flow_track.Df_ctx
         use: Ast_node$@) //<
             //< [W0111] A read of a view that some path to it ended
         book: = r.views
-        if !book.active || book.comparing || !state.stale.contains(def) ||
-            !book.first_report(def)
+        if !book.active || book.comparing || !state.stale.contains(def)
             return
-        $end: = View_end::{ .view = def, .owner = null, .call = use, .method = "" }
-        for e in book.ends
-            if e.view == def
-                end = e
+        end: = book.end_of(def, use)
+        if !book.first_report(end)
+            return
         owner: = local_name(end.owner)
         line: = r.sema.line_of(end.call.loc)
         what: = r.sema.clear_scratch()

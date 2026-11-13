@@ -5,7 +5,10 @@
 // extension asks of it. The server records every message the extension writes. It answers each
 // request with nothing, but `prepareRename` with a refusal. It plays one editing session and
 // prints one JSON object: the messages in the order the server read them, how often the output
-// panel was brought forward, and what the editor was told when the rename was refused.
+// panel was brought forward, and what the editor was told when the rename was refused. Then it
+// changes a setting the server starts with, and stops the server again and again: `starts` holds
+// the `KSPLC_DEFINES` of each start, `restarted` the methods sent meanwhile, and `errors` what the
+// editor was told.
 // Caution: **Answer `initialize` late**, on a later turn, as a real server does. If it is answered
 // at once, a message sent during the handshake cannot be told from one sent after it.
 'use strict';
@@ -41,7 +44,8 @@ for (const key of Object.keys(declared)) settings[key] = declared[key].default;
 // **The program started is a fake**, so the path need only exist.
 settings['kspl.serverPath'] = extPath;
 
-const seen = { sent: [], shown: 0, refusal: '' };
+const seen = { sent: [], shown: 0, refusal: '', starts: [], errors: [] };
+let server = null;
 const refusal = 'refused by the fake server';
 let definitionUri;
 
@@ -87,7 +91,11 @@ function fakeServer() {
     };
     return proc;
 }
-cp.spawn = fakeServer;
+cp.spawn = (exe, args, options) => {
+    seen.starts.push(options.env.KSPLC_DEFINES || '');
+    server = fakeServer();
+    return server;
+};
 
 class Uri {
     constructor(fsPath) { this.fsPath = fsPath; this.scheme = 'file'; }
@@ -124,9 +132,13 @@ const vscode = new Proxy({
     window: {
         visibleTextEditors: [],
         createOutputChannel: () => ({ appendLine() {}, show() { seen.shown += 1; }, dispose() {} }),
+        showErrorMessage: (msg) => { seen.errors.push(msg); },
+    },
+    commands: {
+        registerCommand: () => disposable,
     },
     languages: new Proxy({
-        createDiagnosticCollection: () => ({ set() {}, dispose() {} }),
+        createDiagnosticCollection: () => ({ set() {}, clear() {}, dispose() {} }),
     }, {
         get: (own, key) => key in own ? own[key] : (selector, provider) => {
             providers[key] = provider;
@@ -177,15 +189,28 @@ async function session() {
     fire('close', doc('a.kspl', 3, 'unsaved'));
     fire('open', doc('a.kspl', 1, 'from disk'));
     await wait(2000);
+    const session_sent = seen.sent.slice();
+    const session_shown = seen.shown;
+    // A changed `kspl.defines` starts the server again with it. Then the server stops by itself
+    // five times: it is started again four times, and the editor is told once that it is not.
+    // **The first stop comes before that server answers `initialize`.**
+    settings['kspl.defines'] = ['blas'];
+    fire('config', { affectsConfiguration: (key) => key === 'kspl.defines' });
+    for (let i = 0; i < 5; i++) {
+        server.exitCode = 1;
+        server.emit('exit', 1);
+        await wait(50);
+    }
     ext.deactivate();
-    const sent = seen.sent.map((m) => {
+    const sent = session_sent.map((m) => {
         const td = (m.params && m.params.textDocument) || {};
         const change = m.params && m.params.contentChanges && m.params.contentChanges[0];
         return { method: m.method, uri: td.uri, version: td.version,
             text: td.text !== undefined ? td.text : change && change.text };
     });
-    process.stdout.write(JSON.stringify({ sent, shown: seen.shown, refusal: seen.refusal }) +
-        '\n');
+    process.stdout.write(JSON.stringify({ sent, shown: session_shown, refusal: seen.refusal,
+        starts: seen.starts, errors: seen.errors,
+        restarted: seen.sent.slice(session_sent.length).map((m) => m.method) }) + '\n');
 }
 
 session().catch((err) => {

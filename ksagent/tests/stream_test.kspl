@@ -237,7 +237,8 @@ fn test_the_live_file_follows_the_answer(work: U8[], arena: Arena$@)
     verdict.check("the live file ends saying the turn is recorded, and holds no text",
         live.equals("{\"id\":\"q1\",\"phase\":\"done\"}\n"), live)
     verdict.check("a chat file is no source: a search passes it over",
-        files.tool_search(root, "Ten days", "", stub.ROOM, arena).find_str("team.").is_none(), "")
+        files.tool_search(files.Folder(root), "Ten days", "", stub.ROOM, arena).find_str("team.")
+        .is_none(), "")
 
 fn test_a_removed_question_stops_its_answer(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a question gone from its ask file while its answer streams stops it")
@@ -305,3 +306,24 @@ fn test_a_stopped_answer_stays_marked_unchecked(work: U8[], arena: Arena$@)
         growing.equals(waiting) || growing.equals(writing), growing)
     verdict.check("after the stop, it says stopped and why, beside the text shown",
         text.equals(stopped), text)
+
+fn test_the_live_file_is_written_again_while_the_work_goes_on(work: U8[], arena: Arena$@)
+    verdict
+        .start("[ksagent] the live file is written again every few seconds while nothing changes")
+    // **So a page can tell a ksagent that works from one stopped by Ctrl+C**, which leaves the
+    // live file as it last was. The time since the last write is set back here, not waited out.
+    root: = stub.folder(work, "kept-live", arena)
+    ask: = fs.join(root, "team.ask.jsonl", arena)
+    io.write_file(ask, ASKED_LEAVE) catch panic("the ask file can be written")
+    live: = files.live_path(ask, arena)
+    defer $shown: = Progress.following(ask, live, "q1", .en, false, arena)
+    fs.remove_path(live) catch panic("the live file can be removed")
+    soon: = shown.go_on()
+    verdict.check("a look just after a write writes nothing", soon && !fs.exists(live), "")
+    shown.last_live_us -= 6000000I64
+    later: = shown.go_on()
+    again: = io.read_file(live, arena) catch
+        fallback ""
+    verdict.check("a look 6 seconds after the last write writes the live file again",
+        later &&
+        again.equals("{\"id\":\"q1\",\"phase\":\"waiting\",\"tools\":\"\",\"text\":\"\"}\n"), again)

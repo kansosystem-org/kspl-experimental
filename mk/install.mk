@@ -3,12 +3,13 @@
 # Taken in by the root Makefile; the rule for including is in the header of its `include mk/ci.mk`.
 # ==================================================================
 ## Build-and-install|install-lsp|Put the language server where the VS Code extension keeps it
-install-lsp: $(EXT_BIN_DIR)/$(PLATFORM)/$(LSP_EXE)
+install-lsp: $(EXT_BIN_DIR)/$(PLATFORM)-$(ARCH)/$(LSP_EXE)
 .PHONY: install-lsp install install-check
 
-$(EXT_BIN_DIR)/$(PLATFORM)/$(LSP_EXE): $(SHIP_EXE)
-	@echo "# INSTALLING LSP SERVER FOR $(PLATFORM)..."
-	@mkdir -p $(EXT_BIN_DIR)/$(PLATFORM)
+# The folder is the one the extension looks in (`bundledServer` in its `extension.js`).
+$(EXT_BIN_DIR)/$(PLATFORM)-$(ARCH)/$(LSP_EXE): $(SHIP_EXE)
+	@echo "# INSTALLING LSP SERVER FOR $(PLATFORM)-$(ARCH)..."
+	@mkdir -p $(EXT_BIN_DIR)/$(PLATFORM)-$(ARCH)
 	@cmp -s $< $@ || (cp $< $@ && echo "LSP Server installed to $@")
 
 # --- Putting ksplc on PATH (make install) ---
@@ -83,7 +84,8 @@ endef
 
 # **The libraries come as a third piece, `lib/` beside `std/`**, where the installed ksplc finds a
 # package with nothing set ("The source of a package other than `std`" in `ksplc/docs/SPEC-tools.md`).
-# A library's own `out/`, what its tests built, stays behind.
+# What the tests of `std/` and of each library built, their `out/`, stays behind: it can hold links
+# back into the repository.
 # Stage every copy before moving any installed path. Keep the old ones until every move succeeds.
 # These are separate paths, not an atomic set; do not compile during installation. A failed
 # rollback keeps its backup folders and prints them rather than deleting the old files.
@@ -131,7 +133,7 @@ trap finish 0; trap 'exit 1' HUP INT TERM; \
 bin_stage=$$(mktemp -d "$(PREFIX)/bin/.kspl-install.XXXXXX"); \
 std_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
 cp "$(SHIP_EXE)" "$$bin_stage/new$(suffix $(INSTALL_NAME))"; chmod +x "$$bin_stage/new$(suffix $(INSTALL_NAME))"; \
-cp -R std "$$std_stage/new"; \
+cp -R std "$$std_stage/new"; rm -rf "$$std_stage/new/out"; \
 lib_stage=$$(mktemp -d "$(PREFIX)/lib/kspl/.kspl-install.XXXXXX"); \
 cp -R lib "$$lib_stage/new"; rm -rf "$$lib_stage/new"/*/out; \
 if [ -f "$(KSMD_INSTALL_MARK)" ]; then \

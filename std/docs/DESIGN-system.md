@@ -284,17 +284,20 @@ Caution: **Do not add a per-purpose way to start a child to C**, for the reason 
 
 ### A bare program name is looked up in PATH alone
 
-**`argv[0]` without a directory is looked up in PATH and nowhere else, on every OS**, as POSIX's `execvp` does.
+**`argv[0]` without a directory is looked up in PATH and nowhere else, on every OS.** `std/subproc` does the search itself on both.
 
 | Where the OS looks, in order | POSIX `execvp` | Windows `CreateProcessW` | `std/subproc` |
 | :-- | :-- | :-- | :-- |
 | This executable's directory | — | 1 | — |
-| The current directory | — | 2 | — |
+| The current directory | where PATH has an empty entry | 2 | — |
 | The system directory | — | 3 | — |
 | The Windows directory | — | 4 | — |
 | The directories PATH names | 1 | 5 | 1 |
 
-Left to Windows, a `cc.exe` in a cloned repository would run in place of the compiler, and `bash` would start WSL's launcher. So on Windows, `std/subproc` looks the name up in PATH itself. It puts the full path found in the command line, and a name not found fails to start with error 2, as `execvp` gives `ENOENT`.
+* **An empty PATH entry names no folder.** `execvp` reads one (`a::b`, or a `:` at either end) as the current directory, so a `cc` in a cloned repository would run in place of the compiler. An unset PATH finds nothing.
+* **On POSIX, the rest is `execvp`'s search.** A folder that does not hold the name, or holds it as a file that cannot run, passes the search to the next folder. A file that the OS cannot start fails, as one named by its path does ("A child that cannot start fails the start everywhere" below).
+
+Left to Windows, a `cc.exe` in a cloned repository would run in place of the compiler, and `bash` would start WSL's launcher. So on Windows too, `std/subproc` looks the name up in PATH itself. It puts the full path found in the command line, and a name not found fails to start with error 2, as POSIX gives `ENOENT`.
 
 * **A name with no extension is tried with `.exe`, `.com`, `.bat` and `.cmd`**, in that order, in each folder before the next. These are the extensions `fs.can_run` accepts, so `npm` finds `npm.cmd`. `PATHEXT` is not read: whoever can change it could get something else started.
 * **A batch file found this way is refused arguments that `cmd.exe` would read as commands**, as one named in full is.
@@ -306,7 +309,7 @@ Left to Windows, a `cc.exe` in a cloned repository would run in place of the com
 
 ### A child that cannot start fails the start everywhere
 
-**Every function in `std/subproc` gives `spawn_failed` for a program that cannot start**, never an exit code. That covers a program that is missing or cannot run, and one that cannot be given its working directory or output files. **A file named by its path that is not a program the OS can start fails too.** POSIX's `execvp` would hand such a file to `/bin/sh`, so a damaged or empty program would run as a shell script, or as nothing with exit 0. So a path with a `/` goes to `execv`, which refuses it. A bare name is looked up as `execvp` looks it up, as a shell does. `CreateProcessW` fails for each of those by itself. POSIX meets the failure in the forked child, after the fork has succeeded. So the child writes a byte on a pipe that the start already waits on, which closes by itself when `exec` succeeds (*close-on-exec*).
+**Every function in `std/subproc` gives `spawn_failed` for a program that cannot start**, never an exit code. That covers a program that is missing or cannot run, and one that cannot be given its working directory or output files. **A file named by its path that is not a program the OS can start fails too.** POSIX's `execvp` would hand such a file to `/bin/sh`, so a damaged or empty program would run as a shell script, or as nothing with exit 0. So every start goes to `execv`, which refuses it, a bare name too once the search has found it. `CreateProcessW` fails for each of those by itself. POSIX meets the failure in the forked child, after the fork has succeeded. So the child writes a byte on a pipe that the start already waits on, which closes by itself when `exec` succeeds (*close-on-exec*).
 
 ```mermaid
 sequenceDiagram
@@ -367,11 +370,13 @@ The wait ends as soon as the group is empty. A KSPL program inside the group can
 
 **`spawn_limited`'s child writes on the terminal from a group of its own, and reads an empty standard input.** A write from outside the foreground group is allowed, so its output reaches the screen as it comes. A read would be stopped, so its standard input is a pipe closed at the start.
 
+**The children of `run_capture`, `run` and `run_many` read an empty standard input too.** They are also in a group of their own. A child that read a terminal from there would be stopped by the OS (`SIGTTIN`) until its limit, with no word why. With a pipe closed at the start, it reads an end at once. **Input piped to the starter does not reach these children.** A child that must read the starter's input runs through `spawn_wait`, or gets its input through `spawn_feed`.
+
 What this gives up:
 
 | Case | What happens |
 | :-- | :-- |
-| A child stopped at its limit asks something on the terminal itself (a password prompt that opens `/dev/tty`), or changes the terminal's modes | The OS stops it until the limit ends it. A tool that must ask runs through `spawn_wait` |
+| A child stopped at its limit asks something on the terminal itself (a password prompt that opens `/dev/tty`), or changes the terminal's modes | The OS stops it until the limit ends it. Its standard input is empty, so only a read of the terminal itself does this. A tool that must ask runs through `spawn_wait` |
 | The terminal is set to stop a background writer (`stty tostop`) | `spawn_limited`'s child is stopped at its first write until the limit ends it |
 | A process that the child started leaves the group on purpose (a daemon that calls `setsid`) | It is not stopped |
 | On POSIX, a process that the child started leads a group of its own. Its starter does not pass `SIGTERM` on (a shell's job control, another language's runner) | It runs until it ends. A KSPL starter at its default passes `SIGTERM` on. Windows nests a job inside the job, so there it is stopped either way |
@@ -508,12 +513,14 @@ Note: **A child's working directory stays under 260**, since the OS keeps a proc
 | A `:` | `key::$DATA` | It starts a drive, or an NTFS stream that gives the file's contents |
 | A name ending in `.` or a space | `secret.key.` | Windows drops them, so the name opens another file |
 | A Windows device name | `CON`, `nul.txt`, `COM1` | It is a device at any level, and a read on an empty port never returns |
-| `~` before a digit | `GIT~1` | It is the form of a short name, so `.git` opens with no dot written |
+| A short name's shape | `GIT~1`, `A~1.TXT` | Windows opens the file by its short name, so `.git` opens with no dot written |
 | A wildcard | `*`, `?`, `<`, `>`, `"`, `\|` | Windows's lookups read it as a pattern, so `.g*` can find `.git` |
 | A link or a junction on a step | | It can lead out of the root (the section below) |
 | A name starting with a dot, if the caller asks | `.git/config` | The section "A hidden name is found by its long name too" below |
 
-**A form is refused, never rewritten.** The forms rewritten would be one more rule that must agree with the OS's. A name with `~1`, a `\` or a `*` is legal on Linux, so such a file cannot be reached through this door. That is the cost of one rule for every OS. A server that offers a listing leaves such names out by the same check.
+**A short name's shape is exact**: 1 to 6 ASCII characters, a `~` and digits, 8 characters at most in all, then perhaps a `.` and 1 to 3 ASCII characters. Only such a name can be a short name. So `budget~2024.md`, `日本語~1.md` and `第1四半期(4~6月).xlsx` are taken, and `PROGRA~1` and `x~10.md` are refused. The check reads the text alone, and gives the same answer on every OS.
+
+**A form is refused, never rewritten.** The forms rewritten would be one more rule that must agree with the OS's. A name such as `A~1.TXT`, or one with a `\` or a `*`, is legal on Linux, so such a file cannot be reached through this door. That is the cost of one rule for every OS. A server that offers a listing leaves such names out by the same check.
 
 **An empty path is the root itself.** A web server and a model's tools both name the root that way.
 

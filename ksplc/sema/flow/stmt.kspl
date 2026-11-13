@@ -122,6 +122,9 @@ impl Ast_node
             init_node.analyze_df_node(c, state)
         target: = c.exit_targets.len - 1
         known: = c.locals.len
+        // The locals an enclosing loop carries, which stay carried after this one.
+        $outer_carried: = sema_flow_track.Df_set(false)
+        outer_carried.copy_from(state.carried_vars@)
         $head: = state
         for
             back: = r.df_loop_pass(c, head, target)
@@ -141,6 +144,12 @@ impl Ast_node
         jumps: = c.exit_targets.get(target).jump_state
         if jumps != null
             state.apply_merged_state(jumps)
+        // **After the loop, no pass of it lies around a use**, so what this loop carried is
+        // reported as a plain release or move: the line that did it is above the use again.
+        for $i: = state.carried_vars.items.len; i > 0; i -= 1
+            v: = state.carried_vars.items.get(i - 1)
+            if !outer_carried.contains(v)
+                state.carried_vars.remove(v)
         // What follows a loop that never ends is unreachable ([W0201]), by the judgement the
         // missing-return check reads too.
         state.reachable = !r.is_endless_loop()

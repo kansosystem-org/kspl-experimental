@@ -120,6 +120,30 @@ fn main(): I32
   for t in ::{ "", "12" }
     io.out().s(t)
   return 0
+// ==== case for_in_not_a_sequence
+//< A `for … in` over a value that is no sequence says what the loop needs
+//< Expanded, a plain struct gave "no field 'len'" and "requires 'Index'", which name code the
+//< writer never wrote. A pointer to such a struct is refused the same way.
+// EXPECT: for_in_not_a_sequence.kspl:14:3: error: 'for … in' cannot walk a '
+// EXPECT: It walks an array, a slice, a type with a 'len' field and '[]' (the trait 'Index' from std/lang), or a type that implements 'Iter' from std/lang
+// EXPECT: for_in_not_a_sequence.kspl:20:3: error: 'for … in' cannot walk a '
+// EXPECT: Finished with 2 error(s)
+// EXPECT-NOT: no field or method named 'len'
+priv struct C
+  n: I32
+
+priv fn sum(c: C@): I32
+  $t: I32 = 0
+  for x in c
+    t += x
+  return t
+
+fn main(): I32
+  $t: I32 = 0
+  for x in C::{ .n = 1 }
+    t += x
+  c: = C::{ .n = 2 }
+  return t + sum(c@)
 // ==== case for_one_init
 //< A loop's header declares one variable; a second one is declared before the loop
 // EXPECT: Note: a loop's header takes one declaration and one step
@@ -517,6 +541,24 @@ priv fn freed_by_a_defer(n: I32)
 fn main(): I32
   freed_by_a_defer(2)
   return I32::freed_in_the_body(2)
+// ==== case loop_carries_a_release_reported_once
+//< A release a loop carries is reported once per read, and after the loop as a plain release
+//< A `defer` body runs at a `continue` and at the block's end, and was reported at both. A use
+//< after the loop has no pass of it around it, so the note about an earlier pass would send the
+//< reader to look below the use in vain.
+// EXPECT: loop_carries_a_release_reported_once.kspl:14:11: error: variable 'b' may already be freed here (use-after-free or double free), by an earlier pass of the loop around this use (this `defer` body runs when line 16 leaves the scope)
+// EXPECT: loop_carries_a_release_reported_once.kspl:17:3: error: variable 'b' may already be freed here (use-after-free or double free)
+// EXPECT-NOT: loop_carries_a_release_reported_once.kspl:17:3: error: variable 'b' may already be freed here (use-after-free or double free), by
+// EXPECT: Finished with 2 error(s)
+import "std/str" { Str_builder }
+
+fn main()
+  $b: = Str_builder()
+  for i in Range.asc(2)
+    defer b.free()
+    if i == 0
+      continue
+  b.s("x")
 // ==== case loop_exit_carries_a_move
 //< What follows a statement a jump leaves starts from the state each jump carries
 //< **A `break`, a `continue` and a `fallback` each carry the state of their own path.** If it is

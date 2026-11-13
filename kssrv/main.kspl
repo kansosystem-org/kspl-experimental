@@ -169,6 +169,8 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
             c.arena.restore(base)
             return
         c.need = head.consumed + head.body_length
+        if c.inbuf.len < c.need && waits_for_continue(head)
+            c.outbuf.s(CONTINUE)
         c.arena.restore(base)
         if c.inbuf.len < c.need
             return
@@ -189,6 +191,21 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
     // The response is in `outbuf` (on the heap) by now. Without the rewind, a keep-alive
     // connection's arena grows with every request.
     c.arena.restore(base)
+
+priv const CONTINUE: U8[] = "HTTP/1.1 100 Continue\r\n\r\n" //<
+    //< The interim answer that lets a client waiting on `Expect: 100-continue` send its body
+
+priv fn waits_for_continue(head: http.Request@): Bool //<
+    //< Whether the client holds back the body until it reads `CONTINUE` (RFC 9110 §10.1.1)
+    //< Without that answer, curl waits a second before each upload. A 1.0 client's `Expect` is
+    //< ignored, as the RFC requires. The answer goes only after `accept_head` took the head, so a
+    //< refused upload is never asked for.
+    if !http.is_1_1_or_later(head.version)
+        return false
+    for h in head.headers.each()
+        if h.name.equals_ignore_case("Expect") && http.lists_token(h.value, "100-continue")
+            return true
+    return false
 
 priv fn head_decided(c: conn.Conn$@): Bool //<
     //< Whether `inbuf` holds what decides its head: its end, a line break it refuses, or its cap

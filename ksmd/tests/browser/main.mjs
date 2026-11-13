@@ -207,6 +207,24 @@ const sections = {
     await select(0, 0, 0);
     await press("2", CTRL | ALT);
     await saves("Ctrl+Alt+2 makes a heading", `${H}## [one](https://kanso.example/one) two \`three\`\n`);
+    // AltGr, which Windows reports as Ctrl+Alt, types a character: `}` from AltGr+0 on a German
+    // keyboard, `#` from AltGr+3 on a French one. Chrome on Windows types them, Chrome on Linux does
+    // not, so the block's kind is checked with or without them, and the source is loaded again.
+    for (const [key, code] of [["}", "Digit0"], ["#", "Digit3"]]) {
+      const altGr = { key, code, windowsVirtualKeyCode: 48 + Number(code[5]), modifiers: CTRL | ALT };
+      await page("Input.dispatchKeyEvent", { ...altGr, type: "keyDown", text: key, unmodifiedText: key });
+      await page("Input.dispatchKeyEvent", { ...altGr, type: "keyUp" });
+    }
+    {
+      await settle();
+      const heading = `${H}## [one](https://kanso.example/one) two \`three\`\n`;
+      const typed = `${H}## }#[one](https://kanso.example/one) two \`three\`\n`;
+      const got = await source();
+      check(got === heading || got === typed,
+        "AltGr's characters through Ctrl+Alt change no block's kind", JSON.stringify(got));
+      await load(heading);
+      await select(0, 0, 0);
+    }
     await js("(() => { const k = document.querySelector('.quick [data-quick=\"kind-list\"]'); k.value = 'p'; k.dispatchEvent(new Event('change')); })()");
     await saves("the quick access bar's Kind of block, Paragraph makes it a paragraph again", `${H}[one](https://kanso.example/one) two \`three\`\n`);
     await js("(() => { const k = document.querySelector('.quick [data-quick=\"kind-list\"]'); k.value = 'c'; k.dispatchEvent(new Event('change')); })()");

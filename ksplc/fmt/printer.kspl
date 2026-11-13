@@ -67,6 +67,9 @@ struct Formatter
         //< **The reader joins such a line to the one above**, past comment lines and blank lines
         //< (`joins_next` in `../parse/line_cont.kspl`). So the comments before it and the link
         //< itself keep the wrapping indent (`carries_on`).
+    stmt_start: Bool //<
+        //< Whether the next token starts a statement or a declaration, so a line ends before it
+        //< A string sets it apart from one that continues an expression (`format_string_token`).
     from_layout: Bool //<
         //< Whether the source read was the indentation notation (`.kspl`)
         //< In that notation `../parse/layout.kspl` inserts every `{` `}` `;`, and
@@ -181,12 +184,13 @@ impl Formatter
             .level_extra = 0, .block_head_col = -1, .head_wanted = false, .head_col = -1,
             .current_col = 0, .src = src, .last_offset = 0, .last_char = '\n',
             .last_text = Str_builder(), .code_end = 0, .suppress_nl_depth = 0, .pending_seg_len = 0,
-            .pending_dot_break_ok = false, .link_next = false, .too_deep = false,
-            .postfix_mark_next = false, .from_layout = from_layout, .paren_depth = 0,
-            .open_brackets = 0, .paren_indent_level = 0, .line_indent = 0, .line_wrapped = false,
-            .summary_cont_col = 0, .summary_run_open = false, .summary_said = false,
-            .summary_last = false, .ternary_depth = -1, .ternary_broke = false,
-            .block_on_one_line = false, .paren_spans = List<|Sz|>(null),
+            .pending_dot_break_ok = false, .link_next = false, .stmt_start = false,
+            .too_deep = false, .postfix_mark_next = false, .from_layout = from_layout,
+            .paren_depth = 0, .open_brackets = 0, .paren_indent_level = 0, .line_indent = 0,
+            .line_wrapped = false, .summary_cont_col = 0, .summary_run_open = false,
+            .summary_said = false, .summary_last = false, .ternary_depth = -1,
+            .ternary_broke = false, .block_on_one_line = false,
+            .paren_spans = List<|Sz|>(null),
             .flags = Fmt_flags::{
             .is_line_start = true,
             .wrap_indent = false,
@@ -437,17 +441,8 @@ impl Formatter
             !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset)
         r.catch_up_trivia(node.loc.offset, force_no_nl)
         r.link_next = false
-
-        if r.flags.force_next_nl
-            // **An `else` or a `case` after a block is not joined to it either.** The `}` is not
-            // written, so joining would put it on the preceding block's last statement.
-            if !text.equals(";") && !text.equals(",")
-                if !r.flags.is_line_start
-                    r.write_nl()
-                // **Inside a bracket the indent is kept** (the reason is at
-                // `Formatter.in_continuation`).
-                r.flags.wrap_indent = r.in_continuation()
-            r.flags.force_next_nl = false
+        r.stmt_start = false
+        r.start_forced_line(text)
 
         if text.equals(";") || text.equals("{") || text.equals("}") || text.equals("]") ||
             text.equals(")")
@@ -576,6 +571,21 @@ impl Formatter
             r.paren_spans.push(node.source_end(r.src))
         r.ternary_depth = -1
 
+    priv fn start_forced_line(r: Self$@, text: U8[]) //<
+        //< It starts the line a statement's end asked for, before the token `text`
+        //< Caution: **Every leaf calls this, a string that starts a statement too.** Such a string
+        //< once joined the line above, and the text no longer parsed.
+        if r.flags.force_next_nl
+            // **An `else` or a `case` after a block is not joined to it either.** The `}` is not
+            // written, so joining would put it on the preceding block's last statement.
+            if !text.equals(";") && !text.equals(",")
+                if !r.flags.is_line_start
+                    r.write_nl()
+                // **Inside a bracket the indent is kept** (the reason is at
+                // `Formatter.in_continuation`).
+                r.flags.wrap_indent = r.in_continuation()
+            r.flags.force_next_nl = false
+
     priv fn format_string_token(r: Self$@, node: Ast_node@, no_space_mode: Bool) //<
         //< It writes a string literal, joined and carried onto the next line where it does not fit
         //< A whole string (its \{...\} interpolations included) is one token. So its leading space
@@ -584,8 +594,13 @@ impl Formatter
         // Caution: **Keep the line break where a comment stands before the string.** Pulled up, a
         // comment on a line of its own moves onto the line above. After a `//<` there, it would
         // join the summary's text.
+        starts: = r.stmt_start && r.flags.force_next_nl // it begins a statement on a line of its own
+        r.stmt_start = false
         r.catch_up_trivia(node.loc.offset,
+            !starts &&
             !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset))
+        if starts
+            r.start_forced_line("\"")
         span: = node.get_string_span(r.src)
         raw_text: = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
         // A literal is laid out from its joined spelling. So its place on the line decides where it
@@ -678,6 +693,8 @@ impl Formatter
         if my_list_suppress
             r.suppress_nl_depth += 1
 
+        if fmt_kinds.rules.is_stmt_or_decl(kind_id)
+            r.stmt_start = true
         if len == 0 || kind_id == .k_identifier || kind_id == .k_keyword || kind_id == .k_literal ||
             kind_id == .k_primitive_type || kind_id == .k_char || kind_id == .k_integer ||
             kind_id == .k_float || kind_id == .k_bool || kind_id == .k_null

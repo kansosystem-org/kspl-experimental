@@ -426,10 +426,56 @@ impl Sema_ctx
             r.scratch
                 .s("cannot apply '\{op\}' to a read-only operand: its method takes the operand as \
                     'Self$@' (writable).")
+        r.scratch.s(" ")
+        r.read_only_place_fix(recv)
         r.scratch
-            .s(" Make the binding mutable ('$x'), take the receiver as 'Self@' if the method does \
-                not write, or cast explicitly ('T$@::(...)') if the write is intended.")
+            .s(", take the receiver as 'Self@' if the method does not write, or cast explicitly \
+                ('T$@::(...)') if the write is intended.")
         r.err(recv, r.scratch.slice())
+
+    fn read_only_place_fix(r: Self$@, node: Ast_node$@) //<
+        //< Adds to the scratch the change that makes a read-only place writable, by its name
+        //< **A read-only pointer on the way is changed in its type** (`P$@`), since a `$` before
+        //< its name lets only the pointer itself be set again. An immutable root binding takes the
+        //< `$`.
+        if ptr: = r.read_only_pointer_on_path(node)
+            pointee: = r.env.get_clean_real_type(r.env.strip_ptr(ptr.type_id))
+            shown: = r.env.display(pointee)
+            if ptr.is_path_or_ident()
+                name: = ptr.get_path_or_ident_name().fqn_last()
+                r.scratch.s("Take '\{name\}' as a writable pointer ('\{shown\}$@')")
+            else
+                r.scratch.s("Reach it through a writable pointer ('\{shown\}$@')")
+            return
+        sym: = r.root_binding_of(node).unwrap_or(null)
+        if sym == null || sym.flags.is_mut
+            r.scratch.s("Make the binding mutable (a '$' before its name)")
+            return
+        switch sym.kind
+        case .variable
+            r.scratch.s("Make the binding mutable ('$\{sym.name.fqn_last()\}')")
+        default
+            r.scratch.s("Copy the constant '\{sym.name.fqn_last()\}' into a mutable binding")
+
+    priv fn read_only_pointer_on_path(r: Self$@, node: Ast_node$@): Ast_node$@? //<
+        //< The read-only pointer (`T@`) a place is reached through, where its path holds one
+        //< The walk follows `.` and `[` down to the root, as root_binding_of does.
+        $curr: = node
+        for curr != null
+            if r.env.is_pointer(curr.type_id)
+                if r.env.is_const(r.env.strip_ptr(curr.type_id))
+                    return .some(curr)
+                return .none
+            if curr.kind_id == .k_expr_primary && curr.children.len > 0
+                curr = curr.get_primary_inner_expr()
+                continue
+            if curr.kind_id != .k_expr_postfix || curr.children.len < 2
+                return .none
+            op: = curr.get_postfix_op()
+            if op == null || (!op.text.equals(".") && !op.text.equals("["))
+                return .none
+            curr = curr.get_postfix_receiver()
+        return .none
 
     fn refuse_interior_mutable_copy(r: Self$@, type_id: I32, name: U8[], loc: Ast_node$@) //<
         //< Refuses a binding the compiler makes (it holds a copy) of an `Interior_mutable` type
@@ -611,6 +657,16 @@ impl Sema_ctx
         if r.is_exempt_generic_reference(sym, defined_in)
             return true
         return r.vis_allows_here(sym.vis, defined_in)
+
+    fn is_symbol_visible_from(r: Self@, sym: Sema_symbol$@, file: U8[]): Bool //<
+        //< Whether sym can be named from file, wherever the analysis stands
+        //< **For a question asked from outside the analysis** (completion in
+        //< `ksplc/lsp/complete.kspl`), which knows the file it asks for but is in no generic's
+        //< instance.
+        defined_in: = sym.get_defined_in()
+        if defined_in.len == 0 || defined_in.equals(file)
+            return true
+        return r.vis_allows_from(sym.vis, defined_in, file)
 
     fn check_import_symbols(r: Self$@) //<
         //< Binds each name in an import's braces, and reports one naming nothing or a hidden one

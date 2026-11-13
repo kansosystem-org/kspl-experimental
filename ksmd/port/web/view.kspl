@@ -18,6 +18,7 @@ import "ksmd/calc/value" { Value }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/region" { Spot, Style, Unit, gather }
 import "ksmd/edit/styled" { Seg }
+import "ksmd/edit/typed" { number_as_text, numbers_column }
 import "ksmd/files/assemble" { Assembly, NONE }
 import "ksmd/model/choice" { colours_in, name_of }
 import "ksmd/model/format" { Number_format, no_format, show, show_plain, shows_numbers }
@@ -304,7 +305,8 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine:
         //< columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`) and
         //< columns (`"ci"`), the groups of rows (`"g"`) and of columns (`"cg"`), and each data
         //< row's values. `"own"` names the page's own functions each cell's formula calls, and
-        //< `"err"` says why each error stands.
+        //< `"err"` says why each error stands. `"nt"` names the typed text that looks like a number
+        //< in a column of numbers.
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
     text(t.name, out)
@@ -418,6 +420,23 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine:
             out.s("[\{r\},\{c\},")
             text(why.slice(), out)
             out.c(']')
+    // Each cell of typed text that looks like a number, in a column of numbers, as [row, column]
+    // (`number_as_text` in `ksmd/edit/typed.kspl`). A total leaves it out, so the page marks it.
+    out.s("],\"nt\":[")
+    $texted: = false
+    for c in Range.asc(t.columns.len)
+        $column: = -1
+        for r in Range.asc(t.rows.len)
+            if !number_as_text(t, r, c)
+                continue
+            if column < 0
+                column = 1 if numbers_column(t, u, values, c) else 0
+            if column == 0
+                break
+            if texted
+                out.c(',')
+            texted = true
+            out.s("[\{r\},\{c\}]")
     // Each link as [row, column, destination].
     out.s("],\"links\":[")
     $linked: = false

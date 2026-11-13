@@ -239,6 +239,36 @@ fn main()
   explicit_unlock()
   released_by_defer()
   io.out().s("done\n")
+// ==== case lock_into_global
+//< [W0105] A pointer from lock() stored into a global outlives the function
+//< As one stored through a parameter does, whether a borrow's name or the call itself is stored.
+//< **A local given it stays silent**: the pointer stays inside the function.
+// EXPECT: lock_into_global.kspl:13:3: warning: [W0105] This stores a pointer obtained from Mutex.lock()
+// EXPECT: lock_into_global.kspl:17:3: warning: [W0105] This stores a pointer obtained from Mutex.lock()
+// EXPECT: 0 error(s), 2 warning(s)
+import "std/thread"
+
+$gp: I64$@ = null
+
+priv fn named(m: thread.Mutex<|I64|>@) //< a borrow's name stored into a global
+  p: = m.lock()
+  gp = p
+  m.unlock()
+
+priv fn direct(m: thread.Mutex<|I64|>@) //< the call's result stored into a global
+  gp = m.lock()
+  m.unlock()
+
+priv fn kept(m: thread.Mutex<|I64|>@) //< silent: a local given it
+  $q: I64$@ = null
+  q = m.lock()
+  q$ += 1
+  m.unlock()
+
+pub fn probe(m: thread.Mutex<|I64|>@)
+  named(m)
+  direct(m)
+  kept(m)
 // ==== case lock_across_flow
 //< [W0105] and [W0106] follow a loop's back edge, a branch and each way out of the function
 //< A pointer from lock() is used after unlock in a loop, returned, or stored through a
@@ -732,6 +762,46 @@ fn main()
   s: = arena.text().s("hi").take()
   arena.reset()
   io.out().s(s) // MARK-s
+// ==== case view_walked_stale
+//< [W0111] A `for … in` over a stale view is reported once, at the view
+//< The loop walks a copy of the view, and that copy is the same fault. Once it was told a second
+//< time, naming no owner.
+// EXPECT: view_walked_stale.kspl:15:12: warning: [W0111] 's' points into 'xs', which 'push' on line 13
+// EXPECT-NOT: walks ''
+// EXPECT: 0 error(s), 1 warning(s)
+import "std/ds" { List }
+
+fn main(): I32
+  defer $xs: = List<|I32|>(null)
+  xs.push(1)
+  s: = xs.slice()
+  xs.push(2)
+  $t: = 0
+  for e in s
+    t += e
+  return t
+// ==== case view_stale_again
+//< [W0111] A view given a new value, which is then ended too, is a second fault, and reported
+//< Once a copy of a stale view counted as reported for good, so the second fault went unseen.
+// EXPECT: view_stale_again.kspl:15:9: warning: [W0111] 's' points into 'xs', which 'push' on line 14
+// EXPECT: view_stale_again.kspl:19:12: warning: [W0111] 't' points into 'ys', which 'push' on line 17
+// EXPECT: 0 error(s), 2 warning(s)
+import "std/ds" { List }
+
+fn main(): I32
+  defer $xs: = List<|I32|>(null)
+  defer $ys: = List<|I32|>(null)
+  xs.push(1)
+  ys.push(1)
+  s: = xs.slice()
+  xs.push(2)
+  $t: = s
+  t = ys.slice()
+  ys.push(5)
+  $n: = 0
+  for e in t
+    n += e
+  return n
 // ==== case view_across_flow
 //< [W0111] follows a loop's back edge and a branch, and each kind of owner std marks
 //< **The silent shapes must stay silent**: the view taken again, a view of another list, a copy

@@ -209,8 +209,9 @@ jobs:
 
   # Packages .vscode/extensions/kspl (highlighting + LSP) into one .vsix carrying all three
   # platforms' ksplc as the LSP server "ksplc_server.exe" (as the Makefile's install-lsp does), so
-  # one `code --install-extension` works on any OS. .vscode/extensions/kspeg becomes a .vsix the
-  # same way, with no server to embed.
+  # one `code --install-extension` works on any OS. Each goes into `bin/<platform>-<arch>/`, as
+  # Node spells the machine, where the extension looks for it. .vscode/extensions/kspeg becomes a
+  # .vsix the same way, with no server to embed.
   package-vscode-ext:
     needs: build
     runs-on: ubuntu-24.04
@@ -226,27 +227,33 @@ jobs:
         # <name>/<name>.
         run: |
           set -e
-          embed() { # <slug> <the exe's name inside the zip> <VS Code's platform name>
+          embed() { # <slug> <the exe's name inside the zip> <process.platform>-<process.arch>
             local zip="ksplc-${TAG}-$1.zip"
             mkdir -p ".vscode/extensions/kspl/bin/$3"
             unzip -p "$zip/$zip" "$2" > ".vscode/extensions/kspl/bin/$3/ksplc_server.exe"
           }
-          embed linux-x64 ksplc linux
-          embed macos-arm64 ksplc darwin
-          embed windows-x64 ksplc.exe win32
-          chmod +x .vscode/extensions/kspl/bin/linux/ksplc_server.exe
-          chmod +x .vscode/extensions/kspl/bin/darwin/ksplc_server.exe
+          embed linux-x64 ksplc linux-x64
+          embed macos-arm64 ksplc darwin-arm64
+          embed windows-x64 ksplc.exe win32-x64
+          chmod +x .vscode/extensions/kspl/bin/linux-x64/ksplc_server.exe
+          chmod +x .vscode/extensions/kspl/bin/darwin-arm64/ksplc_server.exe
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "20"
+          # vsce 4 needs Node 22 or later.
+          node-version: "22"
+      # **The packing tool and everything it uses come from the lockfile**, so each release packs
+      # with the same tree. `npx` would resolve vsce's own version ranges on the day.
+      - name: Install vsce from .github/vsce's lockfile
+        run: npm ci --ignore-scripts --prefix .github/vsce
       - name: Package .vsix
         # vsce packs the folder's LICENSE.md into the .vsix and without one only warns; copying it
         # in keeps one LICENSE.md to edit.
         run: |
           set -e
+          vsce="${{ github.workspace }}/.github/vsce/node_modules/.bin/vsce"
           for ext in kspl kspeg; do
             cp LICENSE.md ".vscode/extensions/$ext/LICENSE.md"
-            (cd ".vscode/extensions/$ext" && npx --yes @vscode/vsce@4.0.0 package \
+            (cd ".vscode/extensions/$ext" && "$vsce" package \
               --allow-missing-repository -o "${{ github.workspace }}/$ext-${TAG}.vsix")
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -263,7 +270,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       - name: Create Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}

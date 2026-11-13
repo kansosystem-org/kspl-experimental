@@ -1,6 +1,7 @@
 //< A literal's type, and whether a numeric literal's value fits in it
 //< An unannotated integer literal takes the expected type where one is passed down. Its range is
-//< checked only where its type is known, and not while a generic is being instantiated.
+//< checked only where its type is known, in a generic's instance too, against the type argument's
+//< type.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place // `is_path_or_ident`
@@ -28,12 +29,13 @@ fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         type_is_known: =
             !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text)) ||
             (!sema_type_env.is_unknown(expected_id) && c.env.is_integer(expected_id))
-        // **Not while a generic is being instantiated**: the fit changes with the type argument. As
-        // an error, it would forbid a template merely because T=U8 exists. See "No diagnostic that
-        // depends on a generic's type argument" in ksplc/docs/DESIGN-diagnostics.md.
-        if type_is_known && !c.is_instantiating()
+        // **In a generic's instance too**: the fit changes with the type argument, but a value
+        // that does not fit changes silently in that instance (`y = 300` with T=U8 stores 44). The
+        // error names the instance ("An error in a generic's body names its instantiation" in
+        // ksplc/docs/DESIGN-diagnostics.md).
+        if type_is_known
             check_literal_bounds(c, node, type_id, c.fn_ctx.literal_negated)
-    else if node.kind_id == .k_float && !c.is_instantiating()
+    else if node.kind_id == .k_float
         check_float_literal_range(c, node, type_id)
     return type_id
 
@@ -204,8 +206,8 @@ fn check_settled_literals(c: Sema_ctx$@, body: Ast_node$@) //<
     //< inferred generic argument, a `~`, an interpolation. A check at each missed the next one
     //< (`g(3000000000)` became -1294967296 silently). Once the body is typed, each literal's type
     //< is final, so one walk checks them all. A place that checked already gives the same message
-    //< at the same place, reported once. Not while a generic is instantiated (infer_literal_expr).
-    if body == null || c.is_instantiating()
+    //< at the same place, reported once. A generic's instance is checked too (infer_literal_expr).
+    if body == null
         return
     walk_settled_literals(c, body, false)
 
@@ -271,7 +273,7 @@ fn check_inferred_decl_literal(c: Sema_ctx$@, expr_node: Ast_node$@, final_id: I
     //< For example `x: = 2147483648;`. The range is checked against the final type.
     //< **Not at the literal itself**, where the default I32 might still widen (type_is_known in
     //< infer_literal_expr). An expression initializer (`x: = 2147483648 + 1;`) is not checked.
-    if expr_node == null || c.is_instantiating()
+    if expr_node == null
         return
     lit: = literal_under_minus(expr_node)
     if lit.node == null

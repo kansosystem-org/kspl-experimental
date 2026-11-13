@@ -610,6 +610,35 @@ fn test_json_large_object_repeats(arena: Arena$@) //<
     verdict.check("a large object with no repeat keeps every member, in the order written",
         i == n && wrong == 0, want.slice())
     verdict.pass("a large object refuses the first repeat in the text, before any later error.")
+
+priv fn nested_members(out: Str_builder$@, depth: Sz, swap: Bool, leaf: I32) //<
+    //< writes `depth` objects, each holding the next under "x" beside "y":1; `swap` puts "y" first
+    for _i in Range.asc(depth)
+        out.s("{\"y\":1,\"x\":" if swap else "{\"x\":")
+    out.s("\{leaf\}")
+    for _i in Range.asc(depth)
+        out.s("}" if swap else ",\"y\":1}")
+
+priv fn deep_pair_equal(depth: Sz, leaf_b: I32, arena: Arena$@): Bool //<
+    //< Whether two nested documents compare equal: members in the other order, leaves 7 and leaf_b
+    defer $src: = Str_builder()
+    nested_members(src@, depth, false, 7)
+    a: = json.parse(src.slice(), arena) catch panic("json: the nested document must parse")
+    src.clear()
+    nested_members(src@, depth, true, leaf_b)
+    b: = json.parse(src.slice(), arena) catch panic("json: the nested document must parse")
+    return a.val.equals(b.val)
+
+fn test_json_equals_deep_objects(arena: Arena$@) //<
+    //< std/json: `equals` compares each value once, however deep the objects nest
+    //< Caution: **The check is the result, not the time.** Comparing each member's matches on
+    //< both sides compared every child twice: 60 levels took 2^60 comparisons and never ended.
+    verdict.start("[Json] equals on deeply nested objects test...")
+    verdict.check("60 levels with members in another order are equal",
+        deep_pair_equal(60, 7, arena), "")
+    verdict.check("60 levels that differ only in the deepest value are not equal",
+        !deep_pair_equal(60, 8, arena), "")
+    verdict.pass("Deep objects compare in any member order, and a deep difference is found.")
 // ==========================================
 // std/json: writing out with indentation.
 // ==========================================

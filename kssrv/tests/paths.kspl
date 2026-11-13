@@ -324,6 +324,29 @@ priv fn only_dots_and_spaces(name: U8[]): Sz? //< how many dots, where nothing e
             return .none
     return .some(dots)
 
+priv fn short_name_shaped(name: U8[]): Bool //< whether Windows can read the name as a short name
+    //< The 8.3 shape: a base of at most 8 ASCII characters ending in `~` and digits, with 1 to 6
+    //< before the `~` (`PROGRA~1`), then perhaps `.` and an extension of 1 to 3 (`A~1.TXT`).
+    for c in name
+        if c >= 0x80U8
+            return false
+    dot: = name.find_char('.').unwrap_or(name.len)
+    if dot < name.len
+        ext: = name.sub_from(dot + 1)
+        if ext.len == 0 || ext.len > 3 || ext.find_char('.').is_some()
+            return false
+    base: = name.sub(0, dot)
+    $t: Sz = -1
+    for i in Range.asc(base.len)
+        if base[i] == '~'
+            t = i
+    if t < 1 || t > 6 || t + 1 >= base.len || base.len > 8
+        return false
+    for c in base.sub_from(t + 1)
+        if !c.is_digit()
+            return false
+    return true
+
 fn harm(rel: U8[], windows: Bool, dots_refused: Bool, sc: Scratch@, arena: Arena$@): U8[] //<
     //< Why the path, read as POSIX or Windows reads it, would reach what the door keeps back
     //< Empty where it would not. It reads a NUL as the end, as the C call does.
@@ -360,9 +383,8 @@ fn harm(rel: U8[], windows: Bool, dots_refused: Bool, sc: Scratch@, arena: Arena
                 return "a `..` climbs out of the root"
             continue
         if windows
-            for i in Range.asc(name.len)
-                if name[i] == '~' && i + 1 < name.len && name[i + 1].is_digit()
-                    return "a short name can stand for any name, a dot name or a link included"
+            if short_name_shaped(name)
+                return "a short name can stand for any name, a dot name or a link included"
             if is_device(name)
                 return "Windows opens the name as a device"
         if dots_refused && name.starts_with(".")
@@ -548,8 +570,9 @@ priv fn lookups_now(port: I32, auth: U8[], arena: Arena$@): I64!client.Http_end 
 
 priv fn listed_names(root: U8[], rel: U8[], arena: Arena$@): I64 //<
     //< How many names a listing of the folder `rel` reads; 0 where the door refuses it
-    folder: = fs.join_under(root, rel, .allowed, arena) catch
-        return 0I64
+    folder: =
+        fs.join_under(root, "" if rel.equals(".") else rel, .refused(U8[][]::{}), arena) catch
+            return 0I64
     names: = fs.read_dir(folder, arena) catch
         return 0I64
     return names.len
@@ -601,8 +624,11 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
             target = arena.text().s("/api/stat?path=").s(coded).take()
             query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, .allowed, e@, arena)
         case .list
+            // A listing refuses a hidden folder, as a write does, and takes `.` alone as the root.
             target = arena.text().s("/api/list?path=").s(coded).take()
-            query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, .allowed, e@, arena)
+            query_expect(sc.root, target.sub_from(10), U8[][]::{ "path" }, refused_dots, e@, arena)
+            if m.rel.equals(".") && !e.broken
+                e.refused = false
         case .page
             target = arena.text().c('/').s(coded).take()
             page_expect(sc.root, target, e@, arena)

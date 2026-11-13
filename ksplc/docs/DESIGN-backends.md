@@ -188,7 +188,7 @@ C needs a name declared before it is used. So `emit_file_node` writes everything
 
 **A `#line` goes before every statement, not only where the line changes** (`emit_stmt` in `gen/c/stmt.kspl`). C counts each line past a directive as one more source line. Lower expands one line into several statements (`x: = f()!` becomes a temporary, an `if` and a `throw`). So the `throw`'s `KSPL_RECORD_TRACE()` would read two lines past the `!`. A loop's `for` gets one of its own after its init. **The route a `!` records is genllvm's too**: it calls the same runtime functions with the line `sema.line_of` gives and the file `recorded_name_to` writes (`base/locate.kspl`).
 
-**The generated C is kept free of warnings**, or a new one goes unnoticed. `make test-c-warnings` (`tests/suite/c_warnings_test.kspl`) compiles the generated C of ksplc, of `make debug`'s executable and of `--freestanding` with `-std=c99 -pedantic -Wall -Wextra -O2 -fsyntax-only` on every C compiler found, and fails on a single warning. `-pedantic` holds the C to ISO C99 ("The generated C is ISO C99, not GNU C").
+**The generated C is kept free of warnings**, or a new one goes unnoticed. `make test-c-warnings` (`tests/suite/c_warnings_test.kspl`) compiles the generated C of ksplc, of `make debug`'s executable and of `--freestanding` with `-std=c99 -pedantic -Wall -Wextra -O2 -fsyntax-only` on every C compiler found, and fails on a single warning. `-pedantic` holds the C to ISO C99 ("The generated C is ISO C99, and GNU C too").
 
 Caution: **Do not drop `--freestanding`, `-Wextra` or `-O2`.** Each catches cases that produce a wrong answer at run time:
 
@@ -282,7 +282,7 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 * **A name whose address is taken stays a name.** `&name` is a C99 address constant, while the address of the value written out is no constant, or a copy's. The root of the place under `@`, and of an array turned into a slice (`T[]::table`), is kept by name (`Genc_ctx.addr_root`). genllvm writes the same address as `ptr @name`, and a field's or an element's (`g.v@`, `g[2]@`) as a constant `getelementptr` from it (`emit_const_place_addr` in `gen/llvm/decl.kspl`).
 * **A tagged union is written as its initializer, never as a number.** Folded to `0`, it would put an integer where `{ tag, payload }` belongs.
 
-#### The generated C is ISO C99, not GNU C
+#### The generated C is ISO C99, and GNU C too
 
 **Genc writes C that a C99 compiler takes with no extension, so a strict compiler builds what gcc and clang build.** gcc and clang accept several GNU forms without a word, while another compiler refuses them. `make test-c-warnings` compiles with `-pedantic`, which reports each.
 
@@ -294,6 +294,7 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 | A cast whose target is an aggregate (an immutable element read as its own type) | The operand alone (`emit_as_cast` in `gen/c/expr_postfix.kspl`) | C casts to a scalar type only |
 
 * **A cast in a file-scope initializer stays a cast.** A call is no constant expression, so a function's address stored in a global `Void$@` keeps the plain cast. `-pedantic` reports it, and nothing in the repository writes one.
+* **The same C builds in GNU C mode** (`-std=gnu11`), which gcc and clang take where no `-std` is given. A person who builds the C by hand, or inside a GNU-mode build, then meets no error far from the KSPL name. That mode predefines `linux` and `unix`, and `i386` on 32-bit x86, as macros. So a name spelled like one takes the suffix, as a name with no lower-case letter does (`is_gnu_macro` in `base/c_name.kspl`). `tests/suite/decl_macros_test.kspl` builds in GNU mode every name the C compiler lists there.
 * **What stays compiler-specific is named and guarded.** `KSPL_UNUSED`, `KSPL_EXPORT` and `KSPL_SECTION` expand to GNU attributes or nothing (`runtime/core.h`). The runtime's attributes, `__thread` (`KSPL_PER_THREAD`), `__atomic_*` builtins, `__builtin_frame_address` and `asm_volatile`'s `__asm__ volatile` are GNU C, which gcc and clang both take. MSVC's `cl.exe` takes none of them, so Kanso's build refuses that toolchain.
 
 ### Genc writes less code, not fewer bytes
@@ -311,6 +312,8 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 * Names took 78% of the seed's bytes, yet shortening them saved no compile time: the C compiler reads a name once.
 
 ### Genllvm (LLVM IR): why the structure differs, and managing SSA
+
+**Genllvm has no freestanding runtime**, so `--to=llvm` is refused beside `--freestanding` in the command line (`ksplc/cli.kspl`). The IR calls the hosted runtime's helpers (`kspl_bounds_check` and the like); written anyway, every program's IR would name functions that no bare-metal build defines. A bare-metal program goes through Genc.
 
 **Genllvm emits no debug information** (no `DIFile` / `DILocation`, no `!dbg`), so stepping through a `--to=llvm` build shows no source line. That is an unimplemented feature, not a fault; only macOS's `ld64` warns about it. `tests/suite/debug_line_test.kspl` checks the C side only.
 

@@ -86,6 +86,7 @@ pub enum Why //< what made an error, beyond its kind; `ksmd/calc/reason.kspl` wr
     condition_no_range //< a condition with no range in it
     in_function //< an error the function `text` found in its own work
     own_function //< an error of the document's own function `text`
+    unbuilt //< the file that gives the document's own function `text` does not build
     wants_number //< argument `number` of the function `text` takes a number
     wants_whole //< argument `number` of the function `text` takes a whole number
     wants_truth //< argument `number` of the function `text` takes `true` or `false`
@@ -159,15 +160,23 @@ fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
         return b
     switch op
     case .plus
-        return number(a.number + b.number)
+        return sum_of(a.number, b.number)
     case .minus
-        return number(a.number - b.number)
+        return sum_of(a.number, -b.number)
     case .times
         return number(a.number * b.number)
     default {}
     if b.number == 0.0
         return Value.because(.division, .divide_by_zero, "", -1)
     return number(a.number / b.number)
+
+fn sum_of(a: F64, b: F64): Value //< `a + b`, and 0 where the two cancel at the 15 digits they show
+    //< **A sum whose sides show the same 15 digits with opposite signs is exactly 0**, so
+    //< `0.1 + 0.2 - 0.3` is 0, not 5.55e-17, and `a - b` is 0 exactly where `a = b` is `true`.
+    //< A number the sides do not cancel stays, however small: `1e-20 - 0` is 1e-20.
+    if a != 0.0 && b != 0.0 && shows_same(a, -b)
+        return number(0.0)
+    return number(a + b)
 
 pub fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
     //< an error

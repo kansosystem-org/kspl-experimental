@@ -110,6 +110,7 @@ fn run_fresh(exe: U8[], arena: Arena$@) //<
     ask: = Ask::{ .c = c@, .dir = dir, .arena = arena }
     check_saved(ask)
     check_typed(ask)
+    check_dependent(exe, arena)
 
 priv fn check_saved(ask: Ask) //<
     //< A file the editor does not have open is read from the disk on each request
@@ -165,3 +166,44 @@ priv fn all_on(edits: List<|json.Value|>@, text: U8[], arena: Arena$@): Bool //<
         if !lines.get(line).sub(from, to - from).equals(WORD)
             return false
     return true
+
+priv const LIB_GONE: U8[] = "fn other(): I32\n    return 2\n" //< `LIB_OLD` without `helper`
+priv fn marks_of(c: jsonrpc_client.Client$@, rel: U8[], arena: Arena$@): I32 //<
+    //< How many diagnostics the next publish for `rel` holds; -1 where none came
+    for _k in Range.asc(12)
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
+            break
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
+            continue
+        got: = msg.val.get("params")
+        if got.get("uri").as_str().unwrap_or("").ends_with(rel)
+            return I32::got.get("diagnostics").arr_list(arena).len
+    return -1
+
+priv fn check_dependent(exe: U8[], arena: Arena$@) //<
+    //< An edit to one open file refreshes the marks on another open file that imports it
+    //< **The edited file is not the only one whose marks change**: `user` calls `lib.helper`, and
+    //< the edit takes `helper` away. Marks left from before tell the reader `user` is sound.
+    name: = "an edit to one open file refreshes the marks on an open file that imports it"
+    dir: = harness.sandbox("lsp_dependent")
+    fs.write_tree(dir, U8[][]::{ LIB_REL, USER_REL }, U8[][]::{ LIB_OLD, USER_OLD }, arena) catch
+        verdict.check(name, false, dir)
+        return
+    $c: =
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+            verdict.check(name, false, "the language server cannot be started")
+            return
+    defer c.free()
+    lsp_client.open(c@, LIB_REL, LIB_OLD, arena)
+    _lib: = marks_of(c@, LIB_REL, arena)
+    lsp_client.open(c@, USER_REL, USER_OLD, arena)
+    before: = marks_of(c@, USER_REL, arena)
+    $b: = Json_builder(arena)
+    params: = b.obj()
+        .set("textDocument", b.obj().set("uri", b.str_val(LIB_REL)).build())
+        .set("contentChanges",
+        b.arr().push(b.obj().set("text", b.str_val(LIB_GONE)).build()).build()).build()
+    c.notify("textDocument/didChange", params, lsp_client.SEND_MS, arena) catch {}
+    after: = marks_of(c@, USER_REL, arena)
+    counts: = arena.text().s("\{before\} marks before, \{after\} after").take()
+    verdict.check(name, before == 0 && after > 0, lsp_client.why(c@, counts, arena))

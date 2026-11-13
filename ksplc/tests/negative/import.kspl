@@ -513,6 +513,35 @@ fn main()
 impl Foo: Manual_free
   priv fn free($r: Self$@)
     r.other = 0
+// ==== case use_after_free_via_generic_wrapper
+//< A generic wrapper that frees its parameter frees the caller's argument too
+//< In the generic body `x: T$@` has no conformance of its own, so the type the caller passes
+//< decides. A type without `Manual_free` passed to the same wrapper stays live.
+// EXPECT: use_after_free_via_generic_wrapper.kspl:21:3: error: variable 'f' may already be freed here
+// EXPECT: Finished with 1 error(s)
+struct Foo
+  priv other: I32
+
+struct Bar
+  n: I32
+
+impl Bar
+  fn free(_r: Self$@) {}
+
+fn rel<|T|>(x: T$@)
+  x.free()
+
+fn main(): I32
+  $f: = Foo::{ .other = 2 }
+  rel(f@)
+  f.other = 1
+  $b: = Bar::{ .n = 3 }
+  rel(b@)
+  return b.n
+
+impl Foo: Manual_free
+  priv fn free($r: Self$@)
+    r.other = 0
 // ==== case vis_wider_than_impl_target
 //< An `impl`'s methods do not reach wider than the target type either
 // EXPECT: widens nothing

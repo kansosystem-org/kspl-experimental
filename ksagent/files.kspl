@@ -46,17 +46,37 @@ priv const OLD_SUFFIXES: U8[][_] = ::{ ".chat.ksmd", ".live.ksmd" } //<
     //< how the names of chat files of the old form end, which ksmd's editor showed
     //< Their answers are the model's own words, so `old_chat_file` finds them before any command.
 
+struct Folder //< the folder the tools reach, and the files in it that they leave out
+    root: U8[] //< the folder
+    left_out: U8[][] //< files under it that no tool reaches, as paths the OS opens (`leaves_out`)
+        //< `eval` leaves out its questions file and its `--out` file: a question is no evidence,
+        //< and the table holds the model's own answers.
+
+impl Folder
+    fn new(root: U8[]): Folder //< the folder, with no file left out
+        return Folder::{ .root = root, .left_out = U8[][]::{} }
+
+    fn leaves_out(r: Self, full: U8[]): Bool //< whether a path names a file left out
+        //< **The same path step by step**, ASCII case ignored, as `fs.lies_under` compares, so
+        //< `./rules/q.md` and `rules/Q.md` are one file, as Windows and macOS open them.
+        for left in r.left_out
+            if fs.lies_under(left, full) && fs.lies_under(full, left)
+                return true
+        return false
+
 struct Resolved //< a path the model gave, checked against the root
     full: U8[] //< the path to open
     rel: U8[] //< the path under the root (empty: the root)
 
-fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved!U8[] //<
+fn resolve(folder: Folder, given: U8[], arena: Arena$@): Resolved!U8[] //<
     //< Checks a path the model gave and joins it to the root, or throws why it is refused, as one
     //< line the model can act on
     //< It refuses what `fs.join_under` refuses (an absolute path, a `..` step, a link anywhere on
     //< the path, a form Windows reads as another name) and a name that starts with a dot.
     //< A conversation's file is found by its name as written, ASCII case aside: `join_under`
-    //< refuses a short name's form (`TEAM~1.JSO` for `team.chat.jsonl`) before it is opened.
+    //< refuses a short name's form (`TEAM~1.JSO` for `team.chat.jsonl`) before it is opened. A file
+    //< the folder leaves out is refused too (`Folder.leaves_out`).
+    root: = folder.root
     $rel: = given.trim_spaces()
     for rel.starts_with("./")
         rel = rel.sub_from(2)
@@ -70,6 +90,9 @@ fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved!U8[] //<
             .s(why.text()).take()
     if is_conversation(sys.get_file_name(rel))
         throw "a conversation's file holds the model's own words or a person's questions, which are \
+            no source"
+    if folder.leaves_out(full)
+        throw "eval leaves this file out: it holds the questions or the table of answers, which are \
             no source"
     return Resolved::{ .full = full, .rel = rel }
 
@@ -233,10 +256,10 @@ fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
 // The tools: list, search and read. Each returns the text the model reads, a refusal included.
 // ==========================================
 
-fn tool_list(root: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
+fn tool_list(folder: Folder, given: U8[], room: Sz, arena: Arena$@): U8[] //<
     //< The entries of one folder, in at most `room` bytes of the request (`sent_len`)
     //< A folder ends with `/`. What `read` would refuse is left out (`taken_under`).
-    at: = resolve(root, given, arena) catch why
+    at: = resolve(folder, given, arena) catch why
         return arena.text().s("refused: ").s(why).take()
     full: = at.full
     if !fs.is_dir(full)
@@ -250,7 +273,7 @@ fn tool_list(root: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
     $listed: Sz = 0
     $sent: Sz = 0
     for name in sorted
-        if !taken_under(full, name, arena)
+        if !taken_under(folder, full, name, arena)
             continue
         path: = fs.join(full, name, arena)
         entry: = arena.text().s(name).s("/\n" if fs.is_dir(path) else "\n").take()
@@ -264,7 +287,7 @@ fn tool_list(root: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
         return "(the folder is empty)"
     return out.take()
 
-fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
+fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
     //< The lines that hold the words of `text`, as `path:line: text`, over every text file under
     //< `given`, in at most `room` bytes of the request (`sent_len`)
     //< **A line matches when it holds every word, in any order**, ASCII case ignored. A word is
@@ -274,7 +297,7 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
     $words: = words_of(text, arena)
     if words.len == 0
         return "refused: give some words to search for"
-    at: = resolve(root, given, arena) catch why
+    at: = resolve(folder, given, arena) catch why
         return arena.text().s("refused: ").s(why).take()
     full: = at.full
     rel: = at.rel
@@ -287,9 +310,9 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
     // The lines that hold a word, with how many each holds; each list is cut where no more of it
     // could be shown. **Each file is read in memory of its own**, and only its hits are kept.
     $whole: = List<|Hit|>(arena)
-    $partial: = List<|Hit|>(arena)
+    $partial: = Partial_hits(words.len, arena)
     for path in files
-        if !path.equals(full) && !taken_under(full, under(full, path), arena)
+        if !path.equals(full) && !taken_under(folder, full, under(full, path), arena)
             continue
         defer one: = Arena(64 * 1024)
         // Caution: **Refuse one named file that cannot be read, and say why.** Passed over, it
@@ -303,7 +326,7 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
         for i in Range.asc(lines.len)
             held: = words_held(lines.get(i), words.slice())
             if held == 0 || whole.len > MAX_HITS ||
-                (held < words.len && partial.len == MAX_PARTIAL)
+                (held < words.len && !partial.takes(held))
                 continue
             if shown.len == 0
                 shown = shown_path(rel, full, path, arena)
@@ -313,18 +336,16 @@ fn tool_search(root: U8[], text: U8[], given: U8[], room: Sz, arena: Arena$@): U
             if held == words.len
                 whole.push(hit)
             else
-                partial.push(hit)
+                partial.add(hit)
     if whole.len > 0
         return hit_lines("", whole.slice(), room, arena)
-    if partial.len == 0
+    if partial.kept == 0
         return "(no line holds any of those words)"
     // **The lines that hold the most words come first**, so a cut list keeps the best of them.
     $ranked: = List<|Hit|>(arena)
     $level: = words.len - 1
     for level > 0 && ranked.len <= MAX_HITS
-        for h in partial
-            if h.held == level
-                ranked.push(h)
+        ranked.push_all(partial.by_held[level].slice())
         level -= 1
     return hit_lines("(no line holds every word; these lines hold the most of them)\n",
         ranked.slice(), room, arena)
@@ -337,6 +358,36 @@ priv struct Hit //< one line a search found
 
 priv const MAX_PARTIAL: Sz = 10000 //< the most lines kept that hold only some of the words
     //< It bounds the memory a search of common words takes over a large folder.
+
+priv struct Partial_hits //< the lines that hold only some of the words, at most `MAX_PARTIAL`
+    //< **Once it is full, a line that holds more words takes the place of one that holds the
+    //< fewest.** Otherwise a folder with 10,000 lines of one common word before the line that holds
+    //< the most words would never show that line.
+    by_held: List<|List<|Hit|>|> //< the lines kept, one list for each count of words they hold
+    kept: Sz //< how many lines all the lists hold
+    fewest: Sz //< no list below this count holds a line, once the lists are full
+
+impl Partial_hits
+    fn new(words: Sz, arena: Arena$@): Partial_hits //< no line kept, for a search of `words` words
+        $by_held: = List<|List<|Hit|>|>(arena)
+        for _k in Range.asc(words)
+            by_held.push(List<|Hit|>(arena))
+        return Partial_hits::{ .by_held = by_held, .kept = 0, .fewest = 1 }
+
+    fn takes(r: Self$@, held: Sz): Bool //< whether a line that holds `held` words would be kept
+        if r.kept < MAX_PARTIAL
+            return true
+        // Lines only move to higher counts once the lists are full, so `fewest` only grows.
+        for r.fewest < held && r.by_held[r.fewest].len == 0
+            r.fewest += 1
+        return r.fewest < held
+
+    fn add(r: Self$@, hit: Hit) //< keeps a line that `takes` accepted, dropping one where full
+        if r.kept < MAX_PARTIAL
+            r.kept += 1
+        else
+            _dropped: = r.by_held[r.fewest].pop()
+        r.by_held[hit.held].push(hit)
 
 priv fn hit_lines(head: U8[], hits: Hit[], room: Sz, arena: Arena$@): U8[] //<
     //< `head`, then each hit as `path:line: text`, and a last line where the list was cut
@@ -397,13 +448,13 @@ priv fn words_held(line: U8[], words: U8[][]): Sz //< how many of the words the 
             n += 1
     return n
 
-priv fn taken_under(folder: U8[], rel: U8[], arena: Arena$@): Bool //<
-    //< Whether a name a listing or a search found under a folder is one `resolve` takes
+priv fn taken_under(folder: Folder, dir: U8[], rel: U8[], arena: Arena$@): Bool //<
+    //< Whether a name a listing or a search found under `dir` is one `resolve` takes
     //< **By the same check**, so the tools never offer a name that a read then refuses: a hidden
-    //< name, a link, a form Windows reads as another name, a conversation's file.
-    _path: = fs.join_under(folder, rel, .refused(U8[][]::{}), arena) catch
+    //< name, a link, a form Windows reads as another name, a conversation's file, a file left out.
+    path: = fs.join_under(dir, rel, .refused(U8[][]::{}), arena) catch
         return false
-    return !is_conversation(sys.get_file_name(rel))
+    return !is_conversation(sys.get_file_name(rel)) && !folder.leaves_out(path)
 
 priv fn shown_path(rel: U8[], full: U8[], path: U8[], arena: Arena$@): U8[] //<
     //< A walked file's path as the model gives it back: under the root, with `/` between levels
@@ -420,14 +471,14 @@ priv fn under(folder: U8[], path: U8[]): U8[] //< a path a walk of `folder` foun
     tail: = path.sub_from(folder.len)
     return (tail.sub_from(1) if tail.len > 0 && sys.is_path_sep(tail[0]) else tail)
 
-fn tool_read(root: U8[], given: U8[], from_line: I64, to_line: I64, room: Sz, arena: Arena$@):
+fn tool_read(folder: Folder, given: U8[], from_line: I64, to_line: I64, room: Sz, arena: Arena$@):
     U8[] //<
         //< Lines `from_line`..`to_line` of one text file, each opening with its number
         //< At most `MAX_READ_LINES` lines, `MAX_READ_BYTES` bytes of lines, and `room` bytes of
         //< the request (`sent_len`); the last line says where it stopped, so the model can read on.
         //< **A first line too long for one read comes cut at a character's start**, with a line
         //< that says so. Otherwise no read could ever show it.
-    at: = resolve(root, given, arena) catch why
+    at: = resolve(folder, given, arena) catch why
         return arena.text().s("refused: ").s(why).take()
     full: = at.full
     rel: = at.rel

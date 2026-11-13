@@ -1,9 +1,11 @@
 //< How text typed into a table's cell is read: a formula, a number, a date, text, or nothing
 //< `set_cell` in `editor_tables.kspl` reads with it, by the switches of the editor's `Auto_entry`.
+//< Text that stays text but looks like a number is found here too, for the page to mark.
 import "ksmd/base/dates" { is_date, month_day, typed_date, write_date }
-import "ksmd/base/marker" { formula_text_end, is_decimal }
+import "ksmd/base/marker" { formula_text_end, is_decimal, run_of_digits }
+import "ksmd/calc/calc" { Results }
 import "ksmd/calc/formula" { unquoted, write_quoted }
-import "ksmd/model/model" { Cell_kind }
+import "ksmd/model/model" { Cell_kind, Table }
 import "ksmd/syntax/inline" { is_destination }
 import "std/chars"
 import "std/mem" { Arena }
@@ -54,3 +56,91 @@ priv fn is_finite(number: U8[]): Bool //< whether a number as JSON writes one is
 fn write_text(text: U8[], out: Str_builder$@) //<
     //< Text as a person types it in quotes, which `value_of` reads back as that text
     write_quoted(text, out)
+
+priv const OTHER_MONEY: U8[][_] = ::{ "¥", "€", "£", "￥", "￡" } //<
+    //< the currency signs besides `$` that a number written as text may carry; they read as `$`
+
+fn looks_like_number(text: U8[]): Bool //<
+    //< Whether text reads as a number to a person, though a cell keeps it as text: `1,000`, `.5`,
+    //< `+5`, `12%`, `$12`, `１２`, or `12` in quotes
+    //< **Arithmetic and `sum` leave such text out**, so the page marks it in a column of numbers
+    //< (`numbers_column`). Full-width digits and signs read as their ASCII ones, and spaces at the
+    //< ends are dropped. Digits may be grouped in threes by `,`.
+    defer $plain: = Str_builder()
+    $i: Sz = 0
+    for i < text.len
+        rest: = text.sub_from(i)
+        if rest[0] < 0x80U8
+            plain.c(rest[0])
+            i += 1
+            continue
+        // U+FF01 to U+FF3F, the full-width forms of `!` to `_`, are EF BC 81 to EF BC BF.
+        if rest.len >= 3 && rest[0] == 0xEFU8 && rest[1] == 0xBCU8 && rest[2] >= 0x81U8
+            plain.c(rest[2] - 0x60U8)
+            i += 3
+            continue
+        if rest.starts_with("　")
+            plain.c(' ')
+            i += 3
+            continue
+        $money: Sz = 0
+        for m in OTHER_MONEY
+            money = m.len if rest.starts_with(m) else money
+        if money == 0
+            return false
+        plain.c('$')
+        i += money
+    return reads_as_number(plain.slice().trim_spaces())
+
+priv fn reads_as_number(t: U8[]): Bool //<
+    //< A sign, a `$` and a sign after it, digits that `,` may group in threes, a `.` and digits, and
+    //< a `%`, each but the digits left out at will; ASCII alone. A whole part such as `007` is a
+    //< code, not a number.
+    $i: Sz = 0
+    signed: = t.len > 0 && (t[0] == '+' || t[0] == '-')
+    if signed
+        i = 1
+    if i < t.len && t[i] == '$'
+        i += 1
+        if !signed && i < t.len && (t[i] == '+' || t[i] == '-')
+            i += 1
+    $digits: = run_of_digits(t.sub_from(i))
+    // A whole part of more than one digit that starts with 0, as `007`, is a code: as a number it
+    // would lose its zeros, so no person reads it as one.
+    zero_first: = digits > 0 && t[i] == '0'
+    i += digits
+    if digits > 0 && digits <= 3
+        for i < t.len && t[i] == ',' && run_of_digits(t.sub_from(i + 1)) == 3
+            i += 4
+            digits += 3
+    if zero_first && digits > 1
+        return false
+    if i < t.len && t[i] == '.'
+        fraction: = run_of_digits(t.sub_from(i + 1))
+        i += 1 + fraction
+        digits += fraction
+    if digits == 0
+        return false
+    if i < t.len && t[i] == '%'
+        i += 1
+    return i == t.len
+
+fn numbers_column(t: Table@, u: Sz, values: Results@, column: Sz): Bool //<
+    //< Whether the column of table `u` holds more numbers than other text, by their values
+    //< **Text that looks like a number is marked only in such a column**, where a total is likely.
+    //< So a column of codes such as `007`, or of years in quotes, is left alone.
+    $numbers: Sz = 0
+    $texts: Sz = 0
+    for r in Range.asc(t.rows.len)
+        v: = values.at(u, r, column)
+        if v.kind == .number
+            numbers += 1
+        else if v.kind == .text && !looks_like_number(v.text)
+            texts += 1
+    return numbers > texts
+
+fn number_as_text(t: Table@, row: Sz, column: Sz): Bool //<
+    //< Whether the cell holds typed text that looks like a number. A formula's text is its writer's
+    //< choice, so it is not marked.
+    cell: = t.cells[t.at(row, column)]
+    return cell.kind == .text && looks_like_number(cell.text)

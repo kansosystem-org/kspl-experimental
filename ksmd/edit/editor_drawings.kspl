@@ -4,8 +4,9 @@
 import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
 import "ksmd/edit/history" { begin }
 import "ksmd/edit/region" { Unit, gap_spot, whole_unit }
-import "ksmd/model/model" { Block, Drawing }
+import "ksmd/model/model" { Block, Drawing, MAX_DRAWINGS }
 import "ksmd/syntax/drawing" { drawings_of }
+import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
 
@@ -50,6 +51,9 @@ impl Editor
         $b: = ed.doc.blocks.get(block)
         if b.kind != .image && b.kind != .chart
             throw .not_whole
+        // Each shape is one line, which the page ends with a line break.
+        if text.count_str("\n") > MAX_DRAWINGS
+            throw .too_many_drawings
         $drawings: = List<|Drawing|>(ed.arena)
         drawings_of(ed.arena.dup_str(text), drawings@, ed.arena) catch
             throw .no_read_back

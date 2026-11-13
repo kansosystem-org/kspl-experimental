@@ -370,8 +370,9 @@ function ksmdFiles(ks, api) {
       }
       if (!got.exists) {
         const made = await local.write(path, ks.enc.encode(c.starter), null);
-        // Made since the dialog listed the folder: the file there is used as it stands.
-        if (made.status !== 200 && made.status !== 409) {
+        // Made since the dialog listed the folder: the file there is used as it stands. A 409
+        // with a `cause` means nothing can be written there.
+        if (made.status !== 200 && (made.status !== 409 || made.cause)) {
           ks.say(`${path} was not written. ${made.why}`);
           return;
         }
@@ -405,7 +406,8 @@ function ksmdFiles(ks, api) {
     for (let n = 1; n <= MAX_NAMES; n++) {
       const name = `${dataFolder(doc.path)}/image-${n}.${ext}`;
       const got = await local.write(folder + name, bytes, null);
-      if (got.status === 409) continue;
+      // A taken name, or a folder standing at it, moves on to the next name.
+      if (got.status === 409 && got.cause !== "folders") continue;
       if (got.status !== 200) return ks.say(`The image was not saved. ${got.why}`);
       await fetchOne(folder + name, true);
       if (a && f) ks.select(a, f);
@@ -477,6 +479,10 @@ function ksmdFiles(ks, api) {
   async function place(path, text, expected, wrote = () => {}) {
     const bytes = ks.enc.encode(text);
     const got = await local.write(path, bytes, expected);
+    if (got.status === 409 && got.cause) {
+      ks.say(`${path} could not be saved. ${got.why}`);
+      return false;
+    }
     if (got.status === 409) {
       ks.say(expected !== null ? `${path} changed after you chose it. Nothing was written. ` +
         "Choose again." : `${path} already exists. Open it, or type another path for this document.`);
@@ -560,6 +566,10 @@ function ksmdFiles(ks, api) {
     if (text === null) return false;
     const bytes = ks.enc.encode(text);
     const got = await local.write(doc.path, bytes, expected);
+    if (got.status === 409 && got.cause === "folder") {
+      askFolder();
+      return false;
+    }
     if (got.status === 409) {
       const now = await readDoc(doc.path);
       seen = now.seen || seen;
@@ -604,6 +614,15 @@ function ksmdFiles(ks, api) {
         }
         await take(doc.path, bytes, d);
       }],
+      ["Keep editing", quiet],
+    ]);
+  }
+
+  // **Save As is the way out**: the file's name is taken by a folder, so no write there can
+  // succeed. The dialog opens outside this choice's step, as `saveAs` runs its own.
+  function askFolder() {
+    ask(`A folder now stands where ${doc.path} was. Your edits are not saved.`, [
+      ["Save as another file", () => { saveAs(); }],
       ["Keep editing", quiet],
     ]);
   }

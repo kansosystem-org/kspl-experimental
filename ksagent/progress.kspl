@@ -20,6 +20,11 @@ import "std/sys"
 priv const LIVE_GAP_US: I64 = 1000000I64 //< the shortest time between two writes of a live file
     //< A page looks again every second, so a write each second keeps it current.
 priv const CHECK_GAP_US: I64 = 2000000I64 //< the shortest time between two looks at the question
+priv const LIVE_KEEP_US: I64 = 5000000I64 //< the longest time a live file goes unwritten while
+    //< an answer is worked on
+    //< **So a live file that grows old says that no ksagent writes it any more**: a process stopped
+    //< by Ctrl+C leaves it as it last was. The page then asks the person to check that `watch`
+    //< runs, after 15 seconds, three of these.
 
 enum Phase //< what the model is doing now, as the person is told it
     waiting //< nothing has come back this round yet
@@ -125,7 +130,10 @@ impl Progress
 
     fn go_on(r: Self$@): Bool //< false once the answer must stop; `stop` then says why
         //< **A question stopped on the page, or gone from its ask file, stops its answer**: nobody
-        //< waits for it any more, and the model's time goes to the next question.
+        //< waits for it any more, and the model's time goes to the next question. It is asked at
+        //< each look at the work, so it also writes the live file again where it grew old.
+        if r.live.len > 0 && sys.mono_us() - r.last_live_us >= LIVE_KEEP_US
+            r.write_live(true)
         if r.stop.len > 0 || r.ask.len == 0 || sys.mono_us() - r.last_check_us < CHECK_GAP_US
             return r.stop.len == 0
         r.last_check_us = sys.mono_us()

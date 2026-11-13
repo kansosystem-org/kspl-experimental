@@ -15,6 +15,10 @@
 "use strict";
 
 function ksmdTable(ks) {
+  // What the corner of typed text that looks like a number says, after the cell's text.
+  const NUMBER_TEXT = "this is text that looks like a number, so a sum and arithmetic leave it " +
+    "out. Type it as a plain number, as 1000 or 0.12, to make it a number; a number format shows " +
+    "a , a currency or a %";
   const letters = (c) => {
     let n = c + 1;
     let s = "";
@@ -52,7 +56,9 @@ function ksmdTable(ks) {
     wrap.colIds = b.ci;
     wrap.values = b.rows;
     wrap.names = b.names;
-    wrap.appendChild(ks.button(b.name, "table-name", "Rename the table"));
+    // A table of an included file shows its name, but is renamed in that file's own tab.
+    wrap.appendChild(b.included ? ks.el("span", "table-name", b.name) :
+      ks.button(b.name, "table-name", "Rename the table"));
     // The caption stands above the table, its number drawn before it (`settings.js`).
     if (b.cap) {
       const cap = ks.el("div", "table-caption", b.cap);
@@ -144,6 +150,16 @@ function ksmdTable(ks) {
       const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
       if (!el) continue;
       el.dataset.why = `${el.textContent}: ${why}`;
+      el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
+    }
+    // Typed text that looks like a number, in a column of numbers (`number_as_text` in
+    // `ksmd/edit/typed.kspl`): a corner marks it, and the tooltip and the status bar say why, as
+    // for an error. Retyping it as a plain number makes it one, as one step of undo.
+    for (const [r, c] of b.nt) {
+      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (!el) continue;
+      el.classList.add("number-text");
+      el.dataset.why = `${el.textContent}: ${NUMBER_TEXT}`;
       el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
     }
     if (ks.ownMark) ks.ownMark(wrap, b.own);

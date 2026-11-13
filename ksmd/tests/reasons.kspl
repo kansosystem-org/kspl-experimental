@@ -1,8 +1,10 @@
 //< Why a cell shows an error: the reason the calculator keeps, as the page's tooltip writes it
+//< Also which typed text looks like a number, which the page marks with a reason of its own.
 import "ksmd/calc/calc" { MAX_READS, Results }
 import "ksmd/calc/calc"
 import "ksmd/calc/reason" { write_reason }
 import "ksmd/calc/value" { Calc_error, Value, Why }
+import "ksmd/edit/typed" { looks_like_number, number_as_text, numbers_column }
 import "ksmd/model/model" { Document }
 import "ksmd/tests/support" { join, read }
 import "std/ds"
@@ -18,6 +20,7 @@ fn run()
     syntax_reasons()
     every_kind_has_a_reason()
     every_error_says_more_than_its_kind()
+    numbers_as_text()
 
 priv fn named_reasons() //< the reasons the person meets most, each naming what went wrong
     defer arena: = Arena(64 * 1024)
@@ -50,6 +53,17 @@ priv fn named_reasons() //< the reasons the person meets most, each naming what 
     says(doc@, r@, 8, 1, "A2 holds no true or false, which a condition needs")
     says(doc@, r@, 9, 0, "A3 shows #DIV/0!")
     says(doc@, r@, 9, 1, "min found no numbers")
+    roots: = read(join(HEAD, "| =power(-1, 0.5) | =power(0, -1) |\n:::\n", arena), arena)
+    rooted: = calc.calculate(roots@, "2026-10-23", arena)
+    says(roots@, rooted@, 0, 0,
+        "power: the result is too large, or a value is outside the range it takes")
+    says(roots@, rooted@, 0, 1, "power divides by zero")
+    // A table of an included file is not this file's, so its name names no table here.
+    nowhere: = read(join(HEAD, "| =zz.A1 | |\n:::\n", arena), arena)
+    missed: = calc.calculate(nowhere@, "2026-10-23", arena)
+    says(nowhere@, missed@, 0, 0,
+        "a reference names no cell: the cell is outside its table, or this file holds no table of \
+            that name. A table of an included file cannot be named from here")
 
 priv fn syntax_reasons() //< a formula that does not read says where
     defer arena: = Arena(64 * 1024)
@@ -75,7 +89,8 @@ priv fn syntax_reasons() //< a formula that does not read says where
     limited: = calc.calculate(few@, "2026-10-23", arena, null, 1)
     says(few@, limited@, 0, 1,
         "the formulas read more than 500 million cell values, so this cell was not calculated. A \
-            range over a whole column on every row reads the most")
+            sum_if over a whole column on every row reads the most, or a range that differs on each \
+            row")
     verdict.check("the read limit's reason names the limit", MAX_READS == 500000000,
         arena.text().s("\{MAX_READS\}").take())
 
@@ -127,6 +142,42 @@ priv fn every_error_says_more_than_its_kind() //<
                 which.s("\{row\},\{column\} ")
     verdict.check("every error the calculator makes says what made it", bare == 0 && errors == 19,
         which.slice())
+
+// Typed text that looks like a number stays text, so a total leaves it out. The page marks it in a
+// column that holds more numbers than other text, and never a formula's text.
+priv fn numbers_as_text()
+    for s in U8[][]::{ "1,000", ".5", "+5", "12%", "$12", "１２", "12", " -3.5 ", "¥1,234.50",
+        "-$5", "$-5", "５０％", "1,234,567", "5.", "€0.99", "－１，０００", "0", "0.5",
+        "-0%" }
+        verdict.check(s, looks_like_number(s), "looks like a number")
+    for s in U8[][]::{ "", "-", "$", "%", ".", "1,00", "12,34", "1000,000", "abc", "1.2.3", "12%%",
+        "1e5", "007a", "007", "012", "0,123", "-01.5", "1 000", "$$5", "+-5", "5%5", "(5)",
+        "かんそ" }
+        verdict.check(s, !looks_like_number(s), "does not look like a number")
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 5 | \"007\" | \
+            =1+1 | =\"12\" |\n| 7 | \"A-1\" | \"x\" | 4 |\n| \"1,000\" | \"B-2\" | \"$3\" | \
+            |\n:::\n", arena)
+    r: = calc.calculate(doc@, "2026-10-23", arena)
+    t: = doc.tables[0]@
+    verdict.check("a column of numbers holds more numbers than other text",
+        numbers_column(t, 0, r@, 0) && !numbers_column(t, 0, r@, 1) &&
+        !numbers_column(t, 0, r@, 2) && numbers_column(t, 0, r@, 3), "")
+    verdict.check("typed 1,000 is text that looks like a number", number_as_text(t, 2, 0), "")
+    verdict.check("typed 5 is a number", !number_as_text(t, 0, 0), "")
+    verdict.check("a formula's text is its writer's", !number_as_text(t, 0, 3), "")
+    v: = r.at(0, 2, 0)
+    verdict.check("the text stays text", v.kind == .text && v.text.equals("1,000"), "")
+    // Codes beside as many numbers: as numbers, the codes would lose their zeros.
+    codes: =
+        read("%ksmd 2\n\n:::table name=\"c\"\n| \"Code\" |\n| \"007\" |\n| \"012\" |\n| 123 |\n| \
+            456 |\n:::\n", arena)
+    rc: = calc.calculate(codes@, "2026-10-23", arena)
+    tc: = codes.tables[0]@
+    verdict.check("a code such as 007 is not marked",
+        !number_as_text(tc, 0, 0) && !number_as_text(tc, 1, 0) &&
+        !numbers_column(tc, 0, rc@, 0), "")
 
 priv fn says(doc: Document@, r: Results@, row: Sz, column: Sz, want: U8[]) //<
     //< The cell of table `t` shows an error, for the reason `want`

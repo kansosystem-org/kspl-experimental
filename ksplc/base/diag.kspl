@@ -9,11 +9,13 @@ import "ksplc/base/lines" as base_lines
 import "ksplc/base/locate" as base_locate
 import "std/chars"
 import "std/ds" { List, Map }
+import "std/fs"
 import "std/io"
 import "std/json" + { Json_builder }
 import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
+import "std/sys"
 
 enum Diagnostic_severity: I32
     error = 1
@@ -30,6 +32,17 @@ impl Diagnostic_severity
 
     fn name(r: Self): U8[] //< the word that heads a diagnostic, in the text and in JSON alike
         return r.variant_name()
+
+    priv fn count_written(r: Self) //< it counts one diagnostic of this severity written
+        switch r
+        case .error
+            written.errors += 1
+        case .warning
+            written.warnings += 1
+        case .information
+            written.informations += 1
+        case .hint
+            written.hints += 1
 
 fn code_of(msg: U8[]): U8[] //<
     //< Extracts CODE from a diagnostic's leading "[CODE] ..." (empty if it does not start with "[")
@@ -84,10 +97,26 @@ fn io_line(e: io.Io_error, kind: U8[]): U8[] //<
     case .read_failed(path)
         out.s("\{kind\}/read_failed: failed to read file: \{path\}\n")
     case .write_failed(path)
-        out.s("\{kind\}/write_failed: failed to write file: \{path\}\n")
+        out.s("\{kind\}/write_failed: failed to write file: \{path\}")
+        if folder: = missing_folder(path)
+            out.s(": the folder \{folder\} does not exist")
+        out.c('\n')
     default
         out.s("\{kind\}/other: generic I/O error\n")
     return out.take()
+
+priv fn missing_folder(path: U8[]): U8[]? //< the folder path names that does not exist, if any
+    //< **The usual cause of a refused write is a folder never made** (`out/x.c` before `out/`),
+    //< and the path alone does not say so.
+    $cut: Sz = path.len
+    for cut > 0 && !sys.is_path_sep(path[cut - 1])
+        cut -= 1
+    if cut <= 1
+        return .none // no folder named, or the root
+    folder: = path.sub(0, cut - 1)
+    if fs.is_dir(folder)
+        return .none
+    return .some(folder)
 
 fn ice_assert(cond: Bool, msg: U8[])
     if !cond
@@ -111,15 +140,6 @@ priv fn print_json(file: U8[], line: Sz, column: Sz, end_column: Sz, msg: U8[],
         .set("file", b.str_val(file) if file.len > 0 else b.null_val())
         .set("line", json_num(b@, line)).set("column", json_num(b@, column))
         .set("end_column", json_num(b@, end_column)).build()
-    switch severity
-    case .error
-        json_written.errors += 1
-    case .warning
-        json_written.warnings += 1
-    case .information
-        json_written.informations += 1
-    case .hint
-        json_written.hints += 1
     print_json_row(row)
 
 priv fn print_json_row(row: json.Value) //< one object as one line of stderr
@@ -127,25 +147,31 @@ priv fn print_json_row(row: json.Value) //< one object as one line of stderr
     row.dump(out@)
     log().s(out.slice()).c('\n')
 
-priv struct Json_written //< the objects `print_json` wrote, by severity
+struct Written //<
+    //< The diagnostics written to standard error, by severity, in either form
+    //< **Both the text summary and the JSON closing object count these**, not the analysis's
+    //< tally. An error the parse or its desugaring stopped on is in no tally, so a summary that
+    //< read the tally left such a compile without one.
     errors: Sz
     warnings: Sz
     informations: Sz
     hints: Sz
-priv $json_written: Json_written = ::{}
+priv $written: Written = ::{}
+
+fn written_counts(): Written //< the diagnostics written so far, by severity
+    return written
 
 fn print_json_closing(succeeded: Bool) //<
     //< The closing object: the last line of a compile or lint that reached its verdict, under json
-    //< **It counts the objects written above it**, not the analysis's tally. So a reader that
-    //< counts the lines itself always gets the same numbers (an error the parse stopped on is in no
-    //< tally).
+    //< **It counts the objects written above it** (`Written`). So a reader that counts the lines
+    //< itself always gets the same numbers.
     defer arena: = Arena(4096)
     $b: = Json_builder(arena)
     row: = b.obj().set("result", b.str_val("succeeded" if succeeded else "failed"))
-        .set("errors", b.int_val(json_written.errors))
-        .set("warnings", b.int_val(json_written.warnings))
-        .set("informations", b.int_val(json_written.informations))
-        .set("hints", b.int_val(json_written.hints)).build()
+        .set("errors", b.int_val(written.errors))
+        .set("warnings", b.int_val(written.warnings))
+        .set("informations", b.int_val(written.informations))
+        .set("hints", b.int_val(written.hints)).build()
     print_json_row(row)
 
 priv fn json_num(b: Json_builder$@, v: Sz): json.Value //< a position, or `null` where it is 0
@@ -153,6 +179,7 @@ priv fn json_num(b: Json_builder$@, v: Sz): json.Value //< a position, or `null`
 
 fn print_unplaced(file: U8[], line: Sz, msg: U8[]) //<
     //< An error placed in no source: a settings file's line, or nowhere at all (`file` empty)
+    Diagnostic_severity.error.count_written()
     if base_core.config.diag_json
         print_json(file, line, 0, 0, msg, .error, false)
     else if file.len > 0
@@ -252,6 +279,7 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
         span_len = line_chars + 1 - column
     if span_len < 1
         span_len = 1
+    severity.count_written()
     if base_core.config.diag_json
         print_json(out_file, line, column, column + span_len, msg, severity, is_syntax)
         return

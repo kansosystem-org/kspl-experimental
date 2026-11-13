@@ -446,6 +446,90 @@ fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the r
     assert(arena.text().take().len == 0, "length 0 when nothing is written")
     verdict.pass("It stays for the arena's lifetime, and two of them do not break each other.")
 
+fn test_arena_text_grows_in_its_arena() //< the text grows in the arena; a dropped one leaks nothing
+    //< Caution: **Test a builder dropped without `take()`.** An error between `text()` and `take()`
+    //< drops it so, and a text grown on the heap would leak there.
+    verdict.start("[str] arena.text grows inside its arena test...")
+    buf: U8[16384] = ::{}
+    $arena: = Arena.from_buffer(Void$@::buf@, 16384)
+    heap_before: = mem.heap_used_bytes()
+    // Alone, the text grows where it is, and `take` gives back the room past its NUL.
+    room: = arena.headroom().free
+    t: = arena.text()
+    for i in Range.asc(1000)
+        t.c('a' + U8::(i % 26))
+    alone: = t.take()
+    assert(alone.len == 1000 && alone[0] == 'a' && alone[999] == 'a' + U8::(999 % 26),
+        "a text grown one byte at a time keeps every byte")
+    assert((alone.ptr + alone.len)$ == 0U8, "take ends the text with a NUL")
+    // The builder and the 1,001 bytes, each rounded up to 8: nothing left over from growing.
+    assert(room - arena.headroom().free <= 1008 + 64,
+        "alone, the text grows in place, and take gives back the room it did not use")
+    // Two texts grown in turn move to new blocks, and each keeps its own bytes.
+    x: = arena.text()
+    y: = arena.text()
+    for i in Range.asc(300)
+        x.s("x\{i % 10\}")
+        y.c('y')
+    xs: = x.take()
+    ys: = y.take()
+    assert(xs.len == 600 && xs.sub(0, 4).equals("x0x1") && ys.len == 300 && ys[299] == 'y',
+        "two texts grown in turn do not mix")
+    // Dropped without take, a builder costs arena space only.
+    _dropped: = arena.text().s("never taken: \{xs.len\}")
+    assert(mem.heap_used_bytes() == heap_before, "the texts took nothing from the heap")
+    verdict.pass("It grows in place or in a new arena block, and a dropped one takes no heap.")
+
+priv fn rewind(arena: Arena$@, mark: mem.Arena_state) //<
+    //< `arena.restore(mark)`, out of [W0111]'s view
+    //< The lint takes every view into the arena as ended by `restore`. The test below checks the
+    //< case where the text is not ended, so it rewinds through this function.
+    arena.restore(mark)
+
+fn test_arena_text_across_a_mark() //< a mark saved since text() leaves the text whole
+    //< Caution: **Use an arena that grows.** A fixed buffer has no other place for the text, and
+    //< `std/docs/DESIGN-core.md` leaves that case to the caller.
+    verdict.start("[str] arena.text keeps its bytes across a restore to a later mark test...")
+    defer arena: = Arena(4096)
+    // Saved after the first write: growing in place would cross the mark.
+    t: = arena.text()
+    t.c('a')
+    mark: = arena.save()
+    for _ in Range.asc(44)
+        t.c('b')
+    rewind(arena, mark)
+    other: = arena.dup_str("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ")
+    out: = t.take()
+    assert(out.len == 45 && out[0] == 'a' && out[1] == 'b' && out[44] == 'b',
+        "restore() to a mark saved after the first write frees no byte of the text")
+    assert(other.len == 48 && other[0] == 'Z', "the next allocation lies outside the text")
+    // Saved before the first write, and restored twice, as a loop reusing one mark does.
+    u: = arena.text()
+    again: = arena.save()
+    for i in Range.asc(3)
+        u.s("round \{i\};")
+        _work: = arena.dup_str("work done in the round, given back by the restore below")
+        rewind(arena, again)
+    _after: = arena
+        .dup_str("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
+    assert(u.take().equals("round 0;round 1;round 2;"),
+        "a text written between restores to one mark keeps every round")
+    // A scratch over the caller's arena saves a mark too, and rewinds to it when freed.
+    w: = arena.text()
+    w.c('c')
+    $work: = mem.scratch(arena)
+    for _ in Range.asc(100)
+        w.c('d')
+    work.free()
+    _later: = arena
+        .dup_str("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+    kept: = w.take()
+    assert(kept.len == 101 && kept[0] == 'c' && kept[100] == 'd',
+        "a scratch freed while the text grows frees no byte of the text")
+    // The mark the text did not give room back past still rewinds.
+    arena.restore(mark)
+    verdict.pass("A text keeps every byte when the arena is rewound to a mark saved since text().")
+
 priv const SELF_APPEND_SRC: U8[] = //< a child that writes builders from views of their own bytes
     //< Each source is past 1 KiB: glibc scribbles over a freed block only above that size.
     """import "std/chars"

@@ -301,22 +301,31 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
 // The packages' own tests, through both backends
 // ==========================================
 
+enum Pkg_arg //< what a package's tests are handed on their command line
+    none //< nothing
+    ksplc //< the compiler, to start as a child
+    work_folder //< a fresh folder to write in, one per build, as `make test` empties its own
+
 struct Pkg_tests //< a package's own tests, as its own `make test` runs them
     pkg: U8[] //< its folder, from the root, which they run in
     entry: U8[] //< the program, from the root
-    takes_ksplc: Bool //< whether they are handed the compiler, to start as a child
+    arg: Pkg_arg //< what they are handed
     own_folder: Bool //< whether each run takes a fresh folder of its own rather than the package's
         //< **For tests that write fixed names under the `out/tmp` they run beside.** Two builds
         //< run side by side in one folder would write over each other's files.
 
 // The compiler, library and editor exercise owned buffers and their borrowed views. Memory checks
-// catch a stale view even when the allocator leaves the freed bytes unchanged.
+// catch a stale view even when the allocator leaves the freed bytes unchanged. ksagent unpacks
+// Word and Excel files it did not make, and ksdb reads its pages back from a file.
 priv const PKG_TESTS: Pkg_tests[_] = ::{
-    Pkg_tests::{ .pkg = "ksplc", .entry = "ksplc/tests/main.kspl", .takes_ksplc = false,
+    Pkg_tests::{ .pkg = "ksplc", .entry = "ksplc/tests/main.kspl", .arg = .none,
         .own_folder = false },
-    Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .takes_ksplc = true,
-        .own_folder = true },
-    Pkg_tests::{ .pkg = "ksmd", .entry = "ksmd/tests/main.kspl", .takes_ksplc = false,
+    Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .arg = .ksplc, .own_folder = true },
+    Pkg_tests::{ .pkg = "ksmd", .entry = "ksmd/tests/main.kspl", .arg = .none,
+        .own_folder = false },
+    Pkg_tests::{ .pkg = "ksagent", .entry = "ksagent/tests/main.kspl", .arg = .work_folder,
+        .own_folder = false },
+    Pkg_tests::{ .pkg = "lib/ksdb", .entry = "lib/ksdb/tests/main.kspl", .arg = .none,
         .own_folder = false },
 }
 
@@ -329,7 +338,9 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
         for llvm in Bool[]::{ false, true }
             name: = arena.text().s(t.pkg).s("'s own tests, built through ").s(backend_name(llvm))
                 .s(", run with nothing the sanitizers report").take()
-            stem: = arena.text().s(t.pkg).s("_llvm" if llvm else "_c").take()
+            // One name per build in work's own folder: lib/ksdb is lib_ksdb.
+            stem: = arena.text().s(t.pkg.replace("/", "_", arena)).s("_llvm" if llvm else "_c")
+                .take()
             b: = harness_sanitizer.build(dir, entry, fs.join(work, stem, arena),
                 U8[][]::SAN_CFLAGS, llvm, SAN_MARKS, arena)
             if b.exe.len == 0
@@ -337,8 +348,11 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
                 continue
             $argv: = List<|U8[]|>(arena)
             argv.push(b.exe)
-            if t.takes_ksplc
+            if t.arg == .ksplc
                 argv.push(ksplc_harness.ksplc_exe())
+            else if t.arg == .work_folder
+                argv
+                    .push(fs.join(work, arena.text().s(stem).s("_work").take(), arena))
             $run_dir: = dir
             if t.own_folder
                 run_dir = fs.join(work, arena.text().s(stem).s("_run").take(), arena)

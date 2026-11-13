@@ -4,7 +4,8 @@
 //< no handler could undo, nor spin: it sleeps until the signal, and the woken tasks run. "Did not
 //< spin" is measured as the process's CPU time over that half second. The second round does the
 //< same with the idle task on, which must sleep too; it never ends, so the last task stops the
-//< scheduler (`task.stop_scheduler`).
+//< scheduler (`task.stop_scheduler`). Each is run again with a timeout too large for the clock:
+//< tickless idle must not move the clock to it, which would end the wait at once.
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
@@ -29,6 +30,8 @@ $g_cpu_start: I64 = 0
 $g_wall_waited: I64 = 0 // µs from before the child started to the first wake
 $g_cpu_used: I64 = 0 // µs of this process's CPU time over the same stretch
 $g_stop_at_end: Bool = false
+$g_forever: Bool = false // the waiters take with a timeout too large for the clock
+$g_gave_up: I32 = 0 // how many waiters' take_for returned false
 
 $tcbs: Task[3]
 $stacks: U8[196608] // 3 * 65536
@@ -44,7 +47,11 @@ fn on_irq(_sig: I32): Void //< the stand-in interrupt handler: one give per wait
         g_sem.give()
 
 fn waiter(_arg: Void$@): Void
-    g_sem.take()
+    if g_forever
+        if !g_sem.take_for(0xFFFFFFFFFFFFFFFFU64)
+            g_gave_up += 1
+    else
+        g_sem.take()
     if g_woken == 0 // the highest priority runs first; it measures the wait for the round
         g_wall_waited = sys.mono_us() - g_wall_start
         g_cpu_used = clock() - g_cpu_start
@@ -57,6 +64,8 @@ fn round(title: U8[]) //< blocks three waiters, raises the interrupt from outsid
     g_irqs = 0
     g_blocked_at_irq = 0
     g_woken = 0
+    g_gave_up = 0
+    tick_before: = task.current_tick()
     for i in Range.asc(WAITERS)
         stack: = U8$[]::{ .ptr = stacks[0]@ + i * 65536, .len = 65536 }
         tcbs[i].create(stack, waiter, null, I32::i + 1, "waiter")
@@ -70,6 +79,8 @@ fn round(title: U8[]) //< blocks three waiters, raises the interrupt from outsid
     assert(g_irqs == 1, "sleep: the interrupt did not arrive exactly once")
     assert(g_blocked_at_irq == WAITERS, "sleep: the waiters were not all blocked at the interrupt")
     assert(g_woken == WAITERS, "sleep: the scheduler returned before the interrupt woke its tasks")
+    assert(g_gave_up == 0, "sleep: a wait with a huge timeout gave up before the interrupt")
+    assert(task.current_tick() == tick_before, "sleep: the clock moved while every task waited")
     assert(g_wall_waited >= RAISE_AFTER_MS * 1000I64 * 4I64 / 5I64,
         "sleep: the tasks woke before the interrupt could have come")
     // Spinning would use about as much CPU as the time waited; a sleep uses next to none.
@@ -82,6 +93,9 @@ fn main(): I32
     g_sem.init(0)
     sys.set_signal_handler(SIGUSR1, on_irq)
     round("[ksos] start_scheduler sleeps while every task waits on an interrupt")
+    g_forever = true
+    round("[ksos] a timeout too large for the clock waits for the interrupt")
+    g_forever = false
     io.out().s("=== the idle task on ===\n")
     task.enable_idle_task(U8$[]::stack_idle, task.Idle_hook::null)
     g_stop_at_end = true
@@ -92,4 +106,6 @@ fn main(): I32
         if t != null && t.get_state() != .done
             left += 1
     assert(left == 1, "sleep: only the idle task should remain once stop_scheduler has returned")
+    g_forever = true
+    round("[ksos] the idle task sleeps through a timeout too large for the clock")
     return verdict.finish()

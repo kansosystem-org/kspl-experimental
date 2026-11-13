@@ -89,11 +89,12 @@ function ksmdView(ks) {
   }
 
   // A block left out of print and PDF is marked; a chart, a diagram, an image or an include has
-  // its toggle beside its Remove button, and a table has it in its right-click menu.
+  // its toggle beside its Remove button, and a table has it in its right-click menu. A block of
+  // an included file has no toggle: that file is edited in its own tab.
   function render(b) {
     const el = shape(b);
     el.classList.toggle("print-hidden", !!b.iv);
-    const remove = ["g", "i", "n", "x"].includes(b.k) && el.querySelector(".block-remove");
+    const remove = ["g", "i", "n", "x"].includes(b.k) && !b.included && el.querySelector(".block-remove");
     if (remove) remove.before(printButton(!!b.iv));
     if (b.k === "g" || b.k === "i") ks.drawings.attach(el, b);
     return el;

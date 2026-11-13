@@ -109,8 +109,12 @@ static void ksos_sigalrm_handler(int sig) {
 }
 
 // Starts the periodic timer (SIGALRM/setitimer) at a period of reload **microseconds** (the
-// Cortex-M port's reload is SysTick cycles).
-void ksos_port_tick_start(uint32_t reload) {
+// Cortex-M port's reload is SysTick cycles). Returns 0, and starts nothing, for a reload of 0,
+// which would stop the timer.
+uint32_t ksos_port_tick_start(uint32_t reload) {
+    if (reload == 0) {
+        return 0;
+    }
     struct sigaction sa;
     sa.sa_handler = ksos_sigalrm_handler;
     sigemptyset(&sa.sa_mask);
@@ -123,6 +127,7 @@ void ksos_port_tick_start(uint32_t reload) {
     tv.it_value.tv_usec = reload % 1000000u;
     tv.it_interval = tv.it_value;
     setitimer(ITIMER_REAL, &tv, NULL);
+    return 1;
 }
 
 // The critical section: it blocks those signals and returns, a bit per signal, which were blocked

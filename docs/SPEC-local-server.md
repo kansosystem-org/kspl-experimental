@@ -101,6 +101,10 @@ The page reads a file whole and writes a file whole, by its path under the root.
 
 **A write makes the one folder its file goes in, if that folder is missing.** The folder above it must stand already. So a page puts a document's images in a folder named for it, and never makes a tree of folders by mistake.
 
+Where the folder above is missing, the write answers 409 with `{"error":<message>,"cause":"folders"}`, and the message names that folder. A step of the path that is a file gets the same answer, naming the file. **`cause` keeps this answer apart from a conditional write's mismatch**, which carries none.
+
+A write to a path where a folder stands answers 409 with `"cause":"folder"`, with or without `X-Kanso-If-Content`. The page then offers another name, since writing there again cannot succeed.
+
 **A write never reaches a name that starts with `.`**, at any step of the path, such as `.git/config` or `.env`. A write to `.git/config` can set a command that the next `git status` runs. A read of such a name is answered as any other.
 
 A PUT can carry `X-Kanso-If-Content`: either `missing`, or the 64-character lowercase SHA-256 digest of the expected file bytes. `missing` permits creation only when the path does not exist. A digest permits replacement only when the existing bytes match. A mismatch returns 409 without writing; a malformed guard returns 400. Without this header, PUT replaces unconditionally.
@@ -135,13 +139,13 @@ A page lists the names in one folder, so that a Save As dialog can show where a 
 
 | Request | Response |
 | :-- | :-- |
-| `GET /api/list?path=<p>` | `{"folders":[…],"files":[…],"more":false}`, each list in byte order. An empty or absent path is the root. 404 if it is not a folder |
+| `GET /api/list?path=<p>` | `{"folders":[…],"files":[…],"more":false}`, each list in byte order. An empty or absent path is the root, and so is `.`. 404 if it is not a folder. 403 if a step of the path starts with `.` |
 
 **A listing gives the holder of the token nothing new**, yet it gives as little as it can:
 
 * **Names only.** No size, no time and no content: "Watching" and "Files" give those.
 * **A link is left out**, so the dialog never offers a way out of the root. So is anything that is neither a folder nor an ordinary file.
-* **A hidden name is left out**: one that starts with `.`, such as `.git`.
+* **A hidden name is left out**: one that starts with `.`, such as `.git`. **A hidden folder is not listed either**: a listing never names one, so a path to it is refused.
 * **A name holding a `\` is left out.** Only POSIX allows one, and there the server refuses it in `path=`, since such a file could not be saved.
 * **At most 2000 names come back.** `more` is `true` when others stand there, and the page then asks the person to type the name.
 
@@ -212,10 +216,10 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | :-- | :-- |
 | 400 | A malformed request (a `Host` given twice included), or a malformed `%XX` |
 | 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike). So a request without the token learns nothing of the names under the root |
-| 403 | It pointed outside the root, wrote to a name that starts with `.`, or named a `Host` other than the loopback. Or it asked to build a file whose bytes the person has not allowed |
+| 403 | It pointed outside the root, wrote to or listed a name that starts with `.`, or named a `Host` other than the loopback. Or it asked to build a file whose bytes the person has not allowed |
 | 404 | A name that does not exist, an unknown endpoint, or a build with no builder named |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
-| 409 | The conditional write no longer matches the file, or its target is not a regular file. Or an allow names bytes the file does not hold |
+| 409 | The conditional write no longer matches the file, or its target is not a regular file. Or a write's folders do not stand, or an allow names bytes the file does not hold |
 | 413 | The body exceeded the ceiling |
 | 422 | The file named for a build does not build; `error` holds the builder's message |
 | 500 | It could not be written or replaced |

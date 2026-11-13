@@ -430,6 +430,34 @@ fn test_tcp_read_for() //<
     pair.listener.free()
     verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")
 
+fn test_tcp_read_empty_buffer() //<
+    //< a read into an empty buffer fails, and is not read as the peer closing
+    //< A receive of 0 bytes returns 0, which once said the peer had closed while it was there.
+    verdict.start("[Net] a read into an empty buffer test...")
+    pair: = tcp_pair()
+    $buf: U8[4] = ::{}
+    empty: = U8$[]::{ .ptr = buf[0]@, .len = 0 }
+    $read_end: = net.Net_error.would_block
+    _n: = pair.client.read(empty) catch e
+        read_end = e
+        fallback 7
+    $for_end: = net.Net_error.would_block
+    _m: = pair.client.read_for(empty, 60000) catch e
+        for_end = e
+        fallback 7
+    verdict.check("read refuses an empty buffer as io_failed",
+        read_end == net.Net_error.io_failed, "")
+    verdict.check("read_for refuses it at once, before any wait",
+        for_end == net.Net_error.io_failed, "")
+    pair.conn.write_all("hi") catch panic("server write should succeed")
+    n: = pair.client.read(U8$[]::buf) catch panic("the stream should still be readable")
+    verdict.check("the stream still reads what the peer sends",
+        U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi"), "")
+    pair.conn.free()
+    pair.client.free()
+    pair.listener.free()
+    verdict.pass("An empty buffer is refused as io_failed, and the stream reads on.")
+
 // ==========================================
 // A handler stays set after a signal. C's `signal()` under -std=c99 puts the default back at the
 // first delivery, so the second signal would end this program. It stands beside the test of a

@@ -420,6 +420,7 @@ const ksagentMarkdown = (() => {
     thinking: "モデルが考えています", reading: "モデルがファイルを読んでいます: ",
     writingPhase: "モデルが書いています", untaken: "ksagent が受け取る前に止めました。",
     gaveUp: "ksagent は回答を記録できませんでした: ", unshown: "このやり取りは表示できません: ",
+    quiet: "ksagent が 15 秒以上なにも書いていません。このフォルダーで ksagent watch が動いているか確かめてください。",
   } : {
     checked: "Sources checked", unverified: "Unverified", not_found: "Not found",
     stopped: "Stopped", failed: "No answer", writing: "Being written: sources not checked yet",
@@ -430,6 +431,7 @@ const ksagentMarkdown = (() => {
     reading: "The model is reading: ", writingPhase: "The model is writing",
     untaken: "Stopped before ksagent took it.", gaveUp: "ksagent could not record an answer: ",
     unshown: "This turn cannot be shown: ",
+    quiet: "ksagent has written nothing for over 15 seconds. Check that ksagent watch runs on this folder.",
   };
   if (ja) {
     document.documentElement.lang = "ja";
@@ -522,17 +524,25 @@ const ksagentMarkdown = (() => {
     return { out: taken, broken };
   }
 
+  // `liveStamp` is the live file's size and second last seen, and `liveSeen` when it last changed,
+  // by this page's clock.
   const S = { name: "", ask: null, chat: null, live: null, refused: "", stamps: {},
     askedAt: new Map(), shown: new Map(), problem: "", late: "", unsure: null, stopUnsure: null,
-    ready: false };
+    ready: false, liveStamp: null, liveSeen: 0 };
   const path = (kind) => `${S.name}.${kind}`;
 
+  // Reads one of the conversation's files again where it changed. Caution: **Drop what comes
+  // back after the person opened another conversation.** Kept, the old conversation's turns
+  // showed in the new one.
   async function refresh(kind, file) {
-    const now = await stat(path(file));
-    if (S.stamps[kind] === now) return false;
-    const got = now === "none" ? { bytes: null } : await read(path(file));
+    const name = S.name;
+    const at = path(file);
+    const now = await stat(at);
+    if (S.name !== name || S.stamps[kind] === now) return false;
+    const got = now === "none" ? { bytes: null } : await read(at);
+    if (S.name !== name) return false;
     S.stamps[kind] = now;
-    S[kind] = (kind === "ask" ? asks : records)(got.bytes, path(file));
+    S[kind] = (kind === "ask" ? asks : records)(got.bytes, at);
     return true;
   }
 
@@ -572,9 +582,9 @@ const ksagentMarkdown = (() => {
     return b;
   }
 
-  // What one turn shows, and the state a check reads (`data-state`). **Only an answer record
-  // whose state is `checked` shows as checked**; the growing text and a stopped answer's partial
-  // text stand apart, marked as not checked.
+  // What one turn shows: its text part, the button it offers (`act`), and the state a check reads
+  // (`data-state`). **Only an answer record whose state is `checked` shows as checked**; the
+  // growing text and a stopped answer's partial text stand apart, marked as not checked.
   function view(t) {
     const live = S.live && S.live.id === t.id ? S.live : null;
     const a = t.answer;
@@ -584,7 +594,8 @@ const ksagentMarkdown = (() => {
     else if (live && live.phase === "stopped") state = "stopped";
     else if (t.stop) state = live && live.phase !== "done" ? "stopping" : "untaken";
     else state = live && live.phase !== "done" ? "writing" : "pending";
-    const box = el("div", `a ${state === "stopping" || state === "untaken" ? "stopped" : state}`);
+    const box = el("div", "part");
+    let act = "";
     box.appendChild(el("div", "badge", W[state] || W.stopped));
     if (a) {
       if (a.state === "checked" || a.state === "unverified" || a.state === "not_found") {
@@ -616,13 +627,12 @@ const ksagentMarkdown = (() => {
         d.appendChild(el("summary", "", W.removed));
         for (const r of a.removed) d.appendChild(el("div", "", String(r)));
       }
-      if (a.state === "stopped" || a.state === "failed") {
-        box.appendChild(el("div", "actions")).appendChild(button(W.again, () => ask(t.text)));
-      }
+      if (a.state === "stopped" || a.state === "failed") act = "again";
     } else if (state === "writing" || state === "stopping") {
       const phase = { waiting: W.waiting, thinking: W.thinking, writing: W.writingPhase,
         reading: W.reading + String(live.tools || "") }[live.phase] || W.waiting;
       box.appendChild(el("div", "phase", phase));
+      if (quiet(t)) box.appendChild(el("div", "phase", W.quiet));
       if (live.text) box.appendChild(markdown(live.text)).classList.add("unchecked");
     } else if (state === "stopped") {
       // ksagent gave up on recording the answer: the live file says why, beside the text shown.
@@ -631,31 +641,57 @@ const ksagentMarkdown = (() => {
         box.appendChild(el("p", "phase", W.partial));
         box.appendChild(markdown(live.text)).classList.add("unchecked");
       }
-      box.appendChild(el("div", "actions")).appendChild(button(W.again, () => ask(t.text)));
+      act = "again";
     } else if (state === "untaken") {
       box.appendChild(el("div", "phase", W.untaken));
-      box.appendChild(el("div", "actions")).appendChild(button(W.again, () => ask(t.text)));
+      act = "again";
     } else if (hinted(t)) {
       box.appendChild(el("div", "phase", W.hint));
     }
-    if (state === "writing" || state === "pending") {
-      box.appendChild(el("div", "actions")).appendChild(button(W.stop, () => stop(t.id)));
-    }
-    return { box, state };
+    if (state === "writing" || state === "pending") act = "stop";
+    return { box, act, state };
   }
 
   const hinted = (t) => !S.refused && Date.now() - (S.askedAt.get(t.id) || Date.now()) > HINT_MS;
+  // **A live file that stops changing names a ksagent that no longer runs**: while it works,
+  // ksagent writes the file again every 5 seconds. Stopped by Ctrl+C, it leaves the file as it last
+  // was, and the turn would say "The model is writing" for good.
+  const quiet = (t) => S.live !== null && S.live.id === t.id && Date.now() - S.liveSeen > HINT_MS;
 
   // A turn that cannot be shown says so, with its text as plain text, and the rest goes on.
   function unshown(t, e) {
-    const box = el("div", "a failed");
+    const box = el("div", "part");
     box.appendChild(el("div", "phase", W.unshown + String(e && e.message)));
     box.appendChild(el("pre", "unchecked", String((t.answer && t.answer.text) || "")));
-    return { box, state: "failed" };
+    return { box, act: "", state: "failed" };
+  }
+
+  // A turn's frame: its question, then its answer box, which holds the text part and the
+  // actions. **Only the text part is built again**; the frame and the button stay.
+  function frame(t) {
+    const turn = el("section", "turn");
+    turn.dataset.id = t.id;
+    turn.appendChild(el("div", "q")).appendChild(el("div", "bubble", t.text));
+    const a = turn.appendChild(el("div", "a"));
+    a.appendChild(el("div", "part"));
+    a.appendChild(el("div", "actions")).dataset.act = "";
+    return turn;
+  }
+  // Puts the turn's button in place. Caution: **Keep the button that stands there when it is the
+  // same one.** Built again each second, a Stop pressed while the answer grew lost its click
+  // where the press and the release met two buttons, and the keyboard's focus went with it.
+  function offer(actions, act, t) {
+    if (actions.dataset.act === act) return;
+    actions.dataset.act = act;
+    actions.replaceChildren(...(act === "stop" ? [button(W.stop, () => stop(t.id))] :
+      act === "again" ? [button(W.again, () => ask(t.text))] : []));
   }
 
   // Draws only the turns whose records changed: **a turn is read and drawn again only when what
   // it shows from changed**, so a growing answer leaves the rest of the page still and unread.
+  // **A screen reader hears an answer once it is whole**: the log reads out what is added to it,
+  // so the box of an answer still open is marked busy, and its growing text is not read out
+  // again each second.
   function draw() {
     const log = $("log");
     const bottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
@@ -663,7 +699,8 @@ const ksagentMarkdown = (() => {
     for (const t of all) {
       if (!S.askedAt.has(t.id)) S.askedAt.set(t.id, Date.now());
       const live = S.live && S.live.id === t.id ? S.live : null;
-      const from = [t.text, t.answer, t.stop, live, !t.answer && hinted(t)];
+      const from = [t.text, t.answer, t.stop, live, !t.answer && hinted(t),
+        !t.answer && quiet(t)];
       const had = S.shown.get(t.id);
       if (had && from.every((x, k) => x === had.from[k])) continue;
       let shown;
@@ -672,20 +709,25 @@ const ksagentMarkdown = (() => {
       } catch (e) {
         shown = unshown(t, e);
       }
-      const { box, state } = shown;
-      const turn = had ? had.node : el("section", "turn");
-      if (!had) {
-        turn.dataset.id = t.id;
-        turn.appendChild(el("div", "q")).appendChild(el("div", "bubble", t.text));
-        log.insertBefore(turn, $("latest"));
-      }
-      if (turn.children[1]) turn.children[1].remove();
-      turn.appendChild(box);
+      const { box, act, state } = shown;
+      const turn = had ? had.node : log.insertBefore(frame(t), $("latest"));
+      const a = turn.children[1];
+      a.className = `a ${state === "stopping" || state === "untaken" ? "stopped" : state}`;
+      a.setAttribute("aria-busy", String(["writing", "stopping", "pending"].includes(state)));
+      a.children[0].replaceWith(box);
+      offer(a.children[1], act, t);
       turn.dataset.state = state;
       S.shown.set(t.id, { from, node: turn });
     }
+    // A turn whose question no file holds any more goes, as when a person edits the ask file.
+    const listed = new Set(all.map((t) => t.id));
+    for (const [id, had] of S.shown) {
+      if (!listed.has(id)) { had.node.remove(); S.shown.delete(id); }
+    }
     const broken = [...(S.ask ? S.ask.broken : []), ...(S.chat ? S.chat.broken : [])];
-    $("notice").textContent = [S.late, S.problem, S.refused, ...broken].filter((x) => x).join("\n");
+    // **Each line once**: a look and a save that fail for one cause say the same words.
+    $("notice").textContent = [...new Set([S.late, S.problem, S.refused, ...broken].filter((x) => x))]
+      .join("\n");
     if (bottom) log.scrollTop = log.scrollHeight;
     $("latest").style.display = bottom ? "none" : "block";
   }
@@ -740,12 +782,18 @@ const ksagentMarkdown = (() => {
   }
 
   async function look() {
+    const name = S.name;
     try {
       const a = await refresh("ask", "ask.jsonl");
       const c = await refresh("chat", "chat.jsonl");
+      if (S.name !== name) return;
       let l = false;
       if (turns().some(isOpen)) {
+        // The size and the second it changed tell a file written again, even with the same bytes.
+        const stamp = await stat(path("live.json"));
         const got = await read(path("live.json"));
+        if (S.name !== name) return;
+        if (stamp !== S.liveStamp) { S.liveStamp = stamp; S.liveSeen = Date.now(); }
         let live = null;
         try {
           live = got.bytes ? JSON.parse(new TextDecoder().decode(got.bytes)) : null;
@@ -776,6 +824,7 @@ const ksagentMarkdown = (() => {
       }
       if (a || c || l || late || turns().some(isOpen)) draw();
     } catch (e) {
+      if (S.name !== name) return;
       S.late = failed(e);
       draw();
     }
@@ -799,14 +848,19 @@ const ksagentMarkdown = (() => {
   }
   async function open(name) {
     S.name = name;
-    S.ask = S.chat = S.live = null;
+    S.ask = S.chat = S.live = S.liveStamp = null;
     S.refused = "";
     S.stamps = {};
     S.shown.clear();
     for (const t of [...document.querySelectorAll(".turn")]) t.remove();
     history.replaceState(null, "", `${location.pathname}?chat=${encodeURIComponent(name)}`);
     document.title = `${name} - ksagent`;
-    const names = await listChats();
+    // **A list that cannot be read still opens the conversation**, and the notice says why.
+    const names = await listChats().catch((e) => {
+      S.late = failed(e);
+      draw();
+      return [];
+    });
     if (!names.includes(name)) names.push(name);
     const ul = $("chats");
     ul.textContent = "";

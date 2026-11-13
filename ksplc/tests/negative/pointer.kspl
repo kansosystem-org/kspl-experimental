@@ -428,6 +428,40 @@ impl Holder
 fn main(): I32
   $h: Holder = ::{ .buf = ::{ 1, 2, 3, 4 } }
   return I32::h.ro_write()
+// ==== case read_only_place_names_its_fix
+//< A write refused on a read-only place names the change that allows it, by its name
+//< A read-only pointer is changed in its type (`P$@`): a `$` before its name would let only the
+//< pointer be set again. An immutable binding takes the `$`, and the advice spells its own name.
+//< Each shape is a function of its own: sema stops a body at its first error.
+// EXPECT: read_only_place_names_its_fix.kspl:19:3: error: cannot call a method that takes a writable receiver ('Self$@') on a read-only location. Take 'x' as a writable pointer ('
+// EXPECT: read_only_place_names_its_fix.kspl:23:3: error: cannot call a method that takes a writable receiver ('Self$@') on a read-only location. Make the binding mutable ('$v')
+// EXPECT: read_only_place_names_its_fix.kspl:27:3: error: cannot write to an element of the read-only array 'I32[3]'. An array's elements follow the binding that holds it. Make the binding mutable ('$xs')
+// EXPECT: read_only_place_names_its_fix.kspl:31:3: error: cannot assign through a read-only location. Take 'ps' as a writable pointer ('
+// EXPECT-NOT: '$x')
+import "std/ds" { List }
+
+struct P
+  n: I32
+impl P
+  fn bump(r: Self$@)
+    r.n += 1
+
+fn through_pointer(x: P@)
+  x.bump()
+
+fn on_binding()
+  v: = P::{ .n = 1 }
+  v.bump()
+
+fn on_array(): I32
+  xs: I32[3] = ::{ 1, 2, 3 }
+  xs[0] = 4
+  return xs[0]
+
+fn into_list(ps: List<|P|>@)
+  ps[0] = P::{ .n = 2 }
+
+fn main() {}
 // ==== case write_through_ptr_arith
 //< A write through pointer arithmetic on a read-only pointer is rejected
 //< `p + 1` keeps `p`'s pointer type, but a road check (write_target_type) walking only `.` / `$` /

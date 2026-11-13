@@ -104,6 +104,42 @@ priv fn closing_paren(text: U8[], start: Sz): Sz //< matching close, or text.len
                 return i
     return text.len
 
+priv fn shown_label(label: U8[], target: U8[], arena: Arena$@): U8[] //<
+    //< A link's label as printed: a label that is the link's own path is named from the root
+    //< **The specification's paths are relative to its folder** (`../../docs/SPEC-gates.md`), which
+    //< is wrong from wherever `ksplc explain` runs. A label that is other words stays as written.
+    $file: = target
+    if hash: = target.find_char('#')
+        file = target.sub(0, hash)
+    bare: = label.strip_prefix("`").strip_suffix("`")
+    if file.len == 0 || !bare.equals(file) || file.find_str("://").is_some()
+        return label
+    rooted: = from_root(file, arena)
+    return arena.text().s("`").s(rooted).s("`").take() if label.starts_with("`") else rooted
+
+priv fn from_root(rel: U8[], arena: Arena$@): U8[] //<
+    //< A path relative to the specification's folder, named from the repository's root
+    //< `../../docs/SPEC-gates.md` gives `docs/SPEC-gates.md`; `SPEC-tools.md` gives
+    //< `ksplc/docs/SPEC-tools.md`. The folder is the one `SPEC_NAME` names.
+    $parts: = ds.List<|U8[]|>(arena)
+    $dir: = SPEC_NAME
+    if slash: = dir.rfind_char('/')
+        dir = dir.sub(0, slash)
+    for part in dir.split('/', arena)
+        parts.push(part)
+    for part in rel.split('/', arena)
+        if part.equals("..")
+            if parts.len > 0
+                _up: = parts.pop()
+        else if part.len > 0 && !part.equals(".")
+            parts.push(part)
+    out: = arena.text()
+    for i in Range.asc(parts.len)
+        if i > 0
+            out.c('/')
+        out.s(parts.get(i))
+    return out.take()
+
 priv fn readable_line(line: U8[], arena: Arena$@): U8[] //<
     //< prose without document citations or link targets
     out: = arena.text()
@@ -127,7 +163,9 @@ priv fn readable_line(line: U8[], arena: Arena$@): U8[] //<
                 label_end: = i + close
                 end: = closing_paren(line, label_end + 1)
                 if end < line.len
-                    out.s(line.sub(i + 1, label_end - i - 1))
+                    label: = line.sub(i + 1, label_end - i - 1)
+                    out
+                        .s(shown_label(label, line.sub(label_end + 2, end - label_end - 2), arena))
                     i = end + 1
                     continue
         if !code && ch == '*' && i + 1 < line.len && line[i + 1] == '*'

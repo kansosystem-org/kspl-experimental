@@ -338,9 +338,14 @@ impl Tcp_stream
             throw .timed_out
 
     pub fn read( //< receives and returns how much arrived; 0 means the peer closed
+        //< An empty buffer fails with `io_failed`.
         r: Self@,
-        buf: U8$[], //< where the bytes go
+        buf: U8$[], //< where the bytes go; at least one byte long
     ): Sz!Net_error
+        // Caution: **Refuse an empty buffer, never pass it on.** A receive of 0 bytes returns 0,
+        // which says the peer closed while it is still there.
+        if buf.len == 0
+            throw .io_failed
         return transferred(kspl_tcp_recv(r.handle, buf.ptr, buf.len))
 
     pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
@@ -349,6 +354,8 @@ impl Tcp_stream
         buf: U8$[], //< where the bytes go
         timeout_ms: I32, //< how long to wait for something to read; `timed_out` past it
     ): Sz!Net_error
+        if buf.len == 0
+            throw .io_failed // as `read` refuses it, before any wait
         r.wait_until_ready(POLL_READABLE, timeout_ms)!
         return r.read(buf)!
 

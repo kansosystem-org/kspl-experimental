@@ -154,11 +154,14 @@ impl Ast_node
             return .none
         return .some(curr)
 
-    fn body_frees_param_directly(r: Self$@, param_name: U8[], c: Sema_ctx$@): Bool //<
+    fn body_frees_param_directly(r: Self$@, param_name: U8[], c: Sema_ctx$@, arg_type_id: I32): Bool //<
         //< Whether the body's top-level statements always free the formal parameter param_name
         //< One level only: a delegation or a release inside an if or a for is not tracked. Once the
         //< name is shadowed or set to another value (`$p` given `p = other`), nothing counts: the
         //< name no longer holds what the caller passed.
+        //< **`x.free()` is decided by the type the caller passes** (arg_type_id; 0 where there is
+        //< no caller). In a generic body, `x: T$@` has no conformance of its own, so `rel(b@)` with
+        //< a `Str_builder` frees `b` as a plain function's would.
         block: = r.find_child(.k_stmt_block)
         if block == null
             return false
@@ -189,9 +192,30 @@ impl Ast_node
                 call_op: = inner.get_postfix_op()
                 if call_op != null && call_op.text.equals("(")
                     inner = inner.get_postfix_receiver()
-            if inner == null || inner.kind_id != .k_method_access
+            if inner == null || !inner.is_free_call_access(arg_type_id != 0)
                 continue
-            if receiver: = inner.get_free_call_receiver(c)
-                if expr_names_local(receiver, param_name)
-                    return true
+            if inner.frees_named_receiver(param_name, c, arg_type_id)
+                return true
         return false
+
+    priv fn is_free_call_access(r: Self$@, as_written: Bool): Bool //<
+        //< Whether this is a method access, or with as_written a `.` that sema has not resolved yet
+        //< A generic body is read as written, where `x.free` is still a plain `.` (sema makes it a
+        //< k_method_access in each instance's copy).
+        if r.kind_id == .k_method_access
+            return true
+        return as_written && r.kind_id == .k_expr_postfix &&
+            r.postfix_op_text().equals(".")
+
+    priv fn frees_named_receiver(r: Self$@, param_name: U8[], c: Sema_ctx$@, arg_type_id: I32): Bool //<
+        //< Whether this method access is `param_name.free()` on a type with the release contract
+        //< The type is the caller's argument's where there is one (body_frees_param_directly), else
+        //< the receiver's own, as get_free_call_receiver decides.
+        if arg_type_id == 0
+            if receiver: = r.get_free_call_receiver(c)
+                return expr_names_local(receiver, param_name)
+            return false
+        member: = r.get_postfix_member()
+        receiver: = r.get_postfix_receiver()
+        return member != null && member.text.equals("free") && receiver != null &&
+            expr_names_local(receiver, param_name) && c.env.has_release_contract(arg_type_id)

@@ -127,21 +127,24 @@ pub struct Run_result //< the outcome of one run that started: how it ended, and
 
 #cfg(!freestanding)
 pub fn run_capture( //< runs one child to the end and collects both its outputs
-    //< argv[0] is as for `spawn_wait`. stdout and stderr are collected separately, watched in one
-    //< wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this
-    //< it is cut"), not the size to allocate.
-    //< **Past the time limit, the child and all it started are killed.** Once the child itself
-    //< has ended, what it started can hold the outputs open. They are read for `PIPE_GRACE_MS`
-    //< more, and what comes after is not kept.
+    //< argv[0] is as for `spawn_wait`. stdout and stderr are collected apart, in one wait.
+    //< **Past the time limit, the child and all it started are killed.** Once the child has ended,
+    //< what it started can hold the outputs open. They are read `PIPE_GRACE_MS` more, no longer.
+    //< **Its standard input is empty**, as `spawn_limited`'s is. In a group of its own, a child
+    //< that read the terminal would be stopped until its limit. So input piped to the caller does
+    //< not reach it.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
     timeout_ms: I32, //< how long it can run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
     arena: Arena$@, //< where the outputs go; null means the heap, each freed with `dealloc`
 ): Run_result!Spawn_error //< both outputs and how it ended; fails only if it cannot start
-    h: = start(argv, cwd, STDIO_OUT | STDIO_ERR | STDIO_GROUP, "", "")
+    h: = start(argv, cwd, STDIO_IN | STDIO_OUT | STDIO_ERR | STDIO_GROUP, "", "")
     if h == 0
         throw .spawn_failed
+    kspl_proc_close_stdin(h)
+    // The two outputs are watched in one wait (`kspl_proc_poll`). **Append only what was read**:
+    // the cap is a promise ("beyond this it is cut"), not the size to allocate.
     defer $out: = Str_builder()
     defer $err: = Str_builder()
     $chunk: U8[4096] = ::{}
@@ -225,10 +228,15 @@ priv fn read_capped(path: U8[], cap: Sz, cut: Bool$@, arena: Arena$@): U8$[]? //
     return .some(U8$[]::got)
 
 // Starts one job; returns 0 on failure (the caller turns that into `Spawn_error.spawn_failed`).
+// Its standard input is a pipe closed at once, so the job reads an end, never the terminal.
 #cfg(!freestanding)
 priv fn start_job(job: Job, index: Sz, work_dir: U8[], arena: Arena$@): I64
-    return start(job.argv, job.cwd, STDIO_GROUP, job_path(work_dir, index, "out", arena),
-        job_path(work_dir, index, "err", arena))
+    h: =
+        start(job.argv, job.cwd, STDIO_IN | STDIO_GROUP,
+        job_path(work_dir, index, "out", arena), job_path(work_dir, index, "err", arena))
+    if h != 0
+        kspl_proc_close_stdin(h)
+    return h
 
 priv const REAP_PAUSE_MAX_MS: I32 = 10 //< the longest pause between two looks at a running job
     //< **Short beside a job's own run**, so a slot stands idle at most this long after its job
@@ -292,6 +300,7 @@ priv struct Running_job //< a handle and its deadline; handle 0 means no child r
 // never an exit code, so a program that itself exits 127 is not read as missing.
 #cfg(!freestanding)
 pub fn run_many( //< runs many children, a few at a time, and collects each one's output
+    //< **Each child's standard input is empty**, as `run_capture`'s is, for the same reason.
     jobs: Job[], //< what to run; the results are returned in this order
     max_parallel: Sz, //< how many can run at once
     timeout_ms: I32, //< how long each can run before it is killed
@@ -377,7 +386,8 @@ impl Run_error
 
 #cfg(!freestanding)
 pub fn run( //< runs one child and returns its standard output; any failure is thrown
-    //< The arguments are as for run_capture. **The failure is thrown**: "cannot start", "timed out"
+    //< The arguments, and the empty standard input, are as for run_capture. **The failure is
+    //< thrown**: "cannot start", "timed out"
     //< and "exited non-zero" all become `Run_error`, so the caller can pass them on with `!`.
     //< **When you need the exit code itself, use run_capture.** This one treats anything but 0 as
     //< a failure. That does not suit a program where a non-zero exit is normal.

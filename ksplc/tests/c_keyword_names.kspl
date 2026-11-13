@@ -59,6 +59,13 @@ struct Sig_row //< the names the declaration half's headers `#define`
         //< The C has `typedef bool Bool;`. Declaration and reference must agree on the suffixed
         //< name.
 
+struct Gnu_row //< the names gcc and clang `#define` in GNU C mode alone (`is_gnu_macro`)
+    //< This C builds as ISO C99, where none is defined: `decl_macros_test.kspl` builds in GNU mode.
+    //< Here the declarations and the references must agree on the suffix.
+    linux: I32
+    unix: I32
+    i386: I32
+
 struct Crt_row //< the names Windows's CRT `#define`s
     //< **Linux cannot trigger them** (glibc's `stdin` expands to itself; the rest are not macros).
     //< On that CRT each expands to another name (`stderr` to `(__acrt_iob_func(2))`).
@@ -136,6 +143,13 @@ priv fn consts_as_locals(): F64 //< the constants' names as local constants and 
 
 priv fn consts_as_params(SIGINT: I32, BUFSIZ: I32): I32
     return SIGINT + BUFSIZ
+
+priv fn gnu(linux: I32, unix: I32): I32 //< GNU mode's macro names as parameters and locals
+    i386: = linux + unix
+    $sun: = Gnu_row::{ .linux = i386, .unix = 1, .i386 = 2 }
+    seen: Gnu_row@ = sun@
+    sparc: = sun.linux + seen.unix + seen.i386
+    return sparc
 
 priv fn crt(environ: I32, stdout: I32): I32
     stderr: = environ + stdout
@@ -268,6 +282,7 @@ fn test_c_keyword_names()
     assert(sized.char() == 12, "C keyword names: trait method through a vtable")
 
     assert(apply(twice, 3) == 6, "C keyword names: function pointer parameter")
+    assert(gnu(1, 2) == 6, "GNU mode's macro names: fields, parameters and locals agree")
 
     defer arena: = Arena(4096)
     lst: = List<|I32|>.create(arena)

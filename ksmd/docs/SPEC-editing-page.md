@@ -62,7 +62,7 @@
 
 | Part | What it shows or does |
 | :-- | :-- |
-| Why it shows an error | The mark and its reason, as `#VALUE!: B7 holds text, which arithmetic cannot use`. Its tooltip holds a long reason whole |
+| Why it shows an error | The mark and its reason, as `#VALUE!: B7 holds text, which arithmetic cannot use`. Its tooltip holds a long reason whole. Text that looks like a number shows why it is marked here too |
 | The document's own functions | Which ones the chosen cell calls, as `Uses tax from mine.kspl (this document's own)` |
 | Note | The note on the chosen cell, or on the paragraph or heading at the caret, as `Note: Count again` |
 | Message | What the last action said, until the next one |
@@ -284,7 +284,7 @@
 
 **Kinds never turn into each other.** Text in arithmetic is `#VALUE!`, even text that looks like a number. An empty cell is 0, empty text or `false`, as the other side needs. Against a date it is earlier than every date, so `B1 < today()` holds for an empty B1.
 
-**Two numbers are equal when the 15 digits they show agree.** So `0.1+0.2 = 0.3` is `true`, and `<`, `>` and `<>` give the same answer as `=`. A lookup's key and a condition of `sum_if` match by this rule too. So do a colour rule and a filter's "is greater than" and "is less than".
+**Two numbers are equal when the 15 digits they show agree.** So `0.1+0.2 = 0.3` is `true`, and `<`, `>` and `<>` give the same answer as `=`. In the same way, `+` and `-` give exactly 0 where the two sides cancel at those digits: `=0.1+0.2-0.3` is 0. A lookup's key and a condition of `sum_if` match by this rule too. So do a colour rule and a filter's "is greater than" and "is less than".
 
 **Point at a cell that shows an error, or choose it, to see why.** Its tooltip and the status bar give the reason in words, and what to write instead where that is clear:
 
@@ -297,6 +297,8 @@
 | `=A3*2`, where A3 shows `#DIV/0!` | `A3 shows #DIV/0!`; choose A3 to see its own reason |
 
 The reason is worked out each time the table is calculated. It is not saved in the file.
+
+**Text that looks like a number has an orange corner at its lower left, in a column of numbers.** A typed `1,000`, `12%`, `$12` or `１２` stays text, and a sum leaves it out. Point at the cell or choose it to see why. To make it a number, type it plain, as `1000` or `0.12`. A number format then shows the `,`, the currency or the `%`.
 
 
 | Mark | The cause |
@@ -370,7 +372,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | `#TIME!` | The call ran past 2 seconds |
 | `#STOPPED!` | The function panicked |
 | `#SYNTAX!` | Too many or too few arguments, as for ksmd's own functions |
-| The box refuses a name | ksmd already has that name, such as `sum` |
+| The box refuses a name | ksmd already has that name, such as `sum`, or the name is not all lowercase, such as `myTax` |
 | The build fails on an import | A file may import only `std` and ksmd's files. A path that climbs out of its folder, or names another package, fails the build |
 
 **Your functions cannot change the document, read files or reach the network.** They run in the browser, apart from the page.
@@ -460,7 +462,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 
 **File ▸ Page setup… sets the document's paper and its numbers**, kept in the document itself:
 
-* **The paper**: A3, A4, A5, B4, B5, letter or legal, and its orientation.
+* **The paper**: A3, A4, A5, B4, B5, JIS-B4, JIS-B5, letter or legal, and its orientation. B4 and B5 are the ISO sizes (250 × 353 and 176 × 250 mm). JIS-B4 and JIS-B5 are the Japanese ones (257 × 364 and 182 × 257 mm).
 * **The header's middle and the footer's left**: any text, where `{page}` and `{pages}` stand for the page's number and the count.
 * **Where heading numbers start**: from level 1 (1, 1.1, 1.1.1), or from level 2 to leave the title unnumbered.
 * **The words before a table's and an image's number**, such as `表` and `図`.

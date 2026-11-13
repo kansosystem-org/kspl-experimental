@@ -428,36 +428,94 @@ impl Str_builder: Manual_free //< it owns its buffer and frees it with `free()`
         r.len = 0
         r.cap = 0
 
-// Caution: **Call `take()`.** Without it the builder's memory leaks (`make debug` fails at the end
-// with "Should be 0 - memory leak").
-// It remembers the arena, so the text cannot end up in the wrong place. How to choose among the
-// three write targets is in std/docs/DESIGN-core.md.
+// **The text grows inside the arena**, so an error thrown before `take()` leaks nothing. A block
+// it grew out of stays there until the arena is freed: at most about as much again as the text.
+// It remembers the arena, so the text cannot end up in the wrong place. Why it grows there, and
+// how to choose among the three write targets, is in std/docs/DESIGN-core.md.
 //   name: = arena.text().s("layer.\{i\}.weight").take();
 pub struct Arena_text //< a short-lived builder that leaves the finished text in the arena
-    priv b: Str_builder
-    priv arena: Arena$@
+    priv ptr: U8$@ //< the text written so far, in the arena
+    priv len: Sz //< how many bytes have been written
+    priv cap: Sz //< the size of the block at `ptr`; 0 before the first write
+    priv arena: Arena$@ //< where the text grows, or null for the heap
 
 impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the builder
-        r.b.s(val)
+        //< `val` can be a view of this builder's own bytes.
+        if val.len > 0
+            // Caution: **Copy from `val` before the old block is freed, and with `move`.** It can
+            // be a view of this builder's text, which a growth in place leaves where it is.
+            old: = r.grow(r.len + val.len)
+            mem.move(Void$@::(r.ptr + r.len), Void$@::val.ptr, val.len)
+            if block: = old
+                dealloc(Void$@::block)
+            r.len += val.len
         return r
 
     pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the builder
-        r.b.c(val)
+        if r.len >= r.cap
+            if block: = r.grow(r.len + 1)
+                dealloc(Void$@::block)
+        dest: U8$@ = r.ptr + r.len
+        dest$ = val
+        r.len += 1
         return r
 
     pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
         return r
 
 impl Arena_text
+    priv fn grow(r: Self$@, need: Sz): U8$@? //<
+        //< Makes room for `need` bytes, and returns a heap block for the caller to free
+        //< **Where the text is the arena's newest block, it grows there**, with nothing copied.
+        //< Otherwise it moves to a new block twice as large, and the old one stays in the arena.
+        //< Only on the heap is the old block returned, since nothing else frees it.
+        if r.cap >= need
+            return .none
+        $cap: Sz = 16 if r.cap == 0 else r.cap
+        for cap < need
+            doubled: = cap * 2
+            if doubled <= cap
+                // cap*2 wraps near Sz's upper bound, so use need as it is. The alloc that follows
+                // catches an absurdly large need.
+                cap = need
+                break
+            cap = doubled
+        // Caution: **Grow nothing past a mark saved since `text()`.** In place or in a new block,
+        // the text would lie past it, and `restore()` to it frees that while the builder still
+        // writes there. Before this, the next allocation silently wrote over the text.
+        kept: = r.arena.rewinds_past(Void@::r)
+        if r.cap > 0 && !kept && r.arena.resize_in_place(Void$@::r.ptr, r.cap, cap)
+            r.cap = cap
+            return .none
+        block: = r.arena.alloc_kept(cap) if kept else r.arena.alloc(cap)
+        new_ptr: = U8$@::block
+        if r.len > 0
+            mem.copy(Void$@::new_ptr, Void$@::r.ptr, r.len)
+        old: U8$@? = .some(r.ptr) if r.arena == null && r.cap > 0 else .none
+        r.ptr = new_ptr
+        r.cap = cap
+        return old
+
     #gives_view
-    pub fn take(r: Self$@): U8[] //< copies the text into the arena and frees the builder
-        //< On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`.
-        out: = U8[]::r.arena.dup_str(r.b.slice())
-        r.b.free()
+    pub fn take(r: Self$@): U8[] //< ends the text with a NUL and hands it out; the builder is empty
+        //< On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`. In an
+        //< arena, the room left past the NUL goes back to it where nothing came after.
+        if block: = r.grow(r.len + 1)
+            dealloc(Void$@::block)
+        (r.ptr + r.len)$ = 0U8
+        out: = U8[]::{ .ptr = r.ptr, .len = r.len }
         // On the heap the builder is a block of its own, which nothing else frees.
         if r.arena == null
             mem.dealloc(Void$@::r)
+            return out
+        // A mark saved since `text()` stays where it was: given back, the room would leave it past
+        // what its chunk holds, and `restore()` would refuse it.
+        if !r.arena.rewinds_past(Void@::r)
+            _given_back: = r.arena.resize_in_place(Void$@::r.ptr, r.cap, r.len + 1)
+        r.ptr = null
+        r.len = 0
+        r.cap = 0
         return out
 
 impl Arena
@@ -465,4 +523,4 @@ impl Arena
     pub fn text(r: Self$@): Arena_text$@ //< a builder for one string in this arena
         //< The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a
         //< place). With a null arena both are on the heap, and `take` frees the builder.
-        return r.create(Arena_text::{ .b = Str_builder(), .arena = r })
+        return r.create(Arena_text::{ .ptr = null, .len = 0, .cap = 0, .arena = r })

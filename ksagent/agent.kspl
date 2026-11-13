@@ -46,7 +46,7 @@ Rules:
 3. If a search finds nothing, search for one key word alone. Then call list, and read the README and the other documents it shows. Only then decide that the files do not hold the answer.
 4. Call read to read the lines around a hit before you answer.
 5. Answer in the language of the question.
-6. Finish by calling answer. Put the answer in text. In sources, give each place the answer comes from: the file's path, its first and last line, at most 50 lines apart, and a quote copied exactly from those lines.
+6. Finish by calling answer. Put the answer in text. In sources, give each place the answer comes from: the file's path, its first and last line (at most 50 lines in all, counting both), and a quote copied exactly from those lines.
 7. If the files do not hold the answer, call answer with the text NOT_FOUND and no sources. Decide that only after you have called search or list.
 8. Give every path relative to the folder, such as rules/leave.md.
 9. You can call the tools at most 12 times. Call answer before that.
@@ -80,7 +80,7 @@ priv const TICK_MS: I32 = 500 //< the longest wait for the reply before the work
 
 struct Ask //< what one question needs besides its text
     server: model.Server$@ //< where the model server is; it learns there whether it streams
-    root: U8[] //< the folder the tools reach
+    folder: files.Folder //< the folder the tools reach
     trace: Bool //< whether the work shows on the console as it goes (`Progress`)
         //< A local model can take minutes; what it writes shows the person it is working.
 
@@ -122,7 +122,7 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
                 msgs.push(message(b@, "user", REMIND_ANSWER if looked else REMIND_LOOK))
                 continue
             none: = List<|Source|>(arena)
-            return answer.finish(job.root, reply.content, none@, lang, arena)
+            return answer.finish(job.folder, reply.content, none@, lang, arena)
         msgs.push(assistant_message(b@, reply@))
         said: = arena.text()
         for i in Range.asc(reply.calls.len)
@@ -144,7 +144,7 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
             if c.name.equals("answer")
                 if looked || sent_to_look || round + 1 == MAX_ROUNDS ||
                     args.val.get("sources").arr_list(arena).len > 0
-                    return finish_answer(job.root, args.val, lang, arena)
+                    return finish_answer(job.folder, args.val, lang, arena)
                 sent_to_look = true
                 shown.note("(asked to look at the files)")
                 refused: = arena.text().s("refused: ").s(REMIND_LOOK).take()
@@ -160,7 +160,7 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
             // **A tool works in memory of its own**: only what it gives back stays (`tool_message`
             // copies it), so the files it read do not add up over the question's rounds.
             defer scratch: = Arena(64 * 1024)
-            gave: = run_tool(job.root, c.name, args.val, room, scratch)
+            gave: = run_tool(job.folder, c.name, args.val, room, scratch)
             msgs.push(tool_message(b@, c.id, gave))
     why: = arena.text()
         .s("the model used all \{MAX_ROUNDS\} tool rounds without calling answer. Ask a narrower \
@@ -229,18 +229,19 @@ priv fn tool_room(b: Json_builder$@, s: model.Server@, msgs: List<|json.Value|>@
     used: = out.slice().len + 1 + TOOL_RESERVE
     return MAX_REQUEST_BYTES - used if used < MAX_REQUEST_BYTES else 0
 
-priv fn run_tool(root: U8[], name: U8[], args: json.Value, room: Sz, arena: Arena$@): U8[] //<
-    //< Runs one of the reading tools in `room` bytes of the request, and returns what the model
-    //< reads back
+priv fn run_tool(folder: files.Folder, name: U8[], args: json.Value, room: Sz, arena: Arena$@):
+    U8[] //<
+        //< Runs one of the reading tools in `room` bytes of the request, and returns what the model
+        //< reads back
     path: = args.get("path").as_str().unwrap_or("")
     if name.equals("list")
-        return files.tool_list(root, path, room, arena)
+        return files.tool_list(folder, path, room, arena)
     if name.equals("search")
-        return files.tool_search(root, args.get("text").as_str().unwrap_or(""), path, room, arena)
+        return files.tool_search(folder, args.get("text").as_str().unwrap_or(""), path, room, arena)
     if name.equals("read")
         from: = int_arg(args.get("from_line"))
         to: = int_arg(args.get("to_line"))
-        return files.tool_read(root, path, from, to, room, arena)
+        return files.tool_read(folder, path, from, to, room, arena)
     return arena.text().s("refused: there is no tool called ").s(name)
         .s("; the tools are list, search, read and answer").take()
 
@@ -254,7 +255,7 @@ priv fn int_arg(v: json.Value): I64 //< a line number the model gave, or 0 where
         return text.trim_spaces().to_i64() catch 0I64
     return 0I64
 
-priv fn finish_answer(root: U8[], args: json.Value, lang: Lang, arena: Arena$@): Answer //<
+priv fn finish_answer(folder: files.Folder, args: json.Value, lang: Lang, arena: Arena$@): Answer //<
     //< The answer the `answer` call gives, its sources checked
     //< A source with a field missing stays in the list, so the check removes and counts it.
     $given: = List<|Source|>(arena)
@@ -265,7 +266,7 @@ priv fn finish_answer(root: U8[], args: json.Value, lang: Lang, arena: Arena$@):
             .push(Source::{ .path = s.get("path").as_str().unwrap_or(""),
             .from_line = int_arg(s.get("from_line")), .to_line = int_arg(s.get("to_line")),
             .quote = s.get("quote").as_str().unwrap_or("") })
-    return answer.finish(root, args.get("text").as_str().unwrap_or(""), given@, lang, arena)
+    return answer.finish(folder, args.get("text").as_str().unwrap_or(""), given@, lang, arena)
 
 // ==========================================
 // The request's JSON

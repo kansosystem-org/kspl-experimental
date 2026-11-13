@@ -32,7 +32,8 @@ priv fn one(mode: U8[], arena: Arena$@) //< one fresh sandbox per failure point
     libs: = fs.join(prefix, "lib/kspl/lib", arena)
     one_lib: = fs.join(dir, "lib/one", arena)
     built: = fs.join(one_lib, "out", arena)
-    for path in U8[][]::{ bin, lib, src, built }
+    std_built: = fs.join(src, "out", arena)
+    for path in U8[][]::{ bin, lib, src, built, std_built }
         fs.mkdir_all(path) catch panic("cannot make the installation fixture")
     name: = "ksplc.exe" if sys.is_windows() else "ksplc"
     exe: = fs.join(bin, name, arena)
@@ -41,6 +42,7 @@ priv fn one(mode: U8[], arena: Arena$@) //< one fresh sandbox per failure point
     put(fs.join(src, "current.kspl", arena), "new library")
     put(fs.join(one_lib, "current.kspl", arena), "new package")
     put(fs.join(built, "test.c", arena), "what its tests built")
+    put(fs.join(std_built, "test.c", arena), "what std's tests built")
     put(fs.join(dir, "compiler", arena), "new compiler")
     put(fs.join(dir, "probe.mk", arena), PROBE)
     rules: = fs.join(harness.root(), "mk/install.mk", arena)
@@ -61,6 +63,8 @@ priv fn one(mode: U8[], arena: Arena$@) //< one fresh sandbox per failure point
     if good
         verdict.check("install: an obsolete library file is removed",
             !fs.exists(fs.join(lib, "obsolete.kspl", arena)), r.out)
+        verdict.check("install: std stands without what its tests built",
+            !fs.exists(fs.join(lib, "out", arena)), r.out)
         verdict.check("install: the libraries stand beside std, without what their tests built",
             fs.exists(fs.join(libs, "one/current.kspl", arena)) &&
             !fs.exists(fs.join(libs, "one/out", arena)), r.out)

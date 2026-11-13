@@ -19,6 +19,9 @@ import "std/str"
 const MAX_ANSWERS: Sz = 4096 //< the answers kept; past that, the next round forgets them all
 const MAX_QUEUE: Sz = 1024 //< the calls one round asks the worker; the rest wait for the next
 priv const TIME_LIMIT: I32 = 1 //< `ksmd_web_own_failed`'s reason for a call past the time limit
+priv const NOT_ALLOWED_NOW: I32 = 3 //< its reason where the file that gives the name is not
+    //< allowed now
+priv const UNBUILT: I32 = 4 //< its reason where that file does not build
 priv const BUILDING: I32 = 1 //< `ksmd_web_own_names`'s state where a file builds
 priv const NOT_ALLOWED: I32 = 2 //< its state where the person has not allowed a file yet
 
@@ -29,6 +32,8 @@ $answered: Sz = 0 //< how many `answers` holds
 $waiting: Keyed<|Bool|>$@ = null //< the calls in the queue or taken, not answered yet
 $queue: List<|U8[]|>$@ = null //< the calls to send in the next round
 $taken: List<|U8[]|>$@ = null //< the calls the script took this round, by their index
+$unbuilt: Keyed<|Bool|>$@ = null //< the calls answered `#BLOCKED!` as their file does not build
+    //< The answer's bytes hold no reason (`ksmd/calc/wire.kspl`), so the reason is kept here.
 
 fn own_functions(): Own_functions@ //< what a new editor's calculations ask; null for none
     return own
@@ -53,6 +58,7 @@ priv fn start_over(names: U8[][], calls: U8[][], unknown: Calc_error) //<
     answers = memory.create(Keyed<|U8[]|>(memory))
     answered = 0
     waiting = memory.create(Keyed<|Bool|>(memory))
+    unbuilt = memory.create(Keyed<|Bool|>(memory))
     queue = memory.create(carried)
     for call in carried
         waiting.set(call, true)
@@ -69,6 +75,8 @@ priv fn ask(_ctx: Void$@, name: U8[], args: Raw_args$@): Value //<
         answer: = wire.read_answer(got) catch
             return Value.failed(.stopped)
         args.misread = answer.misread
+        if unbuilt.get(call).is_some()
+            return Value.because(.blocked, .unbuilt, name, -1)
         return answer.value
     if waiting.get(call).is_none() && queue.len < MAX_QUEUE
         kept: = memory.dup_str(call)
@@ -122,10 +130,14 @@ extern fn ksmd_web_own_answer(i: Sz, len: Sz): Sz //<
     return 1
 
 extern fn ksmd_web_own_failed(i: Sz, why: I32): Sz //<
-    //< Keeps for the `i`th call taken that it has no answer: 1 past the time limit, 2 stopped
+    //< Keeps for the `i`th call taken that it has no answer: 1 past the time limit, 2 stopped, 3
+    //< its file not allowed now, 4 its file does not build
     if memory == null || i >= taken.len
         return 0
-    v: = Value.failed(.time_limit if why == TIME_LIMIT else .stopped)
+    blocked: = why == NOT_ALLOWED_NOW || why == UNBUILT
+    v: = Value.failed(.time_limit if why == TIME_LIMIT else .blocked if blocked else .stopped)
+    if why == UNBUILT
+        unbuilt.set(taken.get(i), true)
     text: = memory.text()
     wire.put_answer(text, v, false)
     keep(taken.get(i), text.take())

@@ -12,6 +12,7 @@ import "ksplc/lsp/nav" as lsp_nav
 import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/spell" as lsp_spell
 import "ksplc/lsp/state" { Doc_state }
+import "ksplc/sema/decl/access" as _sema_decl_access // `is_symbol_visible_from`
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" as sema_type_def
@@ -266,7 +267,7 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
         seg: = alias_module_of(state, head, arena)
         typed: = lsp_nav.folded_receiver_type(state.sema, path, mark)
         if seg.len > 0
-            add_by_dot_prefix_syms(state.sema.symtab.by_fqn, seg, swapped.prefix, out@)
+            add_by_dot_prefix_syms(state.sema, seg, swapped.prefix, state.mod_name_perm, out@)
         else if typed.len > 0
             picks_of_type(state.sema, typed, swapped.prefix, out@)
         else
@@ -304,7 +305,11 @@ priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$
             add_fields(sd2, prefix, out)
         default
             add_declared_fields(c, raw, prefix, out)
-    // Methods.
+    // Methods. **A trait value's are its trait's** (`w.` on a `w: io.Writer`); a trait has no
+    // entry in the methods table.
+    add_trait_methods(c, raw, prefix, out)
+    if !base_only.equals(raw)
+        add_trait_methods(c, base_only, prefix, out)
     add_methods(c, raw, prefix, out)
     if !base_only.equals(raw)
         add_methods(c, base_only, prefix, out)
@@ -332,6 +337,13 @@ priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|P
                         t_node.type_id if t_node != null else 0)
     case .none {}
 
+priv fn add_trait_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
+    switch c.env.get_trait_def(type_name)
+    case .some(td)
+        for m in td.methods_list
+            add_pick(out, m.name, KIND_METHOD, prefix, m.node, 0)
+    case .none {}
+
 priv fn add_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
     // The table is built only on demand (ensure_instance_methods in
     // ksplc/sema/decl/mono_queue.kspl). Without that call, a type nobody called methods on is
@@ -356,8 +368,10 @@ priv fn add_by_dot_prefix(map: Map<|U8[], Ast_node$@|>$@, head: U8[], prefix: U8
             continue
         add_pick(out, e.key.sub_from(lead.len), kind, prefix, e.value, 0)
 
-priv fn add_by_dot_prefix_syms(map: Map<|U8[], sema_type_scope.Sema_symbol$@|>$@, head: U8[],
-    prefix: U8[], out: List<|Pick|>$@)
+priv fn add_by_dot_prefix_syms(c: Sema_ctx$@, head: U8[], prefix: U8[], file: U8[],
+    out: List<|Pick|>$@) //<
+        //< The names a module's alias reaches from file
+    map: = c.symtab.by_fqn
     if map == null
         return
     lead: = base_core.arena.text().s(head).c('.').take()
@@ -369,11 +383,10 @@ priv fn add_by_dot_prefix_syms(map: Map<|U8[], sema_type_scope.Sema_symbol$@|>$@
         if tail.find_char('.').is_some()
             continue
 
-        // Caution: **List only what can be called from outside**, or C declarations and internal
-        // helpers mix in as candidates that are an error once chosen.
-        switch e.value.vis
-        case .public {}
-        default
+        // Caution: **List what the access rule lets file name, and nothing else.** A wider list
+        // offers another package's internal helpers, an error once chosen; a list of `pub` names
+        // alone hides a sibling file's internal ones, which compile.
+        if !c.is_symbol_visible_from(e.value, file)
             continue
         add_pick(out, tail, kind_of_sym(e.value), prefix, e.value.node, 0)
 

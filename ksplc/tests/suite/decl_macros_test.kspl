@@ -1,5 +1,6 @@
 #!/usr/bin/env -S ksplc run
 //< It checks that KSPL handles **every one** of the names the declaration-half headers `#define`
+//< In ISO C99, and in GNU C mode, which adds names such as `linux` and `unix`.
 //< Caution: **Do not keep the list of replaced names by hand.** Which names get replaced changes
 //< with libc's version. A name erased by `#undef` disappears from `-dM -E`'s output, so the output
 //< itself lists the names not yet erased. **Do not pin down which names or how many pass**, only
@@ -90,25 +91,72 @@ priv fn program_using(names: List<|U8[]|>, consts: List<|U8[]|>, arena: Arena$@)
     for n in consts
         b.s("  const ").s(n).s(": I32 = 1\n  total += ").s(n).s("\n")
     b.s("  return total\n\n")
-    b.s("struct Holder\n")
-    for n in names
-        b.s("  ").s(n).s(": I32\n")
-    b.s("\n")
+    // Caution: **Write Holder only when names holds one.** A struct needs a field, and on Windows
+    // GNU mode adds only constants (`WIN32`, `WINNT`), so names can be empty while consts is not.
+    if names.len > 0
+        b.s("struct Holder\n")
+        for n in names
+            b.s("  ").s(n).s(": I32\n")
+        b.s("\n")
     // Caution: **Put the formal parameter and the local in different functions.** The same name for
     // both in one function is a redefinition in C, a fault of the test program rather than of KSPL.
     for n in names
         b.s("priv fn take_").s(n).s("(").s(n).s(": I32): I32\n  return ").s(n).s("\n\n")
         b.s("priv fn local_").s(n).s("(v: I32): I32\n  ").s(n).s(": = v + 1\n  return ").s(n)
             .s("\n\n")
-    b.s("fn main(): I32\n  h: Holder = ::{ ")
-    for n in names
-        b.s(".").s(n).s(" = 1, ")
-    b.s("}\n  held: Holder@ = h@\n  $total: I32 = 0\n")
+    b.s("fn main(): I32\n  $total: I32 = 0\n")
+    if names.len > 0
+        b.s("  h: Holder = ::{ ")
+        for n in names
+            b.s(".").s(n).s(" = 1, ")
+        b.s("}\n  held: Holder@ = h@\n")
     for n in names
         b.s("  total += take_").s(n).s("(h.").s(n).s(") + held.").s(n).s(" + local_").s(n)
             .s("(1)\n")
     b.s("  total += local_consts()\n  return 0 if total > 0 else 1\n")
     return b.take()
+
+priv fn check_gnu_mode(decl: U8[], iso: U8[], keywords: Map<|U8[], Bool|>@, work: U8[],
+    arena: Arena$@) //<
+        //< That the names GNU C mode alone defines as macros (`linux`, `unix`) pass as bare names
+        //< `iso` is the ISO mode's `-dM -E` output. The material builds with `-std=gnu11`, the mode
+        //< a C compiler takes when no `-std` is given.
+    probe: = harness.run(U8[][]::{ harness.cc(), "-std=gnu11", "-dM", "-E", decl })
+    if !probe.exited_with(0)
+        verdict.check("cc lists the GNU mode's macros (`-std=gnu11 -dM -E`)", false, probe.out)
+        return
+    $in_iso: = Map<|U8[], Bool|>(arena)
+    for line in iso.lines(arena)
+        in_iso.set(object_macro_name(line), true)
+    $names: = List<|U8[]|>(arena)
+    $consts: = List<|U8[]|>(arena)
+    for line in probe.out.lines(arena)
+        name: = object_macro_name(line)
+        if name.len == 0 || in_iso.get(name).unwrap_or(false) ||
+            !is_kspl_identifier(name, keywords)
+            continue
+        if is_snake_case(name)
+            names.push(name)
+        else if is_upper_snake_case(name)
+            consts.push(name)
+    if names.len == 0 && consts.len == 0
+        return
+    src: = fs.join(work, "gnu_macro_names.kspl", arena)
+    io.write_file(src, program_using(names, consts, arena)) catch
+        verdict.check("the GNU mode's material is written", false, src)
+        return
+    gen: = fs.join(work, "gnu_macro_names.c", arena)
+    exe: = fs.join(work, "gnu_macro_names.exe", arena)
+    t: = harness.ksplc(U8[][]::{ src, gen })
+    $out: = t.out
+    $ok: = t.exited_with(0)
+    if ok
+        b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::{ "-std=gnu11", "-O0" })
+        ok = b.exited_with(0) && harness.run(U8[][]::{ exe }).exited_with(0)
+        out = b.out
+    verdict.check("every name GNU mode alone defines as a macro passes as a bare name", ok,
+        arena.text().s("Add the name the C compiler's error named to `is_gnu_macro` in ")
+        .s("`ksplc/base/c_name.kspl`.\n").s(out).take())
 
 fn main(): I32
     arena: = harness.begin(16 * 1024 * 1024)
@@ -134,6 +182,7 @@ fn main(): I32
             .fatal(arena.text().s("cc cannot list the declaration half's macros (`-dM -E`)\n")
             .s(probe.out).take())
     keywords: = keywords_of(arena)
+    check_gnu_mode(decl, probe.out, keywords, work, arena)
     $names: = List<|U8[]|>(arena)
     $consts: = List<|U8[]|>(arena)
     $skipped: Sz = 0

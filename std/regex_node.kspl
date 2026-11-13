@@ -232,9 +232,10 @@ impl Emitter
 
     // Written out round by round: `x{2,4}` is `x x`, then two rounds each skippable past the whole
     // repetition (the longest match tries the round first). `x{2,}` is `x x`, then a loop.
-    // Caution: **A round that read nothing stops the repetition. It is not undone.** Undoing it
-    // would leave `(a?)*b`'s group out where Python's `re` and PCRE answer empty. Going on
-    // would loop for good. So a body that can match empty sits between `round_in` and `round_out`.
+    // Caution: **An optional round that read nothing stops the repetition**, between `round_in`
+    // and `round_out`; going on would loop for good. **A required round is written plain**: it
+    // cannot loop, and stopping after it would make `(a|\b){2}` match empty on `ac`. The reasons
+    // are "An optional round that read nothing stops the repetition" in std/docs/DESIGN-core.md.
     fn repeat(r: Self$@, n: Rx_node$@)
         empty_ok: = n.kind == .group_repeat && can_be_empty(n.sub)
         defer $forks: = List<|Sz|>(null)
@@ -242,7 +243,7 @@ impl Emitter
         for _i in Range.asc(n.min_count)
             if r.full()
                 break
-            r.round(n, empty_ok, exits@)
+            r.node(n.sub)
         if n.max_count < 0
             head: = r.step(.split, n, 0)
             forks.push(head)

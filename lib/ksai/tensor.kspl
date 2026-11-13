@@ -378,9 +378,14 @@ impl<|T|> Tensor<|T|>
     // shapes at hand. The bodies below are private, so no second, error-returning way stands
     // beside the operator.
     // ---------------------------------------------------------
-    priv fn elementwise_out(r: Self@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error
-        if r.size != rhs.size
+    priv fn elementwise_out(r: Self@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error //<
+        //< A new tensor of `r`'s shape, once both shapes are the same dimension for dimension
+        //< **Comparing the sizes alone is not enough**: `[2,3] + [3,2]` would add rows to columns.
+        if r.shape.len != rhs.shape.len
             throw .shape_mismatch
+        for d in Range.asc(r.shape.len)
+            if r.shape[d] != rhs.shape[d]
+                throw .shape_mismatch
         return Tensor<|T|>(r.shape, r.arena)
 
     priv fn checked_add( //< element-wise sum; rejects shapes that do not match

@@ -102,7 +102,7 @@ fn main(): I32
         model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), arena) catch why
             io.err().s("\{NAME\}: ").s(why).c('\n')
             return 1
-    job: = agent.Ask::{ .server = server@, .root = root, .trace = true }
+    job: = agent.Ask::{ .server = server@, .folder = files.Folder(root), .trace = true }
     if o.command.equals("watch")
         return watch.watch(job)
     if o.command.equals("eval")
@@ -132,11 +132,11 @@ priv fn run_eval(job: agent.Ask, questions: U8[], out: U8[], arena: Arena$@): I3
             return 1
         // **The same guards as the model's paths** (`files.resolve`), so the table cannot land
         // outside the folder, on a hidden name or on a conversation's file.
-        at: = files.resolve(job.root, out, arena) catch why
+        at: = files.resolve(job.folder, out, arena) catch why
             io.err().s("\{NAME\}: --out: ").s(why).c('\n')
             return 1
         target = at.full
-    rows: = evaluate.run_all(job, cases@, arena)
+    rows: = evaluate.run_all(evaluate.leaving_out(job, questions, target, arena), cases@, arena)
     evaluate.write_table(rows@, io.out(), arena)
     if target.len > 0
         body: =

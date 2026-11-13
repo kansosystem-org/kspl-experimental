@@ -56,7 +56,7 @@ static const wchar_t *kspl_win_path_entry(const wchar_t *p, wchar_t *dir, size_t
 /* Looks a bare program name up in PATH alone and keeps the full path in out; false where it is
  * nowhere. A name with no extension is tried with each of kspl_win_run_exts in one folder before
  * the next folder, as cmd.exe does.
- * Caution: **Search PATH alone, as POSIX's execvp does.** CreateProcess searches this executable's
+ * Caution: **Search PATH alone, as the POSIX side does.** CreateProcess searches this executable's
  * directory, the current directory, the system directory and the Windows directory before PATH.
  * So `bash` names WSL's launcher in System32 in place of the bash on PATH. A `cc.exe` lying in a
  * directory a build is started from (a cloned repository) runs in place of the compiler. */
@@ -127,16 +127,23 @@ static BOOL kspl_win_create_listed(wchar_t *wcmd, DWORD flags, const wchar_t *cw
     }
     InitializeProcThreadAttributeList(NULL, 1, 0, &size);
     si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(size);
-    if (si.lpAttributeList == NULL) return FALSE;
+    if (si.lpAttributeList == NULL) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
     BOOL ok = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &size);
+    DWORD why = ok ? 0 : GetLastError();
     if (ok) {
         ok = UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, list,
             n * sizeof(HANDLE), NULL, NULL) &&
             CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, flags | EXTENDED_STARTUPINFO_PRESENT, NULL,
             cwd, &si.StartupInfo, pi);
+        if (!ok) why = GetLastError();
         DeleteProcThreadAttributeList(si.lpAttributeList);
     }
     free(si.lpAttributeList);
+    /* The clean-up may set the error again, so the failed call's own error is put back. */
+    if (!ok) SetLastError(why);
     return ok;
 }
 
@@ -173,7 +180,7 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
         wchar_t wname[KSPL_WPATH_CAP], wfound[KSPL_WPATH_CAP];
         *why = ERROR_INVALID_NAME;
         if (!kspl_win_cstr_to_wide(prog, wname, KSPL_WPATH_CAP)) return NULL;
-        /* 2, as POSIX's execvp gives ENOENT for a name on no PATH */
+        /* 2, as the POSIX side gives ENOENT for a name on no PATH */
         *why = ERROR_FILE_NOT_FOUND;
         if (!kspl_win_find_program(wname, wfound, KSPL_WPATH_CAP)) return NULL;
         *why = ERROR_INVALID_NAME;
@@ -314,6 +321,9 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     fflush(stdout);
     fflush(stderr);
     BOOL ok = kspl_win_create_listed(wcmd, flags, cwd_len > 0 ? cwd_path : NULL, std3, &pi);
+    /* Caution: **Keep the error right after the failed call.** CloseHandle and free below can set
+     * it again, and the start would then name another cause, or none. */
+    why = ok ? 0 : GetLastError();
     /* The child's ends, the parent's opened files and the copies are closed here, started or not. */
     for (int k = 0; k < 3; k++) {
         if (dups[k] != NULL) CloseHandle(dups[k]);
@@ -326,9 +336,14 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     in_r = out_w = err_w = oh = eh = NULL;
     free(wcmd);
     wcmd = NULL;
-    if (!ok) goto fail;
+    if (!ok) {
+        kspl_start_error = why != 0 ? (I32)why : -1;
+        goto fail;
+    }
     if (job != NULL && (!AssignProcessToJobObject(job, pi.hProcess) ||
             ResumeThread(pi.hThread) == (DWORD)-1)) {
+        why = GetLastError();
+        kspl_start_error = why != 0 ? (I32)why : -1;
         TerminateProcess(pi.hProcess, 1);
         WaitForSingleObject(pi.hProcess, INFINITE);
         CloseHandle(pi.hThread);

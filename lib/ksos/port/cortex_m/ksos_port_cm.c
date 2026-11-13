@@ -69,7 +69,10 @@ void* ksos_port_ctx_create(void* stack, long stack_size) {
         sp[i] = 0; // r4-r11, r0-r3, r12 = 0
     }
     sp[13] = 0xFFFFFFFFu;                          // lr (a task does not return)
-    sp[14] = (uint32_t)(uintptr_t)ksos_trampoline;  // pc = the trampoline
+    // pc = the trampoline. A function's address has bit 0 set (the Thumb bit), and the Arm
+    // architecture leaves an exception return to a stacked pc with bit 0 set unpredictable, so the
+    // bit is cleared. The T bit of xPSR below keeps the CPU in Thumb state.
+    sp[14] = (uint32_t)(uintptr_t)ksos_trampoline & ~1u;
     sp[15] = 0x01000000u;                          // xPSR (the T bit)
     c->sp = sp;
     return c;
@@ -108,14 +111,22 @@ void ksos_port_switch(void* from, void* to) {
     __asm__ volatile("dsb; isb");
 }
 
-// Starts SysTick at a period of reload cycles, and sets PendSV's priority too.
-void ksos_port_tick_start(uint32_t reload) {
+// Starts SysTick at a period of reload cycles, and sets PendSV's priority too. Returns 0, and
+// starts nothing, for a reload outside 1 to 2^24.
+// SysTick counts LOAD down to 0, so its period is LOAD+1: LOAD takes reload-1. LOAD has 24 bits,
+// so a larger reload would be cut without a word (1 Hz at 125 MHz would tick every 56.9 ms).
+// A LOAD of 0 stops SysTick.
+uint32_t ksos_port_tick_start(uint32_t reload) {
+    if (reload == 0 || reload > (1u << 24)) {
+        return 0;
+    }
     // SHPR3: PendSV (bits23:16) and SysTick (bits31:24) share the lowest priority. So SysTick
     // tail-chains after a PendSV in progress rather than preempting it.
     * (volatile uint32_t*)0xE000ED20u |= (0xFFu << 16) | (0xFFu << 24);
-    * (volatile uint32_t*)0xE000E014u = reload;          // SysTick->LOAD
+    * (volatile uint32_t*)0xE000E014u = reload - 1u;     // SysTick->LOAD
     * (volatile uint32_t*)0xE000E018u = 0;               // SysTick->VAL
     * (volatile uint32_t*)0xE000E010u = 0x7u;            // SysTick->CTRL: ENABLE|TICKINT|CLKSOURCE
+    return 1;
 }
 
 // The critical section: it forbids interrupts (cpsid i) and returns the previous PRIMASK, which

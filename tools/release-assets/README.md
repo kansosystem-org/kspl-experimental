@@ -6,7 +6,7 @@ This folder holds the KSPL compiler and its standard library, ready to use.
 | :-- | :-- |
 | `ksplc` / `ksplc.exe` | the compiler, which both translates and runs |
 | `std/` | the standard library. **Keep it beside `ksplc`** |
-| `.vscode/` | VS Code's build tasks and LLDB settings, which work without setup once this folder is open |
+| `.vscode/` | VS Code's build tasks and LLDB settings, which work once this folder is open. Debugging needs the CodeLLDB extension, which VS Code offers to install |
 | `kspl_lldb.py` | the script that formats KSPL's values for LLDB, the debugger |
 | `LICENSE.md` | the license (MIT) this folder is distributed under |
 

@@ -41,6 +41,35 @@ let openedUris = new Set();
 // in order, and goes out after `initialized`; null once the answer has come.
 let heldMessages = null;
 
+// The context `activate` was given, kept so a restart can start the server again.
+let extensionContext = null;
+
+// Counts the server's starts. Caution: **An answer to an earlier start's `initialize` is let
+// go.** A stop answers it with nothing, and acted on it would send `initialized` to the new
+// server before that one has answered.
+let serverStarts = 0;
+
+// When the server stopped by itself, oldest first, within the last `RESTART_WINDOW_MS`.
+// **It is started again at most `MAX_RESTARTS` times in that window**, as
+// `vscode-languageclient` does: a server that stops on every start would otherwise start for ever.
+let serverStops = [];
+const MAX_RESTARTS = 4;
+const RESTART_WINDOW_MS = 3 * 60 * 1000;
+
+// The settings read only when the server starts. A change to one starts it again.
+const RESTART_SETTINGS = ['kspl.serverPath', 'kspl.defines'];
+
+// The command that starts the server again by hand (`contributes.commands` in package.json).
+const RESTART_COMMAND = 'kspl.restartServer';
+
+// The server's file name in each bundled folder (`bin/<platform>-<arch>/`, as
+// `process.platform` and `process.arch` spell them).
+const SERVER_NAME = 'ksplc_server.exe';
+
+// Where no server for the machine is bundled, the one it runs by emulation: Windows and macOS on
+// arm64 also run an x64 program.
+const EMULATED = { 'win32-arm64': 'win32-x64', 'darwin-arm64': 'darwin-x64' };
+
 // The language a KSPL source is opened as (`languages` in package.json).
 const KSPL_LANG = 'kspl';
 // The documents the providers serve.
@@ -168,6 +197,29 @@ function getRelativeUri(documentUri) {
     return path.relative(workspacePath, documentUri.fsPath).replace(/\\/g, '/');
 }
 
+// Shows an error in the output panel and as a notification, which a person sees without the panel.
+function tellError(msg) {
+    logError(`[Error] ${msg}`);
+    vsc.window.showErrorMessage(msg);
+}
+
+// The bundled server that runs on this machine, or why there is none.
+// **The folder is chosen by the processor too**: a server for another one fails to start with an
+// error that names neither the machine nor the fix.
+function bundledServer(extensionPath) {
+    const machine = `${process.platform}-${process.arch}`;
+    for (const slot of [machine, EMULATED[machine]]) {
+        if (!slot) continue;
+        const exePath = path.join(extensionPath, 'bin', slot, SERVER_NAME);
+        if (fs.existsSync(exePath)) return { exePath };
+    }
+    let carried = [];
+    try { carried = fs.readdirSync(path.join(extensionPath, 'bin')); } catch (e) {}
+    return { missing: `No bundled Kanso language server runs on this machine (${machine}). ` +
+        `The extension holds one for: ${carried.join(', ') || 'none'}. Build ksplc for this ` +
+        `machine, and set "kspl.serverPath" to it.` };
+}
+
 function startLspServer(context) {
     const config = vsc.workspace.getConfiguration('kspl');
     // Caution: **Never take the program from the opened folder.** A repository can carry its own
@@ -175,13 +227,18 @@ function startLspServer(context) {
     // setting (`kspl.serverPath`, machine-scoped) names another server; to try a compiler built in
     // a checkout, put its path there.
     let exePath = config.get('serverPath');
-    if (!exePath) {
-        exePath = path.join(context.extensionPath, 'bin', process.platform, 'ksplc_server.exe');
-    }
-
-    if (!fs.existsSync(exePath)) {
-        logError(`[Error] LSP Server executable not found at: ${exePath}`);
-        return;
+    if (exePath) {
+        if (!fs.existsSync(exePath)) {
+            tellError(`The Kanso language server set in "kspl.serverPath" is not there: ${exePath}`);
+            return;
+        }
+    } else {
+        const found = bundledServer(context.extensionPath);
+        if (found.missing) {
+            tellError(found.missing);
+            return;
+        }
+        exePath = found.exePath;
     }
 
     let args = ['lsp'];
@@ -209,24 +266,28 @@ function startLspServer(context) {
     });
     // Caution: **Settle whatever is in flight.** With no deadline of our own, a request left in the
     // table when the process goes never answers, and the editor spins for ever.
+    // **A start that fails is not tried again**: the same program fails the same way.
     lspProcess.on('error', (err) => {
-        logError(`[LSP Process Error] ${err.message}`);
+        tellError(`The Kanso language server could not start (${exePath}): ${err.message}`);
         lspProcess = null;
         settlePendingRequests();
     });
-    // A stop of our own takes the listeners off first (`disposePreviousActivation`), so an exit
-    // seen here is the server going by itself.
+    // A stop of our own takes the listeners off first (`stopLspServer`), so an exit seen here is
+    // the server going by itself.
     lspProcess.on('exit', (code) => {
         logError(`[LSP Process Exit] Code: ${code}`);
         lspProcess = null;
         settlePendingRequests();
+        restartAfterStop(code);
     });
     heldMessages = [];
+    const thisStart = ++serverStarts;
     sendRequest("initialize", {
         capabilities: { textDocument: { rename: { prepareSupport: true } } }
     }).catch((err) => {
         logError(`[Error] initialize failed: ${err.message}`);
     }).then(() => {
+        if (thisStart !== serverStarts) return;
         const held = heldMessages || [];
         heldMessages = null;
         sendNotification("initialized", {});
@@ -378,26 +439,59 @@ function writeMessage(msgObj) {
     lspProcess.stdin.write(`Content-Length: ${Buffer.byteLength(msgStr)}\r\n\r\n${msgStr}`);
 }
 
-// When activate() is called again with the previous round left behind (an extension host restart,
-// deactivate not run on a reload), everything pushed onto activeDisposables is disposed of before
-// starting anew, so the LSP process, the providers and the listeners are never doubled.
-function disposePreviousActivation() {
-    if (lspProcess && lspProcess.exitCode === null) {
+// Stops the server and forgets what it was told. The listeners come off first: its exit is then
+// not taken for a stop by itself, and its last output does not reach the next server's buffer.
+function stopLspServer() {
+    if (lspProcess) {
         lspProcess.removeAllListeners();
-        lspProcess.kill();
+        lspProcess.stdout.removeAllListeners();
+        lspProcess.stderr.removeAllListeners();
+        if (lspProcess.exitCode === null) lspProcess.kill();
     }
     lspProcess = null;
     settlePendingRequests();
-    reqId = 1;
     messageBuffer = Buffer.alloc(0);
     if (didChangeTimeout) {
         clearTimeout(didChangeTimeout);
         didChangeTimeout = null;
     }
     pendingChanges = new Map();
-    hoverRequestSeq = 0;
     openedUris = new Set();
     heldMessages = null;
+}
+
+// Starts the server again, and tells it of every open document anew.
+// **Its diagnostics are cleared**: they came from the server that stopped, and the new one sends
+// its own for each document it is told of.
+function restartLspServer(why) {
+    logSystem(`[Extension] Starting the language server again: ${why}`);
+    stopLspServer();
+    if (diagnosticCollection) diagnosticCollection.clear();
+    startLspServer(extensionContext);
+    for (const document of vsc.workspace.textDocuments) sendDidOpenOnce(document);
+}
+
+function restartAfterStop(code) {
+    const now = Date.now();
+    serverStops = serverStops.filter(t => now - t <= RESTART_WINDOW_MS);
+    serverStops.push(now);
+    if (serverStops.length > MAX_RESTARTS) {
+        tellError(`The Kanso language server stopped ${serverStops.length} times in 3 minutes, ` +
+            `and is not started again. The output panel "Kanso LSP" shows why. Run "Kanso: ` +
+            `Restart the language server" to try again.`);
+        return;
+    }
+    restartLspServer(`it stopped with exit code ${code}`);
+}
+
+// When activate() is called again with the previous round left behind (an extension host restart,
+// deactivate not run on a reload), everything pushed onto activeDisposables is disposed of before
+// starting anew, so the LSP process, the providers and the listeners are never doubled.
+function disposePreviousActivation() {
+    stopLspServer();
+    reqId = 1;
+    hoverRequestSeq = 0;
+    serverStops = [];
     for (const d of activeDisposables) {
         try { d.dispose(); } catch (e) {}
     }
@@ -425,6 +519,7 @@ exports.activate = function (context) {
     }
     disposePreviousActivation();
     KSPL_GLOBAL.__kansoKsplTeardown = disposePreviousActivation;
+    extensionContext = context;
     outputChannel = track(vsc.window.createOutputChannel("Kanso LSP"));
     logSystem("🚀 Kanso Native LSP Extension Activated!");
 
@@ -440,6 +535,14 @@ exports.activate = function (context) {
                 }
                 logSystem(`[Extension] Trace level changed to: ${newLevel}`);
             }
+            if (RESTART_SETTINGS.some(key => e.affectsConfiguration(key))) {
+                serverStops = [];
+                restartLspServer('a setting it starts with changed');
+            }
+        })),
+        track(vsc.commands.registerCommand(RESTART_COMMAND, () => {
+            serverStops = [];
+            restartLspServer('asked for');
         }))
     );
     startLspServer(context);

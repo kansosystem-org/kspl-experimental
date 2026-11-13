@@ -163,7 +163,8 @@ impl Lsp_docs
     priv fn observe(r: Self$@, method: U8[], params: json.Value) //<
         //< It records the text on didOpen / didChange and discards it on didClose
         //< **Each of the three settles the document's analysis**: the worker analyses the new text
-        //< itself, or the document is gone. So none is sent again.
+        //< itself, or the document is gone. So none is sent again. A change unsettles the other
+        //< open documents (`recheck_others`).
         td: = params.get("textDocument")
         uri: = td.get("uri").as_str().unwrap_or("")
         if uri.len == 0
@@ -176,10 +177,21 @@ impl Lsp_docs
             r.store
                 .put(uri,
                 params.get("contentChanges").get_at(0).get("text").as_str().unwrap_or(""))
+            r.recheck_others(uri)
         else
             return
         _settled: = r.unchecked.remove(uri)
         r.quarantine.remove(uri) // a new edit lifts the poison mark (once fixed, it is analysed again)
+
+    priv fn recheck_others(r: Self$@, uri: U8[]) //<
+        //< It marks every other open document unchecked, so the idle analysis refreshes it
+        //< **An edit can change another document's diagnostics**: one that imports the edited one,
+        //< directly or through a third. The supervisor reads no imports, so it marks every open
+        //< document. Each is analysed once, while the editor is idle, so a request waits for one
+        //< at most.
+        for e in r.store.map.items()
+            if e.value.is_open && !e.key.equals(uri) && !r.is_poison(e.key)
+                r.unchecked.set(e.key, 1)
 
     priv fn poison(r: Self$@, uri: U8[])
         _settled: = r.unchecked.remove(uri)

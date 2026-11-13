@@ -67,7 +67,8 @@ const IMAGES = ':::image src="pics/dot.png" alt="A dot"\n:::\n\n' +
   ':::image src="pics/huge.png" alt="Huge"\n:::\n\n:::image src="pics/fake.png" alt="Fake"\n:::\n\n' +
   ':::image src="pics/none.png" alt="None"\n:::\n';
 const TOP = `${H}# Top\n\nFirst paragraph.\n\n:::include path="parts/notes.ksmd"\n:::\n\n${IMAGES}`;
-const NOTES = `${H}Note text.\n\n## Notes heading\n\n:::table name="t"\n| "a" | "b" |\n| 2 | =A1*3 |\n:::\n`;
+const NOTES = `${H}Note text.\n\n## Notes heading\n\n:::table name="t"\n| "a" | "b" |\n| 2 | =A1*3 |\n:::\n\n` +
+  ':::chart table="t" kind="bar" labels="a" values="b"\n:::\n';
 
 export async function served(browser, pageFile, work, kssrv, builder) {
   verdict.part = "served";
@@ -223,6 +224,11 @@ const SECTIONS = {
       check(inside.includes("Note text.") && await d.js(
         "document.querySelector('#doc .include td[data-r=\"0\"][data-c=\"1\"]').textContent") === "6",
       "the included file shows in place, its table calculated", inside);
+      // Its file is edited in its own tab, so its blocks offer no button that would do nothing.
+      const buttons = await d.js("Array.from(document.querySelectorAll('#doc .include .inside button'))" +
+        ".filter((b) => b.offsetParent !== null).map((b) => b.className).join(' ')");
+      check(buttons === "" && await d.js("!!document.querySelector('#doc .include .chart svg')"),
+        "an included table's name, chart and blocks show no button that would do nothing", buttons);
       check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"pics/dot.png\"] " +
         "img'); return !!i && i.complete && i.naturalWidth === 1; })()"),
       "a PNG beside the document shows decoded at its clause");
@@ -493,6 +499,35 @@ const SECTIONS = {
       check(await h.js("document.getElementById('notice').hidden"),
         "a saved or brought back draft is not offered again");
     });
+  },
+
+  // A folder that takes the open file's name: Save offers Save As, and never asks the same thing
+  // again. Before, the server answered only "not as expected", the page read no file, and offered
+  // to write it there again, for ever.
+  async folder(ctx) {
+    const file = path.join(ctx.root, "gone.ksmd");
+    fs.writeFileSync(file, `${H}# Gone\n\nText.\n`);
+    try {
+      await withTab(ctx, "?doc=gone.ksmd", async (d) => {
+        await typeAtEnd(d, 1, " Mine.");
+        fs.rmSync(file, { force: true });
+        fs.mkdirSync(file);
+        await d.press("s", CTRL);
+        await idle(d);
+        check((await noticed(d)).includes("no longer on disk"), "a file gone from disk is told",
+          await noticed(d));
+        await choose(d, "Save it there again");
+        check((await noticed(d)).includes("A folder now stands where gone.ksmd was"),
+          "writing it there again says that a folder stands there", await noticed(d));
+        await choose(d, "Save as another file");
+        check(await d.until("document.getElementById('browse').open", 5000),
+          "and Save as is the way out");
+        await d.click('#browse [data-browse="cancel"]');
+        await d.settle();
+      });
+    } finally {
+      fs.rmSync(file, { force: true, recursive: true });
+    }
   },
 
   async include(ctx) {

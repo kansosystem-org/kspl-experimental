@@ -33,9 +33,14 @@ fn init(pin: U32) //< sets up one pin for a servo
 fn set_angle(pin: U32, angle: I32) //< sets an angle in degrees
     //< **An angle outside 0 to `ANGLE_MAX` is clamped first.** A mechanism that allows less
     //< clamps before calling this.
+    pwm.set_level(pin, level_for_angle(angle, PWM_TOP))
+
+fn level_for_angle(angle: I32, top: U32): U32 //< the CC count for an angle under a TOP
+    //< An angle outside 0 to `ANGLE_MAX` is clamped. **The duty is not rounded to parts per
+    //< thousand first**: that gave 1.8° steps, so 1° set the same pulse as 0°. Under TOP 9999 a
+    //< step is 0.18°.
+    //< The product stays below 2^32 for any TOP up to 65535, the most CC holds.
     a: = U32::(0 if angle < 0 else (ANGLE_MAX if angle > ANGLE_MAX else angle))
     span: = DUTY_MAX_PERMILLE - DUTY_MIN_PERMILLE
-    permille: = DUTY_MIN_PERMILLE + (a * span / U32::ANGLE_MAX)
-    // **Compute in parts per thousand**; in percent, 180 degrees get only 10 steps.
-    level: = (PWM_TOP + 1) * permille / 1000
-    pwm.set_level(pin, level)
+    scale: = 1000 * U32::ANGLE_MAX // the duty in parts per 180,000
+    return (top + 1) * (DUTY_MIN_PERMILLE * U32::ANGLE_MAX + a * span) / scale

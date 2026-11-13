@@ -518,6 +518,196 @@ fn test_limit_reaches_a_starters_own_group(ksplc: U8[], arena: Arena$@) //< kspl
     assert(!alive, "the starter's own grouped child is stopped with the limited child")
     verdict.pass("The limit's SIGTERM reached the starter, which passed it on to its own group.")
 
+priv const RELAY_SRC: U8[] = //< a child that pipes "hi" through cat and exits 0 if it comes back
+    """import "std/ds"
+import "std/subproc"
+
+fn main(): I32
+  $c: = subproc.spawn_piped(U8[][]::{ "/bin/cat" }, "") catch
+    return 2
+  c.write("hi", 60000) catch {}
+  c.close_stdin()
+  $buf: U8[16] = ::{}
+  n: = c.read(U8$[]::buf, 60000) catch 0
+  c.kill()
+  return 0 if U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi") else 1
+"""
+
+fn test_pipe_reaches_child_of_closed_parent(ksplc: U8[], arena: Arena$@) //< ksplc builds it
+    //< A program started with its standard streams closed still gives its child working pipes
+    //< The pipe then takes the free number 0 or 1, the child's own stream. Copied onto itself,
+    //< its close-on-exec mark stayed, and the child started with that stream closed.
+    verdict.start("[Sys] a program started with closed streams pipes to its child...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines that close a stream")
+        return
+    dir: = "out/tmp/kspl_test_closed_streams"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    src_path: = arena.text().s(dir).s("/relay.kspl").take()
+    exe: = arena.text().s(dir).s("/relay").take()
+    io.write_file(src_path, RELAY_SRC) catch panic("the relay's source must be writable")
+    built: =
+        subproc.run_capture(U8[][]::{ ksplc, "build", src_path, exe }, "", 300000, 1 << 16, arena)
+        catch panic("ksplc must start to build the relay")
+    assert(built.exited_with(0), "the relay must build")
+    for closing in U8[][]::{ "<&-", "<&- >&-" }
+        sh: = arena.text().s("exec '").s(exe).s("' ").s(closing).take()
+        r: =
+            subproc.run_capture(U8[][]::{ "/bin/sh", "-c", sh }, "", 120000, 256, arena) catch
+                panic("the shell must start")
+        verdict.check(arena.text().s("the relay started with ").s(closing).s(" gets its text back")
+            .take(), r.exited_with(0), "")
+    verdict
+        .pass("A program started with standard input, or input and output, closed pipes to its \
+            child.")
+
+priv const FILE_PROBE_SRC: U8[] = //< 0 if a start that must fail, with output to a file, fails
+    """import "std/ds"
+import "std/subproc"
+
+fn main(): I32
+  argv: = U8[][]::{ "/bin/sh", "-c", "true" }
+  out: = "out/tmp/kspl_test_closed_streams/probe.txt"
+  err: = "out/tmp/kspl_test_closed_streams/probe_err.txt"
+  $c: = subproc.spawn_redirect(argv, "no-such-folder-here", out, err) catch
+    return 0
+  c.wait()
+  return 1
+"""
+
+fn test_failed_start_reported_by_closed_parent(ksplc: U8[], arena: Arena$@) //< ksplc builds it
+    //< A program started with standard input and output closed still hears that a start failed
+    //< The pipe that carries the failure took the free number 1. Putting the output file on 1
+    //< closed it, so the start looked successful and the error went into the file.
+    verdict.start("[Sys] a program started with closed streams hears that a start failed...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines that close a stream")
+        return
+    dir: = "out/tmp/kspl_test_closed_streams"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    src_path: = arena.text().s(dir).s("/file_probe.kspl").take()
+    exe: = arena.text().s(dir).s("/file_probe").take()
+    io.write_file(src_path, FILE_PROBE_SRC) catch panic("the probe's source must be writable")
+    built: =
+        subproc.run_capture(U8[][]::{ ksplc, "build", src_path, exe }, "", 300000, 1 << 16, arena)
+        catch panic("ksplc must start to build the probe")
+    assert(built.exited_with(0), "the probe must build")
+    for closing in U8[][]::{ "<&-", "<&- >&-", "<&- >&- 2>&-" }
+        sh: = arena.text().s("exec '").s(exe).s("' ").s(closing).take()
+        r: =
+            subproc.run_capture(U8[][]::{ "/bin/sh", "-c", sh }, "", 120000, 256, arena) catch
+                panic("the shell must start")
+        verdict.check(arena.text().s("a probe started with ").s(closing)
+            .s(" hears that a start in a missing folder failed").take(), r.exited_with(0), "")
+    verdict.pass("A program started with closed streams hears that a start failed.")
+
+priv const STDIN_PROBE_SRC: U8[] = //< runs a reader each way; 0 if every one found its input empty
+    """import "std/chars"
+import "std/ds"
+import "std/subproc"
+
+fn said_empty(out: U8[]): Bool
+  return out.starts_with("empty")
+
+fn main(): I32
+  argv: = U8[][]::{ "/bin/sh", "-c", "if read x; then echo got; else echo empty; fi" }
+  r: = subproc.run_capture(argv, "", 60000, 256, null) catch
+    return 2
+  if !said_empty(r.stdout_data)
+    return 3
+  out: = subproc.run(argv, "", 60000, 256, null) catch
+    return 2
+  if !said_empty(out)
+    return 4
+  jobs: = subproc.Job[]::{ subproc.Job::{ .argv = argv, .cwd = "" } }
+  rs: = subproc.run_many(jobs, 1, 60000, 256, "out/tmp/kspl_test_child", null)
+  got: = rs.get(0) catch
+    return 2
+  return 0 if said_empty(got.stdout_data) else 5
+"""
+
+fn test_captured_child_reads_empty_input(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< run_capture, run and run_many give their child an empty standard input
+    //< In a group of their own, a child that read the terminal was stopped until its limit. The
+    //< probe's own input holds a line, which none of its children may read.
+    verdict.start("[Sys] a captured child reads an empty standard input...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines as its reader")
+        return
+    code: =
+        subproc.spawn_feed(sys_test.child_argv(ksplc, "stdin_probe", STDIN_PROBE_SRC, arena), "",
+        "a line\n", 300000) catch panic("the probe must start")
+    verdict.check("run_capture's, run's and run_many's children each read an end at once", code == 0,
+        arena.text().s("the probe returned \{code\}").take())
+    verdict.pass("The children of run_capture, run and run_many read an empty standard input.")
+
+priv const PATH_PROBE_SRC: U8[] = //< starts the name it is given; 100 + start_error if it cannot
+    """import "std/subproc"
+import "std/sys"
+
+fn main(): I32
+  code: = subproc.spawn_wait(U8[][]::{ sys.args()[1] }, "") catch
+    return 100 + subproc.start_error()
+  return code
+"""
+
+priv const PATH_TOOL: U8[] = "kspl-path-probe-tool" //< the bare name the PATH test looks up
+
+priv fn probe_with_path(probe: U8[], dir: U8[], path: U8[], arena: Arena$@): I32 //<
+    //< What the probe returns, started in `dir` with PATH set to `path`; -1 if the shell fails
+    sh: = arena.text().s("cd '").s(dir).s("' && PATH='").s(path).s("' exec '").s(probe).s("' ")
+        .s(PATH_TOOL).take()
+    r: =
+        subproc.run_capture(U8[][]::{ "/bin/sh", "-c", sh }, "", 120000, 256, arena) catch
+            return -1
+    if code: = r.exit_code
+        return code
+    return -1
+
+fn test_bare_name_skips_empty_path_entries(ksplc: U8[], arena: Arena$@) //< ksplc builds it
+    //< A bare program name is looked up in PATH's entries, and an empty entry names no folder
+    //< execvp read an empty entry as the current directory, so a tool lying there ran.
+    verdict.start("[Sys] a bare name is looked up in PATH, an empty entry skipped...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines that set PATH")
+        return
+    base: = fs.absolute("out/tmp/kspl_test_path_search", arena) catch
+        panic("the work directory must have an absolute path")
+    runs: = arena.text().s(base).s("/runs").take()
+    denied: = arena.text().s(base).s("/denied").take()
+    fs.mkdir_all(runs) catch panic("the work directory must be creatable")
+    fs.mkdir_all(denied) catch panic("the work directory must be creatable")
+    tool: = arena.text().s(runs).s("/").s(PATH_TOOL).take()
+    io.write_file(tool, "#!/bin/sh\nexit 7\n") catch panic("the tool must be writable")
+    io.write_file(arena.text().s(denied).s("/").s(PATH_TOOL).take(), "#!/bin/sh\nexit 9\n")
+        catch panic("the file that cannot run must be writable")
+    chmod: =
+        subproc.run_capture(U8[][]::{ "/bin/chmod", "755", tool }, "", 60000, 256, arena) catch
+            panic("chmod must start")
+    assert(chmod.exited_with(0), "the tool must be made executable")
+    src_path: = arena.text().s(base).s("/probe.kspl").take()
+    probe: = arena.text().s(base).s("/probe").take()
+    io.write_file(src_path, PATH_PROBE_SRC) catch panic("the probe's source must be writable")
+    built: =
+        subproc.run_capture(U8[][]::{ ksplc, "build", src_path, probe }, "", 300000, 1 << 16, arena)
+        catch panic("ksplc must start to build the probe")
+    assert(built.exited_with(0), "the probe must build")
+
+    // Run in the tool's own folder, PATH's empty entries must not find it there.
+    verdict.check("empty PATH entries do not name the current folder",
+        probe_with_path(probe, runs, ":/kspl-no-such-folder::", arena) == 102, "")
+    verdict.check("an empty PATH finds nothing",
+        probe_with_path(probe, runs, "", arena) == 102, "")
+    past_missing: = arena.text().s("/kspl-no-such-folder:").s(runs).take()
+    verdict.check("a folder PATH names is searched, past one without the name",
+        probe_with_path(probe, base, past_missing, arena) == 7, "")
+    past_denied: = arena.text().s(denied).s(":").s(runs).take()
+    verdict.check("a file that cannot run passes the search to the next folder",
+        probe_with_path(probe, base, past_denied, arena) == 7, "")
+    verdict.check("a file that cannot run, and no other, fails as EACCES",
+        probe_with_path(probe, base, denied, arena) == 113, "")
+    verdict.pass("A bare name is found in PATH alone, an empty entry skipped, as on Windows.")
+
 fn test_start_error_names_the_cause(arena: Arena$@) //<
     //< A start that fails leaves the OS's own number, and the next start that succeeds clears it
     //< A missing program is 2 on both kinds of OS: `ENOENT` on POSIX, `ERROR_FILE_NOT_FOUND` on

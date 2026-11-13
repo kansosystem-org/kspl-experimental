@@ -12,7 +12,8 @@
 //<    (`own/ksplc.cfg`) and uses only ksmd. **This closes the build**: a path that climbs out of
 //<    the folder, or names any other package, is a compile error, for an `embed` too.
 //< 2. `ksplc doc` lists its `pub fn`s; `ksmd/calc/glue.kspl` writes their table as
-//<    `entry/table.kspl`, and refuses a name ksmd already has.
+//<    `entry/table.kspl`. A name ksmd already has is refused, and so is one a formula cannot
+//<    call, as `Sum`.
 //< 3. `entry/main.kspl`, the entry (`ENTRY`), hands the table to `ksmd/port/own/serve.kspl`. Both
 //<    stand in the package `entry`, with its own `ksplc.cfg`, as `own` may write no `extern fn`.
 //< 4. `ksmd/port/wasm.kspl` builds the entry, with ksmd's sources as the place packages are found.
@@ -160,6 +161,10 @@ priv fn steps(source: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena:
         throw arena.text().s(PERSON).s(": no `pub fn` a formula can call\n").take()
     for i in Range.asc(fns.len)
         name: = fns.get(i).name
+        if !formula_name(name)
+            throw arena.text().s(PERSON)
+                .s(": a formula cannot call `\{name\}`. Formula names are lowercase: a lowercase \
+                    letter, then lowercase letters, digits and `_`\n").take()
         if known(name)
             throw arena.text().s(PERSON)
                 .s(": ksmd has a function `\{name\}` of its own. Name yours otherwise\n").take()
@@ -180,6 +185,16 @@ priv fn steps(source: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena:
     build(b@, arena)!
     return io.read_file(out, arena) catch
         throw "the build wrote no wasm\n"
+
+priv fn formula_name(name: U8[]): Bool //<
+    //< Whether a formula can call the name: a lowercase letter, then lowercase letters, digits and
+    //< `_`, as `ksmd/calc/formula.kspl` reads a function's name
+    if name.len == 0 || !name[0].is_lower()
+        return false
+    for c in name
+        if !(c.is_lower() || c.is_digit() || c == '_')
+            return false
+    return true
 
 priv fn put(work: U8[], name: U8[], text: U8[], arena: Arena$@): Void!U8[] //< writes one file
     io.write_file(fs.join(work, name, arena), text) catch

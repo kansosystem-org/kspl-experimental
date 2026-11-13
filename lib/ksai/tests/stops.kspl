@@ -58,6 +58,22 @@ fn tensor_add_shape_mismatch(arena: Arena$@)
     io.out().s("must not get here: size=\{sum.size\}\n")
 
 // ==========================================
+// tensor-add-same-size: `a + b` on [2,3] and [3,2], or on [2,3] and [6], must stop as well.
+// **The element counts match**, so a check of the sizes alone would add rows to columns.
+// ==========================================
+fn tensor_add_same_size(rank_differs: Bool, arena: Arena$@)
+    a_shape: Sz[2] = ::{ 2, 3 }
+    transposed: Sz[2] = ::{ 3, 2 }
+    flat: Sz[1] = ::{ 6 }
+    a: = Tensor<|F32|>(Sz[]::a_shape, arena)
+    $b: = Tensor<|F32|>(Sz[]::transposed, arena)
+    if rank_differs
+        b = Tensor<|F32|>(Sz[]::flat, arena)
+    io.out().s("about to add \{a.size\} and \{b.size\} elements\n")
+    sum: = a + b
+    io.out().s("must not get here: size=\{sum.size\}\n")
+
+// ==========================================
 // updater-weight-count: a step that gives the Updater fewer weights than the first step must stop.
 // **Otherwise the states shift**: the weights after the missing one would be moved by other
 // weights' states, and training would go on, silently wrong.
@@ -156,6 +172,8 @@ fn main(): I32
         tensor_shape_product_overflow(arena)
     else if which.equals("tensor-add-shape-mismatch")
         tensor_add_shape_mismatch(arena)
+    else if which.equals("tensor-add-transposed") || which.equals("tensor-add-flat")
+        tensor_add_same_size(which.equals("tensor-add-flat"), arena)
     else if which.equals("updater-weight-count")
         updater_weight_count(arena)
     else if which.equals("gqa-uneven-heads")
@@ -176,7 +194,8 @@ fn main(): I32
         // **An unknown name must not pass**: it says no reason, so its check fails.
         io.err().s("usage: stops <which>, one of: argmax-empty-logits\n")
             .s("  tensor-shape-product-overflow tensor-add-shape-mismatch updater-weight-count\n")
-            .s("  gqa-uneven-heads\n").s("  gqa-odd-head-dim gqa-past-cache grad-small-out\n")
+            .s("  tensor-add-transposed tensor-add-flat\n").s("  gqa-uneven-heads\n")
+            .s("  gqa-odd-head-dim gqa-past-cache grad-small-out\n")
             .s("  embed-grads-past-tokens embed-grads-past-dx\n")
         return 2
     return 0

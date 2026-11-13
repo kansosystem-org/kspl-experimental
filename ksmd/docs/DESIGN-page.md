@@ -87,6 +87,7 @@
 * **The colour tools are split**: the face applies the colour shown on it, and the arrow opens a palette.
 * **Clear format takes colours, size, alignment and a cell's own number format away in one step.** In text it takes the colour and the paragraphs' alignment away; the marks stay, as part of what the text says.
 * **Paragraph (Ctrl+Alt+0) turns every selected block back into a plain paragraph, in one step.** A heading, a list item, a checklist item, a quote and a code block all go. Ctrl+Alt+1 to 6 make headings.
+* **AltGr types its character and runs no Ctrl+Alt key.** Windows reports AltGr as Ctrl+Alt, so AltGr+0 on a German keyboard (`}`) would otherwise make a paragraph and lose the character. Outside a Mac, Ctrl+Alt with a digit is a key only where the press gives that digit. So where a digit key types a sign without Shift (`&` on a French layout), Ctrl+Alt makes no heading. The menu still makes one.
 * **Clear format leaves the kind of block**, as it leaves the marks. A heading and a list say how the text is built, and the contents are made from the headings. A command that cleared both would turn a whole document flat in one press. So clearing the kind is one command and clearing the look another.
 
 **A look acts on the cells where a cell was worked in last, and on the selected text otherwise.** Alignment on text aligns the paragraphs and headings the selection touches.
@@ -119,6 +120,8 @@
 * **The window scrolls only as far as it must to show the caret.** Focusing the document without that care scrolls a browser's window to the document's top.
 
 **Removing a whole block puts the caret on the block that takes its place** (`remove_whole` in `ksmd/edit/editor.kspl`). That is the start of the text after it, else the end of the text before it. A table, chart, image, include or divider goes this way, by its Remove button, the table menu, or Delete on a whole table. An include, an image and a chart have a Remove button, since no text selection reaches inside them. The included file or the image file stays as it is.
+
+**An included file's blocks show no button.** That file is edited in a tab of its own, so Remove, Leave out of print and a chart's Edit would do nothing there. Its tables show their names as text, not as a Rename button.
 
 * **The window scrolls only as far as it must to show the caret.** The person goes on working where the block stood, not at the top of the document.
 * **The caret takes a gap only where no text stands on either side**, as in an empty document. A gap shows as an empty line, which looks like a paragraph no one typed.
@@ -475,6 +478,9 @@
 
 **A chart's Edit button opens a panel**: the kind, series in columns or in rows, the labels column, the series drawn and the title (`chart.js`). In rows, the panel lists the rows that the editor takes as series, and asks for the first and last columns drawn. Such a row holds text written in the labels column, not a calculated value. The saved chart finds the row by that text, so the text holds no `,` and no row above it holds the same text. The view sends these rows for each column (`sr` in `ksmd/port/web/view.kspl`), so the panel and the editor apply one rule. Apply sets the chart as one step.
 
+* **An axis mark is written as the Thousands format shows a number**: `12,000,000`, with `,` and `.` as the file has them. The left edge widens to the widest mark, so no mark loses its first digits.
+* **The labels under a chart never overlap.** Past about 30 rows only every second, third or later label shows. A label wider than its room, and never wider than 120 pixels, is cut with `…`. Its whole text shows as a tooltip.
+
 ## Page setup, numbers and references
 
 **File ▸ Page setup… opens a panel for the document's settings.** It holds the paper, the orientation, the header and the footer. It also holds where heading numbers start, and the words before table and image numbers. Apply sets them as one step (`settings.js`).
@@ -578,6 +584,10 @@
   * **The calculator writes the reason; the page only shows it** (`write_reason` in `ksmd/calc/reason.kspl`, sent with each table as `err`). So `#BLOCKED!` has no words of its own in the page's script: its reason comes the same way.
   * **The bar cuts a long reason with `…`**, and the part's tooltip holds it whole. A reason in two lines would push the bar's other parts out of the window.
   * **An error carried from another cell names that cell**, as `A3 shows #DIV/0!`. Choosing A3 shows its own reason, so the person follows the chain to the cell to fix.
+* **Typed text that looks like a number, in a column of numbers, says why it is marked in the same place** ("Number formats" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)). The editor finds the cells, and sends them with each table as `nt`.
+  * **The mark is an orange corner at the cell's lower left.** A note's red corner stands at the top right. An own function's blue corner stands at the top left of a formula. So a cell can show a note and this mark together.
+  * **The reason says that a sum leaves the text out, and how to make it a number.** The person types it plain, as `1000` or `0.12`. A number format then shows the `,`, the currency or the `%`.
+  * **No command turns the text into a number.** Retyping it is already one step of undo. A command would have to guess what `12%` or `1,000` means, which is the guess the rule avoids.
 * **The bar names no cell mode.** The open cell shows its mode by how it acts. A cell typed into moves on with the arrow keys, and one opened by F2 moves its caret ("Input, menus and tables" above). A mode named in the bar tells the person nothing that the next key does not show.
 * **The bar names no section.** View ▸ Contents marks the heading being read ("The contents" below), and shows its place among the others, which one name cannot.
 * **A message stands in the middle until the next action.** The page and the filter's count step aside for it, and its tooltip holds a message the bar cuts.
@@ -751,5 +761,7 @@ sequenceDiagram
 * A browser without the highlight API (`CSS.highlights`) marks no match in text. The current match still scrolls into sight, and the count still shows.
 * It never trims the undo history. A long session can use up the editor's memory, and the page then asks the person to save and open the document again.
 * Choosing a diagram's shape, drawing one and joining two take the pointer. The arrow keys only move a shape already chosen.
+* Drawing on an image or a chart, choosing a shape there and moving it take the pointer. On a chosen shape, the keys only do Delete, which takes it away, and Esc, which lets it go.
+  * Why: a shape stands at points of the picture's own pixels. Keys would need a mark that moves over the picture to set each corner, and the page has none yet.
 * The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked. What a screen reader is given is checked by the page's names, roles and states.
 * A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves, and hide the page by script.

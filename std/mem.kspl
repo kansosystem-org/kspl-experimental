@@ -551,6 +551,10 @@ pub struct Arena //< a bump allocator: everything it allocated is freed at once
         //< from_buffer() sets 0: running out panics without calling malloc, and free() does nothing
         //< (the chunk and the Arena are the caller's memory).
     priv resets: Sz //< how many times reset() has run, so restore() can refuse a mark from before
+    priv marked: Arena_chunk$@ //< the chunk of the newest mark that `save()` gave, or null
+    priv marked_used: Sz //< how much of `marked` was used at that mark
+    priv kept: Arena_chunk$@ //<
+        //< Blocks on the heap that `restore()` leaves alone, freed with the arena (`alloc_kept`)
 priv const ARENA_INITIAL_CHUNK: Sz = 256 * 1024 //<
     //< the first chunk's capacity; later ones grow from it
     //< A smaller default_chunk_size takes precedence.
@@ -590,6 +594,9 @@ impl Arena
         ptr.head = null
         ptr.default_chunk_size = chunk_size
         ptr.resets = 0
+        ptr.marked = null
+        ptr.marked_used = 0
+        ptr.kept = null
         return ptr
     pub fn from_buffer( //< an arena over memory the caller owns, which never grows
         //< Neither the arena nor the chunk calls malloc, so a program runs unchanged on a
@@ -607,7 +614,8 @@ impl Arena
         chunk.used = 0
         chunk.next = null
         kspl_mem_poison(chunk_data(chunk, 0), chunk.cap)
-        return Arena::{ .head = chunk, .default_chunk_size = 0, .resets = 0 }
+        return Arena::{ .head = chunk, .default_chunk_size = 0, .resets = 0, .marked = null,
+            .marked_used = 0, .kept = null }
     priv fn next_chunk_cap(r: Self$@, alloc_size: Sz): Sz //< decides the new chunk's capacity
         //< It doubles from a small first chunk up to default_chunk_size. So a small workload does
         //< not over-allocate, and a large one reaches big chunks quickly. An allocation above the
@@ -661,7 +669,78 @@ impl Arena
         r.head = new_chunk
         return chunk_data(new_chunk, 0)
 
+    fn resize_in_place( //< grows or shrinks the block allocated last, without moving it
+        //< Returns false, and changes nothing, where the block is not the newest one in the arena
+        //< or the arena has too little room left after it. A null arena always returns false.
+        //< For `std/str`'s `Arena_text`, which grows its text where the arena would hand out next.
+        r: Self$@,
+        ptr: Void@, //< the block, as `alloc` returned it
+        size: Sz, //< the size it was allocated or last resized to
+        new_size: Sz, //< the size it is to have; not negative
+    ): Bool
+        if r == null || r.head == null || new_size < 0
+            return false
+        old_size: = ((size + MAX_ALIGN - 1) / MAX_ALIGN) * MAX_ALIGN
+        want: = ((new_size + MAX_ALIGN - 1) / MAX_ALIGN) * MAX_ALIGN
+        head_chunk: = r.head
+        // Caution: **Check that the block ends where the chunk's used bytes end.** Only then is
+        // nothing after it, and the bytes past it are free for it to take.
+        if want < new_size || old_size > head_chunk.used ||
+            chunk_data(head_chunk, head_chunk.used - old_size) != ptr
+            return false
+        start: = head_chunk.used - old_size
+        if want > head_chunk.cap - start
+            return false
+        if want > old_size
+            kspl_mem_unpoison(chunk_data(head_chunk, head_chunk.used), want - old_size)
+            head_chunk.used = start + want
+        else if want < old_size
+            release_tail(head_chunk, start + want)
+        return true
+
+    fn rewinds_past( //< whether `restore()` could free a block allocated now for what is at `at`
+        //< True where a mark saved since `at` was allocated could still be restored. Always false
+        //< for a null arena, and for a fixed buffer, which has nowhere else to put the block.
+        //< For `std/str`'s `Arena_text`, whose builder is at `at` and outlives such a rewind.
+        r: Self@,
+        at: Void@, //< a block allocated in this arena
+    ): Bool
+        if r == null || r.marked == null || r.default_chunk_size == 0
+            return false
+        here: = U8@::at
+        $curr: = r.head
+        for curr != null
+            start: = U8@::chunk_data(curr, 0)
+            holds: = here >= start && here < start + curr.cap
+            if curr == r.marked
+                // The mark lies in a newer chunk than `at`, or after it in the same one.
+                return !holds || start + r.marked_used > here
+            if holds
+                return false
+            curr = curr.next
+        return false
+
+    #gives_view
+    fn alloc_kept( //< allocates a block that `restore()` does not free; the arena's `free()` does
+        //< For a text that outlives a rewind (`rewinds_past`). `reset()` frees it too.
+        r: Self$@, //< a growing arena: not null, and not a fixed buffer
+        size: Sz, //< how many bytes
+    ): Void$@
+        if size < 0
+            panic("Arena alloc_kept size must be non-negative")
+        block: = Arena_chunk$@::alloc(ARENA_CHUNK_HEADER_SIZE + size)
+        block.cap = size
+        block.used = size
+        block.next = r.kept
+        r.kept = block
+        return chunk_data(block, 0)
+
     pub fn save(r: Self$@): Arena_state //< a mark to rewind to later
+        //< It also records the mark for `rewinds_past`. Only the newest is kept: a mark older than
+        //< it lies before anything that one lies before.
+        if r.head != null
+            r.marked = r.head
+            r.marked_used = r.head.used
         return Arena_state::{ .chunk = r.head, .used = r.head.used if r.head != null else 0,
             .resets = r.resets }
     #ends_views
@@ -679,6 +758,9 @@ impl Arena
         r.head = state.chunk
         if r.head != null
             release_tail(r.head, state.used)
+        // A mark after this one can no longer be restored, so this one is the highest that is left.
+        r.marked = state.chunk
+        r.marked_used = state.used
 
     #ends_views
     pub fn reset(r: Self$@) //< empties it, keeping the last round's usage as one chunk
@@ -687,6 +769,10 @@ impl Arena
         //< again, page by page. One chunk the size of the last round's use holds a round of that
         //< size, even above the limit (Zig's `ArenaAllocator.reset(.retain_capacity)`).
         r.resets += 1
+        r.marked = null
+        r.marked_used = 0
+        _kept: = free_chunks(r.kept, null)
+        r.kept = null
         if r.head == null
             return
         // A fixed buffer stops here: its one chunk is the caller's.
@@ -775,6 +861,7 @@ impl Arena: Manual_free //< it owns its resources and releases them with `free()
                 kspl_mem_unpoison(chunk_data(r.head, 0), r.head.cap)
             return
         _freed: = free_chunks(r.head, null)
+        _kept: = free_chunks(r.kept, null)
         dealloc(Void$@::r)
 
 // ==========================================

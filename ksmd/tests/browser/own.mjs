@@ -216,6 +216,9 @@ export function own(helpers) {
           `    __kspl_asm_volatile(".include \\"${path.resolve(ctx.root, "secret.txt").replace(/\\/g, "/")}\\"")\n` +
           "    return n\n",
         "cannot be written in the package 'own'", "assembler text that includes a file outside the build"],
+        // Not closed but refused too: a formula reads only lowercase names, so it could never call `myTax`.
+        ["upper", "pub fn myTax(n: F64): F64 //< a name no formula can call\n    return n\n",
+          "Formula names are lowercase", "a name that is not lowercase"],
       ];
       for (const [name, text, why, what] of cases) {
         fs.writeFileSync(path.join(ctx.root, `closed/${name}.kspl`), text);

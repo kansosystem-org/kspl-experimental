@@ -35,6 +35,7 @@ fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_e
     token_cases(port, auth, root, arena)!
     host_cases(port, auth, arena)!
     early_head_cases(port, auth, arena)!
+    continue_cases(port, auth, arena)!
     refusal_cases(port, token, arena)!
     status_cases(port, auth, arena)!
     read_cases(port, auth, arena)!
@@ -71,6 +72,30 @@ priv fn early_head_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Htt
             200000\r\n\r\n")!
     again: = valid.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
     client.expect_status("each keep-alive request needs its own token", again, 401, arena)
+
+priv fn continue_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< An upload that waits on `Expect: 100-continue` is told to go on, and a refused one is not
+    //< Without the interim answer, curl waits a second before it sends the body.
+    for round in Range.asc(2)
+        authorized: = round == 1
+        defer $c: = client.Conn.open(port)!
+        head: = arena.text().s("PUT /api/file?path=early.txt HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+            .s("Content-Length: 5\r\nExpect: 100-continue\r\n")
+        if authorized
+            head.s(auth)
+        c.send(head.s("\r\n").take())!
+        first: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena) catch e
+            verdict.check("an upload with Expect gets an answer before its body", false,
+                e.reason())
+            continue
+        if !authorized
+            client.expect_status("a refused upload with Expect is not asked to go on", first, 401,
+                arena)
+            continue
+        client.expect_status("an upload with Expect is asked to go on", first, 100, arena)
+        c.send("hello")!
+        saved: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+        client.expect_status("the upload after 100 Continue completes", saved, 200, arena)
 
 priv fn token_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< which files need the token
@@ -270,6 +295,15 @@ priv fn list_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!clie
     verdict.check("/api/list with no path names the root",
         top.status == 200 && top.body.find_str("\"listed\"").is_some(),
         client.shown(top, arena))
+    dot: = client.get(port, "/api/list?path=.", auth, arena)!
+    verdict.check("/api/list of `.` names the root, as no path does",
+        dot.status == 200 && dot.body.equals(top.body), client.shown(dot, arena))
+    // **A hidden folder is not listed either**, as no listing names it.
+    fs.mkdir_all(fs.join(listed, ".hd", arena)) catch
+        verdict.check("/api/list refuses a hidden folder", false, "the folder cannot be made")
+        return
+    hidden: = client.get(port, "/api/list?path=listed/.hd", auth, arena)!
+    client.expect_status("/api/list refuses a hidden folder", hidden, 403, arena)
     for q in U8[][]::{ "path=..", "path=listed/../..", "path=/etc" }
         out: = client.get(port, arena.text().s("/api/list?\{q\}").take(), auth, arena)!
         nm: = arena.text().s("/api/list refuses outside the root: \{q\}").take()
@@ -317,6 +351,17 @@ priv fn conditional_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Ht
     bad: = arena.text().s(auth).s("X-Kanso-If-Content: invalid\r\n").take()
     refused: = client.put_file(port, path, bad, "bad", arena)!
     client.expect_status("malformed content guards are refused", refused, 400, arena)
+    // **A folder at the path is told apart from a mismatch**, guarded or not: a page told only
+    // "not as expected" reads the file again, finds none, and offers to write it there again.
+    for guarded in Range.asc(2)
+        head: = missing if guarded == 1 else auth
+        on_folder: = client.put_file(port, "/api/file?path=sub", head, "x", arena)!
+        said: = client.doc_of(on_folder, arena)
+        verdict.check("a write onto a folder says that a folder stands there",
+            on_folder.status == 409 &&
+            said.get("cause").as_str().unwrap_or("").equals("folder") &&
+            said.get("error").as_str().unwrap_or("").find_str("\"sub\"").is_some(),
+            client.shown(on_folder, arena))
 
 priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< writing a file
@@ -374,8 +419,18 @@ priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     client.expect_status("PUT refuses outside the root too", out, 403, arena)
     made: = client.put_file(port, "/api/file?path=memo-images/image-1.png", auth, "png\n", arena)!
     client.expect_status("a write makes the one folder its file goes in", made, 200, arena)
+    // **A refusal names the folder to make**, or the person cannot tell what is missing.
     deep: = client.put_file(port, "/api/file?path=none/deeper/a.png", auth, "x", arena)!
-    client.expect_status("but not a tree of folders", deep, 500, arena)
+    said: = client.doc_of(deep, arena).get("error").as_str().unwrap_or("")
+    verdict.check("but not a tree of folders, and the refusal names the folder missing",
+        deep.status == 409 && said.find_str("\"none\"").is_some() &&
+        client.doc_of(deep, arena).get("cause").as_str().unwrap_or("").equals("folders"),
+        client.shown(deep, arena))
+    on_file: = client.put_file(port, "/api/file?path=sub/two.txt/a.png", auth, "x", arena)!
+    said_file: = client.doc_of(on_file, arena).get("error").as_str().unwrap_or("")
+    verdict.check("a write below a file is refused, naming the file",
+        on_file.status == 409 && said_file.find_str("\"sub/two.txt\" is a file").is_some(),
+        client.shown(on_file, arena))
 
 priv const DOT_RELS: U8[][2] = ::{ ".git/config", ".hidden" } //< the dot names a write tries
 priv const DOT_BODIES: U8[][2] = ::{ "[core]\n", "hidden\n" } //< what each holds before

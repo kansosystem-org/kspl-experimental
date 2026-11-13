@@ -114,6 +114,19 @@ KSPL_LINK I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
     d->first = 1;
     d->h = FindFirstFileW(path, &d->fd);
     if (d->h == INVALID_HANDLE_VALUE) {
+        /* Caution: **A folder with no entry at all is a listing of none, not a failure.** The root
+         * of an empty drive holds no `.` or `..`, so the pattern matches nothing and the error is
+         * ERROR_FILE_NOT_FOUND. Asked of the folder itself, the attributes tell it from a path
+         * that is not there. The read then ends at once. */
+        DWORD attr;
+        if (GetLastError() == ERROR_FILE_NOT_FOUND) {
+            path[n] = L'\0';
+            attr = GetFileAttributesW(path);
+            if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                d->first = 0;
+                return (I64)(intptr_t)d;
+            }
+        }
         free(d);
         return 0;
     }
@@ -124,6 +137,7 @@ KSPL_LINK I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
     kspl_dir_t *d;
     if (handle == 0) return 0;
     d = (kspl_dir_t *)(intptr_t)handle;
+    if (d->h == INVALID_HANDLE_VALUE) return 0; /* a folder with no entry at all */
     for (;;) {
         const wchar_t *name;
         char utf8[KSPL_WPATH_CAP * 3];
@@ -149,7 +163,7 @@ KSPL_LINK void kspl_dir_close(I64 handle) {
     kspl_dir_t *d;
     if (handle == 0) return;
     d = (kspl_dir_t *)(intptr_t)handle;
-    FindClose(d->h);
+    if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h);
     free(d);
 }
 

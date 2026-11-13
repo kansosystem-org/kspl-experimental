@@ -151,6 +151,20 @@ impl Probe
         default
             return false
 
+    priv fn is_nothing(p: Self): Bool //< whether nothing listens at the port
+        switch p
+        case .nothing
+            return true
+        default
+            return false
+
+    priv fn is_locked(p: Self): Bool //< whether the server there refused the key sent
+        switch p
+        case .locked
+            return true
+        default
+            return false
+
 fn default_file(): U8[] //< the model file started where none is named: the first in the list
     return FIRST.file
 
@@ -169,10 +183,23 @@ fn ensure(plan: Model_plan, arena: Arena$@): Model_run? //<
     //< It is the one at `plan.url`, on this machine. **None, with the reason and what to do said,
     //< where there is none.**
     at: = aim.port_num(aim.port_in_url(plan.url))
-    held: = held_key(key_path(plan, at, arena), arena)
+    key_file: = key_path(plan, at, arena)
+    kept: = kept_key(key_file, arena)
+    env: = sys.get_env(defaults.API_KEY_ENV).unwrap_or("")
+    $held: = kept if kept.len > 0 else env
+    $seen: = probe(at, held, arena)
+    // Caution: **A key file whose server is gone is stale; delete it.** The server a launcher
+    // started takes the key it wrote, so a port where nothing answers, or where the key is
+    // refused, has another server or none. Kept, the file would stand in for `KSAGENT_API_KEY` for
+    // good, and the message below would name a setting that changes nothing.
+    if kept.len > 0 && (seen.is_nothing() || seen.is_locked())
+        fs.remove_path(key_file) catch {}
+        if seen.is_locked() && env.len > 0 && !env.equals(kept)
+            held = env
+            seen = probe(at, held, arena)
     found: = Model_run::{ .name = "the model server", .slow = false, .log = "", .child = .none,
         .key = held, .key_file = "" }
-    switch probe(at, held, arena)
+    switch seen
     case .ready
         if names_in_vain(plan)
             return .none
@@ -192,6 +219,12 @@ fn ensure(plan: Model_plan, arena: Arena$@): Model_run? //<
                 it, or name another port: make chat DIR=<folder> PORT=<port>\n")
         return .none
     case .locked
+        if env.len > 0
+            warn()
+                .s("the model server at \{plan.url\} refuses the API key in \
+                    \{defaults.API_KEY_ENV\}. Set it to the server's key, stop the server, or name \
+                    another port: make chat DIR=<folder> PORT=<port>\n")
+            return .none
         warn()
             .s("the model server at \{plan.url\} asks for an API key that this command does not \
                 hold. Set \{defaults.API_KEY_ENV\} to its key, stop it, or name another port: make \
@@ -207,15 +240,15 @@ fn key_path(plan: Model_plan, at: I32, arena: Arena$@): U8[] //< where a started
     //< **Beside its log**, so that a second launcher can use a server the first one started.
     return fs.join(plan.tmp, arena.text().s("model.\{at\}.key").take(), arena)
 
-priv fn held_key(file: U8[], arena: Arena$@): U8[] //< the key for a server that is not started here
-    //< **The file a launcher wrote for the port, where it is there and private.** Otherwise
-    //< `KSAGENT_API_KEY`, which ksagent sends anyway; empty for none.
+priv fn kept_key(file: U8[], arena: Arena$@): U8[] //<
+    //< The key a launcher wrote for the port, where its file is there and private; empty for none
+    //< **It is tried before `KSAGENT_API_KEY`** (`ensure`), so a second launcher uses a server the
+    //< first one started.
     trust: = fs.secret_trust(file)
     if trust == .own || trust == .unchecked
         body: = io.read_file(file, arena) catch ""
-        if body.trim_spaces().len > 0
-            return body.trim_spaces()
-    return sys.get_env(defaults.API_KEY_ENV).unwrap_or("")
+        return body.trim_spaces()
+    return ""
 
 priv fn new_key(arena: Arena$@): U8[]? //< a new random key, as hex; none where the OS has none
     $raw: U8[KEY_BYTES] = ::{}

@@ -156,6 +156,7 @@ The type a position calls for is the *expected type*: a variable declaration's a
 * A literal whose type is fixed is checked against that type. A suffix fixes it (`300U8`), and so does an expected type from a declaration, argument, field and so on.
 * A literal with no fixed type is checked against the type actually computed (below).
 * A literal with more digits than any integer type holds (beyond 64 bits) is an error whatever the expected type.
+* **Inside a generic, each instance is checked against its own type arguments.** With `fn keep<|T|>(x: T)`, a `y: T = x; y = 300` in its body is a compile error where `keep` is used with `T = U8`, and passes for `I32`. The error's note names the instance and the line that asked for it. A shift amount is checked against the type argument's width the same way ([6.8](#68-integer-arithmetic-folding-overflow-division-shifts)).
 * **A minus written directly before a literal is checked with it, as one value**, in a function and in a constant alike. So a type's minimum can be written as it reads: `-2147483648` for `I32`, and `-9223372036854775808` for `I64`, although `9223372036854775808` alone fits no `I64`.
 
 **A floating-point literal its type holds only as infinity, or only as zero, is a compile error** (`f: F32 = 1.0e39`, `x: F64 = 1.0e400`, `x: F64 = 1.0e-400`). It is checked against the type it takes, by the same rules as an integer literal. Two kinds of rounding stay accepted, since neither changes what the number is:
@@ -1278,6 +1279,10 @@ The same text compiles in both languages and only the answer changes, so write t
 * A slice has no arithmetic and no ordering. Compare its contents with `equals`.
 
 **`Bool` has no arithmetic and no shifts.** On a `Bool`, `!`, `&&` `||` (short-circuiting), `&` `|` `^` (not short-circuiting) and the comparisons (`false < true`) are allowed. `+` `-` `*` `/` `%` `<<` `>>` and unary `-` `~` are refused at translation time. To count a `Bool` as a number, convert it first with `I32::flag`.
+
+**`!`, `&&` and `||` take only a `Bool`.** A number, a pointer or an enum is refused at translation time, since nothing converts to `Bool` by itself ([6.4](#64-type-conversion--and-implicit-casts)). Write the comparison that is meant: `x == 0` for `!x`, `p != null` for `p &&`. A type of your own takes `!` through `Not` ([6.1.1](#611-operator-overloading)).
+
+**Bit operations and shifts work on an integer's bits.** `&` `|` `^` `~` `<<` `>>` and their compound forms refuse a float, and `~` refuses a pointer too, at translation time. Convert a float first (`I64::x`). On a pointer, the binary forms are refused under the rules of pointer arithmetic ([6.2](#62-pointer-arithmetic-and-implicit-dereferencing)).
 
 **A cast is on the same level as a unary operator.** `Type::` binds as strongly as `!` or `-` and can take another unary as its operand (both `I32::-x` and `-I32::x` can be written).
 

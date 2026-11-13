@@ -114,6 +114,17 @@ impl U8[]
                 has_upper = true
         return has_upper
 
+    fn is_gnu_macro(r: U8[]): Bool //<
+        //< Whether gcc or clang predefines it as a macro in GNU C mode (`-std=gnu11`), with no `_`
+        //< **So the generated C builds in GNU mode too**, which a C compiler takes when no `-std`
+        //< is given. In ISO mode only `__linux__` and the like are defined. The list is the
+        //< lower-case ones clang's targets define (`DefineStd` in `clang/lib/Basic/Targets`), which
+        //< gcc defines alike: `linux` and `unix` on Linux, `i386` on 32-bit x86. The upper-case
+        //< ones (`WIN32`) match `is_macro_case`. **Add each new one to
+        //< `ksplc/tests/c_keyword_names.kspl`.**
+        return r.equals("linux") || r.equals("unix") || r.equals("i386") || r.equals("sun") ||
+            r.equals("sparc") || r.equals("mips") || r.equals("mc68000")
+
     priv fn is_reserved_for_compiler(r: U8[]): Bool //<
         //< Whether it opens with `__`, or with `_` and a capital (C99 7.1.3's implementation space)
         //< **A rule, not a list**: MSVC's `__try` and `__int64`, clang's `__cdecl` (a keyword even
@@ -144,10 +155,10 @@ impl U8[]
 
     fn needs_c_escape(r: U8[]): Bool //<
         //< Whether a name cannot be emitted into the generated C as it is
-        //< **Only this function decides whether to escape.** There are five reasons but one way to
+        //< **Only this function decides whether to escape.** There are six reasons but one way to
         //< escape, so they fold into one answer.
         return r.is_c_keyword() || r.is_preamble_macro() || r.is_macro_case() ||
-            r.is_reserved_for_compiler() || r.is_microsoft_keyword()
+            r.is_gnu_macro() || r.is_reserved_for_compiler() || r.is_microsoft_keyword()
 
     fn c_safe_name(r: U8[]): Str_builder //< the name as emitted into C
         //< It adds the suffix where the name is a reserved word, and spells a made name in its own

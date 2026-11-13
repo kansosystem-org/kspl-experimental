@@ -459,10 +459,12 @@ fn test_fs_join_under_refusals(arena: Arena$@) //<
         ::{ .rel = "www/nul.txt", .why = .device }, ::{ .rel = "a/CoM1/b", .why = .device },
         ::{ .rel = "GIT~1/config", .why = .short_name },
         ::{ .rel = "sub/TEAM~12.JSO", .why = .short_name },
-        ::{ .rel = "*.txt", .why = .wildcard }, ::{ .rel = "sub/.g?t", .why = .wildcard },
-        ::{ .rel = "a<b", .why = .wildcard }, ::{ .rel = "a>b", .why = .wildcard },
-        ::{ .rel = "a\"b", .why = .wildcard }, ::{ .rel = "a|b", .why = .wildcard },
-        ::{ .rel = ".env", .why = .hidden } }
+        ::{ .rel = "PROGRA~1", .why = .short_name }, ::{ .rel = "A~1.TXT", .why = .short_name },
+        ::{ .rel = "progra~1/x", .why = .short_name },
+        ::{ .rel = "x~10.md", .why = .short_name }, ::{ .rel = "*.txt", .why = .wildcard },
+        ::{ .rel = "sub/.g?t", .why = .wildcard }, ::{ .rel = "a<b", .why = .wildcard },
+        ::{ .rel = "a>b", .why = .wildcard }, ::{ .rel = "a\"b", .why = .wildcard },
+        ::{ .rel = "a|b", .why = .wildcard }, ::{ .rel = ".env", .why = .hidden } }
     $wrong: U8[] = ""
     for c in cases
         if !refused_as(root, c.rel, keep, c.why, arena)
@@ -472,7 +474,15 @@ fn test_fs_join_under_refusals(arena: Arena$@) //<
         taken_under(root, "sub/page.txt", keep, arena) &&
         taken_under(root, "a..b/x~y.txt", keep, arena) &&
         taken_under(root, "console.js", keep, arena) &&
-        taken_under(root, "com12", keep, arena)
+        taken_under(root, "com12", keep, arena) &&
+        // Not a short name's shape: too long, a long extension, non-ASCII or no digit last.
+        taken_under(root, "budget~2024.md", keep, arena) &&
+        taken_under(root, "ABCDE~123", keep, arena) &&
+        taken_under(root, "ABCDEFG~1", keep, arena) &&
+        taken_under(root, "a~1.html", keep, arena) && taken_under(root, "a~1b", keep, arena) &&
+        taken_under(root, "~1", keep, arena) &&
+        taken_under(root, "日本語~1.md", keep, arena) &&
+        taken_under(root, "第1四半期(4~6月).xlsx", keep, arena)
     whole: = fs.join_under(root, "", keep, arena) catch "refused"
     joined: = fs.join_under(root, "sub/page.txt", keep, arena) catch "refused"
     scratch.remove_tree(root, arena)

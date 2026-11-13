@@ -45,6 +45,32 @@ fn main(): I32
     _p: = wrap<|Pt|>(Pt::{ .x = 1 }, Pt::{ .x = 2 })
     _q: = wrap<|Qt|>(Qt::{ .y = 1 }, Qt::{ .y = 2 })
     return 0
+// ==== case generic_body_literal_out_of_range
+//< A literal or a shift amount that does not fit the type argument is refused in that instance
+//< Let through, `y = 300` with `T = U8` stored 44 and `a + 1000` gave 237, in silence. The Note
+//< names the instance whose type argument the value does not fit. The `I32` instances pass.
+// EXPECT: generic_body_literal_out_of_range.kspl:13:7: error: literal '300' is out of range for type 'U8'
+// EXPECT: Note: in 'generic_body_literal_out_of_range.keep<|U8|>', instantiated at generic_body_literal_out_of_range.kspl:23:33.
+// EXPECT: generic_body_literal_out_of_range.kspl:17:14: error: literal '1000' is out of range for type 'U8'
+// EXPECT: Note: in 'generic_body_literal_out_of_range.add<|U8|>', instantiated at generic_body_literal_out_of_range.kspl:24:14.
+// EXPECT: generic_body_literal_out_of_range.kspl:20:15: error: shift count 40 is out of range for the left-hand side type 'I32'
+// EXPECT: Note: in 'generic_body_literal_out_of_range.wide<|I32|>'
+// EXPECT: Finished with 3 error(s)
+priv fn keep<|T|>(x: T): T
+  $y: T = x
+  y = 300
+  return y
+
+priv fn add<|T|>(a: T): T
+  return a + 1000
+
+priv fn wide<|T|>(a: T): T
+  return a << 40
+
+fn main(): I32
+  _a: = keep(1) + add(2) + I32::keep(U8::1)
+  _b: = I32::add(U8::2)
+  return I32::wide(5)
 // ==== case generic_call_arg_types
 //< A generic call's arguments are checked against the parameter types after instantiation too
 //< **At the call they cannot be checked**: `T`/`U` are bound to nothing, so the expected type is

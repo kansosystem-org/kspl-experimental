@@ -18,10 +18,11 @@ const SIZE_LEAST = 0.5;
 const SIZE_MOST = 255;
 const SIZE_FIT_LEAST = 3;
 const SIZE_FIT_MOST = 60;
-// Each paper's width and height in millimetres, as `:::document` names it.
+// Each paper's width and height in millimetres, as `:::document` names it. B4 and B5 are ISO's,
+// as CSS names them; JIS-B4 and JIS-B5 are Japan's.
 const SIZE_PAPERS = {
   A3: [297, 420], A4: [210, 297], A5: [148, 210], B4: [250, 353], B5: [176, 250],
-  letter: [215.9, 279.4], legal: [215.9, 355.6],
+  "JIS-B4": [257, 364], "JIS-B5": [182, 257], letter: [215.9, 279.4], legal: [215.9, 355.6],
 };
 
 function ksmdSizes(ks) {

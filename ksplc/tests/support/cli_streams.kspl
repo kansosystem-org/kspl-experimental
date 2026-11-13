@@ -37,6 +37,7 @@ fn case_refusal_stream(arena: Arena$@) //<
         h.stderr_data)
     case_fmt_stream(arena)
     case_status_stream(arena)
+    case_summary_on_every_failure(arena)
 
 priv const FMT_GOOD: U8[] = "fn main(): I32\n    return 0\n" //< a file `fmt` leaves as it is
 
@@ -94,3 +95,30 @@ priv fn case_status_stream(arena: Arena$@) //<
     verdict.check("`clean` reports what it emptied on standard error",
         k.exited_with(0) && k.stdout_data.len == 0 &&
         k.stderr_data.starts_with("ksplc: cleared "), streams(k@, arena))
+
+priv fn case_summary_on_every_failure(arena: Arena$@) //<
+    //< Every compile that fails on a diagnostic ends with the summary, then the closing line
+    //< **A syntax error and a format spec the desugaring refuses ended with no summary**: the
+    //< summary read the analysis's tally, which neither reaches. It now counts what was written.
+    dir: = harness.sandbox("cli_summary")
+    samples: U8[][2][3] = ::{::{ "a syntax error", "fn main(): I32\n    x: I32 =\n" },
+        ::{ "a format spec the desugaring refuses",
+        "import \"std/io\"\n\nfn main(): I32\n    x: = 1\n    io.out().s(\"\\{x:.20\\}\")\n    \
+            return 0\n" }, ::{ "a type error", "fn main(): I32\n    return \"a\"\n" } }
+    for i in Range.asc(samples.len)
+        what: = samples[i][0]
+        src: = fs.join(dir, arena.text().s("s\{i\}.kspl").take(), arena)
+        io.write_file(src, samples[i][1]) catch
+            verdict.check("the summary: the sample can be written", false, src)
+            return
+        for lint in U8[][]::{ "", "lint" }
+            argv: =
+                (U8[][]::{ src, fs.join(dir, "out.c", arena) } if lint.len == 0
+                else U8[][]::{ "lint", src })
+            r: = capture(harness.ksplc_argv(argv), arena)
+            summary: = r.stderr_data.find_str("Finished with 1 error(s), 0 warning(s)")
+            closing: = r.stderr_data.find_str("compilation terminated")
+            verdict.check(arena.text().s(lint).s(" " if lint.len > 0 else "").s(what)
+                .s(" ends with the summary, then the closing line").take(),
+                !r.exited_with(0) && summary.is_some() && closing.is_some() &&
+                summary.unwrap_or(0) < closing.unwrap_or(0), streams(r@, arena))

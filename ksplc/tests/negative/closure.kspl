@@ -516,6 +516,50 @@ fn main(): I32
   total += kept.consume()
   kept = H::{ .fd = 7 }
   return total + kept.consume()
+// ==== case move_only_moved_inside_a_borrow
+//< A call's or an index's argument moves, though the call is a receiver or sits under `@`
+//< Let through, `mk(h).get()` twice built two values from one handle, and `xs[mk(h).n]@` twice
+//< did too. Only the place a receiver names is borrowed, never what a call or a literal in it copies.
+// EXPECT: move_only_moved_inside_a_borrow.kspl:34:15: error: variable 'h' was moved out of
+// EXPECT: move_only_moved_inside_a_borrow.kspl:36:25: error: variable 'g' was moved out of
+// EXPECT: move_only_moved_inside_a_borrow.kspl:40:15: error: variable 'k' was moved out of
+// EXPECT: move_only_moved_inside_a_borrow.kspl:43:28: error: variable 'j' was moved out of
+// EXPECT: Finished with 4 error(s)
+priv struct H
+  fd: I32
+
+impl H: Move_only {}
+
+priv struct W
+  n: I32
+
+impl W
+  priv fn get(r: Self@): I32
+    return r.n
+
+priv fn mk(h: H): W
+  return W::{ .n = h.fd }
+
+priv struct V
+  h: H
+
+impl V
+  priv fn peek(r: Self@): I32
+    return r.h.fd
+
+fn main(): I32
+  h: = H::{ .fd = 1 }
+  $total: = mk(h).get()
+  total += mk(h).get()
+  g: = H::{ .fd = 2 }
+  total += mk(g).n + mk(g).n
+  k: = H::{ .fd = 0 }
+  $xs: I32[4] = ::{}
+  _p: = xs[mk(k).n]@
+  _q: = xs[mk(k).n]@
+  j: = H::{ .fd = 3 }
+  total += V::{ .h = j }.peek()
+  return total + V::{ .h = j }.peek()
 // ==== case move_only_use_after_move
 //< Copying a `Move_only` value moves it, so the original binding cannot be used after that
 //< Allow the copy and the owning handle is duplicated: both release, destroying the same OS object

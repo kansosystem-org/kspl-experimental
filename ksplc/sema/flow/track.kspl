@@ -211,7 +211,9 @@ struct Df_ctx
     exit_targets: List<|Df_exit_target|>$@ //<
         //< the statements a `break`, `continue` or `fallback` leaves
     exit_from: Ast_node$@ //< the early exit whose defer bodies are being analyzed, else null
-    reported_in_defers: Df_set //< the reads in defer bodies already reported at an early exit
+    reported_in_defers: Df_set //<
+        //< The reads in defer bodies already reported at an early exit
+        //< The block's end, which runs the same body, does not report them again.
     locks: sema_flow_lock.Lock_book$@ //< the locks [W0105] / [W0106] follow
     views: sema_flow_view.View_book$@ //< the views [W0111] follows
     in_field_path: Bool //<
@@ -316,6 +318,10 @@ impl Ast_node
             return
         if !state.reachable
             r.report_unreachable(c)
+            return
+        if c.suppress_move && !r.is_borrow_path()
+            // A value made inside a borrow (a call, a literal, an operator) is no borrow itself.
+            r.analyze_as_value(c, state)
             return
 
         switch r.kind_id
@@ -527,6 +533,35 @@ impl Ast_node
         c.suppress_move = saved
         c.borrowed = saved_borrowed
 
+    priv fn is_borrow_path(r: Self$@): Bool //<
+        //< Whether a borrow reaches through this node to the place it names
+        //< That is a name, parentheses, a field, an element, `@` / `$`, a cast or an unwrap, and a
+        //< method call (whose receiver is borrowed again). A call or any other node makes a new
+        //< value.
+        k: = r.kind_id
+        if k == .k_identifier || k == .k_expr_path || k == .k_type_path || k == .k_expr_primary ||
+            k == .k_method_access
+            return true
+        return k == .k_expr_postfix && !r.postfix_op_text().equals("(")
+
+    fn analyze_as_value(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+        //< Analyzes a child node as a read of its value, even inside a borrow
+        //< **What a borrowed place's argument or operand copies moves**: `mk(h).get()`,
+        //< `xs[take(h)]@` and `w.put(h).get()` move `h`. analyze_as_borrow's flags would otherwise
+        //< stay set for the borrowed node's whole subtree, so this clears them.
+        if r == null
+            return
+        saved: = c.suppress_move
+        saved_borrowed: = c.borrowed
+        saved_path: = c.in_field_path
+        c.suppress_move = false
+        c.borrowed = null
+        c.in_field_path = false
+        r.analyze_df_node(c, state)
+        c.suppress_move = saved
+        c.borrowed = saved_borrowed
+        c.in_field_path = saved_path
+
     priv fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Walks `expr catch …`: the expression on both paths, then the failure path apart
         //< What follows starts from the success path, the catch block's end and each `fallback`
@@ -707,7 +742,7 @@ impl Ast_node
                 arg = given
             else
                 break
-            if fn_node.body_frees_param_directly(p.get_decl_id_text(), c.sema)
+            if fn_node.body_frees_param_directly(p.get_decl_id_text(), c.sema, arg.type_id)
                 if def: = arg.get_addressed_local_def()
                     if def.is_tracked_local(c)
                         state.add_freed(def)
@@ -732,7 +767,7 @@ impl Ast_node
                 // Not a move, but still a use of something released (analyze_as_borrow).
                 child.analyze_as_borrow(c, state)
             else
-                child.analyze_df_node(c, state)
+                child.analyze_as_value(c, state)
         r.mark_free_call_if_any(c, state)
 
     priv fn moves_value_receiver(r: Self$@, c: Df_ctx$@): Bool //<
@@ -818,7 +853,7 @@ impl Ast_node
             // Address-taking, dereferencing and indexing borrow.
             r.get_postfix_receiver().analyze_as_borrow(c, state)
             for $i: = 1; i < r.children.len; i += 1
-                r.get_child(i).analyze_df_node(c, state)
+                r.get_child(i).analyze_as_value(c, state)
         else
             if op_text.equals("(")
                 r.release_kept_block_if_any(state)

@@ -120,7 +120,7 @@ KSPL has no garbage collector. Memory that `std` hands you lives in one of four 
 
 **Choose an arena first, and the heap only when no arena fits.** A value made in an arena needs no `free()`, so it cannot leak.
 
-* **A function given an arena makes what it returns there**: `arena.text().s(…).take()`, not a `Str_builder` on the heap handed back.
+* **A function given an arena makes what it returns there**: `arena.text().s(…).take()`, not a `Str_builder` on the heap handed back. The text grows inside that arena, so a failure before `take()` leaks nothing ([below](#arenatext-grows-its-text-inside-the-arena)).
 * **Use the heap** where nothing that outlives the result holds an arena, or where memory must go back early, such as inside a long loop.
 
 The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-memory-management).
@@ -549,7 +549,7 @@ String interpolation (`"n=\{n\}"`) always writes into something that you name. N
 | :-- | :-- | :-- |
 | Stream it | `w.s("n=\{n\}")` | The destination `w` holds it |
 | Write into the caller's array | `Buf_writer(U8$[]::buf).s("n=\{n\}").slice()` | The caller's array; nothing is allocated |
-| Allocate and keep it | `arena.text().s("n=\{n\}").take()` | The arena (`take` lets the builder go) |
+| Allocate and keep it | `arena.text().s("n=\{n\}").take()` | The arena, which holds the builder and its text from the start |
 
 It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the allocator argument.
 
@@ -568,6 +568,23 @@ It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the 
 Caution: **Do not free the old buffer before the copy.** The copy then reads freed memory and still gets the right bytes until the allocator reuses the block. So it passes every ordinary test and corrupts text far from the cause. Its test therefore runs as a child, with freed memory scribbled over.
 
 **A refusal of such a write is not taken instead.** A view is an address and a length, so the type cannot say which builder it came from. A refusal at run time would cost every write the address comparison that the working version avoids.
+
+### `arena.text()` grows its text inside the arena
+
+**An `Arena_text` grows its text in the arena that made it, never on the heap.** So a builder dropped before `take()` costs only arena space, which the arena gives back when it is freed. A failure thrown between `text()` and `take()` therefore leaks nothing. With a buffer on the heap, every such path would need its own `free`.
+
+* **While the text is the arena's newest block, it grows where it is**, with nothing copied. `take()` then gives back the room past the text, and copies nothing either.
+* **Otherwise it moves to a new block twice as large.** Another allocation in the same arena, such as a second builder written in turn, causes that.
+
+* **Past a mark saved since `text()`, it grows in a block on the heap that the arena keeps.** Grown in the arena, the text would lie past the mark, and `restore()` to it would free the text while the builder still writes there. The next allocation then wrote over it, with nothing reported. A mark is saved by `save()`, and by a function that works in the caller's arena (`mem.scratch`). `restore()` leaves such a block alone; the arena's `free()` and `reset()` free it. `take()` then gives no room back, so the mark still lies inside what the chunk holds.
+
+The cost: **a block the text grew out of stays in the arena until the arena is freed.** Since each block is twice the last, those blocks hold at most about as much again as the final text.
+
+Caution: **Do not rewind the arena to a mark saved before `text()` while the builder is still used.** `restore()` frees the builder and its text as it frees any other allocation. The address sanitizer then reports the next write.
+
+Caution: **In a fixed buffer (`from_buffer`), do not rewind to a mark saved since `text()` while the builder is still written to.** The buffer has no heap to keep the text in, so the text grows past the mark, and `restore()` frees it.
+
+**With a null arena, the builder and its text are on the heap.** Only `take()` frees the builder there, and the caller frees the text.
 
 ### The digits of a floating-point number are assembled here
 
@@ -687,7 +704,7 @@ Three words are used below:
 
 * A *capture group* is a part of the pattern in parentheses. `Match.group(n)` returns its matched text afterwards.
 * A *way* is one path through the pattern that the search follows.
-* A *state* is one step of the program plus the count of empty rounds open there ("A round that read nothing stops the repetition").
+* A *state* is one step of the program plus the count of empty rounds open there ("An optional round that read nothing stops the repetition").
 
 ### The pattern runs as a flat program, all ways together
 
@@ -722,13 +739,15 @@ A search keeps the ways alive at the current byte in a list, in the order the pa
 
 **`(…)?` is not a repetition** but an empty alternative. So when `(ab)?c` matches `c`, the group is "not participating", as Python's `re` and PCRE answer.
 
-### A round that read nothing stops the repetition
+### An optional round that read nothing stops the repetition
 
-**A round that ended where it started stops the repetition.** Without the check, `(a?)*` would go round on the empty match for good. **The round is not undone; only the repetition stops.** So `(a?)*b`'s group holds the empty string, as Python's `re` and PCRE answer.
+**An optional round that ended where it started stops the repetition.** Without the check, `(a?)*` would go round on the empty match for good. **The round is not undone; only the repetition stops.** So `(a?)*b`'s group holds the empty string, as Python's `re` and PCRE answer.
 
-A body that can match empty is wrapped in a step that opens a round and one that closes it. Each way counts the rounds it opened since it last read a byte. A close while that count is above zero means the round read nothing, so the way leaves the repetition.
+**A required round goes on after it read nothing.** The rounds up to the minimum of `{m}` or `{m,n}` are a fixed number of copies, so they cannot go round for good. Stopped after an empty one, `(a|\b){2}` on `ac` would match the empty string. A search with steps back takes `\b` in the first round and `a` in the second, so it matches `a`, as Python's `re` does.
 
-**That count is part of the state.** Take two ways at one step. One in a round that read nothing leaves the repetition at its end; one in a round that read a byte goes round again. Merged, one would be dropped. **Only the innermost rounds can be empty**: a round opens after the ones around it, so if it read a byte, so did they. So one count says which rounds are empty, and a step inside n such repetitions holds n + 1 states, not 2ⁿ.
+In an optional round, a body that can match empty is wrapped in a step that opens a round and one that closes it. Each way counts the rounds it opened since it last read a byte. A close while that count is above zero means the round read nothing, so the way leaves the repetition.
+
+**That count is part of the state.** Take two ways at one step. One in a round that read nothing leaves the repetition at its end; one in a round that read a byte goes round again. Merged, one would be dropped. **Only the innermost rounds can be empty**: a round opens after the ones around it, so if it read a byte, so did they. So one count says which rounds are empty, and a step inside n such repetitions holds n + 1 states, not 2ⁿ. A required round opens no round, so it adds no state.
 
 ### Every match comes back in a `List`, with no lazy iterator
 

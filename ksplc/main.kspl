@@ -188,18 +188,20 @@ priv fn print_diag_summary(compiler: pipeline.Compiler$@, is_lint: Bool) //<
     //< With neither an error nor a warning it prints nothing, and under json nothing either (the
     //< closing object counts, `end_compile`). **It is printed only after every stage has
     //< finished** (the one `defer` in run_compiler); earlier, later stages' counts miss it.
-    if compiler == null || compiler.sema == null || base_core.config.diag_json
+    //< Caution: **Count what was written** (`base_diag.written_counts`), not sema's tally. A syntax
+    //< error and a format spec the desugaring refuses are in no tally. Read from it, such a failed
+    //< compile ended with no summary.
+    if base_core.config.diag_json
         return
-    errs: = compiler.sema.diags.counts.errors
-    warns: = compiler.sema.diags.counts.warnings
-    if !is_lint && errs == 0 && warns == 0
+    n: = base_diag.written_counts()
+    if !is_lint && n.errors == 0 && n.warnings == 0
         return
-    io.err().s("Finished with \{errs\} error(s), \{warns\} warning(s)")
+    io.err().s("Finished with \{n.errors\} error(s), \{n.warnings\} warning(s)")
     if is_lint
-        io.err()
-            .s(", \{compiler.sema.diags.counts.infos\} information(s), and \
-                \{compiler.sema.diags.counts.hints\} hint(s)")
+        io.err().s(", \{n.informations\} information(s), and \{n.hints\} hint(s)")
     io.err().s(".\n")
+    if compiler == null || compiler.sema == null
+        return
     // Caution: **Name the command where the codes are.** An explanation nobody is told about goes
     // unread; the lint gate reads only the line above, and a clean run names no code.
     codes: = compiler.sema.diags.counts.codes
@@ -241,6 +243,11 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     t0: = sys.mono_us()
     base_stats.reset_bytes()
     defer compiler: = pipeline.Compiler(parser)
+    // Caution: **Print the summary only once, after every stage has finished.** Printed after sema,
+    // it misses what Lower and the code generation added, and fails while saying "0 error(s)".
+    // As a defer, it is printed through any throw below, a syntax error's included, but not on the
+    // depth limit's `sys.exit`. A count after a cut-off that skipped the counting would be a lie.
+    defer print_diag_summary(compiler, is_lint)
     compiler.parse_file(mod_name, read_supplied(mod_name), false)!
 
     expected_max: = I32::base_ast_kinds.Ast_kind.k_max
@@ -259,12 +266,6 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     base_stats.stages.parse = base_stats.end_stage(t0, t1)
 
     compiler.run_semantic_analysis(mod_name, is_lint, false, .everywhere) catch {}
-
-    // Caution: **Print the summary only once, after every stage has finished.** Printed after sema,
-    // it misses what Lower and the code generation added, and fails while saying "0 error(s)".
-    // As a defer, it is printed through any throw below, but not on the depth limit's `sys.exit`. A
-    // count after a cut-off that skipped the counting would be a lie.
-    defer print_diag_summary(compiler, is_lint)
 
     $errs: = 0
     if compiler.sema != null

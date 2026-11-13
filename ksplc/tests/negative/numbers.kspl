@@ -38,6 +38,35 @@ fn of_float(x: F64): Bool
 
 fn main(): I32
   return I32::of(2) + I32::of_float(0.5)
+// ==== case logic_on_a_number
+//< `!`, `&&` and `||` take a `Bool` alone, so a number, a pointer or an enum is refused
+//< **Let it through and the backends disagree**: `!n` gave 0 through C and `n ^ 1` through LLVM,
+//< `n && m` made IR that does not build, and `!p` and `!2.5` reached the C compiler.
+// EXPECT: logic_on_a_number.kspl:22:9: error: operator '!' takes a 'Bool', not 'I32'
+// EXPECT: such as 'x == 0'
+// EXPECT: logic_on_a_number.kspl:23:9: error: operator '!' takes a 'Bool', not 'I32@'
+// EXPECT: such as 'p == null'
+// EXPECT: logic_on_a_number.kspl:24:9: error: operator '!' takes a 'Bool', not 'F64'
+// EXPECT: logic_on_a_number.kspl:25:9: error: operator '&&' takes a 'Bool', not 'I32'
+// EXPECT: such as 'x != 0'
+// EXPECT: logic_on_a_number.kspl:26:9: error: operator '||' takes a 'Bool', not 'I32@'
+// EXPECT: logic_on_a_number.kspl:27:9: error: operator '!' takes a 'Bool', not '
+// EXPECT: such as 'e == E.a' with a variant of its type
+// EXPECT: Finished with 6 error(s)
+priv enum E
+  a
+  b
+
+fn main(): I32
+  n: = 3
+  p: = n@
+  _a: = !n
+  _b: = !p
+  _c: = !2.5
+  _d: = n && n
+  _e: = p || p
+  _f: = !E.a
+  return n
 // ==== case cast_to_enum
 //< A cast to an enum gives one of its variants, or is refused
 //< A constant that is none of the tags is refused here; a value known only at run time is checked
@@ -285,6 +314,31 @@ fn main(): I32
   $x: F64 = 7.5
   x %= 2.0
   return I32::(rem(7.5, 2.0) + x)
+// ==== case bit_operation_on_a_float
+//< A bit operation or a shift refuses a float, and `~` a pointer too
+//< **Let it through and it fails in the backends**: `a >> 1` on an `F64` and `~p` reached the C
+//< compiler as `invalid operands`, and LLVM IR that does not build.
+// EXPECT: operator '>>' does not apply to 'F64'. Bit operations and shifts take integers; convert the value first ('I64::x')
+// EXPECT: operator '^' does not apply to 'F64'
+// EXPECT: operator '|' does not apply to 'F32'
+// EXPECT: operator '&' does not apply to 'F64'
+// EXPECT: operator '<<=' does not apply to 'F64'
+// EXPECT: operator '|=' does not apply to 'F64'
+// EXPECT: operator '~' does not apply to 'F64'
+// EXPECT: operator '~' does not apply to 'I32@'. Bit operations and shifts take integers
+// EXPECT: Finished with 8 error(s)
+fn main(): I32
+  $a: = 2.5
+  n: = 3
+  _b: = a >> 1
+  _c: = a ^ a
+  _d: = 1.5F32 | 2.5F32
+  _e: = 1 & a
+  a <<= 1
+  a |= 1.0
+  _f: = ~a
+  _g: = ~n@
+  return n
 // ==== case int_literal_too_wide
 //< ksplc rejects an integer literal with more digits than any integer type holds
 //< The backend puts the characters straight into C / LLVM IR. Let through, the literal makes the C

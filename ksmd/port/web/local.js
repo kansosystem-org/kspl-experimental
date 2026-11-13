@@ -125,12 +125,20 @@ function ksmdLocal() {
       }
     },
     // Replaces a file only if it still holds what `expected` names: a digest of its bytes, or
-    // null for no file at all. { status, why }; 409 means the file is not what was expected.
+    // null for no file at all. { status, why, cause }; a 409 without `cause` means the file is not
+    // what was expected. With `cause`, nothing can be written there, and `why` is the server's
+    // own words.
     async write(path, bytes, expected) {
       try {
         const got = await send(ask("file", path), { method: "PUT", body: bytes,
           headers: { "X-Kanso-If-Content": expected === null ? "missing" : expected } });
-        return { status: got.status, why: got.ok ? "" : reason(got.status) };
+        if (got.status !== 409) return { status: got.status, why: got.ok ? "" : reason(got.status) };
+        let said = null;
+        try {
+          said = await got.json();
+        } catch (_) { /* no reason given */ }
+        const cause = said && typeof said.cause === "string" ? said.cause : "";
+        return { status: 409, why: cause ? String(said.error) : reason(409), cause };
       } catch (e) {
         return { status: 0, why: lost(e) };
       }

@@ -1,0 +1,23 @@
+import "ksos/drivers/rp2040/servo"
+import "std/verdict"
+
+// ==========================================
+// ksos/drivers/rp2040/servo: the duty counts the driver writes for an angle.
+//
+// As in pwm_test.kspl, **the driver computes the count in a function of its own**, and this file
+// checks it. The pulse itself is checked on the car.
+// ==========================================
+
+fn test_servo_one_degree_moves_the_pulse() //<
+    //< Each degree gives its own count, and the ends are 0.5 ms and 2.5 ms of 20 ms
+    //< Caution: **Rounding to parts per thousand first gave 1.8° steps**: 1° then set 0°'s pulse.
+    verdict.start("[ksos/servo] the duty count for an angle test...")
+    assert(servo.level_for_angle(0, 9999) == 250, "0° is 2.5% of TOP+1")
+    assert(servo.level_for_angle(1, 9999) == 255, "1° differs from 0°")
+    assert(servo.level_for_angle(90, 9999) == 750, "90° is 7.5% of TOP+1")
+    assert(servo.level_for_angle(180, 9999) == 1250, "180° is 12.5% of TOP+1")
+    assert(servo.level_for_angle(-5, 9999) == 250, "below 0 counts as 0")
+    assert(servo.level_for_angle(200, 9999) == 1250, "past 180 counts as 180")
+    assert(servo.level_for_angle(180, 65535) == 8192, "180° under TOP 65535 does not wrap")
+    verdict
+        .pass("Each degree moves the pulse, the ends are exact, and the widest TOP does not wrap.")

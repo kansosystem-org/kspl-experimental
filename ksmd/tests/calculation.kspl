@@ -33,6 +33,7 @@ fn run()
     many_names()
     comparisons()
     shown_comparisons()
+    cancelling()
     blank_dates()
     logic()
     text_in_formulas()
@@ -206,9 +207,10 @@ priv fn limits()
 // Past the cell values a calculation may read, each formula not yet calculated is `#LIMIT!`, and
 // so is the one under way. A formula done before it keeps its value, and a plain cell keeps its
 // own.
+// The second row's first call was worked out on the first row, so it counts as one read.
 priv fn read_limit()
     defer arena: = Arena(64 * 1024)
-    rows: = "| 1 | =sum(A1:A2) |\n| 2 | =sum(A1:A2) + sum(A1:A2) |\n| 3 | =1+1 |\n:::\n"
+    rows: = "| 1 | =sum(A1:A2) |\n| 2 | =sum(A1:A2) + sum(A1:A3) |\n| 3 | =1+1 |\n:::\n"
     doc: = read(join(HEAD, rows, arena), arena)
     r: = calc.calculate(doc@, TODAY, arena, null, 5)
     number("a formula done before the read limit keeps its value", r@, 0, 0, 1, 3.0)
@@ -219,22 +221,23 @@ priv fn read_limit()
     verdict.check("a calculation reads no more than its limit", r.reads == 5,
         arena.text().s("\{r.reads\}").take())
     enough: = calc.calculate(doc@, TODAY, arena, null, 6)
-    number("at the read limit exactly, every formula calculates", enough@, 0, 1, 1, 6.0)
+    number("at the read limit exactly, every formula calculates", enough@, 0, 1, 1, 9.0)
     number("and the formula after it too", enough@, 0, 2, 1, 2.0)
     verdict.check("the mark of the read limit",
         Calc_error.read_limit.mark().equals("#LIMIT!"), "")
-    // Every row reading the whole column is the shape that multiplies the reads.
+    // A range of its own on every row is the shape that multiplies the reads. Row r adds
+    // A1:A(300 - r), so 35 rows read 9,905 values, and the 36th would pass 10,000.
     defer $many: = Str_builder()
     many.s(HEAD)
-    for _ in Range.asc(300)
-        many.s("| 1 | =sum(t.A) + sum(t.A) + sum(t.A) + sum(t.A) |\n")
+    for row in Range.asc(300)
+        many.s("| 1 | =sum(A1:A\{300 - row\}) |\n")
     many.s(":::\n")
     crafted: = read(many.slice(), arena)
     c: = calc.calculate(crafted@, TODAY, arena, null, 10000)
     verdict.check("a range on every row stops at the read limit", c.reads == 10000,
         arena.text().s("\{c.reads\}").take())
-    number("the rows before it calculate", c@, 0, 7, 1, 1200.0)
-    failure("the row it falls in is #LIMIT!", c@, 0, 8, 1, .read_limit)
+    number("the rows before it calculate", c@, 0, 34, 1, 266.0)
+    failure("the row it falls in is #LIMIT!", c@, 0, 35, 1, .read_limit)
     failure("and so is the last row", c@, 0, 299, 1, .read_limit)
 
 priv fn budget()
@@ -413,6 +416,16 @@ priv fn shown_comparisons()
     cases_with(U8[][]::{ "lookup(1.1*3 - 0.3, d.C1:C6, d.A1:A6, \"no\") -> \"Ink\"",
         "sum_if(d.C1:C6, d.C1:C6 = 1.1*3 - 0.3) -> 3" }, DATA)
 
+// `+` and `-` give exactly 0 where the two sides cancel at the 15 digits they show, so a total
+// that balances shows 0, not 5.55e-17. A result the sides do not cancel stays, however small.
+priv fn cancelling()
+    cases_with(U8[][]::{ "sum(c.A1:B1) - c.C1 -> 0", "sum(c.A1:B1) - c.C1 = 0 -> true",
+        "c.A1 + c.B1 - c.C1 -> 0", "0.1 + 0.2 - 0.3 -> 0", "-0.3 + (0.1 + 0.2) -> 0",
+        "0.3 - (0.1 + 0.2) -> 0", "1.1 * 3 - 3.3 -> 0", "1e-20 - 0 -> 1e-20", "0 - 1e-20 -> -1e-20",
+        "1e-20 - 1e-21 -> 9e-21", "1 - 1.00000000000001 -> -9.992007221626409e-15",
+        "0.3 - 0.1 -> 0.19999999999999998", "A2 - 0 -> 0" },
+        "\n:::table name=\"c\"\n| \"x\" | \"y\" | \"total\" |\n| 0.1 | 0.2 | 0.3 |\n:::\n")
+
 // `A2` is empty: among dates it stands before every day, as it stands for 0 among numbers.
 priv fn blank_dates()
     cases(U8[][]::{ "A2 < today() -> true", "if(A2 < today(), \"late\", \"\") -> \"late\"",
@@ -534,14 +547,17 @@ priv fn bases()
         "dec_to_hex(-128, 8) -> \"80\"", "dec_to_hex(1, 0) -> #NUM!", "dec_to_hex(1, 54) -> #NUM!",
         "dec_to_hex(1, 2.5) -> #NUM!", "dec_to_bin(5) -> \"101\"", "dec_to_bin(-5) -> \"-101\"",
         "dec_to_bin(-5, 8) -> \"11111011\"", "dec_to_bin(5, 8) -> \"00000101\"",
-        "dec_to_bin(1023) -> \"1111111111\"", "dec_to_bin(A1) -> \"10\"", "dec_to_bin(A2) -> \"0\"",
-        "hex_to_dec(\"ff\") -> 255", "hex_to_dec(\"FF\") -> 255", "hex_to_dec(\"-ff\") -> -255",
-        "hex_to_dec(\"FF\", 8) -> -1", "hex_to_dec(\"7F\", 8) -> 127",
-        "hex_to_dec(\"100\", 8) -> #NUM!", "hex_to_dec(\"-1\", 8) -> #VALUE!",
-        "hex_to_dec(\"fg\") -> #VALUE!", "hex_to_dec(\"\") -> #VALUE!",
-        "hex_to_dec(\"-\") -> #VALUE!", "hex_to_dec(\"40000000000000\") -> #NUM!",
-        "hex_to_dec(10) -> 16", "hex_to_dec(A2) -> 0", "hex_to_dec(-1) -> #VALUE!",
-        "hex_to_dec(true) -> #VALUE!", "hex_to_dec(B2) -> #DIV/0!",
+        "dec_to_bin(200, 8) -> #NUM!", "dec_to_bin(127, 8) -> \"01111111\"",
+        "dec_to_hex(128, 8) -> #NUM!", "dec_to_hex(255, 8) -> #NUM!",
+        "dec_to_hex(4503599627370495, 53) -> \"0FFFFFFFFFFFFF\"",
+        "dec_to_hex(4503599627370496, 53) -> #NUM!", "dec_to_bin(1023) -> \"1111111111\"",
+        "dec_to_bin(A1) -> \"10\"", "dec_to_bin(A2) -> \"0\"", "hex_to_dec(\"ff\") -> 255",
+        "hex_to_dec(\"FF\") -> 255", "hex_to_dec(\"-ff\") -> -255", "hex_to_dec(\"FF\", 8) -> -1",
+        "hex_to_dec(\"7F\", 8) -> 127", "hex_to_dec(\"100\", 8) -> #NUM!",
+        "hex_to_dec(\"-1\", 8) -> #VALUE!", "hex_to_dec(\"fg\") -> #VALUE!",
+        "hex_to_dec(\"\") -> #VALUE!", "hex_to_dec(\"-\") -> #VALUE!",
+        "hex_to_dec(\"40000000000000\") -> #NUM!", "hex_to_dec(10) -> 16", "hex_to_dec(A2) -> 0",
+        "hex_to_dec(-1) -> #VALUE!", "hex_to_dec(true) -> #VALUE!", "hex_to_dec(B2) -> #DIV/0!",
         "bin_to_dec(\"11111011\") -> 251", "bin_to_dec(\"11111011\", 8) -> -5",
         "bin_to_dec(1010) -> 10", "bin_to_dec(\"102\") -> #VALUE!", "bin_to_dec(\"-101\") -> -5",
         "hex_to_bin(\"A5\") -> \"10100101\"", "hex_to_bin(\"FF\", 8) -> \"11111111\"",
@@ -584,9 +600,13 @@ priv fn texts()
         "\"24\" & mid(\"0123\", 3, 2) -> \"2423\"", "B1 & \"!\" -> \"Pens!\"", "A2 & \"x\" -> \"x\"",
         "\"a\" & A1 -> #VALUE!", "\"a\" & B2 -> #DIV/0!", "\"a\" & \"b\" = \"AB\" -> true",
         "\"n\" & 1 + 1 -> #VALUE!", "mod(7, 3) -> 1", "mod(-1, 72) -> 71", "mod(1, -3) -> -2",
-        "mod(5.5, 2) -> 1.5", "mod(1, 0) -> #DIV/0!", "mod(1e300, 3) -> #NUM!",
-        "power(2, 10) -> 1024", "power(4, 0.5) -> 2", "power(-1, 0.5) -> #NUM!",
-        "power(10, 400) -> #NUM!", "mod(B1, 2) -> #VALUE!" })
+        "mod(5.5, 2) -> 1.5", "mod(3.3, 1.1) -> 0", "mod(0.3, 0.1) -> 0", "mod(-0.3, 0.1) -> 0",
+        "mod(0.35, 0.1) -> 0.05", "mod(1.05, 0.1) -> 0.05", "mod(-0.35, 0.1) -> 0.05",
+        "mod(1e-20, 1) -> 1e-20", "mod(1.0000000000001, 1) -> 1e-13", "mod(1, 0) -> #DIV/0!",
+        "mod(1e300, 3) -> #NUM!", "power(2, 10) -> 1024", "power(4, 0.5) -> 2",
+        "power(-1, 0.5) -> #NUM!", "power(10, 400) -> #NUM!", "power(-8, 1 / 3) -> #NUM!",
+        "power(0, -1) -> #DIV/0!", "power(0, 0) -> 1", "power(-2, 3) -> -8",
+        "mod(B1, 2) -> #VALUE!" })
 
 // Rounding toward and away from zero, replacing text, writing a number as text, and the sum of
 // two ranges' products.
@@ -941,14 +961,14 @@ priv fn shows(what: U8[], r: Results@, row: Sz, column: Sz, want: U8[]) //<
         ok = v.kind == .number && v.number == n
     verdict.check(what, ok, got.slice())
 
-priv fn number(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: F64) //<
+fn number(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: F64) //<
     //< The cell's value is the number `want`
     v: = r.at(u, row, column)
     defer $got: = Str_builder()
     got.s("\{v.number\} ").s(v.kind.variant_name()).c(' ').s(v.error.variant_name())
     verdict.check(what, v.kind == .number && v.number == want, got.slice())
 
-priv fn failure(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Calc_error) //<
+fn failure(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Calc_error) //<
     //< The cell's value is the error `want`
     v: = r.at(u, row, column)
     defer $got: = Str_builder()

@@ -62,19 +62,25 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
         val = val.set("fs_lookups", b.int_val(fs.lookups()))
     queue_json(c, 200, val.build(), keep)
 
-fn path_or_refuse(c: conn.Conn$@, query: U8[], root: U8[], need_name: Bool, dots: fs.Dot_names):
-    U8[]? //<
-        //< The path that a query's `?path=` names under the root, the root joined in, or none
-        //< None means a 400 or a 403 is queued. An empty path is the root itself. A write refuses a
-        //< dot name through `dots` ("`/api/` does not go through static serving" in
-        //< `kssrv/docs/DESIGN-server.md`).
-        //< Caution: **Check the value after the decode, but keep a leading `/`.** Only a URL's path
-        //< opens with one. So here `/etc/passwd` is an absolute path, refused, never under the
-        //< root.
+fn path_or_refuse( //< the path that `?path=` names under the root, the root joined in, or none
+    //< None means a 400 or a 403 is queued. An empty path is the root itself. A write refuses a
+    //< dot name through `dots` ("`/api/` does not go through static serving" in
+    //< `kssrv/docs/DESIGN-server.md`).
+    //< Caution: **Check the value after the decode, but keep a leading `/`.** Only a URL's path
+    //< opens with one. So here `/etc/passwd` is an absolute path, refused, never under the root.
+    c: conn.Conn$@,
+    query: U8[],
+    root: U8[],
+    need_name: Bool,
+    dots: fs.Dot_names,
+    dot_is_root: Bool = false, //< whether `.` alone names the root, as for a listing
+): U8[]?
     params: = url.parse_query(query, c.arena) catch _e
         queue_json_error(c, 400)
         return .none
-    rel: = params.find("path").unwrap_or("")
+    $rel: = params.find("path").unwrap_or("")
+    if dot_is_root && rel.equals(".")
+        rel = ""
     if need_name && rel.len == 0
         // The root itself is not a file; this endpoint needs a name.
         queue_json_error(c, 400)
@@ -109,12 +115,19 @@ fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request@, root: U8[]
     if reads
         queue_get_file(c, path, keep)
         return
+    // **Say that a folder stands there**: a page told only "not as expected" reads the file again,
+    // finds none, and offers to write it there again, for ever.
+    if fs.is_dir(path)
+        queue_conflict(c, "folder",
+            c.arena.text().s("A folder stands at \"").s(under_root(path, root))
+            .s("\". Save the file under another name.").take())
+        return
     if expected: = req.headers.find("X-Kanso-If-Content")
         status: = check_content(path, expected, c.arena)
         if status != 200
             queue_json_error(c, status)
             return
-    queue_put_file(c, path, req.body, keep)
+    queue_put_file(c, path, root, req.body, keep)
 
 fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
     //< Queues the file at `path` as the response, typed octet-stream
@@ -176,13 +189,16 @@ priv fn hex_of(digest: U8[sha256.DIGEST_SIZE], arena: Arena$@): U8[] //< a diges
     sha256.write_hex(digest, U8$[]::hex)
     return arena.dup_str(U8[]::hex)
 
-fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
+fn queue_put_file(c: conn.Conn$@, path: U8[], root: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written
     //< Caution: **Answer 200 only once the body is on the disk** (`fs.replace_file`). An editor
     //< told "saved" drops its copy. So a save that a power cut then loses is lost for good. The
     //< file keeps its mode. The body's cap is in `kssrv/main.kspl` (a 413 never reaches here).
     // A write into a folder that is not there yet makes that one folder first, as a page's
     // images go into a folder named for their document. Its own folder must stand already.
+    if why: = folder_refusal(path, root, c.arena)
+        queue_conflict(c, "folders", why)
+        return
     if !make_folder_for(path)
         queue_json_error(c, 500)
         return
@@ -193,6 +209,39 @@ fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
     $b: = Json_builder(c.arena)
     val: = b.obj().set("wrote", b.int_val(body.len)).build()
     queue_json(c, 200, val, keep)
+
+priv fn queue_conflict(c: conn.Conn$@, cause: U8[], why: U8[]) //<
+    //< A 409 that is not a conditional write's mismatch: `cause` names the case, `error` says why
+    //< **The page tells the cases apart by `cause`**, so it never says "changed on disk" for a
+    //< file that cannot be written at all.
+    $b: = Json_builder(c.arena)
+    val: = b.obj().set("error", b.str_val(why)).set("cause", b.str_val(cause))
+        .set("status", b.int_val(409)).build()
+    queue_json(c, 409, val, false)
+
+priv fn folder_refusal(path: U8[], root: U8[], arena: Arena$@): U8[]? //<
+    //< Why the folders above `path` cannot take it, naming the folder at fault; none if they can
+    //< A write makes at most the one folder its file goes in, so the folder above that one must
+    //< stand. **The answer names it**, or the person cannot tell which folder to make.
+    parent: = sys.get_dir_name(path)
+    if parent.len == 0
+        return .none
+    if fs.exists(parent)
+        if fs.is_dir(parent)
+            return .none
+        return .some(arena.text().s("\"\{under_root(parent, root)\}\" is a file, not a folder. ")
+            .s("Choose a path whose folders stand.").take())
+    above: = sys.get_dir_name(parent)
+    if above.len == 0 || fs.is_dir(above)
+        return .none
+    return .some(arena.text().s("The folder \"\{under_root(above, root)\}\" does not exist. ")
+        .s("A write makes only the folder its file goes in, so make that folder first.").take())
+
+priv fn under_root(path: U8[], root: U8[]): U8[] //< a path as the page names it, from the root
+    $rel: = path.sub_from(root.len) if path.starts_with(root) else path
+    for rel.len > 0 && (rel[0] == '/' || rel[0] == '\\')
+        rel = rel.sub_from(1)
+    return rel
 
 priv fn make_folder_for(path: U8[]): Bool //<
     //< makes the one missing folder a file goes in; false if it cannot
@@ -222,14 +271,15 @@ priv const MAX_LISTED: Sz = 2000 //< the most names one listing returns
 
 fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< `GET /api/list?path=<folder>`: the names in one folder under the root, for a Save As dialog
-    //< `{"folders":[…],"files":[…],"more":false}`, each list sorted. An empty path is the root.
+    //< `{"folders":[…],"files":[…],"more":false}`, each list sorted. Empty or `.` is the root.
     //< Caution: **Names only, and only what the page could open anyway.** No content and no size.
-    //< A link is left out, so the dialog never offers a way out of the root, and so is a hidden
-    //< name (`.git`, `.ksmd-workspace`). So is anything neither a folder nor an ordinary file.
+    //< A link is left out, so the dialog never offers a way out of the root. So is a hidden name
+    //< (`.git`), whose folder is not listed either (403), and anything neither folder nor file.
     //< At most `MAX_LISTED` names come back; `more` says that others stand there.
     // **No link check here**: `path_or_refuse` refused any below the root, and a root can be one.
-    folder: U8[] = path_or_refuse(c, query, root, false, .allowed) catch
-        return
+    folder: U8[] =
+        path_or_refuse(c, query, root, false, .refused(U8[][]::{}), true) catch
+            return
     if !fs.is_dir(folder)
         queue_json_error(c, 404)
         return

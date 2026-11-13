@@ -60,7 +60,7 @@ ksplc --to=llvm main.kspl main.ll
 
 **A debugger shows the generated C's names.** A name C reserves carries a `_kw` suffix ("2.2 Identifiers and naming rules" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A local that hides another of its name, or is spelled as a global's C name (`Slice_U8`), shows as `__k_shadow<N>_<name>`.
 
-**A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. **So is every other file the compile writes**: the `--emit-deps`, `--emit-libs` and `--library=` files. They are all renamed once the last is whole, so a compile that fails partway changes none of them. A write the disk refuses fails the compile with `io/write_failed`. A device named as the output (`/dev/null`) is written where it is.
+**A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. **So is every other file the compile writes**: the `--emit-deps`, `--emit-libs` and `--library=` files. They are all renamed once the last is whole, so a compile that fails partway changes none of them. A write the disk refuses fails the compile with `io/write_failed`, which names the folder where it does not exist. A device named as the output (`/dev/null`) is written where it is.
 
 ### 2.2 Choosing the language of the output (`--to`)
 
@@ -78,6 +78,8 @@ ksplc --to=llvm main.kspl main.ll
 ksplc emit-runtime kspl_runtime.c
 clang main.ll kspl_runtime.c -o main
 ```
+
+**`--to=llvm` is refused beside `--freestanding`.** The IR calls the hosted runtime's helpers (`kspl_bounds_check` and the like), which no bare-metal build has, and the LLVM backend has no freestanding runtime yet. A bare-metal program is written in C.
 
 #### 2.2.1 Naming the machine the output is for (`--machine`)
 
@@ -176,7 +178,7 @@ This table lists every option of a compile. Most have a section of their own, li
 **Standard output holds only what was asked for, and every line about the run goes to standard error.** What is asked for is a program's own output under `ksplc run`, `info`'s answer, `fmt`'s text, `doc`'s Markdown, `explain`'s text and `--help`'s usage. Everything else is about the run:
 
 * a refused command line: the reason, then the usage, and exit code 1. A subcommand left out or misspelled gets one line instead, naming the likely command (`ksplc hello.kspl` names `ksplc run hello.kspl`) and `--help`;
-* a compile's diagnostics, its summary (`Finished with 1 error(s), 0 warning(s).`) and the line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`);
+* a compile's diagnostics, its summary (`Finished with 1 error(s), 0 warning(s).`) and the line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`). **Every compile that fails on a diagnostic ends with both**, a syntax error's included. The summary counts the diagnostics written above it;
 * an error with no diagnostic before it (a file that cannot be read);
 * `--stats`'s report, and the folder `ksplc clean` emptied.
 
@@ -600,7 +602,7 @@ ksplc emit-runtime [--freestanding] <output.c>
 
 It writes the C runtime's source to `<output.c>` as one translation unit and exits. **It analyses no source**, so it takes no `.kspl`. `--to=llvm`'s IR holds no runtime, and is linked beside this file.
 
-**`--freestanding` changes the contents**, so emit it with the same setting as the IR it is linked with.
+**`--freestanding` changes the contents**, so emit it with the same setting as the IR it is linked with. No IR is written under `--freestanding` yet ([§2.2](#22-choosing-the-language-of-the-output---to)).
 
 **Emit it with the `ksplc` that wrote the IR.** The runtime defines a symbol named after its whole source, and the IR's `main` calls it. So a runtime of another version stops the link with `undefined symbol`.
 
@@ -704,7 +706,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 | **`IndentWidth`** | `4` | the number of spaces per indentation level. |
 | **`ColumnLimit`** | `100` | the maximum width of a line, in display columns (a CJK character or `✅` takes two). An argument list, a method chain and the like that exceed it are broken at a safe position. |
 
-**A key not in the table is an error**, so a typo such as `IndentWith` cannot succeed while the default stays in effect unnoticed. **A value the key does not take is an error too.** `IndentWidth` and `ColumnLimit` take a whole number of 1 or more, written in digits alone. So `IndentWidth: two` and `ColumnLimit: 0` are refused. No setting switches the trailing comma: the formatter follows the source.
+**A key not in the table is an error**, so a typo such as `IndentWith` cannot succeed while the default stays in effect unnoticed. **A value the key does not take is an error too.** `IndentWidth` and `ColumnLimit` take a whole number of 1 or more, written in digits alone. So `IndentWidth: two` and `ColumnLimit: 0` are refused. **A key given twice is an error as well**, as a second `--style` is: `IndentWidth: 2, IndentWidth: 8` would otherwise format with 8 and report success. No setting switches the trailing comma: the formatter follows the source.
 
 **A comment inside braces stays inside the block, at its level**, a comment right before the `}` included. A block holding a comment is never folded onto one line.
 
@@ -768,6 +770,8 @@ A summary is its run's first line, so it runs past the width instead of being cu
 * **The other documents' diagnostics stay on screen**, and are replaced one document at a time as each is analysed again, while the editor sends nothing.
 * **A document whose analysis brings the analysis process down again is set aside.** It answers nothing until it is edited, and the server's log (its standard error) names it.
 
+**An edit to one open document refreshes the diagnostics of the others** too, one document at a time, while the editor sends nothing. An edit can break or mend a file that imports the edited one.
+
 **A message whose header holds no valid `Content-Length` ends the server** with exit code 1, and its log says why. Past such a header, where the next message starts is not known.
 
 ```mermaid
@@ -824,9 +828,11 @@ The `.vscode/extensions/kspl` extension provides these settings.
 
 | The setting | What it does |
 | :-- | :-- |
-| `kspl.serverPath` | the executable to start as the LSP server; empty means the one bundled with the extension. It has `machine` scope, so a workspace's `.vscode/settings.json` cannot set it: opening a repository must not run any program |
+| `kspl.serverPath` | the executable to start as the LSP server; empty means the one bundled with the extension for this OS and processor (`bin/<platform>-<arch>/`). It has `machine` scope, so a workspace's `.vscode/settings.json` cannot set it: opening a repository must not run any program |
 | `kspl.trace.server` | how much of the traffic with the server to log in the "Kanso LSP" output panel (`off` by default, `messages`, `verbose`). The panel comes forward by itself only on an error and when this setting is turned up |
 | `kspl.defines` | the `#cfg()` flags to raise during the analysis, as the compiler's `--define` does (for example `["blas"]`) |
+
+**A change to `kspl.serverPath` or `kspl.defines` starts the server again**, since the server reads both only as it starts. **So does a server that stops by itself**, up to four times in three minutes. After that, the extension tells you so and waits. The command "Kanso: Restart the language server" then starts it again.
 
 **The editor colours the code by its spelling alone**, with the extension's TextMate grammar (`tmLanguage.json`). The language server sends no colours.
 
@@ -1055,7 +1061,7 @@ usage: ksplc info <std-dir|link-libs|exe-flags|cache-dir|keywords|package>
 ksplc clean
 ```
 
-It empties the disk cache and reports the location it emptied on standard error. **It takes no subject**: a word after it is refused with the usage. It is safe at any time (the cache is made afresh next time). It removes only the hex-named directories ksplc made; anything else in `KSPLC_CACHE_DIR` is left alone.
+It empties the disk cache and reports the location it emptied on standard error. **It takes no subject**: a word after it is refused with the reason, then the usage. It is safe at any time (the cache is made afresh next time). It removes only the hex-named directories ksplc made; anything else in `KSPLC_CACHE_DIR` is left alone.
 
 ### 7.3 ksplc info keywords: the list of reserved words
 
@@ -1097,6 +1103,7 @@ It prints, as Markdown on standard output, each declaration a file publishes as 
 * **A name resolves as an `import` resolves it**: a `std/` name against `--std-dir` / `KSPLC_STD_DIR`, any other against `--pkg-src-dir` / `KSPLC_PKG_SRC_DIR` or the current folder ([§2.9](#29-source-crossing-the-boundary-its-place-and-what-is-recorded)).
 * **A name is made logical first**, as a compile makes its input's name: a `./` in front, a `/` at the end and each `.` part are dropped. So `lib/kspeg/`, `./lib/kspeg` and `lib/kspeg` list one folder, and its files are named `kspeg/engine` in each.
 * **The entry begins at the first `.` after the last `/`**, since a logical name holds no `.`. A name written with its extension (`std/io.kspl`) is therefore read as the file `std/io` asked for an entry `kspl`. A last part of `.` or `..` is a folder, not an entry: `ksplc doc .` lists the current folder, its files named from it.
+* **An entry is named as code calls it**, with no type arguments: `std/ds.List.push` finds the method keyed `List<|T|>.push`, and `std/ds.List` brings it with the type. A name written with them finds the same entry.
 * **It reads what the record reads** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)): the source alone, with no analysis. So it answers in a fraction of a second and cannot disagree with `SURFACE.txt`. `--surface-scope=all` shows what is not `pub` as well.
 * **A name that resolves to nothing is an error** (exit 1), naming what was looked for, and so is an entry the file does not publish. A file in a folder that cannot be read is named in the listing, not dropped.
 * **A link in a description resolves from the source's folder**, as it does in the source. A dotted name of an entry of the same file becomes a link to it; another file's stays text, and `ksplc doc` on that file shows it.

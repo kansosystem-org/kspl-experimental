@@ -88,8 +88,9 @@ extern fn ksos_port_ctx_free(ctx: Void$@) //<
 extern fn ksos_port_switch(from_ctx: Void$@, to_ctx: Void$@) //<
     //< saves the running task and runs to; a null from (a deleted task) saves none
     //< A port that records the running context itself (Cortex-M) does not read from.
-extern fn ksos_port_tick_start(reload: U32) //<
+extern fn ksos_port_tick_start(reload: U32): U32 //<
     //< starts the periodic timer (preemption); the port implements it
+    //< It returns 0, and starts nothing, for a reload the port's timer cannot take.
 extern fn ksos_port_irq_save(): U32 //<
     //< disables interrupts and returns the prior state (a critical section begins)
 extern fn ksos_port_irq_restore(state: U32) //<
@@ -360,6 +361,11 @@ priv fn wake_delayed_to(now: U64) //< makes ready every task that should wake by
 priv fn wakes_by_clock(t: Task$@): Bool //<
     //< Whether it is in a wait that ends by time (a delay, or blocked with a timeout)
     //< tickless idle uses it to find the next time to move the clock to.
+    //< **A deadline saturated at the last tick does not count** (deadline_after): it stands for a
+    //< wait too long to end. Moving the clock there would end that wait at once, and leave every
+    //< later deadline saturated too, so each delay would return at once.
+    if t.delay_until == LAST_TICK
+        return false
     return t.state == .delayed || (t.state == .blocked && t.deadline_set)
 priv fn pick_next(): Task$@? //< picks the runnable task with the highest priority
     //< **With none runnable it moves the clock forward without waiting in real time**, decoupling
@@ -654,7 +660,10 @@ fn block_and_rearm(obj: Void$@, deadline: U64?, state: U32): U32 //<
 fn enable_preemption(reload: U32) //< turns preemption on
     //< It starts the port's periodic timer (SysTick on Cortex-M, SIGALRM/setitimer on POSIX), which
     //< calls ksos_tick() and forces task switches on the time slice. Not on a port with no timer.
-    ksos_port_tick_start(reload)
+    //< **A reload the timer cannot take panics**: 0 on every port, and past 2^24 on Cortex-M,
+    //< whose SysTick has 24 bits. A tick at another period would break every timeout.
+    started: = ksos_port_tick_start(reload)
+    assert(started != 0, "enable_preemption: the port's timer cannot take this reload")
 
 // ============================ Converting to real time ============================
 // A tick is logical time (like FreeRTOS's tick). **The kernel does not know how long a tick is**:
@@ -720,7 +729,8 @@ fn enable_idle_task(stack: U8$[], hook: Idle_hook) //<
 extern fn ksos_tick()
     s: = ksos_port_irq_save()
     defer ksos_port_irq_restore(s)
-    g_tick += 1
+    if g_tick != LAST_TICK // it stops at the last tick: a wrap to 0 would put every deadline ahead
+        g_tick += 1
     if g_current == null
         return // before the scheduler starts, or while it sleeps, only the clock advances
     // Count one tick for g_current: CPU use by sampling, like top and ps, at the tick's resolution.

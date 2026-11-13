@@ -163,6 +163,20 @@ fn test_mono_clock()
     assert(advanced, "it advances once work is done")
     verdict.pass("confirmed that it does not go back and that it advances once work is done.")
 
+fn test_deadline_saturates() //< a deadline past the I64 limits stops at the limit
+    //< `ms * 1000` once wrapped, so the longest wait gave a deadline in the past.
+    verdict.start("[Time] a deadline past the I64 limits stops at the limit...")
+    last: = 9223372036854775807I64
+    first: = -9223372036854775807I64 - 1
+    t0: = sys.mono_us()
+    verdict.check("the longest wait gives the largest I64", sys.deadline_after_ms(last) == last, "")
+    verdict.check("a wait just past the limit gives the largest I64",
+        sys.deadline_after_ms(last / 1000I64) == last, "")
+    verdict.check("the most negative wait gives the smallest I64",
+        sys.deadline_after_ms(first) == first, "")
+    verdict.check("a wait of one second still lies ahead", sys.deadline_after_ms(1000I64) > t0, "")
+    verdict.pass("A deadline past either I64 limit stops at it, and a short one lies ahead.")
+
 priv const BOTH_OSES: Bool[2] = ::{ false, true } //< POSIX's answer, then Windows's
 
 fn test_absolute_paths() //< telling an absolute path from a relative one

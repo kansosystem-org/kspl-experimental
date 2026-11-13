@@ -11,7 +11,8 @@ import "ksmd/base/dates" { day_of, write_date, write_date_with, ymd_of }
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
 import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value, number }
-import "ksmd/model/format" { SHOWN_DIGITS, format_of, round_digits, round_places, show, show_plain }
+import "ksmd/model/format" { SHOWN_DIGITS, format_of, round_at_digits_of, round_digits, round_places,
+    show, show_plain }
 import "std/chars" // `next_codepoint`, `count_codepoints`
 import "std/math"
 import "std/mem" { Arena }
@@ -109,8 +110,10 @@ priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
 
 pub fn mod( //<
     //< what is left of `x` after dividing by `y`, with the sign of `y`
-    //< So a count of minutes wraps round a clock. A division by zero is `#DIV/0!`, and a quotient
-    //< past 2^53, whose remainder an F64 no longer holds, is `#NUM!`.
+    //< So a count of minutes wraps round a clock. The quotient is cut at the 15 digits it shows, so
+    //< `mod(0.3, 0.1)` is 0. The remainder is rounded at the 15th digit of the larger operand, so
+    //< `mod(0.35, 0.1)` is 0.05. A division by zero is `#DIV/0!`, and a quotient past 2^53, whose
+    //< remainder an F64 no longer holds, is `#NUM!`.
     //< For example, `mod(-1, 72)` is `71`.
     x: F64, //< the number to divide
     y: F64, //< the number to divide by
@@ -120,19 +123,39 @@ pub fn mod( //<
     q: = x / y
     if q >= 9007199254740992.0 || q <= -9007199254740992.0
         throw .not_finite
-    $times: = F64::(I64::q)
-    if times > q
+    // The quotient is cut at the 15 digits a person reads, as `cut` cuts, so `mod(3.3, 1.1)` is 0:
+    // its F64 quotient lies just below 3. A quotient that shows as a whole number leaves nothing.
+    near: = round_digits(q, SHOWN_DIGITS) catch
+        throw .not_finite
+    $times: = F64::(I64::near)
+    if times == near
+        return 0.0
+    if times > near
         times -= 1.0
-    return x - y * times
+    if times == 0.0
+        return x
+    // Taking whole divisors away leaves an error at the operands' 15th digit, so the remainder is
+    // rounded there: `mod(0.35, 0.1)` is 0.05, not 0.04999999999999993. With nothing taken away
+    // the remainder is `x` itself, so `mod(1e-20, 1)` stays 1e-20.
+    left: = x - y * times
+    larger: = math.max(math.abs(x), math.abs(y))
+    return round_at_digits_of(left, larger, SHOWN_DIGITS).unwrap_or(left)
 
 pub fn power( //<
     //< `x` to the power `y`
-    //< Where no real number is the answer, it is `#NUM!`.
+    //< Where no real number is the answer, as for `power(-1, 0.5)`, or the result is too large, it
+    //< is `#NUM!`. 0 to a negative power divides by 0, so it is `#DIV/0!`.
     //< For example, `power(2, 10)` is `1024`.
     x: F64, //< the base
     y: F64, //< the power to raise it to
 ): F64!Calc_error
-    return math.pow(x, y)
+    if x == 0.0 && y < 0.0
+        throw .division
+    r: = math.pow(x, y)
+    // A NaN (no real number) or an infinity is the function's own error, so the reason names it.
+    if r - r != 0.0
+        throw .not_finite
+    return r
 
 // ==========================================
 // Text
@@ -459,8 +482,9 @@ priv fn day_in(d: Value): I64!Calc_error //< the day a date names; anything else
 // Hexadecimal and binary
 // ==========================================
 // Why they work as they do is "Hexadecimal and binary" in `ksmd/docs/DESIGN-ksmd.md`. The width is
-// in bits, from 1 to 53. Left out, a negative number takes a minus sign; given, it is written and
-// read as its two's complement in that width (`ksmd/calc/bases.kspl`).
+// in bits, from 1 to 53. Left out, a negative number takes a minus sign. Given, the width is
+// signed: a number is written and read as its two's complement in that width
+// (`ksmd/calc/bases.kspl`), and one outside it, such as 200 in 8 bits, is `#NUM!`.
 
 pub fn dec_to_hex( //<
     //< `n` in hexadecimal

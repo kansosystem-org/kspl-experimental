@@ -159,7 +159,7 @@ Typing inserts literal text: `#`, `*` or `:::` does not change structure. Format
 
 | Attribute | Sets | Left out |
 | :-- | :-- | :-- |
-| `paper` | `A3`, `A4`, `A5`, `B4`, `B5`, `letter` or `legal` | The browser's paper |
+| `paper` | `A3`, `A4`, `A5`, `B4`, `B5`, `JIS-B4`, `JIS-B5`, `letter` or `legal` | The browser's paper |
 | `orientation` | `"landscape"` | Portrait |
 | `header` | The text in the middle of each printed page's header | The document's name |
 | `footer` | The text at the left of each printed page's footer | Nothing |
@@ -167,11 +167,12 @@ Typing inserts literal text: `#`, `*` or `:::` does not change structure. Format
 | `table_label`, `figure_label` | The word before a table's or an image's number | `Table`, `Figure` |
 
 * **Every attribute is optional, but the clause sets at least one.** Portrait has no spelling, so one setting has one form.
+* **`B4` and `B5` are the ISO sizes, 250 × 353 and 176 × 250 mm.** `JIS-B4` and `JIS-B5` are the Japanese sizes, 257 × 364 and 182 × 257 mm. Each name is the one CSS's `@page` takes, so one name means one size in the file and in the browser's print.
 * **A header or a footer is 1 to 200 bytes of text.** `{page}` and `{pages}` stand for the page's number and the count of pages, and are the only braces it holds.
 * **Headings number themselves from the level `numbers` names**: 1, 1.1, 1.1.1. With `numbers=2`, a level-1 heading stays a title without a number. A number is shown, never written into the heading's text, so an inserted section moves every later number at once.
 * **A table's `caption` and an image's caption take a number by chapter**, such as `表 4-12`, where headings are numbered. The chapter is the heading at the level numbering starts at, and each chapter counts from 1 again.
 * **A link whose text is `#` is a reference: `[#](#運用モード)`.** It shows the number of the heading, table or image its place names, so `[#](#運用モード)項` reads "4.1.1項". The place is a heading's text, a table's name or caption, or an image's caption. Without numbers, it shows that name, and a name that finds nothing shows `#?`.
-* **Only the opened document's clause counts.** An included file's own clause is read, and changes nothing where it is included.
+* **Only the opened document's clause counts.** An included file's own clause is read, and changes nothing where it is included. A functions clause counts there, as "Table names across includes" below says.
 
 `ksmd/syntax/settings.kspl` reads, checks and writes the clause, and `ksmd/edit/editor_settings.kspl` sets it as one step of undo.
 
@@ -281,6 +282,9 @@ pub fn tax(price: F64, rate: F64?): F64 //< the price with its tax
 * **The clause's box says what the file gives**: the names a formula can call. Or it says why the file cannot be used, in the compiler's own words.
 * **Insert ▸ Functions file… puts the clause at the caret.** It picks a `.kspl` file in the workspace, or starts a new one holding one function to copy.
 * **A name ksmd has is refused**, so `sum` always means ksmd's `sum`. Where two files give one name, the first clause's is called.
+  * **A file that is not ready keeps the names of its last build.** It may wait for an allow, have had Stop allowing pressed, or not build. A call to one shows `#BLOCKED!`, never the answer of a file below. Its reason says whether the file waits for an allow or does not build.
+  * **While a file waits for its allow or builds, the files below it give no names.** Its names are unknown, so any of theirs may be its. Their box says that those names wait for a file above.
+* **A name a formula cannot call is refused**, as `Sum` or `myTax`. Formula names are lowercase, so the box says so.
 * **The file is built again when it changes on disk**, once the page looks again (on focus, as for an include). The person allows its new content first.
 * **A function returns a value only.** It cannot change the document, as a procedure in a spreadsheet's macros can. That was left for later.
 * **Inside a `sum_if` condition, a range reaches a person's function whole**, never one row's cell. ksmd's own functions read the row's cell there.
@@ -331,6 +335,9 @@ A cell's value is empty, a number, text, `true` or `false`, or an error. A formu
   * Why the day before every date: a due date not yet written counts as passed, as a blank counts as 0 against a number. Excel and LibreOffice Calc give the same answer, so a sheet brought from them keeps its marks. An error here would turn a whole `sum_if` over a column with one blank date into `#VALUE!`.
 * **Two numbers are equal when the 15 digits they show agree** (`shows_same` in `ksmd/model/format.kspl`). So `0.1 + 0.2 = 0.3` is `true`, as both show 0.3. `<`, `<=`, `>`, `>=` and `<>` follow the same rule, so `0.1 + 0.2 > 0.3` is `false`.
   * Why: a person reads the 15 digits, and a comparison that disagreed with what both cells show would look wrong. The display, `round_down` and `text` already use those digits. Excel, LibreOffice Calc and Google Sheets all compare so.
+* **`a + b` and `a - b` are exactly 0 where the two sides cancel at the 15 digits they show** (`sum_of` in `ksmd/calc/value.kspl`). So `=0.1 + 0.2 - 0.3` is 0, and `0.1 + 0.2 - 0.3 = 0` is `true`. `a - b` is 0 exactly where `a = b` is `true`.
+  * Why: the 5.55111512312578e-17 that binary arithmetic leaves there is no value a person wrote. Shown, it reads as a real amount, and a check that a total balances to 0 fails.
+  * A result that the sides do not cancel stays, however small: `1e-20 - 0` is 1e-20, and `1e-20 - 1e-21` is 9e-21. Only `+` and `-` do this, since only there do two equal amounts cancel. `sum` adds as it always did.
 * **Text compares without regard to case,** in the order the sort uses: letters A to Z, then other bytes by their value. `false` comes before `true`.
 * **`and` calculates its right side only when its left side is `true`, and `or` only when it is `false`.** An error or a wrong kind on the left decides too.
 * **`if(condition, then, else)` calculates only the branch it takes.** An error in the condition is the result.
@@ -351,7 +358,7 @@ Each error has its own mark, since each is fixed differently.
 | Mark | The cause |
 | :-- | :-- |
 | `#VALUE!` | A value of the wrong kind: text or `true` and `false` in arithmetic, a number or text as a condition, or two kinds ordered |
-| `#DIV/0!` | A division by zero |
+| `#DIV/0!` | A division by zero, or 0 to a negative power |
 | `#NUM!` | A result too large: a number past an F64, or text past 32,767 bytes. Or a value out of a function's range: `round`'s places, a text position or a count |
 | `#REF!` | A reference to no cell: `#REF!`, a cell outside its table, or a table name this source does not hold |
 | `#CYCLE!` | The cell depends on itself, directly or through other cells |
@@ -416,7 +423,8 @@ Each error has its own mark, since each is fixed differently.
 
 * **Every whole number up to 2^53 either way converts exactly**, the largest a cell's number holds exactly. A larger one, or a fraction, is `#NUM!`.
 * **Without a width, a negative number takes a minus sign**: `=dec_to_bin(-5)` is `"-101"`, and `=hex_to_dec("-ff")` is -255.
-* **A width in bits, from 1 to 53, writes two's complement**: `=dec_to_bin(-5, 8)` is `"11111011"`, and `=bin_to_dec("11111011", 8)` reads it back as -5. A number is written in the digits the width needs, zeros first (`=dec_to_hex(10, 16)` is `"000A"`). A number outside the width, or another width, is `#NUM!`.
+* **A width in bits, from 1 to 53, writes two's complement**: `=dec_to_bin(-5, 8)` is `"11111011"`, and `=bin_to_dec("11111011", 8)` reads it back as -5. A number is written in the digits the width needs, zeros first (`=dec_to_hex(10, 16)` is `"000A"`). The width is signed, so 8 bits hold -128 to 127. A number outside the width, such as `=dec_to_bin(200, 8)`, or another width, is `#NUM!`.
+  * Why signed only: the digits read back as signed, so `11001000` written for 200 would read back as -56.
 * **Hexadecimal is written in capitals and read in either case.** A text holding anything but the base's digits is `#VALUE!`.
 * **A whole number stands for its decimal digits** where text is read, so `=bin_to_dec(1010)` is 10. An empty cell is 0.
 
@@ -468,7 +476,7 @@ The text functions are `char`, `mid`, `left`, `right`, `len`, `find`, `like`, `v
 
 **Why a `~` before another character is refused:** what a spreadsheet does with it is not clearly documented. An error shows at once, where a wrong match may never be noticed.
 
-**`mod(x, y)` takes the sign of `y`**, so `mod(-1, 72)` is 71 and a count wraps round as a clock does. **`power(x, y)` is `x` to the power `y`**; a result with no real number, such as `power(-1, 0.5)`, is `#NUM!`.
+**`mod(x, y)` takes the sign of `y`**, so `mod(-1, 72)` is 71 and a count wraps round as a clock does. Its quotient is cut at the 15 digits it shows, as `round_down` cuts, so `mod(3.3, 1.1)` is 0 and not 1.1. Where whole divisors were taken away, the remainder is rounded at the place of the larger operand's 15th digit, since the subtraction's error lies there. So `mod(0.35, 0.1)` is 0.05, not 0.0499999999999999, while `mod(1e-20, 1)` stays 1e-20. **`power(x, y)` is `x` to the power `y`**; a result with no real number, such as `power(-1, 0.5)`, is `#NUM!`, as is one too large. `power(0, -1)` is `#DIV/0!`, since 0 to a negative power divides by 0.
 
 ### Number formats
 
@@ -498,6 +506,11 @@ The text functions are `char`, `mid`, `left`, `right`, `len`, `find`, `like`, `v
 * **Rounding follows `round`'s rule, in the same code** ("Values and errors" above). So 2.675 shows as `2.68`, though its binary value is a little less. Only the shown text is rounded: a sum still adds the stored numbers.
 * **Text, empty cells and errors in a formatted column show as they are.**
 * **A typed `$12` or `12%` stays text** ("How the editor changes a document" below). The format gives the symbol; the cell holds the number.
+  * **Such text is marked in a column of numbers**, since `sum` leaves it out without a word (`number_as_text` in `ksmd/edit/typed.kspl`). The page shows the mark ("The status bar" in [`DESIGN-page.md`](DESIGN-page.md)).
+  * Text looks like a number when it holds digits that `,` may group in threes, with a sign, a `.`, a currency sign or a `%`: `1,000`, `.5`, `+5`, `12%`, `$12`. Full-width forms such as `１２` count, and so does a number in quotes.
+  * A code such as `"007"` never looks like a number: its whole part starts with 0 and holds more digits. As a number it would lose its zeros.
+  * A column of numbers holds more numbers than other text, and codes count as other text. So a column of codes such as `"007"` is not marked, even beside as many numbers. A formula's text is not marked either, since its writer chose text.
+  * Why a mark, and not a number: reading `12%` as 0.12 or `1,000` as 1000 guesses what the person meant. A wrong guess changes a total without a word. The mark keeps the cell as typed, and shows that a total leaves it out.
 * **An open cell edits the number it holds, with every digit, not the shown text.**
 * **`date:yyyy/mm/dd` shows the column's dates as `2026/10/23`.** A date shows as `2026-10-23` with no entry. Its places cannot change.
 * **A new column has no format, and a moved or removed column takes its format with it.**
@@ -653,7 +666,13 @@ Calculation (`ksmd/calc/calc.kspl`) reads the model and one input: the date the 
 * **After an edit, the whole source calculates again.** The read limit below bounds that cost; a partial recalculation waits for a measured need.
 * **One calculation reads at most 500 million cell values** (`MAX_READS` in `ksmd/calc/calc.kspl`). Past it, each formula not yet finished shows `#LIMIT!`, and a formula finished before keeps its value.
   * Why: the table limits alone do not bound the work. A range read on every row multiplies it, so a crafted file within 8 MiB can read billions of values, at about 100 ns each.
-  * Why 500 million: the largest ordinary shapes measured read far less. A table of 10,000 rows with each row's share of a column's total reads 100 million. With a `sum_if` over a whole column on each row, it reads 205 million.
+  * Why 500 million: the largest ordinary shapes measured read far less. A table of 10,000 rows with a `sum_if` over a whole column on each row reads 205 million.
+* **A call worked out once is used again for the rest of the calculation**, where each argument is a reference alone: `sum(A$1:A$10000)`, or `max(t.B)`. The same function on the same cells gives the same answer, as no function reads anything but its arguments. So a table of 10,000 rows with each row's share of a column's total adds the column once, not 10,000 times.
+  * **The call is the function's name and its cells**, so `sum(t.A)` and `sum(A1:A300)` over the same 300 rows are one call. A person's own functions are not kept, nor a call with any other argument, nor a range read row by row in a condition.
+  * **A call is kept only once each of its cells holds its final value.** A cell's value never changes after that within the calculation. Otherwise, as for a cell on its own chain or past the read limit, the call is worked out again where it stands next.
+  * **A call used again counts as one read**, as reading it costs no more than reading one cell. So the read limit still bounds the work: a share of the total on each of 10,000 rows reads about 20,000 values.
+  * Measured in the page's wasm, the share of a total down 10,000 rows calculated in 7.7 seconds before, and now in 0.04 seconds. In Chromium, an edit there took 14 seconds, and now 2.
+  * Ten columns of 7,500 rows, each `sum(A1:A7500)`, reached `#LIMIT!` after 38 seconds. They now calculate in 0.13 seconds.
   * The reason names the limit, so the person knows the values are not wrong but unfinished. Like `#CYCLE!`, the error keeps its own reason as it carries.
 * **A condition of `sum_if`, `count_if` or `average_if` calculates once for each row of its values.**
 * **A function's arguments are kept only while it runs.** So `=sum(t.A)` on each of 3,000 rows keeps no copy of column A for each row; only the results stay.
@@ -828,6 +847,11 @@ Links may use `https`, `http`, `mailto`, or a document fragment; other schemes a
 ### Table names across includes
 
 **A table name belongs to its source file.** Two files can each hold a table named `budget`, and a repeated include shows one declaration again. A formula names only the tables of its own source, so a repeated table shows the same values in each instance.
+
+**A functions clause in an included file gives its functions to the whole page**, the parent's tables among them ("Your own functions"). A table name stays in its file, and only the opened document's settings clause counts. Functions are the exception:
+
+* **Why:** a table in an included file calls the functions its own file names, so that file's clause must count where it is included. The page holds one list of names, so the parent's formulas see them too.
+* **The clauses count in the order the page shows them**, the included ones in their place. Where two files give one name, the first clause on the page is called.
 
 ## Model and editor architecture
 
@@ -1026,5 +1050,5 @@ What the figures show, as orders of magnitude:
 These are known limits, not yet worked on:
 
 * A key press in a document of tens of thousands of blocks takes over 100 ms.
-* An edit in a table of 10,000 rows takes over a second, as the page draws and lays out that whole table again.
+* An edit in a table of 10,000 rows takes about two seconds, as the page draws and lays out that whole table again. The calculation is a small part of it. In Chromium, rows that each take a share of the total edit as fast as rows of plain arithmetic.
 * So the served page does not reach the limits above: a document of 6.2 MB does not open, and one of 4.3 MB does.

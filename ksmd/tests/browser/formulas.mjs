@@ -551,6 +551,34 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       check(await bar() === "", "a cell with no error shows no reason", await bar());
     },
 
+    // **Typed text that looks like a number is marked in a column of numbers**, since a total
+    // leaves it out: a corner, and a reason on the tooltip and the status bar. A column of codes
+    // is left alone, and retyping the text as a number takes the mark away.
+    async numberAsText() {
+      const why = "1,000: this is text that looks like a number, so a sum and arithmetic leave it out. " +
+        "Type it as a plain number, as 1000 or 0.12, to make it a number; a number format shows a , a " +
+        "currency or a %";
+      const start = `${H}:::table name="t"\n| "n" | "code" |\n| 5 | "007" |\n| 7 | "A-1" |\n` +
+        `| "1,000" | "12" |\n| =sum(A1:A3) | |\n:::\n`;
+      await load(start);
+      const marked = (r, c) => js(`document.querySelector('${cellAt(r, c)}').classList.contains('number-text')`);
+      check(await marked(2, 0), "typed 1,000 among numbers is marked");
+      check(await js(`document.querySelector('${cellAt(2, 0)}').title`) === why, "and its tooltip says why",
+        await js(`document.querySelector('${cellAt(2, 0)}').title`));
+      check(await cellText(js, 3, 0) === "12", "the sum leaves the text out", await cellText(js, 3, 0));
+      check(!await marked(0, 0) && !await marked(0, 1) && !await marked(2, 1),
+        "a number, and text in a column of codes, are not marked");
+      await click(cellAt(2, 0));
+      await until("!document.querySelector('.status-why').hidden");
+      check(await js("document.querySelector('.status-why').textContent") === why,
+        "the status bar says why while the cell is chosen");
+      await type("1000");
+      await press("Enter");
+      await saves("the text retyped as a number", start.replace('| "1,000" |', "| 1000 |"));
+      check(!await marked(2, 0), "takes the mark away");
+      check(await cellText(js, 3, 0) === "1012", "and the sum counts it", await cellText(js, 3, 0));
+    },
+
     async copyFormula() {
       const formula = "=sum(A1:A2)*2";
       await load(`${H}:::table name="t"\n| "a" | "b" |\n| 1 | ${formula} |\n| 2 | |\n:::\n`);

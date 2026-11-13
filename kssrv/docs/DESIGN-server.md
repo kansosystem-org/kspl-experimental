@@ -310,7 +310,7 @@ Caution: **Do not add a check of a path's parts here.** Each of the four Windows
 
 Everything under `/api/` is dispatched by the routing table alone, even over a directory named `api` under the root. **Every answer there is JSON, a refusal's included**, so a client of the API reads one form ("The JSON API" in [`SPEC-api.md`](SPEC-api.md)).
 
-Caution: **Check a path in the query too.** An API taking `?path=` goes through the same `fs.join_under` as static serving. **A read lets a dot name through, and a write refuses it with 403.** Only the holder of the token reaches either, and the page reads what the person keeps under the root. A write to `.git/config` can set a command that the next `git status` runs, so the token would run that command on the machine. `GET /api/list` leaves out every name that `fs.join_under` would refuse with dot names kept back, so the dialog offers no name that the server then refuses.
+Caution: **Check a path in the query too.** An API taking `?path=` goes through the same `fs.join_under` as static serving. **A read lets a dot name through, and a write refuses it with 403.** Only the holder of the token reaches either, and the page reads what the person keeps under the root. A write to `.git/config` can set a command that the next `git status` runs, so the token would run that command on the machine. `GET /api/list` leaves out every name that `fs.join_under` would refuse with dot names kept back, so the dialog offers no name that the server then refuses. It also refuses to list a hidden folder, as no listing names one.
 
 ### The counters are held in plain global variables
 

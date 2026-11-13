@@ -199,6 +199,52 @@ static void kspl_child_fail(int done) {
     _exit(127);
 }
 
+/* Puts a pipe end or an output file on the child's stream `target`, for kspl_proc_start's child.
+ * Caution: **Where the end already sits on `target`, clear its close-on-exec mark.** That happens
+ * when the parent started with that stream closed, so the pipe took the free number. dup2 onto
+ * itself changes nothing, and the child would then start with the stream closed. */
+static int kspl_child_onto(int fd, int target) {
+    if (fd != target) return dup2(fd, target);
+    int flags = fcntl(fd, F_GETFD);
+    return flags < 0 ? -1 : fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
+}
+
+/* Starts a bare program name from the PATH value `path_env`, for kspl_proc_start's child. It does
+ * not return: a start that fails ends the child through kspl_child_fail.
+ * Caution: **Skip an empty entry.** execvp reads one (`a::b`, or a `:` at either end) as the
+ * current directory, so a `cc` lying in a cloned repository would run in place of the compiler.
+ * Windows's search skips one too (kspl_win_try_dir), and an unset PATH finds nothing on both.
+ * The rest is execvp's search: an entry that does not hold the name, or holds it as a file that
+ * cannot run (EACCES), passes to the next. Another failure stops the search. A file the OS cannot
+ * start (ENOEXEC) fails, as a path with a `/` does, rather than running under /bin/sh.
+ * Only async-signal-safe work, as after any fork: the entries are cut with no allocation. */
+static void kspl_child_exec_path(const char *path_env, char **argv, int done) {
+    const char *name = argv[0];
+    size_t nlen = strlen(name);
+    int denied = 0;
+    char cand[KSPL_PATH_CAP];
+    const char *p = path_env != NULL ? path_env : "";
+    if (nlen == 0) p = "";
+    while (*p != '\0') {
+        const char *end = strchr(p, ':');
+        size_t dlen = end != NULL ? (size_t)(end - p) : strlen(p);
+        if (dlen > 0 && dlen + 1 + nlen < sizeof(cand)) {
+            size_t m = dlen;
+            memcpy(cand, p, dlen);
+            if (cand[m - 1] != '/') cand[m++] = '/';
+            memcpy(cand + m, name, nlen + 1);
+            execv(cand, argv);
+            if (errno == EACCES) denied = 1;
+            else if (errno != ENOENT && errno != ENOTDIR && errno != ESTALE && errno != ENODEV &&
+                errno != ETIMEDOUT) kspl_child_fail(done);
+        }
+        if (end == NULL) break;
+        p = end + 1;
+    }
+    errno = denied ? EACCES : ENOENT;
+    kspl_child_fail(done);
+}
+
 /* Copies a path for kspl_proc_start as kspl_to_cstr does; an empty one is left unused and passes.
  * Where it fails, errno says why: ENAMETOOLONG where it does not fit, EINVAL where it holds a
  * NUL. */
@@ -253,6 +299,8 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
 
     h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
     if (h == NULL) goto fail; /* errno is ENOMEM */
+    /* Read before the fork: getenv is not async-signal-safe. */
+    const char *path_env = getenv("PATH");
     kspl_spawn_take();
     if ((pipe_in && kspl_pipe_cloexec(in_p) != 0) || (pipe_out && kspl_pipe_cloexec(out_p) != 0) ||
         (pipe_err && kspl_pipe_cloexec(err_p) != 0) || kspl_pipe_cloexec(exec_p) != 0) {
@@ -264,31 +312,42 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     pid_t pid = fork();
     if (pid == 0) {
         int done = exec_p[1];
+        /* Caution: **Move the failure pipe above 2 first.** Where the parent started with its
+         * streams closed, the pipe took a free number among 0 to 2. Putting a pipe end or an
+         * output file there closed it, so a start that failed later looked successful, and the
+         * failure's byte went into the file. */
+        if (done <= 2) {
+            int moved = fcntl(done, F_DUPFD_CLOEXEC, 3);
+            if (moved < 0) kspl_child_fail(done);
+            done = moved;
+        }
         kspl_child_restore_signals();
         if (group && setpgid(0, 0) != 0) kspl_child_fail(done);
-        if (pipe_in && dup2(in_p[0], 0) < 0) kspl_child_fail(done);
-        if (pipe_out && dup2(out_p[1], 1) < 0) kspl_child_fail(done);
-        if (pipe_err && dup2(err_p[1], 2) < 0) kspl_child_fail(done);
+        if (pipe_in && kspl_child_onto(in_p[0], 0) < 0) kspl_child_fail(done);
+        if (pipe_out && kspl_child_onto(out_p[1], 1) < 0) kspl_child_fail(done);
+        if (pipe_err && kspl_child_onto(err_p[1], 2) < 0) kspl_child_fail(done);
+        /* Caution: **Open the output files close-on-exec, and put them on 1 and 2 through
+         * kspl_child_onto.** Where the parent started with a stream closed, open takes that free
+         * number. Opened without the mark, a file that landed on 0 stayed there as the child's
+         * standard input. With it, whatever does not sit on 1 or 2 closes at the exec. */
         if (out_len > 0 || err_len > 0) {
             int ofd = -1, efd = -1;
             if (out_len > 0) {
-                ofd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (ofd < 0 || dup2(ofd, 1) < 0) kspl_child_fail(done);
+                ofd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+                if (ofd < 0 || kspl_child_onto(ofd, 1) < 0) kspl_child_fail(done);
             }
             if (err_len > 0) {
-                efd = one_file ? ofd : open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (efd < 0 || dup2(efd, 2) < 0) kspl_child_fail(done);
+                efd = one_file ? ofd : open(err_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+                if (efd < 0 || kspl_child_onto(efd, 2) < 0) kspl_child_fail(done);
             }
-            if (ofd > 2) close(ofd);
-            if (!one_file && efd > 2) close(efd);
         }
         if (cwd_len > 0 && chdir(cwd_path) != 0) kspl_child_fail(done);
-        /* Caution: **A path with a `/` goes to execv, not execvp.** Where the file is not a
-         * program the OS can start (ENOEXEC), execvp hands it to /bin/sh. A damaged or empty file
-         * would then run as a shell script, or as nothing with exit 0. execv refuses it, and the
-         * start fails. Only a bare name is searched for in PATH, as a shell does. */
-        if (strchr(argv_arr[0], '/') != NULL) execv(argv_arr[0], argv_arr);
-        else execvp(argv_arr[0], argv_arr);
+        /* Caution: **Never execvp.** Where the file is not a program the OS can start (ENOEXEC),
+         * execvp hands it to /bin/sh. A damaged or empty file would then run as a shell script, or
+         * as nothing with exit 0. execv refuses it, and the start fails. A bare name is searched
+         * for in PATH by kspl_child_exec_path, which also skips PATH's empty entries. */
+        if (strchr(argv_arr[0], '/') == NULL) kspl_child_exec_path(path_env, argv_arr, done);
+        execv(argv_arr[0], argv_arr);
         kspl_child_fail(done);
     }
     kspl_spawn_give();

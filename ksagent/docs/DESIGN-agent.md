@@ -79,11 +79,13 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 
 **A conversation's files are never a source.** The answers in them are the model's own words, so citing one would check a claim against itself. The questions are no evidence either. The tools leave all three files out of every listing and search, and refuse to read one. A name counts whatever its ASCII case, since Windows and macOS open `team.CHAT.jsonl` as `team.chat.jsonl`. A short name such as `TEAM~1.JSO` is refused before it is opened (below). The earlier turns the model needs reach it as the conversation so far ("The caps" above), not through a tool.
 
+**During `eval`, the questions file and the `--out` file are left out in the same way.** Either may stand in the folder: the command in [`ksagent/README.md`](../README.md) puts both there. The questions are no evidence, and a table of an earlier run holds the model's own answers. A path names one of them when it reaches the same file step by step, ASCII case ignored, so `./eval.ksmd` counts too.
+
 ## The guards on paths
 
 **Every path the model gives passes one check before anything opens it** (`files.resolve`). A refusal goes back to the model as the tool's result, so the loop goes on.
 
-* **The path must stay under the root, in a form every OS reads alike.** `fs.join_under` refuses an absolute path, a `..` step and a link anywhere on the path. It also refuses every form Windows reads as another name, such as a `\`, a short name's `~1` or a wildcard. The refusal names its reason, so the model can give the path again. kssrv's static serving uses the same check. The forms are "A path from outside goes through one door" in `std/docs/DESIGN-system.md`.
+* **The path must stay under the root, in a form every OS reads alike.** `fs.join_under` refuses an absolute path, a `..` step and a link anywhere on the path. It also refuses every form Windows reads as another name, such as a `\`, a name shaped like a short name (`PROGRA~1`) or a wildcard. The refusal names its reason, so the model can give the path again. kssrv's static serving uses the same check. The forms are "A path from outside goes through one door" in `std/docs/DESIGN-system.md`.
 * **A name that starts with a dot is hidden.** A root that is a checkout holds `.git/` and `.env`. `fs.join_under` checks each segment, by its long name too, because Windows opens `.git` by its short name `GIT~1`.
 * **A listing and a search offer only what a read takes.** They pass each name through the same check, so the model is never shown a name that a read then refuses.
 * **Only text is read.** A file with a NUL byte, or one that is not valid UTF-8, is skipped by a search and refused by a read. A Word or Excel file is read as its text view ("Word and Excel files" below).
@@ -230,7 +232,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 | State | What the page shows |
 | :-- | :-- |
 | Waiting | The question, "Waiting for ksagent", and a Stop button. After 15 seconds, a line asks the person to check that `ksagent watch` runs |
-| Being written | The growing text, set apart by a dashed border, under a line saying its sources are not checked yet. What the model is doing, and a Stop button |
+| Being written | The growing text, set apart by a dashed border, under a line saying its sources are not checked yet. What the model is doing, and a Stop button. Once the live file has not changed for 15 seconds, a line asks the person to check that `ksagent watch` runs |
 | `checked` | The answer, its checked sources with their quotes, and the lines ksagent adds |
 | `unverified`, `not_found` | The answer or the not-found line, under its state, and ksagent's lines |
 | `stopped`, `failed` | The state, ksagent's line saying why, any partial text marked as not whole and not checked, and "Ask again" |
@@ -239,6 +241,9 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **Only the page's own labels follow the browser's language**: English, or Japanese where the browser asks for it. ksagent's lines come in the question's language.
 * **The page follows the growing answer only while it stands near the bottom**, within 60 pixels. A person reading above is not pulled down, and a button jumps to the latest text.
 * **Only a turn whose records changed is read and drawn again.** So a growing answer leaves the rest of the page still, and unread.
+* **Only a turn's text is drawn again; its frame and its button stay.** A Stop button built again each second missed a press whose release met the new button, and lost the keyboard's focus.
+* **A screen reader reads an answer once it is whole.** The turns stand in a log, which reads out what is added to it. So the box of an answer still open is marked busy (`aria-busy`), and its growing text is not read out again each second.
+* **A page shows only the turns its conversation's files hold.** A read that comes back after the person opened another conversation is dropped. A turn whose question goes from the files goes from the page.
 * **A turn that cannot be shown says so, and the page goes on.** Its text stands as plain text, and the next look comes whatever the last one met.
 * **A request to the local server gives up after 15 seconds, and the page says so.** The next look that gets through removes the notice. A slow model never makes a request slow, since the answer reaches the page through files. Only the request that holds the server open has no limit.
 * **A live file with an empty id and the phase `refused` is shown as a notice**: ksagent answers none of the conversation's questions, and says why.
@@ -281,6 +286,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **The console gets no control character but a line break and a tab** (`answer.write_shown`); each other one shows as `�`. Text from the model, a file or a server can hold an escape sequence, which a terminal would obey.
 * **The live file is a file of its own**, replaced as a whole, so the chat file holds only turns that ended. It needs no endpoint and starts nothing.
 * **The live file is written at most once a second**, and the page reads it every second while a question is open. The tools leave it out, as they leave out the other two files.
+* **While ksagent works on an answer, it writes the live file again at least every 5 seconds**, even where nothing changed. So a live file that grows old names a ksagent that no longer runs.
 * **The answer's text is read from the `answer` call while its arguments arrive.** They are JSON cut anywhere, so the `text` member is decoded up to its last whole character. Each byte is read once (`progress.Text_reader`), so a long answer takes time and memory in step with its length. The not-found marker shows nothing: ksagent writes its own sentence at the end.
 
 **An unchecked answer never looks checked.**
@@ -289,7 +295,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * The chat file names `checked` only for an answer with a source that passed the check. Text shown before a stop stands in `partial`, never in `text`.
 * Once the turn is recorded, the live file says `done` and holds no text. The page then shows the recorded answer in place of the growing text.
 * When the turn cannot be recorded, the live file says `stopped`, and why, beside the unchecked text.
-* A process stopped by Ctrl+C leaves the live file as it last was. The chat file holds no answer for the question, so the next `watch` asks it again.
+* A process stopped by Ctrl+C leaves the live file as it last was. The chat file holds no answer for the question, so the next `watch` asks it again. **Once the live file has not changed for 15 seconds, the page asks the person to check that `ksagent watch` runs.** Without that line, the turn would say for good that the model is writing.
 
 **The thinking shows on the console and nowhere else**, as a sign that the model works. It is the model's draft, not its answer, so the live file and the chat file leave it out.
 

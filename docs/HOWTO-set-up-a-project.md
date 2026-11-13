@@ -72,11 +72,11 @@ Note: **A library can also be handed over without its KSPL source.** Build it wi
 
 ## VS Code (syntax highlighting, the Language Server, debugging)
 
-**VS Code builds and debugs in the unpacked folder without setup**, through its `.vscode/` (build tasks, LLDB settings) and `kspl_lldb.py`. That LLDB pretty printer makes slices, `Result` types and structs readable in the debugger. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
+**VS Code builds and debugs in the unpacked folder without setup**, through its `.vscode/` (build tasks, LLDB settings) and `kspl_lldb.py`. That LLDB pretty printer makes slices, lists, maps, strings, `Option` and `Result` values readable in the debugger, and stops the program where it panics. An enum shows its case's name, which `ksplc build` keeps in the debug information; a program built another way may show the case's number instead. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
 
 1. **Install the extension**
 
-  Install `kspl-*.vsix` from the Releases page. It bundles the LSP server for all three OSes.
+  Install `kspl-*.vsix` from the Releases page. It bundles the LSP server for Linux and Windows on x64, and macOS on Apple silicon. On another machine, the extension says so; build `ksplc` there and set `kspl.serverPath` to it.
 
   ```sh
   code --install-extension kspl-x.y.z.vsix
@@ -91,7 +91,7 @@ Note: **A library can also be handed over without its KSPL source.** Build it wi
 
 3. **Debug with LLDB (optional)**
 
-  With [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) installed (third-party), `F5` on an open `.kspl` builds it and launches the debugger.
+  With [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) installed (third-party), `F5` on an open `.kspl` builds it and launches the debugger. The folder's `.vscode/extensions.json` recommends CodeLLDB, so VS Code offers to install it.
 
 ### The `.kspl` file icon outside VS Code
 

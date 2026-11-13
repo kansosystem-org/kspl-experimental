@@ -402,6 +402,19 @@ fn test_regex_group_repeat()
     assert(empty_after.equals(""), "the empty round after advancing stays too")
     assert(empty_alt.equals(""), "the round that went on the empty alternative stays too")
 
+    // **A required round does not stop the repetition when it reads nothing**; only an optional
+    // round does. Stopped there, `(a|\b){2}` matched empty on `ac`, where Python's `re` takes `a`
+    // in the second round after `\b` in the first.
+    assert(group_of("(a|\\b){2}", "ac", 1).equals("a") && match_end("(a|\\b){2}", "ac") == 1,
+        "the second required round reads `a` after an empty first one")
+    assert(group_of("(.[b]|\\b){2}", "bb1", 1).equals("bb"),
+        "a required round after an empty one reads two bytes")
+    assert(group_of("(|.){2}b", "_b", 1).equals("_"), "the second required round reads the `_`")
+    assert(group_of("(a{0,}?){2}[b]", "ab", 1).equals("a"),
+        "a lazy body still reads in the second required round")
+    assert(group_of("(a|\\b){2,3}", "ac", 1).equals("a"),
+        "the required rounds of `{2,3}` behave the same")
+
     // The match further back tests the cut-off (the reason is at `late_match_start`).
     assert(late_match_start() == 800, "a match further back is found")
 

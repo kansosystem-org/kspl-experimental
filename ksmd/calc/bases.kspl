@@ -1,7 +1,7 @@
 //< Whole numbers written in hexadecimal or binary, and read back: the six base functions' work
 //< `dec_to_hex`, `hex_to_dec` and the rest in `ksmd/calc/calc.kspl` call these. A number is
-//< written with a minus sign. Given a width in bits, a negative number is written as its two's
-//< complement in that width, and a digit text is read back the same way.
+//< written with a minus sign. Given a width in bits, a number is signed: it must fit the width's
+//< two's complement, a negative one is written so, and a digit text is read back the same way.
 import "std/chars" // `sub_from`
 import "std/mem" { Arena }
 import "std/str" // `text`
@@ -43,8 +43,10 @@ fn width_ok(width: I64): Bool //< whether a width in bits is one the functions t
 
 fn write(n: I64, base: Base, width: I64, arena: Arena$@): U8[]!Base_error //<
     //< `n` in the base. **Width 0 means none**: a negative number takes a minus sign. Otherwise
-    //< `n` must fit the width as a signed or an unsigned number, and is written in exactly the
-    //< digits the width needs, a negative one as its two's complement.
+    //< `n` must fit the width as a signed number, and is written in exactly the digits the width
+    //< needs, a negative one as its two's complement.
+    // Why signed only: `read` reads a width's digits back as signed, so `dec_to_bin(200, 8)` would
+    // write `11001000`, which reads back as -56.
     if n > LIMIT || n < -LIMIT
         throw .too_large
     $v: = n
@@ -53,7 +55,7 @@ fn write(n: I64, base: Base, width: I64, arena: Arena$@): U8[]!Base_error //<
         if !width_ok(width)
             throw .too_large
         span: = 1I64 << width
-        if n >= span || n < -(span >> 1)
+        if n >= (span >> 1) || n < -(span >> 1)
             throw .too_large
         if n < 0
             v = n + span

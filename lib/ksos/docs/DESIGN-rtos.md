@@ -25,7 +25,7 @@ flowchart TD
 | `ksos_port_ctx_create_main()` | captures the scheduler's (initial) context |
 | `ksos_port_ctx_free(ctx)` | takes back a deleted task's context for reuse. If the task is the running one, its switch away saves nothing into it |
 | `ksos_port_switch(from, to)` | saves `from` and switches to `to`; a null `from` (the running task was just deleted) saves nothing |
-| `ksos_port_tick_start(reload)` | starts the periodic timer: `SIGALRM`+`setitimer` on POSIX, `SysTick` on Cortex-M |
+| `ksos_port_tick_start(reload)` | starts the periodic timer: `SIGALRM`+`setitimer` on POSIX, `SysTick` on Cortex-M. It returns 0, and starts nothing, for a reload the timer cannot take (0, or past 2^24 on Cortex-M) |
 | `ksos_port_irq_save() / _restore(s)` | a critical section: `SIGALRM` and `SIGUSR1` blocked through `sigprocmask` on POSIX, `PRIMASK` on Cortex-M |
 | `ksos_port_in_isr()` | non-zero inside an interrupt handler: `IPSR` on Cortex-M; always 0 on POSIX, whose signal handler runs on top of the interrupted task |
 | `ksos_port_wait_irq()` | called inside a critical section; opens it and sleeps until an interrupt in one step: `wfi` then a brief `cpsie i`, or `sigsuspend` |
@@ -182,7 +182,7 @@ All three break with no diagnostic. A returned error code gets forgotten, so kso
 
   The timeout runs on `g_tick`, so tickless idle counts it as a point to move the time to. A blocked task carries one timeout. The woken task's recheck takes the condition if it can, and gives up if the timeout has passed (`make ksos-timeout` and `make ksos-cm-timeout`).
   * **When `lock_for` gives up, return the priority it lent.** The holder is recomputed as on a release, from the priorities still waiting on the mutexes it holds.
-  * **A timeout too large for the clock waits rather than wrapping.** `deadline_after` in `lib/ksos/kernel/task.kspl` saturates at the last tick. A plain sum would wrap to a deadline already passed (`make ksos-timeout`).
+  * **A timeout too large for the clock waits rather than wrapping.** `deadline_after` in `lib/ksos/kernel/task.kspl` saturates at the last tick. A plain sum would wrap to a deadline already passed (`make ksos-timeout`). **Tickless idle never moves the clock to a saturated deadline**, and the tick stops at the last tick rather than wrapping to 0. Moving there would end the wait at once and saturate every later deadline, so each later delay would return at once (`make ksos-sleep`).
   * **The bare form is the `_for` form with no deadline.** Each primitive has one wait loop per direction (`take_until` and the like in `lib/ksos/kernel/sync.kspl`), so a fix reaches both forms.
   * **A tick is logical time.** `enable_preemption`'s reload is in the port's unit, so only the application can turn it into Hz. It names the rate with `declare_tick_hz(hz)` and converts with `ms_to_ticks(ms)`, which panics if no rate was named. It rounds up: rounding down would turn a short timeout into 0 ticks and give up without waiting.
   * Caution: **Do not fold how long it waits into one argument.** A single tick count that reads 0 as "do not wait" and a sentinel as "forever" lets a setting change the sentinel into a finite wait. ksos separates the cases by how the call is written. It refuses `_for(0)` with a panic (0 is `try_`'s job), and has no sentinel for forever.

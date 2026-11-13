@@ -400,6 +400,35 @@ priv fn check_client(root: U8[], arena: Arena$@) //<
     times: = got.get("shown").as_int().unwrap_or(-1)
     verdict.check("extension client: a start with the default settings keeps the output panel back",
         times == 0, arena.text().s("brought forward \{times\} times").take())
+    check_restarts(got, arena)
+
+priv fn check_restarts(got: json.Value, arena: Arena$@) //<
+    //< A changed setting starts the server again, and so does a stop, a limited number of times
+    //< **`kspl.defines` reaches the server only as it starts**, so without the restart a change
+    //< waits for a reload of the window.
+    starts: = got.get("starts").arr_list(arena)
+    errors: = got.get("errors").arr_list(arena)
+    said: = arena.text().s("the starts' KSPLC_DEFINES:")
+    for one in starts
+        said.s(" [").s(one.as_str().unwrap_or("?")).s("]")
+    told: = said.s("; errors shown: \{errors.len\}").take()
+    verdict.check("extension client: a changed kspl.defines starts the server again with it",
+        starts.len >= 2 && starts.get(1).as_str().unwrap_or("").equals("blas"), told)
+    // The host stops the server five times: four starts follow, then one error and no fifth.
+    verdict.check("extension client: a server that stops starts again, four times in 3 minutes",
+        starts.len == 6 && errors.len == 1, told)
+    // Caution: **Count the `initialized` too.** A stop answers the old `initialize` with nothing,
+    // and a client acting on that answer tells the new server `initialized` before it is ready.
+    // The first of the five servers stops before it answers, so it is told none.
+    $inits: Sz = 0
+    $readies: Sz = 0
+    for one in got.get("restarted").arr_list(arena)
+        name: = one.as_str().unwrap_or("")
+        inits += 1 if name.equals("initialize") else 0
+        readies += 1 if name.equals("initialized") else 0
+    verdict.check("extension client: each restarted server is told `initialized` once",
+        inits == 5 && readies == 4,
+        arena.text().s("initialize \{inits\} times, initialized \{readies\} times").take())
 
 priv fn listed(msgs: List<|Sent|>@, arena: Arena$@): U8[] //< the messages, one word each
     b: = arena.text()

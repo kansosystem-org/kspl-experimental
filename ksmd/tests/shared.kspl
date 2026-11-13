@@ -1,0 +1,46 @@
+//< A call worked out once is used again for the rest of the calculation: the same function on the
+//< same cells, each argument a reference alone (`Parser.shared_key` in `ksmd/calc/calc.kspl`)
+import "ksmd/calc/calc"
+import "ksmd/tests/calculation" { failure, number }
+import "ksmd/tests/support" { join, read }
+import "std/mem" { Arena }
+import "std/str"
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const HEAD: U8[] = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+priv const TODAY: U8[] = "2026-10-23" //< the date the test documents count as opened on
+
+fn run()
+    once_per_range()
+    kept_only_when_settled()
+
+// **One range on every row is added once**: each later call is one read (`MAX_READS`). Whole
+// columns and the rows they hold are one call.
+priv fn once_per_range()
+    defer arena: = Arena(64 * 1024)
+    defer $same: = Str_builder()
+    same.s(HEAD)
+    for _ in Range.asc(300)
+        same.s("| 1 | =sum(t.A) + sum(t.A) + sum(A1:A300) + sum(A$1:A$300) |\n")
+    same.s(":::\n")
+    doc: = read(same.slice(), arena)
+    r: = calc.calculate(doc@, TODAY, arena, null, 10000)
+    number("the same range on every row calculates under the read limit", r@, 0, 299, 1, 1200.0)
+    verdict.check("its cells are read once, and each later call is one read",
+        r.reads == 300 + 300 * 4 - 1, arena.text().s("\{r.reads\}").take())
+
+// A call kept gives what working it out again would. One that read a cell on its own chain is not
+// kept, since that cell's value is not final yet.
+priv fn kept_only_when_settled()
+    defer arena: = Arena(64 * 1024)
+    rows: =
+        "| 1 | =A1/sum(A$1:A$2) |\n| 3 | =A2/sum(A$1:A$2) |\n| 5 | =sum(B$1:B$3) |\n| 6 | \
+            =sum(B$1:B$3) |\n| 7 | =sum(B$1:B$2) |\n:::\n"
+    doc: = read(join(HEAD, rows, arena), arena)
+    r: = calc.calculate(doc@, TODAY, arena)
+    number("a share of a kept total", r@, 0, 0, 1, 0.25)
+    number("and the next row's share", r@, 0, 1, 1, 0.75)
+    failure("a total inside its own range is a cycle", r@, 0, 2, 1, .cycle)
+    failure("and the same total below it reads that cycle", r@, 0, 3, 1, .cycle)
+    number("a total of the shares above", r@, 0, 4, 1, 1.0)

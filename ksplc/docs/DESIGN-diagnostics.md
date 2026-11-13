@@ -94,6 +94,8 @@ In the `T=F32` instance, `F32$@::(a)` is an identity cast, so [I0301] fires. In 
 
 **A missed finding is the cost accepted.** Reporting what is redundant in every instance would need machinery to pool diagnostics across instances. No advice is safer than wrong advice.
 
+**An error that keeps an instance's code right is still given there.** Three such values are refused in an instance whose type argument they do not fit. They are a literal (`y = 300` with `T = U8`), a constant operand (`a + 1000`) and a shift amount. Silent, they change the value: the `U8` instance stores 44. Such an error does depend on the type argument, so the rule above would drop it. It is not advice, though, and the instance has no other way to be right. The error names its instance as the next section says, and other instances are not affected (`literal.kspl`, `binary.kspl`).
+
 **The import an extension method requires is a third case, and an error rather than advice.** That rule is "A file using an extension method imports its defining file" in [`DESIGN-compiler.md`](DESIGN-compiler.md). Inside the body the receiver can be the type argument's. A generic cannot import every file that serves its bound: `put<|W, T: Formattable|>` in `std/lang` reaches each type's `fmt` wherever its `impl` stands. The ledger is still asked, so a hit marks the template file's import used for [I0401].
 
 ### An error in a generic's body names its instantiation
@@ -374,6 +376,7 @@ Caution: **Do not consult it with the qualification stripped.** A short name ans
 
 * **A status line describes the run, not its product**: the summary, the closing line, `--stats`'s report, the folder `clean` emptied. `ksplc run script.kspl > out.txt` must not leave the compiler's lines in `out.txt`.
 * **The summary stays on the diagnostics' stream**, so the count comes under the lines it counts.
+* **The summary counts the diagnostics written**, as the closing object does (`Written` in `base/diag.kspl`). The analysis's tally misses an error the parse or its desugaring stopped on, so a summary read from it left such a compile without one.
 * **Under `--diagnostic-format=json`, standard error stays a stream of objects**: the summary and the closing line become one closing object (the next section).
 
 Caution: **A reader taking the count from the text matches the head of the line (`Finished with `).** A message can say `error(s)` too.
