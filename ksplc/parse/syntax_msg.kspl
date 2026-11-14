@@ -77,6 +77,11 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
     //< shape is recognized by looking at both sides of the failure position.
     if pos < 0 || pos > src.len
         return ""
+    // A block comment (`/* … */`, C's and Java's shape). The failure lands on its `/`, or on the
+    // `*` where the `/` was read as a division.
+    if src.starts_with("/*", pos) || (pos >= 1 && src.starts_with("/*", pos - 1))
+        return "\n  Note: KSPL has no block comment ('/* ... */'). A comment starts with '//' and \
+            runs to the end of the line. Start each line of a longer comment with '//'."
     // A bare block (`{ … }` as a statement of its own): `stmt` does not include `stmt_block`
     // (`../kspl.kspeg`), so the failure lands on the `{`.
     // Caution: **Ask what stands before it.** A valid `{` (`if cond {`, `T::{ … }`) has a name
@@ -603,11 +608,12 @@ priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool 
     msg.s(". Separate the items of a list with ','.")
     return true
 
-priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
-    //< It writes the sentence naming a decimal integer that starts with `0`, which KSPL refuses
+priv fn append_leading_zero_msg(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+    //< It writes the whole message for a decimal integer that starts with `0`, which KSPL refuses
     //< C reads `0755` as octal (493), and KSPL has no octal literal, so the spelling is not read at
     //< all rather than read as a different number. The failure lands on the digits' end (a float's
-    //< `.` was expected) or on the `0` itself.
+    //< `.` was expected) or on the `0` itself. **The leading zero is the message**, not the
+    //< expected set: "expected a float" names a fix the writer did not mean.
     $start: = math.min(pos, src.len)
     for start > 0 && (src[start - 1].is_digit() || src[start - 1] == '_')
         start -= 1
@@ -628,8 +634,8 @@ priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool /
     $rest: = start
     for rest < end - 1 && (src[rest] == '0' || src[rest] == '_')
         rest += 1
-    msg.s("\n  Note: a decimal integer does not start with 0. KSPL has no octal literal. '")
-        .s(spelled).s("' is not read. Write '").s(src.sub(rest, end - rest))
+    msg.s("'").s(spelled).s("' is not read: a decimal integer does not start with 0")
+        .s("\n  Note: KSPL has no octal literal. Write '").s(src.sub(rest, end - rest))
         .s("' for the decimal value")
     if is_octal
         msg.s(", or '0x\{octal:x\}' for the octal one C would read")
@@ -791,6 +797,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
             .s("this string is never closed. No '\"' closes it. The rest of the file was read as \
                 its text. Close it where its text ends")
         return msg
+    if append_leading_zero_msg(msg@, src, pos)
+        return msg
     msg.s("expected ")
     in_laid_block: = laid_out && opened_by_layout(src, innermost_open(src, pos))
     if target_parser.fail.expected_label_count > 0
@@ -817,8 +825,6 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     if append_unclosed_bracket_hint(msg@, src, pos)
         return msg
     if append_missing_comma_hint(msg@, src, pos)
-        return msg
-    if append_leading_zero_hint(msg@, src, pos)
         return msg
     if append_based_digit_hint(msg@, src, pos)
         return msg

@@ -1,7 +1,7 @@
 //< Frame addresses: a pointer into a function's frame must not outlive it
 //< Each case below is compiled alone, as the file its head names.
 // ==== case frame_pointer_stored_outside
-//< A slice or an interface value pointing into the frame is refused where a store outlives it
+//< A slice or a trait value pointing into the frame is refused where a store outlives it
 //< A global, a parameter's pointee, `p$` and a slice's element all outlive the frame, as `return`
 //< does. `kept_inside` stores into the frame or stores a global's view, and passes.
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into the global 'g', which
@@ -9,8 +9,8 @@
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
-// EXPECT: cannot store an interface value built from local storage. The interface value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into the global 'g_shape'
-// EXPECT: cannot store 's': it was set from a slice or an interface value built from local storage
+// EXPECT: cannot store a trait value built from local storage. The trait value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into the global 'g_shape'
+// EXPECT: cannot store 's': it was set from a slice or a trait value built from local storage
 // EXPECT: Finished with 7 error(s)
 import "std/io"
 
@@ -79,7 +79,7 @@ fn main()
   marked_local_into_global()
   io.out().s("\{kept_inside()\}\n")
 // ==== case frame_pointer_stored_in_outer_local
-//< A slice, an interface value or a closure made in an inner block is refused in an outer local
+//< A slice, a trait value or a closure made in an inner block is refused in an outer local
 //< The C backend ends a block's storage at its end, so the outer local would point at a dead
 //< block. The storage's own block decides, not the statement's: `kept_where_it_lives` slices an
 //< outer array in an inner block, stores into a parameter, or keeps a local in its own block, and
@@ -87,8 +87,8 @@ fn main()
 // EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored into 'c', a local of an outer block, and outlive the block whose end frees what it points at. Declare 'c' in that block
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 's', a local of an outer block
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 'h', a local of an outer block
-// EXPECT: cannot store an interface value built from local storage. The interface value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into 'shape', a local of an outer block
-// EXPECT: cannot store 't': it was set from a slice or an interface value built from local storage. Its pointer points into this function's frame. The compiler makes that pointer, so no '@' appears. It would be stored into 's', a local of an outer block
+// EXPECT: cannot store a trait value built from local storage. The trait value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into 'shape', a local of an outer block
+// EXPECT: cannot store 't': it was set from a slice or a trait value built from local storage. Its pointer points into this function's frame. The compiler makes that pointer, so no '@' appears. It would be stored into 's', a local of an outer block
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into 's', a local of an outer block
 // EXPECT: Finished with 6 error(s)
 import "std/io"
@@ -240,9 +240,9 @@ fn main(): I32
 //< A trait value made of a slice keeps the descriptor's address, which dies with the frame
 //< A slice's elements can lie anywhere, but the trait value points at the descriptor itself: a
 //< local, a parameter or a literal's copy. Returned, it would read the ended frame.
-// EXPECT: frame_slice_trait_value_leaves.kspl:16:10: error: cannot return an interface value built from local storage
-// EXPECT: frame_slice_trait_value_leaves.kspl:19:10: error: cannot return an interface value built from local storage
-// EXPECT: frame_slice_trait_value_leaves.kspl:22:10: error: cannot return an interface value built from local storage
+// EXPECT: frame_slice_trait_value_leaves.kspl:16:10: error: cannot return a trait value built from local storage
+// EXPECT: frame_slice_trait_value_leaves.kspl:19:10: error: cannot return a trait value built from local storage
+// EXPECT: frame_slice_trait_value_leaves.kspl:22:10: error: cannot return a trait value built from local storage
 priv trait Look
   fn look(r: Self): I32
 
@@ -267,11 +267,11 @@ fn main(): I32
 //< A field set afterwards (`h.s = U8[]::a`), an element of a local array, and a container a call
 //< keeps a trait value in (`xs.push(sq)`) all make the local point into the frame. Returning it
 //< then reads a dead frame. `ok_read_field` returns only a field's length and passes.
-// EXPECT: cannot return 'h': it was set from a slice or an interface value built from local storage
-// EXPECT: cannot return 'v': it was set from a slice or an interface value built from local storage
-// EXPECT: cannot return 'arr': it was set from a slice or an interface value built from local storage
+// EXPECT: cannot return 'h': it was set from a slice or a trait value built from local storage
+// EXPECT: cannot return 'v': it was set from a slice or a trait value built from local storage
+// EXPECT: cannot return 'arr': it was set from a slice or a trait value built from local storage
 // EXPECT: cannot return 'k': it was set from the address of local storage
-// EXPECT: cannot return 'xs': it was set from a slice or an interface value built from local storage
+// EXPECT: cannot return 'xs': it was set from a slice or a trait value built from local storage
 // EXPECT: Finished with 5 error(s)
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -345,9 +345,9 @@ fn main(): I32
 //< point where the local's pointer does, and so does a field set from a written `@` (`k.p`).
 //< Returned, each reads a dead frame. A number read out of the same local holds no pointer, so
 //< `ok_len` passes, and a field set from no frame pointer passes too (`ok_other_field`).
-// EXPECT: frame_pointer_read_out_of_a_local.kspl:17:10: error: cannot return 'h': it was set from a slice or an interface value built from local storage
-// EXPECT: frame_pointer_read_out_of_a_local.kspl:22:10: error: cannot return 's': it was set from a slice or an interface value built from local storage
-// EXPECT: frame_pointer_read_out_of_a_local.kspl:27:10: error: cannot return 's': it was set from a slice or an interface value built from local storage
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:17:10: error: cannot return 'h': it was set from a slice or a trait value built from local storage
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:22:10: error: cannot return 's': it was set from a slice or a trait value built from local storage
+// EXPECT: frame_pointer_read_out_of_a_local.kspl:27:10: error: cannot return 's': it was set from a slice or a trait value built from local storage
 // EXPECT: frame_pointer_read_out_of_a_local.kspl:41:10: error: cannot return 'k': it was set from the address of local storage
 // EXPECT: Finished with 4 error(s)
 priv struct Holder
@@ -405,7 +405,7 @@ fn main(): I32
 // EXPECT: frame_pointer_read_through_a_pointer.kspl:27:10: error: cannot return this value: it is read through a pointer to 'h', which was set from the address of local storage
 // EXPECT: frame_pointer_read_through_a_pointer.kspl:33:10: error: cannot return this value: it is read through a pointer to 'arr', which was set from the address of local storage
 // EXPECT: frame_pointer_read_through_a_pointer.kspl:38:10: error: cannot return 'arr': it was set from the address of local storage
-// EXPECT: frame_pointer_read_through_a_pointer.kspl:44:10: error: cannot return this value: it is read through a pointer to 's', which was set from a slice or an interface value built from local storage
+// EXPECT: frame_pointer_read_through_a_pointer.kspl:44:10: error: cannot return this value: it is read through a pointer to 's', which was set from a slice or a trait value built from local storage
 // EXPECT: Finished with 5 error(s)
 priv struct H
   p: I32@

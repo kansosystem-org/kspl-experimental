@@ -12,6 +12,7 @@ import "ksplc/base/cache" as base_cache + { Hash_hex }
 import "ksplc/base/config_file" as base_config_file
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
+import "ksplc/base/package" as base_package
 import "ksplc/tools/libs" as tools_libs
 import "ksplc/tools/run_start" as tools_run_start
 import "std/chars"
@@ -553,7 +554,17 @@ fn run_script(script: U8[], script_args: List<|U8[]|>$@) //<
     if !fs.exists(script)
         io.err().s("ksplc run: no such file: \{script\}\n")
         sys.exit(1)
+    exit_if_refused("run", script)
     run_program(script, .none, script_args)
+
+priv fn exit_if_refused(verb: U8[], script: U8[]) //<
+    //< It stops on a file in another folder named `std` (`refused_entry` in ../base/package.kspl)
+    //< Caution: **Refuse it here, not in the child.** The child is handed `--std-dir=`, so its
+    //< message would name that as where std was taken, even where nobody wrote one.
+    refused: = base_package.refused_entry(script)
+    if refused.len > 0
+        io.err().s("ksplc \{verb\}: ").s(refused).c('\n')
+        sys.exit(1)
 
 fn run_source(source: U8[], script_args: List<|U8[]|>$@) //<
     //< It builds a program given as text (`--eval=`) and runs it
@@ -851,6 +862,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     if !fs.exists(input)
         io.err().s("ksplc build: no such file: \{input\}\n")
         sys.exit(1)
+    exit_if_refused("build", input)
     stem: = sys.strip_last_ext(output)
     c_path: = arena.text().s(stem).s(".c").take()
     libs_path: = arena.text().s(stem).s(".libs").take()

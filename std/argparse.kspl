@@ -24,6 +24,9 @@ pub enum Argument_error //< why the arguments could not be read as declared
     unexpected_value(name: U8[]) //< a flag carried `=value`
     multiple_commands(name: U8[]) //< two commands were named at once
     unexpected_arg(name: U8[]) //< a positional argument was given to a CLI that takes none
+    before_command(name: U8[], command: U8[]) //<
+        //< A positional argument stood before a command that takes one target and passes on the rest
+        //< `ksplc b.kspl run x.kspl` would otherwise run `b.kspl` with `x.kspl` as its argument.
     repeated(name: U8[]) //< an item taking one value was given twice; the second would replace it
     not_for_command(name: U8[], command: U8[], commands: U8[]) //<
         //< An option was given with a command it does not take effect on
@@ -426,12 +429,15 @@ impl Parser
     ): Void!Argument_error
         // subcommand_trailing's rest, pushed once its target has arrived.
         $trail: List<|U8[]|>$@ = null
+        // The target came after the command's name. `rest` alone cannot tell: a positional given
+        // before the name is refused, but it would fill `rest` too.
+        $target_seen: = false
         $operands_only: = false // after `--`
         $named: = false // a command was chosen by its name
         for arg in argv
             // Caution: Make this check before every other one: after the target, not even `--help`
             // can be interpreted (it would take the script's own).
-            if trail != null && r.rest.len > 0
+            if target_seen
                 trail.push(arg)
                 continue
             if !operands_only && arg.equals("--")
@@ -449,6 +455,8 @@ impl Parser
                 operand_due: = named && (trail != null || r.takes_positional)
                 if !operands_only && !operand_due
                     if c: = r.find_cmd(arg)
+                        if c.trailing != null && r.rest.len > 0
+                            throw .before_command(r.rest.get(0), c.name)
                         r.set_command(c.name)!
                         named = true
                         if c.trailing != null
@@ -459,6 +467,7 @@ impl Parser
                 if !r.takes_positional && trail == null
                     throw .unexpected_arg(arg)
                 r.rest.push(arg)
+                target_seen = trail != null
                 continue
             hit: = r.option_named(arg)!
             o: = hit.opt
@@ -672,6 +681,10 @@ impl Argument_error: Formattable //< so a failure can be written straight into a
             return w.s("cannot combine '").s(n).s("' with another command")
         case .unexpected_arg(n)
             return w.s("unexpected argument '").s(n).s("'")
+        case .before_command(n, c)
+            return w.s("'").s(n).s("' stands before '").s(c).s("'. '").s(c)
+                .s("' takes the argument after it and passes on the rest, so write '").s(c).s(" ")
+                .s(n).s("'")
         case .repeated(n)
             return w.s("option '").s(n).s("' takes one value and is given more than once")
         case .not_for_command(n, c, cs)

@@ -256,6 +256,12 @@ fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
 // The tools: list, search and read. Each returns the text the model reads, a refusal included.
 // ==========================================
 
+trait Going //< what a long tool asks between files (`Progress` in `ksagent/progress.kspl`)
+    //< **A search over a very large folder can take longer than the page waits** for the live
+    //< file to be written again, so asking writes it where it grew old. The answer is false once
+    //< the question was stopped, and the tool then stops too.
+    fn go_on(r: Self): Bool //< false once the work must stop
+
 fn tool_list(folder: Folder, given: U8[], room: Sz, arena: Arena$@): U8[] //<
     //< The entries of one folder, in at most `room` bytes of the request (`sent_len`)
     //< A folder ends with `/`. What `read` would refuse is left out (`taken_under`).
@@ -287,13 +293,15 @@ fn tool_list(folder: Folder, given: U8[], room: Sz, arena: Arena$@): U8[] //<
         return "(the folder is empty)"
     return out.take()
 
-fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, arena: Arena$@): U8[] //<
-    //< The lines that hold the words of `text`, as `path:line: text`, over every text file under
-    //< `given`, in at most `room` bytes of the request (`sent_len`)
-    //< **A line matches when it holds every word, in any order**, ASCII case ignored. A word is
-    //< found inside a longer one, so `quote` finds `quoted`. Japanese has no spaces, so a Japanese
-    //< text is one word, found as it is written. With no line holding every word, the lines that
-    //< hold the most of them come first, under a line that says so.
+fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, going: Going, arena: Arena$@):
+    U8[] //<
+        //< The lines that hold the words of `text`, as `path:line: text`, over every text file under
+        //< `given`, in at most `room` bytes of the request (`sent_len`)
+        //< `going` is asked before each file is read.
+        //< **A line matches when it holds every word, in any order**, ASCII case ignored. A word is
+        //< found inside a longer one, so `quote` finds `quoted`. Japanese has no spaces, so a
+        //< Japanese text is one word, found as it is written. With no line holding every word, the
+        //< lines that hold the most of them come first, under a line that says so.
     $words: = words_of(text, arena)
     if words.len == 0
         return "refused: give some words to search for"
@@ -312,6 +320,8 @@ fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, arena: Arena$@
     $whole: = List<|Hit|>(arena)
     $partial: = Partial_hits(words.len, arena)
     for path in files
+        if !going.go_on()
+            return STOPPED
         if !path.equals(full) && !taken_under(folder, full, under(full, path), arena)
             continue
         defer one: = Arena(64 * 1024)
@@ -349,6 +359,8 @@ fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, arena: Arena$@
         level -= 1
     return hit_lines("(no line holds every word; these lines hold the most of them)\n",
         ranked.slice(), room, arena)
+
+const STOPPED: U8[] = "refused: the question was stopped" //< what a tool stopped by `Going` gives
 
 priv struct Hit //< one line a search found
     path: U8[] //< the file, as the model gives it back

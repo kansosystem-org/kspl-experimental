@@ -281,7 +281,7 @@ priv fn case_summary_codes(arena: Arena$@) //<
         return
     r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "lint", src }, dir)
     verdict.check("the closing line offers explain only the codes it knows",
-        r.out.find_str("does not explicitly implement interface").is_some() &&
+        r.out.find_str("does not explicitly implement trait").is_some() &&
         r.out.find_str("explained by `ksplc explain <code>`: I0401.").is_some(), r.out)
 
 priv fn case_build(arena: Arena$@) //<
@@ -324,6 +324,16 @@ priv fn case_build(arena: Arena$@) //<
                 return
     ok_case("build: a container that keeps a local's closure is warned of",
         U8[][]::{ "build", std_flag(), src, exe }, "[W0110]")
+    // **[W0101] is printed by every compile too**: the index panics at run time.
+    io.write_file(src, "fn main(): I32\n  a: = I32[3]::{ 1, 2, 3 }\n  return a[5]\n") catch
+        verdict.check("build: the program with a constant index past the end can be written", false,
+            "")
+        return
+    ok_case("build: a constant index past an array's end is warned of",
+        U8[][]::{ "build", std_flag(), src, exe }, "[W0101]")
+    c_out: = fs.join(dir, "index.c", arena)
+    ok_case("a translation to C warns of a constant index past an array's end",
+        U8[][]::{ std_flag(), src, c_out }, "[W0101]")
     io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
     ng_case("build: a program with no main() is refused by ksplc, not by the linker",
         U8[][]::{ "build", std_flag(), src, exe }, "this program has no main()")

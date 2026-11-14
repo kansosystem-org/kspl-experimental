@@ -304,8 +304,38 @@ priv fn check_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_n
     if out_of_range
         sign: = "-" if is_neg else ""
         type_name: = c.env.display(type_id)
+        bits: = c.env.get_portable_bit_size(type_id)
+        unsigned: = c.env.is_unsigned(type_id)
+        // `U8::300` keeps the low bits, so the message shows the number that cast gives. A suffix
+        // is not written on the cast's operand: `U8::300U8` repeats the type and is itself out of
+        // range.
+        mask: = 0U64 - 1U64 if bits >= 64 else (U64::1 << U64::bits) - 1U64
+        top: = mask >> 1U64 // the signed type's largest value
+        bottom: = top + 1U64 // the magnitude of its smallest
+        cast_value: = sema_decl_eval.wrap_to(I64::(0U64 - lit.value if is_neg else lit.value), bits,
+            unsigned)
+        $digits: = node.text
+        suffix_id: = sema_decl_eval.int_suffix_type_id(digits)
+        if suffix_id != I32::sema_type_env.Builtin_type_id.unknown
+            digits = digits.sub(0,
+                digits.len - sema_type_env.BUILTIN_TYPES[suffix_id].name.len)
         c.clear_scratch()
-            .s("literal '\{sign\}\{node.text\}' is out of range for type '\{type_name\}'. Its value \
-                would change silently. Use a wider type, or cast explicitly \
-                ('\{type_name\}::\{sign\}\{node.text\}') if the truncation is intended")
+            .s("literal '\{sign\}\{node.text\}' is out of range for type '\{type_name\}', which \
+                holds ")
+        if unsigned
+            c.scratch.s("0 to \{mask\}")
+        else
+            c.scratch.s("-\{bottom\} to \{top\}")
+        c.scratch
+            .s(". Its value would change silently. Use a wider type, or cast explicitly if the \
+                truncation is intended: '\{type_name\}::")
+        if is_neg
+            c.scratch.s("-\{digits\}")
+        else
+            c.scratch.s(digits)
+        c.scratch.s("' keeps the low bits and gives ")
+        if unsigned
+            c.scratch.s("\{U64::cast_value\}")
+        else
+            c.scratch.s("\{cast_value\}")
         c.err(node, c.scratch.slice())

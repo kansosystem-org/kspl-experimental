@@ -36,10 +36,9 @@ fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous 
         arena) catch
             verdict.check("the empty-buffer workspace is written", false, "write failed")
             return
-    $c: = lsp_client.start_ready(exe, U8[][]::{}, dir, arena) catch
+    defer $c: = lsp_client.start_ready(exe, U8[][]::{}, dir, arena) catch
         verdict.check("the empty-buffer client starts", false, "start failed")
         return
-    defer c.free()
     for rel in U8[][]::{ "brace.kspl", "laid.kspl" }
         uri: = lsp_client.uri_of(dir, rel, arena)
         text: =
@@ -285,11 +284,10 @@ fn check_first_answer(exe: U8[], arena: Arena$@) //<
     //< After a crash and after a hang alike; every other document's diagnostics still come.
     name: = "a queued request after recovery precedes unrelated documents' analyses"
     text: = copy_text(arena)
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
             verdict.check(name, false, "the client cannot be started")
             return
-    defer c.free()
     if !verdict.check("the first recovery document opens",
         open_copies(c@, 0, 1, text, arena), lsp_client.why(c@, "", arena))
         return
@@ -338,11 +336,10 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
     //< **The document is found when it is analysed**, which after a restart comes later than the
     //< restart itself; the worker is not remade without end.
     name: = "a document that crashes its analysis is quarantined"
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
             verdict.check(name, false, "the client cannot be started")
             return
-    defer c.free()
     for uri in KEPT_URIS
         lsp_client.open(c@, uri, KEPT_SRC, arena)
     lsp_client.open(c@, POISON_URI, KEPT_SRC, arena)
@@ -378,11 +375,10 @@ priv const NOISE_END: U8[] = "end of the injected test noise" //< the noise's la
 fn check_noise(exe: U8[], arena: Arena$@) //<
     //< That a worker writing much to standard error is not taken for hung, and its text is logged
     name: = "a worker that writes much to standard error goes on answering"
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
             verdict.check(name, false, "the client cannot be started")
             return
-    defer c.free()
     c.notify(NOISE_HOOK, lsp_client.empty_obj(arena), lsp_client.SEND_MS, arena) catch {}
     // The watchdog's wait as well, so a stopped worker shows as a restart, not as a timeout here.
     got: = lsp_client.answer(c@, "shutdown", lsp_client.empty_obj(arena),
@@ -444,11 +440,10 @@ fn run_package(exe: U8[], arena: Arena$@)
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
     top: = arena.text().s(dir).c('/').s(OWN_TOP).take()
-    $c: =
+    defer $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, top, arena) catch
             verdict.check(name, false, "the language server cannot be started")
             return
-    defer c.free()
     $b: = Json_builder(arena)
     _ready: =
         c.request("initialize", b.obj().build(), lsp_client.READ_MS, arena) catch e

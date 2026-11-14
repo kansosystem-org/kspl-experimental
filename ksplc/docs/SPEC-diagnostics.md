@@ -32,6 +32,7 @@ The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, over
 
 ### [W0101] An out-of-bounds array access
 A constant index lies outside a fixed-length array (`a[5]` on an `I32[3]`, or `a[-1]`).
+* **Every compile prints it**, `ksplc run` and `ksplc build` included, not `ksplc lint` alone: the index panics at run time.
 * **Fix**: correct the index, or it panics at run time.
 
 ### [W0102] A side effect lost in an array length
@@ -83,12 +84,12 @@ A pointer to such a value (`Arena(…)`'s result) is read only up to a `defer` l
 * **Not reported**:
   * a value declared with `defer` in front, which its block's end frees;
   * a parameter, which the caller made;
-  * a value whose initializer passes an arena other than the literal `null` (`List<|I32|>(arena)`): the arena frees it;
-  * a value that keeps its arena in a field (a `List`, a `Map`, a `json.Doc`), made by a call that passes no literal `null`;
+  * a value that keeps its arena in a field, made by a call that passes no literal `null`: the arena frees it. That is a `List`, a `Map`, a `json.Doc`, or a struct holding one by value;
   * an arena held by value, which stands over a buffer its caller owns (`Arena.from_buffer`);
   * an element read out of a container that holds such values (`rows.get(i)`);
   * an exit inside a closure, which leaves only the closure;
   * in a generic body, a value whose type is a type argument itself (`v: T`): in one instance it can be an `I32`.
+* **An arena passed to the call does not exempt a value that keeps none.** Its `free()` has no arena to give its memory back to, so the value is on the heap. Example: a function that takes an arena for its scratch work and returns a `Str_builder`.
 * **A generic body is checked in each instance the program uses.** A finding is printed once, at the line written.
 * **Not seen**: a field or a value reached through a pointer, a generic body no instance uses, or an arena variable `null` at run time.
 * **Fix**: put `defer` in front of the declaration (`defer $b: = Str_builder()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.

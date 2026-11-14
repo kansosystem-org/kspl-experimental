@@ -233,6 +233,37 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return (fd.dwReserved0 & IO_REPARSE_TAG_NAME_SURROGATE_BIT) ? 1 : 0;
 }
 
+/* The POSIX side's meanings. A link, a junction and a `subst` drive are resolved by opening the
+ * path and asking for its final name; FILE_FLAG_BACKUP_SEMANTICS lets a folder open. The `\\?\`
+ * prefix the answer opens with is dropped, so it compares with a path written the usual way
+ * (`\\?\UNC\srv\sh` becomes `\\srv\sh`). */
+KSPL_LINK I32 kspl_real_path(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
+    wchar_t path[KSPL_WPATH_CAP];
+    wchar_t final_w[KSPL_WPATH_CAP];
+    char utf8[KSPL_WPATH_CAP * 3 + 1];
+    const wchar_t *from = final_w;
+    HANDLE h;
+    DWORD got;
+    int len;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
+    h = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    got = GetFinalPathNameByHandleW(h, final_w, KSPL_WPATH_CAP, FILE_NAME_NORMALIZED);
+    CloseHandle(h);
+    if (got == 0 || got >= KSPL_WPATH_CAP) return -1;
+    if (wcsncmp(final_w, L"\\\\?\\UNC\\", 8) == 0) {
+        final_w[6] = L'\\';
+        from = final_w + 6;
+    } else if (wcsncmp(final_w, L"\\\\?\\", 4) == 0) {
+        from = final_w + 4;
+    }
+    len = kspl_win_from_wide(from, utf8, (Sz)sizeof(utf8));
+    if (len < 0 || (Sz)len > cap) return -1;
+    memcpy(buf, utf8, (size_t)len);
+    return (I32)len;
+}
+
 /* The POSIX side's meanings. **A short name (`GIT~1` for `.git`) gives its long name**, which
  * FindFirstFileW reports for the entry whatever name found it. **Every byte the directory search
  * reads as a wildcard is refused**: `*` and `?`, and the DOS forms `<`, `>` and `"`, which the NT

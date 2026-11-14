@@ -6,6 +6,9 @@
 //< editor is idle. So the first answer after a recovery waits for one document, not for all. A
 //< document that crashes that analysis is quarantined. The analysis never runs here, so no fault in
 //< it takes down the editor's connection.
+//<
+//< A change that a later change to the same document, already waiting, replaces is not analysed
+//< (`Waiting`).
 // ==========================================
 // Caution: **Do not write your own wrapper for talking to a child process.** `Piped_child` in
 // `std/subproc` is the only one (declared twice, the timeout's guarantee or the cleanup steps
@@ -17,7 +20,7 @@ import "ksplc/lsp/state" { Doc_store }
 import "ksplc/lsp/worker" as lsp_worker
 import "std/channel"
 import "std/chars"
-import "std/ds" { Map }
+import "std/ds" { List, Map }
 import "std/io"
 import "std/json" + { Json_builder }
 import "std/jsonrpc"
@@ -311,7 +314,7 @@ priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], are
         //< The worker publishes the document's diagnostics, which replace those on screen. A
         //< document that brings the worker down is quarantined and the worker restarted.
     text: = docs.store.open_text(uri).unwrap_or("")
-    $frame: = build_doc_frame("textDocument/didOpen", uri, text, arena)
+    defer $frame: = build_doc_frame("textDocument/didOpen", uri, text, arena)
     end: = exchange(worker@, frame.slice(), arena)
     switch end
     case .done
@@ -330,6 +333,13 @@ priv fn message_of(body: U8[], arena: Arena$@): json.Value //<
     doc: = json.parse(body, arena) catch
         return .null_val
     return doc.val
+
+priv fn asks_answer(id_val: json.Value): Bool //< whether a message with this id is a request
+    switch id_val
+    case .null_val
+        return false
+    default
+        return true
 
 priv fn named_uri(params: json.Value): U8[] //< the document a message names; empty for none
     //< A call hierarchy's second step names it in `item`, every other request in `textDocument`.
@@ -448,6 +458,84 @@ impl Editor_reader: Manual_free
         r.reading.free()
         r.let_go()
 
+// ==========================================
+// Skipping a change that a later one replaces
+// **An editor that sends each keystroke sends changes faster than one is analysed.** A change
+// carries the whole text (`textDocumentSync` is Full), so only the newest counts. Before a change
+// is relayed, the messages waiting are taken; a later change to the same document skips it. The
+// numbers are in "The language server runs as two processes" in `../docs/DESIGN-tools.md`.
+// ==========================================
+
+priv struct Held //< one message taken from the editor before its turn
+    body: U8[] //< on the waiting list's arena
+    method: U8[]
+    uri: U8[] //< the document it names (`named_uri`); empty for none
+    asks: Bool //< whether it is a request, which owes an answer
+
+priv struct Waiting //< the messages taken from the editor before their turn, oldest first
+    //< Caution: **Hand all of them on before reading the editor again**, or their order changes.
+    arena: Arena$@ //< holds them; rewound once the last is handed on, so it holds one burst
+    empty: mem.Arena_state //< the arena's mark while it holds nothing
+    held: List<|Held|>
+    head: Sz //< the next to hand on
+
+impl Waiting
+    priv fn new(): Waiting
+        a: = Arena(64 * 1024)
+        return Waiting::{ .arena = a, .empty = a.save(), .held = List<|Held|>(a), .head = 0 }
+
+    priv fn next(r: Self$@, reader: Editor_reader@, wait: Bool, arena: Arena$@): Inbound //<
+        //< The oldest message taken before its turn, copied onto `arena`; else the reader's next
+        if r.head >= r.held.len
+            return reader.next(wait, arena)
+        body: = U8[]::arena.dup_str(r.held.get(r.head).body)
+        r.head += 1
+        if r.head >= r.held.len
+            r.held = List<|Held|>(r.arena)
+            r.head = 0
+            r.arena.restore(r.empty)
+        return .message(body)
+
+    priv fn replaced(r: Self$@, reader: Editor_reader@, uri: U8[], arena: Arena$@): Bool //<
+        //< Whether a later change to `uri` waits, with nothing between that must see this one
+        //< **A request between them keeps this change**, as does any other message naming `uri`
+        //< (a close, a save). A request is answered against the text the editor had when it
+        //< asked, and in the order asked.
+        $at: = r.head
+        for
+            for at < r.held.len
+                h: = r.held.get(at)
+                at += 1
+                if h.asks
+                    return false
+                if h.uri.equals(uri)
+                    return h.method.equals("textDocument/didChange")
+            if !r.take_waiting(reader, arena)
+                return false
+
+    priv fn take_waiting(r: Self$@, reader: Editor_reader@, arena: Arena$@): Bool //<
+        //< It takes every message the reader holds now, without waiting; false where none was there
+        //< `arena` holds only the parse each needs, and is rewound after it.
+        before: = r.held.len
+        for
+            switch reader.next(false, r.arena)
+            case .message(body)
+                mark: = arena.save()
+                msg: = message_of(body, arena)
+                method: = r.arena.dup_str(msg.get("method").as_str().unwrap_or(""))
+                uri: = r.arena.dup_str(named_uri(msg.get("params")))
+                r.held
+                    .push(Held::{ .body = body, .method = method, .uri = uri,
+                    .asks = asks_answer(msg.get("id")) })
+                arena.restore(mark)
+            default
+                break
+        return r.held.len > before
+
+impl Waiting: Manual_free
+    priv fn free(r: Self$@)
+        r.arena.free()
+
 fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
     // Where no worker or no reading thread can be started, it runs in-process instead.
     // Caution: **Start the reading thread last, once a worker is.** Once started it takes standard
@@ -465,6 +553,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
     defer reader.free()
     $worker: = first_worker
     defer $docs: = Lsp_docs()
+    defer $waiting: = Waiting()
     defer arena: = Arena(8 * 1024 * 1024)
     base: = arena.save()
 
@@ -474,7 +563,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         // time. So a request waits for at most one of them.
         idle_work: = worker.is_some() && docs.next_unchecked().len > 0
         $msg_body: U8[] = ""
-        switch reader.next(!idle_work, arena)
+        switch waiting.next(reader, !idle_work, arena)
         case .message(body)
             msg_body = body
         case .idle
@@ -488,9 +577,14 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         id_val: = msg.get("id")
         params: = msg.get("params")
         docs.observe(method, params)
+        named: = named_uri(params)
+        // **A change a later one replaces is recorded but not analysed.** The store holds its text
+        // all the same, and the later change is analysed in its place.
+        if method.equals("textDocument/didChange") && named.len > 0 &&
+            waiting.replaced(reader, named, arena)
+            continue
         // **The document a request names is analysed first**, as a didOpen. So its diagnostics
         // come too, and a crash in that analysis is told from a crash in answering.
-        named: = named_uri(params)
         if docs.is_unchecked(named)
             worker = check_doc(docs@, worker, named, arena)
         // forward to the worker (rebuilt with a proper header)
@@ -510,12 +604,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
             stop_worker(worker)
             worker = restart_worker(docs@, named, arena)
             // A request awaiting an answer gets an empty one, so the editor is not left waiting.
-            $has_id: = true
-            switch id_val
-            case .null_val
-                has_id = false
-            default {}
-            if has_id
+            if asks_answer(id_val)
                 lsp_msg.send_null_response(id_val, arena)
 
         if method.equals("shutdown")

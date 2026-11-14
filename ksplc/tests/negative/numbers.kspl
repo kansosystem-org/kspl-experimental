@@ -13,6 +13,26 @@ fn main(): I32
   b: U16[2147483648U32] = ::{}
   c: U8[0] = ::{}
   return I32::sizeof(U8[2147483647]) + I32::a.len + I32::b.len + I32::c.len
+// ==== case array_size_overflows
+//< An array size whose arithmetic overflows names the overflow, as an enum tag or a `const` does
+//< The fold failed, and the size read as one that is not positive, which says nothing of why.
+// EXPECT: integer overflow in compile-time constant expression
+// EXPECT-NOT: positive constant expression
+fn main(): I32
+  a: I32[2147483647 * 2 + 3] = ::{}
+  return a[0]
+// ==== case suffixed_literal_out_of_range
+//< A suffixed literal out of range names the type's range and what the cast it suggests gives
+//< The cast suggested once kept the suffix (`U8::300U8`), which repeats the type and is itself
+//< out of range. `U8::300` keeps the low bits, so the message shows that number.
+// EXPECT: literal '300U8' is out of range for type 'U8', which holds 0 to 255. Its value would change silently. Use a wider type, or cast explicitly if the truncation is intended: 'U8::300' keeps the low bits and gives 44
+// EXPECT: literal '-200I8' is out of range for type 'I8', which holds -128 to 127
+// EXPECT: 'I8::-200' keeps the low bits and gives 56
+// EXPECT-NOT: U8::300U8
+fn main(): I32
+  a: = 300U8
+  b: = -200I8
+  return I32::a + I32::b
 // ==== case cast_struct_to_number
 //< A struct does not cast to a number
 //< **Let it through and C refuses it** ("aggregate value used where an integer was expected"),
@@ -352,7 +372,7 @@ fn main()
 //< **Let `0755` through and it means one number on each backend**: C reads it as octal (493),
 //< while the LLVM backend and the constant folder read 755. A `09` stops the C compiler instead.
 //< So the spelling is refused, and the note gives both values it might have meant.
-// EXPECT: a decimal integer does not start with 0
+// EXPECT: error: '0755' is not read: a decimal integer does not start with 0
 // EXPECT: Write '755' for the decimal value, or '0x1ed'
 fn main(): I32
   mode: = 0755
@@ -381,8 +401,8 @@ fn main(): I32
 //< A leading `0` is refused in a type's array length too, where no expression is inferred
 //< The grammar refuses the spelling. So every place a literal can stand refuses it alike. A check
 //< in the analysis would have to be repeated wherever a constant is folded.
-// EXPECT: error: expected a float
-// EXPECT: a decimal integer does not start with 0. KSPL has no octal literal. '09'
+// EXPECT: error: '09' is not read: a decimal integer does not start with 0
+// EXPECT: Note: KSPL has no octal literal. Write '9' for the decimal value
 // EXPECT-NOT: or '0x
 priv const TABLE: U8[09] = ::{}
 

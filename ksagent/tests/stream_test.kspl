@@ -237,8 +237,9 @@ fn test_the_live_file_follows_the_answer(work: U8[], arena: Arena$@)
     verdict.check("the live file ends saying the turn is recorded, and holds no text",
         live.equals("{\"id\":\"q1\",\"phase\":\"done\"}\n"), live)
     verdict.check("a chat file is no source: a search passes it over",
-        files.tool_search(files.Folder(root), "Ten days", "", stub.ROOM, arena).find_str("team.")
-        .is_none(), "")
+        files
+        .tool_search(files.Folder(root), "Ten days", "", stub.ROOM, stub.GOING, arena)
+        .find_str("team.").is_none(), "")
 
 fn test_a_removed_question_stops_its_answer(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a question gone from its ask file while its answer streams stops it")
@@ -327,3 +328,13 @@ fn test_the_live_file_is_written_again_while_the_work_goes_on(work: U8[], arena:
     verdict.check("a look 6 seconds after the last write writes the live file again",
         later &&
         again.equals("{\"id\":\"q1\",\"phase\":\"waiting\",\"tools\":\"\",\"text\":\"\"}\n"), again)
+    // **A search over a very large folder can outlast the page's wait**, so it asks between files.
+    fs.remove_path(live) catch panic("the live file can be removed")
+    shown.last_live_us -= 6000000I64
+    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, shown, arena)
+    verdict.check("a search 6 seconds after the last write writes the live file again",
+        fs.exists(live) && hits.find_str("leave.md").is_some(), hits)
+    shown.stop = "stopped on the page"
+    stopped: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, shown, arena)
+    verdict.check("a search stops once the question is stopped",
+        stopped.equals(files.STOPPED), stopped)

@@ -49,9 +49,11 @@ function ksmdZoom(ks) {
     ZOOM_STEPS.slice().reverse().map((p) => [`${p}%`, p === now, () => set(p)]), true, false));
 
   // Ctrl+Alt+= zooms in and Ctrl+Alt+- out, also with Shift, which types + on many keyboards.
-  // AltGr, which Windows reports as Ctrl+Alt, types its character instead (`input.js`).
+  // AltGr, which Windows reports as Ctrl+Alt, types its character instead (`input.js`). A Mac has
+  // no AltGr, so there a press reported as AltGraph still zooms (`ks.mac`).
   document.addEventListener("keydown", (e) => {
-    if (!e.ctrlKey || !e.altKey || e.metaKey || e.isComposing || e.getModifierState("AltGraph")) return;
+    if (!e.ctrlKey || !e.altKey || e.metaKey || e.isComposing) return;
+    if (!ks.mac && e.getModifierState("AltGraph")) return;
     const by = e.key === "=" || e.key === "+" ? 1 : e.key === "-" || e.key === "_" ? -1 : 0;
     if (by === 0) return;
     e.preventDefault();

@@ -37,3 +37,32 @@ fn kind(c: U8): I32
 
 fn main(): I32
   return kind('q')
+// ==== case switch_case_joined_payload_short
+//< A variant joined by `,` needs a field for each name the case binds, of the same type
+//< **Fewer names bind the leading fields**, so a longer payload passes; a shorter one, or one
+//< whose leading field has another type, would leave the name with nothing to read.
+// EXPECT: variant 'tap' carries 1 payload field(s), but this 'case' binds 2 name(s)
+// EXPECT: variant 'key' holds 'U8' in field 1, but 'a' is bound as 'I32'
+// EXPECT-NOT: smart capture
+enum Ev
+  click(x: I32, y: I32)
+  tap(x: I32)
+  key(c: U8, d: I32)
+  quit
+
+fn both(e: Ev): I32
+  switch e
+  case .click(a, b), .tap
+    return a + b
+  default
+    return 0
+
+fn lead(e: Ev): I32
+  switch e
+  case .click(a), .key
+    return a
+  default
+    return 0
+
+fn main(): I32
+  return both(.quit) + lead(.quit)

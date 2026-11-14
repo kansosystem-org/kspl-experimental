@@ -118,6 +118,74 @@ priv fn case_only_std_prefix(arena: Arena$@)
     verdict.check(name, r.out.find_str("mylib/thing.kspl").is_some(),
         arena.text().s("the user's file is being hunted on the std_dir side\n\{r.out\}").take())
 
+priv const TWIN_SRC: U8[] = """import "std/io"
+
+fn main()
+    io.out().s("twin\n")
+
+""" //<
+    //< A program in a folder named `std` that is not the standard library in use
+
+priv const TWIN_REFUSED: U8[][_] = ::{ "' is in the folder '", "the standard library in use is '",
+    "(taken from the environment variable KSPLC_STD_DIR)", "--std-dir=DIR or KSPLC_STD_DIR" } //<
+        //< What the refusal of such a file says: both folders, where std was taken from, and how to
+        //< choose
+
+priv fn case_std_twin(arena: Arena$@) //<
+    //< A file in another folder named `std` is refused, naming both folders
+    //< Named `std/io` from its folder, it once ran the standard library's `std/io` instead, with no
+    //< word said. A file with no twin there failed as "file not found" in the other folder.
+    //< **`run` and `build` refuse it before the child starts**, which would name its `--std-dir=`
+    //< as where std was taken. From the folder above, the file is the user's own and runs.
+    name: = "a file in another folder named 'std' is refused, naming both folders"
+    dir: =
+        case_dir(name, "other_std", U8[][]::{ "proj/std/io.kspl", "proj/std/lone.kspl" },
+        U8[][]::{ TWIN_SRC, TWIN_SRC })
+    if dir.len == 0
+        return
+    std: = harness.std_dir()
+    proj: = fs.join(dir, "proj", arena)
+    // Built here, as the standard library holds no such file to name.
+    lone: = arena.text().s("std/").s("lone.kspl").take()
+    argvs: = U8[][][]::{ U8[][]::{ "std/io.kspl", "out.c" },
+        U8[][]::{ "./std/io.kspl", "out.c" }, U8[][]::{ lone, "out.c" },
+        U8[][]::{ "lint", "std/io.kspl" }, U8[][]::{ "run", "std/io.kspl" },
+        U8[][]::{ "build", "std/io.kspl", "out" } }
+    for argv in argvs
+        r: = ksplc_env(argv, proj, std, "", arena)
+        label: = arena.text().s("'ksplc ").s(argv[0]).s(" ").s(argv[1] if argv.len > 1 else "")
+            .s("' in another std folder is refused").take()
+        verdict.check(label,
+            !r.exited_with(0) && r.out.find_str("twin\n").is_none(), r.out)
+        harness_markers.check(arena.text().s(label).s(", saying why").take(),
+            U8[][]::TWIN_REFUSED, U8[][]::{ "taken from --std-dir=", "file not found" }, r.out)
+    own: = ksplc_env(U8[][]::{ "run", "proj/std/io.kspl" }, dir, std, "", arena)
+    verdict.check("from the folder above, a file in a folder named 'std' runs as the user's own",
+        own.exited_with(0) && own.out.equals("twin\n"), own.out)
+    case_std_through_link(dir, arena)
+
+priv fn case_std_through_link(dir: U8[], arena: Arena$@) //<
+    //< A file of std's own, given by its real path, is not refused where std is named by a link
+    //< A scratch place on macOS (`/tmp`), a linked checkout and a junction spell std's folder
+    //< apart from the file's path; compared by spelling alone, the file would read as a twin's.
+    name: = "a file of std's own is accepted where KSPLC_STD_DIR is a link to std"
+    if sys.is_windows()
+        verdict.skip_check(name, "`ln -s` makes no link on Windows")
+        return
+    std: = harness.std_dir()
+    real_std: = fs.absolute(std, arena) catch
+        verdict.check(name, false, "std's folder cannot be made absolute")
+        return
+    link: = fs.join(dir, "linked_std", arena)
+    if !harness.run(U8[][]::{ "ln", "-s", real_std, link }).exited_with(0)
+        verdict.check(name, false, "cannot make the link")
+        return
+    out: = fs.join(dir, "io.c", arena)
+    r: =
+        ksplc_env(U8[][]::{ "std/io.kspl", out }, sys.get_dir_name(real_std), link, "", arena)
+    verdict.check(name,
+        r.exited_with(0) && r.out.find_str("is in the folder").is_none(), r.out)
+
 // ==========================================
 // The location of a package other than `std`
 // ==========================================
@@ -557,6 +625,7 @@ fn main(): I32
     case_space_in_path(arena)
     case_dot_folder_in_path(arena)
     case_drive_named_folder(arena)
+    case_std_twin(arena)
     std_dir_named.case_named_anywhere(std, arena)
     std_dir_named.case_named_inner_cfg(std, arena)
     std_dir_named.case_named_dotted(std, arena)

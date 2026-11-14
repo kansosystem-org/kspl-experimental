@@ -121,6 +121,35 @@ fn name_entry(path: U8[]): U8[] //<
     //< **past the current folder**, so `cd lib/ksdb/tests && ksplc run all.kspl` gives the same
     //< name as from the root. Under std's folder it is `std/<the rest>`; elsewhere the
     //< project-relative name (`to_project_relative` in `locate.kspl`).
+    return entry_name(path).name
+
+fn refused_entry(path: U8[]): U8[] //<
+    //< Why a file given by its path cannot be compiled; empty where it can
+    //< **A file in another folder named `std` is refused** ("import syntax and path resolution" in
+    //< docs/SPEC-programming-language.md). Named `std/…` from the current folder, it would be read
+    //< from std's own folder instead, and a different file would run with no word said.
+    //< Caution: **Say which standard library is in use and how to choose one.** The usual cause is
+    //< a second copy of std, and the reader cannot see which folder ksplc took.
+    named: = entry_name(path)
+    if named.std_twin.len == 0
+        return ""
+    in_use: = base_locate.canonical_path(base_locate.std_dir())
+    // The compile is handed the path without its extension; the reader wrote it with one.
+    shown: =
+        (path if path.has_kspl_ext()
+        else base_core.arena.text().s(path).s(base_core.SOURCE_EXT).take())
+    return base_core.arena.text()
+        .s("'\{shown\}' is in the folder '\{named.std_twin\}', but the standard library in use is ")
+        .s("'\{in_use\}' (taken from \{base_locate.std_dir_origin()\}). A file named 'std/...' ")
+        .s("belongs to the standard library in use, so this file is refused. To use that folder ")
+        .s("as the standard library, name it with --std-dir=DIR or KSPLC_STD_DIR. To run the ")
+        .s("file as your own, give its path from a folder above that 'std'").take()
+
+priv struct Entry_name //< a file's logical name, and the other `std` folder it stands in
+    name: U8[]
+    std_twin: U8[] //< the folder named `std` that holds the file, not std's own; empty where none
+
+priv fn entry_name(path: U8[]): Entry_name //< `name_entry`, and whether it is refused
     plain: = base_locate.to_project_relative(path)
     // Caution: **Cut the rest from the path the walk read.** The package's top is found with `..`
     // folded (`fold_dots` in `locate.kspl`). So a path that still holds one would name its file
@@ -134,10 +163,27 @@ fn name_entry(path: U8[]): U8[] //<
     in_std: = base_locate.rest_under(abs_file,
         base_locate.canonical_path(base_locate.std_dir()))
     if in_std.len > 0
-        return base_locate.std_name(in_std)
+        return Entry_name::{ .name = base_locate.std_name(in_std), .std_twin = "" }
     top: = base_config_file.package_top(sys.get_dir_name(abs_file))
     if top.len == 0 || abs_file.len <= top.len + 1
-        return plain
+        if !base_locate.is_std_file(plain)
+            return Entry_name::{ .name = plain, .std_twin = "" }
+        // Caution: **Compare the resolved paths before refusing.** Through a link (macOS's
+        // `/tmp`, a linked checkout, a junction), std's own folder is spelled apart from the
+        // file's path. Resolved only here, so no other name waits on the disk. **The file's folder
+        // is resolved, not the file**: the compile is handed the name without its extension.
+        real_std: = base_locate.real_path(base_locate.std_dir())
+        real_dir: = base_locate.real_path(sys.get_dir_name(abs_file))
+        real_file: = base_core.arena.text().s(real_dir).c('/').s(sys.get_file_name(abs_file)).take()
+        rest: =
+            (base_locate.rest_under(real_file, real_std) if real_std.len > 0 && real_dir.len > 0
+            else "")
+        if rest.len > 0
+            return Entry_name::{ .name = base_locate.std_name(rest), .std_twin = "" }
+        // **A name under `std/` from outside std's folder names one of std's files, not this
+        // one.** The absolute path names it instead: a name in no package, which hides none of
+        // std's files where nothing asks for the refusal (`ksplc doc`).
+        return Entry_name::{ .name = abs_file, .std_twin = base_locate.canonical_path("std") }
     decl: = decl_at(top)
     // The package's folder as diagnostics name it: relative to the current folder, empty if equal.
     $root: = base_locate.to_project_relative(top)
@@ -149,7 +195,7 @@ fn name_entry(path: U8[]): U8[] //<
     out: = base_core.arena.text()
     out.s(decl.name).c('/')
         .s(base_locate.to_project_relative(abs_file.sub_from(top.len + 1)))
-    return out.take()
+    return Entry_name::{ .name = out.take(), .std_twin = "" }
 
 priv fn climbs(logical: U8[]): Bool //< whether a logical name holds a `..` segment
     return logical.find_str("/../").is_some() || logical.ends_with("/..")

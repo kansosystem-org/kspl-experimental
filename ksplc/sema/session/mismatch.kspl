@@ -50,6 +50,22 @@ fn address_hint(env: sema_type_env.Env$@, node: Ast_node$@, expected_id: I32, ac
         .s("\n  Hint: '\{name\}@' is a writable pointer only where '\{name\}' is declared with '$', \
             as in '$\{name\}: = 0'. The declaration alone decides it.")
 
+fn option_hint(env: sema_type_env.Env$@, node: Ast_node$@, expected_id: I32, actual_id: I32,
+    out: Str_builder$@) //<
+        //< Says how to write an optional, where its payload's type was given (`x: I32? = 3`)
+        //< **Swift and Kotlin wrap a value into an optional in silence**, so a writer from either
+        //< expects it to work. KSPL writes the variant, so the hint names it.
+    if !env.is_option(expected_id)
+        return
+    payload: = env
+        .get_real_type(env
+        .strip_const_deep(env.instance_arg(env.get_clean_real_type(expected_id), 0)))
+    is_int_literal: = node != null && node.kind_id == .k_integer && env.is_integer(payload)
+    if !is_int_literal && env.get_real_type(env.strip_const_deep(actual_id)) != payload
+        return
+    shown: = node.text if is_int_literal else plain_or_x(written_name(node))
+    out.s("\n  Hint: a value becomes an optional only by its variant: '.some(\{shown\})'.")
+
 priv fn written_name(n: Ast_node$@): U8[] //<
     //< The one name n is written as, for a hint to repeat; empty where n is anything else
     //< **A plain name reaches here as a path of one segment** once sema has read it.

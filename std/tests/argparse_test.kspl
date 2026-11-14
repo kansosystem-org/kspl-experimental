@@ -456,6 +456,18 @@ priv fn check_trailing(arena: Arena$@)
         rest_args.get(1).equals("--help") && rest_args.get(2).equals("x")
     assert(passed_through,
         "argparse: what is after the subject is passed on uninterpreted, --help included")
+    // A positional before the command once counted as its subject: `b.kspl run x.kspl y` ran
+    // `b.kspl` with `x.kspl y` as its arguments.
+    bp: = argparse.Parser.create("t", "", arena)
+    bp.positional("<input>")
+    bp.subcommand_trailing("run", "", List<|U8[]|>.create(arena))
+    $refused: = false
+    bp.parse_list(argv_of(U8[][]::{ "b.kspl", "run", "x.kspl", "y" }, arena)) catch e
+        switch e
+        case .before_command(n, c)
+            refused = n.equals("b.kspl") && c.equals("run")
+        default {}
+    assert(refused, "argparse: a positional before a trailing command is refused")
 
 // ==========================================
 // `--`: what follows is positional, a name starting with `-`, `--help` and a command's name alike.

@@ -286,7 +286,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **The console gets no control character but a line break and a tab** (`answer.write_shown`); each other one shows as `�`. Text from the model, a file or a server can hold an escape sequence, which a terminal would obey.
 * **The live file is a file of its own**, replaced as a whole, so the chat file holds only turns that ended. It needs no endpoint and starts nothing.
 * **The live file is written at most once a second**, and the page reads it every second while a question is open. The tools leave it out, as they leave out the other two files.
-* **While ksagent works on an answer, it writes the live file again at least every 5 seconds**, even where nothing changed. So a live file that grows old names a ksagent that no longer runs.
+* **While ksagent works on an answer, it writes the live file again at least every 5 seconds**, even where nothing changed. So a live file that grows old names a ksagent that no longer runs. A search writes it too, between files, since one search of a very large folder can take longer than 15 seconds. The same look hears a stop, and the search then ends.
 * **The answer's text is read from the `answer` call while its arguments arrive.** They are JSON cut anywhere, so the `text` member is decoded up to its last whole character. Each byte is read once (`progress.Text_reader`), so a long answer takes time and memory in step with its length. The not-found marker shows nothing: ksagent writes its own sentence at the end.
 
 **An unchecked answer never looks checked.**

@@ -247,6 +247,46 @@ const sections = {
     await saves("Enter at an item's end makes the next item", `${H}- a\n\n1. b\n1. c\n`);
   },
 
+  // A Mac has no AltGr, but Firefox there can report Option as AltGraph. Cmd+Option+2 must still
+  // make a heading, and Ctrl+Option+= still zoom. The browser here is told it runs on a Mac, and
+  // each press is a synthetic event that says AltGraph, since a real key event cannot.
+  async macKeys() {
+    const ua = await js("navigator.userAgent");
+    const own = await js("navigator.platform");
+    const reload = async () => {
+      await page("Page.reload", {});
+      await until("document.documentElement.dataset.ready === '1'");
+    };
+    const fire = (key, code, mods) => js(`(() => {
+      const e = new KeyboardEvent("keydown", { key: "${key}", code: "${code}", bubbles: true,
+        cancelable: true, modifierAltGraph: true, ${mods} });
+      (document.activeElement || document.body).dispatchEvent(e);
+      return e.getModifierState("AltGraph");
+    })()`);
+    await page("Emulation.setUserAgentOverride", { userAgent: ua, platform: "MacIntel" });
+    try {
+      await reload();
+      check(await js("navigator.platform") === "MacIntel", "the page is told it runs on a Mac",
+        await js("navigator.platform"));
+      await load(`${H}one\n`);
+      await select(0, 0, 0);
+      const said = await fire("2", "Digit2", "metaKey: true, altKey: true");
+      check(said === true, "the synthetic press says AltGraph", String(said));
+      await saves("on a Mac, Cmd+Option+2 reported as AltGraph makes a heading", `${H}## one\n`);
+      const level = () => js("document.querySelector('.status-zoom .zoom-level').textContent");
+      const before = await level();
+      await fire("=", "Equal", "ctrlKey: true, altKey: true");
+      await settle();
+      const after = await level();
+      check(after !== before, "on a Mac, Ctrl+Option+= reported as AltGraph zooms in", `${before} -> ${after}`);
+      await fire("-", "Minus", "ctrlKey: true, altKey: true");
+      await settle();
+    } finally {
+      await page("Emulation.setUserAgentOverride", { userAgent: ua, platform: own });
+      await reload();
+    }
+  },
+
   async tables() {
     const table = `:::table name="t"\n| "a" |\n| 1 |\n:::\n`;
     await load(`${H}${table}`);

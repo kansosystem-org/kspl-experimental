@@ -148,6 +148,26 @@ KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
     return (I32)(path_len - start);
 }
 
+/* Writes a path with every link resolved into buf, for ksplc's comparison of folders (where the
+ * standard library is read from), and returns its length. -1 = it cannot be resolved (nothing
+ * stands there), or it does not fit; the caller then compares the spelling. */
+KSPL_LINK I32 kspl_real_path(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
+    char path[KSPL_PATH_CAP];
+    char *real;
+    Sz n;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
+    real = realpath(path, NULL);
+    if (real == NULL) return -1;
+    n = (Sz)strlen(real);
+    if (n > cap) {
+        free(real);
+        return -1;
+    }
+    memcpy(buf, real, (size_t)n);
+    free(real);
+    return (I32)n;
+}
+
 /* Copies one file to a name that does not stand yet, with the source's permission bits (for
  * std/fs.kspl's copy_tree). 0 = done, 1 = the source cannot be opened, -1 = refused.
  * **The bits are the copy's from its first byte.** Created wider and narrowed afterwards, a private

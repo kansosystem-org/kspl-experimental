@@ -89,12 +89,17 @@ fn test_fuzz_gather()
 
 priv const SUBJECT_SRC: U8[] =
     """import "std/ds"
+import "std/io"
 import "std/sys"
 
 fn main(): I32
   mode: = sys.args().get(1)
   if mode.equals("stop")
     panic("on purpose")
+  if mode.equals("quote")
+    io.out().s("panic: quoted on standard output\n")
+    io.err().s("a line that quotes panic: in its middle\n")
+    sys.exit(3)
   if mode.equals("fall")
     sys.exit(3)
   return 1 if mode.equals("refuse") else 0
@@ -106,7 +111,7 @@ fn test_fuzz_rounds(ksplc: U8[], arena: Arena$@) //< ksplc runs the subject
     script: = fs.join(WORK_DIR, "subject.kspl", arena)
     io.write_file(script, SUBJECT_SRC) catch panic("the subject must be writable")
     found: = fuzz.findings_new(arena)
-    for mode in U8[][]::{ "answer", "refuse", "stop", "fall" }
+    for mode in U8[][]::{ "answer", "refuse", "stop", "fall", "quote" }
         t: =
             fuzz.run_trial(U8[][]::{ ksplc, "run", script, mode }, 300000, arena)
             catch panic("the subject must start")
@@ -118,8 +123,11 @@ fn test_fuzz_rounds(ksplc: U8[], arena: Arena$@) //< ksplc runs the subject
     fuzz.note(found, hung@, 1, "hung", "h", WORK_DIR, ".txt")
     assert(found.aborts.len == 1 && found.aborts.get(0).seed_name.equals("stop"),
         "a panic is a stop the program announced")
-    assert(found.crashes.len == 1 && found.crashes.get(0).seed_name.equals("fall"),
+    assert(found.crashes.len == 2 && found.crashes.get(0).seed_name.equals("fall"),
         "an end in a code of its own, with no mark, is a crash")
+    // The mark only quoted once made a crash read as a stop the program announced.
+    assert(found.crashes.get(1).seed_name.equals("quote"),
+        "a mark not at the start of a line of standard error is no announced stop")
     assert(fs.exists(found.crashes.get(0).saved), "the input a round crashed on is kept")
     assert(found.hangs.len == 1 && found.hangs.get(0).why.equals("timed out"),
         "a round that did not end is said without the killer's code")

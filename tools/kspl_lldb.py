@@ -366,6 +366,7 @@ def kspl_ast_node_summary(valobj, internal_dict):
 # to keep them; a program built another way may show only the number (`tag=1`). `Option` and
 # `Result` still show theirs, from `STD_ENUM_CASES`.
 
+C_NAME_SUFFIX = "_kw"  # what genc adds to a name C reserves (`C_NAME_SUFFIX` in base/c_name.kspl)
 _enum_index = {}   # the module's UUID -> [{value: name}] for each enum of `kspl_` enumerators
 _enum_cases = {}   # (UUID, C type name) -> {value: case}, or None where none is known
 
@@ -439,7 +440,12 @@ def kspl_enum_summary(valobj, internal_dict):
         case = cases.get(tag)
         if case is None:
             return format_summary(valobj, f"tag={tag}")
-        payload = valobj.GetChildMemberWithName("payload").GetChildMemberWithName(case)
+        # A case named as a C reserved word or macro (`int`, `errno`) has its member renamed with
+        # genc's suffix (`C_NAME_SUFFIX` in `ksplc/base/c_name.kspl`); its enumerator is not.
+        union = valobj.GetChildMemberWithName("payload")
+        payload = union.GetChildMemberWithName(case)
+        if not payload or not payload.IsValid():
+            payload = union.GetChildMemberWithName(case + C_NAME_SUFFIX)
         if not payload or not payload.IsValid() or payload.GetNumChildren() == 0:
             return format_summary(valobj, f".{case}")
         fields = [payload.GetChildAtIndex(i) for i in range(payload.GetNumChildren())]
@@ -738,6 +744,7 @@ LLDB_WANTS = [
     ("builder", ('(Str_builder) "built"',)),
     ("text", ('(U8[]) "hello"',)),
     ("_shape", ("(Shape) .square(side: 2)",)),
+    ("_int", ("(Shape) .int(v: 7)",)),
     ("bad", ("(I32!Made_err) .err(.too_big)",)),
     ("good", ("(I32!Made_err) .ok(1)",)),
     ("_some_text", ('(U8[]?) .some("abc")',)),
@@ -820,7 +827,8 @@ def check_c(rep, c_text):
         rep.check("the enumerators of %s are named kspl_<type>_<case>" % name, not missing,
                   "missing: %s" % missing)
     rep.check("an enum's payload holds one member per case with a payload",
-              enums.get("tools_tests_lldb_sample_Shape", ([], []))[1] == ["circle", "square"],
+              enums.get("tools_tests_lldb_sample_Shape", ([], []))[1] ==
+              ["circle", "square", "int" + C_NAME_SUFFIX],
               repr(enums.get("tools_tests_lldb_sample_Shape")))
     rep.check("a trait value is obj and vtable", structs.get("Writer", ([],))[0] ==
               ["obj", "vtable"], repr(structs.get("Writer")))

@@ -103,10 +103,10 @@ impl Sema_ctx
                 // return is legitimate.
                 if param_ordinal >= 1 && p_type != null && p_type.mentions_self_type()
                     r.err(p_type,
-                        "'Self' cannot be used for a parameter other than the receiver. The \
-                            interface thunk would pass the interface value where the implementation \
-                            expects its own concrete type. Take a type parameter instead (see \
-                            'trait Eq<|Other|>' in std/lang)")
+                        "'Self' cannot be used for a parameter other than the receiver. The thunk \
+                            would pass the trait value where the implementation expects its own \
+                            concrete type. Take a type parameter instead (see 'trait Eq<|Other|>' \
+                            in std/lang)")
                 // Only a bare `Self` can be the receiver. `Self$@` would not bind the implementing
                 // type (a thunk bridges value and pointer), but would tighten the caller's lvalue
                 // check, unseen in the text. See "Why a trait's receiver is fixed to a bare `Self`"
@@ -115,9 +115,9 @@ impl Sema_ctx
                     defer $extracted: = p_type.extract_type_name()
                     if !extracted.slice().equals("Self")
                         r.err(p_type,
-                            "interface method receivers must be written as plain 'Self'. The '@' / \
-                                '$' form does not constrain implementations. The thunk bridges \
-                                value and pointer. An impl can still take 'Self$@' and mutate the \
+                            "trait method receivers must be written as plain 'Self'. The '@' / '$' \
+                                form does not constrain implementations. The thunk bridges value \
+                                and pointer. An impl can still take 'Self$@' and mutate the \
                                 receiver. The form only forbids callers from using a temporary as \
                                 the receiver. Write 'Self'")
                 param_ordinal += 1
@@ -132,7 +132,7 @@ impl Sema_ctx
             m_sym.type_id = type_node.resolve_and_apply_type(r)!
             // infer_fn's check, for a prototype with no body. The impl does not cover it: a `priv`
             // target makes it `priv`, and the type leaks through a `pub trait`.
-            r.check_type_vis_leak(type_node, m_sym.vis, "return type", "interface method")
+            r.check_type_vis_leak(type_node, m_sym.vis, "return type", "trait method")
         else
             m_sym.type_id = I32::sema_type_env.Builtin_type_id.void_type
 
@@ -146,7 +146,7 @@ impl Sema_ctx
         impl_type_str: = r.env.display(r.env.get_real_type(impl_tid))
         defer $e: = Str_builder()
         e
-            .s("method '\{m_name\}': \{kind\} type mismatch. The interface expects \
+            .s("method '\{m_name\}': \{kind\} type mismatch. The trait expects \
                 '\{trait_type_str\}'. The impl has '\{impl_type_str\}'")
         r.err(err_node, e.slice())
     priv fn check_trait_method_sig(r: Self$@, req_m: Sema_symbol$@, impl_m: Sema_symbol$@,
@@ -170,7 +170,7 @@ impl Sema_ctx
                 r.err(d,
                     "a trait implementation cannot give a parameter a default value. A call through \
                         the trait resolves to the trait's declaration, which does not see that \
-                        default. Write the default on the interface declaration instead")
+                        default. Write the default on the trait declaration instead")
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
         $ok: = true
         $param_ordinal: Sz = 0
@@ -211,28 +211,28 @@ impl Sema_ctx
             !req_ret_node.names_self_type()
             defer $spelled: = req_ret_node.extract_type_name()
             r.clear_scratch()
-                .s("method '\{req_m.name\}' of interface '\{r.env.display(real_trait)\}' has 'Self' \
+                .s("method '\{req_m.name\}' of trait '\{r.env.display(real_trait)\}' has 'Self' \
                     inside its return type ('\{spelled.slice()\}'), not as the whole of it. That \
-                    cannot be an interface method. Without a body, its vtable slot would need a \
-                    different type for every implementor. A default body holds no slot. It leaves \
-                    that 'Self' unresolved when copied into a generic implementation. Returning a \
-                    pointer does not help, because what varies is the type itself. Write the method \
-                    on the concrete type instead (`impl<|...|> Keep<|S, T|> { ... }`). \
-                    Alternatively, give the interface a type parameter for the result. Return that \
+                    cannot be a trait method. Without a body, its slot in the method table would \
+                    need a different type for every implementor. A default body holds no slot. It \
+                    leaves that 'Self' unresolved when copied into a generic implementation. \
+                    Returning a pointer does not help, because what varies is the type itself. \
+                    Write the method on the concrete type instead (`impl<|...|> Keep<|S, T|> { ... \
+                    }`). Alternatively, give the trait a type parameter for the result. Return that \
                     type parameter.")
             r.err(err_node, r.scratch.slice())
             return false
         if req_ret_node != null && req_ret_node.mentions_self_type() &&
             !r.env.is_pointer(impl_m.type_id)
             r.clear_scratch()
-                .s("method '\{req_m.name\}' of interface '\{r.env.display(real_trait)\}' returns \
+                .s("method '\{req_m.name\}' of trait '\{r.env.display(real_trait)\}' returns \
                     'Self'. This implementation must return '\{r.env.display(real_target)\}$@' (a \
-                    pointer), not a value. Dispatch wraps the result in an interface value and \
-                    needs an address. A returned value has no storage that outlives the call. The \
-                    caller receives '\{r.env.display(real_trait)\}', never a raw pointer. The \
-                    interface therefore spells the return type as plain 'Self', as it does for the \
-                    receiver. To return your own type by value, give the interface a type \
-                    parameter. Return that type parameter instead")
+                    pointer), not a value. Dispatch wraps the result in a trait value and needs an \
+                    address. A returned value has no storage that outlives the call. The caller \
+                    receives '\{r.env.display(real_trait)\}', never a raw pointer. The trait \
+                    therefore spells the return type as plain 'Self', as it does for the receiver. \
+                    To return your own type by value, give the trait a type parameter. Return that \
+                    type parameter instead")
             r.err(err_node, r.scratch.slice())
             return false
         bi: = r.env.trait_cmp_base(req_m.type_id, real_trait, real_target)
@@ -245,11 +245,11 @@ impl Sema_ctx
         if bi == bp && r.env.is_pointer(req_m.type_id) &&
             !r.env.is_pointer(impl_m.type_id)
             r.clear_scratch()
-                .s("method '\{req_m.name\}' of interface '\{r.env.display(real_trait)\}' returns \
+                .s("method '\{req_m.name\}' of trait '\{r.env.display(real_trait)\}' returns \
                     '\{r.env.display(req_m.type_id)\}', a pointer, but this implementation returns \
-                    the value '\{r.env.display(impl_m.type_id)\}'. A call through the interface \
-                    would receive the address of a value that ends with the call. Return a pointer \
-                    to storage that outlives the call, or make the interface return the value")
+                    the value '\{r.env.display(impl_m.type_id)\}'. A call through the trait would \
+                    receive the address of a value that ends with the call. Return a pointer to \
+                    storage that outlives the call, or make the trait return the value")
             r.err(err_node, r.scratch.slice())
             return false
         // **A read-only pointer cannot stand for a writable one**: the caller writes through what
@@ -278,7 +278,7 @@ impl Sema_ctx
             trait_def = d
         default
             defer $sb: = Str_builder()
-            sb.s("'\{r.env.display(trait_id)\}' is not an interface")
+            sb.s("'\{r.env.display(trait_id)\}' is not a trait")
             r.err(err_node, sb.slice())
             return false
 
@@ -301,7 +301,7 @@ impl Sema_ctx
                 defer $err_sb: = Str_builder()
                 err_sb
                     .s("Type '\{target_str\}' does not implement required method '\{req_m.name\}' \
-                        of interface '\{trait_shown\}'")
+                        of trait '\{trait_shown\}'")
                 r.err(err_node, err_sb.slice())
                 success = false
             else
@@ -319,7 +319,7 @@ impl Sema_ctx
                 if req_count != impl_count
                     $err_sb: = Str_builder()
                     err_sb
-                        .s("method '\{req_m.name\}' argument count mismatch in interface \
+                        .s("method '\{req_m.name\}' argument count mismatch in trait \
                             implementation. Expected \{req_count\}, got \{impl_count\}")
                     r.err(err_node, err_sb.slice())
                     err_sb.free()
@@ -362,8 +362,7 @@ impl Sema_ctx
             target_shown: = r.env.display(r.env.get_real_type(target_id))
             trait_shown: = r.env.display(trait_id)
             r.clear_scratch()
-                .s("type '\{target_shown\}' does not explicitly implement interface \
-                    '\{trait_shown\}'")
+                .s("type '\{target_shown\}' does not explicitly implement trait '\{trait_shown\}'")
             r.err(err_node, r.scratch.slice())
             r.clear_scratch()
                 .s("If the implementation exists in another file, check for circular imports or a \
@@ -486,7 +485,7 @@ impl Sema_ctx
                     return .error
                 r.clear_scratch()
                     .s("\{err_prefix\} '\{op\}' requires '\{shown\}' to implement '\{trait_name\}' \
-                        interface")
+                        trait")
                 if is_tagged
                     r.scratch
                         .s(". Its variants carry data, so it has no built-in '\{op\}'. Take it \

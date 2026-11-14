@@ -98,6 +98,14 @@ priv fn program_using(names: List<|U8[]|>, consts: List<|U8[]|>, arena: Arena$@)
         for n in names
             b.s("  ").s(n).s(": I32\n")
         b.s("\n")
+        // Each name as an enum's case with a payload, which names the union's member.
+        b.s("enum Cases\n")
+        for n in names
+            b.s("  ").s(n).s("(v: I32)\n")
+        b.s("\npriv fn case_value(c: Cases): I32\n  switch c\n")
+        for n in names
+            b.s("  case .").s(n).s("(v)\n    return v\n")
+        b.s("\n")
     // Caution: **Put the formal parameter and the local in different functions.** The same name for
     // both in one function is a redefinition in C, a fault of the test program rather than of KSPL.
     for n in names
@@ -112,7 +120,7 @@ priv fn program_using(names: List<|U8[]|>, consts: List<|U8[]|>, arena: Arena$@)
         b.s("}\n  held: Holder@ = h@\n")
     for n in names
         b.s("  total += take_").s(n).s("(h.").s(n).s(") + held.").s(n).s(" + local_").s(n)
-            .s("(1)\n")
+            .s("(1) + case_value(Cases.").s(n).s("(1))\n")
     b.s("  total += local_consts()\n  return 0 if total > 0 else 1\n")
     return b.take()
 

@@ -550,6 +550,51 @@ fn main()
   defer $rows: = List<|List<|I32|>|>(null)
   rows.push(List<|I32|>(a))
   _m: = in_arena(a, rows@, Str_builder())
+// ==== case value_from_a_call_given_an_arena
+//< [W0109] A value a call hands back on the heap, though the call is given an arena
+//< **An arena owns only a value that keeps it in a field**, directly or in a field held by value
+//< (a `List`, or a struct holding one). A `Str_builder` keeps none, so the arena a function takes
+//< for its scratch work cannot own the builder it returns.
+// EXPECT: value_from_a_call_given_an_arena.kspl:20:3: warning: [W0109] 'frame' is never freed
+// EXPECT-NOT: 'rows'
+// EXPECT-NOT: 'bag'
+// EXPECT-NOT: 'kept'
+// EXPECT: 0 error(s), 1 warning(s)
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv fn framed(text: U8[], a: Arena$@): Str_builder //< built on the heap; the arena is scratch
+  $b: = Str_builder()
+  b.s(a.dup_str(text))
+  return b
+
+priv fn sent(text: U8[], a: Arena$@): Sz //< the builder is never freed (a finding)
+  frame: = framed(text, a)
+  return frame.len
+
+priv struct Bag //< keeps its arena in a field held by value
+  items: List<|I32|>
+
+impl Bag: Manual_free
+  fn free(r: Self$@)
+    r.items.free()
+
+priv fn bag_in(a: Arena$@): Bag //< made in the arena it is given
+  return Bag::{ .items = List<|I32|>(a) }
+
+priv fn counted(a: Arena$@): Sz //< none of these: each lives in the arena
+  $rows: = List<|I32|>(a)
+  rows.push(1)
+  $bag: = bag_in(a)
+  bag.items.push(2)
+  defer $kept: = framed("y", a)
+  return rows.len + bag.items.len + kept.len
+
+fn main()
+  defer a: = Arena(64)
+  _n: = sent("x", a)
+  _m: = counted(a)
 // ==== case thread_never_joined
 //< [W0109] A thread started and never waited for
 //< `free()` waits for it, so a thread no path frees can outlive what it was handed. **Two must stay

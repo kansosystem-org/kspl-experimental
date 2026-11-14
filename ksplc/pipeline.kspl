@@ -4,6 +4,7 @@
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
 import "ksplc/base/lint_codes" as base_lint_codes
 import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
@@ -271,6 +272,15 @@ impl Compiler
         Void!Compile_error
         // **A logical name is always relative to the project root** or the package's top. With an
         // absolute path, the mangled names change per machine (`name_entry` in base/package.kspl).
+        // **A file in another folder named `std` is refused before anything is read**
+        // (`refused_entry` in base/package.kspl). The language server shows the reason on the
+        // document itself (`build_document_state` in lsp/worker.kspl).
+        refused: = base_package.refused_entry(file_path)
+        if refused.len > 0
+            r.has_load_error = true
+            if !base_core.config.is_lsp
+                base_diag.print_unplaced("", 0, refused)
+            throw .parse(.syntax_error)
         clean_mod: = base_package.name_entry(file_path).strip_kspl_ext()
         perm_file: = base_core.arena.dup_str(clean_mod)
 

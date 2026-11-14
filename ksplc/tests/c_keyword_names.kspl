@@ -103,6 +103,28 @@ enum Shape
     box(short: I32, signed: I32)
     line(near: I32, far: I32)
 
+enum Word_case //< cases named as C's words, each holding a payload
+    //< The union's member is named after the case: its declaration, the value's construction and
+    //< the binding's read must agree on the suffix.
+    float(v: F64)
+    bool(v: Bool)
+    int(v: I32)
+    errno(v: I32)
+    WIN32(v: I32)
+    none
+
+impl Word_case
+    fn payload_value(r: Self): I32 //< reads each case's payload back
+        switch r
+        case .float(v)
+            return I32::v
+        case .bool(v)
+            return 1 if v else 0
+        case .int(v), .errno(v), .WIN32(v)
+            return v
+        case .none
+            return -1
+
 trait Sized
     fn char(r: Self): I32
 
@@ -276,6 +298,14 @@ fn test_c_keyword_names()
         assert(short * signed == 10, "C keyword names: enum payload field")
     case .line(near, far)
         assert(far - near == 0, "C keyword names: unreachable variant")
+
+    // An enum's case name, as the union's member.
+    assert(Word_case.float(2.0).payload_value() == 2, "C keyword names: enum case float")
+    assert(Word_case.bool(true).payload_value() == 1, "C keyword names: enum case bool")
+    assert(Word_case.int(3).payload_value() == 3, "C keyword names: enum case int")
+    assert(Word_case.errno(4).payload_value() == 4, "preamble macro names: enum case errno")
+    assert(Word_case.WIN32(5).payload_value() == 5, "constant-spelled names: enum case WIN32")
+    assert(Word_case.none.payload_value() == -1, "C keyword names: enum case beside them")
 
     // A trait's method name becomes a vtable struct's member.
     sized: Sized = auto

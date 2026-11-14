@@ -678,7 +678,7 @@ As arguments to one method, a `:x` on a float or a `:.2` on an integer would be 
 
 **A signed value goes through the unsigned type of the same width**, because hexadecimal shows the bits the type holds. Widened straight to `U64`, sign extension would print `I32`'s `-1` in 16 digits, where C's `%x` prints 8. `Sz` has no unsigned name of its width, so it widens to `U64`.
 
-**The extension-method shape `impl Writer { fn hex(...) }` cannot be taken**: a method added to a trait has no vtable slot. Use a free function or a conforming wrapper such as `Hex_fmt`.
+**The extension-method shape `impl Writer { fn hex(...) }` cannot be taken**: a trait value's table of methods holds no slot for a method added to the trait. Use a free function or a conforming wrapper such as `Hex_fmt`.
 
 ### Converting between bytes and integers holds no format string
 

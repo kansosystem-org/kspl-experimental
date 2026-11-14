@@ -818,7 +818,7 @@ The policy and the observations live in **the record inside the device** (the la
 
 * **A key acts only while it is held.** A held NEC key sends a repeat about every 108ms, and the repeat says only "still held". So a key's action lasts a little longer than one repeat interval: shorter, the car judders; much longer, it runs on after release.
 * **Only ▶ and 9 stop it.** Stage 7's firmware stops on any key, since it has no other key to stop with. Here, that rule would stop the car each time a person changes the face or the light.
-* **The speed stays below the tutorial's 50 to 80%.** `motor.CAP` is the one cap, and it holds the car to a speed a person can catch on foot.
+* **The speed stays below the tutorial's 50 to 80%.** `motor.CAP` is the one cap. It holds for each wheel, so the car stays at a speed a person can catch on foot.
 * **Obstacle dodging refuses with a beep and one line of text.** The ultrasonic module and the LED matrix share GPIO 4 and 5, so only one can be plugged in. A key that did nothing silently would look the same as a broken car.
 
 ### The USB-Ethernet probe's steps and what the PC needs

@@ -30,6 +30,10 @@ function ksmdStart(root, bar, status, wasmBytes) {
     const ks = { root, bar, w, enc, composing: null, stopped: false, sel: null, cell: null,
       changed: [], rendered: [] };
 
+    // Whether the page runs on a Mac, an iPhone or an iPad. There Ctrl+Option and Cmd+Option are
+    // shortcuts, never AltGr, though Firefox can report Option as AltGraph (`input.js`, `zoom.js`).
+    ks.mac = /Mac|iPhone|iPad/.test(navigator.platform);
+
     // Writes text, or byte arrays one after another, into the editor's input buffer, and returns
     // the length in bytes. **Make the view after asking for the buffer**: memory can move when it
     // grows. A buffer the memory cannot hold stops the page, so the action after it does nothing.

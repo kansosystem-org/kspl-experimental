@@ -831,11 +831,11 @@ priv fn array_size(c: Sema_ctx$@, size_node: Ast_node$@): I32 //<
     //< narrowed to I32 fails on it, and the size read as one that is not positive.
     if size_node.text.equals("_")
         return -1
-    $too_deep: = false
+    $has_reason: = false
     size_val: = c.fold_quietly(size_node, false) catch e
         switch e
-        case .nesting_too_deep
-            too_deep = true
+        case .nesting_too_deep, .invalid_argument, .division_by_zero
+            has_reason = true
         default {}
         fallback -1I64
     if size_val > 0 && size_val <= 2147483647I64
@@ -844,9 +844,11 @@ priv fn array_size(c: Sema_ctx$@, size_node: Ast_node$@): I32 //<
     // in sema/decl/layout.kspl reports it).
     if c.suppress_errors || c.resolving.registry_cycle_at != null
         return 1
-    // **A chain cut at the depth limit is named as such**, by folding again aloud (silent where
-    // that chain was reported already). It is never named as a size that is not positive.
-    if too_deep
+    // **A fold that failed for a reason is named by that reason**, by folding again aloud: a chain
+    // cut at the depth limit (silent where that chain was reported already), an overflow
+    // (`2147483647 * 2`), a bad shift or a division by zero. It is never named as a size that is
+    // not positive, as an enum tag's or a `const`'s value is not.
+    if has_reason
         _loud: = size_node.eval_constexpr(c) catch 0
     else if size_val > 0
         c.clear_scratch()

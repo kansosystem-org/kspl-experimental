@@ -267,12 +267,12 @@ Note: **Declarations inside `{ … }` are not a comma-separated list.** A struct
 
 **Indentation is written with spaces.** A tab, U+3000, U+00A0, a form feed or a vertical tab does not count as a column. A line indented with one is read at column 0.
 
-**A block with no heading carries a label**: a name and a `:` on the line above the block (`release_on_exit:`). A lone `{ … }` is a compile error. A block that needs no name takes the label `_`. It can appear any number of times in one scope, so `break` or `continue` to `_` is a compile error.
+**A block with no heading carries a label**: a name and a `:` on the line above the block (`release_on_exit:`). A loop's label goes on the loop's own line instead, before `for` (`outer: for i in Range.asc(3)`), as does the label of a `switch` or an `if`. A lone `{ … }` is a compile error. A block that needs no name takes the label `_`. It can appear any number of times in one scope, so `break` or `continue` to `_` is a compile error.
 
 **Two forms keep their braces in `.kspl`**:
 
 * a closure (a function written inside an expression) with a multi-line body inside a call's arguments, since a newline inside brackets is not a block;
-* an empty block, and a block fitting on one line (`f() catch {}`, `fn f() {}`, `case .x {}`). A block holding only a comment counts as empty. No terminator follows such a block, and its last statement takes no `;` (`fn one(x: I32): I32 { return x + 1 }`).
+* an empty block, and a block fitting on one line (`f() catch {}`, `fn f() {}`, `case .x {}`). A block holding only a comment counts as empty. No terminator follows such a block. Its last statement needs no `;` (`fn one(x: I32): I32 { return x + 1 }`), though one is allowed.
 
 **A `;` at the end of a statement's line in `.kspl` is a compile error with no code.** The line's end already ends the statement.
 
@@ -1660,14 +1660,14 @@ whole: = sizeof(Row) // 24 (the tail rounds up to the struct's alignment too)
 
 ### 6.8 Integer arithmetic: folding, overflow, division, shifts
 
-Integer arithmetic gives the same answer whether the compiler works it out ahead of time or the running program computes it. The one difference is that a signed overflow the compiler can see is an error. How a literal's type is fixed is [2.3.1](#231-the-rules-that-fix-a-literals-type).
+Integer arithmetic gives the same answer whether the compiler works it out ahead of time or the running program computes it. The one difference is that a signed overflow in a constant context is an error. How a literal's type is fixed is [2.3.1](#231-the-rules-that-fix-a-literals-type).
 
 *Folding* is the compiler computing a constant expression itself. To *wrap `mod 2^N`* is to keep only the low `N` bits of the result, `N` being the type's width. For a signed type, past the maximum comes the minimum.
 
 **Folding a constant expression gives the same answer as run time.** The operands' types fix the width and the signedness. A binary operation uses the wider of its two operands' types (an unsuffixed literal takes the other side's). A shift uses its left operand's type. A comparison is judged at its operands' type, not at its result's `Bool`. **A cast folds as it converts at run time**: an integer keeps the target type's low bits (`U8::300` is `44`, `I8::200` is `-56`, `I32::(U8::(0 - 1))` is `255`). Where nothing is typed yet (an array length, an enum tag), the types are read from what is written. That is a literal's suffix, a cast's target, or a constant's declared type.
 
 * **Unsigned wraps `mod 2^N`** (`1U32 - 2U32` is `4294967295`), as it does at run time, so it is not refused as a constant.
-* **A signed overflow is a compile error** (`integer overflow in compile-time constant expression`), although it wraps `mod 2^N` at run time. It is judged at the operands' type width, intermediate results included: `(2147483647 + 1) - 1` overflows along the way and is an error. A left shift is judged as the multiplication by `2^amount` it is: `1 << 31` at `I32` and `1I64 << 63` are errors. A bit pattern is written unsigned and cast (`I32::(1U32 << 31)`).
+* **A signed overflow in a constant context is a compile error** (`integer overflow in compile-time constant expression`). A constant context is a `const` or a top-level variable's initializer. In a function's body the same expression is no error: it runs, and wraps `mod 2^N`. It is judged at the operands' type width, intermediate results included: in a `const`, `(2147483647 + 1) - 1` overflows along the way and is an error. A left shift is judged as the multiplication by `2^amount` it is: there, `1 << 31` at `I32` and `1I64 << 63` are errors. A bit pattern is written unsigned and cast (`I32::(1U32 << 31)`).
 * **Division, remainder, right shift, and ordering comparisons change their answer with signedness.** On an unsigned type everything is evaluated as unsigned (`(1U32 - 2U32) >> 1U32` is `2147483647`, not an arithmetic shift of `-1`).
 * **A shift amount must be smaller than the operand's width** (`shift amount is out of range in compile-time constant expression`): `1U64 << 40` can be written, `1U32 << 40` cannot.
 
@@ -1750,7 +1750,7 @@ A condition is written without parentheses `()`, and a block is always written, 
   | A `Bool` | Both `true` and `false`, or a `default` |
   | An integer | A `default` |
 
-* **Attached data is extracted once**: variants lined up with commas can hold attached data of the same shape. Then `(variable_name)` written once after the first candidate reads the contents under that name, whichever candidate was entered.
+* **Attached data is extracted once**: `(variable_name)` written once after the first candidate reads the contents under that name, whichever candidate was entered. Each candidate needs a field for every name, of the same type at the same place. The fields past the last name may differ: with `click(x: I32, y: I32)` and `drag(x: I32, dz: F64)`, `case .click(a), .drag` binds `x` as `a`.
 * **A case names no more bindings than the variant has payload fields.** With `click(x: I32, y: I32)`, `case .click(a, b, z)` is a compile error, as is `case .quit(z)` on a variant with no payload. Fewer names bind the leading fields (`case .click(a)` binds `x` as `a`).
 * **A payload's name only reads.** It holds a copy of the attached data, so a write to it, or a call of a method that takes `Self$@`, is a compile error. To change the value, copy it into a `$` name first (`$w: = v`).
 * **Write the payload only when it is needed.** Where the case does not use a variant's payload, omit the `(...)` and write `.variant`. The exhaustiveness check still takes effect. The linter reports a payload nothing reads (`ksplc explain I0313`).
@@ -1846,7 +1846,7 @@ Caution: **Do not have a type you want walked by index name `Iter`**: `.len` and
 
 ### 7.3 Labelled blocks and breaking out of nested constructs
 
-A *label* is a name written before a construct (`my_label:`). `break my_label` jumps out of that construct from any depth. `for` / `switch` / `if` and a plain block `{}` can carry a label.
+A *label* is a name written before a construct (`my_label:`). `break my_label` jumps out of that construct from any depth. A `for`, `switch` or `if` takes its label on its own line, before the keyword (`outer: for`). A plain block takes it on the line above ([2.5](#25-blocks-and-statement-ends)). `for` / `switch` / `if` and a plain block `{}` can carry a label.
 
 | Statement | Where control goes |
 | :-- | :-- |
@@ -1867,6 +1867,14 @@ for
     switch event
     case .quit
         break // ignore the switch and escape the for
+
+// 3. a labelled loop: the label stands on the loop's own line
+outer: for row in rows
+    for cell in row
+        if cell == 0
+            break outer // escape both loops
+        if cell < 0
+            continue outer // go on with the next row
 ```
 
 However it escapes, every `defer` registered along the way runs ([8.4.1](#841-the-defer-statement)).
@@ -2277,7 +2285,7 @@ impl My_handle: Ref_counted
 
 Caution: **Do not call `retain` / `release` by hand.** Such a call doubles up with the compiler's, whose `release` then writes into freed memory. `priv` on the trait blocks a call through a trait value, and `priv` on the `impl` a direct call on the type. The compiler's own calls still reach them.
 
-`std/mem.kspl` offers these concrete types:
+`std/refcount.kspl` offers these concrete types:
 
 | Type | What it is |
 | :-- | :-- |
@@ -2523,6 +2531,7 @@ flowchart TD
 1. **The standard library**: a path beginning with `"std/"` resolves to the standard library the compiler offers.
    * **The standard library is closed.** An `import` or `embed` in one of its files names one of its own files, and a path beginning with `std/` holds no `..` segment. Either kind of reach out of it is a compile error at that line.
    * **A file standing in its place is one of its files.** A file opened inside the folder the standard library is read from, as the entry file or an editor's document, is named `std/…`.
+   * **A file in another folder named `std` is refused.** Its name from the current folder would begin with `std/`, but it stands outside the folder the standard library is read from. Given as the entry file or opened in an editor, it is an error. The message names both folders, where the standard library in use was chosen, and how to choose another (`--std-dir`, `KSPLC_STD_DIR`). Given from a folder above that `std`, the file is an ordinary one of the program's own. The two folders are compared after links are resolved, so a standard library reached through a link still owns its files.
 2. **By the package it names**: a path that contains `/` and does not begin with `.` (`"ksplc/base/ast"`). The first segment names a package ([9.4](#94-circular-imports-and-visibility)).
    * **A package that names itself** has `name = <package>` in a `[package]` section of the `ksplc.cfg` (the compiler's settings file) at its top folder. It finds its own files in that folder, wherever it stands and whatever it is called. Its files are still named `<package>/…`.
    * **Any other package** is found in a folder of its name under the current directory, or where the compiler is told packages are.
@@ -2582,7 +2591,7 @@ After an import, you reach the file's names through its alias (`math.sin()`). Or
 **`std/lang` is in every file without being written**, and writing `import "std/lang"` is a compile error. It enters every file as a selective import of everything it publishes, together with the alias `lang`.
 
 * **An implicit name is the weakest.** The file's own declarations and the names a selective import lists come first. Declare `Manual_free` or `Ref_counted` in your own file, and the unqualified name refers to yours.
-* **`lang.X` always refers to `std/lang`'s declaration**, so `impl My_type: lang.Ref_counted` conforms to `std/lang`'s trait even when your own declaration holds the name. The compiler matches the traits it knows (`Ref_counted` / `Move_only` / `Manual_free` / `Interior_mutable` / `Callable1` / `Callable2` and the operator group) by FQN. Dropping the qualification there loses ARC ([8.4](#84-memory-management)) or operator desugaring. The linter reports it as W0501 for the first four; for an operator trait the operator's use is an error (`Operator '+' requires 'V' to implement 'Add' interface`).
+* **`lang.X` always refers to `std/lang`'s declaration**, so `impl My_type: lang.Ref_counted` conforms to `std/lang`'s trait even when your own declaration holds the name. The compiler matches the traits it knows (`Ref_counted` / `Move_only` / `Manual_free` / `Interior_mutable` / `Callable1` / `Callable2` and the operator group) by FQN. Dropping the qualification there loses ARC ([8.4](#84-memory-management)) or operator desugaring. The linter reports it as W0501 for the first four; for an operator trait the operator's use is an error (`Operator '+' requires 'V' to implement 'Add' trait`).
 * **Write `lang.` only when the unqualified name is blocked** (the linter reports it otherwise, `ksplc explain I0312`).
 * **Only what `std/lang` publishes with `pub` enters bare.** A declaration of `std/lang` without `pub` is reached inside `std/` only through `lang.`.
 * When the file declares a name `lang`, the alias does not enter (your own declaration wins).
@@ -2648,7 +2657,7 @@ From narrowest to widest, the levels are `priv`, unmarked, `pub`.
 
 * What is compared is the position's effective visibility. For a method, that is the narrower of the function and the `impl`'s target type; for a field, the narrower of the field and the `struct`. An unmarked method of a `priv struct S` cannot be called from code that cannot name `S`, so it is effectively `priv`; a `pub` there is refused by [3.3](#33-structs-struct).
 * Every named type in the position's type expression is checked, generic type arguments included.
-* **Not covered** are a function's argument positions, non-`pub` fields and `main`'s return. None lets the type leak outside.
+* **Not covered** are a function's argument positions, `priv` fields and `main`'s return. None lets the type leak outside.
 
 **`pub` / `priv` cannot be written on a block itself** (before `impl { ... }` or a `#cfg` group). Write them on each item inside.
 

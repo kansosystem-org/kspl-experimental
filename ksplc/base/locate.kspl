@@ -73,16 +73,18 @@ fn std_dir(): U8[] //< the standard library's folder, resolved once (`SPEC-tools
 fn std_found(): Bool //< whether the standard library's folder taken holds `lang.kspl`
     return fs.exists(fs.join(std_dir(), STD_LANDMARK, base_core.arena))
 
+fn std_dir_origin(): U8[] //< where the folder std_dir() took was named, for a message
+    named: = base_core.config.std_dir_origin
+    return "--std-dir=" if named.len == 0 else named
+
 fn std_missing_note(): U8[] //< where std was looked for and which folder was taken
     //< For a std holding no `lang.kspl`. **Name every place, with the path each stands for
     //< here.** With the bare "std/lang.kspl not found", a reader outside the repository has to
     //< guess which folder was meant.
-    named: = base_core.config.std_dir_origin
-    origin: = "--std-dir=" if named.len == 0 else named
     exe_dir: = exe_folder()
     out: = base_core.arena.text()
     out.s("ksplc: the standard library is not found: \{to_absolute(std_dir())\} holds no ")
-        .s(STD_LANDMARK).s(" (it was taken from ").s(origin).s(").\n")
+        .s(STD_LANDMARK).s(" (it was taken from ").s(std_dir_origin()).s(").\n")
         .s("  ksplc takes the first of these:\n    --std-dir=DIR\n")
         .s("    the environment variable KSPLC_STD_DIR\n")
     for rel in STD_BESIDE
@@ -95,6 +97,20 @@ fn std_missing_note(): U8[] //< where std was looked for and which folder was ta
     return out.take()
 
 extern fn kspl_exe_path(buf: U8$@, cap: Sz): Sz //< this executable's path, links resolved; else 0
+extern fn kspl_real_path(path: U8@, path_len: Sz, buf: U8$@, cap: Sz): I32 //<
+    //< the path with every link resolved, its length; -1 where it cannot be resolved
+
+fn real_path(path: U8[]): U8[] //<
+    //< The path with every link, junction and `subst` drive resolved; empty where it cannot be
+    //< **For a comparison that must not refuse a folder reached through a link** (macOS's `/tmp`,
+    //< a linked checkout). The caller compares the spelling where it is empty.
+    $buf: U8[OS_PATH_BYTES] = ::{}
+    n: = kspl_real_path(path.ptr, path.len, buf[0]@, OS_PATH_BYTES)
+    if n < 0
+        return ""
+    out: = base_core.arena.text()
+    write_slashed(U8[]::{ .ptr = buf[0]@, .len = n }, out)
+    return out.take()
 
 priv const STD_BESIDE: U8[][2] = ::{ "std", "../lib/kspl/std" } //<
     //< Where std is looked for from the executable's folder, in order

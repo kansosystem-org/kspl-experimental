@@ -396,7 +396,7 @@ fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, targ
     // it silently misses the container.
     if left.is_trait_index_access() && !c.env.is_place_index_node(left)
         c.err(node,
-            "cannot take the address of an element accessed through the 'Index' interface; 'get' \
+            "cannot take the address of an element accessed through the 'Index' trait; 'get' \
                 returns a copy, so '@' would yield the address of a temporary")
         throw .analysis_failed
     // The general form: `@` on a non-place (a return value, a literal, a computed result) becomes
@@ -761,7 +761,7 @@ fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): B
 // target_id is the type as written (for the diagnostic), recv_id stripped by receiver_base_id.
 // `[]` is allowed **only on what carries its own length**: a slice, an array, an Index /
 // Index_place type. A raw pointer cannot be bounds-checked, so the user is pointed to `(p + i)$`.
-priv fn lint_index_out_of_bounds(c: Sema_ctx$@, index: Ast_node$@, recv_id: I32) //<
+priv fn warn_index_out_of_bounds(c: Sema_ctx$@, index: Ast_node$@, recv_id: I32) //<
     //< [W0101] A constant index outside a fixed-length array: past its end, or below 0
     //< The range is index_is_static_in_range's, so a warned index is never one whose run-time
     //< check the backends leave out.
@@ -859,8 +859,9 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
     if next_op != null
         next_op.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)!
 
-        if base_core.config.run_lint_checks
-            lint_index_out_of_bounds(c, next_op, recv_id)
+        // **Every compile prints it, not `ksplc lint` alone**: the index panics at run time
+        // ("13. Conditions that stop execution at run time" in docs/SPEC-programming-language.md).
+        warn_index_out_of_bounds(c, next_op, recv_id)
 
     $stripped: = c.env.slice_elem(recv_id)
     if stripped == recv_id

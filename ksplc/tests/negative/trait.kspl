@@ -88,8 +88,8 @@ fn main(): I32
 //< A method absent from the declaration has no slot in the vtable, and the call becomes C in which
 //< genc draws `vtable->hex`, which does not compile. Without refusing here, the user gets a raw C
 //< compiler error rather than KSPL's diagnostic.
-// EXPECT: cannot add methods to interface
-// EXPECT: a small wrapper type conforming to the interface
+// EXPECT: cannot add methods to trait
+// EXPECT: a small wrapper type conforming to the trait
 import "std/io"
 
 impl Writer
@@ -311,7 +311,7 @@ fn main(): I32
 //< name suffix (`.Add`) misreads it as the operator trait. KSPL gives no diagnostic. The **invalid
 //< C** takes the receiver for a fat pointer and fails as a clang error that no user can map.
 // EXPECT: requires
-// EXPECT: to implement 'Add' interface
+// EXPECT: to implement 'Add' trait
 pub trait Add
   fn add(r: Self, o: Self): Self
 
@@ -393,7 +393,7 @@ fn main()
 //< `get` returns a copy, so the `@` is a temporary's address and a `p$ = v` write quietly misses
 //< the container. The built-in slice and array and an `Index_place` type give a true
 //< element address with `a[i]@`; this case covers a type implementing `Index` alone.
-// EXPECT: cannot take the address of an element accessed through the 'Index' interface
+// EXPECT: cannot take the address of an element accessed through the 'Index' trait
 
 struct Pair
   a: I32
@@ -414,7 +414,6 @@ fn main(): I32
 //< Implement "an index returning a place" (`Index_place`) and `a[i] += v` can be used.
 // ==========================================
 // EXPECT: compound assignment is not supported for types that index through 'Index_mut'
-// interface
 // ==========================================
 
 struct Pair
@@ -576,9 +575,9 @@ fn main()
 //< One subject, with one function for each of its shapes
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
-// EXPECT: return type 'Hidden' is less visible than the interface method exposing it
-// EXPECT: interface method receivers must be written as plain 'Self'
-// EXPECT: interface method receivers must be written as plain 'Self'
+// EXPECT: return type 'Hidden' is less visible than the trait method exposing it
+// EXPECT: trait method receivers must be written as plain 'Self'
+// EXPECT: trait method receivers must be written as plain 'Self'
 // EXPECT: returns 'Self'. This implementation must return 'I8$@' (a pointer)
 // EXPECT: never a raw pointer
 // EXPECT: cannot access symbol
@@ -666,9 +665,9 @@ fn main()
 //< (docs/DESIGN-programming-language.md "Which pointers into a frame are stopped from leaving it"). A
 //< value parameter and a throw are the same. Into a `Trait!Err`, the upcast sits inside
 //< result_wrap. The check peels that off and checks it too.
-// EXPECT: cannot return an interface value built from local storage
-// EXPECT: cannot return an interface value built from local storage
-// EXPECT: cannot throw an interface value built from local storage
+// EXPECT: cannot return a trait value built from local storage
+// EXPECT: cannot return a trait value built from local storage
+// EXPECT: cannot throw a trait value built from local storage
 
 pub trait Shape
   fn area(r: Self$@): I32
@@ -748,11 +747,11 @@ fn main(): I32
   grow(w@)
   return size_of(q) + size_of(CQ) + w.s
 // ==== case trait_value_default_body_call
-//< A method with a default body has no vtable slot, so it cannot be called from a trait value
+//< A method with a default body holds no table slot, so a trait value cannot call it
 //< Let it through and the call names a field absent from the C. It fails at the C compiler with no
 //< KSPL diagnostic (has_vtable_slot in `ksplc/base/ast_place.kspl`). From a concrete type it stays
 //< callable: that reaches the body copied per implementation.
-// EXPECT: has a default body. It has no vtable slot
+// EXPECT: has a default body. It holds no slot
 // EXPECT-NOT: has no field or method named
 
 pub struct Down
@@ -801,9 +800,9 @@ fn main()
 //< the trait passes a read-only pointer, and the implementation wrote through it. A return of
 //< `I32@` where the trait promises `I32$@` let the caller write read-only memory. The other way,
 //< a writable pointer returned for a read-only one, only narrows what the caller may do.
-// EXPECT: method 'put': argument 1 type mismatch. The interface expects 'I32@'. The impl has 'I32$@'
-// EXPECT: method 'get': return type mismatch. The interface expects 'I32$@'. The impl has 'I32@'
-// EXPECT: method 'take': argument 1 type mismatch. The interface expects 'I32@'. The impl has 'I32$@'
+// EXPECT: method 'put': argument 1 type mismatch. The trait expects 'I32@'. The impl has 'I32$@'
+// EXPECT: method 'get': return type mismatch. The trait expects 'I32$@'. The impl has 'I32@'
+// EXPECT: method 'take': argument 1 type mismatch. The trait expects 'I32@'. The impl has 'I32$@'
 // EXPECT: Finished with 3 error(s)
 priv trait Sink
   fn put(r: Self, p: I32@)
@@ -844,7 +843,7 @@ fn main(): I32
 //< A call through the trait would receive the address of a value that ends with the call, the
 //< reason a `Self` return needs a pointer. The thunk did not bridge it: the number came back as
 //< an address. The other way, a pointer returned for a value, the thunk reads through it.
-// EXPECT: method 'get' of interface 'trait_impl_returns_value_for_pointer.Src' returns 'I32$@', a pointer, but this implementation returns the value 'I32'
+// EXPECT: method 'get' of trait 'trait_impl_returns_value_for_pointer.Src' returns 'I32$@', a pointer, but this implementation returns the value 'I32'
 // EXPECT: Finished with 1 error(s)
 priv trait Src
   fn get(r: Self): I32$@

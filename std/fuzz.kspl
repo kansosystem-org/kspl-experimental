@@ -458,7 +458,7 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
 priv enum Verdict //< how one round ended
     ok //< the program's own answer: it accepted the input (0) or refused it (1)
     hang //< no end within the longer timeout
-    controlled_abort //< a stop it announced, starting with `STOP_MARK`
+    controlled_abort //< a stop it announced: a line of standard error starts with `STOP_MARK`
     crash //< a silent end: a break in memory safety
 
 struct Finding //< one trial that did not end with the program's own answer
@@ -499,10 +499,20 @@ priv fn classify(got: subproc.Run_result@): Verdict //< how a trial ended, seen 
         return .hang
     if got.exited_with(0) || got.exited_with(1)
         return .ok
-    if got.stdout_data.find_str(STOP_MARK).is_some() ||
-        got.stderr_data.find_str(STOP_MARK).is_some()
+    if announced_stop(got.stderr_data)
         return .controlled_abort
     return .crash
+
+priv fn announced_stop(err: U8[]): Bool //< whether a line of standard error starts with `STOP_MARK`
+    //< The runtime writes the mark there, at the start of a line, just before it stops.
+    //< Caution: **Do not look for the mark anywhere in the output.** A crash whose output only
+    //< quotes a line holding it was then listed as a stop the program announced.
+    if err.starts_with(STOP_MARK)
+        return true
+    for i in Range.asc(err.len)
+        if err[i] == '\n' && err.sub_from(i + 1).starts_with(STOP_MARK)
+            return true
+    return false
 
 priv fn save_mutant(dir: U8[], kind: U8[], trial: Sz, data: U8[], ext: U8[], arena: Arena$@): U8[] //<
     //< Saves the input that made a trial fail: a count alone cannot say which input it was

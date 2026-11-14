@@ -172,14 +172,14 @@ function ksmdInput(ks) {
 
   // Caution: **AltGr types a character; it is not a shortcut.** On Windows the browser reports
   // AltGr as Ctrl+Alt. AltGr+0 on a German keyboard (`}`) took Ctrl+Alt+0: it made a paragraph and
-  // dropped the character. A press is AltGr's where the browser says so. Outside a Mac it is also
-  // AltGr's where Ctrl+Alt gives a character other than `want`, the character the shortcut names.
-  // ProseMirror and CodeMirror decide the same way. The cost: a layout whose digit key types a sign
-  // without Shift, as `&` on a French one, makes no heading with Ctrl+Alt there; the menu still does.
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+  // dropped the character. Outside a Mac, a press is AltGr's where the browser says so, or where
+  // Ctrl+Alt gives a character other than `want`, the character the shortcut names. ProseMirror and
+  // CodeMirror decide the same way. The cost: a layout whose digit key types a sign without Shift,
+  // as `&` on a French one, makes no heading with Ctrl+Alt there; the menu still does.
+  // A Mac has no AltGr, but Firefox there can report Option as AltGraph (`ks.mac`).
   function altGr(e, want) {
-    return e.getModifierState("AltGraph") ||
-      (!mac && e.ctrlKey && e.altKey && !e.metaKey && e.key.length === 1 && e.key !== want);
+    return !ks.mac && (e.getModifierState("AltGraph") ||
+      (e.ctrlKey && e.altKey && !e.metaKey && e.key.length === 1 && e.key !== want));
   }
 
   // Ctrl+End and Ctrl+Home where the document ends, or starts, with a block that holds no text, as

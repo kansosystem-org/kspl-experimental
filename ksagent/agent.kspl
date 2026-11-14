@@ -160,8 +160,11 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
             // **A tool works in memory of its own**: only what it gives back stays (`tool_message`
             // copies it), so the files it read do not add up over the question's rounds.
             defer scratch: = Arena(64 * 1024)
-            gave: = run_tool(job.folder, c.name, args.val, room, scratch)
+            gave: = run_tool(job.folder, c.name, args.val, room, shown, scratch)
             msgs.push(tool_message(b@, c.id, gave))
+        // A stop heard inside the last tool ends the question before another request goes out.
+        if !shown.go_on()
+            return Answer.ended(.stopped(shown.stop), lang, arena)
     why: = arena.text()
         .s("the model used all \{MAX_ROUNDS\} tool rounds without calling answer. Ask a narrower \
             question, or try a stronger model.").take()
@@ -229,15 +232,17 @@ priv fn tool_room(b: Json_builder$@, s: model.Server@, msgs: List<|json.Value|>@
     used: = out.slice().len + 1 + TOOL_RESERVE
     return MAX_REQUEST_BYTES - used if used < MAX_REQUEST_BYTES else 0
 
-priv fn run_tool(folder: files.Folder, name: U8[], args: json.Value, room: Sz, arena: Arena$@):
-    U8[] //<
+priv fn run_tool(folder: files.Folder, name: U8[], args: json.Value, room: Sz, shown: Progress$@,
+    arena: Arena$@): U8[] //<
         //< Runs one of the reading tools in `room` bytes of the request, and returns what the model
         //< reads back
+        //< A search asks `shown` between files, so the live file stays fresh and a stop is heard.
     path: = args.get("path").as_str().unwrap_or("")
     if name.equals("list")
         return files.tool_list(folder, path, room, arena)
     if name.equals("search")
-        return files.tool_search(folder, args.get("text").as_str().unwrap_or(""), path, room, arena)
+        return files.tool_search(folder, args.get("text").as_str().unwrap_or(""), path, room, shown,
+            arena)
     if name.equals("read")
         from: = int_arg(args.get("from_line"))
         to: = int_arg(args.get("to_line"))

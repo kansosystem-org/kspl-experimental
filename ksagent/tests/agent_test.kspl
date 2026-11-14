@@ -205,7 +205,7 @@ fn test_a_conversation_file_in_any_case_is_no_source(work: U8[], arena: Arena$@)
         verdict.check(arena.text().s("reading ").s(names[k]).s(" is refused").take(),
             got.starts_with("refused: a conversation's file"), got)
     listing: = files.tool_list(files.Folder(root), "", stub.ROOM, arena)
-    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, arena)
+    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, stub.GOING, arena)
     verdict.check("a listing and a search leave them out",
         listing.find_str("Team.").is_none() && listing.find_str("y.Live").is_none() &&
         hits.find_str("Team.").is_none() && hits.find_str("x.ASK").is_none() &&
@@ -233,7 +233,7 @@ fn test_a_search_keeps_only_the_lines_it_found(work: U8[], arena: Arena$@)
     fs.write_tree(root, U8[][]::{ "big/a.txt", "big/b.txt", "big/c.txt", "big/d.txt" },
         U8[][]::{ big, big, big, big }, arena) catch panic("the large files can be written")
     defer own: = Arena(64 * 1024)
-    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, own)
+    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, stub.GOING, own)
     used: = own.get_total_used()
     verdict.check(arena.text().s("4 MiB searched, within 256 KiB kept (\{used / 1024\} KiB)").take(),
         hits.find_str("rules/leave.md:3:").is_some() && used < 256 * 1024, hits)
@@ -265,8 +265,9 @@ fn test_a_search_skips_out_unless_given_it(work: U8[], arena: Arena$@)
     fs.write_tree(root, U8[][]::{ "rules/out/deep.md" },
         U8[][]::{ "paid leave, deep output\n" }, arena)
         catch panic("the nested folder can be written")
-    all: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, arena)
-    given: = files.tool_search(files.Folder(root), "paid leave", "rules/out", stub.ROOM, arena)
+    all: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, stub.GOING, arena)
+    given: = files.tool_search(files.Folder(root), "paid leave", "rules/out", stub.ROOM,
+        stub.GOING, arena)
     verdict.check("a search of the root passes over out/ and rules/out/",
         all.find_str("build output").is_none() && all.find_str("deep output").is_none(), all)
     verdict.check("a search given rules/out reads it",
@@ -279,7 +280,8 @@ fn test_a_search_of_one_file_it_cannot_read_says_why(work: U8[], arena: Arena$@)
     root: = stub.folder(work, "one-unread", arena)
     fs.write_tree(root, U8[][]::{ "old/leave.doc" }, U8[][]::{ "paid leave\n" }, arena)
         catch panic("the old Word file can be written")
-    said: = files.tool_search(files.Folder(root), "paid leave", "old/leave.doc", stub.ROOM, arena)
+    said: = files.tool_search(files.Folder(root), "paid leave", "old/leave.doc", stub.ROOM,
+        stub.GOING, arena)
     verdict.check("the search is refused with the reason read would give",
         said.starts_with("refused: it is a Word file in the old format"), said)
 
@@ -315,7 +317,7 @@ fn test_a_folder_that_cannot_be_read_is_passed_over(work: U8[], arena: Arena$@)
         verdict.skip("this user reads a folder of any mode (root does), so none can be locked")
         return
     walked: = walks(root, arena)
-    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, arena)
+    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, stub.GOING, arena)
     _restored: = set_mode(locked, "755", arena)
     verdict.check("the walk does not fail, and the search finds the lines outside the locked folder",
         walked && hits.find_str("rules/leave.md:3:").is_some() &&
@@ -324,7 +326,7 @@ fn test_a_folder_that_cannot_be_read_is_passed_over(work: U8[], arena: Arena$@)
 fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds Japanese text as plain bytes")
     root: = stub.folder(work, "japanese", arena)
-    hits: = files.tool_search(files.Folder(root), "有給休暇", "", stub.ROOM, arena)
+    hits: = files.tool_search(files.Folder(root), "有給休暇", "", stub.ROOM, stub.GOING, arena)
     verdict.check("a Japanese word is found with its file and line",
         hits.find_str("規程/休暇.md:3: 第3条").is_some(), hits)
     verdict.check("a Japanese question is answered in Japanese lines",
@@ -334,22 +336,26 @@ fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
 fn test_a_search_matches_words_in_any_order(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds the lines that hold every word, in any order")
     root: = stub.folder(work, "words", arena)
-    hits: = files.tool_search(files.Folder(root), "LEAVE employee new", "", stub.ROOM, arena)
+    hits: = files.tool_search(files.Folder(root), "LEAVE employee new", "", stub.ROOM, stub.GOING,
+        arena)
     verdict.check("words in another order and case find the line that holds them all",
         hits.find_str("rules/leave.md:3: A new employee").is_some() &&
         hits.find_str("no line holds every word").is_none(), hits)
-    hits_part: = files.tool_search(files.Folder(root), "employees receive", "", stub.ROOM, arena)
+    hits_part: = files.tool_search(files.Folder(root), "employees receive", "", stub.ROOM,
+        stub.GOING, arena)
     verdict.check("a word is found inside a longer one only one way: employees is not in employee",
         hits_part.find_str("no line holds every word").is_some() &&
         hits_part.find_str("rules/leave.md:3:").is_some(), hits_part)
-    ranked: = files.tool_search(files.Folder(root), "unused days unicorn", "", stub.ROOM, arena)
+    ranked: = files.tool_search(files.Folder(root), "unused days unicorn", "", stub.ROOM,
+        stub.GOING, arena)
     verdict.check("with no line holding every word, the line holding the most comes first",
         ranked.find_str("these lines hold the most of them)\nrules/leave.md:6: Unused days")
         .is_some(), ranked)
-    none: = files.tool_search(files.Folder(root), "unicorn zebra", "", stub.ROOM, arena)
+    none: = files.tool_search(files.Folder(root), "unicorn zebra", "", stub.ROOM, stub.GOING, arena)
     verdict.check("a search for words no line holds says so",
         none.equals("(no line holds any of those words)"), none)
-    ja: = files.tool_search(files.Folder(root), "有給休暇　付与", "", stub.ROOM, arena)
+    ja: = files.tool_search(files.Folder(root), "有給休暇　付与", "", stub.ROOM, stub.GOING,
+        arena)
     verdict.check("Japanese words split at an ideographic space are found together",
         ja.find_str("規程/休暇.md:3: 第3条").is_some() &&
         ja.find_str("no line holds every word").is_none(), ja)
@@ -366,7 +372,8 @@ fn test_a_full_search_keeps_the_lines_that_hold_the_most_words(work: U8[], arena
     body.s("alpha beta, the best line\n")
     fs.write_tree(root, U8[][]::{ "many/common.txt" }, U8[][]::{ body.take() }, arena)
         catch panic("the file of common words can be written")
-    hits: = files.tool_search(files.Folder(root), "alpha beta gamma", "", stub.ROOM, arena)
+    hits: = files.tool_search(files.Folder(root), "alpha beta gamma", "", stub.ROOM, stub.GOING,
+        arena)
     verdict.check("the line that holds two of the three words comes first",
         hits.find_str("hold the most of them)\nmany/common.txt:10002: alpha beta").is_some(),
         hits.utf8_head(300))
@@ -581,11 +588,12 @@ fn test_a_folder_given_with_a_slash_keeps_whole_paths(work: U8[], arena: Arena$@
         U8[][]::{ "paid leave, straight under the folder\n" }, arena)
         catch panic("the file can be written")
     root: = arena.text().s(made).c('/').take()
-    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, arena)
+    hits: = files.tool_search(files.Folder(root), "paid leave", "", stub.ROOM, stub.GOING, arena)
     verdict.check("a hit in a folder, and one straight under the root, keep their first character",
         hits.starts_with("a.md:1: paid leave") &&
         hits.find_str("\nrules/leave.md:3:").is_some(), hits)
-    given: = files.tool_search(files.Folder(root), "paid leave", "rules/", stub.ROOM, arena)
+    given: = files.tool_search(files.Folder(root), "paid leave", "rules/", stub.ROOM, stub.GOING,
+        arena)
     verdict.check("a path given with a slash keeps it too",
         given.find_str("rules/leave.md:3:").is_some(), given)
 

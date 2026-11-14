@@ -1,0 +1,38 @@
+import "ksos/boards/freenove_4wd_pico/motor"
+import "std/math"
+import "std/verdict"
+
+// ==========================================
+// ksos/boards/freenove_4wd_pico/motor: the speed cap holds on each wheel.
+//
+// As in pwm_test.kspl, **the arithmetic stands in a function of its own**, and this file checks it.
+// The wheels themselves are checked on the car.
+// ==========================================
+
+priv fn largest_wheel(lon: I32, lat: I32, rot: I32): I32 //<
+    //< The largest wheel value, in the four sums `spread` sends, after the triple is scaled
+    d: = motor.divisor(lon, lat, rot)
+    l: = lon * motor.CAP / d
+    s: = lat * motor.CAP / d
+    r: = rot * motor.CAP / d
+    a: = math.max(math.abs(l + s + r), math.abs(l - s + r))
+    return math.max(a, math.max(math.abs(l + s - r), math.abs(l - s - r)))
+
+fn test_motor_cap_holds_per_wheel() //<
+    //< No wheel goes over `CAP`, whatever the triple
+    //< Caution: **Scaling by the largest component let a wheel reach three times `CAP`**: (20, 20,
+    //< 20) gave the front left wheel 60.
+    verdict.start("[ksos/motor] the speed cap on each wheel test...")
+    c: = motor.CAP
+    assert(largest_wheel(c, c, c) <= c, "all three at the cap stay within it on every wheel")
+    assert(largest_wheel(100, -100, 100) <= c, "large mixed signs stay within the cap")
+    assert(largest_wheel(c, 0, c / 2) <= c, "forward with a turn stays within the cap")
+    vals: = I32[]::{ -100, -30, -21, -7, 0, 3, 13, 20, 29, 100 }
+    for lon in vals
+        for lat in vals
+            for rot in vals
+                assert(largest_wheel(lon, lat, rot) <= c, "no wheel goes over the cap")
+    // A command already within the cap is sent as it is.
+    assert(motor.divisor(c / 2, 0, c / 4) == c, "a small command is not scaled")
+    assert(largest_wheel(c, 0, 0) == c, "straight ahead at the cap keeps the full cap")
+    verdict.pass("No wheel goes over the cap, and a command within it is sent unchanged.")

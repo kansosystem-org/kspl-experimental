@@ -95,9 +95,6 @@ impl Ast_node
         if r.payload_fields_held(cg) == 0
             return
         f_list: = r.find_child(.k_enum_payload)
-        cg.clear_scratch()
-        r.get_child(0).text.mangle_c_identifier_to(cg.scratch)
-        v_name: = cg.scratch.slice()
         cg.s("        struct {\n")
         for f_node in f_list.children
             if f_node.kind_id != .k_enum_field || is_void_field(f_node, cg)
@@ -107,7 +104,9 @@ impl Ast_node
             cg.s("            ")
             f_node.get_enum_field_type_node().emit_resolved_type(cg, false)
             cg.s(" ").nm(f_name).s(";\n")
-        cg.s("        } \{v_name\};\n")
+        // The member is named as every read and write of it names it (`nm`): a variant called
+        // `float` or `errno` would otherwise collide with C.
+        cg.s("        } ").nm(r.get_child(0).text).s(";\n")
 
     priv fn emit_vtable_param(r: Ast_node$@, cg: Genc_ctx$@, pi: Sz) //<
         //< It writes one argument of a vtable's function pointer

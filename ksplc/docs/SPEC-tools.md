@@ -331,7 +331,7 @@ ksplc hello.kspl hello.c     # the 2nd time onward: it skips the parse (the smal
 | The unit | one file, so `std/io`'s entry, once made, serves other programs too |
 | The key | the file's contents and `ksplc`'s identity, so rebuilding `ksplc` remakes it automatically |
 | The size | the files read, per generation of `ksplc`. `--define` is in the key, so each new combination of flags adds to the generation. Making a new generation keeps the 8 newest by modification time and removes the rest |
-| What is not cached | an editor's unsaved buffer, since the language server analyses it on every keystroke. Files read from disk (`std/` and the like) are, so the language server answers faster too |
+| What is not cached | an editor's unsaved buffer, since the language server analyses it after each edit. Files read from disk (`std/` and the like) are, so the language server answers faster too |
 
 `--stats`'s `[AST Cache] N hit / M miss / K stored` line shows whether the cache is working.
 
@@ -770,6 +770,8 @@ A summary is its run's first line, so it runs past the width instead of being cu
 * **The other documents' diagnostics stay on screen**, and are replaced one document at a time as each is analysed again, while the editor sends nothing.
 * **A document whose analysis brings the analysis process down again is set aside.** It answers nothing until it is edited, and the server's log (its standard error) names it.
 
+**Quick edits are analysed as one.** Where the editor sends a change while an earlier one is still waiting, only the newest text of that document is analysed. A request sent between two changes is answered against the text the editor had when it asked. The diagnostics end matching the final text.
+
 **An edit to one open document refreshes the diagnostics of the others** too, one document at a time, while the editor sends nothing. An edit can break or mend a file that imports the edited one.
 
 **A message whose header holds no valid `Content-Length` ends the server** with exit code 1, and its log says why. Past such a header, where the next message starts is not known.
@@ -880,7 +882,7 @@ Every diagnostic has one of four weights, from "it does not run" down to "it run
 
 **A compile hides information diagnostics and hints**; `ksplc lint` and the editor show them.
 
-**A compile prints only the warnings of the checks it makes anyway**, and `ksplc run` and `ksplc build` print the same. Those are the checks its own analysis needs, such as [W0207]'s unread local. [W0110] is printed too: a container that keeps a local's trait value reads freed memory at run time. **Every other check runs under `ksplc lint` alone**, or where a code is set to `error` ([§5.3.1](#531-the-levels)), since each costs time on every build.
+**A compile prints only the warnings of the checks it makes anyway**, and `ksplc run` and `ksplc build` print the same. Those are the checks its own analysis needs, such as [W0207]'s unread local. [W0101] and [W0110] are printed too. A constant index outside its array panics at run time, and a container that keeps a local's trait value reads freed memory then. **Every other check runs under `ksplc lint` alone**, or where a code is set to `error` ([§5.3.1](#531-the-levels)), since each costs time on every build.
 
 Only warnings, information and hints carry a code: a fixed number such as `W0201`, used to point at one or to narrow the output to it. **An error has no number**: with one, the mechanism of §5.3 could silence it.
 

@@ -220,6 +220,16 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
     // other.
     base_diag.lsp_diags.clear()
     base_cfg_inactive.clear()
+    // **A document in another folder named `std` is refused, and the reason is shown on it**
+    // (`refused_entry` in `../base/package.kspl`). The compile refuses it too, without a word.
+    refused: = base_package.refused_entry(doc_path(uri_perm))
+    if refused.len > 0
+        if send_diag
+            base_diag.lsp_diags.list
+                .push(base_diag.Lsp_diagnostic::{ .file = uri_perm, .severity = .error, .line = 0,
+                .col = 0, .len = 0, .msg = base_core.arena.dup_str(refused) })
+            lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
+        return ptr
     compiler: = init_doc_compiler(server, ptr, .some(ptr.src_perm))
 
     if send_diag && compiler.has_load_error

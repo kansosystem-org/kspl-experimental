@@ -15,8 +15,10 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/json" + { Json_builder }
+import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
+import "std/sys"
 import "std/verdict"
 
 priv const WORD: U8[] = "helper" //< the function renamed; no other text in the files holds it
@@ -102,15 +104,15 @@ fn run_fresh(exe: U8[], arena: Arena$@) //<
     fs.write_tree(dir, U8[][]::{ LIB_REL, USER_REL }, U8[][]::{ LIB_OLD, USER_OLD }, arena) catch
         verdict.check("the fresh-bytes workspace can be laid out", false, dir)
         return
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
             verdict.check("the fresh-bytes workspace's server starts", false, dir)
             return
-    defer c.free()
     ask: = Ask::{ .c = c@, .dir = dir, .arena = arena }
     check_saved(ask)
     check_typed(ask)
     check_dependent(exe, arena)
+    check_burst(exe, arena)
 
 priv fn check_saved(ask: Ask) //<
     //< A file the editor does not have open is read from the disk on each request
@@ -189,11 +191,10 @@ priv fn check_dependent(exe: U8[], arena: Arena$@) //<
     fs.write_tree(dir, U8[][]::{ LIB_REL, USER_REL }, U8[][]::{ LIB_OLD, USER_OLD }, arena) catch
         verdict.check(name, false, dir)
         return
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
             verdict.check(name, false, "the language server cannot be started")
             return
-    defer c.free()
     lsp_client.open(c@, LIB_REL, LIB_OLD, arena)
     _lib: = marks_of(c@, LIB_REL, arena)
     lsp_client.open(c@, USER_REL, USER_OLD, arena)
@@ -207,3 +208,85 @@ priv fn check_dependent(exe: U8[], arena: Arena$@) //<
     after: = marks_of(c@, USER_REL, arena)
     counts: = arena.text().s("\{before\} marks before, \{after\} after").take()
     verdict.check(name, before == 0 && after > 0, lsp_client.why(c@, counts, arena))
+    // Caution: **End the session and read what the server says last.** Each re-check of another
+    // open file once left that file's framed copy unfreed, and the exit's heap check then said
+    // "memory leak" and ended with 1.
+    _down: = lsp_client.answer(c@, "shutdown", lsp_client.empty_obj(arena), lsp_client.READ_MS,
+        arena)
+    c.notify("exit", lsp_client.empty_obj(arena), lsp_client.SEND_MS, arena) catch {}
+    $waits: I32 = 0
+    for c.alive() && waits < 200
+        sys.sleep_ms(50)
+        waits += 1
+    tail: = arena.text().s(c.err_tail()).take()
+    verdict.check("a session that re-checked another open file ends with nothing left allocated",
+        !c.alive() && tail.find_str("memory leak").is_none(), tail)
+
+// ==========================================
+// A burst of changes is analysed once, as its last text
+// **The server analyses only the newest of the changes already waiting**, so fewer analyses
+// publish than changes were sent. Each one analysed in turn kept the next answer waiting.
+// Caution: **Count the published diagnostics, not the time taken.** A count holds on a loaded
+// machine; a time bound fails there by mistake.
+// ==========================================
+
+priv const BURST_REL: U8[] = "burst.kspl"
+priv const BURST_CHANGES: Sz = 8 //< the changes sent in one write, before the hover
+priv const BURST_LAST: U8[] = "fn last_one(): I32\n    return 1\n" //< the last text; no error
+priv const BURST_ID: I32 = 9100 //< the hover's id, above any the client gives itself here
+
+priv fn burst_text(k: Sz, arena: Arena$@): U8[] //<
+    //< The text the burst's change `k` sends; each but the last holds one error
+    if k + 1 == BURST_CHANGES
+        return BURST_LAST
+    return arena.text().s("fn step(): I32\n    return missing_\{k\}\n").take()
+
+priv fn change_body(k: Sz, arena: Arena$@): U8[] //< the didChange that sends `burst_text(k)`
+    $b: = Json_builder(arena)
+    params: = b.obj()
+        .set("textDocument",
+        b.obj().set("uri", b.str_val(BURST_REL)).set("version", b.int_val(I64::k + 2I64)).build())
+        .set("contentChanges",
+        b.arr()
+        .push(b.obj().set("text", b.str_val(burst_text(k, arena))).build()).build()).build()
+    return jsonrpc.encode("textDocument/didChange", params, -1, arena)
+
+priv fn check_burst(exe: U8[], arena: Arena$@) //<
+    //< Quick changes, then a hover: fewer analyses than changes, and the marks match the last text
+    name: = "a burst of changes is analysed fewer times than it holds changes"
+    dir: = harness.sandbox("lsp_burst")
+    defer $c: =
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+            verdict.check(name, false, "the language server cannot be started")
+            return
+    lsp_client.open(c@, BURST_REL, burst_text(0, arena), arena)
+    opened: = marks_of(c@, BURST_REL, arena)
+    $bodies: = List<|U8[]|>(arena)
+    for k in Range.asc(BURST_CHANGES)
+        bodies.push(change_body(k, arena))
+    on_name: = lsp_client.at_pos(BURST_REL, 0, 4, arena)
+    bodies.push(jsonrpc.encode("textDocument/hover", on_name, BURST_ID, arena))
+    // One write, so every change is waiting before the first one's analysis ends.
+    c.send_messages(bodies.slice(), lsp_client.SEND_MS) catch {}
+    $published: Sz = 0
+    $last_marks: I32 = -1
+    $shown: U8[] = ""
+    for
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
+            break
+        if msg.val.get("id").as_int().unwrap_or(-1) == BURST_ID
+            shown = lsp_client.hover_text(msg.val)
+            break
+        got: = msg.val.get("params")
+        if msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics") &&
+            got.get("uri").as_str().unwrap_or("").ends_with(BURST_REL)
+            published += 1
+            last_marks = I32::got.get("diagnostics").arr_list(arena).len
+    counts: = arena.text()
+        .s("\{opened\} marks on open; \{published\} analyses for \{BURST_CHANGES\} changes; \
+            \{last_marks\} marks last; hover '\{shown\}'").take()
+    verdict.check(name, opened == 1 && published >= 1 && published < BURST_CHANGES,
+        lsp_client.why(c@, counts, arena))
+    verdict.check("after a burst of changes, the marks and the hover match the last text",
+        last_marks == 0 && shown.find_str("last_one").is_some(),
+        lsp_client.why(c@, counts, arena))

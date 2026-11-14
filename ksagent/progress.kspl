@@ -128,26 +128,6 @@ impl Progress
             answer.write_shown(io.err(), line)
             io.err().c('\n')
 
-    fn go_on(r: Self$@): Bool //< false once the answer must stop; `stop` then says why
-        //< **A question stopped on the page, or gone from its ask file, stops its answer**: nobody
-        //< waits for it any more, and the model's time goes to the next question. It is asked at
-        //< each look at the work, so it also writes the live file again where it grew old.
-        if r.live.len > 0 && sys.mono_us() - r.last_live_us >= LIVE_KEEP_US
-            r.write_live(true)
-        if r.stop.len > 0 || r.ask.len == 0 || sys.mono_us() - r.last_check_us < CHECK_GAP_US
-            return r.stop.len == 0
-        r.last_check_us = sys.mono_us()
-        defer look: = Arena(64 * 1024)
-        if files.ask_too_large(r.ask)
-            r.stop = "the ask file grew larger than 1 MiB"
-            return false
-        // **An ask file that cannot be read now stops nothing**: the next check reads it again.
-        // Read as empty, it would stop the answer as a question gone from its ask file.
-        now: = io.read_file(r.ask, look) catch
-            return true
-        r.stop = chat.stop_reason(now, r.id, look)
-        return r.stop.len == 0
-
     fn ended(r: Self$@, why: U8[], written: Bool) //<
         //< Ends the work: the live file says the turn stands in the chat file, or why it does not
         //< Where it does not, the text shown so far stays in the live file, marked unchecked.
@@ -216,6 +196,27 @@ impl Progress: Manual_free //< `free()` lets go the text it keeps
     fn free(r: Self$@) //< frees this round's text
         r.text.free()
         r.reader.free()
+
+impl Progress: files.Going //< so a long tool can ask it between files (`files.tool_search`)
+    fn go_on(r: Self$@): Bool //< false once the answer must stop; `stop` then says why
+        //< **A question stopped on the page, or gone from its ask file, stops its answer**: nobody
+        //< waits for it any more, and the model's time goes to the next question. It is asked at
+        //< each look at the work, so it also writes the live file again where it grew old.
+        if r.live.len > 0 && sys.mono_us() - r.last_live_us >= LIVE_KEEP_US
+            r.write_live(true)
+        if r.stop.len > 0 || r.ask.len == 0 || sys.mono_us() - r.last_check_us < CHECK_GAP_US
+            return r.stop.len == 0
+        r.last_check_us = sys.mono_us()
+        defer look: = Arena(64 * 1024)
+        if files.ask_too_large(r.ask)
+            r.stop = "the ask file grew larger than 1 MiB"
+            return false
+        // **An ask file that cannot be read now stops nothing**: the next check reads it again.
+        // Read as empty, it would stop the answer as a question gone from its ask file.
+        now: = io.read_file(r.ask, look) catch
+            return true
+        r.stop = chat.stop_reason(now, r.id, look)
+        return r.stop.len == 0
 
 impl Phase
     fn word(r: Self): U8[] //< the phase as the live file names it

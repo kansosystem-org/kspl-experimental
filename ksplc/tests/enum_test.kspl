@@ -168,6 +168,33 @@ fn test_enum_variant_list()
     verdict.pass("")
 
 // ==========================================
+// Variants joined by `,` in one case, binding the leading fields
+// Fewer names bind the leading fields, in a joined case as in a single one (7.1 in
+// `../../docs/SPEC-programming-language.md`).
+// ==========================================
+priv enum Pointer_ev
+    click(x: I32, y: I32)
+    drag(x: I32, dy: I32, dz: I32)
+    tap(x: I32)
+    quit
+
+impl Pointer_ev
+    fn leading_x(r: Self): I32 //< reads `x` from whichever joined variant was entered
+        switch r
+        case .click(a), .drag, .tap
+            return a
+        case .quit
+            return -1
+
+fn test_joined_case_binds_leading_fields()
+    verdict.start("[enum] a joined case binds the leading fields of payloads of other lengths...")
+    assert(Pointer_ev.click(3, 4).leading_x() == 3, "the first variant's leading field")
+    assert(Pointer_ev.drag(5, 6, 7).leading_x() == 5, "a longer payload's leading field")
+    assert(Pointer_ev.tap(8).leading_x() == 8, "a payload of exactly the bound fields")
+    assert(Pointer_ev.quit.leading_x() == -1, "a variant outside the joined case")
+    verdict.pass("")
+
+// ==========================================
 // `T?` is `Option<|T|>`: the two spellings are one type
 // The marks apply from the left as `[]` and `@` do ("`T?` is sugar for `Option<|T|>`" in
 // `../../docs/DESIGN-programming-language.md`).

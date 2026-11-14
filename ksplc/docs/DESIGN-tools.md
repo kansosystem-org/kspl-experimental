@@ -6,7 +6,7 @@ The language server (`ksplc/lsp/`) and the formatter (`ksplc/fmt/`) stand outsid
 
 ## The arena is rewound after each request (a worked example)
 
-The language server discards each request's analysis memory after answering. Interned names and document entries live across requests, under their own owners; the rewind does not promise constant process memory. A language server analyses on every keystroke, and without a GC a naive one leaks. `ksplc/lsp/state.kspl` uses **the arena's save and restore** ("Arena's implementation: a linked list of chunks and bump allocation" in [`DESIGN-compiler.md`](DESIGN-compiler.md)).
+The language server discards each request's analysis memory after answering. Interned names and document entries live across requests, under their own owners; the rewind does not promise constant process memory. A language server analyses after almost every edit, and without a GC a naive one leaks. `ksplc/lsp/state.kspl` uses **the arena's save and restore** ("Arena's implementation: a linked list of chunks and bump allocation" in [`DESIGN-compiler.md`](DESIGN-compiler.md)).
 
 The diagram shows one request's life.
 
@@ -58,9 +58,15 @@ sequenceDiagram
    * **An edit sends the other open documents through the same path** (`recheck_others` in `ksplc/lsp/server.kspl`): each is marked unchecked and analysed again while the editor is silent. An edit can change the diagnostics of a file that imports the edited one, directly or through a third. The supervisor reads no imports, so it marks every open document. That costs one analysis per open document, and a request waits for one at most.
    * **A message of its own, not a flag on didOpen.** `didOpen` always analyses and publishes; a field changing that would give one name two meanings in `dispatch`.
    * **To know the editor is silent, a thread of the supervisor reads standard input** and hands each message over (`Editor_reader`). Standard input has no "is anything waiting" that works on every OS and sees past the C library's buffer. The thread stops at `exit` or the end of input. A thread left blocked in the C library's read holds standard input's lock, and the C library's exit would wait for it.
-4. **Quarantine**: a document whose analysis brings the worker down again is marked poison and excluded, so one document cannot cause an endless crash loop.
+4. **A change that a later one replaces is not analysed.** Before the supervisor relays a `didChange`, it takes every message already waiting from the reading thread (`Waiting` in `ksplc/lsp/server.kspl`). Where a later change to the same document is among them, it records the text and relays nothing. The later change is analysed in its place.
+   * **An editor that sends each keystroke sends changes faster than one is analysed.** A file the size of `lsp/worker.kspl` takes about 1.4 s. Analysed in turn, ten quick changes kept the next hover waiting 14 s and fifty 71 s; skipped, the hover waited under 4 s for both. An editor that waits for a pause in typing (VS Code waits 1.5 s) rarely sends such a run.
+   * **Only the newest text counts**, since each change carries the whole text (`textDocumentSync` is Full). So the diagnostics end matching the final text.
+   * **A request between two changes keeps the earlier one**, as does any other message naming the document (a close, a save). The request is answered in the order asked, against the text the editor had when it asked. A change to another document between them does not.
+   * **The messages taken stay in their order** and are handed on before the reading thread is asked again. Their memory is let go once the last is handed on, so it holds one burst at most.
+   * `tests/support/lsp_fresh.kspl` sends eight changes and a hover in one write. It counts the diagnostics published before the answer: fewer than eight, the last for the last text.
+5. **Quarantine**: a document whose analysis brings the worker down again is marked poison and excluded, so one document cannot cause an endless crash loop.
    * Caution: **After a quarantine, hand every document over again from the first, to the new worker.** Those already handed went down with the old one, and their requests would answer nothing.
-5. **Degraded mode**: where processes cannot be created, the supervisor falls back to in-process analysis (`run_lsp_worker`).
+6. **Degraded mode**: where processes cannot be created, the supervisor falls back to in-process analysis (`run_lsp_worker`).
 
 **The supervisor is the last resort, not the plan.** Recovery loses the request in flight, and its `null` reads as "nothing found". So a failure the analysis can report must be reported, not turned into a dead process. `validate_layout` in `base/ast.kspl` returns its verdict on a tree nested past 2000 and fails that file alone. `clone_with` and `find_deep_child_impl` in the same file still end the run, since a file that deep is refused while loading and never reaches them.
 
@@ -274,7 +280,7 @@ Caution: **Do not split it into two.** A swallowing operator held apart from the
 
 ## A `didOpen` checks one document's bodies
 
-**When you open a file, the server type-checks the function bodies of that file only, not of every file it imports.** Checking every reachable file's bodies would delay every answer, redone on every keystroke.
+**When you open a file, the server type-checks the function bodies of that file only, not of every file it imports.** Checking every reachable file's bodies would delay every answer, redone on every edit.
 
 So the document view checks `main_file`'s bodies and no others (`Bodies.main_file`, the `bodies` on `Sema_ctx` that `run_semantic_analysis` is handed). Every file's declarations are still collected and every `const` initializer still inferred, since other files read those. Only other files' function and impl bodies go unchecked.
 

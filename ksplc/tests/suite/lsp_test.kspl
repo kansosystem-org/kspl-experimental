@@ -375,12 +375,11 @@ priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): U8[]
     return lsp_client.hover_text(got.val)
 
 priv fn check_didclose(exe: U8[], arena: Arena$@)
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
             verdict.check("a document left open is restored after the worker is remade", false,
                 "the client cannot be started")
             return
-    defer c.free()
     for uri in U8[][]::{ CLOSED_URI, OPEN_URI }
         lsp_client.open(c@, uri, CLOSE_SRC, arena)
     lsp_client.close(c@, CLOSED_URI, arena)
@@ -414,12 +413,11 @@ priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
     verdict.check("what sits under an unraised #cfg answers with a reason", ok5, d13)
     // The analysis worker is a separate process: only an environment variable reaches it.
     sys.set_env("KSPLC_DEFINES", "probe_flag") catch panic("KSPLC_DEFINES could not be set")
-    $c2: =
+    defer $c2: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
             verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", false,
                 "the client cannot be started")
             return
-    defer c2.free()
     lsp_client.open(c2@, CFG_URI, CFG_SRC, arena)
     on: = lsp_client.answer(c2@, "textDocument/hover",
         lsp_client.at_pos(CFG_URI, 3, 4, arena), lsp_client.READ_MS, arena)
@@ -458,10 +456,9 @@ priv const WALK_BODIES: U8[][5] = ::{ "built/\n", WALK_LIB, WALK_USER, WALK_COPY
 
 priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Value //<
     //< It starts the language server in that directory and counts `hit`'s rename destinations
-    $c: =
+    defer $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
             return .null_val
-    defer c.free()
     $b: = Json_builder(arena)
     _ready: =
         c.request("initialize", b.obj().build(), lsp_client.READ_MS, arena) catch
@@ -488,11 +485,10 @@ priv fn check_spaced_folder(exe: U8[], arena: Arena$@)
     fs.write_tree(dir, U8[][]::SPACED_RELS, U8[][]::SPACED_BODIES, arena) catch
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
-    $c: =
+    defer $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
             verdict.check(name, false, "the language server cannot be started")
             return
-    defer c.free()
     _ready: =
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch
             verdict.check(name, false, "initialize does not return")
@@ -504,6 +500,21 @@ priv fn check_spaced_folder(exe: U8[], arena: Arena$@)
     landed: = got.get("result").get("uri").as_str().unwrap_or("")
     verdict.check(name, landed.equals(lsp_client.encoded_uri_of(dir, "lib.kspl", arena)),
         lsp_client.why(c@, arena.text().s("'").s(landed).s("'").take(), arena))
+    // **A document in another folder named `std` is refused, and the reason is shown on it**
+    // (`refused_entry` in `ksplc/base/package.kspl`). It is named relative to the folder, as a link
+    // in the scratch place's path can spell an absolute one apart from the server's.
+    rel: = arena.text().s("std/").s(OTHER_STD_FILE).take()
+    lsp_client.open(c@, rel, "fn main()\n  return\n", arena)
+    refused: = published_for(c@, rel, arena)
+    one: =
+        refused.found && refused.diags.len == 1 &&
+        refused.diags.get(0).get("message").as_str().unwrap_or("")
+        .find_str("the standard library in use is").is_some()
+    verdict.check("a document in another folder named 'std' is refused, saying why", one,
+        lsp_client.why(c@, said(refused, arena), arena))
+
+priv const OTHER_STD_FILE: U8[] = "other_std_probe.kspl" //<
+    //< A document in a folder named `std` beside the workspace's files; no file stands there
 
 priv fn check_walk(exe: U8[], arena: Arena$@)
     dir: = harness.sandbox("lsp_walk")
@@ -548,11 +559,10 @@ priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
     fs.write_tree(dir, U8[][]::{ "cfg_walk.kspl" }, U8[][]::{ CFG_WALK_SRC }, arena) catch
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
-    $c: =
+    defer $c: =
         lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
             verdict.check(name, false, "the client cannot be started")
             return
-    defer c.free()
     lsp_client.open(c@, "cfg_walk.kspl", CFG_WALK_SRC, arena)
     before: = dropped_reason(c@, arena)
     _uses: =
@@ -583,11 +593,10 @@ priv fn check_generic_caller(exe: U8[], arena: Arena$@)
     fs.write_tree(dir, U8[][]::RELAY_RELS, U8[][]::RELAY_BODIES, arena) catch
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
-    $c: =
+    defer $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
             verdict.check(name, false, "the language server cannot be started")
             return
-    defer c.free()
     _ready: =
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch
             verdict.check(name, false, "initialize does not return")
@@ -673,10 +682,9 @@ fn main(): I32
     // The workspace is the package's top, where the suite runs (an empty path inherits it).
     top: = fs.absolute("", arena) catch
         return harness.fatal("the working directory cannot be read")
-    $c: =
+    defer $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
             return harness.fatal("the language server cannot be started")
-    defer c.free()
 
     init: =
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch e

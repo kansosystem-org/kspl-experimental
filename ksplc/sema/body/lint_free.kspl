@@ -5,9 +5,10 @@
 //< it is freed, a `defer` frees it, or it is handed on (returned, thrown, stored or passed by
 //< value). **A generic body is checked in each of its instances**, since nothing checks its
 //< template; one finding is printed once at its place in the source, whichever instance met it. A
-//< value in an arena is the arena's to free, so an initializer that passes an arena other than the
-//< literal `null` is skipped. Fields, values reached through a pointer and an arena held in a
-//< variable that is `null` at run time are not seen.
+//< value in an arena is the arena's to free, so a value that keeps its arena in a field, made by a
+//< call that passes an arena other than the literal `null`, is skipped. **A value that keeps no
+//< arena is on the heap**, whatever the call is passed. Fields, values reached through a pointer
+//< and an arena held in a variable that is `null` at run time are not seen.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -97,13 +98,16 @@ priv fn creates_owner(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
     if core.kind_id != .k_expr_postfix || !core.postfix_op_text().equals("(") ||
         reads_element(c, core, t_id)
         return false
-    $arena_arg: = Arena_arg.none
-    core.find_arena_arg(c, arena_arg@)
-    if arena_arg == .other
-        return false
+    // **A value that keeps no arena is on the heap, whatever arena the call is passed.** Its
+    // `free()` has no arena to hand its memory back to, so an arena the call takes cannot own it
+    // (a `Str_builder` built by a function that takes an arena for its scratch work).
+    if !keeps_arena
+        return true
     // **A value that keeps an arena is made here only where this call chose the heap**
     // (`List<|T|>(null)`). From any other call it can live in an arena the callee chose.
-    return !keeps_arena || arena_arg == .null_given
+    $arena_arg: = Arena_arg.none
+    core.find_arena_arg(c, arena_arg@)
+    return arena_arg == .null_given
 
 priv enum Arena_arg //< what arena the making call passes, if any
     none //< it passes none
@@ -140,13 +144,21 @@ priv fn reads_element(c: Sema_ctx$@, call: Ast_node$@, t_id: I32): Bool //<
                 return true
     return false
 
-priv fn holds_arena(c: Sema_ctx$@, t_id: I32): Bool //<
+priv const ARENA_FIELD_DEPTH: Sz = 4 //< how many levels of fields held by value are read
+
+priv fn holds_arena(c: Sema_ctx$@, t_id: I32, depth: Sz = 0): Bool //<
     //< Whether the type keeps the arena it lives in, in a field (`List`'s `arena`, a `Doc`'s own)
+    //< **A field held by value is read too** (a struct whose `List` field keeps the arena): its
+    //< `free()` hands that field's memory back to the arena. A field behind a pointer is not.
+    if depth >= ARENA_FIELD_DEPTH
+        return false
     switch c.env.get_info(c.env.get_clean_real_type(t_id))
     case .struct_type(def)
         for f in def.fields_list
             if is_arena(c, f.type_id) ||
                 c.env.get_str(c.env.get_clean_real_type(f.type_id)).equals(OWN_ARENA_FQN)
+                return true
+            if !c.env.is_pointer(f.type_id) && holds_arena(c, f.type_id, depth + 1)
                 return true
     default {}
     return false

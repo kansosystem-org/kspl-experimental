@@ -645,7 +645,7 @@ make ksos-rp2040-car-pilot
 | Leave it | At 60 seconds, `HALTED: run time limit` and it stops |
 | `ir=` on the report line | Grows with every press (receiving works) |
 | `run=` | Grows only while it runs; coming back resets it to 0 |
-| `drive=` | Never over `motor.CAP` in absolute value |
+| `drive=` | The three values' absolute values add up to `motor.CAP` or less, so no wheel goes over it |
 
 Caution: **`HALTED` gone is not enough; check that `n` (the decisions) grows.** Back from the run-time limit:
 

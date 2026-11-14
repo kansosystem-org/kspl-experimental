@@ -464,6 +464,19 @@ fn pick(c: Bool): I32
 
 fn main(): I32
   return pick(true)
+// ==== case label_above_its_loop
+//< A label on the line above a `for` is read as a declaration, and the note shows the loop's form
+//< A label alone on its line names the indented block under it, so `outer:` over a `for` at the
+//< same depth declares a variable with no type. Other languages write the label there.
+// EXPECT: cannot infer type for 'outer'
+// EXPECT: Note: if 'outer' is meant as a label, a label alone on its line names the indented block under it. To label a 'for', 'switch' or 'if', write the label on its line ('outer: for i in ...')
+fn main(): I32
+  $n: Sz = 0
+  outer:
+  for i in Range.asc(3)
+    n += i
+    break outer
+  return I32::n
 // ==== case loop_carries_a_move
 //< A `Move_only` value moved inside a loop is moved again by the next pass
 //< **Each pass starts from what the last one left**, in all four shapes of `for`. Walked once
@@ -843,6 +856,18 @@ fn main(): I32
     return 1
   default
     return 0
+// ==== case switch_on_bool_missing_a_value
+//< A `switch` on a `Bool` names the value no case covers
+//< **A `Bool` has two values, so both can be listed**, unlike an integer. Saying that its values
+//< cannot all be listed would be false and hides which `case` to add.
+// EXPECT: switch on 'Bool' does not cover both values. Missing: 'false'
+// EXPECT-NOT: cannot all be listed
+fn main(): I32
+  b: = true
+  switch b
+  case true
+    return 1
+  return 0
 // ==== case switch_payload_names_too_many
 //< A `case` names no more bindings than its variant has payload fields
 //< A name past the last field holds nothing: the C compiler then finds it undeclared, and LLVM gets

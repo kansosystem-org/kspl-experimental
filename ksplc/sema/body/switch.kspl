@@ -332,14 +332,15 @@ impl Ast_node
                 check_or_binding(c, mctx, bind_var, mctx.bound_vars.get(field_idx),
                     payload_type_at(variant_def, field_idx))
             field_idx += 1
-        // An OR pattern's later arms may omit the names; then only the payload's count and types
-        // are checked against the first arm's.
+        // An OR pattern's later arms may omit the names; then each name the first arm binds needs
+        // a field here of the same type. **Fewer names bind the leading fields**, so a longer
+        // payload is allowed (7.1 in docs/SPEC-programming-language.md).
         if bound_count == 0 && mctx.bound_vars.len > 0
-            if variant_def.payload_fields.len != mctx.bound_vars.len
+            if variant_def.payload_fields.len < mctx.bound_vars.len
                 c.clear_scratch()
-                    .s("variant '\{variant_def.name\}' payload count \
-                        (\{variant_def.payload_fields.len\}) does not match the captured variables \
-                        (\{mctx.bound_vars.len\}) for smart capture")
+                    .s("variant '\{variant_def.name\}' carries \{variant_def.payload_fields.len\} \
+                        payload field(s), but this 'case' binds \{mctx.bound_vars.len\} name(s). \
+                        Each variant joined by ',' needs a field for every name bound")
                 c.err(r, c.scratch.slice())
                 mctx.success = false
             else
@@ -348,8 +349,11 @@ impl Ast_node
                     actual_type_id: = variant_def.payload_fields.get(i).type_id
                     if actual_type_id != expected_sym.type_id
                         c.clear_scratch()
-                            .s("variant '\{variant_def.name\}' payload type mismatch for smart \
-                                capture")
+                            .s("variant '\{variant_def.name\}' holds \
+                                '\{c.env.display(actual_type_id)\}' in field \{i + 1\}, but \
+                                '\{expected_sym.name\}' is bound as \
+                                '\{c.env.display(expected_sym.type_id)\}'. The variants joined by \
+                                ',' need the same types in the fields a name binds")
                         c.err(r, c.scratch.slice())
                         mctx.success = false
         else if bound_count != mctx.bound_vars.len
@@ -396,7 +400,7 @@ impl Ast_node
             return false
         return true
 
-    priv fn matches_both_bools(r: Ast_node$@): Bool //< whether the cases name `true` and `false`
+    priv fn missing_bools(r: Ast_node$@): U8[] //< the `Bool` values no case names, or ""
         $seen_true: = false
         $seen_false: = false
         for $i: Sz = 2; i < r.children.len; i += 1
@@ -412,7 +416,13 @@ impl Ast_node
             if pat.kind_id == .k_bool
                 seen_true = seen_true || pat.text.equals("true")
                 seen_false = seen_false || pat.text.equals("false")
-        return seen_true && seen_false
+        if seen_true && seen_false
+            return ""
+        if seen_true
+            return "'false'"
+        if seen_false
+            return "'true'"
+        return "'true' and 'false'"
 
     fn process_switch_exhaustiveness(r: Ast_node$@, c: Sema_ctx$@, target_id: I32,
         enum_def: sema_type_def.Enum_def@, covered_variants: List<|Ast_node$@|>@, has_default: Bool):
@@ -420,9 +430,15 @@ impl Ast_node
         if has_default
             return true
         // A `Bool` has two values, so naming both covers it as naming every variant does.
-        if enum_def == null && c.env.is_bool(r.get_switch_cond().type_id) &&
-            r.matches_both_bools()
-            return true
+        if enum_def == null && c.env.is_bool(r.get_switch_cond().type_id)
+            missing: = r.missing_bools()
+            if missing.len == 0
+                return true
+            c.clear_scratch()
+                .s("switch on 'Bool' does not cover both values. Missing: \{missing\}. Add a 'case' \
+                    for what is missing, or a 'default' case")
+            c.err(r, c.scratch.slice())
+            return false
         if enum_def == null
             c.err(r,
                 "switch on a non-enum type requires a 'default' case. Its values cannot all be \
