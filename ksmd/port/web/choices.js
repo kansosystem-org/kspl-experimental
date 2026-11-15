@@ -26,10 +26,11 @@ function ksmdChoices(ks) {
   }
 
   // Notes each column's choices on a rendered table, marks the cells off their list, and paints
-  // the choices' colours on their cells, or on their whole rows.
+  // the choices' colours on their cells, or on their whole rows. Only the cells `only(row,
+  // column)` names are marked and painted (`dress` in `table.js`).
   // `lists` holds each column's choices as [text, colour, fill]; `rows` is the column whose
   // choices colour rows, or -1.
-  function mark(wrap, lists, rows) {
+  function mark(wrap, lists, rows, only) {
     wrap.choices = lists.map((list) => list.map(([text]) => text));
     wrap.choiceColours = lists;
     wrap.rowColours = rows;
@@ -40,16 +41,18 @@ function ksmdChoices(ks) {
         const v = row[c];
         const one = v && v[0] === 2 ? byName.get(lower(String(v[1]))) : undefined;
         const off = v && v.length > 1 && !one;
-        const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+        const el = ks.table.cellAt(wrap, r, c);
         if (!el) return;
-        if (off) {
+        if (off && only(r, c)) {
           el.classList.add("off-list");
           el.title = `Not one of this column's choices: ${wrap.choices[c].join(", ")}`;
         }
         if (!one) return;
         if (c === rows) {
-          for (const td of el.parentElement.querySelectorAll("td")) tint(td, one);
-        } else {
+          for (const td of el.parentElement.cells) {
+            if (td.tagName === "TD" && only(r, Number(td.dataset.c))) tint(td, one);
+          }
+        } else if (only(r, c)) {
           tint(el, one);
         }
       });

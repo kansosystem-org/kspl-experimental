@@ -327,9 +327,13 @@ $(STAGE1_GEN): $(SEED_EXE) $(KSPL_SRCS)
 	@mkdir -p $(dir $(STAGE1_OUT))
 	@$(ksplc_step) translate WITH=$(SEED_EXE) TO=$(STAGE1_OUT) RT=$(STAGE1_RT)
 
+# **A `STAGE1_EXE` given on the command line is used as it is, never built**: a sub-make that
+# passes the compiler built in C down with `LLVM=1` would otherwise rebuild that file from the IR.
+ifneq ($(origin STAGE1_EXE),command line)
 $(STAGE1_EXE): $(STAGE1_GEN)
 	@echo "# BUILDING STAGE 1 EXECUTABLE..."
 	@$(ksplc_step) build WITH=$(SEED_EXE) FROM=$(STAGE1_OUT) RT=$(STAGE1_RT) EXE=$(STAGE1_EXE)
+endif
 
 $(STAGE2_GEN): $(STAGE1_EXE) $(KSPL_SRCS)
 	@echo "# GENERATING STAGE 2 ($(BACKEND))..."

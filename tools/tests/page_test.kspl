@@ -5,7 +5,6 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
-import "std/sys"
 import "std/tests/scratch"
 import "std/verdict"
 import "tools/opener_aim" as aim
@@ -242,9 +241,10 @@ fn test_a_folder_named_with_a_separator_at_its_end() //< `devel/` is the same fo
     // Caution: **A root keeps its separator**, or `/` becomes empty and `C:\` a drive's current
     // folder.
     assert(aim.trim_end_sep("/").equals("/"), "the root keeps its `/`")
-    if sys.is_windows()
-        for root in U8[][]::{ "C:\\", "\\\\srv\\share\\", "\\\\?\\C:\\" }
-            assert(aim.trim_end_sep(root).equals(root), "a Windows root keeps its separator")
+    // Windows's roots, checked on every OS: on POSIX `C:\` is a folder named `C:`.
+    for root in U8[][]::{ "C:\\", "\\\\srv\\share\\", "\\\\?\\C:\\" }
+        assert(aim.trim_end_sep_on(root, true).equals(root), "a Windows root keeps its separator")
+    assert(aim.trim_end_sep_on("C:\\", false).equals("C:"), "on POSIX `C:` is only a name")
     verdict.pass("the separators after a folder's name drop, and a root keeps its own.")
 
 fn test_climbing_up_from_a_file() //< a path goes up one folder, absolute or not
@@ -258,9 +258,10 @@ fn test_climbing_up_from_a_file() //< a path goes up one folder, absolute or not
     assert(aim.parent_of("/").equals("/"), "above the root is the root")
     assert(aim.parent_of("C:\\work\\a").equals("C:\\work"), "it goes up with `\\` too")
     assert(aim.parent_of("").len == 0, "an empty path has no parent")
-    if sys.is_windows()
-        for root in U8[][]::{ "C:\\", "\\\\srv\\share\\", "\\\\?\\C:\\" }
-            assert(aim.parent_of(root).equals(root), "a Windows root is its own parent")
+    for root in U8[][]::{ "C:\\", "\\\\srv\\share\\", "\\\\?\\C:\\" }
+        assert(aim.parent_of_on(root, true).equals(root), "a Windows root is its own parent")
+    assert(aim.parent_of_on("C:\\work", true).equals("C:\\"), "under a drive the root is above")
+    assert(aim.parent_of_on("C:\\work", false).equals("C:"), "on POSIX `C:` is only a folder")
     verdict.pass("it climbs a tier at a time, and stops at the root.")
 
 fn test_the_path_the_server_will_see() //< the path the server sees for a document

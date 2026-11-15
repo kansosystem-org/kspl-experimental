@@ -8,13 +8,13 @@
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/jsonrpc_client_check"
-import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_client" + { Spot }
 import "ksplc/tests/support/lsp_frames"
 import "ksplc/tests/support/lsp_fresh"
 import "ksplc/tests/support/lsp_hover"
 import "ksplc/tests/support/lsp_outline" + { HEAVY_MS, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_pick"
-import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, is_missing }
+import "ksplc/tests/support/lsp_read" { decl_line, end_text, from_names, is_missing }
 import "ksplc/tests/support/lsp_recover"
 import "ksplc/tests/support/lsp_rename"
 import "ksplc/tests/support/lsp_spell"
@@ -71,17 +71,11 @@ priv fn check_hover_builtin_member(c: jsonrpc_client.Client$@, arena: Arena$@)
     lsp_client.open(c, BUILTIN_URI, BUILTIN_SRC, arena)
     defer lsp_client.close(c, BUILTIN_URI, arena)
     for i in Range.asc(BUILTIN_DECLS.len)
-        decl: = BUILTIN_DECLS[i]
-        col: = col_in_line(BUILTIN_SRC, decl, BUILTIN_MARKS[i], arena) + 2
-        pos: = lsp_client.at_pos(BUILTIN_URI, decl_line(BUILTIN_SRC, decl, arena), col, arena)
         label: = arena.text().s("a hover on a slice's own '").s(BUILTIN_MARKS[i]).s("' answers")
             .take()
-        got: = c.request("textDocument/hover", pos, lsp_client.READ_MS, arena) catch e
-            verdict.check(label, false, end_text(e))
-            continue
-        text: = lsp_client.hover_text(got.val)
-        verdict.check(label, text.find_str(BUILTIN_WANTS[i]).is_some(),
-            lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+        lsp_client.check_hover(c, label, BUILTIN_URI, BUILTIN_SRC,
+            Spot::{ .line = BUILTIN_DECLS[i], .needle = BUILTIN_MARKS[i], .step = 2,
+            .want = BUILTIN_WANTS[i] }, arena)
     // The worker is still the same one; a remade one would not know this document.
     live: = lsp_client.at_pos(BUILTIN_URI, decl_line(BUILTIN_SRC, "fn probe", arena), 3, arena)
     alive: = c.request("textDocument/hover", live, lsp_client.READ_MS, arena) catch e
@@ -89,8 +83,7 @@ priv fn check_hover_builtin_member(c: jsonrpc_client.Client$@, arena: Arena$@)
         return
     a_text: = lsp_client.hover_text(alive.val)
     verdict.check("the analysis side is still standing after them",
-        a_text.find_str("probe").is_some(),
-        lsp_client.why(c, arena.text().s("'").s(a_text).s("'").take(), arena))
+        a_text.find_str("probe").is_some(), lsp_client.why_quoted(c, a_text, arena))
 
 // ==========================================
 // A variant reached through an alias
@@ -116,15 +109,15 @@ priv const ALIAS_USE: U8[] = "  return Form.line(3)"
 priv fn check_variant_through_alias(c: jsonrpc_client.Client$@, arena: Arena$@)
     lsp_client.open(c, ALIAS_URI, ALIAS_SRC, arena)
     defer lsp_client.close(c, ALIAS_URI, arena)
-    pos: = lsp_client.at_pos(ALIAS_URI, decl_line(ALIAS_SRC, ALIAS_USE, arena),
-        col_in_line(ALIAS_SRC, ALIAS_USE, "line", arena) + 1, arena)
+    pos: = lsp_client.pos_at(ALIAS_URI, ALIAS_SRC,
+        Spot::{ .line = ALIAS_USE, .needle = "line", .step = 1 }, arena)
     shown: = "a hover on a variant reached through an alias shows the variant"
     got: = c.request("textDocument/hover", pos, lsp_client.READ_MS, arena) catch e
         verdict.check(shown, false, end_text(e))
         return
     text: = lsp_client.hover_text(got.val)
     verdict.check(shown, text.find_str("line(len: I32)").is_some(),
-        lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+        lsp_client.why_quoted(c, text, arena))
     jump: = "a jump from it lands on the enum's variant"
     went: =
         c.request("textDocument/definition", pos, lsp_client.READ_MS, arena) catch e
@@ -177,14 +170,7 @@ priv struct Published //< what the next publishDiagnostics for one document said
 
 priv fn published_for(c: jsonrpc_client.Client$@, tail: U8[], arena: Arena$@): Published //<
     //< Reads messages until one publishes the diagnostics of the URI ending `tail`
-    for _k in Range.asc(8)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        p: = msg.val.get("params")
-        if !p.get("uri").as_str().unwrap_or("").ends_with(tail)
-            continue
+    if p: = lsp_client.published(c, tail, 8, lsp_client.READ_MS, arena)
         return Published::{ .found = true,
             .diags = p.get("diagnostics").arr_list(arena) }
     return Published::{ .found = false, .diags = List<|json.Value|>(arena) }
@@ -214,22 +200,13 @@ priv fn check_wide_range(c: jsonrpc_client.Client$@, arena: Arena$@)
     $found: = false
     $from: I64 = -1I64
     $to: I64 = -1I64
-    for _k in Range.asc(12)
-        msg: = c.read_msg(HEAVY_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        p: = msg.val.get("params")
-        if !p.get("uri").as_str().unwrap_or("").ends_with("wide_probe.kspl")
-            continue
+    if p: = lsp_client.published(c, "wide_probe.kspl", 12, HEAVY_MS, arena)
         got: = p.get("diagnostics").arr_list(arena)
-        if got.len == 0
-            continue
-        r: = got.get(0).get("range")
-        found = true
-        from = r.get("start").get("character").as_int().unwrap_or(-1I32)
-        to = r.get("end").get("character").as_int().unwrap_or(-1I32)
-        break
+        if got.len > 0
+            r: = got.get(0).get("range")
+            found = true
+            from = r.get("start").get("character").as_int().unwrap_or(-1I32)
+            to = r.get("end").get("character").as_int().unwrap_or(-1I32)
     d: = arena.text().s("\{from\}..\{to\}").take() if found else "(no diagnostic came)"
     verdict.check("the diagnostic's range comes in UTF-16 units",
         found && from == WIDE_FROM && to == WIDE_TO, d)
@@ -255,19 +232,11 @@ priv fn check_ragged_reaches(c: jsonrpc_client.Client$@, arena: Arena$@)
     defer lsp_client.close(c, RAGGED_URI, arena)
     $found: = false
     $ragged: = false
-    for _k in Range.asc(12)
-        msg: = c.read_msg(HEAVY_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        p: = msg.val.get("params")
-        if !p.get("uri").as_str().unwrap_or("").ends_with("ragged_probe.kspl")
-            continue
+    if p: = lsp_client.published(c, "ragged_probe.kspl", 12, HEAVY_MS, arena)
         found = true
         for one in p.get("diagnostics").arr_list(arena)
             if one.get("message").as_str().unwrap_or("").find_str("sibling lines use").is_some()
                 ragged = true
-        break
     seen: = "the cautions did not come" if found else "(no publishDiagnostics came)"
     verdict.check("a column slip in the indentation notation reaches the editor", found && ragged,
         lsp_client.why(c, seen, arena))
@@ -389,11 +358,11 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
         gave_up(c@, CRASH_LOG, arena), lsp_client.why(c@, "", arena))
     verdict.check("the supervisor's log names why the worker crashed",
         gave_up(c@, "panic: injected test crash", arena), lsp_client.why(c@, "", arena))
-    d4: = lsp_client.why(c@, arena.text().s("'").s(stays).s("'").take(), arena)
+    d4: = lsp_client.why_quoted(c@, stays, arena)
     ok11: = stays.find_str("I64").is_some()
     verdict.check("a document left open is restored after the worker is remade", ok11, d4)
     gone: = probe_hover(c@, CLOSED_URI, arena)
-    d5: = lsp_client.why(c@, arena.text().s("'").s(gone).s("'").take(), arena)
+    d5: = lsp_client.why_quoted(c@, gone, arena)
     ok10: = gone.find_str("I64").is_none()
     verdict.check("a document that was didClose is not restored after the worker is remade", ok10,
         d5)
@@ -406,7 +375,7 @@ priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
     off_text: = lsp_client.hover_text(off)
     // Caution: **It must not return null.** A dropped declaration is not in the AST, so without a
     // reason it looks like "nothing at that position" and the feature seems dead.
-    d13: = lsp_client.why(c, arena.text().s("'").s(off_text).s("'").take(), arena)
+    d13: = lsp_client.why_quoted(c, off_text, arena)
     ok5: =
         off_text.find_str("#cfg(probe_flag)").is_some() &&
         off_text.find_str("not analyzed").is_some()
@@ -422,8 +391,7 @@ priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
     on: = lsp_client.answer(c2@, "textDocument/hover",
         lsp_client.at_pos(CFG_URI, 3, 4, arena), lsp_client.READ_MS, arena)
     on_text: = lsp_client.hover_text(on)
-    detail2: = lsp_client.why(c2@,
-        arena.text().s("'").s(on_text).s("'").take(), arena)
+    detail2: = lsp_client.why_quoted(c2@, on_text, arena)
     ok4: = on_text.find_str("cfg_only_fn").is_some()
     verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", ok4, detail2)
     // Caution: **Delete it; do not set it empty.** `set_env` rejects an empty value, so that leaves
@@ -499,7 +467,7 @@ priv fn check_spaced_folder(exe: U8[], arena: Arena$@)
         lsp_client.at_pos(user, 3, 13, arena), HEAVY_MS, arena)
     landed: = got.get("result").get("uri").as_str().unwrap_or("")
     verdict.check(name, landed.equals(lsp_client.encoded_uri_of(dir, "lib.kspl", arena)),
-        lsp_client.why(c@, arena.text().s("'").s(landed).s("'").take(), arena))
+        lsp_client.why_quoted(c@, landed, arena))
     // **A document in another folder named `std` is refused, and the reason is shown on it**
     // (`refused_entry` in `ksplc/base/package.kspl`). It is named relative to the folder, as a link
     // in the scratch place's path can spell an absolute one apart from the server's.

@@ -186,7 +186,7 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
         //< **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena),
         //< so a tokenizer kept for a server's lifetime does not grow.
     priv split: Split_rule //< the rule that splits a text into chunks; Qwen2's unless set
-    priv steps: thread.Atomic_sz //< the merge steps taken so far (`merge_steps`)
+    priv steps: thread.Counter_sz //< the merge steps taken so far (`merge_steps`)
 
 impl Tokenizer
     pub fn new( //< an empty tokenizer, to be filled by a `load` or by `add_token` / `add_merge`
@@ -198,7 +198,7 @@ impl Tokenizer
         merge_rank: = arena.create(Map<|Bpe_key, I32|>(arena)) // keys from the model
         return Tokenizer::{ .vocab = vocab, .vocab_rev = vocab_rev, .merges = merges,
             .merge_rank = merge_rank, .markers = List<|Marker|>.create(arena), .next_rank = 0,
-            .arena = arena, .split = .qwen2, .steps = thread.Atomic_sz(0) }
+            .arena = arena, .split = .qwen2, .steps = thread.Counter_sz(0) }
 
     pub fn set_split( //< the rule that splits a text into chunks before merging
         //< It must be the rule the vocabulary was made with: GGUF's `tokenizer.ggml.pre` names it
@@ -457,7 +457,7 @@ impl Tokenizer
             if left.prev >= 0
                 r.queue_pair(queue@, pieces@, left.prev, steps@)
             r.queue_pair(queue@, pieces@, p.left, steps@)
-        r.steps.fetch_add(steps)
+        r.steps.add(steps)
         // The first piece is never merged away: only a right piece is.
         for $at: Sz = 0; at < n; at = pieces[at].next
             out.push(pieces[at].id)

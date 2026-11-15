@@ -124,10 +124,19 @@ fn open(doc: Document, today: U8[], arena: Arena$@): Editor //<
         .written = writer.size(doc@), .own = null,
         .auto = edit.Auto_entry::{ .dates = true, .links = true, .brackets = true } }
 
-priv fn first_spot(doc: Document@): Spot //< the start of the first text, or the gap before all
-    if doc.blocks.len > 0 && is_text_block(doc.blocks.get(0).kind)
-        return text_spot(0, 0, 0)
-    return gap_spot(0)
+priv fn first_spot(doc: Document@): Spot //< the start of the first text, or the gap before it
+    //< That is the first block after the `:::document` clause, where one stands.
+    gap: = gap_before(doc, 0)
+    if gap.block < doc.blocks.len && is_text_block(doc.blocks.get(gap.block).kind)
+        return text_spot(gap.block, 0, 0)
+    return gap
+
+priv fn gap_before(doc: Document@, block: Sz): Spot //<
+    //< The gap before a block, where the caret can stand
+    //< Nothing may stand before a `:::document` clause, so the gap before it is the one after.
+    if block == 0 && doc.blocks.len > 0 && doc.blocks.get(0).kind == .document
+        return gap_spot(1)
+    return gap_spot(block)
 
 impl Editor
     fn selection(ed: Self@): Selection
@@ -403,8 +412,10 @@ impl Editor
             throw .not_whole
         $b: = ed.doc.blocks.get(block)
         b.invisible = on
-        s: = gap_spot(block)
-        e: = gap_spot(block + 1)
+        ed.put_whole(gap_spot(block), gap_spot(block + 1), b)!
+
+    fn put_whole(ed: Self$@, s: Spot, e: Spot, b: Block): Void!Refused //<
+        //< The whole block `b` in place of what stands from `s` to `e`, as one step
         defer scratch: = Arena(16 * 1024)
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         $frag: = List<|Unit|>(scratch)
@@ -466,10 +477,11 @@ impl Editor
 
     fn finish(ed: Self$@, $tx: Transaction, kind: Step_kind, join: Bool): Void!Refused //<
         //< Records a transaction, or joins it to the last when `join` says it continues that step
-        //< A transaction that would take the source past a limit the reader holds is undone and
-        //< refused, so every step can be saved and opened again.
+        //< A transaction that would take the source past a limit the reader holds, or put a block
+        //< before the `:::document` clause, is undone and refused, so every step can be saved and
+        //< opened again.
         if !is_empty(tx@)
-            ed.keep_limits(tx@)!
+            ed.keep_readable(tx@)!
         tx.after = ed.selection()
         tx.kind = kind
         ed.joinable = kind != .other
@@ -485,8 +497,9 @@ impl Editor
         ed.history.done.push(tx)
         ed.history.undone.clear()
 
-    priv fn keep_limits(ed: Self$@, tx: Transaction$@): Void!Refused //<
-        //< Undoes a transaction and refuses it where its source would hold too many blocks or bytes
+    priv fn keep_readable(ed: Self$@, tx: Transaction$@): Void!Refused //<
+        //< Undoes a transaction and refuses it where the reader would refuse its source: too many
+        //< blocks or bytes, or a `:::document` clause that does not stand first
         //< `apply` counts the bytes of the blocks it changes. A table changes how other blocks
         //< write, so a transaction that changed one has its whole source measured.
         if tx.tables.len + tx.cells.len + tx.pieces.len + tx.columns.len > 0
@@ -496,6 +509,8 @@ impl Editor
             why = .some(.too_many_blocks)
         else if ed.written + tx.grown > MAX_SOURCE_BYTES
             why = .some(.too_large)
+        else if ed.settings_moved()
+            why = .some(.no_read_back)
         if refused: = why
             defer scratch: = Arena(16 * 1024)
             swap(ed.doc@, tx, true, ed.change@, scratch)
@@ -505,6 +520,17 @@ impl Editor
             ed.change.any = false
             throw refused
         ed.written += tx.grown
+
+    priv fn settings_moved(ed: Self@): Bool //<
+        //< Whether a `:::document` clause stands after another block, where the reader refuses it
+        //< Only the blocks changed, and the one after them, can hold such a clause: one that stood
+        //< first and had a block put before it moved there.
+        n: = ed.doc.blocks.len
+        last: = n - ed.change.tail if n - ed.change.tail < n else n - 1
+        for b in Range(ed.change.from if ed.change.from > 1 else 1, last + 1, 1)
+            if ed.doc.blocks.get(b).kind == .document
+                return true
+        return false
 
     fn commit(ed: Self$@, w: Work$@, tx: Transaction$@, anchor: Pos, focus: Pos, scratch: Arena$@):
         Void!Refused //<
@@ -715,10 +741,10 @@ impl Editor
         if p.block < 0 || p.block > n || p.block == n && p.place != .block_gap
             return gap_spot(n)
         if p.place == .block_gap
-            return gap_spot(p.block)
+            return gap_before(ed.doc@, p.block)
         b: = ed.doc.blocks.get(p.block)
         if !is_text_block(b.kind)
-            return gap_spot(p.block)
+            return gap_before(ed.doc@, p.block)
         if b.kind != .list && (p.item != 0 || p.place == .item_gap)
             return gap_spot(p.block)
         if b.kind == .list &&

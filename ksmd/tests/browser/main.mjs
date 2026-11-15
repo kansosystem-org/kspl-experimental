@@ -559,8 +559,9 @@ const sections = {
     await saves("General on the column, and Clear format on the cell, leave the formats out of the source", table);
   },
 
-  // An edit sends every table, since a value can reach them all; only a table that shows otherwise
-  // is drawn again. Each table is marked, and an edit counts the marks that stay.
+  // An edit sends every table, since a value can reach them all; a table whose cells alone show
+  // otherwise keeps its element, and only those cells are drawn again (`cellsInPlace` in
+  // `tables.mjs`). Each table is marked, and an edit counts the marks that stay.
   async tablesDrawnAgain() {
     await load(`${H}:::table name="a"\n| "n" |\n| 1 |\n:::\n\n:::table name="b"\n| "m" |\n` +
       `| =sum(a.$A) |\n:::\n\n:::table name="c"\n| "k" |\n| 5 |\n:::\n`);
@@ -570,14 +571,14 @@ const sections = {
     await mark();
     await click(at("c"));
     await menu("format-percent");
-    check(await kept() === "110" && await js(`document.querySelector('${at("c")}').textContent`) === "500%",
-      "a number format draws its own table again, and no other", await kept());
+    check(await kept() === "111" && await js(`document.querySelector('${at("c")}').textContent`) === "500%",
+      "a number format shows in its cell, and no table is drawn again", await kept());
     await mark();
     await click(at("a"));
     await type("2");
     await press("Enter");
-    check(await kept() === "001" && await js(`document.querySelector('${at("b")}').textContent`) === "2",
-      "a value draws again its table and the table whose formula reads it", await kept());
+    check(await kept() === "111" && await js(`document.querySelector('${at("b")}').textContent`) === "2",
+      "a value shows in its cell and in the cell whose formula reads it, in tables kept", await kept());
   },
 
   async examples() {
@@ -676,7 +677,7 @@ Object.assign(sections, tables({ page, js, settle, press, type, select, click, m
   rightClick, openCell }));
 Object.assign(sections, sizes({ page, js, settle, until, press, type, click, drag, menu, load, saves, source,
   openCell, doubleClickAt, rightClick, frames, resize }));
-Object.assign(sections, documents({ page, js, press, click, menu, load, saves, source }));
+Object.assign(sections, documents({ page, js, press, type, click, menu, load, saves, source }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
 Object.assign(sections, formulaHelp({ page, js, settle, until, press, type, click, menu, load, saves }));
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));

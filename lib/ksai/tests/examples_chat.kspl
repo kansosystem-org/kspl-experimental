@@ -97,13 +97,12 @@ priv fn texts_in(text: U8[], all: U8[][]): Sz //< how many times the text holds 
             rest = rest.sub_from(at + t.len)
     return n
 
-fn test_chat_template_tokens(arena: Arena$@) //<
-    //< Each case renders to llama.cpp's text for it, every marker by its ID
-    //< The cases and their texts come from llama.cpp's Jinja formatter on the template
-    //< (`lib/ksai/tools/make_qwen_fixtures.py`). **Decoding the IDs gives the text back**, and
-    //< each marker's text in it stands as the marker's ID, never as the bytes of its text.
-    verdict.start("[chat_server] the template renders llama.cpp's text, markers by their IDs")
-    $e: = engine_of(arena)
+fn check_cases(cases_text: U8[], e: Engine$@,
+    render: fn(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@, arena: Arena$@): Sz //<
+        //< Checks that each template case renders to llama.cpp's text; gives the number of cases
+        //< **Decoding the IDs gives the text back**, and each marker's text in it stands as the
+        //< marker's ID, never as the bytes of its text. Each template's tests give their own
+        //< render.
     doc: = json.parse(cases_text, arena) catch panic("the template cases are JSON")
     cases: = doc.val.arr_list(arena)
     assert(cases.len > 0, "the template cases are read")
@@ -111,7 +110,7 @@ fn test_chat_template_tokens(arena: Arena$@) //<
         defer $body: = Str_builder()
         cases.get(i).get("request").dump(body@)
         want: = cases.get(i).get("prompt").as_str().unwrap_or("")
-        got: = rendered(body.slice(), e@, arena)
+        got: = render(body.slice(), e, arena)
         text: = e.tok.decode(got, arena)
         if !text.equals(want)
             panic(arena.text().s("case \{i\} renders otherwise:\n").s(text)
@@ -126,13 +125,22 @@ fn test_chat_template_tokens(arena: Arena$@) //<
                 in_messages += control_texts_in(m.get("content").as_str().unwrap_or(""))
         assert(marks_in(got, e.marks) + in_messages == mark_texts_in(want),
             arena.text().s("case \{i\}: a marker is written as text").take())
+    return cases.len
+
+fn test_chat_template_tokens(arena: Arena$@) //<
+    //< Each case renders to llama.cpp's text for it, every marker by its ID
+    //< The cases and their texts come from llama.cpp's Jinja formatter on the template
+    //< (`lib/ksai/tools/make_qwen_fixtures.py`).
+    verdict.start("[chat_server] the template renders llama.cpp's text, markers by their IDs")
+    $e: = engine_of(arena)
+    n: = check_cases(cases_text, e@, rendered, arena)
     // The template the file holds is the one this server follows, and another one is not.
     g: = Gguf.parse(model_bytes, arena) catch panic("the tiny chat model is read")
     own: = g.text("tokenizer.chat_template") catch ""
     assert(template.matches(own) && !template.matches(own.sub(0, own.len - 1)),
         "the file's template is matched by its hash, and one byte less is not")
     verdict
-        .pass(arena.text().s("\{cases.len\} conversations, with tools and without, as ")
+        .pass(arena.text().s("\{n\} conversations, with tools and without, as ")
         .s("llama.cpp renders them").take())
 
 fn test_chat_control_marker_text_stays_text(arena: Arena$@) //<

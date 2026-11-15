@@ -277,6 +277,20 @@ fn refused_link(target: U8[], source: Bool): U8[] //<
         .s("which can lead out of its package. Put the file or folder itself in place of the link")
         .take()
 
+fn refused_spelling(target: U8[], written: U8[], source: Bool): U8[] //<
+    //< Why a file is not read under the letter case its path is written in; empty where it is
+    //< **Refused on every OS**: Windows and macOS would open it, and Linux would not find it. So
+    //< a program built on one would fail on the other, and two spellings would load one file twice
+    //< (`spelt_otherwise_on_the_way` in `locate.kspl`).
+    switch base_locate.spelt_otherwise_on_the_way(target, written, source)
+    case .some(s)
+        return base_core.arena.text()
+            .s("'\{written\}' names '\{s.written\}', which is spelt '\{s.on_disk\}' on disk. ")
+            .s("The letter case must match the disk: Linux requires it, and Windows and macOS ")
+            .s("do not check it").take()
+    case .none
+        return ""
+
 fn here(): Package_decl //< the package the current folder is in (`ksplc info package`)
     top: = base_config_file.package_top(base_locate.cwd())
     if top.len == 0

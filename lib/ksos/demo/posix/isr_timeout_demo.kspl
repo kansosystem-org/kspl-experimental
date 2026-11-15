@@ -1,0 +1,73 @@
+//< A timed wait for an interrupt, with the tick running and nothing else to do
+//< One task waits with `take_for` on a semaphore that only an interrupt handler gives. No other
+//< task runs, so the kernel is idle the whole wait. With a tick running, idle must sleep until
+//< that tick, not move the clock to the deadline: a jump would end the wait before the interrupt.
+
+// ==========================================
+// What it checks, on a 1 ms tick: `take_for` of 1000 ms takes the give that an interrupt makes
+// about 200 ms later. Then `take_for` of 300 ms with no give returns false only once 300 ms of
+// real time have passed. The interrupt is SIGUSR1, which a child shell sends to this program.
+// ==========================================
+
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+const SIGUSR1: I32 = 10 // Linux's number (the POSIX demos run on Linux only)
+const TICK_US: U32 = 1000 // the tick's period: 1 ms
+const TICK_HZ: U32 = 1000
+
+priv const SIGNAL_AFTER: U8[] = "sleep 0.2; kill -USR1 $PPID" //<
+    //< A child that interrupts this program about 200 ms after it starts
+    //< `$PPID` is this program: the child's shell is started directly, with no shell between.
+priv const WAIT_GIVEN_MS: U32 = 1000 //< the time limit the interrupt falls inside
+priv const WAIT_ALONE_MS: U32 = 300 //< the time limit nothing gives within
+priv const SLACK_MS: I64 = 10I64 //< how much sooner a wait may end than its time, by the clock
+    //< A tick never comes early, but the first tick of a wait can be part of a period.
+
+$g_sem: sync.Sem
+$g_irq_count: I32 = 0
+
+$tcb_waiter: Task
+$stack_waiter: U8[65536]
+
+fn on_ext_irq(_sig: I32): Void //< the stand-in interrupt handler: it gives, which never waits
+    g_irq_count += 1
+    g_sem.give()
+
+priv fn ms_since(t0: I64): I64 //< the milliseconds since t0, by the monotonic clock
+    return (sys.mono_us() - t0) / 1000I64
+
+fn waiter(_arg: Void$@): Void
+    t0: = sys.mono_us()
+    took: = g_sem.take_for(task.ms_to_ticks(WAIT_GIVEN_MS))
+    given_ms: = ms_since(t0)
+    io.out().s("[waiter] took=\{took\} after \{given_ms\} ms (interrupts: \{g_irq_count\})\n")
+    verdict.check("a timed wait takes the give an interrupt makes inside its time", took, "")
+    verdict.check("the interrupt came, once", g_irq_count == 1, "")
+
+    t1: = sys.mono_us()
+    alone: = g_sem.take_for(task.ms_to_ticks(WAIT_ALONE_MS))
+    alone_ms: = ms_since(t1)
+    io.out().s("[waiter] took=\{alone\} after \{alone_ms\} ms with no give\n")
+    verdict.check("a timed wait that nothing gives returns false", !alone, "")
+    verdict.check("it returns only once its time has passed in real time",
+        alone_ms + SLACK_MS >= I64::WAIT_ALONE_MS, "")
+
+fn main(): I32
+    verdict.start("[ksos] a timed wait for an interrupt waits in real time while idle")
+    g_sem.init(0)
+    sys.set_signal_handler(SIGUSR1, on_ext_irq)
+    $child: =
+        subproc.spawn_async(U8[][]::{ "/bin/sh", "-c", SIGNAL_AFTER }, "")
+        catch panic("/bin/sh should start")
+    task.declare_tick_hz(TICK_HZ)
+    task.enable_preemption(TICK_US)
+    tcb_waiter.create(U8$[]::stack_waiter, waiter, null, 1, "waiter")
+    task.start_scheduler() // returns once the waiter is done
+    task.enable_preemption(1000000000) // no tick past this point
+    child.wait()
+    return verdict.finish()

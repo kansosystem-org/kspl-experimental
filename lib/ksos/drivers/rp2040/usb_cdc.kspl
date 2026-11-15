@@ -239,6 +239,43 @@ priv fn handle_ncm_request(req: U32, want: U32): Bool //< NCM's class requests
         return true
     return false
 
+// The data endpoints, by their USB address (bit 7 set: IN), as `toggles_reset_by` names them.
+const EP2_OUT: U32 = 0x02
+const EP2_IN: U32 = 0x82
+const EP3_IN: U32 = 0x83
+const EP4_OUT: U32 = 0x04
+const EP4_IN: U32 = 0x84
+
+fn toggle_bit(addr: U32): U32 //< an endpoint address's bit in a toggle mask
+    //< Bits 0 to 15 are OUT endpoints 0 to 15, bits 16 to 31 the IN ones.
+    return 1U32 << ((addr & 0x0f) + (16U32 if (addr & 0x80) != 0 else 0U32))
+
+// Every data endpoint's bit (toggle_bit of each): EP2 OUT and EP4 OUT, then EP2, EP3 and EP4 IN.
+const DATA_ENDPOINTS: U32 =
+    (1U32 << 2) | (1U32 << 4) | (1U32 << 18) | (1U32 << 19) | (1U32 << 20)
+
+fn toggles_reset_by(bm: U32, req: U32, value: U32, index: U32): U32 //<
+    //< The data endpoints whose toggle a setup request starts again at DATA0, as a toggle mask
+    //< SET_CONFIGURATION resets all of them, and CLEAR_FEATURE(ENDPOINT_HALT) the one it names.
+    //< It reads no register, so a host test checks it.
+    if bm == 0x00 && req == 9
+        return DATA_ENDPOINTS
+    if bm == 0x02 && req == 1 && value == 0
+        return toggle_bit(index & 0x8f) & DATA_ENDPOINTS
+    return 0
+
+priv fn reset_toggles(mask: U32) //< starts each endpoint in mask again at DATA0
+    if (mask & toggle_bit(EP2_OUT)) != 0
+        ep2_out_pid = 0
+    if (mask & toggle_bit(EP2_IN)) != 0
+        ep2_in_pid = 0
+    if (mask & toggle_bit(EP3_IN)) != 0
+        ep3_in_pid = 0
+    if (mask & toggle_bit(EP4_OUT)) != 0
+        ep4_out_pid = 0
+    if (mask & toggle_bit(EP4_IN)) != 0
+        ep4_in_pid = 0
+
 priv fn handle_setup()
     bm: = setup_byte(0)
     req: = setup_byte(1)
@@ -255,6 +292,10 @@ priv fn handle_setup()
         stage = STAGE_SETUP_SEEN
 
     is_standard: = (bm & 0x60) == 0
+    // **Both requests start their endpoints again at DATA0** (USB 2.0, 9.1.1.5 and 9.4.5). The
+    // host does, so a toggle left as it was makes it drop the next packet without a word.
+    toggles: = toggles_reset_by(bm, req, value, index)
+    reset_toggles(toggles)
     if is_standard && req == 6
         handle_get_descriptor(value, want)
         return
@@ -268,8 +309,7 @@ priv fn handle_setup()
         if configured
             stage = STAGE_CONFIGURED
             // Arm one reception (so input from the host is not lost)
-            ep2_out_pid = 0
-            hw.arm_recv(2, 0, hw.MAX_PACKET)
+            hw.arm_recv(2, ep2_out_pid, hw.MAX_PACKET)
         // A new configuration resets the alternate setting to 0 and restarts the notifications.
         ncm_alt = 0
         notify_state = NOTIFY_IDLE
@@ -294,6 +334,15 @@ priv fn handle_setup()
             ack_ep0() // the other interfaces have only alt 0
         else
             stall_ep0(true)
+        return
+    // CLEAR_FEATURE(ENDPOINT_HALT): its toggle went back to DATA0 above. An OUT endpoint waits
+    // with a buffer armed for the old toggle, so it is armed again for DATA0.
+    if toggles != 0
+        if (toggles & toggle_bit(EP2_OUT)) != 0 && configured
+            hw.arm_recv(2, ep2_out_pid, hw.MAX_PACKET)
+        if (toggles & toggle_bit(EP4_OUT)) != 0 && ncm_alt == 1
+            rx_rearm() // a part of an NTB is lost with it: the host starts the stream again
+        ack_ep0()
         return
     // GET_INTERFACE.
     // Caution: Return one byte. Without it the host cannot check the alternate setting.
@@ -384,8 +433,7 @@ fn poll_once() //< handles one round of pending work
         pending_address = 0
         configured = false
         ep0_in_pid = 1
-        ep2_in_pid = 0
-        ep2_out_pid = 0
+        reset_toggles(DATA_ENDPOINTS)
         ep0_tx_active = false
         ep0_out_active = false
         // Discard what is still being sent: keeping tx_busy set would block sending forever (the
@@ -396,9 +444,6 @@ fn poll_once() //< handles one round of pending work
         ncm_alt = 0
         notify_state = NOTIFY_IDLE
         notify_busy = false
-        ep3_in_pid = 0
-        ep4_in_pid = 0
-        ep4_out_pid = 0
         rx_len = 0
         rx_want = 0
         rx_index = 0

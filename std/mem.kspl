@@ -58,11 +58,14 @@ priv fn guard_leave(state: Sz) //< leaves the guard guard_enter entered
     if heap_leave != null
         heap_leave(state)
 
-// The two more atomic operations the hosted counters need, declared as `std/thread.kspl` does.
+// The relaxed atomic operations the hosted counters need, declared as `std/thread.kspl` does.
 // Freestanding never calls them: an Armv6-M core has none (`ksplc/gen/runtime/core.c`).
+// Why relaxed: **the counters are statistics, and order nothing.** A stronger update would order
+// any two threads that allocate, and ThreadSanitizer would then miss the race between them.
 #cfg(!freestanding)
-    extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
-    extern fn kspl_atomic_load(ptr: Sz$@): Sz
+    extern fn kspl_atomic_add_relaxed(ptr: Sz$@, delta: Sz): Sz
+    extern fn kspl_atomic_load_relaxed(ptr: Sz$@): Sz
+    extern fn kspl_atomic_cas_relaxed(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
 
 // The counters for hosted builds (the libc.malloc version).
 // Caution: **Keep them priv, and touch them only through the atomic operations.** Only
@@ -112,17 +115,17 @@ pub fn alloc( //< allocates raw bytes from the global heap
     owner_ptr: = (U8$@$@)::((ptr) + ALLOC_OWNER_OFFSET)
     owner_ptr$ = ptr
 
-    raise_peak(kspl_atomic_add(heap_current@, size) + size)
-    kspl_atomic_add(heap_total@, size)
+    raise_peak(kspl_atomic_add_relaxed(heap_current@, size) + size)
+    kspl_atomic_add_relaxed(heap_total@, size)
     data_ptr: = ptr + ALLOC_HEADER_SIZE
     return Void$@::data_ptr
 // A compare-and-swap loop, so a thread holding a lower value can never write it over a higher one.
 // Cost: one atomic read while the peak stays above, as it does once a program warms up.
 #cfg(!freestanding)
 priv fn raise_peak(now: Sz)
-    $seen: = kspl_atomic_load(heap_peak@)
+    $seen: = kspl_atomic_load_relaxed(heap_peak@)
     for seen < now
-        was: = kspl_atomic_cas(heap_peak@, seen, now)
+        was: = kspl_atomic_cas_relaxed(heap_peak@, seen, now)
         if was == seen
             return
         seen = was
@@ -154,7 +157,7 @@ pub fn dealloc( //< returns bytes to the global heap
         owner_ptr$ = null
         size_ptr: = Sz$@::real_ptr
 
-        kspl_atomic_add(heap_current@, -size_ptr$)
+        kspl_atomic_add_relaxed(heap_current@, -size_ptr$)
         guard: = guard_enter()
         libc.free(Void$@::real_ptr)
         guard_leave(guard)
@@ -373,20 +376,20 @@ pub fn heap_used_bytes(): Sz //< the bytes allocated now; 0 while there is no he
     return _fh.used
 #cfg(!freestanding)
 pub fn heap_used_bytes(): Sz //< the bytes allocated now
-    return kspl_atomic_load(heap_current@)
+    return kspl_atomic_load_relaxed(heap_current@)
 
 #cfg(freestanding)
 pub fn heap_peak_used_bytes(): Sz //< the most bytes ever allocated at once
     return _fh.peak_used
 #cfg(!freestanding)
 pub fn heap_peak_used_bytes(): Sz //< the most bytes ever allocated at once
-    return kspl_atomic_load(heap_peak@)
+    return kspl_atomic_load_relaxed(heap_peak@)
 
 // **It is not the allocation limit.** It shows whether `libc.malloc` was called at all during a
 // span, to verify work that should use only an arena.
 #cfg(!freestanding)
 pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up; never decreases
-    return kspl_atomic_load(heap_total@)
+    return kspl_atomic_load_relaxed(heap_total@)
 
 // Caution: **Zeroing bytes runs no cleanup.** Use `init_at` to initialize raw value storage,
 // `take_at` to transfer its live value, and `drop_at` to destroy it before reusing the slot.

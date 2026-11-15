@@ -566,6 +566,76 @@ fn embedded_read(): List<|U8[]|>$@ //< the embedded files this compilation read
         embedded_paths = List<|U8[]|>.create(base_core.perm_arena)
     return embedded_paths
 
+struct Spelt_otherwise //< a step of a path that the disk spells in another letter case
+    written: U8[] //< the step as the path spells it
+    on_disk: U8[] //< the same step as its folder's listing spells it
+
+fn spelling_in_listing(name: U8[], listing: U8[][]): U8[] //<
+    //< The entry of a folder's listing that is name in another ASCII letter case; empty where
+    //< the listing holds name as spelt, or nothing like it
+    //< **It reads no disk**, so a test on any OS checks the answers of every OS: Windows and macOS
+    //< open the other spelling, and Linux finds no file.
+    for entry in listing
+        if entry.equals(name)
+            return ""
+    for entry in listing
+        if entry.equals_ignore_case(name)
+            return entry
+    return ""
+
+fn written_names(written: U8[]): Sz //<
+    //< How many names end a written path: those after its last `..`, without a `.`
+    //< Only these steps are the writer's own; the steps before them come from elsewhere (the
+    //< importing file's folder, std's folder).
+    $n: Sz = 0
+    $at: Sz = 0
+    for at <= written.len
+        end: = sys.segment_end(written, at)
+        step: = written.sub(at, end - at)
+        if step.equals("..")
+            n = 0
+        else if step.len > 0 && !step.equals(".")
+            n += 1
+        at = end + 1
+    return n
+
+fn spelt_otherwise_on_the_way( //<
+    //< The first step of the path opened for a file that its folder spells in another case
+    //< Only the steps the import wrote are checked (`written_names`), and never those of a
+    //< package's top folder or above (as `link_on_the_way`). Each step is compared with its
+    //< folder's listing (`spelling_in_listing`). **None where a folder cannot be listed**: the
+    //< open then says what is wrong.
+    logical: U8[], //< the logical name of a source or an embedded file
+    written: U8[], //< the path as the import or the `embed` wrote it
+    source: Bool, //< true for a source, whose path takes the extension `append_file_path` adds
+): Spelt_otherwise?
+    defer $out: = Str_builder()
+    top: =
+        append_source_path(logical, out@) if source else append_disk_path(logical, out@)
+    path: = out.slice()
+    defer $starts: = List<|Sz|>(null)
+    defer $ends: = List<|Sz|>(null)
+    $at: = top.unwrap_or(0)
+    for at < path.len
+        end: = sys.segment_end(path, at)
+        if end > at
+            starts.push(at)
+            ends.push(end)
+        at = end + 1
+    names: = written_names(written)
+    first: = starts.len - names if starts.len > names else 0
+    for i in Range(first, starts.len, 1)
+        s: = starts.get(i)
+        dir: U8[] = path.sub(0, s) if s > 0 else "."
+        $listing: = fs.read_dir(dir, base_core.arena) catch
+            return .none
+        name: = path.sub(s, ends.get(i) - s)
+        other: = spelling_in_listing(name, listing.slice())
+        if other.len > 0
+            return .some(Spelt_otherwise::{ .written = base_core.arena.dup_str(name),
+                .on_disk = other })
+    return .none
+
 priv fn append_disk_path(import_path: U8[], out: Str_builder$@): Sz? //<
     //< Where a logical name's file is: under std's folder, in a package's own folder, or locally
     //< It returns how much of what it wrote is the top folder of a package read from a place of

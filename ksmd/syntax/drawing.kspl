@@ -11,7 +11,7 @@
 //< A drawing stands in the picture's own pixels, so it stays on what it points at however wide
 //< the page shows the picture. A chart's frame is 640 by 300. The page sends a whole new list as
 //< the same lines (`drawings_of`), so what it draws passes the reader's one set of rules.
-import "ksmd/base/attribute" { Attribute, find, read_attributes }
+import "ksmd/base/attribute" { Attribute, Pair, allow, find, pair_of, pair_text, read_attributes }
 import "ksmd/base/source" { HEADER, Diagnostic, Line, Source }
 import "ksmd/model/model" { MAX_DRAWING_TEXT, MAX_DRAWINGS, MAX_PEN_POINTS, MAX_SPOT, Drawing,
     Drawing_shape }
@@ -57,11 +57,8 @@ fn drawings_of(text: U8[], drawings: List<|Drawing|>$@, arena: Arena$@): Void!Di
 priv fn drawing_of(src: Source@, line: Line, arena: Arena$@): Drawing!Diagnostic //< one `draw` line
     attributes: =
         read_attributes(src, line.text, WORD.len, line.text.len, line.offset, arena)!
-    for a in attributes
-        if !a.name.equals("shape") && !a.name.equals("from") && !a.name.equals("to") &&
-            !a.name.equals("color") && !a.name.equals("text") && !a.name.equals("points")
-            throw src.diagnostic(a.offset,
-                "a drawing takes only shape, from, to, points, color and text")
+    allow(src, attributes, U8[][]::{ "shape", "from", "to", "color", "text", "points" },
+        "a drawing takes only shape, from, to, points, color and text")!
     shape_at: = find(attributes, "shape") catch
         throw src.diagnostic(line.offset, "a drawing needs shape, from and to")
     shape: = shape_of(shape_at.value) catch
@@ -112,16 +109,12 @@ priv fn pen_of(src: Source@, attributes: List<|Attribute|>, line: Line): Drawing
         end: =
             from + a.value.sub_from(from).find_char(' ').unwrap_or(a.value.len - from)
         pair: = a.value.sub(from, end - from)
-        comma: = pair.find_char(',') catch
+        p: = pair_text(pair, 0, MAX_SPOT) catch
             throw src.diagnostic(a.offset, message)
-        x: = whole_of(pair.sub(0, comma)) catch
-            throw src.diagnostic(a.offset, message)
-        y: = whole_of(pair.sub_from(comma + 1)) catch
-            throw src.diagnostic(a.offset, message)
-        box.x1 = x if x < box.x1 else box.x1
-        box.y1 = y if y < box.y1 else box.y1
-        box.x2 = x if x > box.x2 else box.x2
-        box.y2 = y if y > box.y2 else box.y2
+        box.x1 = p.x if p.x < box.x1 else box.x1
+        box.y1 = p.y if p.y < box.y1 else box.y1
+        box.x2 = p.x if p.x > box.x2 else box.x2
+        box.y2 = p.y if p.y > box.y2 else box.y2
         count += 1
         from = end + 1
     if count < 2 || count > MAX_PEN_POINTS
@@ -132,37 +125,13 @@ priv fn pen_of(src: Source@, attributes: List<|Attribute|>, line: Line): Drawing
         box.color = c.value
     return box
 
-priv struct Point
-    x: Sz
-    y: Sz
-
 priv fn point_of(src: Source@, attributes: List<|Attribute|>, name: U8[], line: Line):
-    Point!Diagnostic //<
+    Pair!Diagnostic //<
         //< `from="120,40"`: two whole numbers from 0 to 20000, the second down from the top
     a: = find(attributes, name) catch
         throw src.diagnostic(line.offset, "a drawing needs shape, from and to")
-    message: = "a point is two whole numbers from 0 to 20000, as \"120,40\""
-    if !a.quoted
-        throw src.diagnostic(a.offset, message)
-    comma: = a.value.find_char(',') catch
-        throw src.diagnostic(a.offset, message)
-    x: = whole_of(a.value.sub(0, comma)) catch
-        throw src.diagnostic(a.offset, message)
-    y: = whole_of(a.value.sub_from(comma + 1)) catch
-        throw src.diagnostic(a.offset, message)
-    return Point::{ .x = x, .y = y }
-
-priv fn whole_of(text: U8[]): Sz? //< digits without a leading zero, from 0 to `MAX_SPOT`
-    if text.len == 0 || text.len > 5 || text.len > 1 && text[0] == '0'
-        return .none
-    $n: Sz = 0
-    for c in text
-        if !c.is_digit()
-            return .none
-        n = n * 10 + Sz::(c - '0')
-    if n > MAX_SPOT
-        return .none
-    return .some(n)
+    return pair_of(src, a, 0, MAX_SPOT,
+        "a point is two whole numbers from 0 to 20000, as \"120,40\"")
 
 priv fn shape_of(text: U8[]): Drawing_shape? //< `rect`, `arrow` or `line`
     if text.equals("rect")

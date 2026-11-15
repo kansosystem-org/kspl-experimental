@@ -76,6 +76,51 @@ fn attribute_at(attributes: List<|Attribute|>, name: U8[]): Sz //<
         return a.offset
     return 0
 
+fn allow(src: Source@, attributes: List<|Attribute|>, names: U8[][], message: U8[]):
+    Void!Diagnostic //<
+        //< Refuses any attribute but these, with `message`
+    for a in attributes
+        $known: = false
+        for name in names
+            known = known || a.name.equals(name)
+        if !known
+            throw src.diagnostic(a.offset, message)
+
+struct Pair //< two whole numbers written `x,y`
+    x: Sz
+    y: Sz
+
+fn pair_of(src: Source@, a: Attribute, least: Sz, most: Sz, message: U8[]): Pair!Diagnostic //<
+    //< `"40,40"`: two whole numbers from `least` to `most`, in quotes; else `message`
+    if !a.quoted
+        throw src.diagnostic(a.offset, message)
+    return pair_text(a.value, least, most) catch
+        throw src.diagnostic(a.offset, message)
+
+fn pair_text(text: U8[], least: Sz, most: Sz): Pair? //< `x,y`, each from `least` to `most`
+    comma: = text.find_char(',') catch
+        return .none
+    x: = whole_of(text.sub(0, comma), most) catch
+        return .none
+    y: = whole_of(text.sub_from(comma + 1), most) catch
+        return .none
+    if x < least || y < least
+        return .none
+    return .some(Pair::{ .x = x, .y = y })
+
+priv fn whole_of(text: U8[], most: Sz): Sz? //<
+    //< Up to five digits without a leading zero, from 0 to `most`
+    if text.len == 0 || text.len > 5 || text.len > 1 && text[0] == '0'
+        return .none
+    $n: Sz = 0
+    for c in text
+        if !c.is_digit()
+            return .none
+        n = n * 10 + Sz::(c - '0')
+    if n > most
+        return .none
+    return .some(n)
+
 fn write_invisible(invisible: Bool, out: Str_builder$@) //< ` invisible="printing"`, where it is
     if invisible
         out.s(" invisible=\"printing\"")

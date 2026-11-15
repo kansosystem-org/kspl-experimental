@@ -9,9 +9,9 @@ import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_tables"
 import "ksmd/edit/region" { text_spot }
-import "ksmd/files/assemble" { assemble }
-import "ksmd/files/workspace" { Workspace }
 import "ksmd/model/model" { Block_kind }
+import "ksmd/syntax/writer"
+import "ksmd/tests/support" { Folder }
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -46,7 +46,7 @@ fn main(): I32
         !write(folder, "large.ksmd", large.slice(), arena)
         io.err().s("a document cannot be written\n")
         return 1
-    ws: = Workspace.open(folder).unwrap_or(Workspace::{ .root = folder })
+    ws: = Folder::{ .root = folder }
     measure(ws@, "typical.ksmd")
     measure(ws@, "medium.ksmd")
     measure(ws@, "large.ksmd")
@@ -84,7 +84,7 @@ priv fn document(out: Str_builder$@, sections: Sz, tables: Sz, rows: Sz) //<
         out.s("| \"Sum\" | =sum(B1:B\{rows\}) | | =sum(D1:D\{rows\}) | |\n:::\n\n")
     out.s(":::include path=\"notes.ksmd\"\n:::\n\nThe last paragraph.\n")
 
-priv fn measure(ws: Workspace@, name: U8[]) //< prints the middle time of each step on one document
+priv fn measure(ws: Folder@, name: U8[]) //< prints the middle time of each step on one document
     defer arena: = Arena(64 * 1024)
     $view: = List<|I64|>(arena)
     $values: = List<|I64|>(arena)
@@ -96,7 +96,7 @@ priv fn measure(ws: Workspace@, name: U8[]) //< prints the middle time of each s
     for _ in Range.asc(RUNS)
         defer run: = Arena(1024 * 1024)
         $t: = sys.mono_us()
-        a: = assemble(ws, name, run) catch e
+        a: = ws.assemble(name, run) catch e
             switch e
             case .invalid(at)
                 io.err().s(name).s(":\{at.line\}: ").s(at.message).c('\n')
@@ -114,7 +114,9 @@ priv fn measure(ws: Workspace@, name: U8[]) //< prints the middle time of each s
         key.push(keystroke(ed@, run))
         cell.push(cell_edit(ed@, run))
         t = sys.mono_us()
-        ws.save(name, ed.doc@, run) catch
+        defer $text: = Str_builder()
+        writer.write(ed.doc@, text@)
+        if !write(ws.root, name, text.slice(), run)
             io.err().s("the document cannot be saved\n")
             return
         save.push(sys.mono_us() - t)

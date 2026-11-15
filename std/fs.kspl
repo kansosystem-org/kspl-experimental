@@ -81,22 +81,22 @@ pub const MAX_PATH_LEN: Sz = 4095 //< the longest path passed to the OS; a longe
     //< Caution: **Never truncate a longer path and pass it on.** The caller would get **the result
     //< of an operation on a different path** (a remove that deletes something else).
 
-// The lookups counted, declared as `std/thread.kspl` declares them.
-extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
-extern fn kspl_atomic_load(ptr: Sz$@): Sz
+// The lookups counted, declared as `std/mem.kspl` declares them.
+extern fn kspl_atomic_add_relaxed(ptr: Sz$@, delta: Sz): Sz
+extern fn kspl_atomic_load_relaxed(ptr: Sz$@): Sz
 
 // Caution: **Touch the count only through the atomic operations.** Threads look paths up at once,
-// and a plain `+=` loses some.
+// and a plain `+=` loses some. They are relaxed, since the count orders nothing (`std/mem.kspl`).
 priv $lookups_made: Sz = 0
 
 pub fn lookups(): Sz //< how many times this process has asked the OS what stands at a path
     //< **Each `stat`, `is_link`, `long_name` and `read_dir` counts one**, and so does each function
     //< built on them (`exists`, `is_dir`, `join_under`). A test holds a path's cost to its steps by
     //< this count, which is the same on every machine; a time is not.
-    return kspl_atomic_load(lookups_made@)
+    return kspl_atomic_load_relaxed(lookups_made@)
 
 priv fn count_lookup() //< counts one lookup (`lookups`)
-    kspl_atomic_add(lookups_made@, 1)
+    kspl_atomic_add_relaxed(lookups_made@, 1)
 
 priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot take as a path
     //< It checks only the length and an inner NUL, which C reads as the end (each operation checks

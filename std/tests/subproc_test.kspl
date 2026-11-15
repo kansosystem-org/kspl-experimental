@@ -3,7 +3,7 @@ import "std/chars" // `ends_with`
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena }
+import "std/mem" { Arena, dealloc }
 import "std/str" // `lines` / `Str_builder`
 import "std/subproc"
 import "std/sys"
@@ -141,6 +141,39 @@ fn test_piped_shared_err(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     assert(err_end == subproc.Read_end.failed,
         "read_err fails as failed, not as closed: there is no pipe to read")
     verdict.pass("A piped child can share the caller's standard error.")
+
+priv const FLOOD_SRC: U8[] = //< a child that writes far more than a pipe holds, then ends
+    """import "std/io"
+
+fn main()
+  for _i in Range.asc(200000)
+    io.out().s("a line long enough to fill a pipe many times over\n")
+"""
+
+fn test_closed_stdout_frees_the_writer(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< **A child writing more than its pipe holds would wait for a reader for good.** Once its
+    //< standard output is closed, its writes meet a closed pipe and it ends.
+    verdict.start("[Sys] a child whose standard output is no longer read ends...")
+    $child: =
+        subproc.spawn_piped(sys_test.child_argv(ksplc, "flood", FLOOD_SRC, arena), "")
+        catch panic("the child must start")
+    $buf: U8[64] = ::{}
+    got: = child.read(U8$[]::buf, 300000) catch 0
+    child.close_stdout()
+    $after: = subproc.Read_end.closed
+    child.read(U8$[]::buf, 300) catch e
+        after = e
+    $code: I32? = .none
+    for _i in Range.asc(30000)
+        code = child.exit_code()
+        if code.is_some()
+            break
+        sys.sleep_ms(10)
+    child.kill()
+    assert(got > 0, "the child's first bytes come through its pipe")
+    assert(after == subproc.Read_end.failed, "a read after closing fails as failed")
+    assert(code.is_some(), "the child ends once nobody reads its standard output")
+    verdict.pass("A child whose standard output was closed ended, and a read there failed.")
 
 priv const COUNTER_SRC: U8[] = //< a child that reads all of its standard input and says how much
     """import "std/io"
@@ -795,3 +828,66 @@ fn test_win_line_batch(arena: Arena$@) //<
     tail: = win_line(U8[][]::{ bat, "C:\\d\\" }, arena)
     assert(tail.equals("\"C:\\t\\x.bat\" \"C:\\d\\\\\""), "a trailing backslash is doubled")
     verdict.pass("a batch file's arguments stay quoted or are refused, under each spelling of it.")
+
+// ==========================================
+// How a program is found and how it ended, on Windows
+// **These answers too are checked on every OS**: the runtime builds them on every OS, since they
+// touch no OS (`ksplc/gen/runtime/hosted_spawn.c` and `hosted_proc.c`).
+// ==========================================
+extern fn kspl_win_status_code(st: U32): I32
+extern fn kspl_win_is_bare(name: U8@): Bool
+extern fn kspl_win_is_cwd_relative(name: U8@): Bool
+extern fn kspl_win_path_entry(p: U16@, dir: U16$@, cap: Sz, dlen: Sz$@): U16@
+
+priv fn win_name_is(name: U8[], cwd_relative: Bool): Bool //<
+    //< `kspl_win_is_cwd_relative` for name where cwd_relative, else `kspl_win_is_bare`
+    cstr: = name.to_cstr().unwrap_or(null)
+    assert(cstr != null, "a test name must hold no NUL")
+    defer dealloc(Void$@::cstr)
+    return kspl_win_is_cwd_relative(cstr) if cwd_relative else kspl_win_is_bare(cstr)
+
+priv fn win_path_entries(path: U8[], cap: Sz, arena: Arena$@): List<|U8[]|> //<
+    //< An ASCII PATH split as Windows's lookup splits it; an entry longer than cap reads as ""
+    $units: U16[128] = ::{}
+    assert(path.len < units.len, "a test PATH must fit")
+    for i in Range.asc(path.len)
+        units[i] = path[i]
+    $dir: U16[128] = ::{}
+    $out: = List<|U8[]|>(arena)
+    $p: U16@ = units[0]@
+    for p != null
+        $n: Sz = 0
+        p = kspl_win_path_entry(p, dir[0]@, cap, n@)
+        text: = arena.text()
+        for i in Range.asc(n)
+            text.c(U8::dir[i])
+        out.push(text.take())
+    return out
+
+fn test_win_lookup_and_status(arena: Arena$@) //<
+    //< A program name's lookup, PATH's entries and a crash's code, as Windows reads them
+    verdict.start("[Sys] how Windows finds a program and reads its end...")
+    for bare in U8[][2]::{ "git", "git.exe" }
+        assert(win_name_is(bare, false), "a name with no folder or drive is looked up")
+    for named in U8[][4]::{ "C:git", ".\\git", "a/git", "\\git" }
+        assert(!win_name_is(named, false), "a name with a folder or drive is not looked up")
+    for rel in U8[][2]::{ "bin\\x.exe", "bin/x" }
+        assert(win_name_is(rel, true), "a folder part with no root is under the working folder")
+    for rooted in U8[][4]::{ "\\x", "/x", "C:\\x", "C:x" }
+        assert(!win_name_is(rooted, true), "a rooted path or a drive is not under it")
+    // A `;` inside quotes stays in its entry, the quotes go, and an empty entry stays empty.
+    got: = win_path_entries("\"C:\\a;b\";D:\\x;;E", 64, arena)
+    assert(got.len == 4 && got.get(0).equals("C:\\a;b") && got.get(1).equals("D:\\x") &&
+        got.get(2).len == 0 && got.get(3).equals("E"), "PATH's entries are split differently")
+    long: = win_path_entries("abcdef;xy", 4, arena)
+    assert(long.len == 2 && long.get(0).len == 0 && long.get(1).equals("xy"),
+        "an entry too long to keep must be skipped, not cut")
+    // A crash Windows reports as an NTSTATUS reads as 128 + POSIX's signal; any other code stays.
+    codes: U32[8] = ::{ 0xC0000005U32, 0xC00000FDU32, 0xC000001DU32, 0xC0000094U32, 0xC0000409U32,
+        0xC000013AU32, 0xC0000135U32, 3U32 }
+    want: I32[8] = ::{ 139, 139, 132, 136, 134, 130, 127, 3 }
+    for i in Range.asc(codes.len)
+        assert(kspl_win_status_code(codes[i]) == want[i], "an NTSTATUS reads as another code")
+    assert(kspl_win_status_code(0xC0000017U32) == I32::0xC0000017U32,
+        "an NTSTATUS outside the table stays as Windows gives it")
+    verdict.pass("names, PATH's entries and crash codes read as Windows reads them, on every OS.")

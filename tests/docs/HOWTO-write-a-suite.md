@@ -41,7 +41,7 @@ Caution: **A new file of tests needs one import line in `<package>/tests/all.ksp
 3. **Name it in the platform table**, "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md), usually in a row's bracketed list. Until then `make test-conventions` fails with "the platform table names every gate and suite CI runs".
 4. **Name its failure case in its header**, as `Its failure case: `<file>#<name>``. It is an input its checks must reject, which the suite runs ("Every gate shows that it can fail" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)). A suite of `tests/suite/` without one fails `make test-conventions`.
 5. **A new module of the conventions suite** (`tests/support/conventions_<x>.kspl`) is called from `main` in `tests/suite/conventions_test.kspl`, or from a module it already calls; one nothing calls checks nothing.
-6. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first** with `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
+6. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first** with `make commit-seed`. Why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN-compiler.md`](../../ksplc/docs/DESIGN-compiler.md).
 7. **Run it**: `make test-<name>`, then `make test-conventions`. The run prints one line per check and a closing verdict:
 
    ```

@@ -1,6 +1,7 @@
 // The served page's drafts and tabs: text typed in a cell still open, a draft brought back over
-// newer edits, a browser that keeps no draft, a new document left for another, the images let go,
-// the token, and many tabs on one server, which must still save and still let it stop.
+// newer edits, a draft another tab still writes, a browser that keeps no draft, a new document
+// left for another, the images let go, the token, and many tabs on one server, which must still
+// save and still let it stop.
 // `drafts(t)` takes `served.mjs`'s helpers, and returns its sections.
 import fs from "fs";
 import path from "path";
@@ -58,6 +59,30 @@ export function drafts({ tab, withTab, idle, said, noticed, choose, typeAtEnd, s
           "and those edits come back from their own draft", await f.js("ksmd.source()"));
       });
       fs.rmSync(path.join(ctx.root, "back.ksmd"), { force: true });
+    },
+
+    // **A tab still open keeps its draft.** A second tab offered it, and a press on Discard there
+    // threw it away while the first still said it was held. Once that tab closes, it is offered.
+    async liveDraft(ctx) {
+      fs.writeFileSync(path.join(ctx.root, "live.ksmd"), CELLS);
+      const offered = (d) => d.js("Array.from(document.querySelectorAll('#notice button'))" +
+        ".some((b) => !b.closest('[hidden]') && b.textContent.startsWith('Bring them back'))");
+      const a = await tab(ctx, "?doc=live.ksmd");
+      try {
+        await typeAtEnd(a, 0, " Kept.");
+        await held(a);
+        await withTab(ctx, "?doc=live.ksmd", async (b) => {
+          check(!await offered(b), "a second tab does not offer the draft of a tab still open");
+        });
+        check((await state(a)).includes("draft"), "and the first tab still holds it", await state(a));
+      } finally {
+        await ctx.browser.closeTab(a.page);
+      }
+      await withTab(ctx, "?doc=live.ksmd", async (c) => {
+        check(await offered(c), "once that tab closes, its draft is offered");
+        await choose(c, "Discard them");
+      });
+      fs.rmSync(path.join(ctx.root, "live.ksmd"), { force: true });
     },
 
     // Where no draft can be held, leaving a document with unsaved edits asks first.

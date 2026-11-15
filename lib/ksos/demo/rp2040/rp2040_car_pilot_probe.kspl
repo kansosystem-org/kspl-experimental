@@ -28,6 +28,7 @@ import "ksos/demo/rp2040/common/pilot_boot"
 import "ksos/demo/rp2040/common/records"
 import "ksos/demo/rp2040/common/sample" as csample
 import "ksos/demo/rp2040/common/store"
+import "ksos/drivers/rp2040/clocks"
 import "ksos/drivers/rp2040/ir_nec" as ir
 import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
@@ -36,8 +37,12 @@ import "ksos/kernel/task" + { Task }
 import "std/mem" { Arena }
 
 $tcb_car: Task
-// The task stack for the driving loop.
-$stack_car: U8[2560]
+// The task stack for the driving loop: the measured worst path, with room to spare.
+// **How it was measured**: this firmware's C, compiled for the RP2040 with clang's -fstack-usage,
+// then the call graph walked from car_task, adding each frame. The worst path, about 5.1 KB, loads
+// a policy whose header holds a number of more than 19 digits: json, then std/strnum's 1 KB frames.
+// Deciding takes about 1.4 KB. Measure again after a change to that path or to the toolchain.
+$stack_car: U8[8192]
 
 // The policy's body, and the working space for one round.
 // **Once the policy is loaded, do not reset to before it.** The weights point straight into the
@@ -559,4 +564,4 @@ fn car_task(_arg: Void$@): Void
 priv fn park() {}
 
 extern fn ksos_main()
-    task.run_single_task(tcb_car@, U8$[]::stack_car, car_task, "car", park)
+    task.run_single_task(tcb_car@, U8$[]::stack_car, car_task, "car", park, clocks.TICK_1MS_RELOAD)

@@ -1,0 +1,29 @@
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "std/verdict"
+
+// ==========================================
+// ksos/drivers/rp2040/usb_cdc: which setup requests start a data endpoint again at DATA0.
+//
+// A host cannot stand in for the USB block, so the driver decides it in `toggles_reset_by`, which
+// reads no register, and this file checks that. The bus itself is checked on a Pico W.
+// ==========================================
+
+fn test_usb_toggles_reset_by_configuration_and_clear_halt() //<
+    //< SET_CONFIGURATION resets every data endpoint, CLEAR_FEATURE(ENDPOINT_HALT) the one it names
+    //< Caution: **A toggle left as it was makes the host drop the next packet without a word.**
+    verdict.start("[ksos/usb] which requests reset a data toggle test...")
+    all: = usb.toggles_reset_by(0x00, 9, 1, 0)
+    for ep in U32[_]::{ usb.EP2_OUT, usb.EP2_IN, usb.EP3_IN, usb.EP4_OUT, usb.EP4_IN }
+        assert((all & usb.toggle_bit(ep)) != 0, "SET_CONFIGURATION resets every data endpoint")
+    assert(usb.toggles_reset_by(0x02, 1, 0, usb.EP2_IN) == usb.toggle_bit(usb.EP2_IN),
+        "CLEAR_FEATURE(ENDPOINT_HALT) on EP2 IN resets that endpoint alone")
+    assert(usb.toggles_reset_by(0x02, 1, 0, usb.EP4_OUT) == usb.toggle_bit(usb.EP4_OUT),
+        "CLEAR_FEATURE(ENDPOINT_HALT) on EP4 OUT resets that endpoint alone")
+    assert(usb.toggle_bit(usb.EP2_IN) != usb.toggle_bit(usb.EP2_OUT),
+        "an endpoint's IN and OUT directions keep their own toggle")
+    assert(usb.toggles_reset_by(0x02, 1, 0, 0x80) == 0, "EP0 has no data toggle to reset")
+    assert(usb.toggles_reset_by(0x02, 1, 0, 0x85) == 0, "an endpoint the device lacks resets none")
+    assert(usb.toggles_reset_by(0x00, 1, 1, 0) == 0,
+        "CLEAR_FEATURE of a device feature resets none")
+    assert(usb.toggles_reset_by(0x00, 5, 7, 0) == 0, "SET_ADDRESS resets none")
+    verdict.pass("each request starts again at DATA0 exactly the endpoints the USB rules name.")

@@ -2,6 +2,10 @@
 // storage so that a closed tab or a crash loses at most a few seconds of typing. A draft is never
 // written to the document's file, and the page never calls it saved.
 // A draft is kept per workspace, path and opening (`id`), so two tabs on one document keep two.
+// **A draft is offered only once its tab is gone.** Each tab holds a Web Lock named by its
+// opening while it shows that opening, and the browser lets the lock go when the tab closes or
+// crashes. So a second tab on the document cannot bring back or discard a draft the first still
+// writes. A browser without Web Locks offers every draft.
 // Caution: **The browser keeps drafts per address**, the local server's port included. Started on
 // another port, the page finds none of them.
 "use strict";
@@ -48,7 +52,35 @@ function ksmdKeep() {
     });
   }
 
+  const lockOf = (id) => `ksmd-draft:${id}`;
+  let letGo = () => {};
+
+  // The ids of the openings some tab shows now.
+  async function live() {
+    try {
+      const got = await navigator.locks.query();
+      return new Set(got.held.map((l) => l.name));
+    } catch (_) {
+      return new Set();
+    }
+  }
+
   return {
+    // Marks the opening `id` as the one this tab shows, and lets the last one go: its draft can
+    // then be offered, as when the tab opens another document.
+    show(id) {
+      letGo();
+      if (!navigator.locks) return;
+      let gone = false;
+      let free = null;
+      letGo = () => {
+        gone = true;
+        if (free) free();
+      };
+      navigator.locks.request(lockOf(id), () => (gone ? null : new Promise((r) => {
+        free = r;
+      }))).catch(() => {});
+    },
     // Holds a draft: { root, path, id, text, cell, base }. `cell` is the text typed in a cell still
     // open, { block, row, column, text }, or null. `base` names the file's bytes the edits started
     // from, so a draft brought back is compared with the file before it is saved.
@@ -59,11 +91,12 @@ function ksmdKeep() {
     drop(root, path, id) {
       return run("readwrite", (s) => s.delete(`${root}\n${path}\n${id}`));
     },
-    // The drafts of one document other than those of the opening `id`, newest first.
+    // The drafts of one document that no tab shows, newest first; the opening `id` is this one.
     async of(root, path, id) {
       const all = (await run("readonly", (s) => s.getAll())) || [];
-      return all.filter((d) => d.root === root && d.path === path && d.id !== id)
-        .sort((a, b) => b.at - a.at);
+      const shown = await live();
+      return all.filter((d) => d.root === root && d.path === path && d.id !== id &&
+        !shown.has(lockOf(d.id))).sort((a, b) => b.at - a.at);
     },
     // Lets go drafts older than 30 days, at start; a draft nobody brought back by then is stale.
     async prune() {

@@ -92,7 +92,7 @@ Standard error waits for nothing: each call is written at once.
 
 **Its owner closes a `File_stream` with `free()`**, usually by declaring it with `defer` in front. `free()` closes the C stream and leaves the handle null, and the compiler refuses a use of that local after it. **A later write through a pointer stops the program with a message**, since a `Writer` call returns no failure. Otherwise the bytes would be lost, and the program would exit 0. `read` and `sync` can report a failure, so they refuse it as `invalid_arg`. `File_stream` conforms to `Move_only`, since a copy would keep the stream its original closes.
 
-**Standard output and standard error are not `File_stream`s.** The whole program shares them, so `out()` / `err()` hand out a stream of another type, opened on the first call. It has no `free()`, so no part of the program can close the stream every other part writes to.
+**Standard output and standard error are not `File_stream`s.** The whole program shares them, so `out()` / `err()` hand out a stream of another type. It holds which stream to write, not the C library's handle, so two threads that print first at once write nothing shared. It has no `free()`, so no part of the program can close the stream every other part writes to.
 
 ### A crash names what happened, in one line
 
@@ -342,7 +342,7 @@ A *signal* is how POSIX tells a process about an event such as a crash (`SIGSEGV
 | `STATUS_CONTROL_C_EXIT` | `SIGINT` | 130 |
 | `STATUS_DLL_NOT_FOUND` | the loader's 127, as on POSIX for a missing shared library | 127 |
 
-Any other code is the child's own, a negative one included. The table's copy in the runtime is `kspl_proc_status_code` in `ksplc/gen/runtime/hosted_proc.c`, and `make test-conventions` checks that the two agree. A fault with no single POSIX signal stays as Windows gives it: an in-page error is `SIGBUS` on Linux and macOS, under different numbers.
+Any other code is the child's own, a negative one included. The table's copy in the runtime is `kspl_win_status_code` in `ksplc/gen/runtime/hosted_proc.c`, and `make test-conventions` checks that the two agree. It touches no OS, so std's tests check it on every OS. A fault with no single POSIX signal stays as Windows gives it: an in-page error is `SIGBUS` on Linux and macOS, under different numbers.
 
 **A KSPL program's own abnormal end is `STATUS_STACK_BUFFER_OVERRUN` on Windows, whatever the C runtime does.** A panic and the run-time checks end in `abort()`, which raises `SIGABRT` first. The runtime's handler ends the process there with that code (`kspl_end_on_abort` in `ksplc/gen/runtime/hosted.c`). Left alone, msvcrt's `abort()` exits 3, and UCRT's exits 3 or fails fast, by a setting.
 
@@ -688,6 +688,19 @@ The only public lock is `thread.Mutex<|T|>`, which holds the data it protects. `
 
 **There is no guard type, because the release is already guaranteed.** A *guard* is an object that unlocks when it goes out of scope (RAII). `defer mx.unlock()` releases the lock on leaving the scope, and lint [W0106] catches a forgotten one. `Cond_var.wait`, `signal` and `broadcast` take a `Mutex<|T|>`, since a condition variable must be given the lock it works under. `Cond_var` is in the same file, so it can reach the handle inside.
 
+### A count kept to be read orders nothing
+
+`thread.Counter_sz` holds a count that threads add to and that is only read, such as the steps a tokenizer took. Its `add` and `load` are relaxed atomics: no count is lost, but no other access is ordered. std's own counters work the same way: the heap's usage, `fs.lookups()` and the count of running threads.
+
+**Why not an `Atomic_sz`**: each of its operations is sequentially consistent, so it orders the two threads. Under ThreadSanitizer, two threads that both add to it look ordered, and a race between them goes unseen. Every `mem.alloc` adds to the heap counters, so with ordered counters the race gate missed most races.
+
+| Rust | KSPL |
+| :-- | :-- |
+| `AtomicUsize` with `Ordering::SeqCst` | `thread.Atomic_sz` |
+| `AtomicUsize` with `Ordering::Relaxed` | `thread.Counter_sz` (`add` and `load` only) |
+
+A type of its own, not an ordering argument, keeps one meaning to each type: a `Counter_sz` cannot guard data by mistake.
+
 ### A mutex is locked once, by one thread
 
 A second lock of a `Mutex<|T|>` on the thread that already holds it stops the program with a message, on every OS. So does an unlock, or a wait, signal or broadcast on a `Cond_var` with it, from a thread that does not hold it.
@@ -731,7 +744,7 @@ A lock kept in memory that the program allocated by hand is freed by hand too, b
 
 ### The environment changes only while no spawned thread runs
 
-`sys.set_env` and `sys.unset_env` stop the program with a message while a thread that `Thread.spawn` started has not been waited for. `Thread` counts the threads it started and `free()` waited for.
+`sys.set_env` and `sys.unset_env` stop the program with a message while a thread that `Thread.spawn` started has not been waited for. `Thread` counts the threads it started and `free()` waited for. **A thread is counted before it starts**, so a thread that changes the environment at once is stopped too.
 
 **Why**: the C library does not order a change of the environment against another thread reading it. A reader can then read memory the change has just freed, and the crash comes far from its cause. A lock inside `std` would cover only `std`'s own readers, not a C library's `getenv`.
 

@@ -84,10 +84,33 @@ priv fn check_file_uri() //<
     verdict.check("a path with no drive keeps its `/` on Windows",
         spaced.equals("/home/a b/x.kspl"), spaced)
 
+priv fn check_letter_case() //<
+    //< An import spelt in another letter case than the file on disk is refused on every OS
+    //< **Both OSes' answers are checked here**: the comparison reads a listing, not the disk.
+    //< Windows and macOS would open `Mod.kspl` for `mod.kspl`; Linux finds no `mod.kspl`.
+    listing: U8[][3] = ::{ "Mod.kspl", "io.kspl", "Both.kspl" }
+    other: = base_locate.spelling_in_listing("mod.kspl", U8[][]::listing)
+    verdict.check("a name in another case gives the spelling on disk", other.equals("Mod.kspl"),
+        other)
+    exact: = base_locate.spelling_in_listing("io.kspl", U8[][]::listing)
+    verdict.check("a name spelt as on disk passes", exact.len == 0, exact)
+    absent: = base_locate.spelling_in_listing("gone.kspl", U8[][]::listing)
+    verdict.check("a name not on disk is left to the open", absent.len == 0, absent)
+    // Linux can hold both spellings; the one written exactly is the one opened.
+    both: U8[][2] = ::{ "both.kspl", "Both.kspl" }
+    picked: = base_locate.spelling_in_listing("Both.kspl", U8[][]::both)
+    verdict.check("where both spellings stand, the exact one passes", picked.len == 0, picked)
+    // Only the steps the import wrote are its own: those after its last `..`, without a `.`.
+    verdict.check("each written step counts", base_locate.written_names("Sub/mod") == 2, "")
+    verdict.check("a step before `..` is not on the path opened",
+        base_locate.written_names("a/../Sub/mod") == 2, "")
+    verdict.check("a `.` is no name", base_locate.written_names("./mod") == 1, "")
+
 fn main(): I32
     arena: = harness.begin(1 << 22)
     check_drive_letter()
     check_file_uri()
+    check_letter_case()
     dir: = harness.sandbox("filepath")
     rel_c: = arena.text().s("\{dir\}/rel.c").take()
     abs_entry: = fs.absolute(REL_ENTRY, arena) catch

@@ -15,7 +15,7 @@
 // ==========================================
 import "ksai/parallel"
 import "ksai/quant" { Quant_matrix }
-import "ksai/tensor" { Tensor }
+import "ksai/tensor" + { Tensor }
 import "std/math"
 import "std/mem"
 
@@ -177,21 +177,6 @@ priv struct Recur_job //< one call's recurrence, as each of its threads reads it
     n: Sz
     scale: F32 //< `1 / √head_dim`, which each output is multiplied by
 
-priv const LANES: Sz = 8 //< the partial sums of a row's dot product, kept side by side
-
-priv fn dot(a: F32@, b: F32@, n: Sz): F32 //<
-    //< the dot product of `n` numbers in 8 lanes; `n` % 8 == 0
-    $acc: F32[LANES] = ::{}
-    p: F32$@ = acc@
-    for $g: Sz = 0; g < n; g += LANES
-        for k in Range.asc(LANES)
-            term: = (a + g + k)$ * (b + g + k)$
-            (p + k)$ = (p + k)$ + term
-    $s: F32 = 0.0
-    for k in Range.asc(LANES)
-        s = s + (p + k)$
-    return s
-
 priv fn recur_heads(arg: Void$@, first: Sz, last: Sz) //< value heads [first, last), every row
     //< ggml's `gated_delta_net`, one row of the square at a time: a row's decay, its read with
     //< the key, its write and its read with the query touch that row alone, so the order of the
@@ -216,11 +201,11 @@ priv fn recur_heads(arg: Void$@, first: Sz, last: Sz) //< value heads [first, la
                 // `make test-simd` sees this loop vectorize.
                 for x in Range.asc(d)
                     (m + x)$ = (m + x)$ * decay
-                read: = dot(m, k, d)
+                read: = tensor.dot_lanes<|F32|>(m, k, d)
                 diff: = (v + i)$ - read
                 delta: = diff * b
                 // `make test-simd` sees this loop vectorize.
                 for x in Range.asc(d)
                     term: = (k + x)$ * delta
                     (m + x)$ = (m + x)$ + term
-                (o + i)$ = dot(m, q, d) * j.scale
+                (o + i)$ = tensor.dot_lanes<|F32|>(m, q, d) * j.scale

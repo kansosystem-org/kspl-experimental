@@ -17,7 +17,7 @@ import "ksplc/sema/decl/mono_queue" as _sema_decl_mono_queue // `ensure_instance
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
-import "ksplc/sema/type/arc" as _sema_type_arc // `is_interior_mutable`
+import "ksplc/sema/type/arc" as _sema_type_arc // `is_interior_mutable`, `one_thread_count_path`
 import "ksplc/sema/type/def" { Struct_field }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
@@ -77,6 +77,10 @@ impl Index_route
             return "at_ref"
         case .by_value
             return "get"
+
+enum Count_reach //< where a value whose count only one thread keeps would be shared from
+    spawn_arg //< the argument `Thread.spawn` hands to the new thread
+    global(name: U8[]) //< a top-level `$` variable or `const`, which every thread can reach
 
 impl Sema_ctx
     fn compute_effective_vis(r: Self$@, fn_node: Ast_node$@): sema_type_scope.Visibility //<
@@ -512,6 +516,85 @@ impl Sema_ctx
             .s("const '\{name\}' declares writable elements. A const is immutable and is placed in \
                 read-only memory. Remove the '$' from the slice stage (write 'T[]', not 'T$[]')")
         r.err(loc, r.scratch.slice())
+
+    fn refuses_one_thread_count(r: Self$@, type_id: I32, reach: Count_reach, loc: Ast_node$@): Bool //<
+        //< Refuses a type_id that reaches an `Rc` or a `Weak_rc`, where reach shares it
+        //< Two threads would change a count kept for one: a lost update frees the value while in
+        //< use, or leaks it. It walks fields, payloads, elements and what a pointer or a slice
+        //< reaches (`one_thread_count_path`). **It sees only the type written**: an `Rc` behind a
+        //< `Void$@` or a cast passes, so it refuses sure bugs and does not promise that what
+        //< passes is safe to share.
+        defer $path: = Str_builder()
+        steps: = r.env.one_thread_count_path(type_id, path@)
+        if steps == 0
+            return false
+        r.clear_scratch()
+        switch reach
+        case .spawn_arg
+            r.scratch.s("cannot hand '\{r.env.display(type_id)\}' to another thread: ")
+        case .global(name)
+            r.scratch
+                .s("'\{name\}' cannot be a global of type '\{r.env.display(type_id)\}': every \
+                    thread can reach a global, and ")
+        if steps > 1
+            r.scratch.s("it holds an 'Rc' or a 'Weak_rc' (\{path.slice()\}), whose")
+        else
+            r.scratch.s("an 'Rc' or a 'Weak_rc' has a")
+        r.scratch
+            .s(" count only one thread may change. Two threads changing it lose counts, so the \
+                value is freed while in use or never freed. Use 'Arc' in place of 'Rc' and \
+                'Weak_arc' in place of 'Weak_rc': threads can share their count. 'Arc.get()' only \
+                reads, so use 'Arc<|Mutex<|T|>|>' where the value is written.")
+        switch reach
+        case .global
+            r.scratch
+                .s(" Or keep the 'Rc' in a local of 'main' and pass it to the functions that use \
+                    it.")
+        default {}
+        r.err(loc, r.scratch.slice())
+        return true
+
+    fn refuse_one_thread_spawns(r: Self$@) //<
+        //< Refuses each spawn whose T reaches an `Rc` or a `Weak_rc` only through a trait value
+        //< **Every body is checked by now**, so each type converted to a trait is known
+        //< (`Env.upcasts`). A T refused at its call was not queued (`refuses_spawn_arg`).
+        //< Caution: **Run it after check_type_layouts, and not once an error stands**, as
+        //< refuse_one_thread_globals below.
+        if r.has_error()
+            return
+        for a in r.spawn_args
+            r.set_current_file(a.site.loc.file())
+            _refused: = r.refuses_one_thread_count(a.type_id, .spawn_arg, a.site)
+
+    fn refuse_one_thread_globals(r: Self$@, root_file: Ast_node@) //<
+        //< Refuses each global whose type reaches an `Rc` or a `Weak_rc` (refuses_one_thread_count)
+        //< A top-level `$` variable, a `const` and a C variable declared with `extern` alike: every
+        //< thread can reach a global, so two threads would change a count kept for one.
+        //< Caution: **Run it after check_type_layouts, and not once an error stands.** The walk
+        //< stops the compiler on a chain of types deeper than its limit, which the layout check
+        //< has reported with a position (deep_struct_chain in tests/support/harness_grow.kspl).
+        if r.has_error()
+            return
+        for top_node in root_file.children
+            child: = top_node.unwrap_top_level()
+            r.set_current_file(child.loc.file())
+            switch child.kind_id
+            case .k_decl_var, .k_decl_const
+                for name_node in child.children
+                    if name_node.kind_id == .k_identifier
+                        _refused: = r.refuses_one_thread_count(child.type_id,
+                            .global(name_node.text), name_node)
+            case .k_decl_extern, .k_decl_extern_block
+                // A C variable's type is on its symbol alone (collect_extern_var in collect.kspl).
+                for item in child.children
+                    id_node: = item.find_child(.k_identifier)
+                    if item.kind_id != .k_decl_var || id_node == null
+                        continue
+                    sym: = r.symtab.resolve(r.make_fqn(id_node.text)).unwrap_or(null)
+                    if sym != null
+                        _refused: = r.refuses_one_thread_count(sym.type_id,
+                            .global(id_node.text), id_node)
+            default {}
 
     priv fn find_mut_in_const_storage(r: Self$@, type_id: I32, seen: List<|I32|>$@): Bool //<
         //< Walks inside the value and returns true once it finds a mutable element

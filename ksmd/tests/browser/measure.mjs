@@ -140,8 +140,8 @@ async function inPage(name) {
   shown("a key typed at the end: the transaction and the blocks shown again", key);
   shown("the same, to the end of the next frame: the status bar shown again too", keyFrame);
   shown("a frame while the page scrolls down through the first table", frames);
-  shown("a cell's value entered: the transaction, every table calculated and shown again", edit);
-  shown("Alt+Right or Alt+Left in a cell: the widths set and the table shown again", resize);
+  shown("a cell's value entered: the transaction, every table calculated, the cells that changed shown again", edit);
+  shown("Alt+Right or Alt+Left in a cell: the widths set and the table laid out again", resize);
   shown("the canonical source a save writes", save);
 }
 

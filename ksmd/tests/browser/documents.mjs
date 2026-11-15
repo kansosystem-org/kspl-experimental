@@ -6,7 +6,7 @@
 import { CTRL, H, SHIFT, check } from "./drive.mjs";
 
 
-export function documents({ page, js, press, click, menu, load, saves, source }) {
+export function documents({ page, js, press, type, click, menu, load, saves, source }) {
   // A press at the first point, moves through the others with the button down, and a release at the
   // last, with the modifier keys held throughout.
   async function dragPath(points, modifiers = 0) {
@@ -164,6 +164,10 @@ export function documents({ page, js, press, click, menu, load, saves, source })
       const set = `${H}:::document paper="A3" orientation="landscape" header="[Confidential]" ` +
         'footer="No.12 ({page}/{pages})" numbers=1\n:::\n\n' + body;
       await saves("Page setup writes the document's settings first", set);
+      // The reader refuses a block before the settings, so the caret stands after them.
+      await type("x");
+      await saves("keys typed after Apply go after the settings", set.replace("# Title", "# xTitle"));
+      await menu("undo");
       const style = await js("document.getElementById('ksmd-paper').textContent");
       check(style.includes("size: A3 landscape") && style.includes('"[Confidential]"') &&
         style.includes('"No.12 (" counter(page) "/" counter(pages) ")"'),

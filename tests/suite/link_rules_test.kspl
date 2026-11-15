@@ -183,6 +183,12 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
         libs.exited_with(0) && flags.exited_with(0),
         arena.text().s(libs.out).s(flags.out).take())
         return
+    // **The section removal follows the target, not the OS ksplc runs on**: the PE linker drops
+    // no section, so a Windows target is given neither half, from Linux too.
+    if triple.equals(WINDOWS_TRIPLE)
+        verdict.check(arena.text().s("\{name\}: no section removal is asked for").take(),
+            flags.out.find_str("-ffunction-sections").is_none() &&
+            flags.out.find_str("--gc-sections").is_none(), flags.out)
     $bad: = disagreements(ldlibs, libs.out, flags.out, arena)
     seen: = make_db.words(ldlibs, arena).len + make_db.words(libs.out, arena).len
     verdict.check_list(arena.text().s("\{name\}: the Makefile's LDLIBS agrees with ksplc").take(),

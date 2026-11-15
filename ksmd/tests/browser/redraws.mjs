@@ -1,7 +1,7 @@
 // The served page, shown again by work that ended later while the person is in the middle of
-// something: typing in the find bar or in Insert Function, reading a message, composing in a cell,
-// typing in a cell while a pasted image is saved, or typing in the formula bar. Each keeps what
-// the person was doing.
+// something: typing in the find bar, also as a changed file opens again, or in Insert Function,
+// reading a message, composing in a cell, typing in a cell while a pasted image is saved, or
+// typing in the formula bar. Each keeps what the person was doing.
 // A table also stands still while a bar or a dialog holds the focus, so a press lands where aimed.
 // The showing is made to come at a known moment: an include changes on disk, and the window is
 // looked at again (`check` in `ksmd/port/web/file.js`), which fetches it and shows the tables again.
@@ -80,6 +80,22 @@ export function redraws({ withTab }) {
         check(drawn && await d.js("document.querySelector('.find-text').value") === "parag" &&
           await line(d, 2) === "First paragraph.", "keys typed in the find bar while the tables are shown again stay in it",
         `drawn ${drawn}; box ${await d.js("document.querySelector('.find-text').value")}; line ${await line(d, 2)}`);
+      });
+
+      // **So do they while the document itself is opened again**, as another program changed its
+      // file and nothing was unsaved. The caret took the focus there too.
+      await inTab(DOC, async (d) => {
+        await d.select(0, 0, 5);
+        await d.press("f", CTRL);
+        await d.until("!document.querySelector('.find').hidden && document.activeElement.classList.contains('find-text')");
+        await d.type("par");
+        fs.writeFileSync(path.join(ctx.root, `redraw-${n}.ksmd`), DOC.replace("First", "Changed"));
+        await d.js("window.dispatchEvent(new Event('focus'))");
+        const opened = await d.until("document.getElementById('status').textContent.includes('changed on disk')", 10000);
+        await d.type("ag");
+        check(opened && await d.js("document.querySelector('.find-text').value") === "parag" &&
+          await line(d, 2) === "Changed paragraph.", "keys typed in the find bar while the changed file opens again stay in it",
+        `opened ${opened}; box ${await d.js("document.querySelector('.find-text').value")}; line ${await line(d, 2)}`);
       });
 
       // Insert Function's search likewise: a key there was lost.

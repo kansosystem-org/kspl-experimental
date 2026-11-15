@@ -10,7 +10,6 @@ import "ksos/demo/common/semihost_console" as con
 import "ksos/drivers/cortex_m/scs"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
-import "std/chars"
 
 const IRQ0: U32 = 0 //< the interrupt raised: no hardware of either QEMU board raises it here
 const EXPECTED: U8[] = "ksos: task-only call inside an ISR"
@@ -20,13 +19,9 @@ $tcb: Task
 $stack: U8[1024]
 
 fn on_panic(msg: U8[]) //< Check that the panic message is the kernel's refusal, and end
-    con.puts("PANIC: ")
-    con.puts(msg)
-    con.puts("\n")
-    con.check("a take inside an ISR stops with the kernel's panic, though a count is there",
-        msg.starts_with(EXPECTED))
-    con.print_summary("Cortex-M ISR block")
-    con.exit()
+    con.end_on_expected_panic(msg, EXPECTED,
+        "a take inside an ISR stops with the kernel's panic, though a count is there",
+        "Cortex-M ISR block")
 
 // IRQ0's handler (its extern overrides the vector table's weak default). A waiting call here is
 // the misuse; returning from it is a failure.

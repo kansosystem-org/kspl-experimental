@@ -252,12 +252,12 @@ priv fn check_stdio_bits(arena: Arena$@)
 // ==========================================
 priv const STATUS_C: U8[] = "ksplc/gen/runtime/hosted_proc.c"
 priv const STATUS_DOC: U8[] = "std/docs/DESIGN-system.md"
-priv const STATUS_C_HEAD: U8[] = "static int kspl_proc_status_code("
+priv const STATUS_C_HEAD: U8[] = "KSPL_LINK I32 kspl_win_status_code("
 priv const STATUS_DOC_HEAD: U8[] = "### A child's end is one code on every OS"
 priv const STATUS_SPLIT: U8[] = "@@@\n" //< parts a sample into its C half and its table half
 
 priv fn c_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The `NAME=code` pairs of `kspl_proc_status_code`
+    //< The `NAME=code` pairs of `kspl_win_status_code`
     //< Each `case` line names an NTSTATUS in a `/* STATUS_... */` comment, and the next `return`
     //< gives the code of every name before it.
     $out: = List<|U8[]|>(arena)
@@ -318,25 +318,25 @@ priv fn status_tables_disagree(text: U8[], arena: Arena$@): Bool //<
 // missing on either side, and a half that parses to nothing.
 priv const STATUS_SAMPLES: Sample[_] = ::{
     Sample::{ .text =
-        "static int kspl_proc_status_code(DWORD st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
+        "KSPL_LINK I32 kspl_win_status_code(U32 st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
             */\ncase 0xC00000FDu: /* STATUS_STACK_OVERFLOW */\nreturn 139; /* SIGSEGV */\ncase \
             0xC000013Au: /* STATUS_CONTROL_C_EXIT */\nreturn 130;\ndefault:\n}\n@@@\n### A child's \
             end is one code on every OS\n| `STATUS_ACCESS_VIOLATION`, `STATUS_STACK_OVERFLOW` | \
             `SIGSEGV` | 139 |\n| `STATUS_CONTROL_C_EXIT` | `SIGINT` | 130 |\n", .hits = false },
     Sample::{ .text =
-        "static int kspl_proc_status_code(DWORD st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
+        "KSPL_LINK I32 kspl_win_status_code(U32 st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
             */\ncase 0xC00000FDu: /* STATUS_STACK_OVERFLOW */\nreturn 139; /* SIGSEGV */\ncase \
             0xC000013Au: /* STATUS_CONTROL_C_EXIT */\nreturn 130;\ndefault:\n}\n@@@\n### A child's \
             end is one code on every OS\n| `STATUS_ACCESS_VIOLATION`, `STATUS_STACK_OVERFLOW` | \
             `SIGSEGV` | 134 |\n| `STATUS_CONTROL_C_EXIT` | `SIGINT` | 130 |\n", .hits = true },
     Sample::{ .text =
-        "static int kspl_proc_status_code(DWORD st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
+        "KSPL_LINK I32 kspl_win_status_code(U32 st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
             */\ncase 0xC00000FDu: /* STATUS_STACK_OVERFLOW */\nreturn 139; /* SIGSEGV */\ncase \
             0xC000013Au: /* STATUS_CONTROL_C_EXIT */\nreturn 130;\ndefault:\n}\n@@@\n### A child's \
             end is one code on every OS\n| `STATUS_ACCESS_VIOLATION` | `SIGSEGV` | 139 |\n| \
             `STATUS_CONTROL_C_EXIT` | `SIGINT` | 130 |\n", .hits = true },
     Sample::{ .text =
-        "static int kspl_proc_status_code(DWORD st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
+        "KSPL_LINK I32 kspl_win_status_code(U32 st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
             */\nreturn 139;\ndefault:\n}\n@@@\n### A child's end is one code on every OS\n| \
             `STATUS_ACCESS_VIOLATION`, `STATUS_STACK_OVERFLOW` | `SIGSEGV` | 139 |\n| \
             `STATUS_CONTROL_C_EXIT` | `SIGINT` | 130 |\n", .hits = true },
@@ -345,7 +345,7 @@ priv const STATUS_SAMPLES: Sample[_] = ::{
             `STATUS_ACCESS_VIOLATION`, `STATUS_STACK_OVERFLOW` | `SIGSEGV` | 139 |\n| \
             `STATUS_CONTROL_C_EXIT` | `SIGINT` | 130 |\n", .hits = true },
     Sample::{ .text =
-        "static int kspl_proc_status_code(DWORD st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
+        "KSPL_LINK I32 kspl_win_status_code(U32 st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \
             */\ncase 0xC00000FDu: /* STATUS_STACK_OVERFLOW */\nreturn 139; /* SIGSEGV */\ncase \
             0xC000013Au: /* STATUS_CONTROL_C_EXIT */\nreturn 130;\ndefault:\n}\n@@@\n### Another \
             section\n", .hits = true },
@@ -359,7 +359,7 @@ priv fn check_status_table(arena: Arena$@)
     $gaps: = List<|U8[]|>(arena)
     if c.len == 0
         gaps
-            .push(arena.text().s(STATUS_C).s(": no `case` rows found in kspl_proc_status_code")
+            .push(arena.text().s(STATUS_C).s(": no `case` rows found in kspl_win_status_code")
             .take())
     scan.diff_into(c@, doc@, STATUS_C, STATUS_DOC, gaps@, arena)
     scan.diff_into(doc@, c@, STATUS_DOC, STATUS_C, gaps@, arena)

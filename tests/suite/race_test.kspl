@@ -99,6 +99,44 @@ fn main(): I32
   return 0
 """
 
+priv const RACY_ALLOC_SOURCE: U8[] =
+    """
+import "std/mem"
+import "std/thread"
+
+priv $flag: Bool = false
+
+extern fn work(arg: I32$@): Void$@
+  flag = true
+  $i: = 0
+  for i < 1000
+    mem.dealloc(mem.alloc(16))
+    i += arg$
+  return null
+
+fn main(): I32
+  $one: I32 = 1
+  $t: = thread.Thread.spawn<|I32|>(work, one@) catch
+    return 2
+  $i: = 0
+  for i < 20000
+    mem.dealloc(mem.alloc(16))
+    i += 1
+  $seen: = flag
+  t.free()
+  return 0 if seen else 1
+""" //<
+        //< **Both threads allocate**, so the heap's counters lie between the write and the read. The
+        //< sanitizer must still report it. A sequentially consistent atomic orders the two threads
+        //< that touch it, so std's counters are relaxed (`thread.Counter_sz` in `std/thread.kspl`).
+        //< **The main loop is long enough to need `TSAN_HISTORY`**:
+        //< with the default history it was reported in one run of three, and with 7 in every run up
+        //< to 40000 (measured). Past about 70000 even 7 loses it, a limit of the sanitizer itself.
+
+priv const TSAN_HISTORY: U8[] = ":history_size=7" //< how much of each thread's past is kept
+    //< **The sanitizer drops a race once the older access has left its history**, with no word.
+    //< 7 is the largest size: a thread that allocates between two accesses fills the default one.
+
 priv const SUMMARY_HEAD: U8[] = "SUMMARY: ThreadSanitizer: " //< the line that closes one
 priv const GLOBAL_HEAD: U8[] = "  Location is global '" //< where the report names the variable
 
@@ -208,7 +246,7 @@ priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[
         "env" })
     out
         .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena))
-        .s(":handle_abort=1").take())
+        .s(":handle_abort=1").s(TSAN_HISTORY).take())
     out.push_all(env)
     out.push_all(argv)
     return out.slice()
@@ -259,25 +297,32 @@ priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
         verdict.check(name, races.len == 0 && ended, why.take())
 
 priv fn check_fires(work: U8[], arena: Arena$@) //<
-    //< The race written on purpose is reported, through the same build and run as the tests
-    src: = fs.join(work, "racy.kspl", arena)
-    io.write_file(src, RACY_SOURCE) catch
-        verdict.check("a race written on purpose is reported", false, "cannot write it")
+    //< Each race written on purpose is reported, through the same build and run as the tests
+    check_one_fires("a race written on purpose is reported", "racy", RACY_SOURCE, work, arena)
+    check_one_fires("a race between two threads that allocate is reported", "racy_alloc",
+        RACY_ALLOC_SOURCE, work, arena)
+
+priv fn check_one_fires(name: U8[], stem: U8[], source: U8[], work: U8[], arena: Arena$@) //<
+    //< The race in source, built and run as stem under work, gives at least one report
+    src: = fs.join(work, arena.text().s(stem).s(".kspl").take(), arena)
+    io.write_file(src, source) catch
+        verdict.check(name, false, "cannot write it")
         return
     o: =
-        order(work, src, fs.join(work, "racy.exe", arena), OPT_FOR_RUN, "", true, arena)
+        order(work, src,
+        fs.join(work, arena.text().s(stem).s(".exe").take(), arena), OPT_FOR_RUN, "", true, arena)
     b: = harness_sanitizer.build(o.dir, o.entry, o.exe, o.cflags, false, "", arena)
     if b.exe.len == 0
-        verdict.check("a race written on purpose is reported", false, b.why)
+        verdict.check(name, false, b.why)
         return
-    log_dir: = fs.join(work, "racy_log", arena)
+    log_dir: = fs.join(work, arena.text().s(stem).s("_log").take(), arena)
     fs.mkdir_all(log_dir) catch {}
     sys.set_env("TSAN_OPTIONS",
-        arena.text().s("log_path=").s(fs.join(log_dir, "tsan", arena)).take()) catch
+        arena.text().s("log_path=").s(fs.join(log_dir, "tsan", arena)).s(TSAN_HISTORY).take()) catch
             panic("TSAN_OPTIONS could not be set")
     ksplc_harness.run_in(U8[][]::{ b.exe }, work)
     sys.unset_env("TSAN_OPTIONS") catch panic("TSAN_OPTIONS could not be unset")
-    verdict.check("a race written on purpose is reported", reports_in(log_dir, arena).len > 0,
+    verdict.check(name, reports_in(log_dir, arena).len > 0,
         "the program built with the sanitizer ran and nothing was reported")
 
 // ==========================================

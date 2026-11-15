@@ -70,7 +70,7 @@ struct Arc_shared //< what the threads share through one `Arc`
     hits: thread.Atomic_sz
 
 extern fn arc_test_add(arg: Arc<|Arc_shared|>$@): Void$@
-    mine: = arg.clone()
+    mine: = arg$
     for _i in Range.asc(1000)
         s: = mine.get()
         n: = s.total.lock()
@@ -634,6 +634,24 @@ fn main()
   sys.set_env("KSPL_ENV_WITH_THREAD", "1") catch panic("set_env")
 """
 
+priv const ENV_IN_THREAD_SRC: U8[] = //< a child whose new thread changes the environment at once
+    """import "std/sys"
+import "std/thread"
+
+extern fn env_test_set(n: I32$@): Void$@
+  sys.set_env("KSPL_ENV_IN_THREAD", "1") catch panic("set_env")
+  n$ = 1
+  return null
+
+fn main()
+  $n: I32 = 0
+  defer $_t: = thread.Thread.spawn<|I32|>(env_test_set, n@) catch panic("spawn")
+"""
+
+priv const ENV_IN_THREAD_RUNS: Sz = 20 //< the runs of that child; each must stop
+    //< **The thread is counted before it starts**, so every run stops. Counted after, from one run
+    //< in 20 to one in 150 got through (measured), so these runs catch a slip only at times.
+
 extern fn env_test_idle(arg: I32$@): Void$@ //< a thread that ends at once
     arg$ = 1
     return null
@@ -643,6 +661,10 @@ fn test_env_waits_for_threads(ksplc: U8[], arena: Arena$@) //< ksplc runs the ch
     child: = sys_test.child_argv(ksplc, "env_with_thread", ENV_WITH_THREAD_SRC, arena)
     stopped: = sys_test.stops_with(child, "a thread started with Thread.spawn still runs", arena)
     assert(stopped, "set_env while a spawned thread runs must stop the program with the reason")
+    own: = sys_test.child_argv(ksplc, "env_in_thread", ENV_IN_THREAD_SRC, arena)
+    for _run in Range.asc(ENV_IN_THREAD_RUNS)
+        assert(sys_test.stops_with(own, "a thread started with Thread.spawn still runs", arena),
+            "set_env in a thread just started must stop the program too")
     $n: I32 = 0
     $t: = thread.Thread.spawn<|I32|>(env_test_idle, n@) catch panic("spawn")
     t.free()

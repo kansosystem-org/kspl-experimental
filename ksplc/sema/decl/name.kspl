@@ -255,11 +255,13 @@ priv fn lookup_bare_name(c: Sema_ctx$@, name: U8[]): Sema_symbol$@ //<
     //< A local or argument first, then a top-level declaration, then a selective import's.
     //< Caution: Look up values here too, not only types, or `import "p" { twice };` passes and the
     //< use fails with `undefined path or identifier` (Principle 5 of docs/DESIGN-principles.md).
-    $sym: = c.symtab.resolve(name).unwrap_or(null)
+    $sym: = c.symtab.peek(name).unwrap_or(null)
     if sym == null
         imported_fqn: = c.imported_symbol_fqn(name)
         if imported_fqn.len > 0
-            sym = c.symtab.resolve(imported_fqn).unwrap_or(null)
+            sym = c.symtab.peek(imported_fqn).unwrap_or(null)
+    if sym != null
+        c.mark_used(sym)
     return sym
 
 fn gen_param_named(gen_params: List<|Ast_node$@|>$@, name: U8[]): Ast_node$@? //<

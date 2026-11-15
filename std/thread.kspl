@@ -33,14 +33,17 @@ extern fn kspl_atomic_load(ptr: Sz$@): Sz
 extern fn kspl_atomic_store(ptr: Sz$@, val: Sz)
 extern fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
 extern fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
+extern fn kspl_atomic_add_relaxed(ptr: Sz$@, delta: Sz): Sz
+extern fn kspl_atomic_load_relaxed(ptr: Sz$@): Sz
 
 // How many threads `spawn` started that `free` has not waited for yet. `sys.set_env` reads it,
 // since the C library does not order a change of the environment against a thread reading it.
 // **No visibility mark**: std's own files read it, and nothing outside std.
+// It is a count that orders nothing, so its operations are relaxed (`std/mem.kspl` says why).
 priv $running: Sz = 0
 
 fn threads_running(): Sz //< the threads started and not yet waited for, at this moment
-    return kspl_atomic_load(running@)
+    return kspl_atomic_load_relaxed(running@)
 
 priv fn require_handle(h: I64, err: Thread_error): I64!Thread_error //<
     //< Throws err when h, the handle an OS create call returned, is 0 (a failure)
@@ -64,9 +67,13 @@ impl Thread: Move_only //< a copy would wait for one OS thread twice
             //< Its result is not read: it returns `null`, and hands a result back through `arg`.
         arg: T$@, //< the argument passed to it; the signature fixes its type, so it cannot mismatch
     ): Thread!Thread_error
+        // Caution: **Count the thread before it starts.** It may call `sys.set_env` at once, and
+        // that must find it counted. A failed start takes the count back.
+        kspl_atomic_add_relaxed(running@, 1)
         spawned: = kspl_thread_spawn(Thread_entry::Void$@::entry, Void$@::arg)
+        if spawned == 0
+            kspl_atomic_add_relaxed(running@, -1)
         h: = require_handle(spawned, .spawn_failed)!
-        kspl_atomic_add(running@, 1)
         return Thread::{ .handle = h }
 
 impl Thread: Manual_free //< `free()` is the one way to end it
@@ -76,7 +83,7 @@ impl Thread: Manual_free //< `free()` is the one way to end it
             return
         kspl_thread_join(r.handle)
         r.handle = 0
-        kspl_atomic_add(running@, -1)
+        kspl_atomic_add_relaxed(running@, -1)
 
 // ============================ Raw_mutex ============================
 priv struct Raw_mutex //< the OS mutex itself (pthread_mutex_t / SRWLOCK)
@@ -220,4 +227,28 @@ impl Atomic_sz: Interior_mutable //< its methods write it through a read-only po
 
     priv fn cell(r: Self@): Sz$@ //< the value as the atomic operations take it
         //< Every access is atomic, so the read-only receiver is cast here, once.
+        return Sz$@::r.value@
+
+// ============================ Counter_sz ============================
+pub struct Counter_sz //< a shared count kept to be read, such as work done; it orders nothing
+    //< Its updates are whole, as an `Atomic_sz`'s are, but **they order no other access**. So a
+    //< count of steps does not hide a race between the threads that add to it: under the race gate,
+    //< an `Atomic_sz` update orders the two threads. Caution: **Never guard data with it**; use an
+    //< `Atomic_sz` or a `Mutex<|T|>` for a flag or a value another thread acts on.
+    priv value: Sz
+
+impl Counter_sz: Interior_mutable //< its methods write it through a read-only pointer
+    pub fn new(initial: Sz): Counter_sz //< creates one holding the initial value
+        return Counter_sz::{ .value = initial }
+
+    pub fn load(r: Self@): Sz //< reads the count without tearing
+        return kspl_atomic_load_relaxed(r.cell())
+
+    pub fn add( //< adds to the count
+        r: Self@,
+        delta: Sz, //< the amount to add
+    )
+        kspl_atomic_add_relaxed(r.cell(), delta)
+
+    priv fn cell(r: Self@): Sz$@ //< the value as the atomic operations take it
         return Sz$@::r.value@

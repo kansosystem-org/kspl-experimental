@@ -24,10 +24,40 @@
  * never ends. It is put back after the fork and before the exec (kspl_child_restore_signals below,
  * called by kspl_proc_start in hosted_spawn.c).
  * ============================================================ */
+#include <errno.h> /* the EPIPE judgement below */
+
+/* Whether a refused write met a closed pipe, from errno and, on Windows, the OS's own code.
+ * **Windows's C library names two of the three pipe codes EINVAL**: ERROR_NO_DATA (232) and
+ * ERROR_PIPE_NOT_CONNECTED (233). Only `_doserrno` keeps the code, while ERROR_BROKEN_PIPE (109)
+ * becomes EPIPE. EPIPE and EINVAL have the same numbers in both C libraries.
+ * It touches no OS and is not static, so std's io_test checks the Windows answers on every OS. */
+KSPL_LINK Bool kspl_closed_pipe_on(I32 err, I32 os_code, Bool windows) {
+    if (err == EPIPE) return 1;
+    if (!windows || err != EINVAL) return 0;
+    return os_code == 109 || os_code == 232 || os_code == 233;
+}
+
+/* errno after a refused write, EPIPE where it met a closed pipe on any OS. */
+static int kspl_write_errno(void) {
+#ifdef _WIN32
+    return kspl_closed_pipe_on(errno, (I32)_doserrno, 1) ? EPIPE : errno;
+#else
+    return errno;
+#endif
+}
+
+/* Why std/io's last write was refused, kept for the check at exit (below).
+ * Caution: **Relaxed atomics, not a plain int.** Two threads' writes can fail at once, and a plain
+ * store would be a data race. The value orders nothing, so relaxed is enough. */
+static int kspl_last_write_errno = 0;
+
+static void kspl_keep_write_errno(void) {
+    __atomic_store_n(&kspl_last_write_errno, kspl_write_errno(), __ATOMIC_RELAXED);
+}
+
 #ifndef _WIN32
 #include <signal.h>
 /* No include after this section is leaned on (the preamble comes first). */
-#include <errno.h> /* the EPIPE judgement below */
 
 /* Caution: **Make it take effect before `main`.** Called from the generated `main`, it would miss
  * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspl). Both join this runtime.
@@ -45,28 +75,23 @@ static void kspl_child_restore_signals(void) {
     signal(SIGPIPE, SIG_DFL);
 }
 
-/* Why std/io's last write was refused, kept for the check at exit (below). */
-static int kspl_last_write_errno = 0;
-
 /* In a library a failed write stays a failure: ending the process is the program's choice. */
 KSPL_LINK void kspl_io_broken_pipe(void) {
-    kspl_last_write_errno = errno;
+    kspl_keep_write_errno();
 #if !defined(KSPL_LIBRARY)
     /* Caution: **Do nothing for anything but EPIPE.** A write also comes out short on a full disk
      * or a removed device. Killing the process there takes away the refusal returned as a
      * value. */
-    if (errno != EPIPE) return;
+    if (kspl_write_errno() != EPIPE) return;
     signal(SIGPIPE, SIG_DFL);
     raise(SIGPIPE);
 #endif
 }
 #else
-#include <errno.h> /* the EPIPE judgement below */
-static int kspl_last_write_errno = 0;
 /* Windows has no SIGPIPE. A write to a closed named pipe merely returns a failure; the reason is
  * kept for the check at exit (below). */
 KSPL_LINK void kspl_io_broken_pipe(void) {
-    kspl_last_write_errno = errno;
+    kspl_keep_write_errno();
 }
 #endif
 
@@ -103,7 +128,8 @@ static void kspl_check_stdout_at_exit(void) {
     /* A write refused earlier left its reason with kspl_io_broken_pipe; this flush has none. That
      * reason may be another stream's, which changes the words of the line, or on Windows where
      * that one was a closed pipe, keeps the line back. */
-    int err = flushed ? kspl_last_write_errno : errno;
+    int err = flushed ? __atomic_load_n(&kspl_last_write_errno, __ATOMIC_RELAXED) :
+        kspl_write_errno();
     if (err == EPIPE) {
         kspl_io_broken_pipe();
         return;

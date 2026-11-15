@@ -33,25 +33,20 @@ fn main()
 priv const RC_SHARED: U8[] =
     """
 import "std/refcount" { Rc }
-import "std/thread" { Atomic_sz, Thread }
+import "std/thread" { Thread }
 
 priv $shared: Rc<|I64|>
 
-extern fn holes_churn(ready: Atomic_sz$@): Void$@
-    _n: = ready.fetch_add(1)
-    $spins: Sz = 0
-    for ready.load() < 2
-        spins += 1
-    for _i in Range.asc(10000)
-        c: = shared.clone()
-        _v: = c.get()$
+extern fn holes_churn(_n: I64$@): Void$@
+    c: = shared
+    _v: = c.get()$
     return null
 
 fn main()
     shared = Rc<|I64|>(7)
-    $ready: = Atomic_sz(0)
-    $t1: = Thread.spawn<|Atomic_sz|>(holes_churn, ready@) catch panic("spawn")
-    $t2: = Thread.spawn<|Atomic_sz|>(holes_churn, ready@) catch panic("spawn")
+    $n: I64 = 0
+    $t1: = Thread.spawn<|I64|>(holes_churn, n@) catch panic("spawn")
+    $t2: = Thread.spawn<|I64|>(holes_churn, n@) catch panic("spawn")
     t1.free()
     t2.free()
 """
@@ -212,7 +207,7 @@ import "std/refcount" { Arc }
 import "std/thread" { Thread }
 
 extern fn holes_bump(a: Arc<|I64|>$@): Void$@
-    mine: = a.clone()
+    mine: = a$
     mine.get()$ += 1
     return null
 
@@ -246,7 +241,7 @@ import "std/refcount" { Rc }
 import "std/thread" { Thread }
 
 extern fn holes_churn(r: Rc<|I64|>$@): Void$@
-    _c: = r.clone()
+    _c: = r$
     return null
 
 fn main()
@@ -375,8 +370,6 @@ fn main()
 const SYNC: Hole[_] = ::{
     Hole::{ .name = "p1_global_inc", .what = "two threads add to one global with no lock",
         .source = GLOBAL_INC, .verdict = .reported, .says = "data race", .spec = "" },
-    Hole::{ .name = "p2_rc_shared", .what = "an `Rc` in a global, cloned from two threads",
-        .source = RC_SHARED, .verdict = .reported, .says = "data race", .spec = "" },
     Hole::{ .name = "p4_list", .what = "one list pushed from two threads", .source = LIST_PUSH,
         .verdict = .reported, .says = "data race", .spec = "" },
     Hole::{ .name = "p8_ptr_after_unlock",
@@ -397,6 +390,9 @@ const SYNC: Hole[_] = ::{
     Hole::{ .name = "p14_arc_holds_rc",
         .what = "an `Arc` whose value holds an `Rc`, handed to `spawn`", .source = ARC_HOLDS_RC,
         .verdict = .refused, .says = "cannot hand", .spec = "" },
+    Hole::{ .name = "p2_rc_shared", .what = "an `Rc` in a global, which two threads copy",
+        .source = RC_SHARED, .verdict = .refused, .says = "cannot be a global of type",
+        .spec = "" },
     Hole::{ .name = "p2b_rc_arg", .what = "an `Rc` handed to `spawn`", .source = RC_ARG,
         .verdict = .refused, .says = "cannot hand", .spec = "" },
     Hole::{ .name = "p7_mutex_rc_clone", .what = "a `Mutex` around an `Rc`, handed to `spawn`",

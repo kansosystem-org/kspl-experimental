@@ -176,6 +176,7 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 * **The threads spin briefly before they sleep** (`SPIN`), since a model asks for products a few microseconds apart. Waking a sleeping thread took about 55 microseconds a product; spinning, a split takes about 9.
 * **A second caller while the pool is busy computes alone**, with the same result, a little later. So two threads that each run a model never wait on each other.
 * **`parallel.set_threads(n)` caps the threads one product uses, at most the CPU count.** A program whose own threads already keep every CPU busy sets 1.
+* Caution: **The pool's threads run to the program's end, so `sys.set_env` and `sys.unset_env` stop the program after the first product that used them.** std refuses to change the environment while a thread it started runs ("The environment changes only while no spawned thread runs" in [`../../../std/docs/DESIGN-system.md`](../../../std/docs/DESIGN-system.md#the-environment-changes-only-while-no-spawned-thread-runs)). Set the environment before the first product, or call `parallel.set_threads(1)` first, so that no thread starts.
 
 The race gate runs ksai's unit tests, so the pool runs under ThreadSanitizer there.
 

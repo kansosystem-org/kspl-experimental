@@ -352,10 +352,11 @@ onmessage = (e) => {
   }
 
   // Marks a cell whose formula calls the document's own functions: a corner, and a tooltip that
-  // names them (`table.js`, after the notes, whose tooltip it adds to).
-  ks.ownMark = (wrap, list) => {
+  // names them (`dress` in `table.js`, after the notes, whose tooltip it adds to). Only the cells
+  // `only(row, column)` names are marked.
+  ks.ownMark = (wrap, list, only) => {
     for (const [r, c, names] of list || []) {
-      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      const el = r >= 0 && only(r, c) && ks.table.cellAt(wrap, r, c);
       if (!el) continue;
       el.classList.add("uses-own");
       el.dataset.own = names.join(" ");

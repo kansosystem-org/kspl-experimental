@@ -74,7 +74,7 @@ flowchart BT
 | `model/` | The document: blocks, inline nodes, tables, and what a column or a cell carries (a look, a format, a colour rule, choices, groups) | `base` |
 | `calc/` | A formula, the values it calculates, and the calculation of every table | `base` `model` |
 | `syntax/` | The reader and the writer of the `.ksmd` source, clauses and inline markup among them | the three above |
-| `files/` | How a path leads to a file, the workspace on disk, what a page fetched, the assembled view of includes, and image headers | the four above |
+| `files/` | How a path leads to a file, what a page fetched, the assembled view of includes, and image headers | the four above |
 | `edit/` | The editor: table edits, styled text, units of blocks, undo and redo, and every action | the four below `files/`; never `files/` |
 | `port/` | Where ksmd meets the outside. `web/` is the editing page: the wasm bridge, the view, and the page's scripts and style. `wasm*.kspl` and `own_build.kspl` build the page's wasm and a person's own functions. `table_writer.kspl` writes `calc/functions_table.kspl`. `desktop/` holds the file icon | all of the above |
 | `tests/` | The tests of the package's inside | all of the above |
@@ -119,7 +119,6 @@ flowchart BT
 | [syntax/settings.kspl](syntax/settings.kspl) | The document's own settings: the `:::document` clause, read, checked and written back |
 | [syntax/writer.kspl](syntax/writer.kspl) | Saves the model as canonical source |
 | [files/files.kspl](files/files.kspl) | Which paths are refused by their text alone, and `Files`, where a document's files are read from |
-| [files/workspace.kspl](files/workspace.kspl) | The workspace on disk: the refusal of links, and reading and saving one source |
 | [files/fetched.kspl](files/fetched.kspl) | The files a page fetched through the local server, and the ones it still lacks |
 | [files/assemble.kspl](files/assemble.kspl) | The assembled view: each included file in place, with where each block came from |
 | [files/image.kspl](files/image.kspl) | An image's format and size, read from its header |

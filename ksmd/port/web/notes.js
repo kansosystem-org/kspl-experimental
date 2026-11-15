@@ -6,12 +6,12 @@
 "use strict";
 
 function ksmdNotes(ks) {
-  // Marks the cells of a rendered table that hold a note.
-  function mark(wrap, notes) {
+  // Marks the cells of a rendered table that hold a note, of those `only(row, column)` names.
+  function mark(wrap, notes, only) {
     wrap.notes = new Map();
     for (const [r, c, text] of notes) {
       wrap.notes.set(`${r} ${c}`, text);
-      const el = wrap.querySelector(`[data-r="${r}"][data-c="${c}"]`);
+      const el = only(r, c) && ks.table.cellAt(wrap, r, c);
       if (!el) continue;
       el.classList.add("has-note");
       el.title = `Note: ${text}`;

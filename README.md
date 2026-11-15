@@ -161,11 +161,6 @@ A document’s name identifies its kind: `TUTORIAL-` teaches, `HOWTO-` gives tas
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
-| [`docs/TUTORIAL-programming-language.md`](docs/TUTORIAL-programming-language.md) | The language one step at a time, through one program the gates run | Whoever is learning KSPL; start here after the quick start |
-| [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md) | After the quick start: arguments, an executable, several files, VS Code | Whoever writes KSPL and has `ksplc` |
-| [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) | The language specification | Whoever writes KSPL and needs the exact rule |
 | [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](ksagent/docs/TUTORIAL-ask-about-your-files.md) | Asking questions about a folder of Word, Excel and text files, with a model on your own computer | Whoever wants answers from their own documents, with the sources checked |
-| [`docs/HOWTO-build.md`](docs/HOWTO-build.md) | Building `ksplc` from source, the tests, and the environment for each platform | Whoever has no prebuilt `ksplc`, and whoever changes Kanso; both need a C compiler and Make |
-| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | Building from source, the gates, and the rules for changing Kanso | Whoever is about to change Kanso |
-| [`docs/README.md`](docs/README.md) | Every document that belongs to no single package, and who each is for | Whoever looks for a document not listed here |
+| [`docs/README.md`](docs/README.md) | Every document that belongs to no single package, and who each is for: the tutorial, the language specification, building from source and changing Kanso | Whoever writes KSPL, builds it or changes Kanso |
 | Each package's `README.md` | That package's entry point, linked from its row in "Repository layout" above | Whoever uses or changes that package |

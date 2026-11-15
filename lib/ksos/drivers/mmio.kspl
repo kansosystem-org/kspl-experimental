@@ -44,14 +44,20 @@ enum Driver_error //< why a driver's call did not take effect
     no_answer //< a device on a bus did not acknowledge (an I2C NACK)
     not_found //< what was looked up is absent (a ROM routine, a device)
     out_of_range //< an address or a length lies outside what the device holds or takes
-    full //< there is no room to take it now; nothing was queued
 
-fn wait(addr: U32, mask: U32, want_nonzero: Bool): Void!Driver_error //<
-    //< Waits until (the value read at addr & mask) is non-zero or zero, as want_nonzero asks
-    //< With want_nonzero=true it waits for the bit to be set, with false for it to be cleared.
+fn wait(addr: U32, mask: U32, want_set: Bool): Void!Driver_error //<
+    //< Waits until every bit of mask reads set (want_set=true) or every one reads clear (false)
     //< After poll_timeout_iters it gives up with `timed_out`.
+    //< Caution: **Every bit, not any.** A mask of two blocks (`RESET_DONE`) must wait for both; a
+    //< wait that ends at the first lets a write reach the other while it is still in reset.
     $i: Sz = 0
-    for ((read32(addr) & mask) != 0) != want_nonzero
+    for !reached(read32(addr), mask, want_set)
         i += 1
         if i >= POLL_TIMEOUT_ITERS
             throw .timed_out
+
+fn reached(value: U32, mask: U32, want_set: Bool): Bool //< whether `wait` ends on value
+    //< It is a function of its own so that a host test can check it without a register.
+    if want_set
+        return (value & mask) == mask
+    return (value & mask) == 0

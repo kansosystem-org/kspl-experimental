@@ -122,6 +122,36 @@ KSPL_LINK Bool kspl_win_line_for(const U8 *argv_buf, Sz argv_buf_len, I32 argc, 
     return kspl_win_build_cmdline(argv_buf, argv_buf_len, argc, (char *)cmd, (int)cmd_cap);
 }
 
+/* How a program name is looked up on Windows, and how PATH splits there. They touch no OS either,
+ * so std/tests/subproc_test.kspl checks them on every OS. */
+/* Whether a name is bare, to be looked up (no `\`, `/` or drive colon in it). */
+KSPL_LINK Bool kspl_win_is_bare(const U8 *name) {
+    return strpbrk((const char *)name, "\\/:") == NULL;
+}
+
+/* Copies the PATH entry at p into dir without its quotes, and returns where the next one starts
+ * (NULL after the last). *dlen is 0 for an entry too long to keep, which is then skipped.
+ * Caution: **A `;` inside quotes belongs to the entry** (`"C:\a;b"`). So the entry ends at the
+ * first `;` outside quotes. Split at the first `;`, a quoted entry is cut in two, and neither half
+ * names the folder. It takes UTF-16 units, as Windows's wchar_t holds them. */
+KSPL_LINK const U16 *kspl_win_path_entry(const U16 *p, U16 *dir, Sz cap, Sz *dlen) {
+    Sz n = 0;
+    Bool quoted = false, fits = true;
+    for (; *p != 0 && (quoted || *p != (U16)';'); p++) {
+        if (*p == (U16)'"') quoted = !quoted;
+        else if (n + 1 < cap) dir[n++] = *p;
+        else fits = false;
+    }
+    *dlen = fits ? n : 0;
+    return *p == (U16)';' ? p + 1 : NULL;
+}
+
+/* Whether a program path with a directory part is relative to the working directory: it starts
+ * with neither a separator (rooted) nor a drive (`C:`). */
+KSPL_LINK Bool kspl_win_is_cwd_relative(const U8 *name) {
+    return name[0] != '\\' && name[0] != '/' && strchr((const char *)name, ':') == NULL;
+}
+
 #ifndef _WIN32
 #include <fcntl.h> /* open / O_*. No include after this section is leaned on */
 #include <pthread.h>
@@ -307,6 +337,12 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
         kspl_spawn_give();
         goto fail;
     }
+    sigset_t sig_old;
+    sigemptyset(&sig_old);
+    if (group) {
+        kspl_group_take_signals();
+        kspl_group_block_signals(&sig_old);
+    }
     fflush(stdout);
     fflush(stderr);
     pid_t pid = fork();
@@ -322,6 +358,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
             done = moved;
         }
         kspl_child_restore_signals();
+        if (group) kspl_group_child_restore(&sig_old);
         if (group && setpgid(0, 0) != 0) kspl_child_fail(done);
         if (pipe_in && kspl_child_onto(in_p[0], 0) < 0) kspl_child_fail(done);
         if (pipe_out && kspl_child_onto(out_p[1], 1) < 0) kspl_child_fail(done);
@@ -353,15 +390,20 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     kspl_spawn_give();
     free(argv_arr);
     argv_arr = NULL;
-    if (pid < 0) goto fail;
+    if (pid < 0) {
+        if (group) pthread_sigmask(SIG_SETMASK, &sig_old, NULL);
+        goto fail;
+    }
     /* exec_p's write end closes when the child execs; a byte on it says the child failed first. */
     close(exec_p[1]);
     exec_p[1] = -1;
     {
         char why;
         ssize_t got;
-        /* Held from here, so a signal passed on reaches it from its exec on. */
+        /* Held from here, so a signal passed on reaches it from its exec on. A signal that came
+         * since the fork waited on the mask, and is taken now, with the child held. */
         int held = !group || kspl_group_swap(0, pid);
+        if (group) pthread_sigmask(SIG_SETMASK, &sig_old, NULL);
         while ((got = read(exec_p[0], &why, 1)) < 0 && errno == EINTR) {}
         if (got > 0 || !held) {
             kspl_start_error = got > 0 ? (I32)(unsigned char)why : -1;

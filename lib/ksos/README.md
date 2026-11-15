@@ -51,7 +51,7 @@ The table maps each RTOS word to everyday words and to the name in the code. Tas
 | a mutex | a lock only one task holds at a time | `Mutex` (`lib/ksos/kernel/sync.kspl`) |
 | priority inheritance | A waiting task raises the lock holder's priority | `Mutex` (`lib/ksos/kernel/sync.kspl`) |
 | an event flag | waits on an AND/OR of several bits | `Event` (`lib/ksos/kernel/sync.kspl`) |
-| tickless idle | with nothing to do, moves **logical** time to the next delay's expiry | the fallback inside `pick_next` |
+| tickless idle | with nothing to do and no tick running, moves **logical** time to the next delay's expiry | the fallback inside `pick_next` |
 | a port | the part per architecture: context switching, the timer, interrupt control | `ksos_port_*` |
 | an interrupt handler (ISR, interrupt service routine) | Code that interrupts a task to handle a hardware event | `ksos_port_in_isr()` tells it apart |
 | a critical section | Code that runs with interrupts disabled | `irq_save()` / `irq_restore(state)` |
@@ -80,7 +80,7 @@ Read from the bottom of the dependencies up, so each file's prerequisites come f
 ### Tasks and scheduling: `lib/ksos/kernel/task.kspl`
 
 - `Task.create(stack, entry, arg, prio, name): Bool` fills the receiving task (`tcb.create(...)`) on a stack slice such as `U8$[]::stack_a`. Larger `prio` values mean higher priority; 0 is the idle task's. At its cap of 32 tasks it returns `false`.
-- `start_scheduler()` runs the tasks until all end or one calls `stop_scheduler()`. `run_single_task(tcb, stack, entry, name, on_idle)` runs one task for `ksos_main`, then loops on `on_idle`.
+- `start_scheduler()` runs the tasks until all end or one calls `stop_scheduler()`. `run_single_task(tcb, stack, entry, name, on_idle, tick_reload)` runs one task for `ksos_main` under a tick, which checks its stack canary, then loops on `on_idle`.
 - `Task.yield()`, `Task.delay(ticks)` and `Task.delay_until(wake_tick)` give way; ticks are logical time. `Task.suspend()`, `Task.resume()` and `Task.delete()` act on another task.
 - `irq_save()` and `irq_restore(state)` disable and restore interrupts around a critical section.
 - A *canary* at the lowest stack address, checked by every `schedule()`, turns an overflow into the panic `ksos: stack overflow detected`.
@@ -129,7 +129,9 @@ One demo per feature. The POSIX ones need no special tools:
 | `lib/ksos/demo/posix/delay_until_demo.kspl` | `make ksos-delay-until` | a period with no drift, via `Task.delay_until` |
 | `lib/ksos/demo/posix/lifecycle_demo.kspl` | `make ksos-lifecycle` | `Task.suspend`/`Task.resume`/`Task.delete` |
 | `lib/ksos/demo/posix/panic_demo.kspl stack-overflow` | `make ksos-stack-overflow` | the canary catching a stack overflow |
+| `lib/ksos/demo/posix/panic_demo.kspl stack-overflow-single` | `make ksos-stack-overflow-single` | the tick catching a damaged canary in a single task that never yields |
 | `lib/ksos/demo/posix/isr_signal_demo.kspl` | `make ksos-isr` | `Queue<\|T\|>.try_send` from an ISR (SIGUSR1 stands in for the interrupt) |
+| `lib/ksos/demo/posix/isr_timeout_demo.kspl` | `make ksos-isr-timeout` | With a tick running, `take_for` waits in real time while idle, and takes an interrupt's give |
 | `lib/ksos/demo/posix/sleep_demo.kspl` | `make ksos-sleep` | With every task waiting on an interrupt, CPU time shows the scheduler sleeps |
 | `lib/ksos/demo/posix/task_manager_demo.kspl` | `make ksos-task-manager` | Heap-allocated tasks and queues, and `Task.cpu_percent` following each task's load |
 | `lib/ksos/demo/posix/kernel_check.kspl` | `make ksos-kernel-check` | Wake order, suspension and deletion while waiting, lent priority taken back, the task limit |

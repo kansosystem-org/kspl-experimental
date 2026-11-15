@@ -7,6 +7,7 @@
 // save is never answered, or answered late; lines ksagent
 // refuses; an answer ksagent could not record; and an ask file past its cap. The browser and its
 // driver are ksmd's (`ksmd/tests/browser/`).
+// A real input method is not driven: Enter during a Japanese composition is checked by review only.
 // Usage: node tools/tests/chat_page.mjs <browser> <ksagent_chat.exe> <work folder>
 import { spawn, spawnSync } from "child_process";
 import fs from "fs";

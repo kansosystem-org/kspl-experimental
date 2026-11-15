@@ -147,3 +147,90 @@ fn main()
   defer $_t5: = Thread.spawn<|Arc<|I64|>|>(ok_shared, ok@) catch panic("spawn")
   $n: I64 = 0
   defer $_t6: = Thread.spawn<|I64|>(ok_plain, n@) catch panic("spawn")
+// ==== case global_refuses_one_thread_count
+//< A global whose type reaches an `Rc` or a `Weak_rc` is refused
+//< A top-level `$` variable, a `const` and a C variable declared with `extern` alike: every
+//< thread can reach a global. The walk is spawn's: fields, elements and what a pointer points
+//< at. The message names the types on the way. An `Arc<|I64|>` global passes.
+// EXPECT: 'direct' cannot be a global of type 'std.refcount.Rc<|I64|>': every thread can reach a global, and an 'Rc' or a 'Weak_rc' has a count only one thread may change
+// EXPECT: 'held' cannot be a global of type 'global_refuses_one_thread_count.Holder': every thread can reach a global, and it holds an 'Rc' or a 'Weak_rc' ('global_refuses_one_thread_count.Holder' > 'std.refcount.Weak_rc<|I64|>')
+// EXPECT: 'many' cannot be a global of type 'std.ds.List<|std.refcount.Rc<|I64|>|>'
+// EXPECT: 'through' cannot be a global of type 'global_refuses_one_thread_count.Boxed$@': every thread can reach a global, and it holds an 'Rc' or a 'Weak_rc' ('global_refuses_one_thread_count.Boxed$@' > 'global_refuses_one_thread_count.Boxed' > 'std.refcount.Rc<|I64|>')
+// EXPECT: 'NOWHERE' cannot be a global of type 'std.refcount.Rc<|I64|>$@'
+// EXPECT: use 'Arc<|Mutex<|T|>|>' where the value is written. Or keep the 'Rc' in a local of 'main'
+// EXPECT: 'from_c' cannot be a global of type 'std.refcount.Rc<|I64|>$@'
+// EXPECT: Finished with 6 error(s)
+import "std/ds" { List }
+import "std/refcount" { Arc, Rc, Weak_rc }
+
+struct Holder
+  w: Weak_rc<|I64|>
+
+struct Boxed
+  id: I32
+  r: Rc<|I64|>
+
+$direct: Rc<|I64|>
+$held: Holder
+$many: List<|Rc<|I64|>|>
+$through: Boxed$@
+const NOWHERE: Rc<|I64|>$@ = null
+extern from_c: Rc<|I64|>$@
+$fine: Arc<|I64|>
+
+fn main()
+  return
+// ==== case spawn_refuses_rc_in_trait_value
+//< `Thread.spawn<|T|>` refuses a `T` whose trait value can hold an `Rc`
+//< A trait value holds the address of a value of a type converted to it. Where any such type
+//< reaches an `Rc`, the walk does too. The conversion here comes in a later function than the
+//< spawn, so the check waits for every body. A trait whose types hold no `Rc` passes.
+// EXPECT: cannot hand 'spawn_refuses_rc_in_trait_value.Wrap' to another thread: it holds an 'Rc' or a 'Weak_rc' ('spawn_refuses_rc_in_trait_value.Wrap' > 'spawn_refuses_rc_in_trait_value.Bumper' > 'spawn_refuses_rc_in_trait_value.Holder@' > 'spawn_refuses_rc_in_trait_value.Holder' > 'std.refcount.Rc<|I64|>')
+// EXPECT: Finished with 1 error(s)
+import "std/refcount" { Rc }
+import "std/thread" { Thread }
+
+trait Bumper
+  fn bump(r: Self): I64
+
+trait Teller
+  fn tell(r: Self): I64
+
+struct Holder
+  rc: Rc<|I64|>
+
+struct Plain
+  n: I64
+
+impl Holder: Bumper
+  fn bump(r: Self@): I64
+    return r.rc.get()$
+
+impl Plain: Teller
+  fn tell(r: Self@): I64
+    return r.n
+
+struct Wrap
+  b: Bumper
+
+struct Fine
+  t: Teller
+
+extern fn work(arg: Wrap$@): Void$@
+  _n: = arg.b.bump()
+  return null
+
+extern fn fine(arg: Fine$@): Void$@
+  _n: = arg.t.tell()
+  return null
+
+priv fn start(w: Wrap$@, f: Fine$@)
+  defer $_t1: = Thread.spawn<|Wrap|>(work, w) catch panic("spawn")
+  defer $_t2: = Thread.spawn<|Fine|>(fine, f) catch panic("spawn")
+
+fn main()
+  h: = Holder::{ .rc = Rc<|I64|>(1) }
+  $w: = Wrap::{ .b = h@ }
+  p: = Plain::{ .n = 2 }
+  $f: = Fine::{ .t = p@ }
+  start(w@, f@)

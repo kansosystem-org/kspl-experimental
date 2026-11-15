@@ -8,7 +8,7 @@
 // ==========================================
 import "std/ds" { Hashable, List, Map }
 import "std/mem" + { alloc, dealloc }
-import "std/refcount" { Rc, Weak_rc }
+import "std/refcount" { Arc, Rc, Weak_rc }
 import "std/str" { Str_builder }
 import "std/verdict"
 
@@ -889,3 +889,19 @@ fn test_arc_unbound_value_released()
     assert(arc_field_of_temporary_body(), "a managed field taken off a temporary stays alive")
     assert(mem.heap_used_bytes() == b1, "and is released with its new owner")
     verdict.pass("each value nobody bound was released once, and a field taken off one kept alive.")
+
+// An `Arc` may stand in a global, where an `Rc` is refused (the case
+// global_refuses_one_thread_count in ksplc/tests/negative/thread.kspl).
+priv $arc_global: Arc<|I32|>
+
+fn test_arc_in_a_global()
+    verdict.start("[ARC] an Arc in a global holds its value, and a copy outlives it test...")
+    b0: = mem.heap_used_bytes()
+    arc_global = Arc<|I32|>(21)
+    $copy: = arc_global
+    assert(copy.get()$ == 21, "a copy of the global reads its value")
+    arc_global = Arc<|I32|>.empty()
+    assert(copy.get()$ == 21, "the copy keeps the value once the global lets it go")
+    copy = Arc<|I32|>.empty()
+    assert(mem.heap_used_bytes() == b0, "the last owner gone, the value is released")
+    verdict.pass("an Arc global was set, copied and emptied, and its value released once.")

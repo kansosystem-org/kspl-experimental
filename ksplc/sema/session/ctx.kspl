@@ -41,6 +41,9 @@ struct Jump_label
 
 struct Fn_ctx
     name: U8[]
+    decl: Ast_node$@ //<
+        //< The declaration of the function whose body is analysed; null outside a body
+        //< `mark_used` reads it, so a function that only calls itself stays unused ([W0206]).
     ret_id: I32
     impl_name: U8[]
     fallback_type: I32
@@ -113,6 +116,10 @@ enum Bodies //< which function bodies an analysis checks
         //< `name` lives in a body that mentions it, or in an instance of a generic that does
         //< (`wanted_names` in `../body/infer.kspl`).
 
+struct Spawn_arg //< a `Thread.spawn<|T|>`'s T, checked again once every body is checked
+    type_id: I32 //< the T
+    site: Ast_node$@ //< the call, where a refusal is reported
+
 struct Sema_ctx
     symtab: sema_type_scope.Symbol_table$@
     fn_ctx: Fn_ctx
@@ -143,6 +150,8 @@ struct Sema_ctx
     scratch: Str_builder //< the one builder in which a diagnostic's message is assembled
     pointees: Map<|U8[], Pointee_param|>$@ //<
         //< [I0602] each `T$@` parameter by where it is written; null until lint meets one
+    spawn_args: List<|Spawn_arg|>$@ //<
+        //< The spawns whose T passed when its call was checked (`refuse_one_thread_spawns`)
     priv in_generic_instance: Bool //<
         //< Whether a monomorphized template body is being analysed
         //< That is while sema/body/infer.kspl's pending queue is drained. Read it only through
@@ -236,6 +245,7 @@ impl Sema_ctx
             .source_map = source_map,
             .jump_stack = base_core.arena.create(List<|Jump_label|>(null)),
             .scratch = Str_builder(),
+            .spawn_args = List<|Spawn_arg|>.create(base_core.arena),
             .layout = Layout_state::{
                 .memo = base_core.arena
                     .create(Map<|I32, Type_layout|>.new_with_cap(64, null)),
@@ -284,6 +294,12 @@ impl Sema_ctx
 
     fn clear_scratch(r: Self$@): Str_builder$@
         return r.scratch.clear()
+    fn mark_used(r: Self$@, sym: Sema_symbol$@) //<
+        //< It marks `sym` used, unless the body analysed now is `sym`'s own
+        //< **A call to itself is no use** ([W0206]): a private function that only calls itself is
+        //< dead all the same.
+        if sym.node == null || sym.node != r.fn_ctx.decl
+            sym.flags.is_used = true
     fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
         //< A type's mangled name, written into scratch: valid until scratch is used again
         return r.env.mangled_into(type_id, r.scratch@)

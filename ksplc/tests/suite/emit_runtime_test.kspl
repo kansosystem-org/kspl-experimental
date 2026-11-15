@@ -148,17 +148,18 @@ priv fn target_probe(dir: U8[], arena: Arena$@): verdict.Run_out //<
         arena.text().s("--target=\{LOCK_FREE_TRIPLES[2]\}").take(), "-std=c99", "-c", probe_c, "-o",
         fs.join(dir, "target_probe.o", arena) })
 
-priv const ATOMIC_NAMES: U8[][4] = ::{ "kspl_atomic_add(", "kspl_atomic_cas(", "kspl_atomic_load(",
-    "kspl_atomic_store(" } //< the four atomics the runtime defines, as they open a definition
+priv const ATOMIC_NAMES: U8[][7] = ::{ "kspl_atomic_add(", "kspl_atomic_cas(", "kspl_atomic_load(",
+    "kspl_atomic_store(", "kspl_atomic_add_relaxed(", "kspl_atomic_cas_relaxed(",
+    "kspl_atomic_load_relaxed(" } //< the atomics the runtime defines, as they open a definition
 
 priv const LOCK_FREE_TRIPLES: U8[][5] = ::{ "x86_64-pc-windows-msvc", "x86_64-w64-mingw32",
     "x86_64-pc-linux-gnu", "x86_64-apple-darwin", "thumbv7m-none-eabi" } //<
-        //< Targets whose pointer atomics are lock-free, so the runtime defines the four itself
+        //< Targets whose pointer atomics are lock-free, so the runtime defines the atomics itself
         //< **MSVC is the one that matters.** Clang there defines only `__CLANG_ATOMIC_*`. A guard
-        //< asking `__GCC_ATOMIC_*` alone left the four out, seen only at the link on Windows.
+        //< asking `__GCC_ATOMIC_*` alone left them out, seen only at the link on Windows.
 
 priv const NO_LOCK_FREE_TRIPLE: U8[] = "thumbv6m-none-eabi" //<
-    //< Armv6-M, with no LDREX/STREX: the four are left to the port layer
+    //< Armv6-M, with no LDREX/STREX: the atomics are left out, and the port layer defines four
     //< Caution: **Always test it**: a guard that lets everything through passes the list above.
 
 priv fn atomics_block(body: U8[], arena: Arena$@): U8[] //<

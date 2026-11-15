@@ -43,6 +43,149 @@ function ksmdTable(ks) {
     return el;
   }
 
+  // The cell at a row and a column of a rendered table, or null; row -1 is the names. It is
+  // found by its place, as a search of every cell for each one made a table of many rows slow.
+  // The rows are kept in a list when the table is drawn, as a table's rows stay until it is drawn
+  // again: the browser counts its own list again after each change to the table.
+  function cellAt(wrap, row, column) {
+    const tr = row < 0 ? wrap.grid.tHead.rows[1] : wrap.trs[row];
+    return (tr && tr.cells[column + 1]) || null;
+  }
+
+  // The parts of a table's JSON that say what one cell holds or how it looks. A change to any
+  // other part but the columns' widths, as a row, a column, a height, a filter, a choice or a
+  // rule, draws the whole table again (`update`).
+  const CELL_PARTS = ["rows", "looks", "notes", "own", "err", "nt", "links"];
+  function frame(b) {
+    const rest = { ...b };
+    for (const part of [...CELL_PARTS, "w"]) delete rest[part];
+    return JSON.stringify(rest);
+  }
+  const every = () => true;
+
+  // Gives the cells of a rendered table that `only(row, column)` names what its JSON `b` says of
+  // them, each over the one before: their looks and links, their choices' and rules' colours,
+  // their notes, why an error stands, typed text that looks like a number, and their own
+  // functions. Drawing a table dresses every cell, and a change to some cells those alone.
+  function dress(wrap, b, only) {
+    for (const [r, c, color, fill, size, align, wraps] of b.looks) {
+      const el = only(r, c) && cellAt(wrap, r, c);
+      if (!el) continue;
+      if (color) el.style.color = color;
+      if (fill) el.style.backgroundColor = fill;
+      if (color || fill) el.classList.add("looked");
+      if (size) el.style.fontSize = `${size / 2}pt`;
+      // A value centred across columns is laid out with its run (`spill` in `sizes.js`).
+      if (align === "across") el.classList.add("across");
+      else if (align) el.style.textAlign = align;
+      if (wraps) el.classList.add("wrap");
+    }
+    // A cell's link holds its text, and opens as a prose link does: on Ctrl+press, or a press
+    // while read-only (`view.js`). A plain press chooses the cell, so it can be edited.
+    wrap.links = new Map();
+    for (const [r, c, to] of b.links) {
+      if (r < 0) continue;
+      wrap.links.set(`${r} ${c}`, to);
+      const el = only(r, c) && cellAt(wrap, r, c);
+      if (!el) continue;
+      const a = document.createElement("a");
+      a.href = to;
+      a.className = "cell-link";
+      a.title = `${to}\nCtrl+click opens it in a new tab`;
+      a.append(...el.childNodes);
+      el.appendChild(a);
+    }
+    // A choice's colours first, so a column's rule stands over them.
+    ks.choices.mark(wrap, b.ch, b.rc, only);
+    ks.rules.paint(wrap, b.ru, only);
+    ks.notes.mark(wrap, b.notes, only);
+    // Why each error stands, as the calculator says it: on the cell's tooltip, after any note,
+    // and on the status bar while the cell is chosen (`status.js`).
+    for (const [r, c, why] of b.err) {
+      const el = only(r, c) && cellAt(wrap, r, c);
+      if (!el) continue;
+      el.dataset.why = `${el.textContent}: ${why}`;
+      el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
+    }
+    // Typed text that looks like a number, in a column of numbers (`number_as_text` in
+    // `ksmd/edit/typed.kspl`): a corner marks it, and the tooltip and the status bar say why, as
+    // for an error. Retyping it as a plain number makes it one, as one step of undo.
+    for (const [r, c] of b.nt) {
+      const el = only(r, c) && cellAt(wrap, r, c);
+      if (!el) continue;
+      el.classList.add("number-text");
+      el.dataset.why = `${el.textContent}: ${NUMBER_TEXT}`;
+      el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
+    }
+    if (ks.ownMark) ks.ownMark(wrap, b.own, only);
+  }
+
+  // Whether two cells of a table's JSON hold the same value, shown the same way.
+  const sameValue = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]));
+
+  // Each entry of one of a table's lists of cells, as `looks` or `err`, by its cell's key.
+  function byCell(list, key) {
+    const out = new Map();
+    for (const entry of list) out.set(key(entry[0], entry[1]), JSON.stringify(entry));
+    return out;
+  }
+
+  // Shows a table's new JSON `b` in its rendered `wrap` by drawing again only the cells whose
+  // value or look changed, and the columns' widths where they changed; false where more changed,
+  // and the table must be drawn again. **The other cells keep their elements**, so an edit in a
+  // table of thousands of rows costs what its changed cells cost, not the whole table's drawing.
+  // A value can reach more than its own cell: a colour scale's cells are drawn again, and so is
+  // the whole row a choice colours. A filter and the merged columns are shown again, and the
+  // columns and rows the cells stand in are laid out again (`refit` in `sizes.js`).
+  function update(wrap, b) {
+    if (!wrap.drawnAs || frame(b) !== wrap.frame) return false;
+    const was = wrap.drawnAs;
+    const columns = b.names.length;
+    const key = (r, c) => (r + 1) * columns + c;
+    const changed = new Set();
+    b.rows.forEach((row, r) => row.forEach((v, c) => {
+      if (!sameValue(v, was.rows[r][c])) changed.add(key(r, c));
+    }));
+    for (const part of CELL_PARTS.slice(1)) {
+      const before = byCell(was[part], key);
+      const now = byCell(b[part], key);
+      for (const [k, entry] of now) if (before.get(k) !== entry) changed.add(k);
+      for (const k of before.keys()) if (!now.has(k)) changed.add(k);
+    }
+    // A name's look or note: the names row is drawn with the table.
+    for (const k of changed) if (k < columns) return false;
+    const widths = JSON.stringify(b.w) !== JSON.stringify(was.w);
+    wrap.drawnAs = b;
+    wrap.values = b.rows;
+    wrap.widths = b.w;
+    if (changed.size === 0 && !widths) return true;
+    const rowOf = (k) => Math.floor(k / columns) - 1;
+    if (b.rc >= 0) {
+      for (const k of [...changed]) {
+        if (k % columns !== b.rc) continue;
+        for (let c = 0; c < columns; c++) changed.add(key(rowOf(k), c));
+      }
+    }
+    const scaled = b.ru.flatMap((rule, c) => (rule && rule[0] === "scale" ? [c] : []));
+    if (scaled.length > 0 && [...changed].some((k) => scaled.includes(k % columns))) {
+      for (let r = 0; r < b.rows.length; r++) for (const c of scaled) changed.add(key(r, c));
+    }
+    const cells = [];
+    for (const k of changed) {
+      const r = rowOf(k);
+      const c = k % columns;
+      const el = cellEl("td", r, c, b.rows[r][c]);
+      // A hidden group's column, as `drawColumns` in `outline.js` marks it.
+      if (wrap.foldedColumns[c]) el.classList.add("col-folded");
+      cellAt(wrap, r, c).replaceWith(el);
+      cells.push(el);
+    }
+    dress(wrap, b, (r, c) => changed.has(key(r, c)));
+    ks.filter.apply(wrap);
+    ks.sizes.refit(wrap, cells, widths);
+    return true;
+  }
+
   function render(b) {
     const wrap = ks.el("div", "b table");
     wrap.contentEditable = "false";
@@ -112,57 +255,13 @@ function ksmdTable(ks) {
     });
     table.appendChild(body);
     wrap.appendChild(table);
-    for (const [r, c, color, fill, size, align, wraps] of b.looks) {
-      const el = wrap.querySelector(`[data-r="${r}"][data-c="${c}"]`);
-      if (!el) continue;
-      if (color) el.style.color = color;
-      if (fill) el.style.backgroundColor = fill;
-      if (color || fill) el.classList.add("looked");
-      if (size) el.style.fontSize = `${size / 2}pt`;
-      // A value centred across columns is laid out with its run (`spill` in `sizes.js`).
-      if (align === "across") el.classList.add("across");
-      else if (align) el.style.textAlign = align;
-      if (wraps) el.classList.add("wrap");
-    }
-    // A cell's link holds its text, and opens as a prose link does: on Ctrl+press, or a press
-    // while read-only (`view.js`). A plain press chooses the cell, so it can be edited.
-    wrap.links = new Map();
-    for (const [r, c, to] of b.links) {
-      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-      if (!el) continue;
-      wrap.links.set(`${r} ${c}`, to);
-      const a = document.createElement("a");
-      a.href = to;
-      a.className = "cell-link";
-      a.title = `${to}\nCtrl+click opens it in a new tab`;
-      a.append(...el.childNodes);
-      el.appendChild(a);
-    }
-    // A choice's colours first, so a column's rule stands over them.
-    ks.choices.mark(wrap, b.ch, b.rc);
-    ks.rules.paint(wrap, b.ru);
+    wrap.grid = table;
+    wrap.trs = Array.from(body.rows);
+    wrap.drawnAs = b;
+    wrap.frame = frame(b);
+    dress(wrap, b, every);
     ks.outline.draw(wrap, b.g);
     ks.outline.drawColumns(wrap, b.cg);
-    ks.notes.mark(wrap, b.notes);
-    // Why each error stands, as the calculator says it: on the cell's tooltip, after any note,
-    // and on the status bar while the cell is chosen (`status.js`).
-    for (const [r, c, why] of b.err) {
-      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-      if (!el) continue;
-      el.dataset.why = `${el.textContent}: ${why}`;
-      el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
-    }
-    // Typed text that looks like a number, in a column of numbers (`number_as_text` in
-    // `ksmd/edit/typed.kspl`): a corner marks it, and the tooltip and the status bar say why, as
-    // for an error. Retyping it as a plain number makes it one, as one step of undo.
-    for (const [r, c] of b.nt) {
-      const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-      if (!el) continue;
-      el.classList.add("number-text");
-      el.dataset.why = `${el.textContent}: ${NUMBER_TEXT}`;
-      el.title = el.title ? `${el.title}\n${el.dataset.why}` : el.dataset.why;
-    }
-    if (ks.ownMark) ks.ownMark(wrap, b.own);
     ks.filter.apply(wrap);
     ks.sizes.decorate(wrap, b.h);
     return wrap;
@@ -483,6 +582,8 @@ function ksmdTable(ks) {
 
   ks.table = {
     render,
+    update,
+    cellAt,
     take,
     // Undoes a formula's closing quote right after it was added, and opens the cell with the
     // formula as typed; false where the editor's own undo acts (`unclose` in `cellbox.js`).
@@ -504,6 +605,8 @@ function ksmdTable(ks) {
     // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
     step: (block, row, dr) => stepRow(block, row, dr),
     pin,
+    // Pins the first columns again on the next frame, after a change of a table's widths.
+    pinSoon: pinLater,
     leftOut,
     // Sets the chosen cell, { block, row, column }, or null for none.
     chooseCell,
@@ -521,7 +624,10 @@ function ksmdTable(ks) {
     // document: { block, row, column, text } or null.
     pending: box.pending,
     // Whether an event belongs to a cell's own input rather than to the document.
-    owns: (target) => !!(target && target.closest && target.closest(".table")),
+    // Caution: **A cell drawn again in place leaves the old one outside any table** (`update`).
+    // An action taken by an earlier listener of the same event can do so, as Enter in a cell's
+    // box or a paste on a chosen cell. The event still belongs to the cell, or the text took it too.
+    owns: (target) => !!(target && target.closest && target.closest(".table, td[data-r], th[data-r]")),
     // Keeps the open cell open while the focus is elsewhere, or lets it be taken again on a blur.
     hold: box.hold,
     // Opens a cell with text typed in and part of it selected, as AutoSum leaves its formula.

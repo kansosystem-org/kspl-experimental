@@ -6,7 +6,7 @@
 //< start nothing"**. So the log leads to no cause.
 //< Note: Which Windows jobs run the gates is "What each platform runs" in `docs/SPEC-gates.md`.
 import "std/chars" // `trim_spaces`
-import "std/ds" { List }
+import "std/ds" { List, Map }
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -174,14 +174,49 @@ priv fn win_hostile(path: U8[], arena: Arena$@): Bool //<
             return true
     return false
 
+priv fn case_clashes(paths: List<|U8[]|>, arena: Arena$@): List<|U8[]|> //<
+    //< The pairs of paths, or of their folders, that differ only in letter case
+    //< **Windows and macOS open both spellings as one file**, so a checkout there writes one over
+    //< the other, and nothing says so. A folder spelled two ways splits nothing there, but the
+    //< same files then have two names on Linux.
+    //< Caution: **Only ASCII case is compared.** Windows and macOS fold `Ä` and `ä` too; the
+    //< repository holds no such name today.
+    $bad: = List<|U8[]|>(arena)
+    $seen: = Map<|U8[], U8[]|>(arena)
+    for path in paths
+        for end in Range.asc(path.len + 1)
+            if end == 0 || (end < path.len && path[end] != '/')
+                continue
+            spelled: = path.sub(0, end)
+            key: = spelled.to_lower_ascii(arena)
+            if first: = seen.get(key)
+                if !first.equals(spelled)
+                    bad
+                        .push(arena.text().s(first).s(" and ").s(spelled).take())
+                    seen.set(key, spelled)
+            else
+                seen.set(key, spelled)
+    return bad
+
+priv fn has_case_clash(lines: U8[], arena: Arena$@): Bool //<
+    //< `case_clashes` over paths given one to a line, for the samples
+    //< Caution: **Keep the judging in `case_clashes`** (the reason is at `cuts_by_hand`).
+    $paths: = List<|U8[]|>(arena)
+    for line in lines.lines(arena)
+        paths.push(line)
+    return case_clashes(paths, arena).len > 0
+
 priv fn check_win_paths(arena: Arena$@)
     $bad: = List<|U8[]|>(arena)
     files: = harness.tracked()
     for rel in files
         if win_hostile(rel, arena)
             bad.push(arena.dup_str(rel))
+    for clash in case_clashes(files, arena)
+        bad
+            .push(arena.text().s(clash).s(": they differ only in letter case").take())
     verdict.check_list("a path git is looking at can be made on Windows", files.len, "paths", bad@,
-        "`<>:\"|?*`, a control character, a trailing dot or space, a device's name: none come out")
+        "no `<>:\"|?*`, control character, trailing dot or space, device name or case-only twin")
 
 // ==========================================
 // The judgments above show they can fire **"no hits" cannot be told apart from green.**
@@ -216,9 +251,18 @@ priv const WIN_PATH_SAMPLES: Sample[_] = ::{ Sample::{ .text =
     Sample::{ .text = "ksmd/port/web/page.html", .hits = false },
     Sample::{ .text = "tests/support/conventions_win.kspl", .hits = false } }
 
+// **One sample is a list of paths, one to a line.** A path that only shares a folder of the same
+// spelling is no hit.
+priv const CASE_CLASH_SAMPLES: Sample[_] = ::{ Sample::{ .text = "docs/Notes.txt\ndocs/notes.txt",
+    .hits = true }, Sample::{ .text = "Docs/a.txt\ndocs/b.txt", .hits = true },
+    Sample::{ .text = "std/str.kspl\nstd/strfmt.kspl", .hits = false },
+    Sample::{ .text = "std/str.kspl\nstd/str.kspl", .hits = false } }
+
 priv fn check_win_fires(arena: Arena$@)
     scan.check_samples("the judgment of a path Windows cannot make can fire",
         Sample[]::WIN_PATH_SAMPLES, "win_path_samples", win_hostile, arena)
+    scan.check_samples("the judgment of names that differ only in case can fire",
+        Sample[]::CASE_CLASH_SAMPLES, "case_clash_samples", has_case_clash, arena)
     scan.check_samples("the judgment of cutting into lines by hand can fire",
         Sample[]::LINE_CUT_SAMPLES, "line_cut_samples", cuts_by_hand, arena)
     scan.check_samples("the judgment of the check before starting can fire",

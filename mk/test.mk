@@ -131,7 +131,7 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
 # `EXTRA_SUITES` comes from a clone's own make files (the root `Makefile`). **The compiler's copy
 # (`extract-ksplc-core` / `extract-ksplc-rest`) runs apart from the other packages'**: each copy
-# rebuilds itself and takes a share of the suites. **std's copy (`extract-std`) runs apart from the
+# takes a share of the suites, and the core share's copy also rebuilds itself. **std's copy (`extract-std`) runs apart from the
 # rest of the packages' (`extract-rest`)**: each runs its packages one after another, so together
 # they would be the longest wait of a half.
 SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-std fmt-tree docref c-warnings docsnippet \
@@ -362,14 +362,15 @@ simd_prog := FILENAME == src && index($$0, "`make test-simd` sees this sum") { s
       print "RESULT: SOME FAILED (1) -> the sum at " src ":" l " no longer auto-vectorizes at -O3" } \
     if (bad) exit 1; \
     print "  -> " n " loops in " src " auto-vectorize at -O3" }
-# $(call simd_check,<program>,<the .kspl its loops are in>,<stem>): builds it, then checks them
+# $(call simd_check,<program>,<the .kspl files its loops are in>,<stem>): builds it once, then
+# checks each file's loops against that one record.
 define simd_check
 	./$(STAGE1_EXE) $(1) $(TMP_DIR)/$(3).c
 	@$(CC) -std=c99 -O3 -fno-strict-aliasing -g -c $(TMP_DIR)/$(3).c -o $(TMP_DIR)/$(3).o -fsave-optimization-record \
 		-foptimization-record-file=$(LOG_DIR)/$(3).yaml \
 		-foptimization-record-passes='loop-vectorize|slp-vectorizer'
-	@awk -v src=$(2) -v gen=$(TMP_DIR)/$(3).c -v rec=$(LOG_DIR)/$(3).yaml '$(simd_prog)' \
-		$(2) $(TMP_DIR)/$(3).c $(LOG_DIR)/$(3).yaml
+	@for src in $(2); do awk -v src=$$src -v gen=$(TMP_DIR)/$(3).c -v rec=$(LOG_DIR)/$(3).yaml '$(simd_prog)' \
+		$$src $(TMP_DIR)/$(3).c $(LOG_DIR)/$(3).yaml || exit 1; done
 endef
 
 ## Gates|test-simd|Whether the loops that should vectorize appear vectorized in the optimization record
@@ -384,9 +385,7 @@ test-simd: $(STAGE1_EXE)
 		echo "RESULT: SOME FAILED (1) -> the check passed a record in which no loop vectorized"; \
 		exit 1; fi
 	@echo "# a record in which no loop vectorized is refused"
-	$(call simd_check,lib/ksai/benches/bench_qwen.kspl,lib/ksai/nn.kspl,simd_check_nn)
-	$(call simd_check,lib/ksai/benches/bench_quant.kspl,lib/ksai/quant.kspl,simd_check_quant)
-	$(call simd_check,lib/ksai/benches/bench_qwen.kspl,lib/ksai/delta_net.kspl,simd_check_delta)
+	$(call simd_check,lib/ksai/benches/bench_qwen.kspl,lib/ksai/nn.kspl lib/ksai/quant.kspl lib/ksai/delta_net.kspl,simd_check_qwen)
 	@# Caution: **Do not remove this line.** It is the gate's verdict (`Gate.verdict`).
 	@echo "RESULT: ALL PASS (every loop naming make test-simd auto-vectorizes at -O3)"
 

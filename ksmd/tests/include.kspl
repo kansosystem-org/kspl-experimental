@@ -4,14 +4,13 @@
 //< fails, those checks are reported as skipped.
 import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES }
 import "ksmd/edit/editor_blocks" // `insert_functions`, `insert_include`
-import "ksmd/files/assemble" { Assembly, NONE, assemble, assemble_loaded }
+import "ksmd/files/assemble" { Assembly, NONE, assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
 import "ksmd/files/files" { Loaded, Refusal, load, moved_path, resolve_text }
-import "ksmd/files/workspace" { Workspace }
 import "ksmd/model/model" { Block_kind, Inline }
 import "ksmd/port/web/save_as"
 import "ksmd/syntax/writer"
-import "ksmd/tests/support" { opened }
+import "ksmd/tests/support" { Folder, opened }
 import "ksmd/tests/support"
 import "std/chars"
 import "std/ds"
@@ -33,7 +32,6 @@ fn run()
     include_inserted()
     cycles()
     path_refusals()
-    links()
     depth_limit()
     block_limit()
     byte_limit()
@@ -221,38 +219,6 @@ priv fn path_refusals() //< each written path names its refusal; `..` may climb 
         a.entries.get(a.entries.len - 2).opens != NONE, view_of(a@, arena))
     scratch.remove_tree(root, arena)
 
-priv fn links() //< a link along a path is refused, whether it leads out of the root or not
-    defer arena: = Arena(64 * 1024)
-    root: = workspace(arena)
-    outside: = workspace(arena)
-    make_file(outside, "secret.ksmd", "%ksmd 2\n\nSecret.\n", arena)
-    make_file(root, "ok.ksmd", "%ksmd 2\n\nInside.\n", arena)
-    make_file(root, "top.ksmd",
-        "%ksmd 2\n\n:::include path=\"leak.ksmd\"\n:::\n\n:::include \
-            path=\"away/secret.ksmd\"\n:::\n\n:::include path=\"alias.ksmd\"\n:::\n\n:::image \
-            src=\"away/pic.png\" alt=\"\"\n:::\n", arena)
-    away: = absolute(outside, arena)
-    secret: = fs.join(away, "secret.ksmd", arena)
-    inside: = fs.join(absolute(root, arena), "ok.ksmd", arena)
-    made: =
-        scratch.made_link(secret, fs.join(root, "leak.ksmd", arena), arena) &&
-        scratch.made_link(away, fs.join(root, "away", arena), arena) &&
-        scratch.made_link(inside, fs.join(root, "alias.ksmd", arena), arena)
-    if !made
-        verdict.skip_check("a link along an include or image path is refused",
-            "a link cannot be made with `ln -s` in this environment")
-    else
-        a: = assembled(root, "top.ksmd", arena)
-        $ok: = a.problems.len == 4 && a.instances.len == 1
-        for i in Range.asc(a.problems.len)
-            ok =
-                ok &&
-                a.problems.get(i).at.message.equals(Refusal.link.message())
-        verdict.check("a link along an include or image path is refused", ok,
-            view_of(a@, arena))
-    scratch.remove_tree(root, arena)
-    scratch.remove_tree(outside, arena)
-
 priv fn depth_limit() //< sixteen files on the stack open; a seventeenth is refused at its clause
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
@@ -352,25 +318,23 @@ priv fn examples() //< the stage 1 example assembles in place, and nothing in it
         a.entries.get(a.instances.get(1).clause).target.equals("notes.ksmd"),
         view_of(a@, arena))
 
-priv fn saves() //< a save writes its own source alone, and the next view shows it
+priv fn saves() //< a source saves its own text alone, and the next view shows it
+    //< The page sends that text, and the local server writes it; both are tested where they run.
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     names: U8[][2] = ::{ "overview.ksmd", "notes.ksmd" }
     for name in names
         make_file(root, name, read(fs.join("examples", name, arena), arena), arena)
-    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
-    parent: = read(fs.join(root, "overview.ksmd", arena), arena)
+    ws: = Folder::{ .root = root }
     notes: = loaded(ws@, "notes.ksmd", arena)
     edit_text(notes, 1, "Changed text.")
-    ws.save("notes.ksmd", notes.doc@, arena) catch
-        verdict.check("an included source saves alone", false, "the save was refused")
     edited: =
         "%ksmd 2\n\n## Purchasing note\n\nChanged text.\n\nContact \
             [purchasing](mailto:purchasing@example.org) before ordering.\n"
-    notes_now: = read(fs.join(root, "notes.ksmd", arena), arena)
-    parent_now: = read(fs.join(root, "overview.ksmd", arena), arena)
-    verdict.check("saving an included source changes that file and not its parent",
-        notes_now.equals(edited) && parent_now.equals(parent), notes_now)
+    notes_now: = support.written(notes.doc@, arena)
+    verdict.check("an included source saves its own text alone", notes_now.equals(edited),
+        notes_now)
+    make_file(root, "notes.ksmd", notes_now, arena)
     a: = assembled(root, "overview.ksmd", arena)
     shown: = a.instances.get(1).first + 1
     holder: = a.source_of(shown)
@@ -380,33 +344,22 @@ priv fn saves() //< a save writes its own source alone, and the next view shows 
         view_of(a@, arena))
     top: = loaded(ws@, "overview.ksmd", arena)
     edit_text(top, top.doc.blocks.get(4).first, "Totals are calculated above.")
-    ws.save("overview.ksmd", top.doc@, arena) catch
-        verdict.check("a parent saves alone", false, "the save was refused")
-    saved: = read(fs.join(root, "overview.ksmd", arena), arena)
-    verdict.check("a parent's save keeps its include as a clause and leaves the included file",
+    saved: = support.written(top.doc@, arena)
+    verdict.check("a parent's save keeps its include as a clause, without the included text",
         saved.ends_with("\nTotals are calculated above.\n\n:::include path=\"notes.ksmd\"\n:::\n")
-        && !saved.find_str("Changed text.").is_some() &&
-        read(fs.join(root, "notes.ksmd", arena), arena).ends_with("before ordering.\n"), saved)
-    names_now: = snapshot_names(root, arena)
-    verdict.check("a save leaves no other file in the folder",
-        names_now.equals("notes.ksmd overview.ksmd"), names_now)
-    $refused: = false
-    ws.save("../escape.ksmd", top.doc@, arena) catch why
-        refused = why == Refusal.outside
-    verdict.check("a save to a path outside the workspace is refused",
-        refused && !fs.exists(fs.join(root, "../escape.ksmd", arena)), "")
+        && !saved.find_str("Changed text.").is_some(), saved)
     scratch.remove_tree(root, arena)
 
 priv fn top_failures() //< only the opened document's own failure fails the assembly
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     make_file(root, "bad.ksmd", "%ksmd 3\n", arena)
-    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    ws: = Folder::{ .root = root }
     verdict.check("a missing document is refused",
         refused_with(ws@, "missing.ksmd", .missing, arena), "")
     verdict.check("a document outside the workspace is refused",
         refused_with(ws@, "../x.ksmd", .outside, arena), "")
-    _view: = assemble(ws@, "bad.ksmd", arena) catch e
+    _view: = ws.assemble("bad.ksmd", arena) catch e
         $where: = ""
         switch e
         case .invalid(at)
@@ -435,37 +388,15 @@ priv fn tables_per_source() //< a table name belongs to its file, so repeats dec
         part.doc.tables.get(0).name.equals("budget"), view_of(a@, arena))
     scratch.remove_tree(root, arena)
 
-priv fn text_rules() //< the rules a page applies by text agree with a folder's, links aside
+priv fn text_rules() //< a `..` climbs from the folder of the file that holds the path
     defer arena: = Arena(64 * 1024)
-    root: = workspace(arena)
-    make_file(root, "ok.ksmd", "%ksmd 2\n", arena)
-    make_file(root, "sub/inner.ksmd", "%ksmd 2\n", arena)
-    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
-    written: U8[][15] = ::{ "/etc/passwd", "C:/x.ksmd", "https://example.org/a.ksmd",
-        "//server/share/a.ksmd", "a\\b.ksmd", "./ok.ksmd", "a//ok.ksmd", "x/../ok.ksmd", "..",
-        "../../ok.ksmd", "ok.ksmd.", "CON.ksmd", "a:b.ksmd", "../ok.ksmd", "inner.ksmd" }
-    $differs: U8[] = ""
-    for w in written
-        by_text: = by_text_from("sub", w, arena)
-        on_disk: = on_disk_from(ws@, "sub", w, arena)
-        if differs.len == 0 && !by_text.equals(on_disk)
-            differs = arena.text().s(w).s(": ").s(by_text).s(" against ").s(on_disk).take()
-    verdict.check("every refusal a path's text earns is the same in a page and on disk",
-        differs.len == 0, differs)
     verdict.check("a '..' climbs from the holding file's folder, by text alone",
         by_text_from("a/b", "../c.ksmd", arena).equals("a/c.ksmd") &&
         by_text_from("", "x/y.ksmd", arena).equals("x/y.ksmd"), "")
-    scratch.remove_tree(root, arena)
 
 priv fn by_text_from(folder: U8[], written: U8[], arena: Arena$@): U8[] //<
     //< The path `resolve_text` gives, or its refusal's message
     path: = resolve_text(folder, written, arena) catch why
-        return arena.text().s("refused: ").s(why.message()).take()
-    return path
-
-priv fn on_disk_from(ws: Workspace@, folder: U8[], written: U8[], arena: Arena$@): U8[] //<
-    //< The path a folder on disk gives, or its refusal's message
-    path: = ws.resolve(folder, written, arena) catch why
         return arena.text().s("refused: ").s(why.message()).take()
     return path
 
@@ -482,7 +413,7 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
     make_file(root, "parts/two.ksmd", "%ksmd 2\n\n:::include path=\"../shared.ksmd\"\n:::\n", arena)
     make_file(root, "shared.ksmd", "%ksmd 2\n\nShared.\n", arena)
     make_file(root, "parts/cat.png", "only whether it stands is asked", arena)
-    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    ws: = Folder::{ .root = root }
     disk: = assembled(root, "top.ksmd", arena)
     top: = loaded(ws@, "top.ksmd", arena)
     $f: = Fetched(arena)
@@ -508,7 +439,7 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
         arena.text().s("\{rounds\} rounds, \{asked\} asked").take())
     scratch.remove_tree(root, arena)
 
-priv fn answer(ws: Workspace@, f: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
+priv fn answer(ws: Folder@, f: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
     //< What the local server answers for one path, held as the page holds it
     if image
         ws.check(path, arena) catch why
@@ -527,7 +458,7 @@ priv fn problems_of(a: Assembly@, arena: Arena$@): U8[] //< each problem's place
         b.s(problem_of(a, i, arena)).c(' ').s(a.problems.get(i).at.message).c('\n')
     return arena.dup_str(b.slice())
 
-priv fn leftover_part() //< a part left by an interrupted save is neither read nor removed
+priv fn leftover_part() //< a part left by an interrupted save is not read
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     part: = "notes.ksmd.0123456789abcdef.part"
@@ -538,15 +469,6 @@ priv fn leftover_part() //< a part left by an interrupted save is neither read n
     verdict.check("a leftover part beside a source changes nothing in the view",
         a.problems.len == 0 && a.sources.len == 2 &&
         view_of(a@, arena).equals("top.ksmd:9>notes notes.ksmd:9"), view_of(a@, arena))
-    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
-    notes: = loaded(ws@, "notes.ksmd", arena)
-    edit_text(notes, 0, "Saved text.")
-    ws.save("notes.ksmd", notes.doc@, arena) catch
-        verdict.check("a source beside a leftover part saves", false, "the save was refused")
-    verdict.check("a save replaces its source and leaves the leftover part as it was",
-        read(fs.join(root, "notes.ksmd", arena), arena).equals("%ksmd 2\n\nSaved text.\n") &&
-        read(fs.join(root, part, arena), arena).equals("%ksmd 2\n\nNew text, cut sh"),
-        snapshot_names(root, arena))
     scratch.remove_tree(root, arena)
 
 // ==========================================
@@ -569,10 +491,6 @@ priv fn read(path: U8[], arena: Arena$@): U8[] //< a file's bytes; empty where i
     return io.read_file(path, arena) catch
         return ""
 
-priv fn absolute(path: U8[], arena: Arena$@): U8[]
-    return fs.absolute(path, arena) catch
-        panic("the working folder cannot be read")
-
 priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly that many bytes
     //< One code block, its lines at most 1,000 bytes long
     defer $b: = Str_builder()
@@ -588,17 +506,17 @@ priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly tha
     return arena.dup_str(b.slice())
 
 priv fn assembled(root: U8[], top: U8[], arena: Arena$@): Assembly //< a refusal stops the run
-    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
-    return assemble(ws@, top, arena) catch
+    ws: = Folder::{ .root = root }
+    return ws.assemble(top, arena) catch
         panic("the opened document itself was refused")
 
-priv fn loaded(ws: Workspace@, path: U8[], arena: Arena$@): Loaded //< a refusal stops the run
+priv fn loaded(ws: Folder@, path: U8[], arena: Arena$@): Loaded //< a refusal stops the run
     return load(ws, path, arena) catch
         panic("a source to edit was refused")
 
-priv fn refused_with(ws: Workspace@, path: U8[], want: Refusal, arena: Arena$@): Bool //<
+priv fn refused_with(ws: Folder@, path: U8[], want: Refusal, arena: Arena$@): Bool //<
     //< Whether opening the document fails with that refusal
-    _view: = assemble(ws, path, arena) catch e
+    _view: = ws.assemble(path, arena) catch e
         switch e
         case .refused(why)
             return why == want
@@ -649,16 +567,6 @@ priv fn snapshot(root: U8[], arena: Arena$@): U8[] //< every file's path and byt
         return ""
     for path in files
         b.s(path).c('\n').s(read(path, arena)).c('\n')
-    return arena.dup_str(b.slice())
-
-priv fn snapshot_names(root: U8[], arena: Arena$@): U8[] //< every file's name, in order
-    defer $b: = Str_builder()
-    files: = fs.walk_files(root, fs.skip_none, arena) catch
-        return ""
-    for i in Range.asc(files.len)
-        if i > 0
-            b.c(' ')
-        b.s(sys.get_file_name(files.get(i)))
     return arena.dup_str(b.slice())
 
 priv fn moved_paths() //< a source saved in another folder writes its paths to name the same files

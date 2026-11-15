@@ -303,9 +303,9 @@ priv fn lookup_def_node(c: Sema_ctx$@, path: Ast_node$@): Ast_node$@? //<
     //< In another order, a different thing with the same name is found.
     written: = c.read_written_type(path)
     name: = written.spelled
-    sym: = c.symtab.resolve(name).unwrap_or(null)
+    sym: = c.symtab.peek(name).unwrap_or(null)
     if sym != null
-        sym.flags.is_used = true
+        c.mark_used(sym)
         return .some(sym.node) if sym.node != null else .none
     // A member's template is keyed under its type's FQN (`app.Box.get`).
     fqn: =
@@ -375,6 +375,11 @@ impl Ast_node
         $own_name: Ast_node$@ = null
         if r.kind_id == .k_decl_fn || r.kind_id == .k_decl_fn_proto
             own_name = r.find_child(.k_identifier)
+        // **Nor is a call to itself a use** (`mark_used`): its body is walked as the function's.
+        saved_decl: = c.fn_ctx.decl
+        if r.kind_id == .k_decl_fn
+            c.fn_ctx.decl = r
+        defer c.fn_ctx.decl = saved_decl
         for item in r.children
             if item != own_name
                 item.resolve_all_types(c) catch {}

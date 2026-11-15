@@ -333,7 +333,7 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
         member_node.def_node = hit.def
         node.def_node = hit.def
         if hit.sym != null
-            hit.sym.flags.is_used = true
+            c.mark_used(hit.sym)
             check_method_import(c, member_node, hit.sym, recv_id)
             c.check_visibility_and_mark_used(hit.sym, node)
         type_id = hit.type_id
@@ -386,13 +386,14 @@ priv struct Method_hit //< the method a `.name` finds
 priv fn find_method(c: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, search_type: U8[],
     name: U8[]): Method_hit //<
         //< The method `name` of the type: from its method table, a generic template, or by its FQN
+        //< **It marks nothing used**: the caller does, once the call is allowed (`mark_used`).
         //< A method whose return type is `Unknown` (a typo in a type argument) still counts.
         //< Treated as absent, it would add a false "no such method" after the real error. Unknown
         //< silences later errors.
     $hit: = Method_hit::{ .def = null, .sym = null,
         .type_id = I32::sema_type_env.Builtin_type_id.unknown }
     if s_entry != null
-        if sym: = s_entry.get_method(name)
+        if sym: = s_entry.peek_method(name)
             hit = Method_hit::{ .def = sym.node, .sym = sym, .type_id = sym.type_id }
             if hit.def != null
                 return hit
@@ -412,7 +413,7 @@ priv fn find_method(c: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, se
             hit.sym.flags.is_method = true
             hit.sym.apply_attributes()
             return hit
-    sym: = c.symtab.resolve(full_m_name).unwrap_or(null)
+    sym: = c.symtab.peek(full_m_name).unwrap_or(null)
     if sym != null && sym.type_id != 0
         return Method_hit::{ .def = sym.node, .sym = sym, .type_id = sym.type_id }
     return hit

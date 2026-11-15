@@ -42,36 +42,16 @@ fn test_chat35_template_tokens(arena: Arena$@) //<
     //< Each case renders to llama.cpp's text for it, every marker by its ID
     //< The cases and their texts come from llama.cpp's Jinja formatter on Qwen3.5's template
     //< (`lib/ksai/tools/make_qwen35_fixtures.py`), the arguments given as `llama-server` gives
-    //< them. Decoding the IDs gives the text back, and each marker stands as its ID.
+    //< them.
     verdict.start("[chat_server] Qwen3.5's template renders llama.cpp's text, markers by their IDs")
     $e: = chat.engine_over(model_bytes, arena)
-    doc: = json.parse(cases_text, arena) catch panic("the template cases are JSON")
-    cases: = doc.val.arr_list(arena)
-    assert(cases.len > 0, "the template cases are read")
-    for i in Range.asc(cases.len)
-        defer $body: = Str_builder()
-        cases.get(i).get("request").dump(body@)
-        want: = cases.get(i).get("prompt").as_str().unwrap_or("")
-        got: = prompt_of(body.slice(), e@, arena)
-        text: = e.tok.decode(got, arena)
-        if !text.equals(want)
-            panic(arena.text().s("case \{i\} renders otherwise:\n").s(text)
-                .s("\n--- llama.cpp renders:\n").s(want).take())
-        $in_messages: Sz = 0
-        messages: = cases.get(i).get("request").get("messages").arr_list(arena)
-        for k in Range.asc(messages.len)
-            m: = messages.get(k)
-            if !m.get("role").as_str().unwrap_or("").equals("assistant")
-                in_messages += chat
-                    .control_texts_in(m.get("content").as_str().unwrap_or(""))
-        assert(chat.marks_in(got, e.marks) + in_messages == chat.mark_texts_in(want),
-            arena.text().s("case \{i\}: a marker is written as text").take())
+    n: = chat.check_cases(cases_text, e@, prompt_of, arena)
     g: = Gguf.parse(model_bytes, arena) catch panic("the tiny Qwen3.5 model is read")
     own: = g.text("tokenizer.chat_template") catch ""
     assert(template35.matches(own) && !template35.matches(own.sub(0, own.len - 1)) &&
         !template.matches(own), "the file's template is matched by its hash, and no other is")
     verdict
-        .pass(arena.text().s("\{cases.len\} conversations, with tools, thinking and without, as ")
+        .pass(arena.text().s("\{n\} conversations, with tools, thinking and without, as ")
         .s("llama.cpp renders them").take())
 
 fn test_chat35_template_refusals(arena: Arena$@) //<
@@ -237,11 +217,7 @@ fn test_chat35_server_http(chat_exe: U8[], work: U8[], arena: Arena$@) //<
     dir: = chat.chat_dir(work, arena)
     path: = fs.join(dir, MODEL_FILE, arena)
     io.write_file(path, model_bytes) catch panic("the tiny Qwen3.5 model can be written")
-    $child: = http_test.started(chat_exe, path, arena)
-    port: = http_test.port_of(child@, arena)
-    fault: = asked_all(port, arena)
-    child.kill()
-    assert(fault.len == 0, arena.dup_str(fault))
+    http_test.check_served(chat_exe, path, asked_all, arena)
     verdict.pass("a request with thinking and one without get whole answers")
 
 priv fn asked_all(port: I32, arena: Arena$@): U8[] //< empty where each answer is right

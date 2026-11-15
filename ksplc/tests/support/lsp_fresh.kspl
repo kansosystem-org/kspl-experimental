@@ -172,14 +172,8 @@ priv fn all_on(edits: List<|json.Value|>@, text: U8[], arena: Arena$@): Bool //<
 priv const LIB_GONE: U8[] = "fn other(): I32\n    return 2\n" //< `LIB_OLD` without `helper`
 priv fn marks_of(c: jsonrpc_client.Client$@, rel: U8[], arena: Arena$@): I32 //<
     //< How many diagnostics the next publish for `rel` holds; -1 where none came
-    for _k in Range.asc(12)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        got: = msg.val.get("params")
-        if got.get("uri").as_str().unwrap_or("").ends_with(rel)
-            return I32::got.get("diagnostics").arr_list(arena).len
+    if got: = lsp_client.published(c, rel, 12, lsp_client.READ_MS, arena)
+        return I32::got.get("diagnostics").arr_list(arena).len
     return -1
 
 priv fn check_dependent(exe: U8[], arena: Arena$@) //<

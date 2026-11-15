@@ -22,8 +22,7 @@ import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
-import "ksplc/sema/session/ctx" as _sema_session_ctx + { Sema_ctx, Sema_error }
-import "ksplc/sema/type/arc" as _sema_type_arc // `one_thread_count_path`
+import "ksplc/sema/session/ctx" as _sema_session_ctx + { Sema_ctx, Sema_error, Spawn_arg }
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
@@ -162,29 +161,19 @@ priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_
 
 priv const SPAWN_FQN: U8[] = "std.thread.Thread.spawn" //< starts a thread, handing it `arg: T$@`
 
-priv fn refuses_one_thread_count(c: Sema_ctx$@, node: Ast_node$@,
-    fn_tmpl: sema_decl_mono.Fn_instance, inst_args: I32[]): Bool //<
+priv fn refuses_spawn_arg(c: Sema_ctx$@, node: Ast_node$@, fn_tmpl: sema_decl_mono.Fn_instance,
+    inst_args: I32[]): Bool //<
         //< Rejects `Thread.spawn<|T|>` where T reaches an `Rc` or a `Weak_rc`
-        //< Two threads would change a count kept for one: a lost update frees the value while in
-        //< use, or leaks it. **It sees only spawn's argument**, not a global the thread reads, so
-        //< it is a refusal of one sure bug, not a promise that what spawn takes is safe to share.
+        //< A global of such a type is refused at its declaration, by the same check
+        //< (`refuses_one_thread_count` in sema/decl/access.kspl, which says what still passes).
+        //< **A T that passes now is checked again once every body is** (`spawn_args`): it may
+        //< reach a trait value, and a conversion to that trait can come in a later body.
     if !fn_tmpl.template.equals(SPAWN_FQN) || inst_args.len != 1
         return false
-    defer $path: = Str_builder()
-    steps: = c.env.one_thread_count_path(inst_args[0], path@)
-    if steps == 0
-        return false
-    c.clear_scratch().s("cannot hand '\{c.env.display(inst_args[0])\}' to another thread: ")
-    if steps > 1
-        c.scratch.s("it holds an 'Rc' or a 'Weak_rc' (\{path.slice()\}), whose")
-    else
-        c.scratch.s("an 'Rc' or a 'Weak_rc' has a")
-    c.scratch
-        .s(" count only one thread may change. Two threads changing it lose counts, so the value is \
-            freed while in use or never freed. Use 'Arc' in place of 'Rc' and 'Weak_arc' in place \
-            of 'Weak_rc': threads can share their count.")
-    c.err(node, c.scratch.slice())
-    return true
+    if c.refuses_one_thread_count(inst_args[0], .spawn_arg, node)
+        return true
+    c.spawn_args.push(Spawn_arg::{ .type_id = inst_args[0], .site = node })
+    return false
 
 priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
     fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node$@, def_node: Ast_node$@):
@@ -219,7 +208,7 @@ priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
             args_node, is_method_access)
         if inst_args.len == 0 || refuses_fn_name_binding(c, left, args_node, inst_args)
             return I32::sema_type_env.Builtin_type_id.unknown
-    if refuses_one_thread_count(c, node, fn_tmpl, inst_args)
+    if refuses_spawn_arg(c, node, fn_tmpl, inst_args)
         return I32::sema_type_env.Builtin_type_id.unknown
     // The call position is recorded during the instantiation. So a bound violation
     // (`f<|T: some.Trait|>`) is reported here rather than on the template's line
@@ -419,7 +408,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         sym = null
 
     if sym != null
-        sym.flags.is_used = true
+        c.mark_used(sym)
         node.def_node = sym.node
         left.def_node = sym.node
         if left.children.len > 0

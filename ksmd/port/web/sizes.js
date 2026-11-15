@@ -57,34 +57,41 @@ function ksmdSizes(ks) {
     };
   }
 
+  // The font a data cell's text is drawn in: the table's, at the cell's own size where it has one.
+  const cellFont = (td, m) => (td.style.fontSize ? m.font.replace(/\d+(\.\d+)?px/, td.style.fontSize) : m.font);
+
+  // The width of a data cell's text in pixels; the text of its box while it is open. A cell's
+  // text stays until it is drawn again, so its width is kept on it, by its font: a column laid
+  // out again measures only the cells drawn since (`refit`).
+  function cellWidth(td, m) {
+    const input = td.querySelector(".cell-input");
+    if (input) return textWidth(input.value, cellFont(td, m));
+    const font = cellFont(td, m);
+    if (!td.measured || td.measured.font !== font) {
+      td.measured = { font, px: td.textContent === "" ? 0 : textWidth(td.textContent, font) };
+    }
+    return td.measured.px;
+  }
+
   // The width a column's text takes, in characters: its widest value, or its name with the
   // filter's arrow. Rows a filter or a closed group hides count too, so a filter moves no column.
   function textChars(wrap, column, m) {
     let widest = 0;
     const name = wrap.querySelector(`th.name[data-c="${column}"]`);
     if (name) widest = textWidth(wrap.names[column], m.nameFont) + 18;
-    for (const tr of wrap.querySelector("tbody").rows) {
-      const td = tr.cells[column + 1];
-      const input = td.querySelector(".cell-input");
-      const text = input ? input.value : td.textContent;
-      if (text === "") continue;
-      const size = td.style.fontSize;
-      const font = size ? m.font.replace(/\d+(\.\d+)?px/, size) : m.font;
-      widest = Math.max(widest, textWidth(text, font));
-    }
+    for (const tr of wrap.querySelector("tbody").rows) widest = Math.max(widest, cellWidth(tr.cells[column + 1], m));
     return widest / m.ch;
   }
 
-  // Each column's width in pixels as the page shows it, 0 for a column a closed group hides.
-  function shown(wrap, m) {
-    return wrap.names.map((_, c) => {
-      if (wrap.foldedColumns[c]) return 0;
-      const given = wrap.widths[c] || 0;
-      const chars = given > 0 ? given / 10 : clamp(Math.ceil(textChars(wrap, c, m) * 10) / 10,
-        SIZE_FIT_LEAST, SIZE_FIT_MOST);
-      return chars * m.ch + m.pad;
-    });
+  // A column's width in pixels as the page shows it, 0 for a column a closed group hides.
+  function columnPx(wrap, c, m) {
+    if (wrap.foldedColumns[c]) return 0;
+    const given = wrap.widths[c] || 0;
+    const chars = given > 0 ? given / 10 : clamp(Math.ceil(textChars(wrap, c, m) * 10) / 10,
+      SIZE_FIT_LEAST, SIZE_FIT_MOST);
+    return chars * m.ch + m.pad;
   }
+  const shown = (wrap, m) => wrap.names.map((_, c) => columnPx(wrap, c, m));
 
   // The width the row numbers take: their longest number, and the outline of the row groups.
   function firstWidth(wrap, m) {
@@ -123,7 +130,8 @@ function ksmdSizes(ks) {
   }
 
   // Lays a rendered table out: its columns' widths, then which cells cut their text. A table
-  // is laid out once after it is drawn; its widths change only by an action, which draws it anew.
+  // is laid out once after it is drawn; an action that changes only its cells or its widths lays
+  // out what they reach (`refit`).
   function lay(wrap, room) {
     if (wrap.laid || !wrap.isConnected) return;
     wrap.laid = true;
@@ -140,40 +148,66 @@ function ksmdSizes(ks) {
   // column shows `###` instead, as in Excel: cut, 1200 would read as 120.
   // A cell centred across columns shows its value over the run `across` gives it instead.
   function spill(wrap) {
+    for (const tr of wrap.querySelector("tbody").rows) spillRow(wrap, tr);
+  }
+
+  // `spill` for one row.
+  function spillRow(wrap, tr) {
     const hidden = wrap.foldedColumns;
     const m = wrap.metrics;
-    for (const tr of wrap.querySelector("tbody").rows) {
-      unbox(tr);
-      let before = null;
-      for (let c = 0; c < wrap.names.length; c++) {
-        if (hidden[c]) continue;
-        const td = tr.cells[c + 1];
-        const text = td.textContent;
-        if (before) before.classList.toggle("clip", text !== "");
-        const value = td.classList.contains("number") || td.classList.contains("date");
-        td.classList.toggle("clip", value || ["error", "wrap"].some((k) => td.classList.contains(k)));
-        const run = text !== "" && td.classList.contains("across") ? across(wrap, tr, c) : [];
-        const width = [c, ...run].reduce((sum, k) => sum + wrap.px[k], 0) - m.pad;
-        let narrow = false;
-        if (value) {
-          const size = td.style.fontSize;
-          const font = size ? m.font.replace(/\d+(\.\d+)?px/, size) : m.font;
-          narrow = textWidth(text, font) > width + 0.5;
-          td.classList.toggle("narrow", narrow);
-          if (narrow) td.style.setProperty("--cell-size", size || `${m.size}px`);
-        }
-        if (text !== "" && td.classList.contains("across") && !narrow &&
-          !td.querySelector(".cell-input")) {
-          const last = run.length > 0 ? run[run.length - 1] : c;
-          box(td, run.map((k) => tr.cells[k + 1]), width, cutAfter(wrap, tr, last));
-          c = last;
-          before = null;
-          continue;
-        }
-        before = td.classList.contains("clip") ? null : td;
+    unbox(tr);
+    let before = null;
+    for (let c = 0; c < wrap.names.length; c++) {
+      if (hidden[c]) continue;
+      const td = tr.cells[c + 1];
+      const text = td.textContent;
+      if (before) before.classList.toggle("clip", text !== "");
+      const value = td.classList.contains("number") || td.classList.contains("date");
+      td.classList.toggle("clip", value || ["error", "wrap"].some((k) => td.classList.contains(k)));
+      const run = text !== "" && td.classList.contains("across") ? across(wrap, tr, c) : [];
+      const width = [c, ...run].reduce((sum, k) => sum + wrap.px[k], 0) - m.pad;
+      let narrow = false;
+      if (value) {
+        // An open cell shows its box, never `###`.
+        narrow = !td.querySelector(".cell-input") && cellWidth(td, m) > width + 0.5;
+        td.classList.toggle("narrow", narrow);
+        if (narrow) td.style.setProperty("--cell-size", td.style.fontSize || `${m.size}px`);
       }
-      if (before) before.classList.add("clip");
+      if (text !== "" && td.classList.contains("across") && !narrow &&
+        !td.querySelector(".cell-input")) {
+        const last = run.length > 0 ? run[run.length - 1] : c;
+        box(td, run.map((k) => tr.cells[k + 1]), width, cutAfter(wrap, tr, last));
+        c = last;
+        before = null;
+        continue;
+      }
+      before = td.classList.contains("clip") ? null : td;
     }
+    if (before) before.classList.add("clip");
+  }
+
+  // Lays out again what a change to some cells of a table reaches, the cells `cells` drawn anew
+  // in place (`update` in `table.js`); with `widths`, the columns' widths changed too. A cell in
+  // a row with a height gets its box. A column that fits its text and holds one of them is
+  // measured again. Where a width changed, the widths are drawn and every row cuts its text
+  // anew, and the first column is pinned on the next frame. Otherwise only their rows cut their
+  // text anew, and the page reads no layout.
+  function refit(wrap, cells, widths) {
+    for (const td of cells) {
+      if (wrap.heights[Number(td.dataset.r)] > 0) fitBox(td);
+    }
+    if (!wrap.laid) return;
+    const m = wrap.metrics;
+    const columns = widths ? wrap.names.keys() : new Set(cells.map((td) => Number(td.dataset.c)));
+    const px = wrap.px.slice();
+    for (const c of columns) px[c] = columnPx(wrap, c, m);
+    if (px.some((p, c) => p !== wrap.px[c])) {
+      draw(wrap, px, room === null ? printable() : room);
+      spill(wrap);
+      ks.table.pinSoon();
+      return;
+    }
+    for (const tr of new Set(cells.map((td) => td.parentElement))) spillRow(wrap, tr);
   }
 
   // Centre across columns, as Excel's Center Across Selection: the columns after `c` whose cells
@@ -241,12 +275,16 @@ function ksmdSizes(ks) {
       tr.classList.add("sized");
       tr.style.height = `${heights[r]}pt`;
       tr.style.setProperty("--row-height", `${heights[r]}pt`);
-      for (const cell of tr.cells) {
-        const box = ks.el("div", "cell-fit");
-        box.append(...Array.from(cell.childNodes).filter((n) => n !== edge));
-        cell.insertBefore(box, cell.firstChild);
-      }
+      for (const cell of tr.cells) fitBox(cell, edge);
     });
+  }
+
+  // Holds a cell's content, all but a row's edge, in a box as tall as its row, which cuts what is
+  // taller.
+  function fitBox(cell, edge = null) {
+    const box = ks.el("div", "cell-fit");
+    box.append(...Array.from(cell.childNodes).filter((n) => n !== edge));
+    cell.insertBefore(box, cell.firstChild);
   }
 
   // The columns an edge's change reaches: where the chosen cells run through every data row of
@@ -377,7 +415,10 @@ function ksmdSizes(ks) {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       wrap.classList.remove("resizing");
-      if (u.clientX === x0) return draw(wrap, start);
+      // The widths shown while dragging go first. The action draws the new ones, but a width
+      // that rounds to the one the column had changes nothing (`update` in `table.js`).
+      draw(wrap, start);
+      if (u.clientX === x0) return null;
       const chars = clamp(Math.round(((width(u.clientX) - m.pad) / m.ch) * 10) / 10, SIZE_LEAST, SIZE_MOST);
       return setWidths(block, reach(block, false, column), chars);
     };
@@ -456,6 +497,13 @@ function ksmdSizes(ks) {
     return ks.pages.paper().width - parseFloat(doc.paddingLeft) - parseFloat(doc.paddingRight);
   }
 
+  // The room `layAll` read last, which `refit` takes rather than reading the layout; null until
+  // then, and after the window's size or a print changes it.
+  let room = null;
+  for (const e of ["resize", "beforeprint", "afterprint"]) window.addEventListener(e, () => {
+    room = null;
+  });
+
   // A table wider than the paper prints smaller, so all of its columns fit. The status bar says so
   // while the person works in it (`status.js`). Paper leaves out the row numbers, so only the
   // columns count.
@@ -468,7 +516,7 @@ function ksmdSizes(ks) {
   // Lays out every table not yet laid out, then sets each table's print scale for the paper the
   // document names now.
   function layAll() {
-    const room = printable();
+    room = printable();
     for (const wrap of ks.root.querySelectorAll(".b.table")) {
       if (!wrap.laid) lay(wrap, room);
       else scale(wrap, wrap.px.reduce((a, x) => a + x, 0), room);
@@ -486,5 +534,5 @@ function ksmdSizes(ks) {
   ks.handle("column-width", (_, c) => askWidth(c.block), { table: true });
   ks.handle("row-height", (_, c) => askHeight(c.block), { table: true });
 
-  ks.sizes = { decorate, layAll, widen };
+  ks.sizes = { decorate, layAll, widen, refit };
 }

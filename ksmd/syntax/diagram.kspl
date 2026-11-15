@@ -10,7 +10,8 @@
 //< A shape names itself with `id`, and an arrow names the two shapes it joins, so a moved shape
 //< keeps its arrows. Every place is in the diagram's own pixels, inside its size. The writer
 //< writes the shapes first and the arrows after them, as the reader takes them.
-import "ksmd/base/attribute" { Attribute, find, read_attributes }
+import "ksmd/base/attribute" { Attribute, allow, attribute_at, find, pair_of, pair_text,
+    read_attributes }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/base/source" { Diagnostic, Line, Source }
 import "ksmd/model/model" { MAX_BENDS, MAX_FIGURE_TEXT, MAX_FIGURES, MAX_LINKS, MAX_SPOT,
@@ -26,14 +27,12 @@ fn read_diagram(src: Source@, first: Line, attributes: List<|Attribute|>, doc: D
     arena: Arena$@): Sz!Diagnostic //<
         //< Reads the diagram whose clause opens at `first` into `doc`, its block and its entry, and
         //< returns where the line after its closing `:::` starts
-    for a in attributes
-        if !a.name.equals("size") && !a.name.equals("caption") &&
-            !a.name.equals("invisible")
-            throw src.diagnostic(a.offset, "':::diagram' takes only size, caption and invisible")
+    allow(src, attributes, U8[][]::{ "size", "caption", "invisible" },
+        "':::diagram' takes only size, caption and invisible")!
     size_at: = find(attributes, "size") catch
         throw src.diagnostic(first.offset, "':::diagram' needs a size, as in size=\"800,400\"")
     size: =
-        pair_of(src, size_at, MIN_DIAGRAM,
+        pair_of(src, size_at, MIN_DIAGRAM, MAX_SPOT,
         "size is a width and a height from 50 to 20000, as \"800,400\"")!
     $caption: U8[] = ""
     if a: = find(attributes, "caption")
@@ -50,10 +49,7 @@ fn read_diagram(src: Source@, first: Line, attributes: List<|Attribute|>, doc: D
         line: = src.line_at(at)
         if line.text.equals(":::")
             doc.diagrams.push(d)
-            doc.blocks
-                .push(Block::{ .kind = .diagram, .level = 0, .label = "", .text = "",
-                .first = doc.diagrams.len - 1, .count = 1, .offset = first.offset, .align = .none,
-                .note = "", .invisible = false })
+            doc.blocks.push(Block.whole(.diagram, doc.diagrams.len - 1, first.offset))
             return line.next
         word_end: = line.text.find_char(' ').unwrap_or(line.text.len)
         word: = line.text.sub(0, word_end)
@@ -80,10 +76,6 @@ fn read_diagram(src: Source@, first: Line, attributes: List<|Attribute|>, doc: D
                     an arrow or line between two; close the clause with ':::'")
         at = line.next
 
-priv struct Pair
-    x: Sz
-    y: Sz
-
 priv fn figure_kind_of(word: U8[]): Bool //< whether a line's first word names a shape
     for k in U8[][]::{ "box", "diamond", "start", "end", "group", "note" }
         if word.equals(k)
@@ -96,12 +88,8 @@ priv fn link_kind_of(word: U8[]): Bool //< whether a line's first word names an 
 priv fn figure_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, d: Diagram@):
     Figure!Diagnostic //<
         //< One shape's line: `box id="a" at="40,40" size="200,120"`, with text, font, color, fill
-    for a in attrs
-        if !a.name.equals("id") && !a.name.equals("at") && !a.name.equals("size") &&
-            !a.name.equals("text") && !a.name.equals("font") && !a.name.equals("color") &&
-            !a.name.equals("fill")
-            throw src.diagnostic(a.offset,
-                "a shape takes only id, at, size, text, font, color and fill")
+    allow(src, attrs, U8[][]::{ "id", "at", "size", "text", "font", "color", "fill" },
+        "a shape takes only id, at, size, text, font, color and fill")!
     id_at: = find(attrs, "id") catch
         throw src.diagnostic(line.offset, "a shape needs id, at and size")
     if !id_at.quoted || !is_id(id_at.value)
@@ -110,11 +98,13 @@ priv fn figure_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>
     at_at: = find(attrs, "at") catch
         throw src.diagnostic(line.offset, "a shape needs id, at and size")
     place: =
-        pair_of(src, at_at, 0, "a point is two whole numbers from 0 to 20000, as \"40,40\"")!
+        pair_of(src, at_at, 0, MAX_SPOT,
+        "a point is two whole numbers from 0 to 20000, as \"40,40\"")!
     size_at: = find(attrs, "size") catch
         throw src.diagnostic(line.offset, "a shape needs id, at and size")
     size: =
-        pair_of(src, size_at, 1, "size is a width and a height from 1 to 20000, as \"200,120\"")!
+        pair_of(src, size_at, 1, MAX_SPOT,
+        "size is a width and a height from 1 to 20000, as \"200,120\"")!
     if place.x + size.x > d.width || place.y + size.y > d.height
         throw src.diagnostic(at_at.offset, "a shape stands inside its diagram's size")
     $text: U8[] = ""
@@ -148,11 +138,8 @@ priv fn figure_kind(word: U8[]): Figure_kind //< the kind a shape's first word n
 priv fn link_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, d: Diagram@,
     ids: Keyed<|Sz|>@, arena: Arena$@): Link!Diagnostic //<
         //< One arrow's or line's line: `arrow from="a" to="b"`, with text, color and via
-    for a in attrs
-        if !a.name.equals("from") && !a.name.equals("to") && !a.name.equals("text") &&
-            !a.name.equals("color") && !a.name.equals("via")
-            throw src.diagnostic(a.offset,
-                "an arrow or a line takes only from, to, text, color and via")
+    allow(src, attrs, U8[][]::{ "from", "to", "text", "color", "via" },
+        "an arrow or a line takes only from, to, text, color and via")!
     from: = end_of(src, line, attrs, "from", ids)!
     to: = end_of(src, line, attrs, "to", ids)!
     if from == to
@@ -169,7 +156,7 @@ priv fn link_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, 
         if !a.quoted || a.value.len == 0
             throw src.diagnostic(a.offset, message)
         for part in a.value.split(' ', arena)
-            p: = pair_text(part, 0) catch
+            p: = pair_text(part, 0, MAX_SPOT) catch
                 throw src.diagnostic(a.offset, message)
             if p.x > d.width || p.y > d.height || bends.len == MAX_BENDS * 2
                 throw src.diagnostic(a.offset, message)
@@ -188,12 +175,6 @@ priv fn end_of(src: Source@, line: Line, attrs: List<|Attribute|>, name: U8[],
     return ids.get(a.value) catch
         throw src.diagnostic(a.offset, "from and to name a shape drawn above in this diagram")
 
-priv fn attribute_at(attrs: List<|Attribute|>, name: U8[]): Sz //< where an attribute stands
-    for a in attrs
-        if a.name.equals(name)
-            return a.offset
-    return 0
-
 priv fn color_in(src: Source@, attrs: List<|Attribute|>, name: U8[]): U8[]!Diagnostic //<
     //< `color` or `fill`: `#` and six lowercase hexadecimal digits, or empty where it is left out
     a: = find(attrs, name) catch
@@ -204,36 +185,6 @@ priv fn color_in(src: Source@, attrs: List<|Attribute|>, name: U8[]): U8[]!Diagn
         if !c.is_digit() && (c < 'a' || c > 'f')
             throw src.diagnostic(a.offset, "a colour is as \"#c00000\", or leave it out")
     return a.value
-
-priv fn pair_of(src: Source@, a: Attribute, least: Sz, message: U8[]): Pair!Diagnostic //<
-    //< `"40,40"`: two whole numbers from `least` to 20000, in quotes
-    if !a.quoted
-        throw src.diagnostic(a.offset, message)
-    return pair_text(a.value, least) catch
-        throw src.diagnostic(a.offset, message)
-
-priv fn pair_text(text: U8[], least: Sz): Pair? //< `x,y`, each from `least` to `MAX_SPOT`
-    comma: = text.find_char(',') catch
-        return .none
-    x: = whole_of(text.sub(0, comma)) catch
-        return .none
-    y: = whole_of(text.sub_from(comma + 1)) catch
-        return .none
-    if x < least || y < least
-        return .none
-    return .some(Pair::{ .x = x, .y = y })
-
-priv fn whole_of(text: U8[]): Sz? //< digits without a leading zero, from 0 to `MAX_SPOT`
-    if text.len == 0 || text.len > 5 || text.len > 1 && text[0] == '0'
-        return .none
-    $n: Sz = 0
-    for c in text
-        if !c.is_digit()
-            return .none
-        n = n * 10 + Sz::(c - '0')
-    if n > MAX_SPOT
-        return .none
-    return .some(n)
 
 priv fn is_id(text: U8[]): Bool //< 1 to 32 letters, digits, `_` and `-`
     if text.len == 0 || text.len > MAX_ID

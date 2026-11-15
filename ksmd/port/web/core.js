@@ -323,8 +323,9 @@ function ksmdStart(root, bar, status, wasmBytes) {
 
     const api = {
       // Opens a document's source, as text or as bytes; on refusal the open document stays, and
-      // `line` and `column` name the place.
-      load(source) {
+      // `line` and `column` name the place. `late` marks an open no one asked for at that moment,
+      // such as the file changed on disk: it leaves the focus where it is, as `ks.redraw` does.
+      load(source, late = false) {
         // Text in a cell still open that the editor refuses would be lost, so nothing opens then.
         if (!ks.table.take()) {
           const why = "the text in the open cell cannot go in. Change it, or press Esc to drop it";
@@ -356,7 +357,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
         ks.filter.forget();
         ks.setPlace("text");
         // Showing a large document can use up the memory too; the page then says it stopped.
-        if (!ks.act("ksmd_web_render")) {
+        if (!run("ksmd_web_render", late, [])) {
           return { ok: false, why: "The editor's memory ran out while it showed this document." };
         }
         ks.say("");

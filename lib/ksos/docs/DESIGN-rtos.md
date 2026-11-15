@@ -47,7 +47,7 @@ flowchart TD
 | event flags | `xEventGroupCreate` + `SetBits`/`WaitBits` | `Event.init`/`set`/`wait` |
 | task notifications | the `xTaskNotify` family | not offered: the existing primitives express it |
 | dynamic heap allocation | `pvPortMalloc` / `vPortFree` | `heap_alloc` / `heap_free` |
-| watching the stack | `configCHECK_FOR_STACK_OVERFLOW`, once configured | a canary written on creation and matched on every `schedule()`; nothing to configure |
+| watching the stack | `configCHECK_FOR_STACK_OVERFLOW`, once configured | a canary written on creation and matched on every `schedule()`, every tick among them; nothing to configure |
 | statistics and a task listing | `uxTaskGetSystemState` and the rest | `t.cpu_percent()` plus `Task.get_prio`/`get_name`/`get_state` |
 
 Each task is in one of these states (`Task_state` in `lib/ksos/kernel/task.kspl`):
@@ -82,10 +82,12 @@ flowchart TD
     B --> C{is any task ready?}
     C -->|yes| D["take the highest priority,<br/>among equals the first after the one picked last"]
     D --> E[switch to it]
-    C -->|no| F{is any task waiting on the clock?}
+    C -->|no| T{is a tick running?}
+    T -->|no| F{is any task waiting on the clock?}
     F -->|yes| G[move the logical time to the nearest expiry<br/>and make that task ready]
     G --> C
     F -->|no| H{has every task ended,<br/>or was stop_scheduler called?}
+    T -->|yes| H
     H -->|no| I[sleep until an interrupt]
     I --> C
     H -->|yes| J[return from start_scheduler]
@@ -169,9 +171,12 @@ All three break with no diagnostic. A returned error code gets forgotten, so kso
 
 ### Time: ticks, delays and timeouts
 
-* **Tickless idle**: where no task is runnable, the kernel moves the logical time (`g_tick`) to the nearest `delay` expiry instead of waiting in real time. So `Task.delay` works with no timer, and a test ends in the same order every time without waiting. With no `enable_preemption`, this is the only path that advances `g_tick`.
-  * **So `Task.delay(n)` counts logical ticks, not real time.** It never wakes before the expiry. But where no other task runs, it returns in zero real time, even with a real timer running. So `cortex_m_control_ai_probe`'s `max_jitter` is in logical ticks, not real-time jitter.
-  * Caution: **Where the real board needs a real-time period, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `lib/ksos/drivers/rp2040/timer.kspl`.
+* **With a tick running, idle sleeps until the next tick.** Once `enable_preemption` has started the timer, `g_tick` counts real ticks. Where no task is runnable, the scheduler sleeps (`ksos_port_wait_irq`), and each tick wakes the tasks whose time has come (`make ksos-isr-timeout`).
+  * Why not move the clock to the next deadline: an interrupt can end a wait before its deadline. A task waits with `take_for(ms_to_ticks(500))` on a semaphore that an interrupt gives 200 ms later. A jump would end that wait at once with `false`, and no time limit would measure real time.
+  * The cost: the CPU wakes on every tick while idle. Stopping the tick until the next deadline would save power, but that needs a timer the port can set to one deadline. No port has one yet.
+* **Tickless idle, with no tick running**: where no task is runnable, the kernel moves the logical time (`g_tick`) to the nearest `delay` expiry. It does not wait in real time. So `Task.delay` works with no timer, and a test ends in the same order every time without waiting. With no `enable_preemption`, this is the only path that advances `g_tick`.
+  * **So, with no tick, `Task.delay(n)` counts logical ticks, not real time.** It never wakes before the expiry, but where no other task runs, it returns at once. A timed wait for an interrupt ends at once too, so give such a program a tick.
+  * Caution: **Where the real board needs a real-time period with no tick running, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `lib/ksos/drivers/rp2040/timer.kspl`.
 * **A timeout on a wait**: a blocking call is written three ways.
 
   | Form | Example | What it does |
@@ -180,7 +185,7 @@ All three break with no diagnostic. A returned error code gets forgotten, so kso
   | `try_` | `try_take` | answers at once, without waiting |
   | `_for(ticks)` | `take_for(10)` | gives up with `false`/`none` at a timeout in logical ticks |
 
-  The timeout runs on `g_tick`, so tickless idle counts it as a point to move the time to. A blocked task carries one timeout. The woken task's recheck takes the condition if it can, and gives up if the timeout has passed (`make ksos-timeout` and `make ksos-cm-timeout`).
+  The timeout runs on `g_tick`. A tick reaches it in real time, or with no tick, tickless idle counts it as a point to move the time to. A blocked task carries one timeout. The woken task's recheck takes the condition if it can, and gives up if the timeout has passed (`make ksos-timeout` and `make ksos-cm-timeout`).
   * **When `lock_for` gives up, return the priority it lent.** The holder is recomputed as on a release, from the priorities still waiting on the mutexes it holds.
   * **A timeout too large for the clock waits rather than wrapping.** `deadline_after` in `lib/ksos/kernel/task.kspl` saturates at the last tick. A plain sum would wrap to a deadline already passed (`make ksos-timeout`). **Tickless idle never moves the clock to a saturated deadline**, and the tick stops at the last tick rather than wrapping to 0. Moving there would end the wait at once and saturate every later deadline, so each later delay would return at once (`make ksos-sleep`).
   * **The bare form is the `_for` form with no deadline.** Each primitive has one wait loop per direction (`take_until` and the like in `lib/ksos/kernel/sync.kspl`), so a fix reaches both forms.
@@ -201,7 +206,10 @@ Only Cortex-M has a handler mode (`IPSR`), so only it detects the misuse. The PO
 
 * **Pausing, resuming and deleting a task** (`make ksos-lifecycle`): the Task and the stack are static, so a delete reclaims neither. It returns the scheduler's slot and the port's context, so create and delete repeat without running out. A task whose entry returned is `done` but keeps both until deleted, so a task manager still lists it. **`Task.create` on a task still in the table panics** (`make ksos-create-again`): let through, each round would take one more slot, until the table is full.
 * **The stack-overflow canary**: `Task.create` writes a known byte run at the stack's lowest-address end, and every `schedule()` matches it. The demo damages it directly (`make ksos-stack-overflow`), since a real overflow depends on the optimization and can die as a SEGV first.
-* **The idle task (`enable_idle_task` in `lib/ksos/kernel/task.kspl`)** calls its hook between pauses. **With nothing ready and nothing waiting on the clock, it sleeps until an interrupt** (`make ksos-sleep`); otherwise it pauses on `Task.delay(1)`, so tickless idle still moves the time. `install_idle_reap` in `lib/ksos/kernel/dynamic.kspl` makes reclaiming deleted tasks its hook. It never ends, so `start_scheduler` returns only on `stop_scheduler`.
+  * **A single task is checked by the tick.** It never yields, so without a tick no `schedule()` would run, and an overflow would write over the memory below its stack unseen. So `run_single_task` takes the tick's reload and starts the tick itself (`make ksos-stack-overflow-single`). On the RP2040 the reload is `clocks.TICK_1MS_RELOAD`. With one task, a tick switches nothing, so it costs only the check.
+  * Why not an MPU region below the stack: it would stop the write itself, not a tick later. But on the RP2040's Cortex-M0+ the fault's own entry writes to the same stack, and the core locks up. It stops with no message, and the panic hook that stops the wheels never runs. The nRF51 has no MPU at all.
+  * Caution: **The canary is 16 bytes, and a frame larger than that can step over it.** The car's deepest frames are about 1 KB (`std/strnum`), so a canary alone cannot prove the stack is large enough. **Size each stack from its measured worst path**: the car firmwares say how theirs was measured, beside `stack_car`.
+* **The idle task (`enable_idle_task` in `lib/ksos/kernel/task.kspl`)** calls its hook between pauses. **With nothing ready and nothing waiting on the clock, it sleeps until an interrupt** (`make ksos-sleep`). Otherwise it pauses on `Task.delay(1)`, so the next tick, or tickless idle, still moves the time. `install_idle_reap` in `lib/ksos/kernel/dynamic.kspl` makes reclaiming deleted tasks its hook. It never ends, so `start_scheduler` returns only on `stop_scheduler`.
 
 ### The heap
 
@@ -423,7 +431,7 @@ make ksos-rp2040          # builds and links for the RP2040 and checks the layou
 
 **Delete the `.ram_text` line and the link still passes**, with the code in Flash. It shows only on the real board, as a freeze when the write begins. So `make test-ksos-link` checks that the window function's address is in RAM.
 
-**The last 64KB of Flash (from `0x1f0000`) is left for the record inside the device.** An ASSERT in `link.ld` confirms the image does not reach it. [`drivers/rp2040/flash.kspl`](../drivers/rp2040/flash.kspl) holds the same position, and `make test-conventions` checks that they agree. Writing a UF2 touches only the range the image takes, so the record survives new firmware.
+**The last 64KB of Flash (from `0x1f0000`) is left for the record inside the device.** An ASSERT in `link.ld` confirms the image does not reach it. A second one stops the link when the RAM data leave the main stack less than 4KB. The nRF51's and `port/cortex_m/link.ld` hold the same check. [`drivers/rp2040/flash.kspl`](../drivers/rp2040/flash.kspl) holds the same position, and `make test-conventions` checks that they agree. Writing a UF2 touches only the range the image takes, so the record survives new firmware.
 
 ## 🔧 The peripheral drivers
 
@@ -442,9 +450,9 @@ A driver reads and writes a piece of hardware's *registers*: fixed memory addres
 
 Caution: **Do not repeat the folder's name in a file name** (`rp2040/gpio.kspl`, not `rp2040/rp2040_gpio.kspl`). An import's alias is the last name, so the caller would read `rp2040_gpio.set_dir(...)`.
 
-**`wait` in `lib/ksos/drivers/mmio.kspl` is the one home of the busy wait every driver shares** (`mmio.wait(addr, mask, want_nonzero)!`). It gives up with `timed_out` after `POLL_TIMEOUT_ITERS` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
+**`wait` in `lib/ksos/drivers/mmio.kspl` is the one home of the busy wait every driver shares** (`mmio.wait(addr, mask, want_set)!`). It waits until every bit of the mask has the state asked for, not any one. So a wait on two blocks leaving reset ends once both have. It gives up with `timed_out` after `POLL_TIMEOUT_ITERS` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
 
-**A driver's call that can fail returns `Void!Driver_error`** (`Driver_error` in the same file), not a `Bool`. A `Bool` said only "it did not work", and a caller could drop it unseen. Its kind (`timed_out`, `no_answer`, `not_found`, `out_of_range`, `full`) says why. A board passes a failure on; a demo decides what to leave out. Two kinds stay `Bool`: a question (`i2c.present`, `usb_cdc.is_configured`), and a try answered at once (`usb_cdc.write`, `flash.program_at`).
+**A driver's call that can fail returns `Void!Driver_error`** (`Driver_error` in the same file), not a `Bool`. A `Bool` said only "it did not work", and a caller could drop it unseen. Its kind (`timed_out`, `no_answer`, `not_found`, `out_of_range`) says why. A board passes a failure on; a demo decides what to leave out. Two kinds stay `Bool`: a question (`i2c.present`, `usb_cdc.is_configured`), and a try answered at once (`usb_cdc.write`, `flash.program_at`).
 
 ### The RTC (`rtc.kspl`) — real chip only
 
@@ -462,7 +470,7 @@ Making a GPIO line an output touches three blocks:
 
 Caution: Miss even one and **it does nothing, with no error**, so `init_out()` does all three together.
 
-The inputs, the pulls and `spin()` are described at each function in `lib/ksos/drivers/rp2040/gpio.kspl`.
+The inputs and the pulls are described at each function in `lib/ksos/drivers/rp2040/gpio.kspl`.
 
 ### PWM (`pwm.kspl`) — real chip only
 
@@ -476,7 +484,7 @@ Caution: **Write it with the wheels off the ground** (stage 3 in [`TUTORIAL-brin
 
 Out of reset the RP2040 runs on the built-in ROSC (about 6.5MHz, varying with the unit and the temperature). **USB needs exactly 48MHz on clk_usb** (±0.25%), and on the ROSC it does not even enumerate. So `clocks.init()` starts the crystal (XOSC, 12MHz) and sets each clock through the two PLLs.
 
-**Calling it changes the scale of time about 19-fold.** `gpio.spin`'s iteration counts, SysTick's reload and PWM's divisors all need revisiting. Time is then taken from `rp2040/timer`'s real microseconds (`now_us`/`delay_us`/`delay_ms`).
+**Calling it changes the scale of time about 19-fold.** A loop's iteration counts, SysTick's reload and PWM's divisors all need revisiting. Time is then taken from `rp2040/timer`'s real microseconds (`now_us`/`delay_us`/`delay_ms`).
 
 **That timer needs `clocks.init()` too.** TIMER counts a 1µs pulse from the watchdog's tick generator, which `clocks.init()` sets up. Without it, `delay_us` never returns.
 
@@ -514,6 +522,8 @@ A composite device that offers **two functions** on one USB cable:
 * a STALL, not an empty answer, for a request it cannot answer.
 
 **A buffer goes to the controller in two writes**: the length and the PID first, then AVAILABLE a few cycles later (`hand_over` in `lib/ksos/drivers/rp2040/usb_hw.kspl`). The controller runs on clk_usb (48 MHz), slower than the CPU's 125 MHz. In one write it could see AVAILABLE before the other fields, and send a packet with the old length or PID. The RP2040 datasheet asks for this order ("Concurrent access" in its USB chapter). It is not yet confirmed on the real chip.
+
+**Each data endpoint starts again at DATA0 where the USB rules say so** (USB 2.0, 9.1.1.5 and 9.4.5). A bus reset and SET_CONFIGURATION reset every data endpoint. CLEAR_FEATURE(ENDPOINT_HALT) resets the one it names. The host resets its own side then. A toggle left as it was makes the host drop the next packet without a word. An OUT endpoint is armed again for DATA0. `toggles_reset_by` in `lib/ksos/drivers/rp2040/usb_cdc.kspl` decides which endpoints, so a host test checks it (`make debug-ksos`). The bus itself is not yet confirmed on the real chip.
 
 Caution: **Always run ksos's `make test` after touching a descriptor** (`make debug-ksos` from the repository's root). One byte out of place makes enumeration fail without a word. Each descriptor is a `U8[_]` array, whose length is its element count; a length written out pads silently. `lib/ksos/tests/usb_descriptors.kspl` checks their length bytes.
 
@@ -842,7 +852,7 @@ There is no DHCP, so **the addresses are fixed** (`net_client.init_addrs`).
 **The policy is carried into the car and decided there** (the section above says why). `ksos-cm-pilot-probe` and the car read one safetensors file embedded in Flash with `embed`: the weights, the manoeuvre table and the preprocessing constants. They check the format's version and every tensor's rank and sizes:
 
 * Caution: **Confirm the version before reading it.** The order of the features, the activation and the manoeuvre table's meaning cannot be told from a tensor's shape. The probe also tests that a truncated file is refused.
-* **A file that loads must not stop the program at its first decision.** The car saves a policy it took, so a file that stops the program would do so on every start. So `load` refuses a weight or table that is not 2-D and a bias that is not 1-D. It also refuses a header nested deeper than a policy's own three levels, before the JSON parser sees it. Each level costs the parser stack, and on bare metal nothing tells it where the car's 2560-byte task stack ends. `make debug-ksos` tests these refusals on the host.
+* **A file that loads must not stop the program at its first decision.** The car saves a policy it took, so a file that stops the program would do so on every start. So `load` refuses a weight or table that is not 2-D and a bias that is not 1-D. It also refuses a header nested deeper than a policy's own three levels, before the JSON parser sees it. Each level costs the parser stack, and on bare metal nothing tells it where the car's 8 KB task stack ends. `make debug-ksos` tests these refusals on the host.
 * **The car makes one decision with a fresh policy before saving it**, and its panic hook stops the wheels. A freestanding panic loops for ever, and without the hook the PWM keeps its last duty. An index out of range or a division by zero stops in the runtime without calling the hook, which is why `load`'s checks come first.
 * **A tie goes to the smaller number (= stopping).** An observation with no distance and no line makes every logit 0, and that really happens, so the probe's first case tests it.
 

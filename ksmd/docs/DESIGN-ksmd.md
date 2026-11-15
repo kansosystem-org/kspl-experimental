@@ -799,11 +799,11 @@ Links may use `https`, `http`, `mailto`, or a document fragment; other schemes a
 
 ### The workspace and its paths
 
-**A document opens inside a workspace: a folder the user opens explicitly.** Every source and image the document reaches stays inside it (`Workspace` in `ksmd/files/workspace.kspl`). The root itself may be a link.
+**A document opens inside a workspace: a folder the user opens explicitly.** Every source and image the document reaches stays inside it. The local server is started on that folder and refuses a path that leaves it ("Where it listens" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md#where-it-listens)). The root itself may be a link.
 
 **A path is read from the folder of the source that holds it**, for includes and images alike. A file then keeps its meaning when its folder moves with the files it names.
 
-**A path has one spelling.** `/` separates folders. Any `..` segments come first, and each climbs one folder from the holding file's folder. `resolve_text` in `ksmd/files/files.kspl` refuses every other form, on disk and in the page alike:
+**A path has one spelling.** `/` separates folders. Any `..` segments come first, and each climbs one folder from the holding file's folder. `resolve_text` in `ksmd/files/files.kspl` refuses every other form before the page asks the local server for the file:
 
 | Written | Why it is refused |
 | :-- | :-- |
@@ -815,13 +815,13 @@ Links may use `https`, `http`, `mailto`, or a document fragment; other schemes a
 | `../x.ksmd` in a file at the root | It climbs out of the workspace |
 | A name ending in `.` or a space, holding `:`, or a device name such as `CON` | Windows reads it as another file or a device |
 
-**A path stays inside the root by refusal, not by comparison.** It is refused if any folder or file along it is a link, even a link that stays inside. `Workspace.resolve` decides this with `fs.stays_under`, std's one check for it ([std's reasons](../../std/docs/DESIGN-system.md#a-path-stays-under-the-root-by-refusal-not-comparison)). A refused path opens nothing, so it never opens another file than the one written.
+**A path stays inside the root by refusal, not by comparison.** It is refused if any folder or file along it is a link, even a link that stays inside. The local server makes this check, since it alone reaches the files ("Where it listens" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md#where-it-listens); [std's reasons](../../std/docs/DESIGN-system.md#a-path-stays-under-the-root-by-refusal-not-comparison)). The page holds its refusal as that file's. A refused path opens nothing, so it never opens another file than the one written.
 
 **Nothing is created for a missing file.** An include or an image whose file is absent is a problem at its clause.
 
 ### The assembled view
 
-**Each source is read once into its own model, and the view refers to its blocks.** `assemble` in `ksmd/files/assemble.kspl` builds it. Each `Entry` names the instance and the block it shows, so every block has its file and offset. An include clause stays in its parent's model, and the included blocks follow its entry.
+**Each source is read once into its own model, and the view refers to its blocks.** `assemble_loaded` in `ksmd/files/assemble.kspl` builds it. Each `Entry` names the instance and the block it shows, so every block has its file and offset. An include clause stays in its parent's model, and the included blocks follow its entry.
 
 **Each include of a file makes an instance of its own.** A file included twice is read once and shown twice, so repetition is not a cycle. A cycle is a source already on the current include stack.
 
@@ -840,7 +840,7 @@ Links may use `https`, `http`, `mailto`, or a document fragment; other schemes a
 
 **Viewing never writes a file.** The view holds references to blocks, not text, so it has nothing to save.
 
-**A save writes one source.** `Workspace.save` writes a document's canonical text through `fs.replace_file`, so a crash leaves the old text or the new. A parent's model holds its include clause, so its save cannot flatten the included blocks.
+**A save writes one source.** The page sends a document's canonical text for its own path. The local server replaces that file whole, so a crash leaves the old text or the new ("Files" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md#files)). A parent's model holds its include clause, so its save cannot flatten the included blocks.
 
 **To change included text, the editor opens the included source** (`load` in `ksmd/files/files.kspl`), with its own undo. Several sources are never saved in one transaction.
 
@@ -935,7 +935,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **A document opens from its path in the workspace**: from the address (`?doc=notes.ksmd`), or chosen in File, Open (Ctrl+O). The page gives the file's bytes to the editor unchanged. A file the reader refuses does not open, and the open document stays.
 
-**The page builds the assembled view itself, in rounds.** An assembly over what the page holds names the files it still lacks (`Fetched` in `ksmd/files/fetched.kspl`). The page fetches them and assembles again, one round per level of includes. So the browser applies `assemble`'s rules, and a refusal that the server gives stands as that file's.
+**The page builds the assembled view itself, in rounds.** An assembly over what the page holds names the files it still lacks (`Fetched` in `ksmd/files/fetched.kspl`). The page fetches them and assembles again, one round per level of includes. So the browser applies `assemble_loaded`'s rules, and a refusal that the server gives stands as that file's.
 
 **An include shows its file's blocks in place, and they do not edit there.** Its Edit button opens the included file in a tab of its own, with its own undo, save and draft.
 
@@ -949,7 +949,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **A file changed on disk is never overwritten without a choice.** The page writes nothing and shows a notice that does not block editing. It offers to replace the file with this version, or to load the file's version and keep this one as a draft. No merge is offered, since a merge that drops a line loses work silently.
 
-**When the page gains focus or is shown again, it reads its file again.** With nothing unsaved, a changed file shows at once. With edits unsaved, the page shows the same notice as a save. Each include and image is fetched again too.
+**When the page gains focus or is shown again, it reads its file again.** With nothing unsaved, a changed file shows at once, and the focus stays where it is, such as in the find bar. With edits unsaved, the page shows the same notice as a save. Each include and image is fetched again too.
 
 **While the page is visible, it asks the local server every two seconds for its file's size and change time** ("Watching" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). Where either changed, the check above runs, so another program's write shows without a click.
 
@@ -961,7 +961,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **A draft is offered when its document opens again, and comes back only on a press.** The notice names the time the draft was held, and offers to bring it back or discard it. A draft brought back keeps the digest of the file it started from, so a save over a file changed since then asks first.
 
-**A draft is kept per workspace, path and opening.** Two tabs on one document hold two drafts, and neither overwrites the other. A save, a discard, or edits undone back to the file's text let the draft go. Drafts older than 30 days are let go when the page starts.
+**A draft is kept per workspace, path and opening.** Two tabs on one document hold two drafts, and neither overwrites the other. A draft is offered only once its tab is closed, so no tab can bring back or discard a draft that another still writes. A save, a discard, or edits undone back to the file's text let the draft go. Drafts older than 30 days are let go when the page starts.
 
 **The browser keeps drafts per address, the server's port included.** So a launcher keeps one port per workspace ("Opening a document from the desktop" below). A server started by hand needs the same port each time.
 
@@ -1046,9 +1046,21 @@ What the figures show, as orders of magnitude:
 * **Outside the browser, the model is fast at every size.** A typed character takes under a millisecond, and setting a cell and calculating every table tens of milliseconds.
 * **A key press grows with the blocks on the page, not with the model.** Most of its time goes to the browser placing the selection and laying the page out, and to the page's own scans of every block.
 * **The editor's 128 MiB holds the large document only in a page opened from a file.** Served, the page builds its view from a second copy of the source, and the memory runs out. Opened from a file, a second opening of it is refused.
+* **A value entered in a table draws again only the cells it changed** ("Input, menus and tables" in [`DESIGN-page.md`](DESIGN-page.md)). Before, the page drew and laid out the whole table, about 0.35 ms for each row. In the medium document, an entry went from 4.3 s to 1.4 s, and Alt+Right from 4.6 s to 1.6 s.
+* **What is left of an entry's time is mostly the browser laying out the table.** A table of rows that each add to a running total changes half its column at each entry. A column that fits its text changes its width when its widest value changes, as a sum's does.
+
+An entry in the middle of an invented table, the median of five, in milliseconds:
+
+| The table | 1,000 rows, before → now | 3,000 rows | 9,999 rows |
+| :-- | --: | --: | --: |
+| A running total; the columns fit their text | 345 → 135 | 1,066 → 429 | 3,646 → 1,451 |
+| A running total; the columns have widths set | 323 → 62 | 985 → 179 | 3,332 → 560 |
+| No running total; the columns fit their text | 318 → 104 | 904 → 302 | 3,277 → 972 |
+| No running total; the columns have widths set | 280 → 22 | 885 → 52 | 3,050 → 164 |
+| Alt+Right, a running total; the columns fit their text | 336 → 120 | 1,027 → 329 | 4,993 → 1,113 |
 
 These are known limits, not yet worked on:
 
 * A key press in a document of tens of thousands of blocks takes over 100 ms.
-* An edit in a table of 10,000 rows takes about two seconds, as the page draws and lays out that whole table again. The calculation is a small part of it. In Chromium, rows that each take a share of the total edit as fast as rows of plain arithmetic.
+* An entry in a table of 10,000 rows can still take about a second. A running total, or a column that fits its text, makes the browser lay out the whole table again. The calculation is a small part of it.
 * So the served page does not reach the limits above: a document of 6.2 MB does not open, and one of 4.3 MB does.

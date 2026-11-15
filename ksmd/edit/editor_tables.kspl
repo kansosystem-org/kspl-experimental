@@ -71,9 +71,7 @@ impl Editor
         defer scratch: = Arena(16 * 1024)
         before: = capture(ed.doc@, scratch)
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
-        table: = Block::{ .kind = .table, .level = 0, .label = "", .text = "",
-            .first = ed.doc.tables.len, .count = 1, .offset = 0, .align = .none, .note = "",
-            .invisible = false }
+        table: = Block.whole(.table, ed.doc.tables.len, 0)
         $frag: = List<|Unit|>(scratch)
         frag.push(blank_unit(paragraph_style(), scratch))
         frag.push(whole_unit(table, scratch))
@@ -247,6 +245,9 @@ impl Editor
         //< text as typed, as Excel's AutoCorrect does. So is a formula's missing ending
         //< (`close_formula`).
         u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if row < -1 || row >= t.rows.len || column < 0 || column >= t.columns.len
+            throw .table(.outside)
         defer scratch: = Arena(16 * 1024)
         had_break: = ed.cell_text(u, row, column, scratch).find_char('\n').is_some()
         value: = value_of(text, ed.reading(), scratch)

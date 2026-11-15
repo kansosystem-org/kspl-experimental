@@ -3,11 +3,6 @@
  * shared part it reads, to make one translation unit. The joining order is held by
  * write_impl in ksplc/gen/runtime.kspl. */
 #ifdef _WIN32
-/* Whether a name is bare, to be looked up (no `\`, `/` or drive colon in it). */
-static Bool kspl_win_is_bare(const char *name) {
-    return strpbrk(name, "\\/:") == NULL;
-}
-
 /* The extensions a bare name with none is looked up with, in this order. **The same list as
  * RUN_EXTS in std/fs.kspl**, which says what can be started; change both together.
  * Caution: **Do not read PATHEXT**, for the reason given at RUN_EXTS. A `.bat` or `.cmd` found here
@@ -35,24 +30,6 @@ static Bool kspl_win_try_dir(const wchar_t *dir, size_t dlen, const wchar_t *nam
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-/* Copies the PATH entry at p into dir without its quotes, and returns where the next one starts
- * (NULL after the last). *dlen is 0 for an entry too long to keep, which is then skipped.
- * Caution: **A `;` inside quotes belongs to the entry** (`"C:\a;b"`). So the entry ends at the
- * first `;` outside quotes. Split at the first `;`, a quoted entry is cut in two, and neither half
- * names the folder. */
-static const wchar_t *kspl_win_path_entry(const wchar_t *p, wchar_t *dir, size_t cap,
-    size_t *dlen) {
-    size_t n = 0;
-    Bool quoted = false, fits = true;
-    for (; *p != L'\0' && (quoted || *p != L';'); p++) {
-        if (*p == L'"') quoted = !quoted;
-        else if (n + 1 < cap) dir[n++] = *p;
-        else fits = false;
-    }
-    *dlen = fits ? n : 0;
-    return *p == L';' ? p + 1 : NULL;
-}
-
 /* Looks a bare program name up in PATH alone and keeps the full path in out; false where it is
  * nowhere. A name with no extension is tried with each of kspl_win_run_exts in one folder before
  * the next folder, as cmd.exe does.
@@ -72,10 +49,11 @@ static Bool kspl_win_find_program(const wchar_t *name, wchar_t *out, size_t cap)
     if (got > 0 && got < n) {
         const wchar_t *p = path;
         while (!found && p != NULL) {
-            size_t dlen;
-            p = kspl_win_path_entry(p, dir, KSPL_WPATH_CAP, &dlen);
+            Sz dlen;
+            p = (const wchar_t *)kspl_win_path_entry((const U16 *)p, (U16 *)dir, KSPL_WPATH_CAP,
+                &dlen);
             for (size_t k = 0; !found && k < n_ext; k++) {
-                found = kspl_win_try_dir(dir, dlen, name, has_ext ? L"" : kspl_win_run_exts[k], out,
+                found = kspl_win_try_dir(dir, (size_t)dlen, name, has_ext ? L"" : kspl_win_run_exts[k], out,
                     cap);
             }
         }
@@ -147,12 +125,6 @@ static BOOL kspl_win_create_listed(wchar_t *wcmd, DWORD flags, const wchar_t *cw
     return ok;
 }
 
-/* Whether a program path with a directory part is relative to the working directory: it starts
- * with neither a separator (rooted) nor a drive (`C:`). */
-static Bool kspl_win_is_cwd_relative(const char *name) {
-    return name[0] != '\\' && name[0] != '/' && strchr(name, ':') == NULL;
-}
-
 /* The command line for argv, on the heap (the caller frees it); NULL where it cannot be built.
  * A bare argv[0] is looked up here, and the line names the full path. So neither CreateProcess
  * nor cmd.exe (for a batch file) searches again. A relative one with a directory part is joined
@@ -176,7 +148,7 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
     *why = ERROR_FILENAME_EXCED_RANGE;
     if (arg0_len >= (Sz)sizeof(prog)) return NULL;
     memcpy(prog, argv_buf, (size_t)arg0_len + 1);
-    if (kspl_win_is_bare(prog)) {
+    if (kspl_win_is_bare((const U8 *)prog)) {
         wchar_t wname[KSPL_WPATH_CAP], wfound[KSPL_WPATH_CAP];
         *why = ERROR_INVALID_NAME;
         if (!kspl_win_cstr_to_wide(prog, wname, KSPL_WPATH_CAP)) return NULL;
@@ -185,7 +157,7 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
         if (!kspl_win_find_program(wname, wfound, KSPL_WPATH_CAP)) return NULL;
         *why = ERROR_INVALID_NAME;
         if (kspl_win_from_wide(wfound, prog, (Sz)sizeof(prog)) < 0) return NULL;
-    } else if (cwd_len > 0 && kspl_win_is_cwd_relative(prog)) {
+    } else if (cwd_len > 0 && kspl_win_is_cwd_relative((const U8 *)prog)) {
         Bool sep = cwd_ptr[cwd_len - 1] == '\\' || cwd_ptr[cwd_len - 1] == '/';
         Sz head = cwd_len + (sep ? 0 : 1);
         *why = ERROR_FILENAME_EXCED_RANGE;

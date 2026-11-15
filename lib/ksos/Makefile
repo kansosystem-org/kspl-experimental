@@ -235,6 +235,7 @@ $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call ro
 # (`KSOS_POSIX_PANIC`, below them). **The needle is the kernel-side panic's spelling itself**;
 # change both in one commit.
 ksos_posix_panic_needle_stack-overflow := ksos: stack overflow detected
+ksos_posix_panic_needle_stack-overflow-single := ksos: stack overflow detected
 ksos_posix_panic_needle_mutex-relock := Mutex.lock by the holder itself
 ksos_posix_panic_needle_mutex-foreign-unlock := Mutex.unlock by a task that is not the holder
 ksos_posix_panic_needle_delete-holder := ksos: a task ended holding a mutex
@@ -475,9 +476,8 @@ endef
 $(foreach r,$(KSOS_RP2040_DEMOS),$(eval $(call ksos_rp2040_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
 
 # ==========================================
-# The **link** regression gate for bare metal (Cortex-M).
-# Caution: **`make ci` builds no part of ksos**: without this gate bare metal breaks unseen,
-# typically on an `undefined symbol` from a libc function with no body under freestanding.
+# The **link** regression gate for bare metal: it catches typically an `undefined symbol` from a
+# libc function with no body under freestanding.
 # **Build the listing from the directory** (a file-name prefix drops a new port's in silence), and
 # **put nothing unlinkable alone directly under `lib/ksos/demo/<port>/`** (shared parts: `common/`).
 # Adding a port: make lib/ksos/demo/<port>/ and add one line below.
@@ -487,6 +487,14 @@ KSOS_LINK_CM_DEMOS     := $(call demo_stems,cortex_m)
 # **RP2040 has to be included**: Armv6-M is narrower, and what links for CM can fail there.
 KSOS_LINK_RP2040_DEMOS := $(call demo_stems,rp2040)
 KSOS_LINK_NRF51_DEMOS  := $(call demo_stems,nrf51)
+
+# **On Linux the gate links the RP2040 demos alone**: `make ci` runs `test-ksos-qemu` there, which
+# builds every Cortex-M and nRF51 demo with the same flags and linker script (`KSOS_CM_DEMOS` and
+# `KSOS_NRF51_DEMOS` come from the same folders). QEMU has no RP2040. **Elsewhere it links them
+# all**: `make ci` runs `test-ksos-qemu` on Linux alone, so off Linux this gate is their only build.
+KSOS_QEMU_IN_CI := $(filter Linux,$(shell uname -s 2>/dev/null))
+KSOS_LINK_GATE_DEMOS := $(KSOS_LINK_RP2040_DEMOS) \
+    $(if $(KSOS_QEMU_IN_CI),,$(KSOS_LINK_CM_DEMOS) $(KSOS_LINK_NRF51_DEMOS))
 
 KSOS_LINK_TARGETS    := $(addprefix ksos-linkcheck-,$(KSOS_LINK_CM_DEMOS) $(KSOS_LINK_RP2040_DEMOS) \
     $(KSOS_LINK_NRF51_DEMOS))
@@ -568,8 +576,8 @@ test-ksos-link:
 	@echo "RESULT: SKIPPED (no ARM toolchain)"
 endif
 else
-test-ksos-link: $(KSOS_LINK_TARGETS) test-ksos-ramtext
-	@echo "RESULT: ALL PASS (bare-metal demos link - Cortex-M: $(words $(KSOS_LINK_CM_DEMOS)), RP2040/Cortex-M0+: $(words $(KSOS_LINK_RP2040_DEMOS)), nRF51/Cortex-M0: $(words $(KSOS_LINK_NRF51_DEMOS)))"
+test-ksos-link: $(addprefix ksos-linkcheck-,$(KSOS_LINK_GATE_DEMOS)) test-ksos-ramtext
+	@echo "RESULT: ALL PASS (bare-metal demos link - $(words $(KSOS_LINK_GATE_DEMOS)) of $(words $(KSOS_LINK_TARGETS)); $(if $(KSOS_QEMU_IN_CI),the RP2040 ones; test-ksos-qemu builds the rest,every port))"
 endif
 
 .PHONY: test-ksos-link test-ksos-ramtext $(KSOS_LINK_TARGETS)
@@ -653,7 +661,7 @@ KSOS_POSIX_DEMOS := $(addprefix ksos-,$(call row_keys,$(KSOS_POSIX_TEMPLATED) $(
     ksos
 
 # **A demo that verifies time itself has to be serial** (drift, forced yielding, CPU use).
-KSOS_POSIX_SERIAL_DEMOS := ksos-preempt ksos-delay-until ksos-task-manager ksos-sleep
+KSOS_POSIX_SERIAL_DEMOS := ksos-preempt ksos-delay-until ksos-task-manager ksos-sleep ksos-isr-timeout
 KSOS_POSIX_PARALLEL_DEMOS := $(filter-out $(KSOS_POSIX_SERIAL_DEMOS),$(KSOS_POSIX_DEMOS))
 
 $(foreach t,$(KSOS_POSIX_PARALLEL_DEMOS),$(eval $(call ksos_gate_rule,posix,$(t))))

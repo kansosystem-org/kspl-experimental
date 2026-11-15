@@ -452,11 +452,19 @@ impl Editor_reader
         r.inbox.free()
         dealloc(Void$@::r)
 
-impl Editor_reader: Manual_free
-    priv fn free(r: Self$@) //< it waits for the thread to stop, at `exit` or the end of input
+    priv fn stop(r: Self$@): Bool //<
+        //< Waits for the thread to stop, at `exit` or the end of input, and lets everything go
+        //< Returns whether the reading stopped at a header it could not read. **It is read only
+        //< after the wait**: after `shutdown` the thread still reads, up to `exit`.
         r.inbox.close()
         r.reading.free()
+        broken: = r.broken
         r.let_go()
+        return broken
+
+impl Editor_reader: Manual_free
+    priv fn free(r: Self$@) //< `stop`, for a caller that does not ask why the reading stopped
+        _broken: = r.stop()
 
 // ==========================================
 // Skipping a change that a later one replaces
@@ -550,7 +558,7 @@ fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
 
 priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) //<
     //< It relays the editor's messages to the worker until `shutdown` or the end of input
-    defer reader.free()
+    //< It stops the reader itself, at the end (`stop`).
     $worker: = first_worker
     defer $docs: = Lsp_docs()
     defer $waiting: = Waiting()
@@ -612,6 +620,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
 
     stop_worker(worker)
     // **A header that could not be read ends the server with 1**, said on standard error by the
-    // reader. The reading thread has stopped by then, as it closed the channel.
-    if reader.broken
+    // reader. Caution: **Stop the reader before `sys.exit`**, which runs no `defer`. A thread
+    // still running then is a leak to the race gate, and its `broken` is not yet final.
+    if reader.stop()
         sys.exit(1)

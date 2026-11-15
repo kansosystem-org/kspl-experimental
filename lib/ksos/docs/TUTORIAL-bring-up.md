@@ -45,7 +45,7 @@ Each *stage* builds a small test program, copies it onto the car, and watches fo
 | atomic operation | A read-and-change of memory that nothing can interrupt. The RP2040's CPU has no instruction for it, so ksos uses the chip's hardware lock (the SIO *spinlock*) |
 | kssrv | Kanso's web server, run on the PC in stages 7 and 9 |
 | policy | The small neural network and its tables that turn the car's sensor readings into the next manoeuvre |
-| manoeuvre | One of the car's moves: `forward`, `back`, `strafe_left` / `strafe_right` (sideways), turning, `stop`, `emergency_back` |
+| manoeuvre | One of the car's moves that the policy picks: `stop`, `forward`, `back`, `strafe_left` / `strafe_right` (sideways), `creep`, and the turns that follow the line (`track_left` / `track_right`, each also hard). Backing off at point-blank range is not one: the firmware decides it before the policy (`EMERGENCY_MM`) |
 | the record | An append-only log kept in the flash's last 64KB by [ksdb](../../ksdb/README.md) |
 | lap | One turn of a firmware's main loop: about 20 seconds for the board firmware, 100ms for a car firmware |
 | WS2812 | An RGB LED with its own controller; several are chained and set by one timed signal |
@@ -399,7 +399,7 @@ Caution: **The car's address is fixed at 192.168.137.50, with no DHCP.** `rx=` g
    [ok]   atomic: fetch_add returns the old value
    [ok]   atomic: cas succeeds on a match
    [ok]   atomic: cas fails on a mismatch
-   [ok]   Arc: new/clone/get and scope-exit release
+   [ok]   Arc: new/copy/get and scope-exit release
    [ok]   std/http: status line
    [ok]   std/http: header lookup
    [ok]   std/http: body
@@ -798,7 +798,7 @@ Note: Only `lib/ksos/demo/rp2040/common/sample.kspl` knows the columns' order, a
 
 Caution: **Do not raise the brightness** (one place: `board.WS2812_LEVEL`). Eight elements at full white use about 0.5A, and the low-voltage watch (`BATTERY_LOW_MV`) fires. To save more, light fewer elements ("The WS2812 LEDs" in [`SPEC-board.md`](SPEC-board.md)).
 
-If the colours start going wrong, doubling `bit_counts` doubles the window for the write. Whether WS2812 accepts the longer Low must be confirmed on the real board.
+If the colours start going wrong, doubling `BIT_COUNTS` in `lib/ksos/drivers/rp2040/ws2812.kspl` doubles the window for the write. Whether WS2812 accepts the longer Low must be confirmed on the real board.
 
 ## Stage 12 — driving it from the IR remote alone
 
@@ -935,7 +935,7 @@ Caution: **Picking the car up fills the record with dodges** (a hand reads tens 
 
 ### A multiplication decides if it follows a sharp curve
 
-**No tuning makes the car follow a curve tighter than `v ≤ ω_max × R` allows**, where `ω_max` is the turning rate at `motor.CAP`. To measure `ω_max`, run `rp2040_motor_probe` with `test_speed` = `motor.CAP`, and read the angle turned over `step_ms` (about 230 degrees/second on this unit).
+**No tuning makes the car follow a curve tighter than `v ≤ ω_max × R` allows**, where `ω_max` is the turning rate at `motor.CAP`. To measure `ω_max`, run `rp2040_motor_probe` with `TEST_SPEED` = `motor.CAP`, and read the angle turned over `STEP_MS` (about 230 degrees/second on this unit).
 
 **If a gentler curve still loses the line, the cause is elsewhere:**
 

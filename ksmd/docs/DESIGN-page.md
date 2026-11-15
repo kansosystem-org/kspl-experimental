@@ -12,7 +12,11 @@
 
 **The selection is two model spots.** A spot names a block, a list item and a UTF-8 offset into its text, or a gap. The page maps between spots and places on the page at each action, and keeps no place across one.
 
-**Only the blocks an action changed are rendered again.** A table edit sends every table, since a value can depend on another table. The page draws again only a table whose JSON differs from the JSON it was drawn from. In a document of many tables, drawing and laying out the others again would take most of an edit's time, and change nothing that shows.
+**Only the blocks an action changed are rendered again, and of a table only the cells that changed.** A table edit sends every table, since a value can depend on another table. A table whose JSON is the one it was drawn from stays as it is. Where only its cells or its columns' widths changed, the page draws those cells again in place (`update` in `ksmd/port/web/table.js`). The other cells, the rows and the table keep their elements. A change to its rows, columns, names, heights, filters, choices, rules or groups draws the whole table again. Drawing and laying out a whole table took most of an edit's time: 0.4 s for each value entered in a table of 1,000 rows.
+
+* **A value can reach more than its own cell.** The cells of a colour scale, and the row a choice colours, are drawn again with it. The filter and the merged columns are shown again.
+* **A column that fits its text is measured again where one of its cells changed.** Only where a width changed does every row cut its text again, and the first column is pinned again.
+* **A width that changes is the one cost left.** The browser then lays out the whole table, so an entry that changes a column's widest value costs about 0.1 s in a table of 1,000 rows. A column with a width set does not change.
 
 **The menu bar holds every command: File, Edit, View, Insert, Format and Table.** Each item shows its icon, its name and its shortcut. One list in `ksmd/port/web/commands.js` gives each command its name, key and icon, and builds the menus, the right-click menu and the quick access bar. Open and Save stand in File only where the local server opens files.
 
@@ -39,7 +43,7 @@
 
 **A command's key stands beside its item, and the same list runs it from a cell**, so the two keys cannot differ.
 
-**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading. A press chooses a cell. A double press or F2 opens it in an input of its own. Typing on a chosen cell replaces its value. Enter, Tab and the arrow keys move the choice, passing over hidden rows, except in a cell opened to edit (below). Esc drops the open cell's edit. The arrow keys past the first or last row leave the table for the text there.
+**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading. The keys that choose, open and leave a cell are "Choosing and editing cells" in [`SPEC-editing-page.md`](SPEC-editing-page.md). The choice passes over hidden rows.
 
 **Alt+Enter types a line break inside an open cell**, as in a spreadsheet, and the cell shows its lines. A line break typed into a cell that held none turns its Wrap text on, in the same step, as Excel does. Unwrapped, the lines after it would run past the column and be cut. The open cell's box is as tall as the lines it shows, those its column's width breaks included. So no line scrolls out of sight while the cell is edited.
 
@@ -49,8 +53,7 @@
 
 **A column filters from its heading.** Each name carries an arrow, and pressing it opens a panel under that column (`ksmd/port/web/filter.js`):
 
-* The panel holds the two sorts, Clear filter from this column, a search box, and the column's values with tick boxes. OK applies them.
-* A condition is folded away under the list: is, is not, contains, is greater than, is less than, is empty, is not empty.
+* **What the panel holds is "Filters" in [`SPEC-editing-page.md`](SPEC-editing-page.md)**, with Clear filter from this column beside the two sorts.
 * **"Is greater than" and "is less than" compare a number at the 15 digits it shows**, as a formula's `>` and `<` do. A colour rule compares so too. The page asks the editor (`ks.compareNumbers` in `ksmd/port/web/core.js`), so it has no rule of its own that could disagree with a formula.
 * Typing in the search box narrows the list shown, and never unticks a value.
 * The values are listed in the order the column sorts in. Values that differ only in case are one value, and empty cells one value listed last. The list stops at 1,000 values and says so.
@@ -75,9 +78,9 @@
 * **Choosing the filter again applies it to every row**, as Excel's Reapply does. OK in its panel and Show all rows choose it again, and so does an undo that changes it. So does opening the document again: the file holds no mark of which row is new or changed.
 * **The filter stays the same in the file**, and one undo takes away the new row alone.
 * **With no value ticked and no condition, OK cannot be pressed**, as in Excel: no row would show. A condition counts once its value is typed, or at once for is empty and is not empty.
-* **In Read-only, a filter is the viewer's alone.** It narrows the rows for them, and the file keeps its own. Editing again shows the file's.
+* **In Read-only, a filter is the viewer's alone** ("Filters" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). Editing again shows the file's.
 
-**Under the menu bar stands a quick access bar: one row of the tools the person chose, as icons.** The menus hold every command, so the bar needs only the few a person uses most. View, Quick access bar opens the chooser, and a right-click on a command adds it or takes it off. The bar keeps the menus' order, and a tool its menu hides stands nowhere on it.
+**Under the menu bar stands a quick access bar: one row of the tools the person chose, as icons.** The menus hold every command, so the bar needs only the few a person uses most. How to choose them is "The window" in [`SPEC-editing-page.md`](SPEC-editing-page.md). The bar keeps the menus' order, and a tool its menu hides stands nowhere on it.
 
 **The bar shows what stands at the caret.** The kind of block shows in its list. A mark, a kind of list and an alignment are pressed in where all the selected text has them. At a caret, they are pressed in where typed text would take them. A tool that cannot act there is greyed out.
 
@@ -105,7 +108,7 @@
 * **Delete, Backspace and Cut on the whole table remove it, as one step.** On the data cells alone, Delete clears them, as it clears any range. Word's Delete clears a selected table's text and only Backspace removes it, which people find hard to tell apart.
 * **The caret takes the table's place** ("Removing a whole block" below).
 
-**Ctrl+C on a range puts its values on the clipboard as tab-separated rows**, which a spreadsheet takes, each number as calculated. Beside them goes what ksmd needs to paste the cells with their formulas ("Copying and pasting cells" below). A paste of rows from another program fills the table from the chosen cell, as one step, growing the table as needed. Each pasted value reads as typed text does, and `1,234.5` is a number. Spaces around a number or a date are left out, and text keeps its spaces. Rows pasted into text make a new table, whose first row gives the names. **An open cell takes the pasted text whole, line breaks included**, as Excel's cell does while it is edited. A person who pastes lines there means one cell's text. A chosen cell that is not open is where rows spread over cells.
+**Ctrl+C on a range puts its values on the clipboard as tab-separated rows**, which a spreadsheet takes, each number as calculated. Beside them goes what ksmd needs to paste the cells with their formulas ("Copying and pasting cells" below). A paste of rows from another program is one step ("Copying, moving and filling" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). Each pasted value reads as typed text does, and `1,234.5` is a number. Spaces around a number or a date are left out, and text keeps its spaces. Rows pasted into text make a new table, whose first row gives the names. **An open cell takes the pasted text whole, as Excel's cell does while it is edited.** A person who pastes lines there means one cell's text. A chosen cell that is not open is where rows spread over cells.
 
 **The document fills the window's width by default, with a margin of 32 pixels**, so a table has a spreadsheet's room. View, Reading width keeps lines about 50 characters long instead, for long prose. The choice belongs to the browser, not to the document.
 
@@ -113,7 +116,7 @@
 
 **A cell is chosen when the mouse button goes down, not on the click.** The press can remove a gap above the table and move the table up a line, so no click would come. For the same reason, the second press of a double-click opens the cell the first chose.
 
-**While a person works in a table, the page draws no caret in the text.** A caret beside a table would stand in a gap, which would push the table down a line after each action. So the keys go to the chosen cell. Esc, a press in the text, and an arrow key past the table's edge leave the table.
+**While a person works in a table, the page draws no caret in the text.** A caret beside a table would stand in a gap, which would push the table down a line after each action. So the keys go to the chosen cell, until the person leaves the table.
 
 * **Esc brings the caret back where the model holds it**, and the window stays where it is.
 * **An arrow key past the table's edge puts the caret on the text beside it** (`select_beside` in `ksmd/edit/editor.kspl`). Down from the last row goes to the start of the text after the table. Up from the names goes to the end of the text before it. A gap shows as an empty line, so the caret takes one only where no text stands on that side.
@@ -133,7 +136,7 @@
 
 **An image goes in three ways: Insert ▸ Image…, a paste, or a drop.** The menu item opens the system's file chooser, so a person who has no image on the clipboard can still add one. Where the file goes, and why nothing is asked, is "Images" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
 
-**A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
+**A paste takes the clipboard's plain text** ("Writing text" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). Each line starts a block of the caret's kind.
 
 **The page is built as wasm32 with no C library**, using clang's bulk-memory instructions to copy and fill memory. **It is one file**: kssrv's `kssrv/page/bundle.kspl` puts its style, its scripts and its wasm, as base64, inside `ksmd.html`. One of the scripts is kssrv's client for the local server, `kssrv/page/client.js`, which ksagent's chat page holds too. So the page opens from a file, and the local server hands it out alone.
 
@@ -154,25 +157,23 @@
 
 * **The menus' names stand in a `menubar` of their own**, apart from the document's name and its saved state, which are not menus. Each name is a `menuitem`.
 * **The menu bar and the quick access bar are each one stop of Tab.** The arrow keys move along them, as WAI-ARIA's menu bar and toolbar have it. The stop is the item the focus left last. Fifteen stops in the quick access bar made the document far to reach.
-* **Home and End go to the first and last item**, in a bar and in a menu. Up on a menu's name opens it on its last item.
+* **Home and End go to the first and last item**, in a bar and in a menu.
 * **Every small pop-up takes its keys and its place from one file** (`popup.js`). They are the status bar's menus, Paste Options, the quick access bar's menu and palette, and a column's filter. Each menu moves by Up, Down, Home and End. Esc closes any of them and gives the focus back, and each keeps off the window's bottom edge.
 * **The item the keys reach takes the mark's colour, with the paper's colour on it.** It stands out from the menu at 4.5 to 1 or more, in both schemes. The soft ground a pointer gives stands at about 1.1 to 1, too faint to find the focus by.
 
 **Esc, Cancel and Apply in a side panel give the focus back where it was before the panel opened**, as a dialog does. Page setup, Colour by value and a chart's panel are such panels. Left on the panel that went, the focus fell to the page's body, and the next key went nowhere.
 
-**A chosen cell takes the spreadsheets' keys for moving:**
+**A chosen cell takes the spreadsheets' keys for moving** ("Choosing and editing cells" in [`SPEC-editing-page.md`](SPEC-editing-page.md) lists them):
 
-* **Ctrl and an arrow key go to the edge of the values.** From a value with a value beside it, they go to the last value before an empty cell. Else they go over empty cells to the next value, or to the table's edge.
-  * The names count as the row above the first, as a heading row does in a sheet.
-  * Hidden rows and columns are passed over, as the arrow keys pass them.
-* **Home and End go to the row's first and last column.** A table ends at its last column, so End needs no Excel's End mode.
-* **Ctrl+Home goes to the first data cell, and Ctrl+End to the last row's last cell.** The names stand frozen above the rows, and Excel's Ctrl+Home goes to the first cell under a frozen heading.
+* **Ctrl and an arrow key count the names as the row above the first**, as a heading row does in a sheet. They pass over hidden rows and columns, as the arrow keys do, and stop at the table's edge.
+* **End needs no Excel's End mode**, since a table ends at its last column.
+* **Ctrl+Home goes to the first data cell, as Excel's goes to the first cell under a frozen heading.** The names stand frozen above the rows.
 * **Shift with any of them reaches there as a range**, from the range's far corner, as in Excel.
-* **Shift+Space chooses the rows of the chosen cells, and Ctrl+Space their columns**, as in Excel. In an open cell, Ctrl+Space still opens the list of functions.
+* **Shift+Space and Ctrl+Space choose rows and columns, as in Excel.** In an open cell, Ctrl+Space still opens the list of functions.
 
 **In an open cell, Shift+Enter takes the text and moves up**, as Shift+Tab moves left.
 
-**Tab past a row's last cell goes to the next row's first.** Past the table's last cell it adds a row, as an Excel table and a Word table do. A list then grows without the menu, and one undo takes the row away. Shift+Tab goes back, and stops at the first cell.
+**Tab past the table's last cell adds a row, as an Excel table and a Word table do.** A list then grows without the menu, and one undo takes the row away. Shift+Tab goes back, and stops at the first cell.
 
 **Esc or Ctrl+Z in a cell typed into gives back the value it held**, and the cell stays chosen. The box held nothing before the first key, so the browser's own undo emptied the cell instead. In a cell opened to edit, Ctrl+Z stays the browser's own, on the text.
 
@@ -184,7 +185,7 @@
 * **A column with no width fits its text**: its widest value or its name, from 3 to 60 characters. Rows a filter hides count too, so a filter moves no column.
 * **A cell's text stays on its lines.** Alt+Enter's line breaks still show as lines, and nothing else breaks a line, unless the cell wraps.
 * **Wrap text, as Excel's, breaks a cell's text into lines at its column's width.** It is set on each cell, as `wrap="on"` in its braces. Its row grows to show the lines, unless the row has a height. A word too long for the column breaks inside the word.
-* **A text runs on over the empty cells to its right, and is cut where the next cell holds a value**, as Excel shows it. It is cut at the table's right edge too.
+* **A text runs on over the empty cells to its right as Excel shows it** ("Rows and columns" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). It is cut at the table's right edge too.
 * **A number, a date or an error is always cut at its own cell.** A number or a date too wide for its column shows `###`, as in Excel: cut, 1200 would read as 120. Opening the cell shows the value.
 * **Centre across columns sets `align="across"` on each chosen cell, as one step of undo.** It stands in Format and in the table's Look flyout. Pressed again on a cell that has it, it takes it off, as the other alignments do.
 * **A value centred across columns shows in a box as wide as its run, over the run's empty cells.** A number wider than the whole run shows `###` in its own cell.
@@ -214,7 +215,7 @@
 
 ## Ranges of cells
 
-**A range of cells runs from the chosen cell to a far corner.** Shift+click and Shift with an arrow key reach it from the chosen cell. A press on a row number chooses that row, and one on a column letter that column's data cells. Shift with either press reaches from the chosen cell's row or column.
+**A range of cells runs from the chosen cell to a far corner** ("Choosing and editing cells" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). A press on a column letter chooses that column's data cells. Shift with a press on a row number or a column letter reaches from the chosen cell's row or column.
 
 * **The range keeps the identities of its rows and columns.** A row added above it, a sort or an undo leaves it on the same cells. A formula follows other rules on a sort. One on a sorted row moves as a copy, but a reference the shift would take out of the table keeps its places. One in another table keeps a range over several rows on its places ("How references follow edits" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 * **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. A typed character opens the chosen cell with that character in place of its value.
@@ -231,14 +232,14 @@
 * **The plain text a copy puts on the clipboard stays the shown values.** A spreadsheet or a text editor takes them as before. A formula there would name cells the other program does not hold.
 * **Beside it goes ksmd's own type, `application/x-ksmd-cells`.** It holds each cell's text as typed, a formula with its `=`, and each value as calculated. It also holds the place the cells were copied from. So a paste in another table, or in another ksmd window, has all it needs, whatever the copied document holds by then.
 * **A copy over rows a filter hides leaves them out, and the paste puts the lines in sight together.** The copy holds the row each line came from (`Copied_at.rows`). So each formula moves from its own row: `=A3*2` copied from row 3 and pasted in row 2 becomes `=A2*2`.
-* **Ctrl+V pastes the formulas, each reference moved as far as the paste moved from the copy.** A part with `$` stays, and a reference moved outside its table becomes `#REF!`. One rule moves a reference, for a fill and a paste alike (`moved` in `ksmd/calc/formula.kspl`).
+* **Ctrl+V pastes the formulas, each reference moved** as "Copying, moving and filling" in [`SPEC-editing-page.md`](SPEC-editing-page.md) says. One rule moves a reference, for a fill and a paste alike (`moved` in `ksmd/calc/formula.kspl`).
   * **A reference without a table's name names a cell of the table pasted into.** A reference to a table the document lacks stays as written.
-* **Ctrl+Shift+V pastes the values alone, and so do Edit ▸ Paste values and the right-click menu.** Each value goes in as typed text that reads back as that value.
+* **Paste values puts each value in as typed text that reads back as that value.**
   * **A number goes in as it shows without a format, and a date as `2026-10-23`.**
   * **Other values go in as quoted text, so `"12"` stays text.** `true`, `false` and an error go in as the text they show.
 * **A paste is one step of undo, and the pasted cells stay chosen.** A range that holds the copy a whole number of times takes it in each place, each copy moved from its own place. Any other range takes it once, from its corner.
 * **After a paste of copied cells, the Paste options button stands below their right corner, as Excel's does.** Its menu holds Keep formulas and Values only, the one in use ticked. The other undoes the paste and pastes again that way, so one undo still takes the whole paste away.
-  * **Ctrl pressed and let go alone opens the menu, as in Excel**, and F or V chooses. The arrow keys, Enter and Esc work as in any menu.
+  * **Its keys are Excel's** ("Copying, moving and filling" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). The arrow keys, Enter and Esc work as in any menu.
   * **The next key, press or change takes the button away**, so it never offers to change a paste that is no longer the last.
 * **Text from another program pastes as before**: its values fill the cells, and no button shows. Only the clipboard's own type tells a copy made in ksmd.
 * **A cut carries no formulas for another window.** Its cells wait in their table for a paste that moves them ("Moving cells" below).
@@ -486,6 +487,7 @@
 **File ▸ Page setup… opens a panel for the document's settings.** It holds the paper, the orientation, the header and the footer. It also holds where heading numbers start, and the words before table and image numbers. Apply sets them as one step (`settings.js`).
 
 * **The settings stand at the document's top as a dashed bar** that says what they set, with Edit and Remove. Paper never shows the bar.
+* **Nothing can be put above the bar.** The reader refuses a file with a block before the settings. So Apply leaves the caret after the bar, and a place above it counts as the place below. A step that would still put a block above it is refused.
 * **A heading's or a caption's number is drawn by CSS from an attribute, never written into the text.** The editor counts the text of each block, so a number inside it would move every caret after it. The contents list shows the numbers too.
 * **A reference's `#` stays in the text and takes no room.** Its number is drawn after it.
 * **Ctrl+press on a reference, or a press while read-only, scrolls to what it names.**
@@ -493,10 +495,9 @@
 
 ## Drawing on an image or a chart
 
-**An image and a chart each have the tools Rectangle, Arrow, Line, Pen, a colour, Text… and Delete** (`drawings.js`). With Shift held, a rectangle is a square, and a line or an arrow keeps to a multiple of 45 degrees. The shapes are saved in the picture's clause ("Shapes drawn over an image or a chart" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+**An image and a chart each have the drawing tools of "Charts, images and drawing" in [`SPEC-editing-page.md`](SPEC-editing-page.md)** (`drawings.js`). The shapes are saved in the picture's clause ("Shapes drawn over an image or a chart" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
-* **A shape is drawn by a drag across the picture once its tool is pressed.** The new shape is then chosen.
-* **A press on a shape chooses it, and a drag moves it**, kept inside the picture. Delete takes the chosen shape away, and Esc lets it go.
+* **A new shape is chosen once it is drawn, and a moved one stays inside the picture.** Delete takes the chosen shape away, and Esc lets it go.
 * **A chosen shape takes the keyboard's focus.** Where the focus then goes to the text or to a field, Delete and Backspace act there and leave the shape. Any change to the document lets the chosen shape go, as another shape can then stand in its place.
 * **A shape stands no further than 20,000 pixels from the picture's corner**, the most the file's reader takes, however large the image is.
 * **The colour list sets the colour of new shapes and of the chosen one.** Text… writes the words inside the chosen rectangle.
@@ -506,17 +507,14 @@
 
 ## A diagram on the page
 
-**Insert ▸ Diagram puts an empty drawing area at the caret** (`diagram.js`). Its tools draw a box, a diamond, a start or end dot, a group and a note. They also draw an arrow or a line between two shapes. The file's form is "Diagrams" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
+**Insert ▸ Diagram puts an empty drawing area at the caret** (`diagram.js`). Its tools, and the keys and presses that use them, are "Diagrams" in [`SPEC-editing-page.md`](SPEC-editing-page.md). The file's form is "Diagrams" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
 
-* **A shape is drawn by a drag across the area once its tool is pressed**, or at its own size by one press. An arrow is drawn by a drag from one shape to another.
-* **A press chooses a shape or an arrow.** A drag moves a shape and its arrows follow, kept inside the area. A group carries the shapes it holds whole.
-* **A chosen shape's corner handle resizes it, and the area's corner handle resizes the area**, never smaller than what it holds.
-* **A chosen arrow shows a handle halfway along each stretch; a drag of one adds a bend there.** A bend's own handle moves it, and two presses on it take it away.
-* **Two presses on a part, or Text…, open a box for its words.** Ctrl+Enter or a press elsewhere takes them, and Esc drops them. A shape's words may have several lines.
-* **Mono, the colour list and the ground list change the chosen part**, and the next one drawn. Caption… writes the words under the diagram.
-* **Delete takes the chosen part away, and a shape's arrows go with it.** An arrow key nudges a chosen shape one pixel, ten with Shift.
+* **A moved shape stays inside the area, and the area is never resized smaller than what it holds.**
+* **A chosen arrow shows a handle halfway along each stretch**, and a bend's own handle moves it.
+* **A press elsewhere takes a part's words too, and a shape's words may have several lines.**
+* **Mono, the colour list and the ground list change the chosen part**, and the next one drawn.
 * **Each change is one step of undo.** The page sends the whole clause, so the file's reader checks every change.
-* **The area shows at its own size, and a wide one reaches past the page**, as a wide table does. Paper shrinks it to the page's width. Read-only, an included file and paper show it without its tools.
+* **The area shows at its own size, and a wide one reaches past the page**, as a wide table does. Read-only, an included file and paper show it without its tools.
 * **The page tells two presses apart itself.** The first press draws the area again, so the browser sends no double-click.
 * **The box for a part's words stands outside the document**, as the chart's panel does. Inside it, the document's own keys would type into its text.
 
@@ -531,7 +529,7 @@
 
 ## Print and PDF
 
-**File, Print or save as PDF (Ctrl+P) opens the browser's print dialog, which also saves a PDF.** Print and PDF are one output, made by the same rules.
+**Print and PDF are one output, made by the same rules** ("Print and PDF" in [`SPEC-editing-page.md`](SPEC-editing-page.md)).
 
 * **The output shows the document, and nothing only editing uses.** The menus, the bars, the status bar and the contents go. So do the column letters, row numbers, table names, filter marks and block buttons. An include's frame, the marks of notes and choices, and the chosen cells go too.
 * **Rows a filter or a closed group hides stay hidden on paper**, so a printout shows what the person sees.
@@ -555,7 +553,7 @@
 
 * **The attribute names the exception, so a new block is in the output until its author says otherwise.**
 * **While editing, such a block has a dashed frame and the words "Not in print or PDF".**
-* **The table menu's Table flyout holds Leave out of print. A chart, a diagram, an image and an include have the button beside Remove.** Each change is one step of undo, and the button reads Put back in print once it is set.
+* **Each change of Leave out of print is one step of undo**, and the button reads Put back in print once it is set.
 
 ## Repeat
 
@@ -564,7 +562,7 @@
 * **The button reads Repeat while it repeats, and Redo while something is left to redo.**
 * **A command that asks for something is not repeated**, such as Rename or a note. Nor are typing and pasting.
 * **Any other change forgets what would be repeated**, so F4 never repeats a command from before the person typed.
-* **In a cell open on a formula, F4 turns a reference's `$` instead** ("Pointing at cells in a formula" above), as in Excel. Elsewhere it repeats as before.
+* **In a cell open on a formula, F4 turns a reference's `$` instead, as in Excel** ("Pointing at cells in a formula" above).
 
 ## Read-only
 
@@ -598,12 +596,12 @@
 
 ### The figures
 
-**With two or more cells chosen, the bar shows the figures the person picked for them** (`figures.js`). A right-click on the bar, or a press on the figures, opens their menu. It holds Average, Count, Numerical count, Min, Max and Sum, each with its value now. Average, Count and Sum show until a person picks others, as in Excel. The choice is this browser's own, and no document carries it.
+**With two or more cells chosen, the bar shows the figures the person picked for them** (`figures.js`). How a person picks them is "The status bar" in [`SPEC-editing-page.md`](SPEC-editing-page.md). Average, Count and Sum show until a person picks others, as in Excel. No document carries the choice.
 
 * **Count takes every cell that holds a value, and the others take the numbers alone.** A figure of numbers is left out where the cells hold none. A date is not a number here, so a sum never adds days. Rows a filter hides are left out.
 * **Each number is written as a cell writes a number without a format**, by the engine. The page has no rule of its own for a number's digits, so a cell, `text(A1, "")` and the bar never round one value differently.
 * **Otherwise the figures are the lines and characters of the selection, or of the whole document.** A word count is absent: Japanese writes no spaces between words, so it would count a sentence as one word.
-* **A line is a line as written.** Each paragraph, heading, list item, quote and code line is one, and each line break typed inside one adds one. The count does not change with the window's width or the zoom. A table's cells and captions are not counted.
+* **A line is a line as written** ("The status bar" in [`SPEC-editing-page.md`](SPEC-editing-page.md)), so the count does not change with the window's width or the zoom. A table's captions are not counted either.
 * **A character is one that a person sees, and spaces are left out.** A kanji written with a variation selector, as some names are, is one character, though it takes two code points. A space, full-width or not, is not counted.
 * **A block that the selection only touches at its edge is not counted.** So selecting a paragraph up to the start of the next one counts one paragraph.
 * **The lines and characters are counted once the person pauses, as the page is.** Each count reads every block, and in a document of 12,000 blocks that took a tenth of a second per key. The figures for chosen cells show on the next frame.
@@ -633,7 +631,7 @@
 
 ## The formula bar
 
-**Under the quick access bar stands the formula bar: the chosen cell's address, then its whole text as typed** (`bar.js`). A press in its box, or Tab to it, opens the chosen cell for editing there. A long formula then has the window's width, not the cell's.
+**Under the quick access bar stands the formula bar** (`bar.js`; "The formula bar" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). A long formula edited there has the window's width, not the cell's.
 
 * **It shows a value's typed text, and a formula as written.** A column's name cell shows `C name` and the name. A range shows `C2:D5`, or `A:D` from the names to the last row. While the cell is open, the bar shows its text as it is typed.
 * **It shows one line while it only shows.** Choosing another cell then moves nothing under it, so a press or a drag lands where it was aimed. The box still holds the whole text, which a screen reader reads, and a press shows it all.
@@ -643,12 +641,12 @@
 **One edit, two views: the bar's box takes the open edit itself** (`inBar` in `ksmd/port/web/cellbox.js`). The keys, the list of functions, the colours, the marked brackets and AutoCorrect act in the bar as in the cell, by the same code. The cell shows a copy of the text, framed with dashes.
 
 * **An edit open in the cell moves into the bar with its text** when the bar is pressed. The caret stands where the press was.
-* **The bar always edits, as F2 does**: the arrow keys move the caret. Enter and Tab take the text and choose the next cell. Esc drops the edit. The keys then go back to the table.
+* **The bar always edits, as F2 does.** Once the edit is taken or dropped, the keys go back to the table.
 * **While a formula is typed in the bar, a press on a cell writes its reference.** It works as from the cell ("Pointing at cells in a formula" above).
 * **A table drawn again while the bar holds the edit keeps the text, the caret and the focus.** The bar is not drawn again. The cell's copy of the text comes back in the table drawn again (`redrawn` in `ksmd/port/web/cellbox.js`).
 * **A box that held an edit is never used again.** Its keys and help stay attached to it, so the bar puts a fresh box in its place once that edit ends.
 
-**The bar is a stop of Tab after the quick access bar.** Its box's name says which cell it edits, such as `Formula bar, Cell C2`. F10 then Tab twice reach it from a chosen cell. Tab to the box puts the caret at the end, as F2 does.
+**The bar is a stop of Tab after the quick access bar.** Its box's name says which cell it edits, such as `Formula bar, Cell C2`. Tab to the box puts the caret at the end, as F2 does.
 
 **Where no edit is allowed, the bar shows the text and takes no edit.** That is in Read-only, on a range, outside a table, and on a table shown from an included file. Its text can still be chosen and copied. A page opened without the local server edits in the bar as it edits in a cell.
 
@@ -703,6 +701,7 @@ Served by the local server, the page opens and saves files itself ("The file lif
 * **One tab holds the server open for all the page's tabs on it.** A browser opens six connections to one server, so a hold in each of six tabs would leave no connection for a save. The tabs share one lock (`navigator.locks`).
 * **Text typed in a cell still open is unsaved at once, and its draft holds it** beside the document's source. Taking the cell to hold a draft would close it under the person's typing.
 * **A draft brought back first holds aside the edits made since the document opened**, as a draft of their own. So neither version is lost.
+* **A draft is offered only once the tab that wrote it is gone** (`keep.js`). Each tab holds a Web Lock named by its opening, and the browser lets it go when the tab closes or crashes. A second tab then cannot discard a draft the first still writes, while the first still says it holds one. A browser without Web Locks offers every draft.
 * **The open document's path, its file's digest and its saved text are one record in `ksmd/port/web/file.js`, changed in one place.** The editor, the menu bar, the window's title and the address follow from it, so the address cannot name a document that did not open.
 * **A change time in the same second as the ask cannot rule out a later write**, since the server gives whole seconds. Until an ask comes in a later second, and once after its own save, the page compares the file's bytes too.
 * **Whether a draft is held is the answer of the last write, not whether the browser has storage.** A browser whose storage is full opens its store, but every write fails.

@@ -1,7 +1,7 @@
 //< The kernel's stops: each misuse panics instead of going on silently, one chosen per run
-//< `panic_demo <which>` runs one: `stack-overflow`, `mutex-relock`, `mutex-foreign-unlock`,
-//< `delete-holder`, `timeout-zero`, `event-no-bits`, `stop-outside`, `wait-masked`,
-//< `delay-before-start` or `create-again`. **Success is the panic**, so
+//< `panic_demo <which>` runs one: `stack-overflow`, `stack-overflow-single`, `mutex-relock`,
+//< `mutex-foreign-unlock`, `delete-holder`, `timeout-zero`, `event-no-bits`, `stop-outside`,
+//< `wait-masked`, `delay-before-start` or `create-again`. **Success is the panic**, so
 //< `ksos-<which>` greps the output for the kernel's own message (`ksos_posix_panic_needle_<which>`
 //< in `../../Makefile`). One run is one stop: a panic ends the process, so the scenarios cannot
 //< share a run.
@@ -32,6 +32,19 @@ fn overflow_task(_arg: Void$@): Void
     stack[0] = 0x00
     Task.yield() // schedule() checks this task's canary here and panics
     io.out().s("[overflow] UNEXPECTED: returned without triggering the guard\n")
+
+// ==========================================
+// stack-overflow-single: the same canary in a single task that never yields. Only the tick that
+// run_single_task starts runs schedule(), and that check must find the damage.
+// ==========================================
+fn single_overflow_task(_arg: Void$@): Void
+    io.out().s("[single] clobbering this task's canary, then running on without yielding...\n")
+    stack[0] = 0x00
+    for {} // the next tick's schedule() checks the canary and panics
+
+fn no_idle() //< run_single_task's on_idle: reached only if the task ended, which it never does
+    io.out().s("[single] UNEXPECTED: the task ended without triggering the guard\n")
+    sys.exit(1)
 
 // ==========================================
 // mutex-relock: when the holder locks the mutex again, the kernel panics instead of waiting
@@ -159,6 +172,9 @@ fn main(): I32
         return delay_before_start()
     if which.equals("create-again")
         return create_again()
+    if which.equals("stack-overflow-single")
+        task.run_single_task(tcb@, U8$[]::stack, single_overflow_task, "single", no_idle, 1000)
+        return 1 // unreachable: run_single_task never returns
     if which.equals("stack-overflow")
         tcb.create(U8$[]::stack, overflow_task, null, 1, "overflow")
     else if which.equals("mutex-relock")
@@ -186,7 +202,7 @@ fn main(): I32
         // **An unknown name must not pass**: it prints no needle, so its gate fails.
         io.err()
             .s("usage: panic_demo \
-                stack-overflow|mutex-relock|mutex-foreign-unlock|delete-holder|timeout-zero|event-no-bits|stop-outside|wait-masked|delay-before-start|create-again\n")
+                stack-overflow|stack-overflow-single|mutex-relock|mutex-foreign-unlock|delete-holder|timeout-zero|event-no-bits|stop-outside|wait-masked|delay-before-start|create-again\n")
         return 2
     task.start_scheduler()
     io.out().s("[panic_demo] UNEXPECTED: scheduler returned without a panic\n")

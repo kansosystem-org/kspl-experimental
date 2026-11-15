@@ -6,8 +6,8 @@
 // ==========================================
 // The clock tree and the register map are in lib/ksos/docs/DESIGN-rtos.md.
 // Caution: **Calling this changes the time scale by about 19 times** (from the ROSC's 6.5MHz to
-// clk_sys's 125MHz). Everything that waits by iteration count (gpio.spin), SysTick's reload and
-// PWM's divisor need review; after it, use rp2040/timer's real microseconds.
+// clk_sys's 125MHz). Everything that waits by iteration count, SysTick's reload and PWM's
+// divisor need review; after it, use rp2040/timer's real microseconds.
 // ==========================================
 
 // QEMU has no RP2040 model: a real Pico W's buzzer sounding **a calibrated 2kHz** verifies it
@@ -18,6 +18,9 @@ import "ksos/drivers/rp2040/resets"
 // The frequencies this driver sets, from which callers compute their divisors.
 const REF_HZ: U32 = 12000000 // = XOSC, the crystal's own frequency
 const SYS_HZ: U32 = 125000000 // clk_sys (= the source of the CPU / SysTick / PWM)
+const TICK_1MS_RELOAD: U32 = SYS_HZ / 1000 //< SysTick's reload for a 1 ms tick (enable_preemption)
+    //< It holds once init has run. Before that clk_sys runs from the ring oscillator, about 20
+    //< times slower, so each tick is longer.
 const USB_HZ: U32 = 48000000 // clk_usb (USB is fixed at 48MHz; it must not change)
 const RTC_HZ: U32 = 46875 //< clk_rtc
     //< The RTC divides this by CLKDIV_M1 + 1 to get 1Hz, so `RTC_HZ - 1` is passed to rtc.init

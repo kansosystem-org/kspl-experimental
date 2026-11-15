@@ -156,17 +156,11 @@ impl<|T|> Self_attention<|T|>
         r.wv.init_uniform(rng, scale)
         r.wo.init_uniform(rng, scale)
 
-    pub fn forward( //< attention over everything cached so far, this input included
-        r: Self$@,
-        x: Tensor<|T|>, //< the input for this step
-        start_pos: Sz, //< this input's position in the sequence, so the cache and RoPE line up
-    ): Tensor<|T|>
-        return r.forward_lora(x, start_pos, null, null)
-
-    pub fn forward_lora( //< the same, with fine-tuned adapters added at inference
-        //< The adapters go on the Q and V projections' outputs, the two the LoRA paper adapts.
+    pub fn forward_lora( //< attention over everything cached so far, this input included
+        //< Fine-tuned adapters can be added at inference. They go on the Q and V projections'
+        //< outputs, the two the LoRA paper adapts.
         r: Self$@, x: Tensor<|T|>, //< the input for this step
-        start_pos: Sz, //< this input's position in the sequence
+        start_pos: Sz, //< this input's position in the sequence, so the cache and RoPE line up
         q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
         v_lora: lora.Lora<|T|>$@): Tensor<|T|>
         compute_arena: = x.arena
@@ -385,25 +379,6 @@ impl<|T|> Gqa_cache<|T|>
             parallel.threads_for(r.n_heads * rows, seen, 2 * r.head_dim))
         return out
 
-priv const SCORE_LANES: Sz = 8 //< the partial sums of a query's dot product with a key
-    //< One running sum waits on its last addition at every step; eight independent ones fill a
-    //< vector register, and the order stays fixed, so the bits do not depend on the machine.
-
-priv fn dot_lanes<|T|>(a: T@, b: T@, n: Sz): T //< the dot product of `n` numbers, in 8 lanes
-    //< Number `i` goes to lane `i % 8`; the lanes are added in order at the end.
-    $acc: T[SCORE_LANES] = ::{}
-    p: T$@ = acc@
-    whole: = n / SCORE_LANES * SCORE_LANES
-    for $g: Sz = 0; g < whole; g += SCORE_LANES
-        for k in Range.asc(SCORE_LANES)
-            (p + k)$ = (p + k)$ + (a + g + k)$ * (b + g + k)$
-    for i in Range(whole, n, 1)
-        (p + i - whole)$ = (p + i - whole)$ + (a + i)$ * (b + i)$
-    $s: T = 0.0
-    for k in Range.asc(SCORE_LANES)
-        s = s + (p + k)$
-    return s
-
 priv fn exp_row<|T|>(sc: T$@, n: Sz, max_val: T) //< each score `x` becomes `e^(x - max_val)`
     //< F32 scores take `tensor.exp_f32`, so the loop runs on vectors; F64 ones keep `math.exp`.
     if sizeof(T) == 4
@@ -432,8 +407,8 @@ priv fn attend_heads<|T|>(arg: Void$@, first: Sz, last: Sz) //< key heads [first
                 k_row: = j.k + t * kv_dim + ko
                 for g in Range.asc(j.groups)
                     h: = heads + g
-                    dot: =
-                        dot_lanes<|T|>(j.q + s * q_dim + h * j.head_dim, k_row, j.head_dim)
+                    dot: = tensor.dot_lanes<|T|>(j.q + s * q_dim + h * j.head_dim, k_row,
+                        j.head_dim)
                     (j.scores + h * j.seen + t)$ = dot * j.scale
             for g in Range.asc(j.groups)
                 sc: = j.scores + (heads + g) * j.seen

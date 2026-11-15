@@ -17,20 +17,13 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-priv const QUOTE: U8[] = "receives 10 days of paid leave after six months" //< from `rules/leave.md`
-
-priv fn leave_args(text: U8[], arena: Arena$@): U8[] //<
-    //< an `answer` call's arguments, citing lines 3-4
-    cites: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, QUOTE, arena) }, arena)
-    return stub.answer_args(text, cites, arena)
-
 fn test_a_streamed_answer_is_checked(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a streamed reply is joined piece by piece, and its answer checked")
     root: = stub.folder(work, "streamed", arena)
     search: = stub.streamed_call("Let me search the rules.", "search", "{\"text\": \"paid leave\"}",
         arena)
-    done: = stub.streamed_call("", "answer", leave_args("新入社員は10日です。", arena),
-        arena)
+    done: = stub.streamed_call("", "answer",
+        stub.leave_args("新入社員は10日です。", arena), arena)
     s: = stub.start(U8[][]::{ search, done }, arena)
     a: = agent_test.ask(s, root, "How much paid leave?", arena)
     verdict.check("the answer joined from pieces keeps its checked source",
@@ -93,7 +86,7 @@ fn test_a_refused_stream_is_asked_whole(work: U8[], arena: Arena$@)
     refusal: =
         "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: \
             60\r\n\r\n{\"error\": {\"message\": \"streaming is not supported here.\"}}"
-    cites: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, QUOTE, arena) }, arena)
+    cites: = stub.leave_cites(arena)
     whole: = stub.one_call(stub.answer_call("Ten days.", cites, arena), arena)
     s: = stub.start(U8[][]::{ refusal, whole, whole }, arena)
     job: = agent_test.job_at(s.port, root, arena)
@@ -224,7 +217,7 @@ fn test_the_live_file_follows_the_answer(work: U8[], arena: Arena$@)
     root: = stub.folder(work, "live", arena)
     ask: = fs.join(root, "team.ask.jsonl", arena)
     io.write_file(ask, ASKED_LEAVE) catch panic("the ask file can be written")
-    done: = stub.streamed_call("", "answer", leave_args("Ten days.", arena), arena)
+    done: = stub.streamed_call("", "answer", stub.leave_args("Ten days.", arena), arena)
     s: = stub.start(U8[][]::{ done }, arena)
     wrote: = watch_one(s, root, ask, arena)
     live: = io.read_file(files.live_path(ask, arena), arena) catch
@@ -246,8 +239,8 @@ fn test_a_removed_question_stops_its_answer(work: U8[], arena: Arena$@)
     root: = stub.folder(work, "stop", arena)
     ask: = fs.join(root, "team.ask.jsonl", arena)
     io.write_file(ask, ASKED_LEAVE) catch panic("the ask file can be written")
-    slow: = stub.streamed_call("", "answer", leave_args("Ten days, after six months.", arena),
-        arena)
+    slow: = stub.streamed_call("", "answer",
+        stub.leave_args("Ten days, after six months.", arena), arena)
     s: = stub.start_dripping(U8[][]::{ slow }, ask, "", 100, arena)
     wrote: = watch_one(s, root, ask, arena)
     recorded: = io.read_file(files.chat_path(ask, arena), arena) catch

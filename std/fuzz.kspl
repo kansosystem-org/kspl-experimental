@@ -451,6 +451,41 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
     check_reach(read_ok, trials, c.reach_div, work.arena)
     report_all(found, o, c.subject, c.wait_ms, c.again, work.arena)
 
+pub fn run_main( //< a package's fuzz driver from start to end, as its `main` runs it
+    //< It reads the command line (`setup`), says whether the reader is sanitized, checks the
+    //< seeds, then scatters. **The driver is `tests/fuzz_main.kspl`** in its package, and the
+    //< program under test is `<reader>`, which reads one file of the kind named before it.
+    subject: U8[], //< the program under test, as the lines name it (`std`)
+    about: U8[], //< what the driver does, as its usage says
+    defaults: Options, //< the two numbers where the command line names none
+    kinds: Input_kind[], //< the kinds of input the reader takes
+    wait_ms: I32, //< a trial's first timeout (`Campaign.wait_ms`)
+    reach_div: Sz, //< at least one trial in this many must be accepted (`Campaign.reach_div`)
+    seed_dirs: Bool, //< whether seed folders can follow the work folder
+    seeds: fn(dirs: U8[][], arena: Arena$@): List<|Sample|>, //< the seeds, given the seed folders
+    arena_bytes: Sz, //< the size of the arena the run works in, which it frees at the end
+): I32 //< the exit code, as `verdict.finish` gives it
+    verdict.begin("fuzz")
+    defer arena: = Arena(arena_bytes)
+    $o: = defaults
+    $a: = Sanitized::{ .asan = false, .required = false }
+    p: = argparse.Parser.create("fuzz_main", about, arena)
+    declare_asan(p, a@)
+    s: =
+        setup(p, o@, "ksplc run tests/fuzz_main.kspl", "<reader>", seed_dirs, arena) catch why
+            return verdict.fatal(why)
+    report_asan(a)
+    // The same reader and work folder run it again, from this folder.
+    c: = Campaign::{ .subject = subject, .argv = U8[][]::{ s.exe }, .tell_kind = true,
+        .after = U8[][]::{}, .work = s.work, .kinds = kinds, .in_turn = false, .wait_ms = wait_ms,
+        .reach_div = reach_div, .again = again_with_asan(a, s.again, arena) }
+    $all: = seeds(s.dirs, arena)
+    io.out().s("# assembling the seeds and reading them back (\{all.len\})\n")
+    $samples: = check_seeds(c@, all@, arena)
+    scatter(c@, samples@, "byte sequences", o, arena) catch why
+        return verdict.fatal(why)
+    return verdict.finish()
+
 // ==========================================
 // Counting and reporting the findings
 // ==========================================

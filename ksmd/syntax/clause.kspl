@@ -2,7 +2,7 @@
 //< image, a chart or a person's functions
 //< A table's names, cells and widths are read and checked here. What a formula means, and where a
 //< path leads, are not: calculation and file resolution come after reading.
-import "ksmd/base/attribute" { Attribute, attribute_at, decode, find, read_attributes }
+import "ksmd/base/attribute" { Attribute, allow, attribute_at, decode, find, read_attributes }
 import "ksmd/base/dates" { is_date }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/base/marker" { formula_text_end, is_decimal, leading, quoted_end }
@@ -96,10 +96,7 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             if width == 0
                 throw src.diagnostic(a.offset,
                     "width is a share of the text width, \"1%\" to \"100%\", or leave it out")
-        doc.blocks
-            .push(Block::{ .kind = .image, .level = 0, .label = "", .text = "",
-            .first = doc.images.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
-            .invisible = false })
+        doc.blocks.push(Block.whole(.image, doc.images.len, first.offset))
         $drawings: = List<|Drawing|>(arena)
         next: = read_drawings(src, first, drawings@, arena)!
         doc.images
@@ -131,10 +128,7 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
         if says: = fault_of(settings)
             throw src.diagnostic(first.offset, says)
         doc.settings.push(settings)
-        doc.blocks
-            .push(Block::{ .kind = .document, .level = 0, .label = "", .text = "",
-            .first = doc.settings.len - 1, .count = 1, .offset = first.offset, .align = .none,
-            .note = "", .invisible = false })
+        doc.blocks.push(Block.whole(.document, doc.settings.len - 1, first.offset))
         return empty_body(src, first, "':::document' has no body. Close it on the next line")
     throw src.diagnostic(first.offset + 3,
         "a clause is ':::table', ':::include', ':::image', ':::chart', ':::diagram', ':::functions' \
@@ -196,10 +190,7 @@ priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc
     $ids: = List<|Sz|>(arena)
     for _ in names
         ids.push(UNBOUND)
-    doc.blocks
-        .push(Block::{ .kind = .chart, .level = 0, .label = "", .text = "",
-        .first = doc.charts.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
-        .invisible = false })
+    doc.blocks.push(Block.whole(.chart, doc.charts.len, first.offset))
     $drawings: = List<|Drawing|>(arena)
     next: = read_drawings(src, first, drawings@, arena)!
     doc.charts
@@ -281,10 +272,7 @@ priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc
         read_group_list(src, a, t@)!
     if a: = find(attributes, "filter")
         read_filter_list(src, a, t@)!
-    doc.blocks
-        .push(Block::{ .kind = .table, .level = 0, .label = "", .text = "",
-        .first = doc.tables.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
-        .invisible = false })
+    doc.blocks.push(Block.whole(.table, doc.tables.len, first.offset))
     doc.tables.push(t)
     return src.line_at(at).next
 
@@ -655,16 +643,6 @@ fn parse_widths(text: U8[], widths: List<|Sz|>$@): Bool //<
             return false
         widths.push(width)
     return true
-
-priv fn allow(src: Source@, attributes: List<|Attribute|>, names: U8[][], message: U8[]):
-    Void!Diagnostic //<
-        //< Refuses any attribute but these
-    for i in Range.asc(attributes.len)
-        $known: = false
-        for name in names
-            known = known || attributes.get(i).name.equals(name)
-        if !known
-            throw src.diagnostic(attributes.get(i).offset, message)
 
 priv fn required(src: Source@, first: Line, attributes: List<|Attribute|>, name: U8[],
     message: U8[]): U8[]!Diagnostic //<

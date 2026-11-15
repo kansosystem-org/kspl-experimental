@@ -6,19 +6,16 @@
 //< given folders (the repository's own, when it runs this) are seeds too.
 //< Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [seed folder ...]`, with
 //< `--trials`, `--seed` and `fuzz.declare_asan`'s two flags; the Makefile builds the reader.
-import "std/argparse"
 import "std/base64"
 import "std/ds" { List }
 import "std/fuzz"
 import "std/http"
-import "std/io"
 import "std/json" { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/url"
-import "std/verdict"
 
 priv const DEFAULT_SEED: I64 = 20260903
 priv const DEFAULT_TRIALS: I64 = 400 //< how many rounds CI scatters, some 40 a kind
@@ -221,23 +218,7 @@ priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
 // ---------------------------------------------------------
 
 fn main(): I32
-    verdict.begin("fuzz")
-    defer arena: = Arena(512 * 1024 * 1024)
-    $o: = fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED }
-    $a: = fuzz.Sanitized::{ .asan = false, .required = false }
-    p: = argparse.Parser.create("fuzz_main", "scatters broken input at std's readers", arena)
-    fuzz.declare_asan(p, a@)
-    s: =
-        fuzz.setup(p, o@, "ksplc run tests/fuzz_main.kspl", "<reader>", true, arena) catch why
-            return verdict.fatal(why)
-    fuzz.report_asan(a)
-    c: = fuzz.Campaign::{ .subject = "std", .argv = U8[][]::{ s.exe }, .tell_kind = true,
-        .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::KINDS, .in_turn = false,
-        .wait_ms = TRIAL_TIMEOUT_MS, .reach_div = REACH_FLOOR_DIV,
-        .again = fuzz.again_with_asan(a, s.again, arena) }
-    $all: = collect_samples(s.dirs, arena)
-    io.out().s("# assembling the seeds and reading them back (\{all.len\})\n")
-    $samples: = fuzz.check_seeds(c@, all@, arena)
-    fuzz.scatter(c@, samples@, "byte sequences", o, arena) catch why
-        return verdict.fatal(why)
-    return verdict.finish()
+    return fuzz.run_main("std", "scatters broken input at std's readers",
+        fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED },
+        fuzz.Input_kind[]::KINDS, TRIAL_TIMEOUT_MS, REACH_FLOOR_DIV, true, collect_samples,
+        512 * 1024 * 1024)

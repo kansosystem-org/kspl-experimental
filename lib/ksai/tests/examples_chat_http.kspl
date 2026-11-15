@@ -134,17 +134,21 @@ fn json_text(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text, for 
     v.dump(out@)
     return arena.dup_str(out.slice())
 
-fn test_chat_server_http(chat_exe: U8[], work: U8[], arena: Arena$@) //<
-    //< The built server answers a client's request, refuses what it does not do, and keeps its cache
+fn check_served(exe: U8[], model: U8[], ask: fn(port: I32, arena: Arena$@): U8[], arena: Arena$@) //<
+    //< Starts the server on a model's file, asks it, kills it, then stops where ask gave a fault
     //< Caution: **Kill the server before any failure stops this program**, or it outlives the run
-    //< and holds the pipes of whatever started it. So the checks return their failure.
-    verdict.start("[chat_server] the built server answers over HTTP")
-    $child: =
-        started(chat_exe, fs.join(chat.chat_dir(work, arena), chat.MODEL_FILE, arena), arena)
+    //< and holds the pipes of whatever started it. So ask returns its failure; empty is none.
+    $child: = started(exe, model, arena)
     port: = port_of(child@, arena)
-    fault: = asked_all(port, arena)
+    fault: = ask(port, arena)
     child.kill()
     assert(fault.len == 0, arena.dup_str(fault))
+
+fn test_chat_server_http(chat_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< The built server answers a client's request, refuses what it does not do, and keeps its cache
+    verdict.start("[chat_server] the built server answers over HTTP")
+    check_served(chat_exe,
+        fs.join(chat.chat_dir(work, arena), chat.MODEL_FILE, arena), asked_all, arena)
     verdict.pass("/v1/models names the model; another method or path is refused")
 
 priv fn asked_all(port: I32, arena: Arena$@): U8[] //<

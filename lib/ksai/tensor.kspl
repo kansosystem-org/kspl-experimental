@@ -344,7 +344,7 @@ impl<|T|> Tensor<|T|>
         dim: = r.shape[r.shape.len - 1]
         if src.shape[src.shape.len - 1] != dim
             throw .shape_mismatch
-        // In the KV cache (Self_attention.forward) row_idx is the generation
+        // In the KV cache (Self_attention.forward_lora) row_idx is the generation
         // position. It goes past the allocated rows once the sequence outgrows max_seq_len. This
         // stops that. The comparison is unsigned, so a negative row is refused by the same test.
         if U64::row_idx >= U64::r.shape[0]
@@ -438,6 +438,25 @@ impl<|T|> Tensor<|T|>
                 ex: = math.exp(-(val))
                 (out.data + i)$ = T::(val / (1.0 + ex))
         return out
+
+priv const DOT_LANES: Sz = 8 //< the partial sums of a dot product, kept side by side
+    //< One running sum waits on its last addition at every step; eight independent ones fill a
+    //< vector register, and the order stays fixed, so the bits do not depend on the machine.
+
+fn dot_lanes<|T|>(a: T@, b: T@, n: Sz): T //< the dot product of `n` numbers, in 8 lanes
+    //< Number `i` goes to lane `i % 8`; the lanes are added in order at the end.
+    $acc: T[DOT_LANES] = ::{}
+    p: T$@ = acc@
+    whole: = n / DOT_LANES * DOT_LANES
+    for $g: Sz = 0; g < whole; g += DOT_LANES
+        for k in Range.asc(DOT_LANES)
+            (p + k)$ = (p + k)$ + (a + g + k)$ * (b + g + k)$
+    for i in Range(whole, n, 1)
+        (p + i - whole)$ = (p + i - whole)$ + (a + i)$ * (b + i)$
+    $s: T = 0.0
+    for k in Range.asc(DOT_LANES)
+        s = s + (p + k)$
+    return s
 
 // ---------------------------------------------------------
 // The exponential of an F32, written so that a loop calling it runs on vectors. `math.exp` is a

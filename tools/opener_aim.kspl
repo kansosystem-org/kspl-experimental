@@ -44,8 +44,12 @@ fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its l
     //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder. The note
     //< matched on the string would start two servers for it, or find none to stop. A root (`/`,
     //< `C:\`) keeps its own.
+    return trim_end_sep_on(dir, sys.is_windows())
+
+fn trim_end_sep_on(dir: U8[], windows: Bool): U8[] //< `trim_end_sep`, on Windows or on POSIX
+    //< It takes the OS, so a test on any OS checks Windows's roots too.
     $at: = dir
-    root: = sys.root_len(dir)
+    root: = sys.root_len_on(dir, windows)
     for at.len > root && sys.is_path_sep(at[at.len - 1])
         at = at.sub(0, at.len - 1)
     return at
@@ -53,9 +57,13 @@ fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its l
 fn parent_of(dir: U8[]): U8[] //< the folder one above
     //< With nothing further up it returns itself, so the caller stops (above `ksmd` is `.`, above
     //< `.` is nothing).
+    return parent_of_on(dir, sys.is_windows())
+
+fn parent_of_on(dir: U8[], windows: Bool): U8[] //< `parent_of`, on Windows or on POSIX
+    //< It takes the OS, so a test on any OS checks Windows's roots too.
     if dir.len == 0 || dir.equals(".")
         return ""
-    parent: = sys.get_dir_name(dir)
+    parent: = sys.get_dir_name_on(dir, windows)
     return "." if parent.len == 0 else parent
 
 priv const MAX_CLIMB: Sz = 32 //< the cap on how many folders up `marked_above` looks

@@ -311,3 +311,32 @@ import "unused_priv_lib"
 
 fn main(): I32
   return unused_priv_lib.plain()
+// ==== case unused_self_call
+//< A private function or method that only calls itself is unused
+//< A call from its own body runs only once something else has called it. The one that main
+//< calls is still in use.
+// EXPECT: [W0206] Unused private function 'spin'
+// EXPECT: [W0206] Unused private function 'unused_self_call.Box.walk'
+// EXPECT-NOT: 'count_down'
+struct Box
+  n: I32
+
+impl Box
+  priv fn walk(r: Self@, n: I32): I32
+    if n <= 0
+      return r.n
+    return r.walk(n - 1)
+
+priv fn spin(n: I32): I32
+  if n <= 0
+    return 0
+  return spin(n - 1)
+
+priv fn count_down(n: I32): I32
+  if n <= 0
+    return 0
+  return count_down(n - 1)
+
+fn main(): I32
+  b: = Box::{ .n = 1 }
+  return count_down(3) + b.n

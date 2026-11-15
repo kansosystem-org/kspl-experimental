@@ -1,5 +1,6 @@
 //< ksmd's and the chat page's opener: what it does with a server it started
 //< `tools/tests/ksmd_launch.kspl` runs the whole launcher; this file checks one step alone.
+import "std/ds"
 import "std/fs"
 import "std/io"
 import "std/subproc"
@@ -30,3 +31,17 @@ fn test_a_server_with_no_url_is_stopped() //< a server that runs but gives no UR
     fs.remove_path(log) catch {}
     fs.remove_path(SCRATCH) catch {}
     verdict.pass("a server that gives no URL in time is stopped before the open gives up.")
+
+fn test_each_environment_has_its_own_openers() //< Linux never tries macOS's `open`
+    //< **On Debian and Ubuntu, `open` can be `openvt`**: it starts, opens nothing and ends the
+    //< search.
+    verdict.start("[tools/opener] each environment's browser tools test...")
+    linux: = opener.openers_for(false, false)
+    for tool in linux
+        assert(!tool.equals("open"), "the list for Linux does not hold `open`")
+    assert(linux.len > 0 && linux[0].equals("xdg-open"), "Linux tries `xdg-open` first")
+    mac: = opener.openers_for(false, true)
+    assert(mac.len == 1 && mac[0].equals("open"), "macOS tries `open`")
+    win: = opener.openers_for(true, true)
+    assert(win.len == 1 && win[0].equals("explorer"), "Windows tries `explorer`, whatever else")
+    verdict.pass("Linux, macOS and Windows each try only their own browser tools.")

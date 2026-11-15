@@ -2,6 +2,7 @@
 //< **It is in `common/` because every port uses it.**
 //< Caution: Do not name it after a chip. What makes it work is the mechanism, not the chip, and
 //< semihosting needs **a debugger attached**.
+import "std/chars"
 import "std/strfmt" as _strfmt // `\{}` on a number: the primitives' `Formattable`
 
 extern fn ksos_console_char(c: U8) //< semihosting SYS_WRITEC (write one character)
@@ -46,6 +47,19 @@ fn on_panic(msg: U8[]) //<
     the_tally.fail += 1
     the_tally.summary("a panic stopped the run")
     ksos_qemu_exit(1)
+fn end_on_expected_panic( //< the panic handler of a demo whose success is the panic
+    //< It prints the message, checks that it starts with the kernel's words, then ends the run.
+    msg: U8[], //< the panic's message
+    expected: U8[], //< what the message starts with where the kernel stopped as it should
+    name: U8[], //< the check's name
+    label: U8[], //< the verdict line's label
+)
+    puts("PANIC: ")
+    puts(msg)
+    puts("\n")
+    check(name, msg.starts_with(expected))
+    print_summary(label)
+    exit()
 
 // ==========================================
 // The checks a demo makes, and the verdict line the gate reads (not free text a demo prints)

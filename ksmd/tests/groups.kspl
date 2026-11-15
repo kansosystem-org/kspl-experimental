@@ -5,7 +5,7 @@ import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_tables" { Group_edit }
 import "ksmd/model/format" { format_of }
 import "ksmd/syntax/reader"
-import "ksmd/tests/support" { changed, opened, saves }
+import "ksmd/tests/support" { changed, opened, records_one_column, saves }
 import "std/chars"
 import "std/ds"
 import "std/mem" { Arena }
@@ -69,9 +69,7 @@ priv fn grouping()
     $ed: = opened(plain, arena)
     grouped(ed@, 1, 3, .group)
     saves("rows 2 to 4 make a group", ed@, arena, table_with("rows 2-4", arena))
-    last: = ed.history.done[ed.history.done.len - 1]@
-    verdict.check("the step records the groups alone, and no copy of the table",
-        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    records_one_column("the step records the groups alone, and no copy of the table", ed@)
     grouped(ed@, 1, 3, .hide)
     saves("hiding a group is saved", ed@, arena, table_with("rows 2-4 closed", arena))
     grouped(ed@, 4, 5, .group)
@@ -198,9 +196,7 @@ priv fn heights()
         verdict.check("setting heights", false, e.message())
     saves("rows 1 to 3 take a height of 20 points in one step", ed@, arena,
         arena.text().s(OPEN).s(" heights=\"20,20,20,,,9\"").s(ROWS).take())
-    last: = ed.history.done[ed.history.done.len - 1]@
-    verdict.check("the step records the heights alone, and no copy of the table",
-        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    records_one_column("the step records the heights alone, and no copy of the table", ed@)
     ed.set_heights(0, Sz[]::{ 3, 5 }, 12) catch e
         verdict.check("setting heights of rows apart", false, e.message())
     saves("rows listed apart take the height, and the rows between keep theirs", ed@, arena,
@@ -248,9 +244,7 @@ priv fn filters()
     ed.set_filter(0, 1, "in:x") catch e
         verdict.check("setting a filter", false, e.message())
     saves("a column's filter is saved, as one step", ed@, arena, with(",in:x", arena))
-    last: = ed.history.done[ed.history.done.len - 1]@
-    verdict.check("the step records the filter alone, and no copy of the table",
-        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    records_one_column("the step records the filter alone, and no copy of the table", ed@)
     changed(ed@, 0, .insert_column, 0)
     saves("an inserted column moves the filter with its column", ed@, arena,
         "%ksmd 2\n\n:::table name=\"t\" filter=\",,in:x\"\n| \"\" | \"a\" | \"b\" |\n| | 1 | \"x\" \

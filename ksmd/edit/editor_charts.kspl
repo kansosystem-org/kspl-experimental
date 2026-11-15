@@ -3,9 +3,8 @@
 //< and its block points at it, so undo swaps the block back, as for any block.
 import "ksmd/calc/calc" { calculate }
 import "ksmd/calc/value" { Value_kind }
-import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
-import "ksmd/edit/history" { begin }
-import "ksmd/edit/region" { Spot, Unit, gap_spot, whole_unit }
+import "ksmd/edit/editor" { Editor, Refused }
+import "ksmd/edit/region" { Spot, gap_spot }
 import "ksmd/model/model" { Block, Chart, Chart_kind, Drawing, MAX_SERIES, Table, UNBOUND }
 import "ksmd/syntax/chart" { reads_back }
 import "std/ds" { List }
@@ -38,7 +37,7 @@ impl Editor
             .title = "", .by_rows = false, .from = 0, .to = 0 }
         chart: = ed.chart_of(settings@)!
         s: = gap_spot(block + 1)
-        ed.put_chart(s, s, chart, scratch)!
+        ed.put_chart(s, s, chart)!
 
     fn set_chart(ed: Self$@, block: Sz, settings: Chart_settings@): Void!Refused //<
         //< Gives a chart block new settings, as one step
@@ -48,8 +47,7 @@ impl Editor
         $chart: = ed.chart_of(settings)!
         // What is drawn over it stays, in the same frame.
         chart.drawings = ed.doc.charts[ed.doc.blocks.get(block).first].drawings
-        defer scratch: = Arena(16 * 1024)
-        ed.put_chart(gap_spot(block), gap_spot(block + 1), chart, scratch)!
+        ed.put_chart(gap_spot(block), gap_spot(block + 1), chart)!
 
     priv fn chart_of(ed: Self$@, s: Chart_settings@): Chart!Refused //<
         //< A chart of the settings, its columns held by identity
@@ -94,19 +92,10 @@ impl Editor
             throw .table(.chart_name)
         return chart
 
-    priv fn put_chart(ed: Self$@, s: Spot, e: Spot, chart: Chart, scratch: Arena$@): Void!Refused //<
+    priv fn put_chart(ed: Self$@, s: Spot, e: Spot, chart: Chart): Void!Refused //<
         //< A block for the chart in place of what stands from `s` to `e`, as one step
         ed.doc.charts.push(chart)
-        b: = Block::{ .kind = .chart, .level = 0, .label = "", .text = "",
-            .first = ed.doc.charts.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
-            .invisible = false }
-        $w: = ed.work(s, e, s.block, end_block(e), scratch)
-        $frag: = List<|Unit|>(scratch)
-        frag.push(whole_unit(b, scratch))
-        r: = replace(w@, frag@, scratch)
-        $tx: = begin(ed.selection(), ed.arena)
-        ed.commit(w@, tx@, r.caret, r.caret, scratch)!
-        ed.finish(tx, .other, false)!
+        ed.put_whole(s, e, Block.whole(.chart, ed.doc.charts.len - 1, 0))!
 
 priv fn numeric_column(ed: Editor@, u: Sz, t: Table@): Sz //<
     //< The first column after the first whose values are mostly numbers, or the second column

@@ -8,7 +8,7 @@ import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_tables" { Table_edit }
 import "ksmd/edit/history" { capture }
 import "ksmd/edit/region" { gap_spot, text_spot }
-import "ksmd/tests/support" { changed, opened, saves, written }
+import "ksmd/tests/support" { changed, opened, records_one_column, saves, written }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -148,6 +148,7 @@ priv fn rows_and_columns()
         "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| 1 | =A1+A2 | |\n| 2 | \
             =sum(A1:A2) | |\n:::\n")
     refused(ed@, "a row outside the table is refused", .row, "No table")
+    refused(ed@, "a cell past the last column is refused", .column, "No table")
 
 priv fn many_lines() //< a row or column edit acts on every line chosen, as one step
     defer arena: = Arena(64 * 1024)
@@ -263,9 +264,7 @@ priv fn widths()
         "%ksmd 2\n\n:::table name=\"t\" char_widths=\"12,8.5,\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 \
             | =A1+B1 |\n:::\n")
     verdict.check("the cells and their values stay", value(ed@, 0, 0, 2, arena) == 3.0, "")
-    last: = ed.history.done[ed.history.done.len - 1]@
-    verdict.check("the step records the widths alone, and no copy of the table",
-        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    records_one_column("the step records the widths alone, and no copy of the table", ed@)
     resized(ed@, "10,10,20", arena)
     ed.undo()
     saves("undo gives the widths before back", ed@, arena,
@@ -287,6 +286,12 @@ priv fn widths()
     resized(ed@, "0,0,0", arena)
     saves("widths that all fit their text take the attribute away", ed@, arena,
         "%ksmd 2\n\n:::table name=\"t\"\n| \"b\" | \"c\" | \"\" |\n| 2 | =#REF!+A1 | |\n:::\n")
+    resized(ed@, "10,0,0", arena)
+    changed(ed@, 0, .remove_column, 0)
+    saves("removing the only column with a width takes the attribute away", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"c\" | \"\" |\n| =#REF!+#REF! | |\n:::\n")
+    ed.undo()
+    ed.undo()
     wrong_widths(ed@, "two widths for three columns are refused", "10,20", arena)
     wrong_widths(ed@, "a width over 255 characters is refused", "10,2551,10", arena)
     wrong_widths(ed@, "a width under half a character is refused", "10,4,10", arena)
@@ -318,6 +323,7 @@ priv enum Wrong //< an action a check expects to be refused
     pipe //< a formula with a '|' outside quotes, in cell B1 of block 0
     empty //< an `=` alone, in cell B1 of block 0
     row //< removing row 6 of block 0
+    column //< typing into column 10 of block 0, past its end
     taken //< naming block 0's table `b`
     bad_name //< naming it with a line break in the name
 
@@ -336,6 +342,8 @@ priv fn attempt(ed: Editor$@, action: Wrong): Bool!Refused
         ed.set_cell(0, 0, 1, "=")!
     case .row
         ed.edit_table(0, .remove_row, 5, 1, Sz[]::{})!
+    case .column
+        ed.set_cell(0, 0, 9, "1")!
     case .taken
         ed.rename_table(0, "b")!
     case .bad_name

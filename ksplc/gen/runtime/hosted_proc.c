@@ -11,6 +11,40 @@
  * output" in std/docs/DESIGN-system.md).
  * What starts one is kspl_proc_start in hosted_spawn.c (the tool assembling argv is there).
  * ============================================================ */
+/* The ending number of an ended child, in the POSIX side's terms. A crash Windows reports as an
+ * NTSTATUS is 128 + the signal POSIX raises for the same fault. Any other code is its own.
+ * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal.** make
+ * test-conventions compares this table with the one in "A child's end is one code on every OS" in
+ * std/docs/DESIGN-system.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives
+ * it too. It touches no OS, so it is built on every OS, and std's subproc_test checks it there. */
+KSPL_LINK I32 kspl_win_status_code(U32 st) {
+    switch (st) {
+    case 0xC0000005u: /* STATUS_ACCESS_VIOLATION */
+    case 0xC00000FDu: /* STATUS_STACK_OVERFLOW */
+        return 139; /* SIGSEGV */
+    case 0xC000001Du: /* STATUS_ILLEGAL_INSTRUCTION */
+        return 132; /* SIGILL */
+    case 0xC000008Du: /* STATUS_FLOAT_DENORMAL_OPERAND */
+    case 0xC000008Eu: /* STATUS_FLOAT_DIVIDE_BY_ZERO */
+    case 0xC000008Fu: /* STATUS_FLOAT_INEXACT_RESULT */
+    case 0xC0000090u: /* STATUS_FLOAT_INVALID_OPERATION */
+    case 0xC0000091u: /* STATUS_FLOAT_OVERFLOW */
+    case 0xC0000092u: /* STATUS_FLOAT_STACK_CHECK */
+    case 0xC0000093u: /* STATUS_FLOAT_UNDERFLOW */
+    case 0xC0000094u: /* STATUS_INTEGER_DIVIDE_BY_ZERO */
+    case 0xC0000095u: /* STATUS_INTEGER_OVERFLOW */
+        return 136; /* SIGFPE */
+    case 0xC0000409u: /* STATUS_STACK_BUFFER_OVERRUN */
+        return 134; /* SIGABRT */
+    case 0xC000013Au: /* STATUS_CONTROL_C_EXIT */
+        return 130; /* SIGINT */
+    case 0xC0000135u: /* STATUS_DLL_NOT_FOUND */
+        return 127; /* the loader's exit code */
+    default:
+        return (I32)st;
+    }
+}
+
 #ifndef _WIN32
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +75,10 @@ typedef struct {
  * on to every group held here. The starter then ends by the signal as by default.
  * Caution: **Take a signal only where it is at its default** (kspl_take_default_signal). A program
  * that ignores or handles one has chosen. The blocks are never freed: the handler walks unlocked.
+ * Caution: **Leave no gap between the fork and the hold.** A Ctrl+C there would end the starter
+ * and leave the child running in its own group. So the handlers are set before the fork, and the
+ * four signals are blocked on the starting thread from the fork until the child is held. A signal
+ * taken by another thread of the program in that gap still meets it: no mask reaches them.
  * ============================================================ */
 #define KSPL_GROUP_BLOCK 64
 typedef struct kspl_group_block {
@@ -52,7 +90,9 @@ static pthread_mutex_t kspl_group_lock = PTHREAD_MUTEX_INITIALIZER;
 static const int kspl_group_signals[4] = {SIGINT, SIGQUIT, SIGHUP, SIGTERM};
 
 static void kspl_group_pass_on(int sig) {
-    for (kspl_group_block *b = kspl_groups; b != NULL; b = b->next) {
+    /* Acquire pairs with the release that links a block, so a slot is seen filled (on Arm too). */
+    for (kspl_group_block *b = __atomic_load_n(&kspl_groups, __ATOMIC_ACQUIRE); b != NULL;
+         b = __atomic_load_n(&b->next, __ATOMIC_ACQUIRE)) {
         for (int i = 0; i < KSPL_GROUP_BLOCK; i++) {
             pid_t g = (pid_t)b->pid[i];
             if (g > 0) kill(-g, sig);
@@ -63,20 +103,47 @@ static void kspl_group_pass_on(int sig) {
     raise(sig);
 }
 
-/* Puts `to` in the first slot holding `from`: a hold is 0 → pid, a release pid → 0. Where a hold
- * finds every block full, a new block goes on the end. It is filled before it is linked, because
- * the handler can walk it at any moment. Returns 0 where no block could be had. */
-static int kspl_group_swap(pid_t from, pid_t to) {
+/* Puts the handlers that pass the signals on, once, before the first fork of a child that leads
+ * a group. */
+static void kspl_group_take_signals(void) {
     static int taken = 0;
-    kspl_group_block *b, *last = NULL;
-    int done = 0;
     pthread_mutex_lock(&kspl_group_lock);
-    if (to != 0 && !taken) {
+    if (!taken) {
         for (int k = 0; k < 4; k++) {
             kspl_take_default_signal(kspl_group_signals[k], kspl_group_pass_on);
         }
         taken = 1;
     }
+    pthread_mutex_unlock(&kspl_group_lock);
+}
+
+/* Blocks the four signals on the calling thread, from just before the fork until the hold. */
+static void kspl_group_block_signals(sigset_t *old) {
+    sigset_t set;
+    sigemptyset(&set);
+    for (int k = 0; k < 4; k++) sigaddset(&set, kspl_group_signals[k]);
+    pthread_sigmask(SIG_BLOCK, &set, old);
+}
+
+/* In the child, after the fork and before the exec: each of the four signals back at its default
+ * where this runtime took it, then the mask from before the fork. Otherwise a signal pending
+ * there would run the starter's handler in the child. Only async-signal-safe calls. */
+static void kspl_group_child_restore(const sigset_t *old) {
+    for (int k = 0; k < 4; k++) {
+        if (kspl_signal_is(kspl_group_signals[k], kspl_group_pass_on)) {
+            signal(kspl_group_signals[k], SIG_DFL);
+        }
+    }
+    sigprocmask(SIG_SETMASK, old, NULL);
+}
+
+/* Puts `to` in the first slot holding `from`: a hold is 0 → pid, a release pid → 0. Where a hold
+ * finds every block full, a new block goes on the end. It is filled before it is linked, because
+ * the handler can walk it at any moment. Returns 0 where no block could be had. */
+static int kspl_group_swap(pid_t from, pid_t to) {
+    kspl_group_block *b, *last = NULL;
+    int done = 0;
+    pthread_mutex_lock(&kspl_group_lock);
     for (b = kspl_groups; b != NULL && !done; b = b->next) {
         for (int i = 0; i < KSPL_GROUP_BLOCK && !done; i++) {
             if ((pid_t)b->pid[i] == from) {
@@ -88,8 +155,9 @@ static int kspl_group_swap(pid_t from, pid_t to) {
     }
     if (!done && to != 0 && (b = (kspl_group_block *)calloc(1, sizeof(kspl_group_block))) != NULL) {
         b->pid[0] = (sig_atomic_t)to;
-        if (last != NULL) last->next = b;
-        else kspl_groups = b;
+        /* Release: the handler that sees the link sees the slot filled. */
+        if (last != NULL) __atomic_store_n(&last->next, b, __ATOMIC_RELEASE);
+        else __atomic_store_n(&kspl_groups, b, __ATOMIC_RELEASE);
         done = 1;
     }
     pthread_mutex_unlock(&kspl_group_lock);
@@ -188,6 +256,18 @@ KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     if (h->to_w >= 0) {
         close(h->to_w);
         h->to_w = -1;
+    }
+}
+
+/* Closes the side reading the child's standard output: its next write there meets a closed pipe,
+ * as `prog | head` does once `head` has read enough. Its standard error stays readable. Calling it
+ * twice is harmless (-1 marks closed); a read of standard output after it fails (-2). */
+KSPL_LINK void kspl_proc_close_stdout(I64 handle) {
+    if (handle == 0) return;
+    kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
+    if (h->from_w >= 0) {
+        close(h->from_w);
+        h->from_w = -1;
     }
 }
 
@@ -385,6 +465,16 @@ KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     }
 }
 
+/* Closes the side reading the child's standard output (the same contract as the POSIX side). */
+KSPL_LINK void kspl_proc_close_stdout(I64 handle) {
+    if (handle == 0) return;
+    kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
+    if (h->from_w != NULL) {
+        CloseHandle(h->from_w);
+        h->from_w = NULL;
+    }
+}
+
 /* The same contract as the POSIX side: a child in a job is stopped with the whole job. A child
  * already seen to end is only tidied, as the POSIX side can no longer name its group. */
 KSPL_LINK void kspl_proc_kill(I64 handle) {
@@ -398,39 +488,6 @@ KSPL_LINK void kspl_proc_kill(I64 handle) {
     kspl_proc_free(h);
 }
 
-/* The ending number of an ended child, in the POSIX side's terms. A crash Windows reports as an
- * NTSTATUS is 128 + the signal POSIX raises for the same fault. Any other code is its own.
- * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal.** make
- * test-conventions compares this table with the one in "A child's end is one code on every OS" in
- * std/docs/DESIGN-system.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives it too. */
-static int kspl_proc_status_code(DWORD st) {
-    switch (st) {
-    case 0xC0000005u: /* STATUS_ACCESS_VIOLATION */
-    case 0xC00000FDu: /* STATUS_STACK_OVERFLOW */
-        return 139; /* SIGSEGV */
-    case 0xC000001Du: /* STATUS_ILLEGAL_INSTRUCTION */
-        return 132; /* SIGILL */
-    case 0xC000008Du: /* STATUS_FLOAT_DENORMAL_OPERAND */
-    case 0xC000008Eu: /* STATUS_FLOAT_DIVIDE_BY_ZERO */
-    case 0xC000008Fu: /* STATUS_FLOAT_INEXACT_RESULT */
-    case 0xC0000090u: /* STATUS_FLOAT_INVALID_OPERATION */
-    case 0xC0000091u: /* STATUS_FLOAT_OVERFLOW */
-    case 0xC0000092u: /* STATUS_FLOAT_STACK_CHECK */
-    case 0xC0000093u: /* STATUS_FLOAT_UNDERFLOW */
-    case 0xC0000094u: /* STATUS_INTEGER_DIVIDE_BY_ZERO */
-    case 0xC0000095u: /* STATUS_INTEGER_OVERFLOW */
-        return 136; /* SIGFPE */
-    case 0xC0000409u: /* STATUS_STACK_BUFFER_OVERRUN */
-        return 134; /* SIGABRT */
-    case 0xC000013Au: /* STATUS_CONTROL_C_EXIT */
-        return 130; /* SIGINT */
-    case 0xC0000135u: /* STATUS_DLL_NOT_FOUND */
-        return 127; /* the loader's exit code */
-    default:
-        return (int)st;
-    }
-}
-
 /* The same contract as the POSIX side (wait until it ends, return the number, tidy up). */
 KSPL_LINK I32 kspl_proc_wait(I64 handle) {
     if (handle == 0) return -1;
@@ -439,7 +496,7 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
         DWORD st = 0;
         WaitForSingleObject(h->proc, INFINITE);
         h->reaped = 1;
-        h->code = GetExitCodeProcess(h->proc, &st) ? kspl_proc_status_code(st) : -1;
+        h->code = GetExitCodeProcess(h->proc, &st) ? kspl_win_status_code((U32)st) : -1;
     }
     I32 code = (I32)h->code;
     kspl_proc_free(h);
@@ -479,7 +536,7 @@ KSPL_LINK Bool kspl_proc_alive(I64 handle) {
 
     DWORD st = 0;
     h->reaped = 1;
-    h->code = GetExitCodeProcess(h->proc, &st) ? kspl_proc_status_code(st) : -1;
+    h->code = GetExitCodeProcess(h->proc, &st) ? kspl_win_status_code((U32)st) : -1;
     return false;
 }
 #endif

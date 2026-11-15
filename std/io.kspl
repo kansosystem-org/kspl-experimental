@@ -85,27 +85,32 @@ priv struct Std_stream //< standard output or error, which the whole program sha
     //< stream as the program ends, and ends with 1 and a line on standard error (a full disk under
     //< `prog > out.txt`). A closed pipe still ends it quietly ("Writing to a closed pipe returns an
     //< error value" in std/docs/DESIGN-system.md).
-    stream: Void$@ //< the C library's `FILE *`, taken on first use
+    is_err: Bool //< standard error; otherwise standard output
+        //< Caution: **It names the stream, not its `FILE *`, and is never written.** A `FILE *`
+        //< taken on the first call would be written by two threads that print first at once.
 
 impl Std_stream
     priv fn flush_if_stdout(r: Self$@) //< flushes when line buffering is on
         //< Only stdout; stderr is unbuffered.
-        if r.stream == g_stdout.stream
+        if !r.is_err
             r.flush()
+
+    priv fn stream(r: Self$@): Void$@ //< the C library's `FILE *`, asked for at each write
+        return libc.get_stderr() if r.is_err else libc.get_stdout()
 
 impl Std_stream: Writer //< what `out()` and `err()` hand out
     fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the stream
-        put_bytes(r.stream, val)
+        put_bytes(r.stream(), val)
         if line_buffered && val.find_char('\n').is_some()
             r.flush_if_stdout()
         return r
     fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the stream
-        put_byte(r.stream, val)
+        put_byte(r.stream(), val)
         if line_buffered && val == '\n'
             r.flush_if_stdout()
         return r
     fn flush(r: Self$@): Self$@ //< flushes buffered data; does not report a failure
-        flush_or_stop(r.stream)
+        flush_or_stop(r.stream())
         return r
 
 priv fn put_bytes(stream: Void$@, val: U8[]) //< writes val; a write nobody reads ends the program
@@ -139,17 +144,13 @@ priv fn read_into(stream: Void$@, buf: U8$[]): Sz!Io_error //< fills buf; 0 mean
 // Set by set_line_buffered(): a write to stdout containing a newline flushes at once.
 priv $line_buffered: Bool = false
 
-priv $g_stdout: Std_stream = Std_stream::{ .stream = null }
-priv $g_stderr: Std_stream = Std_stream::{ .stream = null }
+priv $g_stdout: Std_stream = Std_stream::{ .is_err = false }
+priv $g_stderr: Std_stream = Std_stream::{ .is_err = true }
 
-pub fn out(): Writer //< standard output, opened on the first call
-    if g_stdout.stream == null
-        g_stdout.stream = libc.get_stdout()
+pub fn out(): Writer //< standard output
     return g_stdout
 
-pub fn err(): Writer //< standard error, opened on the first call
-    if g_stderr.stream == null
-        g_stderr.stream = libc.get_stderr()
+pub fn err(): Writer //< standard error
     return g_stderr
 
 priv fn fopen_checked(path: U8[], mode: U8[]): Void$@!Io_error //<

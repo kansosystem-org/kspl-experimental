@@ -79,7 +79,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 
 **A conversation's files are never a source.** The answers in them are the model's own words, so citing one would check a claim against itself. The questions are no evidence either. The tools leave all three files out of every listing and search, and refuse to read one. A name counts whatever its ASCII case, since Windows and macOS open `team.CHAT.jsonl` as `team.chat.jsonl`. A short name such as `TEAM~1.JSO` is refused before it is opened (below). The earlier turns the model needs reach it as the conversation so far ("The caps" above), not through a tool.
 
-**During `eval`, the questions file and the `--out` file are left out in the same way.** Either may stand in the folder: the command in [`ksagent/README.md`](../README.md) puts both there. The questions are no evidence, and a table of an earlier run holds the model's own answers. A path names one of them when it reaches the same file step by step, ASCII case ignored, so `./eval.ksmd` counts too.
+**During `eval`, the questions file and the `--out` file are left out in the same way.** Either may stand in the folder: the command in [`ksagent/README.md`](../README.md) puts both there. The questions are no evidence, and a table of an earlier run holds the model's own answers. A path names one of them when it reaches the same file step by step, ASCII case ignored, so `./eval.ksmd` counts too. Only ASCII case is ignored. Windows and macOS also open `Ä.md` as `ä.md`, so that spelling of a left-out file with a non-ASCII name is not caught.
 
 ## The guards on paths
 

@@ -1241,7 +1241,7 @@ stateDiagram-v2
 
 Only `std.lang.Move_only` **itself** is derived structurally. A trait of the same name declared in your own file needs an explicit `impl`, like any ordinary trait (as with `Ref_counted`; §8.4.2).
 
-**The type system places one constraint on values crossing a thread boundary**: the `T` of `thread.Thread.spawn<|T|>` cannot reach an `Rc<|T|>` or a `Weak_rc<|T|>` ([8.6](#86-what-orders-memory-between-threads)). A raw pointer, a global, and an `Rc` in a global can still be touched from several threads. Such a *data race* (two threads touching the same memory at once, at least one of them writing) is undefined ([14.2](#142-undefined---no-answer-is-fixed)).
+**The type system places one constraint on values that threads share**: neither the `T` of `thread.Thread.spawn<|T|>` nor a global's type can reach an `Rc<|T|>` or a `Weak_rc<|T|>` ([8.6](#86-what-orders-memory-between-threads)). A raw pointer and any other global can still be touched from several threads. Such a *data race* (two threads touching the same memory at once, at least one of them writing) is undefined ([14.2](#142-undefined---no-answer-is-fixed)).
 
 ## 6. Expressions and operators
 
@@ -2470,11 +2470,19 @@ fn main(): I32
 
 **An atomic operation orders the plain writes around it too.** Where one thread's `Atomic_sz.load` reads the value another thread's `store` wrote, it sees every write made before that `store`.
 
+**A `Counter_sz` orders nothing.** Its `add` and `load` are whole, so no count is lost or torn, but they order no other access. It suits a count kept to be read, such as steps taken. Use an `Atomic_sz` for a flag or a value that another thread acts on.
+
 **Two threads that touch one place with no such order, at least one of them writing, make a data race.** A data race is undefined ([14.2](#142-undefined---no-answer-is-fixed)), and the type system does not prevent one ([5.4](#54-worked-example-forbidding-copies-with-move_only)). This holds for every type, a plain `Sz` counter included, even where the machine writes it in one step.
 
 **A thread can outlive the frame whose address it was given.** The compiler does not follow an address given to `spawn`. The frame that holds the address must not end before the thread stops using it. Join the thread in that frame, or give it memory that outlives the thread.
 
-**`Thread.spawn<|T|>` refuses a `T` that reaches an `Rc<|T|>` or a `Weak_rc<|T|>`.** Only one thread may change such a count, and two threads that change it lose counts: the value is freed while in use, or never. The walk goes through fields, variant payloads, elements, and what a pointer or a slice points at, so an `Arc<|Rc<|I64|>|>` is refused too. The error names the types on the way to the count. Use `Arc` and `Weak_arc`, whose count threads can share. **It sees only `spawn`'s argument.** An `Rc` in a global that the thread reads is not refused. Passing the check does not make other types safe to share.
+**`Thread.spawn<|T|>` refuses a `T` that reaches an `Rc<|T|>` or a `Weak_rc<|T|>`.** Only one thread may change such a count, and two threads that change it lose counts: the value is freed while in use, or never. The walk goes through fields, variant payloads, elements, and what a pointer or a slice points at, so an `Arc<|Rc<|I64|>|>` is refused too. The error names the types on the way to the count. Use `Arc` and `Weak_arc`, whose count threads can share. `Arc.get()` only reads, so use `Arc<|Mutex<|T|>|>` where the value is written.
+
+**A global whose type reaches an `Rc<|T|>` or a `Weak_rc<|T|>` is refused too**: a top-level `$` variable, a `const` or a C variable declared with `extern`, by the same walk. Every thread can reach a global, so the compiler cannot keep its count to one thread. This holds in a program that starts no thread. Use an `Arc`, or keep the `Rc` in a local of `main` and pass it to the functions that use it.
+
+**A trait value reaches what each type converted to that trait reaches**, anywhere in the program. So a struct whose field is a trait value is refused where some type converted to the trait holds an `Rc`. A closure is such a trait value, so an `Rc` it captures is refused too.
+
+**The two checks see only the types written and those conversions.** An `Rc` reached through a `Void$@` or a cast is not refused. Passing them does not make other types safe to share.
 
 ---
 
@@ -2541,6 +2549,8 @@ flowchart TD
 3. **Relative to the importing file**: every other path, one with no `/` (`"context"`) or beginning with `.` (`"./x"`, `"../x"`, `".lib/x"`), resolves against the importing file's directory.
 
 **An absolute path is none of the three, and a compile error** at that line, for an `import` and an `embed` alike. It begins with `/` or `\` (`"//host/share/x"` included) or with a drive (`"C:/x"`). It is refused before anything is opened, since on Windows opening another machine's path already offers it the user's credentials.
+
+**Each step a path writes must match the disk's letter case, on every OS**, for an `import` and an `embed` alike. `import "std/IO"` is a compile error at that line where the file is `std/io.kspl`, and the message names the spelling on disk. Windows and macOS would open the file anyway and Linux would find none, so a program would build on one OS and fail on another. Two spellings would also load one file twice, each with its own globals. Only the steps the path writes are compared, not the folders above them.
 
 **Every spelling of a file's path gives one logical name**, so one file never becomes two modules:
 
@@ -3027,7 +3037,7 @@ These shapes must not be written. The implementation need not diagnose them, and
 
 **What is fixed at translation time is not left undefined.** Of the shapes above, those whose value is visible at translation time are compile errors. These are a constant expression's overflow, a shift amount and a divisor ([6.8](#68-integer-arithmetic-folding-overflow-division-shifts)), and a cast to an enum ([6.4](#64-type-conversion--and-implicit-casts)). Of those fixed only at run time, only what [13. Conditions that stop execution at run time](#13-conditions-that-stop-execution-at-run-time) lists is checked.
 
-**Lint [W0602], off by default, lists each place where the text shows one of these shapes**, for a review. A dangling pointer and a data race look like any other code, so it cannot list them. The Lint section of the development tools specification says how to enable it.
+**Lint [W0602], off by default, lists each place where the text shows one of these shapes**, for a review. A dangling pointer and a data race look like any other code, so it cannot list them. It is enabled as [W0601] is ([8.4](#84-memory-management)).
 
 ### 14.3 What must be the same in every implementation
 

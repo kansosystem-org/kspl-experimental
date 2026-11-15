@@ -911,6 +911,42 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       check(await js("!!document.querySelector('#doc td.chosen[data-r=\"1\"]')"), "and moves down");
     },
 
+    // A value entered draws again only the cells whose value changed: the table, its other rows
+    // and their cells keep their elements (`update` in `ksmd/port/web/table.js`). So does a
+    // column's width set by Alt+Right. Drawing the whole table again made each entry in a table
+    // of 1,000 rows take 0.4 s; the elements kept show that it is not drawn again.
+    async cellsInPlace() {
+      const table = (first) => `${H}:::table name="t"\n| "a" | "b" |\n` +
+        `${[first, 2, 3].map((v, k) => `| ${v} | =A${k + 1}*2 |`).join("\n")}\n:::\n`;
+      await load(table(1));
+      await js(`window.__kept = { wrap: document.querySelector("#doc .table"),
+        rows: [...document.querySelectorAll("#doc tbody tr")], cells: [...document.querySelectorAll("#doc tbody td")] }; true`);
+      // The elements of the table that are not the ones it had, by row and column.
+      const replaced = () => js(`(() => {
+        const k = window.__kept;
+        const out = [];
+        if (document.querySelector("#doc .table") !== k.wrap) out.push("table");
+        document.querySelectorAll("#doc tbody tr").forEach((tr, r) => { if (tr !== k.rows[r]) out.push("row " + r); });
+        document.querySelectorAll("#doc tbody td").forEach((td, i) => {
+          if (td !== k.cells[i]) out.push(td.dataset.r + "," + td.dataset.c);
+        });
+        return out.join(" ");
+      })()`);
+      await click(cellAt(0, 0));
+      await type("5");
+      await press("Enter");
+      await saves("a value entered is taken", table(5));
+      check(await cellText(js, 0, 1) === "10", "the cell that reads it shows its new value", await cellText(js, 0, 1));
+      const drawn = await replaced();
+      check(drawn === "0,0 0,1", "only the two cells whose value changed are drawn again", drawn);
+      await js(`window.__kept.cells = [...document.querySelectorAll("#doc tbody td")]; true`);
+      await press("ArrowLeft", ALT);
+      await settle();
+      const widths = await js("ksmd.source()");
+      check(widths.includes("char_widths="), "Alt+Left in a cell sets its column's width", widths);
+      check(await replaced() === "", "and the table keeps every cell", await replaced());
+    },
+
     // AutoCorrect, as Excel's: a typed `11/6` becomes a date in this year, and a typed web address
     // a link. `Ctrl`+`Z` right after gives back the text as typed, and each can be turned off.
     async autoCorrect() {

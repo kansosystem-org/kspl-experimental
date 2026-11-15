@@ -79,3 +79,29 @@ fn run(exe: U8[], arena: Arena$@) //< one short server round per header shape
     for head.len < jsonrpc.MAX_HEAD_BYTES
         head.c('\r')
     check(exe, "LSP counts carriage returns toward its bound", head.slice(), false, arena)
+    check_after_shutdown(exe, arena)
+
+priv fn check_after_shutdown(exe: U8[], arena: Arena$@) //<
+    //< A header refused after `shutdown` still ends the server with 1
+    //< **The reading thread goes on after `shutdown`**, up to `exit`. So the server must wait for
+    //< it before it asks why the reading stopped. The broken header is sent once the answer to
+    //< `shutdown` has come, when a server that does not wait has already asked.
+    name: = "LSP ends with 1 at a header refused after shutdown"
+    defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "lsp" }, "") catch
+        verdict.check(name, false, "the server could not start")
+        return
+    stop: = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}"
+    defer $frame: = Str_builder()
+    frame.s(jsonrpc.LENGTH_TAG).s(" \{stop.len\}\r\n\r\n").s(stop)
+    c.child.write(frame.slice(), WAIT_MS) catch
+        verdict.check(name, false, "the shutdown could not be sent")
+        return
+    c.read_msg(WAIT_MS, arena) catch
+        verdict.check(name, false, "the shutdown was not answered")
+        return
+    c.child.write("Content-Length: 0\r\n\r\n", WAIT_MS) catch
+        verdict.check(name, false, "the header could not be sent")
+        return
+    code: = exit_code_of(c@)
+    verdict.check(name, code.unwrap_or(-1) == 1,
+        arena.text().s("exit code \{code.unwrap_or(-1)\}: ").s(c.err_tail()).take())

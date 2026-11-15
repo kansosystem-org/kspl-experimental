@@ -177,8 +177,13 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
         verdict.check(name, false, "cannot copy the package or what it uses")
         return
     // **A package that rebuilds itself is checked for that too** (`self-host`). It goes first: the
-    // compiler it rebuilds is the one the checks then inspect.
-    if offers(copy, "self-host")
+    // compiler it rebuilds is the one the checks then inspect. **The `rest` share only builds that
+    // compiler** (`stage1`), for its suites: the other share's self-host gives the same answer.
+    if part == .rest && offers(copy, "stage1")
+        b: = make_in(copy, uses, "stage1", U8[][]::{}, arena)
+        check_run(arena.text().s("\{dir\} builds its compiler from the copy").take(),
+            arena.text().s("\{label\}_stage1").take(), b, arena)
+    else if offers(copy, "self-host")
         h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
         check_run(arena.text().s("\{dir\} rebuilds itself from the copy").take(),
             arena.text().s("\{label\}_self-host").take(), h, arena)

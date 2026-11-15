@@ -52,14 +52,39 @@ priv const WAIT_STEPS: Sz = 300
 const PORT_TRIES: I32 = 16 //< how many ports, counting up from the one named, are tried
     //< **Do not give up after one** (the reason is at `free_port`).
 
-priv const OPENERS: U8[][] = U8[][]::{ "xdg-open", "open" } //< the tools that start a browser
-    //< Caution: **Try the ones that exist, in turn** (with only one, nothing happens, silently,
-    //< where it is missing). macOS has `open`, the others `xdg-open`.
+priv const OPENERS: U8[][] = U8[][]::{ "xdg-open" } //< the tool that starts a browser on Linux
+    //< and the other POSIX systems
+    //< Caution: **Do not add `open` here.** On Debian and Ubuntu, `/usr/bin/open` can be
+    //< `openvt`, which starts, opens nothing, and so ends the search ("passed on" below).
+    //< `sensible-browser` and `www-browser` are left out too: they can start a text browser, which
+    //< waits on a terminal it does not have.
+priv const OPENERS_MAC: U8[][] = U8[][]::{ "open" } //< the tool that starts one on macOS
 priv const OPENERS_WIN: U8[][] = U8[][]::{ "explorer" } //< the tool that starts one on Windows
     //< **Do not work around it by turning the quoting off** (the quoting blocks argument
     //< injection). `explorer.exe` is a real executable, so one URL is enough to reach the default
     //< browser. **Keep a separate list per environment.** A tool that starts counts as "passed on",
     //< so an earlier tool in the list that is there but opens nothing would end the search.
+
+fn openers_for(windows: Bool, mac: Bool): U8[][] //< the list of tools for that environment
+    //< A list may hold more than one tool: `start_browser` tries them in turn, and a missing one
+    //< fails to start. Caution: **Put in a list only a tool that opens a page in that
+    //< environment.**
+    if windows
+        return OPENERS_WIN
+    return OPENERS_MAC if mac else OPENERS
+
+fn openers(arena: Arena$@): U8[][] //< the tools that start a browser here
+    //< **On POSIX, `uname -s` tells macOS from the others**, as `tools/ci.kspl` does; std has no
+    //< predicate for it. Where `uname` cannot say, the list for Linux is used.
+    if sys.is_windows()
+        return OPENERS_WIN
+    host: =
+        subproc.run_capture(U8[][]::{ "uname", "-s" }, "", 10000, 4096, arena) catch
+            return OPENERS
+    mac: =
+        host.exited_with(0) &&
+        (U8[]::host.stdout_data).trim_spaces().equals("Darwin")
+    return openers_for(false, mac)
 
 struct Where //< every path this run needs, found once, and what it opens
     //< **Find them once and pass them around** (looked up in two places, only one gets fixed).
@@ -135,6 +160,7 @@ fn ask_local( //< sends one request, without a body, to a server on this compute
     method: U8[],
     target: U8[],
     token: U8[], //< sent as `Authorization: Bearer`; empty sends none
+    extra: U8[][], //< more headers to send, each a name followed by its value
     wait_ms: I32, //< how long writing the request, and then reading the answer, may each take
     arena: Arena$@, //< where the answer's body goes
 ): Local_answer
@@ -143,6 +169,8 @@ fn ask_local( //< sends one request, without a body, to a server on this compute
     $hb: = http.headers(arena).add("Host", arena.text().s("127.0.0.1:\{at\}").take())
     if token.len > 0
         hb = hb.add("Authorization", arena.text().s("Bearer ").s(token).take())
+    for $i: Sz = 0; i + 1 < extra.len; i += 2
+        hb = hb.add(extra[i], extra[i + 1])
     head: = hb.build()
     http.write_request(stream, method, target, head, "", wait_ms) catch
         return Local_answer::{ .status = 0, .body = "" }
@@ -156,7 +184,7 @@ priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
     //< Sends one request with our token to the server on that port, and returns the status
     //< **0 where nothing answered** (nothing listens there, or it closed without an answer).
     defer arena: = Arena(16 * 1024)
-    status: = ask_local(at, method, target, token, ANSWER_WAIT_MS, arena).status
+    status: = ask_local(at, method, target, token, U8[][]::{}, ANSWER_WAIT_MS, arena).status
     return 0 if status < 0 else status
 
 priv fn server_answers(at: I32, token: U8[]): Bool //<
@@ -334,9 +362,10 @@ priv fn page_for_browser(open_url: U8[], where: Where, arena: Arena$@): U8[] //<
 priv fn start_browser(page: U8[], where: Where, arena: Arena$@): Bool //<
     //< Starts the browser on the page; false where no tool for it would start
     //< Caution: **Try the tools in turn, from the list for this environment** (the reasons are at
-    //< `OPENERS` and `OPENERS_WIN`). Keep their output (the reason is at `Where.browser`).
+    //< `OPENERS`, `OPENERS_WIN` and `openers_for`). Keep their output (the reason is at
+    //< `Where.browser`).
     // A tool that is not there fails to start, on every OS, and the next one is tried.
-    for tool in OPENERS_WIN if sys.is_windows() else OPENERS
+    for tool in openers(arena)
         way: = aim.browser_argv(tool, page, sys.is_windows(), arena)
         _h: =
             subproc.spawn_redirect(U8[][]::way, "", where.browser, where.browser) catch

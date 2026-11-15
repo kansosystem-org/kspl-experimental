@@ -5,7 +5,7 @@
 //< Not a suite; `../suite/lsp_test.kspl` runs each part.
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/jsonrpc_client"
-import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_client" + { Spot }
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, is_missing }
 import "std/chars"
 import "std/ds" as _ds // what makes `arr_list`'s List available
@@ -106,21 +106,19 @@ priv const BROKEN_URI: U8[] = "file:///recover_probe.kspl"
 priv fn check_answers_beside_the_break(c: jsonrpc_client.Client$@, arena: Arena$@)
     lsp_client.open(c, BROKEN_URI, BROKEN_SRC, arena)
     defer lsp_client.close(c, BROKEN_URI, arena)
-    line: = decl_line(BROKEN_SRC, "  n: = area(pt)", arena)
-    col: = col_in_line(BROKEN_SRC, "  n: = area(pt)", "area", arena)
-    got: = lsp_client.hover(c, BROKEN_URI, line, col, arena) catch e
-        verdict.check("a hover beside a broken line still answers", false, end_text(e))
-        return
-    text: = lsp_client.hover_text(got.val)
+    at: = Spot::{ .line = "  n: = area(pt)", .needle = "area" }
+    text: =
+        lsp_client.hover_text_at(c, BROKEN_URI, BROKEN_SRC, at, lsp_client.READ_MS, arena) catch e
+            verdict.check("a hover beside a broken line still answers", false, end_text(e))
+            return
     verdict.check("a hover beside a broken line still answers",
-        text.find_str("how much it covers").is_some(),
-        lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+        text.find_str("how much it covers").is_some(), lsp_client.why_quoted(c, text, arena))
 
     // Caution: **Test a jump too**: a hover needs only the node under the caret, the jump the tree
     // above it.
     def_got: =
-        c.request("textDocument/definition", lsp_client.at_pos(BROKEN_URI, line, col, arena),
-        lsp_client.READ_MS, arena) catch e
+        c.request("textDocument/definition",
+        lsp_client.pos_at(BROKEN_URI, BROKEN_SRC, at, arena), lsp_client.READ_MS, arena) catch e
             verdict.check("a jump beside a broken line still lands", false, end_text(e))
             return
     def_line: = def_got.val.get("result").get("range").get("start").get("line").as_int()
@@ -138,18 +136,9 @@ priv fn check_one_account_only(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     defer lsp_client.close(c, BROKEN_URI, arena)
     $count: Sz = 0
     $came: = false
-    for _k in Range.asc(12)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        got: = msg.val.get("params")
-        if !got.get("uri").as_str().unwrap_or("").ends_with("recover_probe.kspl")
-            continue
-        list: = got.get("diagnostics").arr_list(arena)
-        count = list.len
+    if got: = lsp_client.published(c, "recover_probe.kspl", 12, lsp_client.READ_MS, arena)
+        count = got.get("diagnostics").arr_list(arena).len
         came = true
-        break
     verdict.check("a broken line is accounted for once and no more", came && count == 1,
         lsp_client.why(c, arena.text().s("\{count\} diagnostics, came=\{came\}").take(), arena))
 
@@ -170,15 +159,10 @@ priv const UNCLOSED_URI: U8[] = "file:///unclosed_probe.kspl"
 priv fn check_an_unclosed_block(c: jsonrpc_client.Client$@, arena: Arena$@)
     lsp_client.open(c, UNCLOSED_URI, UNCLOSED_SRC, arena)
     defer lsp_client.close(c, UNCLOSED_URI, arena)
-    line: = decl_line(UNCLOSED_SRC, "fn area(p: I32): I32", arena)
-    col: = col_in_line(UNCLOSED_SRC, "fn area(p: I32): I32", "area", arena)
-    got: = lsp_client.hover(c, UNCLOSED_URI, line, col, arena) catch e
-        verdict.check("a block left unclosed does not take the file with it", false, end_text(e))
-        return
-    text: = lsp_client.hover_text(got.val)
-    verdict.check("a block left unclosed does not take the file with it",
-        text.find_str("how much it covers").is_some(),
-        lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+    lsp_client.check_hover(c, "a block left unclosed does not take the file with it", UNCLOSED_URI,
+        UNCLOSED_SRC,
+        Spot::{ .line = "fn area(p: I32): I32", .needle = "area", .want = "how much it covers" },
+        arena)
 
 fn run_recover(c: jsonrpc_client.Client$@, arena: Arena$@)
     check_answers_beside_the_break(c, arena)
@@ -346,8 +330,7 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
     for uri in KEPT_URIS
         text: = lsp_client.hover_text(probe_hover(c@, uri, arena))
         verdict.check(arena.text().s("a document beside the quarantined one answers: ").s(uri)
-            .take(), text.find_str("I64").is_some(),
-            lsp_client.why(c@, arena.text().s("'").s(text).s("'").take(), arena))
+            .take(), text.find_str("I64").is_some(), lsp_client.why_quoted(c@, text, arena))
     poisoned: = probe_hover(c@, POISON_URI, arena)
     verdict.check("the crashing document answers nothing, without bringing the worker down",
         lsp_client.hover_text(poisoned).len == 0 && c.alive(),
@@ -360,8 +343,7 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
         lsp_client.why(c@, "", arena))
     again: = lsp_client.hover_text(probe_hover(c@, KEPT_URIS[0], arena))
     verdict.check("after the quarantine the worker goes on answering",
-        again.find_str("I64").is_some(),
-        lsp_client.why(c@, arena.text().s("'").s(again).s("'").take(), arena))
+        again.find_str("I64").is_some(), lsp_client.why_quoted(c@, again, arena))
 
 // ==========================================
 // A worker that writes much to standard error goes on answering
@@ -414,22 +396,15 @@ priv const OWN_CALL: U8[] = "  return lib.hit()"
 
 priv fn def_uri(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): U8[] //<
     //< Where `hit` is defined, asked from the user's document under that spelling
-    pos: = lsp_client.at_pos(uri, decl_line(OWN_USER, OWN_CALL, arena),
-        col_in_line(OWN_USER, OWN_CALL, "hit", arena) + 1, arena)
+    pos: = lsp_client.pos_at(uri, OWN_USER,
+        Spot::{ .line = OWN_CALL, .needle = "hit", .step = 1 }, arena)
     got: = lsp_client.answer(c, "textDocument/definition", pos, HEAVY_MS, arena)
     return got.get("result").get("uri").as_str().unwrap_or("")
 
 priv fn marks_on(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): I32 //<
     //< How many diagnostics a `didOpen` of the user's document reports; -1 where none came
     lsp_client.open(c, uri, OWN_USER, arena)
-    for _k in Range.asc(12)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        got: = msg.val.get("params")
-        if !got.get("uri").as_str().unwrap_or("").equals(uri)
-            continue
+    if got: = lsp_client.published(c, uri, 12, lsp_client.READ_MS, arena)
         return I32::got.get("diagnostics").arr_list(arena).len
     return -1
 
@@ -458,13 +433,11 @@ fn run_package(exe: U8[], arena: Arena$@)
     back: = def_uri(c@, full, arena)
     want: = lsp_client.uri_of(top, "lib.kspl", arena)
     verdict.check("asked by the file:// URI, the jump lands on the file in its folder",
-        back.equals(want),
-        lsp_client.why(c@, arena.text().s("'").s(back).s("'").take(), arena))
+        back.equals(want), lsp_client.why_quoted(c@, back, arena))
     lsp_client.open(c@, "use/user.kspl", OWN_USER, arena)
     flat: = def_uri(c@, "use/user.kspl", arena)
     verdict.check("asked by the folder-relative name, it answers by that name",
-        flat.equals("lib.kspl"),
-        lsp_client.why(c@, arena.text().s("'").s(flat).s("'").take(), arena))
+        flat.equals("lib.kspl"), lsp_client.why_quoted(c@, flat, arena))
     // **The workspace walk names what it reads the same way**, or a rename splits callers from the
     // declaration.
     at_hit: = b.obj().set("line", b.int_val(0I64)).set("character", b.int_val(8I64)).build()
@@ -484,8 +457,7 @@ fn run_package(exe: U8[], arena: Arena$@)
         lsp_client.READ_MS, arena)
     said: = lsp_client.hover_text(why)
     verdict.check("what an unraised #cfg leaves out of it answers with the reason",
-        said.find_str("not analyzed").is_some(),
-        lsp_client.why(c@, arena.text().s("'").s(said).s("'").take(), arena))
+        said.find_str("not analyzed").is_some(), lsp_client.why_quoted(c@, said, arena))
 
 // ==========================================
 // Checks the type-argument constraints of a template that is never instantiated
@@ -522,20 +494,12 @@ fn check_template_bound(c: jsonrpc_client.Client$@, arena: Arena$@)
     $found: = false
     $count: Sz = 0
     $first: U8[] = ""
-    for _k in Range.asc(8)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        p: = msg.val.get("params")
-        if !p.get("uri").as_str().unwrap_or("").ends_with("bound_probe.kspl")
-            continue
+    if p: = lsp_client.published(c, "bound_probe.kspl", 8, lsp_client.READ_MS, arena)
         found = true
         got: = p.get("diagnostics").arr_list(arena)
         count = got.len
         if count > 0
             first = got.get(0).get("message").as_str().unwrap_or("")
-        break
     seen_text: =
         arena.text().s("\{count\}: \{first\}").take() if found else "(no publishDiagnostics came)"
     verdict.check("a template raises no diagnostic on a type constraint it declared itself",

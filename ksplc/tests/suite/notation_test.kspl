@@ -76,14 +76,7 @@ priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the sq
     $line: I64 = -1I64
     $col: I64 = -1I64
     $count: Sz = 0
-    for _k in Range.asc(8)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        p: = msg.val.get("params")
-        if !p.get("uri").as_str().unwrap_or("").ends_with("laid_probe.kspl")
-            continue
+    if p: = lsp_client.published(c, "laid_probe.kspl", 8, lsp_client.READ_MS, arena)
         found = true
         diags: = p.get("diagnostics").arr_list(arena)
         count = diags.len
@@ -91,7 +84,6 @@ priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the sq
             start: = diags.get(0).get("range").get("start")
             line = start.get("line").as_int64().unwrap_or(-1I64)
             col = start.get("character").as_int64().unwrap_or(-1I64)
-        break
     seen: = arena.text().s("arrived=\{found\} count=\{count\} line=\{line\} col=\{col\}").take()
     verdict.check("a squiggle points at the indentation notation's line and column",
         found && count == 1 && line == BAD_LINE && col == BAD_COL, seen)
@@ -104,14 +96,7 @@ priv fn check_lone_cr(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     lsp_client.open(c, uri, notation_crlf.LONE_CR_COMMENT, arena)
     $seen: = "no diagnostics arrived"
     $ok: = false
-    for _k in Range.asc(8)
-        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
-            break
-        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
-            continue
-        p: = msg.val.get("params")
-        if !p.get("uri").as_str().unwrap_or("").ends_with("lone_cr.kspl")
-            continue
+    if p: = lsp_client.published(c, "lone_cr.kspl", 8, lsp_client.READ_MS, arena)
         diags: = p.get("diagnostics").arr_list(arena)
         seen = lsp_client.dump(p, arena)
         if diags.len == 1
@@ -121,7 +106,6 @@ priv fn check_lone_cr(c: jsonrpc_client.Client$@, arena: Arena$@) //<
                 start.get("character").as_int64().unwrap_or(-1I64) == 11I64 &&
                 diags.get(0).get("message").as_str().unwrap_or("").find_str("carriage return")
                 .is_some()
-        break
     verdict.check("the language server reports a lone carriage return where the editor shows it",
         ok, seen)
 

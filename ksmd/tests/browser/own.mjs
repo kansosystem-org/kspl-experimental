@@ -53,8 +53,9 @@ const RECORD = `(() => {
     document.addEventListener(k, (e) => seen.push(k + ":" + (e.key || e.data || "") + "@" + who(e.target) +
       (e.target && "value" in e.target ? "=" + e.target.value : "")), true);
   }
+  // A table drawn again, or a cell of it drawn again in place (\`update\` in \`table.js\`).
   new MutationObserver((list) => {
-    if (list.some((m) => [...m.addedNodes].some((n) => n.querySelector && n.querySelector("td"))))
+    if (list.some((m) => [...m.addedNodes].some((n) => n.matches && (n.matches("td") || !!n.querySelector("td")))))
       seen.push("drawn");
   }).observe(document.getElementById("doc"), { childList: true, subtree: true });
 })()`;
@@ -142,8 +143,8 @@ export function own(helpers) {
           await d.js("ksmd.source().split('\\n').find((l) => l.includes('=tax(A1)'))"));
         // **A cell open while its table is drawn again keeps what is typed.** A call that runs past
         // its time is answered while the person types in another cell, and the answer draws the
-        // table again between two keys. The box went with the old table on Windows: the keys typed
-        // before were lost, and the next one opened the cell afresh.
+        // table, or now its changed cells, again between two keys. The box went with the old table
+        // on Windows: the keys typed before were lost, and the next one opened the cell afresh.
         await d.click('#doc td[data-r="3"][data-c="0"]');
         await d.type("5");
         await d.press("Enter");

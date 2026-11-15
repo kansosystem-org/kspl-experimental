@@ -186,8 +186,10 @@ impl sema_type_env.Env
     fn one_thread_count_path(r: Self$@, target_id: I32, w: str.Str_builder$@): Sz //<
         //< How many types lead from target_id to an `Rc` or a `Weak_rc`, written into w; 0 for none
         //< The walk is derives_marker's, through pointers and slices too: what a thread is handed
-        //< behind a pointer is shared as much as what it holds. w gets each type from target_id
-        //< down to the count, joined by " > ".
+        //< behind a pointer is shared as much as what it holds. A trait value leads to each type
+        //< converted to it. w gets each type from target_id down to the count, joined by " > ".
+        //< Caution: **Ask it only once every body is checked**: until then a conversion to a trait
+        //< can still be missing (`Env.upcasts`).
         defer $memo: = Map<|I32, I32|>(null)
         defer $resolving: = List<|I32|>(null)
         if !r.derives_marker(target_id, .one_thread_count, memo@, resolving@, 0)
@@ -217,6 +219,13 @@ impl sema_type_env.Env
             cur = next
         return named.len + 1
 
+    priv fn is_trait_type(r: Self@, clean_id: I32): Bool //< whether clean_id is a trait
+        switch r.get_info(clean_id)
+        case .trait_type
+            return true
+        default
+            return false
+
     priv fn is_one_thread_count(r: Self$@, type_id: I32): Bool //<
         //< Whether type_id is `std/refcount`'s `Rc` or `Weak_rc`, whose count only one thread keeps
         base: = r.instance_base(r.get_clean_real_type(type_id))
@@ -233,12 +242,19 @@ impl sema_type_env.Env
             r.owned_parts(r.get_clean_real_type(target_id), out)
         case .one_thread_count
             elem: = r.slice_struct_elem(target_id)
+            clean: = r.get_clean_real_type(target_id)
             if r.is_pointer(target_id)
                 out.push(r.strip_ptr(target_id))
             else if elem != 0
                 out.push(elem)
+            else if r.is_trait_type(clean)
+                // **A trait value holds the address of a value of some type converted to it.** The
+                // whole program is one unit, so every such type is known (`Env.upcasts`).
+                for i in Range(0, r.upcasts.len, 2)
+                    if r.upcasts.get(i) == clean
+                        out.push(r.upcasts.get(i + 1))
             else
-                r.owned_parts(r.get_clean_real_type(target_id), out)
+                r.owned_parts(clean, out)
 
     priv fn derives_marker(r: Self$@, target_id: I32, test: Part_test,
         memo: Map<|I32, I32|>$@, resolving: List<|I32|>$@, depth: Sz): Bool //<

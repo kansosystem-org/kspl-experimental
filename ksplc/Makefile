@@ -16,7 +16,7 @@ CFLAGS ?= -std=c99 -Wall -g -O0
 # **A recipe that fails leaves no target**: a compiler cut short would otherwise count as current.
 .DELETE_ON_ERROR:
 
-.PHONY: test test-answers test-suites self-host translate build compare verdict compare-fires
+.PHONY: test test-answers test-suites stage1 self-host translate build compare verdict compare-fires
 test: test-answers test-suites
 
 test-answers:
@@ -161,8 +161,12 @@ define stage1_cmds
 	$(call build_cmd,$(KSPLC),$(OUT)/gen/ksplc_stage1.$(host_ext),$(host_rt),$(OUT)/ksplc_stage1.exe)
 endef
 
-# This folder's compiler, made where missing for the suites (`self-host` remakes it every time).
+# This folder's compiler, made where missing for the suites. `stage1` and `self-host` remake it
+# every time, also where a caller's `make -o` holds the file as it is.
 $(OUT)/ksplc_stage1.exe:
+	$(stage1_cmds)
+
+stage1:
 	$(stage1_cmds)
 
 self-host:

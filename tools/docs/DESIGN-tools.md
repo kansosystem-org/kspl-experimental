@@ -82,9 +82,9 @@ Why that one named page file gives the client no more reach is "Where it listens
 
 **Starting the browser:**
 
-* **The opener tries the environment's tools in turn, and always says how to open the page by hand.** Where one tool is absent, nothing happens and nothing says so. Each environment has its own list (`OPENERS` / `OPENERS_WIN` in `tools/opener.kspl`).
+* **The opener tries the environment's tools in turn, and always says how to open the page by hand.** Where one tool is absent, nothing happens and nothing says so. Each environment has its own list (`OPENERS`, `OPENERS_MAC` and `OPENERS_WIN` in `tools/opener.kspl`). On POSIX, `uname -s` tells macOS from the others.
 * **On POSIX, a tool is looked up on the PATH before it is started.** Starting even a missing tool creates the child there, and the failure shows only inside it.
-* **Do not mix the environments' tools in one list.** On Windows a tool counts as handed over as soon as it starts, so MSYS2's `xdg-open` first would report success without starting any browser.
+* **Do not mix the environments' tools in one list.** On Windows a tool counts as handed over as soon as it starts, so MSYS2's `xdg-open` first would report success without starting any browser. Likewise, on Debian and Ubuntu `open` can be `openvt`, so Linux's list does not hold macOS's `open`.
 * **On Windows, the page goes to `explorer.exe`**, which opens one file with the program the system holds for its type: the default browser for `.html`. Its path is written with `\`.
 * **`cmd /c start` cannot be used.** Each argument is passed in its own quotation marks (`kspl_win_build_cmdline` in [`../../ksplc/gen/runtime/hosted_spawn.c`](../../ksplc/gen/runtime/hosted_spawn.c)), and cmd does not recognise `"start"` as an internal command. Do not fix it by dropping the quoting: that function stops argument injection.
 * **"Handed over" is not reported as "opened"**, since a tool can start and still show nothing. So the opener always prints how to open the page by hand and where the messages are.

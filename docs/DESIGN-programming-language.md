@@ -1111,9 +1111,9 @@ flowchart LR
     G -->|"read and written<br/>(no marker sees this)"| W
 ```
 
-**The shape that passes**: a non-conforming type in a global, a small conforming argument to `spawn`, and a worker touching the global. `ksplc lint` reports nothing, and a counter ends low or a `List` loses elements. Worse, a single-thread `Rc<|T|>` in a global crashes from racing counts. **What slips past fails harder than what the marker would catch.**
+**The shape that passes**: a non-conforming type in a global, a small conforming argument to `spawn`, and a worker touching the global. `ksplc lint` reports nothing, and a counter ends low or a `List` loses elements. **What slips past fails harder than what the marker would catch.** A single-thread `Rc<|T|>` in a global would crash from racing counts, so that one global is refused (below).
 
-**The difference from Rust**: Rust's `Send` is sound because `static` requires `Sync` and `static mut` requires `unsafe`. KSPL has no such closure. Requiring it of every mutable global would fail `ksplc` itself, whose shared arena is a raw pointer.
+**The difference from Rust**: Rust's `Send` is sound because `static` requires `Sync` and `static mut` requires `unsafe`. KSPL has no such closure. Requiring it of every mutable global would fail `ksplc` itself, whose shared arena is a raw pointer. Only a global that reaches an `Rc` or a `Weak_rc` is refused.
 
 **Structural derivation decides it.** `struct Counter { n: I32 }` would conform, and `c.n += 1` racing from two threads would pass with no diagnostic. The marker would manufacture false assurance (Principle 8). So the type's name carries the choice instead ("The order of decision").
 
@@ -1121,12 +1121,24 @@ flowchart LR
 
 * **It watches every channel at once**: a global, an argument or a raw pointer. It names both accesses by their `.kspl` lines.
 * **It is a check on what ran, not a guarantee** (Principle 8): "no test hit one", not "the program has no race".
+* **It misses a race that something else orders.** A sequentially consistent atomic orders the two threads that touch it, so std's own counters are relaxed (`thread.Counter_sz`). Otherwise every `mem.alloc` would order any two threads that allocate, and hide the race between them.
+* **It misses a race whose older access it has forgotten.** It keeps a short history of each thread, so the gate runs with the largest one. A race written on purpose between two threads that allocate checks both points.
 * **Nothing is suppressed.** std, the runtime and the program are compiled from source into one unit, so a report is a finding to fix.
 * **The price is paid by the gate, not the language.** A sanitized run takes several times the time and memory, so it runs once, in the Linux job. A program left out of it is named with its reason.
 
 **`Move_only` escapes this criticism**: a global does not bypass the local data flow it follows.
 
-**`spawn` refuses a `T` that reaches an `Rc` or a `Weak_rc`.** This is not the marker refused above either. A marker says a type is safe to share, and a type that passes it gets trust it has not earned. This check says one thing: these two names promise a count kept by one thread. Handed to another thread, the promise breaks as soon as either thread copies or drops one. A `Mutex` around it does not help: a copy taken under the lock is dropped after the unlock. It walks what `T` holds as `Move_only` does. It also walks through pointers and slices, since a thread uses what it is pointed at as much as what it holds. An `Rc` in a global still slips past, and the refusal does not claim more. The compiler knows `spawn` and the two types by their full names (`std.thread.Thread.spawn`, `std.refcount.Rc`, `std.refcount.Weak_rc`), as it knows `Ref_counted`.
+**`spawn` refuses a `T` that reaches an `Rc` or a `Weak_rc`.** This is not the marker refused above either. A marker says a type is safe to share, and a type that passes it gets trust it has not earned. This check says one thing: these two names promise a count kept by one thread. Handed to another thread, the promise breaks as soon as either thread copies or drops one. A `Mutex` around it does not help: a copy taken under the lock is dropped after the unlock. It walks what `T` holds as `Move_only` does. It also walks through pointers and slices, since a thread uses what it is pointed at as much as what it holds. The compiler knows `spawn` and the two types by their full names (`std.thread.Thread.spawn`, `std.refcount.Rc`, `std.refcount.Weak_rc`), as it knows `Ref_counted`.
+
+**A global whose type reaches an `Rc` or a `Weak_rc` is refused by the same walk**, at its declaration. A `$` variable, a `const` and a C variable declared with `extern` are all refused, since a `const` or a C variable can hold a pointer to a count.
+
+* **Why at the declaration**: every thread can reach a global, and no rule says which threads touch it. A check at each use would need to know which thread runs the code, which the compiler does not follow.
+* **The price**: a program that starts no thread cannot keep an `Rc` in a global either, since the compiler does not know that. It keeps the `Rc` in a local of `main` and passes it down, or it uses an `Arc`.
+* **Why only these two types**: their names promise a count kept by one thread, so the refusal is never wrong. A `List` or a counter in a global is often touched by one thread only, and refusing it would fail correct code.
+* **A trait value leads to every type converted to it.** Its type names only the trait, but it holds the address of a value of one of those types. The whole program is one unit, so the compiler knows each type converted to each trait. The check of a `spawn` therefore waits until every body is checked: a conversion can come in a later function.
+  * Why not every type that implements the trait: a type that holds an `Rc` but is never converted would refuse a correct program.
+  * A closure is a trait value too (`Callable1`), so the `Rc` it captures is refused as well.
+* **What still slips past**: an `Rc` reached through a `Void$@` or a cast. The walk sees only the types written and the conversions to a trait, and the refusal does not claim more.
 
 **A thread waits for its end where the block ends.** `thread.Thread` is a value whose `free()` waits for the thread, so `defer` in front of its declaration makes a scoped thread. A local whose address the thread was handed then outlives it, and returning such a thread is refused. [W0109] reports a thread some path never waits for. Why it has the one `free()` is "A thread is a value that `free()` waits for" in [`../std/docs/DESIGN-system.md`](../std/docs/DESIGN-system.md#a-thread-is-a-value-that-free-waits-for).
 

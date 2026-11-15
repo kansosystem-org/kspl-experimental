@@ -231,3 +231,28 @@ fn test_io_open_modes() //< what each mode asks of the file, on Windows and on P
     for bad in U8[][8]::{ "", "x", "rx", "ax", "rt", "wN", "w,ccs=UTF-8", "b" }
         assert(open_plan(bad) == -1, "a mode outside C11's set must be refused")
     verdict.pass("each mode asks for the same bits on every OS, and a foreign letter is refused.")
+
+extern fn kspl_closed_pipe_on(err: I32, os_code: I32, windows: Bool): Bool //<
+    //< Whether a refused write met a closed pipe (`hosted_io.c`): it then ends quietly
+    //< **Windows's C library names two of the pipe codes EINVAL**, and only the OS's own code tells
+    //< them apart. The answer touches no OS, so both OSes' answers are checked here on every OS.
+
+priv const EPIPE_NUM: I32 = 32 //< EPIPE, the same number in glibc, macOS's libc and Windows's
+priv const EINVAL_NUM: I32 = 22 //< EINVAL, likewise
+priv const ENOSPC_NUM: I32 = 28 //< ENOSPC, a full disk, likewise
+
+fn test_io_closed_pipe_codes() //< a closed pipe is told from a refusal on Windows and POSIX alike
+    verdict.start("[Io] which refused write met a closed pipe...")
+    for windows in Bool[2]::{ false, true }
+        assert(kspl_closed_pipe_on(EPIPE_NUM, 0, windows), "EPIPE is a closed pipe on every OS")
+        assert(!kspl_closed_pipe_on(ENOSPC_NUM, 0, windows), "a full disk is no closed pipe")
+    // ERROR_BROKEN_PIPE, ERROR_NO_DATA and ERROR_PIPE_NOT_CONNECTED, which the CRT names EINVAL.
+    for code in I32[3]::{ 109, 232, 233 }
+        assert(kspl_closed_pipe_on(EINVAL_NUM, code, true),
+            "Windows's EINVAL with a pipe code is a closed pipe")
+        assert(!kspl_closed_pipe_on(EINVAL_NUM, code, false), "POSIX has no such code")
+        assert(!kspl_closed_pipe_on(ENOSPC_NUM, code, true), "a pipe code needs EINVAL beside it")
+    // ERROR_DISK_FULL, and EINVAL on its own, stay refusals that the exit reports.
+    assert(!kspl_closed_pipe_on(EINVAL_NUM, 112, true), "another OS code is not a closed pipe")
+    assert(!kspl_closed_pipe_on(EINVAL_NUM, 0, true), "a bare EINVAL is not a closed pipe")
+    verdict.pass("EPIPE, and on Windows EINVAL with a pipe's code, end quietly; the rest report.")

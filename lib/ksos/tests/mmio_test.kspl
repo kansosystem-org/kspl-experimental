@@ -1,0 +1,24 @@
+import "ksos/drivers/mmio"
+import "std/verdict"
+
+// ==========================================
+// ksos/drivers/mmio: when the shared busy wait ends.
+//
+// A host cannot stand in for a register, so `wait` judges each read with `reached`, and this file
+// checks that.
+// ==========================================
+
+fn test_mmio_wait_needs_every_bit() //<
+    //< A wait for two bits set ends only once both are set, and a wait for clear once both are clear
+    //< Caution: **Ending at the first bit lets a write reach a block still in reset**
+    //< (`resets.unreset` with `IO_BANK0 | PADS_BANK0`).
+    verdict.start("[ksos/mmio] when a wait for several bits ends test...")
+    both: U32 = 0b11
+    assert(!mmio.reached(0b01, both, true), "one of two bits set does not end a wait for set")
+    assert(!mmio.reached(0b10, both, true), "nor does the other one")
+    assert(mmio.reached(0b11, both, true), "both set ends it")
+    assert(mmio.reached(0b111, both, true), "a bit outside the mask does not matter")
+    assert(!mmio.reached(0b01, both, false), "one of two bits set does not end a wait for clear")
+    assert(mmio.reached(0b100, both, false), "both clear ends it")
+    assert(mmio.reached(0b1, 0b1, true), "one bit set ends a wait for that bit")
+    verdict.pass("a wait ends only once every bit of its mask has the state it waits for.")

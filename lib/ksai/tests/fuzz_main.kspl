@@ -8,12 +8,10 @@
 //< with `--trials` and `--seed`.
 import "ksai/safetensors" as st
 import "ksai/tensor" { Tensor }
-import "std/argparse"
 import "std/ds" { List }
 import "std/fuzz"
 import "std/mem" { Arena }
 import "std/str"
-import "std/verdict"
 
 priv const DEFAULT_SEED: I64 = 20260906
 priv const DEFAULT_TRIALS: I64 = 50 //< how many rounds CI scatters
@@ -72,7 +70,8 @@ priv fn built_vocab(arena: Arena$@): U8[] //< one assembled vocabulary
     return arena.text().s("0\t\n1\t4b\n2\t61\n3\t6e\n4\t73\n5\t6f\n6\t20\n7\t3132\n")
         .s("8\t4b61\n9\t6e73\n10\t6e736f\n").s("\n").s("1 2 8\n3 4 9\n9 5 10\n").take()
 
-priv fn collect_seeds(arena: Arena$@): List<|fuzz.Sample|>
+priv fn collect_seeds(_dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+    //< The seeds built here and the tiny models; ksai takes no seed folder
     $out: = List<|fuzz.Sample|>(arena)
     out
         .push(fuzz.Sample::{ .kind = "safetensors", .name = "built weights",
@@ -91,23 +90,7 @@ priv fn collect_seeds(arena: Arena$@): List<|fuzz.Sample|>
     return out
 
 fn main(): I32
-    verdict.begin("fuzz")
-    defer arena: = Arena(256 * 1024 * 1024)
-    $o: = fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED }
-    $a: = fuzz.Sanitized::{ .asan = false, .required = false }
-    p: = argparse.Parser.create("fuzz_main", "scatters broken input at ksai's readers", arena)
-    fuzz.declare_asan(p, a@)
-    s: =
-        fuzz.setup(p, o@, "ksplc run tests/fuzz_main.kspl", "<reader>", false, arena) catch why
-            return verdict.fatal(why)
-    fuzz.report_asan(a)
-    // The same reader and work folder run it again, from this folder.
-    c: = fuzz.Campaign::{ .subject = "ksai", .argv = U8[][]::{ s.exe }, .tell_kind = true,
-        .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::KINDS, .in_turn = false,
-        .wait_ms = TRIAL_TIMEOUT_MS, .reach_div = REACH_FLOOR_DIV,
-        .again = fuzz.again_with_asan(a, s.again, arena) }
-    $all: = collect_seeds(arena)
-    $samples: = fuzz.check_seeds(c@, all@, arena)
-    fuzz.scatter(c@, samples@, "byte sequences", o, arena) catch why
-        return verdict.fatal(why)
-    return verdict.finish()
+    return fuzz.run_main("ksai", "scatters broken input at ksai's readers",
+        fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED },
+        fuzz.Input_kind[]::KINDS, TRIAL_TIMEOUT_MS, REACH_FLOOR_DIV, false, collect_seeds,
+        256 * 1024 * 1024)

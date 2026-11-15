@@ -1,14 +1,18 @@
 //< The helpers that several of ksmd's test files share: reading a test source, opening an editor
-//< on it, a row or column edit, the source a document saves as, and the reader's or the editor's
-//< refusal
+//< on it, a row or column edit, the source a document saves as, the reader's or the editor's
+//< refusal, and a folder on disk to read sources from
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_tables" { Table_edit }
+import "ksmd/files/assemble" { Assembly, assemble_loaded }
+import "ksmd/files/files" { Files, Load_error, Refusal, load, resolve_text }
 import "ksmd/model/model" { Document }
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
 import "std/ds"
+import "std/fs"
+import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -51,6 +55,12 @@ fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
     writer.write(again@, second@)
     verdict.check(what, second.slice().equals(got), "a second save changed")
 
+fn records_one_column(what: U8[], ed: Editor@) //<
+    //< The last step recorded one column's change alone, and no copy of the table
+    last: = ed.history.done[ed.history.done.len - 1]@
+    verdict.check(what,
+        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+
 fn refused(text: U8[], what: U8[]) //< the reader refuses the source
     defer arena: = Arena(64 * 1024)
     src: = Source("bad.ksmd", text) catch e
@@ -65,3 +75,28 @@ fn refuses(what: U8[], r: Void!Refused) //< the editor refuses the action
     //< Caution: **Hand it the call's result, rather than checking `true` in a `catch`.** There, an
     //< action the editor wrongly takes prints nothing, and the test passes unseen.
     verdict.check(what, r.is_err(), "accepted")
+
+struct Folder //< a folder on disk that the tests read sources and images from
+    //< It applies the rules of a path's text alone. The page and the local server add their own
+    //< checks, such as the refusal of a link; those are tested where they are made.
+    root: U8[]
+
+impl Folder
+    fn assemble(f: Self@, written: U8[], arena: Arena$@): Assembly!Load_error //<
+        //< The view of the document `written` names from the root
+        return assemble_loaded(f, load(f, written, arena)!, arena)
+
+impl Folder: Files
+    fn resolve(_f: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal
+        return resolve_text(folder, written, arena)
+
+    fn check(f: Self@, path: U8[], arena: Arena$@): Void!Refusal
+        info: = fs.stat(fs.join(f.root, path, arena)) catch
+            throw .missing
+        if info.kind != .file
+            throw .not_file
+
+    fn read(f: Self@, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal
+        f.check(path, arena)!
+        return io.read_file_capped(fs.join(f.root, path, arena), limit + 1, arena) catch
+            throw .unreadable

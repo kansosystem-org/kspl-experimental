@@ -1,7 +1,10 @@
 //< The document's own settings, a table's caption and its merged columns: how they read and save,
 //< what the reader refuses, and setting each with its undo
+import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_settings" // `set_settings`
 import "ksmd/edit/editor_tables"
+import "ksmd/edit/region" { gap_spot }
+import "ksmd/model/model" { Block }
 import "ksmd/syntax/settings" { no_settings }
 import "ksmd/tests/support" { opened, refused, refuses, saves }
 import "std/mem" { Arena }
@@ -19,6 +22,7 @@ priv const TABLE: U8[] =
 fn run()
     reading()
     setting()
+    caret()
     tables()
 
 priv fn reading()
@@ -70,6 +74,41 @@ priv fn setting()
     ed.undo()
     ed.undo()
     saves("and undo takes each step back", ed@, arena, plain)
+
+priv fn caret() //< nothing can be put before the settings
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(arena.text().s("%ksmd 2\n").s(BODY).take(), arena)
+    $s: = no_settings()
+    s.numbers = 2
+    ed.set_settings(s) catch e
+        verdict.check("setting the settings", false, e.message())
+    clause: = "%ksmd 2\n\n:::document numbers=2\n:::\n"
+    typed(ed@, "x")
+    saves("keys typed after setting the settings go after the clause", ed@, arena,
+        arena.text().s(clause).s("\n# xTitle\n\n## One\n").take())
+    ed.undo()
+    ed.select(gap_spot(0), gap_spot(0))
+    typed(ed@, "y")
+    saves("the gap before the clause is the gap after it", ed@, arena,
+        arena.text().s(clause).s("\ny\n").s(BODY).take())
+    ed.undo()
+    ed.undo()
+    ed.redo()
+    typed(ed@, "z")
+    saves("and so after redo", ed@, arena,
+        arena.text().s(clause).s("\n# zTitle\n\n## One\n").take())
+    ed.undo()
+    second: = Block.whole(.document, 0, 0)
+    refuses("a block put before the clause is refused",
+        ed.put_whole(gap_spot(0), gap_spot(0), second))
+    refuses("and so is a clause after another block",
+        ed.put_whole(gap_spot(2), gap_spot(2), second))
+    saves("and neither changes the document", ed@, arena,
+        arena.text().s(clause).s(BODY).take())
+
+priv fn typed(ed: Editor$@, text: U8[]) //< types `text` where the caret stands
+    ed.type_text(text, .typing) catch e
+        verdict.check("typing", false, e.message())
 
 priv fn tables()
     defer arena: = Arena(64 * 1024)

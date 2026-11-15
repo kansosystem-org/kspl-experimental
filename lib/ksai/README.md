@@ -256,7 +256,7 @@ Before moving or deleting an example, check these dependencies:
 | :-- | :-- |
 | `make run` | The macOS CI AI step trains `llama_engine` and checks that its loss decreased |
 | `make test-extract` | Runs the package tests, and so every example, from an independent copy, on Linux and Windows instead of `make run`. The checks are in [`tests/examples_main.kspl`](tests/examples_main.kspl) and the files beside it whose names start with `examples_` |
-| `make test-simd` | Compiles `llama_engine`, `lib/ksai/benches/bench_qwen.kspl` and `lib/ksai/benches/bench_quant.kspl` to C, and checks that each named `ksai` loop is vectorized at `-O3` |
+| `make test-simd` | Compiles `llama_engine` and `lib/ksai/benches/bench_qwen.kspl` to C, and checks that each named `ksai` loop is vectorized at `-O3` |
 | `make lint` | Analyses each example's `main.kspl`, which `mk/lint.mk` finds by its `fn main` |
 | `make test-ksos-link` / `make test-ksos-qemu` | Use embedded weights in the `ksos` Cortex-M demo, without a filesystem |
 

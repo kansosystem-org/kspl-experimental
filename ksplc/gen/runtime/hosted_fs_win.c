@@ -411,7 +411,8 @@ static void kspl_win_restore_attr(const wchar_t *path, DWORD attr) {
     }
 }
 
-/* How many times, and how many milliseconds apart, a rename is tried again (kspl_win_move). */
+/* How many times, and how many milliseconds apart, a rename or a removal is tried again
+ * (kspl_win_move, kspl_remove_path). */
 #define KSPL_MOVE_TRIES 5
 #define KSPL_MOVE_PAUSE_MS 50
 
@@ -495,12 +496,21 @@ KSPL_LINK I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
     int r;
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
     attr = kspl_win_writable(path);
-    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
-        r = _wrmdir(path);
-    } else {
-        r = _wremove(path);
+    int dir = attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
+    /* **Tried again a few times, as kspl_win_move is**: a scanner that holds a file for a moment
+     * refuses its removal, and a file it holds stays as a pending delete, so its folder is "not
+     * empty" until the scanner lets go. Any other error, and a hold that lasts, fails as before. */
+    for (int i = 0;; i++) {
+        r = dir ? _wrmdir(path) : _wremove(path);
+        if (r == 0) return 0;
+        unsigned long e = _doserrno;
+        if (i + 1 >= KSPL_MOVE_TRIES || (e != ERROR_SHARING_VIOLATION && e != ERROR_ACCESS_DENIED &&
+            e != ERROR_LOCK_VIOLATION && !(dir && e == ERROR_DIR_NOT_EMPTY))) {
+            break;
+        }
+        Sleep(KSPL_MOVE_PAUSE_MS);
     }
-    if (r != 0) kspl_win_restore_attr(path, attr);
+    kspl_win_restore_attr(path, attr);
     return r;
 }
 

@@ -151,6 +151,7 @@ An `if` or `for` condition is a boolean literal, as in `if true` / `if false` or
 A `priv` function, struct or the like is never referred to within its file.
 * **Fix**: delete it, or, where it is kept on purpose for later, start its name with `_`.
 * **Every file the compile reads is checked**, an imported one too. So a lint of one entry point finds a dead helper in any file it imports.
+* **A call from its own body is no use.** A function or method that only calls itself is reported, since nothing else can start it.
 * **Not reported**:
   * a helper that only a generic's body names, although no caller instantiates the generic;
   * a method that a conformance (`impl T: Trait`) requires, called or not.

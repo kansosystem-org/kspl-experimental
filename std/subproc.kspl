@@ -31,6 +31,7 @@ extern fn kspl_proc_read(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
 extern fn kspl_proc_read_err(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
 extern fn kspl_proc_poll(handle: I64, timeout_ms: I32): I32
 extern fn kspl_proc_close_stdin(handle: I64)
+extern fn kspl_proc_close_stdout(handle: I64)
 extern fn kspl_proc_kill(handle: I64)
 extern fn kspl_proc_wait(handle: I64): I32
 extern fn kspl_proc_alive(handle: I64): Bool
@@ -685,6 +686,12 @@ impl Piped_child: Move_only //< copying it would reap one child twice
     pub fn close_stdin(r: Self@) //< closes standard input, to signal the end of input
         //< A child that answers only after reading all its input is waiting for this.
         kspl_proc_close_stdin(r.handle)
+
+    pub fn close_stdout(r: Self@) //< stops reading standard output, as a reader that has enough
+        //< **The child's next write there meets a closed pipe**, as in `prog | head`. On POSIX it
+        //< gets SIGPIPE, on Windows a failed write. Its standard error stays readable, and a `read`
+        //< after this fails as `failed`.
+        kspl_proc_close_stdout(r.handle)
 
     pub fn alive(r: Self@): Bool //< whether it is still running
         return kspl_proc_alive(r.handle)

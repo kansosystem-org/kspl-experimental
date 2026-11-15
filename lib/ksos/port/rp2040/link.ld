@@ -17,6 +17,10 @@ MEMORY
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 _thread_stack_top = _estack - 4096;
 
+/* The room left for what `ksos_main` and the scheduler's own loop take on the PSP, from
+ * _thread_stack_top down towards the end of the data: a few times what they take. */
+_main_stack_room = 4096;
+
 SECTIONS
 {
     /* Stage 2, 256 bytes (the binary .incbin'ed with pad_checksum.kspl's padding and checksum),
@@ -74,7 +78,13 @@ SECTIONS
     .noinit_panic (NOLOAD) : {
         . = ALIGN(4);
         *(.noinit_panic)
+        _end_of_data = .;
     } > RAM
+
+    /* A firmware whose data leave the main stack too little room fails here, at the link, rather
+     * than overwriting its own data at run time (the same check as the nRF51's). */
+    ASSERT(_end_of_data + _main_stack_room <= _thread_stack_top,
+        "RP2040: the data leave the main stack less than 4KB of room; shrink the stacks or buffers")
 
     /* throw the unwinding information away, which bare metal does not need */
     /DISCARD/ : {

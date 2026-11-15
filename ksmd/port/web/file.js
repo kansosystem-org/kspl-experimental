@@ -127,6 +127,7 @@ function ksmdFiles(ks, api) {
   // what it fetched where it holds that path already.
   function become(next) {
     if (next.path !== placed) placeEditor(next.path);
+    if (next.id !== doc.id) keep.show(next.id);
     doc = next;
     show();
   }
@@ -208,13 +209,14 @@ function ksmdFiles(ks, api) {
   // at once reads includes from the new folder; a refusal gives it the old path back. Text in a
   // cell still open that the editor refuses opens nothing (`api.load`), and the view stays as it
   // is, so the cell stays open with it. `base` is the bytes' digest, which the caller read with them.
+  // `late` marks a file that changed on disk, which leaves the focus where it is (`api.load`).
   // Caution: **Wait for nothing before `api.load`.** Each caller has just found that the page holds
   // no unsaved edits. A key typed during a wait would be overwritten, and no draft would hold it.
-  async function take(path, bytes, base, after = "") {
+  async function take(path, bytes, base, after = "", late = false) {
     const cellTaken = ks.table.take();
     if (cellTaken) placeEditor(path);
     const max = limit();
-    const said = api.load(bytes.length > max + 1 ? bytes.subarray(0, max + 1) : bytes);
+    const said = api.load(bytes.length > max + 1 ? bytes.subarray(0, max + 1) : bytes, late);
     // A stopped editor says so, and nothing may say the file opened.
     if (ks.stopped) return false;
     if (!said.ok) {
@@ -647,7 +649,7 @@ function ksmdFiles(ks, api) {
         if (unsaved()) {
           await askChanged(now.bytes, now.digest);
         } else if (await take(doc.path, now.bytes, now.digest, " It was changed on disk. The " +
-          "page shows the version it opened.")) {
+          "page shows the version it opened.", true)) {
           ks.say(`${doc.path} was changed on disk. The page shows it as it is now.`);
           return;
         }
@@ -811,6 +813,7 @@ function ksmdFiles(ks, api) {
     // The new document is open, and the address keeps the one to open until it opens.
     placeEditor("");
     doc = { path: "", base: null, clean: model(), id: newId() };
+    keep.show(doc.id);
     ks.addImage = (file) => one(() => addImage(file));
     ks.addClause = addClause;
     ks.fileCommand = (name) => {

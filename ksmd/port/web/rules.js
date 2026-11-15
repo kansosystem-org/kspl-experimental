@@ -40,8 +40,8 @@ function ksmdRules(ks) {
   }
 
   // Fills the number cells of the columns that share one colour scale, from its first colour at
-  // their least number to its second at their greatest.
-  function scale(wrap, rules, rule) {
+  // their least number to its second at their greatest; only those `only(row, column)` names.
+  function scale(wrap, rules, rule, only) {
     const columns = rules.map((r, c) => (r && r[0] === "scale" && r[2] === rule[2] && r[3] === rule[3] ? c : -1))
       .filter((c) => c >= 0);
     const numbers = columns.flatMap((c) => wrap.values.map((row) => row[c]).filter((v) => v && v[0] === 1)
@@ -52,7 +52,7 @@ function ksmdRules(ks) {
     for (const c of columns) {
       wrap.values.forEach((row, r) => {
         const v = row[c];
-        const el = v && v[0] === 1 && wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+        const el = v && v[0] === 1 && only(r, c) && ks.table.cellAt(wrap, r, c);
         if (!el) return;
         el.style.backgroundColor = between(rule[2], rule[3], span > 0 ? (v[1] - lo) / span : 1);
         el.classList.add("ruled", "looked");
@@ -60,21 +60,22 @@ function ksmdRules(ks) {
     }
   }
 
-  // Colours the cells of a rendered table that meet their column's rule.
-  function paint(wrap, rules) {
+  // Colours the cells of a rendered table that meet their column's rule, of those `only(row,
+  // column)` names (`dress` in `table.js`).
+  function paint(wrap, rules, only) {
     wrap.rules = rules;
     const scaled = new Set();
     rules.forEach((rule, c) => {
       if (!rule) return;
       if (rule[0] === "scale") {
         const key = `${rule[2]} ${rule[3]}`;
-        if (!scaled.has(key)) scale(wrap, rules, rule);
+        if (!scaled.has(key)) scale(wrap, rules, rule, only);
         scaled.add(key);
         return;
       }
       wrap.values.forEach((row, r) => {
-        if (!meets(rule, row[c])) return;
-        const el = wrap.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+        if (!only(r, c) || !meets(rule, row[c])) return;
+        const el = ks.table.cellAt(wrap, r, c);
         if (!el) return;
         if (rule[2]) el.style.color = rule[2];
         if (rule[3]) el.style.backgroundColor = rule[3];

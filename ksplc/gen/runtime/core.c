@@ -55,7 +55,8 @@ KSPL_LINK Sz kspl_stack_here(void) {
 }
 
 /* The atomic operations (std/mem.kspl's Arc<T> and the freestanding heap's spinlock,
- * std/thread.kspl's Atomic_sz) on the clang/gcc builtins. They need no <stdatomic.h> at -std=c99.
+ * std/thread.kspl's Atomic_sz, and the relaxed forms after them) on the clang/gcc builtins.
+ * They need no <stdatomic.h> at -std=c99.
  * Caution: On a core holding no LDREX/STREX (Armv6-M: Cortex-M0+, the RP2040) they are **not
  * defined**. The builtin would become a library call, and only the port layer knows the chip's
  * inter-core exclusion. POINTER_LOCK_FREE judges it (Sz is pointer-wide; 2 = always lock-free).
@@ -79,5 +80,24 @@ KSPL_LINK Sz kspl_atomic_load(Sz *ptr) {
 
 KSPL_LINK void kspl_atomic_store(Sz *ptr, Sz val) {
     __atomic_store_n(ptr, val, __ATOMIC_SEQ_CST);
+}
+
+/* The relaxed forms, for a counter that is only a statistic (the heap counters, std/fs's
+ * lookups). Each update is still whole, but it orders nothing else.
+ * Why: **a sequentially consistent update orders the two threads for ThreadSanitizer.** Every
+ * mem.alloc adds to the heap counters, so any two threads that allocate looked ordered, and the
+ * race gate missed the race between them. Caution: Never use them where a value guards memory. */
+KSPL_LINK Sz kspl_atomic_add_relaxed(Sz *ptr, Sz delta) {
+    return __atomic_fetch_add(ptr, delta, __ATOMIC_RELAXED);
+}
+
+KSPL_LINK Sz kspl_atomic_cas_relaxed(Sz *ptr, Sz expected, Sz new_val) {
+    Sz actual = expected;
+    __atomic_compare_exchange_n(ptr, &actual, new_val, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    return actual;
+}
+
+KSPL_LINK Sz kspl_atomic_load_relaxed(Sz *ptr) {
+    return __atomic_load_n(ptr, __ATOMIC_RELAXED);
 }
 #endif /* POINTER_LOCK_FREE == 2 */

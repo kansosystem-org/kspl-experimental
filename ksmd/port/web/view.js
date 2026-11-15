@@ -492,28 +492,51 @@ function ksmdView(ks) {
 
   // Puts an action's result on the page: the changed blocks and the other tables. The selection
   // follows once the page has found the chosen cell again (`ks.act`).
-  // **A table whose JSON is the one it was drawn from stays as it is.** An edit to one table sends
-  // every table, since its values can reach them all. Drawing and laying out each again would take
-  // most of an edit's time in a document of many tables, and change nothing on the page.
+  // **A table whose JSON is the one it was drawn from stays as it is**, and one where only cells
+  // changed has those cells drawn again in place (`update` in `table.js`). An edit to one table
+  // sends every table, since its values can reach them all. Drawing and laying out each again
+  // took most of an edit's time: in a table of 1,000 rows, 0.4 s for each value entered.
+  // Only where a block was drawn anew, or a column's width changed, are the first columns pinned
+  // again (`pin` in `table.js`): it reads the layout of the whole page, which costs time in
+  // proportion to its size.
   function apply(r) {
     removeGap();
+    let fresh = false;
+    const kept = [];
+    // A table in place shows its new JSON in the cells that changed; any other block, or a table
+    // whose rows, columns or settings changed, is drawn anew.
+    const show = (old, b, json = JSON.stringify(b)) => {
+      if (b.k === "t" && old.classList.contains("table") && (old.drawnFrom === json || ks.table.update(old, b))) {
+        old.drawnFrom = json;
+        kept.push(old);
+        return;
+      }
+      old.replaceWith(drawn(b, json));
+      fresh = true;
+    };
     // An open cell keeps its box in the table drawn again (`redrawn` in `cellbox.js`).
     ks.table.redrawn(() => {
       const all = blocks();
       const end = all.length - r.tail;
       const next = all[end] || null;
-      for (let i = r.from; i < end; i++) all[i].remove();
-      for (const b of r.blocks) ks.root.insertBefore(drawn(b), next);
+      if (end - r.from === r.blocks.length) {
+        r.blocks.forEach((b, k) => show(all[r.from + k], b));
+      } else {
+        for (let i = r.from; i < end; i++) all[i].remove();
+        for (const b of r.blocks) ks.root.insertBefore(drawn(b), next);
+        fresh = true;
+      }
       for (const [i, b] of r.tables) {
         const old = blocks()[i];
         const json = JSON.stringify(b);
-        if (old && old.drawnFrom !== json) old.replaceWith(drawn(b, json));
+        if (old && old.drawnFrom !== json) show(old, b, json);
       }
     });
     ks.settings.apply();
+    const moved = fresh || kept.some((wrap) => !wrap.laid);
     // The widths are laid out before the first column is pinned beside the row numbers.
     ks.sizes.layAll();
-    ks.table.pin();
+    if (moved) ks.table.pin();
   }
 
   ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len, u16At,

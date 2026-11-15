@@ -65,7 +65,7 @@ make lint
 
 Formatting runs as many files at once as there are cores (`FMT_JOBS`, default `nproc`). **`make fmt FMT_JOBS=1` runs one file at a time**, for the failures in a fixed order.
 
-**`make fmt` formats with the seed, while the gate `make test-fmt-tree` asks the ksplc just built.** After a change to ksplc's formatter, run `make commit-seed` before `make fmt`. Otherwise the gate keeps failing on files `make fmt` leaves as they are.
+**`make fmt` formats with the seed, while the gate `make test-fmt-tree` asks the ksplc just built.** After a change to ksplc's formatter, run `make commit-seed` before `make fmt`. Why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
 
 ### The tests (`make debug`)
 

@@ -41,7 +41,8 @@ impl Task_state
 
 priv const STACK_GUARD_BYTES: Sz = 16 //<
     //< The known bytes Task.create writes at the stack's lowest address (a canary)
-    //< Every schedule() checks them; if they are damaged, it is an overflow and it panics at once.
+    //< Every schedule() checks them, every tick among them; if they are damaged, it is an overflow
+    //< and it panics at once.
 priv const STACK_GUARD_BYTE: U8 = 0xa5
 
 struct Task
@@ -77,6 +78,7 @@ $g_current: Task$@ = null // sync.kspl (Mutex.lock/unlock) uses it
 priv $g_running: Bool = false // from start_scheduler's entry to its return
 priv $g_stop: Bool = false // stop_scheduler asked start_scheduler to return
 priv $g_tick: U64 = 0
+priv $g_ticking: Bool = false // a periodic tick runs (enable_preemption), so g_tick is real time
 priv $g_rr_start: Sz = 0 // where the search starts, for round-robin among equal priorities
 priv $g_wait_seq: U64 = 0 // how many waits have begun (block_current stamps each wait with it)
 priv $g_main_ctx: Void$@ = null
@@ -368,9 +370,11 @@ priv fn wakes_by_clock(t: Task$@): Bool //<
         return false
     return t.state == .delayed || (t.state == .blocked && t.deadline_set)
 priv fn pick_next(): Task$@? //< picks the runnable task with the highest priority
-    //< **With none runnable it moves the clock forward without waiting in real time**, decoupling
-    //< g_tick from real time, even with preemption enabled. That buys determinism, and under
-    //< cooperative scheduling it is the only path that advances g_tick (without it no delay ends).
+    //< **With none runnable and no tick running, it moves the clock forward** without waiting in
+    //< real time. Under cooperative scheduling that is the only path that advances g_tick (without
+    //< it no delay ends), and a run keeps the same order every time.
+    //< **With a tick running (g_ticking), it moves nothing** and returns none, so the caller sleeps
+    //< until the next tick. A jump there would end a timed wait for an interrupt before it came.
     for
         $best: Task$@ = null
         $best_prio: I32 = 0
@@ -387,6 +391,8 @@ priv fn pick_next(): Task$@? //< picks the runnable task with the highest priori
         if best != null
             g_rr_start = (best_idx + 1) % g_task_count
             return .some(best)
+        if g_ticking
+            return .none // the tick advances the clock in real time, and wakes the task (ksos_tick)
         // No runnable task: move the clock to the nearest expiry and wake that task
         $earliest: U64 = 0
         $have_delayed: = false
@@ -664,6 +670,7 @@ fn enable_preemption(reload: U32) //< turns preemption on
     //< whose SysTick has 24 bits. A tick at another period would break every timeout.
     started: = ksos_port_tick_start(reload)
     assert(started != 0, "enable_preemption: the port's timer cannot take this reload")
+    g_ticking = true
 
 // ============================ Converting to real time ============================
 // A tick is logical time (like FreeRTOS's tick). **The kernel does not know how long a tick is**:
@@ -701,7 +708,8 @@ fn idle_entry(_arg: Void$@): Void
 priv fn idle_rest() //< the idle task's pause between two calls of its hook
     //< **With no other task ready and none waiting on the clock, it sleeps until an interrupt.**
     //< Going round again would spin the CPU at full use for as long as the rest stay blocked.
-    //< Otherwise it sleeps one tick, so tickless idle moves the clock to the next expiry.
+    //< Otherwise it rests one tick: tickless idle moves the clock to the next expiry, or with a
+    //< tick running, the scheduler sleeps until that tick.
     s: = ksos_port_irq_save()
     defer ksos_port_irq_restore(s)
     me: = g_current
@@ -731,11 +739,11 @@ extern fn ksos_tick()
     defer ksos_port_irq_restore(s)
     if g_tick != LAST_TICK // it stops at the last tick: a wrap to 0 would put every deadline ahead
         g_tick += 1
+    wake_delayed_to(g_tick)
     if g_current == null
-        return // before the scheduler starts, or while it sleeps, only the clock advances
+        return // before the scheduler starts, or while it sleeps: start_scheduler picks next
     // Count one tick for g_current: CPU use by sampling, like top and ps, at the tick's resolution.
     g_current.cpu_ticks += 1
-    wake_delayed_to(g_tick)
     schedule()
 fn start_scheduler() //< runs the registered tasks until none remains or stop_scheduler is called
     //< **While the tasks left are all blocked with no deadline, it sleeps until an interrupt**
@@ -797,12 +805,21 @@ fn stop_scheduler() //< makes start_scheduler return, leaving every task where i
     cur.state = .ready
     switch_to_main(cur.ctx)
 
-fn run_single_task(tcb: Task$@, stack: U8$[], entry: Task_fn, name: U8[], on_idle: fn(): Void) //<
-    //< Runs a single task at priority 1, then calls on_idle and loops forever
-    //< It registers the task and starts the scheduler; on_idle is called once the task is done.
-    //< It serves as a single-task demo's ksos_main. on_idle, not this file, knows how to end the
-    //< run, so this file depends on no layer above.
+fn run_single_task( //< runs a single task at priority 1 under a tick, then on_idle, forever
+    //< It registers the task, starts the tick (enable_preemption) and the scheduler. It serves as a
+    //< single-task demo's ksos_main. on_idle, not this file, knows how to end the run, so this
+    //< file depends on no layer above.
+    //< **The tick is what checks the task's stack canary.** A single task never yields, so no
+    //< other schedule() runs, and an overflow would go on unseen.
+    tcb: Task$@,
+    stack: U8$[],
+    entry: Task_fn,
+    name: U8[],
+    on_idle: fn(): Void, //< called once the task is done, then this loops forever
+    tick_reload: U32, //< the tick's period, in the port's unit (enable_preemption)
+)
     tcb.create(stack, entry, null, 1, name)
+    enable_preemption(tick_reload)
     start_scheduler()
     on_idle()
     for {}
